@@ -26,6 +26,14 @@ __pycache__/
 venv/
 .env
 
+# Node / Vercel web app
+node_modules/
+apps/web/node_modules/
+apps/web/.next/
+apps/web/tsconfig.tsbuildinfo
+apps/web/.env.local
+apps/web/.vercel/
+
 # Credentials (never commit secrets)
 credentials.json
 **/credentials.json
