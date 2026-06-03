@@ -123,9 +123,9 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
       return;
     }
     triggerTapFeedback(team);
-    setDraftHistory((history) => [...history.slice(-19), draft]);
     setDraft((current) => {
       if (!current) return current;
+      setDraftHistory((history) => [...history.slice(-49), current]);
       return {
         ...current,
         teamAScore: team === "A" ? current.teamAScore + 1 : current.teamAScore,
@@ -139,16 +139,13 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
   }
 
   async function undoScore() {
-    if (dirty && draftHistory.length) {
+    if (draftHistory.length) {
       const previous = draftHistory[draftHistory.length - 1];
       setDraft(previous);
       setDraftHistory((history) => history.slice(0, -1));
-      const stillDirty = draftHistory.length > 1;
-      setDirty(stillDirty);
-      dirtyRef.current = stillDirty;
-      if (stillDirty) {
-        setDirtyVersion((version) => version + 1);
-      }
+      setDirty(true);
+      dirtyRef.current = true;
+      setDirtyVersion((version) => version + 1);
       setError(null);
       return;
     }
@@ -190,10 +187,11 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
       setRetryCount(0);
       setSavedAt(new Date());
       if (dirtyVersionRef.current === versionToSave) {
+        setState((current) => stateWithSavedScore(current, json.score));
+        setDraft(scoreToSave);
+        draftRef.current = scoreToSave;
         setDirty(false);
         dirtyRef.current = false;
-        setDraftHistory([]);
-        await refresh();
       } else {
         scheduleAutoSave(120);
       }
@@ -345,6 +343,27 @@ function savedResponseMatchesDraft(score: unknown, draft: DraftScore) {
     Number(row.current_set) === draft.currentSet &&
     ((row.serving_team === null || row.serving_team === undefined ? "none" : row.serving_team) === draft.servingTeam)
   );
+}
+
+function stateWithSavedScore(state: ScorerState | null, score: unknown) {
+  if (!state || !score || typeof score !== "object") {
+    return state;
+  }
+  const row = score as Record<string, unknown>;
+  const servingTeam: "A" | "B" | null = row.serving_team === "A" || row.serving_team === "B" ? row.serving_team : null;
+  return {
+    ...state,
+    score: {
+      ...state.score,
+      team_a_score: Number(row.team_a_score),
+      team_b_score: Number(row.team_b_score),
+      team_a_sets: Number(row.team_a_sets),
+      team_b_sets: Number(row.team_b_sets),
+      current_set: Number(row.current_set),
+      serving_team: servingTeam,
+      status: typeof row.status === "string" ? row.status : state.score.status
+    }
+  };
 }
 
 function retryDelay(retryCount: number) {
