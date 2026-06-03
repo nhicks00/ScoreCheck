@@ -1,7 +1,7 @@
 "use client";
 
-import { CheckCircle, Flag, Minus, Pencil, RotateCcw, Timer, Trophy } from "lucide-react";
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { CheckCircle, Pencil, RotateCcw, Trophy } from "lucide-react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type ScorerState = {
   court: {
@@ -37,6 +37,8 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
+  const [scoreFlash, setScoreFlash] = useState<{ team: "A" | "B"; id: number } | null>(null);
+  const scoreFlashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const teamA = state?.match?.team_a ?? "Team A";
   const teamB = state?.match?.team_b ?? "Team B";
 
@@ -69,14 +71,37 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
     setBusy(null);
     if (!res.ok) {
       setError(json.error ?? "Scoring action failed");
-      return;
+      return false;
     }
     await refresh();
+    return true;
+  }
+
+  async function scorePoint(team: "A" | "B") {
+    if (scoreFlashTimer.current) {
+      clearTimeout(scoreFlashTimer.current);
+    }
+    setScoreFlash((previous) => ({ team, id: (previous?.id ?? 0) + 1 }));
+    scoreFlashTimer.current = setTimeout(() => setScoreFlash(null), 650);
+
+    const endpoint = team === "A" ? "point-a" : "point-b";
+    const ok = await mutate(endpoint, `/api/score/courts/${courtId}/${endpoint}`);
+    if (!ok) {
+      setScoreFlash(null);
+    }
   }
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    return () => {
+      if (scoreFlashTimer.current) {
+        clearTimeout(scoreFlashTimer.current);
+      }
+    };
+  }, []);
 
   if (error && !state) {
     return (
@@ -106,26 +131,24 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
           score={state?.score.team_a_score ?? 0}
           sets={state?.score.team_a_sets ?? 0}
           serving={state?.score.serving_team === "A"}
-          onPoint={() => mutate("point-a", `/api/score/courts/${courtId}/point-a`)}
+          onPoint={() => scorePoint("A")}
           busy={busy != null}
+          animationId={scoreFlash?.team === "A" ? scoreFlash.id : 0}
         />
         <TeamBlock
           name={teamB}
           score={state?.score.team_b_score ?? 0}
           sets={state?.score.team_b_sets ?? 0}
           serving={state?.score.serving_team === "B"}
-          onPoint={() => mutate("point-b", `/api/score/courts/${courtId}/point-b`)}
+          onPoint={() => scorePoint("B")}
           busy={busy != null}
+          animationId={scoreFlash?.team === "B" ? scoreFlash.id : 0}
         />
       </section>
 
       <section className="score-actions">
-        <button onClick={() => mutate("undo", `/api/score/courts/${courtId}/undo`)} disabled={busy != null}><RotateCcw size={20} /> Undo</button>
-        <button onClick={() => mutate("serve", `/api/score/courts/${courtId}`, { action: "toggle-serve" })} disabled={busy != null}><Flag size={20} /> Serve</button>
+        <button className="undo" onClick={() => mutate("undo", `/api/score/courts/${courtId}/undo`)} disabled={busy != null}><RotateCcw size={20} /> Undo</button>
         <button onClick={() => setEditing(true)} disabled={!state || busy != null}><Pencil size={20} /> Edit</button>
-        <button onClick={() => mutate("timeout-a", `/api/score/courts/${courtId}`, { action: "timeout-a" })} disabled={busy != null}><Timer size={20} /> A Timeout</button>
-        <button onClick={() => mutate("timeout-b", `/api/score/courts/${courtId}`, { action: "timeout-b" })} disabled={busy != null}><Timer size={20} /> B Timeout</button>
-        <button onClick={() => mutate("side-switch", `/api/score/courts/${courtId}`, { action: "side-switch" })} disabled={busy != null}><Minus size={20} /> Switch</button>
         <button onClick={() => mutate("set", `/api/score/courts/${courtId}/set-complete`)} disabled={busy != null}><CheckCircle size={20} /> Set Complete</button>
         <button className="danger" onClick={() => mutate("match", `/api/score/courts/${courtId}/match-complete`)} disabled={busy != null}><Trophy size={20} /> Match Complete</button>
       </section>
@@ -147,9 +170,11 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
   );
 }
 
-function TeamBlock({ name, score, sets, serving, onPoint, busy }: { name: string; score: number; sets: number; serving: boolean; onPoint: () => void; busy: boolean }) {
+function TeamBlock({ name, score, sets, serving, onPoint, busy, animationId }: { name: string; score: number; sets: number; serving: boolean; onPoint: () => void; busy: boolean; animationId: number }) {
+  const isAnimating = animationId > 0;
   return (
-    <button className="team-button" onClick={onPoint} disabled={busy}>
+    <button className={`team-button ${isAnimating ? "scored" : ""}`} onClick={onPoint} disabled={busy}>
+      {isAnimating && <span key={animationId} className="tap-burst" aria-hidden="true" />}
       <span className="team-name">{serving ? "● " : ""}{name}</span>
       <span className="team-score">{score}</span>
       <span className="team-sets">{sets} sets</span>
@@ -235,9 +260,29 @@ function ScoreStyles() {
         display: grid;
         grid-template-columns: minmax(0, 1fr) 120px;
         min-height: 168px;
+        overflow: hidden;
         padding: 0;
+        position: relative;
         text-align: left;
         width: 100%;
+      }
+      .team-button.scored {
+        animation: team-pop 420ms ease-out;
+        border-color: #f8d84a;
+        box-shadow: 0 0 0 4px rgba(248, 216, 74, .28), 0 16px 36px rgba(248, 216, 74, .22);
+      }
+      .team-button.scored .team-score {
+        animation: score-pop 420ms ease-out;
+      }
+      .tap-burst {
+        animation: tap-burst 620ms ease-out;
+        background: radial-gradient(circle at center, rgba(248, 216, 74, .42), rgba(248, 216, 74, .16) 34%, transparent 68%);
+        inset: 0;
+        opacity: 0;
+        pointer-events: none;
+        position: absolute;
+        transform: scale(.82);
+        z-index: 0;
       }
       .team-name {
         align-items: center;
@@ -248,6 +293,7 @@ function ScoreStyles() {
         padding: 22px;
         text-overflow: ellipsis;
         white-space: nowrap;
+        z-index: 1;
       }
       .team-score {
         align-items: center;
@@ -258,6 +304,7 @@ function ScoreStyles() {
         font-variant-numeric: tabular-nums;
         font-weight: 950;
         justify-content: center;
+        z-index: 1;
       }
       .team-sets {
         background: #111827;
@@ -267,6 +314,7 @@ function ScoreStyles() {
         grid-column: 1 / -1;
         padding: 8px 18px;
         text-transform: uppercase;
+        z-index: 1;
       }
       .score-actions {
         display: grid;
@@ -288,6 +336,7 @@ function ScoreStyles() {
         justify-content: center;
         min-height: 52px;
       }
+      .score-actions .undo { background: #ea580c; }
       .score-actions .danger { background: #b91c1c; }
       .score-error,
       .score-busy {
@@ -342,6 +391,21 @@ function ScoreStyles() {
         .team-score { font-size: 60px; }
         .score-actions { grid-template-columns: 1fr; }
         .edit-grid { grid-template-columns: 1fr; }
+      }
+      @keyframes team-pop {
+        0% { transform: scale(1); }
+        42% { transform: scale(.985); }
+        100% { transform: scale(1); }
+      }
+      @keyframes score-pop {
+        0% { transform: scale(1); }
+        45% { transform: scale(1.14); }
+        100% { transform: scale(1); }
+      }
+      @keyframes tap-burst {
+        0% { opacity: 0; transform: scale(.72); }
+        18% { opacity: 1; }
+        100% { opacity: 0; transform: scale(1.18); }
       }
     `}</style>
   );
