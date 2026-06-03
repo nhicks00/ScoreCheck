@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle, Pencil, RotateCcw, Trophy } from "lucide-react";
+import { Pencil, RotateCcw, Save } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type ScorerState = {
@@ -31,14 +31,27 @@ type ScorerState = {
   };
 };
 
+type DraftScore = {
+  teamAScore: number;
+  teamBScore: number;
+  teamASets: number;
+  teamBSets: number;
+  currentSet: number;
+  servingTeam: "A" | "B" | "none";
+};
+
 export function ScorerClient({ courtId, initialToken }: { courtId: string; initialToken: string }) {
   const [token] = useState(initialToken);
   const [state, setState] = useState<ScorerState | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
-  const [scoreFlash, setScoreFlash] = useState<{ team: "A" | "B"; id: number } | null>(null);
-  const scoreFlashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [draft, setDraft] = useState<DraftScore | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const [draftHistory, setDraftHistory] = useState<DraftScore[]>([]);
+  const [savedAt, setSavedAt] = useState<Date | null>(null);
+  const [tapFeedback, setTapFeedback] = useState<{ team: "A" | "B"; id: number } | null>(null);
+  const tapFeedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const teamA = state?.match?.team_a ?? "Team A";
   const teamB = state?.match?.team_b ?? "Team B";
 
@@ -56,38 +69,81 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
       return;
     }
     setState(json);
+    setDraft(draftFromState(json));
+    setDraftHistory([]);
+    setDirty(false);
     setError(null);
   }, [stateUrl, token]);
 
   async function mutate(label: string, endpoint: string, extra: Record<string, unknown> = {}, method = "POST") {
     setBusy(label);
     setError(null);
-    const res = await fetch(endpoint, {
-      method,
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ token, actionId: crypto.randomUUID(), ...extra })
-    });
-    const json = await res.json().catch(() => ({}));
-    setBusy(null);
-    if (!res.ok) {
-      setError(json.error ?? "Scoring action failed");
+    try {
+      const res = await fetch(endpoint, {
+        method,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token, actionId: crypto.randomUUID(), ...extra })
+      });
+      const json = await res.json().catch(() => ({}));
+      setBusy(null);
+      if (!res.ok) {
+        setError(json.error ?? "Scoring action failed");
+        return false;
+      }
+      await refresh();
+      return true;
+    } catch {
+      setBusy(null);
+      setError("Could not save. Keep the scorer page open and try Save Score again.");
       return false;
     }
-    await refresh();
-    return true;
   }
 
-  async function scorePoint(team: "A" | "B") {
-    if (scoreFlashTimer.current) {
-      clearTimeout(scoreFlashTimer.current);
+  function triggerTapFeedback(team: "A" | "B") {
+    if (tapFeedbackTimer.current) {
+      clearTimeout(tapFeedbackTimer.current);
     }
-    setScoreFlash((previous) => ({ team, id: (previous?.id ?? 0) + 1 }));
-    scoreFlashTimer.current = setTimeout(() => setScoreFlash(null), 650);
+    setTapFeedback((previous) => ({ team, id: (previous?.id ?? 0) + 1 }));
+    tapFeedbackTimer.current = setTimeout(() => setTapFeedback(null), 180);
+  }
 
-    const endpoint = team === "A" ? "point-a" : "point-b";
-    const ok = await mutate(endpoint, `/api/score/courts/${courtId}/${endpoint}`);
-    if (!ok) {
-      setScoreFlash(null);
+  function scorePoint(team: "A" | "B") {
+    if (!draft || busy === "save") {
+      return;
+    }
+    triggerTapFeedback(team);
+    setDraftHistory((history) => [...history.slice(-19), draft]);
+    setDraft((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        teamAScore: team === "A" ? current.teamAScore + 1 : current.teamAScore,
+        teamBScore: team === "B" ? current.teamBScore + 1 : current.teamBScore
+      };
+    });
+    setDirty(true);
+    setError(null);
+  }
+
+  async function undoScore() {
+    if (dirty && draftHistory.length) {
+      const previous = draftHistory[draftHistory.length - 1];
+      setDraft(previous);
+      setDraftHistory((history) => history.slice(0, -1));
+      setDirty(draftHistory.length > 1);
+      setError(null);
+      return;
+    }
+    await mutate("undo", `/api/score/courts/${courtId}/undo`);
+  }
+
+  async function saveScore() {
+    if (!draft || !dirty) {
+      return;
+    }
+    const ok = await mutate("save", `/api/score/courts/${courtId}`, draft, "PATCH");
+    if (ok) {
+      setSavedAt(new Date());
     }
   }
 
@@ -97,8 +153,8 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
 
   useEffect(() => {
     return () => {
-      if (scoreFlashTimer.current) {
-        clearTimeout(scoreFlashTimer.current);
+      if (tapFeedbackTimer.current) {
+        clearTimeout(tapFeedbackTimer.current);
       }
     };
   }, []);
@@ -128,29 +184,33 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
       <section className="scoreboard">
         <TeamBlock
           name={teamA}
-          score={state?.score.team_a_score ?? 0}
-          sets={state?.score.team_a_sets ?? 0}
+          score={draft?.teamAScore ?? state?.score.team_a_score ?? 0}
+          sets={draft?.teamASets ?? state?.score.team_a_sets ?? 0}
           serving={state?.score.serving_team === "A"}
           onPoint={() => scorePoint("A")}
-          busy={busy != null}
-          animationId={scoreFlash?.team === "A" ? scoreFlash.id : 0}
+          disabled={!draft || busy === "save"}
+          feedbackId={tapFeedback?.team === "A" ? tapFeedback.id : 0}
         />
         <TeamBlock
           name={teamB}
-          score={state?.score.team_b_score ?? 0}
-          sets={state?.score.team_b_sets ?? 0}
+          score={draft?.teamBScore ?? state?.score.team_b_score ?? 0}
+          sets={draft?.teamBSets ?? state?.score.team_b_sets ?? 0}
           serving={state?.score.serving_team === "B"}
           onPoint={() => scorePoint("B")}
-          busy={busy != null}
-          animationId={scoreFlash?.team === "B" ? scoreFlash.id : 0}
+          disabled={!draft || busy === "save"}
+          feedbackId={tapFeedback?.team === "B" ? tapFeedback.id : 0}
         />
       </section>
 
+      <section className={`save-status ${dirty ? "unsaved" : "saved"}`}>
+        <strong>{dirty ? "Unsaved score changes" : "Score saved"}</strong>
+        <span>{dirty ? "Tap Save Score when the score is correct." : savedAt ? `Last saved ${savedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "Ready for scoring."}</span>
+      </section>
+
       <section className="score-actions">
-        <button className="undo" onClick={() => mutate("undo", `/api/score/courts/${courtId}/undo`)} disabled={busy != null}><RotateCcw size={20} /> Undo</button>
+        <button className="save" onClick={saveScore} disabled={!dirty || busy != null}><Save size={22} /> Save Score</button>
+        <button className="undo" onClick={undoScore} disabled={busy != null || (!dirty && !state)}><RotateCcw size={20} /> Undo</button>
         <button onClick={() => setEditing(true)} disabled={!state || busy != null}><Pencil size={20} /> Edit</button>
-        <button onClick={() => mutate("set", `/api/score/courts/${courtId}/set-complete`)} disabled={busy != null}><CheckCircle size={20} /> Set Complete</button>
-        <button className="danger" onClick={() => mutate("match", `/api/score/courts/${courtId}/match-complete`)} disabled={busy != null}><Trophy size={20} /> Match Complete</button>
       </section>
 
       {error && <div className="score-error">{error}</div>}
@@ -162,7 +222,9 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
           onSave={async (payload) => {
             setEditing(false);
             await mutate("edit", `/api/score/courts/${courtId}`, payload, "PATCH");
+            setSavedAt(new Date());
           }}
+          draft={draft}
         />
       )}
       <ScoreStyles />
@@ -170,11 +232,22 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
   );
 }
 
-function TeamBlock({ name, score, sets, serving, onPoint, busy, animationId }: { name: string; score: number; sets: number; serving: boolean; onPoint: () => void; busy: boolean; animationId: number }) {
-  const isAnimating = animationId > 0;
+function draftFromState(state: ScorerState): DraftScore {
+  return {
+    teamAScore: state.score.team_a_score,
+    teamBScore: state.score.team_b_score,
+    teamASets: state.score.team_a_sets,
+    teamBSets: state.score.team_b_sets,
+    currentSet: state.score.current_set,
+    servingTeam: state.score.serving_team ?? "none"
+  };
+}
+
+function TeamBlock({ name, score, sets, serving, onPoint, disabled, feedbackId }: { name: string; score: number; sets: number; serving: boolean; onPoint: () => void; disabled: boolean; feedbackId: number }) {
+  const hasFeedback = feedbackId > 0;
   return (
-    <button className={`team-button ${isAnimating ? "scored" : ""}`} onClick={onPoint} disabled={busy}>
-      {isAnimating && <span key={animationId} className="tap-burst" aria-hidden="true" />}
+    <button className={`team-button ${hasFeedback ? "tap-active" : ""}`} onClick={onPoint} disabled={disabled}>
+      {hasFeedback && <span key={feedbackId} className="tap-flash" aria-hidden="true" />}
       <span className="team-name">{serving ? "● " : ""}{name}</span>
       <span className="team-score">{score}</span>
       <span className="team-sets">{sets} sets</span>
@@ -182,7 +255,7 @@ function TeamBlock({ name, score, sets, serving, onPoint, busy, animationId }: {
   );
 }
 
-function EditModal({ state, onClose, onSave }: { state: ScorerState; onClose: () => void; onSave: (payload: Record<string, unknown>) => Promise<void> }) {
+function EditModal({ state, onClose, onSave, draft }: { state: ScorerState; onClose: () => void; onSave: (payload: Record<string, unknown>) => Promise<void>; draft: DraftScore | null }) {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -194,13 +267,13 @@ function EditModal({ state, onClose, onSave }: { state: ScorerState; onClose: ()
       <form className="edit-modal" onSubmit={submit}>
         <h2>Edit Score</h2>
         <div className="edit-grid">
-          <label>Team A Score<input name="teamAScore" type="number" min="0" defaultValue={state.score.team_a_score} /></label>
-          <label>Team B Score<input name="teamBScore" type="number" min="0" defaultValue={state.score.team_b_score} /></label>
-          <label>Team A Sets<input name="teamASets" type="number" min="0" defaultValue={state.score.team_a_sets} /></label>
-          <label>Team B Sets<input name="teamBSets" type="number" min="0" defaultValue={state.score.team_b_sets} /></label>
-          <label>Current Set<input name="currentSet" type="number" min="1" defaultValue={state.score.current_set} /></label>
+          <label>Team A Score<input name="teamAScore" type="number" min="0" defaultValue={draft?.teamAScore ?? state.score.team_a_score} /></label>
+          <label>Team B Score<input name="teamBScore" type="number" min="0" defaultValue={draft?.teamBScore ?? state.score.team_b_score} /></label>
+          <label>Team A Sets<input name="teamASets" type="number" min="0" defaultValue={draft?.teamASets ?? state.score.team_a_sets} /></label>
+          <label>Team B Sets<input name="teamBSets" type="number" min="0" defaultValue={draft?.teamBSets ?? state.score.team_b_sets} /></label>
+          <label>Current Set<input name="currentSet" type="number" min="1" defaultValue={draft?.currentSet ?? state.score.current_set} /></label>
           <label>Serving
-            <select name="servingTeam" defaultValue={state.score.serving_team ?? "none"}>
+            <select name="servingTeam" defaultValue={draft?.servingTeam ?? state.score.serving_team ?? "none"}>
               <option value="none">None</option>
               <option value="A">Team A</option>
               <option value="B">Team B</option>
@@ -263,25 +336,29 @@ function ScoreStyles() {
         overflow: hidden;
         padding: 0;
         position: relative;
+        touch-action: manipulation;
+        transition: border-color 80ms linear, box-shadow 80ms linear, filter 80ms linear;
+        user-select: none;
+        -webkit-tap-highlight-color: transparent;
         text-align: left;
         width: 100%;
       }
-      .team-button.scored {
-        animation: team-pop 420ms ease-out;
+      .team-button:active,
+      .team-button.tap-active {
         border-color: #f8d84a;
-        box-shadow: 0 0 0 4px rgba(248, 216, 74, .28), 0 16px 36px rgba(248, 216, 74, .22);
+        box-shadow: 0 0 0 4px rgba(248, 216, 74, .3);
+        filter: brightness(.98);
       }
-      .team-button.scored .team-score {
-        animation: score-pop 420ms ease-out;
+      .team-button:disabled {
+        opacity: .68;
       }
-      .tap-burst {
-        animation: tap-burst 620ms ease-out;
-        background: radial-gradient(circle at center, rgba(248, 216, 74, .42), rgba(248, 216, 74, .16) 34%, transparent 68%);
+      .tap-flash {
+        animation: tap-flash 180ms linear;
+        background: rgba(248, 216, 74, .24);
         inset: 0;
         opacity: 0;
         pointer-events: none;
         position: absolute;
-        transform: scale(.82);
         z-index: 0;
       }
       .team-name {
@@ -316,10 +393,40 @@ function ScoreStyles() {
         text-transform: uppercase;
         z-index: 1;
       }
+      .save-status {
+        align-items: center;
+        border: 2px solid;
+        border-radius: 8px;
+        display: flex;
+        gap: 8px 14px;
+        justify-content: space-between;
+        margin: 12px auto 0;
+        max-width: 900px;
+        padding: 11px 13px;
+      }
+      .save-status strong {
+        font-size: 15px;
+        font-weight: 950;
+        text-transform: uppercase;
+      }
+      .save-status span {
+        font-size: 14px;
+        font-weight: 750;
+      }
+      .save-status.unsaved {
+        background: #fff7ed;
+        border-color: #fb923c;
+        color: #7c2d12;
+      }
+      .save-status.saved {
+        background: #ecfdf5;
+        border-color: #34d399;
+        color: #065f46;
+      }
       .score-actions {
         display: grid;
         gap: 8px;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: 1fr;
         margin: 12px auto 0;
         max-width: 900px;
       }
@@ -334,10 +441,18 @@ function ScoreStyles() {
         font-weight: 900;
         gap: 8px;
         justify-content: center;
-        min-height: 52px;
+        min-height: 56px;
+      }
+      .score-actions .save {
+        background: #047857;
+        font-size: 18px;
+        min-height: 64px;
+      }
+      .score-actions .save:disabled {
+        background: #9ca3af;
+        color: #f9fafb;
       }
       .score-actions .undo { background: #ea580c; }
-      .score-actions .danger { background: #b91c1c; }
       .score-error,
       .score-busy {
         border-radius: 8px;
@@ -355,15 +470,19 @@ function ScoreStyles() {
         display: flex;
         inset: 0;
         justify-content: center;
+        overflow-y: auto;
         padding: 16px;
         position: fixed;
+        z-index: 1000;
       }
       .edit-modal {
         background: white;
         border-radius: 8px;
         max-width: 540px;
         padding: 18px;
+        position: relative;
         width: 100%;
+        z-index: 1001;
       }
       .edit-grid {
         display: grid;
@@ -389,23 +508,18 @@ function ScoreStyles() {
         .team-button { grid-template-columns: minmax(0, 1fr) 96px; min-height: 142px; }
         .team-name { font-size: 24px; padding: 16px; }
         .team-score { font-size: 60px; }
-        .score-actions { grid-template-columns: 1fr; }
+        .save-status {
+          align-items: flex-start;
+          flex-direction: column;
+        }
         .edit-grid { grid-template-columns: 1fr; }
+        .modal-backdrop {
+          align-items: flex-start;
+        }
       }
-      @keyframes team-pop {
-        0% { transform: scale(1); }
-        42% { transform: scale(.985); }
-        100% { transform: scale(1); }
-      }
-      @keyframes score-pop {
-        0% { transform: scale(1); }
-        45% { transform: scale(1.14); }
-        100% { transform: scale(1); }
-      }
-      @keyframes tap-burst {
-        0% { opacity: 0; transform: scale(.72); }
-        18% { opacity: 1; }
-        100% { opacity: 0; transform: scale(1.18); }
+      @keyframes tap-flash {
+        0% { opacity: 1; }
+        100% { opacity: 0; }
       }
     `}</style>
   );
