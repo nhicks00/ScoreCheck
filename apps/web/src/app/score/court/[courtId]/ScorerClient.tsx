@@ -59,6 +59,7 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
   const draftRef = useRef<DraftScore | null>(null);
   const dirtyRef = useRef(false);
   const dirtyVersionRef = useRef(0);
+  const undoStackRef = useRef<DraftScore[]>([]);
   const retryCountRef = useRef(0);
   const saveInFlightRef = useRef(false);
   const saveScoreRef = useRef<(manual?: boolean) => Promise<void>>(async () => {});
@@ -78,8 +79,11 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
       setError(json.error ?? "Scorer link is not valid");
       return;
     }
+    const savedDraft = draftFromState(json);
     setState(json);
-    setDraft(draftFromState(json));
+    setDraft(savedDraft);
+    draftRef.current = savedDraft;
+    undoStackRef.current = [];
     setDraftHistory([]);
     setDirty(false);
     dirtyRef.current = false;
@@ -118,34 +122,41 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
     tapFeedbackTimer.current = setTimeout(() => setTapFeedback(null), 180);
   }
 
+  function markUnsaved() {
+    dirtyRef.current = true;
+    dirtyVersionRef.current += 1;
+    setDirty(true);
+    setDirtyVersion(dirtyVersionRef.current);
+  }
+
   function scorePoint(team: "A" | "B") {
-    if (!draft) {
+    const current = draftRef.current;
+    if (!current) {
       return;
     }
     triggerTapFeedback(team);
-    setDraft((current) => {
-      if (!current) return current;
-      setDraftHistory((history) => [...history.slice(-49), current]);
-      return {
-        ...current,
-        teamAScore: team === "A" ? current.teamAScore + 1 : current.teamAScore,
-        teamBScore: team === "B" ? current.teamBScore + 1 : current.teamBScore
-      };
-    });
-    setDirty(true);
-    dirtyRef.current = true;
-    setDirtyVersion((version) => version + 1);
+    const next = {
+      ...current,
+      teamAScore: team === "A" ? current.teamAScore + 1 : current.teamAScore,
+      teamBScore: team === "B" ? current.teamBScore + 1 : current.teamBScore
+    };
+    undoStackRef.current = [...undoStackRef.current.slice(-49), current];
+    setDraftHistory(undoStackRef.current);
+    draftRef.current = next;
+    setDraft(next);
+    markUnsaved();
     setError(null);
   }
 
   async function undoScore() {
-    if (draftHistory.length) {
-      const previous = draftHistory[draftHistory.length - 1];
+    if (undoStackRef.current.length) {
+      const nextStack = undoStackRef.current.slice(0, -1);
+      const previous = undoStackRef.current[undoStackRef.current.length - 1];
+      undoStackRef.current = nextStack;
+      setDraftHistory(nextStack);
+      draftRef.current = previous;
       setDraft(previous);
-      setDraftHistory((history) => history.slice(0, -1));
-      setDirty(true);
-      dirtyRef.current = true;
-      setDirtyVersion((version) => version + 1);
+      markUnsaved();
       setError(null);
       return;
     }
