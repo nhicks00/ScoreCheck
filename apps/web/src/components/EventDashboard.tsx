@@ -2,7 +2,7 @@
 
 import { Copy, HeartPulse, Link as LinkIcon, Minus, Pause, Pencil, Play, Plus, RefreshCw, RotateCcw, RotateCw, ShieldOff, Snowflake, StepForward, Trophy, Unlock } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { FormEvent, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 type DashboardEvent = {
@@ -127,6 +127,10 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
     label: `${match.match_number ?? "Match"} - ${match.team_a ?? "Team A"} vs ${match.team_b ?? "Team B"}`
   })), [matches]);
   const vblMatches = useMemo(() => matches.filter((match) => (match.source_type ?? "vbl") === "vbl"), [matches]);
+  const manualCourts = useMemo(() => courts.filter((court) => {
+    const active = firstRelation(court.matches);
+    return court.mode === "manual" || court.mode === "hybrid" || active?.source_type === "manual";
+  }), [courts]);
 
   const queueByCourt = useMemo(() => {
     const map = new Map<string, QueueRow[]>();
@@ -142,6 +146,10 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
   const workerAgeMs = latestHeartbeat?.last_seen_at ? Date.now() - new Date(latestHeartbeat.last_seen_at).getTime() : null;
   const workerIsFresh = workerAgeMs != null && workerAgeMs <= 60_000;
   const overlayLayout = event.settings?.overlayLayout === "top-left" ? "top-left" : "bottom-left";
+
+  useEffect(() => {
+    setLinksByCourt(loadStoredScorerLinks(event.id));
+  }, [event.id]);
 
   async function call(label: string, url: string, body?: Record<string, unknown>, method = "POST") {
     setBusy(label);
@@ -168,19 +176,27 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
     const body = Object.fromEntries(form.entries());
     const json = await call("manual-session", `/api/events/${event.id}/manual-sessions`, body);
     if (!json?.court?.id) return;
-    setLinksByCourt((current) => ({
-      ...current,
-      [json.court.id]: { scorerUrl: json.scorerUrl, overlayUrl: json.overlayUrl }
-    }));
+    rememberScorerLinks(json.court.id, { scorerUrl: json.scorerUrl, overlayUrl: json.overlayUrl });
   }
 
   async function rotateScorer(courtId: string) {
     const json = await call(`rotate-${courtId}`, `/api/courts/${courtId}/scorer-token/rotate`);
     if (!json?.scorerUrl) return;
-    setLinksByCourt((current) => ({
-      ...current,
-      [courtId]: { ...current[courtId], scorerUrl: json.scorerUrl }
-    }));
+    rememberScorerLinks(courtId, { scorerUrl: json.scorerUrl });
+  }
+
+  function rememberScorerLinks(courtId: string, links: LinkBundle) {
+    setLinksByCourt((current) => {
+      const next = {
+        ...current,
+        [courtId]: {
+          ...current[courtId],
+          ...links
+        }
+      };
+      storeScorerLinks(event.id, next);
+      return next;
+    });
   }
 
   async function startPolling() {
@@ -344,15 +360,23 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
           </form>
           <div className="panel stack">
             <h2>Scorer Links</h2>
-            <p className="muted">Raw scorer URLs are only shown after creation or rotation.</p>
-            {Object.entries(linksByCourt).length === 0 && <p className="muted">No new scorer links in this browser session.</p>}
-            {Object.entries(linksByCourt).map(([courtId, links]) => (
-              <div className="link-card" key={courtId}>
-                <strong>{courtLabel(courts, courtId)}</strong>
-                <button onClick={() => links.scorerUrl && copyText(links.scorerUrl)} disabled={!links.scorerUrl}><Copy size={16} /> Scorer URL</button>
-                <button onClick={() => links.overlayUrl && copyText(links.overlayUrl)} disabled={!links.overlayUrl}><Copy size={16} /> Overlay URL</button>
-              </div>
-            ))}
+            <p className="muted">Scorer URLs generated in this browser session survive refreshes. If a scorer URL is missing, rotate the scorer link to generate a new one.</p>
+            {manualCourts.length === 0 && <p className="muted">No manual sessions yet.</p>}
+            {manualCourts.map((court) => {
+              const links = linksByCourt[court.id] ?? {};
+              const currentOverlayUrl = links.overlayUrl ?? overlayUrl(court);
+              const hasToken = Boolean(court.scorer_token_hash && !court.scorer_token_revoked_at);
+              return (
+                <div className="link-card" key={court.id}>
+                  <strong>{court.display_name}</strong>
+                  <span className={hasToken ? "status live" : "status stale"}>{hasToken ? "scorer link active" : "scorer link missing/revoked"}</span>
+                  <button onClick={() => links.scorerUrl && copyText(links.scorerUrl)} disabled={!links.scorerUrl}><Copy size={16} /> Copy Scorer URL</button>
+                  <button onClick={() => rotateScorer(court.id)} disabled={busy != null}><RotateCw size={16} /> {links.scorerUrl ? "Rotate Scorer URL" : "Generate Scorer URL"}</button>
+                  <button onClick={() => copyText(currentOverlayUrl)}><Copy size={16} /> Copy Overlay URL</button>
+                  {!links.scorerUrl && <p className="muted">The original secret URL cannot be recovered after leaving this browser session. Generate a new scorer URL if you need to share it again.</p>}
+                </div>
+              );
+            })}
           </div>
         </section>
       )}
@@ -572,12 +596,29 @@ function firstRelation<T>(value: T | T[] | null | undefined): T | null {
   return Array.isArray(value) ? value[0] ?? null : value ?? null;
 }
 
-function courtLabel(courts: DashboardCourt[], courtId: string) {
-  return courts.find((court) => court.id === courtId)?.display_name ?? "New court";
-}
-
 function copyText(value: string) {
   void navigator.clipboard.writeText(value);
+}
+
+function scorerLinksStorageKey(eventId: string) {
+  return `mcs:scorer-links:${eventId}`;
+}
+
+function loadStoredScorerLinks(eventId: string): Record<string, LinkBundle> {
+  if (typeof window === "undefined") return {};
+  const raw = window.sessionStorage.getItem(scorerLinksStorageKey(eventId));
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, LinkBundle> : {};
+  } catch {
+    return {};
+  }
+}
+
+function storeScorerLinks(eventId: string, links: Record<string, LinkBundle>) {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.setItem(scorerLinksStorageKey(eventId), JSON.stringify(links));
 }
 
 function scoreSourceLabel(mode: DashboardCourt["mode"], score: DashboardScore | null) {
