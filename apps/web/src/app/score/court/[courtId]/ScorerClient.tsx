@@ -48,10 +48,20 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<DraftScore | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [dirtyVersion, setDirtyVersion] = useState(0);
   const [draftHistory, setDraftHistory] = useState<DraftScore[]>([]);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "retrying">("idle");
+  const [retryCount, setRetryCount] = useState(0);
   const [tapFeedback, setTapFeedback] = useState<{ team: "A" | "B"; id: number } | null>(null);
   const tapFeedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const draftRef = useRef<DraftScore | null>(null);
+  const dirtyRef = useRef(false);
+  const dirtyVersionRef = useRef(0);
+  const retryCountRef = useRef(0);
+  const saveInFlightRef = useRef(false);
+  const saveScoreRef = useRef<(manual?: boolean) => Promise<void>>(async () => {});
   const teamA = state?.match?.team_a ?? "Team A";
   const teamB = state?.match?.team_b ?? "Team B";
 
@@ -72,6 +82,7 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
     setDraft(draftFromState(json));
     setDraftHistory([]);
     setDirty(false);
+    dirtyRef.current = false;
     setError(null);
   }, [stateUrl, token]);
 
@@ -108,7 +119,7 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
   }
 
   function scorePoint(team: "A" | "B") {
-    if (!draft || busy === "save") {
+    if (!draft) {
       return;
     }
     triggerTapFeedback(team);
@@ -122,6 +133,8 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
       };
     });
     setDirty(true);
+    dirtyRef.current = true;
+    setDirtyVersion((version) => version + 1);
     setError(null);
   }
 
@@ -130,31 +143,107 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
       const previous = draftHistory[draftHistory.length - 1];
       setDraft(previous);
       setDraftHistory((history) => history.slice(0, -1));
-      setDirty(draftHistory.length > 1);
+      const stillDirty = draftHistory.length > 1;
+      setDirty(stillDirty);
+      dirtyRef.current = stillDirty;
+      if (stillDirty) {
+        setDirtyVersion((version) => version + 1);
+      }
       setError(null);
       return;
     }
     await mutate("undo", `/api/score/courts/${courtId}/undo`);
   }
 
-  async function saveScore() {
-    if (!draft || !dirty) {
+  async function saveScore(manual = true) {
+    if (!draftRef.current || !dirtyRef.current) {
       return;
     }
-    const ok = await mutate("save", `/api/score/courts/${courtId}`, draft, "PATCH");
-    if (ok) {
+    await saveDraft(draftRef.current, dirtyVersionRef.current, manual);
+  }
+  saveScoreRef.current = saveScore;
+
+  async function saveDraft(scoreToSave: DraftScore, versionToSave: number, manual: boolean) {
+    if (saveInFlightRef.current) {
+      return;
+    }
+    saveInFlightRef.current = true;
+    setSaveStatus(retryCountRef.current > 0 && !manual ? "retrying" : "saving");
+    if (manual) {
+      setError(null);
+    }
+
+    try {
+      const res = await fetch(`/api/score/courts/${courtId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token, actionId: crypto.randomUUID(), ...scoreToSave })
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !savedResponseMatchesDraft(json.score, scoreToSave)) {
+        throw new Error(json.error ?? "Score save did not finish");
+      }
+
+      saveInFlightRef.current = false;
+      setSaveStatus("idle");
+      retryCountRef.current = 0;
+      setRetryCount(0);
       setSavedAt(new Date());
+      if (dirtyVersionRef.current === versionToSave) {
+        setDirty(false);
+        dirtyRef.current = false;
+        setDraftHistory([]);
+        await refresh();
+      } else {
+        scheduleAutoSave(120);
+      }
+    } catch {
+      saveInFlightRef.current = false;
+      setSaveStatus("retrying");
+      retryCountRef.current += 1;
+      setRetryCount(retryCountRef.current);
+      setError("Score has not reached the overlay yet. Retrying automatically; tap Save Score to retry now.");
+      scheduleAutoSave(retryDelay(retryCountRef.current));
     }
   }
+
+  const scheduleAutoSave = useCallback((delayMs = 650) => {
+    if (autoSaveTimer.current) {
+      clearTimeout(autoSaveTimer.current);
+    }
+    autoSaveTimer.current = setTimeout(() => {
+      if (draftRef.current && dirtyRef.current) {
+        void saveScoreRef.current(false);
+      }
+    }, delayMs);
+  }, []);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
   useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
+
+  useEffect(() => {
+    dirtyRef.current = dirty;
+  }, [dirty]);
+
+  useEffect(() => {
+    dirtyVersionRef.current = dirtyVersion;
+    if (dirty && draft) {
+      scheduleAutoSave(650);
+    }
+  }, [dirty, dirtyVersion, draft, scheduleAutoSave]);
+
+  useEffect(() => {
     return () => {
       if (tapFeedbackTimer.current) {
         clearTimeout(tapFeedbackTimer.current);
+      }
+      if (autoSaveTimer.current) {
+        clearTimeout(autoSaveTimer.current);
       }
     };
   }, []);
@@ -204,11 +293,11 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
 
       <section className={`save-status ${dirty ? "unsaved" : "saved"}`}>
         <strong>{dirty ? "Unsaved score changes" : "Score saved"}</strong>
-        <span>{dirty ? "Tap Save Score when the score is correct." : savedAt ? `Last saved ${savedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "Ready for scoring."}</span>
+        <span>{saveStatus === "saving" ? "Saving to overlay..." : saveStatus === "retrying" ? `Retrying save${retryCount ? ` (${retryCount})` : ""}...` : dirty ? "Auto-saving. Tap Save Score to retry now." : savedAt ? `Last saved ${savedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "Ready for scoring."}</span>
       </section>
 
       <section className="score-actions">
-        <button className="save" onClick={saveScore} disabled={!dirty || busy != null}><Save size={22} /> Save Score</button>
+        <button className="save" onClick={() => saveScore(true)} disabled={!dirty || busy != null}><Save size={22} /> Save Score</button>
         <button className="undo" onClick={undoScore} disabled={busy != null || (!dirty && !state)}><RotateCcw size={20} /> Undo</button>
         <button onClick={() => setEditing(true)} disabled={!state || busy != null}><Pencil size={20} /> Edit</button>
       </section>
@@ -241,6 +330,25 @@ function draftFromState(state: ScorerState): DraftScore {
     currentSet: state.score.current_set,
     servingTeam: state.score.serving_team ?? "none"
   };
+}
+
+function savedResponseMatchesDraft(score: unknown, draft: DraftScore) {
+  if (!score || typeof score !== "object") {
+    return false;
+  }
+  const row = score as Record<string, unknown>;
+  return (
+    Number(row.team_a_score) === draft.teamAScore &&
+    Number(row.team_b_score) === draft.teamBScore &&
+    Number(row.team_a_sets) === draft.teamASets &&
+    Number(row.team_b_sets) === draft.teamBSets &&
+    Number(row.current_set) === draft.currentSet &&
+    ((row.serving_team === null || row.serving_team === undefined ? "none" : row.serving_team) === draft.servingTeam)
+  );
+}
+
+function retryDelay(retryCount: number) {
+  return Math.min(1000 * 2 ** Math.max(0, retryCount - 1), 8000);
 }
 
 function TeamBlock({ name, score, sets, serving, onPoint, disabled, feedbackId }: { name: string; score: number; sets: number; serving: boolean; onPoint: () => void; disabled: boolean; feedbackId: number }) {
