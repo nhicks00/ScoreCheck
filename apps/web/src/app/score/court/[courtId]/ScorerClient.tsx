@@ -1,6 +1,6 @@
 "use client";
 
-import { Pencil, RotateCcw, Save } from "lucide-react";
+import { ArrowLeft, ArrowRight, Pencil, RotateCcw, Save } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type ScorerState = {
@@ -19,6 +19,7 @@ type ScorerState = {
     team_b: string | null;
     round_name: string | null;
     match_number: string | null;
+    format?: Record<string, unknown> | null;
   } | null;
   score: {
     team_a_score: number;
@@ -26,9 +27,17 @@ type ScorerState = {
     team_a_sets: number;
     team_b_sets: number;
     current_set: number;
+    set_scores: ManualSetScore[];
     serving_team: "A" | "B" | null;
     status: string;
   };
+};
+
+type ManualSetScore = {
+  setNumber: number;
+  teamAScore: number;
+  teamBScore: number;
+  isComplete: boolean;
 };
 
 type DraftScore = {
@@ -37,7 +46,14 @@ type DraftScore = {
   teamASets: number;
   teamBSets: number;
   currentSet: number;
+  setScores: ManualSetScore[];
   servingTeam: "A" | "B" | "none";
+  status: string;
+};
+
+type ManualFormat = {
+  bestOf: number;
+  setsToWin: number;
 };
 
 export function ScorerClient({ courtId, initialToken }: { courtId: string; initialToken: string }) {
@@ -65,6 +81,7 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
   const saveScoreRef = useRef<(manual?: boolean) => Promise<void>>(async () => {});
   const teamA = state?.match?.team_a ?? "Team A";
   const teamB = state?.match?.team_b ?? "Team B";
+  const format = useMemo(() => formatFromMatch(state?.match ?? null), [state?.match]);
 
   const stateUrl = useMemo(() => `/api/score/courts/${courtId}/state?token=${encodeURIComponent(token)}`, [courtId, token]);
 
@@ -140,6 +157,24 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
       teamAScore: team === "A" ? current.teamAScore + 1 : current.teamAScore,
       teamBScore: team === "B" ? current.teamBScore + 1 : current.teamBScore
     };
+    undoStackRef.current = [...undoStackRef.current.slice(-49), current];
+    setDraftHistory(undoStackRef.current);
+    draftRef.current = next;
+    setDraft(next);
+    markUnsaved();
+    setError(null);
+  }
+
+  function changeSet(direction: "next" | "previous") {
+    const current = draftRef.current;
+    if (!current) {
+      return;
+    }
+    const next = direction === "next" ? advanceSet(current, format) : retreatSet(current, format);
+    if (!next) {
+      setError(direction === "next" ? "Enter a non-tied set score before moving to the next set." : "Already on the first set.");
+      return;
+    }
     undoStackRef.current = [...undoStackRef.current.slice(-49), current];
     setDraftHistory(undoStackRef.current);
     draftRef.current = next;
@@ -307,6 +342,8 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
 
       <section className="score-actions">
         <button className="save" onClick={() => saveScore(true)} disabled={!dirty || busy != null}><Save size={22} /> Save Score</button>
+        <button className="set-nav" onClick={() => changeSet("previous")} disabled={!draft || busy != null || (draft.currentSet <= 1 && !draft.setScores.length)}><ArrowLeft size={20} /> Previous Set</button>
+        <button className="set-nav" onClick={() => changeSet("next")} disabled={!draft || busy != null || draft.status.toLowerCase().includes("final")}><ArrowRight size={20} /> Next Set</button>
         <button className="undo" onClick={undoScore} disabled={busy != null || (!dirty && !state)}><RotateCcw size={20} /> Undo</button>
         <button onClick={() => setEditing(true)} disabled={!state || busy != null}><Pencil size={20} /> Edit</button>
       </section>
@@ -337,7 +374,71 @@ function draftFromState(state: ScorerState): DraftScore {
     teamASets: state.score.team_a_sets,
     teamBSets: state.score.team_b_sets,
     currentSet: state.score.current_set,
-    servingTeam: state.score.serving_team ?? "none"
+    setScores: Array.isArray(state.score.set_scores) ? state.score.set_scores : [],
+    servingTeam: state.score.serving_team ?? "none",
+    status: state.score.status
+  };
+}
+
+function formatFromMatch(match: ScorerState["match"]): ManualFormat {
+  const raw = match?.format ?? {};
+  const bestOf = numberValue(raw.bestOf) ?? 3;
+  return {
+    bestOf,
+    setsToWin: numberValue(raw.setsToWin) ?? Math.ceil(bestOf / 2)
+  };
+}
+
+function advanceSet(current: DraftScore, format: ManualFormat) {
+  if (current.teamAScore === current.teamBScore) {
+    return null;
+  }
+  const completedCurrent = {
+    setNumber: current.currentSet,
+    teamAScore: current.teamAScore,
+    teamBScore: current.teamBScore,
+    isComplete: true
+  };
+  const setScores = [
+    ...current.setScores.filter((set) => set.setNumber !== current.currentSet),
+    completedCurrent
+  ].sort((a, b) => a.setNumber - b.setNumber);
+  const teamASets = setScores.filter((set) => set.isComplete && set.teamAScore > set.teamBScore).length;
+  const teamBSets = setScores.filter((set) => set.isComplete && set.teamBScore > set.teamAScore).length;
+  const isFinal = teamASets >= format.setsToWin || teamBSets >= format.setsToWin || current.currentSet >= format.bestOf;
+  return {
+    ...current,
+    teamAScore: isFinal ? current.teamAScore : 0,
+    teamBScore: isFinal ? current.teamBScore : 0,
+    teamASets,
+    teamBSets,
+    currentSet: isFinal ? current.currentSet : current.currentSet + 1,
+    setScores,
+    status: isFinal ? "Final" : "In Progress"
+  };
+}
+
+function retreatSet(current: DraftScore, format: ManualFormat) {
+  const currentSetIsComplete = current.setScores.some((set) => set.setNumber === current.currentSet && set.isComplete);
+  const targetSetNumber = currentSetIsComplete ? current.currentSet : current.currentSet - 1;
+  if (targetSetNumber < 1) {
+    return null;
+  }
+  const previousSet = current.setScores.find((set) => set.setNumber === targetSetNumber);
+  const setScores = current.setScores
+    .filter((set) => set.setNumber < targetSetNumber)
+    .sort((a, b) => a.setNumber - b.setNumber);
+  const teamASets = setScores.filter((set) => set.isComplete && set.teamAScore > set.teamBScore).length;
+  const teamBSets = setScores.filter((set) => set.isComplete && set.teamBScore > set.teamAScore).length;
+  return {
+    ...current,
+    teamAScore: previousSet?.teamAScore ?? 0,
+    teamBScore: previousSet?.teamBScore ?? 0,
+    teamASets,
+    teamBSets,
+    currentSet: Math.min(targetSetNumber, format.bestOf),
+    setScores,
+    status: "In Progress"
   };
 }
 
@@ -352,6 +453,7 @@ function savedResponseMatchesDraft(score: unknown, draft: DraftScore) {
     Number(row.team_a_sets) === draft.teamASets &&
     Number(row.team_b_sets) === draft.teamBSets &&
     Number(row.current_set) === draft.currentSet &&
+    (typeof row.status !== "string" || row.status === draft.status) &&
     ((row.serving_team === null || row.serving_team === undefined ? "none" : row.serving_team) === draft.servingTeam)
   );
 }
@@ -371,10 +473,16 @@ function stateWithSavedScore(state: ScorerState | null, score: unknown) {
       team_a_sets: Number(row.team_a_sets),
       team_b_sets: Number(row.team_b_sets),
       current_set: Number(row.current_set),
+      set_scores: Array.isArray(row.set_scores) ? row.set_scores as ManualSetScore[] : state.score.set_scores,
       serving_team: servingTeam,
       status: typeof row.status === "string" ? row.status : state.score.status
     }
   };
+}
+
+function numberValue(value: unknown) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
 }
 
 function retryDelay(retryCount: number) {

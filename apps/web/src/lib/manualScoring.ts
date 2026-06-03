@@ -34,7 +34,14 @@ export const manualEditSchema = z.object({
   teamASets: z.coerce.number().int().min(0).max(5).optional(),
   teamBSets: z.coerce.number().int().min(0).max(5).optional(),
   currentSet: z.coerce.number().int().min(1).max(5).optional(),
-  servingTeam: z.enum(["A", "B", "none"]).optional()
+  servingTeam: z.enum(["A", "B", "none"]).optional(),
+  setScores: z.array(z.object({
+    setNumber: z.coerce.number().int().min(1).max(5),
+    teamAScore: z.coerce.number().int().min(0).max(99),
+    teamBScore: z.coerce.number().int().min(0).max(99),
+    isComplete: z.coerce.boolean()
+  })).optional(),
+  status: z.string().max(40).optional()
 });
 
 export function defaultManualState(): ManualScoreState {
@@ -124,6 +131,8 @@ export function applyManualEdit(state: ManualScoreState, edit: z.infer<typeof ma
   if (edit.teamBSets != null) next.team_b_sets = edit.teamBSets;
   if (edit.currentSet != null) next.current_set = edit.currentSet;
   if (edit.servingTeam != null) next.serving_team = edit.servingTeam === "none" ? null : edit.servingTeam;
+  if (edit.setScores != null) next.set_scores = edit.setScores;
+  if (edit.status != null) next.status = edit.status;
   syncCurrentSet(next, format, false);
   return next;
 }
