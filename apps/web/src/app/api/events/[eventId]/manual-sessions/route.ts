@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
-import { getEnv } from "@/lib/env";
+import { publicOrigin } from "@/lib/env";
 import { defaultManualState } from "@/lib/manualScoring";
 import { persistScoreAndOverlay } from "@/lib/scoreState";
 import { generateScorerToken, hashSecret } from "@/lib/security";
@@ -140,7 +140,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ eve
     message: null
   });
 
-  const origin = publicOrigin(req);
+  const origin = publicOrigin(new URL(req.url).origin);
   return NextResponse.json({
     ok: true,
     event,
@@ -170,11 +170,6 @@ function formatFromBody(body: z.infer<typeof manualSessionSchema>) {
     cap: Number.isFinite(cap) ? cap : null,
     setsToWin: Math.ceil(bestOf / 2)
   };
-}
-
-function publicOrigin(req: NextRequest) {
-  const configured = getEnv().publicSiteUrl;
-  return (configured || new URL(req.url).origin).replace(/\/$/, "");
 }
 
 function cleanText(value: string | undefined) {

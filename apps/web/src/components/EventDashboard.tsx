@@ -211,11 +211,11 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
   }
 
   function overlayUrl(court: DashboardCourt) {
-    return `${siteUrl.replace(/\/$/, "")}/overlay/stream/${court.court_number}`;
+    return `${browserOrigin(siteUrl)}/overlay/stream/${court.court_number}`;
   }
 
   function eventOverlayUrl(court: DashboardCourt) {
-    return `${siteUrl.replace(/\/$/, "")}/overlay/court/${court.court_number}?eventId=${event.id}`;
+    return `${browserOrigin(siteUrl)}/overlay/court/${court.court_number}?eventId=${event.id}`;
   }
 
   return (
@@ -370,7 +370,7 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
                 <div className="link-card" key={court.id}>
                   <strong>{court.display_name}</strong>
                   <span className={hasToken ? "status live" : "status stale"}>{hasToken ? "scorer link active" : "scorer link missing/revoked"}</span>
-                  <button onClick={() => links.scorerUrl && copyText(links.scorerUrl)} disabled={!links.scorerUrl}><Copy size={16} /> Copy Scorer URL</button>
+                  <button onClick={() => links.scorerUrl && copyText(normalizeScorerUrl(links.scorerUrl, siteUrl, court.id))} disabled={!links.scorerUrl}><Copy size={16} /> Copy Scorer URL</button>
                   <button onClick={() => rotateScorer(court.id)} disabled={busy != null}><RotateCw size={16} /> {links.scorerUrl ? "Rotate Scorer URL" : "Generate Scorer URL"}</button>
                   <button onClick={() => copyText(currentOverlayUrl)}><Copy size={16} /> Copy Overlay URL</button>
                   {!links.scorerUrl && <p className="muted">The original secret URL cannot be recovered after leaving this browser session. Generate a new scorer URL if you need to share it again.</p>}
@@ -424,7 +424,7 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
                   <button onClick={() => copyText(overlayUrl(court))}><Copy size={16} /> Overlay</button>
                   <button onClick={() => copyText(eventOverlayUrl(court))}><Copy size={16} /> Event Overlay</button>
                   <button onClick={() => rotateScorer(court.id)}><RotateCw size={16} /> Rotate Scorer</button>
-                  <button onClick={() => links?.scorerUrl && copyText(links.scorerUrl)} disabled={!links?.scorerUrl}><Copy size={16} /> Scorer</button>
+                  <button onClick={() => links?.scorerUrl && copyText(normalizeScorerUrl(links.scorerUrl, siteUrl, court.id))} disabled={!links?.scorerUrl}><Copy size={16} /> Scorer</button>
                   <button onClick={() => call(`revoke-${court.id}`, `/api/courts/${court.id}/scorer-token/revoke`)}><ShieldOff size={16} /> Revoke</button>
                   <button onClick={() => call(`next-${court.id}`, `/api/courts/${court.id}/force-next`)}><StepForward size={16} /> Next</button>
                   <button className={court.frozen ? "" : "warn"} onClick={() => call(`freeze-${court.id}`, `/api/courts/${court.id}/${court.frozen ? "unfreeze" : "freeze"}`)}>
@@ -598,6 +598,52 @@ function firstRelation<T>(value: T | T[] | null | undefined): T | null {
 
 function copyText(value: string) {
   void navigator.clipboard.writeText(value);
+}
+
+function browserOrigin(configuredSiteUrl: string) {
+  const configured = configuredSiteUrl.trim().replace(/\/$/, "");
+  if (configured) {
+    try {
+      return new URL(configured).origin;
+    } catch {
+      if (configured.includes(".")) {
+        try {
+          return new URL(`https://${configured}`).origin;
+        } catch {
+          // Fall through to current browser origin.
+        }
+      }
+    }
+  }
+  return typeof window === "undefined" ? "http://localhost:3000" : window.location.origin;
+}
+
+function normalizeCopiedUrl(value: string, configuredSiteUrl: string) {
+  try {
+    return new URL(value).toString();
+  } catch {
+    const origin = browserOrigin(configuredSiteUrl);
+    if (value.startsWith("/")) {
+      return new URL(value, origin).toString();
+    }
+    const scorePathIndex = value.indexOf("/score/court/");
+    if (scorePathIndex >= 0) {
+      return new URL(value.slice(scorePathIndex), origin).toString();
+    }
+    return new URL(value, origin).toString();
+  }
+}
+
+function normalizeScorerUrl(value: string, configuredSiteUrl: string, courtId: string) {
+  const normalized = normalizeCopiedUrl(value, configuredSiteUrl);
+  if (normalized.includes("/score/court/")) {
+    return normalized;
+  }
+  const lastSegment = value.split(/[/?#]/).filter(Boolean).pop();
+  if (lastSegment) {
+    return new URL(`/score/court/${courtId}?token=${encodeURIComponent(lastSegment)}`, browserOrigin(configuredSiteUrl)).toString();
+  }
+  return normalized;
 }
 
 function scorerLinksStorageKey(eventId: string) {

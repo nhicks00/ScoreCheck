@@ -50,3 +50,21 @@ export function assertSupabaseConfigured(): AppEnv {
   }
   return env;
 }
+
+export function publicOrigin(fallbackOrigin?: string): string {
+  const configured = getEnv().publicSiteUrl.trim().replace(/\/$/, "");
+  if (configured) {
+    try {
+      return new URL(configured).origin;
+    } catch {
+      if (configured.includes(".")) {
+        try {
+          return new URL(`https://${configured}`).origin;
+        } catch {
+          // Fall through to request origin/default.
+        }
+      }
+    }
+  }
+  return (fallbackOrigin || "http://localhost:3000").replace(/\/$/, "");
+}

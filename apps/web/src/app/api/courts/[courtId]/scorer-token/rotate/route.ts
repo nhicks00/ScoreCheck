@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
-import { getEnv } from "@/lib/env";
+import { publicOrigin } from "@/lib/env";
 import { generateScorerToken, hashSecret } from "@/lib/security";
 import { supabaseAdmin } from "@/lib/supabase";
 
@@ -25,7 +25,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cou
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  const origin = (getEnv().publicSiteUrl || new URL(req.url).origin).replace(/\/$/, "");
+  const origin = publicOrigin(new URL(req.url).origin);
   return NextResponse.json({
     ok: true,
     token,
