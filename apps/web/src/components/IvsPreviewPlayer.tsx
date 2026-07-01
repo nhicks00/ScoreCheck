@@ -16,7 +16,7 @@ declare global {
       create: () => {
         attachHTMLVideoElement: (element: HTMLVideoElement) => void;
         load: (url: string) => void;
-        play: () => void;
+        play: () => void | Promise<void>;
         delete?: () => void;
       };
     };
@@ -29,6 +29,7 @@ export function IvsPreviewPlayer({ sessionToken, courtNumber, enabled }: IvsPrev
   const [status, setStatus] = useState("Loading preview...");
   const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [playerReady, setPlayerReady] = useState(false);
 
   const loadToken = useCallback(async () => {
     if (!enabled) return;
@@ -47,8 +48,8 @@ export function IvsPreviewPlayer({ sessionToken, courtNumber, enabled }: IvsPrev
       return;
     }
     setPlaybackUrl(json.playbackUrl);
-    setStatus("Preview ready");
-  }, [courtNumber, enabled, sessionToken]);
+    setStatus(playerReady ? "Preview ready" : "Loading video player...");
+  }, [courtNumber, enabled, playerReady, sessionToken]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -58,33 +59,71 @@ export function IvsPreviewPlayer({ sessionToken, courtNumber, enabled }: IvsPrev
   }, [enabled, loadToken]);
 
   useEffect(() => {
-    if (!playbackUrl || !videoRef.current) return;
+    if (!enabled || !playbackUrl || !videoRef.current) return;
     const video = videoRef.current;
+    playerRef.current?.delete?.();
+    playerRef.current = null;
+
+    if (!playerReady) {
+      setStatus("Loading video player...");
+      return;
+    }
+
     if (window.IVSPlayer?.isPlayerSupported) {
-      playerRef.current?.delete?.();
       const player = window.IVSPlayer.create();
       player.attachHTMLVideoElement(video);
       player.load(playbackUrl);
-      void video.play().catch(() => setStatus("Tap play to start preview."));
       playerRef.current = player;
-    } else {
+      setStatus("Preview ready");
+      void Promise.resolve(player.play()).catch(() => setStatus("Tap play to start preview."));
+    } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
       video.src = playbackUrl;
+      setStatus("Preview ready");
       void video.play().catch(() => setStatus("Tap play to start preview."));
+    } else {
+      setPlaybackUrl(null);
+      setStatus("Preview video is not available in this browser.");
+      setError("Preview video is not available in this browser.");
     }
     return () => {
       playerRef.current?.delete?.();
       playerRef.current = null;
     };
-  }, [playbackUrl]);
+  }, [enabled, playbackUrl, playerReady]);
 
   useEffect(() => {
-    if (!enabled || window.IVSPlayer) return;
-    const script = document.createElement("script");
-    script.src = "https://player.live-video.net/1.31.0/amazon-ivs-player.min.js";
-    script.async = true;
-    document.head.appendChild(script);
+    if (!enabled) {
+      setPlayerReady(false);
+      return;
+    }
+    if (window.IVSPlayer) {
+      setPlayerReady(true);
+      return;
+    }
+    let cancelled = false;
+    let script = document.querySelector<HTMLScriptElement>("script[data-amazon-ivs-player]");
+    if (!script) {
+      script = document.createElement("script");
+      script.src = "https://player.live-video.net/1.31.0/amazon-ivs-player.min.js";
+      script.async = true;
+      script.dataset.amazonIvsPlayer = "true";
+      document.head.appendChild(script);
+    }
+    const onLoad = () => {
+      if (!cancelled) setPlayerReady(Boolean(window.IVSPlayer));
+    };
+    const onError = () => {
+      if (cancelled) return;
+      setPlayerReady(false);
+      setStatus("Preview video player could not load.");
+      setError("Preview video player could not load.");
+    };
+    script.addEventListener("load", onLoad);
+    script.addEventListener("error", onError);
     return () => {
-      script.remove();
+      cancelled = true;
+      script?.removeEventListener("load", onLoad);
+      script?.removeEventListener("error", onError);
     };
   }, [enabled]);
 
