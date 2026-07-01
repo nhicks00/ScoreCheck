@@ -82,6 +82,8 @@ export type SessionRow = {
 type MatchRow = {
   id: string;
   event_id: string;
+  source_type?: "vbl" | "manual" | null;
+  api_url?: string | null;
   match_number: string | null;
   round_name: string | null;
   scheduled_time: string | null;
@@ -104,6 +106,10 @@ type ScoreRow = {
   serving_team: string | null;
   timeouts?: Record<string, unknown> | null;
   status: string;
+  source?: "api" | "manual" | "override" | null;
+  source_available?: boolean | null;
+  source_priority?: "primary" | "fallback" | "override" | null;
+  stale?: boolean | null;
 };
 
 type CourtContext = CourtRow & {
@@ -623,6 +629,15 @@ async function applyOfficialSessionAction(context: SessionContext, input: {
   type: SessionActionType;
   payload?: Record<string, unknown>;
 }) {
+  if (apiScoreHasPriority(context)) {
+    const result = await applyBackupSessionAction(context, input);
+    return {
+      ...result,
+      reason: "api_priority",
+      message: "VolleyballLife live scoring is controlling the broadcast. Your taps are saved as backup."
+    };
+  }
+
   const db = supabaseAdmin();
   if (input.actionId) {
     const { data: existing } = await db.from("score_actions").select("next_state").eq("action_id", input.actionId).maybeSingle();
@@ -892,6 +907,22 @@ function priorityFromAuthor(author: Record<string, unknown> | null | undefined):
 
 function scoreSignature(state: ScoreState): string {
   return [state.teamAScore, state.teamBScore, state.teamASets, state.teamBSets, state.currentSet, state.status].join(":");
+}
+
+function apiScoreHasPriority(context: SessionContext): boolean {
+  const score = context.score;
+  if (!context.match?.api_url || context.match.source_type === "manual") return false;
+  if (!score || score.source !== "api" || score.stale) return false;
+  if (score.source_available === false || score.source_priority === "fallback") return false;
+  return scoreLooksLive(score);
+}
+
+function scoreLooksLive(score: ScoreRow): boolean {
+  const status = score.status.toLowerCase();
+  if (status.includes("final") || status.includes("progress")) return true;
+  if (score.team_a_score > 0 || score.team_b_score > 0) return true;
+  if (score.team_a_sets > 0 || score.team_b_sets > 0) return true;
+  return Array.isArray(score.set_scores) && score.set_scores.length > 0;
 }
 
 function firstRelation<T>(value: Relation<T>): T | null {

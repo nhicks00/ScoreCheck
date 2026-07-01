@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeScorePayload } from "../lib/scoring";
+import { isAuthoritativeScorePayload, normalizeScorePayload } from "../lib/scoring";
 import { parseVblUrl } from "../lib/vbl";
 
 describe("VolleyballLife helpers", () => {
@@ -31,5 +31,28 @@ describe("VolleyballLife helpers", () => {
     expect(snapshot.teamBName).toBe("Bravo");
     expect(snapshot.status).toBe("Final");
     expect(snapshot.teamASets).toBe(2);
+  });
+
+  it("uses vMix teamName when players are structured arrays", () => {
+    const payload = [
+      { teamName: "Genny Cruz / Amaya Messier", isMatch: false, game1: 0, game2: 0, game3: 0, players: [{ firstname: "Genny", lastname: "Cruz" }] },
+      { teamName: "Gella Andrew / Jordan Boulware", isMatch: false, game1: 0, game2: 0, game3: 0, players: [{ firstname: "Jordan", lastname: "Boulware" }] }
+    ];
+    const snapshot = normalizeScorePayload(payload);
+
+    expect(snapshot.teamAName).toBe("Genny Cruz / Amaya Messier");
+    expect(snapshot.teamBName).toBe("Gella Andrew / Jordan Boulware");
+    expect(snapshot.status).toBe("Pre-Match");
+    expect(isAuthoritativeScorePayload(payload, snapshot)).toBe(false);
+  });
+
+  it("treats nonzero vMix scores as authoritative", () => {
+    const payload = [
+      { teamName: "Alpha", isMatch: false, game1: 1, game2: 0, game3: 0 },
+      { teamName: "Bravo", isMatch: false, game1: 0, game2: 0, game3: 0 }
+    ];
+    const snapshot = normalizeScorePayload(payload);
+
+    expect(isAuthoritativeScorePayload(payload, snapshot)).toBe(true);
   });
 });

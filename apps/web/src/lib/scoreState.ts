@@ -40,6 +40,8 @@ export type ScoreRecord = {
   timeouts?: Record<string, unknown> | null;
   status: string;
   source: "api" | "manual" | "override";
+  source_available?: boolean | null;
+  source_priority?: "primary" | "fallback" | "override" | null;
   stale: boolean;
   message: string | null;
   last_api_poll_at: string | null;
@@ -62,6 +64,8 @@ export async function persistScoreAndOverlay(
     serving_team?: string | null;
     status: string;
     source: "api" | "manual" | "override";
+    source_available?: boolean;
+    source_priority?: "primary" | "fallback" | "override";
     stale?: boolean;
     message?: string | null;
   }
@@ -83,6 +87,8 @@ export async function persistScoreAndOverlay(
       timeouts: score.timeouts ?? {},
       status: score.status,
       source: score.source,
+      source_available: score.source_available ?? score.source === "api",
+      source_priority: score.source_priority ?? (score.source === "override" ? "override" : score.source === "api" ? "primary" : "fallback"),
       stale: score.stale ?? false,
       message: score.message ?? null,
       last_api_poll_at: score.last_api_poll_at ?? null,

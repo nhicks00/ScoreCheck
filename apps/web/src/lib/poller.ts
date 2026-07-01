@@ -1,5 +1,5 @@
 import { buildOverlayState } from "./overlay";
-import { normalizeScorePayload } from "./scoring";
+import { isAuthoritativeScorePayload, normalizeScorePayload } from "./scoring";
 import { persistScoreAndOverlay } from "./scoreState";
 import { supabaseAdmin } from "./supabase";
 
@@ -20,12 +20,13 @@ type CourtRow = {
   last_update_at: string | null;
   current_match_id: string | null;
   matches?: Relation<MatchRow>;
-  score_states?: Relation<{ source?: string | null }>;
+  score_states?: Relation<ScoreRow>;
 };
 
 type MatchRow = {
   id: string;
   event_id: string;
+  source_type?: "vbl" | "manual" | null;
   api_url: string | null;
   match_number: string | null;
   round_name: string | null;
@@ -37,6 +38,28 @@ type MatchRow = {
   team_a_players: string[] | null;
   team_b_players: string[] | null;
   format: Record<string, unknown> | null;
+};
+
+type ScoreRow = {
+  court_id: string;
+  match_id: string | null;
+  team_a_score: number;
+  team_b_score: number;
+  team_a_sets: number;
+  team_b_sets: number;
+  current_set: number;
+  set_scores: unknown;
+  serving_team: string | null;
+  timeouts?: Record<string, unknown> | null;
+  status: string;
+  source?: "api" | "manual" | "override" | null;
+  source_available?: boolean | null;
+  source_priority?: "primary" | "fallback" | "override" | null;
+  stale?: boolean | null;
+  message?: string | null;
+  last_api_poll_at?: string | null;
+  last_score_change_at?: string | null;
+  updated_at?: string | null;
 };
 
 export async function runPollingWindow(eventId: string, courtId?: string) {
@@ -139,9 +162,15 @@ async function pollCourt(court: CourtRow) {
   }
   const payload = await res.json();
   const snapshot = normalizeScorePayload(payload, match);
+  const sourceAvailable = isAuthoritativeScorePayload(payload, snapshot);
   const now = new Date().toISOString();
 
   const updatedMatch = await updateResolvedTeams(match, snapshot.teamAName, snapshot.teamBName, snapshot.teamASeed, snapshot.teamBSeed);
+  if (!sourceAvailable && currentScore?.source === "manual") {
+    await markApiFallbackActive(court.id, now, "VolleyballLife feed connected; waiting for live score.");
+    return true;
+  }
+
   await persistScoreAndOverlay(court, updatedMatch, {
     court_id: court.id,
     match_id: updatedMatch.id,
@@ -154,13 +183,26 @@ async function pollCourt(court: CourtRow) {
     serving_team: snapshot.servingTeam ?? null,
     status: snapshot.status,
     source: snapshot.source,
+    source_available: sourceAvailable,
+    source_priority: sourceAvailable ? "primary" : "fallback",
     stale: false,
-    message: null,
+    message: sourceAvailable ? null : "VolleyballLife feed connected; waiting for live score.",
     last_api_poll_at: now,
-    last_score_change_at: now,
+    last_score_change_at: sourceAvailable ? now : currentScore?.last_score_change_at ?? now,
     updated_at: now
   });
   return true;
+}
+
+async function markApiFallbackActive(courtId: string, now: string, message: string) {
+  await supabaseAdmin().from("score_states").update({
+    source_available: false,
+    source_priority: "fallback",
+    stale: false,
+    message,
+    last_api_poll_at: now,
+    updated_at: now
+  }).eq("court_id", courtId);
 }
 
 async function updateResolvedTeams(match: MatchRow, teamAName: string, teamBName: string, teamASeed: string | null | undefined, teamBSeed: string | null | undefined) {
@@ -193,6 +235,26 @@ async function markCourtStale(court: CourtRow, message: string) {
   const db = supabaseAdmin();
   const now = new Date().toISOString();
   const match = firstRelation(court.matches);
+  const currentScore = firstRelation(court.score_states);
+  if (currentScore?.source === "manual") {
+    await db.from("score_states").update({
+      source_available: false,
+      source_priority: "fallback",
+      stale: false,
+      message: "VolleyballLife unavailable; manual score active.",
+      last_api_poll_at: now,
+      updated_at: now
+    }).eq("court_id", court.id);
+    await db.from("poller_errors").insert({
+      event_id: court.event_id,
+      court_id: court.id,
+      match_id: match?.id ?? null,
+      source_url: match?.api_url ?? null,
+      message,
+      payload: { courtNumber: court.court_number, fallback: "manual" }
+    });
+    return;
+  }
   const { data: score } = await db
     .from("score_states")
     .select("*")
@@ -204,6 +266,8 @@ async function markCourtStale(court: CourtRow, message: string) {
     const { data: updatedScore } = await db.from("score_states").update({
       stale: true,
       message,
+      source_available: false,
+      source_priority: "fallback",
       last_api_poll_at: now,
       updated_at: now
     }).eq("court_id", court.id).select("*").single();

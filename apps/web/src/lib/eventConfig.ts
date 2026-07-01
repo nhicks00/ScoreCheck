@@ -22,6 +22,11 @@ export const DEFAULT_MATCH_FORMAT = {
   setsToWin: 2
 };
 
+export const AVP_DENVER_VBL_BRACKET_SOURCES = [
+  "https://volleyballlife.com/event/37451/division/136905/round/287193/brackets",
+  "https://volleyballlife.com/event/37451/division/136904/round/287192/brackets"
+];
+
 type Db = ReturnType<typeof supabaseAdmin>;
 
 export type EventRow = {
@@ -50,6 +55,8 @@ export type CourtRow = {
   ivs_channel_arn?: string | null;
   ivs_playback_url?: string | null;
   public_score_url?: string | null;
+  vbl_court_number?: string | null;
+  vbl_court_label?: string | null;
 };
 
 export async function getActiveEvent(db = supabaseAdmin()): Promise<EventRow | null> {
@@ -167,16 +174,31 @@ export async function ensureAvpDenverSeeded(input: {
   if (eventResult.error) throw eventResult.error;
   const event = eventResult.data as EventRow;
 
+  await Promise.all(AVP_DENVER_VBL_BRACKET_SOURCES.map((sourceUrl) => db.from("bracket_sources").upsert({
+    event_id: event.id,
+    source_url: sourceUrl,
+    source_type: "bracket",
+    status: "pending",
+    last_error: null
+  }, { onConflict: "event_id,source_url" })));
+
   for (let courtNumber = 1; courtNumber <= env.courtCount; courtNumber += 1) {
     const ivs = input.courtIvs?.[courtNumber] ?? {};
     const youtube = input.courtYoutube?.[courtNumber] ?? {};
     const displayName = youtube.displayName || `Court ${courtNumber}`;
+    const generatedVblCourt = vblCourtFromDisplayName(displayName);
+    const { data: existingCourt } = await db
+      .from("courts")
+      .select("*")
+      .eq("event_id", event.id)
+      .eq("court_number", courtNumber)
+      .maybeSingle();
     const courtPayload = {
       event_id: event.id,
       court_number: courtNumber,
       display_name: displayName,
       camera_name: `Camera ${courtNumber}`,
-      mode: "manual",
+      mode: existingCourt?.mode === "api" ? "hybrid" : existingCourt?.mode ?? "hybrid",
       status: "waiting",
       frozen: false,
       scoring_open: true,
@@ -186,19 +208,22 @@ export async function ensureAvpDenverSeeded(input: {
       youtube_live_chat_id: youtube.liveChatId || null,
       ivs_channel_arn: ivs.channelArn || null,
       ivs_playback_url: ivs.playbackUrl || null,
+      vbl_court_number: existingCourt?.vbl_court_number ?? generatedVblCourt.number,
+      vbl_court_label: existingCourt?.vbl_court_label ?? generatedVblCourt.label,
       updated_at: now
     };
-    const { data: existingCourt } = await db
-      .from("courts")
-      .select("*")
-      .eq("event_id", event.id)
-      .eq("court_number", courtNumber)
-      .maybeSingle();
     const courtResult = existingCourt
       ? await db.from("courts").update(courtPayload).eq("id", existingCourt.id).select("*").single()
       : await db.from("courts").insert(courtPayload).select("*").single();
     if (courtResult.error) throw courtResult.error;
     const court = courtResult.data as CourtRow;
+
+    const currentMatch = court.current_match_id
+      ? await loadMatch(court.current_match_id, db)
+      : null;
+    if (currentMatch?.source_type === "vbl") {
+      continue;
+    }
 
     const { data: activeMatch } = await db
       .from("matches")
@@ -257,12 +282,31 @@ export async function ensureAvpDenverSeeded(input: {
       timeouts: initial.timeouts,
       status: "Pre-Match",
       source: "manual",
+      source_available: false,
+      source_priority: "fallback",
       stale: false,
       message: null
     });
   }
 
   return event;
+}
+
+async function loadMatch(matchId: string, db: Db) {
+  const { data, error } = await db.from("matches").select("id,source_type").eq("id", matchId).maybeSingle();
+  if (error) throwSupabaseError(error);
+  return data as { id: string; source_type?: string | null } | null;
+}
+
+function vblCourtFromDisplayName(displayName: string): { number: string | null; label: string | null } {
+  const courtNumber = displayName.match(/\bcourt\s+(\d+)\b/i)?.[1] ?? null;
+  if (courtNumber) {
+    return { number: courtNumber, label: `Court ${courtNumber}` };
+  }
+  if (/center/i.test(displayName)) {
+    return { number: null, label: "Center Court" };
+  }
+  return { number: null, label: null };
 }
 
 export function fanScoringSettings(event: EventRow | null | undefined) {

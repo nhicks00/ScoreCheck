@@ -87,7 +87,7 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
       setError(friendlyError(json.error ?? "Scoring action failed."));
       return;
     }
-    setMessage(json.official === false ? "Saved as backup score." : "Broadcast score updated.");
+    setMessage(json.reason === "api_priority" ? "VolleyballLife is updating the broadcast score. Your tap was saved as backup." : json.official === false ? "Saved as backup score." : "Broadcast score updated.");
     await refresh();
   }
 

@@ -18,6 +18,18 @@ export function normalizeScorePayload(payload: unknown, match?: MatchLike | null
   return emptySnapshot(match);
 }
 
+export function isAuthoritativeScorePayload(payload: unknown, snapshot: ScoreSnapshot): boolean {
+  if (Array.isArray(payload)) {
+    return payload.some((row) => {
+      const record = row && typeof row === "object" && !Array.isArray(row) ? row as Record<string, unknown> : null;
+      if (!record) return false;
+      if (record.isMatch === true) return true;
+      return [1, 2, 3, 4, 5].some((setNumber) => safeScore(record[`game${setNumber}`]) > 0);
+    });
+  }
+  return scoreSnapshotHasLiveScore(snapshot);
+}
+
 function normalizeArrayPayload(payload: unknown[], match?: MatchLike | null): ScoreSnapshot {
   const teamA = recordAt(payload, 0);
   const teamB = recordAt(payload, 1);
@@ -52,8 +64,8 @@ function normalizeArrayPayload(payload: unknown[], match?: MatchLike | null): Sc
   return {
     status,
     currentSet: current?.isComplete ? setScores.length + 1 : Math.max(setScores.length, 1),
-    teamAName: cleanText(teamA.players) ?? cleanText(teamA.teamName) ?? match?.team_a ?? "Team A",
-    teamBName: cleanText(teamB.players) ?? cleanText(teamB.teamName) ?? match?.team_b ?? "Team B",
+    teamAName: cleanText(teamA.teamName) ?? teamNameFromPayload(teamA.players) ?? match?.team_a ?? "Team A",
+    teamBName: cleanText(teamB.teamName) ?? teamNameFromPayload(teamB.players) ?? match?.team_b ?? "Team B",
     teamASeed: cleanText(teamA.seed) ?? match?.team_a_seed ?? null,
     teamBSeed: cleanText(teamB.seed) ?? match?.team_b_seed ?? null,
     teamAScore: current?.teamAScore ?? 0,
@@ -144,9 +156,31 @@ function record(value: unknown): Record<string, unknown> | null {
 }
 
 function cleanText(value: unknown): string | null {
+  if (Array.isArray(value)) return null;
   if (value == null) return null;
   const text = String(value).trim();
   return text.length ? text : null;
+}
+
+function teamNameFromPayload(value: unknown): string | null {
+  if (typeof value === "string") return cleanText(value);
+  if (!Array.isArray(value)) return null;
+  const names = value.map((player) => {
+    const record = player && typeof player === "object" && !Array.isArray(player) ? player as Record<string, unknown> : null;
+    if (!record) return null;
+    const first = cleanText(record.firstname);
+    const last = cleanText(record.lastname);
+    return [first, last].filter(Boolean).join(" ").trim() || cleanText(record.name);
+  }).filter((name): name is string => Boolean(name));
+  return names.length ? names.join(" / ") : null;
+}
+
+function scoreSnapshotHasLiveScore(snapshot: ScoreSnapshot): boolean {
+  if (snapshot.status.toLowerCase().includes("final")) return true;
+  if (snapshot.status.toLowerCase().includes("progress")) return true;
+  if (snapshot.teamAScore > 0 || snapshot.teamBScore > 0) return true;
+  if (snapshot.teamASets > 0 || snapshot.teamBSets > 0) return true;
+  return snapshot.setScores.length > 0;
 }
 
 function numberValue(value: unknown): number | null {

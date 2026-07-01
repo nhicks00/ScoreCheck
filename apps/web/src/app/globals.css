@@ -61,6 +61,11 @@ select {
 .grid {
   display: grid;
   gap: 16px;
+  min-width: 0;
+}
+
+.grid > * {
+  min-width: 0;
 }
 
 .grid.two {
@@ -87,6 +92,7 @@ select {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
+  min-width: 0;
   overflow-wrap: anywhere;
   padding: 18px;
 }
@@ -105,6 +111,11 @@ select {
   display: flex;
   gap: 10px;
   justify-content: space-between;
+  min-width: 0;
+}
+
+.row > * {
+  min-width: 0;
 }
 
 .row.wrap {
@@ -280,6 +291,28 @@ label {
   padding: 10px;
 }
 
+.mapping-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.mapping-row {
+  align-items: end;
+  background: #11161a;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(120px, 1fr) minmax(110px, 150px) minmax(160px, 1fr) auto;
+  min-width: 0;
+  padding: 10px;
+}
+
+.mapping-row strong {
+  align-self: center;
+  overflow-wrap: anywhere;
+}
+
 .takeover-panel {
   background: #0d1115;
   border: 1px solid var(--line);
@@ -336,6 +369,7 @@ label {
 
 .scroll-table {
   max-height: 480px;
+  min-width: 0;
   overflow: auto;
 }
 
@@ -348,6 +382,7 @@ label {
 
 .table {
   border-collapse: collapse;
+  min-width: 620px;
   width: 100%;
 }
 
@@ -876,7 +911,8 @@ label {
   .session-actions,
   .correction-grid,
   .metadata-form,
-  .admin-button-row {
+  .admin-button-row,
+  .mapping-row {
     grid-template-columns: 1fr;
   }
 

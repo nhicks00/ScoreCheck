@@ -20,6 +20,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cou
   const matchId = body.matchId || null;
   const now = new Date().toISOString();
   const db = supabaseAdmin();
+  let selectedMatch: AssignableMatch | null = null;
   const { data: existingCourt, error: courtLoadError } = await db
     .from("courts")
     .select("*")
@@ -37,6 +38,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cou
       .eq("event_id", existingCourt.event_id)
       .single();
     if (matchError || !match) return NextResponse.json({ error: matchError?.message ?? "Match not found for this event" }, { status: 404 });
+    selectedMatch = match;
 
     const { data: existingQueue } = await db
       .from("court_match_queue")
@@ -73,7 +75,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cou
 
   const { data: court, error } = await db
     .from("courts")
-    .update({ current_match_id: matchId, status: matchId ? "waiting" : "idle", mode: matchId ? existingCourt.mode : "api", last_update_at: now, updated_at: now })
+    .update({
+      current_match_id: matchId,
+      status: matchId ? "waiting" : "idle",
+      mode: matchId ? modeForAssignedMatch(selectedMatch, existingCourt.mode) : "hybrid",
+      last_update_at: now,
+      updated_at: now
+    })
     .eq("id", courtId)
     .select("*")
     .single();
@@ -99,6 +107,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cou
       timeouts: {},
       status: "Pre-Match",
       source: scoreSourceForMatch(match),
+      source_available: false,
+      source_priority: "fallback",
       stale: false,
       message: null
     });
@@ -109,4 +119,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cou
 function scoreSourceForMatch(match: AssignableMatch | null) {
   if (!match) return "manual";
   return match.source_type === "manual" || !match.api_url ? "manual" : "api";
+}
+
+function modeForAssignedMatch(match: AssignableMatch | null, currentMode: "api" | "manual" | "hybrid") {
+  if (match?.source_type === "manual" || !match?.api_url) return "manual";
+  return currentMode === "manual" ? "hybrid" : currentMode;
 }

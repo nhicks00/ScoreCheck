@@ -9,7 +9,9 @@ const schema = z.object({
   youtubeVideoId: z.string().max(120).nullable().optional(),
   youtubeLiveChatId: z.string().max(180).nullable().optional(),
   ivsChannelArn: z.string().max(300).nullable().optional(),
-  ivsPlaybackUrl: z.string().max(500).nullable().optional()
+  ivsPlaybackUrl: z.string().max(500).nullable().optional(),
+  vblCourtNumber: z.string().max(40).nullable().optional(),
+  vblCourtLabel: z.string().max(120).nullable().optional()
 });
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ courtId: string }> }) {
@@ -26,6 +28,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ co
   if (parsed.data.youtubeLiveChatId !== undefined) patch.youtube_live_chat_id = emptyToNull(parsed.data.youtubeLiveChatId);
   if (parsed.data.ivsChannelArn !== undefined) patch.ivs_channel_arn = emptyToNull(parsed.data.ivsChannelArn);
   if (parsed.data.ivsPlaybackUrl !== undefined) patch.ivs_playback_url = emptyToNull(parsed.data.ivsPlaybackUrl);
+  if (parsed.data.vblCourtNumber !== undefined) patch.vbl_court_number = emptyToNull(parsed.data.vblCourtNumber);
+  if (parsed.data.vblCourtLabel !== undefined) patch.vbl_court_label = emptyToNull(parsed.data.vblCourtLabel);
   const { data, error } = await supabaseAdmin().from("courts").update(patch).eq("id", courtId).select("*").single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true, court: data });

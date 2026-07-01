@@ -38,7 +38,10 @@ type DashboardScore = {
   serving_team: "A" | "B" | null;
   status: string;
   source: "api" | "manual" | "override";
+  source_available?: boolean | null;
+  source_priority?: "primary" | "fallback" | "override" | null;
   stale: boolean;
+  message?: string | null;
   updated_at: string | null;
   last_api_poll_at: string | null;
 };
@@ -55,6 +58,8 @@ type DashboardCourt = {
   last_update_at: string | null;
   scorer_token_hash?: string | null;
   scorer_token_revoked_at?: string | null;
+  vbl_court_number?: string | null;
+  vbl_court_label?: string | null;
   matches?: DashboardMatch | DashboardMatch[] | null;
   score_states?: DashboardScore | DashboardScore[] | null;
 };
@@ -127,6 +132,12 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
     label: `${match.match_number ?? "Match"} - ${match.team_a ?? "Team A"} vs ${match.team_b ?? "Team B"}`
   })), [matches]);
   const vblMatches = useMemo(() => matches.filter((match) => (match.source_type ?? "vbl") === "vbl"), [matches]);
+  const unmappedVblCourts = useMemo(() => {
+    const mapped = new Set(courts.map((court) => court.vbl_court_number).filter(Boolean));
+    return [...new Set(vblMatches.map((match) => match.court_number).filter(Boolean) as string[])]
+      .filter((courtNumber) => !mapped.has(courtNumber))
+      .sort((a, b) => Number(a) - Number(b) || a.localeCompare(b));
+  }, [courts, vblMatches]);
   const manualCourts = useMemo(() => courts.filter((court) => {
     const active = firstRelation(court.matches);
     return court.mode === "manual" || court.mode === "hybrid" || active?.source_type === "manual";
@@ -165,7 +176,7 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
       setMessage(json.error ?? "Request failed");
       return null;
     }
-    setMessage(json.discovered != null ? `Discovered ${json.discovered} matches` : "Saved");
+    setMessage(json.discovered != null ? discoveryMessage(json) : "Saved");
     router.refresh();
     return json;
   }
@@ -177,6 +188,15 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
     const json = await call("manual-session", `/api/events/${event.id}/manual-sessions`, body);
     if (!json?.court?.id) return;
     rememberScorerLinks(json.court.id, { scorerUrl: json.scorerUrl, overlayUrl: json.overlayUrl });
+  }
+
+  async function saveVblMapping(eventSubmit: FormEvent<HTMLFormElement>, courtId: string) {
+    eventSubmit.preventDefault();
+    const form = new FormData(eventSubmit.currentTarget);
+    await call(`vbl-map-${courtId}`, `/api/admin/fan-scoring/courts/${courtId}`, {
+      vblCourtNumber: form.get("vblCourtNumber"),
+      vblCourtLabel: form.get("vblCourtLabel")
+    }, "PATCH");
   }
 
   async function rotateScorer(courtId: string) {
@@ -322,7 +342,7 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
 
           <div className="panel stack">
             <h2>Discovered Matches</h2>
-            <p className="muted">{vblMatches.length} VBL matches available for assignment.</p>
+            <p className="muted">{vblMatches.length} VBL matches available for assignment. {unmappedVblCourts.length ? `Unmapped physical courts: ${unmappedVblCourts.join(", ")}` : "All discovered physical courts are mapped."}</p>
             <div className="scroll-table">
               <table className="table">
                 <thead>
@@ -339,6 +359,21 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+
+          <div className="panel span-all stack">
+            <h2>VBL Court Mapping</h2>
+            <p className="muted">Map VolleyballLife physical court numbers to the eight ScoreCheck stream slots. Unmapped VBL matches stay discovered but are not auto-assigned.</p>
+            <div className="mapping-grid">
+              {courts.map((court) => (
+                <form className="mapping-row" key={court.id} onSubmit={(eventSubmit) => saveVblMapping(eventSubmit, court.id)}>
+                  <strong>{court.display_name}</strong>
+                  <label>VBL court<input name="vblCourtNumber" defaultValue={court.vbl_court_number ?? ""} placeholder="7" /></label>
+                  <label>Label<input name="vblCourtLabel" defaultValue={court.vbl_court_label ?? ""} placeholder={court.display_name} /></label>
+                  <button type="submit" disabled={busy != null}>Save</button>
+                </form>
+              ))}
             </div>
           </div>
         </section>
@@ -600,6 +635,12 @@ function copyText(value: string) {
   void navigator.clipboard.writeText(value);
 }
 
+function discoveryMessage(json: Record<string, unknown>) {
+  const unmapped = Array.isArray(json.unmappedCourts) ? json.unmappedCourts.filter(Boolean).join(", ") : "";
+  const base = `Discovered ${json.discovered} matches, queued ${json.queued ?? 0}, activated ${json.activated ?? 0}`;
+  return unmapped ? `${base}. Unmapped VBL courts: ${unmapped}` : base;
+}
+
 function browserOrigin(configuredSiteUrl: string) {
   const configured = configuredSiteUrl.trim().replace(/\/$/, "");
   if (configured) {
@@ -669,6 +710,8 @@ function storeScorerLinks(eventId: string, links: Record<string, LinkBundle>) {
 
 function scoreSourceLabel(mode: DashboardCourt["mode"], score: DashboardScore | null) {
   if (score?.source === "override") return `${mode} override`;
+  if (score?.source === "api" && score.source_priority === "fallback") return `${mode} / VBL standby`;
+  if (score?.source === "api" && score.source_available === true) return `${mode} / VBL live`;
   if (score?.source && score.source !== mode) return `${mode} / ${score.source}`;
   return mode;
 }

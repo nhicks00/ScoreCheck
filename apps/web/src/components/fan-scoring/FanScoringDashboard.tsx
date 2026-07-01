@@ -14,6 +14,8 @@ type Court = {
   youtube_live_chat_id?: string | null;
   ivs_channel_arn?: string | null;
   ivs_playback_url?: string | null;
+  vbl_court_number?: string | null;
+  vbl_court_label?: string | null;
   matches?: Match | Match[] | null;
   score_states?: Score | Score[] | null;
 };
@@ -116,7 +118,9 @@ export function FanScoringDashboard({
       youtubeVideoId: form.get("youtubeVideoId"),
       youtubeLiveChatId: form.get("youtubeLiveChatId"),
       ivsChannelArn: form.get("ivsChannelArn"),
-      ivsPlaybackUrl: form.get("ivsPlaybackUrl")
+      ivsPlaybackUrl: form.get("ivsPlaybackUrl"),
+      vblCourtNumber: form.get("vblCourtNumber"),
+      vblCourtLabel: form.get("vblCourtLabel")
     });
   }
 
@@ -191,12 +195,14 @@ export function FanScoringDashboard({
                 <button type="button" onClick={() => void copyText("Overlay URL", overlayUrl)}><Eye size={14} /> Overlay URL</button>
               </div>
               <details className="metadata-panel">
-                <summary><Edit3 size={16} /> Edit IVS / YouTube metadata</summary>
+                <summary><Edit3 size={16} /> Edit IVS / YouTube / VBL metadata</summary>
                 <form className="metadata-form" onSubmit={(eventSubmit) => saveMetadata(eventSubmit, court.id)}>
                   <label>YouTube video ID<input name="youtubeVideoId" defaultValue={court.youtube_video_id ?? ""} /></label>
                   <label>YouTube live chat ID<input name="youtubeLiveChatId" defaultValue={court.youtube_live_chat_id ?? ""} /></label>
                   <label>IVS channel ARN<input name="ivsChannelArn" defaultValue={court.ivs_channel_arn ?? ""} /></label>
                   <label>IVS playback URL<input name="ivsPlaybackUrl" defaultValue={court.ivs_playback_url ?? ""} /></label>
+                  <label>VBL court number<input name="vblCourtNumber" defaultValue={court.vbl_court_number ?? ""} placeholder="7" /></label>
+                  <label>VBL court label<input name="vblCourtLabel" defaultValue={court.vbl_court_label ?? ""} placeholder="Court 7" /></label>
                   <button className="primary" type="submit" disabled={busy != null}>Save metadata</button>
                 </form>
               </details>
