@@ -7,12 +7,23 @@
     "build": "next build",
     "start": "next start",
     "worker": "tsx src/worker/index.ts",
+    "worker:youtube": "tsx src/worker/youtube.ts",
+    "worker:all": "tsx src/worker/all.ts",
+    "seed:avp-denver": "tsx src/scripts/seedAvpDenver.ts",
+    "setup:preflight": "tsx src/scripts/setup/preflight.ts",
+    "setup:aws-ivs": "tsx src/scripts/setup/awsIvsSetup.ts",
+    "setup:youtube-denver": "tsx src/scripts/setup/youtubeDenverMetadata.ts",
+    "setup:streamrun:discover": "tsx src/scripts/setup/streamrunDiscover.ts",
+    "setup:streamrun": "tsx src/scripts/setup/streamrunSetup.ts",
+    "setup:vercel-env": "tsx src/scripts/setup/vercelEnvExport.ts",
+    "verify:all": "tsx src/scripts/setup/verifyAll.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.47.10",
+    "jsonwebtoken": "^9.0.2",
     "lucide-react": "^0.468.0",
     "next": "^15.1.3",
     "react": "^19.0.0",
@@ -31,6 +42,7 @@
     "eslint-config-next": "^15.1.3",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
+    "@types/jsonwebtoken": "^9.0.7",
     "vitest": "^4.1.8"
   }
 }

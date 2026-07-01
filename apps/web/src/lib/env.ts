@@ -4,6 +4,20 @@ export type AppEnv = {
   supabaseServiceRoleKey: string;
   adminSecret: string;
   publicSiteUrl: string;
+  defaultEventSlug: string;
+  eventName: string;
+  courtCount: number;
+  timezone: string;
+  awsRegion: string;
+  ivsPlaybackKeyPairId: string;
+  ivsPlaybackKeyPairArn: string;
+  ivsPlaybackPrivateKey: string;
+  youtubeWorkerSharedSecret: string;
+  youtubeApiKey: string;
+  youtubeClientId: string;
+  youtubeClientSecret: string;
+  youtubeRefreshToken: string;
+  youtubeBotPostingEnabled: boolean;
 };
 
 export function getEnv(): AppEnv {
@@ -12,7 +26,21 @@ export function getEnv(): AppEnv {
     supabaseAnonKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "",
     supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
     adminSecret: process.env.ADMIN_SECRET ?? "",
-    publicSiteUrl: process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"
+    publicSiteUrl: process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000",
+    defaultEventSlug: process.env.NEXT_PUBLIC_DEFAULT_EVENT_SLUG ?? "avp-denver",
+    eventName: process.env.NEXT_PUBLIC_EVENT_NAME ?? "AVP Denver Open",
+    courtCount: numberEnv("NEXT_PUBLIC_COURT_COUNT", 8),
+    timezone: process.env.NEXT_PUBLIC_DEFAULT_TIMEZONE ?? "America/Denver",
+    awsRegion: process.env.AWS_REGION ?? "us-west-2",
+    ivsPlaybackKeyPairId: process.env.IVS_PLAYBACK_KEY_PAIR_ID ?? "",
+    ivsPlaybackKeyPairArn: process.env.IVS_PLAYBACK_KEY_PAIR_ARN ?? "",
+    ivsPlaybackPrivateKey: process.env.IVS_PLAYBACK_PRIVATE_KEY ?? "",
+    youtubeWorkerSharedSecret: process.env.YOUTUBE_WORKER_SHARED_SECRET ?? "",
+    youtubeApiKey: process.env.YOUTUBE_API_KEY ?? "",
+    youtubeClientId: process.env.YOUTUBE_CLIENT_ID ?? "",
+    youtubeClientSecret: process.env.YOUTUBE_CLIENT_SECRET ?? "",
+    youtubeRefreshToken: process.env.YOUTUBE_REFRESH_TOKEN ?? "",
+    youtubeBotPostingEnabled: process.env.YOUTUBE_BOT_POSTING_ENABLED === "true"
   };
 }
 
@@ -67,4 +95,36 @@ export function publicOrigin(fallbackOrigin?: string): string {
     }
   }
   return (fallbackOrigin || "http://localhost:3000").replace(/\/$/, "");
+}
+
+export function requestOrigin(origin?: string | null): string {
+  if (origin) {
+    try {
+      return new URL(origin).origin;
+    } catch {
+      // Fall through to configured public origin.
+    }
+  }
+  return publicOrigin();
+}
+
+export function ivsMissingEnvKeys(): string[] {
+  const env = getEnv();
+  return [
+    ["IVS_PLAYBACK_PRIVATE_KEY", env.ivsPlaybackPrivateKey]
+  ]
+    .filter(([, value]) => !value)
+    .map(([key]) => key);
+}
+
+export function courtIvsEnv(courtNumber: number): { channelArn: string; playbackUrl: string } {
+  return {
+    channelArn: process.env[`COURT_${courtNumber}_IVS_CHANNEL_ARN`] ?? "",
+    playbackUrl: process.env[`COURT_${courtNumber}_IVS_PLAYBACK_URL`] ?? ""
+  };
+}
+
+function numberEnv(key: string, fallback: number): number {
+  const value = Number(process.env[key]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
 }

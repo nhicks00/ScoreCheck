@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "MultiCourtScore Cloud",
-  description: "Cloud-hosted live scoreboard overlays for beach volleyball streams"
+  title: "ScoreCheck",
+  description: "Fan-powered live scoring for beach volleyball broadcasts"
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

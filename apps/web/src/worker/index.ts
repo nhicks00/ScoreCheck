@@ -49,3 +49,5 @@ function sleep(ms: number) {
 }
 
 void main();
+
+export {};

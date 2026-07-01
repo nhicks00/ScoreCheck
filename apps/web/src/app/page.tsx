@@ -6,14 +6,17 @@ export default function HomePage() {
     <main className="shell">
       <div className="container stack">
         <div className="topbar">
-          <div className="brand">MultiCourtScore Cloud</div>
-          <Link className="button primary" href="/admin/events">Open Admin</Link>
+          <div className="brand">ScoreCheck</div>
+          <div className="row wrap">
+            <Link className="button primary" href="/score">Score a court</Link>
+            <Link className="button" href="/admin/avp-denver">Open Admin</Link>
+          </div>
         </div>
         <SetupNotice />
         <section className="panel">
-          <h1>Cloud scoreboard overlays for Streamrun</h1>
+          <h1>AVP Denver fan scoring</h1>
           <p className="muted">
-            Configure events, discover VolleyballLife matches, assign courts, and publish public HTTPS overlay URLs from Vercel.
+            Parent-friendly scoring links, verified scorekeeper sessions, private scorer preview video, and read-only StreamRun overlays.
           </p>
         </section>
       </div>
