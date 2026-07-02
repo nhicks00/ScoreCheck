@@ -168,9 +168,10 @@ export function ClaimClient({ courtParam, eventSlug, adminMode }: { courtParam: 
     if (!data) return "Loading";
     if (data.court.scoring_open === false) return "Scoring closed";
     if (data.scorerStatus.needsScorer) return "Needs scorer";
-    if (data.scorerStatus.backups.length === 0) return "Has scorer - backup needed";
-    return "Covered";
+    return "Being scored";
   }, [data]);
+  const teamA = displayTeamName(data?.match?.team_a, "TBD");
+  const teamB = displayTeamName(data?.match?.team_b, "TBD");
 
   return (
     <main className="shell score-shell">
@@ -185,9 +186,9 @@ export function ClaimClient({ courtParam, eventSlug, adminMode }: { courtParam: 
           <h1>{data?.court.display_name ?? `Court ${courtNumber}`}</h1>
           <p className="muted">{data?.event.name ?? "AVP Denver Open"}</p>
           <div className="match-line large">
-            <strong>{data?.match?.team_a ?? "Team on left"}</strong>
+            <strong>{teamA}</strong>
             <span>vs</span>
-            <strong>{data?.match?.team_b ?? "Team on right"}</strong>
+            <strong>{teamB}</strong>
           </div>
         </section>
 
@@ -207,11 +208,9 @@ export function ClaimClient({ courtParam, eventSlug, adminMode }: { courtParam: 
               <div className="watch-toggle mode-toggle" role="group" aria-label="Scoring view">
                 <button type="button" className={watchMode === "courtside" ? "primary" : ""} onClick={() => setWatchMode("courtside")}>
                   <span><MonitorOff size={18} /> Score only</span>
-                  <small>Use video on another screen</small>
                 </button>
                 <button type="button" className={watchMode === "website" ? "primary" : ""} onClick={() => setWatchMode("website")}>
                   <span><MonitorPlay size={18} /> Watch stream + score</span>
-                  <small>Show the preview here</small>
                 </button>
               </div>
               <label>
@@ -257,4 +256,10 @@ function friendlyError(message: string | null): string {
     return "Scoring is not ready yet. Please try again in a moment.";
   }
   return message;
+}
+
+function displayTeamName(value: string | null | undefined, fallback: string): string {
+  const normalized = value?.trim();
+  if (!normalized || /^team on (left|right)$/i.test(normalized)) return fallback;
+  return normalized;
 }

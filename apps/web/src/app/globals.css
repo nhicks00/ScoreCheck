@@ -784,24 +784,27 @@ label {
   align-items: center;
   display: grid;
   gap: 14px;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) 44px;
   min-height: 42px;
 }
 
 .court-team-row strong {
   font-size: clamp(0.95rem, 1.6vw, 1.12rem);
+  justify-self: stretch;
   line-height: 1.12;
   min-width: 0;
   overflow-wrap: anywhere;
+  text-align: center;
   text-wrap: balance;
 }
 
 .court-team-row span {
   font-size: clamp(1.6rem, 2.8vw, 2.2rem);
   font-weight: 950;
+  justify-self: center;
   line-height: 1.08;
-  min-width: 34px;
-  text-align: right;
+  min-width: 0;
+  text-align: center;
 }
 
 .court-versus {

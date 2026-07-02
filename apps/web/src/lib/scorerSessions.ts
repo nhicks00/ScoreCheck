@@ -645,7 +645,7 @@ async function applyOfficialSessionAction(context: SessionContext, input: {
     return {
       ...result,
       reason: "api_priority",
-      message: "VolleyballLife live scoring is controlling the broadcast. Your taps are saved as backup."
+      message: "VolleyballLife live scoring is controlling the broadcast. Your taps are saved for review."
     };
   }
 
@@ -735,7 +735,7 @@ async function applyBackupSessionAction(context: SessionContext, input: {
       match_id: context.match?.id ?? null,
       severity: "warning",
       type: "score_mismatch",
-      message: `${context.session.display_name}'s backup score differs from the official score.`,
+      message: `${context.session.display_name}'s saved score differs from the broadcast score.`,
       payload: { sessionId: context.session.id, official: scoreStateFromDb(context.score), shadow: next }
     });
   }

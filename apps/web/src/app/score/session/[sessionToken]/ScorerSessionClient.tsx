@@ -132,7 +132,7 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
         setError(friendlyError(json.error ?? "Scoring action failed."));
         return false;
       }
-      setMessage(json.reason === "api_priority" ? "VolleyballLife is updating the broadcast score. Your tap was saved as backup." : json.official === false ? "Saved as backup score." : "Broadcast score updated.");
+      setMessage(json.reason === "api_priority" ? "VolleyballLife is updating the broadcast score. Your tap was saved for review." : json.official === false ? "Score saved for review." : "Broadcast score updated.");
       await refresh();
       return true;
     } catch (err) {
@@ -205,8 +205,8 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
   }
 
   const score = state?.session.role === "backup" ? state.shadowScore : state?.officialScore;
-  const teamA = state?.match?.team_a ?? "Team on left";
-  const teamB = state?.match?.team_b ?? "Team on right";
+  const teamA = displayTeamName(state?.match?.team_a, "Team A");
+  const teamB = displayTeamName(state?.match?.team_b, "Team B");
   const disabled = busy != null || !state || !sessionLive;
   const isBackup = state?.session.role === "backup";
   const sessionEnded = Boolean(state && !sessionLive);
@@ -319,7 +319,7 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
   }
 
   function renderTeamScoreControl(side: TeamSide, label: string, value: number, setsWon: number) {
-    const sideLabel = side === "A" ? "Team on left" : "Team on right";
+    const sideLabel = side === "A" ? "Team A" : "Team B";
     const pointBusy = busy === `POINT_${side}`;
     const correctionBusy = busy === "MANUAL_CORRECTION" && pulseTeam === side;
     return (
@@ -369,8 +369,8 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
             <section className={`role-banner ${state.session.role}`}>
               <div>
                 <span>{state.court.displayName}</span>
-                <h1>{sessionEnded ? "Scoring session ended." : isBackup ? "You are a backup scorekeeper." : "You are the live scorekeeper."}</h1>
-                <p>{sessionEnded ? "This page is read-only now." : isBackup ? "Please keep scoring. If the main scorekeeper leaves, you may become live automatically." : "Your taps update the broadcast scoreboard."}</p>
+                <h1>{sessionEnded ? "Scoring session ended." : "You are helping keep score."}</h1>
+                <p>{sessionEnded ? "This page is read-only now." : isBackup ? "Please keep scoring. Your updates are saved for the broadcast team." : "Your taps update the broadcast scoreboard."}</p>
               </div>
               <strong>{state.session.displayName}</strong>
             </section>
@@ -389,11 +389,9 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
             <div className="watch-toggle scorer-toggle mode-toggle" role="group" aria-label="Scoring view">
               <button type="button" className={watchMode === "courtside" ? "primary" : ""} onClick={() => void changeWatchMode("courtside")} disabled={!sessionLive}>
                 <span><MonitorOff size={18} /> Score only</span>
-                <small>Use video on another screen</small>
               </button>
               <button type="button" className={watchMode === "website" ? "primary" : ""} onClick={() => void changeWatchMode("website")} disabled={!sessionLive}>
                 <span><MonitorPlay size={18} /> Watch stream + score</span>
-                <small>Show the preview here</small>
               </button>
             </div>
 
@@ -454,6 +452,12 @@ function draftFromScore(score?: ScoreState): CorrectionDraft {
     servingTeam: score?.servingTeam ?? null,
     status: score?.status ?? "In Progress"
   };
+}
+
+function displayTeamName(value: string | null | undefined, fallback: string): string {
+  const normalized = value?.trim();
+  if (!normalized || /^team on (left|right)$/i.test(normalized)) return fallback;
+  return normalized;
 }
 
 function correctionPayload(draft: CorrectionDraft): ScoreState {

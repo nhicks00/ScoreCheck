@@ -1,6 +1,6 @@
 "use client";
 
-import { RefreshCw, ShieldCheck, Users } from "lucide-react";
+import { RefreshCw, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -80,7 +80,6 @@ export function ScorePortalClient() {
 
         <section className="score-strip">
           <div><ShieldCheck size={18} /> {covered} courts covered</div>
-          <div><Users size={18} /> Backups welcome</div>
           {updatedAt && <div>Updated {updatedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</div>}
         </section>
 
@@ -88,33 +87,37 @@ export function ScorePortalClient() {
         {loading && courts.length === 0 && <div className="panel muted">Loading courts...</div>}
 
         <section className="fan-court-grid">
-          {courts.map((court) => (
-            <article className="fan-court-card" key={court.id}>
-              <div className="court-card-top">
-                <span className="status">{courtStatus(court)}</span>
-                <span className="stream-key-badge" aria-label={`Stream key ${court.courtNumber}`}>Key {court.courtNumber}</span>
-              </div>
-              <h2 className="court-title">{court.displayName || `Court ${court.courtNumber}`}</h2>
-              <div className="court-scoreboard" aria-label={`${court.match?.teamA ?? "Team on left"} versus ${court.match?.teamB ?? "Team on right"}`}>
-                <div className="court-team-row">
-                  <strong>{court.match?.teamA ?? "Team on left"}</strong>
-                  <span>{court.score?.teamAScore ?? 0}</span>
+          {courts.map((court) => {
+            const teamA = displayTeamName(court.match?.teamA, "TBD");
+            const teamB = displayTeamName(court.match?.teamB, "TBD");
+            return (
+              <article className="fan-court-card" key={court.id}>
+                <div className="court-card-top">
+                  <span className="status">{courtStatus(court)}</span>
+                  <span className="stream-key-badge" aria-label={`Stream key ${court.courtNumber}`}>Key {court.courtNumber}</span>
                 </div>
-                <div className="court-versus">vs</div>
-                <div className="court-team-row">
-                  <strong>{court.match?.teamB ?? "Team on right"}</strong>
-                  <span>{court.score?.teamBScore ?? 0}</span>
+                <h2 className="court-title">{court.displayName || `Court ${court.courtNumber}`}</h2>
+                <div className="court-scoreboard" aria-label={`${teamA} versus ${teamB}`}>
+                  <div className="court-team-row">
+                    <strong>{teamA}</strong>
+                    <span>{court.score?.teamAScore ?? 0}</span>
+                  </div>
+                  <div className="court-versus">vs</div>
+                  <div className="court-team-row">
+                    <strong>{teamB}</strong>
+                    <span>{court.score?.teamBScore ?? 0}</span>
+                  </div>
                 </div>
-              </div>
-              <div className="court-set-row">
-                <span>Set {court.score?.currentSet ?? 1}</span>
-                <small>Sets {court.score?.teamASets ?? 0}-{court.score?.teamBSets ?? 0}</small>
-              </div>
-              <Link className="button primary fan-cta" href={`/score/court/${court.courtNumber}`}>
-                Help score {court.displayName || `Court ${court.courtNumber}`}
-              </Link>
-            </article>
-          ))}
+                <div className="court-set-row">
+                  <span>Set {court.score?.currentSet ?? 1}</span>
+                  <small>Sets {court.score?.teamASets ?? 0}-{court.score?.teamBSets ?? 0}</small>
+                </div>
+                <Link className="button primary fan-cta" href={`/score/court/${court.courtNumber}`}>
+                  Help score {court.displayName || `Court ${court.courtNumber}`}
+                </Link>
+              </article>
+            );
+          })}
         </section>
       </div>
     </main>
@@ -126,8 +129,13 @@ function courtStatus(court: CourtCard): string {
   if (!court.match) return "Match not loaded";
   if (court.score?.status?.toLowerCase().includes("final")) return "Match complete";
   if (court.scorerStatus.needsScorer) return "Needs scorer";
-  if (court.scorerStatus.backups === 0) return "Has scorer - backup needed";
-  return "Covered";
+  return "Being scored";
+}
+
+function displayTeamName(value: string | null | undefined, fallback: string): string {
+  const normalized = value?.trim();
+  if (!normalized || /^team on (left|right)$/i.test(normalized)) return fallback;
+  return normalized;
 }
 
 function friendlyError(message: string | null): string {
