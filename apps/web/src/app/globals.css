@@ -739,7 +739,7 @@ label {
 .admin-command-grid {
   align-items: start;
   gap: 16px;
-  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
 }
 
 .fan-court-card,
@@ -1499,11 +1499,15 @@ label.score-field {
 
 .admin-dashboard {
   gap: 16px;
+  margin: 0 auto;
+  max-width: 1280px;
+  width: 100%;
 }
 
 .admin-dashboard-header {
   align-items: flex-end;
   display: flex;
+  flex-wrap: wrap;
   gap: 16px;
   justify-content: space-between;
 }
@@ -1517,7 +1521,7 @@ label.score-field {
 .admin-summary-grid {
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
 }
 
 .admin-summary-grid div {
@@ -1546,6 +1550,8 @@ label.score-field {
 .admin-court-card {
   align-content: start;
   gap: 16px;
+  min-width: 0;
+  overflow: hidden;
   padding: 18px;
 }
 
@@ -1562,6 +1568,11 @@ label.score-field {
   display: flex;
   gap: 12px;
   justify-content: space-between;
+  min-width: 0;
+}
+
+.admin-court-header > div:first-child {
+  min-width: 0;
 }
 
 .admin-court-header h2 {
@@ -1599,6 +1610,7 @@ label.score-field {
   border-radius: 8px;
   display: grid;
   gap: 8px;
+  min-width: 0;
   padding: 12px;
 }
 
@@ -1607,6 +1619,7 @@ label.score-field {
   display: grid;
   gap: 12px;
   grid-template-columns: minmax(0, 1fr) 48px;
+  min-width: 0;
 }
 
 .admin-team-row strong {
@@ -1771,12 +1784,19 @@ label.score-field {
 .admin-action-stack > .button,
 .admin-action-stack > button {
   min-height: 50px;
+  white-space: normal;
 }
 
 .admin-link-actions {
   display: grid;
   gap: 8px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.admin-link-actions button,
+.metadata-panel summary {
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 @media (max-width: 800px) {
