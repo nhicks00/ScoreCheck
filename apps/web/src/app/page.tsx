@@ -9,7 +9,7 @@ export default function HomePage() {
         <header className="landing-topbar">
           <div>
             <p className="eyebrow">ScoreCheck</p>
-            <h1>Help keep the AVP Denver scoreboard live.</h1>
+            <h1>Help me keep score with community driven score keeping!</h1>
           </div>
           <Link className="button admin-link" href="/admin/avp-denver">Open Admin</Link>
         </header>
@@ -17,10 +17,10 @@ export default function HomePage() {
 
         <section className="landing-hero">
           <div className="landing-copy">
-            <h2>Score one court from your phone.</h2>
+            <h2>Score one court from your phone or computer.</h2>
             <p>
-              Choose the match you are watching, enter your name, then tap the team that wins each rally.
-              Your updates feed the live scoreboard.
+              Choose the match you are watching, enter your name, then use the scoring controls to add points and correct mistakes as the match happens.
+              <span className="landing-score-impact">Your updates feed the live scoreboard.</span>
             </p>
           </div>
 
@@ -41,8 +41,8 @@ export default function HomePage() {
             </div>
             <div>
               <MousePointerClick size={22} />
-              <strong>3. Tap each rally winner</strong>
-              <span>Use the two large team buttons. Undo or edit the score if a point is entered wrong.</span>
+              <strong>3. Update the score</strong>
+              <span>Use the large + and - controls. Undo or edit the score if a point is entered wrong.</span>
             </div>
             <div>
               <Trophy size={22} />

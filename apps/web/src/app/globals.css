@@ -623,6 +623,13 @@ label {
   max-width: 780px;
 }
 
+.landing-score-impact {
+  color: var(--focus);
+  display: block;
+  font-weight: 900;
+  margin-top: 8px;
+}
+
 .landing-steps {
   display: grid;
   gap: 12px;
