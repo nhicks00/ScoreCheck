@@ -15,8 +15,8 @@ async function main() {
     try {
       const poller = await pollActiveCourtsOnce({ owner: workerId });
       if (Date.now() - lastYoutubeAt >= youtubeIntervalMs) {
-        await pollYoutubeChatsOnce(`${workerId}:youtube`);
         lastYoutubeAt = Date.now();
+        await pollYoutubeChatsOnce(`${workerId}:youtube`);
       }
       const interval = poller.polls > 0 ? activeIntervalMs : idleIntervalMs;
       await sleep(Math.max(250, interval - (Date.now() - started)));

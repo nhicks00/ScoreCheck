@@ -16,9 +16,18 @@ export async function pollYoutubeChatsOnce(workerId: string) {
   if (error) throw error;
   let messages = 0;
   let matched = 0;
+  const failures: Array<{ courtNumber: number; status: number; reason: string; message: string }> = [];
   for (const court of courts ?? []) {
     const liveChatId = court.youtube_live_chat_id as string;
-    const result = await fetchChatMessages(liveChatId);
+    const result = await fetchChatMessages(liveChatId).catch((err: unknown) => {
+      const failure = chatFetchFailure(err);
+      failures.push({ courtNumber: court.court_number as number, ...failure });
+      return null;
+    });
+    if (!result) {
+      if (failures.at(-1)?.reason === "quotaExceeded") break;
+      continue;
+    }
     if (result.nextPageToken) pageTokens.set(liveChatId, result.nextPageToken);
     for (const item of result.items) {
       const text = item.snippet?.displayMessage ?? item.snippet?.textMessageDetails?.messageText ?? "";
@@ -42,8 +51,20 @@ export async function pollYoutubeChatsOnce(workerId: string) {
       if (verification.ok && verification.matched) matched += 1;
     }
   }
-  await recordHeartbeat(workerId, "youtube-idle", undefined, { courts: courts?.length ?? 0, messages, matched });
-  return { courts: courts?.length ?? 0, messages, matched };
+  const quotaExceeded = failures.some((failure) => failure.reason === "quotaExceeded");
+  const status = quotaExceeded ? "youtube-quota-exceeded" : failures.length ? "youtube-partial-error" : "youtube-idle";
+  await recordHeartbeat(workerId, status, undefined, {
+    courts: courts?.length ?? 0,
+    messages,
+    matched,
+    failures: failures.map((failure) => ({
+      courtNumber: failure.courtNumber,
+      status: failure.status,
+      reason: failure.reason,
+      message: failure.message.slice(0, 240)
+    }))
+  });
+  return { courts: courts?.length ?? 0, messages, matched, failures };
 }
 
 async function fetchChatMessages(liveChatId: string): Promise<{
@@ -84,9 +105,34 @@ async function fetchChatMessages(liveChatId: string): Promise<{
   }
   const res = await fetch(url, { headers });
   if (!res.ok) {
-    throw new Error(`YouTube chat fetch failed: ${res.status}`);
+    const body = await res.json().catch(() => ({}));
+    const reason = typeof body?.error?.errors?.[0]?.reason === "string" ? body.error.errors[0].reason : "unknown";
+    const message = typeof body?.error?.message === "string" ? body.error.message : `YouTube chat fetch failed: ${res.status}`;
+    throw new YoutubeChatFetchError(res.status, reason, message);
   }
   return await res.json();
+}
+
+class YoutubeChatFetchError extends Error {
+  constructor(
+    readonly status: number,
+    readonly reason: string,
+    message: string
+  ) {
+    super(message);
+    this.name = "YoutubeChatFetchError";
+  }
+}
+
+function chatFetchFailure(err: unknown) {
+  if (err instanceof YoutubeChatFetchError) {
+    return { status: err.status, reason: err.reason, message: err.message };
+  }
+  return {
+    status: 0,
+    reason: "unknown",
+    message: err instanceof Error ? err.message : "Unknown YouTube chat fetch failure"
+  };
 }
 
 async function getAccessToken(): Promise<string | null> {
