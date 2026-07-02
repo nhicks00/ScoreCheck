@@ -3,6 +3,7 @@
 import { AlertTriangle, Copy, Edit3, Eye, Radio, ShieldAlert, ShieldCheck, UserMinus, UserPlus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { FormEvent, useMemo, useState } from "react";
+import { formatRelativeTime } from "@/lib/timeLabels";
 
 type Court = {
   id: string;
@@ -202,7 +203,7 @@ export function FanScoringDashboard({
               <section className="session-stack" aria-label={`${court.display_name} scoring sessions`}>
                 <div className="admin-section-title">
                   <span>Scorer Health</span>
-                  {active?.last_heartbeat_at && <small>{age(active.last_heartbeat_at)}</small>}
+                  {active?.last_heartbeat_at && <small>{formatRelativeTime(active.last_heartbeat_at)}</small>}
                 </div>
                 <div className="session-row">
                   <ShieldCheck size={16} />
@@ -221,7 +222,7 @@ export function FanScoringDashboard({
                         <div>
                           <span>Contributor #{index + 1}</span>
                           <strong>{backup.display_name}</strong>
-                          {backup.last_heartbeat_at && <small>{age(backup.last_heartbeat_at)}</small>}
+                          {backup.last_heartbeat_at && <small>{formatRelativeTime(backup.last_heartbeat_at)}</small>}
                         </div>
                         <button type="button" onClick={() => void updateSession(backup.id, "promote")} disabled={busy != null}>Promote</button>
                       </div>
@@ -294,12 +295,6 @@ function groupBy<T>(items: T[], keyFn: (item: T) => string) {
     map.set(key, next);
   }
   return map;
-}
-
-function age(value: string) {
-  const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
-  return `${Math.round(seconds / 60)}m ago`;
 }
 
 function displayTeamName(value: string | null | undefined, fallback: string) {

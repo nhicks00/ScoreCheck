@@ -4,6 +4,7 @@ import { Copy, HeartPulse, Link as LinkIcon, Minus, Pause, Pencil, Play, Plus, R
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { formatRelativeTime, isFreshTimestamp } from "@/lib/timeLabels";
 
 type DashboardEvent = {
   id: string;
@@ -154,8 +155,7 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
   }, [queues]);
 
   const latestHeartbeat = heartbeats[0];
-  const workerAgeMs = latestHeartbeat?.last_seen_at ? Date.now() - new Date(latestHeartbeat.last_seen_at).getTime() : null;
-  const workerIsFresh = workerAgeMs != null && workerAgeMs <= 60_000;
+  const workerIsFresh = isFreshTimestamp(latestHeartbeat?.last_seen_at, 60_000);
   const overlayLayout = event.settings?.overlayLayout === "top-left" ? "top-left" : "bottom-left";
 
   useEffect(() => {
@@ -286,7 +286,7 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
           <Metric label="Courts" value={String(courts.length)} />
           <Metric label="Matches" value={String(matches.length)} />
           <Metric label="Live Courts" value={String(courts.filter((court) => court.status === "live").length)} />
-          <Metric label="Worker" value={latestHeartbeat && workerIsFresh ? age(latestHeartbeat.last_seen_at) : "Offline"} icon={<HeartPulse size={18} />} />
+          <Metric label="Worker" value={latestHeartbeat && workerIsFresh ? formatRelativeTime(latestHeartbeat.last_seen_at) : "Offline"} icon={<HeartPulse size={18} />} />
           <div className="panel span-all stack">
             <div className="row wrap">
               <div>
@@ -475,7 +475,7 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
                     call={call}
                   />
                 )}
-                <p className="muted">Last update: {court.last_update_at ? age(court.last_update_at) : "never"} · queue {courtQueues.length}</p>
+                <p className="muted">Last update: {court.last_update_at ? formatRelativeTime(court.last_update_at) : "never"} · queue {courtQueues.length}</p>
               </article>
             );
           })}
@@ -490,8 +490,8 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
             {heartbeats.map((heartbeat) => (
               <div className="row" key={heartbeat.worker_id}>
                 <span>{heartbeat.worker_id}</span>
-                <span className={Date.now() - new Date(heartbeat.last_seen_at).getTime() > 60_000 ? "status stale" : "muted"}>
-                  {heartbeat.status} · {age(heartbeat.last_seen_at)}
+                <span className={isFreshTimestamp(heartbeat.last_seen_at, 60_000) ? "muted" : "status stale"}>
+                  {heartbeat.status} · {formatRelativeTime(heartbeat.last_seen_at)}
                 </span>
               </div>
             ))}
@@ -501,7 +501,7 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
             {pollerErrors.length === 0 && <p className="muted">No poll errors logged.</p>}
             {pollerErrors.map((error) => (
               <div className="error-row" key={error.id}>
-                <strong>{age(error.created_at)}</strong>
+                <strong>{formatRelativeTime(error.created_at)}</strong>
                 <span>{error.message}</span>
                 {error.source_url && <span className="muted truncate">{error.source_url}</span>}
               </div>
@@ -714,14 +714,4 @@ function scoreSourceLabel(mode: DashboardCourt["mode"], score: DashboardScore | 
   if (score?.source === "api" && score.source_available === true) return `${mode} / VBL live`;
   if (score?.source && score.source !== mode) return `${mode} / ${score.source}`;
   return mode;
-}
-
-function age(value: string) {
-  const ms = Date.now() - new Date(value).getTime();
-  if (!Number.isFinite(ms)) return "unknown";
-  const seconds = Math.max(0, Math.round(ms / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  return `${Math.round(minutes / 60)}h ago`;
 }
