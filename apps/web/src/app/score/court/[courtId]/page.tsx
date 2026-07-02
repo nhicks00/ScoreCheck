@@ -1,3 +1,4 @@
+import { isAdminRequest } from "@/lib/auth";
 import { ScorerClient } from "./ScorerClient";
 import { ClaimClient } from "./ClaimClient";
 
@@ -9,5 +10,6 @@ export default async function ScoreCourtPage({ params, searchParams }: { params:
   if (token) {
     return <ScorerClient courtId={courtId} initialToken={token} />;
   }
-  return <ClaimClient courtParam={courtId} eventSlug={eventSlug ?? "avp-denver"} adminMode={admin === "1"} />;
+  const adminMode = admin === "1" && await isAdminRequest();
+  return <ClaimClient courtParam={courtId} eventSlug={eventSlug ?? "avp-denver"} adminMode={adminMode} />;
 }

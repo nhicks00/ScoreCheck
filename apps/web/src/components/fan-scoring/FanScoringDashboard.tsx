@@ -106,7 +106,7 @@ export function FanScoringDashboard({
         fallbackCopy(value);
         setMessage(`${label} copied`);
       } catch {
-        setMessage(`Could not copy ${label.toLowerCase()}: ${value}`);
+        setMessage(`${label}: ${value}`);
       }
     }
   }
@@ -143,6 +143,7 @@ export function FanScoringDashboard({
           const match = firstRelation(court.matches);
           const score = firstRelation(court.score_states);
           const scoreUrl = `${origin}/score/court/${court.court_number}`;
+          const adminScorePath = `/score/court/${court.court_number}?eventSlug=${encodeURIComponent(event.slug)}&admin=1`;
           const overlayUrl = `${origin}/overlay/stream/${court.court_number}`;
           return (
             <article className="admin-court-card" key={court.id}>
@@ -191,6 +192,7 @@ export function FanScoringDashboard({
                 <button type="button" onClick={() => void updateCourt(court.id, { scoringOpen: court.scoring_open === false })} disabled={busy != null}>
                   <Radio size={14} /> {court.scoring_open === false ? "Open scoring" : "Close scoring"}
                 </button>
+                <a className="button warn" href={adminScorePath}><ShieldCheck size={14} /> Test scoring</a>
                 <button type="button" onClick={() => void copyText("Score URL", scoreUrl)}><Copy size={14} /> Score URL</button>
                 <button type="button" onClick={() => void copyText("Overlay URL", overlayUrl)}><Eye size={14} /> Overlay URL</button>
               </div>

@@ -7,25 +7,35 @@ type AdminIvsPreviewClientProps = {
   courtNumber: number;
 };
 
+type IvsPlayerEventCallback = (event?: unknown) => void;
+
+type IvsPlayerInstance = {
+  attachHTMLVideoElement: (element: HTMLVideoElement) => void;
+  load: (url: string) => void;
+  play: () => void | Promise<void>;
+  addEventListener?: (eventName: string, callback: IvsPlayerEventCallback) => void;
+  removeEventListener?: (eventName: string, callback: IvsPlayerEventCallback) => void;
+  delete?: () => void;
+};
+
 declare global {
   interface Window {
     IVSPlayer?: {
       isPlayerSupported: boolean;
-      create: () => {
-        attachHTMLVideoElement: (element: HTMLVideoElement) => void;
-        load: (url: string) => void;
-        play: () => void | Promise<void>;
-        delete?: () => void;
-      };
+      PlayerEventType?: { ERROR?: string };
+      create: () => IvsPlayerInstance;
     };
   }
 }
 
+const STREAM_NOT_LIVE_MESSAGE = "Preview stream is not live yet. Press reload after the camera feed starts.";
+
 export function AdminIvsPreviewClient({ courtNumber }: AdminIvsPreviewClientProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const playerRef = useRef<ReturnType<NonNullable<typeof window.IVSPlayer>["create"]> | null>(null);
+  const playerRef = useRef<IvsPlayerInstance | null>(null);
   const [playerReady, setPlayerReady] = useState(false);
   const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);
+  const [loadRevision, setLoadRevision] = useState(0);
   const [status, setStatus] = useState("Loading preview...");
   const [error, setError] = useState<string | null>(null);
 
@@ -41,7 +51,8 @@ export function AdminIvsPreviewClient({ courtNumber }: AdminIvsPreviewClientProp
       return;
     }
     setPlaybackUrl(json.playbackUrl);
-    setStatus(playerReady ? "Preview ready" : "Loading video player...");
+    setLoadRevision((current) => current + 1);
+    setStatus(playerReady ? "Connecting preview..." : "Loading video player...");
   }, [courtNumber, playerReady]);
 
   useEffect(() => {
@@ -87,16 +98,32 @@ export function AdminIvsPreviewClient({ courtNumber }: AdminIvsPreviewClientProp
     playerRef.current?.delete?.();
     playerRef.current = null;
 
+    const onPlaybackError = () => {
+      setStatus("Preview stream is not live yet.");
+      setError(STREAM_NOT_LIVE_MESSAGE);
+    };
+    const onPlaying = () => {
+      setError(null);
+      setStatus("Preview ready");
+    };
+
+    video.addEventListener("error", onPlaybackError);
+    video.addEventListener("playing", onPlaying);
+
     if (window.IVSPlayer?.isPlayerSupported) {
       const player = window.IVSPlayer.create();
+      const errorEvent = window.IVSPlayer.PlayerEventType?.ERROR;
+      if (errorEvent) player.addEventListener?.(errorEvent, onPlaybackError);
       player.attachHTMLVideoElement(video);
       player.load(playbackUrl);
       playerRef.current = player;
-      setStatus("Preview ready");
-      void Promise.resolve(player.play()).catch(() => setStatus("Tap play to start preview."));
+      setStatus("Connecting preview...");
+      void Promise.resolve(player.play())
+        .then(onPlaying)
+        .catch(() => setStatus("Tap play to start preview."));
     } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
       video.src = playbackUrl;
-      setStatus("Preview ready");
+      setStatus("Connecting preview...");
       void video.play().catch(() => setStatus("Tap play to start preview."));
     } else {
       setPlaybackUrl(null);
@@ -105,16 +132,20 @@ export function AdminIvsPreviewClient({ courtNumber }: AdminIvsPreviewClientProp
     }
 
     return () => {
+      const errorEvent = window.IVSPlayer?.PlayerEventType?.ERROR;
+      if (errorEvent) playerRef.current?.removeEventListener?.(errorEvent, onPlaybackError);
+      video.removeEventListener("error", onPlaybackError);
+      video.removeEventListener("playing", onPlaying);
       playerRef.current?.delete?.();
       playerRef.current = null;
     };
-  }, [playbackUrl, playerReady]);
+  }, [loadRevision, playbackUrl, playerReady]);
 
   return (
     <section className="ivs-preview">
       <video ref={videoRef} playsInline muted controls crossOrigin="anonymous" />
       <div className="video-controls">
-        <span>{error ?? status}</span>
+        <span>{error ? "Preview unavailable" : status}</span>
         <button type="button" onClick={() => videoRef.current?.play()}>
           <Play size={16} /> Play
         </button>

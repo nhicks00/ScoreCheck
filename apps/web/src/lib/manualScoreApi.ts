@@ -4,6 +4,7 @@ import { applyManualAction, applyManualEdit, formatFromMatch, manualEditSchema, 
 import { checkRateLimit } from "./rateLimit";
 import { CourtRecord, MatchRecord, persistScoreAndOverlay } from "./scoreState";
 import { requestIpHash, userAgent, validateToken } from "./security";
+import { apiScoreHasPriority } from "./sourcePriority";
 import { supabaseAdmin } from "./supabase";
 
 type Relation<T> = T | T[] | null | undefined;
@@ -186,22 +187,6 @@ async function persistScorerMutation(
     payload
   });
   return NextResponse.json({ ok: true, score: saved.score, overlay: saved.overlay });
-}
-
-function apiScoreHasPriority(score: Record<string, unknown> | null, match: ScorerContext["match"]): boolean {
-  if (!match?.api_url || match.source_type === "manual") return false;
-  if (score?.source !== "api" || score?.stale === true) return false;
-  if (score?.source_available === false || score?.source_priority === "fallback") return false;
-  const status = typeof score?.status === "string" ? score.status.toLowerCase() : "";
-  if (status.includes("final") || status.includes("progress")) return true;
-  if (numberValue(score?.team_a_score) > 0 || numberValue(score?.team_b_score) > 0) return true;
-  if (numberValue(score?.team_a_sets) > 0 || numberValue(score?.team_b_sets) > 0) return true;
-  return Array.isArray(score?.set_scores) && score.set_scores.length > 0;
-}
-
-function numberValue(value: unknown): number {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : 0;
 }
 
 async function saveManualState(context: ScorerContext, state: ReturnType<typeof normalizeManualState>) {

@@ -13,7 +13,7 @@ ScoreCheck uses one public parent-friendly scoring link, one active scorer per c
 ## Primary Flow
 
 1. A parent opens `/score` or `/score/court/[court]`.
-2. They choose website or courtside mode and enter a display name.
+2. They choose Score only or Watch stream + score and enter a display name.
 3. The server creates a short-lived claim with a code like `C4-728`.
 4. The parent types that code in YouTube chat.
 5. The worker marks the claim verified.

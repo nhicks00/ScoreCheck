@@ -11,7 +11,7 @@ export const DEFAULT_FAN_SCORING_SETTINGS = {
   claimExpirationMinutes: 10,
   videoTokenSeconds: 600,
   requireYoutubeVerification: true,
-  allowCourtsideMode: true
+  allowScoreOnlyMode: true
 };
 
 export const DEFAULT_MATCH_FORMAT = {

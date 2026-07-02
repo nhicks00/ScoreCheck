@@ -3,7 +3,10 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "ScoreCheck",
-  description: "Fan-powered live scoring for beach volleyball broadcasts"
+  description: "Fan-powered live scoring for beach volleyball broadcasts",
+  icons: {
+    icon: "/favicon.svg"
+  }
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

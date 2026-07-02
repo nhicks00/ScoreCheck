@@ -23,6 +23,12 @@ export default async function CourtsPage({ params }: { params: Promise<{ eventId
         <div className="topbar">
           <Link className="button" href={`/admin/events/${eventId}`}>Dashboard</Link>
         </div>
+        <header className="row wrap">
+          <div>
+            <h1>Court Grid</h1>
+            <p className="muted">Current match, score, and overlay URL status by court.</p>
+          </div>
+        </header>
         <section className="grid courts">
           {(courts ?? []).map((court) => {
             const match = Array.isArray(court.matches) ? court.matches[0] : court.matches;
