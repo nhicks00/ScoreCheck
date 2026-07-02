@@ -51,6 +51,11 @@ export default function HomePage() {
             </div>
           </div>
         </section>
+
+        <footer className="legal-footer">
+          <Link href="/privacy">Privacy Policy</Link>
+          <Link href="/terms">Terms of Service</Link>
+        </footer>
       </div>
     </main>
   );
