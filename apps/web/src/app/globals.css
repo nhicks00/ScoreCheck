@@ -836,7 +836,7 @@ label {
   align-items: flex-start;
   flex-direction: column;
   justify-content: center;
-  min-height: 70px;
+  min-height: 58px;
   padding: 12px 14px;
   text-align: left;
 }
@@ -931,18 +931,12 @@ label {
   display: flex;
   gap: 14px;
   justify-content: space-between;
-  position: sticky;
-  top: 0;
-  z-index: 5;
 }
 
 .role-banner.active,
-.role-banner.promoted {
-  border-color: rgba(54, 211, 153, 0.55);
-}
-
+.role-banner.promoted,
 .role-banner.backup {
-  border-color: rgba(100, 168, 255, 0.55);
+  border-color: rgba(54, 211, 153, 0.55);
 }
 
 .role-banner span,
@@ -998,6 +992,32 @@ label {
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 8px;
+}
+
+.team-suggestion-panel {
+  background: rgba(100, 168, 255, 0.1);
+  border: 1px solid rgba(100, 168, 255, 0.3);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.team-suggestion-panel h3 {
+  font-size: 20px;
+  line-height: 1.1;
+  margin: 2px 0 4px;
+}
+
+.team-suggestion-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.team-suggestion-panel button {
+  justify-self: start;
+  min-height: 48px;
 }
 
 .ivs-preview {
@@ -1556,6 +1576,7 @@ label.score-field {
   .metadata-form,
   .admin-button-row,
   .mapping-row,
+  .team-suggestion-grid,
   .set-team-editor {
     grid-template-columns: 1fr;
   }

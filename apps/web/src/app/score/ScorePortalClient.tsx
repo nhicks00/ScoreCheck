@@ -3,6 +3,7 @@
 import { RefreshCw, ShieldCheck, Users } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { displayTeamName, matchupLabel } from "@/lib/teamDisplay";
 
 type CourtCard = {
   id: string;
@@ -71,7 +72,7 @@ export function ScorePortalClient() {
           <div>
             <p className="eyebrow">ScoreCheck</p>
             <h1>{eventName}</h1>
-            <p className="muted">Pick a court, type the short code in YouTube chat, then tap the team that wins each point.</p>
+            <p className="muted">Pick a court, verify with a short YouTube chat code, then help the broadcast keep the live score accurate.</p>
           </div>
           <button type="button" onClick={() => void refresh()} disabled={loading}>
             <RefreshCw size={18} /> Refresh
@@ -80,7 +81,7 @@ export function ScorePortalClient() {
 
         <section className="score-strip">
           <div><ShieldCheck size={18} /> {covered} courts covered</div>
-          <div><Users size={18} /> Backups welcome</div>
+          <div><Users size={18} /> Community scoring live</div>
           {updatedAt && <div>Updated {updatedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</div>}
         </section>
 
@@ -95,14 +96,14 @@ export function ScorePortalClient() {
                 <span className="stream-key-badge" aria-label={`Stream key ${court.courtNumber}`}>Key {court.courtNumber}</span>
               </div>
               <h2 className="court-title">{court.displayName || `Court ${court.courtNumber}`}</h2>
-              <div className="court-scoreboard" aria-label={`${court.match?.teamA ?? "Team on left"} versus ${court.match?.teamB ?? "Team on right"}`}>
+              <div className="court-scoreboard" aria-label={matchupLabel(court.match?.teamA, court.match?.teamB)}>
                 <div className="court-team-row">
-                  <strong>{court.match?.teamA ?? "Team on left"}</strong>
+                  <strong>{displayTeamName(court.match?.teamA, "A")}</strong>
                   <span>{court.score?.teamAScore ?? 0}</span>
                 </div>
                 <div className="court-versus">vs</div>
                 <div className="court-team-row">
-                  <strong>{court.match?.teamB ?? "Team on right"}</strong>
+                  <strong>{displayTeamName(court.match?.teamB, "B")}</strong>
                   <span>{court.score?.teamBScore ?? 0}</span>
                 </div>
               </div>
@@ -126,8 +127,7 @@ function courtStatus(court: CourtCard): string {
   if (!court.match) return "Match not loaded";
   if (court.score?.status?.toLowerCase().includes("final")) return "Match complete";
   if (court.scorerStatus.needsScorer) return "Needs scorer";
-  if (court.scorerStatus.backups === 0) return "Has scorer - backup needed";
-  return "Covered";
+  return "Being scored";
 }
 
 function friendlyError(message: string | null): string {

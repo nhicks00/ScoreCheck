@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   if (!session || !["active", "backup"].includes(session.role) || !["active", "promoted"].includes(session.status)) {
-    return NextResponse.json({ error: "Only active and backup scorekeepers can view preview video." }, { status: 403 });
+    return NextResponse.json({ error: "Preview video is only available while your scoring session is active." }, { status: 403 });
   }
   const court = Array.isArray(session.courts) ? session.courts[0] : session.courts;
   const event = Array.isArray(session.events) ? session.events[0] : session.events;

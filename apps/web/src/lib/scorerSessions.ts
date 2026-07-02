@@ -33,6 +33,7 @@ export type SessionActionType =
   | "SERVE_B"
   | "TIMEOUT_A"
   | "TIMEOUT_B"
+  | "TEAM_NAME_SUGGESTION"
   | "RELEASE";
 
 type Relation<T> = T | T[] | null | undefined;
@@ -469,6 +470,9 @@ export async function applySessionAction(rawToken: string, input: {
   if (!checkRateLimit(`session-action:${context.session.id}:${ipHash}`, 90, 60_000)) {
     return { ok: false as const, status: 429, error: "Too many scoring taps. Pause for a moment and try again." };
   }
+  if (input.type === "TEAM_NAME_SUGGESTION") {
+    return recordTeamNameSuggestion(context, input.payload);
+  }
   if (context.session.role === "active") {
     return applyOfficialSessionAction(context, input);
   }
@@ -476,6 +480,29 @@ export async function applySessionAction(rawToken: string, input: {
     return applyBackupSessionAction(context, input);
   }
   return { ok: false as const, status: 403, error: "Waiting scorers cannot score yet." };
+}
+
+async function recordTeamNameSuggestion(context: SessionContext, payload?: Record<string, unknown>) {
+  const teamA = safeTeamSuggestion(payload?.teamA);
+  const teamB = safeTeamSuggestion(payload?.teamB);
+  if (!teamA && !teamB) {
+    return { ok: false as const, status: 400, error: "Enter at least one team name suggestion." };
+  }
+  await logSessionEvent({
+    eventId: context.event.id,
+    courtId: context.court.id,
+    matchId: context.match?.id ?? null,
+    sessionId: context.session.id,
+    type: "team_name_suggestion",
+    payload: {
+      teamA,
+      teamB,
+      displayName: context.session.display_name,
+      existingTeamA: context.match?.team_a ?? null,
+      existingTeamB: context.match?.team_b ?? null
+    }
+  });
+  return { ok: true as const, recorded: true, official: false, role: context.session.role };
 }
 
 export async function releaseSession(rawToken: string) {
@@ -916,6 +943,16 @@ function firstRelation<T>(value: Relation<T>): T | null {
 
 function recordValue(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function safeTeamSuggestion(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const clean = value
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+  return clean || null;
 }
 
 export async function publicCourtData(eventSlug: string | undefined, courtParam: string) {

@@ -3,6 +3,7 @@
 import { AlertTriangle, CheckCircle2, ChevronRight, Lock, Minus, MonitorOff, MonitorPlay, Plus, RotateCcw, Send, StopCircle, Unlock } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { IvsPreviewPlayer } from "@/components/IvsPreviewPlayer";
+import { displayTeamName, hasUnresolvedTeamName, teamSideLabel } from "@/lib/teamDisplay";
 
 type SetScore = {
   setNumber: number;
@@ -60,6 +61,8 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
   const [draftDirty, setDraftDirty] = useState(false);
   const [unlockedSets, setUnlockedSets] = useState<number[]>([]);
   const [pulseTeam, setPulseTeam] = useState<"A" | "B" | null>(null);
+  const [suggestion, setSuggestion] = useState({ teamA: "", teamB: "" });
+  const [suggestionSent, setSuggestionSent] = useState(false);
   const previousRole = useRef<SessionState["session"]["role"] | null>(null);
   const watchModeHydrated = useRef(false);
 
@@ -71,7 +74,7 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
       return;
     }
     if (previousRole.current === "backup" && json.session.role === "active") {
-      setMessage("You are now the live scorekeeper. Your taps now update the broadcast scoreboard.");
+      setMessage("Keep scoring. Your updates are helping the broadcast scoreboard.");
     }
     previousRole.current = json.session.role;
     setState(json);
@@ -132,7 +135,7 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
         setError(friendlyError(json.error ?? "Scoring action failed."));
         return false;
       }
-      setMessage(json.reason === "api_priority" ? "VolleyballLife is updating the broadcast score. Your tap was saved as backup." : json.official === false ? "Saved as backup score." : "Broadcast score updated.");
+      setMessage(json.reason === "api_priority" ? "VolleyballLife is updating the broadcast score. Your update was recorded for review." : json.official === false ? "Score update recorded." : "Broadcast score updated.");
       await refresh();
       return true;
     } catch (err) {
@@ -163,9 +166,8 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
   }
 
   async function changeWatchMode(next: "website" | "courtside") {
-    if (!sessionLive) return;
     setWatchMode(next);
-    await heartbeat(next);
+    if (sessionLive) await heartbeat(next);
   }
 
   async function submitCorrection(event: FormEvent<HTMLFormElement>) {
@@ -205,11 +207,13 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
   }
 
   const score = state?.session.role === "backup" ? state.shadowScore : state?.officialScore;
-  const teamA = state?.match?.team_a ?? "Team on left";
-  const teamB = state?.match?.team_b ?? "Team on right";
+  const rawTeamA = state?.match?.team_a ?? null;
+  const rawTeamB = state?.match?.team_b ?? null;
+  const teamA = displayTeamName(rawTeamA, "A");
+  const teamB = displayTeamName(rawTeamB, "B");
   const disabled = busy != null || !state || !sessionLive;
-  const isBackup = state?.session.role === "backup";
   const sessionEnded = Boolean(state && !sessionLive);
+  const hasUnresolvedTeams = hasUnresolvedTeamName(rawTeamA) || hasUnresolvedTeamName(rawTeamB);
   const teamAScore = score?.teamAScore ?? 0;
   const teamBScore = score?.teamBScore ?? 0;
   const teamASets = score?.teamASets ?? 0;
@@ -257,6 +261,22 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
 
   function toggleCompletedSet(setNumber: number) {
     setUnlockedSets((sets) => sets.includes(setNumber) ? sets.filter((item) => item !== setNumber) : [...sets, setNumber]);
+  }
+
+  async function submitTeamSuggestion(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const teamAName = suggestion.teamA.trim();
+    const teamBName = suggestion.teamB.trim();
+    if (!teamAName && !teamBName) return;
+    const saved = await action("TEAM_NAME_SUGGESTION", {
+      teamA: teamAName || null,
+      teamB: teamBName || null
+    });
+    if (saved) {
+      setSuggestion({ teamA: "", teamB: "" });
+      setSuggestionSent(true);
+      setMessage("Thanks. Your team-name suggestion was sent to the broadcast team.");
+    }
   }
 
   function renderSetEditor(setNumber: number) {
@@ -319,13 +339,13 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
   }
 
   function renderTeamScoreControl(side: TeamSide, label: string, value: number, setsWon: number) {
-    const sideLabel = side === "A" ? "Team on left" : "Team on right";
+    const unresolved = hasUnresolvedTeamName(side === "A" ? rawTeamA : rawTeamB);
     const pointBusy = busy === `POINT_${side}`;
     const correctionBusy = busy === "MANUAL_CORRECTION" && pulseTeam === side;
     return (
       <article className={`score-team-card team-${side.toLowerCase()} ${pulseTeam === side ? "is-pressed" : ""}`}>
         <div className="team-card-copy">
-          <span>{sideLabel}</span>
+          {unresolved && <span>{teamSideLabel(side)}</span>}
           <h3>{label}</h3>
           <small>{setsWon} {setsWon === 1 ? "set" : "sets"} won</small>
         </div>
@@ -369,8 +389,8 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
             <section className={`role-banner ${state.session.role}`}>
               <div>
                 <span>{state.court.displayName}</span>
-                <h1>{sessionEnded ? "Scoring session ended." : isBackup ? "You are a backup scorekeeper." : "You are the live scorekeeper."}</h1>
-                <p>{sessionEnded ? "This page is read-only now." : isBackup ? "Please keep scoring. If the main scorekeeper leaves, you may become live automatically." : "Your taps update the broadcast scoreboard."}</p>
+                <h1>{sessionEnded ? "Scoring session ended." : "Help keep the live score accurate."}</h1>
+                <p>{sessionEnded ? "This page is read-only now." : "Please pay attention. Viewers are relying on you, and each point you enter helps the broadcast."}</p>
               </div>
               <strong>{state.session.displayName}</strong>
             </section>
@@ -386,14 +406,49 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
               </div>
             </section>
 
+            {hasUnresolvedTeams && (
+              <form className="team-suggestion-panel" onSubmit={submitTeamSuggestion}>
+                <div>
+                  <span className="muted">Team names needed</span>
+                  <h3>Know who is playing?</h3>
+                  <p className="muted">If the bracket has not loaded the names yet, send a suggestion for the broadcast team to review.</p>
+                </div>
+                <div className="team-suggestion-grid">
+                  {hasUnresolvedTeamName(rawTeamA) && (
+                    <label>
+                      Team A
+                      <input
+                        value={suggestion.teamA}
+                        onChange={(event) => setSuggestion((current) => ({ ...current, teamA: event.target.value }))}
+                        placeholder="Player / Player"
+                        maxLength={120}
+                      />
+                    </label>
+                  )}
+                  {hasUnresolvedTeamName(rawTeamB) && (
+                    <label>
+                      Team B
+                      <input
+                        value={suggestion.teamB}
+                        onChange={(event) => setSuggestion((current) => ({ ...current, teamB: event.target.value }))}
+                        placeholder="Player / Player"
+                        maxLength={120}
+                      />
+                    </label>
+                  )}
+                </div>
+                <button type="submit" disabled={disabled || busy === "TEAM_NAME_SUGGESTION" || (!suggestion.teamA.trim() && !suggestion.teamB.trim())}>
+                  <Send size={18} /> {suggestionSent ? "Send another suggestion" : "Send name suggestion"}
+                </button>
+              </form>
+            )}
+
             <div className="watch-toggle scorer-toggle mode-toggle" role="group" aria-label="Scoring view">
-              <button type="button" className={watchMode === "courtside" ? "primary" : ""} onClick={() => void changeWatchMode("courtside")} disabled={!sessionLive}>
-                <span><MonitorOff size={18} /> Score only</span>
-                <small>Use video on another screen</small>
+              <button type="button" className={watchMode === "courtside" ? "primary" : ""} onClick={() => void changeWatchMode("courtside")}>
+                <span><MonitorOff size={18} /> Score without video</span>
               </button>
-              <button type="button" className={watchMode === "website" ? "primary" : ""} onClick={() => void changeWatchMode("website")} disabled={!sessionLive}>
+              <button type="button" className={watchMode === "website" ? "primary" : ""} onClick={() => void changeWatchMode("website")}>
                 <span><MonitorPlay size={18} /> Watch stream + score</span>
-                <small>Show the preview here</small>
               </button>
             </div>
 

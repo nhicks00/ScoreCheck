@@ -237,8 +237,8 @@ export async function ensureAvpDenverSeeded(input: {
 
     const matchResult = activeMatch
       ? await db.from("matches").update({
-        team_a: activeMatch.team_a ?? "Team on left",
-        team_b: activeMatch.team_b ?? "Team on right",
+        team_a: unresolvedSeedName(activeMatch.team_a),
+        team_b: unresolvedSeedName(activeMatch.team_b),
         format: activeMatch.format ?? DEFAULT_MATCH_FORMAT,
         updated_at: now
       }).eq("id", activeMatch.id).select("*").single()
@@ -251,8 +251,8 @@ export async function ensureAvpDenverSeeded(input: {
         round_name: "Pool Play",
         court_number: String(courtNumber),
         physical_court: displayName,
-        team_a: "Team on left",
-        team_b: "Team on right",
+        team_a: "TBD",
+        team_b: "TBD",
         team_a_players: [],
         team_b_players: [],
         format: DEFAULT_MATCH_FORMAT,
@@ -307,6 +307,11 @@ function vblCourtFromDisplayName(displayName: string): { number: string | null; 
     return { number: null, label: "Center Court" };
   }
   return { number: null, label: null };
+}
+
+function unresolvedSeedName(name: string | null | undefined): string {
+  if (!name || /^team on (left|right)$/i.test(name.trim())) return "TBD";
+  return name;
 }
 
 export function fanScoringSettings(event: EventRow | null | undefined) {

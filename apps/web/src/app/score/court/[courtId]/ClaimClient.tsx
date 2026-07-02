@@ -3,6 +3,7 @@
 import { CheckCircle2, MonitorOff, MonitorPlay, RefreshCw, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { displayTeamName } from "@/lib/teamDisplay";
 
 type CourtPageData = {
   event: { id: string; slug: string; name: string };
@@ -167,8 +168,7 @@ export function ClaimClient({ courtParam, eventSlug, adminMode }: { courtParam: 
     if (!data) return "Loading";
     if (data.court.scoring_open === false) return "Scoring closed";
     if (data.scorerStatus.needsScorer) return "Needs scorer";
-    if (data.scorerStatus.backups.length === 0) return "Has scorer - backup needed";
-    return "Covered";
+    return "Community scoring live";
   }, [data]);
 
   return (
@@ -184,9 +184,9 @@ export function ClaimClient({ courtParam, eventSlug, adminMode }: { courtParam: 
           <h1>{data?.court.display_name ?? `Court ${courtNumber}`}</h1>
           <p className="muted">{data?.event.name ?? "AVP Denver Open"}</p>
           <div className="match-line large">
-            <strong>{data?.match?.team_a ?? "Team on left"}</strong>
+            <strong>{displayTeamName(data?.match?.team_a, "A")}</strong>
             <span>vs</span>
-            <strong>{data?.match?.team_b ?? "Team on right"}</strong>
+            <strong>{displayTeamName(data?.match?.team_b, "B")}</strong>
           </div>
         </section>
 
@@ -202,15 +202,13 @@ export function ClaimClient({ courtParam, eventSlug, adminMode }: { courtParam: 
           <form className="claim-form" onSubmit={submit}>
             <div className="panel stack">
               <h2>Thanks for helping keep score.</h2>
-              <p className="muted">You only need to do one thing: tap the team that wins each point.</p>
+              <p className="muted">Please pay attention. Viewers are relying on this score, and every accurate point helps the broadcast.</p>
               <div className="watch-toggle mode-toggle" role="group" aria-label="Scoring view">
                 <button type="button" className={watchMode === "courtside" ? "primary" : ""} onClick={() => setWatchMode("courtside")}>
-                  <span><MonitorOff size={18} /> Score only</span>
-                  <small>Use video on another screen</small>
+                  <span><MonitorOff size={18} /> Score without video</span>
                 </button>
                 <button type="button" className={watchMode === "website" ? "primary" : ""} onClick={() => setWatchMode("website")}>
                   <span><MonitorPlay size={18} /> Watch stream + score</span>
-                  <small>Show the preview here</small>
                 </button>
               </div>
               <label>

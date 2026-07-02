@@ -15,6 +15,7 @@ const schema = z.object({
     "SERVE_B",
     "TIMEOUT_A",
     "TIMEOUT_B",
+    "TEAM_NAME_SUGGESTION",
     "RELEASE"
   ]),
   payload: z.record(z.unknown()).optional()
