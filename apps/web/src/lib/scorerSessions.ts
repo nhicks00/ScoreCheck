@@ -151,12 +151,15 @@ export async function startClaim(input: {
       display_name: safeDisplayName(input.displayName),
       verification_code_hash: hashToken(normalizedCode),
       verification_code_label: code,
+      status: "verified",
       claim_status_token_hash: hashToken(claimStatusToken),
       watch_mode: input.watchMode,
       youtube_live_chat_id: court.youtube_live_chat_id ?? null,
+      youtube_display_name: "Direct scoring access",
       ip_hash: ipHash,
       user_agent: userAgent(input.req),
-      expires_at: expiresAt
+      expires_at: expiresAt,
+      verified_at: new Date().toISOString()
     })
     .select("*")
     .single();
@@ -167,14 +170,21 @@ export async function startClaim(input: {
     courtId: court.id,
     matchId: court.current_match_id,
     type: "claim_created",
-    payload: { claimId: claim.id, displayName: safeDisplayName(input.displayName), watchMode: input.watchMode }
+    payload: { claimId: claim.id, displayName: safeDisplayName(input.displayName), watchMode: input.watchMode, verificationMode: "direct" }
+  });
+  await logSessionEvent({
+    eventId: event.id,
+    courtId: court.id,
+    matchId: court.current_match_id,
+    type: "claim_verified",
+    payload: { claimId: claim.id, source: "direct_scoring_access" }
   });
 
   return {
     ok: true as const,
     claim: claim as ClaimRow,
     claimStatusToken,
-    message: `Type ${code} in YouTube chat to verify.`
+    message: "Opening scorer page..."
   };
 }
 
@@ -213,7 +223,7 @@ export async function getClaimStatus(input: { claimId: string; claimStatusToken?
   return {
     ok: true as const,
     status: data.status,
-    message: data.status === "pending" ? "Waiting for YouTube chat verification." : "Claim is no longer active."
+    message: data.status === "pending" ? "Waiting for verification." : "Claim is no longer active."
   };
 }
 

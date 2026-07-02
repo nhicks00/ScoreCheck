@@ -14,11 +14,33 @@ export async function pollYoutubeChatsOnce(workerId: string) {
     .not("youtube_live_chat_id", "is", null)
     .or("status.eq.active,is_active.eq.true", { foreignTable: "events" });
   if (error) throw error;
+  const liveChatIds = [...new Set((courts ?? []).map((court) => court.youtube_live_chat_id).filter(Boolean))] as string[];
+  if (liveChatIds.length === 0) {
+    await recordHeartbeat(workerId, "youtube-no-active-chats", undefined, { courts: 0, messages: 0, matched: 0 });
+    return { courts: 0, messages: 0, matched: 0, failures: [] };
+  }
+  const { data: pendingClaims, error: pendingError } = await db
+    .from("scorer_claims")
+    .select("youtube_live_chat_id")
+    .eq("status", "pending")
+    .gt("expires_at", new Date().toISOString())
+    .in("youtube_live_chat_id", liveChatIds);
+  if (pendingError) throw pendingError;
+  const pendingLiveChatIds = new Set((pendingClaims ?? []).map((claim) => claim.youtube_live_chat_id).filter(Boolean));
+  if (pendingLiveChatIds.size === 0) {
+    await recordHeartbeat(workerId, "youtube-no-pending-claims", undefined, {
+      courts: courts?.length ?? 0,
+      messages: 0,
+      matched: 0
+    });
+    return { courts: courts?.length ?? 0, messages: 0, matched: 0, failures: [] };
+  }
   let messages = 0;
   let matched = 0;
   const failures: Array<{ courtNumber: number; status: number; reason: string; message: string }> = [];
   for (const court of courts ?? []) {
     const liveChatId = court.youtube_live_chat_id as string;
+    if (!pendingLiveChatIds.has(liveChatId)) continue;
     const result = await fetchChatMessages(liveChatId).catch((err: unknown) => {
       const failure = chatFetchFailure(err);
       failures.push({ courtNumber: court.court_number as number, ...failure });

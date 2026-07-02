@@ -71,7 +71,7 @@ export function ScorePortalClient() {
           <div>
             <p className="eyebrow">ScoreCheck</p>
             <h1>{eventName}</h1>
-            <p className="muted">Pick a court, type the short code in YouTube chat, then tap the team that wins each point.</p>
+            <p className="muted">Pick a court, enter your name, then tap the team that wins each point.</p>
           </div>
           <button type="button" onClick={() => void refresh()} disabled={loading}>
             <RefreshCw size={18} /> Refresh

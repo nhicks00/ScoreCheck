@@ -15,7 +15,7 @@ type CourtPageData = {
 type Claim = {
   claimId: string;
   claimStatusToken: string;
-  verificationCode: string;
+  verificationCode?: string;
   expiresAt: string;
   message: string;
 };
@@ -113,6 +113,7 @@ export function ClaimClient({ courtParam, eventSlug, adminMode }: { courtParam: 
       const nextClaim = await createClaim(displayName);
       setClaim(nextClaim);
       setStatus(nextClaim.message);
+      await openClaimStatus(nextClaim);
     } catch (err) {
       setError(friendlyError(err instanceof Error ? err.message : "Could not start scoring"));
     } finally {
@@ -194,7 +195,7 @@ export function ClaimClient({ courtParam, eventSlug, adminMode }: { courtParam: 
         {adminMode && (
           <div className="admin-test-banner" role="status">
             <ShieldCheck size={18} />
-            <span>Admin test mode can skip YouTube chat verification for this court.</span>
+            <span>Admin test mode can start a scoring session for this court.</span>
           </div>
         )}
 
@@ -225,7 +226,7 @@ export function ClaimClient({ courtParam, eventSlug, adminMode }: { courtParam: 
                 />
               </label>
               <button className="primary claim-submit" type="submit" disabled={busy || !data || data.court.scoring_open === false}>
-                <ShieldCheck size={20} /> Get my chat code
+                <ShieldCheck size={20} /> Start scoring
               </button>
               {adminMode && (
                 <button className="warn claim-submit" type="button" onClick={() => void adminStartSession()} disabled={busy || !data || data.court.scoring_open === false}>
@@ -237,11 +238,11 @@ export function ClaimClient({ courtParam, eventSlug, adminMode }: { courtParam: 
         ) : (
           <section className="verification-card">
             <CheckCircle2 size={28} />
-            <p>Type this code in the YouTube chat:</p>
-            <strong>{claim.verificationCode}</strong>
-            <p className="muted">Leave this page open. We will continue automatically when your code is seen.</p>
+            <p>Opening your scoring page...</p>
+            {claim.verificationCode && <strong>{claim.verificationCode}</strong>}
+            <p className="muted">Leave this page open. If it does not continue automatically, tap the button below.</p>
             {status && <p className="muted">{status}</p>}
-            <button type="button" onClick={() => setClaim(null)} disabled={busy}>Get a new code</button>
+            <button type="button" onClick={() => void openClaimStatus(claim)} disabled={busy}>Open scorer page</button>
             {adminMode && <button className="warn" type="button" onClick={() => void adminVerify()} disabled={busy}>Admin verify for testing</button>}
           </section>
         )}

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { CheckCircle2, MessageSquareText, MousePointerClick, ShieldCheck, Trophy } from "lucide-react";
+import { CheckCircle2, MousePointerClick, ShieldCheck, Trophy, UserRoundCheck } from "lucide-react";
 import { SetupNotice } from "@/components/SetupNotice";
 
 export default function HomePage() {
@@ -19,7 +19,7 @@ export default function HomePage() {
           <div className="landing-copy">
             <h2>Score one court from your phone.</h2>
             <p>
-              Choose the match you are watching, verify in YouTube chat, then tap the team that wins each rally.
+              Choose the match you are watching, enter your name, then tap the team that wins each rally.
               Your updates feed the live scoreboard.
             </p>
           </div>
@@ -35,9 +35,9 @@ export default function HomePage() {
               <span>Choose the court that matches the stream or court you are watching.</span>
             </div>
             <div>
-              <MessageSquareText size={22} />
-              <strong>2. Verify in chat</strong>
-              <span>Type the short code shown on screen into the YouTube live chat.</span>
+              <UserRoundCheck size={22} />
+              <strong>2. Enter your name</strong>
+              <span>This lets the broadcast team know who is helping with that court.</span>
             </div>
             <div>
               <MousePointerClick size={22} />
