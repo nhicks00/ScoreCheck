@@ -21,11 +21,18 @@ async function main() {
   const headers = { authorization: `Bearer ${apiKey}` };
   fs.mkdirSync(outputDir, { recursive: true });
 
-  const [configurations, destinations, configuration] = await Promise.all([
+  const [configurationList, destinations, configuration] = await Promise.all([
     fetchJson(`${baseUrl}/api/v1/configurations`, headers),
     fetchJson(`${baseUrl}/api/v1/destinations`, headers),
     configurationId ? fetchJson(`${baseUrl}/api/v1/configurations/${configurationId}`, headers) : Promise.resolve(null)
   ]);
+  const listedConfigurations = Array.isArray(configurationList.configurations) ? configurationList.configurations : [];
+  const detailedConfigurations = await Promise.all(
+    listedConfigurations.map((item: { id?: string }) => (
+      item.id ? fetchJson(`${baseUrl}/api/v1/configurations/${item.id}`, headers) : Promise.resolve(item)
+    ))
+  );
+  const configurations = { ...configurationList, configurations: detailedConfigurations };
   const discovery = { configurations, destinations, configuration };
   fs.writeFileSync(path.join(outputDir, "streamrun-discovery.generated.json"), JSON.stringify(discovery, null, 2));
   fs.writeFileSync(path.join(outputDir, "streamrun-discovery.redacted.json"), JSON.stringify(redact(discovery), null, 2));

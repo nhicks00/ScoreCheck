@@ -16,6 +16,7 @@ import {
 } from "./scoringRules";
 import { persistScoreAndOverlay } from "./scoreState";
 import { generateClaimCode, generateSessionToken, hashToken, requestIpHash, safeDisplayName, userAgent, validateToken } from "./security";
+import { apiScoreHasPriority } from "./sourcePriority";
 import { supabaseAdmin } from "./supabase";
 import crypto from "node:crypto";
 
@@ -356,7 +357,7 @@ export async function assignSessionForVerifiedClaim(claim: ClaimRow, origin?: st
     priority_score: priority,
     last_heartbeat_at: now.toISOString(),
     lease_expires_at: role === "active" ? leaseExpiresAt : null,
-    watch_mode: claim.watch_mode ?? "website"
+    watch_mode: claim.watch_mode ?? "courtside"
   }).select("*").single<SessionRow>();
   if (error) return { ok: false as const, status: 500, error: error.message };
 
@@ -629,7 +630,7 @@ async function applyOfficialSessionAction(context: SessionContext, input: {
   type: SessionActionType;
   payload?: Record<string, unknown>;
 }) {
-  if (apiScoreHasPriority(context)) {
+  if (apiScoreHasPriority(context.score as Record<string, unknown> | null, context.match)) {
     const result = await applyBackupSessionAction(context, input);
     return {
       ...result,
@@ -907,22 +908,6 @@ function priorityFromAuthor(author: Record<string, unknown> | null | undefined):
 
 function scoreSignature(state: ScoreState): string {
   return [state.teamAScore, state.teamBScore, state.teamASets, state.teamBSets, state.currentSet, state.status].join(":");
-}
-
-function apiScoreHasPriority(context: SessionContext): boolean {
-  const score = context.score;
-  if (!context.match?.api_url || context.match.source_type === "manual") return false;
-  if (!score || score.source !== "api" || score.stale) return false;
-  if (score.source_available === false || score.source_priority === "fallback") return false;
-  return scoreLooksLive(score);
-}
-
-function scoreLooksLive(score: ScoreRow): boolean {
-  const status = score.status.toLowerCase();
-  if (status.includes("final") || status.includes("progress")) return true;
-  if (score.team_a_score > 0 || score.team_b_score > 0) return true;
-  if (score.team_a_sets > 0 || score.team_b_sets > 0) return true;
-  return Array.isArray(score.set_scores) && score.set_scores.length > 0;
 }
 
 function firstRelation<T>(value: Relation<T>): T | null {

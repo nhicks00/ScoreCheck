@@ -27,6 +27,7 @@ type CourtCard = {
     teamASets: number;
     teamBSets: number;
     currentSet: number;
+    setScores?: Array<{ setNumber: number; teamAScore: number; teamBScore: number; isComplete: boolean }>;
     status: string;
   } | null;
 };
@@ -89,23 +90,25 @@ export function ScorePortalClient() {
         <section className="fan-court-grid">
           {courts.map((court) => (
             <article className="fan-court-card" key={court.id}>
-              <div className="row">
-                <div>
-                  <span className="status">{courtStatus(court)}</span>
-                  <h2>{court.displayName || `Court ${court.courtNumber}`}</h2>
+              <div className="court-card-top">
+                <span className="status">{courtStatus(court)}</span>
+                <span className="stream-key-badge" aria-label={`Stream key ${court.courtNumber}`}>Key {court.courtNumber}</span>
+              </div>
+              <h2 className="court-title">{court.displayName || `Court ${court.courtNumber}`}</h2>
+              <div className="court-scoreboard" aria-label={`${court.match?.teamA ?? "Team on left"} versus ${court.match?.teamB ?? "Team on right"}`}>
+                <div className="court-team-row">
+                  <strong>{court.match?.teamA ?? "Team on left"}</strong>
+                  <span>{court.score?.teamAScore ?? 0}</span>
                 </div>
-                <strong className="court-number">{court.courtNumber}</strong>
+                <div className="court-versus">vs</div>
+                <div className="court-team-row">
+                  <strong>{court.match?.teamB ?? "Team on right"}</strong>
+                  <span>{court.score?.teamBScore ?? 0}</span>
+                </div>
               </div>
-              <div className="match-line">
-                <strong>{court.match?.teamA ?? "Team on left"}</strong>
-                <span>vs</span>
-                <strong>{court.match?.teamB ?? "Team on right"}</strong>
-              </div>
-              <div className="score-mini">
-                <span>{court.score?.teamAScore ?? 0}</span>
-                <span>-</span>
-                <span>{court.score?.teamBScore ?? 0}</span>
-                <small>Set {court.score?.currentSet ?? 1}</small>
+              <div className="court-set-row">
+                <span>Set {court.score?.currentSet ?? 1}</span>
+                <small>Sets {court.score?.teamASets ?? 0}-{court.score?.teamBSets ?? 0}</small>
               </div>
               <Link className="button primary fan-cta" href={`/score/court/${court.courtNumber}`}>
                 Help score {court.displayName || `Court ${court.courtNumber}`}

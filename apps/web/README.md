@@ -75,12 +75,31 @@ npm run setup:youtube-denver
 npm run setup:streamrun:discover
 npm run setup:streamrun
 npm run setup:vercel-env
+npm run verify:vercel-env
+npm run verify:architecture
 npm run verify:all
 ```
 
 `setup:streamrun` maps the eight existing StreamRun workflows, YouTube destinations, overlay element IDs, and IVS values. It writes redacted reports plus a manual IVS destination paste sheet under `.local/`.
 
+`setup:vercel-env` writes two ignored env artifacts:
+
+- `.local/vercel-env.generated.env` for Vercel app variables. It intentionally excludes YouTube OAuth/API secrets.
+- `.local/worker-env.generated.env` for a Railway/Render-style worker. This is where YouTube OAuth/API secrets belong.
+
+`verify:vercel-env` checks Vercel project settings and env variable names without printing values. It fails if worker-only YouTube OAuth/API keys are present in the Vercel app environment.
+
+`cleanup:vercel-worker-env` dry-runs removal of worker-only YouTube keys from Vercel app env. Destructive mode requires both `--apply` and `CONFIRM_VERCEL_WORKER_ENV_CLEANUP=remove-worker-youtube-keys`; do not run destructive mode without explicit approval.
+
+`verify:architecture` writes `.local/architecture-readiness.redacted.json` and aggregates Supabase, AWS IVS, StreamRun, Vercel, and generated-artifact readiness without printing secret values.
+
+StreamRun/IVS preview setup and test-feed pitfalls are recorded in `../../docs/STREAMRUN_IVS_PREVIEW_RUNBOOK.md`. Read it before changing IVS destinations or sending local SRT test video.
+
+Browser QA coverage and cleanup expectations are recorded in `../../docs/SCORECHECK_QA_RUNBOOK.md`.
+
 Do not commit `.local/`, `.env.local`, `.env.setup.local`, IVS stream keys, playback private keys, Supabase service role keys, StreamRun API keys, Vercel tokens, or YouTube refresh tokens.
+
+Security posture and RLS notes are documented in `SECURITY.md`.
 
 ## Verification
 

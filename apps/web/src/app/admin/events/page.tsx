@@ -20,7 +20,7 @@ export default async function EventsPage() {
     <main className="shell">
       <div className="container stack">
         <div className="topbar">
-          <div className="brand">Events</div>
+          <h1 className="brand">Events</h1>
           <Link className="button" href="/">Home</Link>
         </div>
         <SetupNotice />

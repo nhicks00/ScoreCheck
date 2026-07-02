@@ -46,6 +46,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ eve
           teamASets: score.team_a_sets,
           teamBSets: score.team_b_sets,
           currentSet: score.current_set,
+          setScores: Array.isArray(score.set_scores) ? score.set_scores : [],
           status: score.status
         } : null
       };

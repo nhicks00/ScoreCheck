@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, MonitorPlay, RefreshCw, ShieldCheck, Volleyball } from "lucide-react";
+import { CheckCircle2, MonitorOff, MonitorPlay, RefreshCw, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
@@ -23,7 +23,7 @@ type Claim = {
 export function ClaimClient({ courtParam, eventSlug, adminMode }: { courtParam: string; eventSlug: string; adminMode: boolean }) {
   const [data, setData] = useState<CourtPageData | null>(null);
   const [displayName, setDisplayName] = useState("");
-  const [watchMode, setWatchMode] = useState<"website" | "courtside">("website");
+  const [watchMode, setWatchMode] = useState<"website" | "courtside">("courtside");
   const [claim, setClaim] = useState<Claim | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -74,42 +74,93 @@ export function ClaimClient({ courtParam, eventSlug, adminMode }: { courtParam: 
     };
   }, [claim]);
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!data) return;
-    setBusy(true);
-    setError(null);
+  async function createClaim(nextDisplayName: string): Promise<Claim> {
+    if (!data) throw new Error("Court is still loading.");
     const res = await fetch("/api/scoring/claims/start", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         eventSlug,
         courtNumber: data.court.court_number,
-        displayName,
+        displayName: nextDisplayName,
         watchMode
       })
     });
     const json = await res.json().catch(() => ({}));
-    setBusy(false);
     if (!res.ok) {
-      setError(friendlyError(json.error ?? "Could not start scoring"));
-      return;
+      throw new Error(json.error ?? "Could not start scoring");
     }
-    setClaim(json);
-    setStatus(json.message);
+    return json as Claim;
+  }
+
+  async function openClaimStatus(nextClaim: Claim) {
+    const res = await fetch(`/api/scoring/claims/${nextClaim.claimId}/status?claimStatusToken=${encodeURIComponent(nextClaim.claimStatusToken)}`, { cache: "no-store" });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(json.error ?? "Could not open scoring session");
+    }
+    setStatus(json.message ?? "Verified. Opening scorer page...");
+    if (json.sessionUrl) {
+      window.location.assign(json.sessionUrl);
+    }
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const nextClaim = await createClaim(displayName);
+      setClaim(nextClaim);
+      setStatus(nextClaim.message);
+    } catch (err) {
+      setError(friendlyError(err instanceof Error ? err.message : "Could not start scoring"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function verifyClaimForAdmin(claimId: string) {
+    const res = await fetch(`/api/scoring/claims/${claimId}/admin-verify`, { method: "POST" });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(json.error ?? "Admin verification failed");
+    }
   }
 
   async function adminVerify() {
     if (!claim) return;
     setBusy(true);
-    const res = await fetch(`/api/scoring/claims/${claim.claimId}/admin-verify`, { method: "POST" });
-    const json = await res.json().catch(() => ({}));
-    setBusy(false);
-    if (!res.ok) {
-      setError(friendlyError(json.error ?? "Admin verification failed"));
-      return;
+    setError(null);
+    try {
+      await verifyClaimForAdmin(claim.claimId);
+      setStatus("Verified. Opening scorer page...");
+      await openClaimStatus(claim);
+    } catch (err) {
+      setError(friendlyError(err instanceof Error ? err.message : "Admin verification failed"));
+    } finally {
+      setBusy(false);
     }
-    setStatus("Verified. Opening scorer page...");
+  }
+
+  async function adminStartSession() {
+    if (!data) return;
+    const adminDisplayName = displayName.trim() || `Admin tester - Court ${data.court.court_number}`;
+    setBusy(true);
+    setError(null);
+    try {
+      if (!displayName.trim()) setDisplayName(adminDisplayName);
+      const nextClaim = await createClaim(adminDisplayName);
+      setClaim(nextClaim);
+      setStatus("Admin verification in progress...");
+      await verifyClaimForAdmin(nextClaim.claimId);
+      setStatus("Verified. Opening scorer page...");
+      await openClaimStatus(nextClaim);
+    } catch (err) {
+      setError(friendlyError(err instanceof Error ? err.message : "Admin test scoring failed"));
+    } finally {
+      setBusy(false);
+    }
   }
 
   const statusText = useMemo(() => {
@@ -140,18 +191,26 @@ export function ClaimClient({ courtParam, eventSlug, adminMode }: { courtParam: 
         </section>
 
         {error && <div className="panel warn-surface">{error}</div>}
+        {adminMode && (
+          <div className="admin-test-banner" role="status">
+            <ShieldCheck size={18} />
+            <span>Admin test mode can skip YouTube chat verification for this court.</span>
+          </div>
+        )}
 
         {!claim ? (
           <form className="claim-form" onSubmit={submit}>
             <div className="panel stack">
               <h2>Thanks for helping keep score.</h2>
               <p className="muted">You only need to do one thing: tap the team that wins each point.</p>
-              <div className="watch-toggle" role="group" aria-label="Watching mode">
-                <button type="button" className={watchMode === "website" ? "primary" : ""} onClick={() => setWatchMode("website")}>
-                  <MonitorPlay size={18} /> On this website
-                </button>
+              <div className="watch-toggle mode-toggle" role="group" aria-label="Scoring view">
                 <button type="button" className={watchMode === "courtside" ? "primary" : ""} onClick={() => setWatchMode("courtside")}>
-                  <Volleyball size={18} /> Courtside / in person
+                  <span><MonitorOff size={18} /> Score only</span>
+                  <small>Use video on another screen</small>
+                </button>
+                <button type="button" className={watchMode === "website" ? "primary" : ""} onClick={() => setWatchMode("website")}>
+                  <span><MonitorPlay size={18} /> Watch stream + score</span>
+                  <small>Show the preview here</small>
                 </button>
               </div>
               <label>
@@ -168,6 +227,11 @@ export function ClaimClient({ courtParam, eventSlug, adminMode }: { courtParam: 
               <button className="primary claim-submit" type="submit" disabled={busy || !data || data.court.scoring_open === false}>
                 <ShieldCheck size={20} /> Get my chat code
               </button>
+              {adminMode && (
+                <button className="warn claim-submit" type="button" onClick={() => void adminStartSession()} disabled={busy || !data || data.court.scoring_open === false}>
+                  <ShieldCheck size={20} /> Start admin scoring test
+                </button>
+              )}
             </div>
           </form>
         ) : (

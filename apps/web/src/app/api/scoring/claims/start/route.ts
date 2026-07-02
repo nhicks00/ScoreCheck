@@ -7,7 +7,7 @@ const schema = z.object({
   eventSlug: z.string().min(1).default(getEnv().defaultEventSlug),
   courtNumber: z.coerce.number().int().min(1).max(8),
   displayName: z.string().min(1).max(80),
-  watchMode: z.enum(["website", "courtside"]).default("website")
+  watchMode: z.enum(["website", "courtside"]).default("courtside")
 });
 
 export async function POST(req: NextRequest) {

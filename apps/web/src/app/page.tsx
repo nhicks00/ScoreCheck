@@ -1,23 +1,55 @@
 import Link from "next/link";
+import { CheckCircle2, MessageSquareText, MousePointerClick, ShieldCheck, Trophy } from "lucide-react";
 import { SetupNotice } from "@/components/SetupNotice";
 
 export default function HomePage() {
   return (
-    <main className="shell">
-      <div className="container stack">
-        <div className="topbar">
-          <div className="brand">ScoreCheck</div>
-          <div className="row wrap">
-            <Link className="button primary" href="/score">Score a court</Link>
-            <Link className="button" href="/admin/avp-denver">Open Admin</Link>
+    <main className="shell landing-shell">
+      <div className="landing-container">
+        <header className="landing-topbar">
+          <div>
+            <p className="eyebrow">ScoreCheck</p>
+            <h1>Help keep the AVP Denver scoreboard live.</h1>
           </div>
-        </div>
+          <Link className="button admin-link" href="/admin/avp-denver">Open Admin</Link>
+        </header>
         <SetupNotice />
-        <section className="panel">
-          <h1>AVP Denver fan scoring</h1>
-          <p className="muted">
-            Parent-friendly scoring links, verified scorekeeper sessions, private scorer preview video, and read-only StreamRun overlays.
-          </p>
+
+        <section className="landing-hero">
+          <div className="landing-copy">
+            <h2>Score one court from your phone.</h2>
+            <p>
+              Choose the match you are watching, verify in YouTube chat, then tap the team that wins each rally.
+              Your updates feed the live scoreboard.
+            </p>
+          </div>
+
+          <Link className="button primary landing-cta" href="/score">
+            <CheckCircle2 size={22} /> Help score a court
+          </Link>
+
+          <div className="landing-steps" aria-label="How fan scoring works">
+            <div>
+              <ShieldCheck size={22} />
+              <strong>1. Pick a court</strong>
+              <span>Choose the court that matches the stream or court you are watching.</span>
+            </div>
+            <div>
+              <MessageSquareText size={22} />
+              <strong>2. Verify in chat</strong>
+              <span>Type the short code shown on screen into the YouTube live chat.</span>
+            </div>
+            <div>
+              <MousePointerClick size={22} />
+              <strong>3. Tap each rally winner</strong>
+              <span>Use the two large team buttons. Undo or edit the score if a point is entered wrong.</span>
+            </div>
+            <div>
+              <Trophy size={22} />
+              <strong>4. Start the next set</strong>
+              <span>When a set is won, start the next set and keep scoring until the match ends.</span>
+            </div>
+          </div>
         </section>
       </div>
     </main>
