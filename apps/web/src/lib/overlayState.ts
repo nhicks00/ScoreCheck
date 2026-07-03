@@ -53,7 +53,7 @@ export function coerceOverlayState(input: unknown, courtNumber = 1): OverlayStat
   const teamB = recordValue(match?.teamB);
   const format = recordValue(match?.format);
 
-  return {
+  return normalizeFinalOverlayState({
     eventId: stringValue(value.eventId) ?? base.eventId,
     courtId: stringValue(value.courtId) ?? base.courtId,
     courtNumber: numberValue(value.courtNumber, base.courtNumber, 1),
@@ -101,14 +101,11 @@ export function coerceOverlayState(input: unknown, courtNumber = 1): OverlayStat
       stale: Boolean(health?.stale),
       message: nullableString(health?.message)
     }
-  };
+  });
 }
 
 export function completedSetScores(setScores: SetScore[]) {
-  return coerceSetScores(setScores)
-    .filter((set) => set.isComplete)
-    .sort((a, b) => a.setNumber - b.setNumber)
-    .slice(0, 3);
+  return completedPlayedSetScores(setScores).slice(0, 3);
 }
 
 export function displayOverlayName(value: string | null | undefined) {
@@ -155,6 +152,31 @@ function coerceSetScores(value: unknown): SetScore[] {
       };
     })
     .filter((item): item is SetScore => Boolean(item));
+}
+
+function normalizeFinalOverlayState(state: OverlayState): OverlayState {
+  if (state.phase !== "POSTMATCH") return state;
+
+  const playedSets = completedPlayedSetScores(state.score.setScores);
+  const lastPlayedSet = playedSets.at(-1);
+  if (!lastPlayedSet) return state;
+
+  return {
+    ...state,
+    score: {
+      ...state.score,
+      teamAScore: lastPlayedSet.teamAScore,
+      teamBScore: lastPlayedSet.teamBScore,
+      currentSet: lastPlayedSet.setNumber,
+      setScores: playedSets
+    }
+  };
+}
+
+function completedPlayedSetScores(setScores: SetScore[]) {
+  return coerceSetScores(setScores)
+    .filter((set) => set.isComplete && (set.teamAScore > 0 || set.teamBScore > 0))
+    .sort((a, b) => a.setNumber - b.setNumber);
 }
 
 function pointTargets(value: unknown) {

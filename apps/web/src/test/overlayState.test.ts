@@ -52,6 +52,32 @@ describe("overlayState", () => {
     ]);
   });
 
+  it("hides unused final-set zeroes after a straight-sets final", () => {
+    const state = coerceOverlayState({
+      phase: "POSTMATCH",
+      score: {
+        teamAScore: 0,
+        teamBScore: 0,
+        currentSet: 3,
+        teamASets: 0,
+        teamBSets: 2,
+        setScores: [
+          { setNumber: 1, teamAScore: 12, teamBScore: 21, isComplete: true },
+          { setNumber: 2, teamAScore: 15, teamBScore: 21, isComplete: true },
+          { setNumber: 3, teamAScore: 0, teamBScore: 0, isComplete: true }
+        ]
+      }
+    }, 8);
+
+    expect(state.score.teamAScore).toBe(15);
+    expect(state.score.teamBScore).toBe(21);
+    expect(state.score.currentSet).toBe(2);
+    expect(completedSetScores(state.score.setScores)).toEqual([
+      { setNumber: 1, teamAScore: 12, teamBScore: 21, isComplete: true },
+      { setNumber: 2, teamAScore: 15, teamBScore: 21, isComplete: true }
+    ]);
+  });
+
   it("uses current set status for live broadcast labels", () => {
     const state = coerceOverlayState({
       phase: "LIVE",

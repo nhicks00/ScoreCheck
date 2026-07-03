@@ -1,4 +1,5 @@
 import { OverlayLayout, OverlayPhase, OverlayState } from "./types";
+import { coerceOverlayState } from "./overlayState";
 
 type OverlayInput = {
   event: { id: string; settings?: Record<string, unknown> | null };
@@ -45,7 +46,7 @@ type OverlayInput = {
 
 export function buildOverlayState(input: OverlayInput): OverlayState {
   const phase = resolvePhase(input.court, input.match, input.score);
-  return {
+  return coerceOverlayState({
     eventId: input.court.event_id,
     courtId: input.court.id,
     courtNumber: input.court.court_number,
@@ -93,7 +94,7 @@ export function buildOverlayState(input: OverlayInput): OverlayState {
       stale: input.score?.stale ?? false,
       message: input.score?.message ?? null
     }
-  };
+  }, input.court.court_number);
 }
 
 function courtLabel(court: OverlayInput["court"]): string {

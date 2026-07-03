@@ -32,7 +32,6 @@ export function normalizeVblBracketPayload(payload: unknown, match?: MatchLike |
       setNumber: numberValue(game.number) ?? 1,
       teamAScore: safeScore(game.home),
       teamBScore: safeScore(game.away),
-      modified: cleanText(game.dtModified) != null,
       explicitFinal: game.isFinal === true
     }))
     .sort((a, b) => a.setNumber - b.setNumber);
@@ -44,7 +43,7 @@ export function normalizeVblBracketPayload(payload: unknown, match?: MatchLike |
   let teamBSets = 0;
   for (const game of games) {
     const hasScore = game.teamAScore > 0 || game.teamBScore > 0;
-    if (!hasScore && !game.modified && !game.explicitFinal) continue;
+    if (!hasScore) continue;
     const target = game.setNumber === 3 ? Math.min(format.pointsPerSet[0] ?? 21, 15) : (format.pointsPerSet[game.setNumber - 1] ?? format.pointsPerSet[0] ?? 21);
     const isComplete = game.explicitFinal || isSetComplete(game.teamAScore, game.teamBScore, target, format.cap);
     setScores.push({

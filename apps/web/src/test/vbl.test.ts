@@ -124,6 +124,33 @@ describe("VolleyballLife helpers", () => {
     });
   });
 
+  it("ignores unused all-zero bracket games after a two-set final", () => {
+    const snapshot = normalizeVblBracketPayload({
+      games: [
+        { number: 1, home: 12, away: 21, isFinal: true, dtModified: "1783100000000" },
+        { number: 2, home: 15, away: 21, isFinal: true, dtModified: "1783101000000" },
+        { number: 3, home: 0, away: 0, isFinal: true, dtModified: "1783102000000" }
+      ]
+    }, {
+      team_a: "Connor Boyles / Jeff Bunge",
+      team_b: "Ford Harman / Ian Satterfield",
+      format: { bestOf: 3, pointsPerSet: [21, 21, 15], setsToWin: 2 }
+    });
+
+    expect(snapshot).toMatchObject({
+      status: "Final",
+      currentSet: 2,
+      teamAScore: 15,
+      teamBScore: 21,
+      teamASets: 0,
+      teamBSets: 2
+    });
+    expect(snapshot?.setScores).toEqual([
+      { setNumber: 1, teamAScore: 12, teamBScore: 21, isComplete: true },
+      { setNumber: 2, teamAScore: 15, teamBScore: 21, isComplete: true }
+    ]);
+  });
+
   it("does not treat a single bracket set confirmation as match final", () => {
     const snapshot = normalizeVblBracketPayload({
       games: [
