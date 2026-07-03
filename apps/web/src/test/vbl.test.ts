@@ -89,6 +89,27 @@ describe("VolleyballLife helpers", () => {
     expect(isAuthoritativeScorePayload(payload, snapshot)).toBe(true);
   });
 
+  it("trims duplicated vMix post-clinch set scores after a straight-sets final", () => {
+    const payload = [
+      { teamName: "Renata Lechien / Margaret Riley", isMatch: true, game1: 21, game2: 21, game3: 21 },
+      { teamName: "Julia Anisimova / Wynter Thorne-Thomsen", isMatch: true, game1: 15, game2: 19, game3: 19 }
+    ];
+    const snapshot = normalizeScorePayload(payload, {
+      format: { bestOf: 3, pointsPerSet: [21, 21, 15], setsToWin: 2 }
+    });
+
+    expect(snapshot.status).toBe("Final");
+    expect(snapshot.currentSet).toBe(2);
+    expect(snapshot.teamAScore).toBe(21);
+    expect(snapshot.teamBScore).toBe(19);
+    expect(snapshot.teamASets).toBe(2);
+    expect(snapshot.teamBSets).toBe(0);
+    expect(snapshot.setScores).toEqual([
+      { setNumber: 1, teamAScore: 21, teamBScore: 15, isComplete: true },
+      { setNumber: 2, teamAScore: 21, teamBScore: 19, isComplete: true }
+    ]);
+  });
+
   it("treats a started all-zero vMix match as live scoring", () => {
     const payload = [
       { teamName: "Alpha", isMatch: true, game1: 0, game2: 0, game3: 0 },
@@ -148,6 +169,33 @@ describe("VolleyballLife helpers", () => {
     expect(snapshot?.setScores).toEqual([
       { setNumber: 1, teamAScore: 12, teamBScore: 21, isComplete: true },
       { setNumber: 2, teamAScore: 15, teamBScore: 21, isComplete: true }
+    ]);
+  });
+
+  it("trims duplicated bracket post-clinch set scores after a straight-sets final", () => {
+    const snapshot = normalizeVblBracketPayload({
+      games: [
+        { number: 1, home: 21, away: 15, isFinal: true, dtModified: "1783100000000" },
+        { number: 2, home: 21, away: 19, isFinal: true, dtModified: "1783101000000" },
+        { number: 3, home: 21, away: 19, isFinal: true, dtModified: "1783102000000" }
+      ]
+    }, {
+      team_a: "Renata Lechien / Margaret Riley",
+      team_b: "Julia Anisimova / Wynter Thorne-Thomsen",
+      format: { bestOf: 3, pointsPerSet: [21, 21, 15], setsToWin: 2 }
+    });
+
+    expect(snapshot).toMatchObject({
+      status: "Final",
+      currentSet: 2,
+      teamAScore: 21,
+      teamBScore: 19,
+      teamASets: 2,
+      teamBSets: 0
+    });
+    expect(snapshot?.setScores).toEqual([
+      { setNumber: 1, teamAScore: 21, teamBScore: 15, isComplete: true },
+      { setNumber: 2, teamAScore: 21, teamBScore: 19, isComplete: true }
     ]);
   });
 

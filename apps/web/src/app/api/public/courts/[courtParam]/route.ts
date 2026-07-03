@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { publicCourtData } from "@/lib/scorerSessions";
+import { scoreForCurrentMatch } from "@/lib/scoreState";
 import { supabaseAdmin } from "@/lib/supabase";
 
 type Relation<T> = T | T[] | null | undefined;
@@ -18,7 +19,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ cour
       .maybeSingle();
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     const match = firstRelation(court?.matches);
-    const score = firstRelation(court?.score_states);
+    const score = scoreForCurrentMatch(court?.score_states, match?.id);
     return NextResponse.json({
       event: data.event,
       court: data.court,

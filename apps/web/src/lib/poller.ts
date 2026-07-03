@@ -1,7 +1,7 @@
 import { isAuthoritativeScorePayload, normalizeScorePayload, normalizeVblBracketPayload } from "./scoring";
 import { refreshEventBracketSources } from "./bracketRefresh";
 import { defaultManualState } from "./manualScoring";
-import { buildOverlayStateWithEventSettings, persistScoreAndOverlay } from "./scoreState";
+import { buildOverlayStateWithEventSettings, persistScoreAndOverlay, scoreForCurrentMatch } from "./scoreState";
 import { supabaseAdmin } from "./supabase";
 import { delayedScoreFromSnapshot, pendingScoresForMatch, queueDelayedVblScore, splitDueDelayedVblScores, type DelayedVblScorePayload } from "./vblDelay";
 
@@ -190,7 +190,7 @@ async function acquireLease(eventId: string, courtId: string, owner: string): Pr
 async function pollCourt(court: CourtRow) {
   const db = supabaseAdmin();
   const match = firstRelation(court.matches);
-  let currentScore = firstRelation(court.score_states);
+  let currentScore = scoreForCurrentMatch(court.score_states, match?.id);
   if (currentScore?.source === "override") return false;
   if (!match?.api_url) return false;
 
@@ -638,7 +638,7 @@ async function markCourtStale(court: CourtRow, message: string) {
   const db = supabaseAdmin();
   const now = new Date().toISOString();
   const match = firstRelation(court.matches);
-  const currentScore = firstRelation(court.score_states);
+  const currentScore = scoreForCurrentMatch(court.score_states, match?.id);
   if (currentScore?.source === "manual") {
     await db.from("score_states").update({
       source_available: false,

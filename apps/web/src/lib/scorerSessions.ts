@@ -14,7 +14,7 @@ import {
   validateManualCorrection,
   type ScoreState
 } from "./scoringRules";
-import { persistScoreAndOverlay } from "./scoreState";
+import { persistScoreAndOverlay, scoreForCurrentMatch } from "./scoreState";
 import { generateClaimCode, generateSessionToken, hashToken, requestIpHash, safeDisplayName, userAgent, validateToken } from "./security";
 import { apiScoreHasPriority } from "./sourcePriority";
 import { supabaseAdmin } from "./supabase";
@@ -1211,7 +1211,7 @@ async function loadSessionContext(rawToken: string): Promise<
     event,
     court,
     match: firstRelation(court.matches),
-    score: firstRelation(court.score_states),
+    score: scoreForCurrentMatch(court.score_states, firstRelation(court.matches)?.id),
     shadow: shadow ?? null,
     flags: (flags ?? []) as CourtFlagRow[]
   };
@@ -1243,7 +1243,7 @@ async function loadSessionContextBySession(session: SessionRow) {
     .select("*, matches:current_match_id(*), score_states(*)")
     .eq("id", session.court_id)
     .maybeSingle<CourtContext>();
-  return court ? { court, score: firstRelation(court.score_states) } : null;
+  return court ? { court, score: scoreForCurrentMatch(court.score_states, firstRelation(court.matches)?.id) } : null;
 }
 
 function sessionCanAct(session: SessionRow): boolean {

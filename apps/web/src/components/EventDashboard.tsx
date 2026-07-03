@@ -31,6 +31,7 @@ type DashboardMatch = {
 };
 
 type DashboardScore = {
+  match_id?: string | null;
   team_a_score: number;
   team_b_score: number;
   team_a_sets: number;
@@ -420,7 +421,7 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
         <section className="grid courts">
           {courts.map((court) => {
             const active = firstRelation(court.matches);
-            const score = firstRelation(court.score_states);
+            const score = scoreForMatch(court.score_states, active?.id);
             const courtQueues = queueByCourt.get(court.id) ?? [];
             const links = linksByCourt[court.id];
             return (
@@ -610,7 +611,8 @@ function Metric({ label, value, icon }: { label: string; value: string; icon?: R
 }
 
 function CourtSummary({ court, queueCount, overlayUrl, copy }: { court: DashboardCourt; queueCount: number; overlayUrl: string; copy: (value: string) => void }) {
-  const score = firstRelation(court.score_states);
+  const active = firstRelation(court.matches);
+  const score = scoreForMatch(court.score_states, active?.id);
   return (
     <article className="court-summary">
       <div className="row">
@@ -629,6 +631,12 @@ function CourtSummary({ court, queueCount, overlayUrl, copy }: { court: Dashboar
 
 function firstRelation<T>(value: T | T[] | null | undefined): T | null {
   return Array.isArray(value) ? value[0] ?? null : value ?? null;
+}
+
+function scoreForMatch(value: DashboardScore | DashboardScore[] | null | undefined, matchId: string | null | undefined): DashboardScore | null {
+  const rows = Array.isArray(value) ? value : value ? [value] : [];
+  if (!matchId) return rows[0] ?? null;
+  return rows.find((row) => row.match_id === matchId) ?? null;
 }
 
 function copyText(value: string) {

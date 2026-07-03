@@ -4,6 +4,7 @@ export type OverlayPhase = "IDLE" | "PREMATCH" | "LIVE" | "POSTMATCH" | "STALE" 
 
 export type MatchFormat = {
   bestOf: number;
+  setsToWin?: number;
   pointsPerSet: number[];
   winByTwo: boolean;
   cap: number | null;

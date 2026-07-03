@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
-import { buildOverlayStateWithEventSettings } from "@/lib/scoreState";
+import { buildOverlayStateWithEventSettings, scoreForCurrentMatch } from "@/lib/scoreState";
 import { supabaseAdmin } from "@/lib/supabase";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ courtId: string }> }) {
@@ -17,7 +17,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cou
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   const match = Array.isArray(court.matches) ? court.matches[0] : court.matches;
-  const score = Array.isArray(court.score_states) ? court.score_states[0] : court.score_states;
+  const score = scoreForCurrentMatch(court.score_states, match?.id);
   const overlay = await buildOverlayStateWithEventSettings(court, match ?? null, score ?? null);
   await db.from("overlay_states").upsert({
     court_id: court.id,

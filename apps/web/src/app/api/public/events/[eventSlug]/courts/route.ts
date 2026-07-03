@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getEventBySlug } from "@/lib/eventConfig";
 import { computeCourtScorerStatus } from "@/lib/scorerSessions";
+import { scoreForCurrentMatch } from "@/lib/scoreState";
 import { supabaseAdmin } from "@/lib/supabase";
 
 type Relation<T> = T | T[] | null | undefined;
@@ -20,7 +21,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ eve
     const courts = await Promise.all((data ?? []).map(async (court) => {
       const status = await computeCourtScorerStatus(court.id);
       const match = firstRelation(court.matches);
-      const score = firstRelation(court.score_states);
+      const score = scoreForCurrentMatch(court.score_states, match?.id);
       return {
         id: court.id,
         courtNumber: court.court_number,

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { isAdminRequest } from "@/lib/auth";
 import { getEnv, missingEnvKeys } from "@/lib/env";
+import { scoreForCurrentMatch } from "@/lib/scoreState";
 import { supabaseAdmin } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
@@ -32,7 +33,7 @@ export default async function CourtsPage({ params }: { params: Promise<{ eventId
         <section className="grid courts">
           {(courts ?? []).map((court) => {
             const match = Array.isArray(court.matches) ? court.matches[0] : court.matches;
-            const score = Array.isArray(court.score_states) ? court.score_states[0] : court.score_states;
+            const score = scoreForCurrentMatch(court.score_states, match?.id);
             const overlayUrl = `${env.publicSiteUrl.replace(/\/$/, "")}/overlay/stream/${court.court_number}`;
             const eventOverlayUrl = `${env.publicSiteUrl.replace(/\/$/, "")}/overlay/court/${court.court_number}?eventId=${eventId}`;
             return (

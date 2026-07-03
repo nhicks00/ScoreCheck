@@ -72,6 +72,7 @@ export function buildOverlayState(input: OverlayInput): OverlayState {
       },
       format: {
         bestOf: numberValue(input.match?.format?.bestOf) ?? 3,
+        setsToWin: numberValue(input.match?.format?.setsToWin),
         pointsPerSet: Array.isArray(input.match?.format?.pointsPerSet) ? input.match!.format!.pointsPerSet as number[] : [21, 21, 15],
         winByTwo: input.match?.format?.winByTwo !== false,
         cap: numberValue(input.match?.format?.cap),

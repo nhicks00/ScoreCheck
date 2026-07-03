@@ -78,6 +78,37 @@ describe("overlayState", () => {
     ]);
   });
 
+  it("hides duplicated post-clinch set scores after a straight-sets final", () => {
+    const state = coerceOverlayState({
+      phase: "POSTMATCH",
+      match: {
+        format: { bestOf: 3, pointsPerSet: [21, 21, 15], winByTwo: true }
+      },
+      score: {
+        teamAScore: 21,
+        teamBScore: 19,
+        currentSet: 3,
+        teamASets: 3,
+        teamBSets: 0,
+        setScores: [
+          { setNumber: 1, teamAScore: 21, teamBScore: 15, isComplete: true },
+          { setNumber: 2, teamAScore: 21, teamBScore: 19, isComplete: true },
+          { setNumber: 3, teamAScore: 21, teamBScore: 19, isComplete: true }
+        ]
+      }
+    }, 5);
+
+    expect(state.score.teamAScore).toBe(21);
+    expect(state.score.teamBScore).toBe(19);
+    expect(state.score.teamASets).toBe(2);
+    expect(state.score.teamBSets).toBe(0);
+    expect(state.score.currentSet).toBe(2);
+    expect(completedSetScores(state.score.setScores)).toEqual([
+      { setNumber: 1, teamAScore: 21, teamBScore: 15, isComplete: true },
+      { setNumber: 2, teamAScore: 21, teamBScore: 19, isComplete: true }
+    ]);
+  });
+
   it("keeps a live deciding set at zero-zero visible as the current score", () => {
     const state = coerceOverlayState({
       phase: "LIVE",

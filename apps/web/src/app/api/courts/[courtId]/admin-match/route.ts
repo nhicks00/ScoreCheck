@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
-import { buildOverlayStateWithEventSettings } from "@/lib/scoreState";
+import { buildOverlayStateWithEventSettings, scoreForCurrentMatch } from "@/lib/scoreState";
 import { supabaseAdmin } from "@/lib/supabase";
 
 const matchEditSchema = z.object({
@@ -52,7 +52,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ co
     .single();
   if (matchError) return NextResponse.json({ error: matchError.message }, { status: 500 });
 
-  const score = Array.isArray(court.score_states) ? court.score_states[0] : court.score_states;
+  const score = scoreForCurrentMatch(court.score_states, match.id);
   const overlay = await buildOverlayStateWithEventSettings(court, match, score ?? null);
   await db.from("overlay_states").upsert({
     court_id: court.id,

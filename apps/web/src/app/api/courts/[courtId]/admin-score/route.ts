@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
 import { applyManualAction, applyManualEdit, formatFromMatch, manualEditSchema, normalizeManualState } from "@/lib/manualScoring";
-import { persistScoreAndOverlay } from "@/lib/scoreState";
+import { persistScoreAndOverlay, scoreForCurrentMatch } from "@/lib/scoreState";
 import { requestIpHash, userAgent } from "@/lib/security";
 import { supabaseAdmin } from "@/lib/supabase";
 
@@ -102,7 +102,7 @@ async function loadContext(courtId: string): Promise<
     ok: true,
     court,
     match: firstRelation(court.matches),
-    currentScore: firstRelation(court.score_states)
+    currentScore: scoreForCurrentMatch(court.score_states, firstRelation(court.matches)?.id)
   };
 }
 

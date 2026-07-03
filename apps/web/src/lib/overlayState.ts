@@ -20,7 +20,7 @@ export function fallbackOverlayState(courtNumber = 1): OverlayState {
       scheduledTime: null,
       teamA: { name: "TBD", seed: null, players: [] },
       teamB: { name: "TBD", seed: null, players: [] },
-      format: { bestOf: 3, pointsPerSet: [21, 21, 15], winByTwo: true, cap: null }
+      format: { bestOf: 3, setsToWin: 2, pointsPerSet: [21, 21, 15], winByTwo: true, cap: null }
     },
     score: {
       teamAScore: 0,
@@ -79,6 +79,7 @@ export function coerceOverlayState(input: unknown, courtNumber = 1): OverlayStat
       },
       format: {
         bestOf: numberValue(format?.bestOf, base.match.format.bestOf, 1, 5),
+        setsToWin: numberValue(format?.setsToWin, base.match.format.setsToWin ?? 2, 1, 5),
         pointsPerSet: pointTargets(format?.pointsPerSet),
         winByTwo: format?.winByTwo !== false,
         cap: nullableNumber(format?.cap),
@@ -157,9 +158,10 @@ function coerceSetScores(value: unknown): SetScore[] {
 function normalizeFinalOverlayState(state: OverlayState): OverlayState {
   if (state.phase !== "POSTMATCH") return state;
 
-  const playedSets = completedPlayedSetScores(state.score.setScores);
+  const playedSets = finalPlayedSetScores(state.score.setScores, setsToWin(state.match.format));
   const lastPlayedSet = playedSets.at(-1);
   if (!lastPlayedSet) return state;
+  const setCounts = setWinCounts(playedSets);
 
   return {
     ...state,
@@ -167,6 +169,8 @@ function normalizeFinalOverlayState(state: OverlayState): OverlayState {
       ...state.score,
       teamAScore: lastPlayedSet.teamAScore,
       teamBScore: lastPlayedSet.teamBScore,
+      teamASets: setCounts.teamASets,
+      teamBSets: setCounts.teamBSets,
       currentSet: lastPlayedSet.setNumber,
       setScores: playedSets
     }
@@ -177,6 +181,37 @@ function completedPlayedSetScores(setScores: SetScore[]) {
   return coerceSetScores(setScores)
     .filter((set) => set.isComplete && (set.teamAScore > 0 || set.teamBScore > 0))
     .sort((a, b) => a.setNumber - b.setNumber);
+}
+
+function finalPlayedSetScores(setScores: SetScore[], requiredSets: number) {
+  const playedSets = completedPlayedSetScores(setScores);
+  const finalSets: SetScore[] = [];
+  let teamASets = 0;
+  let teamBSets = 0;
+
+  for (const set of playedSets) {
+    finalSets.push(set);
+    if (set.teamAScore > set.teamBScore) teamASets += 1;
+    if (set.teamBScore > set.teamAScore) teamBSets += 1;
+    if (teamASets >= requiredSets || teamBSets >= requiredSets) break;
+  }
+
+  return finalSets;
+}
+
+function setWinCounts(setScores: SetScore[]) {
+  return setScores.reduce((counts, set) => {
+    if (set.teamAScore > set.teamBScore) counts.teamASets += 1;
+    if (set.teamBScore > set.teamAScore) counts.teamBSets += 1;
+    return counts;
+  }, { teamASets: 0, teamBSets: 0 });
+}
+
+function setsToWin(format: OverlayState["match"]["format"]) {
+  const explicitSetsToWin = numberValue(format.setsToWin, 0, 1, 5);
+  return explicitSetsToWin > 0
+    ? explicitSetsToWin
+    : Math.max(1, Math.ceil(numberValue(format.bestOf, 3, 1, 5) / 2));
 }
 
 function pointTargets(value: unknown) {

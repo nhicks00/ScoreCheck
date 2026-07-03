@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { isAdminRequest } from "@/lib/auth";
+import { scoreForCurrentMatch } from "@/lib/scoreState";
 import { supabaseAdmin } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
@@ -14,7 +15,7 @@ export default async function CourtPage({ params }: { params: Promise<{ courtId:
     .single();
   if (!court) redirect("/admin/events");
   const match = Array.isArray(court.matches) ? court.matches[0] : court.matches;
-  const score = Array.isArray(court.score_states) ? court.score_states[0] : court.score_states;
+  const score = scoreForCurrentMatch(court.score_states, match?.id);
   return (
     <main className="shell">
       <div className="container">

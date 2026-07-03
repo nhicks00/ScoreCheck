@@ -1,5 +1,5 @@
 import { defaultManualState } from "./manualScoring";
-import { persistScoreAndOverlay } from "./scoreState";
+import { persistScoreAndOverlay, scoreForCurrentMatch } from "./scoreState";
 import type { CourtRecord, MatchRecord, ScoreRecord } from "./scoreState";
 import { supabaseAdmin } from "./supabase";
 import { discoverMatchesFromUrl } from "./vbl";
@@ -411,7 +411,7 @@ async function refreshActiveOverlaysForMatches(eventId: string, matches: Record<
   let refreshed = 0;
   for (const court of (courts ?? []) as CourtRow[]) {
     const match = firstRelation(court.matches) as Parameters<typeof persistScoreAndOverlay>[1] | null;
-    const score = firstRelation(court.score_states) as ScoreRow | null;
+    const score = scoreForCurrentMatch(court.score_states, match?.id) as ScoreRow | null;
     if (!match || !score) continue;
     await persistScoreAndOverlay(court, match, {
       court_id: score.court_id,

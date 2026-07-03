@@ -61,21 +61,23 @@ export function normalizeVblBracketPayload(payload: unknown, match?: MatchLike |
   if (!setScores.length) return null;
 
   const won = teamASets >= format.setsToWin || teamBSets >= format.setsToWin;
-  const activeSet = setScores.find((set) => !set.isComplete) ?? null;
-  const displaySet = won ? setScores.at(-1) : activeSet;
+  const finalSetScores = won ? trimSetScoresAtClinch(setScores, format.setsToWin) : setScores;
+  const finalCounts = won ? setWinCounts(finalSetScores) : { teamASets, teamBSets };
+  const activeSet = finalSetScores.find((set) => !set.isComplete) ?? null;
+  const displaySet = won ? finalSetScores.at(-1) : activeSet;
   return {
     status: won ? "Final" : "In Progress",
-    currentSet: won ? Math.max(setScores.length, 1) : activeSet?.setNumber ?? Math.min(setScores.length + 1, format.bestOf),
+    currentSet: won ? Math.max(displaySet?.setNumber ?? finalSetScores.length, 1) : activeSet?.setNumber ?? Math.min(finalSetScores.length + 1, format.bestOf),
     teamAName: match?.team_a ?? "Team A",
     teamBName: match?.team_b ?? "Team B",
     teamASeed: match?.team_a_seed ?? null,
     teamBSeed: match?.team_b_seed ?? null,
     teamAScore: displaySet?.teamAScore ?? 0,
     teamBScore: displaySet?.teamBScore ?? 0,
-    teamASets,
-    teamBSets,
+    teamASets: finalCounts.teamASets,
+    teamBSets: finalCounts.teamBSets,
     servingTeam: null,
-    setScores,
+    setScores: finalSetScores,
     source: "api",
     stale: false,
     message: null
@@ -112,8 +114,10 @@ function normalizeArrayPayload(payload: unknown[], match?: MatchLike | null): Sc
   const activeSet = setScores.find((set) => !set.isComplete) ?? null;
   const finalSet = setScores.at(-1) ?? null;
   const won = teamASets >= format.setsToWin || teamBSets >= format.setsToWin;
-  const displaySet = won ? finalSet : activeSet;
-  const currentSet = won ? Math.max(setScores.length, 1) : activeSet?.setNumber ?? Math.min(setScores.length + 1, format.bestOf);
+  const finalSetScores = won ? trimSetScoresAtClinch(setScores, format.setsToWin) : setScores;
+  const finalCounts = won ? setWinCounts(finalSetScores) : { teamASets, teamBSets };
+  const displaySet = won ? finalSetScores.at(-1) ?? finalSet : activeSet;
+  const currentSet = won ? Math.max(displaySet?.setNumber ?? finalSetScores.length, 1) : activeSet?.setNumber ?? Math.min(finalSetScores.length + 1, format.bestOf);
   const scoringStarted = teamA.isMatch === true || teamB.isMatch === true || setScores.length > 0;
   const status = won ? "Final" : scoringStarted ? "In Progress" : "Pre-Match";
 
@@ -126,10 +130,10 @@ function normalizeArrayPayload(payload: unknown[], match?: MatchLike | null): Sc
     teamBSeed: cleanText(teamB.seed) ?? match?.team_b_seed ?? null,
     teamAScore: displaySet?.teamAScore ?? 0,
     teamBScore: displaySet?.teamBScore ?? 0,
-    teamASets,
-    teamBSets,
+    teamASets: finalCounts.teamASets,
+    teamBSets: finalCounts.teamBSets,
     servingTeam: null,
-    setScores,
+    setScores: finalSetScores,
     source: "api",
     stale: false,
     message: null
@@ -194,6 +198,30 @@ export function isSetComplete(a: number, b: number, target: number, cap: number 
   const max = Math.max(a, b);
   if (cap && max >= cap) return true;
   return max >= target && Math.abs(a - b) >= 2;
+}
+
+function trimSetScoresAtClinch(setScores: SetScore[], setsToWin: number) {
+  const orderedSets = [...setScores].sort((a, b) => a.setNumber - b.setNumber);
+  const trimmed: SetScore[] = [];
+  let teamASets = 0;
+  let teamBSets = 0;
+
+  for (const set of orderedSets) {
+    trimmed.push(set);
+    if (set.isComplete && set.teamAScore > set.teamBScore) teamASets += 1;
+    if (set.isComplete && set.teamBScore > set.teamAScore) teamBSets += 1;
+    if (teamASets >= setsToWin || teamBSets >= setsToWin) break;
+  }
+
+  return trimmed;
+}
+
+function setWinCounts(setScores: SetScore[]) {
+  return setScores.reduce((counts, set) => {
+    if (set.isComplete && set.teamAScore > set.teamBScore) counts.teamASets += 1;
+    if (set.isComplete && set.teamBScore > set.teamAScore) counts.teamBSets += 1;
+    return counts;
+  }, { teamASets: 0, teamBSets: 0 });
 }
 
 function parseFormat(format?: Record<string, unknown> | null) {

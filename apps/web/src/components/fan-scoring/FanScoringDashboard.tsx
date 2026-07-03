@@ -22,7 +22,7 @@ type Court = {
 };
 
 type Match = { id: string; team_a: string | null; team_b: string | null; round_name: string | null; match_number: string | null };
-type Score = { team_a_score: number; team_b_score: number; team_a_sets: number; team_b_sets: number; current_set: number; status: string; updated_at: string | null };
+type Score = { match_id?: string | null; team_a_score: number; team_b_score: number; team_a_sets: number; team_b_sets: number; current_set: number; status: string; updated_at: string | null };
 type Session = {
   id: string;
   court_id: string;
@@ -164,7 +164,7 @@ export function FanScoringDashboard({
           const backups = courtSessions.filter((session) => session.role === "backup" && session.status === "active");
           const courtFlags = flagsByCourt.get(court.id) ?? [];
           const match = firstRelation(court.matches);
-          const score = firstRelation(court.score_states);
+          const score = scoreForMatch(court.score_states, match?.id);
           const scoreUrl = `${origin}/score/court/${court.court_number}`;
           const adminScorePath = `/score/court/${court.court_number}?eventSlug=${encodeURIComponent(event.slug)}&admin=1`;
           const overlayUrl = `${origin}/overlay/stream/${court.court_number}`;
@@ -282,6 +282,12 @@ function courtStatus(court: Court, active: Session | undefined, backupCount: num
 
 function firstRelation<T>(value: T | T[] | null | undefined): T | null {
   return Array.isArray(value) ? value[0] ?? null : value ?? null;
+}
+
+function scoreForMatch(value: Score | Score[] | null | undefined, matchId: string | null | undefined): Score | null {
+  const rows = Array.isArray(value) ? value : value ? [value] : [];
+  if (!matchId) return rows[0] ?? null;
+  return rows.find((row) => row.match_id === matchId) ?? null;
 }
 
 function groupBy<T>(items: T[], keyFn: (item: T) => string) {

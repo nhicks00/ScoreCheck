@@ -139,6 +139,33 @@ export async function buildOverlayStateWithEventSettings(
   });
 }
 
+export function scoreForCurrentMatch<T>(
+  scoreStates: T | T[] | null | undefined,
+  matchId: string | null | undefined
+): T | null {
+  const rows = (Array.isArray(scoreStates) ? scoreStates : scoreStates ? [scoreStates] : [])
+    .filter((row): row is T => Boolean(row));
+  if (!rows.length) return null;
+
+  if (matchId) {
+    return rows.find((row) => scoreMatchId(row) === matchId) ?? null;
+  }
+
+  return [...rows].sort((a, b) => Date.parse(scoreUpdatedAt(b)) - Date.parse(scoreUpdatedAt(a)))[0] ?? null;
+}
+
+function scoreMatchId(row: unknown): string {
+  if (!row || typeof row !== "object" || !("match_id" in row)) return "";
+  const value = (row as { match_id?: unknown }).match_id;
+  return typeof value === "string" ? value : "";
+}
+
+function scoreUpdatedAt(row: unknown): string {
+  if (!row || typeof row !== "object" || !("updated_at" in row)) return "";
+  const value = (row as { updated_at?: unknown }).updated_at;
+  return typeof value === "string" ? value : "";
+}
+
 async function loadEventSettings(eventId: string) {
   const { data } = await supabaseAdmin().from("events").select("settings").eq("id", eventId).maybeSingle();
   const settings = data?.settings;

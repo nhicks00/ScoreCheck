@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import { buildOverlayState } from "@/lib/overlay";
+import { scoreForCurrentMatch } from "@/lib/scoreState";
 import { supabaseAdmin } from "@/lib/supabase";
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ courtId: string }> }) {
@@ -15,7 +16,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ cour
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   if (!court) return NextResponse.json({ error: "Court not found" }, { status: 404 });
   const match = Array.isArray(court.matches) ? court.matches[0] : court.matches;
-  const score = Array.isArray(court.score_states) ? court.score_states[0] : court.score_states;
+  const score = scoreForCurrentMatch(court.score_states, match?.id);
   return NextResponse.json(buildOverlayState({
     event: { id: court.event_id },
     court,

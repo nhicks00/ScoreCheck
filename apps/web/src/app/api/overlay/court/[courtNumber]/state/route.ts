@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { buildOverlayState, overlayLayout } from "@/lib/overlay";
 import { missingEnvKeys } from "@/lib/env";
 import { coerceOverlayState, fallbackOverlayState } from "@/lib/overlayState";
+import { scoreForCurrentMatch } from "@/lib/scoreState";
 import { supabaseAdmin } from "@/lib/supabase";
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ courtNumber: string }> }) {
@@ -23,7 +24,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ cour
   }
 
   const match = Array.isArray(court.matches) ? court.matches[0] : court.matches;
-  const score = Array.isArray(court.score_states) ? court.score_states[0] : court.score_states;
+  const score = scoreForCurrentMatch(court.score_states, match?.id);
   return NextResponse.json(buildOverlayState({
     event: { id: court.event_id, settings: eventSettings(court) },
     court,

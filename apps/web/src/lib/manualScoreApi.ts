@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { applyManualAction, applyManualEdit, formatFromMatch, manualEditSchema, normalizeManualState } from "./manualScoring";
 import { checkRateLimit } from "./rateLimit";
-import { CourtRecord, MatchRecord, persistScoreAndOverlay } from "./scoreState";
+import { CourtRecord, MatchRecord, persistScoreAndOverlay, scoreForCurrentMatch } from "./scoreState";
 import { requestIpHash, userAgent, validateToken } from "./security";
 import { apiScoreHasPriority } from "./sourcePriority";
 import { supabaseAdmin } from "./supabase";
@@ -66,7 +66,7 @@ export async function validateScorerRequest(req: NextRequest, courtId: string, b
     context: {
       court,
       match: firstRelation(court.matches),
-      currentScore: firstRelation(court.score_states),
+      currentScore: scoreForCurrentMatch(court.score_states, firstRelation(court.matches)?.id),
       ipHash,
       userAgent: userAgent(req),
       actorLabel: stringValue(body.actorLabel) ?? "remote scorer"
