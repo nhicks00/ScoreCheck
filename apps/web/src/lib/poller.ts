@@ -10,6 +10,7 @@ const ACTIVE_INTERVAL_MS = 1_800;
 const LEASE_MS = 35_000;
 const FINAL_ADVANCE_HOLD_MS = 10_000;
 const BRACKET_REFRESH_INTERVAL_MS = 45_000;
+const EVENT_TIME_ZONE = "America/Denver";
 
 const lastBracketRefreshAtByEvent = new Map<string, number>();
 
@@ -37,6 +38,7 @@ type MatchRow = {
   match_number: string | null;
   round_name: string | null;
   scheduled_time: string | null;
+  scheduled_date: string | null;
   team_a: string | null;
   team_b: string | null;
   team_a_seed: string | null;
@@ -210,6 +212,13 @@ async function pollCourt(court: CourtRow) {
     return true;
   }
 
+  const scheduleAdvanceTarget = await nextQueuedMatch(court.id);
+  const scheduleAdvanceMatch = firstRelation(scheduleAdvanceTarget?.matches);
+  if (scheduleAdvanceTarget && scheduleAdvanceMatch && shouldAdvanceInactiveScheduledMatch(currentScore, snapshot, match, scheduleAdvanceMatch, now)) {
+    await activateQueuedMatch(court, scheduleAdvanceTarget);
+    return true;
+  }
+
   if (hasFutureDelayedVblScore(currentScore, now)) {
     await touchApiPoll(court.id, now, true, "VolleyballLife live scoring active; broadcast score delayed 6 seconds.");
     return true;
@@ -245,6 +254,79 @@ async function advanceFinalMatchIfReady(court: CourtRow, match: MatchRow, curren
 
 function isFinalScore(score: ScoreRow) {
   return score.status.toLowerCase().includes("final") || score.status.toLowerCase().includes("complete");
+}
+
+function shouldAdvanceInactiveScheduledMatch(
+  currentScore: ScoreRow | null,
+  snapshot: ReturnType<typeof normalizeScorePayload>,
+  currentMatch: MatchRow,
+  nextMatch: MatchRow,
+  now: string
+) {
+  if (hasVisibleProgress(currentScore, snapshot)) return false;
+
+  const currentStart = scheduledTimestamp(currentMatch);
+  const nextStart = scheduledTimestamp(nextMatch);
+  const nowMs = Date.parse(now);
+  if (!Number.isFinite(nowMs) || !Number.isFinite(nextStart)) return false;
+  if (nowMs < nextStart) return false;
+
+  if (Number.isFinite(currentStart) && nextStart <= currentStart) return false;
+  return true;
+}
+
+function hasVisibleProgress(currentScore: ScoreRow | null, snapshot: ReturnType<typeof normalizeScorePayload>) {
+  const scoreProgress = Boolean(currentScore)
+    && (
+      currentScore!.team_a_score > 0
+      || currentScore!.team_b_score > 0
+      || currentScore!.team_a_sets > 0
+      || currentScore!.team_b_sets > 0
+      || (Array.isArray(currentScore!.set_scores) && currentScore!.set_scores.length > 0)
+      || currentScore!.status.toLowerCase().includes("final")
+      || currentScore!.status.toLowerCase().includes("complete")
+    );
+  const snapshotProgress = snapshot.teamAScore > 0
+    || snapshot.teamBScore > 0
+    || snapshot.teamASets > 0
+    || snapshot.teamBSets > 0
+    || snapshot.setScores.length > 0
+    || snapshot.status.toLowerCase().includes("final")
+    || snapshot.status.toLowerCase().includes("complete");
+  return scoreProgress || snapshotProgress;
+}
+
+function scheduledTimestamp(match: MatchRow | null | undefined) {
+  if (!match?.scheduled_time || !match.scheduled_date) return NaN;
+  const date = match.scheduled_date.match(/\d{4}-\d{2}-\d{2}/)?.[0];
+  const time = match.scheduled_time.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (!date || !time) return NaN;
+  let hour = Number(time[1]);
+  const minute = Number(time[2]);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return NaN;
+  const suffix = time[3].toUpperCase();
+  if (suffix === "PM" && hour !== 12) hour += 12;
+  if (suffix === "AM" && hour === 12) hour = 0;
+  const [year, month, day] = date.split("-").map(Number);
+  const localAsUtc = Date.UTC(year, month - 1, day, hour, minute, 0);
+  return localAsUtc - timeZoneOffsetMs(new Date(localAsUtc), EVENT_TIME_ZONE);
+}
+
+function timeZoneOffsetMs(date: Date, timeZone: string) {
+  const value = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    timeZoneName: "longOffset",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).formatToParts(date).find((part) => part.type === "timeZoneName")?.value;
+  const match = value?.match(/GMT([+-])(\d{2}):(\d{2})/);
+  if (!match) return 0;
+  const sign = match[1] === "-" ? -1 : 1;
+  return sign * ((Number(match[2]) * 60 + Number(match[3])) * 60_000);
 }
 
 async function nextQueuedMatch(courtId: string) {
