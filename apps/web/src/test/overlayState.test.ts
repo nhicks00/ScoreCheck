@@ -78,6 +78,33 @@ describe("overlayState", () => {
     ]);
   });
 
+  it("keeps a live deciding set at zero-zero visible as the current score", () => {
+    const state = coerceOverlayState({
+      phase: "LIVE",
+      score: {
+        teamAScore: 0,
+        teamBScore: 0,
+        currentSet: 3,
+        teamASets: 1,
+        teamBSets: 1,
+        setScores: [
+          { setNumber: 1, teamAScore: 21, teamBScore: 18, isComplete: true },
+          { setNumber: 2, teamAScore: 19, teamBScore: 21, isComplete: true },
+          { setNumber: 3, teamAScore: 0, teamBScore: 0, isComplete: false }
+        ]
+      }
+    }, 8);
+
+    expect(state.score.currentSet).toBe(3);
+    expect(state.score.teamAScore).toBe(0);
+    expect(state.score.teamBScore).toBe(0);
+    expect(state.score.setScores).toEqual([
+      { setNumber: 1, teamAScore: 21, teamBScore: 18, isComplete: true },
+      { setNumber: 2, teamAScore: 19, teamBScore: 21, isComplete: true },
+      { setNumber: 3, teamAScore: 0, teamBScore: 0, isComplete: false }
+    ]);
+  });
+
   it("uses current set status for live broadcast labels", () => {
     const state = coerceOverlayState({
       phase: "LIVE",
