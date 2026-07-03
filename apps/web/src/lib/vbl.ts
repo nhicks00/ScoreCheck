@@ -42,6 +42,14 @@ export type DiscoveredMatch = {
 
 const hydrateSchema = z.record(z.string(), z.unknown());
 
+type TeamLookupEntry = { name: string; seed: string | null; players: string[] };
+
+type ResolvedTeamSide = {
+  name: string | null;
+  seed: string | null;
+  players: string[];
+};
+
 export function parseVblUrl(url: string): VblUrlParts | null {
   const tournamentId = Number(url.match(/\/event\/(\d+)/)?.[1] ?? NaN);
   const divisionId = Number(url.match(/\/division\/(\d+)/)?.[1] ?? NaN);
@@ -81,6 +89,16 @@ export async function discoverMatchesFromUrl(sourceUrl: string): Promise<Discove
   }
 
   const hydrate = hydrateSchema.parse(await res.json());
+  return discoverMatchesFromHydrate(hydrate, sourceUrl, parts);
+}
+
+export function discoverMatchesFromHydrate(rawHydrate: unknown, sourceUrl: string, parsedParts?: VblUrlParts): DiscoveredMatch[] {
+  const parts = parsedParts ?? parseVblUrl(sourceUrl);
+  if (!parts) {
+    throw new Error("Could not parse VolleyballLife division ID from URL");
+  }
+
+  const hydrate = hydrateSchema.parse(rawHydrate);
   const teamLookup = buildTeamLookup(hydrate);
   const days = arrayOfRecords(hydrate.days);
   const relevantDays = parts.dayId ? days.filter((day) => numberValue(day.id) === parts.dayId) : days;
@@ -98,14 +116,15 @@ export async function discoverMatchesFromUrl(sourceUrl: string): Promise<Discove
 }
 
 function buildTeamLookup(hydrate: Record<string, unknown>) {
-  const lookup = new Map<number, { name: string; seed: string | null; players: string[] }>();
+  const lookup = new Map<number, TeamLookupEntry>();
   for (const team of arrayOfRecords(hydrate.teams)) {
     const id = numberValue(team.id);
     if (!id) continue;
+    const players = arrayOfRecords(team.players).map((player) => stringValue(player.name) ?? playerFullName(player)).filter(Boolean);
     lookup.set(id, {
-      name: stringValue(team.name) ?? "Unknown",
+      name: stringValue(team.name) ?? (players.join(" / ") || "Unknown"),
       seed: stringValue(team.seed),
-      players: arrayOfRecords(team.players).map((player) => stringValue(player.name) ?? "").filter(Boolean)
+      players
     });
   }
   return lookup;
@@ -113,7 +132,7 @@ function buildTeamLookup(hydrate: Record<string, unknown>) {
 
 function extractBracketMatches(
   day: Record<string, unknown>,
-  teamLookup: Map<number, { name: string; seed: string | null; players: string[] }>,
+  teamLookup: Map<number, TeamLookupEntry>,
   sourceUrl: string
 ): DiscoveredMatch[] {
   const matches: DiscoveredMatch[] = [];
@@ -130,13 +149,10 @@ function extractBracketMatches(
 
     for (const [index, match] of arrayOfRecords(bracket.matches).entries()) {
       const matchId = numberValue(match.id);
-      if (!matchId || booleanValue(match.isBye)) continue;
-      const homeTeam = recordValue(match.homeTeam);
-      const awayTeam = recordValue(match.awayTeam);
-      const homeInfo = homeTeam ? teamLookup.get(numberValue(homeTeam.teamId) ?? 0) : undefined;
-      const awayInfo = awayTeam ? teamLookup.get(numberValue(awayTeam.teamId) ?? 0) : undefined;
-      const teamB = awayInfo?.name ?? stringValue(match.awayMap);
-      const displayNumber = stringValue(match.displayNumber) ?? stringValue(match.number) ?? String(index + 1);
+      if (!matchId || isByeMatch(match)) continue;
+      const home = resolveTeamSide(match, "home", teamLookup);
+      const away = resolveTeamSide(match, "away", teamLookup);
+      const displayNumber = nonZeroString(match.displayNumber) ?? stringValue(match.number) ?? String(index + 1);
       const startTime = stringValue(match.startTime);
       matches.push({
         externalMatchId: String(matchId),
@@ -148,12 +164,12 @@ function extractBracketMatches(
         scheduledDate: formatDate(startTime),
         courtNumber: stringValue(match.court),
         physicalCourt: stringValue(match.court),
-        teamA: homeInfo?.name ?? null,
-        teamB: teamB ?? null,
-        teamASeed: homeTeam ? stringValue(homeTeam.seed) : homeInfo?.seed ?? null,
-        teamBSeed: awayTeam ? stringValue(awayTeam.seed) : awayInfo?.seed ?? null,
-        teamAPlayers: homeInfo?.players ?? [],
-        teamBPlayers: awayInfo?.players ?? [],
+        teamA: home.name,
+        teamB: away.name,
+        teamASeed: home.seed,
+        teamBSeed: away.seed,
+        teamAPlayers: home.players,
+        teamBPlayers: away.players,
         format,
         sourcePayload: match
       });
@@ -164,48 +180,96 @@ function extractBracketMatches(
 
 function extractPoolMatches(
   day: Record<string, unknown>,
-  teamLookup: Map<number, { name: string; seed: string | null; players: string[] }>,
+  teamLookup: Map<number, TeamLookupEntry>,
   sourceUrl: string,
   requestedPoolId: number | null
 ): DiscoveredMatch[] {
   const matches: DiscoveredMatch[] = [];
-  for (const pool of arrayOfRecords(day.pools)) {
+  for (const pool of poolsForDay(day)) {
     const poolId = numberValue(pool.id);
     if (requestedPoolId && poolId !== requestedPoolId) continue;
     const poolName = stringValue(pool.name) ?? "Pool";
-    const settings = arrayOfRecords(recordValue(pool.matchSettings)?.gameSettings);
-    const format = formatFromSettings(settings);
+    const poolSettings = arrayOfRecords(recordValue(pool.matchSettings)?.gameSettings);
 
     for (const [index, match] of arrayOfRecords(pool.matches).entries()) {
       const matchId = numberValue(match.id);
-      if (!matchId) continue;
-      const homeTeamId = numberValue(match.homeTeamId ?? recordValue(match.homeTeam)?.teamId);
-      const awayTeamId = numberValue(match.awayTeamId ?? recordValue(match.awayTeam)?.teamId);
-      const homeInfo = homeTeamId ? teamLookup.get(homeTeamId) : undefined;
-      const awayInfo = awayTeamId ? teamLookup.get(awayTeamId) : undefined;
+      if (!matchId || isByeMatch(match)) continue;
+      const home = resolveTeamSide(match, "home", teamLookup);
+      const away = resolveTeamSide(match, "away", teamLookup);
       const startTime = stringValue(match.startTime);
+      const settings = arrayOfRecords(match.games).length ? arrayOfRecords(match.games) : poolSettings;
+      const format = formatFromSettings(settings);
       matches.push({
         externalMatchId: String(matchId),
         apiUrl: `${VMIX_BASE}/${matchId}/vmix?bracket=false`,
         bracketUrl: sourceUrl,
-        matchNumber: stringValue(match.displayNumber) ?? stringValue(match.number) ?? String(index + 1),
+        matchNumber: nonZeroString(match.displayNumber) ?? stringValue(match.number) ?? String(index + 1),
         roundName: poolName,
         scheduledTime: formatTime(startTime),
         scheduledDate: formatDate(startTime),
         courtNumber: stringValue(match.court),
         physicalCourt: stringValue(match.court),
-        teamA: homeInfo?.name ?? null,
-        teamB: awayInfo?.name ?? null,
-        teamASeed: homeInfo?.seed ?? null,
-        teamBSeed: awayInfo?.seed ?? null,
-        teamAPlayers: homeInfo?.players ?? [],
-        teamBPlayers: awayInfo?.players ?? [],
+        teamA: home.name,
+        teamB: away.name,
+        teamASeed: home.seed,
+        teamBSeed: away.seed,
+        teamAPlayers: home.players,
+        teamBPlayers: away.players,
         format: { ...format, setsToPlay: settings.length || null },
         sourcePayload: match
       });
     }
   }
   return matches;
+}
+
+function resolveTeamSide(match: Record<string, unknown>, side: "home" | "away", teamLookup: Map<number, TeamLookupEntry>): ResolvedTeamSide {
+  const teamRecord = recordValue(match[`${side}Team`]);
+  const teamId = numberValue(teamRecord?.teamId ?? match[`${side}TeamId`]);
+  const lookup = teamId ? teamLookup.get(teamId) : undefined;
+  const mapText = normalizePlaceholderText(stringValue(match[`${side}Map`]));
+  const directName = stringValue(teamRecord?.name) ?? stringValue(teamRecord?.teamName) ?? stringValue(match[`${side}TeamName`]);
+  const seed = nonZeroString(teamRecord?.seed) ?? nonZeroString(match[`${side}Seed`]) ?? lookup?.seed ?? null;
+
+  return {
+    name: lookup?.name ?? directName ?? mapText,
+    seed,
+    players: lookup?.players ?? []
+  };
+}
+
+function poolsForDay(day: Record<string, unknown>) {
+  return [
+    ...arrayOfRecords(day.pools),
+    ...arrayOfRecords(day.flights).flatMap((flight) => arrayOfRecords(flight.pools))
+  ];
+}
+
+function isByeMatch(match: Record<string, unknown>) {
+  if (booleanValue(match.isBye)) return true;
+  const homeTeam = recordValue(match.homeTeam);
+  const awayTeam = recordValue(match.awayTeam);
+  return (isByeText(stringValue(match.homeMap)) && !homeTeam) || (isByeText(stringValue(match.awayMap)) && !awayTeam);
+}
+
+function isByeText(value: string | null) {
+  return value?.trim().toLowerCase() === "bye";
+}
+
+function normalizePlaceholderText(value: string | null) {
+  if (!value || isByeText(value)) return null;
+  const clean = value.replace(/\s+/g, " ").trim();
+  const winner = clean.match(/^match\s+(.+?)\s+winner$/i);
+  if (winner) return `Winner of Match ${winner[1]}`;
+  const loser = clean.match(/^match\s+(.+?)\s+loser$/i);
+  if (loser) return `Loser of Match ${loser[1]}`;
+  return clean;
+}
+
+function nonZeroString(value: unknown) {
+  const text = stringValue(value);
+  if (!text || text === "0") return null;
+  return text;
 }
 
 function formatFromSettings(settings: Record<string, unknown>[]) {
@@ -239,16 +303,24 @@ function dedupeMatches(matches: DiscoveredMatch[]) {
 
 function formatTime(iso: string | null) {
   if (!iso) return null;
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return null;
-  return date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+  const parts = iso.match(/T(\d{2}):(\d{2})/);
+  if (!parts) return null;
+  const hour24 = Number(parts[1]);
+  const minute = parts[2];
+  if (!Number.isFinite(hour24)) return null;
+  const suffix = hour24 >= 12 ? "PM" : "AM";
+  const hour12 = hour24 % 12 || 12;
+  return `${hour12}:${minute} ${suffix}`;
 }
 
 function formatDate(iso: string | null) {
   if (!iso) return null;
-  const date = new Date(iso);
+  const datePart = iso.match(/^(\d{4})-(\d{2})-(\d{2})/)?.[0];
+  if (!datePart) return null;
+  const date = new Date(`${datePart}T12:00:00Z`);
   if (Number.isNaN(date.getTime())) return null;
-  return date.toLocaleDateString("en-US", { weekday: "short" });
+  const weekday = date.toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" });
+  return `${weekday} ${datePart}`;
 }
 
 function arrayOfRecords(value: unknown): Record<string, unknown>[] {
@@ -272,4 +344,10 @@ function numberValue(value: unknown): number | null {
 
 function booleanValue(value: unknown): boolean {
   return value === true || value === "true";
+}
+
+function playerFullName(player: Record<string, unknown>) {
+  const first = stringValue(player.firstname);
+  const last = stringValue(player.lastname);
+  return [first, last].filter(Boolean).join(" ").trim();
 }

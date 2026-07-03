@@ -19,11 +19,14 @@ export function apiScoreHasPriority(score: ScoreSourceLike, match: MatchSourceLi
 
 function scoreLooksLive(score: Record<string, unknown>): boolean {
   const status = stringValue(score.status).toLowerCase();
-  if (status.includes("final") || status.includes("progress")) return true;
   if (numberValue(score.team_a_score ?? score.teamAScore) > 0 || numberValue(score.team_b_score ?? score.teamBScore) > 0) return true;
-  if (numberValue(score.team_a_sets ?? score.teamASets) > 0 || numberValue(score.team_b_sets ?? score.teamBSets) > 0) return true;
+  if (status.includes("final")) return false;
   const setScores = score.set_scores ?? score.setScores;
-  return Array.isArray(setScores) && setScores.length > 0;
+  if (Array.isArray(setScores) && setScores.some(isActiveSetScore)) return true;
+  if (status.includes("progress")) {
+    return !Array.isArray(setScores) || setScores.length === 0;
+  }
+  return false;
 }
 
 function stringValue(value: unknown): string {
@@ -33,4 +36,11 @@ function stringValue(value: unknown): string {
 function numberValue(value: unknown): number {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function isActiveSetScore(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  if (record.isComplete === true) return false;
+  return numberValue(record.teamAScore ?? record.team_a_score) > 0 || numberValue(record.teamBScore ?? record.team_b_score) > 0;
 }

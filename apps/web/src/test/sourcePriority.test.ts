@@ -66,7 +66,7 @@ describe("apiScoreHasPriority", () => {
     }, vblMatch)).toBe(false);
   });
 
-  it("treats nonzero scores and completed set history as live API evidence", () => {
+  it("treats current-set scoring as live API evidence but ignores completed set history alone", () => {
     expect(apiScoreHasPriority({
       source: "api",
       source_available: true,
@@ -84,6 +84,31 @@ describe("apiScoreHasPriority", () => {
       stale: false,
       status: "Pre-Match",
       set_scores: [{ setNumber: 1, teamAScore: 21, teamBScore: 19, isComplete: true }]
+    }, vblMatch)).toBe(false);
+
+    expect(apiScoreHasPriority({
+      source: "api",
+      source_available: true,
+      source_priority: "primary",
+      stale: false,
+      status: "In Progress",
+      team_a_score: 0,
+      team_b_score: 0,
+      team_a_sets: 1,
+      team_b_sets: 0,
+      set_scores: [{ setNumber: 1, teamAScore: 21, teamBScore: 19, isComplete: true }]
+    }, vblMatch)).toBe(false);
+
+    expect(apiScoreHasPriority({
+      source: "api",
+      source_available: true,
+      source_priority: "primary",
+      stale: false,
+      status: "In Progress",
+      set_scores: [
+        { setNumber: 1, teamAScore: 21, teamBScore: 19, isComplete: true },
+        { setNumber: 2, teamAScore: 3, teamBScore: 2, isComplete: false }
+      ]
     }, vblMatch)).toBe(true);
   });
 });

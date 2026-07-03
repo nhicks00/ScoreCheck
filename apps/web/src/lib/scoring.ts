@@ -20,12 +20,7 @@ export function normalizeScorePayload(payload: unknown, match?: MatchLike | null
 
 export function isAuthoritativeScorePayload(payload: unknown, snapshot: ScoreSnapshot): boolean {
   if (Array.isArray(payload)) {
-    return payload.some((row) => {
-      const record = row && typeof row === "object" && !Array.isArray(row) ? row as Record<string, unknown> : null;
-      if (!record) return false;
-      if (record.isMatch === true) return true;
-      return [1, 2, 3, 4, 5].some((setNumber) => safeScore(record[`game${setNumber}`]) > 0);
-    });
+    return vMixArrayHasLiveScoring(payload, snapshot);
   }
   return scoreSnapshotHasLiveScore(snapshot);
 }
@@ -57,19 +52,23 @@ function normalizeArrayPayload(payload: unknown[], match?: MatchLike | null): Sc
     }
   }
 
-  const current = setScores.at(-1);
+  const activeSet = setScores.find((set) => !set.isComplete) ?? null;
+  const finalSet = setScores.at(-1) ?? null;
   const won = teamASets >= format.setsToWin || teamBSets >= format.setsToWin;
-  const status = won ? "Final" : setScores.length > 0 ? "In Progress" : "Pre-Match";
+  const displaySet = won ? finalSet : activeSet;
+  const currentSet = won ? Math.max(setScores.length, 1) : activeSet?.setNumber ?? Math.min(setScores.length + 1, format.bestOf);
+  const scoringStarted = teamA.isMatch === true || teamB.isMatch === true || setScores.length > 0;
+  const status = won ? "Final" : scoringStarted ? "In Progress" : "Pre-Match";
 
   return {
     status,
-    currentSet: current?.isComplete ? setScores.length + 1 : Math.max(setScores.length, 1),
+    currentSet,
     teamAName: cleanText(teamA.teamName) ?? teamNameFromPayload(teamA.players) ?? match?.team_a ?? "Team A",
     teamBName: cleanText(teamB.teamName) ?? teamNameFromPayload(teamB.players) ?? match?.team_b ?? "Team B",
     teamASeed: cleanText(teamA.seed) ?? match?.team_a_seed ?? null,
     teamBSeed: cleanText(teamB.seed) ?? match?.team_b_seed ?? null,
-    teamAScore: current?.teamAScore ?? 0,
-    teamBScore: current?.teamBScore ?? 0,
+    teamAScore: displaySet?.teamAScore ?? 0,
+    teamBScore: displaySet?.teamBScore ?? 0,
     teamASets,
     teamBSets,
     servingTeam: null,
@@ -139,6 +138,7 @@ export function isSetComplete(a: number, b: number, target: number, cap: number 
 function parseFormat(format?: Record<string, unknown> | null) {
   const bestOf = numberValue(format?.bestOf) ?? 3;
   return {
+    bestOf,
     pointsPerSet: Array.isArray(format?.pointsPerSet)
       ? format.pointsPerSet.map(numberValue).filter((value): value is number => value != null)
       : [21],
@@ -175,12 +175,26 @@ function teamNameFromPayload(value: unknown): string | null {
   return names.length ? names.join(" / ") : null;
 }
 
+function vMixArrayHasLiveScoring(payload: unknown[], snapshot: ScoreSnapshot): boolean {
+  const rows = payload.map(record).filter((row): row is Record<string, unknown> => Boolean(row));
+  const hasStartedMatch = rows.some((row) => row.isMatch === true);
+  const hasAnyPoint = rows.some((row) => [1, 2, 3, 4, 5].some((setNumber) => safeScore(row[`game${setNumber}`]) > 0));
+  const hasActiveSetScore = snapshot.setScores.some((set) => !set.isComplete && (set.teamAScore > 0 || set.teamBScore > 0));
+
+  if (hasActiveSetScore) return true;
+  if (hasStartedMatch && !hasAnyPoint) return true;
+  return false;
+}
+
 function scoreSnapshotHasLiveScore(snapshot: ScoreSnapshot): boolean {
-  if (snapshot.status.toLowerCase().includes("final")) return true;
-  if (snapshot.status.toLowerCase().includes("progress")) return true;
   if (snapshot.teamAScore > 0 || snapshot.teamBScore > 0) return true;
-  if (snapshot.teamASets > 0 || snapshot.teamBSets > 0) return true;
-  return snapshot.setScores.length > 0;
+  if (snapshot.setScores.some((set) => !set.isComplete && (set.teamAScore > 0 || set.teamBScore > 0))) return true;
+  const status = snapshot.status.toLowerCase();
+  if (status.includes("final")) return false;
+  if (status.includes("progress")) {
+    return snapshot.setScores.length === 0 && snapshot.teamASets === 0 && snapshot.teamBSets === 0;
+  }
+  return false;
 }
 
 function numberValue(value: unknown): number | null {
