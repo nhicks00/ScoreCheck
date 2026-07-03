@@ -1,4 +1,5 @@
 import { isAuthoritativeScorePayload, normalizeScorePayload } from "./scoring";
+import { refreshEventBracketSources } from "./bracketRefresh";
 import { defaultManualState } from "./manualScoring";
 import { buildOverlayStateWithEventSettings, persistScoreAndOverlay } from "./scoreState";
 import { supabaseAdmin } from "./supabase";
@@ -8,6 +9,9 @@ const POLL_WINDOW_MS = 25_000;
 const ACTIVE_INTERVAL_MS = 1_800;
 const LEASE_MS = 35_000;
 const FINAL_ADVANCE_HOLD_MS = 10_000;
+const BRACKET_REFRESH_INTERVAL_MS = 45_000;
+
+const lastBracketRefreshAtByEvent = new Map<string, number>();
 
 type Relation<T> = T | T[] | null | undefined;
 
@@ -113,6 +117,7 @@ export async function pollActiveCourtsOnce(options: { eventId?: string; courtId?
   let polls = 0;
   let errors = 0;
   const courts = (data ?? []) as CourtRow[];
+  await refreshBracketSourcesForActiveEvents(courts, options.eventId, options.owner);
   await Promise.all(courts.map(async (court) => {
     const lease = await acquireLease(court.event_id, court.id, options.owner);
     if (!lease) return;
@@ -127,6 +132,22 @@ export async function pollActiveCourtsOnce(options: { eventId?: string; courtId?
 
   await recordHeartbeat(options.owner, "idle", options.eventId, { polls, errors });
   return { polls, errors };
+}
+
+async function refreshBracketSourcesForActiveEvents(courts: CourtRow[], eventId: string | undefined, owner: string) {
+  const eventIds = eventId ? [eventId] : [...new Set(courts.map((court) => court.event_id).filter(Boolean))];
+  for (const id of eventIds) {
+    const lastRefreshAt = lastBracketRefreshAtByEvent.get(id) ?? 0;
+    if (Date.now() - lastRefreshAt < BRACKET_REFRESH_INTERVAL_MS) continue;
+    lastBracketRefreshAtByEvent.set(id, Date.now());
+    try {
+      const result = await refreshEventBracketSources(id);
+      await recordHeartbeat(owner, "bracket-refresh", id, result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Bracket refresh failed";
+      await recordHeartbeat(owner, "bracket-refresh-error", id, { message });
+    }
+  }
 }
 
 export async function recordHeartbeat(workerId: string, status: string, eventId?: string, metadata: Record<string, unknown> = {}) {
