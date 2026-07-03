@@ -33,7 +33,7 @@ export default async function AdminAvpDenverPage() {
   ]);
   return (
     <main className="shell">
-      <div className="container stack">
+      <div className="container admin-container stack">
         <div className="topbar">
           <Link className="button" href="/admin/events">Events</Link>
           <Link className="button" href={`/admin/events/${event.id}`}>Event setup</Link>
