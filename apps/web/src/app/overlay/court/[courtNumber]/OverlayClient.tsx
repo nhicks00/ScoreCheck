@@ -1,32 +1,18 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import {
+  coerceOverlayState,
+  completedSetScores,
+  displayOverlayName,
+  fallbackOverlayState,
+  overlayPhaseText
+} from "@/lib/overlayState";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
-import type { OverlayLayout, OverlayState, SetScore } from "@/lib/types";
-
-const fallback: OverlayState = {
-  eventId: "",
-  courtId: "",
-  courtNumber: 1,
-  layout: "bottom-left",
-  phase: "IDLE",
-  mode: "api",
-  frozen: false,
-  match: {
-    id: null,
-    matchNumber: null,
-    roundName: null,
-    scheduledTime: null,
-    teamA: { name: "Team A", seed: null, players: [] },
-    teamB: { name: "Team B", seed: null, players: [] },
-    format: { bestOf: 3, pointsPerSet: [21, 21, 15], winByTwo: true, cap: null }
-  },
-  score: { teamAScore: 0, teamBScore: 0, teamASets: 0, teamBSets: 0, currentSet: 1, setScores: [] },
-  health: { lastUpdateAt: null, lastApiPollAt: null, apiOnline: true, stale: false, message: null }
-};
 
 export function OverlayClient({ courtNumber, eventId }: { courtNumber: string; eventId: string; theme: string }) {
-  const [state, setState] = useState<OverlayState>(fallback);
+  const courtNumberValue = Number(courtNumber) || 1;
+  const [state, setState] = useState(() => fallbackOverlayState(courtNumberValue));
   const [connected, setConnected] = useState(true);
   const stateUrl = useMemo(() => `/api/overlay/court/${courtNumber}/state${eventId ? `?eventId=${eventId}` : ""}`, [courtNumber, eventId]);
   const realtimeEventId = eventId || state.eventId;
@@ -40,7 +26,7 @@ export function OverlayClient({ courtNumber, eventId }: { courtNumber: string; e
         if (!res.ok) throw new Error(String(res.status));
         const next = await res.json();
         if (!cancelled) {
-          setState(next);
+          setState(coerceOverlayState(next, courtNumberValue));
           setConnected(true);
         }
       } catch {
@@ -53,7 +39,7 @@ export function OverlayClient({ courtNumber, eventId }: { courtNumber: string; e
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [stateUrl, connected]);
+  }, [stateUrl, connected, courtNumberValue]);
 
   useEffect(() => {
     if (!realtimeTopic) return;
@@ -62,7 +48,7 @@ export function OverlayClient({ courtNumber, eventId }: { courtNumber: string; e
     const channel = supabase
       .channel(realtimeTopic)
       .on("broadcast", { event: "overlay_state" }, ({ payload }) => {
-        setState(payload as OverlayState);
+        setState(coerceOverlayState(payload, courtNumberValue));
         setConnected(true);
       })
       .subscribe((status) => {
@@ -72,12 +58,12 @@ export function OverlayClient({ courtNumber, eventId }: { courtNumber: string; e
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [realtimeTopic]);
+  }, [realtimeTopic, courtNumberValue]);
 
   const layout = state.layout === "top-left" ? "top-left" : "bottom-left";
   const isIntermission = state.phase === "IDLE" || state.phase === "PREMATCH";
   const setScores = completedSetScores(state.score.setScores);
-  const status = phaseText(state, connected);
+  const status = overlayPhaseText(state, connected);
 
   return (
     <main className={`overlay-stage layout-${layout}`}>
@@ -85,7 +71,7 @@ export function OverlayClient({ courtNumber, eventId }: { courtNumber: string; e
         <div className={`trad-board carbon-bar ${isIntermission ? "trad-intermission" : ""}`}>
           <TradRow
             row="one"
-            name={displayName(state.match.teamA.name)}
+            name={displayOverlayName(state.match.teamA.name)}
             seed={state.match.teamA.seed}
             serving={state.score.servingTeam === "A"}
             score={state.score.teamAScore}
@@ -95,7 +81,7 @@ export function OverlayClient({ courtNumber, eventId }: { courtNumber: string; e
           <div className="trad-divider" />
           <TradRow
             row="two"
-            name={displayName(state.match.teamB.name)}
+            name={displayOverlayName(state.match.teamB.name)}
             seed={state.match.teamB.seed}
             serving={state.score.servingTeam === "B"}
             score={state.score.teamBScore}
@@ -132,6 +118,8 @@ export function OverlayClient({ courtNumber, eventId }: { courtNumber: string; e
         }
         .overlay-position {
           left: 1rem;
+          max-width: calc(100vw - 2rem);
+          pointer-events: none;
           position: fixed;
           z-index: 20;
         }
@@ -148,12 +136,14 @@ export function OverlayClient({ courtNumber, eventId }: { courtNumber: string; e
         .trad-board {
           border-radius: 0.6rem;
           box-shadow: 0 10px 34px rgba(0, 0, 0, 0.85);
+          contain: layout paint style;
           display: flex;
           flex-direction: column;
           isolation: isolate;
           min-width: 430px;
           overflow: hidden;
           position: relative;
+          transform: translateZ(0);
           width: auto;
         }
         .trad-divider {
@@ -198,6 +188,18 @@ export function OverlayClient({ courtNumber, eventId }: { courtNumber: string; e
         }
         .bubble-bar.warn {
           color: #f9e29b;
+        }
+        .bubble-bar span {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .bubble-bar span:first-child {
+          max-width: 18rem;
+        }
+        .bubble-bar span:not(:first-child) {
+          flex: 0 0 auto;
         }
         @media (max-width: 560px) {
           .overlay-position {
@@ -245,7 +247,7 @@ function TradRow({
       </div>
       <span className="trad-score-shell">
         <span className="trad-score-cell">
-          <span className="trad-current-score">{score}</span>
+          <span key={score} className="trad-current-score">{score}</span>
         </span>
       </span>
       <style jsx>{`
@@ -287,13 +289,16 @@ function TradRow({
           width: 1.75rem;
         }
         .trad-name {
+          align-items: center;
           color: rgba(255, 255, 255, 0.98);
+          display: flex;
           font-family: var(--overlay-condensed-font);
           font-size: 1.05rem;
           font-style: normal;
           font-weight: 850;
           grid-column: 3;
-          letter-spacing: -0.012em;
+          letter-spacing: 0;
+          line-height: 1.02;
           max-width: none;
           min-width: 0;
           overflow: hidden;
@@ -315,7 +320,7 @@ function TradRow({
           font-size: 1.48rem;
           font-variant-numeric: tabular-nums;
           font-weight: 800;
-          letter-spacing: -0.025em;
+          letter-spacing: 0;
           line-height: 1;
           min-width: 2.45rem;
           padding: 0 0.18rem;
@@ -363,6 +368,7 @@ function TradRow({
           background-clip: text;
           color: transparent;
           display: grid;
+          animation: score-pop 420ms cubic-bezier(0.2, 0.72, 0.25, 1);
           font-family: var(--overlay-condensed-font);
           font-feature-settings: "tnum" 1, "lnum" 1;
           font-size: 1.48rem;
@@ -370,7 +376,7 @@ function TradRow({
           font-variant-numeric: tabular-nums;
           font-weight: 900;
           height: 100%;
-          letter-spacing: -0.025em;
+          letter-spacing: 0;
           line-height: 1;
           place-items: center;
           text-align: center;
@@ -378,10 +384,32 @@ function TradRow({
           -webkit-text-fill-color: transparent;
           width: 100%;
         }
+        @keyframes score-pop {
+          0% {
+            filter: brightness(1.55);
+            transform: translateY(1px) scale(0.96);
+          }
+          45% {
+            filter: brightness(1.2);
+            transform: translateY(0) scale(1.04);
+          }
+          100% {
+            filter: brightness(1);
+            transform: translateY(0) scale(1);
+          }
+        }
         .hide-score-details .trad-current-score,
         .hide-score-details .trad-sets,
+        .hide-score-details .trad-score-shell,
         .hide-score-details .trad-serve {
           visibility: hidden;
+        }
+        .hide-score-details {
+          grid-template-columns: 24px 1.75rem minmax(11rem, 1fr);
+          padding-right: 0.8rem;
+        }
+        .hide-score-details .trad-score-shell {
+          display: none;
         }
         @media (max-width: 560px) {
           .trad-row {
@@ -410,6 +438,11 @@ function TradRow({
             font-size: 1.3rem;
           }
         }
+        @media (prefers-reduced-motion: reduce) {
+          .trad-current-score {
+            animation: none;
+          }
+        }
       `}</style>
     </div>
   );
@@ -424,22 +457,4 @@ function ServeIcon({ size }: { size: number }) {
       <path d="M2.5 10c3 1.5 7 1.5 10 0s7-1.5 10 0" fill="none" stroke="#D4AF37" strokeWidth="1.5" />
     </svg>
   );
-}
-
-function completedSetScores(setScores: SetScore[]) {
-  return setScores.filter((set) => set.isComplete);
-}
-
-function displayName(value: string) {
-  return value.replace(/\s*\(.*?\)\s*/g, " ").replace(/\s{2,}/g, " ").trim() || "TBD";
-}
-
-function phaseText(state: OverlayState, connected: boolean) {
-  if (!connected || state.health.stale) return "Stale";
-  if (state.frozen) return "Frozen";
-  if (state.phase === "IDLE") return `Court ${state.courtNumber}`;
-  if (state.phase === "PREMATCH") return "Match Starting Soon";
-  if (state.phase === "POSTMATCH") return "Final";
-  if (state.phase === "ERROR") return "Error";
-  return state.match.roundName ?? state.phase;
 }

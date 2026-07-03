@@ -1,6 +1,5 @@
-import { buildOverlayState } from "./overlay";
 import { isAuthoritativeScorePayload, normalizeScorePayload } from "./scoring";
-import { persistScoreAndOverlay } from "./scoreState";
+import { buildOverlayStateWithEventSettings, persistScoreAndOverlay } from "./scoreState";
 import { supabaseAdmin } from "./supabase";
 
 const POLL_WINDOW_MS = 25_000;
@@ -290,12 +289,11 @@ async function markCourtStale(court: CourtRow, message: string) {
     payload: { courtNumber: court.court_number }
   });
 
-  const overlay = buildOverlayState({
-    event: { id: court.event_id },
-    court: updatedCourt ?? { ...court, status: "error", last_update_at: now },
-    match: match ?? null,
-    score: staleScore ?? null
-  });
+  const overlay = await buildOverlayStateWithEventSettings(
+    updatedCourt ?? { ...court, status: "error", last_update_at: now },
+    match ?? null,
+    staleScore ?? null
+  );
   await db.from("overlay_states").upsert({
     court_id: court.id,
     event_id: court.event_id,

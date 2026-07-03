@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildOverlayState, overlayLayout } from "@/lib/overlay";
 import { missingEnvKeys } from "@/lib/env";
+import { coerceOverlayState, fallbackOverlayState } from "@/lib/overlayState";
 import { supabaseAdmin } from "@/lib/supabase";
-import { OverlayState } from "@/lib/types";
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ courtNumber: string }> }) {
   const { courtNumber } = await params;
   if (missingEnvKeys().some((key) => key.startsWith("NEXT_PUBLIC_SUPABASE") || key === "SUPABASE_SERVICE_ROLE_KEY")) {
-    return NextResponse.json(fallbackOverlayState(Number(courtNumber)), { headers: { "cache-control": "no-store" } });
+    return NextResponse.json(envFallbackOverlayState(Number(courtNumber)), { headers: { "cache-control": "no-store" } });
   }
 
   const eventId = req.nextUrl.searchParams.get("eventId");
@@ -68,10 +68,10 @@ async function loadOverlayCourt(courtNumber: number, eventId: string | null) {
 }
 
 function withOverlayLayout(payload: unknown, court: Record<string, unknown>) {
-  return {
+  return coerceOverlayState({
     ...(typeof payload === "object" && payload ? payload : {}),
     layout: overlayLayout(eventSettings(court))
-  };
+  }, Number(court.court_number) || 1);
 }
 
 function eventSettings(court: Record<string, unknown>) {
@@ -81,35 +81,12 @@ function eventSettings(court: Record<string, unknown>) {
   return settings && typeof settings === "object" && !Array.isArray(settings) ? settings as Record<string, unknown> : null;
 }
 
-function fallbackOverlayState(courtNumber: number): OverlayState {
+function envFallbackOverlayState(courtNumber: number) {
+  const fallback = fallbackOverlayState(courtNumber);
   return {
-    eventId: "",
-    courtId: "",
-    courtNumber: Number.isFinite(courtNumber) ? courtNumber : 1,
-    layout: "bottom-left",
-    phase: "IDLE",
-    mode: "api",
-    frozen: false,
-    match: {
-      id: null,
-      matchNumber: null,
-      roundName: `Court ${Number.isFinite(courtNumber) ? courtNumber : 1}`,
-      scheduledTime: null,
-      teamA: { name: "Team A", seed: null, players: [] },
-      teamB: { name: "Team B", seed: null, players: [] },
-      format: { bestOf: 3, pointsPerSet: [21, 21, 15], winByTwo: true, cap: null }
-    },
-    score: {
-      teamAScore: 0,
-      teamBScore: 0,
-      teamASets: 0,
-      teamBSets: 0,
-      currentSet: 1,
-      setScores: []
-    },
+    ...fallback,
     health: {
-      lastUpdateAt: null,
-      lastApiPollAt: null,
+      ...fallback.health,
       apiOnline: false,
       stale: true,
       message: "Supabase is not configured"

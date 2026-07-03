@@ -56,12 +56,12 @@ export function buildOverlayState(input: OverlayInput): OverlayState {
       roundName: input.match?.round_name ?? null,
       scheduledTime: input.match?.scheduled_time ?? null,
       teamA: {
-        name: input.score?.status && input.match ? input.match.team_a ?? "Team A" : input.match?.team_a ?? "Team A",
+        name: teamName(input.match?.team_a),
         seed: input.match?.team_a_seed ?? null,
         players: input.match?.team_a_players ?? []
       },
       teamB: {
-        name: input.match?.team_b ?? "Team B",
+        name: teamName(input.match?.team_b),
         seed: input.match?.team_b_seed ?? null,
         players: input.match?.team_b_players ?? []
       },
@@ -118,4 +118,8 @@ function stringValue(value: unknown): string | undefined {
 function numberValue(value: unknown): number | null {
   const num = Number(value);
   return Number.isFinite(num) ? num : null;
+}
+
+function teamName(value: string | null | undefined) {
+  return value?.trim() || "TBD";
 }

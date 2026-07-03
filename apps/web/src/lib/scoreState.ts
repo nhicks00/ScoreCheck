@@ -1,4 +1,5 @@
 import { buildOverlayState } from "./overlay";
+import type { OverlayState } from "./types";
 import { supabaseAdmin } from "./supabase";
 
 export type CourtRecord = {
@@ -108,12 +109,7 @@ export async function persistScoreAndOverlay(
     .single();
   if (courtError) throw courtError;
 
-  const overlay = buildOverlayState({
-    event: { id: court.event_id },
-    court: updatedCourt,
-    match,
-    score: savedScore
-  });
+  const overlay = await buildOverlayStateWithEventSettings(updatedCourt, match, savedScore);
 
   const { error: overlayError } = await db.from("overlay_states").upsert({
     court_id: court.id,
@@ -125,6 +121,25 @@ export async function persistScoreAndOverlay(
   });
   if (overlayError) throw overlayError;
   return { score: savedScore, overlay };
+}
+
+export async function buildOverlayStateWithEventSettings(
+  court: CourtRecord,
+  match: MatchRecord | null,
+  score: ScoreRecord | null
+): Promise<OverlayState> {
+  return buildOverlayState({
+    event: { id: court.event_id, settings: await loadEventSettings(court.event_id) },
+    court,
+    match,
+    score
+  });
+}
+
+async function loadEventSettings(eventId: string) {
+  const { data } = await supabaseAdmin().from("events").select("settings").eq("id", eventId).maybeSingle();
+  const settings = data?.settings;
+  return settings && typeof settings === "object" && !Array.isArray(settings) ? settings as Record<string, unknown> : null;
 }
 
 function resolveCourtStatus(status: string, setScores: unknown): string {
