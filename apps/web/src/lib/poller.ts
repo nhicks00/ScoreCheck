@@ -399,7 +399,7 @@ async function nextQueuedMatch(courtId: string) {
     .order("queue_position", { ascending: true })
     .limit(50);
   if (error) throw error;
-  const queued = (data ?? []) as QueueRow[];
+  const queued = await closeFinalQueuedMatches(db, (data ?? []) as QueueRow[]);
   const activeMatch = firstRelation((active as QueueRow | null)?.matches);
   const activeStart = scheduledTimestamp(activeMatch);
   const nextBySchedule = Number.isFinite(activeStart)
@@ -410,6 +410,25 @@ async function nextQueuedMatch(courtId: string) {
     : null;
   if (nextBySchedule) return nextBySchedule;
   return queued.find((queue) => queue.queue_position > basePosition) ?? queued[0] ?? null;
+}
+
+async function closeFinalQueuedMatches(db: ReturnType<typeof supabaseAdmin>, queued: QueueRow[]) {
+  const finalQueued = queued.filter((queue) => {
+    const match = firstRelation(queue.matches);
+    return Boolean(match && normalizeVblBracketPayload(match.source_payload, match)?.status.toLowerCase().includes("final"));
+  });
+  if (!finalQueued.length) return queued;
+
+  const now = new Date().toISOString();
+  const finalIds = finalQueued.map((queue) => queue.id);
+  const { error } = await db
+    .from("court_match_queue")
+    .update({ is_active: false, status: "finished", updated_at: now })
+    .in("id", finalIds);
+  if (error) throw error;
+
+  const finalIdSet = new Set(finalIds);
+  return queued.filter((queue) => !finalIdSet.has(queue.id));
 }
 
 async function activateQueuedMatch(court: CourtRow, next: QueueRow) {
