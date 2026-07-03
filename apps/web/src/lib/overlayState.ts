@@ -8,6 +8,7 @@ export function fallbackOverlayState(courtNumber = 1): OverlayState {
     eventId: "",
     courtId: "",
     courtNumber: safeCourtNumber,
+    courtLabel: `Court ${safeCourtNumber}`,
     layout: "bottom-left",
     phase: "IDLE",
     mode: "api",
@@ -56,6 +57,7 @@ export function coerceOverlayState(input: unknown, courtNumber = 1): OverlayStat
     eventId: stringValue(value.eventId) ?? base.eventId,
     courtId: stringValue(value.courtId) ?? base.courtId,
     courtNumber: numberValue(value.courtNumber, base.courtNumber, 1),
+    courtLabel: nullableString(value.courtLabel) ?? base.courtLabel,
     layout: value.layout === "top-left" ? "top-left" : "bottom-left",
     phase: validPhase(value.phase) ?? base.phase,
     mode: value.mode === "manual" || value.mode === "hybrid" ? value.mode : "api",
@@ -127,7 +129,7 @@ export function displayOverlayName(value: string | null | undefined) {
 export function overlayPhaseText(state: OverlayState, connected: boolean) {
   if (!connected || state.health.stale) return "Stale";
   if (state.frozen) return "Frozen";
-  if (state.phase === "IDLE") return `Court ${state.courtNumber}`;
+  if (state.phase === "IDLE") return state.courtLabel ?? `Court ${state.courtNumber}`;
   if (state.phase === "PREMATCH") return "Match starting soon";
   if (state.phase === "POSTMATCH") return "Final";
   if (state.phase === "STALE") return "Stale";

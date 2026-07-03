@@ -6,6 +6,9 @@ type OverlayInput = {
     id: string;
     event_id: string;
     court_number: number;
+    display_name?: string | null;
+    vbl_court_label?: string | null;
+    vbl_court_number?: string | null;
     mode: "api" | "manual" | "hybrid";
     frozen: boolean;
     status: string;
@@ -46,6 +49,7 @@ export function buildOverlayState(input: OverlayInput): OverlayState {
     eventId: input.court.event_id,
     courtId: input.court.id,
     courtNumber: input.court.court_number,
+    courtLabel: courtLabel(input.court),
     layout: overlayLayout(input.event.settings),
     phase,
     mode: input.court.mode,
@@ -90,6 +94,19 @@ export function buildOverlayState(input: OverlayInput): OverlayState {
       message: input.score?.message ?? null
     }
   };
+}
+
+function courtLabel(court: OverlayInput["court"]): string {
+  const vblLabel = stringValue(court.vbl_court_label);
+  if (vblLabel) return vblLabel;
+
+  const vblCourtNumber = stringValue(court.vbl_court_number);
+  if (vblCourtNumber) return /^court\b/i.test(vblCourtNumber) ? vblCourtNumber : `Court ${vblCourtNumber}`;
+
+  const displayName = stringValue(court.display_name);
+  if (displayName) return displayName;
+
+  return `Court ${court.court_number}`;
 }
 
 export function overlayLayout(settings: Record<string, unknown> | null | undefined): OverlayLayout {

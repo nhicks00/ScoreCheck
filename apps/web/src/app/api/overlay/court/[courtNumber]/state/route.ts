@@ -70,8 +70,23 @@ async function loadOverlayCourt(courtNumber: number, eventId: string | null) {
 function withOverlayLayout(payload: unknown, court: Record<string, unknown>) {
   return coerceOverlayState({
     ...(typeof payload === "object" && payload ? payload : {}),
+    courtLabel: overlayCourtLabel(court),
     layout: overlayLayout(eventSettings(court))
   }, Number(court.court_number) || 1);
+}
+
+function overlayCourtLabel(court: Record<string, unknown>) {
+  const vblLabel = stringValue(court.vbl_court_label);
+  if (vblLabel) return vblLabel;
+
+  const vblCourtNumber = stringValue(court.vbl_court_number);
+  if (vblCourtNumber) return /^court\b/i.test(vblCourtNumber) ? vblCourtNumber : `Court ${vblCourtNumber}`;
+
+  return stringValue(court.display_name) ?? `Court ${Number(court.court_number) || 1}`;
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" && value.trim().length ? value.trim() : null;
 }
 
 function eventSettings(court: Record<string, unknown>) {

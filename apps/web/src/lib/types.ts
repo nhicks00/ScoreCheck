@@ -39,6 +39,7 @@ export type OverlayState = {
   eventId: string;
   courtId: string;
   courtNumber: number;
+  courtLabel: string | null;
   layout: OverlayLayout;
   phase: OverlayPhase;
   mode: CourtMode;

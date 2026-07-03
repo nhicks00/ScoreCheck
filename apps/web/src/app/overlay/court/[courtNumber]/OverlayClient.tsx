@@ -92,6 +92,7 @@ export function OverlayClient({ courtNumber, eventId }: { courtNumber: string; e
         </div>
 
         <div className={`bubble-bar ${layout} ${(!connected || state.health.stale || state.frozen) ? "warn" : ""}`}>
+          {state.courtLabel && <span>{state.courtLabel}</span>}
           <span>{status}</span>
           {state.match.matchNumber && <span>Match {state.match.matchNumber}</span>}
         </div>
