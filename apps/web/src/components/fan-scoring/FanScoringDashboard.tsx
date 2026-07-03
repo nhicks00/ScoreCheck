@@ -55,7 +55,7 @@ export function FanScoringDashboard({
   const [message, setMessage] = useState<string | null>(null);
   const sessionsByCourt = useMemo(() => groupBy(sessions, (session) => session.court_id), [sessions]);
   const flagsByCourt = useMemo(() => groupBy(flags.filter((flag) => flag.status === "open"), (flag) => flag.court_id), [flags]);
-  const origin = siteUrl.replace(/\/$/, "");
+  const origin = scorecheckOrigin(siteUrl);
   const openCourts = courts.filter((court) => court.scoring_open !== false).length;
   const activeSessions = sessions.filter((session) => session.role === "active" && ["active", "promoted"].includes(session.status)).length;
   const staleSessions = sessions.filter((session) => session.status === "stale").length;
@@ -171,7 +171,6 @@ export function FanScoringDashboard({
           const status = courtStatus(court, active, backups.length);
           const teamA = displayTeamName(match?.team_a, "TBD");
           const teamB = displayTeamName(match?.team_b, "TBD");
-          const latestFlag = courtFlags[0];
           return (
             <article className={`admin-court-card ${status.tone}`} key={court.id}>
               <header className="admin-court-header">
@@ -237,7 +236,6 @@ export function FanScoringDashboard({
                   <summary>
                     <AlertTriangle size={16} />
                     <span>{courtFlags.length} alert{courtFlags.length === 1 ? "" : "s"}</span>
-                    {latestFlag && <small>{latestFlag.message}</small>}
                   </summary>
                   <div className="flag-list">
                     {courtFlags.slice(0, 6).map((flag) => <span key={flag.id}><ShieldAlert size={14} /> {flag.message}</span>)}
@@ -301,6 +299,21 @@ function displayTeamName(value: string | null | undefined, fallback: string) {
   const normalized = value?.trim();
   if (!normalized || /^team on (left|right)$/i.test(normalized)) return fallback;
   return normalized;
+}
+
+function scorecheckOrigin(configuredSiteUrl: string) {
+  const configured = configuredSiteUrl.trim().replace(/\/$/, "");
+  const fallback = typeof window === "undefined" ? "http://localhost:3000" : window.location.origin;
+  const candidate = configured || fallback;
+  try {
+    const parsed = new URL(candidate.includes("://") ? candidate : `https://${candidate}`);
+    if (["beachvolleyballmedia.com", "www.beachvolleyballmedia.com", "score.beachvolleyballmedia.com"].includes(parsed.hostname)) {
+      return "https://score.beachvolleyballmedia.com";
+    }
+    return parsed.origin;
+  } catch {
+    return fallback;
+  }
 }
 
 function fallbackCopy(value: string) {
