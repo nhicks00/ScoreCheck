@@ -180,8 +180,10 @@ function vMixArrayHasLiveScoring(payload: unknown[], snapshot: ScoreSnapshot): b
   const hasStartedMatch = rows.some((row) => row.isMatch === true);
   const hasAnyPoint = rows.some((row) => [1, 2, 3, 4, 5].some((setNumber) => safeScore(row[`game${setNumber}`]) > 0));
   const hasActiveSetScore = snapshot.setScores.some((set) => !set.isComplete && (set.teamAScore > 0 || set.teamBScore > 0));
+  const hasFinalScore = snapshot.status.toLowerCase().includes("final") && snapshot.setScores.some((set) => set.isComplete);
 
   if (hasActiveSetScore) return true;
+  if (hasFinalScore) return true;
   if (hasStartedMatch && !hasAnyPoint) return true;
   return false;
 }

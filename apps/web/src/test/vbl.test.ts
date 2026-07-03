@@ -73,6 +73,22 @@ describe("VolleyballLife helpers", () => {
     expect(isAuthoritativeScorePayload(payload, snapshot)).toBe(false);
   });
 
+  it("treats completed match vMix scores as authoritative so final points are released", () => {
+    const payload = [
+      { teamName: "Alpha", isMatch: true, game1: 12, game2: 14, game3: 0 },
+      { teamName: "Bravo", isMatch: true, game1: 21, game2: 21, game3: 0 }
+    ];
+    const snapshot = normalizeScorePayload(payload, {
+      format: { bestOf: 3, pointsPerSet: [21, 21, 15], setsToWin: 2 }
+    });
+
+    expect(snapshot.status).toBe("Final");
+    expect(snapshot.teamAScore).toBe(14);
+    expect(snapshot.teamBScore).toBe(21);
+    expect(snapshot.teamBSets).toBe(2);
+    expect(isAuthoritativeScorePayload(payload, snapshot)).toBe(true);
+  });
+
   it("treats a started all-zero vMix match as live scoring", () => {
     const payload = [
       { teamName: "Alpha", isMatch: true, game1: 0, game2: 0, game3: 0 },

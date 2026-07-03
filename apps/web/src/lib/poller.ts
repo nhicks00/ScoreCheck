@@ -1,4 +1,5 @@
 import { isAuthoritativeScorePayload, normalizeScorePayload } from "./scoring";
+import { defaultManualState } from "./manualScoring";
 import { buildOverlayStateWithEventSettings, persistScoreAndOverlay } from "./scoreState";
 import { supabaseAdmin } from "./supabase";
 import { delayedScoreFromSnapshot, pendingScoresForMatch, queueDelayedVblScore, splitDueDelayedVblScores } from "./vblDelay";
@@ -6,6 +7,7 @@ import { delayedScoreFromSnapshot, pendingScoresForMatch, queueDelayedVblScore, 
 const POLL_WINDOW_MS = 25_000;
 const ACTIVE_INTERVAL_MS = 1_800;
 const LEASE_MS = 35_000;
+const FINAL_ADVANCE_HOLD_MS = 10_000;
 
 type Relation<T> = T | T[] | null | undefined;
 
@@ -38,6 +40,17 @@ type MatchRow = {
   team_a_players: string[] | null;
   team_b_players: string[] | null;
   format: Record<string, unknown> | null;
+};
+
+type QueueRow = {
+  id: string;
+  court_id: string;
+  event_id: string;
+  match_id: string;
+  queue_position: number;
+  is_active: boolean;
+  status: string;
+  matches?: Relation<MatchRow>;
 };
 
 type ScoreRow = {
@@ -159,6 +172,7 @@ async function pollCourt(court: CourtRow) {
 
   const releasedScore = await releaseDueDelayedVblScore(court, match, currentScore);
   if (releasedScore) currentScore = releasedScore;
+  if (await advanceFinalMatchIfReady(court, match, currentScore)) return true;
 
   const res = await fetch(match.api_url, { cache: "no-store" });
   if (!res.ok) {
@@ -192,6 +206,101 @@ async function pollCourt(court: CourtRow) {
 
   await persistFallbackSnapshot(court, updatedMatch, snapshot, now);
   return true;
+}
+
+async function advanceFinalMatchIfReady(court: CourtRow, match: MatchRow, currentScore: ScoreRow | null) {
+  if (!currentScore || currentScore.match_id !== match.id) return false;
+  if (!isFinalScore(currentScore)) return false;
+  if (hasFutureDelayedVblScore(currentScore, new Date().toISOString())) return false;
+
+  const finalVisibleAt = Date.parse(currentScore.last_score_change_at ?? currentScore.updated_at ?? "");
+  if (!Number.isFinite(finalVisibleAt) || Date.now() - finalVisibleAt < FINAL_ADVANCE_HOLD_MS) return false;
+
+  const next = await nextQueuedMatch(court.id);
+  if (!next) return false;
+  await activateQueuedMatch(court, next);
+  return true;
+}
+
+function isFinalScore(score: ScoreRow) {
+  return score.status.toLowerCase().includes("final") || score.status.toLowerCase().includes("complete");
+}
+
+async function nextQueuedMatch(courtId: string) {
+  const db = supabaseAdmin();
+  const { data: active } = await db
+    .from("court_match_queue")
+    .select("*")
+    .eq("court_id", courtId)
+    .eq("is_active", true)
+    .maybeSingle();
+  const basePosition = Number(active?.queue_position ?? 0);
+  const { data, error } = await db
+    .from("court_match_queue")
+    .select("*, matches:match_id(*)")
+    .eq("court_id", courtId)
+    .eq("status", "queued")
+    .gt("queue_position", basePosition)
+    .order("queue_position", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data as QueueRow | null;
+}
+
+async function activateQueuedMatch(court: CourtRow, next: QueueRow) {
+  const db = supabaseAdmin();
+  const now = new Date().toISOString();
+  await db
+    .from("court_match_queue")
+    .update({ is_active: false, status: "finished", updated_at: now })
+    .eq("court_id", court.id)
+    .eq("is_active", true);
+
+  const { error: queueError } = await db
+    .from("court_match_queue")
+    .update({ is_active: true, status: "active", updated_at: now })
+    .eq("id", next.id);
+  if (queueError) throw queueError;
+
+  const match = firstRelation(next.matches);
+  const { data: updatedCourt, error: courtError } = await db
+    .from("courts")
+    .update({
+      current_match_id: next.match_id,
+      status: "waiting",
+      frozen: false,
+      last_update_at: now,
+      updated_at: now
+    })
+    .eq("id", court.id)
+    .select("*")
+    .single();
+  if (courtError) throw courtError;
+
+  const state = defaultManualState();
+  await persistScoreAndOverlay(updatedCourt, match ?? null, {
+    court_id: updatedCourt.id,
+    match_id: next.match_id,
+    team_a_score: state.team_a_score,
+    team_b_score: state.team_b_score,
+    team_a_sets: state.team_a_sets,
+    team_b_sets: state.team_b_sets,
+    current_set: state.current_set,
+    set_scores: state.set_scores,
+    serving_team: null,
+    timeouts: {},
+    status: "Pre-Match",
+    source: match?.source_type === "manual" || !match?.api_url ? "manual" : "api",
+    source_available: false,
+    source_priority: "fallback",
+    source_pending_scores: [],
+    stale: false,
+    message: match?.source_type === "manual" || !match?.api_url ? null : "VolleyballLife match assigned; waiting for live scoring.",
+    last_api_poll_at: now,
+    last_score_change_at: now,
+    updated_at: now
+  });
 }
 
 async function releaseDueDelayedVblScore(court: CourtRow, match: MatchRow, currentScore: ScoreRow | null) {
