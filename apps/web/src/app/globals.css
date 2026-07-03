@@ -1016,6 +1016,7 @@ label {
 .scorer-match,
 .ivs-preview,
 .video-fallback,
+.handoff-panel,
 .correction-panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -1144,6 +1145,72 @@ label {
   background: rgba(255, 107, 107, 0.12);
   border-color: rgba(255, 107, 107, 0.38);
   color: #ffc6c6;
+}
+
+.handoff-panel {
+  border-color: rgba(247, 185, 85, 0.45);
+  display: grid;
+  gap: 14px;
+}
+
+.handoff-panel h3 {
+  font-size: 22px;
+  line-height: 1.1;
+  margin: 3px 0 4px;
+}
+
+.handoff-panel p {
+  color: var(--muted);
+  margin: 0;
+}
+
+.score-check-panel {
+  border-color: rgba(255, 107, 107, 0.44);
+}
+
+.handoff-scores {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.score-snapshot {
+  background: #10161b;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  text-align: center;
+}
+
+.score-snapshot span,
+.handoff-panel .muted {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.score-snapshot strong {
+  font-size: clamp(36px, 7vw, 58px);
+  line-height: 0.95;
+}
+
+.score-snapshot small {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.handoff-actions {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.handoff-actions button {
+  min-height: 54px;
 }
 
 .scorer-instruction {
@@ -1296,6 +1363,17 @@ label {
 .point-adjust-button.plus:hover:not(:disabled) {
   background: #4ce0aa;
   border-color: #4ce0aa;
+}
+
+.point-adjust-button:disabled {
+  filter: saturate(0.45);
+  opacity: 0.42;
+}
+
+.point-adjust-button.plus:disabled {
+  background: #1a5f49;
+  border-color: #2a6f58;
+  color: #b7dfd0;
 }
 
 .session-actions {
@@ -1897,6 +1975,8 @@ label.score-field {
   .metadata-form,
   .admin-button-row,
   .mapping-row,
+  .handoff-scores,
+  .handoff-actions,
   .set-team-editor {
     grid-template-columns: 1fr;
   }

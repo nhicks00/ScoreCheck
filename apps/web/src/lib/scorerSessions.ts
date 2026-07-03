@@ -29,11 +29,18 @@ export type SessionActionType =
   | "SET_COMPLETE"
   | "MATCH_COMPLETE"
   | "MANUAL_CORRECTION"
+  | "HANDOFF_USE_OFFICIAL"
+  | "HANDOFF_USE_SHADOW"
+  | "SCORE_CHECK_KEEP_OFFICIAL"
+  | "SCORE_CHECK_USE_BACKUP"
   | "SERVE_A"
   | "SERVE_B"
   | "TIMEOUT_A"
   | "TIMEOUT_B"
   | "RELEASE";
+
+const ACTIVE_SCORING_IDLE_MS = 20_000;
+const RECENT_BACKUP_ACTIVITY_MS = 90_000;
 
 type Relation<T> = T | T[] | null | undefined;
 
@@ -111,6 +118,20 @@ type ScoreRow = {
   source_available?: boolean | null;
   source_priority?: "primary" | "fallback" | "override" | null;
   stale?: boolean | null;
+};
+
+type CourtFlagRow = {
+  id: string;
+  event_id: string;
+  court_id: string;
+  match_id: string | null;
+  severity: "info" | "warning" | "critical";
+  status: "open" | "acknowledged" | "resolved";
+  type: string;
+  message: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+  resolved_at: string | null;
 };
 
 type CourtContext = CourtRow & {
@@ -346,10 +367,19 @@ export async function assignSessionForVerifiedClaim(claim: ClaimRow, origin?: st
     .limit(1)
     .maybeSingle<SessionRow>();
 
-  const role: ScorerRole = active ? "backup" : "active";
+  let role: ScorerRole = active ? "backup" : "active";
   const rawToken = rawSessionTokenForClaim(claim.id);
   const now = new Date();
   const settings = fanScoringSettings(event);
+  if (role === "backup") {
+    const { count } = await db
+      .from("scorer_sessions")
+      .select("id", { count: "exact", head: true })
+      .eq("court_id", claim.court_id)
+      .eq("role", "backup")
+      .eq("status", "active");
+    if ((count ?? 0) >= settings.maxBackupScorersPerCourt) role = "waiting";
+  }
   const priority = priorityFromAuthor(claim.youtube_author_details ?? {});
   const leaseExpiresAt = new Date(now.getTime() + settings.failoverSeconds * 1000).toISOString();
   const { data: session, error } = await db.from("scorer_sessions").insert({
@@ -480,9 +510,36 @@ export async function applySessionAction(rawToken: string, input: {
     return { ok: false as const, status: 429, error: "Too many scoring taps. Pause for a moment and try again." };
   }
   if (context.session.role === "active") {
+    if (input.type === "SCORE_CHECK_KEEP_OFFICIAL") return resolveActiveScoreCheck(context);
+    if (input.type === "SCORE_CHECK_USE_BACKUP") return resolveActiveScoreCheckWithBackup(context);
+    const handoffPending = isPromotionHandoffPending(context.session, scoreStateFromDb(context.score), scoreStateFromDb(context.shadow));
+    if (handoffPending) {
+      if (input.type === "HANDOFF_USE_OFFICIAL") return resolvePromotionHandoffWithOfficial(context);
+      if (input.type === "HANDOFF_USE_SHADOW") return resolvePromotionHandoffWithShadow(context);
+      if (input.type !== "MANUAL_CORRECTION") {
+        return {
+          ok: false as const,
+          status: 409,
+          error: "Choose which score to continue from before adding more points."
+        };
+      }
+    } else if (input.type === "HANDOFF_USE_OFFICIAL" || input.type === "HANDOFF_USE_SHADOW") {
+      return { ok: true as const, official: true, role: context.session.role, score: scoreStateFromDb(context.score), message: "Score handoff is already resolved." };
+    }
+
+    if (activeScoreCheckFlag(context) && input.type !== "MANUAL_CORRECTION") {
+      return {
+        ok: false as const,
+        status: 409,
+        error: "Please confirm the score check before adding more points."
+      };
+    }
     return applyOfficialSessionAction(context, input);
   }
   if (context.session.role === "backup") {
+    if (input.type === "HANDOFF_USE_OFFICIAL" || input.type === "HANDOFF_USE_SHADOW" || input.type === "SCORE_CHECK_KEEP_OFFICIAL" || input.type === "SCORE_CHECK_USE_BACKUP") {
+      return { ok: false as const, status: 403, error: "Only the live scorekeeper can resolve a score handoff." };
+    }
     return applyBackupSessionAction(context, input);
   }
   return { ok: false as const, status: 403, error: "Waiting scorers cannot score yet." };
@@ -512,7 +569,7 @@ export async function releaseSession(rawToken: string) {
 
 export async function promoteBestBackup(courtId: string) {
   const db = supabaseAdmin();
-  const { data: backup, error } = await db
+  const { data: backups, error } = await db
     .from("scorer_sessions")
     .select("*")
     .eq("court_id", courtId)
@@ -520,12 +577,23 @@ export async function promoteBestBackup(courtId: string) {
     .eq("status", "active")
     .order("priority_score", { ascending: false })
     .order("joined_at", { ascending: true })
-    .limit(1)
-    .maybeSingle<SessionRow>();
-  if (error || !backup) return null;
-  const event = await loadEvent(backup.event_id);
+    .limit(20);
+  if (error || !backups?.length) return null;
+  const event = await loadEvent(backups[0].event_id);
   const settings = fanScoringSettings(event);
   const now = new Date();
+  const heartbeatCutoff = now.getTime() - settings.failoverSeconds * 1000;
+  const backup = backups
+    .filter((session) => session.last_heartbeat_at && new Date(session.last_heartbeat_at).getTime() >= heartbeatCutoff)
+    .sort((a, b) => backupPromotionRank(b, now) - backupPromotionRank(a, now) || new Date(a.joined_at).getTime() - new Date(b.joined_at).getTime())[0] as SessionRow | undefined;
+  if (!backup) return null;
+  return promoteBackupSession(backup, now);
+}
+
+async function promoteBackupSession(backup: SessionRow, now = new Date()) {
+  const db = supabaseAdmin();
+  const event = await loadEvent(backup.event_id);
+  const settings = fanScoringSettings(event);
   const leaseExpiresAt = new Date(now.getTime() + settings.failoverSeconds * 1000).toISOString();
   const { data: session, error: updateError } = await db.from("scorer_sessions").update({
     role: "active",
@@ -537,17 +605,53 @@ export async function promoteBestBackup(courtId: string) {
   if (updateError) return null;
   await logSessionEvent({
     eventId: backup.event_id,
-    courtId,
+    courtId: backup.court_id,
     matchId: backup.match_id,
     sessionId: backup.id,
     type: "session_promoted",
-    payload: { displayName: backup.display_name }
+    payload: { displayName: backup.display_name, previousRole: "backup", handoffRequired: true }
   });
   return { session };
 }
 
+export function backupPromotionRank(session: Pick<SessionRow, "priority_score" | "watch_mode" | "last_action_at" | "last_heartbeat_at">, now = new Date()): number {
+  const lastActionAt = session.last_action_at ? new Date(session.last_action_at).getTime() : 0;
+  const lastHeartbeatAt = session.last_heartbeat_at ? new Date(session.last_heartbeat_at).getTime() : 0;
+  const recentAction = lastActionAt > 0 && now.getTime() - lastActionAt <= RECENT_BACKUP_ACTIVITY_MS;
+  const freshestSignalAt = Math.max(lastActionAt, lastHeartbeatAt);
+  const recencyScore = freshestSignalAt > 0 ? Math.max(0, 60 - Math.floor((now.getTime() - freshestSignalAt) / 1000)) : 0;
+  return session.priority_score
+    + (session.watch_mode === "courtside" ? 100 : 0)
+    + (recentAction ? 75 : 0)
+    + recencyScore;
+}
+
 export async function markStaleSessions(courtId?: string) {
   const db = supabaseAdmin();
+  const staleHeartbeatCutoff = new Date(Date.now() - fanScoringSettings(null).failoverSeconds * 1000).toISOString();
+  let staleBackupQuery = db
+    .from("scorer_sessions")
+    .select("*")
+    .eq("role", "backup")
+    .eq("status", "active")
+    .lt("last_heartbeat_at", staleHeartbeatCutoff);
+  if (courtId) staleBackupQuery = staleBackupQuery.eq("court_id", courtId);
+  const { data: staleBackups } = await staleBackupQuery;
+  for (const session of (staleBackups ?? []) as SessionRow[]) {
+    await db.from("scorer_sessions").update({
+      status: "stale",
+      updated_at: new Date().toISOString()
+    }).eq("id", session.id);
+    await logSessionEvent({
+      eventId: session.event_id,
+      courtId: session.court_id,
+      matchId: session.match_id,
+      sessionId: session.id,
+      type: "backup_session_stale",
+      payload: { displayName: session.display_name }
+    });
+  }
+
   let query = db
     .from("scorer_sessions")
     .select("*")
@@ -569,7 +673,7 @@ export async function markStaleSessions(courtId?: string) {
       type: "session_stale",
       payload: { displayName: session.display_name }
     });
-    await db.from("court_flags").insert({
+    await upsertOpenCourtFlag({
       event_id: session.event_id,
       court_id: session.court_id,
       match_id: session.match_id,
@@ -602,6 +706,12 @@ export async function computeCourtScorerStatus(courtId: string) {
 }
 
 export function publicSessionState(context: Awaited<ReturnType<typeof loadSessionContext>> & { ok: true }) {
+  const officialScore = scoreStateFromDb(context.score);
+  const shadowScore = scoreStateFromDb(context.shadow);
+  const handoffPending = isPromotionHandoffPending(context.session, officialScore, shadowScore);
+  const challengeFlag = activeScoreCheckFlag(context);
+  const challengePayload = recordValue(challengeFlag?.payload);
+  const challengeShadow = recordValue(challengePayload?.shadow);
   const scorerStatus = {
     role: context.session.role,
     status: context.session.status,
@@ -630,8 +740,20 @@ export function publicSessionState(context: Awaited<ReturnType<typeof loadSessio
       ivsConfigured: Boolean((context.court.ivs_channel_arn || courtIvsEnv(context.court.court_number).channelArn) && (context.court.ivs_playback_url || courtIvsEnv(context.court.court_number).playbackUrl))
     },
     match: context.match,
-    officialScore: scoreStateFromDb(context.score),
-    shadowScore: scoreStateFromDb(context.shadow)
+    officialScore,
+    shadowScore,
+    handoff: {
+      pending: handoffPending,
+      officialScore,
+      shadowScore,
+      reason: handoffPending ? "promotion" : null
+    },
+    scoreCheck: {
+      pending: Boolean(challengeFlag),
+      message: challengeFlag?.message ?? null,
+      backupDisplayName: typeof challengePayload?.backupDisplayName === "string" ? challengePayload.backupDisplayName : null,
+      backupScore: challengeShadow ? normalizeScoreState(challengeShadow) : null
+    }
   };
 }
 
@@ -675,6 +797,8 @@ async function applyOfficialSessionAction(context: SessionContext, input: {
     last_action_at: new Date().toISOString(),
     updated_at: new Date().toISOString()
   }).eq("id", context.session.id);
+  await syncShadowState(context.session, next);
+  await resolveOpenCourtFlags(context.event.id, context.court.id, context.match?.id ?? null, ["score_mismatch", "active_score_check"]);
   await logSessionEvent({
     eventId: context.event.id,
     courtId: context.court.id,
@@ -728,18 +852,279 @@ async function applyBackupSessionAction(context: SessionContext, input: {
     last_action_at: new Date().toISOString(),
     updated_at: new Date().toISOString()
   }).eq("id", context.session.id);
-  if (scoreSignature(scoreStateFromDb(context.score)) !== scoreSignature(next)) {
-    await db.from("court_flags").insert({
-      event_id: context.event.id,
-      court_id: context.court.id,
-      match_id: context.match?.id ?? null,
-      severity: "warning",
-      type: "score_mismatch",
-      message: `${context.session.display_name}'s saved score differs from the broadcast score.`,
-      payload: { sessionId: context.session.id, official: scoreStateFromDb(context.score), shadow: next }
-    });
-  }
+  await handleBackupScoreComparison(context, next);
   return { ok: true as const, official: false, role: context.session.role, shadowScore: shadow };
+}
+
+async function resolvePromotionHandoffWithOfficial(context: SessionContext) {
+  const official = scoreStateFromDb(context.score);
+  await syncShadowState(context.session, official);
+  await resolveOpenCourtFlags(context.event.id, context.court.id, context.match?.id ?? null, ["active_score_check", "score_mismatch"]);
+  await logSessionEvent({
+    eventId: context.event.id,
+    courtId: context.court.id,
+    matchId: context.match?.id ?? null,
+    sessionId: context.session.id,
+    type: "handoff_continue_official",
+    payload: { official }
+  });
+  return {
+    ok: true as const,
+    official: true,
+    role: context.session.role,
+    score: official,
+    handoffResolved: true,
+    message: "Continuing from the broadcast score."
+  };
+}
+
+async function resolvePromotionHandoffWithShadow(context: SessionContext) {
+  const db = supabaseAdmin();
+  const previous = scoreStateFromDb(context.score);
+  const shadow = validateManualCorrection(scoreStateFromDb(context.shadow), formatFromUnknown(context.match?.format ?? defaultBeachFormat()));
+  const saved = await persistScoreAndOverlay(context.court, context.match, dbScorePayload(context.court.id, context.match?.id ?? null, shadow, "manual"));
+  await db.from("score_actions").insert({
+    court_id: context.court.id,
+    match_id: context.match?.id ?? null,
+    action: "HANDOFF_ADOPT_SHADOW",
+    action_id: crypto.randomUUID(),
+    payload: { promotedSessionId: context.session.id },
+    actor: "scorer",
+    actor_type: "scorer",
+    actor_label: context.session.display_name,
+    previous_state: previous,
+    next_state: shadow
+  });
+  await db.from("scorer_sessions").update({
+    last_action_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  }).eq("id", context.session.id);
+  await syncShadowState(context.session, shadow);
+  await resolveOpenCourtFlags(context.event.id, context.court.id, context.match?.id ?? null, ["active_score_check", "score_mismatch"]);
+  await logSessionEvent({
+    eventId: context.event.id,
+    courtId: context.court.id,
+    matchId: context.match?.id ?? null,
+    sessionId: context.session.id,
+    type: "handoff_adopt_shadow",
+    payload: { previousOfficial: previous, adoptedShadow: shadow }
+  });
+  return {
+    ok: true as const,
+    official: true,
+    role: context.session.role,
+    score: saved.score,
+    handoffResolved: true,
+    message: "Your saved score is now the broadcast score."
+  };
+}
+
+async function resolveActiveScoreCheck(context: SessionContext) {
+  const official = scoreStateFromDb(context.score);
+  await syncShadowState(context.session, official);
+  await resolveOpenCourtFlags(context.event.id, context.court.id, context.match?.id ?? null, ["active_score_check", "score_mismatch"]);
+  await logSessionEvent({
+    eventId: context.event.id,
+    courtId: context.court.id,
+    matchId: context.match?.id ?? null,
+    sessionId: context.session.id,
+    type: "active_score_check_confirmed",
+    payload: { official }
+  });
+  return {
+    ok: true as const,
+    official: true,
+    role: context.session.role,
+    score: official,
+    scoreCheckResolved: true,
+    message: "Broadcast score confirmed."
+  };
+}
+
+async function resolveActiveScoreCheckWithBackup(context: SessionContext) {
+  const flag = activeScoreCheckFlag(context);
+  const payload = recordValue(flag?.payload);
+  const backupShadow = recordValue(payload?.shadow);
+  if (!backupShadow) return { ok: false as const, status: 409, error: "No backup score is available for this score check." };
+
+  const db = supabaseAdmin();
+  const previous = scoreStateFromDb(context.score);
+  const next = validateManualCorrection(normalizeScoreState(backupShadow), formatFromUnknown(context.match?.format ?? defaultBeachFormat()));
+  const saved = await persistScoreAndOverlay(context.court, context.match, dbScorePayload(context.court.id, context.match?.id ?? null, next, "manual"));
+  await db.from("score_actions").insert({
+    court_id: context.court.id,
+    match_id: context.match?.id ?? null,
+    action: "SCORE_CHECK_ADOPT_BACKUP",
+    action_id: crypto.randomUUID(),
+    payload: {
+      activeSessionId: context.session.id,
+      backupSessionId: payload?.backupSessionId ?? null
+    },
+    actor: "scorer",
+    actor_type: "scorer",
+    actor_label: context.session.display_name,
+    previous_state: previous,
+    next_state: next
+  });
+  await db.from("scorer_sessions").update({
+    last_action_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  }).eq("id", context.session.id);
+  await syncShadowState(context.session, next);
+  await resolveOpenCourtFlags(context.event.id, context.court.id, context.match?.id ?? null, ["active_score_check", "score_mismatch"]);
+  await logSessionEvent({
+    eventId: context.event.id,
+    courtId: context.court.id,
+    matchId: context.match?.id ?? null,
+    sessionId: context.session.id,
+    type: "active_score_check_adopted_backup",
+    payload: { previousOfficial: previous, adoptedBackup: next, backupSessionId: payload?.backupSessionId ?? null }
+  });
+  return {
+    ok: true as const,
+    official: true,
+    role: context.session.role,
+    score: saved.score,
+    scoreCheckResolved: true,
+    message: "Backup score is now the broadcast score."
+  };
+}
+
+async function handleBackupScoreComparison(context: SessionContext, shadow: ScoreState) {
+  const official = scoreStateFromDb(context.score);
+  if (scoreSignature(official) === scoreSignature(shadow)) {
+    await resolveOpenCourtFlags(context.event.id, context.court.id, context.match?.id ?? null, ["active_score_check", "score_mismatch"]);
+    return;
+  }
+
+  await upsertOpenCourtFlag({
+    event_id: context.event.id,
+    court_id: context.court.id,
+    match_id: context.match?.id ?? null,
+    severity: "warning",
+    type: "score_mismatch",
+    message: `${context.session.display_name}'s saved score differs from the broadcast score.`,
+    payload: {
+      sessionId: context.session.id,
+      backupDisplayName: context.session.display_name,
+      official,
+      shadow
+    }
+  });
+  await maybeCreateActiveScoreCheck(context, official, shadow);
+}
+
+async function maybeCreateActiveScoreCheck(context: SessionContext, official: ScoreState, shadow: ScoreState) {
+  const db = supabaseAdmin();
+  const { data: active } = await db
+    .from("scorer_sessions")
+    .select("*")
+    .eq("court_id", context.court.id)
+    .eq("role", "active")
+    .in("status", ["active", "promoted"])
+    .limit(1)
+    .maybeSingle<SessionRow>();
+  if (!active || active.id === context.session.id) return;
+
+  const now = Date.now();
+  const settings = fanScoringSettings(context.event);
+  const heartbeatFresh = active.last_heartbeat_at
+    ? now - new Date(active.last_heartbeat_at).getTime() <= settings.failoverSeconds * 1000
+    : false;
+  if (!heartbeatFresh) return;
+
+  const activeIdle = !active.last_action_at || now - new Date(active.last_action_at).getTime() >= ACTIVE_SCORING_IDLE_MS;
+  if (!activeIdle) return;
+
+  const since = new Date(now - RECENT_BACKUP_ACTIVITY_MS).toISOString();
+  const { data: recentEvents } = await db
+    .from("scorer_session_events")
+    .select("payload")
+    .eq("session_id", context.session.id)
+    .eq("type", "backup_action")
+    .gte("created_at", since)
+    .order("created_at", { ascending: false })
+    .limit(20);
+  const recentScoreActions = (recentEvents ?? [])
+    .map((event) => recordValue(event.payload)?.type)
+    .filter((type) => typeof type === "string" && ["POINT_A", "POINT_B", "UNDO", "MANUAL_CORRECTION"].includes(type)).length;
+  if (recentScoreActions < 2) return;
+
+  await upsertOpenCourtFlag({
+    event_id: context.event.id,
+    court_id: context.court.id,
+    match_id: context.match?.id ?? null,
+    severity: "critical",
+    type: "active_score_check",
+    message: "Backup scoring is moving while the active scorer has not updated the broadcast. Confirm the current score.",
+    payload: {
+      activeSessionId: active.id,
+      activeDisplayName: active.display_name,
+      activeLastActionAt: active.last_action_at,
+      activeLastHeartbeatAt: active.last_heartbeat_at,
+      backupSessionId: context.session.id,
+      backupDisplayName: context.session.display_name,
+      recentBackupActions: recentScoreActions,
+      official,
+      shadow
+    }
+  });
+}
+
+async function syncShadowState(session: SessionRow, state: ScoreState) {
+  await supabaseAdmin().from("scorer_shadow_states").upsert({
+    session_id: session.id,
+    event_id: session.event_id,
+    court_id: session.court_id,
+    match_id: session.match_id,
+    ...dbScorePatch(state),
+    updated_at: new Date().toISOString()
+  });
+}
+
+async function upsertOpenCourtFlag(input: {
+  event_id: string;
+  court_id: string;
+  match_id: string | null;
+  severity: "info" | "warning" | "critical";
+  type: string;
+  message: string;
+  payload: Record<string, unknown>;
+}) {
+  const db = supabaseAdmin();
+  let query = db
+    .from("court_flags")
+    .select("id")
+    .eq("event_id", input.event_id)
+    .eq("court_id", input.court_id)
+    .eq("status", "open")
+    .eq("type", input.type)
+    .order("created_at", { ascending: false })
+    .limit(1);
+  query = input.match_id ? query.eq("match_id", input.match_id) : query.is("match_id", null);
+  const { data: existing } = await query.maybeSingle<{ id: string }>();
+  if (existing?.id) {
+    await db.from("court_flags").update({
+      severity: input.severity,
+      message: input.message,
+      payload: input.payload
+    }).eq("id", existing.id);
+    return;
+  }
+  await db.from("court_flags").insert(input);
+}
+
+async function resolveOpenCourtFlags(eventId: string, courtId: string, matchId: string | null, types: string[]) {
+  const db = supabaseAdmin();
+  let query = db
+    .from("court_flags")
+    .update({ status: "resolved", resolved_at: new Date().toISOString() })
+    .eq("event_id", eventId)
+    .eq("court_id", courtId)
+    .eq("status", "open")
+    .in("type", types);
+  query = matchId ? query.eq("match_id", matchId) : query.is("match_id", null);
+  await query;
 }
 
 function reduceAction(previous: ScoreState, formatInput: Record<string, unknown> | null, type: SessionActionType, payload?: Record<string, unknown>): ScoreState {
@@ -781,7 +1166,7 @@ async function restorePreviousBackupState(sessionId: string, fallback: ScoreStat
 }
 
 async function loadSessionContext(rawToken: string): Promise<
-  | { ok: true; session: SessionRow; event: EventRow; court: CourtContext; match: MatchRow | null; score: ScoreRow | null; shadow: ScoreRow | null }
+  | { ok: true; session: SessionRow; event: EventRow; court: CourtContext; match: MatchRow | null; score: ScoreRow | null; shadow: ScoreRow | null; flags: CourtFlagRow[] }
   | { ok: false; status: number; error: string }
 > {
   const db = supabaseAdmin();
@@ -802,6 +1187,17 @@ async function loadSessionContext(rawToken: string): Promise<
   if (courtError) return { ok: false, status: 500, error: courtError.message };
   if (!court) return { ok: false, status: 404, error: "Court not found." };
   const { data: shadow } = await db.from("scorer_shadow_states").select("*").eq("session_id", session.id).maybeSingle<ScoreRow>();
+  const flagQuery = db
+    .from("court_flags")
+    .select("*")
+    .eq("court_id", session.court_id)
+    .eq("status", "open")
+    .in("type", ["score_mismatch", "active_score_check"])
+    .order("created_at", { ascending: false })
+    .limit(20);
+  const { data: flags } = session.match_id
+    ? await flagQuery.eq("match_id", session.match_id)
+    : await flagQuery;
   return {
     ok: true,
     session,
@@ -809,7 +1205,8 @@ async function loadSessionContext(rawToken: string): Promise<
     court,
     match: firstRelation(court.matches),
     score: firstRelation(court.score_states),
-    shadow: shadow ?? null
+    shadow: shadow ?? null,
+    flags: (flags ?? []) as CourtFlagRow[]
   };
 }
 
@@ -844,6 +1241,17 @@ async function loadSessionContextBySession(session: SessionRow) {
 
 function sessionCanAct(session: SessionRow): boolean {
   return session.status === "active" || session.status === "promoted";
+}
+
+export function isPromotionHandoffPending(
+  session: Pick<SessionRow, "role" | "status">,
+  official: ScoreState,
+  shadow: ScoreState | null | undefined
+): boolean {
+  if (!shadow) return false;
+  return session.role === "active"
+    && session.status === "promoted"
+    && scoreSignature(official) !== scoreSignature(shadow);
 }
 
 function scoreStateFromDb(row: ScoreRow | null | undefined): ScoreState {
@@ -918,6 +1326,14 @@ function priorityFromAuthor(author: Record<string, unknown> | null | undefined):
 
 function scoreSignature(state: ScoreState): string {
   return [state.teamAScore, state.teamBScore, state.teamASets, state.teamBSets, state.currentSet, state.status].join(":");
+}
+
+function activeScoreCheckFlag(context: SessionContext): CourtFlagRow | null {
+  return context.flags.find((flag) => {
+    if (flag.type !== "active_score_check") return false;
+    const payload = recordValue(flag.payload);
+    return payload?.activeSessionId === context.session.id;
+  }) ?? null;
 }
 
 function firstRelation<T>(value: Relation<T>): T | null {

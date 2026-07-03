@@ -35,6 +35,18 @@ type SessionState = {
   match: { team_a: string | null; team_b: string | null; round_name: string | null; match_number: string | null } | null;
   officialScore: ScoreState;
   shadowScore: ScoreState;
+  handoff: {
+    pending: boolean;
+    officialScore: ScoreState;
+    shadowScore: ScoreState;
+    reason: string | null;
+  };
+  scoreCheck: {
+    pending: boolean;
+    message: string | null;
+    backupDisplayName: string | null;
+    backupScore: ScoreState | null;
+  };
 };
 
 type CorrectionDraft = {
@@ -60,6 +72,7 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
   const [draftDirty, setDraftDirty] = useState(false);
   const [unlockedSets, setUnlockedSets] = useState<number[]>([]);
   const [pulseTeam, setPulseTeam] = useState<"A" | "B" | null>(null);
+  const [handoffManualMode, setHandoffManualMode] = useState(false);
   const previousRole = useRef<SessionState["session"]["role"] | null>(null);
   const watchModeHydrated = useRef(false);
 
@@ -71,7 +84,9 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
       return;
     }
     if (previousRole.current === "backup" && json.session.role === "active") {
-      setMessage("You are now the live scorekeeper. Your taps now update the broadcast scoreboard.");
+      setMessage(json.handoff?.pending
+        ? "You are now the live scorekeeper. Choose which score to continue from."
+        : "You are now the live scorekeeper. Your taps now update the broadcast scoreboard.");
     }
     previousRole.current = json.session.role;
     setState(json);
@@ -113,7 +128,7 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
   async function action(type: string, payload?: Record<string, unknown>): Promise<boolean> {
     if (busy) return false;
     const pressedTeam = type === "POINT_A" ? "A" : type === "POINT_B" ? "B" : null;
-    if (type === "POINT_A" || type === "POINT_B" || type === "UNDO" || type === "SET_COMPLETE") {
+    if (type === "POINT_A" || type === "POINT_B" || type === "UNDO" || type === "SET_COMPLETE" || type.startsWith("HANDOFF_") || type === "SCORE_CHECK_KEEP_OFFICIAL" || type === "SCORE_CHECK_USE_BACKUP") {
       setDraftDirty(false);
       setUnlockedSets([]);
     }
@@ -132,7 +147,7 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
         setError(friendlyError(json.error ?? "Scoring action failed."));
         return false;
       }
-      setMessage(json.reason === "api_priority" ? "VolleyballLife is updating the broadcast score. Your tap was saved for review." : json.official === false ? "Score saved for review." : "Broadcast score updated.");
+      setMessage(json.message ?? (json.reason === "api_priority" ? "VolleyballLife is updating the broadcast score. Your tap was saved for review." : json.official === false ? "Score saved for review." : "Broadcast score updated."));
       await refresh();
       return true;
     } catch (err) {
@@ -204,11 +219,16 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
     }, 180);
   }
 
-  const score = state?.session.role === "backup" ? state.shadowScore : state?.officialScore;
+  const handoffPending = Boolean(state?.handoff?.pending);
+  const scoreCheckPending = Boolean(state?.scoreCheck?.pending);
+  const waiting = state?.session.role === "waiting";
+  const score = state ? (state.session.role === "backup" || handoffPending ? state.shadowScore : state.officialScore) : undefined;
   const teamA = displayTeamName(state?.match?.team_a, "Team A");
   const teamB = displayTeamName(state?.match?.team_b, "Team B");
-  const disabled = busy != null || !state || !sessionLive;
+  const disabled = busy != null || !state || !sessionLive || waiting || handoffPending || scoreCheckPending;
+  const correctionDisabled = busy != null || !state || !sessionLive || waiting || scoreCheckPending || (handoffPending && !handoffManualMode);
   const isBackup = state?.session.role === "backup";
+  const isActive = state?.session.role === "active";
   const sessionEnded = Boolean(state && !sessionLive);
   const teamAScore = score?.teamAScore ?? 0;
   const teamBScore = score?.teamBScore ?? 0;
@@ -229,6 +249,10 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
   useEffect(() => {
     setUnlockedSets([]);
   }, [currentSet, setScoresSignature]);
+
+  useEffect(() => {
+    if (!handoffPending) setHandoffManualMode(false);
+  }, [handoffPending]);
 
   function updateSetScore(setNumber: number, side: TeamSide, value: number) {
     setDraftDirty(true);
@@ -265,7 +289,7 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
     const isCompleted = Boolean(completed) && !isCurrent;
     const isFuture = setNumber > correctionDraft.currentSet && !completed;
     const unlocked = unlockedSets.includes(setNumber);
-    const editable = !disabled && (isCurrent || unlocked);
+    const editable = !correctionDisabled && (isCurrent || unlocked);
     const teamASetScore = isCurrent ? correctionDraft.teamAScore : completed?.teamAScore ?? 0;
     const teamBSetScore = isCurrent ? correctionDraft.teamBScore : completed?.teamBScore ?? 0;
     const stateLabel = isCurrent ? "Current set" : isCompleted ? unlocked ? "Editing completed set" : "Completed set locked" : "Not started";
@@ -278,7 +302,7 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
             <span>{stateLabel}</span>
           </div>
           {isCompleted && (
-            <button className="set-lock-button" type="button" onClick={() => toggleCompletedSet(setNumber)} disabled={disabled}>
+            <button className="set-lock-button" type="button" onClick={() => toggleCompletedSet(setNumber)} disabled={correctionDisabled}>
               {unlocked ? <Lock size={16} /> : <Unlock size={16} />}
               {unlocked ? "Lock" : "Modify"}
             </button>
@@ -358,6 +382,24 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
     );
   }
 
+  function renderScoreSnapshot(label: string, snapshot: ScoreState) {
+    return (
+      <div className="score-snapshot">
+        <span>{label}</span>
+        <strong>{snapshot.teamAScore} - {snapshot.teamBScore}</strong>
+        <small>Sets {snapshot.teamASets}-{snapshot.teamBSets} · Set {snapshot.currentSet}</small>
+      </div>
+    );
+  }
+
+  function enableHandoffCorrection() {
+    if (!state) return;
+    setHandoffManualMode(true);
+    setDraftDirty(true);
+    setCorrectionDraft(draftFromScore(state.handoff.shadowScore));
+    setMessage("Adjust the set scores below, then apply the edited score to continue.");
+  }
+
   return (
     <main className="scorer-screen">
       <div className="scorer-wrap">
@@ -369,8 +411,20 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
             <section className={`role-banner ${state.session.role}`}>
               <div>
                 <span>{state.court.displayName}</span>
-                <h1>{sessionEnded ? "Scoring session ended." : "You are helping keep score."}</h1>
-                <p>{sessionEnded ? "This page is read-only now." : isBackup ? "Please keep scoring. Your updates are saved for the broadcast team." : "Your taps update the broadcast scoreboard."}</p>
+                <h1>{sessionEnded ? "Scoring session ended." : waiting ? "This court already has enough scorers." : handoffPending ? "You are now the live scorekeeper." : "You are helping keep score."}</h1>
+                <p>
+                  {sessionEnded
+                    ? "This page is read-only now."
+                    : waiting
+                      ? "Keep this page open if you want to be available, but this session is view-only for now."
+                      : handoffPending
+                        ? "Choose which score to continue from before adding more points."
+                        : isBackup
+                          ? "Please keep scoring. Your updates are saved for the broadcast team."
+                          : scoreCheckPending
+                            ? "A score check is needed before more points can be added."
+                            : "Your taps update the broadcast scoreboard."}
+                </p>
               </div>
               <strong>{state.session.displayName}</strong>
             </section>
@@ -397,8 +451,60 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
 
             <IvsPreviewPlayer sessionToken={sessionToken} courtNumber={state.court.courtNumber} enabled={watchMode === "website"} />
 
+            {handoffPending && (
+              <section className="handoff-panel">
+                <div>
+                  <span className="muted">Promotion handoff</span>
+                  <h3>Pick the score to continue with</h3>
+                  <p>The broadcast still has one score, but your saved scorer page has another. Nothing else will update the broadcast until you choose.</p>
+                </div>
+                <div className="handoff-scores">
+                  {renderScoreSnapshot("Broadcast score", state.handoff.officialScore)}
+                  {renderScoreSnapshot("Your saved score", state.handoff.shadowScore)}
+                </div>
+                <div className="handoff-actions">
+                  <button type="button" onClick={() => void action("HANDOFF_USE_OFFICIAL")} disabled={busy != null}>
+                    Continue from broadcast
+                  </button>
+                  <button className="primary" type="button" onClick={() => void action("HANDOFF_USE_SHADOW")} disabled={busy != null}>
+                    Use my score
+                  </button>
+                  <button className="warn" type="button" onClick={enableHandoffCorrection} disabled={busy != null}>
+                    Correct manually
+                  </button>
+                </div>
+              </section>
+            )}
+
+            {scoreCheckPending && isActive && !handoffPending && (
+              <section className="handoff-panel score-check-panel">
+                <div>
+                  <span className="muted">Score check</span>
+                  <h3>Please confirm the broadcast score</h3>
+                  <p>{state.scoreCheck.message ?? "Another scorer has a different score. Confirm before adding more points."}</p>
+                </div>
+                <div className="handoff-scores">
+                  {renderScoreSnapshot("Broadcast score", state.officialScore)}
+                  {state.scoreCheck.backupScore && renderScoreSnapshot(`${state.scoreCheck.backupDisplayName ?? "Backup scorer"} score`, state.scoreCheck.backupScore)}
+                </div>
+                <div className="handoff-actions">
+                  <button className="primary" type="button" onClick={() => void action("SCORE_CHECK_KEEP_OFFICIAL")} disabled={busy != null}>
+                    Broadcast score is correct
+                  </button>
+                  {state.scoreCheck.backupScore && (
+                    <button className="warn" type="button" onClick={() => void action("SCORE_CHECK_USE_BACKUP")} disabled={busy != null}>
+                      Use backup score
+                    </button>
+                  )}
+                  <button className="danger" type="button" onClick={() => void release()} disabled={busy != null}>
+                    Stop scoring
+                  </button>
+                </div>
+              </section>
+            )}
+
             <div className="scorer-instruction" aria-live="polite">
-              <span>Use + for the team that won the rally. Use - to correct one point.</span>
+              <span>{handoffPending ? "Choose a score above before continuing." : scoreCheckPending ? "Confirm the score check before continuing." : waiting ? "This view-only session is waiting for an open scorer slot." : "Use + for the team that won the rally. Use - to correct one point."}</span>
               {busy && <strong>{busy === "POINT_A" || busy === "POINT_B" ? "Saving point..." : busy === "MANUAL_CORRECTION" ? "Saving correction..." : "Saving..."}</strong>}
             </div>
 
@@ -433,7 +539,7 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
                 <div className="set-editor-list">
                   {[1, 2, 3].map((setNumber) => renderSetEditor(setNumber))}
                 </div>
-                <button className="primary" type="submit" disabled={disabled || !draftDirty}><Send size={18} /> Apply edited score</button>
+                <button className="primary" type="submit" disabled={correctionDisabled || !draftDirty}><Send size={18} /> Apply edited score</button>
               </form>
             </section>
           </>
