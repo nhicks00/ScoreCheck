@@ -333,7 +333,7 @@ async function nextQueuedMatch(courtId: string) {
   const db = supabaseAdmin();
   const { data: active } = await db
     .from("court_match_queue")
-    .select("*")
+    .select("*, matches:match_id(*)")
     .eq("court_id", courtId)
     .eq("is_active", true)
     .maybeSingle();
@@ -343,12 +343,20 @@ async function nextQueuedMatch(courtId: string) {
     .select("*, matches:match_id(*)")
     .eq("court_id", courtId)
     .eq("status", "queued")
-    .gt("queue_position", basePosition)
     .order("queue_position", { ascending: true })
-    .limit(1)
-    .maybeSingle();
+    .limit(50);
   if (error) throw error;
-  return data as QueueRow | null;
+  const queued = (data ?? []) as QueueRow[];
+  const activeMatch = firstRelation((active as QueueRow | null)?.matches);
+  const activeStart = scheduledTimestamp(activeMatch);
+  const nextBySchedule = Number.isFinite(activeStart)
+    ? queued
+      .map((queue) => ({ queue, startsAt: scheduledTimestamp(firstRelation(queue.matches)) }))
+      .filter((item) => Number.isFinite(item.startsAt) && item.startsAt > activeStart)
+      .sort((a, b) => a.startsAt - b.startsAt || a.queue.queue_position - b.queue.queue_position)[0]?.queue
+    : null;
+  if (nextBySchedule) return nextBySchedule;
+  return queued.find((queue) => queue.queue_position > basePosition) ?? queued[0] ?? null;
 }
 
 async function activateQueuedMatch(court: CourtRow, next: QueueRow) {
