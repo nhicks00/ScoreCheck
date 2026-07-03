@@ -3,6 +3,7 @@ import { refreshEventBracketSources } from "./bracketRefresh";
 import { defaultManualState } from "./manualScoring";
 import { buildOverlayStateWithEventSettings, persistScoreAndOverlay, scoreForCurrentMatch } from "./scoreState";
 import { supabaseAdmin } from "./supabase";
+import type { ScoreSnapshot, SetScore } from "./types";
 import { delayedScoreFromSnapshot, pendingScoresForMatch, queueDelayedVblScore, splitDueDelayedVblScores, type DelayedVblScorePayload } from "./vblDelay";
 
 const POLL_WINDOW_MS = 25_000;
@@ -200,6 +201,9 @@ async function pollCourt(court: CourtRow) {
   const bracketFinalScore = await persistVblBracketFinalIfAvailable(court, match, currentScore);
   if (bracketFinalScore) currentScore = bracketFinalScore;
 
+  const bracketProgressScore = await persistVblBracketProgressIfAvailable(court, match, currentScore);
+  if (bracketProgressScore) currentScore = bracketProgressScore;
+
   if (await advanceFinalMatchIfReady(court, match, currentScore)) return true;
 
   const res = await fetch(match.api_url, { cache: "no-store" });
@@ -307,6 +311,112 @@ async function persistVblBracketFinalIfAvailable(court: CourtRow, match: MatchRo
     updated_at: now
   });
   return score as ScoreRow;
+}
+
+async function persistVblBracketProgressIfAvailable(court: CourtRow, match: MatchRow, currentScore: ScoreRow | null) {
+  if (match.source_type !== "vbl") return null;
+  if (currentScore?.source === "api" && currentScore.source_available !== false && currentScore.source_priority !== "fallback") return null;
+  if (hasFutureDelayedVblScore(currentScore, new Date().toISOString())) return null;
+
+  const snapshot = normalizeVblBracketPayload(match.source_payload, match);
+  if (!snapshot || snapshot.status.toLowerCase().includes("final")) return null;
+  if (!snapshot.setScores.some((set) => set.isComplete)) return null;
+  if (!shouldApplyBracketProgress(currentScore, snapshot)) return null;
+
+  const merged = mergeBracketProgress(currentScore, snapshot);
+  const now = new Date().toISOString();
+  const { score } = await persistScoreAndOverlay(court, match, {
+    court_id: court.id,
+    match_id: match.id,
+    team_a_score: merged.teamAScore,
+    team_b_score: merged.teamBScore,
+    team_a_sets: merged.teamASets,
+    team_b_sets: merged.teamBSets,
+    current_set: merged.currentSet,
+    set_scores: merged.setScores,
+    serving_team: merged.servingTeam ?? null,
+    status: merged.status,
+    source: "api",
+    source_available: false,
+    source_priority: "fallback",
+    source_pending_scores: [],
+    stale: false,
+    message: "VolleyballLife bracket confirmed completed set.",
+    last_api_poll_at: now,
+    last_score_change_at: now,
+    updated_at: now
+  });
+  return score as ScoreRow;
+}
+
+function shouldApplyBracketProgress(currentScore: ScoreRow | null, snapshot: ScoreSnapshot) {
+  if (!currentScore || currentScore.match_id == null) return true;
+  const currentSets = dbSetScores(currentScore.set_scores);
+  return snapshot.setScores
+    .filter((set) => set.isComplete)
+    .some((set) => {
+      const currentSet = currentSets.find((item) => item.setNumber === set.setNumber);
+      return !currentSet
+        || currentSet.teamAScore !== set.teamAScore
+        || currentSet.teamBScore !== set.teamBScore
+        || currentSet.isComplete !== true;
+    });
+}
+
+function mergeBracketProgress(currentScore: ScoreRow | null, snapshot: ScoreSnapshot): ScoreSnapshot {
+  const completedSets = snapshot.setScores.filter((set) => set.isComplete);
+  const liveSet = currentLiveSetAfterBracketConfirmation(currentScore, completedSets);
+  if (!liveSet) return snapshot;
+
+  const setScores = [...completedSets, liveSet].sort((a, b) => a.setNumber - b.setNumber);
+  return {
+    ...snapshot,
+    status: "In Progress",
+    currentSet: liveSet.setNumber,
+    teamAScore: liveSet.teamAScore,
+    teamBScore: liveSet.teamBScore,
+    setScores
+  };
+}
+
+function currentLiveSetAfterBracketConfirmation(currentScore: ScoreRow | null, completedSets: SetScore[]) {
+  if (!currentScore) return null;
+  const maxCompletedSet = Math.max(0, ...completedSets.map((set) => set.setNumber));
+  if (currentScore.current_set <= maxCompletedSet) return null;
+
+  const currentSets = dbSetScores(currentScore.set_scores);
+  const activeSet = currentSets.find((set) => !set.isComplete && set.setNumber === currentScore.current_set);
+  const teamAScore = activeSet?.teamAScore ?? Number(currentScore.team_a_score ?? 0);
+  const teamBScore = activeSet?.teamBScore ?? Number(currentScore.team_b_score ?? 0);
+  if (teamAScore <= 0 && teamBScore <= 0) return null;
+
+  return {
+    setNumber: currentScore.current_set,
+    teamAScore,
+    teamBScore,
+    isComplete: false
+  };
+}
+
+function dbSetScores(value: unknown): SetScore[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+      const record = item as Record<string, unknown>;
+      const setNumber = Number(record.setNumber ?? record.set_number);
+      const teamAScore = Number(record.teamAScore ?? record.team_a_score);
+      const teamBScore = Number(record.teamBScore ?? record.team_b_score);
+      if (!Number.isFinite(setNumber) || !Number.isFinite(teamAScore) || !Number.isFinite(teamBScore)) return null;
+      return {
+        setNumber,
+        teamAScore,
+        teamBScore,
+        isComplete: record.isComplete === true || record.is_complete === true
+      };
+    })
+    .filter((set): set is SetScore => Boolean(set))
+    .sort((a, b) => a.setNumber - b.setNumber);
 }
 
 function shouldAdvanceInactiveScheduledMatch(
