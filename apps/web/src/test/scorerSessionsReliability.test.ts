@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { backupPromotionRank, isPromotionHandoffPending } from "../lib/scorerSessions";
+import { backupPromotionRank, isPromotionHandoffPending, reduceAction } from "../lib/scorerSessions";
 import type { ScoreState } from "../lib/scoringRules";
 
 const official: ScoreState = {
@@ -41,5 +41,12 @@ describe("scorer session reliability helpers", () => {
     }, now);
 
     expect(courtsideRecent).toBeGreaterThan(idle);
+  });
+
+  it("rejects scorer mutations after a match is final", () => {
+    const finalScore: ScoreState = { ...official, status: "Final" };
+
+    expect(() => reduceAction(finalScore, null, "POINT_A")).toThrow("already final");
+    expect(() => reduceAction(finalScore, null, "MANUAL_CORRECTION", { score: official })).toThrow("already final");
   });
 });

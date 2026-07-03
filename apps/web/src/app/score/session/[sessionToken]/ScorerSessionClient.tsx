@@ -32,7 +32,7 @@ type SessionState = {
   };
   event: { name: string };
   court: { id: string; courtNumber: number; displayName: string; ivsConfigured: boolean };
-  match: { team_a: string | null; team_b: string | null; round_name: string | null; match_number: string | null } | null;
+  match: { team_a: string | null; team_b: string | null; round_name: string | null; match_number: string | null; format?: Record<string, unknown> | null } | null;
   officialScore: ScoreState;
   shadowScore: ScoreState;
   handoff: {
@@ -60,7 +60,8 @@ type CorrectionDraft = {
 
 type TeamSide = "A" | "B";
 
-const MAX_SETS = 3;
+const DEFAULT_MAX_SETS = 3;
+const ABSOLUTE_MAX_SETS = 5;
 
 export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) {
   const [state, setState] = useState<SessionState | null>(null);
@@ -128,7 +129,7 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
   async function action(type: string, payload?: Record<string, unknown>): Promise<boolean> {
     if (busy) return false;
     const pressedTeam = type === "POINT_A" ? "A" : type === "POINT_B" ? "B" : null;
-    if (type === "POINT_A" || type === "POINT_B" || type === "UNDO" || type === "SET_COMPLETE" || type.startsWith("HANDOFF_") || type === "SCORE_CHECK_KEEP_OFFICIAL" || type === "SCORE_CHECK_USE_BACKUP") {
+    if (type === "POINT_A" || type === "POINT_B" || type === "UNDO" || type === "SET_COMPLETE" || type === "MATCH_COMPLETE" || type.startsWith("HANDOFF_") || type === "SCORE_CHECK_KEEP_OFFICIAL" || type === "SCORE_CHECK_USE_BACKUP") {
       setDraftDirty(false);
       setUnlockedSets([]);
     }
@@ -147,7 +148,7 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
         setError(friendlyError(json.error ?? "Scoring action failed."));
         return false;
       }
-      setMessage(json.message ?? (json.reason === "api_priority" ? "VolleyballLife is updating the broadcast score. Your tap was saved for review." : json.official === false ? "Score saved for review." : "Broadcast score updated."));
+      setMessage(json.message ?? actionSuccessMessage(type, json.official === false, json.reason === "api_priority"));
       await refresh();
       return true;
     } catch (err) {
@@ -193,7 +194,7 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
   }
 
   async function adjustPoint(side: TeamSide, delta: 1 | -1) {
-    if (disabled) return;
+    if (scoringDisabled) return;
     if (delta === 1) {
       await action(side === "A" ? "POINT_A" : "POINT_B");
       return;
@@ -238,7 +239,12 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
   const scoreStatus = score?.status ?? "In Progress";
   const setScores = useMemo(() => normalizeSetScores(score?.setScores), [score?.setScores]);
   const setScoresSignature = setScores.map((set) => `${set.setNumber}:${set.teamAScore}:${set.teamBScore}:${set.isComplete ? 1 : 0}`).join("|");
-  const canStartNextSet = sessionLive && scoreStatus.toLowerCase().includes("set complete") && currentSet < MAX_SETS && Math.max(teamASets, teamBSets) < 2;
+  const maxSets = resolveMaxSets(state?.match?.format, currentSet, setScores);
+  const isFinal = scoreStatus.toLowerCase().includes("final");
+  const scoringDisabled = disabled || isFinal;
+  const hasCurrentSetWinner = Math.max(teamAScore, teamBScore) > 0 && teamAScore !== teamBScore;
+  const canSaveSetAndContinue = !isFinal && currentSet < maxSets && hasCurrentSetWinner;
+  const canFinishMatch = !isFinal && (hasCurrentSetWinner || teamASets !== teamBSets);
 
   useEffect(() => {
     if (!draftDirty) {
@@ -289,7 +295,7 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
     const isCompleted = Boolean(completed) && !isCurrent;
     const isFuture = setNumber > correctionDraft.currentSet && !completed;
     const unlocked = unlockedSets.includes(setNumber);
-    const editable = !correctionDisabled && (isCurrent || unlocked);
+    const editable = !correctionDisabled && !isFinal && (isCurrent || unlocked);
     const teamASetScore = isCurrent ? correctionDraft.teamAScore : completed?.teamAScore ?? 0;
     const teamBSetScore = isCurrent ? correctionDraft.teamBScore : completed?.teamBScore ?? 0;
     const stateLabel = isCurrent ? "Current set" : isCompleted ? unlocked ? "Editing completed set" : "Completed set locked" : "Not started";
@@ -362,7 +368,7 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
             type="button"
             aria-label={`Remove one point from ${label}`}
             onClick={() => void adjustPoint(side, -1)}
-            disabled={disabled || value <= 0}
+            disabled={scoringDisabled || value <= 0}
           >
             <Minus size={34} strokeWidth={2.6} />
             <span>Point</span>
@@ -372,7 +378,7 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
             type="button"
             aria-label={`Add one point for ${label}`}
             onClick={() => void adjustPoint(side, 1)}
-            disabled={disabled}
+            disabled={scoringDisabled}
           >
             <Plus size={36} strokeWidth={2.8} />
             <span>{pointBusy || correctionBusy ? "Saving" : "Point"}</span>
@@ -504,7 +510,7 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
             )}
 
             <div className="scorer-instruction" aria-live="polite">
-              <span>{handoffPending ? "Choose a score above before continuing." : scoreCheckPending ? "Confirm the score check before continuing." : waiting ? "This view-only session is waiting for an open scorer slot." : "Use + for the team that won the rally. Use - to correct one point."}</span>
+              <span>{isFinal ? "This match is final. Stop scoring when you are done." : handoffPending ? "Choose a score above before continuing." : scoreCheckPending ? "Confirm the score check before continuing." : waiting ? "This view-only session is waiting for an open scorer slot." : "Use + for the team that won the rally. Use - to correct one point."}</span>
               {busy && <strong>{busy === "POINT_A" || busy === "POINT_B" ? "Saving point..." : busy === "MANUAL_CORRECTION" ? "Saving correction..." : "Saving..."}</strong>}
             </div>
 
@@ -514,17 +520,30 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
             </section>
 
             <section className="session-actions">
-              <button type="button" onClick={() => void action("UNDO")} disabled={disabled}>
+              <button type="button" onClick={() => void action("UNDO")} disabled={scoringDisabled}>
                 <RotateCcw size={18} /> Undo point
               </button>
-              {canStartNextSet && (
-                <button className="warn" type="button" onClick={() => void action("SET_COMPLETE")} disabled={disabled}>
-                  <ChevronRight size={18} /> Start set {currentSet + 1}
-                </button>
-              )}
-              <button className="danger" type="button" onClick={() => void release()} disabled={disabled}>
+              <button className="danger" type="button" onClick={() => void release()} disabled={busy != null || !state || !sessionLive}>
                 <StopCircle size={18} /> Stop scoring
               </button>
+            </section>
+
+            <section className="set-flow-panel" aria-label="Set and match controls">
+              <div>
+                <span>Set control</span>
+                <strong>Save the set when it is over at any score.</strong>
+                <small>Use Finish match if this is the only set or no next set will be played.</small>
+              </div>
+              <div className="set-flow-actions">
+                {currentSet < maxSets && (
+                  <button className="warn" type="button" onClick={() => void action("SET_COMPLETE")} disabled={scoringDisabled || !canSaveSetAndContinue}>
+                    <ChevronRight size={18} /> Save set &amp; go to Set {currentSet + 1}
+                  </button>
+                )}
+                <button className="danger" type="button" onClick={() => void action("MATCH_COMPLETE")} disabled={scoringDisabled || !canFinishMatch}>
+                  <StopCircle size={18} /> Finish match
+                </button>
+              </div>
             </section>
 
             <section className="correction-panel score-editor" aria-label="Edit scoreboard">
@@ -537,9 +556,9 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
               </div>
               <form className="set-editor-form" onSubmit={submitCorrection}>
                 <div className="set-editor-list">
-                  {[1, 2, 3].map((setNumber) => renderSetEditor(setNumber))}
+                  {Array.from({ length: maxSets }, (_, index) => renderSetEditor(index + 1))}
                 </div>
-                <button className="primary" type="submit" disabled={correctionDisabled || !draftDirty}><Send size={18} /> Apply edited score</button>
+                <button className="primary" type="submit" disabled={correctionDisabled || isFinal || !draftDirty}><Send size={18} /> Apply edited score</button>
               </form>
             </section>
           </>
@@ -553,7 +572,7 @@ function draftFromScore(score?: ScoreState): CorrectionDraft {
   return {
     teamAScore: score?.teamAScore ?? 0,
     teamBScore: score?.teamBScore ?? 0,
-    currentSet: clampInt(score?.currentSet ?? 1, 1, MAX_SETS),
+    currentSet: clampInt(score?.currentSet ?? 1, 1, ABSOLUTE_MAX_SETS),
     setScores: normalizeSetScores(score?.setScores),
     servingTeam: score?.servingTeam ?? null,
     status: score?.status ?? "In Progress"
@@ -587,6 +606,21 @@ function correctionPayload(draft: CorrectionDraft): ScoreState {
   };
 }
 
+function actionSuccessMessage(type: string, shadowOnly: boolean, apiPriority: boolean): string {
+  if (apiPriority) return "VolleyballLife is updating the broadcast score. Your action was saved for review.";
+  if (shadowOnly) return "Score saved for review.";
+  if (type === "SET_COMPLETE") return "Set saved. The next set is ready.";
+  if (type === "MATCH_COMPLETE") return "Match marked final.";
+  return "Broadcast score updated.";
+}
+
+function resolveMaxSets(format: Record<string, unknown> | null | undefined, currentSet: number, setScores: SetScore[]): number {
+  const configured = Number(format?.bestOf);
+  const highestSeenSet = Math.max(currentSet, DEFAULT_MAX_SETS, ...setScores.map((set) => set.setNumber));
+  const candidate = Number.isFinite(configured) && configured > 0 ? configured : highestSeenSet;
+  return clampInt(candidate, 1, ABSOLUTE_MAX_SETS);
+}
+
 function currentSetIsComplete(setNumber: number, teamAScore: number, teamBScore: number): boolean {
   const target = setNumber >= 3 ? 15 : 21;
   const high = Math.max(teamAScore, teamBScore);
@@ -597,7 +631,7 @@ function currentSetIsComplete(setNumber: number, teamAScore: number, teamBScore:
 function normalizeSetScores(input?: SetScore[]): SetScore[] {
   if (!Array.isArray(input)) return [];
   return sortSetScores(input.map((set) => ({
-    setNumber: clampInt(set.setNumber, 1, MAX_SETS),
+    setNumber: clampInt(set.setNumber, 1, ABSOLUTE_MAX_SETS),
     teamAScore: clampInt(set.teamAScore, 0, 99),
     teamBScore: clampInt(set.teamBScore, 0, 99),
     isComplete: set.isComplete !== false

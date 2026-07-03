@@ -1386,6 +1386,57 @@ label {
   min-height: 56px;
 }
 
+.set-flow-panel {
+  align-items: center;
+  background: #10161b;
+  border: 1px solid rgba(247, 185, 85, 0.28);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.9fr);
+  padding: 14px;
+}
+
+.set-flow-panel > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.set-flow-panel span {
+  color: var(--warn);
+  font-size: 12px;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.set-flow-panel strong {
+  font-size: 16px;
+  line-height: 1.15;
+}
+
+.set-flow-panel small {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.set-flow-actions {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.set-flow-actions button {
+  min-height: 58px;
+  white-space: normal;
+}
+
+.set-flow-actions button:only-child {
+  grid-column: 1 / -1;
+}
+
 .metadata-panel summary {
   align-items: center;
   cursor: pointer;
@@ -2030,6 +2081,8 @@ label.score-field {
   .watch-toggle,
   .score-control-grid,
   .session-actions,
+  .set-flow-panel,
+  .set-flow-actions,
   .correction-grid,
   .metadata-form,
   .admin-button-row,

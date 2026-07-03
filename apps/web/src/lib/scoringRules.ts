@@ -69,10 +69,40 @@ export function canCompleteSet(state: ScoreState, format = defaultBeachFormat())
 }
 
 export function completeSet(state: ScoreState, format = defaultBeachFormat()): ScoreState {
+  return completeSetWithOptions(state, format);
+}
+
+export function forceCompleteSet(state: ScoreState, format = defaultBeachFormat()): ScoreState {
+  return completeSetWithOptions(state, format, { force: true });
+}
+
+function completeSetWithOptions(state: ScoreState, format = defaultBeachFormat(), options: { force?: boolean } = {}): ScoreState {
   const current = normalizeScoreState(state, format);
-  if (!canCompleteSet(current, format)) {
+  if (!options.force && !canCompleteSet(current, format)) {
     throw new Error("Set cannot be completed from the current score");
   }
+  if (!currentSetHasWinner(current)) {
+    throw new Error("Set needs a non-tied score before it can be saved");
+  }
+  const recorded = recordCurrentSet(current);
+  if (recorded.teamASets >= format.setsToWin || recorded.teamBSets >= format.setsToWin || recorded.currentSet >= format.bestOf) {
+    return {
+      ...recorded,
+      status: "Final"
+    };
+  }
+
+  return {
+    ...recorded,
+    teamAScore: 0,
+    teamBScore: 0,
+    currentSet: Math.min(recorded.currentSet + 1, format.bestOf),
+    servingTeam: null,
+    status: "In Progress"
+  };
+}
+
+function recordCurrentSet(current: ScoreState): ScoreState {
   const winner = current.teamAScore > current.teamBScore ? "A" : "B";
   const setScores = current.setScores.filter((set) => set.setNumber !== current.currentSet);
   setScores.push({
@@ -85,26 +115,11 @@ export function completeSet(state: ScoreState, format = defaultBeachFormat()): S
 
   const teamASets = current.teamASets + (winner === "A" ? 1 : 0);
   const teamBSets = current.teamBSets + (winner === "B" ? 1 : 0);
-  if (teamASets >= format.setsToWin || teamBSets >= format.setsToWin) {
-    return {
-      ...current,
-      teamASets,
-      teamBSets,
-      setScores,
-      status: "Final"
-    };
-  }
-
   return {
     ...current,
-    teamAScore: 0,
-    teamBScore: 0,
     teamASets,
     teamBSets,
-    currentSet: Math.min(current.currentSet + 1, format.bestOf),
-    setScores,
-    servingTeam: null,
-    status: "In Progress"
+    setScores
   };
 }
 
@@ -119,6 +134,17 @@ export function completeMatch(state: ScoreState, format = defaultBeachFormat()):
   }
   if (!canCompleteMatch(next, format)) {
     throw new Error("Match format has not been satisfied");
+  }
+  return { ...next, status: "Final" };
+}
+
+export function forceCompleteMatch(state: ScoreState, format = defaultBeachFormat()): ScoreState {
+  const next = normalizeScoreState(state, format);
+  if (currentSetHasWinner(next)) {
+    return { ...recordCurrentSet(next), status: "Final" };
+  }
+  if (next.teamASets === next.teamBSets) {
+    throw new Error("Match needs a set winner before it can be finished");
   }
   return { ...next, status: "Final" };
 }
@@ -190,6 +216,10 @@ export function formatFromUnknown(input: Record<string, unknown> | null | undefi
 
 function setTarget(setNumber: number, format: MatchFormat): number {
   return format.pointsPerSet[setNumber - 1] ?? (setNumber >= format.bestOf ? 15 : 21);
+}
+
+function currentSetHasWinner(state: ScoreState): boolean {
+  return Math.max(state.teamAScore, state.teamBScore) > 0 && state.teamAScore !== state.teamBScore;
 }
 
 function stringStatus(value: unknown): ScoreState["status"] {

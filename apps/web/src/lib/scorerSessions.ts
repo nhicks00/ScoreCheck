@@ -4,10 +4,10 @@ import { courtIvsEnv, getEnv, publicOrigin, requestOrigin } from "./env";
 import { checkRateLimit } from "./rateLimit";
 import { normalizeVerificationCode } from "./youtube";
 import {
-  completeMatch,
-  completeSet,
   defaultBeachFormat,
   emptyScoreState,
+  forceCompleteMatch,
+  forceCompleteSet,
   formatFromUnknown,
   normalizeScoreState,
   scorePoint,
@@ -1127,17 +1127,24 @@ async function resolveOpenCourtFlags(eventId: string, courtId: string, matchId: 
   await query;
 }
 
-function reduceAction(previous: ScoreState, formatInput: Record<string, unknown> | null, type: SessionActionType, payload?: Record<string, unknown>): ScoreState {
+export function reduceAction(previous: ScoreState, formatInput: Record<string, unknown> | null, type: SessionActionType, payload?: Record<string, unknown>): ScoreState {
   const format = formatFromUnknown(formatInput ?? defaultBeachFormat());
+  if (isFinalScore(previous)) {
+    throw new Error("This match is already final.");
+  }
   if (type === "POINT_A") return scorePoint(previous, "A", format);
   if (type === "POINT_B") return scorePoint(previous, "B", format);
-  if (type === "SET_COMPLETE") return completeSet(previous, format);
-  if (type === "MATCH_COMPLETE") return completeMatch(previous, format);
+  if (type === "SET_COMPLETE") return forceCompleteSet(previous, format);
+  if (type === "MATCH_COMPLETE") return forceCompleteMatch(previous, format);
   if (type === "SERVE_A") return { ...previous, servingTeam: "A" };
   if (type === "SERVE_B") return { ...previous, servingTeam: "B" };
   if (type === "TIMEOUT_A" || type === "TIMEOUT_B") return { ...previous, status: previous.status === "Prematch" ? "In Progress" : previous.status };
   if (type === "MANUAL_CORRECTION") return validateManualCorrection(recordValue(payload?.score) as Partial<ScoreState>, format);
   return previous;
+}
+
+function isFinalScore(score: ScoreState): boolean {
+  return score.status.toLowerCase().includes("final");
 }
 
 async function restorePreviousOfficialState(courtId: string, fallback: ScoreState) {
