@@ -2,7 +2,7 @@ import { isAuthoritativeScorePayload, normalizeScorePayload } from "./scoring";
 import { defaultManualState } from "./manualScoring";
 import { buildOverlayStateWithEventSettings, persistScoreAndOverlay } from "./scoreState";
 import { supabaseAdmin } from "./supabase";
-import { delayedScoreFromSnapshot, pendingScoresForMatch, queueDelayedVblScore, splitDueDelayedVblScores } from "./vblDelay";
+import { delayedScoreFromSnapshot, pendingScoresForMatch, queueDelayedVblScore, splitDueDelayedVblScores, type DelayedVblScorePayload } from "./vblDelay";
 
 const POLL_WINDOW_MS = 25_000;
 const ACTIVE_INTERVAL_MS = 1_800;
@@ -309,6 +309,7 @@ async function releaseDueDelayedVblScore(court: CourtRow, match: MatchRow, curre
   const pendingForCurrentMatch = pendingScoresForMatch(currentScore.source_pending_scores, match.id);
   const { latestDue, remaining } = splitDueDelayedVblScores(pendingForCurrentMatch, now);
   if (!latestDue) return null;
+  const isSameVisibleScore = delayedScoreMatchesVisibleScore(latestDue.score, currentScore);
 
   const { score } = await persistScoreAndOverlay(court, match, {
     court_id: court.id,
@@ -328,10 +329,22 @@ async function releaseDueDelayedVblScore(court: CourtRow, match: MatchRow, curre
     stale: false,
     message: remaining.length ? "VolleyballLife live scoring active; broadcast score delayed 6 seconds." : null,
     last_api_poll_at: now,
-    last_score_change_at: now,
+    last_score_change_at: isSameVisibleScore ? currentScore.last_score_change_at ?? now : now,
     updated_at: now
   });
   return score as ScoreRow;
+}
+
+function delayedScoreMatchesVisibleScore(delayed: DelayedVblScorePayload, visible: ScoreRow) {
+  return delayed.match_id === visible.match_id
+    && delayed.team_a_score === visible.team_a_score
+    && delayed.team_b_score === visible.team_b_score
+    && delayed.team_a_sets === visible.team_a_sets
+    && delayed.team_b_sets === visible.team_b_sets
+    && delayed.current_set === visible.current_set
+    && delayed.status === visible.status
+    && delayed.serving_team === visible.serving_team
+    && JSON.stringify(delayed.set_scores) === JSON.stringify(visible.set_scores ?? []);
 }
 
 async function queueLiveVblScore(court: CourtRow, match: MatchRow, currentScore: ScoreRow | null, snapshot: ReturnType<typeof normalizeScorePayload>, now: string) {
