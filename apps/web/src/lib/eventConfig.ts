@@ -27,6 +27,17 @@ export const AVP_DENVER_VBL_BRACKET_SOURCES = [
   "https://volleyballlife.com/event/37451/division/136904/round/287192/brackets"
 ];
 
+export const AVP_DENVER_STREAM_COURT_MAP: Record<number, { displayName: string; vblCourtNumber: string; vblCourtLabel: string }> = {
+  1: { displayName: "Court 7", vblCourtNumber: "7", vblCourtLabel: "Court 7" },
+  2: { displayName: "Court 14", vblCourtNumber: "14", vblCourtLabel: "Court 14" },
+  3: { displayName: "Court 8", vblCourtNumber: "8", vblCourtLabel: "Court 8" },
+  4: { displayName: "Court 10", vblCourtNumber: "10", vblCourtLabel: "Court 10" },
+  5: { displayName: "Court 11", vblCourtNumber: "11", vblCourtLabel: "Court 11" },
+  6: { displayName: "Court 15", vblCourtNumber: "15", vblCourtLabel: "Court 15" },
+  7: { displayName: "Court 17", vblCourtNumber: "17", vblCourtLabel: "Court 17" },
+  8: { displayName: "Court 18", vblCourtNumber: "18", vblCourtLabel: "Court 18" }
+};
+
 type Db = ReturnType<typeof supabaseAdmin>;
 
 export type EventRow = {
@@ -185,7 +196,8 @@ export async function ensureAvpDenverSeeded(input: {
   for (let courtNumber = 1; courtNumber <= env.courtCount; courtNumber += 1) {
     const ivs = input.courtIvs?.[courtNumber] ?? {};
     const youtube = input.courtYoutube?.[courtNumber] ?? {};
-    const displayName = youtube.displayName || `Court ${courtNumber}`;
+    const streamCourt = AVP_DENVER_STREAM_COURT_MAP[courtNumber];
+    const displayName = streamCourt?.displayName || youtube.displayName || `Court ${courtNumber}`;
     const generatedVblCourt = vblCourtFromDisplayName(displayName);
     const { data: existingCourt } = await db
       .from("courts")
@@ -208,8 +220,8 @@ export async function ensureAvpDenverSeeded(input: {
       youtube_live_chat_id: youtube.liveChatId || null,
       ivs_channel_arn: ivs.channelArn || null,
       ivs_playback_url: ivs.playbackUrl || null,
-      vbl_court_number: existingCourt?.vbl_court_number ?? generatedVblCourt.number,
-      vbl_court_label: existingCourt?.vbl_court_label ?? generatedVblCourt.label,
+      vbl_court_number: streamCourt?.vblCourtNumber ?? generatedVblCourt.number,
+      vbl_court_label: streamCourt?.vblCourtLabel ?? generatedVblCourt.label,
       updated_at: now
     };
     const courtResult = existingCourt
