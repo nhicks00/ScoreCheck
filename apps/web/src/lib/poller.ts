@@ -1,4 +1,4 @@
-import { isAuthoritativeScorePayload, normalizeScorePayload } from "./scoring";
+import { isAuthoritativeScorePayload, normalizeScorePayload, normalizeVblBracketPayload } from "./scoring";
 import { refreshEventBracketSources } from "./bracketRefresh";
 import { defaultManualState } from "./manualScoring";
 import { buildOverlayStateWithEventSettings, persistScoreAndOverlay } from "./scoreState";
@@ -46,6 +46,7 @@ type MatchRow = {
   team_a_players: string[] | null;
   team_b_players: string[] | null;
   format: Record<string, unknown> | null;
+  source_payload?: Record<string, unknown> | null;
 };
 
 type QueueRow = {
@@ -195,6 +196,10 @@ async function pollCourt(court: CourtRow) {
 
   const releasedScore = await releaseDueDelayedVblScore(court, match, currentScore);
   if (releasedScore) currentScore = releasedScore;
+
+  const bracketFinalScore = await persistVblBracketFinalIfAvailable(court, match, currentScore);
+  if (bracketFinalScore) currentScore = bracketFinalScore;
+
   if (await advanceFinalMatchIfReady(court, match, currentScore)) return true;
 
   const res = await fetch(match.api_url, { cache: "no-store" });
@@ -241,6 +246,7 @@ async function pollCourt(court: CourtRow) {
 async function advanceFinalMatchIfReady(court: CourtRow, match: MatchRow, currentScore: ScoreRow | null) {
   if (!currentScore || currentScore.match_id !== match.id) return false;
   if (!isFinalScore(currentScore)) return false;
+  if (match.source_type === "vbl" && !isApiConfirmedFinalScore(currentScore)) return false;
   if (hasFutureDelayedVblScore(currentScore, new Date().toISOString())) return false;
 
   const finalVisibleAt = Date.parse(currentScore.last_score_change_at ?? currentScore.updated_at ?? "");
@@ -254,6 +260,53 @@ async function advanceFinalMatchIfReady(court: CourtRow, match: MatchRow, curren
 
 function isFinalScore(score: ScoreRow) {
   return score.status.toLowerCase().includes("final") || score.status.toLowerCase().includes("complete");
+}
+
+function isApiConfirmedFinalScore(score: ScoreRow) {
+  return score.source === "api"
+    && score.source_available !== false
+    && score.source_priority !== "fallback"
+    && isFinalScore(score);
+}
+
+async function persistVblBracketFinalIfAvailable(court: CourtRow, match: MatchRow, currentScore: ScoreRow | null) {
+  if (match.source_type !== "vbl") return null;
+  const snapshot = normalizeVblBracketPayload(match.source_payload, match);
+  if (!snapshot || !snapshot.status.toLowerCase().includes("final")) return null;
+
+  const hasSameConfirmedFinal = currentScore
+    && currentScore.match_id === match.id
+    && isApiConfirmedFinalScore(currentScore)
+    && currentScore.team_a_score === snapshot.teamAScore
+    && currentScore.team_b_score === snapshot.teamBScore
+    && currentScore.team_a_sets === snapshot.teamASets
+    && currentScore.team_b_sets === snapshot.teamBSets
+    && JSON.stringify(currentScore.set_scores ?? []) === JSON.stringify(snapshot.setScores);
+  if (hasSameConfirmedFinal) return currentScore;
+
+  const now = new Date().toISOString();
+  const { score } = await persistScoreAndOverlay(court, match, {
+    court_id: court.id,
+    match_id: match.id,
+    team_a_score: snapshot.teamAScore,
+    team_b_score: snapshot.teamBScore,
+    team_a_sets: snapshot.teamASets,
+    team_b_sets: snapshot.teamBSets,
+    current_set: snapshot.currentSet,
+    set_scores: snapshot.setScores,
+    serving_team: snapshot.servingTeam ?? null,
+    status: snapshot.status,
+    source: "api",
+    source_available: true,
+    source_priority: "primary",
+    source_pending_scores: [],
+    stale: false,
+    message: "VolleyballLife bracket confirmed final score.",
+    last_api_poll_at: now,
+    last_score_change_at: now,
+    updated_at: now
+  });
+  return score as ScoreRow;
 }
 
 function shouldAdvanceInactiveScheduledMatch(

@@ -25,6 +25,64 @@ export function isAuthoritativeScorePayload(payload: unknown, snapshot: ScoreSna
   return scoreSnapshotHasLiveScore(snapshot);
 }
 
+export function normalizeVblBracketPayload(payload: unknown, match?: MatchLike | null): ScoreSnapshot | null {
+  const source = record(payload);
+  const games = arrayOfRecords(source?.games)
+    .map((game) => ({
+      setNumber: numberValue(game.number) ?? 1,
+      teamAScore: safeScore(game.home),
+      teamBScore: safeScore(game.away),
+      modified: cleanText(game.dtModified) != null,
+      explicitFinal: game.isFinal === true
+    }))
+    .sort((a, b) => a.setNumber - b.setNumber);
+  if (!games.length) return null;
+
+  const format = parseFormat(match?.format);
+  const setScores: SetScore[] = [];
+  let teamASets = 0;
+  let teamBSets = 0;
+  for (const game of games) {
+    const hasScore = game.teamAScore > 0 || game.teamBScore > 0;
+    if (!hasScore && !game.modified && !game.explicitFinal) continue;
+    const target = game.setNumber === 3 ? Math.min(format.pointsPerSet[0] ?? 21, 15) : (format.pointsPerSet[game.setNumber - 1] ?? format.pointsPerSet[0] ?? 21);
+    const isComplete = game.explicitFinal || isSetComplete(game.teamAScore, game.teamBScore, target, format.cap);
+    setScores.push({
+      setNumber: game.setNumber,
+      teamAScore: game.teamAScore,
+      teamBScore: game.teamBScore,
+      isComplete
+    });
+    if (isComplete) {
+      if (game.teamAScore > game.teamBScore) teamASets += 1;
+      if (game.teamBScore > game.teamAScore) teamBSets += 1;
+    }
+  }
+
+  if (!setScores.length) return null;
+
+  const won = teamASets >= format.setsToWin || teamBSets >= format.setsToWin;
+  const activeSet = setScores.find((set) => !set.isComplete) ?? null;
+  const displaySet = won ? setScores.at(-1) : activeSet;
+  return {
+    status: won ? "Final" : "In Progress",
+    currentSet: won ? Math.max(setScores.length, 1) : activeSet?.setNumber ?? Math.min(setScores.length + 1, format.bestOf),
+    teamAName: match?.team_a ?? "Team A",
+    teamBName: match?.team_b ?? "Team B",
+    teamASeed: match?.team_a_seed ?? null,
+    teamBSeed: match?.team_b_seed ?? null,
+    teamAScore: displaySet?.teamAScore ?? 0,
+    teamBScore: displaySet?.teamBScore ?? 0,
+    teamASets,
+    teamBSets,
+    servingTeam: null,
+    setScores,
+    source: "api",
+    stale: false,
+    message: null
+  };
+}
+
 function normalizeArrayPayload(payload: unknown[], match?: MatchLike | null): ScoreSnapshot {
   const teamA = recordAt(payload, 0);
   const teamB = recordAt(payload, 1);
@@ -77,6 +135,10 @@ function normalizeArrayPayload(payload: unknown[], match?: MatchLike | null): Sc
     stale: false,
     message: null
   };
+}
+
+function arrayOfRecords(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => !!item && typeof item === "object" && !Array.isArray(item)) : [];
 }
 
 function normalizeObjectPayload(payload: Record<string, unknown>, match?: MatchLike | null): ScoreSnapshot {

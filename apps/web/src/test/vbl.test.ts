@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isAuthoritativeScorePayload, normalizeScorePayload } from "../lib/scoring";
+import { isAuthoritativeScorePayload, normalizeScorePayload, normalizeVblBracketPayload } from "../lib/scoring";
 import { discoverMatchesFromHydrate, parseVblUrl } from "../lib/vbl";
 
 describe("VolleyballLife helpers", () => {
@@ -98,6 +98,49 @@ describe("VolleyballLife helpers", () => {
 
     expect(snapshot.status).toBe("In Progress");
     expect(isAuthoritativeScorePayload(payload, snapshot)).toBe(true);
+  });
+
+  it("uses bracket game scores as final confirmation when vMix never went live", () => {
+    const snapshot = normalizeVblBracketPayload({
+      games: [
+        { number: 1, home: 21, away: 14, isFinal: false, dtModified: "1783100000000" },
+        { number: 2, home: 21, away: 18, isFinal: false, dtModified: "1783101000000" },
+        { number: 3, home: 0, away: 0, isFinal: false, dtModified: null }
+      ]
+    }, {
+      team_a: "Kyle Paulson / Jack Walmer",
+      team_b: "Richard Diedrich / Alex Mortimer",
+      format: { bestOf: 3, pointsPerSet: [21, 21, 15], setsToWin: 2 }
+    });
+
+    expect(snapshot).toMatchObject({
+      status: "Final",
+      teamAScore: 21,
+      teamBScore: 18,
+      teamASets: 2,
+      teamBSets: 0,
+      teamAName: "Kyle Paulson / Jack Walmer",
+      teamBName: "Richard Diedrich / Alex Mortimer"
+    });
+  });
+
+  it("does not treat a single bracket set confirmation as match final", () => {
+    const snapshot = normalizeVblBracketPayload({
+      games: [
+        { number: 1, home: 21, away: 19, isFinal: false, dtModified: "1783100000000" },
+        { number: 2, home: 0, away: 0, isFinal: false, dtModified: null }
+      ]
+    }, {
+      team_a: "Alpha",
+      team_b: "Bravo",
+      format: { bestOf: 3, pointsPerSet: [21, 21, 15], setsToWin: 2 }
+    });
+
+    expect(snapshot).toMatchObject({
+      status: "In Progress",
+      teamASets: 1,
+      teamBSets: 0
+    });
   });
 
   it("discovers future bracket placeholders and event-local schedule text", () => {
