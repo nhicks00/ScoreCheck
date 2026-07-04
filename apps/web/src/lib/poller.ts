@@ -4,7 +4,7 @@ import { defaultManualState } from "./manualScoring";
 import { buildOverlayStateWithEventSettings, persistScoreAndOverlay, scoreForCurrentMatch } from "./scoreState";
 import { supabaseAdmin } from "./supabase";
 import type { ScoreSnapshot, SetScore } from "./types";
-import { delayedScoreFromSnapshot, pendingScoresForMatch, queueDelayedVblScore, splitDueDelayedVblScores, type DelayedVblScorePayload } from "./vblDelay";
+import { delayedScoreFromSnapshot, isDelayedScoreBehindVisible, pendingScoresForMatch, queueDelayedVblScore, splitDueDelayedVblScores, type DelayedVblScorePayload } from "./vblDelay";
 import { buildActiveVblSourceSet, matchBelongsToActiveVblSource } from "./vblSources";
 
 const POLL_WINDOW_MS = 25_000;
@@ -713,6 +713,15 @@ async function releaseDueDelayedVblScore(court: CourtRow, match: MatchRow, curre
   const { latestDue, remaining } = splitDueDelayedVblScores(pendingForCurrentMatch, now);
   if (!latestDue) return null;
   const isSameVisibleScore = delayedScoreMatchesVisibleScore(latestDue.score, currentScore);
+  if (!isSameVisibleScore && isDelayedScoreBehindVisible(latestDue.score, currentScore)) {
+    await supabaseAdmin().from("score_states").update({
+      source_pending_scores: remaining,
+      stale: false,
+      last_api_poll_at: now,
+      updated_at: now
+    }).eq("court_id", court.id);
+    return currentScore;
+  }
 
   const { score } = await persistScoreAndOverlay(court, match, {
     court_id: court.id,
@@ -753,7 +762,8 @@ function delayedScoreMatchesVisibleScore(delayed: DelayedVblScorePayload, visibl
 async function queueLiveVblScore(court: CourtRow, match: MatchRow, currentScore: ScoreRow | null, snapshot: ReturnType<typeof normalizeScorePayload>, now: string) {
   const pendingScore = delayedScoreFromSnapshot(match.id, snapshot, now);
   const pendingForCurrentMatch = pendingScoresForMatch(currentScore?.source_pending_scores, match.id);
-  const pending = queueDelayedVblScore(pendingForCurrentMatch, currentScore, pendingScore);
+  const pending = queueDelayedVblScore(pendingForCurrentMatch, currentScore, pendingScore)
+    .filter((item) => !isDelayedScoreBehindVisible(item.score, currentScore));
 
   if (!currentScore) {
     await persistScoreAndOverlay(court, match, {

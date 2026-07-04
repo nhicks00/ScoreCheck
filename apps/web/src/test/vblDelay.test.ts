@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { delayedScoreFromSnapshot, pendingScoresForMatch, queueDelayedVblScore, splitDueDelayedVblScores } from "../lib/vblDelay";
+import { delayedScoreFromSnapshot, isDelayedScoreBehindVisible, pendingScoresForMatch, queueDelayedVblScore, splitDueDelayedVblScores } from "../lib/vblDelay";
 
 const startedAt = "2026-07-03T15:00:00.000Z";
 const snapshot = {
@@ -81,5 +81,66 @@ describe("VBL overlay delay queue", () => {
     const matchTwoScore = delayedScoreFromSnapshot("match-2", { ...snapshot, teamAScore: 0, teamBScore: 1 }, startedAt);
 
     expect(pendingScoresForMatch([matchOneScore, matchTwoScore], "match-2")).toEqual([matchTwoScore]);
+  });
+
+  it("detects delayed VBL scores that would move the visible score backward", () => {
+    const delayed = delayedScoreFromSnapshot("match-1", {
+      ...snapshot,
+      currentSet: 2,
+      teamAScore: 20,
+      teamBScore: 14,
+      teamASets: 1,
+      teamBSets: 0,
+      setScores: [
+        { setNumber: 1, teamAScore: 21, teamBScore: 14, isComplete: true },
+        { setNumber: 2, teamAScore: 20, teamBScore: 14, isComplete: false }
+      ]
+    }, startedAt);
+    const visible = {
+      match_id: "match-1",
+      team_a_score: 20,
+      team_b_score: 18,
+      team_a_sets: 1,
+      team_b_sets: 0,
+      current_set: 2,
+      set_scores: [
+        { setNumber: 1, teamAScore: 21, teamBScore: 14, isComplete: true },
+        { setNumber: 2, teamAScore: 20, teamBScore: 18, isComplete: false }
+      ],
+      status: "In Progress"
+    };
+
+    expect(isDelayedScoreBehindVisible(delayed.score, visible)).toBe(true);
+  });
+
+  it("allows a later official final to correct an earlier final score", () => {
+    const delayed = delayedScoreFromSnapshot("match-1", {
+      ...snapshot,
+      status: "Final",
+      currentSet: 2,
+      teamAScore: 21,
+      teamBScore: 18,
+      teamASets: 2,
+      teamBSets: 0,
+      setScores: [
+        { setNumber: 1, teamAScore: 21, teamBScore: 14, isComplete: true },
+        { setNumber: 2, teamAScore: 21, teamBScore: 18, isComplete: true }
+      ]
+    }, startedAt);
+    const visible = {
+      match_id: "match-1",
+      team_a_score: 21,
+      team_b_score: 14,
+      team_a_sets: 2,
+      team_b_sets: 0,
+      current_set: 2,
+      set_scores: [
+        { setNumber: 1, teamAScore: 21, teamBScore: 14, isComplete: true },
+        { setNumber: 2, teamAScore: 21, teamBScore: 14, isComplete: true }
+      ],
+      status: "Final"
+    };
+
+    expect(isDelayedScoreBehindVisible(delayed.score, visible)).toBe(false);
   });
 });

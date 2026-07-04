@@ -129,8 +129,8 @@ describe("overlayState", () => {
     expect(scorebugDisplayScores(state)).toEqual({
       teamAScore: 12,
       teamBScore: 21,
-      teamASetScores: [19],
-      teamBSetScores: [21]
+      teamASetScores: [19, 12],
+      teamBSetScores: [21, 21]
     });
   });
 
@@ -154,8 +154,8 @@ describe("overlayState", () => {
     expect(scorebugDisplayScores(state)).toEqual({
       teamAScore: 12,
       teamBScore: 15,
-      teamASetScores: [23, 16],
-      teamBSetScores: [21, 21]
+      teamASetScores: [23, 16, 12],
+      teamBSetScores: [21, 21, 15]
     });
   });
 
@@ -179,8 +179,8 @@ describe("overlayState", () => {
     expect(scorebugDisplayScores(state)).toEqual({
       teamAScore: 12,
       teamBScore: 15,
-      teamASetScores: [21, 14],
-      teamBSetScores: [18, 21]
+      teamASetScores: [21, 14, 12],
+      teamBSetScores: [18, 21, 15]
     });
     expect(overlayPhaseText(state, true)).toBe("Final");
   });
@@ -206,8 +206,32 @@ describe("overlayState", () => {
     expect(scorebugDisplayScores(state)).toEqual({
       teamAScore: 12,
       teamBScore: 15,
-      teamASetScores: [21, 14],
-      teamBSetScores: [18, 21]
+      teamASetScores: [21, 14, 12],
+      teamBSetScores: [18, 21, 15]
+    });
+  });
+
+  it("renders a live second set without creating a separate duplicate current-score column", () => {
+    const state = coerceOverlayState({
+      phase: "LIVE",
+      score: {
+        teamAScore: 20,
+        teamBScore: 18,
+        currentSet: 2,
+        teamASets: 1,
+        teamBSets: 0,
+        setScores: [
+          { setNumber: 1, teamAScore: 21, teamBScore: 14, isComplete: true },
+          { setNumber: 2, teamAScore: 20, teamBScore: 18, isComplete: false }
+        ]
+      }
+    }, 2);
+
+    expect(scorebugDisplayScores(state)).toEqual({
+      teamAScore: 20,
+      teamBScore: 18,
+      teamASetScores: [21, 20],
+      teamBSetScores: [14, 18]
     });
   });
 

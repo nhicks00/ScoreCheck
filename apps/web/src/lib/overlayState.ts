@@ -110,19 +110,44 @@ export function completedSetScores(setScores: SetScore[]) {
 }
 
 export function scorebugDisplayScores(state: OverlayState) {
-  const finalDisplay = isFinalDisplayState(state);
-  const completedScores = finalDisplay
-    ? finalPlayedSetScores(state.score.setScores, setsToWin(state.match.format))
-    : completedSetScores(state.score.setScores);
-  const finalCurrentSet = finalDisplay ? completedScores.at(-1) ?? null : null;
-  const setHistory = finalCurrentSet ? completedScores.slice(0, -1) : completedScores;
+  const displaySets = scorebugDisplaySetScores(state);
+  const currentDisplaySet = displaySets.at(-1) ?? null;
 
   return {
-    teamAScore: finalCurrentSet?.teamAScore ?? state.score.teamAScore,
-    teamBScore: finalCurrentSet?.teamBScore ?? state.score.teamBScore,
-    teamASetScores: setHistory.map((set) => set.teamAScore),
-    teamBSetScores: setHistory.map((set) => set.teamBScore)
+    teamAScore: currentDisplaySet?.teamAScore ?? state.score.teamAScore,
+    teamBScore: currentDisplaySet?.teamBScore ?? state.score.teamBScore,
+    teamASetScores: displaySets.map((set) => set.teamAScore),
+    teamBSetScores: displaySets.map((set) => set.teamBScore)
   };
+}
+
+function scorebugDisplaySetScores(state: OverlayState) {
+  const finalDisplay = isFinalDisplayState(state);
+  if (finalDisplay) {
+    return finalPlayedSetScores(state.score.setScores, setsToWin(state.match.format)).slice(0, 3);
+  }
+
+  const bySetNumber = new Map<number, SetScore>();
+  for (const set of completedPlayedSetScores(state.score.setScores)) {
+    bySetNumber.set(set.setNumber, set);
+  }
+
+  if (state.phase !== "IDLE" && state.phase !== "PREMATCH") {
+    const currentSetNumber = numberValue(state.score.currentSet, 1, 1, 3);
+    const currentSetFromPayload = coerceSetScores(state.score.setScores)
+      .find((set) => set.setNumber === currentSetNumber && !set.isComplete);
+    const completedCurrentSet = bySetNumber.get(currentSetNumber);
+    if (!completedCurrentSet) {
+      bySetNumber.set(currentSetNumber, {
+        setNumber: currentSetNumber,
+        teamAScore: currentSetFromPayload?.teamAScore ?? state.score.teamAScore,
+        teamBScore: currentSetFromPayload?.teamBScore ?? state.score.teamBScore,
+        isComplete: false
+      });
+    }
+  }
+
+  return [...bySetNumber.values()].sort((a, b) => a.setNumber - b.setNumber).slice(0, 3);
 }
 
 export function displayOverlayName(value: string | null | undefined) {

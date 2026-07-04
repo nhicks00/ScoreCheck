@@ -87,6 +87,32 @@ export function pendingScoresForMatch(rawPending: unknown, matchId: string) {
   return parsePendingScores(rawPending).filter((item) => item.score.match_id === matchId);
 }
 
+export function isDelayedScoreBehindVisible(delayed: DelayedVblScorePayload, visible: VisibleScoreLike | null | undefined) {
+  if (!visible) return false;
+  const visibleMatchId = stringValue(visible.match_id ?? visible.matchId);
+  if (visibleMatchId && delayed.match_id !== visibleMatchId) return false;
+
+  const delayedRank = progressRank(delayed);
+  const visibleRank = progressRank({
+    match_id: visibleMatchId ?? delayed.match_id,
+    team_a_score: numberValue(visible.team_a_score ?? visible.teamAScore),
+    team_b_score: numberValue(visible.team_b_score ?? visible.teamBScore),
+    team_a_sets: numberValue(visible.team_a_sets ?? visible.teamASets),
+    team_b_sets: numberValue(visible.team_b_sets ?? visible.teamBSets),
+    current_set: numberValue(visible.current_set ?? visible.currentSet) || 1,
+    set_scores: visible.set_scores ?? visible.setScores ?? [],
+    serving_team: servingTeamValue(visible.serving_team ?? visible.servingTeam),
+    status: stringValue(visible.status) ?? ""
+  });
+
+  for (let i = 0; i < delayedRank.length; i += 1) {
+    if (delayedRank[i] < visibleRank[i]) return true;
+    if (delayedRank[i] > visibleRank[i]) return false;
+  }
+
+  return false;
+}
+
 export function parsePendingScores(value: unknown): DelayedVblScore[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -152,6 +178,47 @@ function scoreKey(score: DelayedVblScorePayload) {
     serving_team: score.serving_team,
     status: score.status
   });
+}
+
+function progressRank(score: DelayedVblScorePayload) {
+  const sets = parsedSetScores(score.set_scores);
+  const completeSets = sets.filter((set) => set.isComplete);
+  const currentSetScore = sets.find((set) => set.setNumber === score.current_set) ?? null;
+  const activeTeamAScore = currentSetScore?.teamAScore ?? score.team_a_score;
+  const activeTeamBScore = currentSetScore?.teamBScore ?? score.team_b_score;
+  return [
+    isFinalStatus(score.status) ? 1 : 0,
+    score.team_a_sets + score.team_b_sets,
+    score.current_set,
+    completeSets.length,
+    activeTeamAScore + activeTeamBScore,
+    Math.max(activeTeamAScore, activeTeamBScore)
+  ];
+}
+
+function parsedSetScores(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+      const record = item as Record<string, unknown>;
+      const setNumber = numberValue(record.setNumber ?? record.set_number);
+      const teamAScore = numberValue(record.teamAScore ?? record.team_a_score);
+      const teamBScore = numberValue(record.teamBScore ?? record.team_b_score);
+      return {
+        setNumber,
+        teamAScore,
+        teamBScore,
+        isComplete: record.isComplete === true || record.is_complete === true
+      };
+    })
+    .filter((item): item is { setNumber: number; teamAScore: number; teamBScore: number; isComplete: boolean } => item != null)
+    .filter((item) => item.setNumber > 0);
+}
+
+function isFinalStatus(value: string) {
+  const status = value.toLowerCase();
+  return status.includes("final") || status.includes("complete");
 }
 
 function stringValue(value: unknown) {

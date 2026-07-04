@@ -91,8 +91,6 @@ export function OverlayClient({ courtNumber, eventId, buildVersion }: { courtNum
   const displayScores = scorebugDisplayScores(state);
   const status = overlayPhaseText(state, connected);
   const [scorebugRenderEpoch, setScorebugRenderEpoch] = useState(0);
-  const teamAScoreText = String(displayScores.teamAScore);
-  const teamBScoreText = String(displayScores.teamBScore);
   const teamASetScoresText = displayScores.teamASetScores.join("|");
   const teamBSetScoresText = displayScores.teamBSetScores.join("|");
   const scorebugShapeKey = [
@@ -102,17 +100,14 @@ export function OverlayClient({ courtNumber, eventId, buildVersion }: { courtNum
     displayOverlayName(state.match.teamB.name),
     state.phase,
     state.score.currentSet,
-    teamAScoreText,
-    teamBScoreText,
     teamASetScoresText,
     teamBSetScoresText
   ].join("|");
   const scorebugDomExpected = useMemo(() => ({
     shapeKey: scorebugShapeKey,
     teamASetScores: splitScoreText(teamASetScoresText),
-    teamBSetScores: splitScoreText(teamBSetScoresText),
-    currentScores: [teamAScoreText, teamBScoreText]
-  }), [scorebugShapeKey, teamASetScoresText, teamBSetScoresText, teamAScoreText, teamBScoreText]);
+    teamBSetScores: splitScoreText(teamBSetScoresText)
+  }), [scorebugShapeKey, teamASetScoresText, teamBSetScoresText]);
 
   useEffect(() => {
     if (!hasInvalidFinalScorebugColumns(state, displayScores)) return;
@@ -177,7 +172,6 @@ export function OverlayClient({ courtNumber, eventId, buildVersion }: { courtNum
             name={displayOverlayName(state.match.teamA.name)}
             seed={state.match.teamA.seed}
             serving={state.score.servingTeam === "A"}
-            score={displayScores.teamAScore}
             setScores={displayScores.teamASetScores}
             hideScoreDetails={isIntermission}
           />
@@ -188,7 +182,6 @@ export function OverlayClient({ courtNumber, eventId, buildVersion }: { courtNum
             name={displayOverlayName(state.match.teamB.name)}
             seed={state.match.teamB.seed}
             serving={state.score.servingTeam === "B"}
-            score={displayScores.teamBScore}
             setScores={displayScores.teamBSetScores}
             hideScoreDetails={isIntermission}
           />
@@ -341,7 +334,6 @@ function renderedScorebugMismatch(expected: {
   shapeKey: string;
   teamASetScores: string[];
   teamBSetScores: string[];
-  currentScores: string[];
 }) {
   const board = document.querySelector("[data-scorebug-shape]");
   if (!board) return null;
@@ -352,9 +344,6 @@ function renderedScorebugMismatch(expected: {
 
   const teamBSetScores = textValues('[data-score-row="two"] .trad-set-cell');
   if (!sameValues(teamBSetScores, expected.teamBSetScores)) return "team-b-sets-mismatch";
-
-  const currentScores = textValues(".trad-current-score");
-  if (!sameValues(currentScores, expected.currentScores)) return "current-score-mismatch";
 
   return null;
 }
@@ -376,7 +365,6 @@ function TradRow({
   name,
   seed,
   serving,
-  score,
   setScores,
   hideScoreDetails
 }: {
@@ -384,7 +372,6 @@ function TradRow({
   name: string;
   seed: string | null;
   serving: boolean;
-  score: number;
   setScores: number[];
   hideScoreDetails: boolean;
 }) {
@@ -394,20 +381,17 @@ function TradRow({
       <span className="trad-seed">{seed ?? ""}</span>
       <span className="trad-name">{name}</span>
       <div className="trad-sets">
-        {setScores.map((setScore, index) => <span key={index} className="trad-set-cell">{setScore}</span>)}
+        {setScores.map((setScore, index) => (
+          <span key={index} className={`trad-set-cell ${index === setScores.length - 1 ? "current" : ""}`}>{setScore}</span>
+        ))}
       </div>
-      <span className="trad-score-shell">
-        <span className="trad-score-cell">
-          <span key={score} className="trad-current-score">{score}</span>
-        </span>
-      </span>
       <style jsx>{`
         .trad-row {
           align-items: center;
           box-sizing: border-box;
           display: grid;
           gap: 0;
-          grid-template-columns: 24px 1.75rem minmax(11rem, 1fr) auto 3.4rem;
+          grid-template-columns: 24px 1.75rem minmax(11rem, 1fr) auto;
           height: 2.95rem;
           min-width: 0;
           padding: 0 0 0 0.6rem;
@@ -463,77 +447,39 @@ function TradRow({
           display: flex;
           grid-column: 4;
           justify-self: end;
+          min-height: 100%;
         }
         .trad-set-cell {
           border-left: 1px solid rgba(255, 255, 255, 0.08);
           color: rgba(255, 255, 255, 0.48);
+          display: grid;
           font-family: var(--overlay-condensed-font);
           font-size: 1.48rem;
           font-variant-numeric: tabular-nums;
           font-weight: 800;
+          height: 2.95rem;
           letter-spacing: 0;
           line-height: 1;
           min-width: 2.45rem;
           padding: 0 0.18rem;
+          place-items: center;
           text-align: center;
         }
-        .trad-score-shell {
-          align-items: stretch;
-          align-self: stretch;
-          background: linear-gradient(180deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.035) 100%);
-          border-left: 1px solid rgba(255, 255, 255, 0.15);
-          box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
-          box-sizing: border-box;
-          display: inline-flex;
-          grid-column: 5;
-          justify-content: flex-start;
-          justify-self: stretch;
-          max-width: 3.4rem;
-          min-width: 3.4rem;
-          overflow: hidden;
-          position: relative;
-          width: 3.4rem;
-        }
-        .trad-score-cell {
-          align-items: center;
-          align-self: stretch;
-          background: linear-gradient(180deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.04) 100%);
-          box-sizing: border-box;
-          display: flex;
-          flex: 0 0 3.4rem;
-          justify-content: center;
-          max-width: 3.4rem;
-          min-width: 3.4rem;
-          width: 3.4rem;
-        }
-        .trad-row.one .trad-score-shell,
-        .trad-row.one .trad-score-cell {
+        .trad-row.one .trad-set-cell:last-child {
           border-top-right-radius: 0.6rem;
         }
-        .trad-row.two .trad-score-shell,
-        .trad-row.two .trad-score-cell {
+        .trad-row.two .trad-set-cell:last-child {
           border-bottom-right-radius: 0.6rem;
         }
-        .trad-current-score {
+        .trad-set-cell.current {
           background: linear-gradient(180deg, #f9e29b 0%, #d4af37 100%);
           background-clip: text;
           color: transparent;
-          display: grid;
           animation: score-pop 420ms cubic-bezier(0.2, 0.72, 0.25, 1);
-          font-family: var(--overlay-condensed-font);
           font-feature-settings: "tnum" 1, "lnum" 1;
-          font-size: 1.48rem;
-          font-style: normal;
-          font-variant-numeric: tabular-nums;
           font-weight: 900;
-          height: 100%;
-          letter-spacing: 0;
-          line-height: 1;
-          place-items: center;
-          text-align: center;
           -webkit-background-clip: text;
           -webkit-text-fill-color: transparent;
-          width: 100%;
         }
         @keyframes score-pop {
           0% {
@@ -549,9 +495,7 @@ function TradRow({
             transform: translateY(0) scale(1);
           }
         }
-        .hide-score-details .trad-current-score,
         .hide-score-details .trad-sets,
-        .hide-score-details .trad-score-shell,
         .hide-score-details .trad-serve {
           visibility: hidden;
         }
@@ -559,12 +503,9 @@ function TradRow({
           grid-template-columns: 24px 1.75rem minmax(11rem, 1fr);
           padding-right: 0.8rem;
         }
-        .hide-score-details .trad-score-shell {
-          display: none;
-        }
         @media (max-width: 560px) {
           .trad-row {
-            grid-template-columns: 20px 1.4rem minmax(8rem, 1fr) auto 3rem;
+            grid-template-columns: 20px 1.4rem minmax(8rem, 1fr) auto;
             height: 2.75rem;
             padding-left: 0.4rem;
           }
@@ -574,23 +515,12 @@ function TradRow({
           }
           .trad-set-cell {
             font-size: 1.2rem;
+            height: 2.75rem;
             min-width: 2rem;
-          }
-          .trad-score-shell,
-          .trad-score-cell {
-            max-width: 3rem;
-            min-width: 3rem;
-            width: 3rem;
-          }
-          .trad-score-cell {
-            flex-basis: 3rem;
-          }
-          .trad-current-score {
-            font-size: 1.3rem;
           }
         }
         @media (prefers-reduced-motion: reduce) {
-          .trad-current-score {
+          .trad-set-cell.current {
             animation: none;
           }
         }
