@@ -19,17 +19,17 @@ const snapshot = {
 };
 
 describe("VBL overlay delay queue", () => {
-  it("queues live VBL snapshots for a six-second release", () => {
+  it("queues live VBL snapshots for a nine-second release", () => {
     const delayed = delayedScoreFromSnapshot("match-1", snapshot, startedAt);
-    expect(delayed.visibleAt).toBe("2026-07-03T15:00:06.000Z");
+    expect(delayed.visibleAt).toBe("2026-07-03T15:00:09.000Z");
 
     const queued = queueDelayedVblScore([], null, delayed);
-    expect(splitDueDelayedVblScores(queued, "2026-07-03T15:00:05.999Z")).toMatchObject({
+    expect(splitDueDelayedVblScores(queued, "2026-07-03T15:00:08.999Z")).toMatchObject({
       latestDue: null,
       remaining: queued
     });
 
-    const due = splitDueDelayedVblScores(queued, "2026-07-03T15:00:06.000Z");
+    const due = splitDueDelayedVblScores(queued, "2026-07-03T15:00:09.000Z");
     expect(due.latestDue?.score).toMatchObject({
       match_id: "match-1",
       team_a_score: 3,
@@ -57,7 +57,7 @@ describe("VBL overlay delay queue", () => {
     const once = queueDelayedVblScore([], null, delayed);
     const twice = queueDelayedVblScore(once, null, delayed);
     expect(twice).toHaveLength(1);
-    expect(twice[0].visibleAt).toBe("2026-07-03T15:00:06.000Z");
+    expect(twice[0].visibleAt).toBe("2026-07-03T15:00:09.000Z");
   });
 
   it("drops delayed scores from a previous match", () => {

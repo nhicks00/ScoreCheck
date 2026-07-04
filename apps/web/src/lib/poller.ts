@@ -231,7 +231,7 @@ async function pollCourt(court: CourtRow) {
   }
 
   if (hasFutureDelayedVblScore(currentScore, now)) {
-    await touchApiPoll(court.id, now, true, "VolleyballLife live scoring active; broadcast score delayed 6 seconds.");
+    await touchApiPoll(court.id, now, true, "VolleyballLife live scoring active; broadcast score delayed 9 seconds.");
     return true;
   }
 
@@ -701,7 +701,7 @@ async function releaseDueDelayedVblScore(court: CourtRow, match: MatchRow, curre
     source_priority: "primary",
     source_pending_scores: remaining,
     stale: false,
-    message: remaining.length ? "VolleyballLife live scoring active; broadcast score delayed 6 seconds." : null,
+    message: remaining.length ? "VolleyballLife live scoring active; broadcast score delayed 9 seconds." : null,
     last_api_poll_at: now,
     last_score_change_at: isSameVisibleScore ? currentScore.last_score_change_at ?? now : now,
     updated_at: now
@@ -743,7 +743,7 @@ async function queueLiveVblScore(court: CourtRow, match: MatchRow, currentScore:
       source_priority: "primary",
       source_pending_scores: pending,
       stale: false,
-      message: "VolleyballLife live scoring active; broadcast score delayed 6 seconds.",
+      message: "VolleyballLife live scoring active; broadcast score delayed 9 seconds.",
       last_api_poll_at: now,
       last_score_change_at: now,
       updated_at: now
@@ -759,7 +759,7 @@ async function queueLiveVblScore(court: CourtRow, match: MatchRow, currentScore:
     source_pending_scores: pending,
     stale: false,
     status: snapshot.status,
-    message: pending.length ? "VolleyballLife live scoring active; broadcast score delayed 6 seconds." : null,
+    message: pending.length ? "VolleyballLife live scoring active; broadcast score delayed 9 seconds." : null,
     last_api_poll_at: now,
     updated_at: now
   }).eq("court_id", court.id);
