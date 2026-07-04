@@ -17,11 +17,14 @@ type MatchRow = {
   source_type?: "vbl" | "manual" | null;
   api_url?: string | null;
   court_number?: string | null;
+  scheduled_date?: string | null;
+  scheduled_time?: string | null;
   source_payload?: Record<string, unknown> | null;
 };
 
 type CourtRow = CourtRecord & {
   current_match_id: string | null;
+  vbl_court_number?: string | null;
   matches?: Relation<MatchRecord>;
   score_states?: Relation<ScoreRow>;
 };
@@ -122,6 +125,7 @@ export async function refreshEventBracketSources(eventId: string): Promise<Brack
     }
   }
 
+  await normalizeEventQueueOrder(eventId);
   return { discovered, queued, activated, moved, unmapped, refreshedActiveOverlays, unmappedCourts: [...unmappedCourts].sort(compareCourtLabels), errors };
 }
 
@@ -396,6 +400,139 @@ async function activateBestMatchForCourt(courtId: string, options: { preserveVal
   return true;
 }
 
+async function normalizeEventQueueOrder(eventId: string) {
+  const db = supabaseAdmin();
+  const { data: courts, error: courtError } = await db
+    .from("courts")
+    .select("*")
+    .eq("event_id", eventId)
+    .order("court_number", { ascending: true });
+  if (courtError) throw courtError;
+
+  for (const court of (courts ?? []) as CourtRow[]) {
+    const { data: queues, error: queueError } = await db
+      .from("court_match_queue")
+      .select("id,event_id,court_id,match_id,queue_position,status,is_active,matches:match_id(*)")
+      .eq("court_id", court.id)
+      .neq("status", "finished")
+      .order("queue_position", { ascending: true });
+    if (queueError) throw queueError;
+
+    const validQueues = ((queues ?? []) as QueueRow[])
+      .filter((queue) => queue.status !== "unmapped")
+      .filter((queue) => cleanText(firstRelation(queue.matches)?.court_number) === cleanText(court.vbl_court_number))
+      .sort((a, b) => scheduledTimestamp(firstRelation(a.matches)) - scheduledTimestamp(firstRelation(b.matches))
+        || Number(a.queue_position ?? 0) - Number(b.queue_position ?? 0));
+
+    if (!validQueues.length) continue;
+
+    const active = validQueues.find((queue) => queue.is_active);
+    const desired = validQueues[0];
+    if (active?.id === desired.id) continue;
+    if (active && await queueHasVisibleScore(active)) continue;
+    await activateQueueForCourt(court, desired);
+  }
+}
+
+async function activateQueueForCourt(court: CourtRow, queue: QueueRow) {
+  const db = supabaseAdmin();
+  const now = new Date().toISOString();
+  await db
+    .from("court_match_queue")
+    .update({ is_active: false, status: "queued", updated_at: now })
+    .eq("court_id", court.id)
+    .eq("is_active", true);
+
+  const { error: activeError } = await db
+    .from("court_match_queue")
+    .update({ is_active: true, status: "active", updated_at: now })
+    .eq("id", queue.id);
+  if (activeError) throw activeError;
+
+  const match = firstRelation(queue.matches) as (Parameters<typeof persistScoreAndOverlay>[1] & { source_type?: "vbl" | "manual" | null; api_url?: string | null }) | null;
+  const { data: updatedCourt, error: courtError } = await db
+    .from("courts")
+    .update({
+      current_match_id: queue.match_id,
+      status: "waiting",
+      mode: court.mode === "manual" ? "hybrid" : court.mode,
+      updated_at: now
+    })
+    .eq("id", court.id)
+    .select("*")
+    .single();
+  if (courtError) throw courtError;
+
+  if (!match) return;
+  const { data: score } = await db
+    .from("score_states")
+    .select("*")
+    .eq("match_id", match.id)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const initial = defaultManualState();
+  await persistScoreAndOverlay(updatedCourt, match, score ? {
+    court_id: court.id,
+    match_id: match.id,
+    team_a_score: Number(score.team_a_score ?? 0),
+    team_b_score: Number(score.team_b_score ?? 0),
+    team_a_sets: Number(score.team_a_sets ?? 0),
+    team_b_sets: Number(score.team_b_sets ?? 0),
+    current_set: Number(score.current_set ?? 1),
+    set_scores: Array.isArray(score.set_scores) ? score.set_scores : [],
+    serving_team: score.serving_team ?? null,
+    timeouts: score.timeouts ?? {},
+    status: cleanText(score.status) ?? "Pre-Match",
+    source: score.source === "manual" || score.source === "override" ? score.source : "api",
+    source_available: Boolean(score.source_available),
+    source_priority: score.source_priority ?? "fallback",
+    source_pending_scores: score.source_pending_scores ?? [],
+    stale: Boolean(score.stale),
+    message: score.message ?? null,
+    last_api_poll_at: score.last_api_poll_at ?? null,
+    last_score_change_at: score.last_score_change_at ?? null
+  } : {
+    court_id: court.id,
+    match_id: match.id,
+    team_a_score: initial.team_a_score,
+    team_b_score: initial.team_b_score,
+    team_a_sets: initial.team_a_sets,
+    team_b_sets: initial.team_b_sets,
+    current_set: initial.current_set,
+    set_scores: initial.set_scores,
+    serving_team: initial.serving_team,
+    timeouts: initial.timeouts,
+    status: "Pre-Match",
+    source: match.source_type === "manual" || !match.api_url ? "manual" : "api",
+    source_available: false,
+    source_priority: "fallback",
+    stale: false,
+    message: match.source_type === "manual" || !match.api_url ? null : "VolleyballLife match assigned; waiting for live scoring."
+  });
+}
+
+async function queueHasVisibleScore(queue: QueueRow) {
+  const matchId = cleanText(queue.match_id);
+  if (!matchId) return false;
+  const { data, error } = await supabaseAdmin()
+    .from("score_states")
+    .select("team_a_score,team_b_score,team_a_sets,team_b_sets,current_set,set_scores,status")
+    .eq("match_id", matchId)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return false;
+  return Number(data.team_a_score ?? 0) > 0
+    || Number(data.team_b_score ?? 0) > 0
+    || Number(data.team_a_sets ?? 0) > 0
+    || Number(data.team_b_sets ?? 0) > 0
+    || (Array.isArray(data.set_scores) && data.set_scores.length > 0)
+    || cleanText(data.status)?.toLowerCase().includes("final") === true
+    || cleanText(data.status)?.toLowerCase().includes("complete") === true;
+}
+
 async function refreshActiveOverlaysForMatches(eventId: string, matches: Record<string, unknown>[]) {
   const matchIds = matches.map((match) => match.id).filter((id): id is string => typeof id === "string");
   if (!matchIds.length) return 0;
@@ -452,6 +589,21 @@ function isFinishedQueue(queue: QueueRow) {
 
 function compareCourtLabels(a: string, b: string) {
   return Number(a) - Number(b) || a.localeCompare(b);
+}
+
+function scheduledTimestamp(match: MatchRow | null | undefined) {
+  if (!match?.scheduled_time || !("scheduled_date" in match)) return Number.POSITIVE_INFINITY;
+  const date = cleanText((match as { scheduled_date?: unknown }).scheduled_date)?.match(/\d{4}-\d{2}-\d{2}/)?.[0];
+  const time = cleanText((match as { scheduled_time?: unknown }).scheduled_time)?.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (!date || !time) return Number.POSITIVE_INFINITY;
+  let hour = Number(time[1]);
+  const minute = Number(time[2]);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return Number.POSITIVE_INFINITY;
+  const suffix = time[3].toUpperCase();
+  if (suffix === "PM" && hour !== 12) hour += 12;
+  if (suffix === "AM" && hour === 12) hour = 0;
+  const parsed = Date.parse(`${date}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00-06:00`);
+  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
 }
 
 function firstRelation<T>(value: Relation<T>): T | null {
