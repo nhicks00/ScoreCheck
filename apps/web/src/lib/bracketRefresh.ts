@@ -3,6 +3,7 @@ import { persistScoreAndOverlay, scoreForCurrentMatch } from "./scoreState";
 import type { CourtRecord, MatchRecord, ScoreRecord } from "./scoreState";
 import { supabaseAdmin } from "./supabase";
 import { discoverMatchesFromUrl } from "./vbl";
+import { buildActiveVblSourceSet, matchBelongsToActiveVblSource } from "./vblSources";
 
 type Relation<T> = T | T[] | null | undefined;
 
@@ -16,6 +17,7 @@ type MatchRow = {
   event_id: string;
   source_type?: "vbl" | "manual" | null;
   api_url?: string | null;
+  bracket_url?: string | null;
   court_number?: string | null;
   scheduled_date?: string | null;
   scheduled_time?: string | null;
@@ -48,6 +50,7 @@ export type BracketRefreshResult = {
   activated: number;
   moved: number;
   unmapped: number;
+  retiredInactiveSources: number;
   refreshedActiveOverlays: number;
   unmappedCourts: string[];
   errors: string[];
@@ -66,9 +69,13 @@ export async function refreshEventBracketSources(eventId: string): Promise<Brack
   let activated = 0;
   let moved = 0;
   let unmapped = 0;
+  let retiredInactiveSources = 0;
   let refreshedActiveOverlays = 0;
   const unmappedCourts = new Set<string>();
   const errors: string[] = [];
+  const activeSourceUrls = buildActiveVblSourceSet(((sources ?? []) as BracketSourceRow[]).map((source) => source.source_url));
+
+  retiredInactiveSources += await retireInactiveVblSourceQueues(eventId, activeSourceUrls);
 
   for (const source of (sources ?? []) as BracketSourceRow[]) {
     try {
@@ -125,8 +132,8 @@ export async function refreshEventBracketSources(eventId: string): Promise<Brack
     }
   }
 
-  await normalizeEventQueueOrder(eventId);
-  return { discovered, queued, activated, moved, unmapped, refreshedActiveOverlays, unmappedCourts: [...unmappedCourts].sort(compareCourtLabels), errors };
+  await normalizeEventQueueOrder(eventId, activeSourceUrls);
+  return { discovered, queued, activated, moved, unmapped, retiredInactiveSources, refreshedActiveOverlays, unmappedCourts: [...unmappedCourts].sort(compareCourtLabels), errors };
 }
 
 async function autoQueueDiscoveredMatches(eventId: string, matches: Record<string, unknown>[]) {
@@ -292,7 +299,7 @@ async function moveQueueToCourt(queue: QueueRow, targetCourtId: string, now: str
   if (moveError) throw moveError;
 }
 
-async function activateBestMatchForCourt(courtId: string, options: { preserveValidActive?: boolean } = {}) {
+async function activateBestMatchForCourt(courtId: string, options: { preserveValidActive?: boolean; activeSourceUrls?: Set<string> } = {}) {
   const db = supabaseAdmin();
   const { data: court, error: courtError } = await db
     .from("courts")
@@ -311,6 +318,7 @@ async function activateBestMatchForCourt(courtId: string, options: { preserveVal
 
   const validQueues = ((queues ?? []) as QueueRow[])
     .filter((queue) => !isFinishedQueue(queue) && queue.status !== "unmapped")
+    .filter((queue) => matchBelongsToActiveVblSource(firstRelation(queue.matches), options.activeSourceUrls ?? new Set()))
     .filter((queue) => cleanText(firstRelation(queue.matches)?.court_number) === cleanText(court.vbl_court_number));
   const currentActive = validQueues.find((queue) => queue.is_active);
   const chosen = options.preserveValidActive && currentActive ? currentActive : validQueues[0];
@@ -400,7 +408,7 @@ async function activateBestMatchForCourt(courtId: string, options: { preserveVal
   return true;
 }
 
-async function normalizeEventQueueOrder(eventId: string) {
+async function normalizeEventQueueOrder(eventId: string, activeSourceUrls: Set<string> = new Set()) {
   const db = supabaseAdmin();
   const { data: courts, error: courtError } = await db
     .from("courts")
@@ -420,6 +428,7 @@ async function normalizeEventQueueOrder(eventId: string) {
 
     const validQueues = ((queues ?? []) as QueueRow[])
       .filter((queue) => queue.status !== "unmapped")
+      .filter((queue) => matchBelongsToActiveVblSource(firstRelation(queue.matches), activeSourceUrls))
       .filter((queue) => cleanText(firstRelation(queue.matches)?.court_number) === cleanText(court.vbl_court_number))
       .sort((a, b) => scheduledTimestamp(firstRelation(a.matches)) - scheduledTimestamp(firstRelation(b.matches))
         || Number(a.queue_position ?? 0) - Number(b.queue_position ?? 0));
@@ -432,6 +441,48 @@ async function normalizeEventQueueOrder(eventId: string) {
     if (active && await queueHasVisibleScore(active)) continue;
     await activateQueueForCourt(court, desired);
   }
+}
+
+async function retireInactiveVblSourceQueues(eventId: string, activeSourceUrls: Set<string>) {
+  if (!activeSourceUrls.size) return 0;
+
+  const db = supabaseAdmin();
+  const { data, error } = await db
+    .from("court_match_queue")
+    .select("id,event_id,court_id,match_id,queue_position,status,is_active,matches:match_id(*)")
+    .eq("event_id", eventId)
+    .neq("status", "finished");
+  if (error) throw error;
+
+  const inactiveQueues = ((data ?? []) as QueueRow[])
+    .filter((queue) => !matchBelongsToActiveVblSource(firstRelation(queue.matches), activeSourceUrls));
+  if (!inactiveQueues.length) return 0;
+
+  const now = new Date().toISOString();
+  const queueIds = inactiveQueues.map((queue) => queue.id);
+  const retiredMatchIds = inactiveQueues
+    .map((queue) => cleanText(queue.match_id))
+    .filter((value): value is string => Boolean(value));
+  const activeCourtIds = [...new Set(inactiveQueues.filter((queue) => queue.is_active).map((queue) => queue.court_id))];
+
+  const { error: retireError } = await db
+    .from("court_match_queue")
+    .update({ is_active: false, status: "finished", updated_at: now })
+    .in("id", queueIds);
+  if (retireError) throw retireError;
+
+  for (const courtId of activeCourtIds) {
+    const activated = await activateBestMatchForCourt(courtId, { preserveValidActive: true, activeSourceUrls });
+    if (!activated && retiredMatchIds.length) {
+      await db
+        .from("courts")
+        .update({ current_match_id: null, status: "waiting", updated_at: now })
+        .eq("id", courtId)
+        .in("current_match_id", retiredMatchIds);
+    }
+  }
+
+  return inactiveQueues.length;
 }
 
 async function activateQueueForCourt(court: CourtRow, queue: QueueRow) {

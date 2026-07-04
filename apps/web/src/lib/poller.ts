@@ -5,6 +5,7 @@ import { buildOverlayStateWithEventSettings, persistScoreAndOverlay, scoreForCur
 import { supabaseAdmin } from "./supabase";
 import type { ScoreSnapshot, SetScore } from "./types";
 import { delayedScoreFromSnapshot, pendingScoresForMatch, queueDelayedVblScore, splitDueDelayedVblScores, type DelayedVblScorePayload } from "./vblDelay";
+import { buildActiveVblSourceSet, matchBelongsToActiveVblSource } from "./vblSources";
 
 const POLL_WINDOW_MS = 25_000;
 const ACTIVE_INTERVAL_MS = 1_800;
@@ -36,6 +37,7 @@ type MatchRow = {
   event_id: string;
   source_type?: "vbl" | "manual" | null;
   api_url: string | null;
+  bracket_url?: string | null;
   match_number: string | null;
   round_name: string | null;
   scheduled_time: string | null;
@@ -576,7 +578,9 @@ async function nextQueuedMatch(courtId: string) {
     .order("queue_position", { ascending: true })
     .limit(50);
   if (error) throw error;
-  const queued = await closeFinalQueuedMatches(db, (data ?? []) as QueueRow[]);
+  const activeSourceUrls = await activeVblSourceUrlsForCourtEvent(db, active?.event_id ?? (data ?? [])[0]?.event_id);
+  const queued = (await closeFinalQueuedMatches(db, (data ?? []) as QueueRow[]))
+    .filter((queue) => matchBelongsToActiveVblSource(firstRelation(queue.matches), activeSourceUrls));
   const activeMatch = firstRelation((active as QueueRow | null)?.matches);
   const activeStart = scheduledTimestamp(activeMatch);
   const nextBySchedule = Number.isFinite(activeStart)
@@ -587,6 +591,16 @@ async function nextQueuedMatch(courtId: string) {
     : null;
   if (nextBySchedule) return nextBySchedule;
   return queued.find((queue) => queue.queue_position > basePosition) ?? queued[0] ?? null;
+}
+
+async function activeVblSourceUrlsForCourtEvent(db: ReturnType<typeof supabaseAdmin>, eventId: unknown) {
+  if (typeof eventId !== "string" || !eventId) return new Set<string>();
+  const { data, error } = await db
+    .from("bracket_sources")
+    .select("source_url")
+    .eq("event_id", eventId);
+  if (error) throw error;
+  return buildActiveVblSourceSet((data ?? []).map((source) => source.source_url));
 }
 
 async function closeFinalQueuedMatches(db: ReturnType<typeof supabaseAdmin>, queued: QueueRow[]) {

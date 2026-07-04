@@ -23,8 +23,8 @@ export const DEFAULT_MATCH_FORMAT = {
 };
 
 export const AVP_DENVER_VBL_BRACKET_SOURCES = [
-  "https://volleyballlife.com/event/37451/division/136905/round/287193/brackets",
-  "https://volleyballlife.com/event/37451/division/136904/round/287192/brackets"
+  "https://volleyballlife.com/event/37451/division/136904/round/311708/pools",
+  "https://volleyballlife.com/event/37451/division/136905/round/311711/pools"
 ];
 
 export const AVP_DENVER_STREAM_COURT_MAP: Record<number, { displayName: string; vblCourtNumber: string; vblCourtLabel: string }> = {

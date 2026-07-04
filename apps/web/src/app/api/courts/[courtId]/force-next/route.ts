@@ -3,11 +3,13 @@ import { requireAdmin } from "@/lib/auth";
 import { defaultManualState } from "@/lib/manualScoring";
 import { persistScoreAndOverlay } from "@/lib/scoreState";
 import { supabaseAdmin } from "@/lib/supabase";
+import { buildActiveVblSourceSet, matchBelongsToActiveVblSource } from "@/lib/vblSources";
 
 type QueueMatch = {
   id: string;
   source_type?: "vbl" | "manual" | null;
   api_url?: string | null;
+  bracket_url?: string | null;
 };
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ courtId: string }> }) {
@@ -27,15 +29,25 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cou
     .eq("is_active", true)
     .maybeSingle();
   const basePosition = Number(active?.queue_position ?? 0);
-  const { data: next, error: nextError } = await db
+  const { data: activeSources, error: sourceError } = await db
+    .from("bracket_sources")
+    .select("source_url")
+    .eq("event_id", court.event_id);
+  if (sourceError) return NextResponse.json({ error: sourceError.message }, { status: 500 });
+  const activeSourceUrls = buildActiveVblSourceSet((activeSources ?? []).map((source) => source.source_url));
+
+  const { data: nextRows, error: nextError } = await db
     .from("court_match_queue")
     .select("*, matches:match_id(*)")
     .eq("court_id", courtId)
     .gt("queue_position", basePosition)
     .order("queue_position", { ascending: true })
-    .limit(1)
-    .maybeSingle();
+    .limit(50);
   if (nextError) return NextResponse.json({ error: nextError.message }, { status: 500 });
+  const next = (nextRows ?? []).find((queue) => {
+    const match = Array.isArray(queue.matches) ? queue.matches[0] : queue.matches;
+    return matchBelongsToActiveVblSource(match, activeSourceUrls);
+  });
   if (!next) return NextResponse.json({ error: "No queued match is available" }, { status: 404 });
 
   if (active) {
