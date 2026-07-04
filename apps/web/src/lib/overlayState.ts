@@ -109,6 +109,19 @@ export function completedSetScores(setScores: SetScore[]) {
   return completedPlayedSetScores(setScores).slice(0, 3);
 }
 
+export function scorebugDisplayScores(state: OverlayState) {
+  const completedScores = completedSetScores(state.score.setScores);
+  const finalCurrentSet = state.phase === "POSTMATCH" ? completedScores.at(-1) ?? null : null;
+  const setHistory = finalCurrentSet ? completedScores.slice(0, -1) : completedScores;
+
+  return {
+    teamAScore: finalCurrentSet?.teamAScore ?? state.score.teamAScore,
+    teamBScore: finalCurrentSet?.teamBScore ?? state.score.teamBScore,
+    teamASetScores: setHistory.map((set) => set.teamAScore),
+    teamBSetScores: setHistory.map((set) => set.teamBScore)
+  };
+}
+
 export function displayOverlayName(value: string | null | undefined) {
   const clean = cleanName(value);
   if (!clean || isPlaceholderName(clean)) return "TBD";

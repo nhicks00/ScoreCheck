@@ -3,7 +3,8 @@ import {
   coerceOverlayState,
   completedSetScores,
   displayOverlayName,
-  overlayPhaseText
+  overlayPhaseText,
+  scorebugDisplayScores
 } from "../lib/overlayState";
 
 describe("overlayState", () => {
@@ -107,6 +108,55 @@ describe("overlayState", () => {
       { setNumber: 1, teamAScore: 21, teamBScore: 15, isComplete: true },
       { setNumber: 2, teamAScore: 21, teamBScore: 19, isComplete: true }
     ]);
+  });
+
+  it("renders a straight-sets final without duplicating the clinching set column", () => {
+    const state = coerceOverlayState({
+      phase: "POSTMATCH",
+      score: {
+        teamAScore: 12,
+        teamBScore: 21,
+        currentSet: 2,
+        teamASets: 0,
+        teamBSets: 2,
+        setScores: [
+          { setNumber: 1, teamAScore: 19, teamBScore: 21, isComplete: true },
+          { setNumber: 2, teamAScore: 12, teamBScore: 21, isComplete: true }
+        ]
+      }
+    }, 4);
+
+    expect(scorebugDisplayScores(state)).toEqual({
+      teamAScore: 12,
+      teamBScore: 21,
+      teamASetScores: [19],
+      teamBSetScores: [21]
+    });
+  });
+
+  it("renders a three-set final without adding a fourth duplicate score column", () => {
+    const state = coerceOverlayState({
+      phase: "POSTMATCH",
+      score: {
+        teamAScore: 12,
+        teamBScore: 15,
+        currentSet: 3,
+        teamASets: 1,
+        teamBSets: 2,
+        setScores: [
+          { setNumber: 1, teamAScore: 23, teamBScore: 21, isComplete: true },
+          { setNumber: 2, teamAScore: 16, teamBScore: 21, isComplete: true },
+          { setNumber: 3, teamAScore: 12, teamBScore: 15, isComplete: true }
+        ]
+      }
+    }, 1);
+
+    expect(scorebugDisplayScores(state)).toEqual({
+      teamAScore: 12,
+      teamBScore: 15,
+      teamASetScores: [23, 16],
+      teamBSetScores: [21, 21]
+    });
   });
 
   it("keeps a live deciding set at zero-zero visible as the current score", () => {

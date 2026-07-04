@@ -3,10 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   coerceOverlayState,
-  completedSetScores,
   displayOverlayName,
   fallbackOverlayState,
-  overlayPhaseText
+  overlayPhaseText,
+  scorebugDisplayScores
 } from "@/lib/overlayState";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 
@@ -62,7 +62,7 @@ export function OverlayClient({ courtNumber, eventId }: { courtNumber: string; e
 
   const layout = state.layout === "top-left" ? "top-left" : "bottom-left";
   const isIntermission = state.phase === "IDLE" || state.phase === "PREMATCH";
-  const setScores = completedSetScores(state.score.setScores);
+  const displayScores = scorebugDisplayScores(state);
   const status = overlayPhaseText(state, connected);
 
   return (
@@ -74,8 +74,8 @@ export function OverlayClient({ courtNumber, eventId }: { courtNumber: string; e
             name={displayOverlayName(state.match.teamA.name)}
             seed={state.match.teamA.seed}
             serving={state.score.servingTeam === "A"}
-            score={state.score.teamAScore}
-            setScores={setScores.map((set) => set.teamAScore)}
+            score={displayScores.teamAScore}
+            setScores={displayScores.teamASetScores}
             hideScoreDetails={isIntermission}
           />
           <div className="trad-divider" />
@@ -84,8 +84,8 @@ export function OverlayClient({ courtNumber, eventId }: { courtNumber: string; e
             name={displayOverlayName(state.match.teamB.name)}
             seed={state.match.teamB.seed}
             serving={state.score.servingTeam === "B"}
-            score={state.score.teamBScore}
-            setScores={setScores.map((set) => set.teamBScore)}
+            score={displayScores.teamBScore}
+            setScores={displayScores.teamBSetScores}
             hideScoreDetails={isIntermission}
           />
           <div className="accent-line" />
