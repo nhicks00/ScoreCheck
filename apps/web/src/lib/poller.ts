@@ -365,10 +365,17 @@ async function queuedMatchHasAuthoritativeScore(match: MatchRow | null) {
     if (!res.ok) return false;
     const payload = await res.json();
     const snapshot = normalizeScorePayload(payload, match);
-    return isAuthoritativeScorePayload(payload, snapshot);
+    return hasLivePointScoringStarted(snapshot);
   } catch {
     return false;
   }
+}
+
+export function hasLivePointScoringStarted(snapshot: Pick<ReturnType<typeof normalizeScorePayload>, "status" | "teamAScore" | "teamBScore" | "setScores">) {
+  const status = snapshot.status.toLowerCase();
+  if (status.includes("final") || status.includes("complete")) return false;
+  if (snapshot.teamAScore > 0 || snapshot.teamBScore > 0) return true;
+  return snapshot.setScores.some((set) => !set.isComplete && (set.teamAScore > 0 || set.teamBScore > 0));
 }
 
 async function persistVblBracketProgressIfAvailable(court: CourtRow, match: MatchRow, currentScore: ScoreRow | null) {

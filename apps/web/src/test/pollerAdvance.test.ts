@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hasScoreClinchedMatch, shouldAdvanceFinalMatchOverlay } from "../lib/poller";
+import { hasLivePointScoringStarted, hasScoreClinchedMatch, shouldAdvanceFinalMatchOverlay } from "../lib/poller";
 
 describe("poller final-match advancement", () => {
   it("advances immediately when the next queued VBL match starts live scoring", () => {
@@ -69,6 +69,24 @@ describe("poller final-match advancement", () => {
       ]
     }, {
       format: { bestOf: 1, setsToWin: 1 }
+    })).toBe(true);
+  });
+
+  it("does not treat a loaded 0-0 next match as live scoring for post-final advance", () => {
+    expect(hasLivePointScoringStarted({
+      status: "In Progress",
+      teamAScore: 0,
+      teamBScore: 0,
+      setScores: []
+    })).toBe(false);
+  });
+
+  it("treats the first actual next-match point as live scoring for post-final advance", () => {
+    expect(hasLivePointScoringStarted({
+      status: "In Progress",
+      teamAScore: 1,
+      teamBScore: 0,
+      setScores: [{ setNumber: 1, teamAScore: 1, teamBScore: 0, isComplete: false }]
     })).toBe(true);
   });
 });
