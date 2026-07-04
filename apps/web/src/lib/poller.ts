@@ -9,7 +9,7 @@ import { delayedScoreFromSnapshot, pendingScoresForMatch, queueDelayedVblScore, 
 const POLL_WINDOW_MS = 25_000;
 const ACTIVE_INTERVAL_MS = 1_800;
 const LEASE_MS = 35_000;
-const FINAL_ADVANCE_HOLD_MS = 10_000;
+const POST_FINAL_NEXT_MATCH_HOLD_MS = 180_000;
 const BRACKET_REFRESH_INTERVAL_MS = 45_000;
 const EVENT_TIME_ZONE = "America/Denver";
 
@@ -250,19 +250,62 @@ async function pollCourt(court: CourtRow) {
 async function advanceFinalMatchIfReady(court: CourtRow, match: MatchRow, currentScore: ScoreRow | null) {
   if (!currentScore || currentScore.match_id !== match.id) return false;
   if (!isFinalScore(currentScore)) return false;
+  if (!hasScoreClinchedMatch(currentScore, match)) return false;
   if (match.source_type === "vbl" && !isApiConfirmedFinalScore(currentScore)) return false;
   if (hasFutureDelayedVblScore(currentScore, new Date().toISOString())) return false;
 
-  const finalVisibleAt = Date.parse(currentScore.last_score_change_at ?? currentScore.updated_at ?? "");
-  if (!Number.isFinite(finalVisibleAt) || Date.now() - finalVisibleAt < FINAL_ADVANCE_HOLD_MS) return false;
-
   const next = await nextQueuedMatch(court.id);
   if (!next) return false;
+  const nextMatch = firstRelation(next.matches);
+  const nextLiveScoringStarted = await queuedMatchHasAuthoritativeScore(nextMatch);
+  const now = new Date().toISOString();
+  if (!shouldAdvanceFinalMatchOverlay({
+    finalVisibleAt: currentScore.last_score_change_at ?? currentScore.updated_at ?? null,
+    now,
+    nextLiveScoringStarted
+  })) return false;
+
   await activateQueuedMatch(court, next);
   return true;
 }
 
-function isFinalScore(score: ScoreRow) {
+export function shouldAdvanceFinalMatchOverlay({
+  finalVisibleAt,
+  now,
+  nextLiveScoringStarted,
+  holdMs = POST_FINAL_NEXT_MATCH_HOLD_MS
+}: {
+  finalVisibleAt: string | null;
+  now: string;
+  nextLiveScoringStarted: boolean;
+  holdMs?: number;
+}) {
+  if (nextLiveScoringStarted) return true;
+
+  const finalVisibleAtMs = Date.parse(finalVisibleAt ?? "");
+  const nowMs = Date.parse(now);
+  if (!Number.isFinite(finalVisibleAtMs) || !Number.isFinite(nowMs)) return false;
+  return nowMs - finalVisibleAtMs >= holdMs;
+}
+
+export function hasScoreClinchedMatch(
+  score: Pick<ScoreRow, "team_a_sets" | "team_b_sets" | "set_scores" | "status">,
+  match: Pick<MatchRow, "format">
+) {
+  const requiredSets = setsToWin(match.format);
+  const completedSetCounts = dbSetScores(score.set_scores)
+    .filter((set) => set.isComplete)
+    .reduce((counts, set) => {
+      if (set.teamAScore > set.teamBScore) counts.teamA += 1;
+      if (set.teamBScore > set.teamAScore) counts.teamB += 1;
+      return counts;
+    }, { teamA: 0, teamB: 0 });
+  if (Math.max(completedSetCounts.teamA, completedSetCounts.teamB) >= requiredSets) return true;
+
+  return isFinalScore(score) && Math.max(Number(score.team_a_sets ?? 0), Number(score.team_b_sets ?? 0)) >= requiredSets;
+}
+
+function isFinalScore(score: Pick<ScoreRow, "status">) {
   return score.status.toLowerCase().includes("final") || score.status.toLowerCase().includes("complete");
 }
 
@@ -311,6 +354,19 @@ async function persistVblBracketFinalIfAvailable(court: CourtRow, match: MatchRo
     updated_at: now
   });
   return score as ScoreRow;
+}
+
+async function queuedMatchHasAuthoritativeScore(match: MatchRow | null) {
+  if (!match?.api_url) return false;
+  try {
+    const res = await fetch(match.api_url, { cache: "no-store" });
+    if (!res.ok) return false;
+    const payload = await res.json();
+    const snapshot = normalizeScorePayload(payload, match);
+    return isAuthoritativeScorePayload(payload, snapshot);
+  } catch {
+    return false;
+  }
 }
 
 async function persistVblBracketProgressIfAvailable(court: CourtRow, match: MatchRow, currentScore: ScoreRow | null) {
@@ -473,6 +529,17 @@ function scheduledTimestamp(match: MatchRow | null | undefined) {
   const [year, month, day] = date.split("-").map(Number);
   const localAsUtc = Date.UTC(year, month - 1, day, hour, minute, 0);
   return localAsUtc - timeZoneOffsetMs(new Date(localAsUtc), EVENT_TIME_ZONE);
+}
+
+function setsToWin(format: Record<string, unknown> | null | undefined) {
+  const explicitSetsToWin = Number(format?.setsToWin);
+  if (Number.isFinite(explicitSetsToWin) && explicitSetsToWin > 0) {
+    return Math.trunc(explicitSetsToWin);
+  }
+
+  const bestOf = Number(format?.bestOf);
+  const safeBestOf = Number.isFinite(bestOf) && bestOf > 0 ? Math.trunc(bestOf) : 3;
+  return Math.max(1, Math.ceil(safeBestOf / 2));
 }
 
 function timeZoneOffsetMs(date: Date, timeZone: string) {
