@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hasLivePointScoringStarted, hasScoreClinchedMatch, shouldAdvanceFinalMatchOverlay } from "../lib/poller";
+import { hasLivePointScoringStarted, hasScoreClinchedMatch, shouldAdvanceFinalMatchOverlay, vblBracketFinalVisibleAt } from "../lib/poller";
 
 describe("poller final-match advancement", () => {
   it("advances immediately when the next queued VBL match starts live scoring", () => {
@@ -88,5 +88,17 @@ describe("poller final-match advancement", () => {
       teamBScore: 0,
       setScores: [{ setNumber: 1, teamAScore: 1, teamBScore: 0, isComplete: false }]
     })).toBe(true);
+  });
+
+  it("uses the latest played VBL game timestamp as the final-visible timestamp", () => {
+    expect(vblBracketFinalVisibleAt({
+      source_payload: {
+        games: [
+          { number: 1, home: 21, away: 14, dtModified: "1783193168915" },
+          { number: 2, home: 21, away: 13, dtModified: "1783193172000" },
+          { number: 3, home: 0, away: 0, dtModified: "1783199999999" }
+        ]
+      }
+    }, "2026-07-04T19:30:00.000Z")).toBe("2026-07-04T19:26:12.000Z");
   });
 });

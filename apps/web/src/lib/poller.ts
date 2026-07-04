@@ -334,6 +334,7 @@ async function persistVblBracketFinalIfAvailable(court: CourtRow, match: MatchRo
   if (hasSameConfirmedFinal) return currentScore;
 
   const now = new Date().toISOString();
+  const finalVisibleAt = vblBracketFinalVisibleAt(match, now);
   const { score } = await persistScoreAndOverlay(court, match, {
     court_id: court.id,
     match_id: match.id,
@@ -352,10 +353,31 @@ async function persistVblBracketFinalIfAvailable(court: CourtRow, match: MatchRo
     stale: false,
     message: "VolleyballLife bracket confirmed final score.",
     last_api_poll_at: now,
-    last_score_change_at: now,
+    last_score_change_at: finalVisibleAt,
     updated_at: now
   });
   return score as ScoreRow;
+}
+
+export function vblBracketFinalVisibleAt(match: Pick<MatchRow, "source_payload">, fallback: string) {
+  const fallbackMs = Date.parse(fallback);
+  const games = Array.isArray(match.source_payload?.games) ? match.source_payload.games : [];
+  const modifiedTimes = games
+    .map((game) => {
+      if (!game || typeof game !== "object" || Array.isArray(game)) return null;
+      const record = game as Record<string, unknown>;
+      const teamAScore = Number(record.home);
+      const teamBScore = Number(record.away);
+      if (!Number.isFinite(teamAScore) || !Number.isFinite(teamBScore) || (teamAScore === 0 && teamBScore === 0)) return null;
+      const modified = Number(record.dtModified ?? record.updatedAt ?? record.modifiedAt);
+      if (!Number.isFinite(modified) || modified <= 0) return null;
+      const modifiedMs = modified < 10_000_000_000 ? modified * 1000 : modified;
+      if (Number.isFinite(fallbackMs) && modifiedMs > fallbackMs) return null;
+      return modifiedMs;
+    })
+    .filter((value): value is number => value != null);
+  const latest = Math.max(...modifiedTimes);
+  return Number.isFinite(latest) ? new Date(latest).toISOString() : fallback;
 }
 
 async function queuedMatchHasAuthoritativeScore(match: MatchRow | null) {
