@@ -90,11 +90,59 @@ export function OverlayClient({ courtNumber, eventId, buildVersion }: { courtNum
   const isIntermission = state.phase === "IDLE" || state.phase === "PREMATCH";
   const displayScores = scorebugDisplayScores(state);
   const status = overlayPhaseText(state, connected);
+  const [scorebugRenderEpoch, setScorebugRenderEpoch] = useState(0);
+  const teamAScoreText = String(displayScores.teamAScore);
+  const teamBScoreText = String(displayScores.teamBScore);
+  const teamASetScoresText = displayScores.teamASetScores.join("|");
+  const teamBSetScoresText = displayScores.teamBSetScores.join("|");
+  const scorebugShapeKey = [
+    state.match.id ?? "no-match",
+    state.match.matchNumber ?? "no-number",
+    displayOverlayName(state.match.teamA.name),
+    displayOverlayName(state.match.teamB.name),
+    state.phase,
+    state.score.currentSet,
+    teamAScoreText,
+    teamBScoreText,
+    teamASetScoresText,
+    teamBSetScoresText
+  ].join("|");
+  const scorebugDomExpected = useMemo(() => ({
+    shapeKey: scorebugShapeKey,
+    teamASetScores: splitScoreText(teamASetScoresText),
+    teamBSetScores: splitScoreText(teamBSetScoresText),
+    currentScores: [teamAScoreText, teamBScoreText]
+  }), [scorebugShapeKey, teamASetScoresText, teamBSetScoresText, teamAScoreText, teamBScoreText]);
 
   useEffect(() => {
     if (!hasInvalidFinalScorebugColumns(state, displayScores)) return;
     reloadOncePerWindow("invalid-final-scorebug");
   }, [state, displayScores]);
+
+  useEffect(() => {
+    let cancelled = false;
+    function healScorebugDom() {
+      if (cancelled) return;
+      const mismatchReason = renderedScorebugMismatch(scorebugDomExpected);
+      if (!mismatchReason) return;
+      setScorebugRenderEpoch((epoch) => epoch + 1);
+      window.setTimeout(() => {
+        if (cancelled) return;
+        const nextMismatchReason = renderedScorebugMismatch(scorebugDomExpected);
+        if (nextMismatchReason) {
+          reloadOncePerWindow(`scorebug-dom-${nextMismatchReason}`);
+        }
+      }, 250);
+    }
+
+    const raf = window.requestAnimationFrame(healScorebugDom);
+    const id = window.setInterval(healScorebugDom, 2000);
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(raf);
+      window.clearInterval(id);
+    };
+  }, [scorebugDomExpected]);
 
   function reloadOncePerWindow(reason: string) {
     const now = Date.now();
@@ -105,14 +153,26 @@ export function OverlayClient({ courtNumber, eventId, buildVersion }: { courtNum
     } catch {
       // Storage can be unavailable in embedded browsers; reload still works.
     }
-    window.location.reload();
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set("_scorecheckReload", String(now));
+      window.location.replace(url.toString());
+      window.setTimeout(() => window.location.reload(), 500);
+    } catch {
+      window.location.reload();
+    }
   }
 
   return (
     <main className={`overlay-stage layout-${layout}`}>
       <div className={`overlay-position ${layout}`}>
-        <div className={`trad-board carbon-bar ${isIntermission ? "trad-intermission" : ""}`}>
+        <div
+          key={`${scorebugShapeKey}:${scorebugRenderEpoch}`}
+          className={`trad-board carbon-bar ${isIntermission ? "trad-intermission" : ""}`}
+          data-scorebug-shape={scorebugShapeKey}
+        >
           <TradRow
+            key={`one:${scorebugShapeKey}`}
             row="one"
             name={displayOverlayName(state.match.teamA.name)}
             seed={state.match.teamA.seed}
@@ -123,6 +183,7 @@ export function OverlayClient({ courtNumber, eventId, buildVersion }: { courtNum
           />
           <div className="trad-divider" />
           <TradRow
+            key={`two:${scorebugShapeKey}`}
             row="two"
             name={displayOverlayName(state.match.teamB.name)}
             seed={state.match.teamB.seed}
@@ -276,6 +337,40 @@ function hasInvalidFinalScorebugColumns(
   return new Set(completedSetNumbers).size !== completedSetNumbers.length;
 }
 
+function renderedScorebugMismatch(expected: {
+  shapeKey: string;
+  teamASetScores: string[];
+  teamBSetScores: string[];
+  currentScores: string[];
+}) {
+  const board = document.querySelector("[data-scorebug-shape]");
+  if (!board) return null;
+  if (board.getAttribute("data-scorebug-shape") !== expected.shapeKey) return "shape-mismatch";
+
+  const teamASetScores = textValues('[data-score-row="one"] .trad-set-cell');
+  if (!sameValues(teamASetScores, expected.teamASetScores)) return "team-a-sets-mismatch";
+
+  const teamBSetScores = textValues('[data-score-row="two"] .trad-set-cell');
+  if (!sameValues(teamBSetScores, expected.teamBSetScores)) return "team-b-sets-mismatch";
+
+  const currentScores = textValues(".trad-current-score");
+  if (!sameValues(currentScores, expected.currentScores)) return "current-score-mismatch";
+
+  return null;
+}
+
+function textValues(selector: string) {
+  return [...document.querySelectorAll(selector)].map((element) => element.textContent?.trim() ?? "");
+}
+
+function sameValues(actual: string[], expected: string[]) {
+  return actual.length === expected.length && actual.every((value, index) => value === expected[index]);
+}
+
+function splitScoreText(value: string) {
+  return value ? value.split("|") : [];
+}
+
 function TradRow({
   row,
   name,
@@ -294,7 +389,7 @@ function TradRow({
   hideScoreDetails: boolean;
 }) {
   return (
-    <div className={`trad-row ${row} ${hideScoreDetails ? "hide-score-details" : ""}`}>
+    <div className={`trad-row ${row} ${hideScoreDetails ? "hide-score-details" : ""}`} data-score-row={row}>
       <span className={`trad-serve ${serving ? "active" : ""}`}><ServeIcon size={18} /></span>
       <span className="trad-seed">{seed ?? ""}</span>
       <span className="trad-name">{name}</span>
