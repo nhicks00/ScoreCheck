@@ -159,6 +159,58 @@ describe("overlayState", () => {
     });
   });
 
+  it("collapses a clinched live-phase score without duplicating the deciding set", () => {
+    const state = coerceOverlayState({
+      phase: "LIVE",
+      score: {
+        teamAScore: 12,
+        teamBScore: 15,
+        currentSet: 3,
+        teamASets: 1,
+        teamBSets: 2,
+        setScores: [
+          { setNumber: 1, teamAScore: 21, teamBScore: 18, isComplete: true },
+          { setNumber: 2, teamAScore: 14, teamBScore: 21, isComplete: true },
+          { setNumber: 3, teamAScore: 12, teamBScore: 15, isComplete: true }
+        ]
+      }
+    }, 6);
+
+    expect(scorebugDisplayScores(state)).toEqual({
+      teamAScore: 12,
+      teamBScore: 15,
+      teamASetScores: [21, 14],
+      teamBSetScores: [18, 21]
+    });
+    expect(overlayPhaseText(state, true)).toBe("Final");
+  });
+
+  it("deduplicates repeated completed set records before scorebug rendering", () => {
+    const state = coerceOverlayState({
+      phase: "POSTMATCH",
+      score: {
+        teamAScore: 12,
+        teamBScore: 15,
+        currentSet: 3,
+        teamASets: 1,
+        teamBSets: 2,
+        setScores: [
+          { setNumber: 1, teamAScore: 21, teamBScore: 18, isComplete: true },
+          { setNumber: 2, teamAScore: 14, teamBScore: 21, isComplete: true },
+          { setNumber: 3, teamAScore: 12, teamBScore: 15, isComplete: true },
+          { setNumber: 3, teamAScore: 12, teamBScore: 15, isComplete: true }
+        ]
+      }
+    }, 6);
+
+    expect(scorebugDisplayScores(state)).toEqual({
+      teamAScore: 12,
+      teamBScore: 15,
+      teamASetScores: [21, 14],
+      teamBSetScores: [18, 21]
+    });
+  });
+
   it("keeps a live deciding set at zero-zero visible as the current score", () => {
     const state = coerceOverlayState({
       phase: "LIVE",

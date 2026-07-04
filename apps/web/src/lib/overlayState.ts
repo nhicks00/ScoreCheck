@@ -110,8 +110,11 @@ export function completedSetScores(setScores: SetScore[]) {
 }
 
 export function scorebugDisplayScores(state: OverlayState) {
-  const completedScores = completedSetScores(state.score.setScores);
-  const finalCurrentSet = state.phase === "POSTMATCH" ? completedScores.at(-1) ?? null : null;
+  const finalDisplay = isFinalDisplayState(state);
+  const completedScores = finalDisplay
+    ? finalPlayedSetScores(state.score.setScores, setsToWin(state.match.format))
+    : completedSetScores(state.score.setScores);
+  const finalCurrentSet = finalDisplay ? completedScores.at(-1) ?? null : null;
   const setHistory = finalCurrentSet ? completedScores.slice(0, -1) : completedScores;
 
   return {
@@ -142,7 +145,7 @@ export function overlayPhaseText(state: OverlayState, connected: boolean) {
   if (state.frozen) return "Frozen";
   if (state.phase === "IDLE") return state.courtLabel ?? `Court ${state.courtNumber}`;
   if (state.phase === "PREMATCH") return "Match starting soon";
-  if (state.phase === "POSTMATCH") return "Final";
+  if (state.phase === "POSTMATCH" || isFinalDisplayState(state)) return "Final";
   if (state.phase === "STALE") return "Stale";
   if (state.phase === "ERROR") return "Error";
   return `Set ${state.score.currentSet || 1}`;
@@ -169,8 +172,7 @@ function coerceSetScores(value: unknown): SetScore[] {
 }
 
 function normalizeFinalOverlayState(state: OverlayState): OverlayState {
-  if (state.phase !== "POSTMATCH") return state;
-
+  if (!isFinalDisplayState(state)) return state;
   const playedSets = finalPlayedSetScores(state.score.setScores, setsToWin(state.match.format));
   const lastPlayedSet = playedSets.at(-1);
   if (!lastPlayedSet) return state;
@@ -191,9 +193,12 @@ function normalizeFinalOverlayState(state: OverlayState): OverlayState {
 }
 
 function completedPlayedSetScores(setScores: SetScore[]) {
-  return coerceSetScores(setScores)
-    .filter((set) => set.isComplete && (set.teamAScore > 0 || set.teamBScore > 0))
-    .sort((a, b) => a.setNumber - b.setNumber);
+  const bySetNumber = new Map<number, SetScore>();
+  for (const set of coerceSetScores(setScores)) {
+    if (!set.isComplete || (set.teamAScore === 0 && set.teamBScore === 0)) continue;
+    bySetNumber.set(set.setNumber, set);
+  }
+  return [...bySetNumber.values()].sort((a, b) => a.setNumber - b.setNumber);
 }
 
 function finalPlayedSetScores(setScores: SetScore[], requiredSets: number) {
@@ -218,6 +223,14 @@ function setWinCounts(setScores: SetScore[]) {
     if (set.teamBScore > set.teamAScore) counts.teamBSets += 1;
     return counts;
   }, { teamASets: 0, teamBSets: 0 });
+}
+
+function isFinalDisplayState(state: OverlayState) {
+  if (state.phase === "POSTMATCH") return true;
+  const requiredSets = setsToWin(state.match.format);
+  if (Math.max(state.score.teamASets, state.score.teamBSets) >= requiredSets) return true;
+  const completedCounts = setWinCounts(completedPlayedSetScores(state.score.setScores));
+  return Math.max(completedCounts.teamASets, completedCounts.teamBSets) >= requiredSets;
 }
 
 function setsToWin(format: OverlayState["match"]["format"]) {
