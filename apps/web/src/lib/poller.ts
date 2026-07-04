@@ -4,7 +4,7 @@ import { defaultManualState } from "./manualScoring";
 import { buildOverlayStateWithEventSettings, persistScoreAndOverlay, scoreForCurrentMatch } from "./scoreState";
 import { supabaseAdmin } from "./supabase";
 import type { ScoreSnapshot, SetScore } from "./types";
-import { delayedScoreFromSnapshot, isDelayedScoreBehindVisible, pendingScoresForMatch, queueDelayedVblScore, splitDueDelayedVblScores, type DelayedVblScorePayload } from "./vblDelay";
+import { delayedScoreFromSnapshot, isDelayedScoreBehindVisible, pendingScoresForMatch, queueDelayedVblScore, shouldHoldDelayedFinalScore, splitDueDelayedVblScores, type DelayedVblScorePayload } from "./vblDelay";
 import { buildActiveVblSourceSet, matchBelongsToActiveVblSource } from "./vblSources";
 
 const POLL_WINDOW_MS = 25_000;
@@ -334,6 +334,11 @@ async function persistVblBracketFinalIfAvailable(court: CourtRow, match: MatchRo
   if (hasSameConfirmedFinal) return currentScore;
 
   const now = new Date().toISOString();
+  if (shouldDelayBracketFinalConfirmation(currentScore, match, now)) {
+    await queueLiveVblScore(court, match, currentScore, snapshot, now);
+    return currentScore;
+  }
+
   const finalVisibleAt = vblBracketFinalVisibleAt(match, now);
   const { score } = await persistScoreAndOverlay(court, match, {
     court_id: court.id,
@@ -357,6 +362,15 @@ async function persistVblBracketFinalIfAvailable(court: CourtRow, match: MatchRo
     updated_at: now
   });
   return score as ScoreRow;
+}
+
+function shouldDelayBracketFinalConfirmation(currentScore: ScoreRow | null, match: MatchRow, now: string) {
+  if (!currentScore || currentScore.match_id !== match.id) return false;
+  if (isApiConfirmedFinalScore(currentScore)) return false;
+  if (hasFutureDelayedVblScore(currentScore, now)) return true;
+  return currentScore.source === "api"
+    && currentScore.source_available !== false
+    && currentScore.source_priority === "primary";
 }
 
 export function vblBracketFinalVisibleAt(match: Pick<MatchRow, "source_payload">, fallback: string) {
@@ -712,6 +726,10 @@ async function releaseDueDelayedVblScore(court: CourtRow, match: MatchRow, curre
   const pendingForCurrentMatch = pendingScoresForMatch(currentScore.source_pending_scores, match.id);
   const { latestDue, remaining } = splitDueDelayedVblScores(pendingForCurrentMatch, now);
   if (!latestDue) return null;
+  if (shouldHoldDelayedFinalScore(latestDue, remaining, now)) {
+    return currentScore;
+  }
+
   const isSameVisibleScore = delayedScoreMatchesVisibleScore(latestDue.score, currentScore);
   if (!isSameVisibleScore && isDelayedScoreBehindVisible(latestDue.score, currentScore)) {
     await supabaseAdmin().from("score_states").update({
@@ -797,7 +815,6 @@ async function queueLiveVblScore(court: CourtRow, match: MatchRow, currentScore:
     source_priority: "primary",
     source_pending_scores: pending,
     stale: false,
-    status: snapshot.status,
     message: pending.length ? "VolleyballLife live scoring active; broadcast score delayed 9 seconds." : null,
     last_api_poll_at: now,
     updated_at: now

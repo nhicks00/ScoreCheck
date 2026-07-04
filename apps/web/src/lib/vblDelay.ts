@@ -1,6 +1,7 @@
 import type { ScoreSnapshot } from "./types";
 
 export const VBL_OVERLAY_DELAY_MS = 9_000;
+export const VBL_FINAL_SETTLE_MS = 12_000;
 
 export type DelayedVblScorePayload = {
   match_id: string;
@@ -67,7 +68,30 @@ export function queueDelayedVblScore(rawPending: unknown, visibleScore: VisibleS
   if (next.key === visibleKey || existing.some((item) => item.key === next.key)) {
     return existing;
   }
-  return [...existing, next]
+
+  const nextIsFinal = isFinalScorePayload(next.score);
+  const hasFinalCandidateForMatch = existing.some((item) => item.score.match_id === next.score.match_id && isFinalScorePayload(item.score));
+  if (!nextIsFinal && hasFinalCandidateForMatch) {
+    return existing;
+  }
+
+  const nextIsBehindExistingCandidate = existing
+    .filter((item) => item.score.match_id === next.score.match_id)
+    .some((item) => {
+      if (nextIsFinal && isFinalScorePayload(item.score)) return false;
+      return isDelayedScoreBehindVisible(next.score, item.score);
+    });
+  if (nextIsBehindExistingCandidate) {
+    return existing;
+  }
+
+  const pruned = existing.filter((item) => {
+    if (item.score.match_id !== next.score.match_id) return true;
+    if (nextIsFinal) return false;
+    return !isDelayedScoreBehindVisible(item.score, next.score);
+  });
+
+  return [...pruned, next]
     .sort((a, b) => Date.parse(a.visibleAt) - Date.parse(b.visibleAt))
     .slice(-maxQueueLength);
 }
@@ -85,6 +109,15 @@ export function splitDueDelayedVblScores(rawPending: unknown, now: string) {
 
 export function pendingScoresForMatch(rawPending: unknown, matchId: string) {
   return parsePendingScores(rawPending).filter((item) => item.score.match_id === matchId);
+}
+
+export function shouldHoldDelayedFinalScore(latestDue: DelayedVblScore | null, remaining: DelayedVblScore[], now: string, settleMs = VBL_FINAL_SETTLE_MS) {
+  if (!latestDue || !isFinalScorePayload(latestDue.score)) return false;
+  const nowMs = Date.parse(now);
+  const visibleAtMs = Date.parse(latestDue.visibleAt);
+  if (!Number.isFinite(nowMs) || !Number.isFinite(visibleAtMs)) return true;
+  if (nowMs - visibleAtMs < settleMs) return true;
+  return remaining.some((item) => item.score.match_id === latestDue.score.match_id);
 }
 
 export function isDelayedScoreBehindVisible(delayed: DelayedVblScorePayload, visible: VisibleScoreLike | null | undefined) {
@@ -219,6 +252,10 @@ function parsedSetScores(value: unknown) {
 function isFinalStatus(value: string) {
   const status = value.toLowerCase();
   return status.includes("final") || status.includes("complete");
+}
+
+function isFinalScorePayload(score: Pick<DelayedVblScorePayload, "status">) {
+  return isFinalStatus(score.status);
 }
 
 function stringValue(value: unknown) {

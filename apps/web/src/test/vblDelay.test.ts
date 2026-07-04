@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { delayedScoreFromSnapshot, isDelayedScoreBehindVisible, pendingScoresForMatch, queueDelayedVblScore, splitDueDelayedVblScores } from "../lib/vblDelay";
+import { delayedScoreFromSnapshot, isDelayedScoreBehindVisible, pendingScoresForMatch, queueDelayedVblScore, shouldHoldDelayedFinalScore, splitDueDelayedVblScores } from "../lib/vblDelay";
 
 const startedAt = "2026-07-03T15:00:00.000Z";
 const snapshot = {
@@ -142,5 +142,102 @@ describe("VBL overlay delay queue", () => {
     };
 
     expect(isDelayedScoreBehindVisible(delayed.score, visible)).toBe(false);
+  });
+
+  it("replaces pre-final pending scores with a final candidate for the same match", () => {
+    const inProgress = delayedScoreFromSnapshot("match-1", {
+      ...snapshot,
+      currentSet: 2,
+      teamAScore: 20,
+      teamBScore: 18,
+      teamASets: 1,
+      teamBSets: 0,
+      setScores: [
+        { setNumber: 1, teamAScore: 21, teamBScore: 14, isComplete: true },
+        { setNumber: 2, teamAScore: 20, teamBScore: 18, isComplete: false }
+      ]
+    }, startedAt);
+    const final = delayedScoreFromSnapshot("match-1", {
+      ...snapshot,
+      status: "Final",
+      currentSet: 2,
+      teamAScore: 21,
+      teamBScore: 18,
+      teamASets: 2,
+      teamBSets: 0,
+      setScores: [
+        { setNumber: 1, teamAScore: 21, teamBScore: 14, isComplete: true },
+        { setNumber: 2, teamAScore: 21, teamBScore: 18, isComplete: true }
+      ]
+    }, "2026-07-03T15:00:02.000Z");
+
+    const queued = queueDelayedVblScore([inProgress], null, final);
+
+    expect(queued).toHaveLength(1);
+    expect(queued[0].score.status).toBe("Final");
+    expect(queued[0].score.team_b_score).toBe(18);
+  });
+
+  it("ignores in-progress snapshots once a final candidate is pending", () => {
+    const final = delayedScoreFromSnapshot("match-1", {
+      ...snapshot,
+      status: "Final",
+      currentSet: 2,
+      teamAScore: 21,
+      teamBScore: 18,
+      teamASets: 2,
+      teamBSets: 0,
+      setScores: [
+        { setNumber: 1, teamAScore: 21, teamBScore: 14, isComplete: true },
+        { setNumber: 2, teamAScore: 21, teamBScore: 18, isComplete: true }
+      ]
+    }, startedAt);
+    const regressed = delayedScoreFromSnapshot("match-1", {
+      ...snapshot,
+      currentSet: 2,
+      teamAScore: 20,
+      teamBScore: 18,
+      teamASets: 1,
+      teamBSets: 0,
+      setScores: [
+        { setNumber: 1, teamAScore: 21, teamBScore: 14, isComplete: true },
+        { setNumber: 2, teamAScore: 20, teamBScore: 18, isComplete: false }
+      ]
+    }, "2026-07-03T15:00:02.000Z");
+
+    expect(queueDelayedVblScore([final], null, regressed)).toEqual([final]);
+  });
+
+  it("holds a due final while a newer final correction is still pending", () => {
+    const firstFinal = delayedScoreFromSnapshot("match-1", {
+      ...snapshot,
+      status: "Final",
+      currentSet: 2,
+      teamAScore: 21,
+      teamBScore: 14,
+      teamASets: 2,
+      teamBSets: 0,
+      setScores: [
+        { setNumber: 1, teamAScore: 21, teamBScore: 14, isComplete: true },
+        { setNumber: 2, teamAScore: 21, teamBScore: 14, isComplete: true }
+      ]
+    }, startedAt);
+    const correctedFinal = delayedScoreFromSnapshot("match-1", {
+      ...snapshot,
+      status: "Final",
+      currentSet: 2,
+      teamAScore: 21,
+      teamBScore: 18,
+      teamASets: 2,
+      teamBSets: 0,
+      setScores: [
+        { setNumber: 1, teamAScore: 21, teamBScore: 14, isComplete: true },
+        { setNumber: 2, teamAScore: 21, teamBScore: 18, isComplete: true }
+      ]
+    }, "2026-07-03T15:00:04.000Z");
+
+    expect(shouldHoldDelayedFinalScore(firstFinal, [correctedFinal], "2026-07-03T15:00:22.000Z")).toBe(true);
+    expect(shouldHoldDelayedFinalScore(correctedFinal, [], "2026-07-03T15:00:24.999Z")).toBe(true);
+    expect(shouldHoldDelayedFinalScore(correctedFinal, [], "2026-07-03T15:00:25.000Z")).toBe(false);
   });
 });
