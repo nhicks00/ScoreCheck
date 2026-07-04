@@ -63,7 +63,7 @@ export function delayedScoreFromSnapshot(matchId: string, snapshot: ScoreSnapsho
 
 export function queueDelayedVblScore(rawPending: unknown, visibleScore: VisibleScoreLike | null | undefined, next: DelayedVblScore, maxQueueLength = 12) {
   const visibleKey = visibleScore ? scoreKeyFromVisible(visibleScore) : null;
-  const existing = parsePendingScores(rawPending);
+  const existing = parsePendingScores(rawPending).filter((item) => item.key !== visibleKey);
   if (next.key === visibleKey || existing.some((item) => item.key === next.key)) {
     return existing;
   }

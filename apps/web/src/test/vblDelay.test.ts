@@ -60,6 +60,22 @@ describe("VBL overlay delay queue", () => {
     expect(twice[0].visibleAt).toBe("2026-07-03T15:00:09.000Z");
   });
 
+  it("removes stale pending entries once that score is already visible", () => {
+    const delayed = delayedScoreFromSnapshot("match-1", snapshot, startedAt);
+    const visible = {
+      match_id: "match-1",
+      team_a_score: 3,
+      team_b_score: 2,
+      team_a_sets: 0,
+      team_b_sets: 0,
+      current_set: 1,
+      set_scores: [{ setNumber: 1, teamAScore: 3, teamBScore: 2, isComplete: false }],
+      status: "In Progress"
+    };
+
+    expect(queueDelayedVblScore([delayed], visible, delayed)).toEqual([]);
+  });
+
   it("drops delayed scores from a previous match", () => {
     const matchOneScore = delayedScoreFromSnapshot("match-1", snapshot, startedAt);
     const matchTwoScore = delayedScoreFromSnapshot("match-2", { ...snapshot, teamAScore: 0, teamBScore: 1 }, startedAt);

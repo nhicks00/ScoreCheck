@@ -800,7 +800,9 @@ function hasFutureDelayedVblScore(score: ScoreRow | null, now: string) {
   if (!score) return false;
   const matchId = score.match_id;
   if (!matchId) return false;
-  return splitDueDelayedVblScores(pendingScoresForMatch(score.source_pending_scores, matchId), now).remaining.length > 0;
+  return splitDueDelayedVblScores(pendingScoresForMatch(score.source_pending_scores, matchId), now)
+    .remaining
+    .some((item) => !delayedScoreMatchesVisibleScore(item.score, score));
 }
 
 async function touchApiPoll(courtId: string, now: string, sourceAvailable: boolean, message: string) {
