@@ -110,7 +110,7 @@ describe("VolleyballLife helpers", () => {
     ]);
   });
 
-  it("treats a started all-zero vMix match as live scoring", () => {
+  it("does not treat a started all-zero vMix match as live scoring", () => {
     const payload = [
       { teamName: "Alpha", isMatch: true, game1: 0, game2: 0, game3: 0 },
       { teamName: "Bravo", isMatch: true, game1: 0, game2: 0, game3: 0 }
@@ -118,7 +118,7 @@ describe("VolleyballLife helpers", () => {
     const snapshot = normalizeScorePayload(payload);
 
     expect(snapshot.status).toBe("In Progress");
-    expect(isAuthoritativeScorePayload(payload, snapshot)).toBe(true);
+    expect(isAuthoritativeScorePayload(payload, snapshot)).toBe(false);
   });
 
   it("uses bracket game scores as final confirmation when vMix never went live", () => {

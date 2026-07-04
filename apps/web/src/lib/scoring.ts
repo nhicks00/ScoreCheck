@@ -266,14 +266,11 @@ function teamNameFromPayload(value: unknown): string | null {
 
 function vMixArrayHasLiveScoring(payload: unknown[], snapshot: ScoreSnapshot): boolean {
   const rows = payload.map(record).filter((row): row is Record<string, unknown> => Boolean(row));
-  const hasStartedMatch = rows.some((row) => row.isMatch === true);
-  const hasAnyPoint = rows.some((row) => [1, 2, 3, 4, 5].some((setNumber) => safeScore(row[`game${setNumber}`]) > 0));
   const hasActiveSetScore = snapshot.setScores.some((set) => !set.isComplete && (set.teamAScore > 0 || set.teamBScore > 0));
   const hasFinalScore = snapshot.status.toLowerCase().includes("final") && snapshot.setScores.some((set) => set.isComplete);
 
   if (hasActiveSetScore) return true;
   if (hasFinalScore) return true;
-  if (hasStartedMatch && !hasAnyPoint) return true;
   return false;
 }
 
