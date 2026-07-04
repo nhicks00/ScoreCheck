@@ -5,6 +5,9 @@ import { coerceOverlayState, fallbackOverlayState } from "@/lib/overlayState";
 import { scoreForCurrentMatch } from "@/lib/scoreState";
 import { supabaseAdmin } from "@/lib/supabase";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export async function GET(req: NextRequest, { params }: { params: Promise<{ courtNumber: string }> }) {
   const { courtNumber } = await params;
   if (missingEnvKeys().some((key) => key.startsWith("NEXT_PUBLIC_SUPABASE") || key === "SUPABASE_SERVICE_ROLE_KEY")) {
@@ -12,25 +15,19 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ cour
   }
 
   const eventId = req.nextUrl.searchParams.get("eventId");
-  const db = supabaseAdmin();
   const courtNumberValue = Number(courtNumber);
   const { court, error } = await loadOverlayCourt(courtNumberValue, eventId);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   if (!court) return NextResponse.json({ error: "Court not found" }, { status: 404 });
 
-  const cached = await db.from("overlay_states").select("payload").eq("court_id", court.id).maybeSingle();
-  if (cached.data?.payload) {
-    return NextResponse.json(withOverlayLayout(cached.data.payload, court), { headers: { "cache-control": "no-store" } });
-  }
-
   const match = Array.isArray(court.matches) ? court.matches[0] : court.matches;
   const score = scoreForCurrentMatch(court.score_states, match?.id);
-  return NextResponse.json(buildOverlayState({
+  return NextResponse.json(withOverlayLayout(buildOverlayState({
     event: { id: court.event_id, settings: eventSettings(court) },
     court,
     match: match ?? null,
     score: score ?? null
-  }), { headers: { "cache-control": "no-store" } });
+  }), court), { headers: { "cache-control": "no-store" } });
 }
 
 async function loadOverlayCourt(courtNumber: number, eventId: string | null) {

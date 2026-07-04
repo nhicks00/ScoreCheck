@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   coerceOverlayState,
   displayOverlayName,
@@ -10,10 +10,11 @@ import {
 } from "@/lib/overlayState";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 
-export function OverlayClient({ courtNumber, eventId }: { courtNumber: string; eventId: string; theme: string }) {
+export function OverlayClient({ courtNumber, eventId, buildVersion }: { courtNumber: string; eventId: string; theme: string; buildVersion: string }) {
   const courtNumberValue = Number(courtNumber) || 1;
   const [state, setState] = useState(() => fallbackOverlayState(courtNumberValue));
   const [connected, setConnected] = useState(true);
+  const lastReloadAttemptAt = useRef(0);
   const stateUrl = useMemo(() => `/api/overlay/court/${courtNumber}/state${eventId ? `?eventId=${eventId}` : ""}`, [courtNumber, eventId]);
   const realtimeEventId = eventId || state.eventId;
   const realtimeTopic = useMemo(() => realtimeEventId ? `overlay:${realtimeEventId}:court:${courtNumber}` : null, [courtNumber, realtimeEventId]);
@@ -60,10 +61,52 @@ export function OverlayClient({ courtNumber, eventId }: { courtNumber: string; e
     };
   }, [realtimeTopic, courtNumberValue]);
 
+  useEffect(() => {
+    if (!buildVersion || buildVersion === "local") return;
+    let cancelled = false;
+
+    async function checkVersion() {
+      try {
+        const res = await fetch("/api/overlay/version", { cache: "no-store" });
+        if (!res.ok) return;
+        const payload = await res.json() as { version?: unknown };
+        const liveVersion = typeof payload.version === "string" ? payload.version : null;
+        if (!liveVersion || liveVersion === "local" || liveVersion === buildVersion || cancelled) return;
+        reloadOncePerWindow(liveVersion);
+      } catch {
+        // The state poller handles connectivity; version checks should never dirty the scorebug.
+      }
+    }
+
+    void checkVersion();
+    const id = window.setInterval(checkVersion, 15_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [buildVersion]);
+
   const layout = state.layout === "top-left" ? "top-left" : "bottom-left";
   const isIntermission = state.phase === "IDLE" || state.phase === "PREMATCH";
   const displayScores = scorebugDisplayScores(state);
   const status = overlayPhaseText(state, connected);
+
+  useEffect(() => {
+    if (!hasInvalidFinalScorebugColumns(state, displayScores)) return;
+    reloadOncePerWindow("invalid-final-scorebug");
+  }, [state, displayScores]);
+
+  function reloadOncePerWindow(reason: string) {
+    const now = Date.now();
+    if (now - lastReloadAttemptAt.current < 15_000) return;
+    lastReloadAttemptAt.current = now;
+    try {
+      window.sessionStorage.setItem("scorecheck-overlay-last-reload", JSON.stringify({ reason, at: now }));
+    } catch {
+      // Storage can be unavailable in embedded browsers; reload still works.
+    }
+    window.location.reload();
+  }
 
   return (
     <main className={`overlay-stage layout-${layout}`}>
@@ -219,6 +262,18 @@ export function OverlayClient({ courtNumber, eventId }: { courtNumber: string; e
       `}</style>
     </main>
   );
+}
+
+function hasInvalidFinalScorebugColumns(
+  state: ReturnType<typeof fallbackOverlayState>,
+  displayScores: ReturnType<typeof scorebugDisplayScores>
+) {
+  if (state.phase !== "POSTMATCH") return false;
+  if (displayScores.teamASetScores.length > 2 || displayScores.teamBSetScores.length > 2) return true;
+  const completedSetNumbers = state.score.setScores
+    .filter((set) => set.isComplete && (set.teamAScore > 0 || set.teamBScore > 0))
+    .map((set) => set.setNumber);
+  return new Set(completedSetNumbers).size !== completedSetNumbers.length;
 }
 
 function TradRow({
