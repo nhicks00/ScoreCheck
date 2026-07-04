@@ -28,13 +28,13 @@ export const AVP_DENVER_VBL_BRACKET_SOURCES = [
 ];
 
 export const AVP_DENVER_STREAM_COURT_MAP: Record<number, { displayName: string; vblCourtNumber: string; vblCourtLabel: string }> = {
-  1: { displayName: "Court 7", vblCourtNumber: "7", vblCourtLabel: "Court 7" },
-  2: { displayName: "Court 14", vblCourtNumber: "14", vblCourtLabel: "Court 14" },
+  1: { displayName: "Center Court", vblCourtNumber: "ST", vblCourtLabel: "Center Court" },
+  2: { displayName: "Court 7", vblCourtNumber: "7", vblCourtLabel: "Court 7" },
   3: { displayName: "Court 8", vblCourtNumber: "8", vblCourtLabel: "Court 8" },
   4: { displayName: "Court 10", vblCourtNumber: "10", vblCourtLabel: "Court 10" },
   5: { displayName: "Court 11", vblCourtNumber: "11", vblCourtLabel: "Court 11" },
-  6: { displayName: "Court 15", vblCourtNumber: "15", vblCourtLabel: "Court 15" },
-  7: { displayName: "Court 17", vblCourtNumber: "17", vblCourtLabel: "Court 17" },
+  6: { displayName: "Court 14", vblCourtNumber: "14", vblCourtLabel: "Court 14" },
+  7: { displayName: "Court 16", vblCourtNumber: "16", vblCourtLabel: "Court 16" },
   8: { displayName: "Court 18", vblCourtNumber: "18", vblCourtLabel: "Court 18" }
 };
 
