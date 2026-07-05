@@ -19,17 +19,17 @@ const snapshot = {
 };
 
 describe("VBL overlay delay queue", () => {
-  it("queues live VBL snapshots for an eight-second release", () => {
+  it("queues live VBL snapshots for a six-second release", () => {
     const delayed = delayedScoreFromSnapshot("match-1", snapshot, startedAt);
-    expect(delayed.visibleAt).toBe("2026-07-03T15:00:08.000Z");
+    expect(delayed.visibleAt).toBe("2026-07-03T15:00:06.000Z");
 
     const queued = queueDelayedVblScore([], null, delayed);
-    expect(splitDueDelayedVblScores(queued, "2026-07-03T15:00:07.999Z")).toMatchObject({
+    expect(splitDueDelayedVblScores(queued, "2026-07-03T15:00:05.999Z")).toMatchObject({
       latestDue: null,
       remaining: queued
     });
 
-    const due = splitDueDelayedVblScores(queued, "2026-07-03T15:00:08.000Z");
+    const due = splitDueDelayedVblScores(queued, "2026-07-03T15:00:06.000Z");
     expect(due.latestDue?.score).toMatchObject({
       match_id: "match-1",
       team_a_score: 3,
@@ -57,7 +57,7 @@ describe("VBL overlay delay queue", () => {
     const once = queueDelayedVblScore([], null, delayed);
     const twice = queueDelayedVblScore(once, null, delayed);
     expect(twice).toHaveLength(1);
-    expect(twice[0].visibleAt).toBe("2026-07-03T15:00:08.000Z");
+    expect(twice[0].visibleAt).toBe("2026-07-03T15:00:06.000Z");
   });
 
   it("removes stale pending entries once that score is already visible", () => {
@@ -237,7 +237,7 @@ describe("VBL overlay delay queue", () => {
     }, "2026-07-03T15:00:04.000Z");
 
     expect(shouldHoldDelayedFinalScore(firstFinal, [correctedFinal], "2026-07-03T15:00:22.000Z")).toBe(true);
-    expect(shouldHoldDelayedFinalScore(correctedFinal, [], "2026-07-03T15:00:23.999Z")).toBe(true);
-    expect(shouldHoldDelayedFinalScore(correctedFinal, [], "2026-07-03T15:00:24.000Z")).toBe(false);
+    expect(shouldHoldDelayedFinalScore(correctedFinal, [], "2026-07-03T15:00:21.999Z")).toBe(true);
+    expect(shouldHoldDelayedFinalScore(correctedFinal, [], "2026-07-03T15:00:22.000Z")).toBe(false);
   });
 });
