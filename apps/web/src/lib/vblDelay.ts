@@ -1,6 +1,6 @@
 import type { ScoreSnapshot } from "./types";
 
-export const VBL_OVERLAY_DELAY_MS = 6_000;
+export const VBL_OVERLAY_DELAY_MS = 8_000;
 export const VBL_FINAL_SETTLE_MS = 12_000;
 
 export type DelayedVblScorePayload = {
