@@ -15,6 +15,8 @@ export function OverlayClient({ courtNumber, eventId, buildVersion }: { courtNum
   const [state, setState] = useState(() => fallbackOverlayState(courtNumberValue));
   const [connected, setConnected] = useState(true);
   const lastReloadAttemptAt = useRef(0);
+  const lastInvalidScorebugHealKey = useRef<string | null>(null);
+  const lastDomHealKey = useRef<string | null>(null);
   const stateUrl = useMemo(() => `/api/overlay/court/${courtNumber}/state${eventId ? `?eventId=${eventId}` : ""}`, [courtNumber, eventId]);
   const realtimeEventId = eventId || state.eventId;
   const realtimeTopic = useMemo(() => realtimeEventId ? `overlay:${realtimeEventId}:court:${courtNumber}` : null, [courtNumber, realtimeEventId]);
@@ -108,26 +110,31 @@ export function OverlayClient({ courtNumber, eventId, buildVersion }: { courtNum
     teamASetScores: splitScoreText(teamASetScoresText),
     teamBSetScores: splitScoreText(teamBSetScoresText)
   }), [scorebugShapeKey, teamASetScoresText, teamBSetScoresText]);
+  const invalidFinalScorebugColumns = hasInvalidFinalScorebugColumns(state, displayScores);
 
   useEffect(() => {
-    if (!hasInvalidFinalScorebugColumns(state, displayScores)) return;
-    reloadOncePerWindow("invalid-final-scorebug");
-  }, [state, displayScores]);
+    if (!invalidFinalScorebugColumns) {
+      lastInvalidScorebugHealKey.current = null;
+      return;
+    }
+    if (lastInvalidScorebugHealKey.current === scorebugShapeKey) return;
+    lastInvalidScorebugHealKey.current = scorebugShapeKey;
+    setScorebugRenderEpoch((epoch) => epoch + 1);
+  }, [invalidFinalScorebugColumns, scorebugShapeKey]);
 
   useEffect(() => {
     let cancelled = false;
     function healScorebugDom() {
       if (cancelled) return;
       const mismatchReason = renderedScorebugMismatch(scorebugDomExpected);
-      if (!mismatchReason) return;
+      if (!mismatchReason) {
+        lastDomHealKey.current = null;
+        return;
+      }
+      const healKey = `${scorebugDomExpected.shapeKey}:${mismatchReason}`;
+      if (lastDomHealKey.current === healKey) return;
+      lastDomHealKey.current = healKey;
       setScorebugRenderEpoch((epoch) => epoch + 1);
-      window.setTimeout(() => {
-        if (cancelled) return;
-        const nextMismatchReason = renderedScorebugMismatch(scorebugDomExpected);
-        if (nextMismatchReason) {
-          reloadOncePerWindow(`scorebug-dom-${nextMismatchReason}`);
-        }
-      }, 250);
     }
 
     const raf = window.requestAnimationFrame(healScorebugDom);
@@ -323,11 +330,28 @@ function hasInvalidFinalScorebugColumns(
   displayScores: ReturnType<typeof scorebugDisplayScores>
 ) {
   if (state.phase !== "POSTMATCH") return false;
-  if (displayScores.teamASetScores.length > 2 || displayScores.teamBSetScores.length > 2) return true;
+  const maxDisplaySets = maxScorebugDisplaySetCount(state);
+  if (displayScores.teamASetScores.length > maxDisplaySets || displayScores.teamBSetScores.length > maxDisplaySets) return true;
   const completedSetNumbers = state.score.setScores
     .filter((set) => set.isComplete && (set.teamAScore > 0 || set.teamBScore > 0))
     .map((set) => set.setNumber);
   return new Set(completedSetNumbers).size !== completedSetNumbers.length;
+}
+
+function maxScorebugDisplaySetCount(state: ReturnType<typeof fallbackOverlayState>) {
+  const bestOf = clampNumber(state.match.format.bestOf, 3, 1, 5);
+  const setsToWin = clampNumber(state.match.format.setsToWin, Math.ceil(bestOf / 2), 1, 5);
+  const clinchMax = Math.max(1, (setsToWin * 2) - 1);
+  const formatSetCount = Array.isArray(state.match.format.pointsPerSet) && state.match.format.pointsPerSet.length
+    ? state.match.format.pointsPerSet.length
+    : bestOf;
+  return Math.min(5, Math.max(1, bestOf, clinchMax, formatSetCount));
+}
+
+function clampNumber(value: unknown, fallback: number, min: number, max: number) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(min, Math.min(max, Math.trunc(number)));
 }
 
 function renderedScorebugMismatch(expected: {
