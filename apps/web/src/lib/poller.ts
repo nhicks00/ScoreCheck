@@ -4,7 +4,7 @@ import { defaultManualState } from "./manualScoring";
 import { buildOverlayStateWithEventSettings, persistScoreAndOverlay, scoreForCurrentMatch } from "./scoreState";
 import { supabaseAdmin } from "./supabase";
 import type { ScoreSnapshot, SetScore } from "./types";
-import { delayedScoreFromSnapshot, isDelayedScoreBehindVisible, pendingScoresForMatch, queueDelayedVblScore, shouldHoldDelayedFinalScore, splitDueDelayedVblScores, type DelayedVblScorePayload } from "./vblDelay";
+import { VBL_OVERLAY_DELAY_MS, delayedScoreFromSnapshot, isDelayedScoreBehindVisible, pendingScoresForMatch, queueDelayedVblScore, shouldHoldDelayedFinalScore, splitDueDelayedVblScores, type DelayedVblScorePayload } from "./vblDelay";
 import { buildActiveVblSourceSet, matchBelongsToActiveVblSource } from "./vblSources";
 
 const POLL_WINDOW_MS = 25_000;
@@ -231,7 +231,7 @@ async function pollCourt(court: CourtRow) {
   }
 
   if (hasFutureDelayedVblScore(currentScore, now)) {
-    await touchApiPoll(court.id, now, true, "VolleyballLife live scoring active; broadcast score delayed 6 seconds.");
+    await touchApiPoll(court.id, now, true, "VolleyballLife live scoring active.");
     return true;
   }
 
@@ -757,7 +757,7 @@ async function releaseDueDelayedVblScore(court: CourtRow, match: MatchRow, curre
     source_priority: "primary",
     source_pending_scores: remaining,
     stale: false,
-    message: remaining.length ? "VolleyballLife live scoring active; broadcast score delayed 6 seconds." : null,
+    message: remaining.length ? "VolleyballLife live scoring active." : null,
     last_api_poll_at: now,
     last_score_change_at: isSameVisibleScore ? currentScore.last_score_change_at ?? now : now,
     updated_at: now
@@ -778,6 +778,11 @@ function delayedScoreMatchesVisibleScore(delayed: DelayedVblScorePayload, visibl
 }
 
 async function queueLiveVblScore(court: CourtRow, match: MatchRow, currentScore: ScoreRow | null, snapshot: ReturnType<typeof normalizeScorePayload>, now: string) {
+  if (VBL_OVERLAY_DELAY_MS <= 0) {
+    await persistImmediateVblScore(court, match, currentScore, snapshot, now);
+    return;
+  }
+
   const pendingScore = delayedScoreFromSnapshot(match.id, snapshot, now);
   const pendingForCurrentMatch = pendingScoresForMatch(currentScore?.source_pending_scores, match.id);
   const pending = queueDelayedVblScore(pendingForCurrentMatch, currentScore, pendingScore)
@@ -800,7 +805,7 @@ async function queueLiveVblScore(court: CourtRow, match: MatchRow, currentScore:
       source_priority: "primary",
       source_pending_scores: pending,
       stale: false,
-      message: "VolleyballLife live scoring active; broadcast score delayed 6 seconds.",
+      message: "VolleyballLife live scoring active.",
       last_api_poll_at: now,
       last_score_change_at: now,
       updated_at: now
@@ -815,10 +820,51 @@ async function queueLiveVblScore(court: CourtRow, match: MatchRow, currentScore:
     source_priority: "primary",
     source_pending_scores: pending,
     stale: false,
-    message: pending.length ? "VolleyballLife live scoring active; broadcast score delayed 6 seconds." : null,
+    message: pending.length ? "VolleyballLife live scoring active." : null,
     last_api_poll_at: now,
     updated_at: now
   }).eq("court_id", court.id);
+}
+
+async function persistImmediateVblScore(court: CourtRow, match: MatchRow, currentScore: ScoreRow | null, snapshot: ReturnType<typeof normalizeScorePayload>, now: string) {
+  const immediate = delayedScoreFromSnapshot(match.id, snapshot, now, 0).score;
+  const isSameVisibleScore = currentScore ? delayedScoreMatchesVisibleScore(immediate, currentScore) : false;
+  if (!isSameVisibleScore && currentScore && isDelayedScoreBehindVisible(immediate, currentScore)) {
+    await supabaseAdmin().from("score_states").update({
+      match_id: match.id,
+      source: "api",
+      source_available: true,
+      source_priority: "primary",
+      source_pending_scores: [],
+      stale: false,
+      message: null,
+      last_api_poll_at: now,
+      updated_at: now
+    }).eq("court_id", court.id);
+    return;
+  }
+
+  await persistScoreAndOverlay(court, match, {
+    court_id: court.id,
+    match_id: immediate.match_id,
+    team_a_score: immediate.team_a_score,
+    team_b_score: immediate.team_b_score,
+    team_a_sets: immediate.team_a_sets,
+    team_b_sets: immediate.team_b_sets,
+    current_set: immediate.current_set,
+    set_scores: immediate.set_scores,
+    serving_team: immediate.serving_team,
+    status: immediate.status,
+    source: "api",
+    source_available: true,
+    source_priority: "primary",
+    source_pending_scores: [],
+    stale: false,
+    message: null,
+    last_api_poll_at: now,
+    last_score_change_at: isSameVisibleScore ? currentScore?.last_score_change_at ?? now : now,
+    updated_at: now
+  });
 }
 
 async function persistFallbackSnapshot(court: CourtRow, match: MatchRow, snapshot: ReturnType<typeof normalizeScorePayload>, now: string) {
