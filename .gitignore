@@ -24,6 +24,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 venv/
+.venv*/
+scraper_venv/
 .env
 
 # Node / Vercel web app
@@ -48,9 +50,11 @@ vbl_session.json
 # Misc
 .idea/
 .vscode/
-scraper_venv/
 .playwright-cli/
-output/playwright/overlay-visual/
+output/
+runs/
+data/
+*.pt
 .claude/settings.local.json
 default.profraw
 signalr_mutations_captured.json
