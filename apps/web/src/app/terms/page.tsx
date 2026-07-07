@@ -11,7 +11,7 @@ export default function TermsPage() {
       <article className="legal-document">
         <p className="eyebrow">ScoreCheck</p>
         <h1>Terms of Service</h1>
-        <p className="muted">Last updated: July 2, 2026</p>
+        <p className="muted">Last updated: July 7, 2026</p>
 
         <section>
           <h2>Overview</h2>
@@ -25,7 +25,7 @@ export default function TermsPage() {
           <h2>Permitted Use</h2>
           <p>You may use ScoreCheck to:</p>
           <ul>
-            <li>Verify as a scorekeeper for a live event broadcast.</li>
+            <li>Join as a scorekeeper for a live event broadcast.</li>
             <li>Submit score updates, corrections, and team-name suggestions for matches you are watching.</li>
             <li>View preview video when enabled for an active scoring session.</li>
           </ul>
@@ -44,24 +44,19 @@ export default function TermsPage() {
           <h2>Prohibited Conduct</h2>
           <p>You agree not to:</p>
           <ul>
-            <li>Attempt to bypass verification or gain unauthorized access to admin or scoring sessions.</li>
+            <li>Attempt to bypass access controls or gain unauthorized access to admin or scoring sessions.</li>
             <li>Submit abusive, misleading, unlawful, or privacy-invasive content.</li>
             <li>Scrape, overload, reverse engineer, or attack ScoreCheck or connected services.</li>
-            <li>Use ScoreCheck in a way that violates YouTube, event, venue, or applicable third-party rules.</li>
+            <li>Use ScoreCheck in a way that violates broadcast platform, event, venue, or applicable third-party rules.</li>
           </ul>
         </section>
 
         <section>
-          <h2>YouTube and Third-Party Services</h2>
+          <h2>Third-Party Services</h2>
           <p>
-            ScoreCheck uses YouTube API Services to verify scorekeepers through live chat messages on Beach
-            Volleyball Media broadcasts. Your use of YouTube is governed by the{" "}
-            <a href="https://www.youtube.com/t/terms">YouTube Terms of Service</a> and{" "}
-            <a href="https://policies.google.com/privacy">Google Privacy Policy</a>.
-          </p>
-          <p>
-            ScoreCheck may also rely on hosting, database, video streaming, and event-data providers. Those
-            services may have their own terms and policies.
+            ScoreCheck relies on hosting, database, video streaming, and event-data providers, and Beach
+            Volleyball Media broadcasts may be distributed on third-party platforms. Those services may have
+            their own terms and policies.
           </p>
         </section>
 
