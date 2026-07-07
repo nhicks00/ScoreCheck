@@ -9,8 +9,12 @@
 - MediaMTX v1.19 runs in Docker (`bluenviron/mediamtx:1-ffmpeg`, host networking).
   Config + compose live at `/opt/mediamtx/`. `docker logs mediamtx` for logs;
   `curl -s 127.0.0.1:9997/v3/paths/list` for live path/reader state.
-- Paths: `court{1-8}_raw` (RTMP/SRT ingest, AAC ok) each run an ffmpeg sidecar that
-  republishes to `court{1-8}` with Opus audio (WebRTC cannot carry AAC).
+- Paths: `court{1-8}_raw` (RTMP/SRT ingest) each run an ffmpeg sidecar that republishes
+  to `court{1-8}` as 720p H264 WITHOUT B-frames + Opus audio. Both conversions are
+  required: WebRTC plays neither AAC audio nor B-frame H264, and StreamRun's encoder
+  emits both with no setting to disable them (verified live 2026-07-07).
+- CPU: one live court's transcode uses ~50% of the current 1 vCPU. RESIZE THE DROPLET
+  (4+ vCPU) before running multiple simultaneous courts.
 - Auth: publish requires user `streamrun` + password (see
   `apps/web/.local/mediamtx-credentials.md`, gitignored); reading is public;
   localhost may publish (the sidecars) and call the API.
