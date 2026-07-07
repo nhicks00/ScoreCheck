@@ -180,6 +180,18 @@ export function overlayLayoutValue(value: unknown): OverlayLayout {
   return value === "top-left" ? "top-left" : "bottom-left";
 }
 
+export function overlayStateUpdatedAtMs(state: OverlayState): number | null {
+  const parsed = Date.parse(state.health.lastUpdateAt ?? "");
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export function shouldApplyOverlayUpdate(candidate: OverlayState, lastAppliedUpdateMs: number | null): boolean {
+  if (lastAppliedUpdateMs == null) return true;
+  const candidateMs = overlayStateUpdatedAtMs(candidate);
+  if (candidateMs == null) return false;
+  return candidateMs >= lastAppliedUpdateMs;
+}
+
 function coerceSetScores(value: unknown): SetScore[] {
   if (!Array.isArray(value)) return [];
   const parsed = value

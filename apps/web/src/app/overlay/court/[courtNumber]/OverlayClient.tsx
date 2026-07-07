@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   coerceOverlayState,
   displayOverlayName,
   fallbackOverlayState,
   overlayPhaseText,
-  scorebugDisplayScores
+  overlayStateUpdatedAtMs,
+  scorebugDisplayScores,
+  shouldApplyOverlayUpdate
 } from "@/lib/overlayState";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 
@@ -17,9 +19,17 @@ export function OverlayClient({ courtNumber, eventId, buildVersion }: { courtNum
   const lastReloadAttemptAt = useRef(0);
   const lastInvalidScorebugHealKey = useRef<string | null>(null);
   const lastDomHealKey = useRef<string | null>(null);
+  const lastAppliedUpdateMs = useRef<number | null>(null);
   const stateUrl = useMemo(() => `/api/overlay/court/${courtNumber}/state${eventId ? `?eventId=${eventId}` : ""}`, [courtNumber, eventId]);
   const realtimeEventId = eventId || state.eventId;
   const realtimeTopic = useMemo(() => realtimeEventId ? `overlay:${realtimeEventId}:court:${courtNumber}` : null, [courtNumber, realtimeEventId]);
+
+  const applyOverlayState = useCallback((payload: unknown) => {
+    const next = coerceOverlayState(payload, courtNumberValue);
+    if (!shouldApplyOverlayUpdate(next, lastAppliedUpdateMs.current)) return;
+    lastAppliedUpdateMs.current = overlayStateUpdatedAtMs(next) ?? lastAppliedUpdateMs.current;
+    setState(next);
+  }, [courtNumberValue]);
 
   useEffect(() => {
     let cancelled = false;
@@ -29,7 +39,7 @@ export function OverlayClient({ courtNumber, eventId, buildVersion }: { courtNum
         if (!res.ok) throw new Error(String(res.status));
         const next = await res.json();
         if (!cancelled) {
-          setState(coerceOverlayState(next, courtNumberValue));
+          applyOverlayState(next);
           setConnected(true);
         }
       } catch {
@@ -42,7 +52,7 @@ export function OverlayClient({ courtNumber, eventId, buildVersion }: { courtNum
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [stateUrl, connected, courtNumberValue]);
+  }, [stateUrl, connected, applyOverlayState]);
 
   useEffect(() => {
     if (!realtimeTopic) return;
@@ -51,7 +61,7 @@ export function OverlayClient({ courtNumber, eventId, buildVersion }: { courtNum
     const channel = supabase
       .channel(realtimeTopic)
       .on("broadcast", { event: "overlay_state" }, ({ payload }) => {
-        setState(coerceOverlayState(payload, courtNumberValue));
+        applyOverlayState(payload);
         setConnected(true);
       })
       .subscribe((status) => {
@@ -61,7 +71,7 @@ export function OverlayClient({ courtNumber, eventId, buildVersion }: { courtNum
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [realtimeTopic, courtNumberValue]);
+  }, [realtimeTopic, applyOverlayState]);
 
   useEffect(() => {
     if (!buildVersion || buildVersion === "local") return;

@@ -4,7 +4,9 @@ import {
   completedSetScores,
   displayOverlayName,
   overlayPhaseText,
-  scorebugDisplayScores
+  overlayStateUpdatedAtMs,
+  scorebugDisplayScores,
+  shouldApplyOverlayUpdate
 } from "../lib/overlayState";
 
 describe("overlayState", () => {
@@ -404,6 +406,35 @@ describe("overlayState", () => {
       { setNumber: 2, teamAScore: 19, teamBScore: 21, isComplete: true },
       { setNumber: 3, teamAScore: 0, teamBScore: 0, isComplete: false }
     ]);
+  });
+
+  it("rejects overlay updates that are older than the applied state", () => {
+    const applied = coerceOverlayState({
+      health: { lastUpdateAt: "2026-07-04T15:00:10.000Z" }
+    }, 1);
+    const appliedMs = overlayStateUpdatedAtMs(applied);
+    expect(appliedMs).toBe(Date.parse("2026-07-04T15:00:10.000Z"));
+
+    const stalePoll = coerceOverlayState({
+      health: { lastUpdateAt: "2026-07-04T15:00:08.000Z" }
+    }, 1);
+    const sameUpdate = coerceOverlayState({
+      health: { lastUpdateAt: "2026-07-04T15:00:10.000Z" }
+    }, 1);
+    const newerRealtime = coerceOverlayState({
+      health: { lastUpdateAt: "2026-07-04T15:00:12.000Z" }
+    }, 1);
+    const missingTimestamp = coerceOverlayState({
+      health: { lastUpdateAt: null }
+    }, 1);
+
+    expect(shouldApplyOverlayUpdate(stalePoll, appliedMs)).toBe(false);
+    expect(shouldApplyOverlayUpdate(sameUpdate, appliedMs)).toBe(true);
+    expect(shouldApplyOverlayUpdate(newerRealtime, appliedMs)).toBe(true);
+    expect(shouldApplyOverlayUpdate(missingTimestamp, appliedMs)).toBe(false);
+    expect(shouldApplyOverlayUpdate(missingTimestamp, null)).toBe(true);
+    expect(shouldApplyOverlayUpdate(stalePoll, null)).toBe(true);
+    expect(overlayStateUpdatedAtMs(missingTimestamp)).toBeNull();
   });
 
   it("uses current set status for live broadcast labels", () => {
