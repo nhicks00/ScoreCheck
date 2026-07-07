@@ -1419,6 +1419,10 @@ label {
   padding: 22px;
 }
 
+.claim-hero p {
+  margin: 0;
+}
+
 .match-line {
   align-items: center;
   display: grid;
@@ -2046,6 +2050,7 @@ label {
 
 .point-adjust-button.plus:hover:not(:disabled) {
   background: #ffffff;
+  border-color: #b9b5a9;
 }
 
 .point-adjust-button.plus:active:not(:disabled) {
@@ -2268,18 +2273,6 @@ label.score-field {
   min-height: 54px;
 }
 
-.status-field select {
-  margin-top: 6px;
-}
-
-.score-editor-grid {
-  gap: 12px;
-}
-
-.score-editor-grid > .primary {
-  min-height: 54px;
-}
-
 /* ---------------------------------------------------------------------------
    Manual scorer (token link flow) — sunlight zone, "ms-" namespace
 --------------------------------------------------------------------------- */
@@ -2291,6 +2284,7 @@ label.score-field {
   border-radius: var(--r-md);
   box-shadow: var(--shadow-sm);
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   justify-content: space-between;
   padding: 14px 16px;
@@ -2919,7 +2913,6 @@ label.score-field {
   white-space: normal;
 }
 
-.correction-grid,
 .metadata-form {
   border-top: 1px solid var(--line);
   display: grid;
@@ -2929,7 +2922,6 @@ label.score-field {
   padding-top: 12px;
 }
 
-.correction-grid > button,
 .metadata-form > button {
   grid-column: 1 / -1;
 }
@@ -3003,35 +2995,13 @@ label.score-field {
   text-underline-offset: 3px;
 }
 
-.legal-actions,
-.legal-footer {
+.legal-actions {
   align-items: center;
+  border-top: 1px solid var(--line);
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-}
-
-.legal-actions {
-  border-top: 1px solid var(--line);
   padding-top: 20px;
-}
-
-.legal-footer {
-  color: var(--muted);
-  font-size: 13.5px;
-  justify-content: center;
-  padding: 4px 0 0;
-}
-
-.legal-footer a {
-  color: var(--muted);
-  font-weight: 650;
-  text-decoration: none;
-  transition: color 160ms ease;
-}
-
-.legal-footer a:hover {
-  color: var(--text);
 }
 
 /* ============================================================================
@@ -3139,7 +3109,6 @@ label.score-field {
   .session-actions,
   .set-flow-panel,
   .set-flow-actions,
-  .correction-grid,
   .metadata-form,
   .mapping-row,
   .handoff-scores,
@@ -3309,7 +3278,6 @@ label.score-field {
   .ms-team-button,
   .set-editor-card,
   .table tbody tr,
-  .legal-footer a,
   .footer-links a {
     transition: none;
   }

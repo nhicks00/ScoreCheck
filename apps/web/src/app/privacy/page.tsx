@@ -96,7 +96,7 @@ export default function PrivacyPage() {
         </section>
 
         <div className="legal-actions">
-          <Link className="button" href="/">Back to ScoreCheck</Link>
+          <Link className="button primary" href="/">Back to ScoreCheck</Link>
           <Link className="button" href="/terms">Terms of Service</Link>
         </div>
       </article>
