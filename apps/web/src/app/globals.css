@@ -1392,10 +1392,175 @@ label {
   font-weight: 600;
 }
 
+.court-scorer-note {
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
 .fan-cta,
 .claim-submit {
   min-height: 54px;
   width: 100%;
+}
+
+/* Quiet idle state: court with nothing live to score right now */
+.fan-court-card.idle {
+  background: color-mix(in srgb, var(--surface) 74%, transparent);
+  box-shadow: none;
+}
+
+.fan-court-card.idle:hover {
+  border-color: var(--line);
+  box-shadow: none;
+  transform: none;
+}
+
+.fan-court-card.idle .court-title {
+  color: var(--text-soft);
+}
+
+.court-idle-body {
+  align-items: center;
+  background: var(--bg-deep);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  color: var(--muted);
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  min-height: 105px;
+  padding: 14px;
+}
+
+.court-idle-body svg {
+  flex: 0 0 auto;
+  opacity: 0.75;
+}
+
+.court-idle-body p {
+  font-size: 14.5px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.idle-cta {
+  align-items: center;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-sm);
+  color: var(--muted);
+  display: inline-flex;
+  font-size: 13.5px;
+  font-weight: 650;
+  justify-content: center;
+  min-height: 54px;
+  padding: 10px 16px;
+  text-align: center;
+  width: 100%;
+}
+
+/* Friendly whole-portal state when no court has a live match */
+.portal-empty {
+  align-items: center;
+  background: var(--surface);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-lg);
+  display: flex;
+  gap: 14px;
+  padding: 20px 22px;
+}
+
+.portal-empty svg {
+  color: var(--cyan);
+  flex: 0 0 auto;
+}
+
+.portal-empty h2 {
+  font-size: 19px;
+  line-height: 1.2;
+  margin: 0 0 4px;
+}
+
+.portal-empty p {
+  color: var(--muted);
+  line-height: 1.45;
+  margin: 0;
+}
+
+.portal-error {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.portal-error p {
+  margin: 0;
+}
+
+.score-strip .strip-reconnect {
+  background: var(--warn-soft);
+  border-color: var(--warn-line);
+  color: #ffe1a1;
+}
+
+.score-strip .strip-reconnect svg {
+  color: var(--warn);
+}
+
+/* Loading skeletons — quiet shimmer placeholders instead of a blank flash */
+.skeleton {
+  background: var(--surface-2);
+  border-radius: var(--r-sm);
+  display: block;
+  overflow: hidden;
+  position: relative;
+}
+
+.skeleton::after {
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+  background: linear-gradient(90deg, transparent, rgba(154, 170, 200, 0.12), transparent);
+  content: "";
+  inset: 0;
+  position: absolute;
+  transform: translateX(-100%);
+}
+
+@keyframes skeleton-shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+.skeleton-chip {
+  border-radius: var(--r-pill);
+  height: 26px;
+  width: 42%;
+}
+
+.skeleton-title {
+  height: 28px;
+  width: 68%;
+}
+
+.skeleton-block {
+  border-radius: var(--r-md);
+  height: 112px;
+}
+
+.skeleton-cta {
+  height: 54px;
+}
+
+.skeleton-card {
+  box-shadow: none;
+}
+
+.skeleton-card:hover {
+  border-color: var(--line);
+  box-shadow: none;
+  transform: none;
 }
 
 .score-back-row {
@@ -3266,7 +3431,8 @@ label.score-field {
 @media (prefers-reduced-motion: reduce) {
   .status.live::before,
   .hero-badge .live-dot,
-  .ms-tap-flash {
+  .ms-tap-flash,
+  .skeleton::after {
     animation: none;
   }
 
