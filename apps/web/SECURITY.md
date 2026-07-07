@@ -6,11 +6,10 @@ This app uses a server-authorized MVP security model for AVP Denver fan scoring.
 
 - Browser clients do not receive `SUPABASE_SERVICE_ROLE_KEY`.
 - Official scoring writes go through Next.js route handlers under `/api/scoring`, `/api/score`, or `/api/courts`.
-- Scorer session tokens are stored hashed in Supabase and raw session URLs are only returned to the verified claimant.
-- YouTube claim verification stores hashed claim codes and short-lived claim status tokens.
+- Scorer entry is name-only: fans enter a display name and receive a scorer session immediately, with no human verification step (removed 2026-07). Abuse controls are per-IP/per-court rate limiting on claim starts, per-session rate limiting on scoring actions, and admin session revocation from the command center.
+- Scorer session tokens are stored hashed in Supabase and raw session URLs are only returned to the claimant.
 - IVS playback URLs are signed server-side and are issued only to active or backup scorer sessions.
 - Overlay routes are read-only. They read score/overlay state and do not expose mutation controls.
-- Worker callbacks require `YOUTUBE_WORKER_SHARED_SECRET` when using `/api/worker/youtube/verification-message`.
 
 ## RLS Status
 
@@ -39,15 +38,14 @@ Do not commit or expose:
 - AWS credentials
 - IVS stream keys
 - IVS playback private keys
-- YouTube OAuth client secrets or refresh tokens
 
 `npm run setup:vercel-env` writes two ignored files:
 
 - `.local/vercel-env.generated.env` for Vercel app runtime values.
-- `.local/worker-env.generated.env` for worker-only YouTube OAuth/API values.
+- `.local/worker-env.generated.env` for the VolleyballLife poller worker.
 
-`npm run verify:vercel-env` checks actual Vercel env names without printing values and fails if worker-only YouTube OAuth/API keys are present in the Vercel app environment.
+`npm run verify:vercel-env` checks actual Vercel env names without printing values.
 
 ## Known External Cleanup
 
-As of the latest audit, the Vercel app environment still contains worker-only YouTube OAuth/API variables. Removing production/preview Vercel env variables is a destructive external change, so it requires explicit human approval before cleanup.
+The app no longer reads any `YOUTUBE_*` variables (chat verification was removed 2026-07). Any `YOUTUBE_*` values remaining in the Vercel or worker environments are unused and can be deleted manually. Removing production/preview Vercel env variables is a destructive external change, so it requires explicit human approval.

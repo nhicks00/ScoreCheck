@@ -5,7 +5,7 @@ This is the Vercel-hosted ScoreCheck app for AVP Denver fan scoring, admin opera
 ## Routes
 
 - Public scorer portal: `/score`
-- Court claim pages: `/score/court/1` through `/score/court/8`
+- Court scoring pages: `/score/court/1` through `/score/court/8` (enter a display name and go straight to a scorer session)
 - Private scorer sessions: `/score/session/[sessionToken]`
 - Stable overlays: `/overlay/stream/1` through `/overlay/stream/8`
 - Event overlay alias: `/overlay/avp-denver/court/[courtNumber]`
@@ -34,11 +34,6 @@ MediaMTX preview video requires (see `../../docs/MEDIAMTX_DIGITALOCEAN_SETUP.md`
 
 Players connect over WHEP (sub-second WebRTC) first and fall back to LL-HLS. Because the production site is https, the MediaMTX base URLs must be https in production or browsers will block them as mixed content.
 
-YouTube verification worker requires:
-
-- `YOUTUBE_API_KEY` or OAuth `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, and `YOUTUBE_REFRESH_TOKEN`
-- `YOUTUBE_WORKER_SHARED_SECRET` if using the callback route from an external worker
-
 ## Setup
 
 Run from `apps/web`:
@@ -48,26 +43,17 @@ npm install
 npm run setup:preflight
 supabase link --project-ref zxrkvklhdvvxwqzsdkyk
 supabase db push
-npm run setup:youtube-denver
 npm run seed:avp-denver
 ```
 
-The YouTube setup step reads the local Beach Volleyball Media OAuth files and Denver summary JSON, then writes ignored court video/chat metadata under `.local/`. It does not modify YouTube stream bindings. If the Denver summary has no active day because real event streams are parked while dry-run streams use Stream Key 1-8, the script selects the earliest upcoming real Denver day.
+The seed script is idempotent. It creates or updates the `avp-denver` active event, eight courts, placeholder matches, fan-scoring settings, overlay states, and MediaMTX stream paths.
 
-The seed script is idempotent. It creates or updates the `avp-denver` active event, eight courts, placeholder matches, fan-scoring settings, overlay states, MediaMTX stream paths, and generated YouTube video/chat metadata when available.
+## Worker
 
-## Workers
-
-Use the combined worker for production:
+Run the VolleyballLife poller for production:
 
 ```bash
-npm run worker:all
-```
-
-This runs the existing VolleyballLife poller and the YouTube verification worker. The YouTube-only worker is also available:
-
-```bash
-npm run worker:youtube
+npm run worker
 ```
 
 ## Service Automation
@@ -75,7 +61,6 @@ npm run worker:youtube
 Local setup scripts write generated artifacts under `.local/`, which is gitignored.
 
 ```bash
-npm run setup:youtube-denver
 npm run setup:streamrun:discover
 npm run setup:streamrun
 npm run setup:vercel-env
@@ -88,12 +73,10 @@ npm run verify:all
 
 `setup:vercel-env` writes two ignored env artifacts:
 
-- `.local/vercel-env.generated.env` for Vercel app variables. It intentionally excludes YouTube OAuth/API secrets.
-- `.local/worker-env.generated.env` for a Railway/Render-style worker. This is where YouTube OAuth/API secrets belong.
+- `.local/vercel-env.generated.env` for Vercel app variables.
+- `.local/worker-env.generated.env` for a Railway/Render-style worker running the VolleyballLife poller.
 
-`verify:vercel-env` checks Vercel project settings and env variable names without printing values. It fails if worker-only YouTube OAuth/API keys are present in the Vercel app environment.
-
-`cleanup:vercel-worker-env` dry-runs removal of worker-only YouTube keys from Vercel app env. Destructive mode requires both `--apply` and `CONFIRM_VERCEL_WORKER_ENV_CLEANUP=remove-worker-youtube-keys`; do not run destructive mode without explicit approval.
+`verify:vercel-env` checks Vercel project settings and env variable names without printing values.
 
 `verify:architecture` writes `.local/architecture-readiness.redacted.json` and aggregates Supabase, MediaMTX, StreamRun, Vercel, and generated-artifact readiness without printing secret values.
 
@@ -101,7 +84,7 @@ MediaMTX droplet provisioning, StreamRun RTMP destination values, encoder settin
 
 Browser QA coverage and cleanup expectations are recorded in `../../docs/SCORECHECK_QA_RUNBOOK.md`.
 
-Do not commit `.local/`, `.env.local`, `.env.setup.local`, MediaMTX publish/read credentials, Supabase service role keys, StreamRun API keys, Vercel tokens, or YouTube refresh tokens.
+Do not commit `.local/`, `.env.local`, `.env.setup.local`, MediaMTX publish/read credentials, Supabase service role keys, StreamRun API keys, or Vercel tokens.
 
 Security posture and RLS notes are documented in `SECURITY.md`.
 
