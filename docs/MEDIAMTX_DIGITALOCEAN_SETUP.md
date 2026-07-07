@@ -1,3 +1,35 @@
+# MediaMTX on DigitalOcean — AS BUILT (2026-07-07)
+
+> This section reflects the live deployment. The generic runbook below it remains
+> for rebuild-from-scratch reference; where they differ, AS BUILT wins.
+
+- Droplet: `bvm-preview-01`, 206.189.169.162, DO `sfo2`, Ubuntu 24.04, 1 vCPU / 2 GB
+  (resize to 2 vCPU / 4 GB before a full 8-court event day).
+- SSH: `ssh -i ~/.ssh/scorecheck_do root@206.189.169.162`
+- MediaMTX v1.19 runs in Docker (`bluenviron/mediamtx:1-ffmpeg`, host networking).
+  Config + compose live at `/opt/mediamtx/`. `docker logs mediamtx` for logs;
+  `curl -s 127.0.0.1:9997/v3/paths/list` for live path/reader state.
+- Paths: `court{1-8}_raw` (RTMP/SRT ingest, AAC ok) each run an ffmpeg sidecar that
+  republishes to `court{1-8}` with Opus audio (WebRTC cannot carry AAC).
+- Auth: publish requires user `streamrun` + password (see
+  `apps/web/.local/mediamtx-credentials.md`, gitignored); reading is public;
+  localhost may publish (the sidecars) and call the API.
+- TLS: Caddy v2.11 (official repo) proxies `preview.beachvolleyballmedia.com` → :8889
+  with a Let's Encrypt cert. DNS A record lives in Vercel DNS (`vercel dns ls
+  beachvolleyballmedia.com`).
+- Firewall (ufw): 22, 80, 443, 1935/tcp (RTMP), 8189/udp (WebRTC), 8890/udp (SRT).
+  8888/8889 are NOT public — Caddy fronts WebRTC; HLS is disabled (WHEP-only v1).
+- App wiring: Vercel production env `MEDIAMTX_WHEP_BASE_URL=https://preview.beachvolleyballmedia.com`;
+  the app issues `{base}/court{n}/whep` via the authenticated stream-source routes.
+- Publish target for StreamRun/encoders: server `rtmp://preview.beachvolleyballmedia.com`,
+  stream key `court{N}_raw?user=streamrun&pass=<password>`.
+- Test pattern for smoke tests (run on the droplet):
+  `docker run -d --name testpub --network host --entrypoint ffmpeg bluenviron/mediamtx:1-ffmpeg -re -f lavfi -i smptebars=size=1280x720:rate=30 -f lavfi -i sine=frequency=440:sample_rate=48000 -c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p -g 30 -b:v 2000k -c:a aac -b:a 128k -ac 2 -t 600 -f flv 'rtmp://127.0.0.1:1935/court1_raw?user=streamrun&pass=PASSWORD'`
+- Watch page: `https://preview.beachvolleyballmedia.com/court1` · WHEP: `.../court1/whep`
+- Commentary sync plan: StreamRun has no input delay; if the measured commentary skew
+  (~1.5-2.5 s) is unacceptable, add delayed `court{N}_program` paths on this droplet and
+  have StreamRun pull them (see docs/COMMENTARY_WORKFLOW.md).
+
 # MediaMTX on DigitalOcean Setup Runbook
 
 This is the complete, copy-pasteable runbook for standing up the self-hosted MediaMTX
