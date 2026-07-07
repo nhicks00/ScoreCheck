@@ -4,10 +4,10 @@ ScoreCheck uses one public parent-friendly scoring link, one active scorer per c
 
 ## Service Roles
 
-- Vercel/Next.js: public portal, scorer sessions, admin, route handlers, overlay pages, IVS token signing.
+- Vercel/Next.js: public portal, scorer sessions, admin, route handlers, overlay pages, stream source issuing.
 - Supabase: events, courts, matches, score state, overlay state, scorer claims, scorer sessions, backup shadow state, flags, worker heartbeats.
-- Amazon IVS: private low-latency scorer preview for active and backup scorers.
-- StreamRun: video routing to YouTube and IVS, with ScoreCheck HTML overlay URLs on the YouTube branch.
+- MediaMTX (self-hosted DigitalOcean droplet): low-latency WHEP + LL-HLS scorer/commentator preview per court (see `MEDIAMTX_DIGITALOCEAN_SETUP.md`).
+- StreamRun: video routing to YouTube and the MediaMTX preview ingest, with ScoreCheck HTML overlay URLs on the YouTube branch.
 - YouTube worker: chat-code verification and worker health.
 
 ## Primary Flow
@@ -27,8 +27,8 @@ ScoreCheck uses one public parent-friendly scoring link, one active scorer per c
 
 - Browsers never write directly to official score tables.
 - Raw session tokens are only returned to the claim owner and are stored hashed in Supabase.
-- IVS playback tokens are issued only to active/backup scorer sessions.
-- Stream keys, IVS ingest values, private keys, Supabase service role keys, Vercel tokens, StreamRun API keys, and YouTube refresh tokens are never committed.
+- Stream playback URLs (which can carry MediaMTX read credentials) are issued only to active/backup scorer sessions or admins.
+- Stream keys, MediaMTX publish/read credentials, Supabase service role keys, Vercel tokens, StreamRun API keys, and YouTube refresh tokens are never committed.
 - Overlay pages are read-only and poll/realtime subscribe to official overlay payloads.
 - YouTube Stream Key 1-8 bindings are an operations concern: only the active/current event day or an intentional private dry run should be bound to Stream Key 1-8. Inactive scheduled event days stay parked on TEMP KEY.
 
@@ -47,7 +47,7 @@ These are added by `apps/web/supabase/migrations/003_fan_scoring_claims_sessions
 
 Admin command center: `/admin/avp-denver`.
 
-Admins can monitor active scorers/backups, promote backups, revoke sessions, open/close scoring, copy public score and overlay URLs, edit IVS/YouTube metadata, and use existing admin score correction routes when needed.
+Admins can monitor active scorers/backups, promote backups, revoke sessions, open/close scoring, copy public score and overlay URLs, edit stream/YouTube metadata, and use existing admin score correction routes when needed.
 
 `npm run setup:youtube-denver` discovers Denver YouTube video and live-chat IDs from the local Beach Volleyball Media OAuth setup and the saved Denver event summary. It writes ignored metadata for `npm run seed:avp-denver`; it does not create broadcasts or change stream-key bindings.
 
@@ -60,5 +60,5 @@ Admins can monitor active scorers/backups, promote backups, revoke sessions, ope
 - Backup scorer writes only shadow score.
 - Release and failover promote a backup.
 - `/overlay/stream/[1-8]` remains transparent, read-only, and safe with missing data.
-- `/api/video/ivs-token` rejects non-scorers and returns graceful unavailable errors when IVS is not configured.
+- `/api/video/stream-source` rejects non-scorers and returns graceful unavailable errors when MediaMTX is not configured.
 - `npm run lint`, `npm run typecheck`, `npm run test`, and `npm run build` pass before deploy.
