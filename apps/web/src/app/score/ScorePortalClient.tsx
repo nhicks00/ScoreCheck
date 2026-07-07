@@ -20,6 +20,7 @@ type CourtCard = {
     activeName: string | null;
   };
   match: {
+    id?: string;
     teamA: string | null;
     teamB: string | null;
     roundName: string | null;
@@ -89,9 +90,26 @@ export function ScorePortalClient() {
     return () => window.clearInterval(id);
   }, [refresh]);
 
+  // Some backend writers momentarily bump a final match's timestamps, which
+  // would make a days-old final flicker back to "Match complete" between
+  // polls. Once a court's final match has been judged stale, keep it idle
+  // until the match or its score actually changes.
+  const staleFinalKeys = useRef<Map<string, string>>(new Map());
+
   const presences = useMemo(() => {
     const now = Date.now();
-    return new Map(courts.map((court) => [court.id, courtPresence(court, now)]));
+    return new Map(courts.map((court) => {
+      let presence = courtPresence(court, now);
+      const key = finalMatchKey(court);
+      if (presence === "final" && staleFinalKeys.current.get(court.id) === key) {
+        presence = "idle";
+      } else if (presence === "idle" && court.match) {
+        staleFinalKeys.current.set(court.id, key);
+      } else if (presence !== "final") {
+        staleFinalKeys.current.delete(court.id);
+      }
+      return [court.id, presence];
+    }));
   }, [courts]);
 
   const liveCount = useMemo(
@@ -267,6 +285,20 @@ function courtPresence(court: CourtCard, now: number): CourtPresence {
 
 function isLivePresence(presence: CourtPresence | undefined): boolean {
   return presence === "live" || presence === "needs-scorer";
+}
+
+/** Identity of the final result currently shown on a court. */
+function finalMatchKey(court: CourtCard): string {
+  return [
+    court.match?.id ?? court.match?.matchNumber ?? "",
+    court.match?.teamA ?? "",
+    court.match?.teamB ?? "",
+    court.score?.teamAScore ?? 0,
+    court.score?.teamBScore ?? 0,
+    court.score?.teamASets ?? 0,
+    court.score?.teamBSets ?? 0,
+    court.score?.status ?? ""
+  ].join("|");
 }
 
 function presenceChip(presence: CourtPresence): { label: string; tone: string } {

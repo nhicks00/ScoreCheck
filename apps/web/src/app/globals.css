@@ -1945,9 +1945,26 @@ label {
   z-index: 30;
 }
 
+/* When the stream is erroring there is nothing worth pinning — let the dead
+   player scroll away so it never crowds the scoring controls. */
+.video-dock:has(.video-fallback) {
+  position: static;
+}
+
 .video-dock .stream-preview {
   background: var(--surface);
   box-shadow: var(--shadow-lg);
+}
+
+.video-dock .video-controls span {
+  flex: 1 1 100%;
+  font-size: 13px;
+}
+
+.video-dock .video-controls button {
+  flex: 1 1 0;
+  min-height: 42px;
+  padding: 8px 10px;
 }
 
 @media (max-height: 640px) {
@@ -3505,6 +3522,18 @@ label.score-field {
 
   .hero-scorebug {
     min-width: 100%;
+  }
+}
+
+@media (max-width: 420px) {
+  .point-adjust-button {
+    gap: 6px;
+    padding: 10px 8px;
+  }
+
+  .point-adjust-button span {
+    font-size: 13px;
+    white-space: nowrap;
   }
 }
 
