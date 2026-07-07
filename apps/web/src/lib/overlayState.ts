@@ -182,7 +182,7 @@ export function overlayLayoutValue(value: unknown): OverlayLayout {
 
 function coerceSetScores(value: unknown): SetScore[] {
   if (!Array.isArray(value)) return [];
-  return value
+  const parsed = value
     .map((item) => {
       const record = recordValue(item);
       if (!record) return null;
@@ -194,6 +194,17 @@ function coerceSetScores(value: unknown): SetScore[] {
       };
     })
     .filter((item): item is SetScore => Boolean(item));
+  return dedupeSetScores(parsed);
+}
+
+function dedupeSetScores(setScores: SetScore[]): SetScore[] {
+  const bySetNumber = new Map<number, SetScore>();
+  for (const set of setScores) {
+    const existing = bySetNumber.get(set.setNumber);
+    if (existing && existing.isComplete && !set.isComplete) continue;
+    bySetNumber.set(set.setNumber, set);
+  }
+  return [...bySetNumber.values()].sort((a, b) => a.setNumber - b.setNumber);
 }
 
 function normalizeFinalOverlayState(state: OverlayState): OverlayState {
@@ -284,6 +295,7 @@ function nullableString(value: unknown): string | null {
 }
 
 function nullableNumber(value: unknown): number | null {
+  if (value == null || value === "") return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }

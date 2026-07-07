@@ -211,6 +211,150 @@ describe("overlayState", () => {
     });
   });
 
+  it("prefers the latest data when repeated completed set records disagree", () => {
+    const state = coerceOverlayState({
+      phase: "LIVE",
+      score: {
+        teamAScore: 5,
+        teamBScore: 3,
+        currentSet: 2,
+        teamASets: 1,
+        teamBSets: 0,
+        setScores: [
+          { setNumber: 1, teamAScore: 21, teamBScore: 18, isComplete: true },
+          { setNumber: 1, teamAScore: 21, teamBScore: 19, isComplete: true },
+          { setNumber: 2, teamAScore: 5, teamBScore: 3, isComplete: false }
+        ]
+      }
+    }, 2);
+
+    expect(state.score.setScores).toEqual([
+      { setNumber: 1, teamAScore: 21, teamBScore: 19, isComplete: true },
+      { setNumber: 2, teamAScore: 5, teamBScore: 3, isComplete: false }
+    ]);
+    expect(scorebugDisplayScores(state)).toEqual({
+      teamAScore: 5,
+      teamBScore: 3,
+      teamASetScores: [21, 5],
+      teamBSetScores: [19, 3]
+    });
+  });
+
+  it("prefers the completed record when a live set collides with a completed set", () => {
+    const state = coerceOverlayState({
+      phase: "LIVE",
+      score: {
+        teamAScore: 19,
+        teamBScore: 21,
+        currentSet: 2,
+        teamASets: 1,
+        teamBSets: 1,
+        setScores: [
+          { setNumber: 1, teamAScore: 21, teamBScore: 14, isComplete: true },
+          { setNumber: 2, teamAScore: 19, teamBScore: 20, isComplete: false },
+          { setNumber: 2, teamAScore: 19, teamBScore: 21, isComplete: true }
+        ]
+      }
+    }, 3);
+
+    expect(state.score.setScores).toEqual([
+      { setNumber: 1, teamAScore: 21, teamBScore: 14, isComplete: true },
+      { setNumber: 2, teamAScore: 19, teamBScore: 21, isComplete: true }
+    ]);
+    expect(scorebugDisplayScores(state)).toEqual({
+      teamAScore: 19,
+      teamBScore: 21,
+      teamASetScores: [21, 19],
+      teamBSetScores: [14, 21]
+    });
+  });
+
+  it("stable-sorts out-of-order set records before rendering", () => {
+    const state = coerceOverlayState({
+      phase: "POSTMATCH",
+      score: {
+        teamAScore: 15,
+        teamBScore: 12,
+        currentSet: 3,
+        teamASets: 2,
+        teamBSets: 1,
+        setScores: [
+          { setNumber: 3, teamAScore: 15, teamBScore: 12, isComplete: true },
+          { setNumber: 1, teamAScore: 21, teamBScore: 19, isComplete: true },
+          { setNumber: 2, teamAScore: 18, teamBScore: 21, isComplete: true }
+        ]
+      }
+    }, 7);
+
+    expect(state.score.setScores).toEqual([
+      { setNumber: 1, teamAScore: 21, teamBScore: 19, isComplete: true },
+      { setNumber: 2, teamAScore: 18, teamBScore: 21, isComplete: true },
+      { setNumber: 3, teamAScore: 15, teamBScore: 12, isComplete: true }
+    ]);
+    expect(scorebugDisplayScores(state)).toEqual({
+      teamAScore: 15,
+      teamBScore: 12,
+      teamASetScores: [21, 18, 15],
+      teamBSetScores: [19, 21, 12]
+    });
+  });
+
+  it("drops a phantom third set that started after a straight-sets clinch", () => {
+    const state = coerceOverlayState({
+      phase: "POSTMATCH",
+      score: {
+        teamAScore: 2,
+        teamBScore: 1,
+        currentSet: 3,
+        teamASets: 2,
+        teamBSets: 0,
+        setScores: [
+          { setNumber: 1, teamAScore: 21, teamBScore: 15, isComplete: true },
+          { setNumber: 2, teamAScore: 21, teamBScore: 19, isComplete: true },
+          { setNumber: 3, teamAScore: 2, teamBScore: 1, isComplete: false }
+        ]
+      }
+    }, 5);
+
+    expect(state.score.currentSet).toBe(2);
+    expect(state.score.teamASets).toBe(2);
+    expect(state.score.teamBSets).toBe(0);
+    expect(state.score.setScores).toEqual([
+      { setNumber: 1, teamAScore: 21, teamBScore: 15, isComplete: true },
+      { setNumber: 2, teamAScore: 21, teamBScore: 19, isComplete: true }
+    ]);
+    expect(scorebugDisplayScores(state)).toEqual({
+      teamAScore: 21,
+      teamBScore: 19,
+      teamASetScores: [21, 21],
+      teamBSetScores: [15, 19]
+    });
+  });
+
+  it("coerces overlay state idempotently for messy final payloads", () => {
+    const payload = {
+      phase: "POSTMATCH",
+      score: {
+        teamAScore: 12,
+        teamBScore: 15,
+        currentSet: 3,
+        teamASets: 3,
+        teamBSets: 0,
+        setScores: [
+          { setNumber: 2, teamAScore: 21, teamBScore: 19, isComplete: true },
+          { setNumber: 1, teamAScore: 21, teamBScore: 15, isComplete: true },
+          { setNumber: 2, teamAScore: 21, teamBScore: 19, isComplete: true },
+          { setNumber: 3, teamAScore: 12, teamBScore: 15, isComplete: false }
+        ]
+      }
+    };
+
+    const once = coerceOverlayState(payload, 6);
+    const twice = coerceOverlayState(once, 6);
+    expect(twice).toEqual(once);
+    expect(scorebugDisplayScores(twice)).toEqual(scorebugDisplayScores(once));
+  });
+
   it("renders a live second set without creating a separate duplicate current-score column", () => {
     const state = coerceOverlayState({
       phase: "LIVE",
