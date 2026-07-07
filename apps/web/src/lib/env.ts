@@ -117,6 +117,10 @@ export function videoMissingEnvKeys(): string[] {
 }
 
 function numberEnv(key: string, fallback: number): number {
-  const value = Number(process.env[key]);
-  return Number.isFinite(value) && value > 0 ? value : fallback;
+  const raw = process.env[key];
+  if (raw == null || raw === "") return fallback;
+  const value = Number(raw);
+  if (Number.isFinite(value) && value > 0) return value;
+  console.warn(`Invalid numeric value for ${key}: ${JSON.stringify(raw)}; using ${fallback}`);
+  return fallback;
 }
