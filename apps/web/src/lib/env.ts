@@ -8,10 +8,11 @@ export type AppEnv = {
   eventName: string;
   courtCount: number;
   timezone: string;
-  awsRegion: string;
-  ivsPlaybackKeyPairId: string;
-  ivsPlaybackKeyPairArn: string;
-  ivsPlaybackPrivateKey: string;
+  mediamtxWhepBaseUrl: string;
+  mediamtxHlsBaseUrl: string;
+  mediamtxReadUser: string;
+  mediamtxReadPass: string;
+  mediamtxRtmpIngestBase: string;
   youtubeWorkerSharedSecret: string;
   youtubeApiKey: string;
   youtubeClientId: string;
@@ -31,10 +32,11 @@ export function getEnv(): AppEnv {
     eventName: process.env.NEXT_PUBLIC_EVENT_NAME ?? "AVP Denver Open",
     courtCount: numberEnv("NEXT_PUBLIC_COURT_COUNT", 8),
     timezone: process.env.NEXT_PUBLIC_DEFAULT_TIMEZONE ?? "America/Denver",
-    awsRegion: process.env.AWS_REGION ?? "us-west-2",
-    ivsPlaybackKeyPairId: process.env.IVS_PLAYBACK_KEY_PAIR_ID ?? "",
-    ivsPlaybackKeyPairArn: process.env.IVS_PLAYBACK_KEY_PAIR_ARN ?? "",
-    ivsPlaybackPrivateKey: process.env.IVS_PLAYBACK_PRIVATE_KEY ?? "",
+    mediamtxWhepBaseUrl: process.env.MEDIAMTX_WHEP_BASE_URL ?? "",
+    mediamtxHlsBaseUrl: process.env.MEDIAMTX_HLS_BASE_URL ?? "",
+    mediamtxReadUser: process.env.MEDIAMTX_READ_USER ?? "",
+    mediamtxReadPass: process.env.MEDIAMTX_READ_PASS ?? "",
+    mediamtxRtmpIngestBase: process.env.MEDIAMTX_RTMP_INGEST_BASE ?? "",
     youtubeWorkerSharedSecret: process.env.YOUTUBE_WORKER_SHARED_SECRET ?? "",
     youtubeApiKey: process.env.YOUTUBE_API_KEY ?? "",
     youtubeClientId: process.env.YOUTUBE_CLIENT_ID ?? "",
@@ -108,20 +110,10 @@ export function requestOrigin(origin?: string | null): string {
   return publicOrigin();
 }
 
-export function ivsMissingEnvKeys(): string[] {
+export function videoMissingEnvKeys(): string[] {
   const env = getEnv();
-  return [
-    ["IVS_PLAYBACK_PRIVATE_KEY", env.ivsPlaybackPrivateKey]
-  ]
-    .filter(([, value]) => !value)
-    .map(([key]) => key);
-}
-
-export function courtIvsEnv(courtNumber: number): { channelArn: string; playbackUrl: string } {
-  return {
-    channelArn: process.env[`COURT_${courtNumber}_IVS_CHANNEL_ARN`] ?? "",
-    playbackUrl: process.env[`COURT_${courtNumber}_IVS_PLAYBACK_URL`] ?? ""
-  };
+  if (env.mediamtxWhepBaseUrl || env.mediamtxHlsBaseUrl) return [];
+  return ["MEDIAMTX_WHEP_BASE_URL", "MEDIAMTX_HLS_BASE_URL"];
 }
 
 function numberEnv(key: string, fallback: number): number {

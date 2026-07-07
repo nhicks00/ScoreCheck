@@ -13,8 +13,7 @@ type Court = {
   backup_requested?: boolean | null;
   youtube_video_id?: string | null;
   youtube_live_chat_id?: string | null;
-  ivs_channel_arn?: string | null;
-  ivs_playback_url?: string | null;
+  stream_path?: string | null;
   vbl_court_number?: string | null;
   vbl_court_label?: string | null;
   matches?: Match | Match[] | null;
@@ -122,8 +121,7 @@ export function FanScoringDashboard({
     void updateCourt(courtId, {
       youtubeVideoId: form.get("youtubeVideoId"),
       youtubeLiveChatId: form.get("youtubeLiveChatId"),
-      ivsChannelArn: form.get("ivsChannelArn"),
-      ivsPlaybackUrl: form.get("ivsPlaybackUrl"),
+      streamPath: form.get("streamPath"),
       vblCourtNumber: form.get("vblCourtNumber"),
       vblCourtLabel: form.get("vblCourtLabel")
     });
@@ -253,12 +251,11 @@ export function FanScoringDashboard({
                 </div>
               </div>
               <details className="metadata-panel">
-                <summary><Edit3 size={16} /> Edit IVS / YouTube / VBL metadata</summary>
+                <summary><Edit3 size={16} /> Edit stream / YouTube / VBL metadata</summary>
                 <form className="metadata-form" onSubmit={(eventSubmit) => saveMetadata(eventSubmit, court.id)}>
                   <label>YouTube video ID<input name="youtubeVideoId" defaultValue={court.youtube_video_id ?? ""} /></label>
                   <label>YouTube live chat ID<input name="youtubeLiveChatId" defaultValue={court.youtube_live_chat_id ?? ""} /></label>
-                  <label>IVS channel ARN<input name="ivsChannelArn" defaultValue={court.ivs_channel_arn ?? ""} /></label>
-                  <label>IVS playback URL<input name="ivsPlaybackUrl" defaultValue={court.ivs_playback_url ?? ""} /></label>
+                  <label>Stream path<input name="streamPath" defaultValue={court.stream_path ?? ""} placeholder={`court${court.court_number}`} /></label>
                   <label>VBL court number<input name="vblCourtNumber" defaultValue={court.vbl_court_number ?? ""} placeholder="7" /></label>
                   <label>VBL court label<input name="vblCourtLabel" defaultValue={court.vbl_court_label ?? ""} placeholder="Court 7" /></label>
                   <button className="primary" type="submit" disabled={busy != null}>Save metadata</button>

@@ -2,7 +2,7 @@
 
 import { AlertTriangle, CheckCircle2, ChevronRight, Lock, Minus, MonitorOff, MonitorPlay, Plus, RotateCcw, Send, StopCircle, Unlock } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { IvsPreviewPlayer } from "@/components/IvsPreviewPlayer";
+import { StreamPlayer } from "@/components/StreamPlayer";
 
 type SetScore = {
   setNumber: number;
@@ -31,7 +31,7 @@ type SessionState = {
     watchMode: "website" | "courtside";
   };
   event: { name: string };
-  court: { id: string; courtNumber: number; displayName: string; ivsConfigured: boolean };
+  court: { id: string; courtNumber: number; displayName: string; videoConfigured: boolean };
   match: { team_a: string | null; team_b: string | null; round_name: string | null; match_number: string | null; format?: Record<string, unknown> | null } | null;
   officialScore: ScoreState;
   shadowScore: ScoreState;
@@ -455,7 +455,7 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
               </button>
             </div>
 
-            <IvsPreviewPlayer sessionToken={sessionToken} courtNumber={state.court.courtNumber} enabled={watchMode === "website"} />
+            <StreamPlayer sessionToken={sessionToken} courtNumber={state.court.courtNumber} enabled={watchMode === "website"} />
 
             {handoffPending && (
               <section className="handoff-panel">

@@ -9,7 +9,6 @@ export const DEFAULT_FAN_SCORING_SETTINGS = {
   failoverSeconds: 35,
   maxBackupScorersPerCourt: 4,
   claimExpirationMinutes: 10,
-  videoTokenSeconds: 600,
   requireYoutubeVerification: true,
   allowScoreOnlyMode: true
 };
@@ -63,8 +62,7 @@ export type CourtRow = {
   backup_requested?: boolean | null;
   youtube_video_id?: string | null;
   youtube_live_chat_id?: string | null;
-  ivs_channel_arn?: string | null;
-  ivs_playback_url?: string | null;
+  stream_path?: string | null;
   public_score_url?: string | null;
   vbl_court_number?: string | null;
   vbl_court_label?: string | null;
@@ -147,7 +145,7 @@ function throwSupabaseError(error: { message?: string }) {
 
 export async function ensureAvpDenverSeeded(input: {
   siteUrl?: string;
-  courtIvs?: Record<number, { channelArn?: string; playbackUrl?: string }>;
+  courtStreamPaths?: Record<number, string>;
   courtYoutube?: Record<number, { displayName?: string; videoId?: string; liveChatId?: string }>;
 } = {}, db = supabaseAdmin()) {
   const env = getEnv();
@@ -194,7 +192,6 @@ export async function ensureAvpDenverSeeded(input: {
   }, { onConflict: "event_id,source_url" })));
 
   for (let courtNumber = 1; courtNumber <= env.courtCount; courtNumber += 1) {
-    const ivs = input.courtIvs?.[courtNumber] ?? {};
     const youtube = input.courtYoutube?.[courtNumber] ?? {};
     const streamCourt = AVP_DENVER_STREAM_COURT_MAP[courtNumber];
     const displayName = streamCourt?.displayName || youtube.displayName || `Court ${courtNumber}`;
@@ -218,8 +215,7 @@ export async function ensureAvpDenverSeeded(input: {
       public_score_url: `${siteUrl}/score/court/${courtNumber}`,
       youtube_video_id: youtube.videoId || null,
       youtube_live_chat_id: youtube.liveChatId || null,
-      ivs_channel_arn: ivs.channelArn || null,
-      ivs_playback_url: ivs.playbackUrl || null,
+      stream_path: input.courtStreamPaths?.[courtNumber] || `court${courtNumber}`,
       vbl_court_number: streamCourt?.vblCourtNumber ?? generatedVblCourt.number,
       vbl_court_label: streamCourt?.vblCourtLabel ?? generatedVblCourt.label,
       updated_at: now

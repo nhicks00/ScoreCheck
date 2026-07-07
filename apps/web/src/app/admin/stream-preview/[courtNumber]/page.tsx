@@ -1,14 +1,14 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { isAdminRequest } from "@/lib/auth";
-import { AdminIvsPreviewClient } from "./AdminIvsPreviewClient";
+import { StreamPlayer } from "@/components/StreamPlayer";
 
 export const dynamic = "force-dynamic";
 
-export default async function AdminIvsPreviewPage({ params }: { params: Promise<{ courtNumber: string }> }) {
+export default async function AdminStreamPreviewPage({ params }: { params: Promise<{ courtNumber: string }> }) {
   const { courtNumber: courtParam } = await params;
   const courtNumber = Number(courtParam);
-  const path = `/admin/ivs-preview/${encodeURIComponent(courtParam)}`;
+  const path = `/admin/stream-preview/${encodeURIComponent(courtParam)}`;
   if (!(await isAdminRequest())) redirect(`/admin/login?next=${encodeURIComponent(path)}`);
   if (!Number.isInteger(courtNumber) || courtNumber < 1 || courtNumber > 99) redirect("/admin/events");
 
@@ -16,18 +16,18 @@ export default async function AdminIvsPreviewPage({ params }: { params: Promise<
     <main className="scorer-screen">
       <div className="scorer-wrap">
         <div className="topbar">
-          <div className="brand">Court {courtNumber} IVS Preview</div>
+          <div className="brand">Court {courtNumber} Stream Preview</div>
           <Link className="button" href="/admin/events">Admin</Link>
         </div>
         <section className="role-banner active">
           <div>
             <span>Admin video check</span>
             <h1>Court {courtNumber} private preview</h1>
-            <p>Uses the admin cookie to mint short-lived IVS playback tokens.</p>
+            <p>Uses the admin cookie to fetch MediaMTX playback sources. WHEP first, HLS fallback.</p>
           </div>
-          <strong>IVS</strong>
+          <strong>LIVE</strong>
         </section>
-        <AdminIvsPreviewClient courtNumber={courtNumber} />
+        <StreamPlayer courtNumber={courtNumber} />
       </div>
     </main>
   );

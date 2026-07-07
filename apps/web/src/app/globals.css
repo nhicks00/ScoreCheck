@@ -1014,7 +1014,7 @@ label {
 
 .role-banner,
 .scorer-match,
-.ivs-preview,
+.stream-preview,
 .video-fallback,
 .handoff-panel,
 .correction-panel {
@@ -1099,13 +1099,13 @@ label {
   padding: 8px;
 }
 
-.ivs-preview {
+.stream-preview {
   display: grid;
   gap: 8px;
   padding: 10px;
 }
 
-.ivs-preview video {
+.stream-preview video {
   aspect-ratio: 16 / 9;
   background: #050607;
   border-radius: 6px;
