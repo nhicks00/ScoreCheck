@@ -109,7 +109,7 @@ export default function TermsPage() {
         </section>
 
         <div className="legal-actions">
-          <Link className="button" href="/">Back to ScoreCheck</Link>
+          <Link className="button primary" href="/">Back to ScoreCheck</Link>
           <Link className="button" href="/privacy">Privacy Policy</Link>
         </div>
       </article>

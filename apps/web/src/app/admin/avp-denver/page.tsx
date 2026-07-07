@@ -17,7 +17,12 @@ export default async function AdminAvpDenverPage() {
     return (
       <main className="shell">
         <div className="container stack">
-          <Link className="button" href="/admin/events">Events</Link>
+          <div className="topbar">
+            <span className="brand-mark">Score<em>Check</em></span>
+            <nav className="topbar-nav" aria-label="Admin">
+              <Link className="button ghost" href="/admin/events">Events</Link>
+            </nav>
+          </div>
           <SetupNotice />
         </div>
       </main>
@@ -35,9 +40,12 @@ export default async function AdminAvpDenverPage() {
     <main className="shell">
       <div className="container admin-container stack">
         <div className="topbar">
-          <Link className="button" href="/admin/events">Events</Link>
-          <Link className="button" href={`/admin/events/${event.id}`}>Event setup</Link>
-          <form action="/api/admin/logout" method="post"><button type="submit">Logout</button></form>
+          <span className="brand-mark">Score<em>Check</em></span>
+          <nav className="topbar-nav" aria-label="Admin">
+            <Link className="button ghost" href="/admin/events">Events</Link>
+            <Link className="button ghost" href={`/admin/events/${event.id}`}>Event setup</Link>
+            <form action="/api/admin/logout" method="post"><button type="submit">Logout</button></form>
+          </nav>
         </div>
         <FanScoringDashboard
           event={{ id: event.id, name: event.name, slug: event.slug ?? env.defaultEventSlug }}

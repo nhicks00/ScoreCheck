@@ -20,9 +20,17 @@ export default async function EventsPage() {
     <main className="shell">
       <div className="container stack">
         <div className="topbar">
-          <h1 className="brand">Events</h1>
-          <Link className="button" href="/">Home</Link>
+          <span className="brand-mark">Score<em>Check</em></span>
+          <nav className="topbar-nav" aria-label="Admin">
+            <Link className="button ghost" href="/">Home</Link>
+          </nav>
         </div>
+        <header className="admin-dashboard-header">
+          <div>
+            <h1>Events</h1>
+            <p className="muted">Create an event, activate it, and grab the static overlay URLs.</p>
+          </div>
+        </header>
         <SetupNotice />
         <section className="grid two">
           <form className="panel stack" action="/api/events" method="post">

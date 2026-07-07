@@ -18,7 +18,12 @@ export default async function EventPage({ params }: { params: Promise<{ eventId:
     return (
       <main className="shell">
         <div className="container stack">
-          <div className="topbar"><Link className="button" href="/admin/events">Events</Link></div>
+          <div className="topbar">
+            <span className="brand-mark">Score<em>Check</em></span>
+            <nav className="topbar-nav" aria-label="Admin">
+              <Link className="button ghost" href="/admin/events">Events</Link>
+            </nav>
+          </div>
           <SetupNotice />
         </div>
       </main>
@@ -44,9 +49,12 @@ export default async function EventPage({ params }: { params: Promise<{ eventId:
     <main className="shell">
       <div className="container stack">
         <div className="topbar">
-          <Link className="button" href="/admin/events">Events</Link>
-          <Link className="button" href={`/admin/events/${eventId}/courts`}>Court Grid</Link>
-          <form action="/api/admin/logout" method="post"><button type="submit">Logout</button></form>
+          <span className="brand-mark">Score<em>Check</em></span>
+          <nav className="topbar-nav" aria-label="Admin">
+            <Link className="button ghost" href="/admin/events">Events</Link>
+            <Link className="button ghost" href={`/admin/events/${eventId}/courts`}>Court Grid</Link>
+            <form action="/api/admin/logout" method="post"><button type="submit">Logout</button></form>
+          </nav>
         </div>
         <EventDashboard
           event={eventResult.data}

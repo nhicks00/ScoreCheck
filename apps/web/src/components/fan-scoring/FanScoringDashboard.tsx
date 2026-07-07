@@ -182,12 +182,13 @@ export function FanScoringDashboard({
                 </div>
               </header>
               <div className="admin-match-score" aria-label={`${teamA} versus ${teamB}`}>
-                <div className="admin-team-row">
+                <div className="admin-team-row team-a">
+                  <span className="team-chip" aria-hidden="true" />
                   <strong>{teamA}</strong>
                   <span>{score?.team_a_score ?? 0}</span>
                 </div>
-                <div className="admin-vs">vs</div>
-                <div className="admin-team-row">
+                <div className="admin-team-row team-b">
+                  <span className="team-chip" aria-hidden="true" />
                   <strong>{teamB}</strong>
                   <span>{score?.team_b_score ?? 0}</span>
                 </div>

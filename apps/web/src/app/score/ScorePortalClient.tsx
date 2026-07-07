@@ -66,7 +66,7 @@ export function ScorePortalClient() {
 
   return (
     <main className="shell score-shell">
-      <div className="score-container stack">
+      <div className="score-container">
         <header className="score-header">
           <div>
             <p className="eyebrow">ScoreCheck</p>
@@ -79,7 +79,7 @@ export function ScorePortalClient() {
         </header>
 
         <section className="score-strip">
-          <div><ShieldCheck size={18} /> {covered} courts covered</div>
+          <div><ShieldCheck size={18} /> {covered} of {courts.length || 8} courts covered</div>
           {updatedAt && <div>Updated {updatedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</div>}
         </section>
 
@@ -90,27 +90,33 @@ export function ScorePortalClient() {
           {courts.map((court) => {
             const teamA = displayTeamName(court.match?.teamA, "TBD");
             const teamB = displayTeamName(court.match?.teamB, "TBD");
+            const status = courtStatus(court);
+            const teamASets = court.score?.teamASets ?? 0;
+            const teamBSets = court.score?.teamBSets ?? 0;
             return (
               <article className="fan-court-card" key={court.id}>
                 <div className="court-card-top">
-                  <span className="status">{courtStatus(court)}</span>
+                  <span className={`status ${status.tone}`}>{status.label}</span>
                   <span className="stream-key-badge" aria-label={`Stream key ${court.courtNumber}`}>Key {court.courtNumber}</span>
                 </div>
                 <h2 className="court-title">{court.displayName || `Court ${court.courtNumber}`}</h2>
                 <div className="court-scoreboard" aria-label={`${teamA} versus ${teamB}`}>
-                  <div className="court-team-row">
-                    <strong>{teamA}</strong>
-                    <span>{court.score?.teamAScore ?? 0}</span>
+                  <div className="court-team-row team-a">
+                    <span className="team-chip" aria-hidden="true" />
+                    <strong className="team-name">{teamA}</strong>
+                    <SetDots sets={teamASets} label={`${teamA}: ${teamASets} sets won`} />
+                    <span className="score-num">{court.score?.teamAScore ?? 0}</span>
                   </div>
-                  <div className="court-versus">vs</div>
-                  <div className="court-team-row">
-                    <strong>{teamB}</strong>
-                    <span>{court.score?.teamBScore ?? 0}</span>
+                  <div className="court-team-row team-b">
+                    <span className="team-chip" aria-hidden="true" />
+                    <strong className="team-name">{teamB}</strong>
+                    <SetDots sets={teamBSets} label={`${teamB}: ${teamBSets} sets won`} />
+                    <span className="score-num">{court.score?.teamBScore ?? 0}</span>
                   </div>
                 </div>
                 <div className="court-set-row">
-                  <span>Set {court.score?.currentSet ?? 1}</span>
-                  <small>Sets {court.score?.teamASets ?? 0}-{court.score?.teamBSets ?? 0}</small>
+                  <span className="set-badge">Set {court.score?.currentSet ?? 1}</span>
+                  <small>Sets {teamASets}-{teamBSets}</small>
                 </div>
                 <Link className="button primary fan-cta" href={`/score/court/${court.courtNumber}`}>
                   Help score {court.displayName || `Court ${court.courtNumber}`}
@@ -124,12 +130,23 @@ export function ScorePortalClient() {
   );
 }
 
-function courtStatus(court: CourtCard): string {
-  if (!court.scoringOpen) return "Scoring closed";
-  if (!court.match) return "Match not loaded";
-  if (court.score?.status?.toLowerCase().includes("final")) return "Match complete";
-  if (court.scorerStatus.needsScorer) return "Needs scorer";
-  return "Being scored";
+function SetDots({ sets, label }: { sets: number; label: string }) {
+  const total = Math.max(2, Math.min(sets, 3));
+  return (
+    <span className="set-dots" role="img" aria-label={label}>
+      {Array.from({ length: total }, (_, index) => (
+        <span className={`set-dot ${index < sets ? "won" : ""}`} key={index} />
+      ))}
+    </span>
+  );
+}
+
+function courtStatus(court: CourtCard): { label: string; tone: string } {
+  if (!court.scoringOpen) return { label: "Scoring closed", tone: "" };
+  if (!court.match) return { label: "Match not loaded", tone: "" };
+  if (court.score?.status?.toLowerCase().includes("final")) return { label: "Match complete", tone: "info" };
+  if (court.scorerStatus.needsScorer) return { label: "Needs scorer", tone: "warn" };
+  return { label: "Live scoring", tone: "live" };
 }
 
 function displayTeamName(value: string | null | undefined, fallback: string): string {
