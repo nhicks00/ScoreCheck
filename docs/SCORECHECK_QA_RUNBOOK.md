@@ -48,7 +48,7 @@ Audit these routes:
 - `/score/session/[sessionToken]` using a temporary admin test session
 - `/overlay/court/1`
 - `/overlay/stream/1`
-- `/admin/ivs-preview/1`
+- `/admin/stream-preview/1`
 
 Expected public flow behavior:
 
@@ -56,7 +56,7 @@ Expected public flow behavior:
 - `/score` shows eight court cards, court names are the primary card headings, stream key labels are small `Key N` badges, and team rows align consistently around the score and `vs` divider.
 - Claim page has two scoring modes: `Score only` and `Watch stream + score`.
 - Admin test mode shows `Start admin scoring test`; normal public mode does not.
-- IVS preview unavailable state says the stream is not live yet and provides Play/Reload controls instead of presenting a blank success state.
+- Stream preview unavailable state says the stream is offline or not configured and provides Play/Reload controls instead of presenting a blank success state.
 
 ## Scorer Session Checks
 
@@ -79,7 +79,7 @@ Audit these routes after admin login:
 - `/admin/events/[eventId]`
 - `/admin/events/[eventId]/fan-scoring`
 - `/admin/events/[eventId]/courts`
-- `/admin/ivs-preview/1`
+- `/admin/stream-preview/1`
 
 Expected admin behavior:
 
@@ -103,7 +103,7 @@ npm run verify:architecture
 npm run cleanup:vercel-worker-env
 ```
 
-`verify:architecture` is allowed to fail only for documented external blockers. As of the July 2, 2026 follow-up audit, there are no known external readiness blockers: Vercel worker-only YouTube variables have been removed from the app environment, and StreamRun courts 1-8 all have separate saved YouTube and IVS output branches with production overlay URLs.
+`verify:architecture` is allowed to fail only for documented external blockers. Since the MediaMTX migration, the MediaMTX section is expected to report blocked until the DigitalOcean droplet exists and the `MEDIAMTX_*` env vars are set (see `docs/MEDIAMTX_DIGITALOCEAN_SETUP.md`). Vercel worker-only YouTube variables were removed from the app environment in the July 2, 2026 audit, and StreamRun courts 1-8 all have separate saved YouTube and preview output branches with production overlay URLs.
 
 `cleanup:vercel-worker-env` is dry-run by default. Destructive cleanup requires explicit human approval plus:
 

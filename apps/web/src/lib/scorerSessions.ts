@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { fanScoringSettings, getCourtByNumber, getEventBySlug, resolveCourtIdentifier, type CourtRow, type EventRow } from "./eventConfig";
-import { courtIvsEnv, getEnv, publicOrigin, requestOrigin } from "./env";
+import { getEnv, publicOrigin, requestOrigin } from "./env";
 import { checkRateLimit } from "./rateLimit";
 import { normalizeVerificationCode } from "./youtube";
 import {
@@ -18,6 +18,7 @@ import { persistScoreAndOverlay, scoreForCurrentMatch } from "./scoreState";
 import { generateClaimCode, generateSessionToken, hashToken, requestIpHash, safeDisplayName, userAgent, validateToken } from "./security";
 import { apiScoreHasPriority } from "./sourcePriority";
 import { supabaseAdmin } from "./supabase";
+import { videoConfigured } from "./video";
 import crypto from "node:crypto";
 
 export type WatchMode = "website" | "courtside";
@@ -438,7 +439,13 @@ async function sessionForClaim(claim: ClaimRow): Promise<SessionRow | null> {
 }
 
 function rawSessionTokenForClaim(claimId: string): string {
-  const secret = getEnv().adminSecret || "local-dev-scorecheck";
+  let secret = getEnv().adminSecret;
+  if (!secret) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("ADMIN_SECRET must be configured to derive scorer session tokens in production");
+    }
+    secret = "local-dev-scorecheck";
+  }
   return crypto.createHmac("sha256", secret)
     .update(`scorecheck-session:${claimId}`)
     .digest("base64url");
@@ -737,7 +744,7 @@ export function publicSessionState(context: Awaited<ReturnType<typeof loadSessio
       scoringOpen: context.court.scoring_open !== false,
       backupRequested: context.court.backup_requested !== false,
       youtubeVideoId: context.court.youtube_video_id,
-      ivsConfigured: Boolean((context.court.ivs_channel_arn || courtIvsEnv(context.court.court_number).channelArn) && (context.court.ivs_playback_url || courtIvsEnv(context.court.court_number).playbackUrl))
+      videoConfigured: videoConfigured()
     },
     match: context.match,
     officialScore,

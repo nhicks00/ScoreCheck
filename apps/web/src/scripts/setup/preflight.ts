@@ -6,7 +6,6 @@ import { loadLocalEnv } from "../envLoader";
 type CheckStatus = "ok" | "missing" | "failing";
 
 const cliChecks = {
-  aws: commandOk("aws", ["--version"]),
   supabase: toolOk("supabase"),
   vercel: toolOk("vercel")
 };
@@ -34,7 +33,8 @@ async function main() {
     ["YouTube OAuth refresh token", env.youtubeRefreshToken ? "ok" : "missing"],
     ["YouTube OAuth token refresh", await youtubeOAuthAccessStatus(env)],
     ["YouTube worker shared secret", env.youtubeWorkerSharedSecret ? "ok" : "missing"],
-    ["AWS CLI", cliChecks.aws ? "ok" : "missing"],
+    ["MediaMTX WHEP/HLS base URL", env.mediamtxWhepBaseUrl || env.mediamtxHlsBaseUrl ? "ok" : "missing"],
+    ["MediaMTX RTMP ingest base", env.mediamtxRtmpIngestBase ? "ok" : "missing"],
     ["Supabase CLI", cliChecks.supabase ? "ok" : "missing"],
     ["Vercel CLI", cliChecks.vercel ? "ok" : "missing"],
     ["Local setup env", fs.existsSync(".env.setup.local") || fs.existsSync(".env.local") ? "ok" : "missing"]

@@ -1,11 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { courtIvsEnv, getEnv } from "../../lib/env";
+import { getEnv } from "../../lib/env";
 import { loadLocalEnv } from "../envLoader";
 
 loadLocalEnv();
 const env = getEnv();
-const generatedIvs = readGeneratedIvs();
 const outputDir = path.join(process.cwd(), ".local");
 fs.mkdirSync(outputDir, { recursive: true });
 
@@ -19,13 +18,14 @@ const vercelLines = [
   ["NEXT_PUBLIC_EVENT_NAME", env.eventName],
   ["NEXT_PUBLIC_COURT_COUNT", String(env.courtCount)],
   ["NEXT_PUBLIC_DEFAULT_TIMEZONE", env.timezone],
-  ["AWS_REGION", env.awsRegion],
-  ["IVS_PLAYBACK_PRIVATE_KEY", env.ivsPlaybackPrivateKey],
+  ["MEDIAMTX_WHEP_BASE_URL", env.mediamtxWhepBaseUrl],
+  ["MEDIAMTX_HLS_BASE_URL", env.mediamtxHlsBaseUrl],
   ["YOUTUBE_WORKER_SHARED_SECRET", env.youtubeWorkerSharedSecret]
 ];
 
-pushIfPresent(vercelLines, "IVS_PLAYBACK_KEY_PAIR_ID", env.ivsPlaybackKeyPairId);
-pushIfPresent(vercelLines, "IVS_PLAYBACK_KEY_PAIR_ARN", env.ivsPlaybackKeyPairArn);
+pushIfPresent(vercelLines, "MEDIAMTX_READ_USER", env.mediamtxReadUser);
+pushIfPresent(vercelLines, "MEDIAMTX_READ_PASS", env.mediamtxReadPass);
+pushIfPresent(vercelLines, "MEDIAMTX_RTMP_INGEST_BASE", env.mediamtxRtmpIngestBase);
 
 const workerLines = [
   ["NODE_ENV", "production"],
@@ -48,10 +48,7 @@ const workerLines = [
 ];
 
 for (let court = 1; court <= env.courtCount; court += 1) {
-  const ivs = courtIvsEnv(court);
-  const generated = generatedIvs[court];
-  vercelLines.push([`COURT_${court}_IVS_CHANNEL_ARN`, ivs.channelArn || generated?.channelArn || ""]);
-  vercelLines.push([`COURT_${court}_IVS_PLAYBACK_URL`, ivs.playbackUrl || generated?.playbackUrl || ""]);
+  pushIfPresent(vercelLines, `COURT_${court}_STREAM_PATH`, process.env[`COURT_${court}_STREAM_PATH`] ?? "");
 }
 
 fs.writeFileSync(path.join(outputDir, "vercel-env.generated.env"), serializeEnv(vercelLines));
@@ -70,11 +67,4 @@ function pushIfPresent(lines: string[][], key: string, value: string) {
 function quote(value: string) {
   if (!value) return "";
   return /[\s"'\\]/.test(value) ? JSON.stringify(value) : value;
-}
-
-function readGeneratedIvs() {
-  const file = path.join(process.cwd(), ".local", "aws-ivs.generated.json");
-  const contents = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
-  const parsed = contents ? JSON.parse(contents) as { channels?: Array<{ court: number; channelArn?: string; playbackUrl?: string }> } : {};
-  return Object.fromEntries((parsed.channels ?? []).map((channel) => [channel.court, channel]));
 }
