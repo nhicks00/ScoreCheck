@@ -47,6 +47,10 @@ vbl_credentials.json
 vbl_session.json
 **/vbl_session.json
 
+# Generated debug/test artifacts
+debug-artifacts/
+TestResults/
+
 # Misc
 .idea/
 .vscode/
