@@ -3,6 +3,31 @@ import { supabaseAdmin } from "./supabase";
 
 const DEFAULT_OFF_EVENT_SLEEP_MS = 15 * 60_000;
 const MAX_OFF_EVENT_SLEEP_MS = 6 * 60 * 60_000;
+const POLLING_STALE_MS = 60_000;
+// A sleeping worker only heartbeats once per sleep interval, so staleness
+// must be judged against its declared interval, not the polling threshold.
+const SLEEP_GRACE_MULTIPLIER = 1.5;
+
+export type WorkerHeartbeatRow = {
+  status?: string | null;
+  last_seen_at?: string | null;
+  metadata?: Record<string, unknown> | null;
+};
+
+export function workerHeartbeatStale(heartbeat: WorkerHeartbeatRow | null | undefined, nowMs = Date.now()): boolean {
+  if (!heartbeat?.last_seen_at) return true;
+  const lastSeen = new Date(heartbeat.last_seen_at).getTime();
+  if (!Number.isFinite(lastSeen)) return true;
+  const age = nowMs - lastSeen;
+  if (heartbeat.status === "sleeping") {
+    const raw = heartbeat.metadata?.nextCheckMs;
+    const interval = typeof raw === "number" && Number.isFinite(raw) && raw > 0
+      ? Math.min(raw, MAX_OFF_EVENT_SLEEP_MS)
+      : DEFAULT_OFF_EVENT_SLEEP_MS;
+    return age > interval * SLEEP_GRACE_MULTIPLIER;
+  }
+  return age > POLLING_STALE_MS;
+}
 
 type ActiveEventRow = {
   id: string;
