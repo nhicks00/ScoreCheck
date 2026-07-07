@@ -12,11 +12,6 @@ export function generateSessionToken(): string {
   return crypto.randomBytes(SESSION_TOKEN_BYTES).toString("base64url");
 }
 
-export function generateClaimCode(courtNumber: number): string {
-  const suffix = String(crypto.randomInt(100, 1000));
-  return `C${courtNumber}-${suffix}`;
-}
-
 export function hashSecret(value: string): string {
   return crypto.createHash("sha256").update(`mcs:v1:${value}`).digest("hex");
 }

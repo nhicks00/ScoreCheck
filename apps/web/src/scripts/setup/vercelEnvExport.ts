@@ -19,8 +19,7 @@ const vercelLines = [
   ["NEXT_PUBLIC_COURT_COUNT", String(env.courtCount)],
   ["NEXT_PUBLIC_DEFAULT_TIMEZONE", env.timezone],
   ["MEDIAMTX_WHEP_BASE_URL", env.mediamtxWhepBaseUrl],
-  ["MEDIAMTX_HLS_BASE_URL", env.mediamtxHlsBaseUrl],
-  ["YOUTUBE_WORKER_SHARED_SECRET", env.youtubeWorkerSharedSecret]
+  ["MEDIAMTX_HLS_BASE_URL", env.mediamtxHlsBaseUrl]
 ];
 
 pushIfPresent(vercelLines, "MEDIAMTX_READ_USER", env.mediamtxReadUser);
@@ -29,21 +28,12 @@ pushIfPresent(vercelLines, "MEDIAMTX_RTMP_INGEST_BASE", env.mediamtxRtmpIngestBa
 
 const workerLines = [
   ["NODE_ENV", "production"],
-  ["WORKER_ID", process.env.WORKER_ID || "scorecheck-youtube-worker-prod"],
-  ["WORKER_MODE", process.env.WORKER_MODE || "all"],
+  ["WORKER_ID", process.env.WORKER_ID || "scorecheck-worker-prod"],
   ["NEXT_PUBLIC_SUPABASE_URL", env.supabaseUrl],
   ["NEXT_PUBLIC_SUPABASE_ANON_KEY", env.supabaseAnonKey],
   ["SUPABASE_SERVICE_ROLE_KEY", env.supabaseServiceRoleKey],
   ["ADMIN_SECRET", env.adminSecret],
   ["NEXT_PUBLIC_SITE_URL", env.publicSiteUrl],
-  ["YOUTUBE_API_KEY", env.youtubeApiKey],
-  ["YOUTUBE_CLIENT_ID", env.youtubeClientId],
-  ["YOUTUBE_CLIENT_SECRET", env.youtubeClientSecret],
-  ["YOUTUBE_REFRESH_TOKEN", env.youtubeRefreshToken],
-  ["YOUTUBE_BOT_POSTING_ENABLED", String(env.youtubeBotPostingEnabled)],
-  ["YOUTUBE_WORKER_SHARED_SECRET", env.youtubeWorkerSharedSecret],
-  ["YOUTUBE_CHAT_RECONNECT_MS", process.env.YOUTUBE_CHAT_RECONNECT_MS || "5000"],
-  ["YOUTUBE_CHAT_IDLE_MS", process.env.YOUTUBE_CHAT_IDLE_MS || "1000"],
   ["WORKER_HEARTBEAT_MS", process.env.WORKER_HEARTBEAT_MS || "15000"]
 ];
 

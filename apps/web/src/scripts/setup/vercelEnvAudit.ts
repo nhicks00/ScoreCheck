@@ -13,13 +13,6 @@ type VercelEnv = {
 };
 
 const requiredTargets = ["production", "preview"] as const;
-const workerOnlyYoutubeKeys = [
-  "YOUTUBE_API_KEY",
-  "YOUTUBE_CLIENT_ID",
-  "YOUTUBE_CLIENT_SECRET",
-  "YOUTUBE_REFRESH_TOKEN",
-  "YOUTUBE_BOT_POSTING_ENABLED"
-];
 
 loadLocalEnv();
 
@@ -36,7 +29,6 @@ async function main() {
   if (!project.projectId) throw new Error("Missing .vercel/project.json projectId. Run vercel link first.");
 
   const expectedKeys = parseEnvKeys(path.join(process.cwd(), ".local", "vercel-env.generated.env"));
-  const generatedWorkerOnlyKeys = expectedKeys.filter((key) => workerOnlyYoutubeKeys.includes(key));
   const teamQuery = project.orgId ? `?teamId=${encodeURIComponent(project.orgId)}` : "";
   const [projectConfig, envs] = await Promise.all([
     fetchVercelJson<Record<string, unknown>>(`/v9/projects/${encodeURIComponent(project.projectId)}${teamQuery}`, token),
@@ -58,8 +50,7 @@ async function main() {
       target,
       expected: expectedKeys.length,
       actual: actualKeys.size,
-      missing: expectedKeys.filter((key) => !actualKeys.has(key)),
-      workerOnlyPresent: workerOnlyYoutubeKeys.filter((key) => actualKeys.has(key))
+      missing: expectedKeys.filter((key) => !actualKeys.has(key))
     };
   });
 
@@ -75,8 +66,7 @@ async function main() {
     project: projectAudit,
     generated: {
       vercelEnvPath: ".local/vercel-env.generated.env",
-      expectedKeys: expectedKeys.length,
-      workerOnlyYoutubeKeysPresent: generatedWorkerOnlyKeys
+      expectedKeys: expectedKeys.length
     },
     targets: targetAudits
   };
@@ -87,11 +77,9 @@ async function main() {
     projectAudit.framework === "nextjs" ? null : `Vercel framework is ${projectAudit.framework || "missing"}, expected nextjs.`,
     projectAudit.rootDirectory === "apps/web" ? null : `Vercel rootDirectory is ${projectAudit.rootDirectory || "missing"}, expected apps/web.`,
     projectAudit.productionDomainPresent ? null : `Production domain ${productionDomain} is not assigned to the project.`,
-    generatedWorkerOnlyKeys.length === 0 ? null : `Generated Vercel env still includes worker-only YouTube keys: ${generatedWorkerOnlyKeys.join(", ")}.`,
-    ...targetAudits.flatMap((audit) => [
-      audit.missing.length === 0 ? null : `${audit.target} is missing expected env keys: ${audit.missing.join(", ")}.`,
-      audit.workerOnlyPresent.length === 0 ? null : `${audit.target} has worker-only YouTube keys in Vercel app env: ${audit.workerOnlyPresent.join(", ")}.`
-    ])
+    ...targetAudits.map((audit) =>
+      audit.missing.length === 0 ? null : `${audit.target} is missing expected env keys: ${audit.missing.join(", ")}.`
+    )
   ].filter(Boolean);
 
   if (failures.length) {

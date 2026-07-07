@@ -1,8 +1,7 @@
 import { NextRequest } from "next/server";
 import { fanScoringSettings, getCourtByNumber, getEventBySlug, resolveCourtIdentifier, type CourtRow, type EventRow } from "./eventConfig";
-import { getEnv, publicOrigin, requestOrigin } from "./env";
+import { getEnv, requestOrigin } from "./env";
 import { checkRateLimit } from "./rateLimit";
-import { normalizeVerificationCode } from "./youtube";
 import {
   defaultBeachFormat,
   emptyScoreState,
@@ -15,7 +14,7 @@ import {
   type ScoreState
 } from "./scoringRules";
 import { persistScoreAndOverlay, scoreForCurrentMatch } from "./scoreState";
-import { generateClaimCode, generateSessionToken, hashToken, requestIpHash, safeDisplayName, userAgent, validateToken } from "./security";
+import { hashToken, requestIpHash, safeDisplayName, userAgent } from "./security";
 import { apiScoreHasPriority } from "./sourcePriority";
 import { supabaseAdmin } from "./supabase";
 import { videoConfigured } from "./video";
@@ -51,17 +50,9 @@ export type ClaimRow = {
   court_id: string;
   match_id: string | null;
   display_name: string;
-  verification_code_hash: string;
-  verification_code_label: string;
-  claim_status_token_hash: string | null;
   status: "pending" | "verified" | "assigned" | "expired" | "cancelled" | "failed";
   assigned_role: ScorerRole | null;
   assigned_session_id: string | null;
-  youtube_live_chat_id: string | null;
-  youtube_channel_id: string | null;
-  youtube_display_name: string | null;
-  youtube_profile_image_url: string | null;
-  youtube_author_details: Record<string, unknown>;
   watch_mode?: WatchMode;
   expires_at: string;
 };
@@ -76,9 +67,6 @@ export type SessionRow = {
   status: "active" | "stale" | "released" | "revoked" | "promoted" | "ended";
   session_token_hash: string;
   display_name: string;
-  youtube_channel_id: string | null;
-  youtube_display_name: string | null;
-  youtube_profile_image_url: string | null;
   priority_score: number;
   last_heartbeat_at: string | null;
   lease_expires_at: string | null;
@@ -159,9 +147,7 @@ export async function startClaim(input: {
   if (!court) return { ok: false as const, status: 404, error: "Court not found." };
   if (court.scoring_open === false) return { ok: false as const, status: 403, error: "Scoring is closed for this court." };
 
-  const code = generateClaimCode(input.courtNumber);
-  const claimStatusToken = generateSessionToken();
-  const normalizedCode = normalizeVerificationCode(code) ?? code.toUpperCase();
+  const displayName = safeDisplayName(input.displayName);
   const settings = fanScoringSettings(event);
   const expiresAt = new Date(Date.now() + settings.claimExpirationMinutes * 60_000).toISOString();
   const { data: claim, error } = await db
@@ -170,18 +156,12 @@ export async function startClaim(input: {
       event_id: event.id,
       court_id: court.id,
       match_id: court.current_match_id,
-      display_name: safeDisplayName(input.displayName),
-      verification_code_hash: hashToken(normalizedCode),
-      verification_code_label: code,
+      display_name: displayName,
       status: "verified",
-      claim_status_token_hash: hashToken(claimStatusToken),
       watch_mode: input.watchMode,
-      youtube_live_chat_id: court.youtube_live_chat_id ?? null,
-      youtube_display_name: "Direct scoring access",
       ip_hash: ipHash,
       user_agent: userAgent(input.req),
-      expires_at: expiresAt,
-      verified_at: new Date().toISOString()
+      expires_at: expiresAt
     })
     .select("*")
     .single();
@@ -191,160 +171,31 @@ export async function startClaim(input: {
     eventId: event.id,
     courtId: court.id,
     matchId: court.current_match_id,
-    type: "claim_created",
-    payload: { claimId: claim.id, displayName: safeDisplayName(input.displayName), watchMode: input.watchMode, verificationMode: "direct" }
+    type: "claim_started",
+    payload: { claimId: claim.id, displayName, watchMode: input.watchMode }
   });
-  await logSessionEvent({
-    eventId: event.id,
-    courtId: court.id,
-    matchId: court.current_match_id,
-    type: "claim_verified",
-    payload: { claimId: claim.id, source: "direct_scoring_access" }
-  });
+
+  const assigned = await assignSessionForClaim(claim as ClaimRow, requestUrlOrigin(input.req));
+  if (!assigned.ok) return assigned;
 
   return {
     ok: true as const,
-    claim: claim as ClaimRow,
-    claimStatusToken,
+    claimId: claim.id as string,
+    role: assigned.role,
+    sessionUrl: assigned.sessionUrl,
     message: "Opening scorer page..."
   };
 }
 
-export async function getClaimStatus(input: { claimId: string; claimStatusToken?: string | null; origin?: string }) {
-  const db = supabaseAdmin();
-  const { data, error } = await db.from("scorer_claims").select("*").eq("id", input.claimId).maybeSingle<ClaimRow>();
-  if (error) return { ok: false as const, status: 500, error: error.message };
-  if (!data) return { ok: false as const, status: 404, error: "Claim not found." };
-  if (data.claim_status_token_hash && !validateToken(input.claimStatusToken, data.claim_status_token_hash)) {
-    return { ok: false as const, status: 403, error: "Claim verification link is not valid." };
+function requestUrlOrigin(req: NextRequest): string | undefined {
+  try {
+    return new URL(req.url).origin;
+  } catch {
+    return undefined;
   }
-  if (data.status === "pending" && new Date(data.expires_at).getTime() < Date.now()) {
-    await db.from("scorer_claims").update({ status: "expired", updated_at: new Date().toISOString() }).eq("id", data.id);
-    return { ok: true as const, status: "expired", message: "That code expired. Tap below to get a new code." };
-  }
-  if (data.status === "verified") {
-    const assigned = await assignSessionForVerifiedClaim(data, input.origin);
-    if (!assigned.ok) return assigned;
-    return {
-      ok: true as const,
-      status: "verified",
-      role: assigned.role,
-      sessionUrl: assigned.sessionUrl
-    };
-  }
-  if (data.status === "assigned") {
-    const existing = await sessionForClaim(data);
-    return {
-      ok: true as const,
-      status: "assigned",
-      role: data.assigned_role,
-      sessionUrl: existing ? `${requestOrigin(input.origin)}/score/session/${encodeURIComponent(rawSessionTokenForClaim(data.id))}` : undefined,
-      message: existing ? "Opening scorer page..." : "Session already assigned. Start a new claim if this page was refreshed."
-    };
-  }
-  return {
-    ok: true as const,
-    status: data.status,
-    message: data.status === "pending" ? "Waiting for verification." : "Claim is no longer active."
-  };
 }
 
-export async function verifyClaimFromYoutubeMessage(input: {
-  liveChatId: string;
-  messageId: string;
-  messageText: string;
-  author: {
-    channelId?: string | null;
-    displayName?: string | null;
-    profileImageUrl?: string | null;
-    isChatOwner?: boolean;
-    isChatModerator?: boolean;
-    isChatSponsor?: boolean;
-    isVerified?: boolean;
-  };
-  publishedAt?: string | null;
-}) {
-  const db = supabaseAdmin();
-  const normalized = normalizeVerificationCode(input.messageText);
-  if (!normalized) {
-    await storeYoutubeMessage(input, null);
-    return { ok: true as const, matched: false };
-  }
-  const hash = hashToken(normalized);
-  const { data: claim, error } = await db
-    .from("scorer_claims")
-    .select("*")
-    .eq("verification_code_hash", hash)
-    .eq("status", "pending")
-    .gt("expires_at", new Date().toISOString())
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle<ClaimRow>();
-  if (error) return { ok: false as const, error: error.message };
-  await storeYoutubeMessage(input, claim?.id ?? null);
-  if (!claim) return { ok: true as const, matched: false };
-
-  const priority = priorityFromAuthor(input.author);
-  const { error: updateError } = await db.from("scorer_claims").update({
-    status: "verified",
-    youtube_live_chat_id: input.liveChatId,
-    youtube_message_id: input.messageId,
-    youtube_channel_id: input.author.channelId ?? null,
-    youtube_display_name: input.author.displayName ?? null,
-    youtube_profile_image_url: input.author.profileImageUrl ?? null,
-    youtube_author_details: input.author,
-    verified_at: new Date().toISOString(),
-    updated_at: new Date().toISOString()
-  }).eq("id", claim.id);
-  if (updateError) return { ok: false as const, error: updateError.message };
-
-  const verifiedClaim = {
-    ...claim,
-    status: "verified" as const,
-    youtube_live_chat_id: input.liveChatId,
-    youtube_channel_id: input.author.channelId ?? null,
-    youtube_display_name: input.author.displayName ?? null,
-    youtube_profile_image_url: input.author.profileImageUrl ?? null,
-    youtube_author_details: input.author
-  };
-  const assignment = await assignSessionForVerifiedClaim(verifiedClaim);
-
-  await logSessionEvent({
-    eventId: claim.event_id,
-    courtId: claim.court_id,
-    matchId: claim.match_id,
-    type: "claim_verified",
-    payload: { claimId: claim.id, youtubeChannelId: input.author.channelId, priority }
-  });
-
-  return {
-    ok: true as const,
-    matched: true,
-    claimId: claim.id,
-    sessionId: assignment.ok ? assignment.session.id : null,
-    role: assignment.ok ? assignment.role : null,
-    priority
-  };
-}
-
-export async function adminVerifyClaim(claimId: string) {
-  const db = supabaseAdmin();
-  const { data: claim, error } = await db.from("scorer_claims").select("*").eq("id", claimId).maybeSingle<ClaimRow>();
-  if (error) return { ok: false as const, status: 500, error: error.message };
-  if (!claim) return { ok: false as const, status: 404, error: "Claim not found." };
-  if (claim.status === "pending") {
-    const { error: updateError } = await db.from("scorer_claims").update({
-      status: "verified",
-      verified_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      youtube_display_name: "Admin verified"
-    }).eq("id", claim.id);
-    if (updateError) return { ok: false as const, status: 500, error: updateError.message };
-  }
-  return { ok: true as const };
-}
-
-export async function assignSessionForVerifiedClaim(claim: ClaimRow, origin?: string) {
+export async function assignSessionForClaim(claim: ClaimRow, origin?: string) {
   const db = supabaseAdmin();
   const existing = await sessionForClaim(claim);
   if (existing) {
@@ -381,7 +232,6 @@ export async function assignSessionForVerifiedClaim(claim: ClaimRow, origin?: st
       .eq("status", "active");
     if ((count ?? 0) >= settings.maxBackupScorersPerCourt) role = "waiting";
   }
-  const priority = priorityFromAuthor(claim.youtube_author_details ?? {});
   const leaseExpiresAt = new Date(now.getTime() + settings.failoverSeconds * 1000).toISOString();
   const { data: session, error } = await db.from("scorer_sessions").insert({
     event_id: claim.event_id,
@@ -392,10 +242,7 @@ export async function assignSessionForVerifiedClaim(claim: ClaimRow, origin?: st
     status: "active",
     session_token_hash: hashToken(rawToken),
     display_name: claim.display_name,
-    youtube_channel_id: claim.youtube_channel_id,
-    youtube_display_name: claim.youtube_display_name,
-    youtube_profile_image_url: claim.youtube_profile_image_url,
-    priority_score: priority,
+    priority_score: 0,
     last_heartbeat_at: now.toISOString(),
     lease_expires_at: role === "active" ? leaseExpiresAt : null,
     watch_mode: claim.watch_mode ?? "courtside"
@@ -723,7 +570,6 @@ export function publicSessionState(context: Awaited<ReturnType<typeof loadSessio
     role: context.session.role,
     status: context.session.status,
     displayName: context.session.display_name,
-    youtubeDisplayName: context.session.youtube_display_name,
     lastHeartbeatAt: context.session.last_heartbeat_at,
     leaseExpiresAt: context.session.lease_expires_at,
     watchMode: context.session.watch_mode
@@ -743,7 +589,6 @@ export function publicSessionState(context: Awaited<ReturnType<typeof loadSessio
       displayName: context.court.display_name,
       scoringOpen: context.court.scoring_open !== false,
       backupRequested: context.court.backup_requested !== false,
-      youtubeVideoId: context.court.youtube_video_id,
       videoConfigured: videoConfigured()
     },
     match: context.match,
@@ -1313,29 +1158,6 @@ async function logSessionEvent(input: {
     type: input.type,
     payload: input.payload
   });
-}
-
-async function storeYoutubeMessage(input: Parameters<typeof verifyClaimFromYoutubeMessage>[0], claimId: string | null) {
-  await supabaseAdmin().from("youtube_chat_messages").upsert({
-    live_chat_id: input.liveChatId,
-    youtube_message_id: input.messageId,
-    message_text: input.messageText,
-    author_channel_id: input.author.channelId ?? null,
-    author_display_name: input.author.displayName ?? null,
-    author_profile_image_url: input.author.profileImageUrl ?? null,
-    author_details: input.author,
-    matched_claim_id: claimId,
-    published_at: input.publishedAt ?? null
-  }, { onConflict: "live_chat_id,youtube_message_id" });
-}
-
-function priorityFromAuthor(author: Record<string, unknown> | null | undefined): number {
-  let score = 0;
-  if (author?.isChatOwner) score += 1000;
-  if (author?.isChatModerator) score += 500;
-  if (author?.isVerified) score += 75;
-  if (author?.isChatSponsor) score += 25;
-  return score;
 }
 
 function scoreSignature(state: ScoreState): string {

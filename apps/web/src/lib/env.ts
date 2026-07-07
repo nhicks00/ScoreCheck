@@ -13,12 +13,6 @@ export type AppEnv = {
   mediamtxReadUser: string;
   mediamtxReadPass: string;
   mediamtxRtmpIngestBase: string;
-  youtubeWorkerSharedSecret: string;
-  youtubeApiKey: string;
-  youtubeClientId: string;
-  youtubeClientSecret: string;
-  youtubeRefreshToken: string;
-  youtubeBotPostingEnabled: boolean;
 };
 
 export function getEnv(): AppEnv {
@@ -36,13 +30,7 @@ export function getEnv(): AppEnv {
     mediamtxHlsBaseUrl: process.env.MEDIAMTX_HLS_BASE_URL ?? "",
     mediamtxReadUser: process.env.MEDIAMTX_READ_USER ?? "",
     mediamtxReadPass: process.env.MEDIAMTX_READ_PASS ?? "",
-    mediamtxRtmpIngestBase: process.env.MEDIAMTX_RTMP_INGEST_BASE ?? "",
-    youtubeWorkerSharedSecret: process.env.YOUTUBE_WORKER_SHARED_SECRET ?? "",
-    youtubeApiKey: process.env.YOUTUBE_API_KEY ?? "",
-    youtubeClientId: process.env.YOUTUBE_CLIENT_ID ?? "",
-    youtubeClientSecret: process.env.YOUTUBE_CLIENT_SECRET ?? "",
-    youtubeRefreshToken: process.env.YOUTUBE_REFRESH_TOKEN ?? "",
-    youtubeBotPostingEnabled: process.env.YOUTUBE_BOT_POSTING_ENABLED === "true"
+    mediamtxRtmpIngestBase: process.env.MEDIAMTX_RTMP_INGEST_BASE ?? ""
   };
 }
 

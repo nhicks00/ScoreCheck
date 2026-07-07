@@ -27,12 +27,6 @@ async function main() {
     ["Admin secret", env.adminSecret ? "ok" : "missing"],
     ["StreamRun API key", process.env.STREAMRUN_API_KEY ? "ok" : "missing"],
     ["StreamRun configuration ID", process.env.STREAMRUN_CONFIGURATION_ID ? "ok" : "missing"],
-    ["YouTube API key or OAuth credentials", youtubeCredentialsStatus(env)],
-    ["YouTube OAuth client ID", env.youtubeClientId ? "ok" : "missing"],
-    ["YouTube OAuth client secret", env.youtubeClientSecret ? "ok" : "missing"],
-    ["YouTube OAuth refresh token", env.youtubeRefreshToken ? "ok" : "missing"],
-    ["YouTube OAuth token refresh", await youtubeOAuthAccessStatus(env)],
-    ["YouTube worker shared secret", env.youtubeWorkerSharedSecret ? "ok" : "missing"],
     ["MediaMTX WHEP/HLS base URL", env.mediamtxWhepBaseUrl || env.mediamtxHlsBaseUrl ? "ok" : "missing"],
     ["MediaMTX RTMP ingest base", env.mediamtxRtmpIngestBase ? "ok" : "missing"],
     ["Supabase CLI", cliChecks.supabase ? "ok" : "missing"],
@@ -97,33 +91,6 @@ async function supabaseApiAccessStatus(supabaseUrl: string, serviceRoleKey: stri
         apikey: serviceRoleKey,
         authorization: `Bearer ${serviceRoleKey}`
       }
-    });
-    return res.ok ? "ok" : "failing";
-  } catch {
-    return "failing";
-  }
-}
-
-function youtubeCredentialsStatus(env: ReturnType<typeof getEnv>): CheckStatus {
-  if (env.youtubeApiKey) return "ok";
-  return env.youtubeClientId && env.youtubeClientSecret && env.youtubeRefreshToken ? "ok" : "missing";
-}
-
-async function youtubeOAuthAccessStatus(env: ReturnType<typeof getEnv>): Promise<CheckStatus> {
-  if (!env.youtubeClientId || !env.youtubeClientSecret || !env.youtubeRefreshToken) {
-    return env.youtubeApiKey ? "ok" : "missing";
-  }
-  try {
-    const body = new URLSearchParams({
-      client_id: env.youtubeClientId,
-      client_secret: env.youtubeClientSecret,
-      refresh_token: env.youtubeRefreshToken,
-      grant_type: "refresh_token"
-    });
-    const res = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body
     });
     return res.ok ? "ok" : "failing";
   } catch {

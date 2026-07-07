@@ -11,8 +11,6 @@ type Court = {
   display_name: string;
   scoring_open?: boolean | null;
   backup_requested?: boolean | null;
-  youtube_video_id?: string | null;
-  youtube_live_chat_id?: string | null;
   stream_path?: string | null;
   vbl_court_number?: string | null;
   vbl_court_label?: string | null;
@@ -28,8 +26,6 @@ type Session = {
   role: "active" | "backup" | "waiting";
   status: string;
   display_name: string;
-  youtube_display_name: string | null;
-  youtube_channel_id: string | null;
   last_heartbeat_at: string | null;
   last_action_at: string | null;
   priority_score: number;
@@ -119,8 +115,6 @@ export function FanScoringDashboard({
     eventSubmit.preventDefault();
     const form = new FormData(eventSubmit.currentTarget);
     void updateCourt(courtId, {
-      youtubeVideoId: form.get("youtubeVideoId"),
-      youtubeLiveChatId: form.get("youtubeLiveChatId"),
       streamPath: form.get("streamPath"),
       vblCourtNumber: form.get("vblCourtNumber"),
       vblCourtLabel: form.get("vblCourtLabel")
@@ -164,7 +158,7 @@ export function FanScoringDashboard({
           const match = firstRelation(court.matches);
           const score = scoreForMatch(court.score_states, match?.id);
           const scoreUrl = `${origin}/score/court/${court.court_number}`;
-          const adminScorePath = `/score/court/${court.court_number}?eventSlug=${encodeURIComponent(event.slug)}&admin=1`;
+          const scorePath = `/score/court/${court.court_number}?eventSlug=${encodeURIComponent(event.slug)}`;
           const overlayUrl = `${origin}/overlay/stream/${court.court_number}`;
           const status = courtStatus(court, active, backups.length);
           const teamA = displayTeamName(match?.team_a, "TBD");
@@ -242,7 +236,7 @@ export function FanScoringDashboard({
                 </details>
               )}
               <div className="admin-action-stack">
-                <a className="button warn" href={adminScorePath}><ShieldCheck size={14} /> Test scoring</a>
+                <a className="button warn" href={scorePath}><ShieldCheck size={14} /> Open scoring page</a>
                 <button type="button" onClick={() => void updateCourt(court.id, { scoringOpen: court.scoring_open === false })} disabled={busy != null}>
                   <Radio size={14} /> {court.scoring_open === false ? "Open scoring" : "Close scoring"}
                 </button>
@@ -252,10 +246,8 @@ export function FanScoringDashboard({
                 </div>
               </div>
               <details className="metadata-panel">
-                <summary><Edit3 size={16} /> Edit stream / YouTube / VBL metadata</summary>
+                <summary><Edit3 size={16} /> Edit stream / VBL metadata</summary>
                 <form className="metadata-form" onSubmit={(eventSubmit) => saveMetadata(eventSubmit, court.id)}>
-                  <label>YouTube video ID<input name="youtubeVideoId" defaultValue={court.youtube_video_id ?? ""} /></label>
-                  <label>YouTube live chat ID<input name="youtubeLiveChatId" defaultValue={court.youtube_live_chat_id ?? ""} /></label>
                   <label>Stream path<input name="streamPath" defaultValue={court.stream_path ?? ""} placeholder={`court${court.court_number}`} /></label>
                   <label>VBL court number<input name="vblCourtNumber" defaultValue={court.vbl_court_number ?? ""} placeholder="7" /></label>
                   <label>VBL court label<input name="vblCourtLabel" defaultValue={court.vbl_court_label ?? ""} placeholder="Court 7" /></label>
