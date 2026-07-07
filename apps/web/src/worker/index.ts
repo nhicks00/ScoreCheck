@@ -5,12 +5,26 @@ const idleIntervalMs = numberEnv("WORKER_IDLE_INTERVAL_MS", 8_000);
 async function main() {
   await loadLocalEnv();
   const { pollActiveCourtsOnce, recordHeartbeat } = await import("../lib/poller");
+  const { getWorkerCoverageStatus } = await import("../lib/workerSchedule");
   console.log(`[worker] starting ${workerId}`);
   await recordHeartbeat(workerId, "starting");
   while (true) {
     const started = Date.now();
     try {
-      const result = await pollActiveCourtsOnce({ owner: workerId });
+      const coverage = await getWorkerCoverageStatus();
+      if (!coverage.shouldPoll) {
+        await recordHeartbeat(workerId, "sleeping", undefined, {
+          reason: coverage.reason,
+          today: coverage.today,
+          timezone: coverage.timezone,
+          nextCheckMs: coverage.sleepMs,
+          activeEventCount: coverage.activeEventCount
+        });
+        await sleep(coverage.sleepMs);
+        continue;
+      }
+
+      const result = await pollActiveCourtsOnce({ owner: workerId, eventIds: coverage.eventIds });
       const interval = result.polls > 0 ? activeIntervalMs : idleIntervalMs;
       await sleep(Math.max(250, interval - (Date.now() - started)));
     } catch (err) {

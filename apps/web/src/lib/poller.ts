@@ -6,6 +6,7 @@ import { supabaseAdmin } from "./supabase";
 import type { ScoreSnapshot, SetScore } from "./types";
 import { VBL_OVERLAY_DELAY_MS, VBL_POST_FINAL_HOLD_MS, delayedScoreFromSnapshot, isDelayedScoreBehindVisible, pendingScoresForMatch, queueDelayedVblScore, shouldHoldDelayedFinalScore, splitDueDelayedVblScores, type DelayedVblScorePayload } from "./vblDelay";
 import { buildActiveVblSourceSet, matchBelongsToActiveVblSource } from "./vblSources";
+import { getWorkerCoverageStatus } from "./workerSchedule";
 
 const POLL_WINDOW_MS = 25_000;
 const ACTIVE_INTERVAL_MS = 1_800;
@@ -105,9 +106,14 @@ export async function runPollingWindow(eventId: string, courtId?: string) {
   return { owner, polls, errors, windowMs: Date.now() - startedAt };
 }
 
-export async function pollActiveCourtsOnce(options: { eventId?: string; courtId?: string; owner: string }) {
+export async function pollActiveCourtsOnce(options: { eventId?: string; eventIds?: string[]; courtId?: string; owner: string }) {
   const db = supabaseAdmin();
   await recordHeartbeat(options.owner, "polling", options.eventId, { localWindow: Boolean(options.eventId) });
+  const scopedEventIds = await eventIdsForPolling(options);
+  if (!scopedEventIds.length) {
+    await recordHeartbeat(options.owner, "sleeping", undefined, { reason: "No covered active events are scheduled for polling." });
+    return { polls: 0, errors: 0 };
+  }
 
   let query = db
     .from("courts")
@@ -117,7 +123,8 @@ export async function pollActiveCourtsOnce(options: { eventId?: string; courtId?
     .not("current_match_id", "is", null)
     .order("court_number", { ascending: true });
 
-  if (options.eventId) query = query.eq("event_id", options.eventId);
+  if (scopedEventIds.length === 1) query = query.eq("event_id", scopedEventIds[0]);
+  else query = query.in("event_id", scopedEventIds);
   if (options.courtId) query = query.eq("id", options.courtId);
 
   const { data, error } = await query;
@@ -126,7 +133,7 @@ export async function pollActiveCourtsOnce(options: { eventId?: string; courtId?
   let polls = 0;
   let errors = 0;
   const courts = (data ?? []) as CourtRow[];
-  await refreshBracketSourcesForActiveEvents(courts, options.eventId, options.owner);
+  await refreshBracketSourcesForActiveEvents(courts, scopedEventIds, options.owner);
   await Promise.all(courts.map(async (court) => {
     const lease = await acquireLease(court.event_id, court.id, options.owner);
     if (!lease) return;
@@ -143,8 +150,15 @@ export async function pollActiveCourtsOnce(options: { eventId?: string; courtId?
   return { polls, errors };
 }
 
-async function refreshBracketSourcesForActiveEvents(courts: CourtRow[], eventId: string | undefined, owner: string) {
-  const eventIds = eventId ? [eventId] : [...new Set(courts.map((court) => court.event_id).filter(Boolean))];
+async function eventIdsForPolling(options: { eventId?: string; eventIds?: string[] }) {
+  if (options.eventId) return [options.eventId];
+  if (options.eventIds?.length) return [...new Set(options.eventIds.filter(Boolean))];
+  const coverage = await getWorkerCoverageStatus();
+  return coverage.shouldPoll ? coverage.eventIds : [];
+}
+
+async function refreshBracketSourcesForActiveEvents(courts: CourtRow[], scopedEventIds: string[], owner: string) {
+  const eventIds = scopedEventIds.length ? scopedEventIds : [...new Set(courts.map((court) => court.event_id).filter(Boolean))];
   for (const id of eventIds) {
     const lastRefreshAt = lastBracketRefreshAtByEvent.get(id) ?? 0;
     if (Date.now() - lastRefreshAt < BRACKET_REFRESH_INTERVAL_MS) continue;

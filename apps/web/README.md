@@ -56,6 +56,8 @@ Run the VolleyballLife poller for production:
 npm run worker
 ```
 
+The worker is schedule-gated. It only performs high-frequency VolleyballLife/vMix polling for active events with a coverage date matching today in `NEXT_PUBLIC_DEFAULT_TIMEZONE`. Coverage dates come from `events.event_date`, `events.settings.coverageDates`, `events.settings.coverageStartDate`/`coverageEndDate`, or imported match `scheduled_date` values. If an active event has no date signal, the worker records a sleeping heartbeat and checks again after `WORKER_OFF_EVENT_INTERVAL_MS` instead of polling stale matches forever.
+
 ## Service Automation
 
 Local setup scripts write generated artifacts under `.local/`, which is gitignored.
