@@ -18,10 +18,9 @@ export async function POST(req: NextRequest) {
     const result = await startClaim({ req, ...parsed.data });
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
     return NextResponse.json({
-      claimId: result.claim.id,
-      claimStatusToken: result.claimStatusToken,
-      verificationCode: result.claim.verification_code_label,
-      expiresAt: result.claim.expires_at,
+      sessionUrl: result.sessionUrl,
+      role: result.role,
+      claimId: result.claimId,
       message: result.message
     });
   } catch (err) {

@@ -1,15 +1,13 @@
-import { isAdminRequest } from "@/lib/auth";
 import { ScorerClient } from "./ScorerClient";
 import { ClaimClient } from "./ClaimClient";
 
 export const dynamic = "force-dynamic";
 
-export default async function ScoreCourtPage({ params, searchParams }: { params: Promise<{ courtId: string }>; searchParams: Promise<{ token?: string; eventSlug?: string; admin?: string }> }) {
+export default async function ScoreCourtPage({ params, searchParams }: { params: Promise<{ courtId: string }>; searchParams: Promise<{ token?: string; eventSlug?: string }> }) {
   const { courtId } = await params;
-  const { token = "", eventSlug, admin } = await searchParams;
+  const { token = "", eventSlug } = await searchParams;
   if (token) {
     return <ScorerClient courtId={courtId} initialToken={token} />;
   }
-  const adminMode = admin === "1" && await isAdminRequest();
-  return <ClaimClient courtParam={courtId} eventSlug={eventSlug ?? "avp-denver"} adminMode={adminMode} />;
+  return <ClaimClient courtParam={courtId} eventSlug={eventSlug ?? "avp-denver"} />;
 }

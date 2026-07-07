@@ -7,8 +7,6 @@
     "build": "next build",
     "start": "next start",
     "worker": "tsx src/worker/index.ts",
-    "worker:youtube": "tsx src/worker/youtube.ts",
-    "worker:all": "tsx src/worker/all.ts",
     "seed:avp-denver": "tsx src/scripts/seedAvpDenver.ts",
     "setup:preflight": "tsx src/scripts/setup/preflight.ts",
     "setup:youtube-denver": "tsx src/scripts/setup/youtubeDenverMetadata.ts",
