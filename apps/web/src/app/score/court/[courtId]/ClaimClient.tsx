@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, MonitorOff, MonitorPlay, RefreshCw, ShieldCheck } from "lucide-react";
+import { ArrowLeft, CheckCircle2, MonitorOff, MonitorPlay, RefreshCw, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
@@ -164,25 +164,27 @@ export function ClaimClient({ courtParam, eventSlug, adminMode }: { courtParam: 
     }
   }
 
-  const statusText = useMemo(() => {
-    if (!data) return "Loading";
-    if (data.court.scoring_open === false) return "Scoring closed";
-    if (data.scorerStatus.needsScorer) return "Needs scorer";
-    return "Being scored";
+  const statusInfo = useMemo(() => {
+    if (!data) return { label: "Loading", tone: "" };
+    if (data.court.scoring_open === false) return { label: "Scoring closed", tone: "" };
+    if (data.scorerStatus.needsScorer) return { label: "Needs scorer", tone: "warn" };
+    return { label: "Live scoring", tone: "live" };
   }, [data]);
   const teamA = displayTeamName(data?.match?.team_a, "TBD");
   const teamB = displayTeamName(data?.match?.team_b, "TBD");
 
   return (
     <main className="shell score-shell">
-      <div className="score-container narrow stack">
+      <div className="score-container narrow">
         <div className="score-back-row">
-          <Link className="button" href="/score">All courts</Link>
+          <Link className="button ghost" href="/score">
+            <ArrowLeft size={16} /> All courts
+          </Link>
           <button type="button" onClick={() => void load()}><RefreshCw size={16} /> Refresh</button>
         </div>
 
         <section className="claim-hero">
-          <span className="status">{statusText}</span>
+          <span className={`status ${statusInfo.tone}`}>{statusInfo.label}</span>
           <h1>{data?.court.display_name ?? `Court ${courtNumber}`}</h1>
           <p className="muted">{data?.event.name ?? "AVP Denver Open"}</p>
           <div className="match-line large">
@@ -202,15 +204,22 @@ export function ClaimClient({ courtParam, eventSlug, adminMode }: { courtParam: 
 
         {!claim ? (
           <form className="claim-form" onSubmit={submit}>
-            <div className="panel stack">
+            <div className="panel">
+              <ol className="claim-steps" aria-label="How to start scoring">
+                <li className="claim-step done"><span className="claim-step-num" aria-hidden="true">1</span> Pick a court</li>
+                <li className="claim-step current"><span className="claim-step-num" aria-hidden="true">2</span> Enter your name</li>
+                <li className="claim-step"><span className="claim-step-num" aria-hidden="true">3</span> Tap to score</li>
+              </ol>
               <h2>Thanks for helping keep score.</h2>
               <p className="muted">You only need to do one thing: tap the team that wins each point.</p>
               <div className="watch-toggle mode-toggle" role="group" aria-label="Scoring view">
                 <button type="button" className={watchMode === "courtside" ? "primary" : ""} onClick={() => setWatchMode("courtside")}>
                   <span><MonitorOff size={18} /> Score only</span>
+                  <small>Best when you are at the court</small>
                 </button>
                 <button type="button" className={watchMode === "website" ? "primary" : ""} onClick={() => setWatchMode("website")}>
                   <span><MonitorPlay size={18} /> Watch stream + score</span>
+                  <small>Best when you are following online</small>
                 </button>
               </div>
               <label>
@@ -236,11 +245,11 @@ export function ClaimClient({ courtParam, eventSlug, adminMode }: { courtParam: 
           </form>
         ) : (
           <section className="verification-card">
-            <CheckCircle2 size={28} />
+            <CheckCircle2 size={30} />
             <p>Opening your scoring page...</p>
-            {claim.verificationCode && <strong>{claim.verificationCode}</strong>}
+            {claim.verificationCode && <strong className="verification-code">{claim.verificationCode}</strong>}
             <p className="muted">Leave this page open. If it does not continue automatically, tap the button below.</p>
-            {status && <p className="muted">{status}</p>}
+            {status && <p className="muted" role="status" aria-live="polite">{status}</p>}
             <button type="button" onClick={() => void openClaimStatus(claim)} disabled={busy}>Open scorer page</button>
             {adminMode && <button className="warn" type="button" onClick={() => void adminVerify()} disabled={busy}>Admin verify for testing</button>}
           </section>

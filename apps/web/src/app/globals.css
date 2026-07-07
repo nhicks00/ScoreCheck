@@ -194,6 +194,10 @@ select {
   gap: 14px;
 }
 
+.stack > p {
+  margin: 0;
+}
+
 .row {
   align-items: center;
   display: flex;
@@ -1442,6 +1446,9 @@ label {
   display: grid;
   gap: 8px;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 
 .claim-step {

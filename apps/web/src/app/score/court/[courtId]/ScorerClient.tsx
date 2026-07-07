@@ -294,75 +294,79 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
 
   if (error && !state) {
     return (
-      <main className="score-shell">
-        <section className="score-card center">
+      <main className="scorer-screen">
+        <section className="panel ms-center">
           <h1>Scorer Link</h1>
-          <p>{error}</p>
+          <p className="muted">{error}</p>
         </section>
-        <ScoreStyles />
       </main>
     );
   }
 
+  const isFinal = Boolean(state?.score.status?.toLowerCase().includes("final"));
+
   return (
-    <main className="score-shell">
-      <section className="score-top">
-        <div>
-          <h1>{state?.court.displayName ?? "Court"}</h1>
-          <p>{state?.match?.round_name ?? "Manual Session"} {state?.match?.match_number ? `- ${state.match.match_number}` : ""}</p>
-        </div>
-        <span className={`pill ${state?.score.status?.toLowerCase().includes("final") ? "final" : ""}`}>{state?.score.status ?? "Loading"}</span>
-      </section>
+    <main className="scorer-screen">
+      <div className="scorer-wrap">
+        <section className="ms-top">
+          <div>
+            <h1>{state?.court.displayName ?? "Court"}</h1>
+            <p>{state?.match?.round_name ?? "Manual Session"} {state?.match?.match_number ? `- ${state.match.match_number}` : ""}</p>
+          </div>
+          <span className={`status ${isFinal ? "info" : "live"}`}>{state?.score.status ?? "Loading"}</span>
+        </section>
 
-      <section className="scoreboard">
-        <TeamBlock
-          name={teamA}
-          score={draft?.teamAScore ?? state?.score.team_a_score ?? 0}
-          sets={draft?.teamASets ?? state?.score.team_a_sets ?? 0}
-          serving={state?.score.serving_team === "A"}
-          onPoint={() => scorePoint("A")}
-          disabled={!draft || busy === "save"}
-          feedbackId={tapFeedback?.team === "A" ? tapFeedback.id : 0}
-        />
-        <TeamBlock
-          name={teamB}
-          score={draft?.teamBScore ?? state?.score.team_b_score ?? 0}
-          sets={draft?.teamBSets ?? state?.score.team_b_sets ?? 0}
-          serving={state?.score.serving_team === "B"}
-          onPoint={() => scorePoint("B")}
-          disabled={!draft || busy === "save"}
-          feedbackId={tapFeedback?.team === "B" ? tapFeedback.id : 0}
-        />
-      </section>
+        <section className="ms-scoreboard">
+          <TeamBlock
+            side="a"
+            name={teamA}
+            score={draft?.teamAScore ?? state?.score.team_a_score ?? 0}
+            sets={draft?.teamASets ?? state?.score.team_a_sets ?? 0}
+            serving={state?.score.serving_team === "A"}
+            onPoint={() => scorePoint("A")}
+            disabled={!draft || busy === "save"}
+            feedbackId={tapFeedback?.team === "A" ? tapFeedback.id : 0}
+          />
+          <TeamBlock
+            side="b"
+            name={teamB}
+            score={draft?.teamBScore ?? state?.score.team_b_score ?? 0}
+            sets={draft?.teamBSets ?? state?.score.team_b_sets ?? 0}
+            serving={state?.score.serving_team === "B"}
+            onPoint={() => scorePoint("B")}
+            disabled={!draft || busy === "save"}
+            feedbackId={tapFeedback?.team === "B" ? tapFeedback.id : 0}
+          />
+        </section>
 
-      <section className={`save-status ${dirty ? "unsaved" : "saved"}`}>
-        <strong>{dirty ? "Unsaved score changes" : "Score saved"}</strong>
-        <span>{saveStatus === "saving" ? "Saving to overlay..." : saveStatus === "retrying" ? `Retrying save${retryCount ? ` (${retryCount})` : ""}...` : dirty ? "Auto-saving. Tap Save Score to retry now." : savedAt ? `Last saved ${savedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "Ready for scoring."}</span>
-      </section>
+        <section className={`ms-save-status ${dirty ? "unsaved" : "saved"}`} aria-live="polite">
+          <strong>{dirty ? "Unsaved score changes" : "Score saved"}</strong>
+          <span>{saveStatus === "saving" ? "Saving to overlay..." : saveStatus === "retrying" ? `Retrying save${retryCount ? ` (${retryCount})` : ""}...` : dirty ? "Auto-saving. Tap Save Score to retry now." : savedAt ? `Last saved ${savedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "Ready for scoring."}</span>
+        </section>
 
-      <section className="score-actions">
-        <button className="save" onClick={() => saveScore(true)} disabled={!dirty || busy != null}><Save size={22} /> Save Score</button>
-        <button className="set-nav" onClick={() => changeSet("previous")} disabled={!draft || busy != null || (draft.currentSet <= 1 && !draft.setScores.length)}><ArrowLeft size={20} /> Previous Set</button>
-        <button className="set-nav" onClick={() => changeSet("next")} disabled={!draft || busy != null || draft.status.toLowerCase().includes("final")}><ArrowRight size={20} /> Next Set</button>
-        <button className="undo" onClick={undoScore} disabled={busy != null || (!dirty && !state)}><RotateCcw size={20} /> Undo</button>
-        <button onClick={() => setEditing(true)} disabled={!state || busy != null}><Pencil size={20} /> Edit</button>
-      </section>
+        <section className="ms-actions">
+          <button className="primary ms-save" onClick={() => saveScore(true)} disabled={!dirty || busy != null}><Save size={22} /> Save Score</button>
+          <button onClick={() => changeSet("previous")} disabled={!draft || busy != null || (draft.currentSet <= 1 && !draft.setScores.length)}><ArrowLeft size={20} /> Previous Set</button>
+          <button onClick={() => changeSet("next")} disabled={!draft || busy != null || draft.status.toLowerCase().includes("final")}><ArrowRight size={20} /> Next Set</button>
+          <button className="warn" onClick={undoScore} disabled={busy != null || (!dirty && !state)}><RotateCcw size={20} /> Undo</button>
+          <button onClick={() => setEditing(true)} disabled={!state || busy != null}><Pencil size={20} /> Edit</button>
+        </section>
 
-      {error && <div className="score-error">{error}</div>}
-      {busy && <div className="score-busy">Saving</div>}
-      {editing && state && (
-        <EditModal
-          state={state}
-          onClose={() => setEditing(false)}
-          onSave={async (payload) => {
-            setEditing(false);
-            await mutate("edit", `/api/score/courts/${courtId}`, payload, "PATCH");
-            setSavedAt(new Date());
-          }}
-          draft={draft}
-        />
-      )}
-      <ScoreStyles />
+        {error && <div className="scorer-alert danger" role="alert">{error}</div>}
+        {busy && <div className="scorer-alert">Saving</div>}
+        {editing && state && (
+          <EditModal
+            state={state}
+            onClose={() => setEditing(false)}
+            onSave={async (payload) => {
+              setEditing(false);
+              await mutate("edit", `/api/score/courts/${courtId}`, payload, "PATCH");
+              setSavedAt(new Date());
+            }}
+            draft={draft}
+          />
+        )}
+      </div>
     </main>
   );
 }
@@ -489,14 +493,14 @@ function retryDelay(retryCount: number) {
   return Math.min(1000 * 2 ** Math.max(0, retryCount - 1), 8000);
 }
 
-function TeamBlock({ name, score, sets, serving, onPoint, disabled, feedbackId }: { name: string; score: number; sets: number; serving: boolean; onPoint: () => void; disabled: boolean; feedbackId: number }) {
+function TeamBlock({ side, name, score, sets, serving, onPoint, disabled, feedbackId }: { side: "a" | "b"; name: string; score: number; sets: number; serving: boolean; onPoint: () => void; disabled: boolean; feedbackId: number }) {
   const hasFeedback = feedbackId > 0;
   return (
-    <button className={`team-button ${hasFeedback ? "tap-active" : ""}`} onClick={onPoint} disabled={disabled}>
-      {hasFeedback && <span key={feedbackId} className="tap-flash" aria-hidden="true" />}
-      <span className="team-name">{serving ? "● " : ""}{name}</span>
-      <span className="team-score">{score}</span>
-      <span className="team-sets">{sets} sets</span>
+    <button className={`ms-team-button ms-team-${side} ${hasFeedback ? "tap-active" : ""}`} onClick={onPoint} disabled={disabled}>
+      {hasFeedback && <span key={feedbackId} className="ms-tap-flash" aria-hidden="true" />}
+      <span className="ms-team-name">{serving ? "● " : ""}{name}</span>
+      <span className="ms-team-score">{score}</span>
+      <span className="ms-team-sets">{sets} sets · Tap to add a point</span>
     </button>
   );
 }
@@ -509,7 +513,7 @@ function EditModal({ state, onClose, onSave, draft }: { state: ScorerState; onCl
   }
 
   return (
-    <div className="modal-backdrop">
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Edit score">
       <form className="edit-modal" onSubmit={submit}>
         <h2>Edit Score</h2>
         <div className="edit-grid">
@@ -532,241 +536,5 @@ function EditModal({ state, onClose, onSave, draft }: { state: ScorerState; onCl
         </div>
       </form>
     </div>
-  );
-}
-
-function ScoreStyles() {
-  return (
-    <style jsx global>{`
-      body { background: #f3f5f7; color: #111827; }
-      .score-shell {
-        min-height: 100vh;
-        padding: 14px;
-      }
-      .score-top {
-        align-items: center;
-        display: flex;
-        gap: 12px;
-        justify-content: space-between;
-        margin: 0 auto 12px;
-        max-width: 900px;
-      }
-      .score-top h1 { font-size: 24px; margin: 0; }
-      .score-top p { color: #4b5563; margin: 3px 0 0; }
-      .pill {
-        background: #111827;
-        border-radius: 999px;
-        color: white;
-        font-size: 12px;
-        font-weight: 900;
-        padding: 8px 10px;
-        text-transform: uppercase;
-        white-space: nowrap;
-      }
-      .pill.final { background: #047857; }
-      .scoreboard {
-        display: grid;
-        gap: 12px;
-        margin: 0 auto;
-        max-width: 900px;
-      }
-      .team-button {
-        align-items: stretch;
-        background: white;
-        border: 2px solid #d1d5db;
-        border-radius: 8px;
-        color: #111827;
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) 120px;
-        min-height: 168px;
-        overflow: hidden;
-        padding: 0;
-        position: relative;
-        touch-action: manipulation;
-        transition: border-color 80ms linear, box-shadow 80ms linear, filter 80ms linear;
-        user-select: none;
-        -webkit-tap-highlight-color: transparent;
-        text-align: left;
-        width: 100%;
-      }
-      .team-button:active,
-      .team-button.tap-active {
-        border-color: #f8d84a;
-        box-shadow: 0 0 0 4px rgba(248, 216, 74, .3);
-        filter: brightness(.98);
-      }
-      .team-button:disabled {
-        opacity: .68;
-      }
-      .tap-flash {
-        animation: tap-flash 180ms linear;
-        background: rgba(248, 216, 74, .24);
-        inset: 0;
-        opacity: 0;
-        pointer-events: none;
-        position: absolute;
-        z-index: 0;
-      }
-      .team-name {
-        align-items: center;
-        display: flex;
-        font-size: 30px;
-        font-weight: 950;
-        overflow: hidden;
-        padding: 22px;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        z-index: 1;
-      }
-      .team-score {
-        align-items: center;
-        background: #f8d84a;
-        border-left: 2px solid #d1d5db;
-        display: flex;
-        font-size: 72px;
-        font-variant-numeric: tabular-nums;
-        font-weight: 950;
-        justify-content: center;
-        z-index: 1;
-      }
-      .team-sets {
-        background: #111827;
-        color: white;
-        font-size: 18px;
-        font-weight: 900;
-        grid-column: 1 / -1;
-        padding: 8px 18px;
-        text-transform: uppercase;
-        z-index: 1;
-      }
-      .save-status {
-        align-items: center;
-        border: 2px solid;
-        border-radius: 8px;
-        display: flex;
-        gap: 8px 14px;
-        justify-content: space-between;
-        margin: 12px auto 0;
-        max-width: 900px;
-        padding: 11px 13px;
-      }
-      .save-status strong {
-        font-size: 15px;
-        font-weight: 950;
-        text-transform: uppercase;
-      }
-      .save-status span {
-        font-size: 14px;
-        font-weight: 750;
-      }
-      .save-status.unsaved {
-        background: #fff7ed;
-        border-color: #fb923c;
-        color: #7c2d12;
-      }
-      .save-status.saved {
-        background: #ecfdf5;
-        border-color: #34d399;
-        color: #065f46;
-      }
-      .score-actions {
-        display: grid;
-        gap: 8px;
-        grid-template-columns: 1fr;
-        margin: 12px auto 0;
-        max-width: 900px;
-      }
-      .score-actions button,
-      .modal-actions button {
-        align-items: center;
-        background: #111827;
-        border: 0;
-        border-radius: 8px;
-        color: white;
-        display: inline-flex;
-        font-weight: 900;
-        gap: 8px;
-        justify-content: center;
-        min-height: 56px;
-      }
-      .score-actions .save {
-        background: #047857;
-        font-size: 18px;
-        min-height: 64px;
-      }
-      .score-actions .save:disabled {
-        background: #9ca3af;
-        color: #f9fafb;
-      }
-      .score-actions .undo { background: #ea580c; }
-      .score-error,
-      .score-busy {
-        border-radius: 8px;
-        font-weight: 800;
-        margin: 12px auto 0;
-        max-width: 900px;
-        padding: 12px;
-      }
-      .score-error { background: #fee2e2; color: #991b1b; }
-      .score-busy { background: #dbeafe; color: #1d4ed8; }
-      .center { margin: 12vh auto; max-width: 420px; text-align: center; }
-      .modal-backdrop {
-        align-items: center;
-        background: rgba(0,0,0,.5);
-        display: flex;
-        inset: 0;
-        justify-content: center;
-        overflow-y: auto;
-        padding: 16px;
-        position: fixed;
-        z-index: 1000;
-      }
-      .edit-modal {
-        background: white;
-        border-radius: 8px;
-        max-width: 540px;
-        padding: 18px;
-        position: relative;
-        width: 100%;
-        z-index: 1001;
-      }
-      .edit-grid {
-        display: grid;
-        gap: 10px;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-      .edit-modal input,
-      .edit-modal select {
-        background: #f9fafb;
-        border: 1px solid #d1d5db;
-        border-radius: 8px;
-        color: #111827;
-        min-height: 44px;
-        padding: 8px;
-      }
-      .modal-actions {
-        display: flex;
-        gap: 8px;
-        justify-content: flex-end;
-        margin-top: 14px;
-      }
-      @media (max-width: 620px) {
-        .team-button { grid-template-columns: minmax(0, 1fr) 96px; min-height: 142px; }
-        .team-name { font-size: 24px; padding: 16px; }
-        .team-score { font-size: 60px; }
-        .save-status {
-          align-items: flex-start;
-          flex-direction: column;
-        }
-        .edit-grid { grid-template-columns: 1fr; }
-        .modal-backdrop {
-          align-items: flex-start;
-        }
-      }
-      @keyframes tap-flash {
-        0% { opacity: 1; }
-        100% { opacity: 0; }
-      }
-    `}</style>
   );
 }
