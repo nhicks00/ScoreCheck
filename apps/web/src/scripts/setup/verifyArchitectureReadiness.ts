@@ -1,8 +1,9 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { getEnv } from "../../lib/env";
 import { getActiveEvent } from "../../lib/eventConfig";
 import { supabaseAdmin } from "../../lib/supabase";
+import { courtStreamPath, videoConfigured } from "../../lib/video";
 import { loadLocalEnv } from "../envLoader";
 
 type Status = "ok" | "warning" | "blocked";
@@ -15,38 +16,6 @@ type VercelProjectFile = {
 type VercelEnv = {
   key: string;
   target?: string | string[];
-};
-
-type AwsIdentity = {
-  Arn?: string;
-};
-
-type AwsChannelSummary = {
-  arn?: string;
-  name?: string;
-};
-
-type AwsListChannels = {
-  channels?: AwsChannelSummary[];
-};
-
-type AwsIvsChannel = {
-  authorized?: boolean;
-  containerFormat?: string;
-  ingestEndpoint?: string;
-  insecureIngest?: boolean;
-  latencyMode?: string;
-  name?: string;
-  playbackUrl?: string;
-  type?: string;
-};
-
-type AwsGetChannel = {
-  channel?: AwsIvsChannel;
-};
-
-type AwsListStreamKeys = {
-  streamKeys?: unknown[];
 };
 
 loadLocalEnv();
@@ -68,7 +37,7 @@ main().catch((err) => {
 async function main() {
   const sections = {
     supabase: await supabaseSection(),
-    awsIvs: awsIvsSection(),
+    mediaMtx: mediaMtxSection(),
     streamRun: streamRunSection(),
     vercel: await vercelSection(),
     generatedArtifacts: generatedArtifactsSection()
@@ -76,7 +45,7 @@ async function main() {
 
   const blockers = [
     ...sectionIssues(sections.supabase, "Supabase"),
-    ...sectionIssues(sections.awsIvs, "AWS IVS"),
+    ...sectionIssues(sections.mediaMtx, "MediaMTX"),
     ...sectionIssues(sections.vercel, "Vercel")
   ];
   const manualFollowUps = [
@@ -107,7 +76,7 @@ async function supabaseSection() {
     if (!event) return { status: "blocked" as Status, issues: ["No active event found."] };
     const db = supabaseAdmin();
     const [courts, sources, matches, overlays] = await Promise.all([
-      db.from("courts").select("id,court_number,current_match_id,ivs_channel_arn,ivs_playback_url,youtube_live_chat_id,vbl_court_number,mode").eq("event_id", event.id).order("court_number"),
+      db.from("courts").select("id,court_number,current_match_id,stream_path,youtube_live_chat_id,vbl_court_number,mode").eq("event_id", event.id).order("court_number"),
       db.from("bracket_sources").select("source_url,status,last_error").eq("event_id", event.id),
       db.from("matches").select("id,source_type,api_url").eq("event_id", event.id),
       db.from("overlay_states").select("court_id,court_number,stale,updated_at").eq("event_id", event.id)
@@ -130,7 +99,6 @@ async function supabaseSection() {
     const issues = [
       courtRows.length === expectedCourtCount ? null : `Expected ${expectedCourtCount} courts, found ${courtRows.length}.`,
       courtRows.every((court) => court.current_match_id) ? null : "One or more courts lack a current match.",
-      courtRows.every((court) => court.ivs_channel_arn && court.ivs_playback_url) ? null : "One or more courts lack IVS channel/playback metadata.",
       courtRows.every((court) => court.youtube_live_chat_id) ? null : "One or more courts lack YouTube live chat metadata.",
       sourceRows.length >= 2 && sourceRows.every((source) => source.status === "success" && !source.last_error) ? null : "VolleyballLife bracket source discovery is not clean.",
       matchRows.filter((match) => match.source_type === "vbl" && match.api_url).length > 0 ? null : "No VBL matches with API URLs are present.",
@@ -146,7 +114,7 @@ async function supabaseSection() {
         courtNumber: court.court_number,
         mode: court.mode,
         hasMatch: Boolean(court.current_match_id),
-        hasIvsPlayback: Boolean(court.ivs_channel_arn && court.ivs_playback_url),
+        streamPath: courtStreamPath(court.court_number, court.stream_path),
         hasYoutubeChat: Boolean(court.youtube_live_chat_id),
         vblCourtNumber: court.vbl_court_number ?? null
       })),
@@ -162,49 +130,25 @@ async function supabaseSection() {
   }
 }
 
-function awsIvsSection() {
+function mediaMtxSection() {
   try {
-    const identity = aws<AwsIdentity>(["sts", "get-caller-identity"]);
-    const arn = String(identity.Arn ?? "");
-    const channels = (aws<AwsListChannels>(["ivs", "list-channels"]).channels ?? [])
-      .filter((channel) => /^bvm-avp-denver-court-\d{2}-preview$/.test(channel.name ?? ""))
-      .sort((a, b) => String(a.name).localeCompare(String(b.name)));
-    const rows = channels.map((channel) => {
-      const channelArn = channel.arn ?? "";
-      const full = aws<AwsGetChannel>(["ivs", "get-channel", "--arn", channelArn]).channel ?? {};
-      const keys = aws<AwsListStreamKeys>(["ivs", "list-stream-keys", "--channel-arn", channelArn]).streamKeys ?? [];
-      return {
-        name: full.name,
-        authorized: full.authorized === true,
-        latencyMode: full.latencyMode,
-        type: full.type,
-        insecureIngest: full.insecureIngest === true,
-        containerFormat: full.containerFormat,
-        hasIngestEndpoint: Boolean(full.ingestEndpoint),
-        hasPlaybackUrl: Boolean(full.playbackUrl),
-        streamKeyCount: keys.length
-      };
-    });
-
+    const env = getEnv();
     const issues = [
-      arn.includes("user/scorecheck-setup-automation") ? null : "AWS profile is not scorecheck-setup-automation.",
-      rows.length === expectedCourtCount ? null : `Expected ${expectedCourtCount} IVS channels, found ${rows.length}.`,
-      rows.every((row) => row.authorized) ? null : "One or more IVS channels are not playback-authorized.",
-      rows.every((row) => row.latencyMode === "LOW") ? null : "One or more IVS channels are not LOW latency.",
-      rows.every((row) => row.type === "STANDARD") ? null : "One or more IVS channels are not STANDARD type.",
-      rows.every((row) => !row.insecureIngest) ? null : "One or more IVS channels allow insecure ingest.",
-      rows.every((row) => row.containerFormat === "TS") ? null : "One or more IVS channels are not TS container format.",
-      rows.every((row) => row.hasIngestEndpoint && row.hasPlaybackUrl) ? null : "One or more IVS channels lack ingest/playback metadata.",
-      rows.every((row) => row.streamKeyCount === 1) ? null : "One or more IVS channels do not have exactly one stream key."
+      videoConfigured() ? null : "MEDIAMTX_WHEP_BASE_URL or MEDIAMTX_HLS_BASE_URL must be set for scorer preview playback.",
+      env.mediamtxRtmpIngestBase ? null : "MEDIAMTX_RTMP_INGEST_BASE is not set; StreamRun preview destinations cannot be generated.",
+      !env.mediamtxWhepBaseUrl || env.mediamtxWhepBaseUrl.startsWith("https://") ? null : "MEDIAMTX_WHEP_BASE_URL is not https; browsers on the https site will block mixed content.",
+      !env.mediamtxHlsBaseUrl || env.mediamtxHlsBaseUrl.startsWith("https://") ? null : "MEDIAMTX_HLS_BASE_URL is not https; browsers on the https site will block mixed content."
     ].filter(Boolean) as string[];
 
     return {
       status: issues.length ? "blocked" as Status : "ok" as Status,
       issues,
-      identity: {
-        arn: arn.replace(/:iam::\d+:/, ":iam::[account]:")
-      },
-      channels: rows
+      config: {
+        whepBaseUrlSet: Boolean(env.mediamtxWhepBaseUrl),
+        hlsBaseUrlSet: Boolean(env.mediamtxHlsBaseUrl),
+        readCredentialsSet: Boolean(env.mediamtxReadUser && env.mediamtxReadPass),
+        rtmpIngestBaseSet: Boolean(env.mediamtxRtmpIngestBase)
+      }
     };
   } catch (err) {
     return { status: "blocked" as Status, issues: [safeError(err)] };
@@ -220,14 +164,14 @@ function streamRunSection() {
     const setup = JSON.parse(fs.readFileSync(file, "utf8")) as {
       generatedAt?: string;
       summary?: Record<string, number>;
-      courts?: Array<{ court: number; gaps?: string[]; elements?: { ivsOutput?: string | null } }>;
+      courts?: Array<{ court: number; gaps?: string[]; elements?: { previewOutput?: string | null } }>;
     };
     const summary = setup.summary ?? {};
     const courtGaps = (setup.courts ?? []).flatMap((court) => (court.gaps ?? []).map((gap) => `Court ${court.court}: ${gap}`));
     const issues = [
       summary.configurationsMapped === expectedCourtCount ? null : `Expected ${expectedCourtCount} mapped StreamRun configurations, found ${summary.configurationsMapped ?? 0}.`,
       summary.youtubeDestinationsMapped === expectedCourtCount ? null : `Expected ${expectedCourtCount} mapped YouTube destinations, found ${summary.youtubeDestinationsMapped ?? 0}.`,
-      summary.ivsDestinationsMapped === expectedCourtCount ? null : `Expected ${expectedCourtCount} mapped IVS destinations, found ${summary.ivsDestinationsMapped ?? 0}.`,
+      summary.previewDestinationsMapped === expectedCourtCount ? null : `Expected ${expectedCourtCount} mapped MediaMTX preview destinations, found ${summary.previewDestinationsMapped ?? 0}.`,
       summary.courtsWithHtmlOverlay === expectedCourtCount ? null : `Expected ${expectedCourtCount} HTML overlay mappings, found ${summary.courtsWithHtmlOverlay ?? 0}.`,
       ...(courtGaps.length ? courtGaps : [])
     ].filter(Boolean) as string[];
@@ -237,7 +181,7 @@ function streamRunSection() {
       issues,
       generatedAt: setup.generatedAt,
       summary,
-      courtGaps: setup.courts?.map((court) => ({ court: court.court, gaps: court.gaps ?? [], hasSeparateIvsOutput: Boolean(court.elements?.ivsOutput) })) ?? []
+      courtGaps: setup.courts?.map((court) => ({ court: court.court, gaps: court.gaps ?? [], hasSeparatePreviewOutput: Boolean(court.elements?.previewOutput) })) ?? []
     };
   } catch (err) {
     return { status: "warning" as Status, issues: [safeError(err)] };
@@ -301,7 +245,6 @@ async function vercelSection() {
 
 function generatedArtifactsSection() {
   const requiredFiles = [
-    ".local/aws-ivs.redacted.json",
     ".local/streamrun-discovery.redacted.json",
     ".local/streamrun-setup.redacted.json",
     ".local/scorecheck-operations-report.redacted.md",
@@ -316,16 +259,6 @@ function generatedArtifactsSection() {
     issues,
     files
   };
-}
-
-function aws<T extends object = Record<string, unknown>>(args: string[]): T {
-  const profile = process.env.AWS_PROFILE || "scorecheck-setup";
-  const region = process.env.AWS_REGION || "us-west-2";
-  const out = execFileSync("aws", [...args, "--profile", profile, "--region", region], {
-    encoding: "utf8",
-    timeout: 30_000
-  });
-  return JSON.parse(out || "{}") as T;
 }
 
 function readVercelProjectFile(): VercelProjectFile {

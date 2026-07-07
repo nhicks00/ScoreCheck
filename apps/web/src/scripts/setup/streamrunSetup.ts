@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getEnv } from "../../lib/env";
+import { courtStreamPath } from "../../lib/video";
 import { loadLocalEnv } from "../envLoader";
 import { redact } from "./redact";
 
@@ -23,23 +24,21 @@ type StreamRunDestination = {
   platform: string;
 };
 
-type AwsIvsChannel = {
-  court: number;
-  channelArn: string;
-  ingestEndpoint: string;
-  playbackUrl: string;
-  streamKeyArn: string;
+type MediaMtxIngest = {
+  streamPath: string;
+  rtmpServerUrl: string;
   streamKeyValue: string;
-  rtmpsServerUrl: string;
 };
 
 loadLocalEnv();
 
 const outputDir = path.join(process.cwd(), ".local");
 const discoveryPath = path.join(outputDir, "streamrun-discovery.generated.json");
-const awsIvsPath = path.join(outputDir, "aws-ivs.generated.json");
 const env = getEnv();
 const publicSiteUrl = env.publicSiteUrl.replace(/\/$/, "");
+const rtmpIngestBase = env.mediamtxRtmpIngestBase.trim().replace(/\/+$/, "");
+const publishUser = process.env.MEDIAMTX_PUBLISH_USER ?? "";
+const publishPass = process.env.MEDIAMTX_PUBLISH_PASS ?? "";
 
 main();
 
@@ -47,18 +46,13 @@ function main() {
   if (!fs.existsSync(discoveryPath)) {
     throw new Error("Run npm run setup:streamrun:discover before setup:streamrun");
   }
-  if (!fs.existsSync(awsIvsPath)) {
-    throw new Error("Run npm run setup:aws-ivs before setup:streamrun");
-  }
 
   const discovery = JSON.parse(fs.readFileSync(discoveryPath, "utf8")) as {
     configurations?: { configurations?: StreamRunConfiguration[] };
     destinations?: { destinations?: StreamRunDestination[] };
   };
-  const awsIvs = JSON.parse(fs.readFileSync(awsIvsPath, "utf8")) as { channels?: AwsIvsChannel[] };
   const configurations = discovery.configurations?.configurations ?? [];
   const destinations = discovery.destinations?.destinations ?? [];
-  const channels = awsIvs.channels ?? [];
 
   const courts = Array.from({ length: env.courtCount }, (_, index) => {
     const court = index + 1;
@@ -70,20 +64,20 @@ function main() {
     const outputElements = elements.filter((element) => element.type === "outputstream");
     const outputs = outputElements.map((element) => element.id);
     const youtubeOutputElement = outputElements[0] ?? null;
-    const ivsOutputElement = outputElements[1] ?? null;
+    const previewOutputElement = outputElements[1] ?? null;
     const youtubeOutput = youtubeOutputElement?.id ?? null;
-    const ivsOutput = ivsOutputElement?.id ?? null;
+    const previewOutput = previewOutputElement?.id ?? null;
     const youtubeDestination = findYoutubeDestination(destinations, court);
-    const ivsDestination = findIvsDestination(destinations, court);
-    const ivsChannel = channels.find((channel) => channel.court === court) ?? null;
+    const previewDestination = findPreviewDestination(destinations, court);
+    const mediamtx = mediaMtxIngestForCourt(court);
     const overlayUrl = `${publicSiteUrl}/overlay/stream/${court}`;
     const expectedYoutubeDestinations = youtubeOutput && youtubeDestination
       ? [
         youtubeDestination.id,
-        ...(!ivsOutput && ivsDestination ? [ivsDestination.id] : [])
+        ...(!previewOutput && previewDestination ? [previewDestination.id] : [])
       ]
       : [];
-    const expectedIvsDestinations = ivsOutput && ivsDestination ? [ivsDestination.id] : [];
+    const expectedPreviewDestinations = previewOutput && previewDestination ? [previewDestination.id] : [];
     const launchOverrides: Record<string, unknown> = {};
     if (htmlOverlay) launchOverrides[htmlOverlay] = { url: overlayUrl, visible: true };
     if (youtubeOutput && youtubeDestination) {
@@ -91,7 +85,7 @@ function main() {
         destinations: expectedYoutubeDestinations
       };
     }
-    if (ivsOutput && ivsDestination) launchOverrides[ivsOutput] = { destinations: expectedIvsDestinations };
+    if (previewOutput && previewDestination) launchOverrides[previewOutput] = { destinations: expectedPreviewDestinations };
     return {
       court,
       configurationId: configuration?.id ?? null,
@@ -100,31 +94,25 @@ function main() {
         input,
         htmlOverlay,
         youtubeOutput,
-        ivsOutput,
+        previewOutput,
         outputCount: outputs.length
       },
       savedSettings: {
         overlayUrl: typeof htmlOverlayElement?.settings?.url === "string" ? htmlOverlayElement.settings.url : null,
         youtubeDestinations: stringArraySetting(youtubeOutputElement?.settings?.destinations),
-        ivsDestinations: stringArraySetting(ivsOutputElement?.settings?.destinations)
+        previewDestinations: stringArraySetting(previewOutputElement?.settings?.destinations)
       },
       expectedSettings: {
         overlayUrl,
         youtubeDestinations: expectedYoutubeDestinations,
-        ivsDestinations: expectedIvsDestinations
+        previewDestinations: expectedPreviewDestinations
       },
       destinations: {
         youtube: youtubeDestination ? pickDestination(youtubeDestination) : null,
-        ivsPreview: ivsDestination ? pickDestination(ivsDestination) : null
+        mediaMtxPreview: previewDestination ? pickDestination(previewDestination) : null
       },
       overlayUrl,
-      ivs: ivsChannel ? {
-        channelArn: ivsChannel.channelArn,
-        playbackUrl: ivsChannel.playbackUrl,
-        rtmpsServerUrl: ivsChannel.rtmpsServerUrl,
-        streamKeyArn: ivsChannel.streamKeyArn,
-        streamKeyValue: ivsChannel.streamKeyValue
-      } : null,
+      mediamtx,
       launchRequest: configuration ? {
         configurationId: configuration.id,
         body: {
@@ -136,44 +124,45 @@ function main() {
           }]
         }
       } : null,
-      fallbackMode: !ivsOutput && youtubeOutput && ivsDestination ? "combined-youtube-and-ivs-output" : null,
+      fallbackMode: !previewOutput && youtubeOutput && previewDestination ? "combined-youtube-and-preview-output" : null,
       gaps: gaps({
         configuration,
         input,
         htmlOverlay,
         youtubeOutput,
-        ivsOutput,
+        previewOutput,
         youtubeDestination,
-        ivsDestination,
-        ivsChannel,
+        previewDestination,
+        mediamtx,
         savedOverlayUrl: typeof htmlOverlayElement?.settings?.url === "string" ? htmlOverlayElement.settings.url : null,
         expectedOverlayUrl: overlayUrl,
         savedYoutubeDestinations: stringArraySetting(youtubeOutputElement?.settings?.destinations),
         expectedYoutubeDestinations,
-        savedIvsDestinations: stringArraySetting(ivsOutputElement?.settings?.destinations),
-        expectedIvsDestinations
+        savedPreviewDestinations: stringArraySetting(previewOutputElement?.settings?.destinations),
+        expectedPreviewDestinations
       })
     };
   });
 
-  const separateIvsOutputCount = courts.filter((court) => court.elements.ivsOutput).length;
+  const separatePreviewOutputCount = courts.filter((court) => court.elements.previewOutput).length;
   const setup = {
     generatedAt: new Date().toISOString(),
     baseUrl: process.env.STREAMRUN_BASE_URL || "https://streamrun.com",
     mode: "one-configuration-per-court",
+    mediaMtxRtmpIngestBase: rtmpIngestBase || null,
     courts,
     summary: {
       configurationsMapped: courts.filter((court) => court.configurationId).length,
       youtubeDestinationsMapped: courts.filter((court) => court.destinations.youtube).length,
-      ivsDestinationsMapped: courts.filter((court) => court.destinations.ivsPreview).length,
+      previewDestinationsMapped: courts.filter((court) => court.destinations.mediaMtxPreview).length,
       courtsWithHtmlOverlay: courts.filter((court) => court.elements.htmlOverlay).length,
-      courtsWithSeparateIvsOutput: separateIvsOutputCount,
-      courtsWithIvsPasteValues: courts.filter((court) => court.ivs?.rtmpsServerUrl && court.ivs?.streamKeyValue).length,
+      courtsWithSeparatePreviewOutput: separatePreviewOutputCount,
+      courtsWithMediaMtxPasteValues: courts.filter((court) => court.mediamtx?.rtmpServerUrl && court.mediamtx?.streamKeyValue).length,
       courtsWithSavedOverlayUrl: courts.filter((court) => court.savedSettings.overlayUrl === court.expectedSettings.overlayUrl).length,
       courtsWithSavedYoutubeOutput: courts.filter((court) => sameStringArray(court.savedSettings.youtubeDestinations, court.expectedSettings.youtubeDestinations)).length,
-      courtsWithSavedIvsOutput: courts.filter((court) => sameStringArray(court.savedSettings.ivsDestinations, court.expectedSettings.ivsDestinations)).length
+      courtsWithSavedPreviewOutput: courts.filter((court) => sameStringArray(court.savedSettings.previewDestinations, court.expectedSettings.previewDestinations)).length
     },
-    notes: streamRunNotes(separateIvsOutputCount, env.courtCount)
+    notes: streamRunNotes(separatePreviewOutputCount, env.courtCount)
   };
 
   fs.mkdirSync(outputDir, { recursive: true });
@@ -187,25 +176,38 @@ function main() {
   console.log(`Wrote ${path.join(outputDir, "scorecheck-operations-report.redacted.md")}`);
 }
 
-function streamRunNotes(separateIvsOutputCount: number, courtCount: number) {
+function mediaMtxIngestForCourt(court: number): MediaMtxIngest | null {
+  if (!rtmpIngestBase) return null;
+  const streamPath = courtStreamPath(court);
+  const credentials = publishUser && publishPass
+    ? `?user=${encodeURIComponent(publishUser)}&pass=${encodeURIComponent(publishPass)}`
+    : "";
+  return {
+    streamPath,
+    rtmpServerUrl: `${rtmpIngestBase}/`,
+    streamKeyValue: `${streamPath}${credentials}`
+  };
+}
+
+function streamRunNotes(separatePreviewOutputCount: number, courtCount: number) {
   const notes = [
-    "Existing StreamRun destination API responses do not expose RTMP server URL fields, so custom IVS destinations are generated as a manual paste sheet.",
-    "Launch requests include YouTube destination, IVS destination, and HTML overlay overrides only when those IDs are mapped.",
-    "Before changing IVS destinations or sending local test video, read docs/STREAMRUN_IVS_PREVIEW_RUNBOOK.md for the RTMPS destination and UDP-to-SRT sender requirements."
+    "StreamRun preview destinations must be custom RTMP destinations that publish to the MediaMTX droplet ingest (see docs/MEDIAMTX_DIGITALOCEAN_SETUP.md).",
+    "Launch requests include YouTube destination, MediaMTX preview destination, and HTML overlay overrides only when those IDs are mapped.",
+    "Set MEDIAMTX_RTMP_INGEST_BASE plus MEDIAMTX_PUBLISH_USER/MEDIAMTX_PUBLISH_PASS locally before generating the paste sheet so it includes complete publish values."
   ];
 
-  if (separateIvsOutputCount === 0) {
+  if (separatePreviewOutputCount === 0) {
     notes.splice(1, 0,
-      "No StreamRun workflows expose a separate IVS outputstream; launch requests attach IVS preview destinations to the same outputstream as a fallback.",
-      "Add a separate IVS output branch in the editor later if a clean no-overlay IVS preview path is required."
+      "No StreamRun workflows expose a separate preview outputstream; launch requests attach MediaMTX preview destinations to the same outputstream as a fallback.",
+      "Add a separate preview output branch in the editor later if a clean no-overlay MediaMTX preview path is required."
     );
-  } else if (separateIvsOutputCount < courtCount) {
+  } else if (separatePreviewOutputCount < courtCount) {
     notes.splice(1, 0,
-      `${separateIvsOutputCount}/${courtCount} StreamRun workflows expose a separate IVS outputstream; courts without one use the combined outputstream fallback.`,
-      "Add separate IVS output branches to the remaining StreamRun workflows if clean no-overlay IVS preview is required on every court."
+      `${separatePreviewOutputCount}/${courtCount} StreamRun workflows expose a separate preview outputstream; courts without one use the combined outputstream fallback.`,
+      "Add separate preview output branches to the remaining StreamRun workflows if clean no-overlay MediaMTX preview is required on every court."
     );
   } else {
-    notes.splice(1, 0, "All StreamRun workflows expose separate YouTube and IVS outputstreams.");
+    notes.splice(1, 0, "All StreamRun workflows expose separate YouTube and preview outputstreams.");
   }
 
   return notes;
@@ -227,7 +229,7 @@ function findYoutubeDestination(destinations: StreamRunDestination[], court: num
   ));
 }
 
-function findIvsDestination(destinations: StreamRunDestination[], court: number) {
+function findPreviewDestination(destinations: StreamRunDestination[], court: number) {
   const courtLabel = String(court).padStart(2, "0");
   return destinations.find((destination) => (
     destination.name.toLowerCase().includes(`court-${courtLabel}`) &&
@@ -256,32 +258,32 @@ function gaps(input: {
   input: string | null;
   htmlOverlay: string | null;
   youtubeOutput: string | null;
-  ivsOutput: string | null;
+  previewOutput: string | null;
   youtubeDestination?: StreamRunDestination;
-  ivsDestination?: StreamRunDestination;
-  ivsChannel: AwsIvsChannel | null;
+  previewDestination?: StreamRunDestination;
+  mediamtx: MediaMtxIngest | null;
   savedOverlayUrl: string | null;
   expectedOverlayUrl: string;
   savedYoutubeDestinations: string[];
   expectedYoutubeDestinations: string[];
-  savedIvsDestinations: string[];
-  expectedIvsDestinations: string[];
+  savedPreviewDestinations: string[];
+  expectedPreviewDestinations: string[];
 }) {
   const gaps: string[] = [];
   if (!input.configuration) gaps.push("Missing StreamRun configuration named Stream N");
   if (!input.input) gaps.push("Missing inputstream element");
   if (!input.htmlOverlay) gaps.push("Missing htmloverlay element");
   if (!input.youtubeOutput) gaps.push("Missing YouTube outputstream element");
-  if (!input.ivsOutput) gaps.push("Missing separate IVS outputstream element");
+  if (!input.previewOutput) gaps.push("Missing separate preview outputstream element");
   if (!input.youtubeDestination) gaps.push("Missing YouTube destination for stream key N");
-  if (!input.ivsDestination) gaps.push("Missing StreamRun IVS preview destination");
-  if (!input.ivsChannel?.rtmpsServerUrl || !input.ivsChannel.streamKeyValue) gaps.push("Missing local AWS IVS RTMPS URL or stream key value");
+  if (!input.previewDestination) gaps.push("Missing StreamRun MediaMTX preview destination");
+  if (!input.mediamtx?.rtmpServerUrl || !input.mediamtx.streamKeyValue) gaps.push("Missing MEDIAMTX_RTMP_INGEST_BASE env for MediaMTX RTMP paste values");
   if (input.htmlOverlay && input.savedOverlayUrl !== input.expectedOverlayUrl) gaps.push("Saved HTML overlay URL does not match expected production overlay URL");
   if (input.youtubeOutput && input.expectedYoutubeDestinations.length && !sameStringArray(input.savedYoutubeDestinations, input.expectedYoutubeDestinations)) {
     gaps.push("Saved YouTube output destinations do not match expected YouTube-only output");
   }
-  if (input.ivsOutput && input.expectedIvsDestinations.length && !sameStringArray(input.savedIvsDestinations, input.expectedIvsDestinations)) {
-    gaps.push("Saved IVS output destinations do not match expected IVS-only output");
+  if (input.previewOutput && input.expectedPreviewDestinations.length && !sameStringArray(input.savedPreviewDestinations, input.expectedPreviewDestinations)) {
+    gaps.push("Saved preview output destinations do not match expected MediaMTX-only output");
   }
   return gaps;
 }
@@ -290,18 +292,18 @@ function pasteSheet(courts: Array<{
   court: number;
   configurationId: string | null;
   configurationName: string | null;
-  elements: { htmlOverlay: string | null; youtubeOutput: string | null; ivsOutput: string | null };
-  savedSettings: { overlayUrl: string | null; youtubeDestinations: string[]; ivsDestinations: string[] };
-  expectedSettings: { overlayUrl: string; youtubeDestinations: string[]; ivsDestinations: string[] };
-  destinations: { youtube: ReturnType<typeof pickDestination> | null; ivsPreview: ReturnType<typeof pickDestination> | null };
+  elements: { htmlOverlay: string | null; youtubeOutput: string | null; previewOutput: string | null };
+  savedSettings: { overlayUrl: string | null; youtubeDestinations: string[]; previewDestinations: string[] };
+  expectedSettings: { overlayUrl: string; youtubeDestinations: string[]; previewDestinations: string[] };
+  destinations: { youtube: ReturnType<typeof pickDestination> | null; mediaMtxPreview: ReturnType<typeof pickDestination> | null };
   overlayUrl: string;
-  ivs: { rtmpsServerUrl: string; streamKeyValue: string } | null;
+  mediamtx: MediaMtxIngest | null;
   gaps: string[];
 }>, redacted = false) {
   const lines = [
     "# StreamRun AVP Denver Setup",
     "",
-    "Do not commit this file. It contains IVS stream keys when generated without redaction.",
+    "Do not commit this file. It contains MediaMTX publish credentials when generated without redaction.",
     ""
   ];
   for (const court of courts) {
@@ -310,15 +312,15 @@ function pasteSheet(courts: Array<{
     lines.push(`Configuration: ${court.configurationName ?? "missing"} (${court.configurationId ?? "missing"})`);
     lines.push(`HTML overlay element: ${court.elements.htmlOverlay ?? "missing"}`);
     lines.push(`YouTube output element: ${court.elements.youtubeOutput ?? "missing"}`);
-    lines.push(`IVS output element: ${court.elements.ivsOutput ?? "missing"}`);
+    lines.push(`Preview output element: ${court.elements.previewOutput ?? "missing"}`);
     lines.push(`YouTube destination: ${court.destinations.youtube?.name ?? "missing"} (${court.destinations.youtube?.id ?? "missing"})`);
-    lines.push(`IVS destination: ${court.destinations.ivsPreview?.name ?? "missing"} (${court.destinations.ivsPreview?.id ?? "missing"})`);
+    lines.push(`MediaMTX preview destination: ${court.destinations.mediaMtxPreview?.name ?? "missing"} (${court.destinations.mediaMtxPreview?.id ?? "missing"})`);
     lines.push(`Overlay URL: ${court.overlayUrl}`);
     lines.push(`Saved overlay URL matches: ${court.savedSettings.overlayUrl === court.expectedSettings.overlayUrl ? "yes" : "no"}`);
     lines.push(`Saved YouTube output destinations match: ${sameStringArray(court.savedSettings.youtubeDestinations, court.expectedSettings.youtubeDestinations) ? "yes" : "no"}`);
-    lines.push(`Saved IVS output destinations match: ${sameStringArray(court.savedSettings.ivsDestinations, court.expectedSettings.ivsDestinations) ? "yes" : "no"}`);
-    lines.push(`IVS RTMPS server: ${court.ivs?.rtmpsServerUrl ?? "missing"}`);
-    lines.push(`IVS stream key: ${redacted ? redactSecret(court.ivs?.streamKeyValue) : court.ivs?.streamKeyValue ?? "missing"}`);
+    lines.push(`Saved preview output destinations match: ${sameStringArray(court.savedSettings.previewDestinations, court.expectedSettings.previewDestinations) ? "yes" : "no"}`);
+    lines.push(`MediaMTX RTMP server: ${court.mediamtx?.rtmpServerUrl ?? "missing"}`);
+    lines.push(`MediaMTX stream key: ${redacted ? redactSecret(court.mediamtx?.streamKeyValue) : court.mediamtx?.streamKeyValue ?? "missing"}`);
     if (court.gaps.length) {
       lines.push("");
       lines.push("Required manual/API follow-up:");
@@ -331,14 +333,15 @@ function pasteSheet(courts: Array<{
 
 function redactSecret(value?: string) {
   if (!value) return "missing";
-  if (value.length <= 8) return "[redacted]";
-  return `${value.slice(0, 4)}...${value.slice(-4)}`;
+  if (!value.includes("?")) return value;
+  return `${value.slice(0, value.indexOf("?"))}?[redacted]`;
 }
 
 function operationsReport(setup: {
   generatedAt: string;
   baseUrl: string;
   mode: string;
+  mediaMtxRtmpIngestBase: string | null;
   summary: Record<string, number>;
   notes: string[];
   courts: Array<{
@@ -349,21 +352,15 @@ function operationsReport(setup: {
       input: string | null;
       htmlOverlay: string | null;
       youtubeOutput: string | null;
-      ivsOutput: string | null;
+      previewOutput: string | null;
       outputCount: number;
     };
     destinations: {
       youtube: ReturnType<typeof pickDestination> | null;
-      ivsPreview: ReturnType<typeof pickDestination> | null;
+      mediaMtxPreview: ReturnType<typeof pickDestination> | null;
     };
     overlayUrl: string;
-    ivs: {
-      channelArn: string;
-      playbackUrl: string;
-      rtmpsServerUrl: string;
-      streamKeyArn: string;
-      streamKeyValue: string;
-    } | null;
+    mediamtx: MediaMtxIngest | null;
     gaps: string[];
   }>;
 }) {
@@ -373,23 +370,24 @@ function operationsReport(setup: {
     `Generated: ${setup.generatedAt}`,
     `StreamRun base URL: ${setup.baseUrl}`,
     `StreamRun mode: ${setup.mode}`,
+    `MediaMTX RTMP ingest base: ${setup.mediaMtxRtmpIngestBase ?? "missing"}`,
     "",
     "## Summary",
     "",
     `- StreamRun configurations mapped: ${setup.summary.configurationsMapped}`,
     `- YouTube destinations mapped: ${setup.summary.youtubeDestinationsMapped}`,
-    `- IVS destinations mapped: ${setup.summary.ivsDestinationsMapped}`,
+    `- MediaMTX preview destinations mapped: ${setup.summary.previewDestinationsMapped}`,
     `- HTML overlays mapped: ${setup.summary.courtsWithHtmlOverlay}`,
-    `- Separate IVS output elements mapped: ${setup.summary.courtsWithSeparateIvsOutput}`,
-    `- IVS paste values available locally: ${setup.summary.courtsWithIvsPasteValues}`,
+    `- Separate preview output elements mapped: ${setup.summary.courtsWithSeparatePreviewOutput}`,
+    `- MediaMTX paste values available locally: ${setup.summary.courtsWithMediaMtxPasteValues}`,
     `- Saved HTML overlay URLs matched: ${setup.summary.courtsWithSavedOverlayUrl}`,
     `- Saved YouTube output destinations matched: ${setup.summary.courtsWithSavedYoutubeOutput}`,
-    `- Saved IVS output destinations matched: ${setup.summary.courtsWithSavedIvsOutput}`,
+    `- Saved preview output destinations matched: ${setup.summary.courtsWithSavedPreviewOutput}`,
     "",
     "## Court Mapping",
     "",
-    "| Court | StreamRun config | Overlay element | YouTube output | YouTube destination | IVS output | IVS destination | IVS channel ARN | IVS playback URL | Overlay URL | Gaps |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    "| Court | StreamRun config | Overlay element | YouTube output | YouTube destination | Preview output | Preview destination | MediaMTX stream path | Overlay URL | Gaps |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
   ];
 
   for (const court of setup.courts) {
@@ -399,10 +397,9 @@ function operationsReport(setup: {
       court.elements.htmlOverlay ?? "missing",
       court.elements.youtubeOutput ?? "missing",
       court.destinations.youtube ? `${court.destinations.youtube.name} (${court.destinations.youtube.id})` : "missing",
-      court.elements.ivsOutput ?? "missing",
-      court.destinations.ivsPreview ? `${court.destinations.ivsPreview.name} (${court.destinations.ivsPreview.id})` : "missing",
-      court.ivs?.channelArn ?? "missing",
-      court.ivs?.playbackUrl ?? "missing",
+      court.elements.previewOutput ?? "missing",
+      court.destinations.mediaMtxPreview ? `${court.destinations.mediaMtxPreview.name} (${court.destinations.mediaMtxPreview.id})` : "missing",
+      court.mediamtx?.streamPath ?? "missing",
       court.overlayUrl,
       court.gaps.length ? court.gaps.join("; ") : "none"
     ].map(tableCell).join(" | ").replace(/^/, "| ").replace(/$/, " |"));
@@ -411,16 +408,16 @@ function operationsReport(setup: {
   lines.push("");
   lines.push("## Manual StreamRun Follow-Up");
   lines.push("");
-  lines.push("- Combined-output launch overrides are available now: the existing outputstream can target both YouTube and IVS.");
-  lines.push("- Add a separate IVS outputstream element to each StreamRun workflow if clean preview output without the YouTube overlay is required.");
-  lines.push("- If separate IVS outputstreams are added, attach each IVS destination to the new IVS branch in the StreamRun Editor.");
+  lines.push("- Combined-output launch overrides are available now: the existing outputstream can target both YouTube and the MediaMTX preview.");
+  lines.push("- Add a separate preview outputstream element to each StreamRun workflow if clean preview output without the YouTube overlay is required.");
+  lines.push("- If separate preview outputstreams are added, attach each MediaMTX preview destination to the new preview branch in the StreamRun Editor.");
   lines.push("- Re-run `npm run setup:streamrun:discover` and `npm run setup:streamrun` after editor changes.");
   lines.push("");
   lines.push("## Notes");
   lines.push("");
   for (const note of setup.notes) lines.push(`- ${note}`);
   lines.push("");
-  lines.push("This report intentionally excludes IVS stream keys, private keys, Supabase service role keys, StreamRun API keys, Vercel tokens, and YouTube refresh tokens.");
+  lines.push("This report intentionally excludes MediaMTX publish credentials, Supabase service role keys, StreamRun API keys, Vercel tokens, and YouTube refresh tokens.");
   return `${lines.join("\n")}\n`;
 }
 
