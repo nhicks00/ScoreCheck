@@ -1,9 +1,14 @@
 import { defaultManualState } from "./manualScoring";
-import { persistScoreAndOverlay, scoreForCurrentMatch } from "./scoreState";
+import { persistVblBracketProgressIfAvailable } from "./poller";
+import { buildOverlayStateWithEventSettings, persistScoreAndOverlay, scoreForCurrentMatch } from "./scoreState";
 import type { CourtRecord, MatchRecord, ScoreRecord } from "./scoreState";
 import { supabaseAdmin } from "./supabase";
 import { discoverMatchesFromUrl } from "./vbl";
 import { buildActiveVblSourceSet, matchBelongsToActiveVblSource } from "./vblSources";
+
+type BracketProgressCourt = Parameters<typeof persistVblBracketProgressIfAvailable>[0];
+type BracketProgressMatch = Parameters<typeof persistVblBracketProgressIfAvailable>[1];
+type BracketProgressScore = Parameters<typeof persistVblBracketProgressIfAvailable>[2];
 
 type Relation<T> = T | T[] | null | undefined;
 
@@ -42,6 +47,14 @@ type QueueRow = {
   status: string;
   is_active: boolean;
   matches?: Relation<MatchRow>;
+};
+
+type ExistingMatchTeams = {
+  api_url: string | null;
+  team_a?: string | null;
+  team_b?: string | null;
+  team_a_seed?: string | null;
+  team_b_seed?: string | null;
 };
 
 export type BracketRefreshResult = {
@@ -105,9 +118,17 @@ export async function refreshEventBracketSources(eventId: string): Promise<Brack
           source_payload: match.sourcePayload,
           updated_at: now
         }));
+        const { data: existingMatches, error: existingMatchError } = await db
+          .from("matches")
+          .select("api_url,team_a,team_b,team_a_seed,team_b_seed")
+          .eq("event_id", eventId)
+          .in("api_url", rows.map((row) => row.api_url));
+        if (existingMatchError) throw existingMatchError;
+        const existingByApiUrl = new Map(((existingMatches ?? []) as ExistingMatchTeams[]).map((row) => [row.api_url, row]));
+        const mergedRows = rows.map((row) => mergeDiscoveredTeamFields(row, existingByApiUrl.get(row.api_url)));
         const { data: savedMatches, error } = await db
           .from("matches")
-          .upsert(rows, { onConflict: "event_id,api_url" })
+          .upsert(mergedRows, { onConflict: "event_id,api_url" })
           .select("*");
         if (error) throw error;
 
@@ -168,13 +189,15 @@ async function autoQueueDiscoveredMatches(eventId: string, matches: Record<strin
     if (!court) {
       if (existingQueue && !isFinishedQueue(existingQueue)) {
         const previousCourtId = existingQueue.court_id;
+        const vacatesCurrentMatch = await courtShowsMatch(previousCourtId, matchId);
         const { error: unmapError } = await db
           .from("court_match_queue")
           .update({ is_active: false, status: "unmapped", updated_at: now })
           .eq("id", existingQueue.id);
         if (unmapError) throw unmapError;
-        if (existingQueue.is_active) {
-          await activateBestMatchForCourt(previousCourtId);
+        if (existingQueue.is_active || vacatesCurrentMatch) {
+          const activated = await activateBestMatchForCourt(previousCourtId);
+          if (!activated) await idleVacatedCourt(previousCourtId, [matchId]);
         }
         unmapped += 1;
       }
@@ -185,11 +208,13 @@ async function autoQueueDiscoveredMatches(eventId: string, matches: Record<strin
     if (existingQueue) {
       if (!isFinishedQueue(existingQueue) && existingQueue.court_id !== court.id) {
         const previousCourtId = existingQueue.court_id;
+        const vacatesCurrentMatch = await courtShowsMatch(previousCourtId, matchId);
         await moveQueueToCourt(existingQueue, court.id, now);
-        if (existingQueue.is_active) {
-          await activateBestMatchForCourt(previousCourtId);
-        }
         await activateBestMatchForCourt(court.id, { preserveValidActive: true });
+        if (existingQueue.is_active || vacatesCurrentMatch) {
+          const activated = await activateBestMatchForCourt(previousCourtId);
+          if (!activated) await idleVacatedCourt(previousCourtId, [matchId]);
+        }
         moved += 1;
       } else if (existingQueue.status === "unmapped") {
         const { error: remapError } = await db
@@ -250,7 +275,7 @@ async function autoQueueDiscoveredMatches(eventId: string, matches: Record<strin
       const { data: updatedCourt } = await db.from("courts").select("*").eq("id", court.id).single();
       if (updatedCourt) {
         const initial = defaultManualState();
-        await persistScoreAndOverlay(updatedCourt, match as Parameters<typeof persistScoreAndOverlay>[1], {
+        const { score: savedScore } = await persistScoreAndOverlay(updatedCourt, match as Parameters<typeof persistScoreAndOverlay>[1], {
           court_id: court.id,
           match_id: matchId,
           team_a_score: initial.team_a_score,
@@ -268,6 +293,11 @@ async function autoQueueDiscoveredMatches(eventId: string, matches: Record<strin
           stale: false,
           message: "VolleyballLife match assigned; waiting for live scoring."
         });
+        await persistVblBracketProgressIfAvailable(
+          updatedCourt as BracketProgressCourt,
+          match as BracketProgressMatch,
+          savedScore as BracketProgressScore
+        );
       }
       activated += 1;
     }
@@ -367,7 +397,7 @@ async function activateBestMatchForCourt(courtId: string, options: { preserveVal
     .limit(1)
     .maybeSingle();
   const initial = defaultManualState();
-  await persistScoreAndOverlay(court, match, score ? {
+  const { score: savedScore } = await persistScoreAndOverlay(court, match, score ? {
     court_id: court.id,
     match_id: match.id,
     team_a_score: Number(score.team_a_score ?? 0),
@@ -405,6 +435,11 @@ async function activateBestMatchForCourt(courtId: string, options: { preserveVal
     stale: false,
     message: "VolleyballLife match assigned; waiting for live scoring."
   });
+  await persistVblBracketProgressIfAvailable(
+    court as BracketProgressCourt,
+    match as BracketProgressMatch,
+    savedScore as BracketProgressScore
+  );
   return true;
 }
 
@@ -473,16 +508,77 @@ async function retireInactiveVblSourceQueues(eventId: string, activeSourceUrls: 
 
   for (const courtId of activeCourtIds) {
     const activated = await activateBestMatchForCourt(courtId, { preserveValidActive: true, activeSourceUrls });
-    if (!activated && retiredMatchIds.length) {
-      await db
-        .from("courts")
-        .update({ current_match_id: null, status: "waiting", updated_at: now })
-        .eq("id", courtId)
-        .in("current_match_id", retiredMatchIds);
+    if (!activated) {
+      await idleVacatedCourt(courtId, retiredMatchIds);
     }
   }
 
   return inactiveQueues.length;
+}
+
+async function courtShowsMatch(courtId: string, matchId: string) {
+  const { data, error } = await supabaseAdmin()
+    .from("courts")
+    .select("current_match_id")
+    .eq("id", courtId)
+    .maybeSingle();
+  if (error) throw error;
+  return data?.current_match_id === matchId;
+}
+
+async function idleVacatedCourt(courtId: string, vacatedMatchIds: string[]) {
+  if (!vacatedMatchIds.length) return false;
+  const db = supabaseAdmin();
+  const { data: court, error } = await db
+    .from("courts")
+    .select("*")
+    .eq("id", courtId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!court?.current_match_id || !vacatedMatchIds.includes(String(court.current_match_id))) return false;
+
+  const now = new Date().toISOString();
+  const { data: clearedCourt, error: clearError } = await db
+    .from("courts")
+    .update({ current_match_id: null, status: "waiting", last_update_at: now, updated_at: now })
+    .eq("id", courtId)
+    .select("*")
+    .single();
+  if (clearError) throw clearError;
+
+  const { error: scoreError } = await db.from("score_states").update({
+    match_id: null,
+    team_a_score: 0,
+    team_b_score: 0,
+    team_a_sets: 0,
+    team_b_sets: 0,
+    current_set: 1,
+    set_scores: [],
+    serving_team: null,
+    status: "Pre-Match",
+    source: "api",
+    source_available: false,
+    source_priority: "fallback",
+    source_pending_scores: [],
+    stale: false,
+    message: "Match reassigned to another court.",
+    last_api_poll_at: now,
+    last_score_change_at: now,
+    updated_at: now
+  }).eq("court_id", courtId);
+  if (scoreError) throw scoreError;
+
+  const overlay = await buildOverlayStateWithEventSettings(clearedCourt, null, null);
+  const { error: overlayError } = await db.from("overlay_states").upsert({
+    court_id: courtId,
+    event_id: clearedCourt.event_id,
+    court_number: clearedCourt.court_number,
+    payload: overlay,
+    stale: false,
+    updated_at: now
+  });
+  if (overlayError) throw overlayError;
+  return true;
 }
 
 async function activateQueueForCourt(court: CourtRow, queue: QueueRow) {
@@ -523,7 +619,7 @@ async function activateQueueForCourt(court: CourtRow, queue: QueueRow) {
     .limit(1)
     .maybeSingle();
   const initial = defaultManualState();
-  await persistScoreAndOverlay(updatedCourt, match, score ? {
+  const { score: savedScore } = await persistScoreAndOverlay(updatedCourt, match, score ? {
     court_id: court.id,
     match_id: match.id,
     team_a_score: Number(score.team_a_score ?? 0),
@@ -561,6 +657,11 @@ async function activateQueueForCourt(court: CourtRow, queue: QueueRow) {
     stale: false,
     message: match.source_type === "manual" || !match.api_url ? null : "VolleyballLife match assigned; waiting for live scoring."
   });
+  await persistVblBracketProgressIfAvailable(
+    updatedCourt as BracketProgressCourt,
+    match as BracketProgressMatch,
+    savedScore as BracketProgressScore
+  );
 }
 
 async function queueHasVisibleScore(queue: QueueRow) {
@@ -626,6 +727,32 @@ async function refreshActiveOverlaysForMatches(eventId: string, matches: Record<
     refreshed += 1;
   }
   return refreshed;
+}
+
+export function mergeDiscoveredTeamFields<T extends { team_a: string | null; team_b: string | null; team_a_seed: string | null; team_b_seed: string | null }>(
+  discovered: T,
+  existing: Omit<ExistingMatchTeams, "api_url"> | null | undefined
+): T {
+  if (!existing) return discovered;
+  return {
+    ...discovered,
+    team_a: preferResolvedTeamName(discovered.team_a, existing.team_a),
+    team_b: preferResolvedTeamName(discovered.team_b, existing.team_b),
+    team_a_seed: discovered.team_a_seed ?? existing.team_a_seed ?? null,
+    team_b_seed: discovered.team_b_seed ?? existing.team_b_seed ?? null
+  };
+}
+
+function preferResolvedTeamName(discovered: string | null, existing: string | null | undefined) {
+  const incoming = cleanText(discovered);
+  const current = cleanText(existing);
+  if (!current || isPlaceholderTeamName(current)) return discovered;
+  if (!incoming || isPlaceholderTeamName(incoming)) return current;
+  return discovered;
+}
+
+function isPlaceholderTeamName(value: string) {
+  return /^(TBD|Team A|Team B|Winner|Loser)/i.test(value);
 }
 
 function cleanText(value: unknown) {

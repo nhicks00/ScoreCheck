@@ -4,17 +4,20 @@ import { defaultManualState } from "./manualScoring";
 import { buildOverlayStateWithEventSettings, persistScoreAndOverlay, scoreForCurrentMatch } from "./scoreState";
 import { supabaseAdmin } from "./supabase";
 import type { ScoreSnapshot, SetScore } from "./types";
-import { VBL_OVERLAY_DELAY_MS, delayedScoreFromSnapshot, isDelayedScoreBehindVisible, pendingScoresForMatch, queueDelayedVblScore, shouldHoldDelayedFinalScore, splitDueDelayedVblScores, type DelayedVblScorePayload } from "./vblDelay";
+import { VBL_OVERLAY_DELAY_MS, VBL_POST_FINAL_HOLD_MS, delayedScoreFromSnapshot, isDelayedScoreBehindVisible, pendingScoresForMatch, queueDelayedVblScore, shouldHoldDelayedFinalScore, splitDueDelayedVblScores, type DelayedVblScorePayload } from "./vblDelay";
 import { buildActiveVblSourceSet, matchBelongsToActiveVblSource } from "./vblSources";
 
 const POLL_WINDOW_MS = 25_000;
 const ACTIVE_INTERVAL_MS = 1_800;
 const LEASE_MS = 35_000;
-const POST_FINAL_NEXT_MATCH_HOLD_MS = 180_000;
 const BRACKET_REFRESH_INTERVAL_MS = 45_000;
+const NEXT_MATCH_LIVE_CHECK_TTL_MS = 10_000;
+const NEXT_MATCH_LIVE_CHECK_CACHE_LIMIT = 500;
 const EVENT_TIME_ZONE = "America/Denver";
 
 const lastBracketRefreshAtByEvent = new Map<string, number>();
+const nextMatchLiveCheckCache = new Map<string, { checkedAt: number; live: boolean }>();
+const fallbackFinalHoldStartByMatch = new Map<string, string>();
 
 type Relation<T> = T | T[] | null | undefined;
 
@@ -254,19 +257,18 @@ async function advanceFinalMatchIfReady(court: CourtRow, match: MatchRow, curren
   if (!isFinalScore(currentScore)) return false;
   if (!hasScoreClinchedMatch(currentScore, match)) return false;
   if (match.source_type === "vbl" && !isApiConfirmedFinalScore(currentScore)) return false;
-  if (hasFutureDelayedVblScore(currentScore, new Date().toISOString())) return false;
+  const now = new Date().toISOString();
+  if (hasFutureDelayedVblScore(currentScore, now)) return false;
 
   const next = await nextQueuedMatch(court.id);
   if (!next) return false;
   const nextMatch = firstRelation(next.matches);
-  const nextLiveScoringStarted = await queuedMatchHasAuthoritativeScore(nextMatch);
-  const now = new Date().toISOString();
-  if (!shouldAdvanceFinalMatchOverlay({
-    finalVisibleAt: currentScore.last_score_change_at ?? currentScore.updated_at ?? null,
-    now,
-    nextLiveScoringStarted
-  })) return false;
+  const nextLiveScoringStarted = bracketPayloadShowsLiveScoring(nextMatch?.source_payload)
+    || await queuedMatchHasAuthoritativeScore(nextMatch);
+  const finalVisibleAt = await resolveFinalHoldStart(court, match, currentScore, now);
+  if (!shouldAdvanceFinalMatchOverlay({ finalVisibleAt, now, nextLiveScoringStarted })) return false;
 
+  fallbackFinalHoldStartByMatch.delete(match.id);
   await activateQueuedMatch(court, next);
   return true;
 }
@@ -275,7 +277,7 @@ export function shouldAdvanceFinalMatchOverlay({
   finalVisibleAt,
   now,
   nextLiveScoringStarted,
-  holdMs = POST_FINAL_NEXT_MATCH_HOLD_MS
+  holdMs = VBL_POST_FINAL_HOLD_MS
 }: {
   finalVisibleAt: string | null;
   now: string;
@@ -288,6 +290,53 @@ export function shouldAdvanceFinalMatchOverlay({
   const nowMs = Date.parse(now);
   if (!Number.isFinite(finalVisibleAtMs) || !Number.isFinite(nowMs)) return false;
   return nowMs - finalVisibleAtMs >= holdMs;
+}
+
+export function resolvePostFinalHoldStart({
+  finalVisibleAt,
+  firstObservedAt,
+  now
+}: {
+  finalVisibleAt: string | null;
+  firstObservedAt: string | null;
+  now: string;
+}) {
+  if (finalVisibleAt && Number.isFinite(Date.parse(finalVisibleAt))) return finalVisibleAt;
+  if (firstObservedAt && Number.isFinite(Date.parse(firstObservedAt))) return firstObservedAt;
+  return now;
+}
+
+async function resolveFinalHoldStart(court: CourtRow, match: MatchRow, currentScore: ScoreRow, now: string) {
+  const persisted = currentScore.last_score_change_at ?? currentScore.updated_at ?? null;
+  const holdStart = resolvePostFinalHoldStart({
+    finalVisibleAt: persisted,
+    firstObservedAt: fallbackFinalHoldStartByMatch.get(match.id) ?? null,
+    now
+  });
+  if (holdStart === persisted) {
+    fallbackFinalHoldStartByMatch.delete(match.id);
+    return holdStart;
+  }
+
+  if (!fallbackFinalHoldStartByMatch.has(match.id)) {
+    fallbackFinalHoldStartByMatch.set(match.id, holdStart);
+    await supabaseAdmin().from("score_states").update({
+      last_score_change_at: holdStart,
+      updated_at: now
+    }).eq("court_id", court.id);
+  }
+  return holdStart;
+}
+
+export function bracketPayloadShowsLiveScoring(sourcePayload: Record<string, unknown> | null | undefined) {
+  const games = Array.isArray(sourcePayload?.games) ? sourcePayload.games : [];
+  return games.some((game) => {
+    if (!game || typeof game !== "object" || Array.isArray(game)) return false;
+    const record = game as Record<string, unknown>;
+    const teamAScore = Number(record.home);
+    const teamBScore = Number(record.away);
+    return (Number.isFinite(teamAScore) && teamAScore > 0) || (Number.isFinite(teamBScore) && teamBScore > 0);
+  });
 }
 
 export function hasScoreClinchedMatch(
@@ -396,14 +445,31 @@ export function vblBracketFinalVisibleAt(match: Pick<MatchRow, "source_payload">
 
 async function queuedMatchHasAuthoritativeScore(match: MatchRow | null) {
   if (!match?.api_url) return false;
+  const cached = nextMatchLiveCheckCache.get(match.id);
+  if (cached && Date.now() - cached.checkedAt < NEXT_MATCH_LIVE_CHECK_TTL_MS) return cached.live;
+
+  let live = false;
   try {
     const res = await fetch(match.api_url, { cache: "no-store" });
-    if (!res.ok) return false;
-    const payload = await res.json();
-    const snapshot = normalizeScorePayload(payload, match);
-    return hasLivePointScoringStarted(snapshot);
+    if (res.ok) {
+      const payload = await res.json();
+      const snapshot = normalizeScorePayload(payload, match);
+      live = hasLivePointScoringStarted(snapshot);
+    }
   } catch {
-    return false;
+    live = false;
+  }
+
+  pruneNextMatchLiveCheckCache();
+  nextMatchLiveCheckCache.set(match.id, { checkedAt: Date.now(), live });
+  return live;
+}
+
+function pruneNextMatchLiveCheckCache() {
+  if (nextMatchLiveCheckCache.size < NEXT_MATCH_LIVE_CHECK_CACHE_LIMIT) return;
+  const cutoff = Date.now() - NEXT_MATCH_LIVE_CHECK_TTL_MS;
+  for (const [matchId, entry] of nextMatchLiveCheckCache) {
+    if (entry.checkedAt < cutoff) nextMatchLiveCheckCache.delete(matchId);
   }
 }
 
@@ -414,7 +480,7 @@ export function hasLivePointScoringStarted(snapshot: Pick<ReturnType<typeof norm
   return snapshot.setScores.some((set) => !set.isComplete && (set.teamAScore > 0 || set.teamBScore > 0));
 }
 
-async function persistVblBracketProgressIfAvailable(court: CourtRow, match: MatchRow, currentScore: ScoreRow | null) {
+export async function persistVblBracketProgressIfAvailable(court: CourtRow, match: MatchRow, currentScore: ScoreRow | null) {
   if (match.source_type !== "vbl") return null;
   if (currentScore?.source === "api" && currentScore.source_available !== false && currentScore.source_priority !== "fallback") return null;
   if (hasFutureDelayedVblScore(currentScore, new Date().toISOString())) return null;
@@ -696,7 +762,7 @@ async function activateQueuedMatch(court: CourtRow, next: QueueRow) {
   if (courtError) throw courtError;
 
   const state = defaultManualState();
-  await persistScoreAndOverlay(updatedCourt, match ?? null, {
+  const { score: savedScore } = await persistScoreAndOverlay(updatedCourt, match ?? null, {
     court_id: updatedCourt.id,
     match_id: next.match_id,
     team_a_score: state.team_a_score,
@@ -718,6 +784,9 @@ async function activateQueuedMatch(court: CourtRow, next: QueueRow) {
     last_score_change_at: now,
     updated_at: now
   });
+  if (match) {
+    await persistVblBracketProgressIfAvailable(updatedCourt, match, savedScore as ScoreRow);
+  }
 }
 
 async function releaseDueDelayedVblScore(court: CourtRow, match: MatchRow, currentScore: ScoreRow | null) {

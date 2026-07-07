@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { hasLivePointScoringStarted, hasScoreClinchedMatch, shouldAdvanceFinalMatchOverlay, vblBracketFinalVisibleAt } from "../lib/poller";
+import {
+  bracketPayloadShowsLiveScoring,
+  hasLivePointScoringStarted,
+  hasScoreClinchedMatch,
+  resolvePostFinalHoldStart,
+  shouldAdvanceFinalMatchOverlay,
+  vblBracketFinalVisibleAt
+} from "../lib/poller";
+import { parseVblPostFinalHoldMs } from "../lib/vblDelay";
 
 describe("poller final-match advancement", () => {
   it("advances immediately when the next queued VBL match starts live scoring", () => {
@@ -88,6 +96,73 @@ describe("poller final-match advancement", () => {
       teamBScore: 0,
       setScores: [{ setNumber: 1, teamAScore: 1, teamBScore: 0, isComplete: false }]
     })).toBe(true);
+  });
+
+  it("honors a custom post-final hold duration", () => {
+    expect(shouldAdvanceFinalMatchOverlay({
+      finalVisibleAt: "2026-07-04T15:00:00.000Z",
+      now: "2026-07-04T15:00:30.000Z",
+      nextLiveScoringStarted: false,
+      holdMs: 30_000
+    })).toBe(true);
+
+    expect(shouldAdvanceFinalMatchOverlay({
+      finalVisibleAt: "2026-07-04T15:00:00.000Z",
+      now: "2026-07-04T15:00:29.999Z",
+      nextLiveScoringStarted: false,
+      holdMs: 30_000
+    })).toBe(false);
+  });
+
+  it("falls back to the first-observed final time so the hold always expires", () => {
+    expect(resolvePostFinalHoldStart({
+      finalVisibleAt: "2026-07-04T15:00:00.000Z",
+      firstObservedAt: "2026-07-04T15:01:00.000Z",
+      now: "2026-07-04T15:02:00.000Z"
+    })).toBe("2026-07-04T15:00:00.000Z");
+
+    expect(resolvePostFinalHoldStart({
+      finalVisibleAt: null,
+      firstObservedAt: "2026-07-04T15:01:00.000Z",
+      now: "2026-07-04T15:02:00.000Z"
+    })).toBe("2026-07-04T15:01:00.000Z");
+
+    expect(resolvePostFinalHoldStart({
+      finalVisibleAt: "not-a-timestamp",
+      firstObservedAt: null,
+      now: "2026-07-04T15:02:00.000Z"
+    })).toBe("2026-07-04T15:02:00.000Z");
+  });
+
+  it("treats nonzero bracket game points on the next match as a live-scoring signal", () => {
+    expect(bracketPayloadShowsLiveScoring({
+      games: [{ number: 1, home: 5, away: 3 }]
+    })).toBe(true);
+
+    expect(bracketPayloadShowsLiveScoring({
+      games: [{ number: 1, home: "7", away: "0" }]
+    })).toBe(true);
+
+    expect(bracketPayloadShowsLiveScoring({
+      games: [{ number: 1, home: 0, away: 0 }, { number: 2, home: 0, away: 0 }]
+    })).toBe(false);
+
+    expect(bracketPayloadShowsLiveScoring({ games: [] })).toBe(false);
+    expect(bracketPayloadShowsLiveScoring({ games: [null, "bad", 4] })).toBe(false);
+    expect(bracketPayloadShowsLiveScoring(null)).toBe(false);
+    expect(bracketPayloadShowsLiveScoring({})).toBe(false);
+  });
+
+  it("validates the VBL_POST_FINAL_HOLD_MS override and falls back to three minutes", () => {
+    expect(parseVblPostFinalHoldMs(undefined)).toBe(180_000);
+    expect(parseVblPostFinalHoldMs("")).toBe(180_000);
+    expect(parseVblPostFinalHoldMs("  ")).toBe(180_000);
+    expect(parseVblPostFinalHoldMs("not-a-number")).toBe(180_000);
+    expect(parseVblPostFinalHoldMs("-1")).toBe(180_000);
+    expect(parseVblPostFinalHoldMs("3600001")).toBe(180_000);
+    expect(parseVblPostFinalHoldMs("0")).toBe(0);
+    expect(parseVblPostFinalHoldMs("240000")).toBe(240_000);
+    expect(parseVblPostFinalHoldMs("90000.7")).toBe(90_000);
   });
 
   it("uses the latest played VBL game timestamp as the final-visible timestamp", () => {

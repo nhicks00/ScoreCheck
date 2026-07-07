@@ -46,6 +46,9 @@ type OverlayInput = {
 
 export function buildOverlayState(input: OverlayInput): OverlayState {
   const phase = resolvePhase(input.court, input.match, input.score);
+  const matchFormat = input.match?.format ?? null;
+  const rawPointsPerSet = matchFormat?.pointsPerSet;
+  const rawSetScores = input.score?.set_scores;
   return coerceOverlayState({
     eventId: input.court.event_id,
     courtId: input.court.id,
@@ -71,12 +74,12 @@ export function buildOverlayState(input: OverlayInput): OverlayState {
         players: input.match?.team_b_players ?? []
       },
       format: {
-        bestOf: numberValue(input.match?.format?.bestOf) ?? 3,
-        setsToWin: numberValue(input.match?.format?.setsToWin),
-        pointsPerSet: Array.isArray(input.match?.format?.pointsPerSet) ? input.match!.format!.pointsPerSet as number[] : [21, 21, 15],
-        winByTwo: input.match?.format?.winByTwo !== false,
-        cap: numberValue(input.match?.format?.cap),
-        rawText: stringValue(input.match?.format?.rawText)
+        bestOf: numberValue(matchFormat?.bestOf) ?? 3,
+        setsToWin: numberValue(matchFormat?.setsToWin),
+        pointsPerSet: Array.isArray(rawPointsPerSet) ? rawPointsPerSet as number[] : [21, 21, 15],
+        winByTwo: matchFormat?.winByTwo !== false,
+        cap: numberValue(matchFormat?.cap),
+        rawText: stringValue(matchFormat?.rawText)
       }
     },
     score: {
@@ -85,7 +88,7 @@ export function buildOverlayState(input: OverlayInput): OverlayState {
       teamASets: input.score?.team_a_sets ?? 0,
       teamBSets: input.score?.team_b_sets ?? 0,
       currentSet: input.score?.current_set ?? 1,
-      setScores: Array.isArray(input.score?.set_scores) ? input.score!.set_scores as OverlayState["score"]["setScores"] : [],
+      setScores: Array.isArray(rawSetScores) ? rawSetScores as OverlayState["score"]["setScores"] : [],
       servingTeam: input.score?.serving_team === "A" || input.score?.serving_team === "B" ? input.score.serving_team : null
     },
     health: {
