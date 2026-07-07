@@ -303,6 +303,19 @@ export function ScorerClient({ courtId, initialToken }: { courtId: string; initi
     );
   }
 
+  if (!state) {
+    return (
+      <main className="scorer-screen">
+        <div className="scorer-wrap" aria-label="Loading scorer">
+          <span className="skeleton skeleton-chip" />
+          <span className="skeleton skeleton-block" />
+          <span className="skeleton skeleton-block" />
+          <span className="skeleton skeleton-cta" />
+        </div>
+      </main>
+    );
+  }
+
   const isFinal = Boolean(state?.score.status?.toLowerCase().includes("final"));
 
   return (
