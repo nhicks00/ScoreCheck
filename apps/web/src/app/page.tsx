@@ -22,8 +22,8 @@ export default function HomePage() {
             Every court. Every point. <span className="hero-accent">Scored by fans.</span>
           </h1>
           <p className="hero-sub">
-            Pick the beach volleyball court you are watching, tap the team that wins each point,
-            and your score lands on the live broadcast scoreboard in seconds.
+            Pick the beach volleyball court you are watching, keep the score up to date with big,
+            simple tap controls, and it lands on the live broadcast scoreboard in seconds.
           </p>
           <div className="hero-actions">
             <Link className="button primary xl" href="/score">

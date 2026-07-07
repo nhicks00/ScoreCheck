@@ -27,6 +27,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ eve
         courtNumber: court.court_number,
         displayName: court.display_name,
         scoringOpen: court.scoring_open !== false,
+        lastUpdateAt: court.last_update_at ?? null,
         backupRequested: status.backupRequested,
         scorerStatus: {
           needsScorer: status.needsScorer,
@@ -48,7 +49,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ eve
           teamBSets: score.team_b_sets,
           currentSet: score.current_set,
           setScores: Array.isArray(score.set_scores) ? score.set_scores : [],
-          status: score.status
+          status: score.status,
+          lastScoreChangeAt: score.last_score_change_at ?? null,
+          updatedAt: score.updated_at ?? null
         } : null
       };
     }));
