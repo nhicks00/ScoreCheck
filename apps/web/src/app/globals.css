@@ -1818,20 +1818,20 @@ label {
   padding: 16px;
 }
 
+/* Slim, non-sticky role chip: identifies court + role without covering media */
 .role-banner {
   align-items: center;
   display: flex;
-  gap: 14px;
+  flex-wrap: wrap;
+  gap: 8px 14px;
   justify-content: space-between;
-  position: sticky;
-  top: 0;
-  z-index: 5;
+  padding: 12px 16px;
 }
 
 .role-banner.active,
 .role-banner.promoted {
-  border-color: var(--ok-line);
-  box-shadow: var(--shadow-sm), inset 3px 0 0 var(--ok);
+  border-color: var(--coral-line);
+  box-shadow: var(--shadow-sm), inset 3px 0 0 var(--coral);
 }
 
 .role-banner.backup {
@@ -1848,7 +1848,19 @@ label {
   text-transform: uppercase;
 }
 
-.role-banner h1,
+.role-banner-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.role-banner h1 {
+  font-size: 17px;
+  line-height: 1.2;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .scorer-match h2 {
   font-size: 22px;
   line-height: 1.14;
@@ -1859,7 +1871,8 @@ label {
 
 .role-banner p {
   color: var(--muted);
-  line-height: 1.45;
+  font-size: 13px;
+  line-height: 1.4;
   margin: 0;
 }
 
@@ -1921,6 +1934,98 @@ label {
   background: #04060a;
   border-radius: var(--r-sm);
   width: 100%;
+}
+
+/* Video-first mode: keep the stream in view while the scorer scrolls the
+   controls below it. Falls back to normal flow on short screens so the
+   scoring controls always stay reachable. */
+.video-dock {
+  position: sticky;
+  top: 10px;
+  z-index: 30;
+}
+
+.video-dock .stream-preview {
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+@media (max-height: 640px) {
+  .video-dock {
+    position: static;
+  }
+
+  .video-dock .stream-preview {
+    box-shadow: var(--shadow-sm);
+  }
+}
+
+/* Session terminal states: match final, session ended, dead link */
+.session-done-panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-sm);
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  padding: 26px 20px;
+  text-align: center;
+}
+
+.session-done-panel > svg {
+  color: var(--coral);
+}
+
+.session-done-panel .done-court {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.session-done-panel h1,
+.session-done-panel h3 {
+  font-size: 24px;
+  line-height: 1.12;
+  margin: 0;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+
+.session-done-panel p {
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0;
+  max-width: 46ch;
+}
+
+.session-done-panel.session-final {
+  border-color: var(--coral-line);
+}
+
+.session-done-actions {
+  display: grid;
+  gap: 8px;
+  margin-top: 6px;
+  max-width: 400px;
+  width: 100%;
+}
+
+.session-done-actions .button,
+.session-done-actions button {
+  min-height: 54px;
+  width: 100%;
+}
+
+.scorer-skeleton {
+  display: grid;
+  gap: 12px;
+}
+
+.scorer-skeleton .skeleton-block {
+  height: 150px;
 }
 
 .video-controls,
@@ -2052,6 +2157,10 @@ label {
   font-size: 12.5px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+.scorer-instruction strong.offline {
+  color: var(--warn);
 }
 
 /* -- Scoring controls: the sunlight zone ---------------------------------- */
@@ -3242,18 +3351,12 @@ label.score-field {
   }
 
   .score-header,
-  .role-banner,
   .scorer-match {
     align-items: stretch;
     flex-direction: column;
   }
 
-  .role-banner {
-    position: static;
-  }
-
   .role-banner > strong {
-    align-self: flex-start;
     max-width: 100%;
   }
 

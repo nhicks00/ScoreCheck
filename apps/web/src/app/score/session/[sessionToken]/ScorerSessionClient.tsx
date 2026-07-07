@@ -1,6 +1,7 @@
 "use client";
 
-import { AlertTriangle, CheckCircle2, ChevronRight, Lock, Minus, MonitorOff, MonitorPlay, Plus, RotateCcw, Send, StopCircle, Unlock } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronRight, Lock, Minus, MonitorOff, MonitorPlay, Plus, RotateCcw, Send, StopCircle, Trophy, Unlock } from "lucide-react";
+import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StreamPlayer } from "@/components/StreamPlayer";
 
@@ -69,6 +70,8 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [syncNote, setSyncNote] = useState<string | null>(null);
+  const [offline, setOffline] = useState(false);
   const [correctionDraft, setCorrectionDraft] = useState<CorrectionDraft>(() => draftFromScore());
   const [draftDirty, setDraftDirty] = useState(false);
   const [unlockedSets, setUnlockedSets] = useState<number[]>([]);
@@ -78,21 +81,31 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
   const watchModeHydrated = useRef(false);
 
   const refresh = useCallback(async () => {
-    const res = await fetch(`/api/scoring/sessions/${encodeURIComponent(sessionToken)}`, { cache: "no-store" });
-    const json = await res.json().catch(() => ({}));
+    let res: Response;
+    let json: Partial<SessionState> & { error?: string } = {};
+    try {
+      res = await fetch(`/api/scoring/sessions/${encodeURIComponent(sessionToken)}`, { cache: "no-store" });
+      json = await res.json().catch(() => ({}));
+    } catch {
+      // Network hiccup: keep the last good state on screen and show a quiet
+      // reconnecting hint instead of wiping the page.
+      setOffline(true);
+      return;
+    }
+    setOffline(false);
     if (!res.ok) {
       setError(friendlyError(json.error ?? "Scorer session could not be loaded."));
       return;
     }
-    if (previousRole.current === "backup" && json.session.role === "active") {
+    if (previousRole.current === "backup" && json.session?.role === "active") {
       setMessage(json.handoff?.pending
         ? "You are now the live scorekeeper. Choose which score to continue from."
         : "You are now the live scorekeeper. Your taps now update the broadcast scoreboard.");
     }
-    previousRole.current = json.session.role;
-    setState(json);
+    previousRole.current = json.session?.role ?? null;
+    setState(json as SessionState);
     if (!watchModeHydrated.current) {
-      setWatchMode(json.session.watchMode ?? "courtside");
+      setWatchMode(json.session?.watchMode ?? "courtside");
       watchModeHydrated.current = true;
     }
     setError(null);
@@ -148,7 +161,7 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
         setError(friendlyError(json.error ?? "Scoring action failed."));
         return false;
       }
-      setMessage(json.message ?? actionSuccessMessage(type, json.official === false, json.reason === "api_priority"));
+      setSyncNote(json.message ?? actionSuccessMessage(type, json.official === false, json.reason === "api_priority"));
       await refresh();
       return true;
     } catch (err) {
@@ -174,7 +187,7 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
       return;
     }
     setState((current) => current ? { ...current, session: { ...current.session, status: "released", leaseExpiresAt: null } } : current);
-    setMessage("You are done scoring. Thank you for helping.");
+    setMessage(null);
     await refresh();
   }
 
@@ -406,44 +419,60 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
     setMessage("Adjust the set scores below, then apply the edited score to continue.");
   }
 
+  const showFinalPanel = isFinal && !handoffPending && !scoreCheckPending;
+
   return (
     <main className="scorer-screen">
       <div className="scorer-wrap">
-        {!state && !error && <div className="panel muted">Loading scorer session...</div>}
-        {error && <div className="scorer-alert danger"><AlertTriangle size={20} /> {error}</div>}
-        {message && <div className="scorer-alert"><CheckCircle2 size={20} /> {message}</div>}
-        {state && (
+        {!state && !error && (
+          <div className="scorer-skeleton" aria-label="Loading scorer session">
+            <span className="skeleton skeleton-chip" />
+            <span className="skeleton skeleton-block" />
+            <span className="skeleton skeleton-block" />
+            <span className="skeleton skeleton-cta" />
+          </div>
+        )}
+        {!state && error && (
+          <section className="session-done-panel">
+            <AlertTriangle size={26} aria-hidden="true" />
+            <h1>This scoring link is not active</h1>
+            <p>{error}</p>
+            <div className="session-done-actions">
+              <Link className="button primary" href="/score">Start again from the court list</Link>
+            </div>
+          </section>
+        )}
+        {state && sessionEnded && (
+          <section className="session-done-panel">
+            <CheckCircle2 size={26} aria-hidden="true" />
+            <span className="done-court">{state.court.displayName}</span>
+            <h1>{endedCopy(sessionStatus).headline}</h1>
+            <p>{endedCopy(sessionStatus).detail}</p>
+            <div className="session-done-actions">
+              <Link className="button primary" href={`/score/court/${state.court.courtNumber}`}>Start scoring again</Link>
+              <Link className="button ghost" href="/score">See all courts</Link>
+            </div>
+          </section>
+        )}
+        {state && !sessionEnded && (
           <>
             <section className={`role-banner ${state.session.role}`}>
-              <div>
+              <div className="role-banner-copy">
                 <span>{state.court.displayName}</span>
-                <h1>{sessionEnded ? "Scoring session ended." : waiting ? "This court already has enough scorers." : handoffPending ? "You are now the live scorekeeper." : "You are helping keep score."}</h1>
+                <h1>{waiting ? "This court already has enough scorers." : handoffPending ? "You are now the live scorekeeper." : "You are helping keep score."}</h1>
                 <p>
-                  {sessionEnded
-                    ? "This page is read-only now."
-                    : waiting
-                      ? "Keep this page open if you want to be available, but this session is view-only for now."
-                      : handoffPending
-                        ? "Choose which score to continue from before adding more points."
-                        : isBackup
-                          ? "Please keep scoring. Your updates are saved for the broadcast team."
-                          : scoreCheckPending
-                            ? "A score check is needed before more points can be added."
-                            : "Your taps update the broadcast scoreboard."}
+                  {waiting
+                    ? "Keep this page open if you want to be available, but this session is view-only for now."
+                    : handoffPending
+                      ? "Choose which score to continue from before adding more points."
+                      : isBackup
+                        ? "Please keep scoring. Your updates are saved for the broadcast team."
+                        : scoreCheckPending
+                          ? "A score check is needed before more points can be added."
+                          : "Your taps update the broadcast scoreboard."}
                 </p>
               </div>
               <strong>{state.session.displayName}</strong>
-            </section>
-
-            <section className="scorer-match">
-              <div>
-                <span className="muted">{state.match?.round_name ?? state.event.name}</span>
-                <h2>{teamA} vs {teamB}</h2>
-              </div>
-              <div className="set-pill">
-                <span>Sets {teamASets}-{teamBSets}</span>
-                <small>{scoreStatus}</small>
-              </div>
             </section>
 
             <div className="watch-toggle scorer-toggle mode-toggle" role="group" aria-label="Scoring view">
@@ -455,7 +484,25 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
               </button>
             </div>
 
-            <StreamPlayer sessionToken={sessionToken} courtNumber={state.court.courtNumber} enabled={watchMode === "website"} />
+            {watchMode === "website" && (
+              <div className="video-dock">
+                <StreamPlayer sessionToken={sessionToken} courtNumber={state.court.courtNumber} enabled />
+              </div>
+            )}
+
+            {error && <div className="scorer-alert danger"><AlertTriangle size={20} /> {error}</div>}
+            {message && <div className="scorer-alert"><CheckCircle2 size={20} /> {message}</div>}
+
+            <section className="scorer-match">
+              <div>
+                <span className="muted">{state.match?.round_name ?? state.event.name}</span>
+                <h2>{teamA} vs {teamB}</h2>
+              </div>
+              <div className="set-pill">
+                <span>Sets {teamASets}-{teamBSets}</span>
+                <small>{scoreStatus}</small>
+              </div>
+            </section>
 
             {handoffPending && (
               <section className="handoff-panel">
@@ -509,58 +556,91 @@ export function ScorerSessionClient({ sessionToken }: { sessionToken: string }) 
               </section>
             )}
 
-            <div className="scorer-instruction" aria-live="polite">
-              <span>{isFinal ? "This match is final. Stop scoring when you are done." : handoffPending ? "Choose a score above before continuing." : scoreCheckPending ? "Confirm the score check before continuing." : waiting ? "This view-only session is waiting for an open scorer slot." : "Use + for the team that won the rally. Use - to correct one point."}</span>
-              {busy && <strong>{busy === "POINT_A" || busy === "POINT_B" ? "Saving point..." : busy === "MANUAL_CORRECTION" ? "Saving correction..." : "Saving..."}</strong>}
-            </div>
-
-            <section className="score-control-grid" aria-label="Current set scoring controls">
-              {renderTeamScoreControl("A", teamA, teamAScore, teamASets)}
-              {renderTeamScoreControl("B", teamB, teamBScore, teamBSets)}
-            </section>
-
-            <section className="session-actions">
-              <button type="button" onClick={() => void action("UNDO")} disabled={scoringDisabled}>
-                <RotateCcw size={18} /> Undo point
-              </button>
-              <button className="danger" type="button" onClick={() => void release()} disabled={busy != null || !state || !sessionLive}>
-                <StopCircle size={18} /> Stop scoring
-              </button>
-            </section>
-
-            <section className="set-flow-panel" aria-label="Set and match controls">
-              <div>
-                <span>Set control</span>
-                <strong>Save the set when it is over at any score.</strong>
-                <small>Use Finish match if this is the only set or no next set will be played.</small>
-              </div>
-              <div className="set-flow-actions">
-                {currentSet < maxSets && (
-                  <button className="warn" type="button" onClick={() => void action("SET_COMPLETE")} disabled={scoringDisabled || !canSaveSetAndContinue}>
-                    <ChevronRight size={18} /> Save set &amp; go to Set {currentSet + 1}
+            {showFinalPanel && (
+              <section className="session-done-panel session-final" aria-live="polite">
+                <Trophy size={26} aria-hidden="true" />
+                <h3>Final — thanks for keeping score!</h3>
+                <p>{teamA} {teamASets}-{teamBSets} {teamB}. The broadcast scoreboard shows the final result.</p>
+                <div className="session-done-actions">
+                  <Link className="button primary" href="/score">Back to all courts</Link>
+                  {!waiting && (
+                    <button className="warn" type="button" onClick={() => void action("UNDO")} disabled={busy != null}>
+                      <RotateCcw size={18} /> Undo — this match is not over
+                    </button>
+                  )}
+                  <button className="ghost" type="button" onClick={() => void release()} disabled={busy != null || !sessionLive}>
+                    <StopCircle size={18} /> I am done scoring
                   </button>
-                )}
-                <button className="danger" type="button" onClick={() => void action("MATCH_COMPLETE")} disabled={scoringDisabled || !canFinishMatch}>
-                  <StopCircle size={18} /> Finish match
-                </button>
-              </div>
-            </section>
+                </div>
+              </section>
+            )}
 
-            <section className="correction-panel score-editor" aria-label="Edit scoreboard">
-              <div className="editor-header">
-                <div>
-                  <span className="muted">Correction tools</span>
-                  <h3>Set scores</h3>
+            {!showFinalPanel && (
+              <>
+                <div className="scorer-instruction" aria-live="polite">
+                  <span>{handoffPending ? "Choose a score above before continuing." : scoreCheckPending ? "Confirm the score check before continuing." : waiting ? "This view-only session is waiting for an open scorer slot." : "Use + for the team that won the rally. Use - to correct one point."}</span>
+                  <strong className={offline ? "offline" : ""}>
+                    {offline
+                      ? "Reconnecting..."
+                      : busy
+                        ? busy === "POINT_A" || busy === "POINT_B"
+                          ? "Saving point..."
+                          : busy === "MANUAL_CORRECTION"
+                            ? "Saving correction..."
+                            : "Saving..."
+                        : syncNote ?? "Up to date"}
+                  </strong>
                 </div>
-                <span className={`edit-state ${draftDirty ? "dirty" : ""}`}>{draftDirty ? "Edits pending" : "Live score synced"}</span>
-              </div>
-              <form className="set-editor-form" onSubmit={submitCorrection}>
-                <div className="set-editor-list">
-                  {Array.from({ length: maxSets }, (_, index) => renderSetEditor(index + 1))}
-                </div>
-                <button className="primary" type="submit" disabled={correctionDisabled || isFinal || !draftDirty}><Send size={18} /> Apply edited score</button>
-              </form>
-            </section>
+
+                <section className="score-control-grid" aria-label="Current set scoring controls">
+                  {renderTeamScoreControl("A", teamA, teamAScore, teamASets)}
+                  {renderTeamScoreControl("B", teamB, teamBScore, teamBSets)}
+                </section>
+
+                <section className="session-actions">
+                  <button type="button" onClick={() => void action("UNDO")} disabled={scoringDisabled}>
+                    <RotateCcw size={18} /> Undo point
+                  </button>
+                  <button className="danger" type="button" onClick={() => void release()} disabled={busy != null || !state || !sessionLive}>
+                    <StopCircle size={18} /> Stop scoring
+                  </button>
+                </section>
+
+                <section className="set-flow-panel" aria-label="Set and match controls">
+                  <div>
+                    <span>Set control</span>
+                    <strong>Save the set when it is over at any score.</strong>
+                    <small>Use Finish match if this is the only set or no next set will be played.</small>
+                  </div>
+                  <div className="set-flow-actions">
+                    {currentSet < maxSets && (
+                      <button className="warn" type="button" onClick={() => void action("SET_COMPLETE")} disabled={scoringDisabled || !canSaveSetAndContinue}>
+                        <ChevronRight size={18} /> Save set &amp; go to Set {currentSet + 1}
+                      </button>
+                    )}
+                    <button className="danger" type="button" onClick={() => void action("MATCH_COMPLETE")} disabled={scoringDisabled || !canFinishMatch}>
+                      <StopCircle size={18} /> Finish match
+                    </button>
+                  </div>
+                </section>
+
+                <section className="correction-panel score-editor" aria-label="Edit scoreboard">
+                  <div className="editor-header">
+                    <div>
+                      <span className="muted">Correction tools</span>
+                      <h3>Set scores</h3>
+                    </div>
+                    <span className={`edit-state ${draftDirty ? "dirty" : ""}`}>{draftDirty ? "Edits pending" : "Live score synced"}</span>
+                  </div>
+                  <form className="set-editor-form" onSubmit={submitCorrection}>
+                    <div className="set-editor-list">
+                      {Array.from({ length: maxSets }, (_, index) => renderSetEditor(index + 1))}
+                    </div>
+                    <button className="primary" type="submit" disabled={correctionDisabled || isFinal || !draftDirty}><Send size={18} /> Apply edited score</button>
+                  </form>
+                </section>
+              </>
+            )}
           </>
         )}
       </div>
@@ -647,6 +727,31 @@ function sortSetScores(setScores: SetScore[]): SetScore[] {
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+function endedCopy(status: string | undefined): { headline: string; detail: string } {
+  switch (status) {
+    case "released":
+      return {
+        headline: "You are done scoring — thank you!",
+        detail: "This session has ended. If the court still needs help later, you can jump back in."
+      };
+    case "revoked":
+      return {
+        headline: "The broadcast team ended this session.",
+        detail: "Thanks for helping out. If the court still needs a scorer, you can start again below."
+      };
+    case "stale":
+      return {
+        headline: "This session timed out.",
+        detail: "It looks like this page was closed or offline for a while, so scoring was handed off. Start again to keep scoring."
+      };
+    default:
+      return {
+        headline: "This scoring session has ended.",
+        detail: "Thanks for helping keep score. You can start a new session below."
+      };
+  }
 }
 
 function friendlyError(message: string | null): string {
