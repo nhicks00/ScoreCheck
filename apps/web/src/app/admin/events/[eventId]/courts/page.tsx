@@ -22,9 +22,12 @@ export default async function CourtsPage({ params }: { params: Promise<{ eventId
     <main className="shell">
       <div className="container stack">
         <div className="topbar">
-          <Link className="button" href={`/admin/events/${eventId}`}>Dashboard</Link>
+          <span className="brand-mark">Score<em>Check</em></span>
+          <nav className="topbar-nav" aria-label="Admin">
+            <Link className="button ghost" href={`/admin/events/${eventId}`}>Dashboard</Link>
+          </nav>
         </div>
-        <header className="row wrap">
+        <header className="admin-dashboard-header">
           <div>
             <h1>Court Grid</h1>
             <p className="muted">Current match, score, and overlay URL status by court.</p>

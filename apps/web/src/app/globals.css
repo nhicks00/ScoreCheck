@@ -306,6 +306,11 @@ select {
   padding: 20px;
 }
 
+.panel h1 {
+  font-size: 24px;
+  margin: 0;
+}
+
 .panel h2,
 .panel h3 {
   margin-top: 0;
@@ -2567,6 +2572,10 @@ label.score-field {
   letter-spacing: -0.02em;
   line-height: 1.06;
   margin: 0;
+}
+
+.admin-dashboard-header p {
+  margin: 6px 0 0;
 }
 
 .admin-summary-grid {

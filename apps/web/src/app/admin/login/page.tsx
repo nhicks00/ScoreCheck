@@ -13,7 +13,8 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
 
   return (
     <main className="shell">
-      <div className="container" style={{ maxWidth: 460 }}>
+      <div className="container auth-container stack">
+        <span className="brand-mark">Score<em>Check</em></span>
         <section className="panel stack">
           <h1>Admin Login</h1>
           {!env.adminSecret && (

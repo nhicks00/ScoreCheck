@@ -241,12 +241,12 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
 
   return (
     <div className="stack">
-      <div className="row">
+      <div className="admin-dashboard-header">
         <div>
           <h1>{event.name}</h1>
           <p className="muted">{event.venue || "No venue"} {event.event_date ? `- ${event.event_date}` : ""}</p>
         </div>
-        <div className="row">
+        <div className="row wrap">
           <button className="warn" onClick={() => call("discover", `/api/events/${event.id}/discover-matches`)} disabled={busy != null}>
             <RefreshCw size={16} /> Discover
           </button>
