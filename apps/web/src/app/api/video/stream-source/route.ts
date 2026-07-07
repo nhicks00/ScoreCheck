@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   if (!session || !["active", "backup"].includes(session.role) || !["active", "promoted"].includes(session.status)) {
-    return NextResponse.json({ error: "Only verified scorekeepers can view preview video." }, { status: 403 });
+    return NextResponse.json({ error: "Only active scorekeepers can view preview video." }, { status: 403 });
   }
   const court = Array.isArray(session.courts) ? session.courts[0] : session.courts;
   if (!court || court.court_number !== parsed.data.courtNumber) {

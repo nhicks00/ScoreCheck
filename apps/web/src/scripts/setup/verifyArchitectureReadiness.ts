@@ -21,13 +21,6 @@ type VercelEnv = {
 loadLocalEnv();
 
 const expectedCourtCount = Number(process.env.NEXT_PUBLIC_COURT_COUNT || 8);
-const workerOnlyYoutubeKeys = [
-  "YOUTUBE_API_KEY",
-  "YOUTUBE_CLIENT_ID",
-  "YOUTUBE_CLIENT_SECRET",
-  "YOUTUBE_REFRESH_TOKEN",
-  "YOUTUBE_BOT_POSTING_ENABLED"
-];
 
 main().catch((err) => {
   console.error(err instanceof Error ? err.message : err);
@@ -76,7 +69,7 @@ async function supabaseSection() {
     if (!event) return { status: "blocked" as Status, issues: ["No active event found."] };
     const db = supabaseAdmin();
     const [courts, sources, matches, overlays] = await Promise.all([
-      db.from("courts").select("id,court_number,current_match_id,stream_path,youtube_live_chat_id,vbl_court_number,mode").eq("event_id", event.id).order("court_number"),
+      db.from("courts").select("id,court_number,current_match_id,stream_path,vbl_court_number,mode").eq("event_id", event.id).order("court_number"),
       db.from("bracket_sources").select("source_url,status,last_error").eq("event_id", event.id),
       db.from("matches").select("id,source_type,api_url").eq("event_id", event.id),
       db.from("overlay_states").select("court_id,court_number,stale,updated_at").eq("event_id", event.id)
@@ -99,7 +92,6 @@ async function supabaseSection() {
     const issues = [
       courtRows.length === expectedCourtCount ? null : `Expected ${expectedCourtCount} courts, found ${courtRows.length}.`,
       courtRows.every((court) => court.current_match_id) ? null : "One or more courts lack a current match.",
-      courtRows.every((court) => court.youtube_live_chat_id) ? null : "One or more courts lack YouTube live chat metadata.",
       sourceRows.length >= 2 && sourceRows.every((source) => source.status === "success" && !source.last_error) ? null : "VolleyballLife bracket source discovery is not clean.",
       matchRows.filter((match) => match.source_type === "vbl" && match.api_url).length > 0 ? null : "No VBL matches with API URLs are present.",
       scoreRows.length >= expectedCourtCount ? null : "Missing score state rows.",
@@ -115,7 +107,6 @@ async function supabaseSection() {
         mode: court.mode,
         hasMatch: Boolean(court.current_match_id),
         streamPath: courtStreamPath(court.court_number, court.stream_path),
-        hasYoutubeChat: Boolean(court.youtube_live_chat_id),
         vblCourtNumber: court.vbl_court_number ?? null
       })),
       counts: {
@@ -212,8 +203,7 @@ async function vercelSection() {
       const actualKeys = actualByTarget.get(target) ?? new Set<string>();
       return {
         target,
-        missing: expectedKeys.filter((key) => !actualKeys.has(key)),
-        workerOnlyPresent: workerOnlyYoutubeKeys.filter((key) => actualKeys.has(key))
+        missing: expectedKeys.filter((key) => !actualKeys.has(key))
       };
     });
     const productionDomain = process.env.VERCEL_PRODUCTION_DOMAIN || "score.beachvolleyballmedia.com";
@@ -227,10 +217,9 @@ async function vercelSection() {
       projectAudit.framework === "nextjs" ? null : `Vercel framework is ${projectAudit.framework || "missing"}, expected nextjs.`,
       projectAudit.rootDirectory === "apps/web" ? null : `Vercel rootDirectory is ${projectAudit.rootDirectory || "missing"}, expected apps/web.`,
       projectAudit.productionDomainPresent ? null : `Production domain ${productionDomain} is not assigned to Vercel project.`,
-      ...targetAudits.flatMap((audit) => [
-        audit.missing.length ? `${audit.target} missing env keys: ${audit.missing.join(", ")}.` : null,
-        audit.workerOnlyPresent.length ? `${audit.target} has worker-only YouTube keys in Vercel app env: ${audit.workerOnlyPresent.join(", ")}.` : null
-      ])
+      ...targetAudits.map((audit) =>
+        audit.missing.length ? `${audit.target} missing env keys: ${audit.missing.join(", ")}.` : null
+      )
     ].filter(Boolean) as string[];
     return {
       status: issues.length ? "blocked" as Status : "ok" as Status,
@@ -249,8 +238,7 @@ function generatedArtifactsSection() {
     ".local/streamrun-setup.redacted.json",
     ".local/scorecheck-operations-report.redacted.md",
     ".local/vercel-env.generated.env",
-    ".local/worker-env.generated.env",
-    ".local/youtube-denver.generated.json"
+    ".local/worker-env.generated.env"
   ];
   const files = requiredFiles.map((file) => ({ file, exists: fs.existsSync(path.join(process.cwd(), file)) }));
   const issues = files.filter((file) => !file.exists).map((file) => `Missing ${file.file}.`);

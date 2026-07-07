@@ -15,7 +15,7 @@ async function main() {
   if (!event) throw new Error("No active event found");
   const { data: courts, error } = await supabaseAdmin()
     .from("courts")
-    .select("id,court_number,current_match_id,stream_path,youtube_live_chat_id")
+    .select("id,court_number,current_match_id,stream_path")
     .eq("event_id", event.id)
     .order("court_number", { ascending: true });
   if (error) throw error;
@@ -25,8 +25,7 @@ async function main() {
     courts: courts?.map((court) => ({
       courtNumber: court.court_number,
       hasMatch: Boolean(court.current_match_id),
-      streamPath: courtStreamPath(court.court_number, court.stream_path),
-      hasYoutubeChat: Boolean(court.youtube_live_chat_id)
+      streamPath: courtStreamPath(court.court_number, court.stream_path)
     }))
   }, null, 2));
 }
