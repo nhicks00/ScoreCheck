@@ -178,7 +178,9 @@ function main() {
 
 function mediaMtxIngestForCourt(court: number): MediaMtxIngest | null {
   if (!rtmpIngestBase) return null;
-  const streamPath = courtStreamPath(court);
+  // Publishers send to court{n}_raw (AAC ok); the server's ffmpeg sidecar
+  // republishes to court{n} with Opus audio, which is what browsers watch.
+  const streamPath = `${courtStreamPath(court)}_raw`;
   const credentials = publishUser && publishPass
     ? `?user=${encodeURIComponent(publishUser)}&pass=${encodeURIComponent(publishPass)}`
     : "";
