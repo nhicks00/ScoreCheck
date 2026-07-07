@@ -480,7 +480,7 @@ export function hasLivePointScoringStarted(snapshot: Pick<ReturnType<typeof norm
   return snapshot.setScores.some((set) => !set.isComplete && (set.teamAScore > 0 || set.teamBScore > 0));
 }
 
-async function persistVblBracketProgressIfAvailable(court: CourtRow, match: MatchRow, currentScore: ScoreRow | null) {
+export async function persistVblBracketProgressIfAvailable(court: CourtRow, match: MatchRow, currentScore: ScoreRow | null) {
   if (match.source_type !== "vbl") return null;
   if (currentScore?.source === "api" && currentScore.source_available !== false && currentScore.source_priority !== "fallback") return null;
   if (hasFutureDelayedVblScore(currentScore, new Date().toISOString())) return null;
@@ -762,7 +762,7 @@ async function activateQueuedMatch(court: CourtRow, next: QueueRow) {
   if (courtError) throw courtError;
 
   const state = defaultManualState();
-  await persistScoreAndOverlay(updatedCourt, match ?? null, {
+  const { score: savedScore } = await persistScoreAndOverlay(updatedCourt, match ?? null, {
     court_id: updatedCourt.id,
     match_id: next.match_id,
     team_a_score: state.team_a_score,
@@ -784,6 +784,9 @@ async function activateQueuedMatch(court: CourtRow, next: QueueRow) {
     last_score_change_at: now,
     updated_at: now
   });
+  if (match) {
+    await persistVblBracketProgressIfAvailable(updatedCourt, match, savedScore as ScoreRow);
+  }
 }
 
 async function releaseDueDelayedVblScore(court: CourtRow, match: MatchRow, currentScore: ScoreRow | null) {
