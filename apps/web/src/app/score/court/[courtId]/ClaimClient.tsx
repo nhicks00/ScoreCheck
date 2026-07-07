@@ -187,7 +187,7 @@ export function ClaimClient({ courtParam, eventSlug, adminMode }: { courtParam: 
           <span className={`status ${statusInfo.tone}`}>{statusInfo.label}</span>
           <h1>{data?.court.display_name ?? `Court ${courtNumber}`}</h1>
           <p className="muted">{data?.event.name ?? "AVP Denver Open"}</p>
-          <div className="match-line large">
+          <div className="match-line">
             <strong>{teamA}</strong>
             <span>vs</span>
             <strong>{teamB}</strong>
