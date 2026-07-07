@@ -3,6 +3,20 @@ import type { ScoreSnapshot } from "./types";
 export const VBL_OVERLAY_DELAY_MS = 0;
 export const VBL_FINAL_SETTLE_MS = 12_000;
 
+const DEFAULT_POST_FINAL_HOLD_MS = 180_000;
+const MAX_POST_FINAL_HOLD_MS = 3_600_000;
+
+export const VBL_POST_FINAL_HOLD_MS = parseVblPostFinalHoldMs(process.env.VBL_POST_FINAL_HOLD_MS);
+
+export function parseVblPostFinalHoldMs(value: string | null | undefined, fallback = DEFAULT_POST_FINAL_HOLD_MS) {
+  if (value == null || !value.trim().length) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  const holdMs = Math.trunc(parsed);
+  if (holdMs < 0 || holdMs > MAX_POST_FINAL_HOLD_MS) return fallback;
+  return holdMs;
+}
+
 export type DelayedVblScorePayload = {
   match_id: string;
   team_a_score: number;
