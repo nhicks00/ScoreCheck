@@ -159,3 +159,29 @@ docker compose down          # stops redis/livekit/egress
   only — cannot touch bvm-preview-01). Billing stops at destroy.
 - End the unlisted YouTube broadcast in Studio.
 - Save `soak-stats.csv` + findings into the plan's Phase 2 status before deciding.
+
+---
+
+## RESULTS — 2026-07-08 (run locally on macOS/colima against the live Waupaca event)
+
+**Verdict: GO.** Every go/no-go link passed on the recommended architecture.
+
+| Check | Result |
+|---|---|
+| Headless Chrome plays MediaMTX WHEP | ✅ (production program page, live court feed) |
+| Scorebug composite fidelity | ✅ frame grab pixel-correct, live match data, broadcast position |
+| VDO.Ninja scene loads headlessly | ✅ (`commentary_loaded: true` heartbeats; NOTE: room was empty — audible-voice validation still pending) |
+| `await_start_signal` / START_RECORDING | ✅ fired exactly once, capture gated correctly |
+| RTMP push stability | ✅ 2h+ continuous to MediaMTX (`live/gating_test_raw`) |
+| Program-page heartbeats | ✅ 5s cadence to Supabase throughout |
+| Soak (2h10m, live conditions) | ✅ zero output gaps; RSS 501→674MB (~86MB/h, flattening); CPU 24–50% of 6 arm64 cores |
+
+**Bugs found & fixed during the run:**
+1. `mediamtx.yml` was missing the `all_others` catch-all path (comment promised it; entry absent) — added; note: the `:ro` bind mount does NOT hot-reload appended config; container restart required.
+2. LiveKit egress requires two-segment RTMP paths (`/{app}/{key}`) — scratch targets must use e.g. `live/gating_test_raw`.
+3. `.env` values containing `&` must be quoted (court scripts `source` the file).
+4. Ops monitoring against a saturated 1-vCPU host needs N-strike tolerance + generous timeouts (false path-missing alarm at 100% CPU).
+
+**Carried forward to the shadow event (Phase 4):**
+- CPU benchmark on real DO Intel dedicated vCPUs (arm64 M-series numbers don't transfer).
+- Full 10h duration + audible commentary audio end-to-end + YouTube as the actual RTMP target (unlisted).
