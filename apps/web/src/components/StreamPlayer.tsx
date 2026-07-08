@@ -10,6 +10,8 @@ type StreamPlayerProps = {
   enabled?: boolean;
   /** Pre-resolved playback sources. When provided the player skips its internal source fetching entirely. */
   sources?: { whepUrl: string | null; hlsUrl: string | null };
+  /** Hides all player chrome (status chip, buttons, error fallback, native controls) for capture surfaces like /program. */
+  chromeless?: boolean;
 };
 
 type StreamSources = {
@@ -28,7 +30,7 @@ const WHEP_FAILURES_BEFORE_HLS = 3;
 const MAX_RETRY_DELAY_MS = 15_000;
 const OFFLINE_MESSAGE = "Stream offline — retrying";
 
-export function StreamPlayer({ courtNumber, sessionToken, enabled = true, sources: providedSources }: StreamPlayerProps) {
+export function StreamPlayer({ courtNumber, sessionToken, enabled = true, sources: providedSources, chromeless = false }: StreamPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [sources, setSources] = useState<StreamSources | null>(null);
   const [loadRevision, setLoadRevision] = useState(0);
@@ -249,20 +251,22 @@ export function StreamPlayer({ courtNumber, sessionToken, enabled = true, source
 
   return (
     <section className="stream-preview">
-      <video ref={videoRef} playsInline muted={muted} controls />
-      <div className="video-controls">
-        <span>{error ? "Stream unavailable" : status}</span>
-        <button type="button" onClick={() => setMuted((current) => !current)}>
-          {muted ? <VolumeX size={16} /> : <Volume2 size={16} />} {muted ? "Unmute" : "Mute"}
-        </button>
-        <button type="button" onClick={() => videoRef.current?.play()}>
-          <Play size={16} /> Play
-        </button>
-        <button type="button" onClick={() => void loadSources()}>
-          <RefreshCw size={16} /> Reload
-        </button>
-      </div>
-      {error && (
+      <video ref={videoRef} playsInline muted={muted} controls={!chromeless} />
+      {!chromeless && (
+        <div className="video-controls">
+          <span>{error ? "Stream unavailable" : status}</span>
+          <button type="button" onClick={() => setMuted((current) => !current)}>
+            {muted ? <VolumeX size={16} /> : <Volume2 size={16} />} {muted ? "Unmute" : "Mute"}
+          </button>
+          <button type="button" onClick={() => videoRef.current?.play()}>
+            <Play size={16} /> Play
+          </button>
+          <button type="button" onClick={() => void loadSources()}>
+            <RefreshCw size={16} /> Reload
+          </button>
+        </div>
+      )}
+      {!chromeless && error && (
         <div className="video-fallback">
           <VideoOff size={18} />
           <span>{error}</span>

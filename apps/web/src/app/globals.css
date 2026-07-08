@@ -3743,3 +3743,123 @@ label.score-field {
     height: 380px;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Program pages (/program/court/{n})
+   The compositor scene a headless-Chrome egress captures and pushes to
+   YouTube (docs/PRODUCTION_PLATFORM_PLAN.md §3.1). Authored at a fixed
+   1280x720 logical stage and scaled to the viewport, so egress can capture
+   at 720p or 1080p pixel-exact. Additive section: program-* classes only.
+--------------------------------------------------------------------------- */
+
+body:has(.program-root) {
+  cursor: none;
+  overflow: hidden;
+}
+
+.program-root {
+  background: #000;
+  cursor: none;
+  height: 100vh;
+  left: 0;
+  overflow: hidden;
+  position: fixed;
+  top: 0;
+  width: 100vw;
+}
+
+.program-stage {
+  height: 720px;
+  left: 50%;
+  overflow: hidden;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%) scale(var(--program-scale, 1));
+  width: 1280px;
+}
+
+.program-video {
+  inset: 0;
+  position: absolute;
+  z-index: 10;
+}
+
+/* Strip the scorer-facing panel chrome: the player IS the broadcast frame. */
+.program-video .stream-preview {
+  background: #000;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  display: block;
+  height: 100%;
+  padding: 0;
+  width: 100%;
+}
+
+.program-video .stream-preview video {
+  aspect-ratio: auto;
+  border-radius: 0;
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+
+/* The scorebug is designed against a 1920x1080 canvas (its StreamRun browser
+   source today), so give OverlayClient that exact virtual canvas and scale it
+   into the 720p stage: 720/1080 = 2/3. OverlayClient's own position: fixed
+   scorebug anchors to this transformed wrapper, keeping today's broadcast
+   placement and proportions. */
+.program-overlay {
+  height: 1080px;
+  left: 0;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  transform: scale(calc(2 / 3));
+  transform-origin: top left;
+  width: 1920px;
+  z-index: 30;
+}
+
+/* Keep commentary audio alive: 1px and transparent, never display:none
+   (which lets browsers suspend the iframe's media pipeline). */
+.program-commentary-frame {
+  border: 0;
+  height: 1px;
+  left: 0;
+  opacity: 0;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  width: 1px;
+  z-index: 1;
+}
+
+/* ?debug=1 diagnostics strip; pinned to the real viewport, outside the
+   scaled stage. */
+.program-debug {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  bottom: 10px;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  gap: 10px;
+  letter-spacing: 0.05em;
+  padding: 6px 10px;
+  position: fixed;
+  right: 10px;
+  text-transform: uppercase;
+  z-index: 90;
+}
+
+.program-debug strong {
+  color: var(--text-soft);
+  font-weight: 700;
+}

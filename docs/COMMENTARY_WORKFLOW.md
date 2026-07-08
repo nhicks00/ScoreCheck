@@ -109,3 +109,30 @@ video+voice together, delayed as a unit by the platform.
   and `&novideo` for audio-only participants to save bandwidth.
 - If YouTube chat interaction matters to the talent, give them a second (muted)
   browser tab with the YouTube stream for chat only — never for watching the game.
+
+## Program Pages (compositor scenes)
+
+`/program/court/{n}?token={PROGRAM_PAGE_TOKEN}` is the self-hosted replacement
+for the StreamRun mix (see `docs/PRODUCTION_PLATFORM_PLAN.md` §3.1): one page
+per court renders the court video (WHEP/HLS via `StreamPlayer`), the exact
+broadcast scorebug (`OverlayClient`, hosted on a 1920x1080 virtual canvas so
+placement matches the StreamRun overlay), and the court's VDO.Ninja scene as a
+hidden audio iframe. A headless-Chrome LiveKit egress captures the page and
+pushes it to YouTube.
+
+- **Gate**: `PROGRAM_PAGE_TOKEN` env; wrong/missing token is a plain 404. The
+  same token authenticates the page's 5s heartbeat POSTs to
+  `/api/program/heartbeat` (upserted into `program_heartbeats`, one row per
+  court — the console alarms on stale `last_seen_at`).
+- **Commentary sync**: unlike the StreamRun scene link, the embedded scene has
+  **no `&buffer` by default** — the egress path gets its own alignment. Trim
+  with `?cbuf={0..4000}` (ms, appended as `&buffer`); disable commentary
+  entirely with `?scene=0`.
+- **Egress signals**: the page logs `START_RECORDING` once video frames are
+  flowing and commentary has loaded (or 10s passed, or `scene=0`), and
+  `END_RECORDING` only in the unrecoverable no-sources state — wire the egress
+  with `await_start_signal`.
+- **Self-healing**: frame progress stalled >5s remounts the player; three
+  fruitless remounts reload the page, indefinitely — a court feed returning
+  mid-event recovers on its own. `?debug=1` shows a diagnostics strip
+  (video state, frames, reconnects, reloads, commentary, heartbeat).
