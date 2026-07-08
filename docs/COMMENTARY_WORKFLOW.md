@@ -23,31 +23,58 @@ Key idea: commentators never watch the YouTube output (10-30 s behind). They wat
 the same MediaMTX WHEP feed the scorers use, which is sub-second, so their audio
 lines up with the live action when StreamRun mixes it in.
 
-## Commentator Setup (per person)
+## Commentator Portal (recommended flow)
 
-1. Open the court preview: `/admin/stream-preview/{courtNumber}` (admin login) or a
-   link shared by the producer. Confirm the status chip reads `Live — low latency`
-   (WHEP). If it says `Live — HLS`, reload — HLS adds seconds of delay and is not
-   suitable for calling live action.
-2. Tap the unmute button if program audio is wanted (keep it low or muted to avoid
-   echo into the mic).
-3. Join the VDO.Ninja room the producer shares, e.g.
-   `https://vdo.ninja/?room=bvmcourt1&push=CASTER1` with a headset. Use headphones —
-   no open speakers.
+The portal at `/commentary` wraps the whole commentator workflow behind one
+passcode — no admin access, no hand-built links:
+
+1. The producer shares the site URL and the commentator passcode
+   (`COMMENTATOR_PASSCODE`).
+2. The commentator opens `/commentary`, enters the passcode once (24h cookie),
+   and lands on the court dashboard: every court with its current match, score
+   snapshot, and stream number.
+3. They pick their court → `/commentary/court/{n}`, which gives them everything
+   on one screen:
+   - the low-latency MediaMTX feed (WHEP first, HLS fallback) — confirm the
+     status chip reads `Live — low latency`;
+   - the fan scorer session, claimed inline with one tap (they score the match
+     they are calling, in `courtside` mode so no duplicate video loads);
+   - the VDO.Ninja audio room for that court (`{VDO_ROOM_PREFIX}{n}`, e.g.
+     `BVMCOURT3`) embedded in the right rail, with "Open in new tab" and copy
+     buttons if the embed cannot reach the microphone.
+4. Headphones always — no open speakers. Keep the program audio muted in the
+   player and rely on VDO.Ninja monitoring to avoid echo.
+
+Setting the portal up requires four env vars on the web app (see
+`apps/web/.env.example`):
+
+| Env var | Meaning | Default |
+| --- | --- | --- |
+| `COMMENTATOR_PASSCODE` | Shared passcode for `/commentary`. Blank = portal disabled. | unset |
+| `VDO_ROOM_PREFIX` | VDO.Ninja room name prefix per stream. | `BVMCOURT` |
+| `VDO_ROOM_PASSWORD` | Room password baked into every link (alphanumeric only). | `bvm2026` |
+| `VDO_SCENE_BUFFER_MS` | Commentary audio delay in the StreamRun scene link (0-4000). | `2000` |
 
 ## Producer Setup (per court)
 
-1. Create a VDO.Ninja room: `https://vdo.ninja/?director=bvmcourt1`.
-2. Bring the room's mixed audio into StreamRun using one of:
-   - StreamRun HTML/browser-source element pointed at the VDO.Ninja scene/room link
-     (e.g. `https://vdo.ninja/?scene&room=bvmcourt1&audioonly`), or
-   - a local OBS/companion machine that plays the VDO.Ninja return feed and
-     republishes it to a StreamRun input.
+All links below are generated on `/admin/commentary` (admin login) with copy
+buttons per stream — director console, StreamRun scene URL, and guest links.
+
+1. Open the Director link for the court and keep it open — it uses
+   `?director&room={prefix}{n}&...&rooms={prefix}1,...,{prefix}8` so you can hop
+   between all eight rooms from one console.
+2. Bring the room's audio into StreamRun: paste the Scene URL
+   (`?scene&room={prefix}{n}&...&novideo&audiobitrate=80&buffer={ms}&retry`)
+   into a StreamRun HTML/browser-source element. The `buffer` value delays the
+   commentary audio to align with the delayed program video — tune it via
+   `VDO_SCENE_BUFFER_MS` and clap-test per court.
 3. In the StreamRun editor, mix that commentary audio element over the program
    (camera) feed on the YouTube output branch. Keep the MediaMTX preview output
    branch clean (camera only) so scorers and commentators see an undelayed,
    commentary-free feed.
-4. Send the commentators their watch link and the VDO.Ninja room link.
+4. Send the commentators the site URL and the portal passcode. For a talent on
+   flaky wifi, send the "bad wifi" guest link variant (`&relay`) from
+   `/admin/commentary` instead — it forces TURN relay routing.
 
 ## Latency Budget
 
@@ -69,8 +96,8 @@ video+voice together, delayed as a unit by the platform.
 
 - Measure the true offset once per court: have the commentator clap on a visible
   rally end, then compare against the StreamRun preview. If commentary consistently
-  leads the program video, add audio delay to the commentary element in StreamRun
-  (typically 0 - 700 ms) rather than delaying video.
+  leads the program video, raise the scene link's `buffer` value (via
+  `VDO_SCENE_BUFFER_MS`, or per-element in StreamRun) rather than delaying video.
 - Keep commentators on WHEP. If a commentator's network forces the player onto HLS,
   their calls will trail the action by several seconds — fix their network or have
   them rejoin, do not compensate in the mix.
