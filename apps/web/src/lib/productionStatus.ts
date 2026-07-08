@@ -62,6 +62,8 @@ export type ConsoleCourt = {
   match: ConsoleMatch | null;
   score: ConsoleScore | null;
   youtubeKeyMasked: string | null;
+  /** Public YouTube video id for fan "Watch live" links — not a secret. */
+  youtubeVideoId: string | null;
   heartbeat: ConsoleHeartbeat;
 };
 
@@ -89,6 +91,7 @@ type CourtRow = {
   stream_path?: string | null;
   current_match_id?: string | null;
   youtube_stream_key?: string | null;
+  youtube_video_id?: string | null;
   matches?: MatchRow | MatchRow[] | null;
   score_states?: ScoreRow | ScoreRow[] | null;
 };
@@ -200,6 +203,7 @@ function buildConsoleCourt(
         }
       : null,
     youtubeKeyMasked: maskStreamKey(row?.youtube_stream_key),
+    youtubeVideoId: (row?.youtube_video_id ?? "").trim() || null,
     heartbeat: {
       freshness: classifyHeartbeatFreshness(heartbeat?.last_seen_at, nowMs),
       lastSeenAt: heartbeat?.last_seen_at ?? null,

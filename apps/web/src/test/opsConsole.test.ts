@@ -13,7 +13,8 @@ import {
   maskStreamKey,
   normalizeControllerUrl,
   parseControllerCourts,
-  PROGRAM_HEARTBEAT_FRESH_MS
+  PROGRAM_HEARTBEAT_FRESH_MS,
+  youtubeWatchUrl
 } from "../lib/opsConsole";
 
 const OPS_ENV_KEYS = ["CONTROLLER_URL", "CONTROLLER_TOKEN"];
@@ -203,6 +204,24 @@ describe("maskStreamKey", () => {
     expect(masked).not.toContain(key);
     expect(masked).not.toContain("abcd");
     expect(maskStreamKey("  12345678  ")).toBe("••••5678");
+  });
+});
+
+describe("youtubeWatchUrl", () => {
+  it("returns null for missing or blank video ids", () => {
+    expect(youtubeWatchUrl(null)).toBeNull();
+    expect(youtubeWatchUrl(undefined)).toBeNull();
+    expect(youtubeWatchUrl("")).toBeNull();
+    expect(youtubeWatchUrl("   ")).toBeNull();
+  });
+
+  it("builds the public watch URL from a video id", () => {
+    expect(youtubeWatchUrl("dQw4w9WgXcQ")).toBe("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+    expect(youtubeWatchUrl("  abc123XYZ_-  ")).toBe("https://www.youtube.com/watch?v=abc123XYZ_-");
+  });
+
+  it("URL-encodes ids so odd input cannot break the link", () => {
+    expect(youtubeWatchUrl("a b&c")).toBe("https://www.youtube.com/watch?v=a%20b%26c");
   });
 });
 
