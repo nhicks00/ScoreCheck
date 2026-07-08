@@ -9,7 +9,7 @@ export function fallbackOverlayState(courtNumber = 1): OverlayState {
     courtId: "",
     courtNumber: safeCourtNumber,
     courtLabel: `Court ${safeCourtNumber}`,
-    layout: "bottom-left",
+    layout: "top-left",
     phase: "IDLE",
     mode: "api",
     frozen: false,
@@ -58,7 +58,7 @@ export function coerceOverlayState(input: unknown, courtNumber = 1): OverlayStat
     courtId: stringValue(value.courtId) ?? base.courtId,
     courtNumber: numberValue(value.courtNumber, base.courtNumber, 1),
     courtLabel: nullableString(value.courtLabel) ?? base.courtLabel,
-    layout: value.layout === "top-left" ? "top-left" : "bottom-left",
+    layout: value.layout === "bottom-left" ? "bottom-left" : "top-left",
     phase: validPhase(value.phase) ?? base.phase,
     mode: value.mode === "manual" || value.mode === "hybrid" ? value.mode : "api",
     frozen: Boolean(value.frozen),
@@ -177,7 +177,7 @@ export function overlayPhaseText(state: OverlayState, connected: boolean) {
 }
 
 export function overlayLayoutValue(value: unknown): OverlayLayout {
-  return value === "top-left" ? "top-left" : "bottom-left";
+  return value === "bottom-left" ? "bottom-left" : "top-left";
 }
 
 export function overlayStateUpdatedAtMs(state: OverlayState): number | null {

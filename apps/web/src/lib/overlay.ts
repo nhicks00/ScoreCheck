@@ -115,7 +115,7 @@ function courtLabel(court: OverlayInput["court"]): string {
 }
 
 export function overlayLayout(settings: Record<string, unknown> | null | undefined): OverlayLayout {
-  return settings?.overlayLayout === "top-left" ? "top-left" : "bottom-left";
+  return settings?.overlayLayout === "bottom-left" ? "bottom-left" : "top-left";
 }
 
 function resolvePhase(

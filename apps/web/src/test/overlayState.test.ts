@@ -33,7 +33,7 @@ describe("overlayState", () => {
     }, 1);
 
     expect(state.courtNumber).toBe(1);
-    expect(state.layout).toBe("bottom-left");
+    expect(state.layout).toBe("top-left");
     expect(state.phase).toBe("IDLE");
     expect(state.score.teamAScore).toBe(99);
     expect(state.score.teamBScore).toBe(8);

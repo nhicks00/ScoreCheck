@@ -98,7 +98,7 @@ export function OverlayClient({ courtNumber, eventId, buildVersion }: { courtNum
     };
   }, [buildVersion]);
 
-  const layout = state.layout === "top-left" ? "top-left" : "bottom-left";
+  const layout = state.layout === "bottom-left" ? "bottom-left" : "top-left";
   const isIntermission = state.phase === "IDLE" || state.phase === "PREMATCH";
   const displayScores = scorebugDisplayScores(state);
   const status = overlayPhaseText(state, connected);
