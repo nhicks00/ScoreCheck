@@ -185,3 +185,15 @@ docker compose down          # stops redis/livekit/egress
 **Carried forward to the shadow event (Phase 4):**
 - CPU benchmark on real DO Intel dedicated vCPUs (arm64 M-series numbers don't transfer).
 - Full 10h duration + audible commentary audio end-to-end + YouTube as the actual RTMP target (unlisted).
+
+## Sync-calibration timecode (added 2026-07-08, Phase 5 tooling)
+
+Preview transcodes (`court{N}`, the on-demand paths) burn `%{gmtime} UTC` bottom-right
+(font mounted at /opt/mediamtx/fonts, drawtext in each runOnDemand command).
+Uses: measure preview glass-latency against any UTC clock; measure program-vs-preview
+delta for the scene `&buffer` value; verify sync drift across a day.
+
+NOTE: the program pages consume `court{N}`, so shadow-phase compositor output includes
+the timecode — intentional for shadow calibration. BEFORE cutover (Phase 6), point the
+program pages at a clean path (e.g. dedicated `court{N}_pgm` transcode without drawtext)
+or strip the drawtext from the config.
