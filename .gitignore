@@ -62,3 +62,8 @@ data/
 .claude/settings.local.json
 default.profraw
 signalr_mutations_captured.json
+
+# Infra (compositor/controller) secrets and generated egress request payloads
+# (request files embed YouTube stream keys)
+infra/**/.env
+infra/compositor/requests/
