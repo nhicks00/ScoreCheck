@@ -59,7 +59,12 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ eve
     }));
     // Public browse data, identical for every viewer — let the Vercel CDN absorb
     // fan-scaled polling so many watchers collapse to ~1 DB read per few seconds.
-    return NextResponse.json({ event, courts }, { headers: { "cache-control": "public, s-maxage=3, stale-while-revalidate=15" } });
+    // Next strips s-maxage from dynamic route handlers, so target the CDN directly
+    // with CDN-Cache-Control (Vercel honors it); keep the browser uncached.
+    return NextResponse.json({ event, courts }, { headers: {
+      "cache-control": "no-store",
+      "cdn-cache-control": "public, s-maxage=3, stale-while-revalidate=15"
+    } });
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Could not load courts" }, { status: 500 });
   }
