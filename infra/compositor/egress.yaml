@@ -1,0 +1,56 @@
+# LiveKit Egress worker config for the BVM compositor stack.
+# Mounted read-only and loaded via the EGRESS_CONFIG_FILE env var (see
+# docker-compose.yml). Field reference: https://github.com/livekit/egress
+# (README + pkg/config/base.go, pkg/config/service.go).
+
+# --- connection to the control plane -----------------------------------------
+
+# api_key / api_secret are intentionally omitted from this file: the worker
+# falls back to the LIVEKIT_API_KEY / LIVEKIT_API_SECRET env vars injected by
+# docker-compose.yml, so the keypair only lives in .env (gitignored).
+
+# LiveKit server websocket URL. "livekit" is the compose service name; plain
+# ws:// because the hop never leaves the private compose network.
+ws_url: ws://livekit:7880
+
+# Must be the SAME redis instance livekit-server uses — it is the job dispatch
+# bus that hands StartWebEgress requests to this worker.
+redis:
+  address: redis:6379
+
+# Permit the non-TLS websocket connection above (egress refuses insecure
+# endpoints by default).
+insecure: true
+
+# --- service ports (published to 127.0.0.1 by docker-compose.yml) -------------
+
+# HTTP health check endpoint; 200 = worker alive and connected.
+health_port: 9091
+
+# Prometheus metrics (per-egress CPU, admission/capacity stats). Scrape or curl
+# this during the Phase 2 soak; later feeds the /admin/production health board.
+prometheus_port: 9090
+
+# --- behavior ------------------------------------------------------------------
+
+logging:
+  # debug | info | warn | error. info shows egress lifecycle + pipeline events
+  # without per-frame noise.
+  level: info
+  # Human-readable console logs (JSON off until a collector exists).
+  json: false
+
+# CPU admission control: the worker refuses a new egress when it lacks headroom
+# (accept iff numCPUs * max_cpu_utilization - committed >= web_cpu_cost).
+# A web egress is budgeted at web_cpu_cost vCPUs; the default (4.0) is left
+# as-is per the plan (§3.3 — one 720p30 court estimated at ~3-4.5 vCPU).
+#
+# KNOWN PITFALL for the Phase 2 c-4 benchmark: on a 4-vCPU host the defaults
+# reject the very FIRST egress (4 * 0.8 = 3.2 available < 4.0 required).
+# For that experiment only, uncomment the override below (or use an 8-vCPU
+# host, where 8 * 0.8 = 6.4 admits exactly one court). Remove the override
+# before any multi-court/event-day use — see GATING_EXPERIMENT.md.
+#
+# cpu_cost:
+#   web_cpu_cost: 3.0          # c-4 BENCHMARK ONLY; default 4.0 otherwise
+#   max_cpu_utilization: 0.8   # default; fraction of host CPU egress may commit

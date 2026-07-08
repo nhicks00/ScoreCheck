@@ -1,0 +1,71 @@
+#cloud-config
+# Burst compositor droplet bootstrap (Ubuntu 24.04) — passed as user_data by
+# provision.sh, or already baked in when creating from the bvm-compositor
+# snapshot (in which case it simply re-runs idempotently on first boot).
+#
+# What it does:
+#   1. installs Docker Engine + the compose plugin (get.docker.com script)
+#   2. creates /opt/compositor
+#   3. installs + enables compositor.service, a systemd unit that runs
+#      `docker compose up -d` in /opt/compositor at every boot
+#
+# IMPORTANT — the compose bundle itself (docker-compose.yml, livekit.yaml,
+# egress.yaml, .env, *.sh) is NOT embedded in this user_data. Get it onto the
+# droplet one of two ways:
+#
+#   a) rsync from this repo after first boot (fresh Ubuntu image):
+#        rsync -av --exclude requests/ --exclude .env infra/compositor/ root@<ip>:/opt/compositor/
+#        scp or create /opt/compositor/.env   (see .env.example)
+#        ssh root@<ip> systemctl start compositor
+#
+#   b) bake a snapshot: provision once via (a), verify, power off, snapshot as
+#      bvm-compositor-base. Droplets created from that snapshot boot with the
+#      bundle already in place, so compositor.service starts the stack
+#      automatically — that is the event-day path (plan §3.6, phase 5).
+#
+# Until the bundle exists, ConditionPathExists below makes the unit a clean
+# no-op — first boot never errors.
+
+package_update: true
+package_upgrade: false
+
+packages:
+  - ca-certificates
+  - curl
+  - rsync
+
+write_files:
+  - path: /etc/systemd/system/compositor.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=BVM compositor stack (docker compose in /opt/compositor)
+      Requires=docker.service
+      After=docker.service network-online.target
+      Wants=network-online.target
+      # No-op until the compose bundle has been rsynced or baked into the image.
+      ConditionPathExists=/opt/compositor/docker-compose.yml
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=true
+      WorkingDirectory=/opt/compositor
+      ExecStart=/usr/bin/docker compose up -d
+      ExecStop=/usr/bin/docker compose down
+      # First `up` pulls livekit/egress images (~2 GB) — allow time for it.
+      TimeoutStartSec=900
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  # Docker Engine + compose plugin via the official convenience script (fine
+  # for cattle droplets that live for hours; the snapshot freezes the version).
+  - curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+  - sh /tmp/get-docker.sh
+  - mkdir -p /opt/compositor
+  - systemctl daemon-reload
+  - systemctl enable compositor.service
+  # Starts the stack only when the bundle is already present (snapshot boots);
+  # on a fresh image the Condition turns this into a successful no-op.
+  - systemctl start compositor.service

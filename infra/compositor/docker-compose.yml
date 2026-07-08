@@ -1,0 +1,100 @@
+# BVM compositor stack — LiveKit Web Egress + control-plane LiveKit server + Redis.
+#
+# Phase 2 of docs/PRODUCTION_PLATFORM_PLAN.md ("program page as scene"): headless
+# Chrome inside the egress container renders the ScoreCheck program page
+# (/program/court/N — WHEP video + scorebug DOM + VDO.Ninja commentary audio),
+# GStreamer/x264 encodes it, and the result is pushed to YouTube RTMP.
+#
+# No LiveKit rooms are ever used. livekit-server exists purely as the Egress
+# control API (StartWebEgress / StopEgress / ListEgress); it dispatches jobs to
+# the egress worker over the shared redis.
+#
+# Secrets come from ./.env (copy .env.example; gitignored). docker compose reads
+# .env from this directory automatically.
+#
+# Usage (on the compositor droplet, from /opt/compositor):
+#   docker compose up -d
+#   ./start-court.sh 1        # begin capture + YouTube push for court 1
+#   ./list-egress.sh          # see active egresses
+#   ./stop-court.sh 1         # end the broadcast
+#   docker compose down       # stop the whole stack
+
+name: bvm-compositor
+
+services:
+  redis:
+    # Job/dispatch bus between livekit-server and the egress worker. Nothing else
+    # uses it; state is disposable.
+    image: redis:7-alpine
+    container_name: bvm-redis
+    restart: unless-stopped
+    # Queue duty only — disable RDB snapshots and AOF so burst-droplet disks stay
+    # quiet and restarts are instant.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  livekit:
+    # Control-plane only: hosts the twirp Egress API. No WebRTC media flows
+    # through it in this deployment.
+    image: livekit/livekit-server:latest
+    container_name: bvm-livekit
+    restart: unless-stopped
+    command: ["--config", "/etc/livekit.yaml"]
+    environment:
+      # The one API keypair (shared with egress and the court scripts).
+      # livekit-server accepts keys via the LIVEKIT_KEYS env var ("key: secret"),
+      # which keeps secrets out of the mounted livekit.yaml.
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      # Egress API + websocket. Bound to localhost because the court scripts run
+      # on this host. Widen to "7880:7880" (plus firewall rules) only when the
+      # Phase 3 production controller calls this from another droplet.
+      - "127.0.0.1:7880:7880"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  egress:
+    # The compositor itself: headless Chrome (+ Xvfb + PulseAudio) renders the
+    # program page; GStreamer encodes x264 and muxes/pushes RTMP. One container
+    # runs multiple web egresses, admission-controlled by cpu_cost
+    # (web_cpu_cost default = 4 vCPU budgeted per court; see egress.yaml).
+    image: livekit/egress:latest
+    container_name: bvm-egress
+    restart: unless-stopped
+    environment:
+      # Path (inside the container) of the mounted worker config.
+      EGRESS_CONFIG_FILE: /etc/egress.yaml
+      # api_key/api_secret are deliberately absent from egress.yaml; the worker
+      # falls back to these env vars so the keypair only ever lives in .env.
+      LIVEKIT_API_KEY: "${LIVEKIT_API_KEY}"
+      LIVEKIT_API_SECRET: "${LIVEKIT_API_SECRET}"
+    volumes:
+      - ./egress.yaml:/etc/egress.yaml:ro
+    # Chrome requires SYS_ADMIN unless enable_chrome_sandbox + a custom seccomp
+    # profile is used; upstream documents this exact flag for docker runs.
+    cap_add:
+      - SYS_ADMIN
+    # Chrome renders via /dev/shm; docker's 64 MB default causes tab crashes
+    # mid-broadcast. 3 GB covers 1–2 concurrent 720p courts — scale up with
+    # court count on event-day hosts (rule of thumb: ~1 GB per court + 1 GB).
+    shm_size: "3gb"
+    ports:
+      # HTTP health check endpoint (200 = worker alive).
+      - "127.0.0.1:9091:9091"
+      # Prometheus metrics (CPU admission, per-egress stats) — the primary data
+      # source for the Phase 2 10-hour soak.
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      redis:
+        condition: service_healthy
+      livekit:
+        # livekit image has no shell/curl for a healthcheck; egress retries its
+        # redis/ws connections on boot, so started-ordering is sufficient.
+        condition: service_started

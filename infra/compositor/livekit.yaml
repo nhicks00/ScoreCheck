@@ -1,0 +1,45 @@
+# livekit-server config for the BVM compositor stack — control-plane only.
+# Mounted read-only by docker-compose.yml. Full reference:
+# https://github.com/livekit/livekit/blob/master/config-sample.yaml
+#
+# This server hosts no realtime rooms. It exists so the court scripts (and later
+# the Phase 3 production controller) can call the Egress twirp API
+# (StartWebEgress / StopEgress / ListEgress); jobs are dispatched to the egress
+# container through the shared redis below.
+
+# HTTP/WS API port (twirp Egress API + signalling). Published to the host as
+# 127.0.0.1:7880 by docker-compose.yml.
+port: 7880
+
+# Redis is what links livekit-server to the egress worker: StartWebEgress
+# enqueues a job here and the egress container claims it. Address is the
+# compose service name on the private compose network.
+redis:
+  address: redis:6379
+
+rtc:
+  # WebRTC transport settings. No media clients connect in this deployment, but
+  # livekit-server still opens these ports inside the container; none of them
+  # are published to the host (see docker-compose.yml).
+  # ICE-over-TCP fallback port.
+  tcp_port: 7881
+  # UDP port range for ICE candidates (kept tiny — unused here).
+  port_range_start: 50000
+  port_range_end: 50019
+  # Skip STUN discovery of a public IP at boot — pointless for a control plane
+  # and avoids a slow/noisy startup on droplets with restrictive egress rules.
+  use_external_ip: false
+
+logging:
+  # debug | info | warn | error
+  level: info
+  # Human-readable console logs; flip to true (JSON) if these ever ship to a
+  # log collector.
+  json: false
+
+# API keys are intentionally NOT in this file so it can stay committed to git.
+# docker-compose.yml injects the keypair from .env via the LIVEKIT_KEYS env var,
+# which livekit-server merges with this config:
+#
+# keys:
+#   <LIVEKIT_API_KEY>: <LIVEKIT_API_SECRET>
