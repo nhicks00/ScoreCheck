@@ -3863,3 +3863,339 @@ body:has(.program-root) {
   color: var(--text-soft);
   font-weight: 700;
 }
+
+/* ============================================================================
+   PRODUCTION OPS CONSOLE — additive section
+   /admin/production court grid, health strip, and sync runbook
+   (docs/PRODUCTION_PLATFORM_PLAN.md §3.5). Everything here is scoped to
+   production-* classes; shared primitives (shell, panel, status, button,
+   stream-preview…) come from the sections above.
+   ========================================================================== */
+
+/* -- Health strip ----------------------------------------------------------- */
+
+.production-health {
+  display: grid;
+  gap: 12px;
+}
+
+.production-health-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.production-health-item {
+  display: grid;
+  gap: 7px;
+  justify-items: start;
+}
+
+.production-health-item > span:first-child {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.production-health-note {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.production-health-meta {
+  border-top: 1px solid var(--line);
+  font-size: 12.5px;
+  margin: 0;
+  padding-top: 10px;
+}
+
+.production-health-error {
+  color: var(--danger);
+  display: block;
+  font-weight: 600;
+}
+
+/* -- Controller-offline notice (expected pre-fleet — looks intentional) ----- */
+
+.production-offline {
+  border-color: var(--cyan-line);
+  display: grid;
+  gap: 8px;
+}
+
+.production-offline-head {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.production-offline p {
+  margin: 0;
+}
+
+/* -- Court grid -------------------------------------------------------------- */
+
+.production-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+}
+
+.production-court-card {
+  display: grid;
+  gap: 12px;
+}
+
+.production-court-head {
+  align-items: start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  justify-content: space-between;
+}
+
+.production-court-head h2 {
+  margin: 0;
+}
+
+.production-court-sub {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin: 4px 0 0;
+}
+
+.production-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.production-heartbeat-detail {
+  color: var(--muted);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  margin: 0;
+}
+
+/* -- Match snapshot ----------------------------------------------------------- */
+
+.production-match {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+}
+
+.production-match p {
+  margin: 0;
+}
+
+.production-match-teams {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.production-match-teams span {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.production-score {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.production-score strong {
+  font-family: var(--font-head);
+  font-size: 26px;
+  font-variant-numeric: tabular-nums;
+}
+
+.production-score span,
+.production-match-meta {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+/* -- Preview monitor (lazy StreamPlayer slot, 16:9) --------------------------- */
+
+.production-monitor {
+  background: var(--bg-deep);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+
+/* The chromeless player IS the monitor — strip its panel chrome. */
+.production-monitor .stream-preview {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0;
+}
+
+.production-monitor .stream-preview video {
+  border-radius: 0;
+  display: block;
+}
+
+.production-monitor-toggle,
+.production-monitor-off {
+  align-items: center;
+  aspect-ratio: 16 / 9;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  justify-content: center;
+  padding: 14px;
+  text-align: center;
+  width: 100%;
+}
+
+.production-monitor-toggle {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  cursor: pointer;
+  font: inherit;
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.production-monitor-toggle:hover {
+  background: rgba(154, 170, 200, 0.06);
+  color: var(--text-soft);
+}
+
+.production-monitor-toggle span {
+  font-weight: 700;
+}
+
+.production-monitor-toggle small {
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* -- Actions + inline feedback ------------------------------------------------ */
+
+.production-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.production-actions .button {
+  min-height: 38px;
+  padding: 7px 14px;
+}
+
+.production-feedback {
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  margin: 0;
+  padding: 8px 12px;
+}
+
+.production-feedback.is-ok {
+  background: var(--ok-soft);
+  border: 1px solid var(--ok-line);
+  color: var(--ok);
+}
+
+.production-feedback.is-error {
+  background: var(--danger-soft);
+  border: 1px solid var(--danger-line);
+  color: var(--danger);
+}
+
+/* -- YouTube key row ----------------------------------------------------------- */
+
+.production-key-row {
+  align-items: center;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  justify-content: space-between;
+  padding-top: 12px;
+}
+
+.production-key-label {
+  align-items: center;
+  color: var(--muted);
+  display: inline-flex;
+  font-size: 11.5px;
+  font-weight: 700;
+  gap: 6px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.production-key-value {
+  align-items: center;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.production-key-value .button,
+.production-key-form .button {
+  min-height: 34px;
+  padding: 5px 12px;
+}
+
+.production-key-form {
+  align-items: center;
+  display: flex;
+  flex: 1 1 260px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.production-key-form input {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+/* -- Sync runbook ---------------------------------------------------------------- */
+
+.production-runbook dl {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+}
+
+.production-runbook dt {
+  color: var(--text-soft);
+  font-weight: 700;
+}
+
+.production-runbook dd {
+  color: var(--muted);
+  margin: 2px 0 0;
+}
+
+@media (max-width: 560px) {
+  .production-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .production-chips {
+    justify-content: flex-start;
+  }
+}
