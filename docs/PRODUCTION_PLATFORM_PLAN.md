@@ -174,10 +174,10 @@ Rough build total: **~2 weeks of focused build** across phases 1–3+5, gated by
 | Item | Status | Ref |
 |---|---|---|
 | Phase 0 — current event on StreamRun | 🟢 running (Waupaca, Jul 8–10) | — |
-| Phase 1a — commentator portal | 🟡 in progress (`feat/commentator-portal`) | — |
+| Phase 1a — commentator portal | ✅ LIVE (/commentary, a38bc66b) | §1 |
 | Phase 1b — program page `/program/court/N` | ✅ built (`feat/program-page`): token-gated scene (video + scorebug + commentary audio + watchdog + START/END signals), `/api/program/heartbeat` + `012_program_heartbeats.sql`, `PROGRAM_PAGE_TOKEN` env | §3.1, `docs/COMMENTARY_WORKFLOW.md` §Program Pages |
 | Phase 2 — compositor stack configs + runbook | ✅ merged | `infra/compositor/`, 436e7788 |
 | Phase 2 — gating experiment execution | ⬜ blocked on droplet capacity (resize or `DIGITALOCEAN_TOKEN`) | `infra/compositor/GATING_EXPERIMENT.md` |
 | Phase 3 — controller skeleton | ✅ merged (`infra/controller/`) | 612ca88a |
-| Phase 3 — ops console `/admin/production` | ⬜ after gating experiment | §3.5 |
+| Phase 3 — ops console `/admin/production` | 🟡 in progress | §3.5 |
 | Phases 4–7 | ⬜ event-gated | §6 |
