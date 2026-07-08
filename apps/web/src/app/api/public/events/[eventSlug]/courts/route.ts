@@ -28,6 +28,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ eve
         displayName: court.display_name,
         scoringOpen: court.scoring_open !== false,
         lastUpdateAt: court.last_update_at ?? null,
+        // Public by design (unlike stream keys): fans deep-link to the live broadcast.
+        youtubeVideoId: (typeof court.youtube_video_id === "string" && court.youtube_video_id.trim()) || null,
         backupRequested: status.backupRequested,
         scorerStatus: {
           needsScorer: status.needsScorer,

@@ -10,16 +10,19 @@ export const dynamic = "force-dynamic";
 
 /**
  * Production-console court settings for stream/court :n of the ACTIVE event.
- * Today that is exactly one field: the YouTube RTMP stream key (migration
- * 013, plan §3.4). Set/replace semantics — the full key is write-only; every
- * response carries at most maskStreamKey()'s last-4 preview. Deliberately
- * separate from the fan-scoring court PATCH (different route, different
- * concerns).
+ * Two fields today: the YouTube RTMP stream key (migration 013, plan §3.4)
+ * and the public YouTube video id (migration 003) that fan surfaces turn into
+ * "Watch live" links. Set/replace semantics — the full key is write-only;
+ * every response carries at most maskStreamKey()'s last-4 preview. Video ids
+ * are public, so they round-trip in the clear. Deliberately separate from the
+ * fan-scoring court PATCH (different route, different concerns).
  */
 
 const schema = z.object({
-  // null or blank clears the key; anything else replaces it wholesale.
-  youtubeStreamKey: z.string().trim().max(200).nullable()
+  // null or blank clears a field; anything else replaces it wholesale.
+  // Both optional — a PATCH updates only the fields it names.
+  youtubeStreamKey: z.string().trim().max(200).nullable().optional(),
+  youtubeVideoId: z.string().trim().max(100).nullable().optional()
 });
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ n: string }> }) {
@@ -35,7 +38,22 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ n:
   const body = await req.json().catch(() => ({}));
   const parsed = schema.safeParse(body);
   if (!parsed.success) return NextResponse.json({ error: "Invalid court update" }, { status: 400 });
-  const youtubeStreamKey = parsed.data.youtubeStreamKey || null;
+
+  const updates: Record<string, string | null> = {};
+  const result: Record<string, unknown> = { ok: true, courtNumber };
+  if (parsed.data.youtubeStreamKey !== undefined) {
+    const youtubeStreamKey = parsed.data.youtubeStreamKey || null;
+    updates.youtube_stream_key = youtubeStreamKey;
+    result.youtubeKeyMasked = maskStreamKey(youtubeStreamKey);
+  }
+  if (parsed.data.youtubeVideoId !== undefined) {
+    const youtubeVideoId = parsed.data.youtubeVideoId || null;
+    updates.youtube_video_id = youtubeVideoId;
+    result.youtubeVideoId = youtubeVideoId;
+  }
+  if (Object.keys(updates).length === 0) {
+    return NextResponse.json({ error: "Invalid court update" }, { status: 400 });
+  }
 
   const db = supabaseAdmin();
   const event = await getActiveEvent(db);
@@ -43,7 +61,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ n:
 
   const { data, error } = await db
     .from("courts")
-    .update({ youtube_stream_key: youtubeStreamKey, updated_at: new Date().toISOString() })
+    .update({ ...updates, updated_at: new Date().toISOString() })
     .eq("event_id", event.id)
     .eq("court_number", courtNumber)
     .select("id")
@@ -59,5 +77,5 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ n:
   }
   if (!data) return NextResponse.json({ error: `No court ${courtNumber} in the active event` }, { status: 404 });
 
-  return NextResponse.json({ ok: true, courtNumber, youtubeKeyMasked: maskStreamKey(youtubeStreamKey) });
+  return NextResponse.json(result);
 }

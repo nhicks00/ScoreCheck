@@ -167,6 +167,21 @@ export function maskStreamKey(key: string | null | undefined): string | null {
 }
 
 /* ---------------------------------------------------------------------------
+   Fan "Watch live" links (courts.youtube_video_id, migration 003)
+--------------------------------------------------------------------------- */
+
+/**
+ * Public YouTube deep link for a court's live broadcast. Video ids are public
+ * (unlike stream keys, which stay masked) — blank/missing ids return null so
+ * fan surfaces simply omit the link.
+ */
+export function youtubeWatchUrl(videoId: string | null | undefined): string | null {
+  const trimmed = (videoId ?? "").trim();
+  if (!trimmed) return null;
+  return `https://www.youtube.com/watch?v=${encodeURIComponent(trimmed)}`;
+}
+
+/* ---------------------------------------------------------------------------
    Program page monitor links (/program/court/{n})
 --------------------------------------------------------------------------- */
 

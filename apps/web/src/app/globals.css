@@ -4199,3 +4199,24 @@ body:has(.program-root) {
     justify-content: flex-start;
   }
 }
+
+/* ==========================================================================
+   Fan "Watch live" links (courts.youtube_video_id → YouTube deep link)
+   ========================================================================== */
+
+.watch-link {
+  align-items: center;
+  color: var(--danger);
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 700;
+  gap: 6px;
+  justify-self: start;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+}
+
+.watch-link:hover,
+.watch-link:focus-visible {
+  text-decoration: underline;
+}

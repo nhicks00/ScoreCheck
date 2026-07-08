@@ -7,7 +7,8 @@ import {
   MonitorPlay,
   Play,
   Radio,
-  Square
+  Square,
+  Youtube
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
@@ -80,6 +81,10 @@ export function ProductionConsoleClient({
   const [keyDraft, setKeyDraft] = useState("");
   const [keySaving, setKeySaving] = useState(false);
   const [keyError, setKeyError] = useState<string | null>(null);
+  const [editingVideoCourt, setEditingVideoCourt] = useState<number | null>(null);
+  const [videoDraft, setVideoDraft] = useState("");
+  const [videoSaving, setVideoSaving] = useState(false);
+  const [videoError, setVideoError] = useState<string | null>(null);
 
   const configByCourt = new Map(courtConfigs.map((config) => [config.courtNumber, config]));
 
@@ -184,6 +189,42 @@ export function ProductionConsoleClient({
     }
   }
 
+  function openVideoEditor(courtNumber: number, currentId: string | null) {
+    setEditingVideoCourt(courtNumber);
+    // Video ids are public (unlike stream keys), so prefill for easy edits.
+    setVideoDraft(currentId ?? "");
+    setVideoError(null);
+  }
+
+  async function saveVideoId(courtNumber: number, value: string | null) {
+    setVideoSaving(true);
+    setVideoError(null);
+    try {
+      const res = await fetch(`/api/admin/production/courts/${courtNumber}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ youtubeVideoId: value })
+      });
+      const json = (await res.json().catch(() => ({}))) as { error?: string; youtubeVideoId?: string | null };
+      if (!res.ok) {
+        setVideoError(json.error ?? `Save failed (${res.status})`);
+        return;
+      }
+      setSnapshot((current) => ({
+        ...current,
+        courts: current.courts.map((court) =>
+          court.courtNumber === courtNumber ? { ...court, youtubeVideoId: json.youtubeVideoId ?? null } : court
+        )
+      }));
+      setEditingVideoCourt(null);
+      setVideoDraft("");
+    } catch {
+      setVideoError("Save failed — network error.");
+    } finally {
+      setVideoSaving(false);
+    }
+  }
+
   return (
     <main className="shell">
       <div className="container stack">
@@ -255,6 +296,7 @@ export function ProductionConsoleClient({
             const busy = busyCourt === court.courtNumber;
             const courtFeedback = feedback[court.courtNumber];
             const editingKey = editingKeyCourt === court.courtNumber;
+            const editingVideo = editingVideoCourt === court.courtNumber;
             const broadcastChip = controllerReachable
               ? broadcastChipForEgress(egressForCourt(controller?.egresses, court.courtNumber))
               : null;
@@ -438,6 +480,75 @@ export function ProductionConsoleClient({
                 </div>
                 {editingKey && keyError && (
                   <p className="production-feedback is-error" role="alert">{keyError}</p>
+                )}
+
+                <div className="production-key-row">
+                  <span className="production-key-label">
+                    <Youtube size={14} aria-hidden="true" /> YouTube video ID
+                  </span>
+                  {editingVideo ? (
+                    <form
+                      className="production-key-form"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        const trimmed = videoDraft.trim();
+                        if (!trimmed) {
+                          setVideoError("Enter a video ID, or use Clear to remove it.");
+                          return;
+                        }
+                        void saveVideoId(court.courtNumber, trimmed);
+                      }}
+                    >
+                      <input
+                        type="text"
+                        autoComplete="off"
+                        placeholder="Video ID from youtube.com/watch?v=…"
+                        value={videoDraft}
+                        onChange={(event) => setVideoDraft(event.target.value)}
+                        disabled={videoSaving}
+                        maxLength={100}
+                      />
+                      <button className="button primary" type="submit" disabled={videoSaving}>
+                        {videoSaving ? "Saving…" : "Save"}
+                      </button>
+                      {court.youtubeVideoId && (
+                        <button
+                          className="button warn"
+                          type="button"
+                          disabled={videoSaving}
+                          onClick={() => void saveVideoId(court.courtNumber, null)}
+                        >
+                          Clear
+                        </button>
+                      )}
+                      <button
+                        className="button ghost"
+                        type="button"
+                        disabled={videoSaving}
+                        onClick={() => {
+                          setEditingVideoCourt(null);
+                          setVideoDraft("");
+                          setVideoError(null);
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </form>
+                  ) : (
+                    <span className="production-key-value">
+                      <code>{court.youtubeVideoId ?? "Not set"}</code>
+                      <button
+                        type="button"
+                        className="button ghost"
+                        onClick={() => openVideoEditor(court.courtNumber, court.youtubeVideoId)}
+                      >
+                        {court.youtubeVideoId ? "Replace" : "Set ID"}
+                      </button>
+                    </span>
+                  )}
+                </div>
+                {editingVideo && videoError && (
+                  <p className="production-feedback is-error" role="alert">{videoError}</p>
                 )}
               </article>
             );

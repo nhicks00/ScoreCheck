@@ -1,8 +1,9 @@
 "use client";
 
-import { Moon, RefreshCw, ShieldCheck, WifiOff } from "lucide-react";
+import { Moon, Play, RefreshCw, ShieldCheck, WifiOff } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { youtubeWatchUrl } from "@/lib/opsConsole";
 import { timestampAgeMs } from "@/lib/timeLabels";
 
 type PortalSetScore = { setNumber: number; teamAScore: number; teamBScore: number; isComplete: boolean };
@@ -13,6 +14,7 @@ type CourtCard = {
   displayName: string;
   scoringOpen: boolean;
   lastUpdateAt?: string | null;
+  youtubeVideoId?: string | null;
   scorerStatus: {
     needsScorer: boolean;
     hasActive: boolean;
@@ -190,6 +192,7 @@ export function ScorePortalClient() {
                     <span className="stream-key-badge" aria-label={`Stream key ${court.courtNumber}`}>Key {court.courtNumber}</span>
                   </div>
                   <h2 className="court-title">{courtName}</h2>
+                  <WatchLiveLink videoId={court.youtubeVideoId} courtName={courtName} />
                   <div className="court-idle-body">
                     <Moon size={18} aria-hidden="true" />
                     <p>{presence === "no-match" ? "No match scheduled yet" : "No live match right now"}</p>
@@ -209,6 +212,7 @@ export function ScorePortalClient() {
                   <span className="stream-key-badge" aria-label={`Stream key ${court.courtNumber}`}>Key {court.courtNumber}</span>
                 </div>
                 <h2 className="court-title">{courtName}</h2>
+                <WatchLiveLink videoId={court.youtubeVideoId} courtName={courtName} />
                 <div className="court-scoreboard" aria-label={`${teamA} versus ${teamB}`}>
                   <div className="court-team-row team-a">
                     <span className="team-chip" aria-hidden="true" />
@@ -252,6 +256,23 @@ export function ScorePortalClient() {
         </section>
       </div>
     </main>
+  );
+}
+
+/** YouTube deep link for a court's broadcast — renders nothing without a video id. */
+function WatchLiveLink({ videoId, courtName }: { videoId?: string | null; courtName: string }) {
+  const url = youtubeWatchUrl(videoId);
+  if (!url) return null;
+  return (
+    <a
+      className="watch-link"
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={`Watch ${courtName} live on YouTube`}
+    >
+      <Play size={14} aria-hidden="true" /> Watch live
+    </a>
   );
 }
 
