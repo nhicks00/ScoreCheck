@@ -1,0 +1,24 @@
+{
+  "name": "bvm-production-controller",
+  "version": "0.1.0",
+  "private": true,
+  "description": "BVM production controller (plan §3.6): authenticated REST surface over LiveKit Egress (and, in Phase 3, DigitalOcean fleet control) consumed by /admin/production.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "livekit-server-sdk": "^2.13.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}
