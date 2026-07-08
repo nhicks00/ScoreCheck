@@ -179,5 +179,5 @@ Rough build total: **~2 weeks of focused build** across phases 1–3+5, gated by
 | Phase 2 — compositor stack configs + runbook | ✅ merged | `infra/compositor/`, 436e7788 |
 | Phase 2 — gating experiment execution | ⬜ blocked on droplet capacity (resize or `DIGITALOCEAN_TOKEN`) | `infra/compositor/GATING_EXPERIMENT.md` |
 | Phase 3 — controller skeleton | ✅ merged (`infra/controller/`) | 612ca88a |
-| Phase 3 — ops console `/admin/production` | 🟡 in progress | §3.5 |
+| Phase 3 — ops console `/admin/production` | ✅ built (`feat/ops-console`): court grid + program-health chips + lazy preview monitors + broadcast start/stop proxy + masked YouTube keys (`013_youtube_stream_keys.sql`) + health strip + sync runbook; controller wiring pending (`CONTROLLER_URL`/`CONTROLLER_TOKEN` unset until the fleet ships) | §3.5 |
 | Phases 4–7 | ⬜ event-gated | §6 |
