@@ -181,4 +181,5 @@ Rough build total: **~2 weeks of focused build** across phases 1–3+5, gated by
 | Phase 3 — controller skeleton | ✅ merged (`infra/controller/`) | 612ca88a |
 | Phase 3 — ops console `/admin/production` | ✅ built (`feat/ops-console`): court grid + program-health chips + lazy preview monitors + broadcast start/stop proxy + masked YouTube keys (`013_youtube_stream_keys.sql`) + health strip + sync runbook; controller wiring pending (`CONTROLLER_URL`/`CONTROLLER_TOKEN` unset until the fleet ships) | §3.5 |
 | Phase 5 — sync-calibration timecode on previews | ✅ live (see GATING_EXPERIMENT.md note re: cutover) | §6 |
-| Phases 4–6 — shadow / burst validation / cutover | ⬜ gated on DIGITALOCEAN_TOKEN + unlisted YouTube key + event days | §6 |
+| Phase 4 — shadow: YouTube-push leg | ✅ validated 2026-07-08 (synthetic→YouTube, test key); full live shadow pending Thu main draw | §6 |
+| Phases 4-full / 5-burst / 6-cutover | ⬜ gated on live event days (+ DIGITALOCEAN_TOKEN for multi-court burst) | §6 |

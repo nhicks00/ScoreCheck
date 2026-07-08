@@ -197,3 +197,25 @@ NOTE: the program pages consume `court{N}`, so shadow-phase compositor output in
 the timecode — intentional for shadow calibration. BEFORE cutover (Phase 6), point the
 program pages at a clean path (e.g. dedicated `court{N}_pgm` transcode without drawtext)
 or strip the drawtext from the config.
+
+## YouTube-push validation — 2026-07-08 (Wed night, pre-main-draw)
+
+Closed the last gating carry-forward: compositor → **real YouTube RTMP** (gating run
+only reached MediaMTX). Synthetic 720p feed → court3_raw → on-demand transcode →
+program page (Court 3 live pre-match overlay) → headless egress → x264 720p30 →
+`rtmp://a.rtmp.youtube.com/live2/<test-key>`. Egress went ACTIVE, zero RTMP rejection,
+stable ~37% CPU / ~1GB RSS on the Mac; `court3` showed 1 WHEP reader (the page).
+Ran on the Mac — **no DO burst droplet needed for a 1-court shadow**, so DIGITALOCEAN_TOKEN
+is NOT a blocker for shadowing one court; it's only needed for the multi-court burst fleet.
+
+### TOMORROW — one-command live shadow (Phase 4)
+Once a court's real feed is live on the droplet (court{N}_raw ingesting):
+```
+colima start --cpu 6 --memory 10          # if not already up
+cd infra/compositor && docker compose up -d
+./start-court.sh <N> <youtube-stream-key>  # composites live court N → YouTube
+./list-egress.sh                           # confirm EGRESS_ACTIVE
+./stop-court.sh <N>                         # end the shadow
+```
+Still unproven until a live match runs: audible commentary sync + multi-hour stability
+on real footage + CPU on DO Intel dedicated vCPUs (Mac arm64 numbers don't transfer).
