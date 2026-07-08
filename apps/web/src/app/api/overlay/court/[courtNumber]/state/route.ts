@@ -32,7 +32,11 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ cour
 
 async function loadOverlayCourt(courtNumber: number, eventId: string | null) {
   const db = supabaseAdmin();
-  const select = "*, events!inner(id,status,settings), matches:current_match_id(*), score_states(*)";
+  // Explicit match columns — never source_payload, the large VBL bracket JSONB
+  // the scorebug never reads. These are exactly the fields buildOverlayState
+  // consumes; pulling the blob here cost egress on ~8 overlays x every 2s.
+  const matchColumns = "id,match_number,round_name,scheduled_time,team_a,team_a_seed,team_b,team_b_seed,team_a_players,team_b_players,format";
+  const select = `*, events!inner(id,status,settings), matches:current_match_id(${matchColumns}), score_states(*)`;
   if (eventId) {
     const result = await db
       .from("courts")

@@ -14,7 +14,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ eve
     if (!event) return NextResponse.json({ error: "Event not found" }, { status: 404 });
     const { data, error } = await db
       .from("courts")
-      .select("*, matches:current_match_id(*), score_states(*)")
+      .select("*, matches:current_match_id(id,match_number,round_name,team_a,team_b), score_states(*)")
       .eq("event_id", event.id)
       .order("court_number", { ascending: true });
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -57,7 +57,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ eve
         } : null
       };
     }));
-    return NextResponse.json({ event, courts }, { headers: { "cache-control": "no-store" } });
+    // Public browse data, identical for every viewer — let the Vercel CDN absorb
+    // fan-scaled polling so many watchers collapse to ~1 DB read per few seconds.
+    return NextResponse.json({ event, courts }, { headers: { "cache-control": "public, s-maxage=3, stale-while-revalidate=15" } });
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Could not load courts" }, { status: 500 });
   }
