@@ -3588,3 +3588,158 @@ label.score-field {
     transform: none;
   }
 }
+
+/* ============================================================================
+   COMMENTATOR PORTAL — additive section
+   /commentary dashboard + court workspace and /admin/commentary room links.
+   Everything here is scoped to commentary-* classes; shared primitives
+   (shell, panel, fan-court-card, table…) come from the sections above.
+   ========================================================================== */
+
+/* -- Dashboard cards ------------------------------------------------------- */
+
+.commentary-card .fan-cta {
+  margin: 0;
+}
+
+.commentary-room-note {
+  align-items: center;
+  color: var(--muted);
+  display: inline-flex;
+  font-weight: 600;
+  gap: 6px;
+  letter-spacing: 0.02em;
+}
+
+/* -- Court workspace: main column + VDO.Ninja rail ------------------------- */
+
+.commentary-court-layout {
+  align-items: start;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) 380px;
+}
+
+.commentary-main {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.commentary-rail {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  position: sticky;
+  top: 16px;
+}
+
+.commentary-claim {
+  max-width: 560px;
+}
+
+/* Embedded fan scorer session: strip its full-screen chrome so it reads as a
+   block inside the workspace instead of a nested app. */
+.commentary-scoring .scorer-screen {
+  background: transparent;
+  min-height: 0;
+  padding: 0;
+}
+
+.commentary-scoring .scorer-wrap {
+  max-width: none;
+}
+
+.commentary-reset-row {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+/* -- Audio room rail ------------------------------------------------------- */
+
+.commentary-audio-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.commentary-room-head {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.commentary-room-head h2 {
+  align-items: center;
+  display: inline-flex;
+  gap: 8px;
+  margin: 0;
+}
+
+.commentary-audio-frame {
+  background: var(--bg-deep);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  display: block;
+  height: 440px;
+  width: 100%;
+}
+
+.commentary-audio-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* -- Admin room-links page -------------------------------------------------- */
+
+.commentary-url-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.commentary-url-cell button,
+.commentary-url-cell .button {
+  min-height: 36px;
+  padding: 6px 12px;
+}
+
+.commentary-buffer-note {
+  border-top: 1px solid var(--line);
+  margin: 0;
+  padding-top: 12px;
+}
+
+.commentary-admin-steps {
+  color: var(--text-soft);
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 20px;
+}
+
+/* Stack the workspace below the desktop breakpoint; the rail drops under the
+   video + scoring column. */
+@media (max-width: 1099px) {
+  .commentary-court-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .commentary-rail {
+    position: static;
+  }
+
+  .commentary-claim {
+    max-width: none;
+  }
+
+  .commentary-audio-frame {
+    height: 380px;
+  }
+}

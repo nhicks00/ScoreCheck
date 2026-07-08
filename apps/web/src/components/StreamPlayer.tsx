@@ -8,6 +8,8 @@ type StreamPlayerProps = {
   /** Scorer-session auth. When omitted the player uses the admin stream-source route. */
   sessionToken?: string;
   enabled?: boolean;
+  /** Pre-resolved playback sources. When provided the player skips its internal source fetching entirely. */
+  sources?: { whepUrl: string | null; hlsUrl: string | null };
 };
 
 type StreamSources = {
@@ -26,18 +28,28 @@ const WHEP_FAILURES_BEFORE_HLS = 3;
 const MAX_RETRY_DELAY_MS = 15_000;
 const OFFLINE_MESSAGE = "Stream offline — retrying";
 
-export function StreamPlayer({ courtNumber, sessionToken, enabled = true }: StreamPlayerProps) {
+export function StreamPlayer({ courtNumber, sessionToken, enabled = true, sources: providedSources }: StreamPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [sources, setSources] = useState<StreamSources | null>(null);
   const [loadRevision, setLoadRevision] = useState(0);
   const [status, setStatus] = useState("Loading stream...");
   const [error, setError] = useState<string | null>(null);
   const [muted, setMuted] = useState(true);
+  // Depend on the primitive URLs so a parent re-render with an identical
+  // sources object never tears down a healthy connection.
+  const hasProvidedSources = providedSources != null;
+  const providedWhepUrl = providedSources?.whepUrl ?? null;
+  const providedHlsUrl = providedSources?.hlsUrl ?? null;
 
   const loadSources = useCallback(async () => {
     if (!enabled) return;
     setError(null);
     setStatus("Loading stream...");
+    if (hasProvidedSources) {
+      setSources({ whepUrl: providedWhepUrl, hlsUrl: providedHlsUrl });
+      setLoadRevision((current) => current + 1);
+      return;
+    }
     const res = sessionToken
       ? await fetch("/api/video/stream-source", {
         method: "POST",
@@ -54,7 +66,7 @@ export function StreamPlayer({ courtNumber, sessionToken, enabled = true }: Stre
     }
     setSources({ whepUrl: json.whepUrl ?? null, hlsUrl: json.hlsUrl ?? null });
     setLoadRevision((current) => current + 1);
-  }, [courtNumber, enabled, sessionToken]);
+  }, [courtNumber, enabled, sessionToken, hasProvidedSources, providedWhepUrl, providedHlsUrl]);
 
   useEffect(() => {
     if (!enabled) {
