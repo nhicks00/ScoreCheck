@@ -25,6 +25,10 @@ async function main() {
       }
 
       const result = await pollActiveCourtsOnce({ owner: workerId, eventIds: coverage.eventIds });
+      // Independent, non-blocking live-chat tick. Fire-and-forget so it never
+      // stalls the scoring cadence, and its own errors can never destabilize
+      // scoring (see maybeRunChatTick). Only runs on coverage days.
+      void maybeRunChatTick();
       const interval = result.polls > 0 ? activeIntervalMs : idleIntervalMs;
       await sleep(Math.max(250, interval - (Date.now() - started)));
     } catch (err) {
@@ -33,6 +37,44 @@ async function main() {
       await recordHeartbeat(workerId, "error", undefined, { message });
       await sleep(idleIntervalMs);
     }
+  }
+}
+
+// --- Live-chat monitor tick (independent of scoring) ---------------------
+// Cadence is separate from the score poll (YOUTUBE_CHAT_POLL_INTERVAL_MS,
+// default 180s). State (budget total, per-court pageTokens, resolved chat ids)
+// persists across ticks for the process lifetime. A single in-flight guard
+// keeps ticks from overlapping; everything is wrapped so a chat failure only
+// logs and never touches the scoring loop.
+let chatTickInFlight = false;
+let lastChatTickAt = 0;
+let chatPollerState: import("../lib/chatPoller").ChatPollerState | null = null;
+
+async function maybeRunChatTick() {
+  const { getEnv } = await import("../lib/env");
+  if (!getEnv().youtubeChatEnabled) return;
+  const { chatPollIntervalMs } = await import("../lib/youtubeChat");
+  const now = Date.now();
+  if (chatTickInFlight || now - lastChatTickAt < chatPollIntervalMs()) return;
+  chatTickInFlight = true;
+  lastChatTickAt = now;
+  try {
+    const { pollEventChatsOnce, createChatPollerState } = await import("../lib/chatPoller");
+    chatPollerState = chatPollerState ?? createChatPollerState(now);
+    const res = await pollEventChatsOnce({ state: chatPollerState });
+    chatPollerState = res.state;
+    if (!res.ok) {
+      console.log(`[worker] chat tick skipped: ${res.reason}`);
+    } else if (res.messagesInserted > 0 || res.budgetExceeded) {
+      console.log(
+        `[worker] chat tick: +${res.messagesInserted} msg across ${res.courtsPolled}/${res.courtsConsidered} court(s), ` +
+        `${res.unitsSpent}u spent, day total ${res.state.budget.unitsSpent}u${res.budgetExceeded ? " (BUDGET REACHED — pausing chat for the day)" : ""}`
+      );
+    }
+  } catch (err) {
+    console.error(`[worker] chat tick failed: ${err instanceof Error ? err.message : "unknown error"}`);
+  } finally {
+    chatTickInFlight = false;
   }
 }
 

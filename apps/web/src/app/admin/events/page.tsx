@@ -42,6 +42,7 @@ export default async function EventsPage() {
           <nav className="topbar-nav" aria-label="Admin">
             <Link className="button ghost" href="/admin/production">Production</Link>
             <Link className="button ghost" href="/admin/commentary">Commentary</Link>
+            <Link className="button ghost" href="/chat">Live Chat</Link>
             <Link className="button ghost" href="/">Home</Link>
           </nav>
         </div>

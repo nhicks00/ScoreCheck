@@ -17,6 +17,17 @@ export type AppEnv = {
   mediamtxReadUser: string;
   mediamtxReadPass: string;
   mediamtxRtmpIngestBase: string;
+  /** YouTube Data API v3 key — used for the live-chat monitor reader when
+   * OAuth is not configured. Works for reading PUBLIC live chats. */
+  youtubeApiKey: string;
+  /** YouTube OAuth client id — preferred over the API key when the full
+   * clientId/clientSecret/refreshToken trio is present. */
+  youtubeClientId: string;
+  youtubeClientSecret: string;
+  youtubeRefreshToken: string;
+  /** Master switch for the worker's live-chat polling. Off by default so the
+   * feature is inert (no quota spend) until an operator opts in. */
+  youtubeChatEnabled: boolean;
 };
 
 export function getEnv(): AppEnv {
@@ -36,7 +47,12 @@ export function getEnv(): AppEnv {
     mediamtxHlsBaseUrl: process.env.MEDIAMTX_HLS_BASE_URL ?? "",
     mediamtxReadUser: process.env.MEDIAMTX_READ_USER ?? "",
     mediamtxReadPass: process.env.MEDIAMTX_READ_PASS ?? "",
-    mediamtxRtmpIngestBase: process.env.MEDIAMTX_RTMP_INGEST_BASE ?? ""
+    mediamtxRtmpIngestBase: process.env.MEDIAMTX_RTMP_INGEST_BASE ?? "",
+    youtubeApiKey: process.env.YOUTUBE_API_KEY ?? "",
+    youtubeClientId: process.env.YOUTUBE_CLIENT_ID ?? "",
+    youtubeClientSecret: process.env.YOUTUBE_CLIENT_SECRET ?? "",
+    youtubeRefreshToken: process.env.YOUTUBE_REFRESH_TOKEN ?? "",
+    youtubeChatEnabled: boolEnv("YOUTUBE_CHAT_ENABLED", false)
   };
 }
 
@@ -116,5 +132,14 @@ function numberEnv(key: string, fallback: number): number {
   const value = Number(raw);
   if (Number.isFinite(value) && value > 0) return value;
   console.warn(`Invalid numeric value for ${key}: ${JSON.stringify(raw)}; using ${fallback}`);
+  return fallback;
+}
+
+function boolEnv(key: string, fallback: boolean): boolean {
+  const raw = process.env[key];
+  if (raw == null || raw === "") return fallback;
+  const normalized = raw.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
   return fallback;
 }
