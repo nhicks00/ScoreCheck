@@ -240,6 +240,18 @@ async function pollCourt(court: CourtRow) {
     return true;
   }
 
+  // Leapfrog: the current match isn't being live-scored, but if a later queued
+  // match on this court IS being live-scored, the earlier match was skipped
+  // without a final — switch straight to the live one so the scorebug follows
+  // the match that is actually in progress.
+  if (!hasVisibleProgress(currentScore, snapshot)) {
+    const liveQueued = await firstLiveScoredQueuedMatch(court.id, match.id);
+    if (liveQueued) {
+      await activateQueuedMatch(court, liveQueued);
+      return true;
+    }
+  }
+
   const scheduleAdvanceTarget = await nextQueuedMatch(court.id);
   const scheduleAdvanceMatch = firstRelation(scheduleAdvanceTarget?.matches);
   if (scheduleAdvanceTarget && scheduleAdvanceMatch && shouldAdvanceInactiveScheduledMatch(currentScore, snapshot, match, scheduleAdvanceMatch, now)) {
@@ -714,6 +726,43 @@ async function nextQueuedMatch(courtId: string) {
     : null;
   if (nextBySchedule) return nextBySchedule;
   return queued.find((queue) => queue.queue_position > basePosition) ?? queued[0] ?? null;
+}
+
+// Bound on how many queued matches we live-check per stalled court per poll.
+// Each check is cached ~10s (queuedMatchHasAuthoritativeScore), so this stays cheap.
+const LIVE_QUEUED_SCAN_LIMIT = 8;
+
+// Find a queued (non-final) match on this court that is CURRENTLY being live-scored.
+// Used to leapfrog when the active match was skipped (never scored, never finaled)
+// and a later match started scoring instead. Returns null if none is live.
+async function firstLiveScoredQueuedMatch(courtId: string, currentMatchId: string | null): Promise<QueueRow | null> {
+  const db = supabaseAdmin();
+  const { data: active } = await db
+    .from("court_match_queue")
+    .select("event_id")
+    .eq("court_id", courtId)
+    .eq("is_active", true)
+    .maybeSingle();
+  const { data, error } = await db
+    .from("court_match_queue")
+    .select("*, matches:match_id(*)")
+    .eq("court_id", courtId)
+    .eq("status", "queued")
+    .order("queue_position", { ascending: true })
+    .limit(50);
+  if (error) throw error;
+  const activeSourceUrls = await activeVblSourceUrlsForCourtEvent(db, active?.event_id ?? (data ?? [])[0]?.event_id);
+  const queued = (await closeFinalQueuedMatches(db, (data ?? []) as QueueRow[]))
+    .filter((queue) => matchBelongsToActiveVblSource(firstRelation(queue.matches), activeSourceUrls));
+  let scanned = 0;
+  for (const queue of queued) {
+    const match = firstRelation(queue.matches);
+    if (!match || match.id === currentMatchId || !match.api_url) continue;
+    if (scanned >= LIVE_QUEUED_SCAN_LIMIT) break;
+    scanned += 1;
+    if (await queuedMatchHasAuthoritativeScore(match)) return queue;
+  }
+  return null;
 }
 
 async function activeVblSourceUrlsForCourtEvent(db: ReturnType<typeof supabaseAdmin>, eventId: unknown) {
