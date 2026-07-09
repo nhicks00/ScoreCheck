@@ -172,9 +172,10 @@ async function loadEventSettings(eventId: string) {
   return settings && typeof settings === "object" && !Array.isArray(settings) ? settings as Record<string, unknown> : null;
 }
 
-function resolveCourtStatus(status: string, setScores: unknown): string {
+export function resolveCourtStatus(status: string, setScores: unknown): string {
   const lower = status.toLowerCase();
-  if (lower.includes("final") || lower.includes("complete")) return "finished";
+  if (lower.includes("set complete")) return "live";
+  if (lower.includes("final") || lower.includes("finished") || lower.includes("complete")) return "finished";
   if (Array.isArray(setScores) && setScores.length > 0) return "live";
   return "waiting";
 }

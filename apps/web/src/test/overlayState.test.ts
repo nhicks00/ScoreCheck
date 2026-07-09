@@ -42,6 +42,18 @@ describe("overlayState", () => {
     expect(displayOverlayName(state.match.teamA.name)).toBe("TBD");
   });
 
+  it("uses format defaults when nullable database values are absent", () => {
+    const state = coerceOverlayState({
+      match: { format: { bestOf: null, setsToWin: null, pointsPerSet: null } }
+    }, 1);
+
+    expect(state.match.format).toMatchObject({
+      bestOf: 3,
+      setsToWin: 2,
+      pointsPerSet: [21, 21, 15]
+    });
+  });
+
   it("orders and caps completed set scores for the compact scorebug", () => {
     expect(completedSetScores([
       { setNumber: 3, teamAScore: 15, teamBScore: 12, isComplete: true },

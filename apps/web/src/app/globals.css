@@ -3951,7 +3951,7 @@ body:has(.program-root) {
 }
 
 .production-court-head {
-  align-items: start;
+  align-items: flex-start;
   display: flex;
   flex-wrap: wrap;
   gap: 8px 14px;

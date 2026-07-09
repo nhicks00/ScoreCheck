@@ -33,6 +33,18 @@ describe("VolleyballLife helpers", () => {
     expect(snapshot.teamASets).toBe(2);
   });
 
+  it("uses the configured deciding-set target in vMix payloads", () => {
+    const snapshot = normalizeScorePayload([
+      { teamName: "Alpha", isMatch: true, game1: 21, game2: 18, game3: 11 },
+      { teamName: "Bravo", isMatch: true, game1: 19, game2: 21, game3: 9 }
+    ], {
+      format: { bestOf: 3, pointsPerSet: [21, 21, 11], setsToWin: 2 }
+    });
+
+    expect(snapshot).toMatchObject({ status: "Final", currentSet: 3, teamASets: 2, teamBSets: 1 });
+    expect(snapshot.setScores.at(-1)).toEqual({ setNumber: 3, teamAScore: 11, teamBScore: 9, isComplete: true });
+  });
+
   it("uses vMix teamName when players are structured arrays", () => {
     const payload = [
       { teamName: "Genny Cruz / Amaya Messier", isMatch: false, game1: 0, game2: 0, game3: 0, players: [{ firstname: "Genny", lastname: "Cruz" }] },
@@ -54,6 +66,23 @@ describe("VolleyballLife helpers", () => {
     const snapshot = normalizeScorePayload(payload);
 
     expect(isAuthoritativeScorePayload(payload, snapshot)).toBe(true);
+  });
+
+  it("distinguishes a completed match from a completed set in object payloads", () => {
+    const completedMatch = normalizeScorePayload({
+      status: "Completed",
+      setNumber: 1,
+      score: { home: 28, away: 24 }
+    }, { format: { bestOf: 1, pointsPerSet: [28], setsToWin: 1 } });
+    const completedSet = normalizeScorePayload({
+      status: "Set Complete",
+      setNumber: 1,
+      score: { home: 21, away: 18 }
+    });
+
+    expect(completedMatch).toMatchObject({ status: "Completed", teamASets: 1, teamBSets: 0 });
+    expect(completedMatch.setScores[0].isComplete).toBe(true);
+    expect(completedSet).toMatchObject({ status: "Set Complete", teamASets: 0, teamBSets: 0 });
   });
 
   it("does not treat completed set entry as active live scoring by itself", () => {
@@ -143,6 +172,21 @@ describe("VolleyballLife helpers", () => {
       teamAName: "Kyle Paulson / Jack Walmer",
       teamBName: "Richard Diedrich / Alex Mortimer"
     });
+  });
+
+  it("uses the configured deciding-set target in bracket confirmation", () => {
+    const snapshot = normalizeVblBracketPayload({
+      games: [
+        { number: 1, home: 21, away: 18, isFinal: false },
+        { number: 2, home: 18, away: 21, isFinal: false },
+        { number: 3, home: 11, away: 9, isFinal: false }
+      ]
+    }, {
+      format: { bestOf: 3, pointsPerSet: [21, 21, 11], setsToWin: 2 }
+    });
+
+    expect(snapshot).toMatchObject({ status: "Final", currentSet: 3, teamASets: 2, teamBSets: 1 });
+    expect(snapshot?.setScores.at(-1)).toEqual({ setNumber: 3, teamAScore: 11, teamBScore: 9, isComplete: true });
   });
 
   it("ignores unused all-zero bracket games after a two-set final", () => {

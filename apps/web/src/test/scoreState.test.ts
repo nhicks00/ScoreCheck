@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { scoreForCurrentMatch } from "../lib/scoreState";
+import { resolveCourtStatus, scoreForCurrentMatch } from "../lib/scoreState";
 
 describe("scoreState", () => {
   it("selects the score row for the current match", () => {
@@ -21,5 +21,11 @@ describe("scoreState", () => {
     ];
 
     expect(scoreForCurrentMatch(scores, "current-match")).toBeNull();
+  });
+
+  it("keeps a completed set live without marking the entire court finished", () => {
+    expect(resolveCourtStatus("Set Complete", [])).toBe("live");
+    expect(resolveCourtStatus("Completed", [])).toBe("finished");
+    expect(resolveCourtStatus("Final", [])).toBe("finished");
   });
 });

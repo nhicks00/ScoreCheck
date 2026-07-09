@@ -316,6 +316,7 @@ function nullableNumber(value: unknown): number | null {
 }
 
 function numberValue(value: unknown, fallback: number, min?: number, max?: number): number {
+  if (value == null || value === "") return fallback;
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
   let int = Math.trunc(number);

@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
+import { isValidTimeZone } from "@/lib/scheduleTime";
 import { supabaseAdmin } from "@/lib/supabase";
 
 const settingsSchema = z.object({
-  overlayLayout: z.enum(["top-left", "bottom-left"])
-});
+  overlayLayout: z.enum(["top-left", "bottom-left"]).optional(),
+  timezone: z.string().trim().min(1).max(100).refine(isValidTimeZone, "Invalid IANA timezone").optional()
+}).refine((value) => value.overlayLayout != null || value.timezone != null, "No settings supplied");
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ eventId: string }> }) {
   const unauthorized = await requireAdmin(req);
@@ -22,7 +24,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ ev
   const current = event.settings && typeof event.settings === "object" && !Array.isArray(event.settings)
     ? event.settings as Record<string, unknown>
     : {};
-  const settings = { ...current, overlayLayout: parsed.data.overlayLayout };
+  const settings = { ...current, ...parsed.data };
   const { data: updated, error } = await db
     .from("events")
     .update({ settings, updated_at: new Date().toISOString() })

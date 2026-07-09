@@ -1,4 +1,5 @@
 import { getEnv } from "./env";
+import { eventTimeZone } from "./scheduleTime";
 import { supabaseAdmin } from "./supabase";
 
 const DEFAULT_OFF_EVENT_SLEEP_MS = 15 * 60_000;
@@ -29,7 +30,7 @@ export function workerHeartbeatStale(heartbeat: WorkerHeartbeatRow | null | unde
   return age > POLLING_STALE_MS;
 }
 
-type ActiveEventRow = {
+export type ActiveEventRow = {
   id: string;
   name?: string | null;
   event_date?: string | null;
@@ -49,13 +50,13 @@ export type WorkerCoverageStatus = {
   sleepMs: number;
   reason: string;
   activeEventCount: number;
-  coveredEvents: Array<{ id: string; name: string | null; dates: string[] }>;
+  coveredEvents: Array<{ id: string; name: string | null; dates: string[]; today: string; timezone: string }>;
 };
 
 export async function getWorkerCoverageStatus(now = new Date()): Promise<WorkerCoverageStatus> {
   const db = supabaseAdmin();
   const env = getEnv();
-  const timezone = env.timezone || "America/Denver";
+  const timezone = eventTimeZone(null, env.timezone || "America/Denver");
   const today = dateKeyInTimeZone(now, timezone);
   const sleepMs = parseBoundedMs(process.env.WORKER_OFF_EVENT_INTERVAL_MS, DEFAULT_OFF_EVENT_SLEEP_MS, MAX_OFF_EVENT_SLEEP_MS);
 
@@ -81,12 +82,8 @@ export async function getWorkerCoverageStatus(now = new Date()): Promise<WorkerC
 
   const matchDates = await loadMatchDateKeys(activeEvents.map((event) => event.id));
   const coveredEvents = activeEvents
-    .map((event) => ({
-      id: event.id,
-      name: event.name ?? null,
-      dates: coverageDateKeys(event, matchDates.get(event.id) ?? [])
-    }))
-    .filter((event) => event.dates.includes(today));
+    .map((event) => eventCoverageAt(event, matchDates.get(event.id) ?? [], now, timezone))
+    .filter((event) => event.dates.includes(event.today));
 
   if (!coveredEvents.length) {
     return {
@@ -95,7 +92,7 @@ export async function getWorkerCoverageStatus(now = new Date()): Promise<WorkerC
       today,
       timezone,
       sleepMs,
-      reason: `No active event is scheduled for ${today}.`,
+      reason: "No active event is scheduled for its current local date.",
       activeEventCount: activeEvents.length,
       coveredEvents: []
     };
@@ -107,9 +104,25 @@ export async function getWorkerCoverageStatus(now = new Date()): Promise<WorkerC
     today,
     timezone,
     sleepMs,
-    reason: `Polling ${coveredEvents.length} covered active event(s) for ${today}.`,
+    reason: `Polling ${coveredEvents.length} covered active event(s) in their event timezone.`,
     activeEventCount: activeEvents.length,
     coveredEvents
+  };
+}
+
+export function eventCoverageAt(
+  event: ActiveEventRow,
+  matchDateValues: string[],
+  now: Date,
+  fallbackTimezone: string
+) {
+  const timezone = eventTimeZone(event.settings, fallbackTimezone);
+  return {
+    id: event.id,
+    name: event.name ?? null,
+    dates: coverageDateKeys(event, matchDateValues),
+    today: dateKeyInTimeZone(now, timezone),
+    timezone
   };
 }
 

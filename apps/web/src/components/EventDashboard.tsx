@@ -116,11 +116,12 @@ type EventDashboardProps = {
   pollerErrors: PollerErrorRow[];
   schemaWarnings: string[];
   siteUrl: string;
+  defaultTimezone: string;
 };
 
 type TabKey = "overview" | "automated" | "manual" | "queues" | "health";
 
-export function EventDashboard({ event, sources, courts, matches, queues, heartbeats, pollerErrors, schemaWarnings, siteUrl }: EventDashboardProps) {
+export function EventDashboard({ event, sources, courts, matches, queues, heartbeats, pollerErrors, schemaWarnings, siteUrl, defaultTimezone }: EventDashboardProps) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
   const [busy, setBusy] = useState<string | null>(null);
@@ -157,7 +158,10 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
 
   const latestHeartbeat = heartbeats[0];
   const workerIsFresh = isFreshTimestamp(latestHeartbeat?.last_seen_at, 60_000);
-  const overlayLayout = event.settings?.overlayLayout === "top-left" ? "top-left" : "bottom-left";
+  const overlayLayout = event.settings?.overlayLayout === "bottom-left" ? "bottom-left" : "top-left";
+  const eventTimezone = typeof event.settings?.timezone === "string" && event.settings.timezone.trim()
+    ? event.settings.timezone
+    : defaultTimezone;
 
   useEffect(() => {
     setLinksByCourt(loadStoredScorerLinks(event.id));
@@ -311,6 +315,24 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
                 </button>
               </div>
             </div>
+            <form className="row wrap" onSubmit={(submitEvent) => {
+              submitEvent.preventDefault();
+              const form = new FormData(submitEvent.currentTarget);
+              void call("event-timezone", `/api/events/${event.id}/settings`, { timezone: form.get("timezone") }, "PATCH");
+            }}>
+              <label>
+                Event time zone
+                <input name="timezone" defaultValue={eventTimezone} list="dashboard-event-timezones" required />
+              </label>
+              <datalist id="dashboard-event-timezones">
+                <option value="America/New_York" />
+                <option value="America/Chicago" />
+                <option value="America/Denver" />
+                <option value="America/Los_Angeles" />
+                <option value="Pacific/Honolulu" />
+              </datalist>
+              <button type="submit" disabled={busy != null}>Save time zone</button>
+            </form>
           </div>
           <div className="panel span-all stack">
             <h2>Court Health</h2>

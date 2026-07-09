@@ -1,6 +1,8 @@
 import { isAuthoritativeScorePayload, normalizeScorePayload, normalizeVblBracketPayload } from "./scoring";
 import { refreshEventBracketSources } from "./bracketRefresh";
 import { defaultManualState } from "./manualScoring";
+import { getEnv } from "./env";
+import { eventTimeZone, scheduledTimestamp } from "./scheduleTime";
 import { buildOverlayStateWithEventSettings, persistScoreAndOverlay, scoreForCurrentMatch } from "./scoreState";
 import { supabaseAdmin } from "./supabase";
 import type { ScoreSnapshot, SetScore } from "./types";
@@ -14,7 +16,6 @@ const LEASE_MS = 35_000;
 const BRACKET_REFRESH_INTERVAL_MS = 45_000;
 const NEXT_MATCH_LIVE_CHECK_TTL_MS = 10_000;
 const NEXT_MATCH_LIVE_CHECK_CACHE_LIMIT = 500;
-const EVENT_TIME_ZONE = "America/Denver";
 
 const lastBracketRefreshAtByEvent = new Map<string, number>();
 const nextMatchLiveCheckCache = new Map<string, { checkedAt: number; live: boolean }>();
@@ -34,6 +35,7 @@ type CourtRow = {
   current_match_id: string | null;
   matches?: Relation<MatchRow>;
   score_states?: Relation<ScoreRow>;
+  events?: Relation<{ settings?: Record<string, unknown> | null }>;
 };
 
 type MatchRow = {
@@ -117,7 +119,7 @@ export async function pollActiveCourtsOnce(options: { eventId?: string; eventIds
 
   let query = db
     .from("courts")
-    .select("*, matches:current_match_id(*), score_states(*)")
+    .select("*, matches:current_match_id(*), score_states(*), events:event_id(settings)")
     .in("mode", ["api", "hybrid"])
     .eq("frozen", false)
     .not("current_match_id", "is", null)
@@ -210,6 +212,7 @@ async function acquireLease(eventId: string, courtId: string, owner: string): Pr
 async function pollCourt(court: CourtRow) {
   const db = supabaseAdmin();
   const match = firstRelation(court.matches);
+  const timeZone = courtEventTimeZone(court);
   let currentScore = scoreForCurrentMatch(court.score_states, match?.id);
   if (currentScore?.source === "override") return false;
   if (!match?.api_url) return false;
@@ -223,7 +226,7 @@ async function pollCourt(court: CourtRow) {
   const bracketProgressScore = await persistVblBracketProgressIfAvailable(court, match, currentScore);
   if (bracketProgressScore) currentScore = bracketProgressScore;
 
-  if (await advanceFinalMatchIfReady(court, match, currentScore)) return true;
+  if (await advanceFinalMatchIfReady(court, match, currentScore, timeZone)) return true;
 
   const res = await fetch(match.api_url, { cache: "no-store" });
   if (!res.ok) {
@@ -252,9 +255,9 @@ async function pollCourt(court: CourtRow) {
     }
   }
 
-  const scheduleAdvanceTarget = await nextQueuedMatch(court.id);
+  const scheduleAdvanceTarget = await nextQueuedMatch(court.id, timeZone);
   const scheduleAdvanceMatch = firstRelation(scheduleAdvanceTarget?.matches);
-  if (scheduleAdvanceTarget && scheduleAdvanceMatch && shouldAdvanceInactiveScheduledMatch(currentScore, snapshot, match, scheduleAdvanceMatch, now)) {
+  if (scheduleAdvanceTarget && scheduleAdvanceMatch && shouldAdvanceInactiveScheduledMatch(currentScore, snapshot, match, scheduleAdvanceMatch, now, timeZone)) {
     await activateQueuedMatch(court, scheduleAdvanceTarget);
     return true;
   }
@@ -278,7 +281,7 @@ async function pollCourt(court: CourtRow) {
   return true;
 }
 
-async function advanceFinalMatchIfReady(court: CourtRow, match: MatchRow, currentScore: ScoreRow | null) {
+async function advanceFinalMatchIfReady(court: CourtRow, match: MatchRow, currentScore: ScoreRow | null, timeZone: string) {
   if (!currentScore || currentScore.match_id !== match.id) return false;
   if (!isFinalScore(currentScore)) return false;
   if (!hasScoreClinchedMatch(currentScore, match)) return false;
@@ -286,7 +289,7 @@ async function advanceFinalMatchIfReady(court: CourtRow, match: MatchRow, curren
   const now = new Date().toISOString();
   if (hasFutureDelayedVblScore(currentScore, now)) return false;
 
-  const next = await nextQueuedMatch(court.id);
+  const next = await nextQueuedMatch(court.id, timeZone);
   if (!next) return false;
   const nextMatch = firstRelation(next.matches);
   const nextLiveScoringStarted = bracketPayloadShowsLiveScoring(nextMatch?.source_payload)
@@ -617,12 +620,13 @@ function shouldAdvanceInactiveScheduledMatch(
   snapshot: ReturnType<typeof normalizeScorePayload>,
   currentMatch: MatchRow,
   nextMatch: MatchRow,
-  now: string
+  now: string,
+  timeZone: string
 ) {
   if (hasVisibleProgress(currentScore, snapshot)) return false;
 
-  const currentStart = scheduledTimestamp(currentMatch);
-  const nextStart = scheduledTimestamp(nextMatch);
+  const currentStart = scheduledTimestamp(currentMatch, timeZone);
+  const nextStart = scheduledTimestamp(nextMatch, timeZone);
   const nowMs = Date.parse(now);
   if (!Number.isFinite(nowMs) || !Number.isFinite(nextStart)) return false;
   if (nowMs < nextStart) return false;
@@ -652,22 +656,6 @@ function hasVisibleProgress(currentScore: ScoreRow | null, snapshot: ReturnType<
   return scoreProgress || snapshotProgress;
 }
 
-function scheduledTimestamp(match: MatchRow | null | undefined) {
-  if (!match?.scheduled_time || !match.scheduled_date) return NaN;
-  const date = match.scheduled_date.match(/\d{4}-\d{2}-\d{2}/)?.[0];
-  const time = match.scheduled_time.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
-  if (!date || !time) return NaN;
-  let hour = Number(time[1]);
-  const minute = Number(time[2]);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return NaN;
-  const suffix = time[3].toUpperCase();
-  if (suffix === "PM" && hour !== 12) hour += 12;
-  if (suffix === "AM" && hour === 12) hour = 0;
-  const [year, month, day] = date.split("-").map(Number);
-  const localAsUtc = Date.UTC(year, month - 1, day, hour, minute, 0);
-  return localAsUtc - timeZoneOffsetMs(new Date(localAsUtc), EVENT_TIME_ZONE);
-}
-
 function setsToWin(format: Record<string, unknown> | null | undefined) {
   const explicitSetsToWin = Number(format?.setsToWin);
   if (Number.isFinite(explicitSetsToWin) && explicitSetsToWin > 0) {
@@ -679,24 +667,7 @@ function setsToWin(format: Record<string, unknown> | null | undefined) {
   return Math.max(1, Math.ceil(safeBestOf / 2));
 }
 
-function timeZoneOffsetMs(date: Date, timeZone: string) {
-  const value = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    timeZoneName: "longOffset",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  }).formatToParts(date).find((part) => part.type === "timeZoneName")?.value;
-  const match = value?.match(/GMT([+-])(\d{2}):(\d{2})/);
-  if (!match) return 0;
-  const sign = match[1] === "-" ? -1 : 1;
-  return sign * ((Number(match[2]) * 60 + Number(match[3])) * 60_000);
-}
-
-async function nextQueuedMatch(courtId: string) {
+async function nextQueuedMatch(courtId: string, timeZone: string) {
   const db = supabaseAdmin();
   const { data: active } = await db
     .from("court_match_queue")
@@ -717,10 +688,10 @@ async function nextQueuedMatch(courtId: string) {
   const queued = (await closeFinalQueuedMatches(db, (data ?? []) as QueueRow[]))
     .filter((queue) => matchBelongsToActiveVblSource(firstRelation(queue.matches), activeSourceUrls));
   const activeMatch = firstRelation((active as QueueRow | null)?.matches);
-  const activeStart = scheduledTimestamp(activeMatch);
+  const activeStart = scheduledTimestamp(activeMatch, timeZone);
   const nextBySchedule = Number.isFinite(activeStart)
     ? queued
-      .map((queue) => ({ queue, startsAt: scheduledTimestamp(firstRelation(queue.matches)) }))
+      .map((queue) => ({ queue, startsAt: scheduledTimestamp(firstRelation(queue.matches), timeZone) }))
       .filter((item) => Number.isFinite(item.startsAt) && item.startsAt > activeStart)
       .sort((a, b) => a.startsAt - b.startsAt || a.queue.queue_position - b.queue.queue_position)[0]?.queue
     : null;
@@ -1163,6 +1134,10 @@ function shouldReplaceTeam(current: string | null, next: string) {
 
 function firstRelation<T>(value: Relation<T>): T | null {
   return Array.isArray(value) ? value[0] ?? null : value ?? null;
+}
+
+function courtEventTimeZone(court: CourtRow) {
+  return eventTimeZone(firstRelation(court.events)?.settings, getEnv().timezone);
 }
 
 function sleep(ms: number) {

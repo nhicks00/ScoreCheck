@@ -29,4 +29,31 @@ describe("manual scoring reducer", () => {
     state = applyManualAction(state, "point-a", format);
     expect(state.status).toBe("Final");
   });
+
+  it("honors a configured one-set target instead of forcing the deciding set to 15", () => {
+    const format = formatFromMatch({ format: { bestOf: 1, pointsPerSet: [28], winByTwo: true, setsToWin: 1 } });
+    let state = defaultManualState();
+    for (let i = 0; i < 13; i += 1) {
+      state = applyManualAction(state, "point-a", format);
+      state = applyManualAction(state, "point-b", format);
+    }
+    state = applyManualAction(state, "point-a", format);
+    state = applyManualAction(state, "point-a", format);
+
+    expect(state).toMatchObject({ status: "In Progress", team_a_score: 15, team_b_score: 13 });
+
+    for (let i = 0; i < 13; i += 1) state = applyManualAction(state, "point-a", format);
+    expect(state).toMatchObject({ status: "Final", team_a_sets: 1 });
+    expect(state.set_scores).toEqual([
+      { setNumber: 1, teamAScore: 28, teamBScore: 13, isComplete: true }
+    ]);
+  });
+
+  it("treats null format values as absent rather than numeric zero", () => {
+    expect(formatFromMatch({ format: { bestOf: null, cap: null } })).toMatchObject({
+      bestOf: 3,
+      setsToWin: 2,
+      cap: null
+    });
+  });
 });

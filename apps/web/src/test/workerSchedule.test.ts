@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { coverageDateKeys, dateKeyInTimeZone, workerHeartbeatStale } from "../lib/workerSchedule";
+import { coverageDateKeys, dateKeyInTimeZone, eventCoverageAt, workerHeartbeatStale } from "../lib/workerSchedule";
 
 describe("worker schedule gate", () => {
   it("recognizes VolleyballLife scheduled date strings as coverage dates", () => {
@@ -28,6 +28,23 @@ describe("worker schedule gate", () => {
   it("computes today's date in the configured tournament timezone", () => {
     expect(dateKeyInTimeZone(new Date("2026-07-04T05:30:00.000Z"), "America/Denver")).toBe("2026-07-03");
     expect(dateKeyInTimeZone(new Date("2026-07-04T07:30:00.000Z"), "America/Denver")).toBe("2026-07-04");
+  });
+
+  it("gates each active event using that event's local timezone", () => {
+    const now = new Date("2026-07-04T05:30:00.000Z");
+    const chicago = eventCoverageAt({
+      id: "chicago-event",
+      settings: { timezone: "America/Chicago", coverageDate: "2026-07-04" }
+    }, [], now, "America/Denver");
+    const denver = eventCoverageAt({
+      id: "denver-event",
+      settings: { timezone: "America/Denver", coverageDate: "2026-07-04" }
+    }, [], now, "America/Denver");
+
+    expect(chicago).toMatchObject({ today: "2026-07-04", timezone: "America/Chicago" });
+    expect(chicago.dates).toContain(chicago.today);
+    expect(denver).toMatchObject({ today: "2026-07-03", timezone: "America/Denver" });
+    expect(denver.dates).not.toContain(denver.today);
   });
 });
 

@@ -52,6 +52,7 @@ export function OverlayClient(props: { courtNumber: string; eventId: string; the
 function OverlayClientInner({ courtNumber, eventId, buildVersion }: { courtNumber: string; eventId: string; theme: string; buildVersion: string }) {
   const courtNumberValue = Number(courtNumber) || 1;
   const [state, setState] = useState(() => fallbackOverlayState(courtNumberValue));
+  const [hasLoadedState, setHasLoadedState] = useState(false);
   const [connected, setConnected] = useState(true);
   const lastReloadAttemptAt = useRef(0);
   const lastInvalidScorebugHealKey = useRef<string | null>(null);
@@ -66,6 +67,7 @@ function OverlayClientInner({ courtNumber, eventId, buildVersion }: { courtNumbe
     if (!shouldApplyOverlayUpdate(next, lastAppliedUpdateMs.current)) return;
     lastAppliedUpdateMs.current = overlayStateUpdatedAtMs(next) ?? lastAppliedUpdateMs.current;
     setState(next);
+    setHasLoadedState(true);
   }, [courtNumberValue]);
 
   useEffect(() => {
@@ -211,6 +213,10 @@ function OverlayClientInner({ courtNumber, eventId, buildVersion }: { courtNumbe
       window.location.reload();
     }
   }
+
+  // Browser sources should stay transparent until authoritative state arrives.
+  // Rendering fallback teams here causes a visible TBD flash on every reload.
+  if (!hasLoadedState) return null;
 
   return (
     <main className={`overlay-stage layout-${layout}`}>

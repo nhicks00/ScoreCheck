@@ -4,6 +4,7 @@ import { Moon, Play, RefreshCw, ShieldCheck, WifiOff } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { youtubeWatchUrl } from "@/lib/opsConsole";
+import { isActivelyPlayingScore, isFinalScoreStatus } from "@/lib/scorePortal";
 import { timestampAgeMs } from "@/lib/timeLabels";
 
 type PortalSetScore = { setNumber: number; teamAScore: number; teamBScore: number; isComplete: boolean };
@@ -152,7 +153,7 @@ export function ScorePortalClient() {
   }, [courts]);
 
   const liveCount = useMemo(
-    () => courts.filter((court) => isLivePresence(presences.get(court.id))).length,
+    () => courts.filter((court) => isLivePresence(presences.get(court.id)) && isActivelyPlayingScore(court.score)).length,
     [courts, presences]
   );
   const needsScorerCount = useMemo(
@@ -337,7 +338,7 @@ function SetDots({ sets, label }: { sets: number; label: string }) {
 
 function courtPresence(court: CourtCard, now: number): CourtPresence {
   if (!court.match) return court.scoringOpen ? "no-match" : "closed";
-  const isFinal = Boolean(court.score?.status?.toLowerCase().includes("final"));
+  const isFinal = isFinalScoreStatus(court.score?.status);
   if (isFinal) {
     const bestTimestamp = court.score?.lastScoreChangeAt ?? court.score?.updatedAt ?? court.lastUpdateAt ?? null;
     const age = timestampAgeMs(bestTimestamp, now);

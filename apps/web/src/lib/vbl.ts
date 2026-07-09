@@ -338,6 +338,7 @@ function stringValue(value: unknown): string | null {
 }
 
 function numberValue(value: unknown): number | null {
+  if (value == null || value === "") return null;
   const num = Number(value);
   return Number.isFinite(num) ? num : null;
 }

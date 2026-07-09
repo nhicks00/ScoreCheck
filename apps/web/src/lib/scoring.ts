@@ -1,4 +1,5 @@
 import { ScoreSnapshot, SetScore } from "./types";
+import { setTargetForFormat } from "./scoringRules";
 
 type MatchLike = {
   team_a?: string | null;
@@ -44,7 +45,7 @@ export function normalizeVblBracketPayload(payload: unknown, match?: MatchLike |
   for (const game of games) {
     const hasScore = game.teamAScore > 0 || game.teamBScore > 0;
     if (!hasScore) continue;
-    const target = game.setNumber === 3 ? Math.min(format.pointsPerSet[0] ?? 21, 15) : (format.pointsPerSet[game.setNumber - 1] ?? format.pointsPerSet[0] ?? 21);
+    const target = setTargetForFormat(game.setNumber, format);
     const isComplete = game.explicitFinal || isSetComplete(game.teamAScore, game.teamBScore, target, format.cap);
     setScores.push({
       setNumber: game.setNumber,
@@ -102,7 +103,7 @@ function normalizeArrayPayload(payload: unknown[], match?: MatchLike | null): Sc
   for (const game of games) {
     if (game.teamAScore === 0 && game.teamBScore === 0 && setScores.length === 0) continue;
     if (game.teamAScore === 0 && game.teamBScore === 0) break;
-    const target = game.setNumber === 3 ? Math.min(format.pointsPerSet[0] ?? 21, 15) : (format.pointsPerSet[game.setNumber - 1] ?? format.pointsPerSet[0] ?? 21);
+    const target = setTargetForFormat(game.setNumber, format);
     const isComplete = isSetComplete(game.teamAScore, game.teamBScore, target, format.cap);
     setScores.push({ ...game, isComplete });
     if (isComplete) {
@@ -150,7 +151,7 @@ function normalizeObjectPayload(payload: Record<string, unknown>, match?: MatchL
   const teamBScore = safeScore(score?.away);
   const status = cleanText(payload.status) ?? (teamAScore || teamBScore ? "In Progress" : "Pre-Match");
   const currentSet = numberValue(payload.setNumber) ?? 1;
-  const isFinal = status.toLowerCase().includes("final");
+  const isFinal = isMatchFinalStatus(status);
   const setScores = teamAScore || teamBScore
     ? [{ setNumber: currentSet, teamAScore, teamBScore, isComplete: isFinal }]
     : [];
@@ -285,7 +286,15 @@ function scoreSnapshotHasLiveScore(snapshot: ScoreSnapshot): boolean {
   return false;
 }
 
+function isMatchFinalStatus(value: string) {
+  const status = value.trim().toLowerCase();
+  return status.includes("final")
+    || status.includes("finished")
+    || (status.includes("complete") && !status.includes("set complete"));
+}
+
 function numberValue(value: unknown): number | null {
+  if (value == null || value === "") return null;
   const num = Number(value);
   return Number.isFinite(num) ? num : null;
 }

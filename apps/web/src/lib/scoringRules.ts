@@ -59,7 +59,7 @@ export function scorePoint(state: ScoreState, team: TeamSide, format = defaultBe
 }
 
 export function canCompleteSet(state: ScoreState, format = defaultBeachFormat()): boolean {
-  const target = setTarget(state.currentSet, format);
+  const target = setTargetForFormat(state.currentSet, format);
   const high = Math.max(state.teamAScore, state.teamBScore);
   const low = Math.min(state.teamAScore, state.teamBScore);
   if (high === low) return false;
@@ -172,7 +172,7 @@ export function validateManualCorrection(input: Partial<ScoreState>, format = de
 }
 
 export function shouldSideSwitch(state: ScoreState, format = defaultBeachFormat()): boolean {
-  const target = setTarget(state.currentSet, format);
+  const target = setTargetForFormat(state.currentSet, format);
   const interval = target <= 15 ? 5 : 7;
   const total = state.teamAScore + state.teamBScore;
   return total > 0 && total % interval === 0;
@@ -214,7 +214,7 @@ export function formatFromUnknown(input: Record<string, unknown> | null | undefi
   };
 }
 
-function setTarget(setNumber: number, format: MatchFormat): number {
+export function setTargetForFormat(setNumber: number, format: Pick<MatchFormat, "bestOf" | "pointsPerSet">): number {
   return format.pointsPerSet[setNumber - 1] ?? (setNumber >= format.bestOf ? 15 : 21);
 }
 

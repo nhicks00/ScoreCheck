@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
+import { getEnv } from "@/lib/env";
+import { setActiveEvent } from "@/lib/eventConfig";
 import { readFormOrJson } from "@/lib/http";
+import { eventTimeZone, isValidTimeZone } from "@/lib/scheduleTime";
 import { supabaseAdmin } from "@/lib/supabase";
 
 export async function GET(req: NextRequest) {
@@ -19,14 +22,19 @@ export async function POST(req: NextRequest) {
   if (unauthorized) return unauthorized;
   const body = await readFormOrJson(req);
   const db = supabaseAdmin();
-  await db.from("events").update({ status: "inactive" }).eq("status", "active");
+  const requestedTimezone = typeof body.timezone === "string" ? body.timezone.trim() : "";
+  if (requestedTimezone && !isValidTimeZone(requestedTimezone)) {
+    return NextResponse.json({ error: "Invalid IANA timezone" }, { status: 400 });
+  }
+  const timezone = requestedTimezone || eventTimeZone(null, getEnv().timezone);
   const { data: event, error } = await db
     .from("events")
     .insert({
       name: body.name || "Untitled Event",
       event_date: body.eventDate || null,
       venue: body.venue || null,
-      status: "active"
+      status: "inactive",
+      settings: { timezone, overlayLayout: "top-left" }
     })
     .select()
     .single();
@@ -41,6 +49,14 @@ export async function POST(req: NextRequest) {
   }));
   const { error: courtError } = await db.from("courts").insert(courts);
   if (courtError) return NextResponse.json({ error: courtError.message }, { status: 500 });
+
+  try {
+    await setActiveEvent(event.id, db);
+  } catch (activationError) {
+    return NextResponse.json({
+      error: activationError instanceof Error ? activationError.message : "Event was created but could not be activated"
+    }, { status: 500 });
+  }
 
   return NextResponse.redirect(new URL(`/admin/events/${event.id}`, req.url), { status: 303 });
 }

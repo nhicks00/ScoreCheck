@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { isSetComplete } from "./scoring";
+import { setTargetForFormat } from "./scoringRules";
 
 export type ManualSetScore = {
   setNumber: number;
@@ -138,9 +139,7 @@ export function applyManualEdit(state: ManualScoreState, edit: z.infer<typeof ma
 }
 
 function syncCurrentSet(state: ManualScoreState, format: ManualFormat, forceSetComplete: boolean) {
-  const target = state.current_set >= format.bestOf
-    ? Math.min(format.pointsPerSet[state.current_set - 1] ?? 15, 15)
-    : format.pointsPerSet[state.current_set - 1] ?? format.pointsPerSet[0] ?? 21;
+  const target = setTargetForFormat(state.current_set, format);
   const complete = forceSetComplete || isSetComplete(state.team_a_score, state.team_b_score, target, format.winByTwo ? format.cap : target);
 
   const nextSetScores = state.set_scores.filter((set) => set.setNumber !== state.current_set);
@@ -175,6 +174,7 @@ function cloneState(state: ManualScoreState): ManualScoreState {
 }
 
 function numberValue(value: unknown): number | null {
+  if (value == null || value === "") return null;
   const num = Number(value);
   return Number.isFinite(num) ? num : null;
 }

@@ -104,6 +104,14 @@ export default async function EventsPage() {
             <label>Name<input name="name" required placeholder="BVM June Showcase" /></label>
             <label>Date<input name="eventDate" type="date" /></label>
             <label>Venue<input name="venue" placeholder="Beach venue" /></label>
+            <label>Time zone<input name="timezone" defaultValue={env.timezone} list="event-timezones" required /></label>
+            <datalist id="event-timezones">
+              <option value="America/New_York" />
+              <option value="America/Chicago" />
+              <option value="America/Denver" />
+              <option value="America/Los_Angeles" />
+              <option value="Pacific/Honolulu" />
+            </datalist>
             <button className="primary" type="submit" disabled={missing.length > 0}>Create</button>
           </form>
 

@@ -1,5 +1,7 @@
 import { defaultManualState } from "./manualScoring";
+import { getEnv } from "./env";
 import { persistVblBracketProgressIfAvailable } from "./poller";
+import { eventTimeZone, scheduledTimestamp } from "./scheduleTime";
 import { buildOverlayStateWithEventSettings, persistScoreAndOverlay, scoreForCurrentMatch } from "./scoreState";
 import type { CourtRecord, MatchRecord, ScoreRecord } from "./scoreState";
 import { supabaseAdmin } from "./supabase";
@@ -445,6 +447,14 @@ async function activateBestMatchForCourt(courtId: string, options: { preserveVal
 
 async function normalizeEventQueueOrder(eventId: string, activeSourceUrls: Set<string> = new Set()) {
   const db = supabaseAdmin();
+  const { data: event, error: eventError } = await db
+    .from("events")
+    .select("settings")
+    .eq("id", eventId)
+    .maybeSingle();
+  if (eventError) throw eventError;
+  const timeZone = eventTimeZone(recordValue(event?.settings), getEnv().timezone);
+
   const { data: courts, error: courtError } = await db
     .from("courts")
     .select("*")
@@ -465,7 +475,7 @@ async function normalizeEventQueueOrder(eventId: string, activeSourceUrls: Set<s
       .filter((queue) => queue.status !== "unmapped")
       .filter((queue) => matchBelongsToActiveVblSource(firstRelation(queue.matches), activeSourceUrls))
       .filter((queue) => cleanText(firstRelation(queue.matches)?.court_number) === cleanText(court.vbl_court_number))
-      .sort((a, b) => scheduledTimestamp(firstRelation(a.matches)) - scheduledTimestamp(firstRelation(b.matches))
+      .sort((a, b) => scheduleSortTimestamp(firstRelation(a.matches), timeZone) - scheduleSortTimestamp(firstRelation(b.matches), timeZone)
         || Number(a.queue_position ?? 0) - Number(b.queue_position ?? 0));
 
     if (!validQueues.length) continue;
@@ -769,18 +779,8 @@ function compareCourtLabels(a: string, b: string) {
   return Number(a) - Number(b) || a.localeCompare(b);
 }
 
-function scheduledTimestamp(match: MatchRow | null | undefined) {
-  if (!match?.scheduled_time || !("scheduled_date" in match)) return Number.POSITIVE_INFINITY;
-  const date = cleanText((match as { scheduled_date?: unknown }).scheduled_date)?.match(/\d{4}-\d{2}-\d{2}/)?.[0];
-  const time = cleanText((match as { scheduled_time?: unknown }).scheduled_time)?.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
-  if (!date || !time) return Number.POSITIVE_INFINITY;
-  let hour = Number(time[1]);
-  const minute = Number(time[2]);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return Number.POSITIVE_INFINITY;
-  const suffix = time[3].toUpperCase();
-  if (suffix === "PM" && hour !== 12) hour += 12;
-  if (suffix === "AM" && hour === 12) hour = 0;
-  const parsed = Date.parse(`${date}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00-06:00`);
+function scheduleSortTimestamp(match: MatchRow | null | undefined, timeZone: string) {
+  const parsed = scheduledTimestamp(match, timeZone);
   return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
 }
 

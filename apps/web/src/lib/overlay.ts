@@ -126,7 +126,7 @@ function resolvePhase(
   if (score?.stale) return "STALE";
   if (court.status === "error") return "ERROR";
   if (!match) return "IDLE";
-  if (score?.status?.toLowerCase().includes("final")) return "POSTMATCH";
+  if (isMatchFinalStatus(score?.status)) return "POSTMATCH";
   if ((score?.team_a_score ?? 0) > 0 || (score?.team_b_score ?? 0) > 0 || (score?.team_a_sets ?? 0) > 0 || (score?.team_b_sets ?? 0) > 0) {
     return "LIVE";
   }
@@ -138,8 +138,17 @@ function stringValue(value: unknown): string | undefined {
 }
 
 function numberValue(value: unknown): number | null {
+  if (value == null || value === "") return null;
   const num = Number(value);
   return Number.isFinite(num) ? num : null;
+}
+
+function isMatchFinalStatus(value: unknown) {
+  if (typeof value !== "string") return false;
+  const status = value.trim().toLowerCase();
+  return status.includes("final")
+    || status.includes("finished")
+    || (status.includes("complete") && !status.includes("set complete"));
 }
 
 function teamName(value: string | null | undefined) {

@@ -66,6 +66,7 @@ export default async function EventPage({ params }: { params: Promise<{ eventId:
           pollerErrors={errorResult.data ?? []}
           schemaWarnings={schemaWarnings}
           siteUrl={env.publicSiteUrl}
+          defaultTimezone={env.timezone}
         />
       </div>
     </main>
