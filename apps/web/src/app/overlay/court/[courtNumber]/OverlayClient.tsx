@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Component, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   coerceOverlayState,
   displayOverlayName,
@@ -12,7 +12,44 @@ import {
 } from "@/lib/overlayState";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 
-export function OverlayClient({ courtNumber, eventId, buildVersion }: { courtNumber: string; eventId: string; theme: string; buildVersion: string }) {
+// A browser-source overlay must NEVER black out the broadcast frame. If the
+// scorebug throws while rendering, fail transparent (render nothing over the
+// video) and attempt a throttled self-heal reload so it recovers when the
+// underlying state changes — instead of Next's full-frame error page.
+type BoundaryProps = { children: ReactNode };
+type BoundaryState = { failed: boolean };
+class OverlayErrorBoundary extends Component<BoundaryProps, BoundaryState> {
+  state: BoundaryState = { failed: false };
+  static getDerivedStateFromError(): BoundaryState {
+    return { failed: true };
+  }
+  componentDidCatch() {
+    try {
+      const key = "scorecheck-overlay-crash-reload";
+      const last = Number(window.sessionStorage.getItem(key) ?? "0");
+      if (Date.now() - last > 15_000) {
+        window.sessionStorage.setItem(key, String(Date.now()));
+        window.setTimeout(() => window.location.reload(), 2000);
+      }
+    } catch {
+      // sessionStorage may be unavailable in embedded browser sources.
+    }
+  }
+  render() {
+    if (this.state.failed) return null;
+    return this.props.children;
+  }
+}
+
+export function OverlayClient(props: { courtNumber: string; eventId: string; theme: string; buildVersion: string }) {
+  return (
+    <OverlayErrorBoundary>
+      <OverlayClientInner {...props} />
+    </OverlayErrorBoundary>
+  );
+}
+
+function OverlayClientInner({ courtNumber, eventId, buildVersion }: { courtNumber: string; eventId: string; theme: string; buildVersion: string }) {
   const courtNumberValue = Number(courtNumber) || 1;
   const [state, setState] = useState(() => fallbackOverlayState(courtNumberValue));
   const [connected, setConnected] = useState(true);
