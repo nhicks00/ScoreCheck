@@ -169,7 +169,10 @@ export function overlayPhaseText(state: OverlayState, connected: boolean) {
   if (!connected || state.health.stale) return "Stale";
   if (state.frozen) return "Frozen";
   if (state.phase === "IDLE") return state.courtLabel ?? `Court ${state.courtNumber}`;
-  if (state.phase === "PREMATCH") return "Match starting soon";
+  // PREMATCH intentionally renders no phrase — "starting soon" was often untrue
+  // on broadcast (queued matches can sit long past their slot). The bubble bar
+  // shows just court label + match number instead.
+  if (state.phase === "PREMATCH") return "";
   if (state.phase === "POSTMATCH" || isFinalDisplayState(state)) return "Final";
   if (state.phase === "STALE") return "Stale";
   if (state.phase === "ERROR") return "Error";
