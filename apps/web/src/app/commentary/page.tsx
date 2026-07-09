@@ -1,6 +1,7 @@
 import { commentaryPortalEnabled, vdoGuestUrl, vdoRoomName } from "@/lib/commentary";
 import { isCommentaryRequest } from "@/lib/commentaryAuth";
 import { getEnv } from "@/lib/env";
+import { getActiveEvent } from "@/lib/eventConfig";
 import { CommentaryDashboardClient } from "./CommentaryDashboardClient";
 
 export const dynamic = "force-dynamic";
@@ -53,5 +54,13 @@ export default async function CommentaryPage({ searchParams }: { searchParams: P
     };
   });
 
-  return <CommentaryDashboardClient eventSlug={env.defaultEventSlug} eventName={env.eventName} rooms={rooms} />;
+  // Event identity comes from the DB-resolved active event, never env.
+  const active = env.supabaseUrl && env.supabaseServiceRoleKey ? await getActiveEvent() : null;
+  return (
+    <CommentaryDashboardClient
+      eventSlug={active?.slug ?? ""}
+      eventName={active?.name ?? "Live scoring"}
+      rooms={rooms}
+    />
+  );
 }

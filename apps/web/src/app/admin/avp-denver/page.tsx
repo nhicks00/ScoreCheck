@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { isAdminRequest } from "@/lib/auth";
 import { getEnv, missingEnvKeys } from "@/lib/env";
-import { getEventBySlug } from "@/lib/eventConfig";
+import { getActiveEvent } from "@/lib/eventConfig";
 import { supabaseAdmin } from "@/lib/supabase";
 import { SetupNotice } from "@/components/SetupNotice";
 import { FanScoringDashboard } from "@/components/fan-scoring/FanScoringDashboard";
@@ -29,7 +29,8 @@ export default async function AdminAvpDenverPage() {
     );
   }
   const db = supabaseAdmin();
-  const event = await getEventBySlug(env.defaultEventSlug, db);
+  // Legacy bookmarked route: resolve the DB-active event, never the Denver slug.
+  const event = await getActiveEvent(db);
   if (!event) redirect("/admin/events");
   const [courtResult, sessionResult, flagResult] = await Promise.all([
     db.from("courts").select("*, matches:current_match_id(*), score_states(*)").eq("event_id", event.id).order("court_number", { ascending: true }),
@@ -48,7 +49,7 @@ export default async function AdminAvpDenverPage() {
           </nav>
         </div>
         <FanScoringDashboard
-          event={{ id: event.id, name: event.name, slug: event.slug ?? env.defaultEventSlug }}
+          event={{ id: event.id, name: event.name, slug: event.slug ?? "event" }}
           courts={courtResult.data ?? []}
           sessions={sessionResult.data ?? []}
           flags={flagResult.data ?? []}
