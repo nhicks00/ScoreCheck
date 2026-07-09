@@ -4,7 +4,11 @@ export type AppEnv = {
   supabaseServiceRoleKey: string;
   adminSecret: string;
   publicSiteUrl: string;
+  /** @deprecated Not the source of event identity. The DB-active event
+   * (getActiveEvent / selectActiveEvent) decides the current event. Retained
+   * only for seed tooling and setup export. */
   defaultEventSlug: string;
+  /** @deprecated Not the source of event identity — see defaultEventSlug. */
   eventName: string;
   courtCount: number;
   timezone: string;
@@ -22,6 +26,8 @@ export function getEnv(): AppEnv {
     supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
     adminSecret: process.env.ADMIN_SECRET ?? "",
     publicSiteUrl: process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000",
+    // Deprecated for event identity (see AppEnv). The DB-active event is the
+    // single source of truth; these remain only for seed/setup tooling.
     defaultEventSlug: process.env.NEXT_PUBLIC_DEFAULT_EVENT_SLUG ?? "avp-denver",
     eventName: process.env.NEXT_PUBLIC_EVENT_NAME ?? "AVP Denver Open",
     courtCount: numberEnv("NEXT_PUBLIC_COURT_COUNT", 8),
