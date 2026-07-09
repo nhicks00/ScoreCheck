@@ -233,6 +233,7 @@ export function ProductionConsoleClient({
           <nav className="topbar-nav" aria-label="Admin">
             <Link className="button ghost" href="/admin/events">Events</Link>
             <Link className="button ghost" href="/admin/commentary">Commentary</Link>
+            <Link className="button ghost" href="/chat">Live Chat</Link>
           </nav>
         </div>
 
