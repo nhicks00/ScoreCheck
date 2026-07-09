@@ -89,7 +89,7 @@ export function ClaimClient({ courtParam, eventSlug }: { courtParam: string; eve
         <section className="claim-hero">
           <span className={`status ${statusInfo.tone}`}>{statusInfo.label}</span>
           <h1>{data?.court.display_name ?? `Court ${courtNumber}`}</h1>
-          <p className="muted">{data?.event.name ?? "AVP Denver Open"}</p>
+          <p className="muted">{data?.event.name ?? ""}</p>
           <div className="match-line">
             <strong>{teamA}</strong>
             <span>vs</span>

@@ -54,7 +54,7 @@ type CourtPresence =
 
 export function ScorePortalClient() {
   const eventSlug = process.env.NEXT_PUBLIC_DEFAULT_EVENT_SLUG ?? "avp-denver";
-  const eventName = process.env.NEXT_PUBLIC_EVENT_NAME ?? "AVP Denver Open";
+  const eventName = process.env.NEXT_PUBLIC_EVENT_NAME ?? "Live Event";
   const [courts, setCourts] = useState<CourtCard[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
