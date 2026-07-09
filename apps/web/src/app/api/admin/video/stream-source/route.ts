@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
 import { getEnv } from "@/lib/env";
+import { getActiveEvent } from "@/lib/eventConfig";
 import { supabaseAdmin } from "@/lib/supabase";
 import { courtStreamPath, courtStreamSources, videoConfigured } from "@/lib/video";
 
@@ -39,11 +40,7 @@ async function loadStreamPath(courtNumber: number): Promise<string | null> {
   if (!env.supabaseUrl || !env.supabaseServiceRoleKey) return null;
 
   const db = supabaseAdmin();
-  const { data: event } = await db
-    .from("events")
-    .select("id")
-    .eq("slug", env.defaultEventSlug)
-    .maybeSingle();
+  const event = await getActiveEvent(db);
   if (!event) return null;
 
   const { data: court } = await db

@@ -43,7 +43,7 @@ export default async function EventFanScoringPage({ params }: { params: Promise<
           <span className="brand-mark">Score<em>Check</em></span>
           <nav className="topbar-nav" aria-label="Admin">
             <Link className="button ghost" href={`/admin/events/${eventId}`}>Event setup</Link>
-            <Link className="button ghost" href="/admin/avp-denver">AVP Denver</Link>
+            <Link className="button ghost" href="/admin/events">Events</Link>
             <form action="/api/admin/logout" method="post"><button type="submit">Logout</button></form>
           </nav>
         </div>

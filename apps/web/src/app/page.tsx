@@ -9,7 +9,7 @@ export default function HomePage() {
         <header className="landing-topbar">
           <span className="brand-mark">Score<em>Check</em></span>
           <nav className="landing-nav" aria-label="Site">
-            <Link className="button ghost admin-link" href="/admin/avp-denver">Open Admin</Link>
+            <Link className="button ghost admin-link" href="/admin/events">Open Admin</Link>
             <Link className="button primary" href="/score">Score a court</Link>
           </nav>
         </header>

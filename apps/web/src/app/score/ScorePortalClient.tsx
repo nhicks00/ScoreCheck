@@ -53,16 +53,52 @@ type CourtPresence =
   | "closed";       // admin closed scoring on this court
 
 export function ScorePortalClient() {
-  const eventSlug = process.env.NEXT_PUBLIC_DEFAULT_EVENT_SLUG ?? "avp-denver";
-  const eventName = process.env.NEXT_PUBLIC_EVENT_NAME ?? "Live Event";
+  const [event, setEvent] = useState<{ slug: string; name: string } | null>(null);
+  const [noEvent, setNoEvent] = useState(false);
   const [courts, setCourts] = useState<CourtCard[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const hasData = useRef(false);
+  const eventSlug = event?.slug ?? null;
+  const eventName = event?.name ?? null;
+
+  // Resolve the current event from the DB once on mount — no env, no hardcoded
+  // slug. The heading and court polling below both follow this result, so the
+  // portal always tracks the live event without a client rebuild.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/public/current-event", { cache: "no-store" });
+        if (res.status === 404) {
+          if (!cancelled) { setNoEvent(true); setLoading(false); }
+          return;
+        }
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json.error ?? "Could not load the current event");
+        const slug = typeof json.event?.slug === "string" ? json.event.slug : null;
+        if (!slug) {
+          if (!cancelled) { setNoEvent(true); setLoading(false); }
+          return;
+        }
+        if (!cancelled) {
+          const name = typeof json.event?.name === "string" && json.event.name.trim() ? json.event.name : "Live scoring";
+          setEvent({ slug, name });
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(friendlyError(err instanceof Error ? err.message : null));
+          setLoading(false);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const refresh = useCallback(async (background = false) => {
+    if (!eventSlug) return;
     if (!background) setLoading(true);
     try {
       const res = await fetch(`/api/public/events/${eventSlug}/courts`, { cache: "no-store" });
@@ -87,10 +123,11 @@ export function ScorePortalClient() {
   }, [eventSlug]);
 
   useEffect(() => {
+    if (!eventSlug) return;
     void refresh();
     const id = window.setInterval(() => void refresh(true), 5000);
     return () => window.clearInterval(id);
-  }, [refresh]);
+  }, [eventSlug, refresh]);
 
   // Some backend writers momentarily bump a final match's timestamps, which
   // would make a days-old final flicker back to "Match complete" between
@@ -130,7 +167,7 @@ export function ScorePortalClient() {
         <header className="score-header">
           <div>
             <p className="eyebrow">ScoreCheck</p>
-            <h1>{eventName}</h1>
+            <h1>{eventName ?? "Live scoring"}</h1>
             <p className="muted">Pick a court, enter your name, and keep the score up to date with big, simple tap controls.</p>
           </div>
           <button type="button" onClick={() => void refresh()} disabled={loading}>
@@ -155,6 +192,16 @@ export function ScorePortalClient() {
           </div>
         )}
 
+        {noEvent && (
+          <section className="portal-empty" aria-live="polite">
+            <Moon size={22} aria-hidden="true" />
+            <div>
+              <h2>No event scheduled yet</h2>
+              <p>Once a tournament is live, its courts show up here. Check back soon.</p>
+            </div>
+          </section>
+        )}
+
         {nothingLive && (
           <section className="portal-empty" aria-live="polite">
             <Moon size={22} aria-hidden="true" />
@@ -165,7 +212,7 @@ export function ScorePortalClient() {
           </section>
         )}
 
-        {loading && courts.length === 0 && !error && (
+        {loading && courts.length === 0 && !error && !noEvent && (
           <section className="fan-court-grid" aria-hidden="true">
             {Array.from({ length: 4 }, (_, index) => (
               <article className="fan-court-card skeleton-card" key={index}>

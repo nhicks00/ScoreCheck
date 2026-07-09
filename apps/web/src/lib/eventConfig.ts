@@ -44,6 +44,8 @@ export type EventRow = {
   slug?: string | null;
   status: string;
   is_active?: boolean | null;
+  event_date?: string | null;
+  created_at?: string | null;
   settings?: Record<string, unknown> | null;
 };
 
@@ -65,28 +67,129 @@ export type CourtRow = {
   vbl_court_label?: string | null;
 };
 
+/**
+ * The single source of truth for "which event is current". Resolution order
+ * (see selectActiveEvent for the pure, tested logic):
+ *   1. An event flagged is_active = true — manual admin control, always wins.
+ *   2. Otherwise the most sensible NON-completed event by date (nearest
+ *      upcoming, else most recent), so it tracks the live/next tournament.
+ *   3. Otherwise the most recent event overall (only completed events remain),
+ *      so this never returns empty when any event exists.
+ *
+ * We `select("*")` and decide in JS rather than filtering on is_active in SQL:
+ * this keeps the missing-column guard implicit (an older DB without is_active
+ * simply yields undefined flags and falls through to the date logic) and lets
+ * one pure function own the priority ordering.
+ */
 export async function getActiveEvent(db = supabaseAdmin()): Promise<EventRow | null> {
-  const byFlag = await db
+  const { data, error } = await db
     .from("events")
     .select("*")
-    .eq("is_active", true)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (byFlag.error && !isMissingColumnError(byFlag.error, "is_active")) {
-    throwSupabaseError(byFlag.error);
-  }
-  if (byFlag.data) return byFlag.data as EventRow;
+    .order("created_at", { ascending: false });
+  if (error) throwSupabaseError(error);
+  const events = (data as EventRow[] | null) ?? [];
+  return selectActiveEvent(events, currentDateIso());
+}
 
-  const byStatus = await db
-    .from("events")
-    .select("*")
-    .eq("status", "active")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (byStatus.error) throwSupabaseError(byStatus.error);
-  return (byStatus.data as EventRow | null) ?? null;
+/**
+ * Pure selection of the current event from a list. `today` is a YYYY-MM-DD
+ * string in the app's timezone; event_date is a Postgres `date` (also
+ * YYYY-MM-DD), so plain string comparison is chronological. Kept side-effect
+ * free so the priority ordering can be unit tested without a database.
+ */
+export function selectActiveEvent(events: EventRow[], today: string): EventRow | null {
+  if (!Array.isArray(events) || events.length === 0) return null;
+
+  // 1. Manual control always wins. The DB enforces at most one is_active row,
+  //    but if data is ever inconsistent, pick deterministically by recency.
+  const flagged = events.filter((event) => event.is_active === true);
+  if (flagged.length > 0) return [...flagged].sort(byRecencyDesc)[0];
+
+  // 2. Prefer a current event among the non-completed ones.
+  const live = events.filter((event) => normalizeStatus(event.status) !== "completed");
+  if (live.length > 0) return mostRelevant(live, today);
+
+  // 3. Only completed events remain — never return empty when events exist.
+  return [...events].sort(byRecencyDesc)[0];
+}
+
+/** Nearest upcoming non-completed event, else the most recent past/undated one. */
+function mostRelevant(events: EventRow[], today: string): EventRow {
+  const upcoming = events
+    .filter((event) => typeof event.event_date === "string" && event.event_date >= today)
+    .sort((a, b) => {
+      if (a.event_date !== b.event_date) return (a.event_date as string) < (b.event_date as string) ? -1 : 1;
+      return byCreatedDesc(a, b);
+    });
+  if (upcoming.length > 0) return upcoming[0];
+  return [...events].sort(byRecencyDesc)[0];
+}
+
+/** Later event_date first (undated sorts last), tiebroken by newer created_at. */
+function byRecencyDesc(a: EventRow, b: EventRow): number {
+  const aDate = a.event_date ?? "";
+  const bDate = b.event_date ?? "";
+  if (aDate !== bDate) return aDate < bDate ? 1 : -1;
+  return byCreatedDesc(a, b);
+}
+
+/** Newer created_at first (missing sorts last). */
+function byCreatedDesc(a: EventRow, b: EventRow): number {
+  const aCreated = a.created_at ?? "";
+  const bCreated = b.created_at ?? "";
+  if (aCreated === bCreated) return 0;
+  return aCreated < bCreated ? 1 : -1;
+}
+
+function normalizeStatus(status: string | null | undefined): string {
+  return (status ?? "").trim().toLowerCase();
+}
+
+/** Today as YYYY-MM-DD in the app's configured timezone (falls back to UTC). */
+function currentDateIso(now: Date = new Date()): string {
+  const timeZone = getEnv().timezone;
+  try {
+    return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+  } catch {
+    return now.toISOString().slice(0, 10);
+  }
+}
+
+/**
+ * Make `eventId` the one active event: clear is_active on every other event
+ * first (so the partial unique index never sees two actives), demote a
+ * previously-active event's status to 'inactive' (do NOT auto-complete it),
+ * then promote the chosen event to is_active=true, status='active'. This is the
+ * single write authority the admin "Set as active" action goes through.
+ */
+export async function setActiveEvent(eventId: string, db = supabaseAdmin()): Promise<EventRow> {
+  const now = new Date().toISOString();
+
+  const cleared = await db.from("events").update({ is_active: false, updated_at: now }).neq("id", eventId);
+  const isActiveMissing = cleared.error ? isMissingColumnError(cleared.error, "is_active") : false;
+  if (cleared.error && !isActiveMissing) throwSupabaseError(cleared.error);
+
+  const demoted = await db.from("events").update({ status: "inactive", updated_at: now }).eq("status", "active").neq("id", eventId);
+  if (demoted.error) throwSupabaseError(demoted.error);
+
+  const promotion = isActiveMissing
+    ? { status: "active", updated_at: now }
+    : { status: "active", is_active: true, updated_at: now };
+  const { data, error } = await db.from("events").update(promotion).eq("id", eventId).select("*").single();
+  if (error) throwSupabaseError(error);
+  return data as EventRow;
+}
+
+/** Archive an event: mark it completed and ensure it is not the active one. */
+export async function setEventCompleted(eventId: string, db = supabaseAdmin()): Promise<EventRow> {
+  const now = new Date().toISOString();
+  const completion: Record<string, unknown> = { status: "completed", updated_at: now };
+  let result = await db.from("events").update({ ...completion, is_active: false }).eq("id", eventId).select("*").single();
+  if (result.error && isMissingColumnError(result.error, "is_active")) {
+    result = await db.from("events").update(completion).eq("id", eventId).select("*").single();
+  }
+  if (result.error) throwSupabaseError(result.error);
+  return result.data as EventRow;
 }
 
 export async function getEventBySlug(slug: string, db = supabaseAdmin()): Promise<EventRow | null> {

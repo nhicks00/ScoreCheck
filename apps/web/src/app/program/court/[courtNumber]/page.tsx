@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getEnv } from "@/lib/env";
+import { getActiveEvent } from "@/lib/eventConfig";
 import {
   checkProgramToken,
   programBuildVersion,
@@ -69,11 +70,7 @@ async function loadCourt(courtNumber: number): Promise<{ streamPath: string | nu
   if (!env.supabaseUrl || !env.supabaseServiceRoleKey) return { streamPath: null };
 
   const db = supabaseAdmin();
-  const { data: event } = await db
-    .from("events")
-    .select("id")
-    .eq("slug", env.defaultEventSlug)
-    .maybeSingle();
+  const event = await getActiveEvent(db);
   if (!event) return { streamPath: null };
 
   const { data: court } = await db
