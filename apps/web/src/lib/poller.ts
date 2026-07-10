@@ -19,6 +19,7 @@ const NEXT_MATCH_LIVE_CHECK_CACHE_LIMIT = 500;
 
 const lastBracketRefreshAtByEvent = new Map<string, number>();
 const nextMatchLiveCheckCache = new Map<string, { checkedAt: number; live: boolean }>();
+const laterLiveQueueScanAtByActiveMatch = new Map<string, number>();
 const fallbackFinalHoldStartByMatch = new Map<string, string>();
 
 type Relation<T> = T | T[] | null | undefined;
@@ -212,10 +213,21 @@ async function acquireLease(eventId: string, courtId: string, owner: string): Pr
 async function pollCourt(court: CourtRow) {
   const db = supabaseAdmin();
   const match = firstRelation(court.matches);
+  if (!match) return false;
   const timeZone = courtEventTimeZone(court);
-  let currentScore = scoreForCurrentMatch(court.score_states, match?.id);
+  let currentScore = scoreForCurrentMatch(court.score_states, match.id);
   if (currentScore?.source === "override") return false;
-  if (!match?.api_url) return false;
+
+  // Run this independently of the current feed so queue conflict detection
+  // never delays a normal live-point write. The per-match scan throttle keeps
+  // this promise cheap on the worker's 1.8s loop.
+  const laterLiveQueuedPromise = firstLiveScoredLaterQueuedMatch(court.id, match.id).catch(() => null);
+  if (!match.api_url) {
+    const laterLiveQueued = await laterLiveQueuedPromise;
+    if (!laterLiveQueued) return false;
+    await activateQueuedMatch(court, laterLiveQueued);
+    return true;
+  }
 
   const releasedScore = await releaseDueDelayedVblScore(court, match, currentScore);
   if (releasedScore) currentScore = releasedScore;
@@ -228,8 +240,23 @@ async function pollCourt(court: CourtRow) {
 
   if (await advanceFinalMatchIfReady(court, match, currentScore, timeZone)) return true;
 
-  const res = await fetch(match.api_url, { cache: "no-store" });
+  let res: Response;
+  try {
+    res = await fetch(match.api_url, { cache: "no-store" });
+  } catch (error) {
+    const laterLiveQueued = await laterLiveQueuedPromise;
+    if (laterLiveQueued) {
+      await activateQueuedMatch(court, laterLiveQueued);
+      return true;
+    }
+    throw error;
+  }
   if (!res.ok) {
+    const laterLiveQueued = await laterLiveQueuedPromise;
+    if (laterLiveQueued) {
+      await activateQueuedMatch(court, laterLiveQueued);
+      return true;
+    }
     throw new Error(`Match API HTTP ${res.status}`);
   }
   const payload = await res.json();
@@ -238,21 +265,22 @@ async function pollCourt(court: CourtRow) {
   const now = new Date().toISOString();
 
   const updatedMatch = await updateResolvedTeams(match, snapshot.teamAName, snapshot.teamBName, snapshot.teamASeed, snapshot.teamBSeed);
+
   if (sourceAvailable) {
     await queueLiveVblScore(court, updatedMatch, currentScore, snapshot, now);
+    const laterLiveQueued = await laterLiveQueuedPromise;
+    if (laterLiveQueued) await activateQueuedMatch(court, laterLiveQueued);
     return true;
   }
 
-  // Leapfrog: the current match isn't being live-scored, but if a later queued
-  // match on this court IS being live-scored, the earlier match was skipped
-  // without a final — switch straight to the live one so the scorebug follows
-  // the match that is actually in progress.
-  if (!hasVisibleProgress(currentScore, snapshot)) {
-    const liveQueued = await firstLiveScoredQueuedMatch(court.id, match.id);
-    if (liveQueued) {
-      await activateQueuedMatch(court, liveQueued);
-      return true;
-    }
+  // A later queue entry with actual point activity supersedes the current
+  // match even when the current vMix feed was left in-progress. Physical
+  // courts cannot host both matches; the later live feed is the stronger
+  // signal that the earlier match ended without a final being entered.
+  const laterLiveQueued = await laterLiveQueuedPromise;
+  if (laterLiveQueued) {
+    await activateQueuedMatch(court, laterLiveQueued);
+    return true;
   }
 
   const scheduleAdvanceTarget = await nextQueuedMatch(court.id, timeZone);
@@ -293,7 +321,7 @@ async function advanceFinalMatchIfReady(court: CourtRow, match: MatchRow, curren
   if (!next) return false;
   const nextMatch = firstRelation(next.matches);
   const nextLiveScoringStarted = bracketPayloadShowsLiveScoring(nextMatch?.source_payload)
-    || await queuedMatchHasAuthoritativeScore(nextMatch);
+    || await queuedMatchHasLivePointScoring(nextMatch);
   const finalVisibleAt = await resolveFinalHoldStart(court, match, currentScore, now);
   if (!shouldAdvanceFinalMatchOverlay({ finalVisibleAt, now, nextLiveScoringStarted })) return false;
 
@@ -472,7 +500,7 @@ export function vblBracketFinalVisibleAt(match: Pick<MatchRow, "source_payload">
   return Number.isFinite(latest) ? new Date(latest).toISOString() : fallback;
 }
 
-async function queuedMatchHasAuthoritativeScore(match: MatchRow | null) {
+async function queuedMatchHasLivePointScoring(match: MatchRow | null) {
   if (!match?.api_url) return false;
   const cached = nextMatchLiveCheckCache.get(match.id);
   if (cached && Date.now() - cached.checkedAt < NEXT_MATCH_LIVE_CHECK_TTL_MS) return cached.live;
@@ -699,21 +727,34 @@ async function nextQueuedMatch(courtId: string, timeZone: string) {
   return queued.find((queue) => queue.queue_position > basePosition) ?? queued[0] ?? null;
 }
 
-// Bound on how many queued matches we live-check per stalled court per poll.
-// Each check is cached ~10s (queuedMatchHasAuthoritativeScore), so this stays cheap.
+// Bound on how many later queued matches we live-check per scan. Both the
+// court scan and each vMix result are cached ~10s, so conflict detection does
+// not multiply the worker's normal 1.8s polling load.
 const LIVE_QUEUED_SCAN_LIMIT = 8;
 
-// Find a queued (non-final) match on this court that is CURRENTLY being live-scored.
-// Used to leapfrog when the active match was skipped (never scored, never finaled)
-// and a later match started scoring instead. Returns null if none is live.
-async function firstLiveScoredQueuedMatch(courtId: string, currentMatchId: string | null): Promise<QueueRow | null> {
+// Find the earliest later queued match on this court that is CURRENTLY being
+// point-scored. Current-match progress is deliberately irrelevant: a stale
+// in-progress feed must not pin the overlay after the next match starts.
+async function firstLiveScoredLaterQueuedMatch(courtId: string, currentMatchId: string): Promise<QueueRow | null> {
+  const scanKey = `${courtId}:${currentMatchId}`;
+  const now = Date.now();
+  const lastScanAt = laterLiveQueueScanAtByActiveMatch.get(scanKey) ?? 0;
+  if (now - lastScanAt < NEXT_MATCH_LIVE_CHECK_TTL_MS) return null;
+  pruneLaterLiveQueueScanCache(now);
+  laterLiveQueueScanAtByActiveMatch.set(scanKey, now);
+
   const db = supabaseAdmin();
-  const { data: active } = await db
+  const { data: active, error: activeError } = await db
     .from("court_match_queue")
-    .select("event_id")
+    .select("event_id,queue_position")
     .eq("court_id", courtId)
     .eq("is_active", true)
     .maybeSingle();
+  if (activeError) throw activeError;
+  if (active?.queue_position == null) return null;
+  const activeQueuePosition = Number(active.queue_position);
+  if (!Number.isFinite(activeQueuePosition)) return null;
+
   const { data, error } = await db
     .from("court_match_queue")
     .select("*, matches:match_id(*)")
@@ -723,17 +764,35 @@ async function firstLiveScoredQueuedMatch(courtId: string, currentMatchId: strin
     .limit(50);
   if (error) throw error;
   const activeSourceUrls = await activeVblSourceUrlsForCourtEvent(db, active?.event_id ?? (data ?? [])[0]?.event_id);
-  const queued = (await closeFinalQueuedMatches(db, (data ?? []) as QueueRow[]))
-    .filter((queue) => matchBelongsToActiveVblSource(firstRelation(queue.matches), activeSourceUrls));
-  let scanned = 0;
+  const queued = orderedLaterQueueCandidates(
+    (await closeFinalQueuedMatches(db, (data ?? []) as QueueRow[]))
+      .filter((queue) => matchBelongsToActiveVblSource(firstRelation(queue.matches), activeSourceUrls)),
+    activeQueuePosition
+  ).slice(0, LIVE_QUEUED_SCAN_LIMIT);
+
   for (const queue of queued) {
     const match = firstRelation(queue.matches);
-    if (!match || match.id === currentMatchId || !match.api_url) continue;
-    if (scanned >= LIVE_QUEUED_SCAN_LIMIT) break;
-    scanned += 1;
-    if (await queuedMatchHasAuthoritativeScore(match)) return queue;
+    if (!match?.api_url) continue;
+    if (await queuedMatchHasLivePointScoring(match)) return queue;
   }
   return null;
+}
+
+export function orderedLaterQueueCandidates<T extends { queue_position: number }>(queues: T[], activeQueuePosition: unknown): T[] {
+  if (activeQueuePosition == null || activeQueuePosition === "") return [];
+  const activePosition = Number(activeQueuePosition);
+  if (!Number.isFinite(activePosition)) return [];
+  return [...queues]
+    .filter((queue) => Number.isFinite(Number(queue.queue_position)) && Number(queue.queue_position) > activePosition)
+    .sort((a, b) => Number(a.queue_position) - Number(b.queue_position));
+}
+
+function pruneLaterLiveQueueScanCache(now: number) {
+  if (laterLiveQueueScanAtByActiveMatch.size < NEXT_MATCH_LIVE_CHECK_CACHE_LIMIT) return;
+  const cutoff = now - NEXT_MATCH_LIVE_CHECK_TTL_MS;
+  for (const [key, checkedAt] of laterLiveQueueScanAtByActiveMatch) {
+    if (checkedAt < cutoff) laterLiveQueueScanAtByActiveMatch.delete(key);
+  }
 }
 
 async function activeVblSourceUrlsForCourtEvent(db: ReturnType<typeof supabaseAdmin>, eventId: unknown) {

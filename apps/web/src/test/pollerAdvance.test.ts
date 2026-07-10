@@ -3,6 +3,7 @@ import {
   bracketPayloadShowsLiveScoring,
   hasLivePointScoringStarted,
   hasScoreClinchedMatch,
+  orderedLaterQueueCandidates,
   resolvePostFinalHoldStart,
   shouldAdvanceFinalMatchOverlay,
   vblBracketFinalVisibleAt
@@ -96,6 +97,33 @@ describe("poller final-match advancement", () => {
       teamBScore: 0,
       setScores: [{ setNumber: 1, teamAScore: 1, teamBScore: 0, isComplete: false }]
     })).toBe(true);
+  });
+
+  it("considers only later queue positions and checks the nearest later match first", () => {
+    const queues = [
+      { id: "later-2", queue_position: 40 },
+      { id: "earlier", queue_position: 10 },
+      { id: "later-1", queue_position: 30 },
+      { id: "active", queue_position: 20 }
+    ];
+
+    expect(orderedLaterQueueCandidates(queues, 20).map((queue) => queue.id)).toEqual(["later-1", "later-2"]);
+    expect(orderedLaterQueueCandidates(queues, null)).toEqual([]);
+  });
+
+  it("does not mistake final-only or completed-set data for a later live match", () => {
+    expect(hasLivePointScoringStarted({
+      status: "Final",
+      teamAScore: 21,
+      teamBScore: 18,
+      setScores: [{ setNumber: 2, teamAScore: 21, teamBScore: 18, isComplete: true }]
+    })).toBe(false);
+    expect(hasLivePointScoringStarted({
+      status: "In Progress",
+      teamAScore: 0,
+      teamBScore: 0,
+      setScores: [{ setNumber: 1, teamAScore: 21, teamBScore: 18, isComplete: true }]
+    })).toBe(false);
   });
 
   it("honors a custom post-final hold duration", () => {
