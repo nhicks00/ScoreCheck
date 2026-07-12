@@ -145,6 +145,7 @@ class TrainingSplitV1(str, Enum):
 
 class TrainingCaptureModeV1(str, Enum):
     HD_1080P30 = "1080P30"
+    HD_1080P60 = "1080P60"
     UHD_4K60 = "4K60"
     DUAL_4K60 = "DUAL_4K60"
 
@@ -183,6 +184,8 @@ class PrimarySamplingStratumV1(str, Enum):
 
 
 class CoverageRequirementV1(str, Enum):
+    MAXIMUM_EXAMPLES = "MAXIMUM_EXAMPLES"
+    MAXIMUM_TOTAL_FRAMES = "MAXIMUM_TOTAL_FRAMES"
     MINIMUM_TRAIN_SOURCES = "MINIMUM_TRAIN_SOURCES"
     MINIMUM_DEV_SOURCES = "MINIMUM_DEV_SOURCES"
     MINIMUM_TRAIN_FRAMES = "MINIMUM_TRAIN_FRAMES"
@@ -231,6 +234,20 @@ _TARGET_FIELD_ORDER = {value: index for index, value in enumerate(TargetTensorFi
 _PRIMARY_STRATUM_ORDER = {
     value: index for index, value in enumerate(PrimarySamplingStratumV1)
 }
+
+_LOCALIZABLE_BALL_TAGS = frozenset(
+    {
+        ExampleStratumTagV1.VISIBLE_BALL,
+        ExampleStratumTagV1.PARTIALLY_OCCLUDED_BALL,
+    }
+)
+_OCCLUDED_OR_OUT_OF_FRAME_TAGS = frozenset(
+    {
+        ExampleStratumTagV1.FULLY_OCCLUDED_BALL,
+        ExampleStratumTagV1.BALL_OUT_OF_FRAME,
+    }
+)
+_BALL_STATE_TAGS = _LOCALIZABLE_BALL_TAGS | _OCCLUDED_OR_OUT_OF_FRAME_TAGS
 
 _FLOAT_TARGET_FIELDS = frozenset(
     {
@@ -321,6 +338,31 @@ def _require_canonical_enum_tuple(
     if value != expected or len(set(value)) != len(value):
         raise ValueError(f"{field_name} must be unique and canonically sorted")
     return value
+
+
+def derive_primary_sampling_stratum_v1(
+    tags: tuple[ExampleStratumTagV1, ...],
+) -> PrimarySamplingStratumV1:
+    """Derive the one fixed V1 sampling stratum from canonical example tags."""
+
+    _require_canonical_enum_tuple(
+        tags,
+        "example_stratum_tags",
+        enum_type=ExampleStratumTagV1,
+        minimum=1,
+    )
+    selected = frozenset(tags)
+    if ExampleStratumTagV1.HARD_NEGATIVE in selected:
+        if ExampleStratumTagV1.NO_BALL not in selected:
+            raise ValueError("HARD_NEGATIVE requires NO_BALL")
+        if selected.intersection(_BALL_STATE_TAGS):
+            raise ValueError("HARD_NEGATIVE cannot coexist with ball-state tags")
+        return PrimarySamplingStratumV1.NO_BALL_HARD_NEGATIVE
+    if selected.intersection(_LOCALIZABLE_BALL_TAGS):
+        return PrimarySamplingStratumV1.LOCALIZABLE_BALL
+    if selected.intersection(_OCCLUDED_OR_OUT_OF_FRAME_TAGS):
+        return PrimarySamplingStratumV1.OCCLUDED_OR_OUT_OF_FRAME
+    return PrimarySamplingStratumV1.OTHER_SUPERVISED
 
 
 def _require_distinct_digests(
@@ -679,6 +721,9 @@ class TrainingAdmissionPolicyV1(_CanonicalContract):
     maximum_match_frames_ppm: int
     maximum_root_asset_frames_ppm: int
     maximum_leakage_group_frames_ppm: int
+    maximum_match_draws_ppm: int
+    maximum_root_asset_draws_ppm: int
+    maximum_leakage_group_draws_ppm: int
     maximum_examples: int
     maximum_total_frames: int
     maximum_schedule_rows: int
@@ -742,6 +787,9 @@ class TrainingAdmissionPolicyV1(_CanonicalContract):
             "maximum_match_frames_ppm",
             "maximum_root_asset_frames_ppm",
             "maximum_leakage_group_frames_ppm",
+            "maximum_match_draws_ppm",
+            "maximum_root_asset_draws_ppm",
+            "maximum_leakage_group_draws_ppm",
         ):
             require_exact_int(getattr(self, field_name), field_name, minimum=1, maximum=PPM)
         require_exact_int(
@@ -777,6 +825,24 @@ class TrainingAdmissionPolicyV1(_CanonicalContract):
             raise ValueError(
                 "minimum_dev_frames cannot fit while reserving minimum TRAIN sources"
             )
+        minimum_train_examples = max(
+            self.minimum_train_sources,
+            (
+                self.minimum_train_frames
+                + CAUSAL_BALL_MAX_FRAMES
+                - 1
+            )
+            // CAUSAL_BALL_MAX_FRAMES,
+        )
+        minimum_dev_examples = max(
+            self.minimum_dev_sources,
+            (self.minimum_dev_frames + CAUSAL_BALL_MAX_FRAMES - 1)
+            // CAUSAL_BALL_MAX_FRAMES,
+        )
+        if minimum_train_examples + minimum_dev_examples > self.maximum_examples:
+            raise ValueError(
+                "combined TRAIN/DEV frame and source minima exceed maximum_examples"
+            )
         require_exact_int(
             self.maximum_total_frames,
             "maximum_total_frames",
@@ -784,7 +850,7 @@ class TrainingAdmissionPolicyV1(_CanonicalContract):
             maximum=MAX_TRAINING_FRAMES,
         )
         minimum_required_examples = max(
-            self.minimum_train_sources + self.minimum_dev_sources,
+            minimum_train_examples + minimum_dev_examples,
             self.minimum_distinct_matches,
             self.minimum_distinct_venues,
             self.minimum_distinct_camera_setups,
@@ -810,8 +876,11 @@ class TrainingAdmissionPolicyV1(_CanonicalContract):
             **_authority_flags_dict(self),
             "domain": self._DOMAIN,
             "maximum_examples": self.maximum_examples,
+            "maximum_leakage_group_draws_ppm": self.maximum_leakage_group_draws_ppm,
             "maximum_leakage_group_frames_ppm": self.maximum_leakage_group_frames_ppm,
+            "maximum_match_draws_ppm": self.maximum_match_draws_ppm,
             "maximum_match_frames_ppm": self.maximum_match_frames_ppm,
+            "maximum_root_asset_draws_ppm": self.maximum_root_asset_draws_ppm,
             "maximum_root_asset_frames_ppm": self.maximum_root_asset_frames_ppm,
             "maximum_schedule_rows": self.maximum_schedule_rows,
             "maximum_total_frames": self.maximum_total_frames,
@@ -1282,7 +1351,11 @@ class TrainingExampleManifestV1(_CanonicalContract):
             raise ValueError("1080P30 examples must carry compatibility risk")
         if (
             self.capture_mode
-            in {TrainingCaptureModeV1.HD_1080P30, TrainingCaptureModeV1.UHD_4K60}
+            in {
+                TrainingCaptureModeV1.HD_1080P30,
+                TrainingCaptureModeV1.HD_1080P60,
+                TrainingCaptureModeV1.UHD_4K60,
+            }
             and CaptureRiskTagV1.SINGLE_VIEW_OCCLUSION not in self.capture_risk_tags
         ):
             raise ValueError("single-view examples must carry occlusion risk")
@@ -1381,32 +1454,12 @@ class TrainingExampleManifestV1(_CanonicalContract):
             enum_type=ExampleStratumTagV1,
             minimum=1,
         )
-        tags = set(self.example_stratum_tags)
-        if self.primary_sampling_stratum is PrimarySamplingStratumV1.LOCALIZABLE_BALL:
-            if not tags.intersection(
-                {
-                    ExampleStratumTagV1.VISIBLE_BALL,
-                    ExampleStratumTagV1.PARTIALLY_OCCLUDED_BALL,
-                }
-            ):
-                raise ValueError("localizable examples require a localizable-ball tag")
-        elif (
-            self.primary_sampling_stratum
-            is PrimarySamplingStratumV1.OCCLUDED_OR_OUT_OF_FRAME
+        if self.primary_sampling_stratum is not derive_primary_sampling_stratum_v1(
+            self.example_stratum_tags
         ):
-            if not tags.intersection(
-                {
-                    ExampleStratumTagV1.FULLY_OCCLUDED_BALL,
-                    ExampleStratumTagV1.BALL_OUT_OF_FRAME,
-                }
-            ):
-                raise ValueError("occluded examples require an occluded/out-of-frame tag")
-        elif self.primary_sampling_stratum is PrimarySamplingStratumV1.NO_BALL_HARD_NEGATIVE:
-            if not {
-                ExampleStratumTagV1.NO_BALL,
-                ExampleStratumTagV1.HARD_NEGATIVE,
-            }.issubset(tags):
-                raise ValueError("hard-negative examples require NO_BALL and HARD_NEGATIVE")
+            raise ValueError(
+                "primary_sampling_stratum does not match the fixed V1 tag derivation"
+            )
         _require_exact_false_flags(self)
         self.to_json_bytes()
 
@@ -1516,6 +1569,12 @@ class TrainingExampleReferenceV1:
             enum_type=ExampleStratumTagV1,
             minimum=1,
         )
+        if self.primary_sampling_stratum is not derive_primary_sampling_stratum_v1(
+            self.example_stratum_tags
+        ):
+            raise ValueError(
+                "primary sampling stratum does not match the fixed V1 tag derivation"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -2642,6 +2701,7 @@ __all__ = [
     "causal_ball_loss_config_descriptor_v1",
     "causal_ball_model_config_descriptor_v1",
     "causal_ball_optimizer_config_descriptor_v1",
+    "derive_primary_sampling_stratum_v1",
     "leakage_group_sha256_v1",
     "target_tensor_set_sha256_v1",
     "test_exclusion_commitment_sha256_v1",

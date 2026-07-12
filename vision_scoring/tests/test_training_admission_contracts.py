@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import FrozenInstanceError, replace
 import hashlib
 import inspect
@@ -9,6 +10,10 @@ import unittest
 from vision_scoring.contract_wire import CanonicalWireError
 from vision_scoring.capture_contracts import MAX_FINALIZED_SOURCE_BYTES
 from vision_scoring.dataset_split import DatasetSplit
+from vision_scoring.training_admission_compiler import (
+    TrainingAdmissionCompilerError,
+    compile_training_coverage_v1,
+)
 from vision_scoring.training_admission_contracts import (
     CAUSAL_BALL_LOSS_CONFIG_SHA256,
     CAUSAL_BALL_CLIP_INPUT_ENCODING_SHA256,
@@ -54,6 +59,7 @@ from vision_scoring.training_admission_contracts import (
     causal_ball_loss_config_descriptor_v1,
     causal_ball_model_config_descriptor_v1,
     causal_ball_optimizer_config_descriptor_v1,
+    derive_primary_sampling_stratum_v1,
     leakage_group_sha256_v1,
     target_tensor_set_sha256_v1,
     test_exclusion_commitment_sha256_v1,
@@ -175,6 +181,9 @@ def _policy() -> TrainingAdmissionPolicyV1:
         maximum_match_frames_ppm=750_000,
         maximum_root_asset_frames_ppm=500_000,
         maximum_leakage_group_frames_ppm=500_000,
+        maximum_match_draws_ppm=750_000,
+        maximum_root_asset_draws_ppm=500_000,
+        maximum_leakage_group_draws_ppm=500_000,
         maximum_examples=512,
         maximum_total_frames=16_384,
         maximum_schedule_rows=4096,
@@ -337,6 +346,65 @@ def _request() -> TrainingRunRequestV1:
         base_weights_sha256=None,
         base_weights_license_proof_sha256=None,
     )
+
+
+def _compiler_variant(
+    base: TrainingExampleManifestV1,
+    *,
+    suffix: int,
+    split: TrainingSplitV1,
+    frame_count: int = 2,
+) -> TrainingExampleManifestV1:
+    root_asset_sha256 = _digest(4_000 + suffix)
+    camera_setup_id = f"camera-{suffix}"
+    match_id = f"match-{suffix}"
+    venue_id = f"venue-{suffix}"
+    synchronized_capture_group_id = f"sync-{suffix}"
+    split_group_id = f"split-{suffix}"
+    rows = _target_rows(frame_count=frame_count)
+    leakage_group_sha256 = leakage_group_sha256_v1(
+        match_id=match_id,
+        root_asset_sha256=root_asset_sha256,
+        synchronized_capture_group_id=synchronized_capture_group_id,
+        split_group_id=split_group_id,
+        venue_id=venue_id,
+        camera_setup_id=camera_setup_id,
+        recording_date=base.recording_date,
+    )
+    camera_risk_key_sha256 = camera_risk_key_sha256_v1(
+        capture_mode=base.capture_mode,
+        camera_setup_id=camera_setup_id,
+        capture_profile_sha256=base.capture_profile_sha256,
+        lighting_condition_id=base.lighting_condition_id,
+        encoder_configuration_sha256=base.encoder_configuration_sha256,
+    )
+    return replace(
+        base,
+        source_id=f"source-{suffix}",
+        source_asset_sha256=root_asset_sha256,
+        root_asset_sha256=root_asset_sha256,
+        split=split,
+        match_id=match_id,
+        venue_id=venue_id,
+        camera_setup_id=camera_setup_id,
+        synchronized_capture_group_id=synchronized_capture_group_id,
+        split_group_id=split_group_id,
+        leakage_group_sha256=leakage_group_sha256,
+        camera_risk_key_sha256=camera_risk_key_sha256,
+        target_tensor_rows=rows,
+        target_tensor_set_sha256=target_tensor_set_sha256_v1(rows),
+        frame_count=frame_count,
+    )
+
+
+def _compiler_examples() -> tuple[TrainingExampleManifestV1, ...]:
+    train = _example()
+    dev = _compiler_variant(
+        train,
+        suffix=2,
+        split=TrainingSplitV1.DEV,
+    )
+    return train, dev
 
 
 def _quotas() -> tuple[StratumQuotaV1, ...]:
@@ -661,6 +729,10 @@ class TrainingAdmissionContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             replace(policy, maximum_match_frames_ppm=PPM + 1)
         with self.assertRaises(ValueError):
+            replace(policy, maximum_match_draws_ppm=True)  # type: ignore[arg-type]
+        with self.assertRaises(ValueError):
+            replace(policy, maximum_root_asset_draws_ppm=PPM + 1)
+        with self.assertRaises(ValueError):
             replace(
                 policy,
                 required_capture_risk_tags=(
@@ -684,6 +756,14 @@ class TrainingAdmissionContractTests(unittest.TestCase):
                 minimum_train_frames=33,
                 minimum_dev_frames=1,
                 maximum_total_frames=34,
+            )
+        with self.assertRaisesRegex(ValueError, "combined TRAIN/DEV"):
+            replace(
+                policy,
+                maximum_examples=3,
+                minimum_train_frames=33,
+                minimum_dev_frames=33,
+                maximum_total_frames=96,
             )
         with self.assertRaises(ValueError):
             replace(
@@ -787,6 +867,105 @@ class TrainingAdmissionContractTests(unittest.TestCase):
             ),
         )
         self.assertNotIn(b'"split":"TEST"', parsed.to_json_bytes())
+
+    def test_primary_sampling_stratum_is_fully_derived_from_exact_tags(self) -> None:
+        self.assertIs(
+            derive_primary_sampling_stratum_v1(
+                (
+                    ExampleStratumTagV1.PARTIALLY_OCCLUDED_BALL,
+                    ExampleStratumTagV1.VISIBLE_BALL,
+                )
+            ),
+            PrimarySamplingStratumV1.LOCALIZABLE_BALL,
+        )
+        self.assertIs(
+            derive_primary_sampling_stratum_v1(
+                (
+                    ExampleStratumTagV1.BALL_OUT_OF_FRAME,
+                    ExampleStratumTagV1.FULLY_OCCLUDED_BALL,
+                )
+            ),
+            PrimarySamplingStratumV1.OCCLUDED_OR_OUT_OF_FRAME,
+        )
+        self.assertIs(
+            derive_primary_sampling_stratum_v1(
+                (
+                    ExampleStratumTagV1.HARD_NEGATIVE,
+                    ExampleStratumTagV1.NO_BALL,
+                )
+            ),
+            PrimarySamplingStratumV1.NO_BALL_HARD_NEGATIVE,
+        )
+        self.assertIs(
+            derive_primary_sampling_stratum_v1((ExampleStratumTagV1.NO_BALL,)),
+            PrimarySamplingStratumV1.OTHER_SUPERVISED,
+        )
+        with self.assertRaises(ValueError):
+            derive_primary_sampling_stratum_v1(
+                (ExampleStratumTagV1.HARD_NEGATIVE,)
+            )
+        with self.assertRaises(ValueError):
+            derive_primary_sampling_stratum_v1(
+                (
+                    ExampleStratumTagV1.HARD_NEGATIVE,
+                    ExampleStratumTagV1.NO_BALL,
+                    ExampleStratumTagV1.VISIBLE_BALL,
+                )
+            )
+        with self.assertRaises(ValueError):
+            replace(
+                _example(),
+                primary_sampling_stratum=PrimarySamplingStratumV1.OTHER_SUPERVISED,
+            )
+        with self.assertRaises(ValueError):
+            replace(
+                _references()[0],
+                primary_sampling_stratum=PrimarySamplingStratumV1.OTHER_SUPERVISED,
+            )
+
+    def test_1080p60_is_single_view_without_compatibility_tier(self) -> None:
+        example = _example()
+        risk_key = camera_risk_key_sha256_v1(
+            capture_mode=TrainingCaptureModeV1.HD_1080P60,
+            camera_setup_id=example.camera_setup_id,
+            capture_profile_sha256=example.capture_profile_sha256,
+            lighting_condition_id=example.lighting_condition_id,
+            encoder_configuration_sha256=example.encoder_configuration_sha256,
+        )
+        sixty = replace(
+            example,
+            capture_mode=TrainingCaptureModeV1.HD_1080P60,
+            camera_risk_key_sha256=risk_key,
+        )
+        self.assertNotIn(
+            CaptureRiskTagV1.COMPATIBILITY_1080P30,
+            sixty.capture_risk_tags,
+        )
+        with self.assertRaises(ValueError):
+            replace(sixty, capture_risk_tags=())
+
+        thirty_risk_key = camera_risk_key_sha256_v1(
+            capture_mode=TrainingCaptureModeV1.HD_1080P30,
+            camera_setup_id=example.camera_setup_id,
+            capture_profile_sha256=example.capture_profile_sha256,
+            lighting_condition_id=example.lighting_condition_id,
+            encoder_configuration_sha256=example.encoder_configuration_sha256,
+        )
+        thirty = replace(
+            example,
+            capture_mode=TrainingCaptureModeV1.HD_1080P30,
+            camera_risk_key_sha256=thirty_risk_key,
+            capture_risk_tags=(
+                CaptureRiskTagV1.COMPATIBILITY_1080P30,
+                CaptureRiskTagV1.SINGLE_VIEW_OCCLUSION,
+            ),
+        )
+        self.assertIn(CaptureRiskTagV1.COMPATIBILITY_1080P30, thirty.capture_risk_tags)
+        with self.assertRaises(ValueError):
+            replace(
+                thirty,
+                capture_risk_tags=(CaptureRiskTagV1.SINGLE_VIEW_OCCLUSION,),
+            )
 
     def test_example_rejects_digest_alias_join_mismatch_and_risk_mismatch(self) -> None:
         example = _example()
@@ -1120,6 +1299,343 @@ class TrainingAdmissionContractTests(unittest.TestCase):
                 epoch_count=MAX_SCHEDULE_ROWS,
                 train_draws_per_epoch=2,
             )
+
+
+class TrainingAdmissionCoverageCompilerTests(unittest.TestCase):
+    def assert_compiler_error(
+        self, code: str, callback: Callable[[], object]
+    ) -> None:
+        with self.assertRaises(TrainingAdmissionCompilerError) as caught:
+            callback()
+        self.assertEqual(caught.exception.code, code)
+        self.assertLess(len(str(caught.exception)), 160)
+
+    def compile(
+        self,
+        *,
+        policy: TrainingAdmissionPolicyV1 | None = None,
+        examples: tuple[TrainingExampleManifestV1, ...] | None = None,
+        readiness_manifest_sha256: str = _digest(5_000),
+    ) -> TrainingCoverageReportV1:
+        return compile_training_coverage_v1(
+            dataset_id="coverage-dataset-v1",
+            readiness_manifest_sha256=readiness_manifest_sha256,
+            admission_policy=_policy() if policy is None else policy,
+            example_manifests=_compiler_examples() if examples is None else examples,
+        )
+
+    def test_compiler_normalizes_order_and_binds_exact_references(self) -> None:
+        examples = _compiler_examples()
+        report = self.compile(examples=examples)
+        reversed_report = self.compile(examples=tuple(reversed(examples)))
+        self.assertEqual(report, reversed_report)
+        self.assertTrue(report.coverage_requirements_satisfied)
+        self.assertEqual(report.unsatisfied_requirements, ())
+        self.assertEqual(report.admission_policy_sha256, _policy().fingerprint())
+        self.assertEqual(report.train_source_count, 1)
+        self.assertEqual(report.dev_source_count, 1)
+        self.assertEqual(report.train_frame_count, 2)
+        self.assertEqual(report.dev_frame_count, 2)
+        self.assertEqual(report.distinct_match_count, 2)
+        self.assertEqual(report.distinct_venue_count, 2)
+        self.assertEqual(report.distinct_camera_setup_count, 2)
+        self.assertEqual(report.maximum_match_frames_ppm, 500_000)
+        self.assertEqual(report.maximum_root_asset_frames_ppm, 500_000)
+        self.assertEqual(report.maximum_leakage_group_frames_ppm, 500_000)
+
+        split_order = {TrainingSplitV1.TRAIN: 0, TrainingSplitV1.DEV: 1}
+        references = tuple(
+            sorted(
+                (
+                    TrainingExampleReferenceV1(
+                        source_id=example.source_id,
+                        split=example.split,
+                        example_manifest_sha256=example.fingerprint(),
+                        leakage_group_sha256=example.leakage_group_sha256,
+                        frame_count=example.frame_count,
+                        primary_sampling_stratum=example.primary_sampling_stratum,
+                        example_stratum_tags=example.example_stratum_tags,
+                    )
+                    for example in examples
+                ),
+                key=lambda value: (
+                    split_order[value.split],
+                    value.source_id,
+                    value.example_manifest_sha256,
+                ),
+            )
+        )
+        self.assertEqual(
+            report.example_reference_set_sha256,
+            training_example_reference_set_sha256_v1(references),
+        )
+        for field_name in (
+            "admissible_for_training",
+            "admissible_for_evaluation",
+            "admissible_for_test",
+            "admissible_for_deployment",
+            "admissible_for_live_scoring",
+        ):
+            self.assertIs(getattr(report, field_name), False)
+
+    def test_compiler_uses_integer_ceiling_for_every_group_share(self) -> None:
+        train, dev = _compiler_examples()
+        rows = _target_rows(frame_count=1)
+        train = replace(
+            train,
+            frame_count=1,
+            target_tensor_rows=rows,
+            target_tensor_set_sha256=target_tensor_set_sha256_v1(rows),
+        )
+        policy = replace(
+            _policy(),
+            minimum_train_frames=1,
+            maximum_match_frames_ppm=700_000,
+            maximum_root_asset_frames_ppm=700_000,
+            maximum_leakage_group_frames_ppm=700_000,
+        )
+        report = self.compile(policy=policy, examples=(train, dev))
+        self.assertEqual(report.train_frame_count + report.dev_frame_count, 3)
+        self.assertEqual(report.maximum_match_frames_ppm, 666_667)
+        self.assertEqual(report.maximum_root_asset_frames_ppm, 666_667)
+        self.assertEqual(report.maximum_leakage_group_frames_ppm, 666_667)
+        self.assertTrue(report.coverage_requirements_satisfied)
+
+    def test_compiler_derives_every_policy_coverage_issue(self) -> None:
+        policy = _policy()
+        examples = _compiler_examples()
+        extra = _compiler_variant(
+            examples[0], suffix=3, split=TrainingSplitV1.TRAIN
+        )
+        canonical_modes = tuple(
+            sorted(
+                (
+                    TrainingCaptureModeV1.HD_1080P60,
+                    TrainingCaptureModeV1.UHD_4K60,
+                ),
+                key=lambda value: value.value,
+            )
+        )
+        canonical_risks = tuple(
+            sorted(
+                (
+                    CaptureRiskTagV1.LOW_LIGHT,
+                    CaptureRiskTagV1.SINGLE_VIEW_OCCLUSION,
+                ),
+                key=lambda value: value.value,
+            )
+        )
+        canonical_strata = tuple(
+            sorted(
+                (
+                    ExampleStratumTagV1.BALL_OUT_OF_FRAME,
+                    ExampleStratumTagV1.VISIBLE_BALL,
+                ),
+                key=lambda value: value.value,
+            )
+        )
+        scenarios = (
+            (
+                CoverageRequirementV1.MAXIMUM_EXAMPLES,
+                replace(policy, maximum_examples=2),
+                (*examples, extra),
+            ),
+            (
+                CoverageRequirementV1.MAXIMUM_TOTAL_FRAMES,
+                replace(
+                    policy,
+                    minimum_train_frames=1,
+                    minimum_dev_frames=1,
+                    maximum_total_frames=3,
+                ),
+                examples,
+            ),
+            (
+                CoverageRequirementV1.MINIMUM_TRAIN_SOURCES,
+                replace(policy, minimum_train_sources=2),
+                examples,
+            ),
+            (
+                CoverageRequirementV1.MINIMUM_DEV_SOURCES,
+                replace(policy, minimum_dev_sources=2),
+                examples,
+            ),
+            (
+                CoverageRequirementV1.MINIMUM_TRAIN_FRAMES,
+                replace(policy, minimum_train_frames=3),
+                examples,
+            ),
+            (
+                CoverageRequirementV1.MINIMUM_DEV_FRAMES,
+                replace(policy, minimum_dev_frames=3),
+                examples,
+            ),
+            (
+                CoverageRequirementV1.MINIMUM_MATCHES,
+                replace(policy, minimum_distinct_matches=3),
+                examples,
+            ),
+            (
+                CoverageRequirementV1.MINIMUM_VENUES,
+                replace(policy, minimum_distinct_venues=3),
+                examples,
+            ),
+            (
+                CoverageRequirementV1.MINIMUM_CAMERA_SETUPS,
+                replace(policy, minimum_distinct_camera_setups=3),
+                examples,
+            ),
+            (
+                CoverageRequirementV1.REQUIRED_CAPTURE_MODES,
+                replace(policy, required_capture_modes=canonical_modes),
+                examples,
+            ),
+            (
+                CoverageRequirementV1.REQUIRED_CAPTURE_RISKS,
+                replace(policy, required_capture_risk_tags=canonical_risks),
+                examples,
+            ),
+            (
+                CoverageRequirementV1.REQUIRED_EXAMPLE_STRATA,
+                replace(policy, required_example_stratum_tags=canonical_strata),
+                examples,
+            ),
+            (
+                CoverageRequirementV1.MAXIMUM_MATCH_SHARE,
+                replace(policy, maximum_match_frames_ppm=499_999),
+                examples,
+            ),
+            (
+                CoverageRequirementV1.MAXIMUM_ROOT_ASSET_SHARE,
+                replace(policy, maximum_root_asset_frames_ppm=499_999),
+                examples,
+            ),
+            (
+                CoverageRequirementV1.MAXIMUM_LEAKAGE_GROUP_SHARE,
+                replace(policy, maximum_leakage_group_frames_ppm=499_999),
+                examples,
+            ),
+        )
+        observed: set[CoverageRequirementV1] = set()
+        for expected, selected_policy, selected_examples in scenarios:
+            with self.subTest(requirement=expected.value):
+                report = self.compile(
+                    policy=selected_policy,
+                    examples=selected_examples,
+                )
+                self.assertIn(expected, report.unsatisfied_requirements)
+                self.assertEqual(
+                    report.unsatisfied_requirements,
+                    tuple(
+                        sorted(
+                            report.unsatisfied_requirements,
+                            key=lambda value: value.value,
+                        )
+                    ),
+                )
+                self.assertFalse(report.coverage_requirements_satisfied)
+                observed.update(report.unsatisfied_requirements)
+        self.assertEqual(observed, set(CoverageRequirementV1))
+
+    def test_compiler_rejects_wrong_types_bounds_and_reference_sets(self) -> None:
+        examples = _compiler_examples()
+
+        class StringSubclass(str):
+            pass
+
+        class TupleSubclass(tuple):
+            pass
+
+        self.assert_compiler_error(
+            "TRAIN_COMPILER_INPUT",
+            lambda: compile_training_coverage_v1(
+                dataset_id=StringSubclass("coverage-dataset-v1"),
+                readiness_manifest_sha256=_digest(5_000),
+                admission_policy=_policy(),
+                example_manifests=examples,
+            ),
+        )
+        self.assert_compiler_error(
+            "TRAIN_COMPILER_INPUT",
+            lambda: compile_training_coverage_v1(
+                dataset_id="coverage-dataset-v1",
+                readiness_manifest_sha256=_digest(5_000),
+                admission_policy=_policy(),
+                example_manifests=TupleSubclass(examples),  # type: ignore[arg-type]
+            ),
+        )
+        self.assert_compiler_error(
+            "TRAIN_COMPILER_INPUT",
+            lambda: compile_training_coverage_v1(
+                dataset_id="coverage-dataset-v1",
+                readiness_manifest_sha256=_digest(5_000),
+                admission_policy=object(),  # type: ignore[arg-type]
+                example_manifests=examples,
+            ),
+        )
+        self.assert_compiler_error(
+            "TRAIN_COMPILER_INPUT",
+            lambda: self.compile(examples=(examples[0], examples[0])),
+        )
+        duplicate_source_asset = replace(
+            examples[0],
+            source_id="source-duplicate-asset",
+            split=TrainingSplitV1.DEV,
+        )
+        self.assert_compiler_error(
+            "TRAIN_COMPILER_INPUT",
+            lambda: self.compile(examples=(examples[0], duplicate_source_asset)),
+        )
+        cross_split_leakage = replace(
+            examples[0],
+            source_id="source-cross-split-leakage",
+            source_asset_sha256=_digest(6_000),
+            parent_asset_sha256=examples[0].root_asset_sha256,
+            split=TrainingSplitV1.DEV,
+        )
+        self.assert_compiler_error(
+            "TRAIN_COMPILER_INPUT",
+            lambda: self.compile(examples=(examples[0], cross_split_leakage)),
+        )
+        second_train = _compiler_variant(
+            examples[0], suffix=4, split=TrainingSplitV1.TRAIN
+        )
+        self.assert_compiler_error(
+            "TRAIN_COMPILER_INPUT",
+            lambda: self.compile(examples=(examples[0], second_train)),
+        )
+        self.assert_compiler_error(
+            "TRAIN_COMPILER_INPUT",
+            lambda: self.compile(examples=(examples[0],) * 513),
+        )
+
+    def test_compiler_emits_stable_stratum_and_policy_binding_errors(self) -> None:
+        examples = _compiler_examples()
+        corrupted_example = replace(examples[0])
+        object.__setattr__(
+            corrupted_example,
+            "primary_sampling_stratum",
+            PrimarySamplingStratumV1.OTHER_SUPERVISED,
+        )
+        self.assert_compiler_error(
+            "TRAIN_COMPILER_STRATUM",
+            lambda: self.compile(examples=(corrupted_example, examples[1])),
+        )
+
+        policy = _policy()
+        self.assert_compiler_error(
+            "TRAIN_COMPILER_POLICY_BINDING",
+            lambda: self.compile(
+                policy=policy,
+                readiness_manifest_sha256=policy.fingerprint(),
+            ),
+        )
+        corrupted_policy = replace(policy)
+        object.__setattr__(corrupted_policy, "maximum_match_frames_ppm", 0)
+        self.assert_compiler_error(
+            "TRAIN_COMPILER_POLICY_BINDING",
+            lambda: self.compile(policy=corrupted_policy),
+        )
 
 
 if __name__ == "__main__":
