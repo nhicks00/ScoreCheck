@@ -1,7 +1,9 @@
 # Capture Integrity Gateway
 
-**Status:** pure metadata contracts, integrity evaluator, and evidence-window
-planner implemented; source-byte materialization and capture trust remain
+**Status:** pure metadata contracts, integrity evaluator, evidence-window
+planner, structurally verified finalized metadata, and a signed genesis-only
+capture-service statement are implemented; source-byte materialization,
+physical-camera/live-origin proof, and every media or product admission remain
 pending
 
 **Decision date:** 2026-07-12
@@ -13,12 +15,16 @@ The first slice is limited to:
 1. strict capture-trace contracts;
 2. a pure integrity state machine;
 3. a bounded evidence-window planner over closed-fragment metadata;
-4. synthetic metadata and FFmpeg integration fixtures; and
-5. a test-domain finalized-window handoff to the trusted review-source
-   pipeline.
+4. synthetic metadata fixtures; and
+5. later FFmpeg integration plus a test-domain finalized-window handoff to the
+   trusted review-source pipeline.
 
-Items 1–3 are implemented and tested. Items 4–5 remain follow-on work; no
-source bytes or trust claims cross this pure metadata boundary yet.
+Items 1–4 are implemented and tested. Item 5 remains follow-on work. A
+separate implemented control-plane boundary now authenticates one supplied
+sequence-zero capture-service statement and replays its exact metadata,
+policy, rights, window, trace, and integrity bindings. No source bytes cross
+that boundary, and it makes no physical-camera, live-origin, continuity,
+media-content, residency, product-admission, or scoring claim.
 
 Do not yet build an AVFoundation camera driver, continuous production byte
 ring, multi-camera synchronization, perception integration, or any scoring
@@ -39,19 +45,22 @@ surface freeze candidates. Repeated diagnostic hashes never establish
 Demux-order PTS reversal can be normal with B-frames, and DTS monotonicity is
 not capture proof. Structural evaluation uses decoded presentation order, an
 exact-rational but unauthenticated `ClockMappingCandidate`, optional device
-sequence, and explicit camera-backend drop callbacks. The later trust boundary
-must authenticate and independently constrain that clock candidate before any
-operational claim.
+sequence, and explicit camera-backend drop callbacks. The implemented signed
+capture-service statement authenticates the exact supplied mapping and its
+recomputed bindings; it does not establish the mapping's accuracy, UTC origin,
+or physical provenance.
 
 ## Trace contracts
 
 `CaptureSessionDescriptor` binds source kind (`SYNTHETIC_TEST` or
 `LIVE_CAMERA`), deployment/session/match/stream identities, expected native
-width/height/FPS rational, capture profile, backend artifact, camera and clock
-attestations, encoder configuration, a locked exposure/control-policy
+width/height/FPS rational, capture profile, backend artifact, camera- and
+clock-attestation reference hashes, encoder configuration, a locked exposure/control-policy
 fingerprint, optional rights grant, and evidence-time opening point.
-`LIVE_CAMERA` requires production camera/clock attestations, a rights grant,
-and an exposure policy that forbids unrecorded automatic setting changes.
+`LIVE_CAMERA` requires nonempty camera, clock, and rights reference hashes, the
+production capture trust-domain value, and an exposure policy that forbids
+unrecorded automatic setting changes. Constructing the descriptor verifies
+only those fields; it does not open or authenticate the referenced evidence.
 Synthetic sessions use a separate test trust domain and can never pass
 operational verification.
 
@@ -82,8 +91,10 @@ timestamp and reported count, host time, and one of `LATE_DATA`,
 explicit drop; a timestamp gap remains inferred.
 
 `CaptureStreamBoundary` records `START`, `INTERRUPT`, `RESUME`,
-`CONFIG_CHANGE`, or `STOP`. Every resume increments `reconnect_epoch`; a
-configuration change begins new provenance rather than silently continuing.
+`CONFIG_CHANGE`, or `STOP`. The pure trace schema represents a resume by
+incrementing `reconnect_epoch`, and a configuration change begins new
+provenance rather than silently continuing. The signed capture-service V0
+boundary accepts only reconnect epoch zero and cannot attest a resumed trace.
 
 `FinalizedSourceFrameSignal` binds presentation-order index, exact source PTS
 and time base, mapped evidence timestamp, dimensions, and whether the frame is
@@ -194,48 +205,45 @@ At 200 Mbps, 30 seconds is about 750 MB. The first slice deliberately does not
 choose a production spool container; that depends on the later native backend
 and encoder.
 
-## Capture, camera, and clock trust
+## Implemented genesis-only capture-service evidence
 
-After finalization:
+`vision_scoring.capture_assets` recomputes the exact ordered fragment
+concatenation, evidence-window plan, finalized trace, integrity report,
+capture-policy binding, and operational capture-session-rights result before
+producing `StructurallyVerifiedCaptureMetadata`. Its camera and clock values
+remain pinned service references, not independently verified physical-camera
+or clock attestations.
 
-1. validate and hash the exact window;
-2. publish a singleton immutable source generation;
-3. construct `ReviewSourceRef`;
-4. sign `CaptureSegmentAttestation` over source/session/epoch/window/report,
-   actual presentation and evidence intervals, frame count,
-   camera/clock/encoder/rights identities, prior-segment chain, protected
-   capture policy, and capture key; and
-5. give the source reference and attestation to the review-clip pipeline.
+`vision_scoring.capture_segment` then builds and verifies one bounded
+`FinalizedCaptureSegmentStatement` plus detached Ed25519
+`CaptureSegmentAttestation`. V0 is a hard cut:
 
-Camera and clock claims use separate key kinds and signature domains. A clock
-attestation binds device/evidence anchors, rational mapping, host-monotonic
-validity interval, samples/residual/error bound, algorithm, policy, and key. A
-camera attestation binds stable device/backend identities, negotiated native
-mode/pixel format, lens/configuration, stabilization/upscaling/interpolation
-state, locked/manual exposure and gain controls (or their explicitly measured
-transition policy), encoder, validity interval, policy, and key.
+- the statement's segment sequence is exactly zero;
+- its reconnect epoch is exactly zero;
+- its `lineage_id` is only an authenticated scope label;
+- the protected trust snapshot contains exactly one current genesis entry;
+  and
+- there is no predecessor, continuation, chain, nonzero-sequence, or
+  post-reconnect API.
 
-Container metadata saying 3840×2160 at 60 fps does not prove native capture,
-device identity, disabled interpolation/upscaling, or clock correctness.
+Verification authenticates the exact supplied statement and signature and
+replays the current metadata signature, metadata trust snapshot, capture and
+rights policy pins, operational rights grant, window plan, finalized trace,
+and integrity report. The trust snapshot itself must be independently pinned;
+it is not self-authenticating.
 
-The future `capture_trust.py` boundary must fail closed while independently:
+This is service-assertion evidence only. It does not prove physical-camera
+origin, live capture rather than replay, clock accuracy, media content,
+decodability, audio absence, storage residency, or continuity after the one
+genesis statement. It authorizes no ScoreCheck presentation, training,
+evaluation, deployment, score event, or official-score mutation. The verified
+receipt's live-presentation, training, evaluation, and deployment admission
+properties are all fixed to `False`.
 
-- authenticating the session, camera, clock, rights, and fragment claims;
-- re-deriving the session and every selected fragment configuration
-  fingerprint instead of trusting serialized fingerprint strings;
-- enforcing policy ceilings on the clock candidate's claimed and measured
-  absolute error;
-- opening, hashing, and validating the exact source bytes against fragment and
-  finalized-window identities; and
-- re-running the pure evaluator over the committed canonical trace and
-  requiring the exact report fingerprint, rather than trusting serialized
-  finding basis keys or aggregates; and
-- validating the rights grant for the source, match, participants, venue,
-  purpose, and requested evidence interval.
-
-Until those checks succeed, `structurally_eligible_for_trust_verification`
-means only that the pure trace is eligible to be presented to that later
-boundary.
+Container metadata saying 3840×2160 at 60 fps likewise does not prove native
+capture, device identity, disabled interpolation/upscaling, or clock
+correctness. `structurally_eligible_for_trust_verification` retains only its
+narrow structural meaning; it is not media or product admission.
 
 ## Modules and public surface
 
@@ -247,10 +255,10 @@ Implementation order and current state:
   — implemented;
 - `capture_windows.py`: bounded fragment projection and pure planner —
   implemented;
-- `capture_process.py`: fixed-command supervisor for finalized synthetic
-  fixtures only;
-- `capture_source.py`: output validation and test-domain source publication;
-- `capture_trust.py`: separate camera, clock, and segment signatures.
+- `capture_assets.py`: exact fragment-byte hashing plus structural
+  metadata/policy/rights/finalized-trace binding — implemented; and
+- `capture_segment.py`: signed, replay-verified, genesis-only capture-service
+  statement with always-false product-admission flags — implemented.
 
 Primary pure APIs:
 
@@ -259,29 +267,38 @@ evaluate_capture_trace(session, clock_mapping, records, finalized_trace)
     -> CaptureSegmentIntegrityReport
 
 plan_evidence_window(request, fragments) -> EvidenceWindowPlan
+
+build_finalized_capture_segment_statement(...)
+    -> FinalizedCaptureSegmentStatement
+
+verify_capture_segment_attestation(...)
+    -> VerifiedCaptureSegmentEvidence
 ```
 
-Later non-serializable staging APIs materialize and publish a planned window.
-No production API accepts executable paths, shell arguments, timeouts, trust
-roots, signing keys, camera claims, or relaxed bounds.
+The capture-segment verifier accepts supplied contracts and metadata only. It
+accepts no paths, fragment or asset bytes, storage handles, network/database
+clients, private signing keys, ScoreCheck credentials, or relaxed bounds.
+Later non-serializable staging APIs must materialize and validate a planned
+window before any media use.
 
 Keep synthetic helpers under `tests/support`; do not generalize the existing
 media-preflight subprocess implementation during this slice.
 
 ## Synthetic validation
 
-Most tests use pure metadata traces. Short-lived integration fixtures cover
-60 and 60000/1001 fps, B-frames with valid presentation order, timestamp gaps,
-freeze/repetition, VFR, wrong 1080p30 profile, rotation/interlace metadata,
-corrupt output, and reconnect epochs. One roughly 0.25-second/15-frame
-3840×2160 60 fps `testsrc2` fixture proves the native-size path without making
-the suite expensive.
+Current capture tests use synthetic metadata and in-memory fragment bytes;
+they do not produce a source object or ReviewClip. Coverage includes exact
+60000/1001 rational mapping, presentation-order semantics, timestamp and
+device-sequence gaps, drop notices, freeze candidates, configuration and
+stream-boundary invalidation, strict finalized PTS, bounded window planning,
+exact fragment hashing, current metadata/rights replay, genesis-only signing,
+and hard rejection of nonzero sequence or reconnect epoch at the signed
+capture-service boundary.
 
-The local ARM64 Mac has Homebrew FFmpeg/ffprobe 8.1 with libx264 and
-VideoToolbox. That build has `--enable-gpl`/`--enable-libx264`; it is allowed
-only as an internal synthetic fixture generator. It is not the proprietary
-production capture dependency. Production should use a separately reviewed,
-pinned build or a native Swift AVFoundation/VideoToolbox helper.
+No FFmpeg/ffprobe capture integration, native 4K60 camera path, production
+spool, or renderer/decoder validation is implemented by this gateway. Any
+future production dependency requires a separately reviewed, pinned build or a
+native Swift AVFoundation/VideoToolbox helper.
 
 macOS production capture also requires TCC permission, code signing/
 entitlements, and a stronger App Sandbox/XPC or constrained-service boundary;
@@ -291,28 +308,31 @@ files, quota/free-space checks, and sustained-write headroom.
 
 ## Required gates
 
-P0 tests cover strict parsing/bounds, session/epoch/config substitution,
-sequence/device/timestamp/drop distinctions, clock validity, diagnostic hashes
-remaining non-authoritative, reconnect/config invalidation, truncation,
-synthetic-domain rejection, cross-key/domain use, planner eviction/no-shortening,
-fragment/config mixing, path/symlink/hard-link/FIFO/dataless inputs, subprocess
-output/deadline/descendant limits, no partial publication, singleton source
-membership, and capture code's inability to construct authorization commands,
-events, outbox rows, or ScoreCheck mutations.
+Implemented tests cover strict parsing/bounds, session/epoch/config
+substitution, sequence/device/timestamp/drop distinctions, supplied clock-map
+validity, diagnostic hashes remaining non-authoritative, boundary/config
+invalidation, truncation, synthetic-domain rejection, cross-key/domain use,
+planner eviction/no-shortening, fragment/config mixing, exact byte hashing,
+metadata/rights/policy/trace replay, genesis currentness, key revocation and
+role separation, and capture code's inability to perform media I/O or construct
+authorization commands, events, outbox rows, or ScoreCheck mutations.
 
 Hardware validation later covers actual camera/capture-card modes and stable
 IDs, native versus upscaled/interpolated output, AVFoundation drop callbacks,
-clock behavior under load, unplug/replug epochs, two-hour 4K60 soak, thermal/
-disk sustained-write behavior, audio/video sync, ball pixels/blur/court
-visibility, and calibration.
+clock behavior under load, interruption termination, two-hour 4K60 soak,
+thermal/disk sustained-write behavior, audio/video sync, ball pixels/blur/court
+visibility, and calibration. V0 must stop after an interruption; it has no
+post-reconnect capture-service continuation.
 
 ## External input boundary
 
-Nothing is needed from Nathan for contracts, evaluator, planner, synthetic
-fixtures, process-failure tests, or a test-domain source handoff.
+Nothing is needed from Nathan for the implemented contracts, evaluator,
+planner, in-memory fragment checks, or synthetic metadata tests. The
+test-domain source handoff remains unimplemented.
 
 Real capture later requires the exact camera/capture-card and connection,
 lens/mount/court positions, TCC permission, capture disk, stable device modes,
 venue/participant rights plus signed session grant, representative lighting,
-and approval for long soak and reconnect tests. Synthetic reports never
-populate production readiness or real camera/clock verification fields.
+and approval for long-soak and interruption-termination tests. Synthetic
+reports never populate production readiness or real camera/clock verification
+fields.

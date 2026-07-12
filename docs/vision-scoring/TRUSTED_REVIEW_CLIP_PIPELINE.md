@@ -1,9 +1,10 @@
 # Trusted Review-Clip Pipeline
 
-**Status:** capture-session rights plus structurally checked, signed capture
-metadata and metadata-only video-frame provenance implemented; trusted media,
-verified ReviewClip production, and every live/training/evaluation/deployment
-admission remain gated designs
+**Status:** capture-session rights, structurally checked signed capture
+metadata, metadata-only video-frame provenance, and a signed genesis-only
+capture-service statement are implemented; trusted media, verified ReviewClip
+production, and every live/training/evaluation/deployment admission remain
+gated designs
 
 **Decision date:** 2026-07-12
 
@@ -16,10 +17,11 @@ Use both of these controls:
 2. a domain-separated renderer signature over the exact source reference,
    frame map, manifest, output, toolchain, policy, and rights proof.
 
-Do not place a potentially 64 GiB source object inside every clip generation.
-That would multiply storage and hashing cost, and the immutable publisher does
-not permit hard-link shortcuts. One verified source session may render several
-clips while holding one lease and one staged source snapshot.
+The planned pipeline must not place a potentially 64 GiB source object inside
+every clip generation. That would multiply storage and hashing cost, and the
+immutable-publisher design forbids hard-link shortcuts. One future verified
+source session may render several clips while holding one lease and one staged
+source snapshot.
 
 The current review schema v2 proves only canonical manifest bytes and rendered
 object identity/size. Its `source_sha256`, decoder, selected frames/timestamps,
@@ -29,8 +31,8 @@ there is no v2 compatibility parser or migration.
 
 ## Interim hard-cut metadata boundary
 
-`vision_scoring.capture_assets` implements a deliberately narrower safety
-slice. It is not `CaptureSegmentAttestation`, review schema v3, a renderer
+`vision_scoring.capture_assets` implements a deliberately narrow safety slice.
+By itself it is not capture-service attestation, review schema v3, a renderer
 proof, a residency lease, or a ScoreCheck admission path.
 
 `build_structurally_verified_capture_metadata()`:
@@ -81,6 +83,24 @@ deployment, derivative-data, and redistribution uses are absent from this API,
 not optional. Exact-asset rights for those uses return only with the later
 signed renderer/dataset-evidence and residency boundary.
 
+`vision_scoring.capture_segment` adds a separate, implemented control-plane
+layer over that metadata. It authenticates one supplied sequence-zero,
+reconnect-epoch-zero `FinalizedCaptureSegmentStatement` with a detached
+capture-service signature. Its protected trust snapshot has exactly one
+current genesis entry. `lineage_id` is only a signed scope label, and V0 has no
+predecessor, continuation, chain, nonzero-sequence, multi-segment, or
+post-reconnect API.
+
+Verification replays the exact current metadata signature and snapshot,
+capture and rights policy pins, operational capture-session rights grant,
+window plan, finalized trace, and integrity report. It authenticates that the
+capture service made that exact statement; it does not authenticate physical
+camera origin, live capture rather than replay, clock accuracy, media content
+or residency, or continuity after genesis. It provides no score authority and
+does not make ReviewClip production real. Live ScoreCheck presentation,
+training, evaluation, and deployment admission properties remain fixed to
+`False` on every verification receipt.
+
 ## Future verified-v3 claims (not the interim metadata boundary)
 
 A future successfully verified v3 clip would mean:
@@ -94,16 +114,17 @@ A future successfully verified v3 clip would mean:
 - the clip generation is currently resident and byte-verified when admitted,
   presented, reviewed, or linked.
 
-It does not prove physical camera truth, unseen camera behavior, computation in
-the cryptographic sense, clock accuracy beyond a separate capture attestation,
+It does not prove physical camera truth, unseen camera behavior, live capture
+rather than replay, computation in the cryptographic sense, clock accuracy,
 current source residency after the render lease closes, or that a human watched
-every frame or exact UI pixels.
+every frame or exact UI pixels. The implemented genesis-only capture-service
+statement cannot supply any of those missing proofs.
 
-## Immutable objects
+## Planned immutable objects
 
 ### Source generation
 
-The source store contains exactly one object:
+A future source generation would contain exactly one source object:
 
 ```text
 generations/<source-generation-id>/
@@ -120,27 +141,28 @@ generations/<source-generation-id>/
 
 ### Clip generation
 
-Each clip generation contains exactly:
+A future verified clip generation would contain exactly:
 
 - canonical `ReviewClipManifestV3`;
 - rendered clip bytes;
 - canonical frame-map sidecar;
 - canonical `SignedReviewClipDerivation`;
 - the exact signed rights decision and attestation used for the render; and
-- a canonical signed capture-segment attestation when the claim is live
-  operational capture.
+- a canonical signed capture-service statement when the proposed claim is
+  operational capture, plus separate proof for any physical-camera or
+  live-origin claim.
 
 The signed derivation cannot contain its own object hash or final clip-generation
 ID without a hash cycle. `ReviewClipRefV3` externally binds all object hashes,
 sizes, and the exact sorted generation membership.
 
-## Audio boundary
+## Planned ReviewClip v3 audio boundary
 
-Review schema v3 is deliberately **video-only**. A source object may contain
-audio, but the renderer does not decode, copy, transform, present, or cite it;
-the rendered clip validator requires exactly one video stream and rejects every
-audio stream. No audio observation may reference a v3 video frame map as proof
-of sample timing or A/V alignment.
+The ReviewClip v3 design is deliberately **video-only**. A source object may
+contain audio, but the future renderer must not decode, copy, transform,
+present, or cite it; the future rendered-clip validator must require exactly
+one video stream and reject every audio stream. No audio observation may
+reference a v3 video frame map as proof of sample timing or A/V alignment.
 
 Audio becomes a separate later contract only after it binds the selected audio
 stream, exact sample/time-base map, source-to-evidence clock transform, measured
@@ -148,7 +170,7 @@ A/V offset and drift, decoded-sample identity, render derivation, rights uses,
 and output validation. Silently copying source audio or assuming that container
 timestamps establish synchronization is forbidden.
 
-## Contracts
+## Planned ReviewClip v3 contracts
 
 ### ReviewClipManifestV3
 
@@ -204,20 +226,31 @@ Capture mode is exactly one of:
 - `LIVE_ATTESTED_CAPTURE_SEGMENT`; or
 - `OFFLINE_FINALIZED_ASSET`.
 
-Live ScoreCheck shadow use requires the first. The second is allowed only in a
-protected offline evaluation/research deployment mode. Human-direct origin is
-not a shortcut around media integrity or rights.
+Live ScoreCheck shadow use would require the first plus independently adequate
+live-origin, media, renderer/decoder, residency, and current-rights proof. The
+implemented genesis-only service statement is not enough to select that mode.
+The second is allowed only in a protected offline evaluation/research
+deployment mode. Human-direct origin is not a shortcut around media integrity
+or rights.
 
 ### CaptureSegmentAttestation
 
-A separate capture key—not a renderer, assessment, review, human-command, or
-authorizer key—binds source reference, capture session/match/stream/segment,
-previous-segment chain and reconnect epoch, camera/profile/device/encoder
-identities, source-to-evidence timeline mapping, clock verification/error
-bound, frame-integrity counters, capture interval, protected capture policy,
-and signature.
+A separate capture-service key—not a renderer, metadata, rights, assessment,
+review, human-command, or authorizer key—signs the complete canonical
+`FinalizedCaptureSegmentStatement`. The statement embeds the exact structurally
+verified metadata, production session descriptor, supplied clock mapping,
+window request and recomputed plan, recomputed clean integrity report,
+protected capture policy, and operational capture-session rights grant. It
+also binds the current metadata, rights, policy, trust-snapshot, and finalized-
+trace hashes checked during replay.
 
-This is trusted-service evidence, not proof of physical truth.
+V0 accepts only segment sequence zero and reconnect epoch zero, with exactly
+one current genesis entry in the protected trust snapshot. It exposes no
+predecessor or continuation representation and makes no multi-segment
+continuity claim. This is authenticated trusted-service assertion evidence,
+not proof of physical-camera truth, live-vs-replay origin, clock truth, media
+content/residency, or any product/scoring authority. All receipt admission
+flags remain `False`.
 
 ## Rights boundary
 
@@ -268,12 +301,14 @@ signed renderer or dataset-evidence derivation and resident-object boundary can
 bind the exact bytes actually used.
 
 The grant deliberately has no asset or segment SHA-256: it cannot claim or
-preauthorize future bytes. The trusted capture service still must bind every
-finalized segment to the verified grant and current trust generation. Grant
-evidence is content-addressed here; the operational coordinator must verify the
-resident evidence objects through the later protected evidence-store boundary.
-A later rights revocation blocks new rendering, admission, presentation,
-review, or link but does not rewrite an already linked historical human event.
+preauthorize future bytes. The implemented genesis-only capture-service
+statement binds its one finalized metadata record to the verified grant and
+current trust generation, but still does not authenticate resident media
+bytes. Grant evidence is content-addressed here; the operational coordinator
+must verify resident evidence objects through the later protected
+evidence-store boundary. A later rights revocation blocks new rendering,
+admission, presentation, review, or link but does not rewrite an already linked
+historical human event.
 
 Checked human-readable synthetic value examples live at
 `vision_scoring/examples/capture-session-rights-grant.json`,
@@ -282,28 +317,30 @@ Checked human-readable synthetic value examples live at
 are not canonical wire byte fixtures; tests generate exact wire bytes through
 each contract's canonical encoder.
 
-Rights policy, trust store, evidence generation, and protected configuration
-are checked before and after source work so a mid-render governance change
-invalidates the result.
+The future clip-production coordinator must check rights policy, trust store,
+evidence generation, and protected configuration before and after source work
+so a mid-render governance change invalidates the result.
 
-## Trust and process separation
+## Trust and process separation (planned clip-production boundary)
 
-Use separate signature domains for renderer derivation, capture segments,
-capture metadata, capture-session rights grants, and future retirement. A
+The clip-production design uses separate signature domains for renderer
+derivation, capture-service statements, capture metadata, capture-session
+rights grants, and future retirement. A
 capture-metadata signer public key may not appear in the capture-session-rights
-keyring even under a different key ID. A protected
-`ClipProductionPolicyArchive` retains adoption history, current revocations,
-trusted renderer/capture keys, approved decoder/render/runtime/validator
-fingerprints, and fixed resource ceilings. It grants no scoring authority.
+keyring even under a different key ID. A future protected
+`ClipProductionPolicyArchive` would retain adoption history, current
+revocations, trusted renderer/capture keys, approved
+decoder/render/runtime/validator fingerprints, and fixed resource ceilings. It
+would grant no scoring authority.
 
-The coordinator owns the renderer key and parses no hostile media. The isolated
-worker receives read-only access to the verified staged source, a private
-write-only output directory, and approved fingerprints. It receives no
-network, database, event-ledger, ScoreCheck, signing-key, scorer, admin, or
-official-score credentials.
+The planned coordinator would own the renderer key and parse no hostile media.
+The isolated worker would receive read-only access to the verified staged
+source, a private write-only output directory, and approved fingerprints. It
+would receive no network, database, event-ledger, ScoreCheck, signing-key,
+scorer, admin, or official-score credentials.
 
-The worker uses no shell, starts in a new process group with a fixed
-environment, and is killable at one absolute deadline. The initial fixed V0
+The worker design uses no shell, starts in a new process group with a fixed
+environment, and is killable at one absolute deadline. The proposed fixed V0
 ceilings are:
 
 - 8 render requests per batch;
@@ -323,7 +360,7 @@ second isolated validator decodes the output and verifies frame count,
 timestamps, dimensions, exactly one video stream, no audio or data streams, and
 absence of extra frames.
 
-## Public surface
+## Planned public surface (not implemented)
 
 ```python
 publish_quarantined_source(source_path, *, trusted_store_context) -> ReviewSourceRef
@@ -340,24 +377,25 @@ with verify_review_clips_for_use(
     ...
 ```
 
-`VerifiedSourceSession` and `VerifiedReviewClipLease` are non-serializable and
-cannot outlive their leases. Public APIs accept no executable path, arbitrary
-arguments, trust roots, keys, timeouts, or relaxed limits. A durable render-job
-registry provides exact idempotency; conflicting bytes under one request key
-fail closed.
+`VerifiedSourceSession` and `VerifiedReviewClipLease` would be non-serializable
+and unable to outlive their leases. These public APIs would accept no
+executable path, arbitrary arguments, trust roots, keys, timeouts, or relaxed
+limits. A durable render-job registry would provide exact idempotency;
+conflicting bytes under one request key would fail closed.
 
-## Publishing and retirement
+## Publishing and retirement (planned)
 
-The coordinator recomputes every output digest, publishes from private
+The future coordinator must recompute every output digest, publish from private
 same-filesystem staging with exclusive generation locking and no-replace
-semantics, fsyncs files/directories, atomically exposes the complete generation,
-then reacquires a read lease and reverifies every object before returning.
+semantics, fsync files/directories, atomically expose the complete generation,
+then reacquire a read lease and reverify every object before returning.
 
-V0 exposes no deletion/retirement API. Before legal deletion is implemented,
-add a signed monotonic retirement index whose entries remain effective even if
-bytes later reappear. Exclusive retirement waits for active shared leases and
-cannot remove clips for active/unresolved cases. Historical links retain hashes
-and signatures and never cause an official score reversal.
+The planned clip-production V0 exposes no deletion/retirement API. Before legal
+deletion is implemented, it requires a signed monotonic retirement index whose
+entries remain effective even if bytes later reappear. Exclusive retirement
+must wait for active shared leases and cannot remove clips for active/unresolved
+cases. Historical links retain hashes and signatures and never cause an
+official score reversal.
 
 ## Required adversarial gates
 
@@ -395,13 +433,17 @@ media or ReviewClip step below.
 5. Implement isolated deterministic render/validation and atomic publishing.
 6. Replace case-store clip checks with v3 verification and current
    policy/rights checks at admission, context, action, and link.
-7. Add bounded finalized capture-window segments plus capture attestation and
-   integrate the implemented pre-match capture-session rights grant before
-   claiming live origin/clocks.
+7. **Implemented control plane only:** add one bounded finalized-window,
+   sequence-zero/reconnect-epoch-zero capture-service statement, current
+   genesis trust entry, detached signature, and exact replay of metadata,
+   policy, rights, window, trace, and integrity bindings. This does not claim
+   live origin, clock truth, media residency/content, or continuity.
 8. Add signed retirement only after the no-deletion V0 is proven.
 9. Expose clips through the dedicated no-mutation ScoreCheck receipt UI.
 
 Steps 1–6 can be proven with synthetic fixtures and selected finalized media.
 Live operation remains gated on the separate capture-session rights grant,
-capture/clock attestation, signed renderer/decoder validation, resident leased
-objects, and actual rights-cleared source material.
+independently adequate physical-camera/live-origin and clock proof, signed
+renderer/decoder validation, resident leased objects, and actual
+rights-cleared source material. The implemented genesis-only capture-service
+statement does not satisfy those gates.
