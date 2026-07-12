@@ -24,7 +24,6 @@ import json
 import multiprocessing
 import os
 import re
-import stat
 import time
 from dataclasses import dataclass
 from datetime import date
@@ -41,6 +40,7 @@ from .immutable_store import (
     generation_id_for,
     generation_read_lease,
 )
+from .protected_file import read_protected_file_bytes
 from .rights import RightsDecision
 
 
@@ -98,10 +98,23 @@ _MAX_ATTESTATION_PAIRS = 10_000
 _MAX_EVIDENCE_BYTES = 32 * 1024 * 1024
 _MAX_TOTAL_EVIDENCE_BYTES = 2 * 1024 * 1024 * 1024
 _EVIDENCE_TIMEOUT_SECONDS = 30.0
-_MAX_TRUST_JSON_BYTES = 4 * 1024 * 1024
 _MAX_TRUST_KEYS = 128
 _MAX_CURRENT_DECISIONS = 100_000
 _MAX_REVOKED_DECISIONS = 100_000
+# The flat policy has eight fixed fields and 128-byte stable IDs.  The
+# trust-store schema maxima serialize below 23 MiB; 32 MiB leaves bounded room
+# without making any schema-valid store unreadable.
+_MAX_RIGHTS_TRUST_STORE_BYTES = 32 * 1024 * 1024
+_MAX_RIGHTS_VERIFICATION_POLICY_BYTES = 4 * 1024
+_MAX_RIGHTS_TRUST_STORE_JSON_NODES = (
+    6
+    + (7 * _MAX_TRUST_KEYS)
+    + (3 * _MAX_CURRENT_DECISIONS)
+    + _MAX_REVOKED_DECISIONS
+)
+_MAX_RIGHTS_TRUST_STORE_JSON_CONTAINERS = (
+    4 + _MAX_TRUST_KEYS + _MAX_CURRENT_DECISIONS
+)
 
 
 class RightsUseProfile(str, Enum):
@@ -177,66 +190,19 @@ def _exact_list(payload: Mapping[str, Any], field_name: str, label: str) -> list
     return value
 
 
-def _strict_json_object(path: Path, *, label: str) -> Mapping[str, Any]:
-    try:
-        path_stat = os.lstat(path)
-    except OSError as exc:
-        raise ValueError(f"{label} is unavailable") from exc
-    if stat.S_ISLNK(path_stat.st_mode) or not stat.S_ISREG(path_stat.st_mode):
-        raise ValueError(f"{label} must be a non-symlink regular file")
-    if path_stat.st_size > _MAX_TRUST_JSON_BYTES:
-        raise ValueError(f"{label} exceeds {_MAX_TRUST_JSON_BYTES} bytes")
+def _parse_canonical_json_object(
+    raw: bytes,
+    *,
+    label: str,
+    maximum_bytes: int,
+    maximum_depth: int,
+    maximum_nodes: int,
+    maximum_containers: int,
+) -> dict[str, Any]:
+    """Parse bounded canonical JSON using schema-derived structural limits."""
 
-    flags = os.O_RDONLY
-    if hasattr(os, "O_CLOEXEC"):
-        flags |= os.O_CLOEXEC
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    if hasattr(os, "O_NONBLOCK"):
-        flags |= os.O_NONBLOCK
-    try:
-        descriptor = os.open(path, flags)
-    except OSError as exc:
-        raise ValueError(f"{label} could not be opened safely") from exc
-    try:
-        descriptor_before = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(descriptor_before.st_mode)
-            or _stat_identity(path_stat) != _stat_identity(descriptor_before)
-            or _stat_state(path_stat) != _stat_state(descriptor_before)
-        ):
-            raise ValueError(f"{label} changed while opening")
-        if descriptor_before.st_size > _MAX_TRUST_JSON_BYTES:
-            raise ValueError(f"{label} exceeds {_MAX_TRUST_JSON_BYTES} bytes")
-
-        remaining = descriptor_before.st_size
-        chunks: list[bytes] = []
-        while remaining:
-            chunk = os.read(descriptor, min(1024 * 1024, remaining))
-            if not chunk:
-                raise ValueError(f"{label} was truncated while reading")
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        if os.read(descriptor, 1):
-            raise ValueError(f"{label} grew while reading")
-
-        descriptor_after = os.fstat(descriptor)
-        try:
-            final_path_stat = os.lstat(path)
-        except OSError as exc:
-            raise ValueError(f"{label} changed while reading") from exc
-        if (
-            not stat.S_ISREG(descriptor_after.st_mode)
-            or stat.S_ISLNK(final_path_stat.st_mode)
-            or not stat.S_ISREG(final_path_stat.st_mode)
-            or _stat_state(descriptor_before) != _stat_state(descriptor_after)
-            or _stat_identity(descriptor_after) != _stat_identity(final_path_stat)
-            or _stat_state(descriptor_after) != _stat_state(final_path_stat)
-        ):
-            raise ValueError(f"{label} changed while reading")
-        raw = b"".join(chunks)
-    finally:
-        os.close(descriptor)
+    if type(raw) is not bytes or not 1 <= len(raw) <= maximum_bytes:
+        raise ValueError(f"{label} must be 1 to {maximum_bytes} exact bytes")
 
     def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         result: dict[str, Any] = {}
@@ -251,26 +217,49 @@ def _strict_json_object(path: Path, *, label: str) -> Mapping[str, Any]:
             raw.decode("utf-8", errors="strict"),
             object_pairs_hook=reject_duplicate_keys,
         )
+    except RecursionError as exc:
+        raise ValueError(f"{label} exceeds JSON depth {maximum_depth}") from exc
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"{label} must be valid UTF-8 JSON") from exc
-    if not isinstance(payload, Mapping):
+
+    nodes = 0
+    containers = 0
+    pending: list[tuple[object, int]] = [(payload, 1)]
+    while pending:
+        item, depth = pending.pop()
+        if depth > maximum_depth:
+            raise ValueError(f"{label} exceeds JSON depth {maximum_depth}")
+        nodes += 1
+        if nodes > maximum_nodes:
+            raise ValueError(f"{label} exceeds JSON node limit {maximum_nodes}")
+        if type(item) is dict:
+            containers += 1
+            pending.extend((child, depth + 1) for child in item.values())
+        elif type(item) is list:
+            containers += 1
+            pending.extend((child, depth + 1) for child in item)
+        elif type(item) not in (str, bool, int, float, type(None)):
+            raise ValueError(f"{label} contains an unsupported JSON value")
+        if containers > maximum_containers:
+            raise ValueError(
+                f"{label} exceeds JSON container limit {maximum_containers}"
+            )
+
+    if type(payload) is not dict:
         raise ValueError(f"{label} root must be a JSON object")
+    try:
+        canonical = json.dumps(
+            payload,
+            allow_nan=False,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    except (TypeError, ValueError, UnicodeEncodeError) as exc:
+        raise ValueError(f"{label} must be canonicalizable UTF-8 JSON") from exc
+    if raw != canonical:
+        raise ValueError(f"{label} must use canonical JSON encoding")
     return payload
-
-
-def _stat_identity(value: os.stat_result) -> tuple[int, int]:
-    return value.st_dev, value.st_ino
-
-
-def _stat_state(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
-    return (
-        value.st_dev,
-        value.st_ino,
-        value.st_mode,
-        value.st_size,
-        value.st_mtime_ns,
-        value.st_ctime_ns,
-    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -904,15 +893,49 @@ def rights_trust_store_from_dict(payload: Mapping[str, Any]) -> RightsTrustStore
 
 
 def load_rights_trust_store(path: Path) -> RightsTrustStore:
-    return rights_trust_store_from_dict(
-        _strict_json_object(path, label="rights trust store")
+    label = "rights trust store"
+    raw = read_protected_file_bytes(
+        path,
+        max_bytes=_MAX_RIGHTS_TRUST_STORE_BYTES,
+        label=label,
     )
+    payload = _parse_canonical_json_object(
+        raw,
+        label=label,
+        maximum_bytes=_MAX_RIGHTS_TRUST_STORE_BYTES,
+        maximum_depth=4,
+        maximum_nodes=_MAX_RIGHTS_TRUST_STORE_JSON_NODES,
+        maximum_containers=_MAX_RIGHTS_TRUST_STORE_JSON_CONTAINERS,
+    )
+    result = rights_trust_store_from_dict(payload)
+    if type(result) is not RightsTrustStore or (
+        raw != result.canonical_json().encode("utf-8")
+    ):
+        raise ValueError(f"{label} did not reconstruct exactly")
+    return result
 
 
 def load_rights_verification_policy(path: Path) -> RightsVerificationPolicy:
-    return rights_verification_policy_from_dict(
-        _strict_json_object(path, label="rights verification policy")
+    label = "rights verification policy"
+    raw = read_protected_file_bytes(
+        path,
+        max_bytes=_MAX_RIGHTS_VERIFICATION_POLICY_BYTES,
+        label=label,
     )
+    payload = _parse_canonical_json_object(
+        raw,
+        label=label,
+        maximum_bytes=_MAX_RIGHTS_VERIFICATION_POLICY_BYTES,
+        maximum_depth=2,
+        maximum_nodes=9,
+        maximum_containers=1,
+    )
+    result = rights_verification_policy_from_dict(payload)
+    if type(result) is not RightsVerificationPolicy or (
+        raw != result.canonical_json().encode("utf-8")
+    ):
+        raise ValueError(f"{label} did not reconstruct exactly")
+    return result
 
 
 def verify_rights_evidence(

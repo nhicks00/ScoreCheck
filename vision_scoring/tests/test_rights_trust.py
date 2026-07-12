@@ -9,7 +9,6 @@ import multiprocessing
 import os
 from pathlib import Path
 import tempfile
-import time
 import unittest
 from unittest.mock import patch
 
@@ -23,6 +22,11 @@ from vision_scoring.immutable_store import (
     generation_id_for,
     generation_read_lease,
     generation_write_lock,
+)
+from vision_scoring.protected_file import (
+    PROTECTED_FILE_INPUT,
+    PROTECTED_FILE_SIZE,
+    ProtectedFileError,
 )
 from vision_scoring.rights import (
     ParticipantAgeStatus,
@@ -910,157 +914,136 @@ class RightsTrustTests(unittest.TestCase):
             self.assertEqual(load_rights_trust_store(store_path), store)
             self.assertEqual(load_rights_verification_policy(policy_path), policy)
 
-    def test_json_loaders_reject_symlink_fifo_device_and_oversize_quickly(
-        self,
-    ) -> None:
+    def test_every_loader_requires_one_exact_absolute_path(self) -> None:
+        concrete_path_type = type(Path())
+
+        class DerivedPath(concrete_path_type):  # type: ignore[misc, valid-type]
+            pass
+
+        loaders = (load_rights_trust_store, load_rights_verification_policy)
+        invalid_paths = (
+            "/tmp/protected.json",
+            Path("relative-protected.json"),
+            DerivedPath("/tmp/protected.json"),
+        )
+        for loader in loaders:
+            for path in invalid_paths:
+                with self.subTest(loader=loader.__name__, path=path):
+                    with self.assertRaises(ProtectedFileError) as caught:
+                        loader(path)  # type: ignore[arg-type]
+                    self.assertEqual(caught.exception.code, PROTECTED_FILE_INPUT)
+
+    def test_protected_file_errors_propagate_unchanged_with_schema_caps(self) -> None:
+        cases = (
+            (load_rights_trust_store, 32 * 1024 * 1024, "rights trust store"),
+            (
+                load_rights_verification_policy,
+                4 * 1024,
+                "rights verification policy",
+            ),
+        )
+        path = Path("/trusted/protected.json")
+        for loader, maximum_bytes, label in cases:
+            error = ProtectedFileError(PROTECTED_FILE_SIZE, "sentinel")
+            with self.subTest(loader=loader.__name__), patch(
+                "vision_scoring.rights_trust.read_protected_file_bytes",
+                side_effect=error,
+            ) as reader, self.assertRaises(ProtectedFileError) as caught:
+                loader(path)
+            self.assertIs(caught.exception, error)
+            reader.assert_called_once_with(
+                path,
+                max_bytes=maximum_bytes,
+                label=label,
+            )
+
+    def test_every_loader_rejects_noncanonical_bytes_and_wrong_result_type(self) -> None:
         store = _store(_decision())
+        policy = _policy(store)
+        cases = (
+            (
+                load_rights_trust_store,
+                store.canonical_json(),
+                "rights_trust_store_from_dict",
+            ),
+            (
+                load_rights_verification_policy,
+                policy.canonical_json(),
+                "rights_verification_policy_from_dict",
+            ),
+        )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            target = root / "trust-store.json"
-            target.write_text(store.canonical_json(), encoding="utf-8")
+            for index, (loader, canonical, parser_name) in enumerate(cases):
+                path = root / f"contract-{index}.json"
+                path.write_bytes(canonical.encode("utf-8") + b"\n")
+                with self.subTest(loader=loader.__name__, case="noncanonical"):
+                    with self.assertRaisesRegex(ValueError, "canonical JSON"):
+                        loader(path)
 
-            symlink = root / "symlink.json"
-            symlink.symlink_to(target)
-            with self.assertRaisesRegex(ValueError, "non-symlink regular file"):
-                load_rights_trust_store(symlink)
+                path.write_text(canonical, encoding="utf-8")
+                with self.subTest(loader=loader.__name__, case="wrong-type"), patch(
+                    f"vision_scoring.rights_trust.{parser_name}",
+                    return_value=object(),
+                ), self.assertRaisesRegex(ValueError, "reconstruct exactly"):
+                    loader(path)
 
-            oversize = root / "oversize.json"
-            with oversize.open("wb") as output:
-                output.truncate(4 * 1024 * 1024 + 1)
-            with self.assertRaisesRegex(ValueError, "exceeds 4194304 bytes"):
-                load_rights_trust_store(oversize)
+    def test_loader_rejects_canonical_json_that_normalizes_during_rebuild(self) -> None:
+        decision = _decision()
+        first_key = _store(decision).keys[0]
+        second_private_key = Ed25519PrivateKey.from_private_bytes(b"\x12" * 32)
+        second_public_key = base64.b64encode(
+            second_private_key.public_key().public_bytes_raw()
+        ).decode("ascii")
+        store = _store(
+            decision,
+            keys=(
+                first_key,
+                TrustedReviewerKey(
+                    key_id="rights-key-2",
+                    reviewer_id="rights-reviewer-2",
+                    public_key_base64=second_public_key,
+                    valid_from="2026-01-01",
+                    valid_until="2026-12-31",
+                    compromised_on=None,
+                ),
+            ),
+        )
+        payload = store.to_canonical_dict()
+        payload["keys"].reverse()
+        raw = json.dumps(
+            payload,
+            allow_nan=False,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        self.assertNotEqual(raw, store.canonical_json().encode("utf-8"))
 
-            if hasattr(os, "mkfifo"):
-                fifo = root / "policy.fifo"
-                os.mkfifo(fifo)
-                started = time.monotonic()
-                with self.assertRaisesRegex(ValueError, "non-symlink regular file"):
-                    load_rights_verification_policy(fifo)
-                self.assertLess(time.monotonic() - started, 2.0)
-
-            device = Path("/dev/null")
-            if device.exists():
-                started = time.monotonic()
-                with self.assertRaisesRegex(ValueError, "non-symlink regular file"):
-                    load_rights_trust_store(device)
-                self.assertLess(time.monotonic() - started, 2.0)
-
-    def test_json_loader_detects_truncation_growth_and_same_inode_mutation(
-        self,
-    ) -> None:
-        store = _store(_decision())
-        raw = store.canonical_json().encode("utf-8")
-        real_read = os.read
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "trust-store.json"
-
+            path = Path(directory) / "out-of-order-store.json"
             path.write_bytes(raw)
-            truncated = False
-
-            def truncate_before_read(descriptor: int, count: int) -> bytes:
-                nonlocal truncated
-                if not truncated:
-                    truncated = True
-                    path.write_bytes(b"")
-                return real_read(descriptor, count)
-
-            with patch(
-                "vision_scoring.rights_trust.os.read",
-                side_effect=truncate_before_read,
-            ), self.assertRaisesRegex(ValueError, "truncated while reading"):
+            with self.assertRaisesRegex(ValueError, "reconstruct exactly"):
                 load_rights_trust_store(path)
 
-            path.write_bytes(raw)
-            grown = False
-
-            def grow_after_read(descriptor: int, count: int) -> bytes:
-                nonlocal grown
-                chunk = real_read(descriptor, count)
-                if not grown:
-                    grown = True
-                    with path.open("ab") as output:
-                        output.write(b"x")
-                        output.flush()
-                        os.fsync(output.fileno())
-                return chunk
-
-            with patch(
-                "vision_scoring.rights_trust.os.read",
-                side_effect=grow_after_read,
-            ), self.assertRaisesRegex(ValueError, "grew while reading"):
-                load_rights_trust_store(path)
-
-            path.write_bytes(raw)
-            mutated = False
-
-            def mutate_after_read(descriptor: int, count: int) -> bytes:
-                nonlocal mutated
-                chunk = real_read(descriptor, count)
-                if not mutated:
-                    mutated = True
-                    with path.open("r+b") as output:
-                        output.write(b"[")
-                        output.flush()
-                        os.fsync(output.fileno())
-                return chunk
-
-            with patch(
-                "vision_scoring.rights_trust.os.read",
-                side_effect=mutate_after_read,
-            ), self.assertRaisesRegex(ValueError, "changed while reading"):
-                load_rights_trust_store(path)
-
-    def test_json_loader_detects_path_replacement_during_read(self) -> None:
-        store = _store(_decision())
-        raw = store.canonical_json().encode("utf-8")
-        real_open = os.open
-        real_read = os.read
+    def test_loader_preserves_semantic_parser_errors(self) -> None:
+        payload = _policy(_store(_decision())).to_canonical_dict()
+        payload["policy_id"] = 7
+        raw = json.dumps(
+            payload,
+            allow_nan=False,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            path = root / "trust-store.json"
-            displaced = root / "displaced.json"
-            replacement = root / "replacement.json"
+            path = Path(directory) / "invalid-policy.json"
             path.write_bytes(raw)
-            replacement.write_bytes(raw)
-            replaced_before_open = False
-
-            def replace_before_open(
-                target: str | bytes | os.PathLike[str] | os.PathLike[bytes],
-                flags: int,
-                mode: int = 0o777,
-                *,
-                dir_fd: int | None = None,
-            ) -> int:
-                nonlocal replaced_before_open
-                if not replaced_before_open and Path(target) == path:
-                    replaced_before_open = True
-                    os.replace(path, displaced)
-                    os.replace(replacement, path)
-                return real_open(target, flags, mode, dir_fd=dir_fd)
-
-            with patch(
-                "vision_scoring.rights_trust.os.open",
-                side_effect=replace_before_open,
-            ), self.assertRaisesRegex(ValueError, "changed while opening"):
-                load_rights_trust_store(path)
-
-            displaced.unlink()
-            replaced = False
-
-            def replace_after_read(descriptor: int, count: int) -> bytes:
-                nonlocal replaced
-                chunk = real_read(descriptor, count)
-                if not replaced:
-                    replaced = True
-                    path.replace(displaced)
-                    path.write_bytes(raw)
-                return chunk
-
-            with patch(
-                "vision_scoring.rights_trust.os.read",
-                side_effect=replace_after_read,
-            ), self.assertRaisesRegex(ValueError, "changed while reading"):
-                load_rights_trust_store(path)
+            with self.assertRaisesRegex(
+                ValueError,
+                "policy_id must be an ASCII stable ID",
+            ):
+                load_rights_verification_policy(path)
 
 
 if __name__ == "__main__":
