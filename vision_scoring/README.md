@@ -6,28 +6,35 @@ scoring. It intentionally contains no detector, tracker, or model runtime yet.
 Architecture and readiness decisions live in
 [the vision-scoring documentation](../docs/vision-scoring/ARCHITECTURE.md).
 
-The adopted hard-cut domain boundary is explicit:
+The adopted V0 boundary is explicit:
 
-1. perception creates immutable observations and event proposals;
-2. causal fusion creates a `RallyHypothesis` with no policy authority;
-3. exception-first policy creates a reproducible `PolicyAssessment` with no
-   scoring authority;
-4. a future authenticated human/service authorizer creates and signs a
-   `RuleEvent` only through an eligible authorization path;
-5. `RulesReducer.reduce()` validates domain semantics and derives the next legal
-   score state.
+1. perception creates immutable observations;
+2. causal fusion creates a bounded `RallyHypothesis` from primary rally
+   evidence, with no policy or scoring power;
+3. a separately timed next-server observation may be reconciled against that
+   hypothesis, but can only corroborate it or make the result less eligible;
+4. exception-first policy creates a reproducible `PolicyAssessment`, which is
+   advice and never an authorization;
+5. an authenticated human signs an exact `AuthorizationCommand`, either
+   directly or with a separately signed eligible assessment attached;
+6. a trusted authorizer verifies the protected per-match policy, human role,
+   signatures, assessment provenance, context, and event, then countersigns an
+   `AuthorizedRuleEvent` envelope;
+7. a transactional shadow processor must reverify that envelope, replay the
+   immutable log, call `RulesReducer.reduce()`, and atomically append the event
+   and derived state.
 
-The current Phase 0 code still contains the pre-adoption `RallyDecision` and
-`AUTO_CONFIRM` names. They are transitional internal artifacts scheduled for
-hard removal before persistence, authorization, or an external API is added;
-new consumers must not depend on them.
+There is no model or service principal that can authorize a score in V0. The
+only trusted actor roles are `SCOREKEEPER`, `REFEREE`, and `MATCH_ADMIN`, and
+the last role may seed a set only. Assessment assistance never replaces the
+human signature.
 
-The reducer is **not** an access-control or security boundary. It does not
-authenticate an actor, verify that an authority label was assigned by a trusted
-service, verify a signature, or transactionally persist an event. The required
-`authorization_id` is provenance linkage only; any in-process caller can
-currently supply it. Do not expose the reducer directly to untrusted input or
-use its acceptance of an event as proof that the event was authorized.
+The reducer is **not** an access-control or security boundary. A `RuleEvent`
+contains domain facts only: no actor, role, permission claim, authorization
+identifier, or signature. The signed envelope is the security boundary, and
+durable use additionally requires transactional verification and append. Do
+not expose the reducer directly to untrusted input or use its acceptance of an
+event as proof that the event was authorized.
 
 Create the locked Python 3.11 environment and run the unit tests:
 
@@ -45,7 +52,7 @@ uv run --locked python -m vision_scoring.readiness \
   --dataset-manifest-attestation examples/dataset-manifest-attestation.json \
   --readiness-verification-policy examples/readiness-verification-policy.json \
   --expected-readiness-verification-policy-sha256 \
-    18d4b55467b0ed81a511d679a592b1f0eee5416d9f1487c1eb88020c08c2bef9 \
+    77dc5aeafc6f4c3697ad545456545639f736009838288c2dd37f29e49866577a \
   --trusted-launcher-deployment-artifact-sha256 \
     ada0689d8c632e1ec54c0d97bd5428afc6875b6d36fe6f363d3e12c0b81dda38 \
   --expected-governance-domain-id example-dataset-governance \
@@ -55,7 +62,7 @@ uv run --locked python -m vision_scoring.readiness \
   --rights-trust-store examples/rights-trust-store.json \
   --rights-verification-policy examples/rights-verification-policy.json \
   --expected-rights-verification-policy-sha256 \
-    2ca5a11bda6219ab2e62c3a36c9e45f9ad41ff739fe9770d6ffee1516b7eaf1f \
+    e4e87616222b632a36f6d2aed1e76e92ce27bf04c3c1c0f34677df448754ffde \
   --rights-evidence-store-root examples/rights-evidence
 ```
 
@@ -220,16 +227,21 @@ The readiness thresholds are engineering gates, not governing-body standards.
 
 Implemented now:
 
-- immutable frame, calibration, observation, proposal, decision, and rule-event contracts;
+- immutable frame, calibration, observation, `RallyHypothesis`, optional
+  next-server reconciliation, `PolicyAssessment`, and typed rule-event
+  contracts;
 - deterministic set/match scoring with service-order validation;
 - explicit replay/no-point plus latched side-switch and technical-timeout obligations;
-- basic non-automatic authorized point aliases named `PENALTY_POINT` and
-  `SERVICE_ORDER_FAULT`; these do not implement a sanctions, defaults, or
-  discipline domain, and they require a unique scoring-opportunity ID in
-  `related_rally_id` plus immutable evidence;
-- a v0 compensating correction limited to the latest score/replay/correction
-  event in the current/latest set;
 - idempotent event replay and simultaneous reducer effects;
+- exactly five rule-event types: `SET_SEED`, `POINT_AWARDED`,
+  `REPLAY_NO_POINT`, `SIDE_SWITCH_CONFIRMED`, and
+  `TECHNICAL_TIMEOUT_COMPLETED`;
+- Ed25519-signed human commands, signed assessment provenance for the assisted
+  path, protected per-match policy generations and current revocations, fixed
+  role/event allowlists, authorizer countersignatures, and strict canonical
+  authorized-event envelopes;
+- canonical match-state encoding and validation for cache comparison; the
+  event log, not a decoded state snapshot, remains the replay source of truth;
 - detached-snapshot, curator-signed readiness manifests with current/revoked
   governance and byte-verified resident media, label, calibration, camera,
   clock, and encoder artifacts;
@@ -244,28 +256,26 @@ Implemented now:
 Not implemented yet:
 
 - persistence/transactional append storage;
-- authenticated actor/role resolution, the evidence-to-`RuleEvent` authorization
-  service, event signing, and signature verification;
+- deployment identity/session resolution that maps a signed human key to the
+  protected per-match authorization policy;
+- the scorer-copilot review workflow and shadow outbox;
 - full misconduct/sanction progression, defaults, forfeits, expulsions, or
   disciplinary case handling;
-- historical correction after a later event or set; that requires a replay
-  service that rebuilds and revalidates all dependent state;
-- correction of an already-seeded player roster or service-order tuple; v0
-  requires rejecting the set seed and restarting before subsequent events;
+- every form of score correction. Correction is intentionally absent from the
+  rule-event schema, reducer, and authorization allowlists. It must wait for a
+  separately designed privileged replay command that binds before/after state,
+  rebuilds from the immutable event log, and revalidates all dependent state;
 - media decoding/content inspection and calibration measurement; the technical
   ffprobe/hash preflight above is structural inventory only;
 - ball, player, tracking, pose, audio, or event models;
 - live ScoreCheck integration.
 
-An authenticated human/referee point entry may continue while a side-switch or
+An authorized human point entry may continue while a side-switch or
 technical-timeout obligation is pending; the obligation remains latched during
-the active set. `AUTO_POLICY` point events are blocked while either obligation
-remains. If an authoritative terminal point closes the set first, any obligation
-that was already overdue before that terminal point is preserved in the
-`SetResult` audit and emits `SET_CLOSED_WITH_OPEN_OBLIGATIONS`; it is never
-silently erased. In this package, however, `OPERATOR`, `SCOREKEEPER`, and
-`REFEREE_FEED` (as well as `IMPORT`) are caller-supplied enum values—not
-authenticated identities.
+the active set. No automated event origin exists. If a terminal point closes
+the set first, any obligation that was already overdue before that point is
+preserved in the `SetResult` audit and emits
+`SET_CLOSED_WITH_OPEN_OBLIGATIONS`; it is never silently erased.
 
 Every rule event carries a `ruleset_fingerprint`: the lowercase SHA-256 of the
 effective ruleset's canonical, UTF-8 JSON (sorted keys, compact separators, all
@@ -273,4 +283,9 @@ scoring/obligation parameters and `reducer_semantics_version` included). This is
 distinct from the rule event's own content fingerprint. The reducer
 computes/stores its ruleset value and rejects an exact mismatch. A hash binds an
 event to ruleset bytes but is not a signature or authorization proof. Durable
-replay must additionally pin the reducer artifact/container/commit digest.
+replay must reparse and reverify every canonical authorized-event envelope,
+reapply the complete ordered stream, compare every persisted derived-state
+snapshot byte-for-byte, and additionally pin the reducer
+artifact/container/commit digest. A state snapshot is only a cache. Rollback of
+the entire log and policy archive remains an outer deployment-boundary threat
+and requires a separately protected monotonic checkpoint.

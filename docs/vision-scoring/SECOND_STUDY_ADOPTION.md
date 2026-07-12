@@ -64,6 +64,20 @@ change; it does not supersede the Phase 0 safety boundaries
   scoresheet/referee feed is preferred when available; neither OCR nor audio is
   legal score authority.
 
+## Deliberate V0 deferrals
+
+- The study correctly requires immutable correction history, but its abstract
+  `CorrectionEvent` is not sufficient executable semantics. A local state
+  replacement can invalidate service order, side switches, timeouts, later
+  sets, and terminal state. V0 therefore exposes no correction event or
+  authorization path. A future privileged replay command must bind the target
+  interval plus before/after state fingerprints, rebuild from the immutable
+  authorized log, and revalidate every dependent event.
+- Model-family names in the study are benchmark candidates, not approved code,
+  checkpoints, datasets, or commercial licenses. No candidate enters training
+  until its exact artifacts and resident source media pass the existing rights,
+  provenance, capture-observability, split, and annotation gates.
+
 ## Revised execution order
 
 1. Finish capture/media, signed rights, annotation-trust, split, and evaluation

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from .contracts import Team
+from .domain_events import Team
 
 
 SCHEMA_VERSION = "1.0"

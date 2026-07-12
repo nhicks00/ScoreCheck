@@ -89,14 +89,12 @@ _VERIFIER_DEPENDENCY_NAMES = ("cryptography",)
 _VERIFIER_SOURCE_FILES = (
     "__init__.py",
     "artifact_store.py",
-    "contracts.py",
     "dataset_split.py",
     "immutable_store.py",
     "readiness.py",
     "readiness_trust.py",
     "rights.py",
     "rights_trust.py",
-    "rules.py",
 )
 
 

@@ -4,10 +4,10 @@
   "governance_domain_id": "example-dataset-governance",
   "policy_id": "synthetic-readiness-policy-v1",
   "require_unseen_test_venue": true,
-  "rights_verification_policy_sha256": "2ca5a11bda6219ab2e62c3a36c9e45f9ad41ff739fe9770d6ffee1516b7eaf1f",
+  "rights_verification_policy_sha256": "e4e87616222b632a36f6d2aed1e76e92ce27bf04c3c1c0f34677df448754ffde",
   "runtime_identity_sha256": "45bcc0b309ac45a0800a6fd2db6397a65538a9055e9beb8566088418e734bf27",
   "schema_version": "1.0",
   "valid_from": "2026-07-01",
   "valid_until": "2099-12-31",
-  "verifier_source_tree_sha256": "4418d6c430a9d6c149a31b05ebdcff9312fe7fb1b9f8eeea81b8489a23095f28"
+  "verifier_source_tree_sha256": "0d0408c7ed25c4469956221a2fa93ac0f4d9a3f3289994e0d5f2c916e2e884b9"
 }

@@ -1,6 +1,6 @@
 # Vision Scoring Data and Capture Readiness
 
-**Readiness:** blocked for production training claims and automatic scoring
+**Readiness:** blocked for production training claims; scoring work is V0 shadow-only
 
 **Date:** 2026-07-11
 
@@ -107,7 +107,7 @@ Rules:
 
 | Tier | Minimum capture | Intended use | Release limitation |
 |---|---|---|---|
-| A: compatibility | One fixed 1920×1080 camera at 30 progressive fps plus synchronized audio | Feasibility, server identity, delayed assistive review, and no-mutation shadow | Compatibility/shadow only; never eligible for automatic score mutation or referee claims |
+| A: compatibility | One fixed 1920×1080 camera at 30 progressive fps plus synchronized audio | Feasibility, server identity, delayed assistive review, and no-mutation shadow | Compatibility/shadow only; never eligible for an official score mutation or referee claim |
 | B: assistive baseline | One fixed 3840×2160 camera at 59.94/60 progressive fps, native-resolution recording, synchronized audio | Ball continuity, contact candidates, rally/server/team attribution, statistics | Occluded/depth-dependent and terminal cases remain human-authorized |
 | C: multi-view | At least two genlocked or independently verified synchronized 4K60 cameras with joint calibration | Occlusion recovery, triangulation, stronger contact attribution | Still requires fault-specific validation before referee support |
 
@@ -178,7 +178,12 @@ Annotation is temporal and uncertainty-aware. Do not turn every ambiguous frame 
 
 Scoreboard OCR and audio may create weak labels or surface review candidates. They are never sole evaluation truth. Two reviewers adjudicate event boundaries, replay/administrative cases, and any disagreement that affects scoring. Store label uncertainty as an interval rather than forcing an exact contact frame.
 
-Preserve a governing-body/referee source's original sanction, default, misconduct, or service-order-fault label instead of collapsing it into a generic training target. The v0 reducer's `PENALTY_POINT` and `SERVICE_ORDER_FAULT` are only basic authorized point aliases; they are not a complete discipline or fault-remedy ontology.
+Preserve a governing-body/referee source's original sanction, default,
+misconduct, service-order-fault, or correction label instead of collapsing it
+into a generic training target. These may be annotation truth and review
+strata, but none maps to a V0 rule event. The reducer and authorization
+allowlists support only the five explicitly documented human-authorized event
+types; administrative remedies and corrections remain unsupported.
 
 ## Initial dataset design
 
@@ -228,10 +233,13 @@ Report point estimates, confidence intervals where meaningful, per-condition sli
 | Court | Reprojection error and surveyed physical error by court zone; drift-detection delay and false alarms |
 | Events | Precision/recall/F1 for serve, dead-ball, replay, next-server, terminal, and team attribution; event latency |
 | Calibration | Reliability diagram, ECE/Brier or appropriate alternative, and accuracy-versus-coverage/risk-versus-coverage curves |
-| Rules | Exact state after every event, complete-match score accuracy, illegal transition count, canonical ruleset-fingerprint rejection, pending-obligation audit behavior, latest-resolution correction boundaries, and replay determinism |
-| Product | False official mutations per 1,000 eligible rallies and per match; review/abstention rate; operator acceptance/correction rate; p50/p95 evidence-to-proposal latency |
+| Rules | Exact state after every event, complete-match score accuracy, illegal transition count, canonical ruleset-fingerprint rejection, pending-obligation audit behavior, rejection of unsupported event classes, and replay determinism |
+| Product | False human-authorization-ready assessments per 1,000 eligible rallies and per match; review/abstention rate; operator acceptance/correction rate; p50/p95 evidence-to-assessment latency |
 
-The live inference target is initially p95 at or below two seconds after the decisive evidence, using the bounded 0.5–2 second buffer. Next-server-based scoring is inherently delayed until the next authorized serve; report that delay separately rather than hiding it in model latency.
+The live inference target is initially p95 at or below two seconds after the
+decisive primary evidence, using the bounded 0.5–2 second buffer. Independent
+next-server reconciliation is inherently delayed until the next authorized
+serve; report that delay separately rather than hiding it in model latency.
 
 ## Release gates
 
@@ -256,54 +264,102 @@ Gates are cumulative. A schedule, demo, or high subsystem AP cannot waive them.
 - Risk/coverage is calibrated on validation and reported unchanged on the locked test set.
 - Every supported and unsupported condition is documented in a model/capture card.
 - Full-match replay produces zero illegal reducer transitions.
-- Tests show `AUTO_POLICY` is blocked by pending side-switch/timeout obligations while trusted human/referee points preserve—rather than silently clear—those obligations.
-- Tests reject historical/local correction after any later event or set; that case is reserved for the replay service.
+- Tests show next-server evidence never promotes a policy status:
+  corroboration leaves the primary result unchanged, contradiction or a
+  service-order conflict requires review, and same-server ambiguity cannot
+  remove human handling.
+- Tests show exception signals are screened before point optimization and
+  cannot enter the assessment-assisted authorization path.
+- Tests reject every administrative, correction, or otherwise unknown event
+  type at both the domain parser and authorization boundary.
 
 Absolute subsystem thresholds beyond the preflight assumptions are intentionally not invented here. Pre-register them after the first baseline, before opening the locked test set.
 
 ### 4. Authorization and persistence gate
 
-The reducer accepting a domain-valid event does not satisfy this gate. Before any external or official mutation path:
+The reducer accepting a domain-valid event does not satisfy this gate. The
+signed human-authorization contracts exist, but the complete gate also
+requires the transactional shadow store and deployment trust boundary:
 
-- authenticate the actor/service and map it to an allowlisted authority; callers cannot self-assert `OPERATOR`, `SCOREKEEPER`, `REFEREE_FEED`, or `AUTO_POLICY`;
-- create a durable authorization record and place its identifier in `authorization_id` for provenance; the identifier alone is never treated as proof;
-- sign the canonical rule-event fingerprint and verify the signature and signer before reduction;
-- compute the effective ruleset's canonical SHA-256, persist it in match state, and reject exact mismatches;
-- within one transaction, lock the match sequence/idempotency key, verify the event, run the reducer, and atomically append both event and derived state before publication;
-- implement durable replay before permitting a correction that targets anything except the latest score/replay/correction event in the current/latest set;
-- pass forged authority/id, changed payload, changed ruleset parameter, replay, duplicate/conflict, stale sequence, and storage-failure tests.
+- resolve a human identity/session to a protected per-match scorekeeper,
+  referee, or match-admin key; V0 contains no model or service principal;
+- require an exact signed human `AuthorizationCommand`; for the assisted path,
+  require the exact separately signed eligible `PolicyAssessment` and preserve
+  its model/evidence provenance;
+- verify the fixed role/event allowlist, command lifetime, nonce, expected
+  revision, event/rally context, ruleset, policy generation, and both human and
+  authorizer signatures before reduction;
+- load the authorization archive through an externally rollback-protected
+  configuration boundary and pin its fingerprint. Retain exact historical
+  policy generations, but apply current key revocations when replaying their
+  envelopes;
+- compute the effective ruleset's canonical SHA-256, persist it in match state,
+  and reject exact mismatches;
+- within one transaction, lock the match sequence and idempotency key, reverify
+  the envelope, replay the complete canonical event history, compare every
+  cached state byte-for-byte, run the reducer, and atomically append the
+  authorization proof, event, state, idempotency result, and shadow outbox row;
+- protect a monotonic database checkpoint or trusted backup generation outside
+  the database. An internally consistent rollback of the database and policy
+  archive cannot be detected from their contents alone;
+- pass forged key/role, changed payload, changed ruleset parameter, untrusted or
+  rolled-back policy, revoked historical key, duplicate/conflict, stale
+  sequence, concurrent append, state-cache tamper, and storage-failure tests.
 
-The v0 `PENALTY_POINT` and `SERVICE_ORDER_FAULT` aliases may enter this path only as basic authorized point awards. Full sanctions, defaults, forfeits, and discipline are unsupported until separately modeled and validated.
+The domain event contains no identity, role, permission claim, or signature;
+those belong only to the signed outer envelope. Exactly five event types are
+accepted: `SET_SEED`, `POINT_AWARDED`, `REPLAY_NO_POINT`,
+`SIDE_SWITCH_CONFIRMED`, and `TECHNICAL_TIMEOUT_COMPLETED`. Administrative
+points, service-order remedies, sanctions/defaults/discipline, and corrections
+are unsupported.
 
 ### 5. Shadow gate
 
 - Run on complete live matches with no credentials capable of official mutation.
-- Record every proposal, abstention, operator ruling, late/corrected truth, outage, and version boundary.
-- Include replays, side switches, reconnects, terminal points, latest-resolution corrections, basic administrative points, and adverse weather/lighting—or explicitly keep missing classes unsupported.
-- Keep historical corrections and full sanction/default/discipline cases unsupported unless the replay/domain services are implemented first.
+- Record every hypothesis, optional reconciliation, assessment, abstention,
+  signed human ruling, late/corrected annotation truth, outage, and version
+  boundary.
+- Exercise all five supported event types plus reconnects, terminal points, and
+  adverse weather/lighting.
+- Retain correction, challenge, administrative, sanction, default, and
+  discipline cases as review/evaluation strata only; they cannot produce a V0
+  event.
+- Reparse, reverify, and replay the complete immutable authorized-event history
+  on every audit. Treat derived state as a cache and compare it byte-for-byte.
 
-### 6. Automatic-mutation gate
+### 6. Evidence required before considering any post-V0 official path
 
-The first eligible automatic policy must achieve all of the following:
+V0 is shadow-only and contains no automated event origin or ScoreCheck mutation
+credential. The following are research evidence, not implementation permission:
 
-- zero false official mutations across at least 3,000 independently adjudicated **eligible** opportunities;
-- exact committed score after every authorized event and zero illegal reducer transitions;
-- useful coverage reported beside safety, with event- and condition-level slices;
-- all terminal points, replays, challenges, corrections, administrative points, and identity-uncertain cases still human/referee-authorized;
-- no score mutation during any integrity, calibration, model, or version failure;
-- no `AUTO_POLICY` point while a side-switch or timeout obligation is pending;
-- authenticated authorizer, signature verification, transactional append, and canonical ruleset matching remain healthy under failure injection;
-- owner sign-off on the specific policy/model/capture/rules versions.
+- zero false human-authorization-ready assessments across at least 3,000
+  independently adjudicated eligible opportunities;
+- exact shadow score after every human-authorized event and zero illegal
+  reducer transitions;
+- useful coverage reported beside safety, with event- and condition-level
+  slices;
+- terminal points, replays, challenges, corrections, administrative cases, and
+  identity uncertainty reported separately;
+- no authorization-ready assessment during any integrity, calibration, model,
+  or version failure;
+- signed human authorization, transactional shadow append, complete replay,
+  rollback protection, and canonical ruleset matching remain healthy under
+  failure injection;
+- a separate architecture and security review plus explicit owner approval for
+  any new official mutation design.
 
-With zero observed errors, the binomial “rule of three” gives only an approximate 95% upper error bound of `3/N`, or 0.1% at 3,000 observations. Real rallies are correlated by venue, camera, and weather, so 3,000 is an initial gate—not proof of perfection. Continue to report venue-clustered results and operate a kill switch at the authorization service.
+With zero observed errors, the binomial “rule of three” gives only an
+approximate 95% upper error bound of `3/N`, or 0.1% at 3,000 observations. Real
+rallies are correlated by venue, camera, and weather, so 3,000 is an initial
+study gate—not proof of perfection. Continue to report venue-clustered results.
 
 ## 30/60/90-day sequence
 
 | Window | Work | Exit decision |
 |---|---|---|
-| Days 0–30 | Preserve/inventory legacy artifacts; resolve rights; choose object manifest/versioning; hard-cut proposal/policy/authorization contracts; implement scorer-copilot review, authenticated authorizer, signed transactional shadow event log, outbox, and deterministic replay; validate canonical ruleset fingerprint and correction boundaries; test camera placements; run Tier A/B preflights; lock dataset groups | Demonstrate a no-mutation control plane and select a supported capture/label plan, or stop and redesign |
+| Days 0–30 | Preserve/inventory legacy artifacts; resolve rights; choose object manifest/versioning; hard-cut hypothesis/policy/authorization contracts; implement scorer-copilot review, signed transactional shadow event log, outbox, and deterministic replay; validate canonical ruleset fingerprint, five-event allowlist, and unsupported-event rejection; test camera placements; run Tier A/B preflights; lock dataset groups | Demonstrate a no-mutation control plane and select a supported capture/label plan, or stop and redesign |
 | Days 31–60 | Complete the first benchmark tranche; establish constrained factor-graph/HSMM and simple vision baselines; then run the justified ball/detector/tracker/pose/calibration challengers and calibrated abstention studies; replay complete matches; publish model/capture cards and error taxonomy | Select a production baseline and challenger only if held-out product and event-security tests justify them |
-| Days 61–90 | Operate one court in no-mutation shadow; harden operator review and audit replay; accumulate independent eligible cases; test failure injection; decide whether dual-camera value justifies cost | Approve continued shadow, human-confirmed assistive release, or redesign; automatic mutation only if every gate actually passes |
+| Days 61–90 | Operate one court in no-mutation shadow; harden operator review and audit replay; accumulate independent eligible cases; test failure injection; decide whether dual-camera value justifies cost | Approve continued shadow, human-confirmed assistive research, or redesign; V0 has no official mutation path |
 
 If adequate rights-cleared diversity, preflight quality, or 3,000 eligible opportunities are unavailable by day 90, remain in shadow. The deadline is not a reason to relax the architecture.
 

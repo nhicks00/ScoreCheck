@@ -27,7 +27,7 @@ from vision_scoring.annotations import (
     TemporalEventAnnotation,
     TimestampBasis,
 )
-from vision_scoring.contracts import Team
+from vision_scoring.domain_events import Team
 
 
 SHA = "a" * 64

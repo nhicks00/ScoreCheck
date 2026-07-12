@@ -1,18 +1,29 @@
-"""Immutable contracts at the perception-to-rules safety boundary."""
+"""Immutable capture and perception contracts.
+
+Scoring-domain events, policy assessments, and authorization deliberately live
+in separate modules so inference objects cannot acquire mutation authority.
+"""
 
 from __future__ import annotations
 
-import hashlib
-import json
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Mapping
 
+from . import domain_events as _domain_events
+
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_ASCII_TOKEN_RE = re.compile(r"^[\x21-\x7e]+$")
+_MAX_JSON_DEPTH = 16
+_MAX_JSON_NODES = 4_096
+_MAX_JSON_CONTAINER_ITEMS = 1_024
+_MAX_JSON_ESTIMATED_BYTES = 64 * 1_024
+_MAX_JSON_KEY_BYTES = 128
+_MAX_JSON_STRING_BYTES = 4_096
 
 
 def _freeze(value: Any) -> Any:
@@ -25,71 +36,121 @@ def _freeze(value: Any) -> Any:
     return value
 
 
-def _thaw(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return {str(key): _thaw(item) for key, item in value.items()}
-    if isinstance(value, (tuple, list)):
-        return [_thaw(item) for item in value]
-    if isinstance(value, (set, frozenset)):
-        thawed = [_thaw(item) for item in value]
-        return sorted(thawed, key=lambda item: json.dumps(item, sort_keys=True))
-    if isinstance(value, Enum):
-        return value.value
-    return value
-
-
 def _require_sha256(value: str, field_name: str) -> None:
     if not isinstance(value, str) or not _SHA256_RE.fullmatch(value):
         raise ValueError(f"{field_name} must be a lowercase 64-character SHA-256")
 
 
+def _require_ascii_token(
+    value: object,
+    field_name: str,
+    *,
+    maximum: int = _domain_events.MAX_ID_LENGTH,
+) -> str:
+    if (
+        type(value) is not str
+        or len(value) > maximum
+        or _ASCII_TOKEN_RE.fullmatch(value) is None
+    ):
+        raise ValueError(
+            f"{field_name} must be printable non-whitespace ASCII of at most "
+            f"{maximum} characters"
+        )
+    return value
+
+
 def _validate_json_value(value: Any, path: str = "payload") -> None:
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            if not isinstance(key, str):
-                raise ValueError(f"{path} object keys must be strings")
-            _validate_json_value(item, f"{path}.{key}")
-        return
-    if isinstance(value, (list, tuple)):
-        for index, item in enumerate(value):
-            _validate_json_value(item, f"{path}[{index}]")
-        return
-    if value is None or isinstance(value, (str, bool, int)):
-        return
-    if isinstance(value, float) and math.isfinite(value):
-        return
-    raise ValueError(f"{path} must contain only finite JSON-compatible values")
+    stack: list[tuple[Any, str, int]] = [(value, path, 0)]
+    seen_containers: set[int] = set()
+    nodes = 0
+    estimated_bytes = 0
+    while stack:
+        item, item_path, depth = stack.pop()
+        nodes += 1
+        if nodes > _MAX_JSON_NODES:
+            raise ValueError(f"{path} exceeds the {_MAX_JSON_NODES}-node limit")
+        if type(item) is dict:
+            if depth >= _MAX_JSON_DEPTH:
+                raise ValueError(f"{path} exceeds depth {_MAX_JSON_DEPTH}")
+            if len(item) > _MAX_JSON_CONTAINER_ITEMS:
+                raise ValueError(f"{item_path} contains too many object fields")
+            identity = id(item)
+            if identity in seen_containers:
+                raise ValueError(f"{item_path} contains a cycle or reused container")
+            seen_containers.add(identity)
+            estimated_bytes += 2
+            for key, child in item.items():
+                _require_ascii_token(
+                    key,
+                    f"{item_path} object key",
+                    maximum=_MAX_JSON_KEY_BYTES,
+                )
+                estimated_bytes += len(key.encode("ascii")) + 4
+                stack.append((child, f"{item_path}.{key}", depth + 1))
+        elif type(item) in (list, tuple):
+            if depth >= _MAX_JSON_DEPTH:
+                raise ValueError(f"{path} exceeds depth {_MAX_JSON_DEPTH}")
+            if len(item) > _MAX_JSON_CONTAINER_ITEMS:
+                raise ValueError(f"{item_path} contains too many array items")
+            identity = id(item)
+            if identity in seen_containers:
+                raise ValueError(f"{item_path} contains a cycle or reused container")
+            seen_containers.add(identity)
+            estimated_bytes += 2
+            for index, child in enumerate(item):
+                stack.append((child, f"{item_path}[{index}]", depth + 1))
+        elif type(item) is str:
+            try:
+                encoded = item.encode("utf-8", errors="strict")
+            except UnicodeEncodeError as exc:
+                raise ValueError(f"{item_path} is not valid UTF-8") from exc
+            if len(encoded) > _MAX_JSON_STRING_BYTES:
+                raise ValueError(f"{item_path} string is too long")
+            estimated_bytes += len(encoded) + 2
+        elif item is None or type(item) is bool:
+            estimated_bytes += 5
+        elif type(item) is int:
+            if not -_domain_events.MAX_SEQUENCE_NUMBER <= item <= _domain_events.MAX_SEQUENCE_NUMBER:
+                raise ValueError(f"{item_path} integer exceeds signed 64-bit bounds")
+            estimated_bytes += 20
+        elif type(item) is float and math.isfinite(item):
+            estimated_bytes += 32
+        else:
+            raise ValueError(
+                f"{item_path} must contain only finite JSON-compatible values"
+            )
+        if estimated_bytes > _MAX_JSON_ESTIMATED_BYTES:
+            raise ValueError(
+                f"{path} exceeds the {_MAX_JSON_ESTIMATED_BYTES}-byte budget"
+            )
 
 
 def _is_finite_number(value: Any) -> bool:
+    if type(value) is int:
+        return (
+            -_domain_events.MAX_SEQUENCE_NUMBER
+            <= value
+            <= _domain_events.MAX_SEQUENCE_NUMBER
+        )
+    return type(value) is float and math.isfinite(value)
+
+
+def _is_bounded_ascii_tuple(
+    value: Any,
+    *,
+    maximum_items: int,
+    maximum_length: int,
+) -> bool:
     return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(value)
+        type(value) is tuple
+        and len(value) <= maximum_items
+        and all(
+            type(item) is str
+            and len(item) <= maximum_length
+            and _ASCII_TOKEN_RE.fullmatch(item) is not None
+            for item in value
+        )
     )
-
-
-def _is_nonempty_string_tuple(value: Any) -> bool:
-    return isinstance(value, tuple) and all(
-        isinstance(item, str) and item.strip() for item in value
-    )
-
-
-class Team(str, Enum):
-    A = "A"
-    B = "B"
-
-    @property
-    def other(self) -> "Team":
-        return Team.B if self is Team.A else Team.A
-
-
-class Authority(str, Enum):
-    AUTO_POLICY = "AUTO_POLICY"
-    OPERATOR = "OPERATOR"
-    REFEREE_FEED = "REFEREE_FEED"
-    SCOREKEEPER = "SCOREKEEPER"
-    IMPORT = "IMPORT"
 
 
 class ObservationType(str, Enum):
@@ -115,32 +176,6 @@ class CalibrationState(str, Enum):
     FAILED = "FAILED"
 
 
-class DecisionState(str, Enum):
-    AUTO_CONFIRM = "AUTO_CONFIRM"
-    PENDING = "PENDING"
-    REVIEW = "REVIEW"
-    REPLAY_NO_POINT = "REPLAY_NO_POINT"
-    UNRESOLVED = "UNRESOLVED"
-
-
-class ConfirmationMode(str, Enum):
-    SERVER_CHANGE = "SERVER_CHANGE"
-    DIRECT_PROVISIONAL = "DIRECT_PROVISIONAL"
-    HUMAN = "HUMAN"
-    REFEREE_FEED = "REFEREE_FEED"
-
-
-class RuleEventType(str, Enum):
-    SET_SEED = "SET_SEED"
-    POINT_AWARDED = "POINT_AWARDED"
-    PENALTY_POINT = "PENALTY_POINT"
-    SERVICE_ORDER_FAULT = "SERVICE_ORDER_FAULT"
-    REPLAY_NO_POINT = "REPLAY_NO_POINT"
-    SIDE_SWITCH_CONFIRMED = "SIDE_SWITCH_CONFIRMED"
-    TECHNICAL_TIMEOUT_COMPLETED = "TECHNICAL_TIMEOUT_COMPLETED"
-    SCORE_CORRECTION = "SCORE_CORRECTION"
-
-
 @dataclass(frozen=True, slots=True)
 class ModelProvenance:
     model_id: str
@@ -150,14 +185,18 @@ class ModelProvenance:
     causal_cutoff_timestamp_ns: int
 
     def __post_init__(self) -> None:
-        if not all(
-            isinstance(value, str) and value.strip()
-            for value in (self.model_id, self.model_version, self.runtime_engine_id)
-        ):
-            raise ValueError("model provenance fields cannot be empty")
+        for field_name in ("model_id", "model_version", "runtime_engine_id"):
+            _require_ascii_token(getattr(self, field_name), field_name)
         _require_sha256(self.weights_sha256, "weights_sha256")
-        if type(self.causal_cutoff_timestamp_ns) is not int or self.causal_cutoff_timestamp_ns < 0:
-            raise ValueError("causal_cutoff_timestamp_ns cannot be negative")
+        if (
+            type(self.causal_cutoff_timestamp_ns) is not int
+            or not 0
+            <= self.causal_cutoff_timestamp_ns
+            <= _domain_events.MAX_SEQUENCE_NUMBER
+        ):
+            raise ValueError(
+                "causal_cutoff_timestamp_ns must be a non-negative signed 64-bit integer"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,11 +219,12 @@ class FramePacket:
     calibration_segment_id: str
 
     def __post_init__(self) -> None:
-        if not all(
-            isinstance(value, str) and value.strip()
-            for value in (self.stream_id, self.codec_profile, self.calibration_segment_id)
+        for field_name in (
+            "stream_id",
+            "codec_profile",
+            "calibration_segment_id",
         ):
-            raise ValueError("frame stream, codec, and calibration ids are required")
+            _require_ascii_token(getattr(self, field_name), field_name)
         integer_fields = (
             self.sequence_number,
             self.capture_timestamp_ns,
@@ -198,6 +238,13 @@ class FramePacket:
         )
         if any(type(value) is not int for value in integer_fields):
             raise ValueError("frame counters, timestamps, dimensions, and PTS/DTS must be integers")
+        if any(
+            not -_domain_events.MAX_SEQUENCE_NUMBER
+            <= value
+            <= _domain_events.MAX_SEQUENCE_NUMBER
+            for value in integer_fields
+        ):
+            raise ValueError("frame integer fields must fit signed 64-bit bounds")
         if any(type(value) is not bool for value in (self.keyframe, self.duplicate, self.decode_corrupt)):
             raise ValueError("frame health flags must be booleans")
         if self.sequence_number < 0:
@@ -208,7 +255,10 @@ class FramePacket:
             raise ValueError("receive timestamp cannot precede capture timestamp")
         if self.duration_ns <= 0:
             raise ValueError("duration_ns must be positive")
-        if self.source_width <= 0 or self.source_height <= 0:
+        if (
+            not 1 <= self.source_width <= 65_536
+            or not 1 <= self.source_height <= 65_536
+        ):
             raise ValueError("source dimensions must be positive")
         if self.dropped_before < 0:
             raise ValueError("dropped_before cannot be negative")
@@ -238,15 +288,12 @@ class CalibrationSegment:
     evidence_refs: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if not all(
-            isinstance(value, str) and value.strip()
-            for value in (
-                self.calibration_segment_id,
-                self.distortion_model,
-                self.survey_geometry_version,
-            )
+        for field_name in (
+            "calibration_segment_id",
+            "distortion_model",
+            "survey_geometry_version",
         ):
-            raise ValueError("calibration identity, model, and survey version are required")
+            _require_ascii_token(getattr(self, field_name), field_name)
         if type(self.valid_from_timestamp_ns) is not int or (
             self.valid_to_timestamp_ns is not None
             and type(self.valid_to_timestamp_ns) is not int
@@ -254,8 +301,12 @@ class CalibrationSegment:
             raise ValueError("calibration validity timestamps must be integers")
         if not isinstance(self.drift_state, CalibrationState):
             raise ValueError("drift_state must be a CalibrationState")
-        if not _is_nonempty_string_tuple(self.evidence_refs):
-            raise ValueError("evidence_refs must be a tuple of non-empty strings")
+        if not _is_bounded_ascii_tuple(
+            self.evidence_refs,
+            maximum_items=_domain_events.MAX_EVIDENCE_REFS,
+            maximum_length=_domain_events.MAX_EVIDENCE_REF_LENGTH,
+        ):
+            raise ValueError("evidence_refs must be a bounded ASCII tuple")
         if self.valid_from_timestamp_ns < 0:
             raise ValueError("valid_from_timestamp_ns cannot be negative")
         if (
@@ -263,6 +314,11 @@ class CalibrationSegment:
             and self.valid_to_timestamp_ns <= self.valid_from_timestamp_ns
         ):
             raise ValueError("calibration validity interval is invalid")
+        if self.valid_from_timestamp_ns > _domain_events.MAX_SEQUENCE_NUMBER or (
+            self.valid_to_timestamp_ns is not None
+            and self.valid_to_timestamp_ns > _domain_events.MAX_SEQUENCE_NUMBER
+        ):
+            raise ValueError("calibration validity timestamps exceed signed 64-bit bounds")
         if (
             not isinstance(self.intrinsics, tuple)
             or len(self.intrinsics) != 3
@@ -288,8 +344,13 @@ class CalibrationSegment:
             ("camera_rotation", self.camera_rotation),
             ("camera_translation", self.camera_translation),
         ):
-            if not isinstance(values, tuple) or not values or any(
+            if (
+                not isinstance(values, tuple)
+                or not values
+                or len(values) > 64
+                or any(
                 not _is_finite_number(value) for value in values
+                )
             ):
                 raise ValueError(f"{name} must be a non-empty tuple of finite numbers")
         if len(self.camera_translation) != 3:
@@ -322,11 +383,12 @@ class Observation:
     provenance: ModelProvenance
 
     def __post_init__(self) -> None:
-        if not all(
-            isinstance(value, str) and value.strip()
-            for value in (self.observation_id, self.stream_id, self.calibration_segment_id)
+        for field_name in (
+            "observation_id",
+            "stream_id",
+            "calibration_segment_id",
         ):
-            raise ValueError("observation, stream, and calibration ids are required")
+            _require_ascii_token(getattr(self, field_name), field_name)
         if not isinstance(self.observation_type, ObservationType) or not isinstance(
             self.visibility, Visibility
         ):
@@ -335,28 +397,37 @@ class Observation:
             raise ValueError("provenance must be ModelProvenance")
         if type(self.frame_sequence) is not int or type(self.timestamp_ns) is not int:
             raise ValueError("observation frame sequence and timestamp must be integers")
-        if self.frame_sequence < 0 or self.timestamp_ns < 0:
-            raise ValueError("observation sequence and timestamp cannot be negative")
+        if not 0 <= self.frame_sequence <= _domain_events.MAX_SEQUENCE_NUMBER or not (
+            0 <= self.timestamp_ns <= _domain_events.MAX_SEQUENCE_NUMBER
+        ):
+            raise ValueError(
+                "observation sequence and timestamp must be non-negative signed 64-bit integers"
+            )
         if self.provenance.causal_cutoff_timestamp_ns > self.timestamp_ns:
             raise ValueError("an observation cannot depend on future evidence")
         for name, geometry in (
             ("source_geometry", self.source_geometry),
             ("undistorted_geometry", self.undistorted_geometry),
         ):
-            if not isinstance(geometry, Mapping):
-                raise ValueError(f"{name} must be a mapping")
+            if type(geometry) is not dict:
+                raise ValueError(f"{name} must be an exact dict")
             _validate_json_value(geometry, name)
         if self.court_geometry is not None:
-            if not isinstance(self.court_geometry, Mapping):
-                raise ValueError("court_geometry must be a mapping when present")
+            if type(self.court_geometry) is not dict:
+                raise ValueError("court_geometry must be an exact dict when present")
             _validate_json_value(self.court_geometry, "court_geometry")
         if self.covariance is not None and (
             not isinstance(self.covariance, tuple)
+            or len(self.covariance) > 256
             or any(not _is_finite_number(value) for value in self.covariance)
         ):
             raise ValueError("covariance must be a tuple of finite numbers when present")
-        if not _is_nonempty_string_tuple(self.quality_flags):
-            raise ValueError("quality_flags must be a tuple of non-empty strings")
+        if not _is_bounded_ascii_tuple(
+            self.quality_flags,
+            maximum_items=64,
+            maximum_length=128,
+        ):
+            raise ValueError("quality_flags must be a bounded ASCII tuple")
         object.__setattr__(self, "source_geometry", _freeze(self.source_geometry))
         object.__setattr__(self, "undistorted_geometry", _freeze(self.undistorted_geometry))
         if self.court_geometry is not None:
@@ -371,7 +442,7 @@ class EventProposal:
     event_type: str
     time_interval_ns: tuple[int, int]
     class_probabilities: Mapping[str, float]
-    team_probabilities: Mapping[Team, float]
+    team_probabilities: Mapping[_domain_events.Team, float]
     player_probabilities: Mapping[str, float]
     evidence_refs: tuple[str, ...]
     model_versions: tuple[str, ...]
@@ -380,11 +451,8 @@ class EventProposal:
     abstained: bool = False
 
     def __post_init__(self) -> None:
-        if not all(
-            isinstance(value, str) and value.strip()
-            for value in (self.proposal_id, self.rally_id, self.event_type)
-        ):
-            raise ValueError("proposal identity and event_type are required")
+        for field_name in ("proposal_id", "rally_id", "event_type"):
+            _require_ascii_token(getattr(self, field_name), field_name)
         if (
             not isinstance(self.time_interval_ns, tuple)
             or len(self.time_interval_ns) != 2
@@ -392,41 +460,55 @@ class EventProposal:
         ):
             raise ValueError("event proposal interval must be a two-integer tuple")
         start, end = self.time_interval_ns
-        if start < 0 or end < start:
-            raise ValueError("event proposal interval is invalid")
-        for name, probabilities in (
-            ("class_probabilities", self.class_probabilities),
-            ("team_probabilities", self.team_probabilities),
-            ("player_probabilities", self.player_probabilities),
+        if (
+            start < 0
+            or end < start
+            or end > _domain_events.MAX_SEQUENCE_NUMBER
         ):
-            if not isinstance(probabilities, Mapping):
-                raise ValueError(f"{name} must be a mapping")
+            raise ValueError("event proposal interval is invalid")
+        for name, probabilities, maximum_items in (
+            ("class_probabilities", self.class_probabilities, 256),
+            ("team_probabilities", self.team_probabilities, 2),
+            ("player_probabilities", self.player_probabilities, 64),
+        ):
+            if type(probabilities) is not dict:
+                raise ValueError(f"{name} must be an exact dict")
+            if len(probabilities) > maximum_items:
+                raise ValueError(f"{name} contains too many entries")
             if any(
-                not isinstance(probability, (int, float))
-                or isinstance(probability, bool)
-                or not math.isfinite(probability)
+                not _is_finite_number(probability)
                 or probability < 0
                 or probability > 1
                 for probability in probabilities.values()
             ):
                 raise ValueError(f"{name} values must be finite numbers in [0, 1]")
-        if any(not isinstance(key, str) or not key.strip() for key in self.class_probabilities):
-            raise ValueError("class_probabilities keys must be non-empty strings")
-        if any(not isinstance(key, Team) for key in self.team_probabilities):
-            raise ValueError("team_probabilities keys must be Team values")
-        if any(not isinstance(key, str) or not key.strip() for key in self.player_probabilities):
-            raise ValueError("player_probabilities keys must be non-empty strings")
-        for name, values in (
-            ("evidence_refs", self.evidence_refs),
-            ("model_versions", self.model_versions),
-            ("blockers", self.blockers),
+        for key in self.class_probabilities:
+            _require_ascii_token(key, "class_probabilities key")
+        if any(
+            not isinstance(key, _domain_events.Team)
+            for key in self.team_probabilities
         ):
-            if not isinstance(values, tuple) or any(
-                not isinstance(value, str) or not value.strip() for value in values
+            raise ValueError("team_probabilities keys must be Team values")
+        for key in self.player_probabilities:
+            _require_ascii_token(key, "player_probabilities key")
+        for name, values, maximum_items, maximum_length in (
+            (
+                "evidence_refs",
+                self.evidence_refs,
+                _domain_events.MAX_EVIDENCE_REFS,
+                _domain_events.MAX_EVIDENCE_REF_LENGTH,
+            ),
+            ("model_versions", self.model_versions, 32, 128),
+            ("blockers", self.blockers, 64, 128),
+        ):
+            if not _is_bounded_ascii_tuple(
+                values,
+                maximum_items=maximum_items,
+                maximum_length=maximum_length,
             ):
-                raise ValueError(f"{name} must be a tuple of non-empty strings")
-        if not isinstance(self.capture_health, Mapping):
-            raise ValueError("capture_health must be a mapping")
+                raise ValueError(f"{name} must be a bounded ASCII tuple")
+        if type(self.capture_health) is not dict:
+            raise ValueError("capture_health must be an exact dict")
         _validate_json_value(self.capture_health, "capture_health")
         if not isinstance(self.abstained, bool):
             raise ValueError("abstained must be a boolean")
@@ -437,230 +519,3 @@ class EventProposal:
         object.__setattr__(self, "evidence_refs", tuple(self.evidence_refs))
         object.__setattr__(self, "model_versions", tuple(self.model_versions))
         object.__setattr__(self, "blockers", tuple(self.blockers))
-
-
-@dataclass(frozen=True, slots=True)
-class RallyDecision:
-    decision_id: str
-    match_id: str
-    rally_id: str
-    set_number: int
-    ruleset_id: str
-    ruleset_version: str
-    state: DecisionState
-    proposed_winner_team: Team | None
-    confirmation_mode: ConfirmationMode | None
-    calibrated_probability: float | None
-    coverage_policy_version: str
-    causal_cutoff_timestamp_ns: int
-    blocking_reasons: tuple[str, ...]
-    evidence_refs: tuple[str, ...]
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.state, DecisionState):
-            raise ValueError("state must be a DecisionState")
-        if self.proposed_winner_team is not None and not isinstance(
-            self.proposed_winner_team, Team
-        ):
-            raise ValueError("proposed_winner_team must be Team A or B when present")
-        if self.confirmation_mode is not None and not isinstance(
-            self.confirmation_mode, ConfirmationMode
-        ):
-            raise ValueError("confirmation_mode must use the declared enum when present")
-        if not all(
-            isinstance(value, str) and value.strip()
-            for value in (
-                self.decision_id,
-                self.match_id,
-                self.rally_id,
-                self.ruleset_id,
-                self.ruleset_version,
-                self.coverage_policy_version,
-            )
-        ):
-            raise ValueError("decision identity and version fields are required")
-        if (
-            type(self.set_number) is not int
-            or self.set_number <= 0
-            or type(self.causal_cutoff_timestamp_ns) is not int
-            or self.causal_cutoff_timestamp_ns < 0
-        ):
-            raise ValueError("decision set number and causal cutoff are invalid")
-        if self.calibrated_probability is not None and (
-            not isinstance(self.calibrated_probability, (int, float))
-            or isinstance(self.calibrated_probability, bool)
-            or not math.isfinite(self.calibrated_probability)
-            or not 0 <= self.calibrated_probability <= 1
-        ):
-            raise ValueError("calibrated_probability must be a finite number in [0, 1]")
-        if not isinstance(self.blocking_reasons, tuple) or any(
-            not isinstance(reason, str) or not reason.strip() for reason in self.blocking_reasons
-        ):
-            raise ValueError("blocking_reasons must be a tuple of non-empty strings")
-        if not isinstance(self.evidence_refs, tuple) or any(
-            not isinstance(reference, str) or not reference.strip()
-            for reference in self.evidence_refs
-        ):
-            raise ValueError("evidence_refs must be a tuple of non-empty strings")
-        object.__setattr__(self, "blocking_reasons", tuple(self.blocking_reasons))
-        object.__setattr__(self, "evidence_refs", tuple(self.evidence_refs))
-        if self.state is DecisionState.AUTO_CONFIRM:
-            if self.proposed_winner_team is None or self.confirmation_mode is None:
-                raise ValueError("AUTO_CONFIRM requires a winner and confirmation mode")
-            if self.blocking_reasons:
-                raise ValueError("AUTO_CONFIRM cannot contain blockers")
-            if not self.evidence_refs:
-                raise ValueError("AUTO_CONFIRM requires evidence")
-            if self.calibrated_probability is None:
-                raise ValueError("AUTO_CONFIRM requires a calibrated probability")
-            if self.confirmation_mode is not ConfirmationMode.SERVER_CHANGE:
-                raise ValueError("AUTO_CONFIRM requires an automatic confirmation mode")
-        elif self.state is DecisionState.REPLAY_NO_POINT:
-            if self.proposed_winner_team is not None or self.confirmation_mode is not None:
-                raise ValueError("REPLAY_NO_POINT cannot contain a winner or confirmation mode")
-            if not self.evidence_refs:
-                raise ValueError("REPLAY_NO_POINT requires evidence")
-        elif self.state is DecisionState.UNRESOLVED:
-            if self.proposed_winner_team is not None or self.confirmation_mode is not None:
-                raise ValueError("UNRESOLVED cannot contain a winner or confirmation mode")
-            if not self.blocking_reasons:
-                raise ValueError("UNRESOLVED requires a blocking reason")
-            if self.calibrated_probability is not None:
-                raise ValueError("UNRESOLVED cannot carry a calibrated winner probability")
-        elif self.state is DecisionState.REVIEW:
-            if not self.evidence_refs or not self.blocking_reasons:
-                raise ValueError("REVIEW requires evidence and a review reason")
-            if self.proposed_winner_team is None:
-                if self.confirmation_mode is not None or self.calibrated_probability is not None:
-                    raise ValueError("winnerless REVIEW cannot carry a mode or winner probability")
-            elif (
-                self.confirmation_mode is not ConfirmationMode.DIRECT_PROVISIONAL
-                or self.calibrated_probability is None
-            ):
-                raise ValueError("winner-bearing REVIEW requires a provisional mode and probability")
-        elif self.state is DecisionState.PENDING:
-            if self.blocking_reasons:
-                raise ValueError("PENDING cannot contain terminal blocking reasons")
-            if self.proposed_winner_team is None:
-                if self.confirmation_mode is not None or self.calibrated_probability is not None:
-                    raise ValueError("winnerless PENDING cannot carry a mode or winner probability")
-            elif (
-                self.confirmation_mode is not ConfirmationMode.DIRECT_PROVISIONAL
-                or self.calibrated_probability is None
-                or not self.evidence_refs
-            ):
-                raise ValueError(
-                    "winner-bearing PENDING requires provisional mode, probability, and evidence"
-                )
-
-
-@dataclass(frozen=True, slots=True)
-class RuleEvent:
-    event_id: str
-    sequence_number: int
-    match_id: str
-    set_number: int
-    event_type: RuleEventType
-    authority: Authority
-    actor_id: str
-    authorization_id: str
-    ruleset_id: str
-    ruleset_version: str
-    ruleset_fingerprint: str
-    payload: Mapping[str, Any]
-    reason: str
-    schema_version: str = "1.0"
-    decision_id: str | None = None
-    policy_version: str | None = None
-    related_rally_id: str | None = None
-    evidence_refs: tuple[str, ...] = field(default_factory=tuple)
-    created_at_ns: int = 0
-    supersedes_event_id: str | None = None
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.event_type, RuleEventType) or not isinstance(
-            self.authority, Authority
-        ):
-            raise ValueError("event_type and authority must use their declared enums")
-        if not all(
-            isinstance(value, str) and value.strip()
-            for value in (self.event_id, self.match_id, self.actor_id, self.authorization_id)
-        ):
-            raise ValueError("event, match, actor, and authorization ids cannot be empty")
-        if (
-            type(self.sequence_number) is not int
-            or self.sequence_number <= 0
-            or type(self.set_number) is not int
-            or self.set_number <= 0
-        ):
-            raise ValueError("event and set sequence numbers must be positive")
-        if not all(
-            isinstance(value, str) and value.strip()
-            for value in (self.ruleset_id, self.ruleset_version)
-        ):
-            raise ValueError("ruleset identity and version are required")
-        if not isinstance(self.reason, str) or not self.reason.strip():
-            raise ValueError("reason and schema_version are required")
-        if not isinstance(self.schema_version, str) or not self.schema_version.strip():
-            raise ValueError("reason and schema_version are required")
-        if self.schema_version != "1.0":
-            raise ValueError("unsupported rule-event schema version")
-        _require_sha256(self.ruleset_fingerprint, "ruleset_fingerprint")
-        if not isinstance(self.payload, Mapping):
-            raise ValueError("rule-event payload must be a mapping")
-        _validate_json_value(self.payload)
-        if type(self.created_at_ns) is not int or self.created_at_ns <= 0:
-            raise ValueError("created_at_ns must be positive")
-        if not isinstance(self.evidence_refs, tuple):
-            raise ValueError("evidence_refs must be a tuple")
-        object.__setattr__(self, "payload", _freeze(self.payload))
-        object.__setattr__(self, "evidence_refs", tuple(self.evidence_refs))
-        if any(not isinstance(reference, str) or not reference.strip() for reference in self.evidence_refs):
-            raise ValueError("evidence_refs must contain non-empty strings")
-        if self.related_rally_id is not None and (
-            not isinstance(self.related_rally_id, str) or not self.related_rally_id.strip()
-        ):
-            raise ValueError("related_rally_id must be a non-empty string when present")
-        if self.supersedes_event_id is not None and (
-            not isinstance(self.supersedes_event_id, str) or not self.supersedes_event_id.strip()
-        ):
-            raise ValueError("supersedes_event_id must be a non-empty string when present")
-        if self.authority is Authority.AUTO_POLICY:
-            if (
-                not isinstance(self.decision_id, str)
-                or not self.decision_id.strip()
-                or not isinstance(self.policy_version, str)
-                or not self.policy_version.strip()
-                or not self.evidence_refs
-            ):
-                raise ValueError(
-                    "AUTO_POLICY events require decision, policy, and immutable evidence references"
-                )
-        elif self.decision_id is not None or self.policy_version is not None:
-            raise ValueError("decision_id and policy_version are reserved for AUTO_POLICY events")
-
-    def fingerprint(self) -> str:
-        canonical = {
-            "event_id": self.event_id,
-            "sequence_number": self.sequence_number,
-            "match_id": self.match_id,
-            "set_number": self.set_number,
-            "event_type": self.event_type.value,
-            "authority": self.authority.value,
-            "actor_id": self.actor_id,
-            "authorization_id": self.authorization_id,
-            "ruleset_id": self.ruleset_id,
-            "ruleset_version": self.ruleset_version,
-            "ruleset_fingerprint": self.ruleset_fingerprint,
-            "payload": _thaw(self.payload),
-            "reason": self.reason,
-            "schema_version": self.schema_version,
-            "decision_id": self.decision_id,
-            "policy_version": self.policy_version,
-            "related_rally_id": self.related_rally_id,
-            "evidence_refs": list(self.evidence_refs),
-            "created_at_ns": self.created_at_ns,
-            "supersedes_event_id": self.supersedes_event_id,
-        }
-        encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        return hashlib.sha256(encoded).hexdigest()

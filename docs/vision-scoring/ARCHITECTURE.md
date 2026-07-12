@@ -1,10 +1,10 @@
 # Beach Volleyball Vision Scoring Architecture
 
-**Status:** domain-contract/reducer foundation implemented; authentication, persistence, perception, and training remain gated
+**Status:** V0 domain, policy, reducer, state-codec, and signed human-authorization contracts implemented; transactional shadow persistence, scorer-copilot workflow, perception, and training remain gated
 
 **Decision date:** 2026-07-11
 
-**Initial product:** assistive live scoring with explicit abstention and human authority
+**Initial product:** assistive live scoring with explicit abstention and signed human authorization
 
 **Related readiness plan:** [DATA_CAPTURE_READINESS.md](./DATA_CAPTURE_READINESS.md)
 
@@ -15,13 +15,13 @@
 
 Build a new event-driven vision service. Do not resume the legacy perception pipeline as the production base. Salvage its deterministic scoring concepts, schemas, test cases, and operator-review ideas, but replace the model orchestration and data lifecycle.
 
-Computer vision produces evidence and proposals; it never writes a score. The deterministic rules reducer is the sole domain function that derives a new score state from an accepted event. It is not, by itself, an access-control or security boundary: official use additionally requires an authenticated authorizer, signature verification, and transactional event persistence, none of which is implemented in the foundation package yet.
+Computer vision produces evidence and hypotheses; it never writes a score. The deterministic rules reducer is the sole domain function that derives a new score state from an accepted event. It is not, by itself, an access-control or security boundary. The foundation now implements protected per-match authorization policy, signed human commands, authorizer countersignatures, and strict envelope verification. Transactional append/replay is still required before an envelope can affect even the isolated shadow state.
 
 The first product is deliberately narrower than referee-grade officiating:
 
 | Product tier | Promise | Explicitly excluded |
 |---|---|---|
-| Assistive scoring | Identify likely server, rally transition, team attribution, and review moments; propose safe score events | Automatic in/out, touch, net, foot-fault, replay, sanction, or terminal-point adjudication |
+| Assistive scoring | Identify likely server, rally transition, team attribution, and review moments; surface evidence and recommended intents for a human | Automatic in/out, touch, net, foot-fault, replay, sanction, or terminal-point adjudication |
 | Advanced statistics | Rally segmentation, contacts, trajectories, player movement, and derived statistics after validation | Claims that monocular estimates are referee-accurate |
 | Referee support | Fault-specific evidence from synchronized, calibrated multi-camera capture | Certification or unattended officiating without a separate validation program |
 
@@ -30,8 +30,8 @@ The current 1080p30 fixed-camera feed is a compatibility input, not the assumed 
 ## Non-negotiable design rules
 
 1. **Fail closed.** Missing frames, non-monotonic timestamps, duplicate bursts, calibration drift, model failure, version mismatch, or conflicting evidence produces `unresolved` or `review`; it cannot silently fall back to a score mutation.
-2. **One domain transition function, separate security boundary.** Vision workers have no credentials for official score tables or overlays. The reducer validates event shape, sequencing, and volleyball-domain semantics, but it does not authenticate callers. A trusted service must authenticate the actor, enforce authority/policy, sign and append the event transactionally, and verify that signature before reduction.
-3. **Event sourcing.** Raw observations, proposals, authorizations, corrections, model versions, calibrations, and reducer outputs are append-only and replayable.
+2. **One domain transition function, separate security boundary.** Vision workers have no credentials for official score tables or overlays. The reducer validates event shape, sequencing, and volleyball-domain semantics, but it does not authenticate callers. The trusted boundary verifies a signed human command against protected per-match policy, countersigns the exact event envelope, and must reverify it within the append transaction before reduction.
+3. **Event sourcing.** Raw observations, hypotheses, assessments, human commands, authorized envelopes, model versions, calibrations, and reducer outputs are append-only and replayable.
 4. **Deterministic rules.** Replaying the same ordered `RuleEvent` stream under the same rules version must produce byte-equivalent score state.
 5. **Calibrated abstention.** Confidence is not a generic detector score. Release decisions use source-held-out, event-level calibration and report accuracy against coverage.
 6. **Causal live path.** Live models may use only present and past frames plus a bounded replay buffer. Non-causal models may be offline benchmarks, never live dependencies.
@@ -58,28 +58,36 @@ Causal temporal fusion + rules context
         |
         v
 RallyHypothesis
-  uncertain causal inference; no policy or scoring authority
+  primary causal inference; no next-server evidence or scoring power
+        |
+        v
+Independent next-server reconciliation (optional)
+  later evidence; corroborate or downgrade only, never promote
         |
         v
 Exception-first PolicyAssessment
-  abstain | review | eligible authorization path
+  pending | unresolved | review | human authorization required
         |
         v
-Authenticated authorizer / human review       [not implemented]
+Human review -> signed AuthorizationCommand
         |
         v
-Signed RuleEvent -> authenticated event processor       [not implemented]
-                    verify signer/ruleset/sequence
-                    run reducer
-                    append event + derived state atomically
+Trusted authorizer verifies policy/roles/signatures
         |
         v
-Committed derived score state -> official score + overlay
-        |                         |
-        +------ immutable audit <-+
+Countersigned AuthorizedRuleEvent
+        |
+        v
+Transactional shadow processor                [not implemented]
+  reverify envelope and complete immutable history
+  run reducer; append event/state/outbox atomically
+        |
+        v
+Committed shadow state + scorer-copilot audit
+  no credential or path to official ScoreCheck mutation
 ```
 
-ScoreCheck remains the official presentation and operator surface. The vision service integrates through the future authenticated event boundary, not by writing `score_states`, `overlay_states`, or their successors directly. Calling `RulesReducer.reduce()` in-process is only a domain-library operation and must not be described as an authorized official mutation.
+ScoreCheck remains the official presentation and operator surface. V0 is shadow-only: the vision subsystem has no credential or code path that can write `score_states`, `overlay_states`, or their successors. Calling `RulesReducer.reduce()` in-process is only a domain-library operation and must not be described as an authorized or official mutation.
 
 ### Runtime stages
 
@@ -91,9 +99,11 @@ ScoreCheck remains the official presentation and operator surface. The vision se
 | Player perception | Active-player boxes and court membership | D-FINE-S or RT-DETRv2-S; typically 15–30 Hz |
 | Tracking | Rally-local identity, team/side constraints, and occlusion continuity | ByteTrack baseline; BoT-SORT only if held-out tests justify added ReID complexity |
 | Pose | Contact-window body/hand evidence | RTMPose-m on player crops only around candidate events |
-| Temporal fusion | Serve/contact/dead-ball/next-server evidence with uncertainty | Transparent constrained factor graph/HSMM first; a small causal TCN/GRU is a later challenger only if held-out evidence justifies it |
-| Decision policy | Eligibility, calibration, contradiction checks, and abstention | Versioned policy producing a proposal, never a score |
-| Authenticated authorizer | Resolve actor/role, enforce human/referee/automatic policy, bind evidence, sign canonical events | Not implemented; required before any external or official mutation path |
+| Temporal fusion | Primary serve/contact/dead-ball and team-attribution evidence with uncertainty | Transparent constrained factor graph/HSMM first; a small causal TCN/GRU is a later challenger only if held-out evidence justifies it |
+| Next-server reconciliation | Compare a separately timed server observation to one exact primary hypothesis and state revision | Delayed consistency check only; never a source of policy promotion |
+| Decision policy | Eligibility, calibration, contradiction checks, and abstention | Versioned policy producing an assessment, never an event or score |
+| Human authorization | Bind one exact event to a signed human command, optionally assisted by a separately signed eligible assessment | Ed25519 command/signature contracts; only scorekeeper, referee, and match-admin human roles exist |
+| Trusted authorizer | Verify protected per-match policy generation, current revocations, role/event allowlist, command, assessment provenance, and context; countersign the envelope | Implemented canonical authorization boundary; deployment identity/session resolution remains external |
 | Authenticated event store | In one transaction: verify signer/ruleset/sequence, run reducer, append event and derived state, and expose replay | Not implemented; in-memory reducer state is not durable proof |
 | Rules reducer | Beach-volleyball scoring, service order, set/match completion, and pending side-switch/timeout obligations | Pure deterministic domain library; validates semantics, not identity or access |
 
@@ -101,91 +111,126 @@ LLMs and general-purpose VLMs are not in the live scoring path. They may help wi
 
 ## Contracts
 
-All durable messages use UTC timestamps, monotonic source time, a schema version, capture/model/calibration identifiers, and an idempotency key. Large tensors and video remain in content-addressed storage; events reference them by hash.
+Durable control-plane records use bounded schemas, stable identifiers,
+explicit causal or authorization timestamps, and content fingerprints.
+`AuthorizationCommand` owns the mutation idempotency key and expected revision;
+those fields are not inference power. Large tensors and video remain in
+content-addressed storage, and records carry immutable evidence references and
+exact model/configuration provenance where applicable.
 
-`RulesReducer` performs domain validation only: match and set identity, contiguous sequence, exact ruleset fingerprint, event payload, scoring legality, and idempotency. It does not authenticate `actor_id`, establish that an `authority` enum came from a trusted principal, verify `authorization_id`, verify a cryptographic signature, or persist an event atomically. Those are responsibilities of the not-yet-implemented authorizer and event store.
+`RulesReducer` performs domain validation only: match and set identity,
+contiguous sequence, exact ruleset fingerprint, event payload, scoring legality,
+rally-resolution uniqueness, and idempotency. It receives a pure domain event;
+actor identity, role, policy, and signatures exist only in the outer authorized
+envelope. The authorization module verifies the signed human command and
+countersigned envelope. The future transactional event store must repeat that
+verification before reduction and append.
 
-### Transitional executable contract: `RallyDecision`
+### Inference, reconciliation, and policy contracts
 
-The Phase 0 executable foundation still contains this pre-adoption proposal
-type. It has no scoring authority and is scheduled for hard removal before any
-persistence, authorizer, or external API is built. New consumers must not use
-it. The authoritative target contract is the separated
-`RallyHypothesis -> PolicyAssessment -> Authorization` flow above.
+`RallyHypothesis` is a bounded causal inference record. Its four mutually
+exclusive outcomes use integer parts-per-million that sum exactly to 1,000,000.
+It binds match, rally, set, state revision, ruleset fingerprint, causal cutoff,
+immutable evidence provenance, and exact model/configuration provenance. It
+cannot contain next-server evidence.
 
-```json
-{
-  "decision_id": "decision-01J...",
-  "match_id": "match-123",
-  "rally_id": "rally-17",
-  "set_number": 1,
-  "ruleset_id": "FIVB_BEACH",
-  "ruleset_version": "2025-2028",
-  "state": "REVIEW",
-  "proposed_winner_team": "B",
-  "confirmation_mode": "DIRECT_PROVISIONAL",
-  "calibrated_probability": 0.997,
-  "coverage_policy_version": "coverage-v0",
-  "causal_cutoff_timestamp_ns": 418000000000,
-  "blocking_reasons": ["human_authorization_required"],
-  "evidence_refs": ["artifact:sha256:abc..."]
-}
-```
+`NextServerObservation` is a separate, later record bound to the same match,
+rally, set, and state revision. Its evidence timestamp cannot precede the
+hypothesis cutoff. Reconciliation records the exact hypothesis fingerprint and
+classifies the observation as corroborating, contradicting, same-server
+ambiguous, service-order conflict, unavailable, or inapplicable at a terminal
+point. The evidence is useful as a delayed consistency check, but it never
+raises a hypothesis into a more permissive policy status. A corroborating
+observation leaves the primary-evidence decision unchanged; contradiction or a
+service-order conflict requires review, and same-server ambiguity cannot
+resolve replay ambiguity or remove human handling.
 
-Required statuses are:
-
-- `PENDING`: insufficient evidence within the allowed causal buffer;
-- `REVIEW`: coherent proposal requiring human/referee review;
-- `REPLAY_NO_POINT`: evidence proposes a replay, but the decision itself cannot close the rally;
-- `UNRESOLVED`: evidence is missing, contradictory, or outside the trained domain;
-- `AUTO_CONFIRM`: a legacy name scheduled for removal because a model cannot
-  confirm its own output; it currently has no authority to issue or persist a
-  `RuleEvent`.
+`PolicyAssessment` is deterministic advice bound to the exact hypothesis,
+optional reconciliation, policy fingerprint, state revision, ruleset, evidence,
+and causal time. Its statuses are `PENDING`, `REVIEW_REQUIRED`,
+`HUMAN_AUTHORIZATION_REQUIRED`, and `UNRESOLVED`. Only a high-confidence point
+with sufficient independent primary rally evidence and no fatal/review signal
+can reach the human-authorization-required status. Replay, challenge,
+administrative, timeout, side-switch, and correction signals remain review
+cases. The assessment has no event-creation or scoring power.
 
 ### `RuleEvent` domain contract
 
-The object below can pass contract and domain checks, but it is not thereby authenticated. `authorization_id` is an audit/provenance link to a future authorization record; it is not a token, credential, signature, or proof of permission.
+The object below can pass contract and domain checks, but it is not thereby
+authenticated. Identity, role, policy, command, and signature fields are
+intentionally absent. Those facts belong to the signed outer envelope.
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "2.0",
   "event_id": "01J...",
   "sequence_number": 42,
   "match_id": "match-123",
   "set_number": 1,
   "event_type": "POINT_AWARDED",
-  "authority": "SCOREKEEPER",
-  "actor_id": "operator-7",
-  "authorization_id": "authz-01J...",
   "ruleset_id": "FIVB_BEACH",
   "ruleset_version": "2025-2028",
-  "ruleset_fingerprint": "f3279c13af9c17ad2df0d4f9d90a042db65fa5e82eb47f64d0590ec8b54e432e",
+  "ruleset_fingerprint": "d814e2e4762a756ecc4e3b57010c0c345aed18b016bff39791b52daf27f722b4",
   "payload": {
     "winner_team": "B",
-    "next_serving_player": "b1",
-    "confirmation_mode": "HUMAN"
+    "evidence_refs": ["artifact:sha256:def..."]
   },
-  "reason": "scorekeeper confirmed ordinary rally",
   "related_rally_id": "rally-17",
-  "evidence_refs": ["artifact:sha256:def..."],
   "created_at_ns": 1783792800000000000
 }
 ```
 
-The reducer recognizes only these semantic inputs initially. The “authority” column describes a domain restriction after an upstream service has authenticated the caller; an enum value supplied to the library is not proof of authority.
+The hard-cut schema and authorization allowlists recognize exactly five event
+types:
 
-| Event | Effect | Authority |
+| Event | Effect | Human role/path |
 |---|---|---|
-| `SET_SEED` | Seeds service orders, first server, and side mapping; awards no point | Human/referee/trusted import, never `AUTO_POLICY` |
-| `POINT_AWARDED` | Awards one rally and updates service entitlement | Human/referee; narrowly eligible `AUTO_POLICY` only after release gate |
-| `PENALTY_POINT` | Basic authorized point alias using ordinary point/service validation | Human/referee/trusted import; never `AUTO_POLICY`; not a full sanction model |
-| `SERVICE_ORDER_FAULT` | Basic authorized point alias using ordinary point/service validation | Human/referee/trusted import; never `AUTO_POLICY`; not full fault/remedy handling |
-| `REPLAY_NO_POINT` | Closes/audits a replay with no score change | Human/referee/trusted import; never `AUTO_POLICY` in v0 |
-| `SIDE_SWITCH_CONFIRMED` | Satisfies a pending switch and updates physical side mapping | Human/referee/trusted import; never `AUTO_POLICY` in v0 |
-| `TECHNICAL_TIMEOUT_COMPLETED` | Satisfies the pending timeout obligation without changing score | Human/referee/trusted import; never `AUTO_POLICY` in v0 |
-| `SCORE_CORRECTION` | Replaces current state under the constrained v0 correction rule | Privileged human/referee/trusted import; never `AUTO_POLICY` |
+| `SET_SEED` | Seeds the two stable match rosters, service orders, first server, and side mapping; awards no point | Match admin, direct signed human command only |
+| `POINT_AWARDED` | Awards one rally and derives the next server from the seeded service order | Scorekeeper or referee; direct, or assessment-assisted with both assessment and human signatures |
+| `REPLAY_NO_POINT` | Resolves one rally with no score change | Scorekeeper or referee, direct signed human command only |
+| `SIDE_SWITCH_CONFIRMED` | Satisfies a pending switch and records the observed physical side mapping | Scorekeeper or referee, direct signed human command only |
+| `TECHNICAL_TIMEOUT_COMPLETED` | Satisfies a pending timeout without changing score | Scorekeeper or referee, direct signed human command only |
 
 `SET_COMPLETE`, `MATCH_COMPLETE`, `SIDE_SWITCH_DUE`, `TECHNICAL_TIMEOUT_DUE`, and next-service-order state are reducer outputs, not model predictions.
+
+### Signed human authorization and trust archive
+
+An `AuthorizationCommand` binds the exact event fingerprint, expected state
+revision, idempotency key, match-scoped policy fingerprint, human actor/key and
+role, issue/expiry times, and nonce. A human-direct command forbids an attached
+assessment. An assessment-assisted command must carry the exact separately
+signed `PolicyAssessment`; its assessment key and policy fingerprint must be
+accepted by the protected authorization policy, and its status, reasons,
+intent, evidence, rally, ruleset, set, and state revision must all match the
+event. The human still signs the command. A trusted authorizer then verifies it
+and countersigns the complete canonical envelope.
+
+`AuthorizationPolicyArchive` retains the exact historical per-match policy
+generations needed to verify older envelopes while naming one current
+generation. Current actor, assessment, and authorizer key revocations are
+applied when an old envelope is replayed, so a later compromise can invalidate
+historical use. Public-key material cannot be moved to a new identity to evade
+that status.
+
+The archive is not its own rollback detector. A trusted deployment loader must
+obtain it from an externally rollback-protected configuration source and pin
+its exact fingerprint. Policy validity windows provide freshness checks but do
+not detect rollback within a window. The same outer boundary must protect a
+monotonic event-log checkpoint or trusted backup generation; restoring an
+internally consistent older database and older policy archive is otherwise
+outside the package's ability to detect.
+
+### Durable replay integrity
+
+The ordered canonical authorized-event log is the source of truth. Encoded
+`MatchState` is a validated cache only; decoding a self-consistent snapshot is
+not evidence that the reducer produced it. Before append or audit, the future
+transactional shadow store must strictly parse and reverify every retained
+envelope against the protected archive and current revocations, replay the
+complete contiguous event stream under the pinned ruleset/reducer artifact,
+and compare each stored derived-state snapshot byte-for-byte. The envelope,
+event, derived state, idempotency result, and shadow outbox record must commit
+atomically. A failed write leaves none of them committed.
 
 ### Ruleset fingerprint
 
@@ -194,45 +239,58 @@ Ruleset identity is the tuple of `ruleset_id`, `ruleset_version`, and a canonica
 Canonicalization serializes exactly the effective `Ruleset` fields as UTF-8 JSON with lexicographically sorted keys and compact separators (`,` and `:`), with JSON `null` for an absent timeout. `reducer_semantics_version` must change whenever hardcoded transition semantics change. The default foundation ruleset canonicalizes to:
 
 ```json
-{"best_of_sets":3,"deciding_set_target":15,"deciding_side_switch_interval":5,"reducer_semantics_version":"beach-reducer-v1","regular_set_target":21,"regular_side_switch_interval":7,"regular_technical_timeout_total":21,"ruleset_id":"FIVB_BEACH","version":"2025-2028","win_by":2}
+{"best_of_sets":3,"deciding_set_target":15,"deciding_side_switch_interval":5,"max_events_per_match":4096,"reducer_semantics_version":"beach-reducer-v2","regular_set_target":21,"regular_side_switch_interval":7,"regular_technical_timeout_total":21,"ruleset_id":"FIVB_BEACH","version":"2025-2028","win_by":2}
 ```
 
-Its lowercase SHA-256 is `f3279c13af9c17ad2df0d4f9d90a042db65fa5e82eb47f64d0590ec8b54e432e`. `MatchState` stores the reducer's computed value and the reducer rejects an event whose value differs exactly. This is a domain/configuration consistency check. SHA-256 without a trusted signature does not authenticate the event or the actor. Historical replay also pins the reducer artifact/container/commit digest; the explicit semantics version is a mandatory release discipline, not a substitute for artifact identity.
+Its lowercase SHA-256 is `d814e2e4762a756ecc4e3b57010c0c345aed18b016bff39791b52daf27f722b4`. `MatchState` stores the reducer's computed value and the reducer rejects an event whose value differs exactly. This is a domain/configuration consistency check. SHA-256 without a trusted signature does not authenticate the event or the actor. Historical replay also pins the reducer artifact/container/commit digest; the explicit semantics version is a mandatory release discipline, not a substitute for artifact identity.
 
 The ruleset fingerprint is distinct from `RuleEvent.fingerprint()`, which hashes the complete canonical event for conflict/idempotency detection. A production signed envelope must sign the event fingerprint (plus any required context) and verify it before transactional append/reduction.
 
 ### Pending obligations and point entry
 
-`SIDE_SWITCH_DUE` and `TECHNICAL_TIMEOUT_DUE` are latched obligations, not reasons to lose an authoritative score update. Once caller identity is authenticated upstream:
+`SIDE_SWITCH_DUE` and `TECHNICAL_TIMEOUT_DUE` are latched obligations, not reasons to lose an authorized human score update:
 
-- a human scorekeeper/operator or referee-feed point may be recorded while either obligation is pending;
+- a signed scorekeeper or referee point may be recorded while either obligation is pending;
 - recording that point does not claim the switch/timeout occurred and does not clear either obligation;
-- `AUTO_POLICY` point events are blocked until all pending obligations have their own authorized confirmation events;
 - simultaneous side-switch and technical-timeout obligations are confirmed separately.
 
 If a human/referee terminal point ends the set before a previously overdue obligation is confirmed, the active latch ends with the set but the unresolved obligation is copied into the immutable `SetResult` and `SET_CLOSED_WITH_OPEN_OBLIGATIONS` is emitted. An obligation that becomes scheduled only at the terminal score is not marked overdue, because no further play occurs in that set.
 
-This rule supports delayed/catch-up human entry while preventing automatic scoring from running ahead of unresolved match operations. In the standalone package the authority labels remain caller-supplied and therefore are not security assertions.
+This rule supports delayed/catch-up human entry while preserving unresolved
+match operations. V0 has no automated event origin.
 
 `SIDE_SWITCH_CONFIRMED` records the first outstanding `due_total`, current `observed_at_total`, explicit `cleared_through_total`, and observed team/side mapping. Catch-up across more than one interval is accepted only when the mapping matches the number-of-switches parity; an unchanged mapping cannot clear a single overdue switch.
 
-### Administrative point and correction scope
+### Unsupported administrative and correction paths
 
-`PENALTY_POINT` and `SERVICE_ORDER_FAULT` are only named aliases for a basic authorized point award. They preserve a reason/event type and reuse normal winner, service, and terminal-point validation. Every score/replay resolution—including either alias—requires a unique `related_rally_id` and immutable evidence so it cannot be scored twice. For an administrative point outside ordinary play, v0 uses an upstream-created synthetic scoring-opportunity ID in that field. They do **not** implement warning or sanction progression, cards, delay/misconduct classification, expulsion, default, forfeit, discipline cases, or every service-order-fault remedy. Those domains remain outside v0.
+Administrative points, service-order remedies, sanctions, defaults, forfeits,
+discipline, and all score corrections are outside V0. They cannot be encoded as
+a specialized rule event and cannot enter the signed authorization path.
 
-`SCORE_CORRECTION` v0 is deliberately local. It may supersede only the latest score/replay/correction event and only the current/latest set; seeds, side switches, and timeout events are not correction targets. A corrected terminal score must be reachable—the preceding score cannot already have ended the set. Corrected switch/timeout completion markers are bounded by that pre-terminal score, and a terminal point event cannot claim a same-set next server. It can reopen that latest set when its terminal point is still the latest event. If any later event or set exists, correction requires a separate replay service that appends an auditable correction instruction, rebuilds from the affected point, and revalidates every dependent event. The reducer does not edit history or perform that rebase itself.
-
-The v0 correction payload cannot replace the seeded player roster or service-order tuples. If either tuple is wrong, reject that set seed and restart before accepting a dependent event; correcting it after dependent events requires the future replay service.
+The reducer and authorization allowlists intentionally contain no correction
+event. A future correction design must be a separately privileged replay
+command, not a state overwrite: it must bind the affected event position and
+before/after state fingerprints, retain the original immutable log, rebuild
+from the affected point, and revalidate every dependent event and derived
+state. Until that design and its trust/rollback controls exist, an incorrect
+seed or score requires manual takeover; no local correction is accepted.
 
 ## Scoring policy
 
-The primary early signal is the next authorized server, not full visual fault adjudication.
+The primary early signal is a causal rally hypothesis built from rally
+transition and team-attribution evidence, not full visual fault adjudication.
+The next observed server is delayed reconciliation evidence only.
 
 - The first serve of a set seeds serving state and awards nothing.
 - If Team A served and Team B makes the next authorized serve, Team B won the prior ordinary rally.
 - If Team A serves again, Team A may have won **or the rally may have been replayed**. Server identity alone is insufficient.
 - There is no next serve after a set-ending point. Every terminal point remains human-authorized until direct outcome evidence passes a separate gate.
-- Replays and corrections require explicit human/referee events. `PENALTY_POINT` and `SERVICE_ORDER_FAULT` cover only basic authorized point aliases; challenges, defaults, and the full sanctions/discipline domain are not implemented.
+- Next-server corroboration never promotes an assessment; it leaves the
+  primary-evidence result unchanged. A contradiction or service-order conflict
+  requires review, while same-server ambiguity cannot remove human handling.
+- Replays require a direct signed scorekeeper/referee command. Challenges,
+  administrative points, corrections, defaults, and the full
+  sanctions/discipline domain are unsupported.
 - Scheduled side switches are derived from score, but the physical team/side mapping must be confirmed when visual identity is uncertain.
 
 The policy must therefore define event-class eligibility. It must not convert a high detector score into an all-purpose notion of rally correctness.
@@ -245,7 +303,7 @@ Detailed measurement gates live in [DATA_CAPTURE_READINESS.md](./DATA_CAPTURE_RE
 |---|---|---|
 | Single fixed 1080p30 | Compatibility experiments, server identity, delayed assistive review when the preflight passes | Reliable contact timing, line calls, touch/net adjudication, referee-grade 3D |
 | Single fixed 4K60 | Production assistive baseline, better ball continuity, contact candidates, useful player/rally statistics | Authoritative calls hidden by occlusion or requiring depth |
-| Dual synchronized calibrated 4K60 | Occlusion recovery, triangulation, stronger contact/team attribution, advanced statistics | Automatic referee authority without fault-specific validation and operations controls |
+| Dual synchronized calibrated 4K60 | Occlusion recovery, triangulation, stronger contact/team attribution, advanced statistics | Unattended referee decisions without fault-specific validation and operations controls |
 | Fault-specific multi-camera | Future challenge/referee support | Assumed certification; each fault type requires its own evidence and acceptance program |
 
 ## Model and license shortlist
@@ -280,12 +338,11 @@ Initial rejection list:
 | Ball/player/pose disagreement | Route to review with all evidence | Average unrelated scores into confidence |
 | Side/team identity uncertain | Require human/referee `SIDE_SWITCH_CONFIRMED` or remain unresolved | Guess from jersey color or last location |
 | Stream reconnect/model version change | Start a new provenance segment | Join observations across the boundary silently |
-| Authority/signature cannot be verified | Reject before append/reduction and alert | Trust `authority` or `authorization_id` strings |
+| Human/authorizer signature or protected role cannot be verified | Reject before append/reduction and alert | Trust fields embedded in the domain event |
 | Ruleset fingerprint mismatch | Reject the event before state transition | Accept matching id/version alone |
-| Latest-event/current-set correction | Append `SCORE_CORRECTION`; retain the original event | Edit or delete the superseded event |
-| Historical correction after a later event/set | Route to the future replay service | Apply a local state overwrite |
+| Any score or seed correction request | Stop shadow progression, retain the request for audit, and require manual takeover pending the future privileged replay design | Edit/delete history, overwrite state, or manufacture a current V0 event |
 
-Manual scoring must remain independently operational during every vision outage. Once its actor is authenticated by the future integration, human/referee point entry may continue while side-switch or timeout obligations remain latched; this exception never extends to `AUTO_POLICY`.
+Manual scoring must remain independently operational during every vision outage. A signed human point entry may continue while side-switch or timeout obligations remain latched; no automated event origin exists in V0.
 
 ## Evaluation and release boundary
 
@@ -297,9 +354,18 @@ Subsystem accuracy is necessary but not sufficient. Release decisions use full-m
 - contact/serve/dead-ball event precision and recall at frame/time tolerances;
 - team attribution, replay discrimination, terminal-point handling, and exact score after every event;
 - calibration and risk-versus-coverage curves;
-- false official mutations per 1,000 eligible rallies and end-to-end latency.
+- false human-authorization-ready assessments per 1,000 eligible rallies and end-to-end latency; official mutations are impossible in the V0 shadow path.
 
-Automatic mutation remains disabled until all gates in [DATA_CAPTURE_READINESS.md](./DATA_CAPTURE_READINESS.md) pass. This includes the non-model security gate: authenticated authority resolution, signature verification, canonical ruleset-fingerprint equality, and transactional event append must exist and pass adversarial tests. In particular, the initial model-policy safety gate is zero false mutations on at least 3,000 independently adjudicated eligible opportunities, zero illegal reducer transitions, and exact committed score after every event. Coverage must be reported beside that result; abstaining on everything is not success.
+V0 remains no-mutation shadow regardless of model metrics. A future official
+path would require every gate in
+[DATA_CAPTURE_READINESS.md](./DATA_CAPTURE_READINESS.md), explicit product
+approval outside this hard cut, authenticated human/role resolution, signature
+verification, canonical ruleset-fingerprint equality, rollback protection, and
+transactional append under adversarial tests. The initial model-policy safety
+study still targets zero false proposed mutations on at least 3,000
+independently adjudicated eligible opportunities, zero illegal reducer
+transitions, and exact shadow state after every event. Coverage must be reported
+beside that result; abstaining on everything is not success.
 
 ## Hard-cutover disposition
 
@@ -317,7 +383,7 @@ The commit is now preserved on `codex/rescue-live-score-f2d0600a`. Do not merge 
 - **Days 31–60:** source-held-out perception baselines, causal fusion, calibration, authenticated/signed event-path prototype, deterministic offline replay, and error taxonomy.
 - **Days 61–90:** one-court no-mutation shadow operation, operator review workflow, risk/coverage measurement, and the single-versus-dual-camera decision.
 
-Calendar dates never waive a gate. If 3,000 eligible shadow opportunities or adequate venue diversity are not available by day 90, automatic mutation stays disabled.
+Calendar dates never waive a gate. If 3,000 eligible shadow opportunities or adequate venue diversity are not available by day 90, remain in shadow. V0 contains no automated or official mutation path.
 
 ## Decisions still required
 
@@ -327,6 +393,6 @@ Calendar dates never waive a gate. If 3,000 eligible shadow opportunities or ade
 4. Which production object store or read-only snapshot service will replace the
    implemented local immutable-generation/lease primitive while preserving its
    exact membership, staged-consumption, and publisher/consumer isolation?
-5. Which authenticated human/referee roles may authorize ordinary, terminal, replay, basic administrative-point, and correction events at each rollout stage?
+5. Which production identity/session system will resolve a person to the protected scorekeeper, referee, or match-admin key for one match?
 6. What regulatory or league process would be required before marketing any feature as referee support?
-7. What complete sanctions/defaults/discipline model is required, if any, beyond the v0 administrative-point aliases?
+7. What trust model and governing-body semantics are required for a future privileged replay command and any separately modeled sanctions/defaults/discipline domain?

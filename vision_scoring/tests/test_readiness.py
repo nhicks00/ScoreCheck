@@ -9,6 +9,8 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -100,6 +102,35 @@ class ReadinessTests(unittest.TestCase):
             READINESS_POLICY
         )
         self.validator = self._validator_for_manifest(self.manifest)
+
+    def test_verifier_source_manifest_exactly_covers_imported_package_modules(
+        self,
+    ) -> None:
+        probe = """
+import json
+from pathlib import Path
+import sys
+import vision_scoring.readiness as readiness
+
+source_root = Path(readiness.__file__).resolve().parent
+loaded = sorted(
+    {
+        Path(module.__file__).name
+        for module in sys.modules.values()
+        if getattr(module, "__file__", None) is not None
+        and Path(module.__file__).resolve().parent == source_root
+    }
+)
+print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": loaded}))
+"""
+        completed = subprocess.run(
+            [sys.executable, "-c", probe],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["loaded"], result["listed"])
 
     def _validator_for_manifest(
         self,
