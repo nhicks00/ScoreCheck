@@ -43,6 +43,8 @@ services:
     depends_on:
       - docker-proxy
     read_only: true
+    volumes:
+      - /var/lib/scorecheck-monitoring/ffmpeg:/monitoring/ffmpeg:ro
     tmpfs:
       - /tmp
     cap_drop:

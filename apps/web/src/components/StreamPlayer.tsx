@@ -25,6 +25,22 @@ type StreamPlayerProps = {
   onVideoElement?: (element: HTMLVideoElement | null) => void;
   /** WHEP transport timing used by the commentary/program synchronization controller. */
   onTimingSample?: (sample: StreamTimingSample | null) => void;
+  /** Bounded transport diagnostics for the independent monitoring gateway. */
+  onConnectionHealth?: (health: StreamConnectionHealth | null) => void;
+};
+
+export type StreamConnectionHealth = {
+  transport: "whep" | "hls" | "none";
+  connectionState: "new" | "connecting" | "connected" | "disconnected" | "failed" | "closed" | "unknown";
+  framesPerSecond: number | null;
+  width: number | null;
+  height: number | null;
+  rttMs: number | null;
+  jitterBufferMs: number | null;
+  packetsLost: number | null;
+  packetsReceived: number | null;
+  framesDropped: number | null;
+  bytesReceived: number | null;
 };
 
 type StreamSources = {
@@ -51,7 +67,8 @@ export function StreamPlayer({
   chromeless = false,
   mode = "preview",
   onVideoElement,
-  onTimingSample
+  onTimingSample,
+  onConnectionHealth
 }: StreamPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [sources, setSources] = useState<StreamSources | null>(null);
@@ -110,6 +127,7 @@ export function StreamPlayer({
     if (!sources.whepUrl && !sources.hlsUrl) {
       setStatus("Stream video is not available yet.");
       setError("Stream video is not available yet.");
+      onConnectionHealth?.(emptyConnectionHealth());
       return;
     }
     const video = videoRef.current;
@@ -126,6 +144,7 @@ export function StreamPlayer({
       if (cancelled) return;
       setError(null);
       setStatus(pc ? "Live — low latency" : "Live — HLS");
+      if (!pc) onConnectionHealth?.({ ...emptyConnectionHealth(), transport: "hls", connectionState: "connected" });
     };
     video.addEventListener("playing", onPlaying);
 
@@ -134,6 +153,7 @@ export function StreamPlayer({
       timingTimer = null;
       previousTimingTotals = null;
       onTimingSample?.(null);
+      onConnectionHealth?.(null);
       pc?.close();
       pc = null;
       hls?.destroy();
@@ -177,6 +197,7 @@ export function StreamPlayer({
           iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
         });
         pc = connection;
+        onConnectionHealth?.({ ...emptyConnectionHealth(), transport: "whep", connectionState: "connecting" });
         connection.addTransceiver("video", { direction: "recvonly" });
         connection.addTransceiver("audio", { direction: "recvonly" });
         const stream = new MediaStream();
@@ -193,6 +214,11 @@ export function StreamPlayer({
             setStatus("Live — low latency");
             startTimingSampling(connection);
           }
+          onConnectionHealth?.({
+            ...emptyConnectionHealth(),
+            transport: "whep",
+            connectionState: normalizeConnectionState(connection.connectionState)
+          });
           if (["failed", "disconnected", "closed"].includes(connection.connectionState)) {
             failWhep(false);
           }
@@ -232,6 +258,11 @@ export function StreamPlayer({
           const timing = extractTimingSample(stats, previousTimingTotals);
           previousTimingTotals = timing.totals;
           onTimingSample?.(timing.sample);
+          onConnectionHealth?.({
+            transport: "whep",
+            connectionState: normalizeConnectionState(connection.connectionState),
+            ...timing.health
+          });
         } catch {
           onTimingSample?.(null);
         }
@@ -297,7 +328,7 @@ export function StreamPlayer({
       video.removeEventListener("playing", onPlaying);
       teardownPlayback();
     };
-  }, [enabled, loadRevision, mode, onTimingSample, sources]);
+  }, [enabled, loadRevision, mode, onConnectionHealth, onTimingSample, sources]);
 
   if (!enabled) return null;
 
@@ -331,13 +362,27 @@ export function StreamPlayer({
 function extractTimingSample(
   reports: RTCStatsReport,
   previous: RtcJitterTotals | null
-): { sample: StreamTimingSample; totals: RtcJitterTotals | null } {
+): { sample: StreamTimingSample; totals: RtcJitterTotals | null; health: Omit<StreamConnectionHealth, "transport" | "connectionState"> } {
   let totals: RtcJitterTotals | null = null;
   let rttMs: number | null = null;
+  let framesPerSecond: number | null = null;
+  let width: number | null = null;
+  let height: number | null = null;
+  let packetsLost: number | null = null;
+  let packetsReceived: number | null = null;
+  let framesDropped: number | null = null;
+  let bytesReceived: number | null = null;
 
   reports.forEach((report) => {
     const row = report as RTCStats & Record<string, unknown>;
     if (row.type === "inbound-rtp" && (row.kind === "video" || row.mediaType === "video")) {
+      framesPerSecond = finiteNumber(row.framesPerSecond);
+      width = finiteInteger(row.frameWidth);
+      height = finiteInteger(row.frameHeight);
+      packetsLost = finiteInteger(row.packetsLost);
+      packetsReceived = finiteInteger(row.packetsReceived);
+      framesDropped = finiteInteger(row.framesDropped);
+      bytesReceived = finiteInteger(row.bytesReceived);
       const emittedCount = finiteNumber(row.jitterBufferEmittedCount);
       const jitterBufferDelaySeconds = finiteNumber(row.jitterBufferDelay);
       if (emittedCount != null && jitterBufferDelaySeconds != null) {
@@ -367,12 +412,50 @@ function extractTimingSample(
       jitterBufferTargetMs: jitter.jitterBufferTargetMs,
       rttMs
     },
-    totals
+    totals,
+    health: {
+      framesPerSecond,
+      width,
+      height,
+      rttMs,
+      jitterBufferMs: jitter.jitterBufferTargetMs ?? jitter.jitterBufferMs,
+      packetsLost,
+      packetsReceived,
+      framesDropped,
+      bytesReceived
+    }
   };
 }
 
 function finiteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function finiteInteger(value: unknown): number | null {
+  const number = finiteNumber(value);
+  return number == null ? null : Math.trunc(number);
+}
+
+function emptyConnectionHealth(): StreamConnectionHealth {
+  return {
+    transport: "none",
+    connectionState: "unknown",
+    framesPerSecond: null,
+    width: null,
+    height: null,
+    rttMs: null,
+    jitterBufferMs: null,
+    packetsLost: null,
+    packetsReceived: null,
+    framesDropped: null,
+    bytesReceived: null
+  };
+}
+
+function normalizeConnectionState(value: RTCPeerConnectionState): StreamConnectionHealth["connectionState"] {
+  return ["new", "connecting", "connected", "disconnected", "failed", "closed"].includes(value)
+    ? value as StreamConnectionHealth["connectionState"]
+    : "unknown";
 }
 
 function waitForIceGathering(connection: RTCPeerConnection, timeoutMs: number): Promise<void> {

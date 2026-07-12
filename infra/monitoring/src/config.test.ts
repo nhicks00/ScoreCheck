@@ -30,12 +30,14 @@ describe("monitoring configuration", () => {
     const service = loadServiceConfig({
       MONITOR_API_TOKEN: "abcdefghijklmnopqrstuvwxyz",
       ALERTMANAGER_WEBHOOK_TOKEN: "zyxwvutsrqponmlkjihgfedcba",
+      MONITOR_BROWSER_HEARTBEAT_SECRET: "browser-heartbeat-secret-that-is-long-enough",
       HEALTHCHECKS_PING_URL: "",
       SUPABASE_URL: "",
       SUPABASE_SERVICE_ROLE_KEY: ""
     });
     expect(service.healthchecksPingUrl).toBeNull();
     expect(service.supabaseUrl).toBeNull();
+    expect(service.browserAllowedOrigins).toEqual(["https://score.beachvolleyballmedia.com"]);
   });
 
   it("normalizes API base URLs without a trailing slash", () => {

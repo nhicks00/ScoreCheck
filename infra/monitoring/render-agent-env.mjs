@@ -15,6 +15,7 @@ const values = {
   MONITOR_AGENT_INTERVAL_MS: integer(process.env.MONITOR_AGENT_INTERVAL_MS ?? "5000", 1_000, 300_000),
   MONITOR_AGENT_CONTAINERS: safeIdList(process.env.MONITOR_AGENT_CONTAINERS ?? ""),
   MONITOR_DISK_PATH: process.env.MONITOR_DISK_PATH?.trim() || "/",
+  FFMPEG_PROGRESS_DIR: process.env.FFMPEG_PROGRESS_DIR?.trim() || "",
   DOCKER_API_URL: process.env.DOCKER_API_URL?.trim() || "http://127.0.0.1:2375",
   MEDIAMTX_API_URL: optionalHttpUrl("MEDIAMTX_API_URL"),
   MEDIAMTX_METRICS_URL: optionalHttpUrl("MEDIAMTX_METRICS_URL"),

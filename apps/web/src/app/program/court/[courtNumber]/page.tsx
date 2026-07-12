@@ -8,6 +8,7 @@ import {
   programBuildVersion,
   programCommentaryBufferMs
 } from "@/lib/program";
+import { createProgramMonitoringConnection } from "@/lib/programMonitoring";
 import { supabaseAdmin } from "@/lib/supabase";
 import { courtProgramStreamPath, courtStreamSources, videoConfigured } from "@/lib/video";
 import { ProgramClient } from "./ProgramClient";
@@ -53,11 +54,11 @@ export default async function ProgramCourtPage({ params, searchParams }: {
     ? null
     : await createCommentaryConnection({ courtNumber, displayName: "Program mixer", role: "program" }).catch(() => null);
   const commentaryDelayOverride = programCommentaryBufferMs(cbuf);
+  const monitoring = createProgramMonitoringConnection(courtNumber);
 
   return (
     <ProgramClient
       courtNumber={courtNumber}
-      token={tokenValue}
       sources={sources}
       commentary={commentary}
       cameraGainDb={court.cameraGainDb}
@@ -65,6 +66,8 @@ export default async function ProgramCourtPage({ params, searchParams }: {
       commentaryDelayMs={commentaryDelayOverride ?? court.commentaryDelayMs}
       debug={debug === "1"}
       buildVersion={programBuildVersion()}
+      configurationVersion={court.configurationVersion}
+      monitoring={monitoring}
     />
   );
 }
@@ -74,13 +77,15 @@ type ProgramCourtConfig = {
   cameraGainDb: number;
   commentaryGainDb: number;
   commentaryDelayMs: number;
+  configurationVersion: string;
 };
 
 const EMPTY_PROGRAM_COURT: ProgramCourtConfig = {
   programStreamPath: null,
   cameraGainDb: 0,
   commentaryGainDb: 0,
-  commentaryDelayMs: 0
+  commentaryDelayMs: 0,
+  configurationVersion: "unknown"
 };
 
 async function loadCourt(courtNumber: number): Promise<ProgramCourtConfig> {
@@ -93,7 +98,7 @@ async function loadCourt(courtNumber: number): Promise<ProgramCourtConfig> {
 
   const { data: court } = await db
     .from("courts")
-    .select("program_stream_path,camera_audio_gain_db,commentary_gain_db,commentary_delay_ms")
+    .select("id,updated_at,program_stream_path,camera_audio_gain_db,commentary_gain_db,commentary_delay_ms")
     .eq("event_id", event.id)
     .eq("court_number", courtNumber)
     .maybeSingle();
@@ -102,8 +107,15 @@ async function loadCourt(courtNumber: number): Promise<ProgramCourtConfig> {
     programStreamPath: court?.program_stream_path ?? null,
     cameraGainDb: finiteNumber(court?.camera_audio_gain_db),
     commentaryGainDb: finiteNumber(court?.commentary_gain_db),
-    commentaryDelayMs: Math.max(0, finiteNumber(court?.commentary_delay_ms))
+    commentaryDelayMs: Math.max(0, finiteNumber(court?.commentary_delay_ms)),
+    configurationVersion: configurationVersion(court?.id, court?.updated_at)
   };
+}
+
+function configurationVersion(courtId: unknown, updatedAt: unknown): string {
+  const id = typeof courtId === "string" ? courtId : "court";
+  const timestamp = Date.parse(typeof updatedAt === "string" ? updatedAt : "");
+  return `${id}:${Number.isFinite(timestamp) ? timestamp : 0}`.slice(0, 64);
 }
 
 function finiteNumber(value: unknown): number {

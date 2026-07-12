@@ -7,6 +7,9 @@ import { buildMonitorSnapshot, type AgentRuntime } from "./correlator.js";
 import { IncidentManager } from "./incidents.js";
 import { IncidentStore } from "./incidentStore.js";
 import { bearerAuth } from "./security.js";
+import { BrowserHeartbeatManager } from "./browserHeartbeats.js";
+import { ControlPlaneCollector } from "./controlPlane.js";
+import { YouTubeCollector } from "./youtube.js";
 
 const config = loadServiceConfig();
 const app = express();
@@ -14,6 +17,23 @@ const registry = new Registry();
 const agentFresh = new Gauge({ name: "scorecheck_monitor_agent_fresh", help: "Whether an expected host agent has reported within ten seconds.", labelNames: ["agent", "role"], registers: [registry] });
 const agentPollErrors = new Counter({ name: "scorecheck_monitor_agent_poll_errors_total", help: "Agent snapshot poll errors.", labelNames: ["agent", "role"], registers: [registry] });
 const snapshotGenerated = new Gauge({ name: "scorecheck_monitor_snapshot_generated_timestamp_seconds", help: "Unix timestamp of the latest monitor snapshot.", registers: [registry] });
+const browserFresh = new Gauge({ name: "scorecheck_program_browser_heartbeat_fresh", help: "Whether a court program browser heartbeat was received within ten seconds.", labelNames: ["court"], registers: [registry] });
+const browserFps = new Gauge({ name: "scorecheck_program_browser_frames_per_second", help: "Program browser rendered video frames per second.", labelNames: ["court"], registers: [registry] });
+const browserRtt = new Gauge({ name: "scorecheck_program_browser_rtt_ms", help: "Program browser selected WebRTC candidate round-trip time in milliseconds.", labelNames: ["court"], registers: [registry] });
+const browserPacketsLost = new Gauge({ name: "scorecheck_program_browser_packets_lost", help: "Program browser cumulative inbound video packets lost for the current page connection.", labelNames: ["court"], registers: [registry] });
+const browserFramesDropped = new Gauge({ name: "scorecheck_program_browser_frames_dropped", help: "Program browser cumulative video frames dropped for the current page connection.", labelNames: ["court"], registers: [registry] });
+const commentaryConnected = new Gauge({ name: "scorecheck_program_commentary_room_connected", help: "Whether the program browser is connected to its commentary room.", labelNames: ["court"], registers: [registry] });
+const commentaryTracks = new Gauge({ name: "scorecheck_program_commentary_audio_tracks", help: "Subscribed commentary audio tracks in the program browser.", labelNames: ["court"], registers: [registry] });
+const scoreRenderAligned = new Gauge({ name: "scorecheck_program_score_render_aligned", help: "Whether scorebug source and rendered DOM signatures agree.", labelNames: ["court"], registers: [registry] });
+const controlPlaneFresh = new Gauge({ name: "scorecheck_control_plane_fresh", help: "Whether the latest Supabase control-plane sample is fresh.", registers: [registry] });
+const courtMediaRequired = new Gauge({ name: "scorecheck_court_media_required", help: "Whether media is currently required for a court.", labelNames: ["court"], registers: [registry] });
+const courtBroadcastLive = new Gauge({ name: "scorecheck_court_broadcast_live", help: "Whether a court broadcast is expected live.", labelNames: ["court"], registers: [registry] });
+const courtCommentaryRequired = new Gauge({ name: "scorecheck_court_commentary_required", help: "Whether commentary is required for a court.", labelNames: ["court"], registers: [registry] });
+const courtScoringLive = new Gauge({ name: "scorecheck_court_scoring_live", help: "Whether live scoring is required for a court.", labelNames: ["court"], registers: [registry] });
+const scoreSourceAligned = new Gauge({ name: "scorecheck_score_source_aligned", help: "Whether canonical score, current match, and overlay state are aligned.", labelNames: ["court"], registers: [registry] });
+const youtubeApiUp = new Gauge({ name: "scorecheck_youtube_api_up", help: "YouTube provider API state: 1 healthy, 0 unavailable, -1 not applicable.", registers: [registry] });
+const youtubeHealthy = new Gauge({ name: "scorecheck_youtube_healthy", help: "YouTube stream health: 1 healthy, 0 unhealthy, -1 unknown or not applicable.", labelNames: ["court"], registers: [registry] });
+const youtubeDegraded = new Gauge({ name: "scorecheck_youtube_degraded", help: "Whether YouTube reports a warning-level stream or configuration issue.", labelNames: ["court"], registers: [registry] });
 const runtimes = new Map<string, AgentRuntime>(config.targets.map((target) => [target.id, {
   target,
   snapshot: null,
@@ -21,6 +41,16 @@ const runtimes = new Map<string, AgentRuntime>(config.targets.map((target) => [t
   lastErrorAt: null
 }]));
 const incidents = new IncidentManager();
+const browserHeartbeats = new BrowserHeartbeatManager(config.browserHeartbeatSecret);
+const controlPlane = new ControlPlaneCollector(config.supabaseUrl, config.supabaseServiceRoleKey);
+const youtubeCollector = new YouTubeCollector({
+  apiKey: config.youtubeApiKey,
+  clientId: config.youtubeClientId,
+  clientSecret: config.youtubeClientSecret,
+  refreshToken: config.youtubeRefreshToken,
+  intervalMs: config.youtubeMonitorIntervalMs
+});
+let youtubeRefreshRunning = false;
 const incidentStore = IncidentStore.create(config.supabaseUrl, config.supabaseServiceRoleKey);
 if (incidentStore) {
   try {
@@ -29,7 +59,7 @@ if (incidentStore) {
     console.error("durable incident state could not be loaded");
   }
 }
-let snapshot: MonitorSnapshot = buildMonitorSnapshot(config.targets, runtimes, config.courtCount, Date.now(), incidents.active());
+let snapshot: MonitorSnapshot = currentSnapshot();
 
 app.disable("x-powered-by");
 app.use(express.json({ limit: "64kb" }));
@@ -41,10 +71,37 @@ app.get("/metrics", bearerAuth(config.token), async (_req, res) => {
   res.type(registry.contentType).send(await registry.metrics());
 });
 app.get("/v1/snapshot", bearerAuth(config.token), (_req, res) => res.json(snapshot));
+app.options("/v1/browser-heartbeats", (req, res) => {
+  const origin = allowedBrowserOrigin(req.headers.origin);
+  if (!origin) {
+    res.sendStatus(403);
+    return;
+  }
+  setBrowserCors(res, origin);
+  res.setHeader("access-control-allow-methods", "POST, OPTIONS");
+  res.setHeader("access-control-allow-headers", "authorization, content-type");
+  res.sendStatus(204);
+});
+app.post("/v1/browser-heartbeats", (req, res) => {
+  const origin = allowedBrowserOrigin(req.headers.origin);
+  if (!origin) {
+    res.status(403).json({ error: "Origin is not allowed." });
+    return;
+  }
+  setBrowserCors(res, origin);
+  const token = bearerToken(req.headers.authorization);
+  try {
+    browserHeartbeats.accept(token, req.body);
+    snapshot = currentSnapshot();
+    res.sendStatus(202);
+  } catch {
+    res.status(400).json({ error: "Invalid browser heartbeat." });
+  }
+});
 app.post("/v1/alertmanager", bearerAuth(config.alertmanagerWebhookToken), async (req, res) => {
   try {
     const changed = incidents.applyWebhook(req.body);
-    snapshot = buildMonitorSnapshot(config.targets, runtimes, config.courtCount, Date.now(), incidents.active());
+    snapshot = currentSnapshot();
     await persistIncidentChanges(changed);
     res.status(202).json({ accepted: changed.length });
   } catch {
@@ -66,19 +123,113 @@ app.post("/v1/incidents/:id/acknowledge", bearerAuth(config.token), async (req, 
     res.status(404).json({ error: "Active incident not found." });
     return;
   }
-  snapshot = buildMonitorSnapshot(config.targets, runtimes, config.courtCount, Date.now(), incidents.active());
+  snapshot = currentSnapshot();
   await persistIncidentChanges([change]);
   res.json({ incident: change.incident, reason: parsed.data.reason });
 });
 
 async function pollAll() {
-  await Promise.all(config.targets.map((target) => pollAgent(target)));
-  snapshot = buildMonitorSnapshot(config.targets, runtimes, config.courtCount, Date.now(), incidents.active());
+  await Promise.all([
+    ...config.targets.map((target) => pollAgent(target)),
+    controlPlane.refresh().catch(() => null)
+  ]);
+  snapshot = currentSnapshot();
   snapshotGenerated.set(Date.parse(snapshot.generatedAt) / 1_000);
   agentFresh.reset();
   for (const agent of snapshot.agents) {
     agentFresh.set({ agent: agent.agentId, role: agent.role }, agent.ageMs != null && agent.ageMs <= 10_000 ? 1 : 0);
   }
+  browserFresh.reset();
+  browserFps.reset();
+  browserRtt.reset();
+  browserPacketsLost.reset();
+  browserFramesDropped.reset();
+  commentaryConnected.reset();
+  commentaryTracks.reset();
+  scoreRenderAligned.reset();
+  courtMediaRequired.reset();
+  courtBroadcastLive.reset();
+  courtCommentaryRequired.reset();
+  courtScoringLive.reset();
+  scoreSourceAligned.reset();
+  youtubeHealthy.reset();
+  youtubeDegraded.reset();
+  controlPlaneFresh.set(snapshot.controlPlane.state === "HEALTHY" ? 1 : 0);
+  youtubeApiUp.set(snapshot.youtube.state === "NOT_APPLICABLE" ? -1 : snapshot.youtube.state === "HEALTHY" ? 1 : 0);
+  for (const court of snapshot.courts) {
+    const labels = { court: String(court.courtNumber) };
+    const browser = court.browser;
+    courtMediaRequired.set(labels, court.expectation.mediaExpectation === "REQUIRED" ? 1 : 0);
+    courtBroadcastLive.set(labels, court.expectation.broadcastExpectation === "LIVE" ? 1 : 0);
+    courtCommentaryRequired.set(labels, court.expectation.commentaryExpectation === "REQUIRED" ? 1 : 0);
+    courtScoringLive.set(labels, court.expectation.scoringExpectation === "LIVE" ? 1 : 0);
+    scoreSourceAligned.set(labels, court.competition && court.competition.alignment.state !== "CRITICAL" && court.competition.alignment.state !== "DEGRADED" ? 1 : 0);
+    youtubeHealthy.set(labels, court.youtube?.state === "HEALTHY" ? 1 : court.youtube?.state === "CRITICAL" ? 0 : -1);
+    youtubeDegraded.set(labels, court.youtube?.state === "DEGRADED" ? 1 : 0);
+    const ageMs = browser ? Date.now() - Date.parse(browser.receivedAt) : Number.POSITIVE_INFINITY;
+    browserFresh.set(labels, ageMs <= 10_000 ? 1 : 0);
+    if (!browser) continue;
+    setOptionalGauge(browserFps, labels, browser.video.framesPerSecond);
+    setOptionalGauge(browserRtt, labels, browser.video.rttMs);
+    setOptionalGauge(browserPacketsLost, labels, browser.video.packetsLost);
+    setOptionalGauge(browserFramesDropped, labels, browser.video.framesDropped);
+    commentaryConnected.set(labels, browser.commentary.roomConnected ? 1 : 0);
+    commentaryTracks.set(labels, browser.commentary.audioTrackCount);
+    const render = browser.scoreRender;
+    scoreRenderAligned.set(labels, render.loaded
+      && render.connected
+      && !render.domMismatchReason
+      && render.sourceSignature != null
+      && render.sourceSignature === render.renderedSignature ? 1 : 0);
+  }
+}
+
+function currentSnapshot(): MonitorSnapshot {
+  return buildMonitorSnapshot(
+    config.targets,
+    runtimes,
+    config.courtCount,
+    Date.now(),
+    incidents.active(),
+    browserHeartbeats.latest(),
+    controlPlane.current(),
+    youtubeCollector.current()
+  );
+}
+
+async function refreshYouTube() {
+  if (youtubeRefreshRunning) return;
+  youtubeRefreshRunning = true;
+  try {
+    await youtubeCollector.refresh(controlPlane.current());
+    snapshot = currentSnapshot();
+  } finally {
+    youtubeRefreshRunning = false;
+  }
+}
+
+function allowedBrowserOrigin(origin: string | undefined): string | null {
+  if (!origin) return null;
+  try {
+    const normalized = new URL(origin).origin;
+    return config.browserAllowedOrigins.includes(normalized) ? normalized : null;
+  } catch {
+    return null;
+  }
+}
+
+function setBrowserCors(res: express.Response, origin: string) {
+  res.setHeader("access-control-allow-origin", origin);
+  res.setHeader("vary", "Origin");
+  res.setHeader("cache-control", "no-store");
+}
+
+function bearerToken(header: string | undefined): string {
+  return header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
+}
+
+function setOptionalGauge(gauge: Gauge, labels: { court: string }, value: number | null) {
+  if (value != null && Number.isFinite(value)) gauge.set(labels, value);
 }
 
 async function pollAgent(target: AgentTarget) {
@@ -108,6 +259,21 @@ async function pingDeadMan() {
   }
 }
 
+async function reconcileAlertmanager() {
+  try {
+    const response = await fetch(`${config.alertmanagerInternalUrl}/api/v2/alerts`, {
+      signal: AbortSignal.timeout(5_000)
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const changes = incidents.reconcileActiveAlerts(await response.json());
+    if (changes.length === 0) return;
+    snapshot = currentSnapshot();
+    await persistIncidentChanges(changes);
+  } catch {
+    console.error("alertmanager active-set reconciliation failed");
+  }
+}
+
 async function persistIncidentChanges(changes: ReturnType<IncidentManager["applyWebhook"]>) {
   if (!incidentStore) return;
   try {
@@ -128,8 +294,11 @@ async function checkpoint() {
 }
 
 await pollAll();
+await refreshYouTube();
 const pollTimer = setInterval(() => void pollAll(), config.intervalMs);
 pollTimer.unref();
+const youtubeTimer = setInterval(() => void refreshYouTube(), 5_000);
+youtubeTimer.unref();
 if (config.healthchecksPingUrl) {
   void pingDeadMan();
   const deadManTimer = setInterval(() => void pingDeadMan(), config.healthchecksIntervalMs);
@@ -140,6 +309,9 @@ if (incidentStore) {
   const checkpointTimer = setInterval(() => void checkpoint(), 60_000);
   checkpointTimer.unref();
 }
+void reconcileAlertmanager();
+const alertmanagerReconcileTimer = setInterval(() => void reconcileAlertmanager(), 30_000);
+alertmanagerReconcileTimer.unref();
 
 app.listen(config.port, config.bind, () => {
   console.log(`scorecheck-monitor-service listening on ${config.bind}:${config.port}`);

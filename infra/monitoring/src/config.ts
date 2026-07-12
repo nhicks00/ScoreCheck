@@ -17,6 +17,7 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv = process.env) {
     MONITOR_AGENT_INTERVAL_MS: interval.default(5_000),
     MONITOR_AGENT_CONTAINERS: z.string().default(""),
     MONITOR_DISK_PATH: z.string().default("/"),
+    FFMPEG_PROGRESS_DIR: z.string().default(""),
     DOCKER_API_URL: safeHttpUrl.optional(),
     MEDIAMTX_API_URL: optionalHttpUrl,
     MEDIAMTX_METRICS_URL: optionalHttpUrl,
@@ -34,6 +35,7 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv = process.env) {
     intervalMs: parsed.MONITOR_AGENT_INTERVAL_MS,
     containers: parsed.MONITOR_AGENT_CONTAINERS.split(",").map((value) => value.trim()).filter(Boolean).map((value) => safeIdSchema.parse(value)),
     diskPath: parsed.MONITOR_DISK_PATH,
+    ffmpegProgressDir: parsed.FFMPEG_PROGRESS_DIR.trim() || null,
     dockerApiUrl: parsed.DOCKER_API_URL ?? null,
     mediamtxApiUrl: parsed.MEDIAMTX_API_URL ? parsed.MEDIAMTX_API_URL.replace(/\/+$/, "") : null,
     mediamtxMetricsUrl: parsed.MEDIAMTX_METRICS_URL ?? null,
@@ -54,6 +56,9 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
   const schema = z.object({
     MONITOR_API_TOKEN: z.string().min(24),
     ALERTMANAGER_WEBHOOK_TOKEN: z.string().min(24),
+    ALERTMANAGER_INTERNAL_URL: safeHttpUrl.default("http://alertmanager:9093"),
+    MONITOR_BROWSER_HEARTBEAT_SECRET: z.string().min(32),
+    MONITOR_BROWSER_ALLOWED_ORIGINS: z.string().default("https://score.beachvolleyballmedia.com"),
     MONITOR_AGENT_TARGETS: z.string().default(""),
     MONITOR_SERVICE_BIND: z.string().default("127.0.0.1"),
     MONITOR_SERVICE_PORT: port.default(9110),
@@ -62,15 +67,25 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     HEALTHCHECKS_PING_URL: optionalHttpsUrl,
     HEALTHCHECKS_INTERVAL_MS: interval.default(60_000),
     SUPABASE_URL: optionalHttpsUrl,
-    SUPABASE_SERVICE_ROLE_KEY: z.preprocess(emptyStringToUndefined, z.string().min(20).optional())
+    SUPABASE_SERVICE_ROLE_KEY: z.preprocess(emptyStringToUndefined, z.string().min(20).optional()),
+    YOUTUBE_API_KEY: z.string().default(""),
+    YOUTUBE_CLIENT_ID: z.string().default(""),
+    YOUTUBE_CLIENT_SECRET: z.string().default(""),
+    YOUTUBE_REFRESH_TOKEN: z.string().default(""),
+    YOUTUBE_MONITOR_INTERVAL_MS: z.coerce.number().int().min(30_000).max(300_000).default(60_000)
   });
   const parsed = schema.parse(env);
   if (Boolean(parsed.SUPABASE_URL) !== Boolean(parsed.SUPABASE_SERVICE_ROLE_KEY)) {
     throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be configured together.");
   }
+  const oauthValues = [parsed.YOUTUBE_CLIENT_ID, parsed.YOUTUBE_CLIENT_SECRET, parsed.YOUTUBE_REFRESH_TOKEN].filter((value) => value.trim());
+  if (oauthValues.length !== 0 && oauthValues.length !== 3) throw new Error("YouTube OAuth monitoring requires client id, client secret, and refresh token together.");
   return {
     token: parsed.MONITOR_API_TOKEN,
     alertmanagerWebhookToken: parsed.ALERTMANAGER_WEBHOOK_TOKEN,
+    alertmanagerInternalUrl: parsed.ALERTMANAGER_INTERNAL_URL.replace(/\/+$/, ""),
+    browserHeartbeatSecret: parsed.MONITOR_BROWSER_HEARTBEAT_SECRET,
+    browserAllowedOrigins: parseOrigins(parsed.MONITOR_BROWSER_ALLOWED_ORIGINS),
     targets: parseAgentTargets(parsed.MONITOR_AGENT_TARGETS),
     bind: parsed.MONITOR_SERVICE_BIND,
     port: parsed.MONITOR_SERVICE_PORT,
@@ -79,8 +94,19 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     healthchecksPingUrl: parsed.HEALTHCHECKS_PING_URL ?? null,
     healthchecksIntervalMs: parsed.HEALTHCHECKS_INTERVAL_MS,
     supabaseUrl: parsed.SUPABASE_URL ?? null,
-    supabaseServiceRoleKey: parsed.SUPABASE_SERVICE_ROLE_KEY ?? null
+    supabaseServiceRoleKey: parsed.SUPABASE_SERVICE_ROLE_KEY ?? null,
+    youtubeApiKey: parsed.YOUTUBE_API_KEY.trim() || null,
+    youtubeClientId: parsed.YOUTUBE_CLIENT_ID.trim() || null,
+    youtubeClientSecret: parsed.YOUTUBE_CLIENT_SECRET.trim() || null,
+    youtubeRefreshToken: parsed.YOUTUBE_REFRESH_TOKEN.trim() || null,
+    youtubeMonitorIntervalMs: parsed.YOUTUBE_MONITOR_INTERVAL_MS
   };
+}
+
+function parseOrigins(raw: string): string[] {
+  const origins = raw.split(",").map((value) => value.trim()).filter(Boolean).map((value) => new URL(value).origin);
+  if (origins.length === 0 || origins.length > 10) throw new Error("MONITOR_BROWSER_ALLOWED_ORIGINS must contain 1-10 origins.");
+  return [...new Set(origins)];
 }
 
 export function parseAgentTargets(raw: string): AgentTarget[] {

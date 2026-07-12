@@ -29,6 +29,7 @@ rsync -a -e "ssh -i $SSH_KEY -o IdentitiesOnly=yes" "$GENERATED_ENV" "$SSH_HOST:
 ssh -i "$SSH_KEY" -o IdentitiesOnly=yes "$SSH_HOST" "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE'
 set -euo pipefail
 cd "$REMOTE_DIR"
+mkdir -p /var/lib/scorecheck-monitoring/ffmpeg
 if docker compose version >/dev/null 2>&1; then
   compose() { docker compose "$@"; }
 elif command -v docker-compose >/dev/null 2>&1; then

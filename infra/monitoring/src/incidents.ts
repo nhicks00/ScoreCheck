@@ -15,6 +15,13 @@ export const alertmanagerWebhookSchema = z.object({
   alerts: z.array(alertSchema).max(200)
 }).passthrough();
 
+const alertmanagerApiAlertsSchema = z.array(z.object({
+  labels: z.record(z.string(), z.string()).default({}),
+  annotations: z.record(z.string(), z.string()).default({}),
+  startsAt: z.string().optional(),
+  endsAt: z.string().optional()
+}).passthrough()).max(500);
+
 export type IncidentEventType = "OPENED" | "SEVERITY_CHANGED" | "EVIDENCE_UPDATED" | "ACKNOWLEDGED" | "RESOLVED" | "REOPENED";
 export type IncidentChange = { incident: IncidentSnapshot; eventType: IncidentEventType };
 
@@ -66,6 +73,29 @@ export class IncidentManager {
       });
     }
     return changed;
+  }
+
+  reconcileActiveAlerts(input: unknown, now = new Date()): IncidentChange[] {
+    const alerts = alertmanagerApiAlertsSchema.parse(input);
+    const payload = {
+      status: "firing" as const,
+      alerts: alerts.map((alert) => ({ ...alert, status: "firing" as const }))
+    };
+    const observed = this.applyWebhook(payload, now);
+    const activeFingerprints = new Set(alerts.map((alert) => normalizeAlert({ ...alert, status: "firing" }).fingerprint));
+    const transitions = observed.filter((change) => change.eventType !== "EVIDENCE_UPDATED");
+    for (const existing of this.active()) {
+      if (activeFingerprints.has(existing.fingerprint)) continue;
+      const resolved: IncidentSnapshot = {
+        ...existing,
+        status: "resolved",
+        lastObservedAt: now.toISOString(),
+        resolvedAt: now.toISOString()
+      };
+      this.incidents.set(resolved.fingerprint, resolved);
+      transitions.push({ incident: resolved, eventType: "RESOLVED" });
+    }
+    return transitions;
   }
 
   active(): IncidentSnapshot[] {

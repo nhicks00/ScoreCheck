@@ -85,3 +85,159 @@ groups:
         annotations:
           summary: "Media frame errors are increasing on court {{ $labels.court }} {{ $labels.branch }}."
           first_action: "Compare raw bitrate, publisher reconnects, and the normalization branch before assigning an upstream cause."
+
+      - alert: ScoreCheckRequiredRawPathMissing
+        expr: (scorecheck_media_path_ready{branch="raw"} == 0) and on(court) (scorecheck_court_media_required == 1)
+        for: 15s
+        labels:
+          severity: critical
+          stage: RAW_INGEST
+          issue_code: REQUIRED_RAW_PATH_MISSING
+          root_dependency: mediamtx
+        annotations:
+          summary: "Required camera ingest is missing on court {{ $labels.court }}."
+          first_action: "Check camera power, venue uplink, encoder publish status, and the MediaMTX raw path."
+
+      - alert: ScoreCheckRequiredRawBitrateLow
+        expr: (scorecheck_media_path_inbound_bitrate_bps{branch="raw"} < 500000) and on(court) (scorecheck_court_media_required == 1)
+        for: 30s
+        labels:
+          severity: warning
+          stage: RAW_INGEST
+          issue_code: RAW_BITRATE_LOW
+          root_dependency: venue-uplink
+        annotations:
+          summary: "Raw ingest bitrate is below 500 kbps on court {{ $labels.court }}."
+          first_action: "Compare camera encoder bitrate, venue uplink quality, packet loss, and reconnect counters."
+
+      - alert: ScoreCheckProgramBrowserMissing
+        expr: (scorecheck_program_browser_heartbeat_fresh == 0) and on(court) (scorecheck_court_broadcast_live == 1)
+        for: 15s
+        labels:
+          severity: critical
+          stage: PROGRAM_BROWSER
+          issue_code: PROGRAM_BROWSER_HEARTBEAT_MISSING
+          root_dependency: compositor
+        annotations:
+          summary: "Program browser heartbeat is missing for live court {{ $labels.court }}."
+          first_action: "Check compositor egress, program-page load, monitor gateway reachability, and browser logs."
+
+      - alert: ScoreCheckProgramFpsLow
+        expr: (scorecheck_program_browser_frames_per_second < 20) and on(court) (scorecheck_court_broadcast_live == 1)
+        for: 20s
+        labels:
+          severity: critical
+          stage: PROGRAM_BROWSER
+          issue_code: PROGRAM_FPS_LOW
+          root_dependency: compositor
+        annotations:
+          summary: "Rendered program FPS is below 20 on live court {{ $labels.court }}."
+          first_action: "Check source FPS first, then compositor CPU, browser frame drops, and egress encoder load."
+
+      - alert: ScoreCheckCommentaryDisconnected
+        expr: (scorecheck_program_commentary_room_connected == 0) and on(court) (scorecheck_court_commentary_required == 1)
+        for: 20s
+        labels:
+          severity: critical
+          stage: COMMENTARY
+          issue_code: COMMENTARY_ROOM_DISCONNECTED
+          root_dependency: livekit-commentary
+        annotations:
+          summary: "Required commentary room is disconnected on court {{ $labels.court }}."
+          first_action: "Check LiveKit health, commentator connectivity, and the program browser subscription."
+
+      - alert: ScoreCheckSourceAlignmentFailed
+        expr: (scorecheck_score_source_aligned == 0) and on(court) (scorecheck_court_scoring_live == 1)
+        for: 10s
+        labels:
+          severity: critical
+          stage: SCORE_SOURCE
+          issue_code: SCORE_SOURCE_ALIGNMENT_FAILED
+          root_dependency: scorecheck-worker
+        annotations:
+          summary: "Current match, canonical score, or persisted overlay state is misaligned on court {{ $labels.court }}."
+          first_action: "Compare the monitor snapshot issue codes before repairing queue or score state."
+
+      - alert: ScoreCheckRenderedScoreMismatch
+        expr: (scorecheck_program_score_render_aligned == 0) and on(court) (scorecheck_court_broadcast_live == 1)
+        for: 10s
+        labels:
+          severity: critical
+          stage: SCORE_RENDER
+          issue_code: SCOREBUG_RENDER_MISMATCH
+          root_dependency: program-browser
+        annotations:
+          summary: "Rendered scorebug differs from source state on court {{ $labels.court }}."
+          first_action: "Inspect source and DOM signatures; do not mutate canonical score data until the rendering fault is isolated."
+
+      - alert: ScoreCheckNativeEndpointDown
+        expr: scorecheck_native_endpoint_up == 0
+        for: 20s
+        labels:
+          severity: critical
+          stage: HOST
+          issue_code: NATIVE_ENDPOINT_DOWN
+          root_dependency: "{{ $labels.service }}"
+        annotations:
+          summary: "Native endpoint {{ $labels.service }} is down on {{ $labels.agent }}."
+          first_action: "Inspect the bounded service health and container state on the affected host."
+
+      - alert: ScoreCheckLiveKitPacketDrops
+        expr: increase(scorecheck_livekit_packets_dropped[1m]) > 10
+        for: 15s
+        labels:
+          severity: warning
+          stage: COMMENTARY
+          issue_code: LIVEKIT_PACKET_DROPS
+          root_dependency: livekit-commentary
+        annotations:
+          summary: "LiveKit packet drops are increasing on {{ $labels.agent }}."
+          first_action: "Compare participant network quality, server load, and packet output before assigning the fault."
+
+      - alert: ScoreCheckProgramBranchProgressMissing
+        expr: (scorecheck_ffmpeg_progress_fresh{branch="program"} == 0) and on(court) (scorecheck_court_broadcast_live == 1)
+        for: 20s
+        labels:
+          severity: critical
+          stage: PROGRAM_PATH
+          issue_code: PROGRAM_BRANCH_PROGRESS_MISSING
+          root_dependency: mediamtx-ffmpeg
+        annotations:
+          summary: "Program FFmpeg branch progress is missing on live court {{ $labels.court }}."
+          first_action: "Check the raw and preview paths, on-demand reader, and MediaMTX branch process."
+
+      - alert: ScoreCheckPreviewBranchFpsLow
+        expr: (scorecheck_ffmpeg_frames_per_second{branch="preview"} < 20) and on(court) (scorecheck_court_broadcast_live == 1)
+        for: 20s
+        labels:
+          severity: critical
+          stage: PREVIEW
+          issue_code: PREVIEW_BRANCH_FPS_LOW
+          root_dependency: mediamtx-ffmpeg
+        annotations:
+          summary: "Preview normalization FPS is below 20 on live court {{ $labels.court }}."
+          first_action: "Compare raw ingest continuity and host CPU before changing encoder settings."
+
+      - alert: ScoreCheckYouTubeUnhealthy
+        expr: (scorecheck_youtube_healthy == 0) and on(court) (scorecheck_court_broadcast_live == 1)
+        for: 30s
+        labels:
+          severity: critical
+          stage: YOUTUBE
+          issue_code: YOUTUBE_STREAM_UNHEALTHY
+          root_dependency: youtube
+        annotations:
+          summary: "YouTube reports unhealthy ingestion on court {{ $labels.court }}."
+          first_action: "Inspect YouTube stream health and configuration issue codes, then compare egress output health."
+
+      - alert: ScoreCheckYouTubeDegraded
+        expr: (scorecheck_youtube_degraded == 1) and on(court) (scorecheck_court_broadcast_live == 1)
+        for: 1m
+        labels:
+          severity: warning
+          stage: YOUTUBE
+          issue_code: YOUTUBE_STREAM_DEGRADED
+          root_dependency: youtube
+        annotations:
+          summary: "YouTube reports a warning-level ingestion issue on court {{ $labels.court }}."
+          first_action: "Inspect the bounded YouTube configuration issue codes and compare source and egress health."

@@ -4,6 +4,7 @@ import type { AgentConfig } from "./config.js";
 import { agentSnapshotSchema, MONITORING_CONTRACT_VERSION, type AgentSnapshot, type MediaPathSnapshot } from "./contracts.js";
 import { collectDockerServices } from "./docker.js";
 import { parseMediaPath, type ByteSample } from "./media.js";
+import { collectFfmpegProgress } from "./ffmpegProgress.js";
 
 type CollectionError = AgentSnapshot["collectionErrors"][number];
 type MediaMtxListResponse = { items?: unknown[] };
@@ -18,7 +19,7 @@ export class AgentCollector {
     const errors = new Set<CollectionError>();
     const sampledAtMs = Date.now();
 
-    const [disk, services, frameErrors, mediaPaths] = await Promise.all([
+    const [disk, services, frameErrors, mediaPaths, ffmpegBranches] = await Promise.all([
       collectDisk(this.config.diskPath).catch(() => {
         errors.add("HOST_DISK_UNAVAILABLE");
         return { total: null, free: null };
@@ -28,14 +29,20 @@ export class AgentCollector {
         return [];
       }),
       this.collectFrameErrors(errors),
-      this.collectMediaPaths(errors, sampledAtMs)
+      this.collectMediaPaths(errors, sampledAtMs),
+      collectFfmpegProgress(this.config.ffmpegProgressDir, sampledAtMs)
     ]);
 
-    await Promise.all([
-      probeMetricsEndpoint(this.config.livekitMetricsUrl, "LIVEKIT_METRICS_UNAVAILABLE", errors),
-      probeMetricsEndpoint(this.config.egressMetricsUrl, "EGRESS_METRICS_UNAVAILABLE", errors),
-      probeHttpEndpoint(this.config.egressHealthUrl, "EGRESS_METRICS_UNAVAILABLE", errors)
+    const [livekit, egressMetricsUp, egressHealthUp] = await Promise.all([
+      collectLiveKit(this.config.livekitMetricsUrl, errors),
+      probeEndpoint(this.config.egressMetricsUrl, "EGRESS_METRICS_UNAVAILABLE", errors, true),
+      probeEndpoint(this.config.egressHealthUrl, "EGRESS_METRICS_UNAVAILABLE", errors, false)
     ]);
+    const endpoints = [
+      this.config.livekitMetricsUrl ? { service: "livekit" as const, up: livekit !== null } : null,
+      egressMetricsUp == null ? null : { service: "egress-metrics" as const, up: egressMetricsUp },
+      egressHealthUp == null ? null : { service: "egress-health" as const, up: egressHealthUp }
+    ].filter((value): value is NonNullable<typeof value> => value !== null);
 
     const pathsWithErrors = mediaPaths.map((path) => ({
       ...path,
@@ -58,7 +65,9 @@ export class AgentCollector {
         diskFreeBytes: disk.free
       },
       services,
-      mediaPaths: pathsWithErrors
+      mediaPaths: pathsWithErrors,
+      ffmpegBranches,
+      nativeServices: { endpoints, livekit }
     });
   }
 
@@ -128,23 +137,49 @@ async function collectDisk(path: string): Promise<{ total: number; free: number 
   };
 }
 
-async function probeMetricsEndpoint(url: string | null, error: CollectionError, errors: Set<CollectionError>) {
-  if (!url) return;
+async function probeEndpoint(url: string | null, error: CollectionError, errors: Set<CollectionError>, requireText: boolean): Promise<boolean | null> {
+  if (!url) return null;
   try {
-    await fetchText(url);
+    if (requireText) await fetchText(url);
+    else {
+      const response = await fetch(url, { signal: AbortSignal.timeout(2_500) });
+      if (!response.ok) throw new Error("Endpoint unavailable.");
+    }
+    return true;
   } catch {
     errors.add(error);
+    return false;
   }
 }
 
-async function probeHttpEndpoint(url: string | null, error: CollectionError, errors: Set<CollectionError>) {
-  if (!url) return;
+async function collectLiveKit(url: string | null, errors: Set<CollectionError>) {
+  if (!url) return null;
   try {
-    const response = await fetch(url, { signal: AbortSignal.timeout(2_500) });
-    if (!response.ok) throw new Error("Endpoint unavailable.");
+    const text = await fetchText(url);
+    return {
+      roomCount: Math.trunc(metricSum(text, "livekit_room_total")),
+      participantCount: Math.trunc(metricSum(text, "livekit_participant_total")),
+      packetsOut: metricSum(text, "livekit_node_packet_total", { type: "out" }),
+      packetsDropped: metricSum(text, "livekit_node_packet_total", { type: "dropped" })
+    };
   } catch {
-    errors.add(error);
+    errors.add("LIVEKIT_METRICS_UNAVAILABLE");
+    return null;
   }
+}
+
+export function metricSum(text: string, metricName: string, requiredLabels: Record<string, string> = {}): number {
+  let sum = 0;
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.startsWith(`${metricName}{`) && !line.startsWith(`${metricName} `)) continue;
+    const labelsEnd = line.indexOf("}");
+    const valueText = labelsEnd >= 0 ? line.slice(labelsEnd + 1).trim() : line.slice(metricName.length).trim();
+    const labels = labelsEnd >= 0 ? line.slice(line.indexOf("{") + 1, labelsEnd) : "";
+    if (Object.entries(requiredLabels).some(([key, value]) => parsePrometheusLabel(labels, key) !== value)) continue;
+    const value = Number(valueText.split(/\s+/)[0]);
+    if (Number.isFinite(value) && value >= 0) sum += value;
+  }
+  return sum;
 }
 
 async function fetchJson<T>(url: string): Promise<T> {

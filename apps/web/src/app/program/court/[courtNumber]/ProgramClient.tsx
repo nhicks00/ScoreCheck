@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { OverlayClient } from "@/app/overlay/court/[courtNumber]/OverlayClient";
-import { StreamPlayer } from "@/components/StreamPlayer";
+import { OverlayClient, type OverlayRenderHealth } from "@/app/overlay/court/[courtNumber]/OverlayClient";
+import { StreamPlayer, type StreamConnectionHealth } from "@/components/StreamPlayer";
 import type { CommentaryConnection } from "@/lib/commentary";
+import type { ProgramMonitoringConnection } from "@/lib/programMonitoring";
 import type { StreamTimingSample } from "@/lib/rtcTiming";
 import {
-  buildProgramHeartbeat,
+  buildProgramMonitorHeartbeat,
   initialProgramWatchdog,
   PROGRAM_COMMENTARY_WAIT_MS,
   PROGRAM_HEARTBEAT_INTERVAL_MS,
@@ -30,8 +31,6 @@ import {
 
 type ProgramClientProps = {
   courtNumber: number;
-  /** The validated ?token= value, echoed into heartbeats (never the env value itself). */
-  token: string;
   sources: { whepUrl: string | null; hlsUrl: string | null };
   commentary: CommentaryConnection | null;
   cameraGainDb: number;
@@ -39,20 +38,23 @@ type ProgramClientProps = {
   commentaryDelayMs: number;
   debug: boolean;
   buildVersion: string;
+  configurationVersion: string;
+  monitoring: ProgramMonitoringConnection | null;
 };
 
 const PROGRAM_STABLE_FRAME_TICKS = 3;
 
 export function ProgramClient({
   courtNumber,
-  token,
   sources,
   commentary,
   cameraGainDb,
   commentaryGainDb,
   commentaryDelayMs,
   debug,
-  buildVersion
+  buildVersion,
+  configurationVersion,
+  monitoring
 }: ProgramClientProps) {
   const hasSources = Boolean(sources.whepUrl);
 
@@ -63,11 +65,17 @@ export function ProgramClient({
   const endLoggedRef = useRef(false);
   const audioBlockedRef = useRef(false);
   const framesRef = useRef(0);
+  const reconnectsRef = useRef(0);
+  const reloadCountRef = useRef(0);
   const presentedFramesRef = useRef(0);
   const stableFrameTicksRef = useRef(0);
   const videoStateRef = useRef("waiting");
   const audioHealthRef = useRef<ProgramAudioHealth>(EMPTY_PROGRAM_AUDIO_HEALTH);
   const programTimingRef = useRef<StreamTimingSample | null>(null);
+  const streamHealthRef = useRef<StreamConnectionHealth | null>(null);
+  const overlayHealthRef = useRef<OverlayRenderHealth>(EMPTY_OVERLAY_RENDER_HEALTH);
+  const pageLoadedAtRef = useRef(new Date().toISOString());
+  const heartbeatSeqRef = useRef(0);
 
   const [playerEpoch, setPlayerEpoch] = useState(0);
   const [reconnects, setReconnects] = useState(0);
@@ -78,7 +86,7 @@ export function ProgramClient({
   const [cameraElement, setCameraElement] = useState<HTMLVideoElement | null>(null);
   const [audioHealth, setAudioHealth] = useState<ProgramAudioHealth>(EMPTY_PROGRAM_AUDIO_HEALTH);
   const [commentaryWaitExpired, setCommentaryWaitExpired] = useState(false);
-  const [heartbeatState, setHeartbeatState] = useState<"waiting" | "ok" | "error">("waiting");
+  const [heartbeatState, setHeartbeatState] = useState<"disabled" | "waiting" | "ok" | "error">(monitoring ? "waiting" : "disabled");
 
   const setVideoState = useCallback((next: string) => {
     videoStateRef.current = next;
@@ -91,6 +99,12 @@ export function ProgramClient({
   }, []);
   const updateProgramTiming = useCallback((sample: StreamTimingSample | null) => {
     programTimingRef.current = sample;
+  }, []);
+  const updateStreamHealth = useCallback((health: StreamConnectionHealth | null) => {
+    streamHealthRef.current = health;
+  }, []);
+  const updateOverlayHealth = useCallback((health: OverlayRenderHealth) => {
+    overlayHealthRef.current = health;
   }, []);
 
   const logEndOnce = useCallback(() => {
@@ -126,7 +140,9 @@ export function ProgramClient({
 
   /* Reload diagnostics survive location.reload() via sessionStorage. */
   useEffect(() => {
-    setReloadCount(readReloadCount(courtNumber));
+    const count = readReloadCount(courtNumber);
+    reloadCountRef.current = count;
+    setReloadCount(count);
   }, [courtNumber]);
 
   /* A human previewing the page can click to lift an autoplay-policy mute;
@@ -181,6 +197,8 @@ export function ProgramClient({
 
       if (step.progressed) {
         clearReloadCount(courtNumber);
+        reloadCountRef.current = 0;
+        setReloadCount(0);
         stableFrameTicksRef.current += 1;
         if (stableFrameTicksRef.current >= PROGRAM_STABLE_FRAME_TICKS) {
           setFramesFlowing(true);
@@ -192,13 +210,15 @@ export function ProgramClient({
         stableFrameTicksRef.current = 0;
         setFramesFlowing(false);
         setVideoState("reconnecting");
-        setReconnects((current) => current + 1);
+        reconnectsRef.current += 1;
+        setReconnects(reconnectsRef.current);
         setPlayerEpoch((current) => current + 1);
       } else if (step.action === "reload") {
         stableFrameTicksRef.current = 0;
         setFramesFlowing(false);
         setVideoState("reloading");
         bumpReloadCount(courtNumber);
+        reloadCountRef.current = readReloadCount(courtNumber);
         window.location.reload();
       } else if (videoStateRef.current === "playing") {
         stableFrameTicksRef.current = 0;
@@ -231,32 +251,51 @@ export function ProgramClient({
      just "Chrome is running". Failures are swallowed — the heartbeat must
      never destabilize the broadcast page. */
   useEffect(() => {
+    if (!monitoring) {
+      setHeartbeatState("disabled");
+      return;
+    }
+    const connection = monitoring;
     let cancelled = false;
     async function beat() {
       try {
-        const res = await fetch("/api/program/heartbeat", {
+        heartbeatSeqRef.current += 1;
+        const audio = audioHealthRef.current;
+        const res = await fetch(connection.heartbeatUrl, {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: {
+            authorization: `Bearer ${connection.credential}`,
+            "content-type": "application/json"
+          },
           body: JSON.stringify(
-            buildProgramHeartbeat({
-              token,
+            buildProgramMonitorHeartbeat({
+              credentialId: connection.credentialId,
               courtNumber,
+              heartbeatSeq: heartbeatSeqRef.current,
+              sampledAt: new Date().toISOString(),
+              pageLoadedAt: pageLoadedAtRef.current,
+              pageBuildVersion: buildVersion,
+              configurationVersion,
               videoState: videoStateRef.current,
               framesRendered: framesRef.current,
-              commentaryRoomConnected: audioHealthRef.current.roomConnected,
-              commentaryParticipantCount: audioHealthRef.current.participantCount,
-              commentaryAudioTrackCount: audioHealthRef.current.audioTrackCount,
-              commentaryRmsDb: audioHealthRef.current.commentaryRmsDb,
-              commentaryPeakDb: audioHealthRef.current.commentaryPeakDb,
-              secondsSinceCommentaryAudio: audioHealthRef.current.secondsSinceCommentaryAudio,
-              cameraAudioRmsDb: audioHealthRef.current.cameraRmsDb,
-              commentarySyncStatus: audioHealthRef.current.commentarySyncStatus,
-              commentaryDelayConfiguredMs: audioHealthRef.current.commentaryDelayConfiguredMs,
-              commentaryDelayTargetMs: audioHealthRef.current.commentaryDelayTargetMs,
-              commentaryDelayAppliedMs: audioHealthRef.current.commentaryDelayAppliedMs,
-              commentarySyncRttMs: audioHealthRef.current.commentarySyncRttMs,
-              commentarySyncSampleAgeMs: audioHealthRef.current.commentarySyncSampleAgeMs,
-              pageVersion: buildVersion
+              streamHealth: streamHealthRef.current,
+              reconnectCount: reconnectsRef.current,
+              reloadCount: reloadCountRef.current,
+              commentaryConfigured: Boolean(commentary),
+              commentaryRoomConnected: audio.roomConnected,
+              commentaryParticipantCount: audio.participantCount,
+              commentaryAudioTrackCount: audio.audioTrackCount,
+              commentaryRmsDb: audio.commentaryRmsDb,
+              commentaryPeakDb: audio.commentaryPeakDb,
+              secondsSinceCommentaryAudio: audio.secondsSinceCommentaryAudio,
+              cameraAudioRmsDb: audio.cameraRmsDb,
+              commentarySyncStatus: audio.commentarySyncStatus,
+              commentaryDelayConfiguredMs: audio.commentaryDelayConfiguredMs,
+              commentaryDelayTargetMs: audio.commentaryDelayTargetMs,
+              commentaryDelayAppliedMs: audio.commentaryDelayAppliedMs,
+              commentarySyncRttMs: audio.commentarySyncRttMs,
+              commentarySyncSampleAgeMs: audio.commentarySyncSampleAgeMs,
+              scoreRender: overlayHealthRef.current
             })
           )
         });
@@ -271,7 +310,7 @@ export function ProgramClient({
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [token, courtNumber, buildVersion]);
+  }, [buildVersion, commentary, configurationVersion, courtNumber, monitoring]);
 
   return (
     <div ref={rootRef} className="program-root">
@@ -285,6 +324,7 @@ export function ProgramClient({
             mode="program"
             onVideoElement={setCameraElement}
             onTimingSample={updateProgramTiming}
+            onConnectionHealth={updateStreamHealth}
           />
         </div>
         {videoState !== "playing" && (
@@ -300,6 +340,7 @@ export function ProgramClient({
             eventId=""
             theme="default"
             buildVersion={buildVersion}
+            onHealth={updateOverlayHealth}
           />
         </div>
         <ProgramAudioMixer
@@ -331,6 +372,19 @@ export function ProgramClient({
     </div>
   );
 }
+
+const EMPTY_OVERLAY_RENDER_HEALTH: OverlayRenderHealth = {
+  loaded: false,
+  connected: false,
+  stale: false,
+  frozen: false,
+  matchId: null,
+  phase: "UNKNOWN",
+  sourceSignature: null,
+  renderedSignature: null,
+  domMismatchReason: null,
+  stateUpdatedAt: null
+};
 
 function formatDb(value: number | null): string {
   return value == null ? "n/a" : `${value.toFixed(1)} dB`;

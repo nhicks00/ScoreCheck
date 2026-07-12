@@ -13,9 +13,9 @@ export MEDIAMTX_PUBLIC_IP="${MEDIAMTX_PUBLIC_IP:-${SSH_HOST#*@}}"
 
 node "$SCRIPT_DIR/render-config.mjs"
 
-ssh -i "$SSH_KEY" "$SSH_HOST" "mkdir -p '$REMOTE_DIR/.incoming' '$REMOTE_DIR/fonts'"
+ssh -i "$SSH_KEY" "$SSH_HOST" "mkdir -p '$REMOTE_DIR/.incoming' '$REMOTE_DIR/fonts' /var/lib/scorecheck-monitoring/ffmpeg"
 rsync -a -e "ssh -i $SSH_KEY" \
-  "$SCRIPT_DIR/docker-compose.yml" "$GENERATED" \
+  "$SCRIPT_DIR/docker-compose.yml" "$SCRIPT_DIR/scorecheck-ffmpeg-runner.sh" "$GENERATED" \
   "$SSH_HOST:$REMOTE_DIR/.incoming/"
 
 ssh -i "$SSH_KEY" "$SSH_HOST" "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE'
@@ -28,6 +28,7 @@ cp mediamtx.yml "backups/mediamtx.$timestamp.yml"
 
 install -m 0644 .incoming/docker-compose.yml docker-compose.yml
 install -m 0600 .incoming/mediamtx.yml mediamtx.yml
+install -m 0755 .incoming/scorecheck-ffmpeg-runner.sh scorecheck-ffmpeg-runner.sh
 docker compose config -q
 
 if ! docker compose up -d --force-recreate; then

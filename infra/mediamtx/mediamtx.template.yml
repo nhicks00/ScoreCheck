@@ -75,7 +75,8 @@ paths:
     runOnDemand: >
       /bin/sh -c 'while ! wget -qO- "http://127.0.0.1:9997/v3/paths/get/court${G1}_raw"
       2>/dev/null | grep -q "\"ready\":true"; do sleep 2; done;
-      exec ffmpeg -nostdin -hide_banner -loglevel warning
+      exec /usr/local/bin/scorecheck-ffmpeg-runner "court${G1}_preview" --
+      -nostdin -hide_banner -loglevel warning
       -fflags nobuffer -flags low_delay -rtsp_transport tcp
       -i "rtsp://127.0.0.1:${RTSP_PORT}/court${G1}_raw"
       -map 0:v:0 -map 0:a:0?
@@ -96,7 +97,8 @@ paths:
     runOnDemand: >
       /bin/sh -c 'while ! wget -qO- "http://127.0.0.1:9997/v3/paths/get/court${G1}_preview"
       2>/dev/null | grep -q "\"ready\":true"; do sleep 2; done;
-      exec ffmpeg -nostdin -hide_banner -loglevel warning
+      exec /usr/local/bin/scorecheck-ffmpeg-runner "court${G1}_program" --
+      -nostdin -hide_banner -loglevel warning
       -i "srt://127.0.0.1:8890?streamid=read:court${G1}_preview&latency=__PROGRAM_DELAY_US__"
       -map 0:v:0 -map 0:a:0? -c copy
       -f rtsp -rtsp_transport tcp "rtsp://127.0.0.1:${RTSP_PORT}/${MTX_PATH}"'
@@ -110,7 +112,8 @@ paths:
     runOnDemand: >
       /bin/sh -c 'while ! wget -qO- "http://127.0.0.1:9997/v3/paths/get/court${G1}_preview"
       2>/dev/null | grep -q "\"ready\":true"; do sleep 2; done;
-      exec ffmpeg -nostdin -hide_banner -loglevel warning
+      exec /usr/local/bin/scorecheck-ffmpeg-runner "court${G1}_calibration" --
+      -nostdin -hide_banner -loglevel warning
       -fflags nobuffer -flags low_delay -rtsp_transport tcp
       -i "rtsp://127.0.0.1:${RTSP_PORT}/court${G1}_preview"
       -map 0:v:0 -map 0:a:0?

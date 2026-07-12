@@ -106,26 +106,66 @@ export function programWatchdogStep(
   };
 }
 
-export type ProgramHeartbeatBody = {
-  token: string;
+export type ProgramMonitorHeartbeatBody = {
+  version: 1;
+  credentialId: string;
   courtNumber: number;
-  videoState: string;
-  framesRendered: number;
-  commentaryRoomConnected: boolean;
-  commentaryParticipantCount: number;
-  commentaryAudioTrackCount: number;
-  commentaryRmsDb: number | null;
-  commentaryPeakDb: number | null;
-  secondsSinceCommentaryAudio: number | null;
-  cameraAudioRmsDb: number | null;
-  commentarySyncStatus: string;
-  commentaryDelayConfiguredMs: number | null;
-  commentaryDelayTargetMs: number | null;
-  commentaryDelayAppliedMs: number | null;
-  commentarySyncRttMs: number | null;
-  commentarySyncSampleAgeMs: number | null;
-  pageVersion: string;
+  heartbeatSeq: number;
+  sampledAt: string;
+  pageLoadedAt: string;
+  pageBuildVersion: string;
+  configurationVersion: string;
+  video: {
+    state: ProgramVideoState;
+    transport: ProgramTransport;
+    connectionState: ProgramConnectionState;
+    framesRendered: number;
+    framesPerSecond: number | null;
+    width: number | null;
+    height: number | null;
+    rttMs: number | null;
+    jitterBufferMs: number | null;
+    packetsLost: number | null;
+    packetsReceived: number | null;
+    framesDropped: number | null;
+    bytesReceived: number | null;
+    reconnectCount: number;
+    reloadCount: number;
+  };
+  commentary: {
+    configured: boolean;
+    roomConnected: boolean;
+    participantCount: number;
+    audioTrackCount: number;
+    rmsDb: number | null;
+    peakDb: number | null;
+    secondsSinceAudio: number | null;
+    cameraRmsDb: number | null;
+    syncStatus: "fallback" | "calibrating" | "locked";
+    configuredDelayMs: number | null;
+    targetDelayMs: number | null;
+    appliedDelayMs: number | null;
+    clockRttMs: number | null;
+    syncSampleAgeMs: number | null;
+  };
+  scoreRender: {
+    loaded: boolean;
+    connected: boolean;
+    stale: boolean;
+    frozen: boolean;
+    matchId: string | null;
+    phase: ProgramScorePhase;
+    sourceSignature: string | null;
+    renderedSignature: string | null;
+    domMismatchReason: "shape-mismatch" | "team-a-sets-mismatch" | "team-b-sets-mismatch" | "board-missing" | null;
+    stateUpdatedAt: string | null;
+  };
 };
+
+type ProgramVideoState = "waiting" | "stabilizing" | "playing" | "stalled" | "reconnecting" | "reloading" | "fatal" | "unknown";
+type ProgramTransport = "whep" | "hls" | "none";
+type ProgramConnectionState = "new" | "connecting" | "connected" | "disconnected" | "failed" | "closed" | "unknown";
+type ProgramScorePhase = "IDLE" | "PREMATCH" | "LIVE" | "POSTMATCH" | "STALE" | "ERROR" | "UNKNOWN";
 
 const MAX_HEARTBEAT_TEXT = 64;
 
@@ -135,11 +175,32 @@ const MAX_HEARTBEAT_TEXT = 64;
  * counts become non-negative integers, free-text fields are trimmed and
  * capped, and blanks fall back to explicit placeholders.
  */
-export function buildProgramHeartbeat(input: {
-  token: string;
+export function buildProgramMonitorHeartbeat(input: {
+  credentialId: string;
   courtNumber: number;
+  heartbeatSeq: number;
+  sampledAt: string;
+  pageLoadedAt: string;
+  pageBuildVersion: string | null | undefined;
+  configurationVersion: string | null | undefined;
   videoState: string | null | undefined;
   framesRendered: number | null | undefined;
+  streamHealth: {
+    transport: string;
+    connectionState: string;
+    framesPerSecond: number | null;
+    width: number | null;
+    height: number | null;
+    rttMs: number | null;
+    jitterBufferMs: number | null;
+    packetsLost: number | null;
+    packetsReceived: number | null;
+    framesDropped: number | null;
+    bytesReceived: number | null;
+  } | null;
+  reconnectCount: number;
+  reloadCount: number;
+  commentaryConfigured: boolean;
   commentaryRoomConnected: boolean;
   commentaryParticipantCount: number | null | undefined;
   commentaryAudioTrackCount: number | null | undefined;
@@ -153,28 +214,107 @@ export function buildProgramHeartbeat(input: {
   commentaryDelayAppliedMs: number | null | undefined;
   commentarySyncRttMs: number | null | undefined;
   commentarySyncSampleAgeMs: number | null | undefined;
-  pageVersion: string | null | undefined;
-}): ProgramHeartbeatBody {
-  return {
-    token: input.token,
-    courtNumber: Math.trunc(input.courtNumber),
-    videoState: clampText(input.videoState, "unknown"),
-    framesRendered: clampCount(input.framesRendered),
-    commentaryRoomConnected: Boolean(input.commentaryRoomConnected),
-    commentaryParticipantCount: clampCount(input.commentaryParticipantCount),
-    commentaryAudioTrackCount: clampCount(input.commentaryAudioTrackCount),
-    commentaryRmsDb: clampDb(input.commentaryRmsDb),
-    commentaryPeakDb: clampDb(input.commentaryPeakDb),
-    secondsSinceCommentaryAudio: clampOptionalNonNegative(input.secondsSinceCommentaryAudio),
-    cameraAudioRmsDb: clampDb(input.cameraAudioRmsDb),
-    commentarySyncStatus: clampSyncStatus(input.commentarySyncStatus),
-    commentaryDelayConfiguredMs: clampOptionalMs(input.commentaryDelayConfiguredMs, 10_000),
-    commentaryDelayTargetMs: clampOptionalMs(input.commentaryDelayTargetMs, 10_000),
-    commentaryDelayAppliedMs: clampOptionalMs(input.commentaryDelayAppliedMs, 10_000),
-    commentarySyncRttMs: clampOptionalMs(input.commentarySyncRttMs, 60_000),
-    commentarySyncSampleAgeMs: clampOptionalMs(input.commentarySyncSampleAgeMs, 60_000),
-    pageVersion: clampText(input.pageVersion, "local")
+  scoreRender: {
+    loaded: boolean;
+    connected: boolean;
+    stale: boolean;
+    frozen: boolean;
+    matchId: string | null;
+    phase: string;
+    sourceSignature: string | null;
+    renderedSignature: string | null;
+    domMismatchReason: ProgramMonitorHeartbeatBody["scoreRender"]["domMismatchReason"];
+    stateUpdatedAt: string | null;
   };
+}): ProgramMonitorHeartbeatBody {
+  const stream = input.streamHealth;
+  return {
+    version: 1,
+    credentialId: input.credentialId,
+    courtNumber: Math.trunc(input.courtNumber),
+    heartbeatSeq: Math.max(1, Math.trunc(input.heartbeatSeq)),
+    sampledAt: input.sampledAt,
+    pageLoadedAt: input.pageLoadedAt,
+    pageBuildVersion: clampIdentifier(input.pageBuildVersion, "local"),
+    configurationVersion: clampIdentifier(input.configurationVersion, "unknown"),
+    video: {
+      state: clampVideoState(input.videoState),
+      transport: clampTransport(stream?.transport),
+      connectionState: clampConnectionState(stream?.connectionState),
+      framesRendered: clampCount(input.framesRendered),
+      framesPerSecond: clampOptionalRange(stream?.framesPerSecond, 0, 240),
+      width: clampOptionalInteger(stream?.width, 1, 8192),
+      height: clampOptionalInteger(stream?.height, 1, 8192),
+      rttMs: clampOptionalRange(stream?.rttMs, 0, 60_000),
+      jitterBufferMs: clampOptionalRange(stream?.jitterBufferMs, 0, 60_000),
+      packetsLost: clampOptionalInteger(stream?.packetsLost, 0, Number.MAX_SAFE_INTEGER),
+      packetsReceived: clampOptionalInteger(stream?.packetsReceived, 0, Number.MAX_SAFE_INTEGER),
+      framesDropped: clampOptionalInteger(stream?.framesDropped, 0, Number.MAX_SAFE_INTEGER),
+      bytesReceived: clampOptionalInteger(stream?.bytesReceived, 0, Number.MAX_SAFE_INTEGER),
+      reconnectCount: clampCount(input.reconnectCount),
+      reloadCount: clampCount(input.reloadCount)
+    },
+    commentary: {
+      configured: Boolean(input.commentaryConfigured),
+      roomConnected: Boolean(input.commentaryRoomConnected),
+      participantCount: Math.min(32, clampCount(input.commentaryParticipantCount)),
+      audioTrackCount: Math.min(32, clampCount(input.commentaryAudioTrackCount)),
+      rmsDb: clampDb(input.commentaryRmsDb),
+      peakDb: clampDb(input.commentaryPeakDb),
+      secondsSinceAudio: clampOptionalRange(input.secondsSinceCommentaryAudio, 0, 86_400),
+      cameraRmsDb: clampDb(input.cameraAudioRmsDb),
+      syncStatus: clampSyncStatus(input.commentarySyncStatus),
+      configuredDelayMs: clampOptionalMs(input.commentaryDelayConfiguredMs, 10_000),
+      targetDelayMs: clampOptionalMs(input.commentaryDelayTargetMs, 10_000),
+      appliedDelayMs: clampOptionalMs(input.commentaryDelayAppliedMs, 10_000),
+      clockRttMs: clampOptionalMs(input.commentarySyncRttMs, 60_000),
+      syncSampleAgeMs: clampOptionalMs(input.commentarySyncSampleAgeMs, 60_000)
+    },
+    scoreRender: {
+      loaded: Boolean(input.scoreRender.loaded),
+      connected: Boolean(input.scoreRender.connected),
+      stale: Boolean(input.scoreRender.stale),
+      frozen: Boolean(input.scoreRender.frozen),
+      matchId: clampOptionalText(input.scoreRender.matchId, 80),
+      phase: clampScorePhase(input.scoreRender.phase),
+      sourceSignature: clampOptionalText(input.scoreRender.sourceSignature, 240),
+      renderedSignature: clampOptionalText(input.scoreRender.renderedSignature, 240),
+      domMismatchReason: input.scoreRender.domMismatchReason,
+      stateUpdatedAt: input.scoreRender.stateUpdatedAt
+    }
+  };
+}
+
+function clampIdentifier(value: string | null | undefined, fallback: string): string {
+  const cleaned = (value ?? "").trim().replace(/[^a-zA-Z0-9_.:-]+/g, "-").slice(0, MAX_HEARTBEAT_TEXT);
+  return cleaned || fallback;
+}
+
+function clampOptionalText(value: string | null | undefined, max: number): string | null {
+  const trimmed = (value ?? "").trim();
+  return trimmed ? trimmed.slice(0, max) : null;
+}
+
+function clampVideoState(value: string | null | undefined): ProgramVideoState {
+  return ["waiting", "stabilizing", "playing", "stalled", "reconnecting", "reloading", "fatal"].includes(value ?? "")
+    ? value as ProgramVideoState
+    : "unknown";
+}
+
+function clampTransport(value: string | null | undefined): ProgramTransport {
+  return value === "whep" || value === "hls" ? value : "none";
+}
+
+function clampConnectionState(value: string | null | undefined): ProgramConnectionState {
+  return ["new", "connecting", "connected", "disconnected", "failed", "closed"].includes(value ?? "")
+    ? value as ProgramConnectionState
+    : "unknown";
+}
+
+function clampScorePhase(value: string | null | undefined): ProgramScorePhase {
+  return ["IDLE", "PREMATCH", "LIVE", "POSTMATCH", "STALE", "ERROR"].includes(value ?? "")
+    ? value as ProgramScorePhase
+    : "UNKNOWN";
 }
 
 function clampText(value: string | null | undefined, fallback: string): string {
@@ -198,6 +338,20 @@ function clampOptionalNonNegative(value: number | null | undefined): number | nu
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return null;
   return Math.max(0, Math.round(numeric * 10) / 10);
+}
+
+function clampOptionalRange(value: number | null | undefined, min: number, max: number): number | null {
+  if (value == null) return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  return Math.min(max, Math.max(min, Math.round(numeric * 10) / 10));
+}
+
+function clampOptionalInteger(value: number | null | undefined, min: number, max: number): number | null {
+  if (value == null) return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  return Math.min(max, Math.max(min, Math.trunc(numeric)));
 }
 
 function clampSyncStatus(value: string | null | undefined): "fallback" | "calibrating" | "locked" {

@@ -25,6 +25,17 @@ export class AgentMetrics {
   private readonly pathBytesSent = new Gauge({ name: "scorecheck_media_path_bytes_sent_total", help: "Media path cumulative bytes sent.", labelNames: ["agent", "court", "branch"], registers: [this.registry] });
   private readonly pathBitrate = new Gauge({ name: "scorecheck_media_path_inbound_bitrate_bps", help: "Derived inbound bitrate from consecutive byte samples.", labelNames: ["agent", "court", "branch"], registers: [this.registry] });
   private readonly pathFrameErrors = new Gauge({ name: "scorecheck_media_path_frame_errors_total", help: "Media path cumulative inbound frame errors.", labelNames: ["agent", "court", "branch"], registers: [this.registry] });
+  private readonly ffmpegProgressFresh = new Gauge({ name: "scorecheck_ffmpeg_progress_fresh", help: "Whether FFmpeg branch progress has updated within twenty seconds.", labelNames: ["agent", "court", "branch"], registers: [this.registry] });
+  private readonly ffmpegFps = new Gauge({ name: "scorecheck_ffmpeg_frames_per_second", help: "FFmpeg branch output frames per second.", labelNames: ["agent", "court", "branch"], registers: [this.registry] });
+  private readonly ffmpegBitrate = new Gauge({ name: "scorecheck_ffmpeg_output_bitrate_bps", help: "FFmpeg branch reported output bitrate in bits per second.", labelNames: ["agent", "court", "branch"], registers: [this.registry] });
+  private readonly ffmpegDropped = new Gauge({ name: "scorecheck_ffmpeg_dropped_frames", help: "FFmpeg branch cumulative dropped frames for the current process.", labelNames: ["agent", "court", "branch"], registers: [this.registry] });
+  private readonly ffmpegDuplicated = new Gauge({ name: "scorecheck_ffmpeg_duplicated_frames", help: "FFmpeg branch cumulative duplicated frames for the current process.", labelNames: ["agent", "court", "branch"], registers: [this.registry] });
+  private readonly ffmpegSpeed = new Gauge({ name: "scorecheck_ffmpeg_speed_ratio", help: "FFmpeg processing speed where one equals real time.", labelNames: ["agent", "court", "branch"], registers: [this.registry] });
+  private readonly nativeEndpointUp = new Gauge({ name: "scorecheck_native_endpoint_up", help: "Whether an allowlisted local native metrics or health endpoint is reachable.", labelNames: ["agent", "role", "service"], registers: [this.registry] });
+  private readonly livekitRooms = new Gauge({ name: "scorecheck_livekit_rooms", help: "Current LiveKit room count.", labelNames: ["agent"], registers: [this.registry] });
+  private readonly livekitParticipants = new Gauge({ name: "scorecheck_livekit_participants", help: "Current LiveKit participant count.", labelNames: ["agent"], registers: [this.registry] });
+  private readonly livekitPacketsOut = new Gauge({ name: "scorecheck_livekit_packets_out", help: "LiveKit node outbound packet count.", labelNames: ["agent"], registers: [this.registry] });
+  private readonly livekitPacketsDropped = new Gauge({ name: "scorecheck_livekit_packets_dropped", help: "LiveKit node dropped packet count.", labelNames: ["agent"], registers: [this.registry] });
   private previousErrors = new Set<string>();
 
   update(snapshot: AgentSnapshot) {
@@ -57,6 +68,19 @@ export class AgentMetrics {
     }
 
     for (const metric of [this.pathReady, this.pathReaders, this.pathBytesReceived, this.pathBytesSent, this.pathBitrate, this.pathFrameErrors]) metric.reset();
+    if (snapshot.role === "mediamtx") {
+      for (let court = 1; court <= 8; court += 1) {
+        for (const branch of ["raw", "preview", "program"] as const) {
+          const labels = { agent: snapshot.agentId, court: String(court), branch };
+          this.pathReady.set(labels, 0);
+          this.pathReaders.set(labels, 0);
+          this.pathBytesReceived.set(labels, 0);
+          this.pathBytesSent.set(labels, 0);
+          this.pathBitrate.set(labels, 0);
+          this.pathFrameErrors.set(labels, 0);
+        }
+      }
+    }
     for (const path of snapshot.mediaPaths) {
       const labels = { agent: snapshot.agentId, court: String(path.courtNumber), branch: path.branch };
       this.pathReady.set(labels, path.ready ? 1 : 0);
@@ -65,6 +89,46 @@ export class AgentMetrics {
       this.pathBytesSent.set(labels, path.bytesSent);
       if (path.inboundBitrateBps != null) this.pathBitrate.set(labels, path.inboundBitrateBps);
       this.pathFrameErrors.set(labels, path.frameErrors);
+    }
+
+    for (const metric of [this.ffmpegProgressFresh, this.ffmpegFps, this.ffmpegBitrate, this.ffmpegDropped, this.ffmpegDuplicated, this.ffmpegSpeed]) metric.reset();
+    if (snapshot.role === "mediamtx") {
+      for (let court = 1; court <= 8; court += 1) {
+        for (const branch of ["preview", "program", "calibration"] as const) {
+          const labels = { agent: snapshot.agentId, court: String(court), branch };
+          this.ffmpegProgressFresh.set(labels, 0);
+          this.ffmpegFps.set(labels, 0);
+          this.ffmpegBitrate.set(labels, 0);
+          this.ffmpegDropped.set(labels, 0);
+          this.ffmpegDuplicated.set(labels, 0);
+          this.ffmpegSpeed.set(labels, 0);
+        }
+      }
+    }
+    for (const branch of snapshot.ffmpegBranches) {
+      const labels = { agent: snapshot.agentId, court: String(branch.courtNumber), branch: branch.branch };
+      this.ffmpegProgressFresh.set(labels, 1);
+      if (branch.framesPerSecond != null) this.ffmpegFps.set(labels, branch.framesPerSecond);
+      if (branch.bitrateBps != null) this.ffmpegBitrate.set(labels, branch.bitrateBps);
+      this.ffmpegDropped.set(labels, branch.droppedFrames);
+      this.ffmpegDuplicated.set(labels, branch.duplicatedFrames);
+      if (branch.speedRatio != null) this.ffmpegSpeed.set(labels, branch.speedRatio);
+    }
+
+    this.nativeEndpointUp.reset();
+    for (const endpoint of snapshot.nativeServices.endpoints) {
+      this.nativeEndpointUp.set({ ...base, service: endpoint.service }, endpoint.up ? 1 : 0);
+    }
+    this.livekitRooms.reset();
+    this.livekitParticipants.reset();
+    this.livekitPacketsOut.reset();
+    this.livekitPacketsDropped.reset();
+    if (snapshot.nativeServices.livekit) {
+      const labels = { agent: snapshot.agentId };
+      this.livekitRooms.set(labels, snapshot.nativeServices.livekit.roomCount);
+      this.livekitParticipants.set(labels, snapshot.nativeServices.livekit.participantCount);
+      this.livekitPacketsOut.set(labels, snapshot.nativeServices.livekit.packetsOut);
+      this.livekitPacketsDropped.set(labels, snapshot.nativeServices.livekit.packetsDropped);
     }
   }
 }

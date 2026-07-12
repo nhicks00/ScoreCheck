@@ -77,6 +77,193 @@ export const mediaPathSnapshotSchema = z.object({
 }).strict();
 export type MediaPathSnapshot = z.infer<typeof mediaPathSnapshotSchema>;
 
+export const ffmpegBranchSnapshotSchema = z.object({
+  name: z.string().regex(/^court[1-8]_(preview|program|calibration)$/),
+  courtNumber: z.number().int().min(1).max(8),
+  branch: z.enum(["preview", "program", "calibration"]),
+  sampledAt: isoDate,
+  frame: z.number().int().nonnegative(),
+  framesPerSecond: z.number().nonnegative().max(240).nullable(),
+  bitrateBps: z.number().nonnegative().nullable(),
+  outputTimeMs: z.number().nonnegative().nullable(),
+  duplicatedFrames: z.number().int().nonnegative(),
+  droppedFrames: z.number().int().nonnegative(),
+  speedRatio: z.number().nonnegative().max(20).nullable()
+}).strict();
+export type FfmpegBranchSnapshot = z.infer<typeof ffmpegBranchSnapshotSchema>;
+
+export const nativeServiceSnapshotSchema = z.object({
+  endpoints: z.array(z.object({
+    service: z.enum(["livekit", "egress-metrics", "egress-health"]),
+    up: z.boolean()
+  }).strict()).max(3),
+  livekit: z.object({
+    roomCount: z.number().int().nonnegative(),
+    participantCount: z.number().int().nonnegative(),
+    packetsOut: z.number().nonnegative(),
+    packetsDropped: z.number().nonnegative()
+  }).strict().nullable()
+}).strict();
+export type NativeServiceSnapshot = z.infer<typeof nativeServiceSnapshotSchema>;
+
+export const browserHeartbeatPayloadSchema = z.object({
+  version: z.literal(MONITORING_CONTRACT_VERSION),
+  credentialId: z.string().uuid(),
+  courtNumber: z.number().int().min(1).max(8),
+  heartbeatSeq: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  sampledAt: isoDate,
+  pageLoadedAt: isoDate,
+  pageBuildVersion: boundedId,
+  configurationVersion: boundedId,
+  video: z.object({
+    state: z.enum(["waiting", "stabilizing", "playing", "stalled", "reconnecting", "reloading", "fatal", "unknown"]),
+    transport: z.enum(["whep", "hls", "none"]),
+    connectionState: z.enum(["new", "connecting", "connected", "disconnected", "failed", "closed", "unknown"]),
+    framesRendered: z.number().int().nonnegative(),
+    framesPerSecond: z.number().nonnegative().max(240).nullable(),
+    width: z.number().int().positive().max(8192).nullable(),
+    height: z.number().int().positive().max(8192).nullable(),
+    rttMs: z.number().nonnegative().max(60_000).nullable(),
+    jitterBufferMs: z.number().nonnegative().max(60_000).nullable(),
+    packetsLost: z.number().int().nonnegative().nullable(),
+    packetsReceived: z.number().int().nonnegative().nullable(),
+    framesDropped: z.number().int().nonnegative().nullable(),
+    bytesReceived: z.number().int().nonnegative().nullable(),
+    reconnectCount: z.number().int().nonnegative(),
+    reloadCount: z.number().int().nonnegative()
+  }).strict(),
+  commentary: z.object({
+    configured: z.boolean(),
+    roomConnected: z.boolean(),
+    participantCount: z.number().int().nonnegative().max(32),
+    audioTrackCount: z.number().int().nonnegative().max(32),
+    rmsDb: z.number().min(-120).max(12).nullable(),
+    peakDb: z.number().min(-120).max(12).nullable(),
+    secondsSinceAudio: z.number().nonnegative().max(86_400).nullable(),
+    cameraRmsDb: z.number().min(-120).max(12).nullable(),
+    syncStatus: z.enum(["fallback", "calibrating", "locked"]),
+    configuredDelayMs: z.number().nonnegative().max(10_000).nullable(),
+    targetDelayMs: z.number().nonnegative().max(10_000).nullable(),
+    appliedDelayMs: z.number().nonnegative().max(10_000).nullable(),
+    clockRttMs: z.number().nonnegative().max(60_000).nullable(),
+    syncSampleAgeMs: z.number().nonnegative().max(60_000).nullable()
+  }).strict(),
+  scoreRender: z.object({
+    loaded: z.boolean(),
+    connected: z.boolean(),
+    stale: z.boolean(),
+    frozen: z.boolean(),
+    matchId: boundedId.nullable(),
+    phase: z.enum(["IDLE", "PREMATCH", "LIVE", "POSTMATCH", "STALE", "ERROR", "UNKNOWN"]),
+    sourceSignature: z.string().max(240).nullable(),
+    renderedSignature: z.string().max(240).nullable(),
+    domMismatchReason: z.enum(["shape-mismatch", "team-a-sets-mismatch", "team-b-sets-mismatch", "board-missing"]).nullable(),
+    stateUpdatedAt: isoDate.nullable()
+  }).strict()
+}).strict();
+export type BrowserHeartbeatPayload = z.infer<typeof browserHeartbeatPayloadSchema>;
+
+export type BrowserHeartbeatSnapshot = BrowserHeartbeatPayload & {
+  receivedAt: string;
+};
+
+export const COVERAGE_PHASES = ["OFF", "WARMUP", "LIVE_MATCH", "INTERMISSION", "FINAL_HOLD", "TEARDOWN"] as const;
+export const MEDIA_EXPECTATIONS = ["OFF", "WARM", "REQUIRED"] as const;
+export const BROADCAST_EXPECTATIONS = ["OFF", "TESTING", "LIVE"] as const;
+export const COMMENTARY_EXPECTATIONS = ["NONE", "OPTIONAL", "REQUIRED"] as const;
+export const SCORING_EXPECTATIONS = ["NONE", "SCHEDULED", "LIVE", "FINAL_HOLD"] as const;
+
+export type CourtExpectation = {
+  coveragePhase: typeof COVERAGE_PHASES[number];
+  mediaExpectation: typeof MEDIA_EXPECTATIONS[number];
+  broadcastExpectation: typeof BROADCAST_EXPECTATIONS[number];
+  commentaryExpectation: typeof COMMENTARY_EXPECTATIONS[number];
+  scoringExpectation: typeof SCORING_EXPECTATIONS[number];
+  overrideExpiresAt: string | null;
+};
+
+export type CompetitionMatchSnapshot = {
+  id: string;
+  matchNumber: string | null;
+  roundName: string | null;
+  scheduledDate: string | null;
+  scheduledTime: string | null;
+  teamA: string | null;
+  teamB: string | null;
+};
+
+export type CompetitionScoreSnapshot = {
+  matchId: string | null;
+  teamAScore: number;
+  teamBScore: number;
+  teamASets: number;
+  teamBSets: number;
+  currentSet: number;
+  setScores: unknown[];
+  status: string;
+  source: string;
+  sourceAvailable: boolean;
+  sourcePriority: string;
+  stale: boolean;
+  lastApiPollAt: string | null;
+  updatedAt: string | null;
+};
+
+export type CompetitionCourtSnapshot = {
+  courtId: string;
+  courtNumber: number;
+  displayName: string;
+  physicalCourtLabel: string;
+  courtStatus: string;
+  expectation: CourtExpectation;
+  currentMatch: CompetitionMatchSnapshot | null;
+  nextMatch: CompetitionMatchSnapshot | null;
+  score: CompetitionScoreSnapshot | null;
+  overlay: {
+    matchId: string | null;
+    teamA: string | null;
+    teamB: string | null;
+    teamAScore: number;
+    teamBScore: number;
+    teamASets: number;
+    teamBSets: number;
+    currentSet: number;
+    phase: string;
+    stale: boolean;
+    updatedAt: string | null;
+  } | null;
+  alignment: {
+    state: HealthState;
+    issueCodes: string[];
+    sourceAgeMs: number | null;
+  };
+  youtubeVideoId: string | null;
+};
+
+export type ControlPlaneSnapshot = {
+  observedAt: string;
+  event: { id: string; name: string; status: string; eventDate: string | null } | null;
+  worker: { state: HealthState; status: string | null; lastSeenAt: string | null; ageMs: number | null };
+  courts: CompetitionCourtSnapshot[];
+};
+
+export type YouTubeCourtSnapshot = {
+  courtNumber: number;
+  videoId: string | null;
+  state: HealthState;
+  broadcastLifecycle: string | null;
+  streamStatus: string | null;
+  healthStatus: string | null;
+  configurationIssues: string[];
+  observedAt: string;
+};
+
+export type YouTubeMonitorSnapshot = {
+  observedAt: string;
+  apiState: HealthState;
+  courts: YouTubeCourtSnapshot[];
+};
+
 export const agentSnapshotSchema = z.object({
   version: z.literal(MONITORING_CONTRACT_VERSION),
   agentId: boundedId,
@@ -100,7 +287,9 @@ export const agentSnapshotSchema = z.object({
     diskFreeBytes: z.number().nonnegative().nullable()
   }).strict(),
   services: z.array(serviceSnapshotSchema).max(40),
-  mediaPaths: z.array(mediaPathSnapshotSchema).max(48)
+  mediaPaths: z.array(mediaPathSnapshotSchema).max(48),
+  ffmpegBranches: z.array(ffmpegBranchSnapshotSchema).max(24).default([]),
+  nativeServices: nativeServiceSnapshotSchema.default({ endpoints: [], livekit: null })
 }).strict();
 export type AgentSnapshot = z.infer<typeof agentSnapshotSchema>;
 
@@ -122,6 +311,10 @@ export type CourtMonitorSnapshot = {
   overallState: HealthState;
   stages: StageHealth[];
   paths: Partial<Record<MediaPathSnapshot["branch"], MediaPathSnapshot>>;
+  browser: BrowserHeartbeatSnapshot | null;
+  competition: CompetitionCourtSnapshot | null;
+  expectation: CourtExpectation;
+  youtube: YouTubeCourtSnapshot | null;
 };
 
 export type IncidentSnapshot = {
@@ -152,6 +345,14 @@ export type MonitorSnapshot = {
     agentsExpected: number;
     agentsFresh: number;
   };
+  controlPlane: {
+    state: HealthState;
+    observedAt: string | null;
+    ageMs: number | null;
+    worker: ControlPlaneSnapshot["worker"];
+  };
+  event: ControlPlaneSnapshot["event"];
+  youtube: { state: HealthState; observedAt: string | null; ageMs: number | null };
   courts: CourtMonitorSnapshot[];
   agents: Array<{
     agentId: string;

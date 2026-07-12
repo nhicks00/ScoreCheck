@@ -32,4 +32,22 @@ describe("incident manager", () => {
     expect(manager.active()).toHaveLength(0);
     expect(manager.all()[0]?.status).toBe("resolved");
   });
+
+  it("reconciles a missed resolved webhook from the authoritative active set", () => {
+    const manager = new IncidentManager();
+    manager.applyWebhook({
+      status: "firing",
+      alerts: [{ status: "firing", labels: { alertname: "AgentMissing", stage: "MONITORING" }, annotations: {} }]
+    }, new Date("2026-07-12T12:00:00Z"));
+    const changes = manager.reconcileActiveAlerts([], new Date("2026-07-12T12:01:00Z"));
+    expect(changes.map((change) => change.eventType)).toEqual(["RESOLVED"]);
+    expect(manager.active()).toHaveLength(0);
+  });
+
+  it("does not emit database churn while an active alert is unchanged", () => {
+    const manager = new IncidentManager();
+    const alert = { labels: { alertname: "AgentMissing", stage: "MONITORING" }, annotations: {} };
+    manager.reconcileActiveAlerts([alert], new Date("2026-07-12T12:00:00Z"));
+    expect(manager.reconcileActiveAlerts([alert], new Date("2026-07-12T12:00:30Z"))).toEqual([]);
+  });
 });

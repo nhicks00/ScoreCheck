@@ -18,6 +18,19 @@ import { createBrowserSupabase } from "@/lib/supabase-browser";
 // underlying state changes — instead of Next's full-frame error page.
 type BoundaryProps = { children: ReactNode };
 type BoundaryState = { failed: boolean };
+export type ScorebugDomMismatchReason = "shape-mismatch" | "team-a-sets-mismatch" | "team-b-sets-mismatch" | "board-missing";
+export type OverlayRenderHealth = {
+  loaded: boolean;
+  connected: boolean;
+  stale: boolean;
+  frozen: boolean;
+  matchId: string | null;
+  phase: "IDLE" | "PREMATCH" | "LIVE" | "POSTMATCH" | "STALE" | "ERROR" | "UNKNOWN";
+  sourceSignature: string | null;
+  renderedSignature: string | null;
+  domMismatchReason: ScorebugDomMismatchReason | null;
+  stateUpdatedAt: string | null;
+};
 class OverlayErrorBoundary extends Component<BoundaryProps, BoundaryState> {
   state: BoundaryState = { failed: false };
   static getDerivedStateFromError(): BoundaryState {
@@ -41,7 +54,7 @@ class OverlayErrorBoundary extends Component<BoundaryProps, BoundaryState> {
   }
 }
 
-export function OverlayClient(props: { courtNumber: string; eventId: string; theme: string; buildVersion: string }) {
+export function OverlayClient(props: { courtNumber: string; eventId: string; theme: string; buildVersion: string; onHealth?: (health: OverlayRenderHealth) => void }) {
   return (
     <OverlayErrorBoundary>
       <OverlayClientInner {...props} />
@@ -49,11 +62,13 @@ export function OverlayClient(props: { courtNumber: string; eventId: string; the
   );
 }
 
-function OverlayClientInner({ courtNumber, eventId, buildVersion }: { courtNumber: string; eventId: string; theme: string; buildVersion: string }) {
+function OverlayClientInner({ courtNumber, eventId, buildVersion, onHealth }: { courtNumber: string; eventId: string; theme: string; buildVersion: string; onHealth?: (health: OverlayRenderHealth) => void }) {
   const courtNumberValue = Number(courtNumber) || 1;
   const [state, setState] = useState(() => fallbackOverlayState(courtNumberValue));
   const [hasLoadedState, setHasLoadedState] = useState(false);
   const [connected, setConnected] = useState(true);
+  const [renderedSignature, setRenderedSignature] = useState<string | null>(null);
+  const [domMismatchReason, setDomMismatchReason] = useState<ScorebugDomMismatchReason | null>(null);
   const lastReloadAttemptAt = useRef(0);
   const lastInvalidScorebugHealKey = useRef<string | null>(null);
   const lastDomHealKey = useRef<string | null>(null);
@@ -160,6 +175,9 @@ function OverlayClientInner({ courtNumber, eventId, buildVersion }: { courtNumbe
     teamBSetScores: splitScoreText(teamBSetScoresText)
   }), [scorebugShapeKey, teamASetScoresText, teamBSetScoresText]);
   const invalidFinalScorebugColumns = hasInvalidFinalScorebugColumns(state, displayScores);
+  const sourceSignature = hasLoadedState
+    ? scoreRenderSignature(state.match.id, state.phase, state.score.currentSet, displayScores.teamASetScores, displayScores.teamBSetScores)
+    : null;
 
   useEffect(() => {
     if (!invalidFinalScorebugColumns) {
@@ -176,6 +194,8 @@ function OverlayClientInner({ courtNumber, eventId, buildVersion }: { courtNumbe
     function healScorebugDom() {
       if (cancelled) return;
       const mismatchReason = renderedScorebugMismatch(scorebugDomExpected);
+      setDomMismatchReason(mismatchReason);
+      setRenderedSignature(renderedScorebugSignature(state.match.id, state.phase, state.score.currentSet));
       if (!mismatchReason) {
         lastDomHealKey.current = null;
         return;
@@ -193,7 +213,22 @@ function OverlayClientInner({ courtNumber, eventId, buildVersion }: { courtNumbe
       window.cancelAnimationFrame(raf);
       window.clearInterval(id);
     };
-  }, [scorebugDomExpected]);
+  }, [scorebugDomExpected, state.match.id, state.phase, state.score.currentSet]);
+
+  useEffect(() => {
+    onHealth?.({
+      loaded: hasLoadedState,
+      connected,
+      stale: state.health.stale,
+      frozen: state.frozen,
+      matchId: state.match.id,
+      phase: state.phase,
+      sourceSignature,
+      renderedSignature,
+      domMismatchReason,
+      stateUpdatedAt: validIsoOrNull(state.health.lastUpdateAt)
+    });
+  }, [connected, domMismatchReason, hasLoadedState, onHealth, renderedSignature, sourceSignature, state]);
 
   function reloadOncePerWindow(reason: string) {
     const now = Date.now();
@@ -411,9 +446,9 @@ function renderedScorebugMismatch(expected: {
   shapeKey: string;
   teamASetScores: string[];
   teamBSetScores: string[];
-}) {
+}): ScorebugDomMismatchReason | null {
   const board = document.querySelector("[data-scorebug-shape]");
-  if (!board) return null;
+  if (!board) return "board-missing";
   if (board.getAttribute("data-scorebug-shape") !== expected.shapeKey) return "shape-mismatch";
 
   const teamASetScores = textValues('[data-score-row="one"] .trad-set-cell');
@@ -423,6 +458,39 @@ function renderedScorebugMismatch(expected: {
   if (!sameValues(teamBSetScores, expected.teamBSetScores)) return "team-b-sets-mismatch";
 
   return null;
+}
+
+function renderedScorebugSignature(matchId: string | null, phase: string, currentSet: number) {
+  const board = document.querySelector("[data-scorebug-shape]");
+  if (!board) return null;
+  return scoreRenderSignature(
+    matchId,
+    phase,
+    currentSet,
+    textValues('[data-score-row="one"] .trad-set-cell'),
+    textValues('[data-score-row="two"] .trad-set-cell')
+  );
+}
+
+function scoreRenderSignature(
+  matchId: string | null,
+  phase: string,
+  currentSet: number,
+  teamASetScores: Array<string | number>,
+  teamBSetScores: Array<string | number>
+) {
+  return [
+    matchId ?? "no-match",
+    phase,
+    Math.max(0, Math.trunc(currentSet)),
+    teamASetScores.map(String).join(","),
+    teamBSetScores.map(String).join(",")
+  ].join("|").slice(0, 240);
+}
+
+function validIsoOrNull(value: string | null | undefined) {
+  const timestamp = Date.parse(value ?? "");
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
 }
 
 function textValues(selector: string) {

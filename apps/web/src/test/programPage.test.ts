@@ -5,8 +5,9 @@ import {
   programCommentaryBufferMs,
   programPageToken
 } from "../lib/program";
+import { createProgramMonitoringConnection } from "../lib/programMonitoring";
 import {
-  buildProgramHeartbeat,
+  buildProgramMonitorHeartbeat,
   initialProgramWatchdog,
   PROGRAM_RECONNECTS_BEFORE_RELOAD,
   PROGRAM_WATCHDOG_STALL_MS,
@@ -19,7 +20,9 @@ const PROGRAM_ENV_KEYS = [
   "PROGRAM_PAGE_TOKEN",
   "VERCEL_GIT_COMMIT_SHA",
   "NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA",
-  "RENDER_GIT_COMMIT"
+  "RENDER_GIT_COMMIT",
+  "MONITOR_PUBLIC_URL",
+  "MONITOR_BROWSER_HEARTBEAT_SECRET"
 ];
 
 const savedEnv = new Map<string, string | undefined>();
@@ -96,6 +99,25 @@ describe("programBuildVersion", () => {
     expect(programBuildVersion()).toBe("render-sha");
     process.env.VERCEL_GIT_COMMIT_SHA = "vercel-sha";
     expect(programBuildVersion()).toBe("vercel-sha");
+  });
+});
+
+describe("createProgramMonitoringConnection", () => {
+  it("mints the versioned credential format consumed by the monitor gateway", () => {
+    process.env.MONITOR_PUBLIC_URL = "https://monitor.example.test/";
+    process.env.MONITOR_BROWSER_HEARTBEAT_SECRET = "monitor-browser-heartbeat-secret-that-is-long-enough";
+    expect(createProgramMonitoringConnection(3, {
+      nowMs: 1_000,
+      credentialId: "10000000-0000-4000-8000-000000000001"
+    })).toEqual({
+      heartbeatUrl: "https://monitor.example.test/v1/browser-heartbeats",
+      credentialId: "10000000-0000-4000-8000-000000000001",
+      credential: "eyJ2IjoxLCJjaWQiOiIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJjb3VydCI6MywiaWF0IjoxMDAwLCJleHAiOjY0ODAxMDAwfQ.Zt4AiuJ0hr4jb8kh4nMGqp4E66uUYToLWIn4_7UXuk4"
+    });
+  });
+
+  it("stays disabled unless both endpoint and secret are configured", () => {
+    expect(createProgramMonitoringConnection(1)).toBeNull();
   });
 });
 
@@ -205,54 +227,42 @@ describe("programWatchdogStep", () => {
   });
 });
 
-describe("buildProgramHeartbeat", () => {
+describe("buildProgramMonitorHeartbeat", () => {
   it("passes through a healthy payload", () => {
-    expect(
-      buildProgramHeartbeat({
-        token: "egress-secret-42",
-        courtNumber: 3,
-        videoState: "playing",
-        framesRendered: 5400,
-        commentaryRoomConnected: true,
-        commentaryParticipantCount: 2,
-        commentaryAudioTrackCount: 1,
-        commentaryRmsDb: -24.04,
-        commentaryPeakDb: -10.02,
-        secondsSinceCommentaryAudio: 0.26,
-        cameraAudioRmsDb: -18.02,
-        commentarySyncStatus: "locked",
-        commentaryDelayConfiguredMs: 3000,
-        commentaryDelayTargetMs: 3025.4,
-        commentaryDelayAppliedMs: 3012.6,
-        commentarySyncRttMs: 54.8,
-        commentarySyncSampleAgeMs: 210.2,
-        pageVersion: "abc1234"
-      })
-    ).toEqual({
-      token: "egress-secret-42",
+    const body = buildProgramMonitorHeartbeat(base({
       courtNumber: 3,
-      videoState: "playing",
       framesRendered: 5400,
       commentaryRoomConnected: true,
       commentaryParticipantCount: 2,
       commentaryAudioTrackCount: 1,
-      commentaryRmsDb: -24,
-      commentaryPeakDb: -10,
-      secondsSinceCommentaryAudio: 0.3,
-      cameraAudioRmsDb: -18,
+      commentaryRmsDb: -24.04,
+      commentaryPeakDb: -10.02,
+      secondsSinceCommentaryAudio: 0.26,
+      cameraAudioRmsDb: -18.02,
       commentarySyncStatus: "locked",
       commentaryDelayConfiguredMs: 3000,
-      commentaryDelayTargetMs: 3025,
-      commentaryDelayAppliedMs: 3013,
-      commentarySyncRttMs: 55,
-      commentarySyncSampleAgeMs: 210,
-      pageVersion: "abc1234"
+      commentaryDelayTargetMs: 3025.4,
+      commentaryDelayAppliedMs: 3012.6,
+      commentarySyncRttMs: 54.8,
+      commentarySyncSampleAgeMs: 210.2
+    }));
+    expect(body.video).toMatchObject({ state: "playing", framesRendered: 5400, framesPerSecond: 30, transport: "whep" });
+    expect(body.commentary).toMatchObject({
+      roomConnected: true,
+      participantCount: 2,
+      audioTrackCount: 1,
+      rmsDb: -24,
+      peakDb: -10,
+      secondsSinceAudio: 0.3,
+      syncStatus: "locked",
+      targetDelayMs: 3025,
+      appliedDelayMs: 3013
     });
+    expect(body.scoreRender.sourceSignature).toBe(body.scoreRender.renderedSignature);
   });
 
   it("normalizes hostile media-element values", () => {
-    const body = buildProgramHeartbeat({
-      token: "t",
+    const body = buildProgramMonitorHeartbeat(base({
       courtNumber: 3.9,
       videoState: "   ",
       framesRendered: Number.NaN,
@@ -269,45 +279,76 @@ describe("buildProgramHeartbeat", () => {
       commentaryDelayAppliedMs: 99_999,
       commentarySyncRttMs: 60.4,
       commentarySyncSampleAgeMs: null,
-      pageVersion: ""
-    });
+      pageBuildVersion: "",
+      streamHealth: {
+        ...base({}).streamHealth!,
+        framesPerSecond: 999,
+        width: -1,
+        packetsLost: -4
+      }
+    }));
     expect(body.courtNumber).toBe(3);
-    expect(body.videoState).toBe("unknown");
-    expect(body.framesRendered).toBe(0);
-    expect(body.commentaryParticipantCount).toBe(0);
-    expect(body.commentaryAudioTrackCount).toBe(0);
-    expect(body.commentaryRmsDb).toBeNull();
-    expect(body.commentaryPeakDb).toBe(12);
-    expect(body.secondsSinceCommentaryAudio).toBe(0);
-    expect(body.cameraAudioRmsDb).toBe(-120);
-    expect(body.commentarySyncStatus).toBe("fallback");
-    expect(body.commentaryDelayConfiguredMs).toBe(0);
-    expect(body.commentaryDelayTargetMs).toBeNull();
-    expect(body.commentaryDelayAppliedMs).toBe(10_000);
-    expect(body.commentarySyncRttMs).toBe(60);
-    expect(body.commentarySyncSampleAgeMs).toBeNull();
-    expect(body.pageVersion).toBe("local");
+    expect(body.video).toMatchObject({ state: "unknown", framesRendered: 0, framesPerSecond: 240, width: 1, packetsLost: 0 });
+    expect(body.commentary).toMatchObject({
+      participantCount: 0,
+      audioTrackCount: 0,
+      rmsDb: null,
+      peakDb: 12,
+      secondsSinceAudio: 0,
+      cameraRmsDb: -120,
+      syncStatus: "fallback",
+      configuredDelayMs: 0,
+      targetDelayMs: null,
+      appliedDelayMs: 10_000,
+      clockRttMs: 60,
+      syncSampleAgeMs: null
+    });
+    expect(body.pageBuildVersion).toBe("local");
   });
 
   it("floors fractional frame counts and zeroes negatives", () => {
-    expect(buildProgramHeartbeat(base({ framesRendered: 12.9 })).framesRendered).toBe(12);
-    expect(buildProgramHeartbeat(base({ framesRendered: -3 })).framesRendered).toBe(0);
-    expect(buildProgramHeartbeat(base({ framesRendered: null })).framesRendered).toBe(0);
+    expect(buildProgramMonitorHeartbeat(base({ framesRendered: 12.9 })).video.framesRendered).toBe(12);
+    expect(buildProgramMonitorHeartbeat(base({ framesRendered: -3 })).video.framesRendered).toBe(0);
+    expect(buildProgramMonitorHeartbeat(base({ framesRendered: null })).video.framesRendered).toBe(0);
   });
 
-  it("caps free-text fields at 64 characters", () => {
-    const body = buildProgramHeartbeat(base({ videoState: "x".repeat(200), pageVersion: "y".repeat(200) }));
-    expect(body.videoState).toHaveLength(64);
-    expect(body.pageVersion).toHaveLength(64);
+  it("bounds identifiers and score signatures", () => {
+    const body = buildProgramMonitorHeartbeat(base({
+      pageBuildVersion: "y".repeat(200),
+      scoreRender: { ...base({}).scoreRender, sourceSignature: "s".repeat(500) }
+    }));
+    expect(body.pageBuildVersion).toHaveLength(64);
+    expect(body.scoreRender.sourceSignature).toHaveLength(240);
   });
 });
 
-function base(overrides: Partial<Parameters<typeof buildProgramHeartbeat>[0]>) {
+function base(overrides: Partial<Parameters<typeof buildProgramMonitorHeartbeat>[0]>) {
   return {
-    token: "t",
+    credentialId: "10000000-0000-4000-8000-000000000001",
     courtNumber: 1,
+    heartbeatSeq: 1,
+    sampledAt: "2026-07-12T18:30:00.000Z",
+    pageLoadedAt: "2026-07-12T18:29:00.000Z",
+    pageBuildVersion: "build-1",
+    configurationVersion: "config-1",
     videoState: "playing",
     framesRendered: 0,
+    streamHealth: {
+      transport: "whep",
+      connectionState: "connected",
+      framesPerSecond: 30,
+      width: 1280,
+      height: 720,
+      rttMs: 20,
+      jitterBufferMs: 80,
+      packetsLost: 0,
+      packetsReceived: 1_000,
+      framesDropped: 0,
+      bytesReceived: 5_000_000
+    },
+    reconnectCount: 0,
+    reloadCount: 0,
+    commentaryConfigured: true,
     commentaryRoomConnected: false,
     commentaryParticipantCount: 0,
     commentaryAudioTrackCount: 0,
@@ -321,7 +362,18 @@ function base(overrides: Partial<Parameters<typeof buildProgramHeartbeat>[0]>) {
     commentaryDelayAppliedMs: null,
     commentarySyncRttMs: null,
     commentarySyncSampleAgeMs: null,
-    pageVersion: "local",
+    scoreRender: {
+      loaded: true,
+      connected: true,
+      stale: false,
+      frozen: false,
+      matchId: "20000000-0000-4000-8000-000000000001",
+      phase: "LIVE",
+      sourceSignature: "match|LIVE|1|12|10",
+      renderedSignature: "match|LIVE|1|12|10",
+      domMismatchReason: null,
+      stateUpdatedAt: "2026-07-12T18:29:59.000Z"
+    },
     ...overrides
   };
 }
