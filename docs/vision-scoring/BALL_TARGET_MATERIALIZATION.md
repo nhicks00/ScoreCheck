@@ -78,6 +78,16 @@ private materializer output on one thread. A trusted consumer must call
 same mutable tensors; these hashes do not serialize tensors or grant training
 authority.
 
+`vision_scoring.training_tensor_binding` then joins those target rows to one
+exact `LoadedCausalBallClipInputV1`. It revalidates the loader receipt and input
+bytes; requires exact source, bundle, TRAIN/DEV split, statement, frame order,
+decoded-frame order, and output geometry agreement; and emits domain-separated
+commitments for the ordered frame-identity and decoded-frame sequences. Its
+canonical wrapper persists hashes only, keeps every authority property false,
+and must canonical-roundtrip and rehash both mutable tensor sides immediately
+before consumption. It cannot represent a TEST loader receipt, persist tensor
+bytes, or authorize a training run.
+
 For a source pixel-center coordinate `p`, the heatmap coordinate is:
 
 ```text
