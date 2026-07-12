@@ -1,0 +1,99 @@
+{
+  "demux_packets": [
+    {
+      "dts": -5,
+      "pts": 103,
+      "size": 832
+    },
+    {
+      "dts": 41,
+      "pts": 307,
+      "size": 155
+    },
+    {
+      "dts": 103,
+      "pts": 211,
+      "size": 42
+    },
+    {
+      "dts": 149,
+      "pts": 149,
+      "size": 33
+    },
+    {
+      "dts": 211,
+      "pts": 467,
+      "size": 86
+    }
+  ],
+  "development_generator": {
+    "compressed_encoder": "libx265",
+    "decoder_acceptance_requires_external_encoder": false,
+    "ffmpeg_executable_sha256": "8d97d0745b0d1d8f6296c026c426c263f509306b8f81c9ffe4e93e95890ca8be",
+    "ffmpeg_version_line": "ffmpeg version 8.1 Copyright (c) 2000-2026 the FFmpeg developers",
+    "ffprobe_executable_sha256": "94da026e33f8c684ab2a449d25611bb808222f7f08a7d3a6233665a63fbab47a",
+    "ffprobe_version_line": "ffprobe version 8.1 Copyright (c) 2007-2026 the FFmpeg developers",
+    "license_reviewed_for_production": false,
+    "production_approved": false
+  },
+  "domain": "multicourt-vision-scoring:decoder-hevc10-golden:v1",
+  "fixture": {
+    "filename": "deterministic_decoder_hevc10_v1.mp4",
+    "sha256": "380fc82506dc596f572e5535c99713ee676f7c37e5682506e994d93df1cd3aa0",
+    "size_bytes": 2218
+  },
+  "presentation_frames": [
+    {
+      "frame_index": 0,
+      "framehash_duration": 46,
+      "pict_type": "I",
+      "pts": 103,
+      "rgb24_sha256": "71bff9fe79095408edb8b260e7d65e251748b7d47ee85e412ead975c5cb8c6cc"
+    },
+    {
+      "frame_index": 1,
+      "framehash_duration": 62,
+      "pict_type": "B",
+      "pts": 149,
+      "rgb24_sha256": "5b75168d530d505fbe6ef8d5776c3dbc1a2218e4c0126822f131426f4e698d7a"
+    },
+    {
+      "frame_index": 2,
+      "framehash_duration": 46,
+      "pict_type": "B",
+      "pts": 211,
+      "rgb24_sha256": "22d3dc625eee41de41012022a58da9ffb681c1c7169bbe8c030212daa7200548"
+    },
+    {
+      "frame_index": 3,
+      "framehash_duration": 62,
+      "pict_type": "P",
+      "pts": 307,
+      "rgb24_sha256": "4be7e8fb77624bf11331de3ed14227c79c408295a6bb763fb2cd6e842d38b9d9"
+    },
+    {
+      "frame_index": 4,
+      "framehash_duration": 40,
+      "pict_type": "P",
+      "pts": 467,
+      "rgb24_sha256": "8bb65cf7369053815b5e67394f25c63359e291e3469deec5f889c4078690f653"
+    }
+  ],
+  "schema_version": "1.0",
+  "selected_video": {
+    "codec_name": "hevc",
+    "codec_tag": "hvc1",
+    "color_range": "tv",
+    "color_space": "bt709",
+    "decoded_frame_hash_basis": "RGB24_SOURCE_DIMENSIONS_ROW_MAJOR_NO_PADDING",
+    "frame_size_bytes": 12288,
+    "height": 64,
+    "output_pixel_format": "rgb24",
+    "source_pixel_format": "yuv420p10le",
+    "source_pts_are_absolute": true,
+    "stream_index": 0,
+    "time_base_denominator": 1000,
+    "time_base_numerator": 1,
+    "width": 64
+  }
+}

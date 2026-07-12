@@ -419,6 +419,7 @@ def _decode_rgb_and_framehash(
     media: Path,
     *,
     autorotate: bool,
+    stream_index: int = 2,
 ) -> tuple[bytes, bytes]:
     hash_read, hash_write = os.pipe()
     rotation_option = "-autorotate" if autorotate else "-noautorotate"
@@ -442,7 +443,7 @@ def _decode_rgb_and_framehash(
         "-i",
         str(media),
         "-filter_complex",
-        f"[0:2]{RGB_FILTER},split=outputs=2[raw][hash]",
+        f"[0:{stream_index}]{RGB_FILTER},split=outputs=2[raw][hash]",
         "-map",
         "[raw]",
         "-an",
