@@ -105,6 +105,23 @@ Incident fingerprints exclude timestamps and message text, so repeated samples
 update one durable incident. Acknowledgement stops repeated emergency push
 delivery but leaves the incident visible until the evidence recovers.
 
+Alertmanager inhibits downstream pages when a stronger upstream cause is active:
+
+- a missing host agent inhibits matching host service and Egress symptoms;
+- a missing raw court path inhibits matching normalization, program-browser,
+  and YouTube symptoms;
+- a missing program branch inhibits matching browser/render/YouTube symptoms;
+- a missing or low-FPS program browser inhibits matching render/YouTube symptoms;
+- a disconnected commentary room inhibits matching track, level, network, and
+  synchronization symptoms;
+- the shared score-worker alert inhibits all per-court source-alignment pages;
+- YouTube unhealthy inhibits YouTube degraded for the same court.
+
+Inhibition suppresses duplicate notification delivery only. The dashboard stage
+matrix and Prometheus evidence continue to show every downstream symptom. Every
+deployment proves same-court suppression and peer-court independence against a
+disposable Alertmanager before restarting production observability.
+
 ### Content and audio thresholds
 
 - Repeated picture: warning after 5 seconds, critical after 15 seconds, only

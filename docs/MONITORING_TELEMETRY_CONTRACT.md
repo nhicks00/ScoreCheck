@@ -201,6 +201,20 @@ clipping. Recent packet loss is calculated in Prometheus over one minute;
 cumulative loss remains evidence only and cannot hold a recovered track in a
 permanent degraded state.
 
+## Paging inhibition
+
+Inhibition is same-court or same-host unless the source is an explicitly shared
+dependency. Raw ingest outranks branch/browser/YouTube symptoms; program branch
+outranks browser/render/YouTube; program browser outranks render/YouTube;
+commentary room connectivity outranks commentary track/quality/network/sync;
+agent reachability outranks matching host-service symptoms; YouTube unhealthy
+outranks YouTube degraded. `SCORE_WORKER_UNAVAILABLE` is the only initial
+court-independent source and may inhibit all per-court source-alignment pages.
+
+The inhibition configuration is accepted only after a disposable Alertmanager
+proves source activity, target suppression, and an unaffected peer for every
+scope. Inhibited downstream stages remain in the monitor snapshot and dashboard.
+
 ## Snapshot freshness
 
 Every observation includes both source observation time and collector receipt time where available.

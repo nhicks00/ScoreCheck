@@ -21,6 +21,7 @@ providers or real media feeds.
 | YouTube health | Exact configured video IDs, lifecycle, ingestion health when OAuth is available, API failure remains unknown | Deployed; provider fault gate pending |
 | Durable incidents and operator actions | Fingerprints, open/ack/resolved transitions, checkpoints, acknowledgements, timed silences, expiry re-arm | Deployed and unit-tested |
 | Alert expression behavior | Promtool fixtures validate hold times, labels, annotations, court isolation, black/freeze exclusion, live gating, and shared-worker fan-out | Passing and enforced before deployment |
+| Page suppression behavior | Disposable network-isolated Alertmanager proves same-court and shared-dependency inhibition while peer alerts remain active | Enforced before deployment |
 | Phone paging | Pushover emergency acknowledgement plus Twilio SMS escalation and recovery logic | Code complete; credentials and delivery gate pending |
 | Independent dead-man | Baseline and active Healthchecks senders with coverage-aware cadence | Code complete; provider URLs and withheld-ping gate pending |
 | One-court real fault gate | Camera, network, preview, browser, commentary, score, Egress, YouTube, agent, dead-man faults | Pending test session |

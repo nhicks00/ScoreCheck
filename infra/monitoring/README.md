@@ -30,6 +30,11 @@ rendered Prometheus and Alertmanager configuration without printing their
 credential-bearing contents. A failing config, alert timing, label, isolation,
 or deduplication case aborts deployment.
 
+The same pre-restart gate launches a disposable, network-isolated Alertmanager
+and verifies upstream inhibition for matching courts, commentary rooms, agents,
+the shared score worker, and YouTube severity. Peer courts must remain active in
+the fixture. The disposable instance cannot reach production receivers.
+
 Render protected Prometheus and Alertmanager configuration:
 
 ```bash

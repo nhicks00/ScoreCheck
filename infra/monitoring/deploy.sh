@@ -17,6 +17,7 @@ rsync -a --delete -e "ssh -i $SSH_KEY -o IdentitiesOnly=yes" \
   "$SCRIPT_DIR/package.json" \
   "$SCRIPT_DIR/package-lock.json" \
   "$SCRIPT_DIR/tsconfig.json" \
+  "$SCRIPT_DIR/test-alertmanager-inhibition.mjs" \
   "$SCRIPT_DIR/Dockerfile" \
   "$SCRIPT_DIR/docker-compose.yml" \
   "$SCRIPT_DIR/Caddyfile" \
@@ -61,6 +62,25 @@ if ! docker run --rm --network none --read-only --cap-drop ALL --tmpfs /tmp:rw,n
   echo "Candidate Alertmanager configuration validation failed." >&2
   exit 1
 fi
+inhibition_container="scorecheck-alertmanager-preflight-$$"
+cleanup_inhibition() { docker rm -f "$inhibition_container" >/dev/null 2>&1 || true; }
+trap cleanup_inhibition EXIT
+docker run -d --name "$inhibition_container" --network none --read-only --cap-drop ALL \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
+  --tmpfs /alertmanager:rw,noexec,nosuid,nodev,size=32m \
+  --user 0:0 \
+  -v "$REMOTE_DIR/.incoming/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro" \
+  "$alertmanager_image" \
+  --config.file=/etc/alertmanager/alertmanager.yml \
+  --storage.path=/alertmanager \
+  --cluster.listen-address= >/dev/null
+docker run --rm --network "container:$inhibition_container" --read-only --cap-drop ALL \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
+  -v "$REMOTE_DIR/.incoming/test-alertmanager-inhibition.mjs:/test-alertmanager-inhibition.mjs:ro" \
+  node:22.23.1-alpine3.24@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 \
+  node /test-alertmanager-inhibition.mjs
+cleanup_inhibition
+trap - EXIT
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 if [[ -f docker-compose.yml ]]; then
   mkdir -p backups
@@ -73,6 +93,7 @@ install -m 0644 .incoming/package.json package.json
 install -m 0644 .incoming/package-lock.json package-lock.json
 install -m 0644 .incoming/tsconfig.json tsconfig.json
 install -m 0644 .incoming/Caddyfile Caddyfile
+install -m 0644 .incoming/test-alertmanager-inhibition.mjs test-alertmanager-inhibition.mjs
 install -m 0600 .incoming/service.env .env
 mkdir -m 0700 .generated
 install -o 65534 -g 65534 -m 0400 .incoming/prometheus.yml .generated/prometheus.yml

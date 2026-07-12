@@ -62,6 +62,47 @@ route:
   group_interval: 30s
   repeat_interval: 15m
 
+inhibit_rules:
+  - source_matchers:
+      - 'alertname="ScoreCheckAgentMissing"'
+    target_matchers:
+      - 'alertname=~"ScoreCheckServiceNotRunning|ScoreCheckServiceUnhealthy|ScoreCheckNativeEndpointDown|ScoreCheckEgressWorkerUnavailable|ScoreCheckEgressCapacityExhausted"'
+    equal: [agent]
+  - source_matchers:
+      - 'alertname="ScoreCheckServiceNotRunning"'
+    target_matchers:
+      - 'alertname="ScoreCheckServiceUnhealthy"'
+    equal: [agent, service]
+  - source_matchers:
+      - 'alertname="ScoreCheckRequiredRawPathMissing"'
+    target_matchers:
+      - 'alertname=~"ScoreCheckProgramBranchProgressMissing|ScoreCheckPreviewBranchFpsLow|ScoreCheckProgramBrowserMissing|ScoreCheckProgramFpsLow|ScoreCheckYouTubeUnhealthy|ScoreCheckYouTubeDegraded"'
+    equal: [court]
+  - source_matchers:
+      - 'alertname="ScoreCheckProgramBranchProgressMissing"'
+    target_matchers:
+      - 'alertname=~"ScoreCheckProgramBrowserMissing|ScoreCheckProgramFpsLow|ScoreCheckRenderedScoreMismatch|ScoreCheckYouTubeUnhealthy|ScoreCheckYouTubeDegraded"'
+    equal: [court]
+  - source_matchers:
+      - 'alertname=~"ScoreCheckProgramBrowserMissing|ScoreCheckProgramFpsLow"'
+    target_matchers:
+      - 'alertname=~"ScoreCheckRenderedScoreMismatch|ScoreCheckYouTubeUnhealthy|ScoreCheckYouTubeDegraded"'
+    equal: [court]
+  - source_matchers:
+      - 'alertname="ScoreCheckCommentaryDisconnected"'
+    target_matchers:
+      - 'alertname=~"ScoreCheckCommentaryTrackMissing|ScoreCheckCommentaryTrackMuted|ScoreCheckCommentaryAudioClipping|ScoreCheckCommentaryAudioSilent|ScoreCheckCommentaryPacketLoss|ScoreCheckCommentaryJitterHigh|ScoreCheckCommentarySyncUnlocked"'
+    equal: [court]
+  - source_matchers:
+      - 'alertname="ScoreCheckScoreWorkerUnavailable"'
+    target_matchers:
+      - 'alertname="ScoreCheckSourceAlignmentFailed"'
+  - source_matchers:
+      - 'alertname="ScoreCheckYouTubeUnhealthy"'
+    target_matchers:
+      - 'alertname="ScoreCheckYouTubeDegraded"'
+    equal: [court]
+
 receivers:
   - name: monitor-service
     webhook_configs:
