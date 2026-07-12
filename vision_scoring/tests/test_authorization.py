@@ -26,9 +26,11 @@ from vision_scoring.authorization import (
     TrustedAuthorizerKey,
     TrustedKeyKind,
     authorize_rule_event,
+    encode_authorization_policy_archive,
     encode_authorization_command,
     encode_authorized_rule_event,
     parse_authorized_rule_event,
+    parse_authorization_policy_archive,
     sign_authorization_command,
     sign_policy_assessment,
     verify_authorized_rule_event,
@@ -349,6 +351,40 @@ class AuthorizationTests(unittest.TestCase):
         )
         self.assertNotIn(b"private", encoded.lower())
 
+    def test_policy_archive_codec_is_strict_bounded_and_canonical(self) -> None:
+        raw = encode_authorization_policy_archive(self.archive)
+        self.assertEqual(parse_authorization_policy_archive(raw), self.archive)
+        self.assertEqual(
+            encode_authorization_policy_archive(parse_authorization_policy_archive(raw)),
+            raw,
+        )
+
+        duplicate = raw.replace(
+            b'{"archive_id":',
+            b'{"archive_id":"duplicate","archive_id":',
+            1,
+        )
+        malformed = json.loads(raw)
+        malformed.pop("trust_domain_id")
+        malformed_raw = json.dumps(
+            malformed, sort_keys=True, separators=(",", ":")
+        ).encode("ascii")
+        float_raw = raw.replace(b'"valid_from_ns":1', b'"valid_from_ns":1.5', 1)
+        cases = (
+            (duplicate, "DUPLICATE_KEY"),
+            (float_raw, "JSON_NUMBER"),
+            (b"[" * 33 + b"]" * 33, "JSON_DEPTH"),
+            (malformed_raw, "FIELD_SET"),
+            (raw + b" ", "NON_CANONICAL"),
+        )
+        for candidate, expected_code in cases:
+            with self.subTest(expected_code=expected_code):
+                self.assert_error(
+                    expected_code,
+                    lambda candidate=candidate: parse_authorization_policy_archive(
+                        candidate
+                    ),
+                )
     def test_assessment_assisted_path_binds_exact_intent_and_context(self) -> None:
         exact_assessment = assessment()
         command = self.command(

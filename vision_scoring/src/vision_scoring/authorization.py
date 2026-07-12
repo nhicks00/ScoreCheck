@@ -1745,6 +1745,20 @@ def encode_authorized_rule_event(envelope: AuthorizedRuleEvent) -> bytes:
     )
 
 
+def encode_authorization_policy_archive(
+    archive: AuthorizationPolicyArchive,
+) -> bytes:
+    """Return the strict canonical persisted encoding of a policy archive."""
+
+    if type(archive) is not AuthorizationPolicyArchive:
+        raise ValueError("archive must be an exact AuthorizationPolicyArchive")
+    return _canonical_json_bytes(
+        archive.canonical_dict(),
+        maximum=MAX_AUTHORIZATION_BYTES,
+        label="authorization policy archive",
+    )
+
+
 class _DuplicateKey(Exception):
     pass
 
@@ -1849,6 +1863,26 @@ _POLICY_FIELDS = frozenset(
         "trust_domain_id",
         "valid_from_ns",
         "valid_until_ns",
+    }
+)
+_KEY_REVOCATION_STATUS_FIELDS = frozenset(
+    {
+        "key_id",
+        "key_kind",
+        "principal_id",
+        "public_key_sha256",
+        "revoked_at_ns",
+    }
+)
+_POLICY_ARCHIVE_FIELDS = frozenset(
+    {
+        "archive_id",
+        "current_policy_fingerprint",
+        "key_revocations",
+        "match_id",
+        "policies",
+        "schema_version",
+        "trust_domain_id",
     }
 )
 _ASSESSMENT_FIELDS = frozenset(
@@ -2112,6 +2146,66 @@ def _policy_from_dict(value: object, label: str) -> AuthorizationPolicy:
         raise AuthorizationError("POLICY_INVALID", f"{label} is invalid") from exc
 
 
+def _key_revocation_status_from_dict(
+    value: object,
+    label: str,
+) -> KeyRevocationStatus:
+    data = _exact_dict(value, _KEY_REVOCATION_STATUS_FIELDS, label)
+    try:
+        return KeyRevocationStatus(
+            key_kind=TrustedKeyKind(data["key_kind"]),
+            principal_id=data["principal_id"],
+            key_id=data["key_id"],
+            public_key_sha256=data["public_key_sha256"],
+            revoked_at_ns=data["revoked_at_ns"],
+        )
+    except (TypeError, ValueError) as exc:
+        raise AuthorizationError(
+            "KEY_REVOCATION_INVALID", f"{label} is invalid"
+        ) from exc
+
+
+def _policy_archive_from_dict(
+    value: object,
+    label: str,
+) -> AuthorizationPolicyArchive:
+    data = _exact_dict(value, _POLICY_ARCHIVE_FIELDS, label)
+    policies = tuple(
+        _policy_from_dict(item, f"{label}.policies[{index}]")
+        for index, item in enumerate(
+            _exact_list(data["policies"], f"{label}.policies", maximum=MAX_POLICY_KEYS)
+        )
+    )
+    revocations = tuple(
+        _key_revocation_status_from_dict(
+            item, f"{label}.key_revocations[{index}]"
+        )
+        for index, item in enumerate(
+            _exact_list(
+                data["key_revocations"],
+                f"{label}.key_revocations",
+                maximum=MAX_POLICY_KEYS * 3,
+            )
+        )
+    )
+    try:
+        return AuthorizationPolicyArchive(
+            archive_id=data["archive_id"],
+            trust_domain_id=data["trust_domain_id"],
+            match_id=data["match_id"],
+            policies=policies,
+            current_policy_fingerprint=data["current_policy_fingerprint"],
+            key_revocations=revocations,
+            schema_version=data["schema_version"],
+        )
+    except AuthorizationError:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise AuthorizationError(
+            "POLICY_ARCHIVE_INVALID", f"{label} is invalid"
+        ) from exc
+
+
 def _signed_assessment_from_dict(
     value: object,
     label: str,
@@ -2207,6 +2301,37 @@ def _record_from_dict(value: object, label: str) -> AuthorizationRecord:
         raise AuthorizationError("RECORD_INVALID", f"{label} is invalid") from exc
 
 
+def parse_authorization_policy_archive(raw: bytes) -> AuthorizationPolicyArchive:
+    """Parse only strict, bounded, canonical policy-archive bytes."""
+
+    if type(raw) is not bytes:
+        _fail("RAW_TYPE", "authorization policy archive must be bytes")
+    if not raw or len(raw) > MAX_AUTHORIZATION_BYTES:
+        _fail("RAW_SIZE", "authorization policy archive is empty or too large")
+    if any(byte > 0x7F for byte in raw):
+        _fail("RAW_ASCII", "authorization policy archive must be ASCII JSON")
+    _check_json_depth(raw)
+    try:
+        decoded = json.loads(
+            raw.decode("ascii"),
+            object_pairs_hook=_object_pairs,
+            parse_float=lambda _: (_ for _ in ()).throw(_UnsupportedNumber()),
+            parse_constant=lambda _: (_ for _ in ()).throw(_UnsupportedNumber()),
+        )
+    except _DuplicateKey as exc:
+        raise AuthorizationError("DUPLICATE_KEY", f"duplicate key: {exc}") from exc
+    except _UnsupportedNumber as exc:
+        raise AuthorizationError("JSON_NUMBER", "non-integer number is forbidden") from exc
+    except RecursionError as exc:
+        raise AuthorizationError("JSON_DEPTH", "authorization JSON is too deep") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise AuthorizationError("INVALID_JSON", "invalid authorization JSON") from exc
+    archive = _policy_archive_from_dict(decoded, "authorization policy archive")
+    if encode_authorization_policy_archive(archive) != raw:
+        _fail("NON_CANONICAL", "authorization policy archive is not canonical JSON")
+    return archive
+
+
 def parse_authorized_rule_event(raw: bytes) -> AuthorizedRuleEvent:
     """Parse only the strict, bounded canonical persisted envelope encoding."""
 
@@ -2278,9 +2403,11 @@ __all__ = [
     "TrustedAuthorizerKey",
     "TrustedKeyKind",
     "authorize_rule_event",
+    "encode_authorization_policy_archive",
     "encode_authorization_command",
     "encode_authorized_rule_event",
     "parse_authorized_rule_event",
+    "parse_authorization_policy_archive",
     "sign_authorization_command",
     "sign_policy_assessment",
     "verify_authorized_rule_event",
