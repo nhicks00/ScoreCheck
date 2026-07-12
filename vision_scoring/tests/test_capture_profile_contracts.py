@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+from typing import Any
 import unittest
 
 from vision_scoring.capture_profile_contracts import (
@@ -20,6 +21,7 @@ from vision_scoring.capture_profile_contracts import (
     LensTopologyV1,
     NominalBitrateBasisV1,
     ScanTypeV1,
+    SourceCaptureFactsV1,
     SourceRepresentationV1,
     TrainingCaptureModeV1,
     VideoCodecV1,
@@ -84,19 +86,12 @@ def _profile(
     compression: CompressionStratumV1 = (
         CompressionStratumV1.CONSTRAINED_INTERFRAME
     ),
-    source_classification: CaptureSourceClassificationV1 = (
-        CaptureSourceClassificationV1.OWNER_PRODUCED_LIVE
-    ),
-    source_complete: bool = True,
-    source_risk_tags: tuple[CaptureRiskTagV1, ...] = (),
     lens_topology: LensTopologyV1 = LensTopologyV1.SINGLE_LENS,
     view_topology: ViewTopologyV1 = ViewTopologyV1.SINGLE_VIEW,
     view_count: int = 1,
 ) -> CaptureProfileDescriptorV1:
     return CaptureProfileDescriptorV1(
         capture_profile_id="test-capture-profile-v1",
-        source_classification=source_classification,
-        source_provenance_complete=source_complete,
         device_scope=DeviceScopeV1.DEVICE_CLASS,
         device_model_or_class="consumer.1080p-camera",
         exact_device_id=None,
@@ -109,12 +104,42 @@ def _profile(
         clock_model_sha256=_digest(3),
         camera_attestation_sha256=_digest(4),
         exposure_descriptor_sha256=_digest(5),
+    )
+
+
+def _source_facts(
+    profile: CaptureProfileDescriptorV1,
+    *,
+    source_id: str = "test-source-1",
+    source_classification: CaptureSourceClassificationV1 = (
+        CaptureSourceClassificationV1.OWNER_PRODUCED_LIVE
+    ),
+    source_complete: bool = True,
+    source_risk_tags: tuple[CaptureRiskTagV1, ...] = (),
+) -> SourceCaptureFactsV1:
+    return SourceCaptureFactsV1(
+        source_id=source_id,
+        capture_profile_sha256=profile.fingerprint(),
+        source_classification=source_classification,
+        source_provenance_complete=source_complete,
         source_risk_tags=source_risk_tags,
     )
 
 
+def _classify_profile(
+    encoder: EncoderConfigurationDescriptorV1,
+    profile: CaptureProfileDescriptorV1,
+    **source_changes: Any,
+) -> CaptureProfileClassificationV1:
+    return classify_capture_profile_v1(
+        encoder,
+        profile,
+        _source_facts(profile, **source_changes),
+    )
+
+
 def _classify(encoder: EncoderConfigurationDescriptorV1) -> CaptureProfileClassificationV1:
-    return classify_capture_profile_v1(encoder, _profile(encoder))
+    return _classify_profile(encoder, _profile(encoder))
 
 
 class ExactModeClassificationTests(unittest.TestCase):
@@ -204,15 +229,13 @@ class ExactModeClassificationTests(unittest.TestCase):
 
     def test_multi_or_unknown_view_topology_explicitly_abstains(self) -> None:
         encoder = _encoder()
-        multi = classify_capture_profile_v1(
+        multi_profile = _profile(
             encoder,
-            _profile(
-                encoder,
-                lens_topology=LensTopologyV1.MULTI_LENS,
-                view_topology=ViewTopologyV1.COMPOSITE_MULTI_VIEW,
-                view_count=2,
-            ),
+            lens_topology=LensTopologyV1.MULTI_LENS,
+            view_topology=ViewTopologyV1.COMPOSITE_MULTI_VIEW,
+            view_count=2,
         )
+        multi = _classify_profile(encoder, multi_profile)
         self.assertIs(
             multi.abstention_reason,
             CaptureClassificationAbstentionV1.UNSUPPORTED_VIEW_TOPOLOGY,
@@ -233,7 +256,7 @@ class ExactModeClassificationTests(unittest.TestCase):
                 view_topology=ViewTopologyV1.COMPOSITE_MULTI_VIEW,
                 view_count=1,
             )
-        unknown = classify_capture_profile_v1(
+        unknown = _classify_profile(
             encoder,
             _profile(encoder, view_topology=ViewTopologyV1.UNKNOWN),
         )
@@ -274,7 +297,7 @@ class CompressionAndRiskTests(unittest.TestCase):
             for bitrate in (1_000_000, 50_000_000):
                 encoder = _encoder(bitrate=bitrate)
                 receipts.append(
-                    classify_capture_profile_v1(
+                    _classify_profile(
                         encoder, _profile(encoder, compression=stratum)
                     )
                 )
@@ -301,10 +324,10 @@ class CompressionAndRiskTests(unittest.TestCase):
     def test_intra_and_interframe_strata_must_be_consistent(self) -> None:
         intra_encoder = _encoder(coding_structure=CodingStructureV1.INTRA_ONLY)
         with self.assertRaisesRegex(ValueError, "compression_stratum"):
-            classify_capture_profile_v1(intra_encoder, _profile(intra_encoder))
+            _classify_profile(intra_encoder, _profile(intra_encoder))
         interframe_encoder = _encoder()
         with self.assertRaisesRegex(ValueError, "compression_stratum"):
-            classify_capture_profile_v1(
+            _classify_profile(
                 interframe_encoder,
                 _profile(
                     interframe_encoder,
@@ -319,7 +342,7 @@ class CompressionAndRiskTests(unittest.TestCase):
             _encoder(coding_structure=CodingStructureV1.LOSSLESS),
             codec=VideoCodecV1.RAW,
         )
-        classify_capture_profile_v1(
+        _classify_profile(
             raw,
             _profile(raw, compression=CompressionStratumV1.LOSSLESS_OR_INTRA),
         )
@@ -328,14 +351,13 @@ class CompressionAndRiskTests(unittest.TestCase):
 
     def test_risks_are_exact_structural_union_plus_source_only(self) -> None:
         encoder = _encoder()
-        receipt = classify_capture_profile_v1(
+        profile = _profile(encoder)
+        receipt = _classify_profile(
             encoder,
-            _profile(
-                encoder,
-                source_risk_tags=(
-                    CaptureRiskTagV1.LOW_LIGHT,
-                    CaptureRiskTagV1.MOTION_BLUR,
-                ),
+            profile,
+            source_risk_tags=(
+                CaptureRiskTagV1.LOW_LIGHT,
+                CaptureRiskTagV1.MOTION_BLUR,
             ),
         )
         self.assertEqual(
@@ -354,17 +376,83 @@ class CompressionAndRiskTests(unittest.TestCase):
             ),
         )
         with self.assertRaisesRegex(ValueError, "source_risk_tags"):
-            _profile(
-                encoder,
+            _source_facts(
+                profile,
                 source_risk_tags=(CaptureRiskTagV1.HIGH_COMPRESSION,),
             )
 
 
 class SourceAndTemplateTests(unittest.TestCase):
+    def test_one_profile_is_reused_across_distinct_bright_and_low_light_sources(
+        self,
+    ) -> None:
+        encoder = _encoder()
+        profile = _profile(encoder)
+        bright_facts = _source_facts(profile, source_id="bright-recording")
+        low_light_facts = _source_facts(
+            profile,
+            source_id="low-light-recording",
+            source_risk_tags=(CaptureRiskTagV1.LOW_LIGHT,),
+        )
+        bright = classify_capture_profile_v1(encoder, profile, bright_facts)
+        low_light = classify_capture_profile_v1(
+            encoder, profile, low_light_facts
+        )
+
+        self.assertEqual(
+            bright.capture_profile.fingerprint(),
+            low_light.capture_profile.fingerprint(),
+        )
+        self.assertNotEqual(
+            bright.source_capture_facts.fingerprint(),
+            low_light.source_capture_facts.fingerprint(),
+        )
+        self.assertNotEqual(
+            bright.source_classification_proof_set_sha256,
+            low_light.source_classification_proof_set_sha256,
+        )
+        self.assertNotEqual(
+            bright.capture_classification_proof_set_sha256,
+            low_light.capture_classification_proof_set_sha256,
+        )
+        self.assertNotIn(CaptureRiskTagV1.LOW_LIGHT, bright.capture_risk_tags)
+        self.assertIn(CaptureRiskTagV1.LOW_LIGHT, low_light.capture_risk_tags)
+        profile_wire = profile.to_json_bytes().decode("ascii")
+        self.assertNotIn("source_classification", profile_wire)
+        self.assertNotIn("source_provenance_complete", profile_wire)
+        self.assertNotIn("source_risk_tags", profile_wire)
+
+    def test_source_facts_must_bind_the_exact_profile(self) -> None:
+        encoder = _encoder()
+        profile = _profile(encoder)
+        wrong_profile_facts = replace(
+            _source_facts(profile),
+            capture_profile_sha256=_digest(62),
+        )
+        with self.assertRaisesRegex(ValueError, "do not bind the capture profile"):
+            classify_capture_profile_v1(
+                encoder,
+                profile,
+                wrong_profile_facts,
+            )
+
+    def test_source_facts_require_exact_bool_and_canonical_risk_order(self) -> None:
+        profile = _profile(_encoder())
+        with self.assertRaisesRegex(ValueError, "exact boolean"):
+            _source_facts(profile, source_complete=1)
+        with self.assertRaisesRegex(ValueError, "canonically sorted"):
+            _source_facts(
+                profile,
+                source_risk_tags=(
+                    CaptureRiskTagV1.MOTION_BLUR,
+                    CaptureRiskTagV1.LOW_LIGHT,
+                ),
+            )
+
     def test_incomplete_provenance_explicitly_abstains(self) -> None:
         encoder = _encoder()
-        receipt = classify_capture_profile_v1(
-            encoder, _profile(encoder, source_complete=False)
+        receipt = _classify_profile(
+            encoder, _profile(encoder), source_complete=False
         )
         self.assertIs(
             receipt.abstention_reason,
@@ -378,7 +466,7 @@ class SourceAndTemplateTests(unittest.TestCase):
             source_representation=SourceRepresentationV1.UNKNOWN,
             bitrate_basis=NominalBitrateBasisV1.UNKNOWN,
         )
-        unknown = classify_capture_profile_v1(
+        unknown = _classify_profile(
             unknown_encoder, _profile(unknown_encoder)
         )
         self.assertIs(
@@ -386,13 +474,11 @@ class SourceAndTemplateTests(unittest.TestCase):
             CaptureClassificationAbstentionV1.INCOMPLETE_SOURCE_PROVENANCE,
         )
 
-        mismatched = classify_capture_profile_v1(
+        mismatched = _classify_profile(
             encoder,
-            _profile(
-                encoder,
-                source_classification=(
-                    CaptureSourceClassificationV1.PHONE_OR_CONSUMER_CAMERA
-                ),
+            _profile(encoder),
+            source_classification=(
+                CaptureSourceClassificationV1.PHONE_OR_CONSUMER_CAMERA
             ),
         )
         self.assertIs(
@@ -404,13 +490,11 @@ class SourceAndTemplateTests(unittest.TestCase):
         phone_encoder = _encoder(
             source_representation=SourceRepresentationV1.PHONE_OR_CONSUMER_CAPTURE
         )
-        phone = classify_capture_profile_v1(
+        phone = _classify_profile(
             phone_encoder,
-            _profile(
-                phone_encoder,
-                source_classification=(
-                    CaptureSourceClassificationV1.PHONE_OR_CONSUMER_CAMERA
-                ),
+            _profile(phone_encoder),
+            source_classification=(
+                CaptureSourceClassificationV1.PHONE_OR_CONSUMER_CAMERA
             ),
         )
         self.assertIs(phone.training_capture_mode, TrainingCaptureModeV1.HD_1080P30)
@@ -419,13 +503,11 @@ class SourceAndTemplateTests(unittest.TestCase):
             source_representation=SourceRepresentationV1.ORIGINAL_CAMERA_MASTER,
             bitrate_basis=NominalBitrateBasisV1.CONTAINER_METADATA,
         )
-        archive = classify_capture_profile_v1(
+        archive = _classify_profile(
             archive_encoder,
-            _profile(
-                archive_encoder,
-                source_classification=(
-                    CaptureSourceClassificationV1.OWNER_PRODUCED_ARCHIVE
-                ),
+            _profile(archive_encoder),
+            source_classification=(
+                CaptureSourceClassificationV1.OWNER_PRODUCED_ARCHIVE
             ),
         )
         self.assertIs(
@@ -434,6 +516,7 @@ class SourceAndTemplateTests(unittest.TestCase):
 
     def test_owner_templates_are_exact_and_avkans_invents_no_mapping(self) -> None:
         facts = {
+            "source_id": "owner-source-1",
             "encoder_settings_sha256": _digest(1),
             "calibration_sha256": _digest(2),
             "clock_model_sha256": _digest(3),
@@ -502,6 +585,12 @@ class CanonicalWireAndProofTests(unittest.TestCase):
             receipt.capture_profile,
         )
         self.assertEqual(
+            SourceCaptureFactsV1.from_json_bytes(
+                receipt.source_capture_facts.to_json_bytes()
+            ),
+            receipt.source_capture_facts,
+        )
+        self.assertEqual(
             CaptureProfileClassificationV1.from_json_bytes(
                 receipt.to_json_bytes()
             ),
@@ -510,6 +599,14 @@ class CanonicalWireAndProofTests(unittest.TestCase):
         tampered = receipt.to_dict()
         tampered["source_classification_proof_set_sha256"] = _digest(63)
         raw = json.dumps(tampered, sort_keys=True, separators=(",", ":")).encode()
+        with self.assertRaisesRegex(ValueError, "proof-set hash"):
+            CaptureProfileClassificationV1.from_json_bytes(raw)
+
+        changed_source = receipt.to_dict()
+        changed_source["source_capture_facts"]["source_id"] = "different-source"
+        raw = json.dumps(
+            changed_source, sort_keys=True, separators=(",", ":")
+        ).encode()
         with self.assertRaisesRegex(ValueError, "proof-set hash"):
             CaptureProfileClassificationV1.from_json_bytes(raw)
 
@@ -562,7 +659,11 @@ class CanonicalWireAndProofTests(unittest.TestCase):
             receipt.encoder_configuration, nominal_bitrate_bps=3_000_001
         )
         with self.assertRaisesRegex(ValueError, "does not bind"):
-            classify_capture_profile_v1(changed_encoder, receipt.capture_profile)
+            classify_capture_profile_v1(
+                changed_encoder,
+                receipt.capture_profile,
+                receipt.source_capture_facts,
+            )
 
 
 if __name__ == "__main__":

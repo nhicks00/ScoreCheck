@@ -39,6 +39,7 @@ ENCODER_CONFIGURATION_DESCRIPTOR_DOMAIN = (
 CAPTURE_PROFILE_DESCRIPTOR_DOMAIN = (
     "multicourt-vision-scoring:capture-profile-descriptor:v1"
 )
+SOURCE_CAPTURE_FACTS_DOMAIN = "multicourt-vision-scoring:source-capture-facts:v1"
 SOURCE_CLASSIFICATION_PROOF_SET_DOMAIN = (
     "multicourt-vision-scoring:source-classification-proof-set:v1"
 )
@@ -457,11 +458,9 @@ class EncoderConfigurationDescriptorV1(_CanonicalContract):
 
 @dataclass(frozen=True, slots=True)
 class CaptureProfileDescriptorV1(_CanonicalContract):
-    """Exact provenance and topology facts bound to an encoder descriptor."""
+    """Reusable device/topology facts bound to an encoder descriptor."""
 
     capture_profile_id: str
-    source_classification: CaptureSourceClassificationV1
-    source_provenance_complete: bool
     device_scope: DeviceScopeV1
     device_model_or_class: str
     exact_device_id: str | None
@@ -474,7 +473,6 @@ class CaptureProfileDescriptorV1(_CanonicalContract):
     clock_model_sha256: str
     camera_attestation_sha256: str
     exposure_descriptor_sha256: str
-    source_risk_tags: tuple[CaptureRiskTagV1, ...]
     schema_version: str = CAPTURE_PROFILE_SCHEMA_VERSION
 
     _DOMAIN: ClassVar[str] = CAPTURE_PROFILE_DESCRIPTOR_DOMAIN
@@ -483,14 +481,6 @@ class CaptureProfileDescriptorV1(_CanonicalContract):
     def __post_init__(self) -> None:
         _require_schema_version(self.schema_version, self._LABEL)
         require_stable_id(self.capture_profile_id, "capture_profile_id")
-        _require_exact_enum(
-            self.source_classification,
-            CaptureSourceClassificationV1,
-            "source_classification",
-        )
-        _require_exact_bool(
-            self.source_provenance_complete, "source_provenance_complete"
-        )
         _require_exact_enum(self.device_scope, DeviceScopeV1, "device_scope")
         require_stable_id(self.device_model_or_class, "device_model_or_class")
         _require_optional_stable_id(self.exact_device_id, "exact_device_id")
@@ -521,7 +511,6 @@ class CaptureProfileDescriptorV1(_CanonicalContract):
             CompressionStratumV1,
             "compression_stratum",
         )
-        _require_source_risk_tags(self.source_risk_tags)
         _require_distinct_digests(
             (
                 (
@@ -558,9 +547,6 @@ class CaptureProfileDescriptorV1(_CanonicalContract):
             "exposure_descriptor_sha256": self.exposure_descriptor_sha256,
             "lens_topology": self.lens_topology.value,
             "schema_version": self.schema_version,
-            "source_classification": self.source_classification.value,
-            "source_provenance_complete": self.source_provenance_complete,
-            "source_risk_tags": [item.value for item in self.source_risk_tags],
             "view_count": self.view_count,
             "view_topology": self.view_topology.value,
         }
@@ -571,7 +557,6 @@ class CaptureProfileDescriptorV1(_CanonicalContract):
             value, _contract_field_names(cls), label=cls._LABEL
         )
         for field_name, enum_type in (
-            ("source_classification", CaptureSourceClassificationV1),
             ("device_scope", DeviceScopeV1),
             ("lens_topology", LensTopologyV1),
             ("view_topology", ViewTopologyV1),
@@ -580,10 +565,6 @@ class CaptureProfileDescriptorV1(_CanonicalContract):
             fields[field_name] = enum_from_json(
                 enum_type, fields[field_name], field_name
             )
-        fields["source_risk_tags"] = tuple(
-            enum_from_json(CaptureRiskTagV1, item, "source_risk_tags")
-            for item in exact_list(fields, "source_risk_tags", label=cls._LABEL)
-        )
         return cls(**fields)
 
     @classmethod
@@ -603,52 +584,122 @@ class CaptureProfileDescriptorV1(_CanonicalContract):
         return result
 
 
+@dataclass(frozen=True, slots=True)
+class SourceCaptureFactsV1(_CanonicalContract):
+    """Per-recording source provenance and observed capture risks."""
+
+    source_id: str
+    capture_profile_sha256: str
+    source_classification: CaptureSourceClassificationV1
+    source_provenance_complete: bool
+    source_risk_tags: tuple[CaptureRiskTagV1, ...]
+    schema_version: str = CAPTURE_PROFILE_SCHEMA_VERSION
+
+    _DOMAIN: ClassVar[str] = SOURCE_CAPTURE_FACTS_DOMAIN
+    _LABEL: ClassVar[str] = "source capture facts"
+
+    def __post_init__(self) -> None:
+        _require_schema_version(self.schema_version, self._LABEL)
+        require_stable_id(self.source_id, "source_id")
+        require_sha256(self.capture_profile_sha256, "capture_profile_sha256")
+        _require_exact_enum(
+            self.source_classification,
+            CaptureSourceClassificationV1,
+            "source_classification",
+        )
+        _require_exact_bool(
+            self.source_provenance_complete, "source_provenance_complete"
+        )
+        _require_source_risk_tags(self.source_risk_tags)
+        self.to_json_bytes()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "capture_profile_sha256": self.capture_profile_sha256,
+            "domain": self._DOMAIN,
+            "schema_version": self.schema_version,
+            "source_classification": self.source_classification.value,
+            "source_id": self.source_id,
+            "source_provenance_complete": self.source_provenance_complete,
+            "source_risk_tags": [item.value for item in self.source_risk_tags],
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> "SourceCaptureFactsV1":
+        fields = require_exact_fields(
+            value, _contract_field_names(cls), label=cls._LABEL
+        )
+        fields["source_classification"] = enum_from_json(
+            CaptureSourceClassificationV1,
+            fields["source_classification"],
+            "source_classification",
+        )
+        fields["source_risk_tags"] = tuple(
+            enum_from_json(CaptureRiskTagV1, item, "source_risk_tags")
+            for item in exact_list(fields, "source_risk_tags", label=cls._LABEL)
+        )
+        return cls(**fields)
+
+    @classmethod
+    def from_json_bytes(cls, raw: bytes) -> "SourceCaptureFactsV1":
+        fields = _parse_contract(
+            raw,
+            label=cls._LABEL,
+            domain=cls._DOMAIN,
+            fields=_contract_field_names(cls),
+            maximum_depth=4,
+            maximum_nodes=24,
+            maximum_containers=4,
+        )
+        result = cls.from_dict(fields)
+        if result.to_json_bytes() != raw:
+            raise ValueError("source capture facts reconstruction changed bytes")
+        return result
+
+
 def source_classification_proof_set_sha256_v1(
     encoder_configuration: EncoderConfigurationDescriptorV1,
     capture_profile: CaptureProfileDescriptorV1,
+    source_capture_facts: SourceCaptureFactsV1,
 ) -> str:
     if type(encoder_configuration) is not EncoderConfigurationDescriptorV1:
         raise ValueError("encoder_configuration must be an exact V1 descriptor")
     if type(capture_profile) is not CaptureProfileDescriptorV1:
         raise ValueError("capture_profile must be an exact V1 descriptor")
+    if type(source_capture_facts) is not SourceCaptureFactsV1:
+        raise ValueError("source_capture_facts must be exact V1 facts")
     if (
         capture_profile.encoder_configuration_sha256
         != encoder_configuration.fingerprint()
     ):
         raise ValueError("capture profile does not bind the encoder descriptor")
+    if source_capture_facts.capture_profile_sha256 != capture_profile.fingerprint():
+        raise ValueError("source capture facts do not bind the capture profile")
     return hashlib.sha256(
         canonical_json_bytes(
             {
                 "bitrate_basis": encoder_configuration.nominal_bitrate_basis.value,
-                "calibration_sha256": capture_profile.calibration_sha256,
-                "camera_attestation_sha256": (
-                    capture_profile.camera_attestation_sha256
-                ),
-                "clock_model_sha256": capture_profile.clock_model_sha256,
-                "device_model_or_class": capture_profile.device_model_or_class,
-                "device_scope": capture_profile.device_scope.value,
+                "capture_profile_sha256": source_capture_facts.capture_profile_sha256,
                 "domain": SOURCE_CLASSIFICATION_PROOF_SET_DOMAIN,
                 "encoder_configuration_sha256": (
                     capture_profile.encoder_configuration_sha256
                 ),
-                "exact_device_id": capture_profile.exact_device_id,
-                "exposure_descriptor_sha256": (
-                    capture_profile.exposure_descriptor_sha256
-                ),
-                "lens_topology": capture_profile.lens_topology.value,
                 "source_representation": (
                     encoder_configuration.source_representation.value
                 ),
                 "schema_version": CAPTURE_PROFILE_SCHEMA_VERSION,
+                "source_capture_facts_sha256": source_capture_facts.fingerprint(),
                 "source_classification": (
-                    capture_profile.source_classification.value
+                    source_capture_facts.source_classification.value
                 ),
+                "source_id": source_capture_facts.source_id,
                 "source_provenance_complete": (
-                    capture_profile.source_provenance_complete
+                    source_capture_facts.source_provenance_complete
                 ),
+                "source_risk_tags": [
+                    item.value for item in source_capture_facts.source_risk_tags
+                ],
                 "transport": encoder_configuration.transport.value,
-                "view_count": capture_profile.view_count,
-                "view_topology": capture_profile.view_topology.value,
             },
             label="source classification proof set",
             maximum_bytes=MAX_CAPTURE_PROFILE_CONTRACT_BYTES,
@@ -659,16 +710,21 @@ def source_classification_proof_set_sha256_v1(
 def capture_classification_proof_set_sha256_v1(
     encoder_configuration: EncoderConfigurationDescriptorV1,
     capture_profile: CaptureProfileDescriptorV1,
+    source_capture_facts: SourceCaptureFactsV1,
 ) -> str:
     if type(encoder_configuration) is not EncoderConfigurationDescriptorV1:
         raise ValueError("encoder_configuration must be an exact V1 descriptor")
     if type(capture_profile) is not CaptureProfileDescriptorV1:
         raise ValueError("capture_profile must be an exact V1 descriptor")
+    if type(source_capture_facts) is not SourceCaptureFactsV1:
+        raise ValueError("source_capture_facts must be exact V1 facts")
     if (
         capture_profile.encoder_configuration_sha256
         != encoder_configuration.fingerprint()
     ):
         raise ValueError("capture profile does not bind the encoder descriptor")
+    if source_capture_facts.capture_profile_sha256 != capture_profile.fingerprint():
+        raise ValueError("source capture facts do not bind the capture profile")
     return hashlib.sha256(
         canonical_json_bytes(
             {
@@ -676,9 +732,12 @@ def capture_classification_proof_set_sha256_v1(
                 "domain": CAPTURE_CLASSIFICATION_PROOF_SET_DOMAIN,
                 "encoder_configuration_sha256": encoder_configuration.fingerprint(),
                 "schema_version": CAPTURE_PROFILE_SCHEMA_VERSION,
+                "source_capture_facts_sha256": source_capture_facts.fingerprint(),
                 "source_classification_proof_set_sha256": (
                     source_classification_proof_set_sha256_v1(
-                        encoder_configuration, capture_profile
+                        encoder_configuration,
+                        capture_profile,
+                        source_capture_facts,
                     )
                 ),
             },
@@ -691,16 +750,17 @@ def capture_classification_proof_set_sha256_v1(
 def _source_provenance_is_complete(
     encoder: EncoderConfigurationDescriptorV1,
     profile: CaptureProfileDescriptorV1,
+    source_facts: SourceCaptureFactsV1,
 ) -> bool:
     source_pair_is_consistent = (
         (
-            profile.source_classification
+            source_facts.source_classification
             is CaptureSourceClassificationV1.OWNER_PRODUCED_LIVE
             and encoder.source_representation
             is SourceRepresentationV1.LIVE_ENCODER_OUTPUT
         )
         or (
-            profile.source_classification
+            source_facts.source_classification
             is CaptureSourceClassificationV1.OWNER_PRODUCED_ARCHIVE
             and encoder.source_representation
             in {
@@ -709,16 +769,16 @@ def _source_provenance_is_complete(
             }
         )
         or (
-            profile.source_classification
+            source_facts.source_classification
             is CaptureSourceClassificationV1.PHONE_OR_CONSUMER_CAMERA
             and encoder.source_representation
             is SourceRepresentationV1.PHONE_OR_CONSUMER_CAPTURE
         )
     )
     return (
-        profile.source_provenance_complete
+        source_facts.source_provenance_complete
         and source_pair_is_consistent
-        and profile.source_classification
+        and source_facts.source_classification
         is not CaptureSourceClassificationV1.EXTERNAL_OR_UNKNOWN
         and encoder.source_representation is not SourceRepresentationV1.UNKNOWN
         and encoder.nominal_bitrate_basis is not NominalBitrateBasisV1.UNKNOWN
@@ -730,6 +790,7 @@ def _source_provenance_is_complete(
 def _classify_exact_mode(
     encoder: EncoderConfigurationDescriptorV1,
     profile: CaptureProfileDescriptorV1,
+    source_facts: SourceCaptureFactsV1,
 ) -> tuple[
     CaptureClassificationStatusV1,
     TrainingCaptureModeV1 | None,
@@ -750,7 +811,7 @@ def _classify_exact_mode(
             None,
             CaptureClassificationAbstentionV1.UNSUPPORTED_CODEC,
         )
-    if not _source_provenance_is_complete(encoder, profile):
+    if not _source_provenance_is_complete(encoder, profile, source_facts):
         return (
             CaptureClassificationStatusV1.ABSTAINED,
             None,
@@ -823,8 +884,9 @@ def _structural_risk_tags(
     encoder: EncoderConfigurationDescriptorV1,
     mode: TrainingCaptureModeV1 | None,
     profile: CaptureProfileDescriptorV1,
+    source_facts: SourceCaptureFactsV1,
 ) -> tuple[CaptureRiskTagV1, ...]:
-    tags = set(profile.source_risk_tags)
+    tags = set(source_facts.source_risk_tags)
     if (
         mode is TrainingCaptureModeV1.HD_1080P30
         or (
@@ -872,6 +934,7 @@ class CaptureProfileClassificationV1(_CanonicalContract):
 
     encoder_configuration: EncoderConfigurationDescriptorV1
     capture_profile: CaptureProfileDescriptorV1
+    source_capture_facts: SourceCaptureFactsV1
     status: CaptureClassificationStatusV1
     training_capture_mode: TrainingCaptureModeV1 | None
     abstention_reason: CaptureClassificationAbstentionV1 | None
@@ -894,6 +957,8 @@ class CaptureProfileClassificationV1(_CanonicalContract):
             raise ValueError("encoder_configuration must be an exact V1 descriptor")
         if type(self.capture_profile) is not CaptureProfileDescriptorV1:
             raise ValueError("capture_profile must be an exact V1 descriptor")
+        if type(self.source_capture_facts) is not SourceCaptureFactsV1:
+            raise ValueError("source_capture_facts must be exact V1 facts")
         _require_exact_enum(self.status, CaptureClassificationStatusV1, "status")
         if self.training_capture_mode is not None:
             _require_exact_enum(
@@ -924,6 +989,11 @@ class CaptureProfileClassificationV1(_CanonicalContract):
             != self.encoder_configuration.fingerprint()
         ):
             raise ValueError("capture profile does not bind the encoder descriptor")
+        if (
+            self.source_capture_facts.capture_profile_sha256
+            != self.capture_profile.fingerprint()
+        ):
+            raise ValueError("source capture facts do not bind the capture profile")
         if self.encoder_configuration.encoder_settings_sha256 in {
             self.capture_profile.encoder_configuration_sha256,
             self.capture_profile.calibration_sha256,
@@ -933,7 +1003,9 @@ class CaptureProfileClassificationV1(_CanonicalContract):
         }:
             raise ValueError("classification typed digest roles must not alias")
         expected_status, expected_mode, expected_reason = _classify_exact_mode(
-            self.encoder_configuration, self.capture_profile
+            self.encoder_configuration,
+            self.capture_profile,
+            self.source_capture_facts,
         )
         if (
             self.status is not expected_status
@@ -945,15 +1017,20 @@ class CaptureProfileClassificationV1(_CanonicalContract):
             self.encoder_configuration,
             expected_mode,
             self.capture_profile,
+            self.source_capture_facts,
         )
         if self.capture_risk_tags != expected_risks:
             raise ValueError("capture_risk_tags are not the exact derived union")
         expected_source_proof = source_classification_proof_set_sha256_v1(
-            self.encoder_configuration, self.capture_profile
+            self.encoder_configuration,
+            self.capture_profile,
+            self.source_capture_facts,
         )
         expected_classification_proof = (
             capture_classification_proof_set_sha256_v1(
-                self.encoder_configuration, self.capture_profile
+                self.encoder_configuration,
+                self.capture_profile,
+                self.source_capture_facts,
             )
         )
         if self.source_classification_proof_set_sha256 != expected_source_proof:
@@ -1019,6 +1096,7 @@ class CaptureProfileClassificationV1(_CanonicalContract):
             "domain": self._DOMAIN,
             "encoder_configuration": self.encoder_configuration.to_dict(),
             "schema_version": self.schema_version,
+            "source_capture_facts": self.source_capture_facts.to_dict(),
             "source_classification_proof_set_sha256": (
                 self.source_classification_proof_set_sha256
             ),
@@ -1038,8 +1116,8 @@ class CaptureProfileClassificationV1(_CanonicalContract):
             domain=cls._DOMAIN,
             fields=_contract_field_names(cls),
             maximum_depth=6,
-            maximum_nodes=128,
-            maximum_containers=10,
+            maximum_nodes=160,
+            maximum_containers=14,
         )
         fields["encoder_configuration"] = EncoderConfigurationDescriptorV1.from_dict(
             _nested_contract_fields(
@@ -1055,6 +1133,14 @@ class CaptureProfileClassificationV1(_CanonicalContract):
                 contract_type=CaptureProfileDescriptorV1,
                 domain=CAPTURE_PROFILE_DESCRIPTOR_DOMAIN,
                 label=CaptureProfileDescriptorV1._LABEL,
+            )
+        )
+        fields["source_capture_facts"] = SourceCaptureFactsV1.from_dict(
+            _nested_contract_fields(
+                fields["source_capture_facts"],
+                contract_type=SourceCaptureFactsV1,
+                domain=SOURCE_CAPTURE_FACTS_DOMAIN,
+                label=SourceCaptureFactsV1._LABEL,
             )
         )
         fields["status"] = enum_from_json(
@@ -1085,6 +1171,7 @@ class CaptureProfileClassificationV1(_CanonicalContract):
 def classify_capture_profile_v1(
     encoder_configuration: EncoderConfigurationDescriptorV1,
     capture_profile: CaptureProfileDescriptorV1,
+    source_capture_facts: SourceCaptureFactsV1,
 ) -> CaptureProfileClassificationV1:
     """Derive one exact non-authorizing receipt or raise on inconsistent facts."""
 
@@ -1092,13 +1179,18 @@ def classify_capture_profile_v1(
         raise ValueError("encoder_configuration must be an exact V1 descriptor")
     if type(capture_profile) is not CaptureProfileDescriptorV1:
         raise ValueError("capture_profile must be an exact V1 descriptor")
+    if type(source_capture_facts) is not SourceCaptureFactsV1:
+        raise ValueError("source_capture_facts must be exact V1 facts")
+    if source_capture_facts.capture_profile_sha256 != capture_profile.fingerprint():
+        raise ValueError("source capture facts do not bind the capture profile")
     _validate_compression_consistency(encoder_configuration, capture_profile)
     status, mode, reason = _classify_exact_mode(
-        encoder_configuration, capture_profile
+        encoder_configuration, capture_profile, source_capture_facts
     )
     return CaptureProfileClassificationV1(
         encoder_configuration=encoder_configuration,
         capture_profile=capture_profile,
+        source_capture_facts=source_capture_facts,
         status=status,
         training_capture_mode=mode,
         abstention_reason=reason,
@@ -1106,15 +1198,16 @@ def classify_capture_profile_v1(
             encoder_configuration,
             mode,
             capture_profile,
+            source_capture_facts,
         ),
         source_classification_proof_set_sha256=(
             source_classification_proof_set_sha256_v1(
-                encoder_configuration, capture_profile
+                encoder_configuration, capture_profile, source_capture_facts
             )
         ),
         capture_classification_proof_set_sha256=(
             capture_classification_proof_set_sha256_v1(
-                encoder_configuration, capture_profile
+                encoder_configuration, capture_profile, source_capture_facts
             )
         ),
     )
@@ -1122,6 +1215,7 @@ def classify_capture_profile_v1(
 
 def _owner_live_template_v1(
     *,
+    source_id: str,
     capture_profile_id: str,
     encoder_configuration_id: str,
     device_model: str,
@@ -1157,8 +1251,6 @@ def _owner_live_template_v1(
     )
     profile = CaptureProfileDescriptorV1(
         capture_profile_id=capture_profile_id,
-        source_classification=CaptureSourceClassificationV1.OWNER_PRODUCED_LIVE,
-        source_provenance_complete=True,
         device_scope=DeviceScopeV1.DEVICE_MODEL,
         device_model_or_class=device_model,
         exact_device_id=None,
@@ -1171,13 +1263,20 @@ def _owner_live_template_v1(
         clock_model_sha256=clock_model_sha256,
         camera_attestation_sha256=camera_attestation_sha256,
         exposure_descriptor_sha256=exposure_descriptor_sha256,
+    )
+    source_facts = SourceCaptureFactsV1(
+        source_id=source_id,
+        capture_profile_sha256=profile.fingerprint(),
+        source_classification=CaptureSourceClassificationV1.OWNER_PRODUCED_LIVE,
+        source_provenance_complete=True,
         source_risk_tags=source_risk_tags,
     )
-    return classify_capture_profile_v1(encoder, profile)
+    return classify_capture_profile_v1(encoder, profile, source_facts)
 
 
 def mevo_core_owner_live_1080p60_v1(
     *,
+    source_id: str,
     encoder_settings_sha256: str,
     calibration_sha256: str,
     clock_model_sha256: str,
@@ -1189,6 +1288,7 @@ def mevo_core_owner_live_1080p60_v1(
     """Owner-declared Mevo Core template: H.264/RTMP 1080p60 at 6 Mbps."""
 
     return _owner_live_template_v1(
+        source_id=source_id,
         capture_profile_id="owner-mevo-core-1080p60-v1",
         encoder_configuration_id="owner-mevo-core-h264-rtmp-1080p60-v1",
         device_model="logitech.mevo-core",
@@ -1208,6 +1308,7 @@ def mevo_core_owner_live_1080p60_v1(
 
 def avkans_go_owner_live_1080p30_v1(
     *,
+    source_id: str,
     encoder_settings_sha256: str,
     calibration_sha256: str,
     clock_model_sha256: str,
@@ -1223,6 +1324,7 @@ def avkans_go_owner_live_1080p30_v1(
     """
 
     return _owner_live_template_v1(
+        source_id=source_id,
         capture_profile_id="owner-avkans-go-1080p30-v1",
         encoder_configuration_id="owner-avkans-go-hevc-srt-1080p30-v1",
         device_model="avkans.go",
@@ -1258,6 +1360,7 @@ __all__ = [
     "MAX_CAPTURE_PROFILE_CONTRACT_BYTES",
     "NominalBitrateBasisV1",
     "ScanTypeV1",
+    "SourceCaptureFactsV1",
     "SourceRepresentationV1",
     "TrainingCaptureModeV1",
     "VideoCodecV1",
