@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CompetitionCourtSnapshot, CompetitionMatchSnapshot, CompetitionScoreSnapshot } from "./contracts.js";
-import { scoreAlignmentIssueCodes } from "./controlPlane.js";
+import { deriveObservedExpectation, scoreAlignmentIssueCodes } from "./controlPlane.js";
 
 const match: CompetitionMatchSnapshot = {
   id: "10000000-0000-4000-8000-000000000001",
@@ -46,6 +46,20 @@ const overlay: NonNullable<CompetitionCourtSnapshot["overlay"]> = {
 describe("control-plane score alignment", () => {
   it("accepts aligned live source and overlay state", () => {
     expect(scoreAlignmentIssueCodes({ currentMatchId: match.id, currentMatch: match, score, overlay, scoringExpectation: "LIVE", sourceAgeMs: 1_000 })).toEqual([]);
+  });
+
+  it("promotes scheduled scoring from observed source state without a manual monitoring write", () => {
+    const scheduled = {
+      coveragePhase: "WARMUP" as const,
+      mediaExpectation: "REQUIRED" as const,
+      broadcastExpectation: "LIVE" as const,
+      commentaryExpectation: "OPTIONAL" as const,
+      scoringExpectation: "SCHEDULED" as const,
+      overrideExpiresAt: "2026-07-13T06:00:00.000Z"
+    };
+    expect(deriveObservedExpectation(scheduled, score)).toMatchObject({ coveragePhase: "LIVE_MATCH", scoringExpectation: "LIVE" });
+    expect(deriveObservedExpectation(scheduled, { ...score, status: "Set Complete" })).toMatchObject({ coveragePhase: "LIVE_MATCH", scoringExpectation: "LIVE" });
+    expect(deriveObservedExpectation(scheduled, { ...score, status: "Final" })).toMatchObject({ coveragePhase: "FINAL_HOLD", scoringExpectation: "FINAL_HOLD" });
   });
 
   it("detects wrong match, team, score, stale source, and 67-67 independently", () => {

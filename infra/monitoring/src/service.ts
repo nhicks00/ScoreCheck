@@ -11,6 +11,7 @@ import { BrowserHeartbeatManager } from "./browserHeartbeats.js";
 import { ControlPlaneCollector } from "./controlPlane.js";
 import { YouTubeCollector } from "./youtube.js";
 import { NotificationDispatcher } from "./notifications.js";
+import { loadCourtPipelineRange, parseRangeInput } from "./rangeQueries.js";
 import { BrowserThumbnailManager } from "./browserThumbnails.js";
 
 const config = loadServiceConfig();
@@ -77,6 +78,16 @@ app.get("/metrics", bearerAuth(config.token), async (_req, res) => {
   res.type(registry.contentType).send(await registry.metrics());
 });
 app.get("/v1/snapshot", bearerAuth(config.token), (_req, res) => res.json(snapshot));
+app.get("/v1/range/court-pipeline", bearerAuth(config.token), async (req, res) => {
+  try {
+    const input = parseRangeInput({ windowSec: req.query.windowSec, stepSec: req.query.stepSec });
+    res.setHeader("cache-control", "private, no-store");
+    res.json(await loadCourtPipelineRange(config.prometheusInternalUrl, input));
+  } catch (error) {
+    const status = error instanceof z.ZodError ? 400 : 502;
+    res.status(status).json({ error: status === 400 ? "Invalid range query bounds." : "Monitoring history is unavailable." });
+  }
+});
 app.options("/v1/browser-heartbeats", (req, res) => {
   const origin = allowedBrowserOrigin(req.headers.origin);
   if (!origin) {

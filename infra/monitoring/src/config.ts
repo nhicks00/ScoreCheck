@@ -16,6 +16,7 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv = process.env) {
     MONITOR_AGENT_PORT: port.default(9108),
     MONITOR_AGENT_INTERVAL_MS: interval.default(5_000),
     MONITOR_AGENT_CONTAINERS: z.string().default(""),
+    MONITOR_AGENT_COURTS: z.string().default(""),
     MONITOR_DISK_PATH: z.string().default("/"),
     FFMPEG_PROGRESS_DIR: z.string().default(""),
     DOCKER_API_URL: safeHttpUrl.optional(),
@@ -34,6 +35,7 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv = process.env) {
     port: parsed.MONITOR_AGENT_PORT,
     intervalMs: parsed.MONITOR_AGENT_INTERVAL_MS,
     containers: parsed.MONITOR_AGENT_CONTAINERS.split(",").map((value) => value.trim()).filter(Boolean).map((value) => safeIdSchema.parse(value)),
+    assignedCourts: parseCourtList(parsed.MONITOR_AGENT_COURTS),
     diskPath: parsed.MONITOR_DISK_PATH,
     ffmpegProgressDir: parsed.FFMPEG_PROGRESS_DIR.trim() || null,
     dockerApiUrl: parsed.DOCKER_API_URL ?? null,
@@ -43,6 +45,12 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv = process.env) {
     egressMetricsUrl: parsed.EGRESS_METRICS_URL ?? null,
     egressHealthUrl: parsed.EGRESS_HEALTH_URL ?? null
   };
+}
+
+function parseCourtList(raw: string): number[] {
+  const courts = raw.split(",").map((value) => value.trim()).filter(Boolean).map(Number);
+  if (courts.some((court) => !Number.isInteger(court) || court < 1 || court > 8)) throw new Error("MONITOR_AGENT_COURTS must contain court numbers 1-8.");
+  return [...new Set(courts)].sort((left, right) => left - right);
 }
 
 export type AgentTarget = {
@@ -57,6 +65,7 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     MONITOR_API_TOKEN: z.string().min(24),
     ALERTMANAGER_WEBHOOK_TOKEN: z.string().min(24),
     ALERTMANAGER_INTERNAL_URL: safeHttpUrl.default("http://alertmanager:9093"),
+    PROMETHEUS_INTERNAL_URL: safeHttpUrl.default("http://prometheus:9090"),
     MONITOR_BROWSER_HEARTBEAT_SECRET: z.string().min(32),
     MONITOR_BROWSER_ALLOWED_ORIGINS: z.string().default("https://score.beachvolleyballmedia.com"),
     MONITOR_AGENT_TARGETS: z.string().default(""),
@@ -101,6 +110,7 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     token: parsed.MONITOR_API_TOKEN,
     alertmanagerWebhookToken: parsed.ALERTMANAGER_WEBHOOK_TOKEN,
     alertmanagerInternalUrl: parsed.ALERTMANAGER_INTERNAL_URL.replace(/\/+$/, ""),
+    prometheusInternalUrl: parsed.PROMETHEUS_INTERNAL_URL.replace(/\/+$/, ""),
     browserHeartbeatSecret: parsed.MONITOR_BROWSER_HEARTBEAT_SECRET,
     browserAllowedOrigins: parseOrigins(parsed.MONITOR_BROWSER_ALLOWED_ORIGINS),
     targets: parseAgentTargets(parsed.MONITOR_AGENT_TARGETS),

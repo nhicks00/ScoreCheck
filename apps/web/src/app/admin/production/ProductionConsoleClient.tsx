@@ -49,7 +49,7 @@ type StatusPayload = ProductionSnapshot & {
   mediamtx: MediamtxStatus;
 };
 
-type CourtFeedback = { tone: "ok" | "error"; text: string };
+type CourtFeedback = { tone: "ok" | "warn" | "error"; text: string };
 
 const CONTROLLER_OFFLINE_HINT =
   "Compositor controller offline — see infra/compositor/GATING_EXPERIMENT.md";
@@ -132,7 +132,7 @@ export function ProductionConsoleClient({
     setCourtFeedback(courtNumber, undefined);
     try {
       const res = await fetch(`/api/admin/production/courts/${courtNumber}/${action}`, { method: "POST" });
-      const json = (await res.json().catch(() => ({}))) as { error?: string };
+      const json = (await res.json().catch(() => ({}))) as { error?: string; monitoringWarning?: string };
       if (!res.ok) {
         setCourtFeedback(courtNumber, {
           tone: "error",
@@ -140,8 +140,8 @@ export function ProductionConsoleClient({
         });
       } else {
         setCourtFeedback(courtNumber, {
-          tone: "ok",
-          text: action === "start" ? "Broadcast starting — egress spinning up." : "Broadcast stopping."
+          tone: json.monitoringWarning ? "warn" : "ok",
+          text: json.monitoringWarning ?? (action === "start" ? "Broadcast starting — egress spinning up." : "Broadcast stopping.")
         });
         void refresh();
       }
@@ -412,7 +412,7 @@ export function ProductionConsoleClient({
                 </div>
 
                 {courtFeedback && (
-                  <p className={`production-feedback ${courtFeedback.tone === "ok" ? "is-ok" : "is-error"}`} role="status">
+                  <p className={`production-feedback ${courtFeedback.tone === "ok" ? "is-ok" : courtFeedback.tone === "warn" ? "is-warn" : "is-error"}`} role="status">
                     {courtFeedback.text}
                   </p>
                 )}

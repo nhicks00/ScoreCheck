@@ -129,6 +129,7 @@ export type MonitorCourt = {
   expectation: MonitorExpectation;
   youtube: { state: MonitorHealthState; broadcastLifecycle: string | null; streamStatus: string | null; healthStatus: string | null; configurationIssues: string[]; observedAt: string } | null;
   thumbnail: { sampledAt: string; receivedAt: string; byteLength: number } | null;
+  egressHost: string | null;
 };
 
 export type MonitorIncident = {
@@ -151,12 +152,17 @@ export type MonitorIncident = {
 export type MonitorAgent = {
   agentId: string;
   role: string;
+  assignedCourts: number[];
   state: MonitorHealthState;
   lastSeenAt: string | null;
   ageMs: number | null;
   host: { uptimeSeconds: number; load1: number; memoryTotalBytes: number; memoryAvailableBytes: number; diskTotalBytes: number | null; diskFreeBytes: number | null } | null;
   services: Array<{ name: string; running: boolean; healthy: boolean | null; restartCount: number; oomKilled: boolean; memoryUsageBytes: number | null; memoryLimitBytes: number | null; cpuRatio: number | null }>;
-  nativeServices: { endpoints: Array<{ service: string; up: boolean }>; livekit: { roomCount: number; participantCount: number; packetsOut: number; packetsDropped: number } | null } | null;
+  nativeServices: {
+    endpoints: Array<{ service: string; up: boolean }>;
+    livekit: { roomCount: number; participantCount: number; packetsOut: number; packetsDropped: number } | null;
+    egress: { available: boolean; canAcceptRequest: boolean; cgroupMemoryBytes: number | null; cpuLoadRatio: number | null; memoryLoadRatio: number | null } | null;
+  } | null;
 };
 
 export type MonitorSnapshot = {
@@ -177,4 +183,16 @@ export type MonitorSnapshotEnvelope = {
   source: "live" | "checkpoint";
   fetchedAt: string;
   monitorError: string | null;
+};
+
+export type MonitorCourtPipelineRange = {
+  generatedAt: string;
+  windowSec: number;
+  stepSec: number;
+  courts: Array<{
+    courtNumber: number;
+    rawBitrate: Array<[number, number]>;
+    previewFps: Array<[number, number]>;
+    programFps: Array<[number, number]>;
+  }>;
 };

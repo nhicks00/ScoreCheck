@@ -162,13 +162,14 @@ function buildCourt(
   const currentMatch = toMatch(first(court.matches));
   const score = toScore(scoreRow);
   const overlay = parseOverlay(overlayRow);
+  const effectiveExpectation = deriveObservedExpectation(expectation, score);
   const sourceAgeMs = timestampAge(score?.lastApiPollAt ?? null, nowMs);
   const issueCodes = scoreAlignmentIssueCodes({
     currentMatchId: court.current_match_id,
     currentMatch,
     score,
     overlay,
-    scoringExpectation: expectation.scoringExpectation,
+    scoringExpectation: effectiveExpectation.scoringExpectation,
     sourceAgeMs
   });
 
@@ -180,7 +181,7 @@ function buildCourt(
     displayName: clean(court.display_name) ?? `Court ${court.court_number}`,
     physicalCourtLabel: clean(court.vbl_court_label) ?? clean(court.vbl_court_number) ?? clean(court.display_name) ?? `Court ${court.court_number}`,
     courtStatus: clean(court.status) ?? "unknown",
-    expectation,
+    expectation: effectiveExpectation,
     currentMatch,
     nextMatch: toMatch(first(next?.matches)),
     score,
@@ -194,6 +195,18 @@ function buildCourt(
     },
     youtubeVideoId: clean(court.youtube_video_id)
   };
+}
+
+export function deriveObservedExpectation(expectation: CourtExpectation, score: CompetitionScoreSnapshot | null): CourtExpectation {
+  if (expectation.scoringExpectation !== "SCHEDULED" || !score) return expectation;
+  const status = score.status.toLowerCase().trim();
+  if (status.includes("final") || status === "complete" || status === "completed" || status.includes("match complete")) {
+    return { ...expectation, coveragePhase: "FINAL_HOLD", scoringExpectation: "FINAL_HOLD" };
+  }
+  if (status.includes("progress") || status.includes("live") || status.includes("set complete")) {
+    return { ...expectation, coveragePhase: "LIVE_MATCH", scoringExpectation: "LIVE" };
+  }
+  return expectation;
 }
 
 export function scoreAlignmentIssueCodes(input: {

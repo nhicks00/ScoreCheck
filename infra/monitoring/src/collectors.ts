@@ -33,14 +33,14 @@ export class AgentCollector {
       collectFfmpegProgress(this.config.ffmpegProgressDir, sampledAtMs)
     ]);
 
-    const [livekit, egressMetricsUp, egressHealthUp] = await Promise.all([
+    const [livekit, egress, egressHealthUp] = await Promise.all([
       collectLiveKit(this.config.livekitMetricsUrl, errors),
-      probeEndpoint(this.config.egressMetricsUrl, "EGRESS_METRICS_UNAVAILABLE", errors, true),
+      collectEgress(this.config.egressMetricsUrl, errors),
       probeEndpoint(this.config.egressHealthUrl, "EGRESS_METRICS_UNAVAILABLE", errors, false)
     ]);
     const endpoints = [
       this.config.livekitMetricsUrl ? { service: "livekit" as const, up: livekit !== null } : null,
-      egressMetricsUp == null ? null : { service: "egress-metrics" as const, up: egressMetricsUp },
+      this.config.egressMetricsUrl ? { service: "egress-metrics" as const, up: egress !== null } : null,
       egressHealthUp == null ? null : { service: "egress-health" as const, up: egressHealthUp }
     ].filter((value): value is NonNullable<typeof value> => value !== null);
 
@@ -53,6 +53,7 @@ export class AgentCollector {
       version: MONITORING_CONTRACT_VERSION,
       agentId: this.config.agentId,
       role: this.config.role,
+      assignedCourts: this.config.assignedCourts,
       generatedAt: new Date(sampledAtMs).toISOString(),
       collectionDurationMs: performance.now() - startedAt,
       collectionErrors: [...errors],
@@ -67,7 +68,7 @@ export class AgentCollector {
       services,
       mediaPaths: pathsWithErrors,
       ffmpegBranches,
-      nativeServices: { endpoints, livekit }
+      nativeServices: { endpoints, livekit, egress }
     });
   }
 
@@ -168,8 +169,37 @@ async function collectLiveKit(url: string | null, errors: Set<CollectionError>) 
   }
 }
 
+async function collectEgress(url: string | null, errors: Set<CollectionError>) {
+  if (!url) return null;
+  try {
+    const text = await fetchText(url);
+    const available = metricValue(text, "livekit_egress_available");
+    const canAccept = metricValue(text, "livekit_egress_can_accept_request");
+    if (available == null || canAccept == null) throw new Error("Required Egress capacity metrics are unavailable.");
+    return {
+      available: available > 0,
+      canAcceptRequest: canAccept > 0,
+      cgroupMemoryBytes: metricValue(text, "livekit_egress_cgroup_memory_bytes"),
+      cpuLoadRatio: metricValue(text, "livekit_load_ratio", { type: "cpu" }),
+      memoryLoadRatio: metricValue(text, "livekit_load_ratio", { type: "memory" })
+    };
+  } catch {
+    errors.add("EGRESS_METRICS_UNAVAILABLE");
+    return null;
+  }
+}
+
 export function metricSum(text: string, metricName: string, requiredLabels: Record<string, string> = {}): number {
-  let sum = 0;
+  return metricValues(text, metricName, requiredLabels).reduce((sum, value) => sum + value, 0);
+}
+
+export function metricValue(text: string, metricName: string, requiredLabels: Record<string, string> = {}): number | null {
+  const values = metricValues(text, metricName, requiredLabels);
+  return values.length > 0 ? values.reduce((sum, value) => sum + value, 0) : null;
+}
+
+function metricValues(text: string, metricName: string, requiredLabels: Record<string, string>): number[] {
+  const values: number[] = [];
   for (const line of text.split(/\r?\n/)) {
     if (!line.startsWith(`${metricName}{`) && !line.startsWith(`${metricName} `)) continue;
     const labelsEnd = line.indexOf("}");
@@ -177,9 +207,9 @@ export function metricSum(text: string, metricName: string, requiredLabels: Reco
     const labels = labelsEnd >= 0 ? line.slice(line.indexOf("{") + 1, labelsEnd) : "";
     if (Object.entries(requiredLabels).some(([key, value]) => parsePrometheusLabel(labels, key) !== value)) continue;
     const value = Number(valueText.split(/\s+/)[0]);
-    if (Number.isFinite(value) && value >= 0) sum += value;
+    if (Number.isFinite(value) && value >= 0) values.push(value);
   }
-  return sum;
+  return values;
 }
 
 async function fetchJson<T>(url: string): Promise<T> {

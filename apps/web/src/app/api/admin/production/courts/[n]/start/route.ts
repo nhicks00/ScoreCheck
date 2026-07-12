@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
+import { setCourtBroadcastMonitoringExpectation } from "@/lib/monitoringExpectations";
 import { isValidCourtNumber } from "@/lib/opsConsole";
 import { proxyControllerCourtAction } from "@/lib/productionStatus";
 
@@ -25,5 +26,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ n: 
   }
 
   const result = await proxyControllerCourtAction(courtNumber, "start");
+  if (result.status >= 200 && result.status < 300) {
+    try {
+      await setCourtBroadcastMonitoringExpectation(courtNumber, "start");
+    } catch {
+      result.body.monitoringWarning = "Broadcast started, but monitoring expectations could not be armed. Open System Monitor immediately.";
+    }
+  }
   return NextResponse.json(result.body, { status: result.status });
 }

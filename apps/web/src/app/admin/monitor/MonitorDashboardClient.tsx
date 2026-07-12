@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StreamPlayer } from "@/components/StreamPlayer";
-import type { MonitorCourt, MonitorHealthState, MonitorIncident, MonitorSnapshotEnvelope, MonitorStage } from "@/lib/monitoringTypes";
+import type { MonitorCourt, MonitorCourtPipelineRange, MonitorHealthState, MonitorIncident, MonitorSnapshotEnvelope, MonitorStage } from "@/lib/monitoringTypes";
 
 const POLL_INTERVAL_MS = 5_000;
 const STATE_RANK: Record<MonitorHealthState, number> = { CRITICAL: 9, UNKNOWN: 8, DEGRADED: 7, RECOVERING: 6, STARTING: 5, HEALTHY: 4, MAINTENANCE: 3, EXPECTED_OFF: 2, NOT_APPLICABLE: 1 };
@@ -37,6 +37,7 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
   const [ackBusy, setAckBusy] = useState<string | null>(null);
   const [ackError, setAckError] = useState<Record<string, string | undefined>>({});
   const [nowMs, setNowMs] = useState(Date.now());
+  const [history, setHistory] = useState<MonitorCourtPipelineRange | null>(null);
   const previousCriticalIds = useRef(new Set(initial?.snapshot.incidents.filter((incident) => incident.severity === "critical").map((incident) => incident.id) ?? []));
 
   useEffect(() => {
@@ -84,6 +85,24 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [configured, refresh]);
+
+  useEffect(() => {
+    if (!configured) return;
+    let cancelled = false;
+    async function refreshHistory() {
+      if (document.hidden) return;
+      try {
+        const response = await fetch("/api/admin/monitor/range/court-pipeline", { cache: "no-store" });
+        const payload = await response.json().catch(() => null) as MonitorCourtPipelineRange | null;
+        if (!cancelled && response.ok && payload?.courts) setHistory(payload);
+      } catch {
+        // Current health remains authoritative when optional trend history is unavailable.
+      }
+    }
+    void refreshHistory();
+    const timer = window.setInterval(() => void refreshHistory(), 30_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [configured]);
 
   function toggleSound() {
     const next = !soundEnabled;
@@ -170,7 +189,7 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
 
       <section className="monitor-court-matrix" aria-label="Court monitoring matrix">
         {snapshot.courts.map((court) => (
-          <CourtCard key={court.courtNumber} court={court} selected={court.courtNumber === selectedCourt} nowMs={nowMs} onSelect={() => { setSelectedCourt(court.courtNumber); setPreviewEnabled(true); }} />
+          <CourtCard key={court.courtNumber} court={court} history={history?.courts.find((entry) => entry.courtNumber === court.courtNumber) ?? null} selected={court.courtNumber === selectedCourt} nowMs={nowMs} onSelect={() => { setSelectedCourt(court.courtNumber); setPreviewEnabled(true); }} />
         ))}
       </section>
 
@@ -206,6 +225,7 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
               </div>
               <div className="monitor-service-list">
                 {agent.services.map((service) => <span key={service.name} className={service.running && service.healthy !== false && !service.oomKilled ? "is-ok" : "is-bad"}>{service.name} · {service.restartCount}r</span>)}
+                {agent.nativeServices?.egress && <span className={agent.nativeServices.egress.available ? "is-ok" : "is-bad"}>Egress {agent.nativeServices.egress.canAcceptRequest ? "ready" : "at capacity"} · CPU {formatPercentRatio(agent.nativeServices.egress.cpuLoadRatio)}</span>}
               </div>
             </article>
           ))}
@@ -239,7 +259,7 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
   );
 }
 
-function CourtCard({ court, selected, nowMs, onSelect }: { court: MonitorCourt; selected: boolean; nowMs: number; onSelect: () => void }) {
+function CourtCard({ court, history, selected, nowMs, onSelect }: { court: MonitorCourt; history: MonitorCourtPipelineRange["courts"][number] | null; selected: boolean; nowMs: number; onSelect: () => void }) {
   const browser = court.browser;
   const raw = court.paths.raw;
   const preview = court.ffmpeg.preview;
@@ -269,6 +289,10 @@ function CourtCard({ court, selected, nowMs, onSelect }: { court: MonitorCourt; 
         <Metric label="Res" value={browser?.video.width && browser.video.height ? `${browser.video.width}×${browser.video.height}` : "--"} />
         <Metric label="RTT" value={formatMs(browser?.video.rttMs)} />
         <Metric label="Loss" value={loss} />
+      </div>
+      <div className="monitor-trends" aria-label="Five minute trends">
+        <Sparkline values={history?.rawBitrate ?? []} label="Raw bitrate, five minutes" className="is-bitrate" />
+        <Sparkline values={history?.programFps.length ? history.programFps : history?.previewFps ?? []} label="Program frames per second, five minutes" className="is-fps" fixedMax={30} />
       </div>
       <div className="monitor-stage-grid">
         {court.stages.map((stage) => <StageRow key={stage.stage} stage={stage} />)}
@@ -302,6 +326,14 @@ function Metric({ label, value }: { label: string; value: string }) {
   return <div className="monitor-metric"><span>{label}</span><strong>{value}</strong></div>;
 }
 
+function Sparkline({ values, label, className, fixedMax }: { values: Array<[number, number]>; label: string; className: string; fixedMax?: number }) {
+  const usable = values.slice(-40).filter((point) => Number.isFinite(point[1]));
+  if (usable.length < 2) return <div className={`monitor-sparkline ${className} is-empty`} aria-label={`${label}: unavailable`} />;
+  const maximum = Math.max(fixedMax ?? 0, ...usable.map((point) => point[1]), 1);
+  const points = usable.map((point, index) => `${(index / (usable.length - 1) * 100).toFixed(2)},${(24 - Math.min(1, point[1] / maximum) * 22).toFixed(2)}`).join(" ");
+  return <svg className={`monitor-sparkline ${className}`} viewBox="0 0 100 26" preserveAspectRatio="none" role="img" aria-label={label}><polyline points={points} /></svg>;
+}
+
 function StateBadge({ state, compact = false }: { state: MonitorHealthState; compact?: boolean }) {
   const Icon = state === "CRITICAL" ? ShieldAlert : state === "DEGRADED" || state === "UNKNOWN" ? AlertTriangle : state === "EXPECTED_OFF" || state === "NOT_APPLICABLE" ? Radio : CheckCircle2;
   return <span className={`monitor-state-badge ${compact ? "is-compact" : ""}`} data-state={state}><Icon size={compact ? 13 : 15} />{friendlyState(state)}</span>;
@@ -330,7 +362,7 @@ function stageLabel(stage: MonitorStage["stage"]): string {
 }
 
 function compactStageLabel(stage: MonitorStage["stage"]): string {
-  return ({ RAW_INGEST: "Ingest", PREVIEW: "Pre", PROGRAM_PATH: "Prog", PROGRAM_BROWSER: "Render", COMMENTARY: "Comms", SCORE_SOURCE: "Score", SCORE_RENDER: "Bug", YOUTUBE: "YT" } as Record<string, string>)[stage] ?? stageLabel(stage);
+  return ({ RAW_INGEST: "Ingest", PREVIEW: "Pre", PROGRAM_PATH: "Prog", PROGRAM_BROWSER: "Render", COMMENTARY: "Comms", SCORE_SOURCE: "Score", SCORE_RENDER: "Bug", EGRESS: "Out", YOUTUBE: "YT" } as Record<string, string>)[stage] ?? stageLabel(stage);
 }
 
 function friendlyState(state: string): string {
@@ -352,6 +384,10 @@ function formatMs(value: number | null | undefined): string {
 
 function percent(value: number, total: number): string {
   return total > 0 ? `${(value / total * 100).toFixed(1)}%` : "0.0%";
+}
+
+function formatPercentRatio(value: number | null): string {
+  return value == null ? "--" : `${Math.round(value * 100)}%`;
 }
 
 function formatDuration(ms: number): string {

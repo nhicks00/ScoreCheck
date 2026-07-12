@@ -182,6 +182,30 @@ groups:
           summary: "Native endpoint {{ $labels.service }} is down on {{ $labels.agent }}."
           first_action: "Inspect the bounded service health and container state on the affected host."
 
+      - alert: ScoreCheckEgressWorkerUnavailable
+        expr: scorecheck_egress_available == 0
+        for: 20s
+        labels:
+          severity: critical
+          stage: EGRESS
+          issue_code: EGRESS_WORKER_UNAVAILABLE
+          root_dependency: "{{ $labels.agent }}"
+        annotations:
+          summary: "Egress worker {{ $labels.agent }} is unavailable."
+          first_action: "Inspect Egress health, Redis and LiveKit control connectivity, then check host capacity."
+
+      - alert: ScoreCheckEgressCapacityExhausted
+        expr: scorecheck_egress_can_accept_request == 0
+        for: 30s
+        labels:
+          severity: warning
+          stage: EGRESS
+          issue_code: EGRESS_CAPACITY_EXHAUSTED
+          root_dependency: "{{ $labels.agent }}"
+        annotations:
+          summary: "Egress worker {{ $labels.agent }} cannot admit another court."
+          first_action: "Inspect Egress CPU and memory admission load before starting another court on this host."
+
       - alert: ScoreCheckLiveKitPacketDrops
         expr: increase(scorecheck_livekit_packets_dropped[1m]) > 10
         for: 15s

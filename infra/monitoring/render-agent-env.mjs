@@ -14,6 +14,7 @@ const values = {
   MONITOR_AGENT_PORT: integer(process.env.MONITOR_AGENT_PORT ?? "9108", 1, 65_535),
   MONITOR_AGENT_INTERVAL_MS: integer(process.env.MONITOR_AGENT_INTERVAL_MS ?? "5000", 1_000, 300_000),
   MONITOR_AGENT_CONTAINERS: safeIdList(process.env.MONITOR_AGENT_CONTAINERS ?? ""),
+  MONITOR_AGENT_COURTS: courtList(process.env.MONITOR_AGENT_COURTS ?? ""),
   MONITOR_DISK_PATH: process.env.MONITOR_DISK_PATH?.trim() || "/",
   FFMPEG_PROGRESS_DIR: process.env.FFMPEG_PROGRESS_DIR?.trim() || "",
   DOCKER_API_URL: process.env.DOCKER_API_URL?.trim() || "http://127.0.0.1:2375",
@@ -48,6 +49,12 @@ function roleValue(value) {
 
 function safeIdList(value) {
   return value.split(",").map((entry) => entry.trim()).filter(Boolean).map(safeId).join(",");
+}
+
+function courtList(value) {
+  const courts = value.split(",").map((entry) => entry.trim()).filter(Boolean).map(Number);
+  if (courts.some((court) => !Number.isInteger(court) || court < 1 || court > 8)) throw new Error("MONITOR_AGENT_COURTS must contain court numbers 1-8.");
+  return [...new Set(courts)].sort((left, right) => left - right).join(",");
 }
 
 function optionalHttpUrl(name) {

@@ -26,6 +26,7 @@ export function buildMonitorSnapshot(
     return {
       agentId: target.id,
       role: target.role,
+      assignedCourts: runtime?.snapshot?.assignedCourts ?? [],
       state: agentState(runtime?.snapshot ?? null, ageMs),
       lastSeenAt: runtime?.lastSeenAt ?? null,
       ageMs,
@@ -46,8 +47,9 @@ export function buildMonitorSnapshot(
     const browser = browserHeartbeats.get(courtNumber) ?? null;
     const competition = controlPlane?.courts.find((court) => court.courtNumber === courtNumber) ?? null;
     const youtube = youtubeMonitor?.courts.find((court) => court.courtNumber === courtNumber) ?? null;
+    const egressAgent = agents.find((agent) => agent.role === "compositor" && agent.assignedCourts.includes(courtNumber)) ?? null;
     const expectation = competition?.expectation ?? OFF_EXPECTATION;
-    const stages = [
+    const observedStages = [
       pathStage("RAW_INGEST", "raw", byBranch.raw ?? null, nowMs, expectation),
       pathStage("PREVIEW", "preview", byBranch.preview ?? null, nowMs, expectation),
       pathStage("PROGRAM_PATH", "program", byBranch.program ?? null, nowMs, expectation),
@@ -55,8 +57,10 @@ export function buildMonitorSnapshot(
       commentaryStage(browser, nowMs, expectation),
       scoreSourceStage(competition, controlPlane, nowMs, expectation),
       scoreRenderStage(browser, nowMs, expectation),
+      egressStage(egressAgent, expectation),
       youtubeStage(youtube, youtubeMonitor, nowMs, expectation)
     ];
+    const stages = applyCourtIncidents(observedStages, incidents, courtNumber, egressAgent?.agentId ?? null, nowMs);
     return {
       courtNumber,
       overallState: worstHealthState(stages.map((stage) => stage.state)),
@@ -67,7 +71,8 @@ export function buildMonitorSnapshot(
       competition,
       expectation,
       youtube,
-      thumbnail: thumbnails.get(courtNumber) ?? null
+      thumbnail: thumbnails.get(courtNumber) ?? null,
+      egressHost: egressAgent?.agentId ?? null
     };
   });
 
@@ -101,6 +106,64 @@ export function buildMonitorSnapshot(
     agents,
     incidents
   };
+}
+
+function applyCourtIncidents(stages: StageHealth[], incidents: IncidentSnapshot[], courtNumber: number, egressHost: string | null, nowMs: number): StageHealth[] {
+  const active = incidents.filter((incident) => incident.status !== "resolved" && (
+    incident.courtNumber === courtNumber
+    || (incident.courtNumber == null && incident.stage === "EGRESS" && incident.rootDependency === egressHost)
+  ));
+  if (active.length === 0) return stages;
+  return stages.map((stageHealth) => {
+    const candidates = active.filter((incident) => incident.stage === stageHealth.stage);
+    if (candidates.length === 0) return stageHealth;
+    const incident = candidates.sort((left, right) => severityRank(right.severity) - severityRank(left.severity))[0];
+    if (!incident) return stageHealth;
+    const incidentState: HealthState = incident.severity === "critical" ? "CRITICAL" : incident.severity === "warning" ? "DEGRADED" : stageHealth.state;
+    if (worstHealthState([stageHealth.state, incidentState]) !== incidentState) return stageHealth;
+    return {
+      ...stageHealth,
+      state: incidentState,
+      severity: incident.severity,
+      issueCode: incident.issueCode,
+      summary: incident.summary,
+      firstAction: incident.firstAction,
+      observedAt: incident.lastObservedAt,
+      ageMs: age(incident.lastObservedAt, nowMs),
+      evidence: { ...stageHealth.evidence, incidentId: incident.id, rootDependency: incident.rootDependency }
+    };
+  });
+}
+
+function egressStage(agent: MonitorSnapshot["agents"][number] | null, expectation: CourtExpectation): StageHealth {
+  if (expectation.broadcastExpectation === "OFF") return expectedOffStage("EGRESS", "Egress output is not expected.");
+  if (!agent) {
+    return stage("EGRESS", "CRITICAL", "critical", "EGRESS_HOST_UNASSIGNED", "No compositor host is assigned to this court.", "Assign the court to an instrumented compositor before starting coverage.", null, null, {});
+  }
+  if (agent.state === "UNKNOWN") {
+    return stage("EGRESS", "CRITICAL", "critical", "EGRESS_HOST_UNREACHABLE", `Compositor ${agent.agentId} telemetry is unavailable.`, "Check the compositor host and its private monitoring agent.", agent.lastSeenAt, agent.ageMs, { host: agent.agentId });
+  }
+  const egress = agent.nativeServices?.egress;
+  const endpointDown = agent.nativeServices?.endpoints.some((endpoint) => endpoint.service.startsWith("egress-") && !endpoint.up) ?? false;
+  if (!egress || endpointDown || !egress.available) {
+    return stage("EGRESS", "CRITICAL", "critical", "EGRESS_WORKER_UNAVAILABLE", `Egress worker ${agent.agentId} is unavailable.`, "Inspect Egress health, Redis and LiveKit control connectivity on the assigned compositor.", agent.lastSeenAt, agent.ageMs, { host: agent.agentId, endpointDown, available: egress?.available ?? false });
+  }
+  const atCapacity = !egress.canAcceptRequest;
+  return stage(
+    "EGRESS",
+    atCapacity ? "DEGRADED" : "HEALTHY",
+    atCapacity ? "warning" : "info",
+    atCapacity ? "EGRESS_CAPACITY_EXHAUSTED" : null,
+    atCapacity ? `Egress worker ${agent.agentId} cannot admit another court.` : `Egress worker ${agent.agentId} is healthy and available.`,
+    atCapacity ? "Do not start another court on this host until capacity is restored." : null,
+    agent.lastSeenAt,
+    agent.ageMs,
+    { host: agent.agentId, canAcceptRequest: egress.canAcceptRequest, cpuLoadRatio: egress.cpuLoadRatio, memoryLoadRatio: egress.memoryLoadRatio, cgroupMemoryBytes: egress.cgroupMemoryBytes }
+  );
+}
+
+function severityRank(severity: IncidentSnapshot["severity"]): number {
+  return severity === "critical" ? 3 : severity === "warning" ? 2 : 1;
 }
 
 function youtubeStage(

@@ -52,4 +52,20 @@ describe("monitoring configuration", () => {
     });
     expect(agent.mediamtxApiUrl).toBe("http://127.0.0.1:9997");
   });
+
+  it("normalizes bounded compositor court assignments", () => {
+    const agent = loadAgentConfig({
+      MONITOR_AGENT_ID: "compositor-a",
+      MONITOR_AGENT_ROLE: "compositor",
+      MONITOR_AGENT_TOKEN: "abcdefghijklmnopqrstuvwxyz",
+      MONITOR_AGENT_COURTS: "2,1,2"
+    });
+    expect(agent.assignedCourts).toEqual([1, 2]);
+    expect(() => loadAgentConfig({
+      MONITOR_AGENT_ID: "compositor-a",
+      MONITOR_AGENT_ROLE: "compositor",
+      MONITOR_AGENT_TOKEN: "abcdefghijklmnopqrstuvwxyz",
+      MONITOR_AGENT_COURTS: "9"
+    })).toThrow();
+  });
 });

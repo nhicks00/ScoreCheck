@@ -94,6 +94,10 @@ Each host runs one `scorecheck-monitor-agent`. The agent:
 - Sends bounded lifecycle events to the correlator when configured.
 - Does not expose a shell, arbitrary proxy, arbitrary file read, arbitrary query, or mutation endpoint.
 
+Compositor agents also publish their bounded `assignedCourts` list. The current
+two-court topology is A=1–2, B=3–4, C=5–6, and D=7–8. This mapping is telemetry,
+not a dashboard convention, and replacement hosts must register it explicitly.
+
 ## Stable metric labels
 
 Allowed labels:
@@ -139,6 +143,11 @@ scorecheck_media_path_bytes_sent_total
 scorecheck_media_path_inbound_bitrate_bps
 scorecheck_media_path_frame_errors_total
 scorecheck_native_endpoint_up
+scorecheck_egress_available
+scorecheck_egress_can_accept_request
+scorecheck_egress_cgroup_memory_bytes
+scorecheck_egress_cpu_load_ratio
+scorecheck_egress_memory_load_ratio
 ```
 
 Counters remain cumulative. Prometheus recording rules derive rates.
@@ -175,7 +184,7 @@ Publicly reachable routes are limited to:
 GET  /healthz
 GET  /v1/snapshot
 GET  /v1/incidents/:id
-GET  /v1/range/:queryName
+GET  /v1/range/court-pipeline
 POST /v1/browser-heartbeats
 POST /v1/provider-callbacks/:provider
 POST /v1/incidents/:id/acknowledge
@@ -183,6 +192,8 @@ POST /v1/silences
 ```
 
 Range queries use allowlisted names, bounded time windows, and bounded resolution. Arbitrary PromQL is forbidden.
+The initial `court-pipeline` query returns only raw bitrate, preview FPS, and
+program FPS for courts 1–8, with a maximum of 240 samples per series.
 
 ## Browser heartbeat security
 
@@ -233,4 +244,3 @@ The gate passes when:
 - Agent snapshots contain no remote address, connection ID, token, or arbitrary error text.
 - The monitor service marks a missing agent `UNKNOWN`.
 - Monitoring processes can run with the browser closed.
-

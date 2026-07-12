@@ -4152,6 +4152,12 @@ body:has(.program-root) {
   color: var(--danger);
 }
 
+.production-feedback.is-warn {
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-line);
+  color: var(--warn);
+}
+
 /* -- YouTube key row ----------------------------------------------------------- */
 
 .production-key-row {
@@ -5034,6 +5040,34 @@ body:has(.program-root) {
   padding: 8px;
 }
 
+.monitor-trends {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 5px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  height: 27px;
+  padding: 3px 8px;
+}
+
+.monitor-sparkline {
+  background: rgba(255, 255, 255, 0.015);
+  height: 20px;
+  overflow: visible;
+  width: 100%;
+}
+
+.monitor-sparkline polyline {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.monitor-sparkline.is-bitrate polyline { stroke: #22d3ee; }
+.monitor-sparkline.is-fps polyline { stroke: #fbbf24; }
+.monitor-sparkline.is-empty { opacity: 0.25; }
+
 .monitor-stage-row {
   align-items: center;
   display: flex;
@@ -5331,7 +5365,7 @@ body:has(.program-root) {
     font-size: 10.5px;
   }
   .monitor-stage-grid {
-    grid-template-columns: repeat(8, minmax(0, 1fr));
+    grid-template-columns: repeat(9, minmax(0, 1fr));
   }
 }
 

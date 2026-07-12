@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { supabaseAdmin } from "./supabase";
-import type { MonitorSnapshot, MonitorSnapshotEnvelope } from "./monitoringTypes";
+import type { MonitorCourtPipelineRange, MonitorSnapshot, MonitorSnapshotEnvelope } from "./monitoringTypes";
 
 const envelopeSnapshotSchema = z.object({
   version: z.literal(1),
@@ -62,6 +62,20 @@ export async function loadMonitorThumbnail(courtNumber: number): Promise<{ body:
     contentType: response.headers.get("content-type") ?? "image/jpeg",
     sampledAt: response.headers.get("x-scorecheck-sampled-at")
   };
+}
+
+export async function loadMonitorCourtPipelineRange(windowSec = 300, stepSec = 15): Promise<MonitorCourtPipelineRange> {
+  const connection = requiredMonitorConnection();
+  const url = new URL("/v1/range/court-pipeline", `${connection.baseUrl}/`);
+  url.searchParams.set("windowSec", String(windowSec));
+  url.searchParams.set("stepSec", String(stepSec));
+  const response = await fetch(url, {
+    headers: { authorization: `Bearer ${connection.token}` },
+    cache: "no-store",
+    signal: AbortSignal.timeout(5_000)
+  });
+  if (!response.ok) throw new Error("Monitoring history fetch failed.");
+  return response.json() as Promise<MonitorCourtPipelineRange>;
 }
 
 async function loadLiveMonitorSnapshot(): Promise<MonitorSnapshot> {

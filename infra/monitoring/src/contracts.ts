@@ -102,7 +102,14 @@ export const nativeServiceSnapshotSchema = z.object({
     participantCount: z.number().int().nonnegative(),
     packetsOut: z.number().nonnegative(),
     packetsDropped: z.number().nonnegative()
-  }).strict().nullable()
+  }).strict().nullable(),
+  egress: z.object({
+    available: z.boolean(),
+    canAcceptRequest: z.boolean(),
+    cgroupMemoryBytes: z.number().nonnegative().nullable(),
+    cpuLoadRatio: z.number().nonnegative().nullable(),
+    memoryLoadRatio: z.number().nonnegative().nullable()
+  }).strict().nullable().default(null)
 }).strict();
 export type NativeServiceSnapshot = z.infer<typeof nativeServiceSnapshotSchema>;
 
@@ -284,6 +291,7 @@ export const agentSnapshotSchema = z.object({
   version: z.literal(MONITORING_CONTRACT_VERSION),
   agentId: boundedId,
   role: z.enum(AGENT_ROLES),
+  assignedCourts: z.array(z.number().int().min(1).max(8)).max(8).default([]),
   generatedAt: isoDate,
   collectionDurationMs: z.number().nonnegative(),
   collectionErrors: z.array(z.enum([
@@ -305,7 +313,7 @@ export const agentSnapshotSchema = z.object({
   services: z.array(serviceSnapshotSchema).max(40),
   mediaPaths: z.array(mediaPathSnapshotSchema).max(48),
   ffmpegBranches: z.array(ffmpegBranchSnapshotSchema).max(24).default([]),
-  nativeServices: nativeServiceSnapshotSchema.default({ endpoints: [], livekit: null })
+  nativeServices: nativeServiceSnapshotSchema.default({ endpoints: [], livekit: null, egress: null })
 }).strict();
 export type AgentSnapshot = z.infer<typeof agentSnapshotSchema>;
 
@@ -333,6 +341,7 @@ export type CourtMonitorSnapshot = {
   expectation: CourtExpectation;
   youtube: YouTubeCourtSnapshot | null;
   thumbnail: BrowserThumbnailMetadata | null;
+  egressHost: string | null;
 };
 
 export type IncidentSnapshot = {
@@ -376,6 +385,7 @@ export type MonitorSnapshot = {
   agents: Array<{
     agentId: string;
     role: AgentRole;
+    assignedCourts: number[];
     state: HealthState;
     lastSeenAt: string | null;
     ageMs: number | null;

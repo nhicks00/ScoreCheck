@@ -15,6 +15,9 @@
 #   --ssh-key KEY    ssh key fingerprint or numeric id already registered in the
 #                    DO account (recommended; without it DO emails a root password)
 #   --name NAME      droplet name (default: bvm-compositor-01)
+#   --courts LIST    assigned courts, e.g. 1,2 (required with monitoring registration)
+#   --register-monitoring  deploy/register the read-only agent after cloud-init
+#   --observability-private-ip IP  private monitor IP (required with registration)
 #   --dry-run        print the create-request JSON and exit — no API calls,
 #                    no token required
 #   -h, --help       this help
@@ -41,8 +44,11 @@ REGION="sfo2"
 NAME="bvm-compositor-01"
 SSH_KEY=""
 DRY_RUN=0
+COURTS=""
+REGISTER_MONITORING=0
+OBSERVABILITY_PRIVATE_IP=""
 
-usage() { sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -51,11 +57,20 @@ while [[ $# -gt 0 ]]; do
     --region)  REGION="$2"; shift 2 ;;
     --ssh-key) SSH_KEY="$2"; shift 2 ;;
     --name)    NAME="$2"; shift 2 ;;
+    --courts)  COURTS="$2"; shift 2 ;;
+    --register-monitoring) REGISTER_MONITORING=1; shift ;;
+    --observability-private-ip) OBSERVABILITY_PRIVATE_IP="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "error: unknown option '$1' (see --help)" >&2; exit 1 ;;
   esac
 done
+
+if [[ "$REGISTER_MONITORING" -eq 1 ]]; then
+  [[ -n "$SSH_KEY" ]] || { echo "error: --ssh-key is required with --register-monitoring" >&2; exit 1; }
+  [[ "$COURTS" =~ ^[1-8](,[1-8])*$ ]] || { echo "error: --courts must be supplied with --register-monitoring" >&2; exit 1; }
+  [[ -n "$OBSERVABILITY_PRIVATE_IP" ]] || { echo "error: --observability-private-ip is required with --register-monitoring" >&2; exit 1; }
+fi
 
 command -v jq >/dev/null 2>&1 || { echo "error: jq is required (brew install jq / apt install jq)" >&2; exit 1; }
 [[ -f "$SCRIPT_DIR/cloud-init.yaml" ]] || { echo "error: cloud-init.yaml not found next to this script" >&2; exit 1; }
@@ -128,8 +143,21 @@ if [[ "$STATUS" != "active" ]]; then
 fi
 
 IP="$(jq -r '[.droplet.networks.v4[] | select(.type == "public")][0].ip_address // empty' <<<"$STATUS_RESP")"
+PRIVATE_IP="$(jq -r '[.droplet.networks.v4[] | select(.type == "private")][0].ip_address // empty' <<<"$STATUS_RESP")"
 echo
-echo "droplet active: $NAME  id=$DROPLET_ID  ip=${IP:-<no public v4?>}"
+echo "droplet active: $NAME  id=$DROPLET_ID  public=${IP:-<none>} private=${PRIVATE_IP:-<none>}"
+
+if [[ "$REGISTER_MONITORING" -eq 1 ]]; then
+  [[ -n "$IP" && -n "$PRIVATE_IP" ]] || { echo "error: droplet addresses unavailable for monitoring registration" >&2; exit 1; }
+  ssh -i "$SSH_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new "root@$IP" cloud-init status --wait
+  "$SCRIPT_DIR/register-monitoring.sh" \
+    --name "$NAME" \
+    --ssh-host "root@$IP" \
+    --private-ip "$PRIVATE_IP" \
+    --courts "$COURTS" \
+    --observability-private-ip "$OBSERVABILITY_PRIVATE_IP" \
+    --refresh
+fi
 cat <<NEXT
 
 Next steps (cloud-init keeps installing docker for ~2-4 min after 'active';
