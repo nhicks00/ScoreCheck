@@ -2,6 +2,25 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { IncidentSnapshot, MonitorSnapshot } from "./contracts.js";
 import type { IncidentChange } from "./incidents.js";
 
+export type NotificationProvider = "pushover" | "twilio_sms";
+export type NotificationKind = "open" | "recovery" | "escalation" | "test";
+export type NotificationStatus = "pending" | "accepted" | "delivered" | "failed" | "acknowledged" | "expired" | "cancelled";
+export type StoredNotification = {
+  id: string;
+  incidentId: string;
+  provider: NotificationProvider;
+  kind: NotificationKind;
+  providerMessageId: string | null;
+  status: NotificationStatus;
+  submittedAt: string;
+  acceptedAt: string | null;
+  deliveredAt: string | null;
+  acknowledgedAt: string | null;
+  expiredAt: string | null;
+  escalatedAt: string | null;
+  providerErrorCode: string | null;
+};
+
 type IncidentRow = {
   id: string;
   fingerprint: string;
@@ -71,7 +90,7 @@ export class IncidentStore {
       incident_id: incident.id,
       event_type: change.eventType,
       actor: change.eventType === "ACKNOWLEDGED" ? incident.acknowledgedBy : "monitor-service",
-      detail: { severity: incident.severity, status: incident.status },
+      detail: { severity: incident.severity, status: incident.status, ...(change.detail ?? {}) },
       occurred_at: incident.lastObservedAt
     });
     if (eventError) throw eventError;
@@ -88,6 +107,126 @@ export class IncidentStore {
     }, { onConflict: "scope" });
     if (error) throw error;
   }
+
+  async ensureNotification(
+    incidentId: string,
+    provider: NotificationProvider,
+    kind: NotificationKind,
+    now = new Date()
+  ): Promise<{ notification: StoredNotification; created: boolean }> {
+    const existing = await this.notificationByKey(incidentId, provider, kind);
+    if (existing) return { notification: existing, created: false };
+    const { data, error } = await this.db.from("incident_notifications").insert({
+      incident_id: incidentId,
+      provider,
+      notification_kind: kind,
+      status: "pending",
+      submitted_at: now.toISOString(),
+      updated_at: now.toISOString()
+    }).select(NOTIFICATION_COLUMNS).single();
+    if (!error && data) return { notification: notificationFromRow(data), created: true };
+    if (error?.code === "23505") {
+      const raced = await this.notificationByKey(incidentId, provider, kind);
+      if (raced) return { notification: raced, created: false };
+    }
+    throw error ?? new Error("Notification claim failed.");
+  }
+
+  async updateNotification(id: string, patch: Partial<{
+    providerMessageId: string | null;
+    status: NotificationStatus;
+    acceptedAt: string | null;
+    deliveredAt: string | null;
+    acknowledgedAt: string | null;
+    expiredAt: string | null;
+    escalatedAt: string | null;
+    providerErrorCode: string | null;
+  }>): Promise<StoredNotification> {
+    const now = new Date().toISOString();
+    const row: Record<string, unknown> = { updated_at: now };
+    if ("providerMessageId" in patch) row.provider_message_id = patch.providerMessageId;
+    if ("status" in patch) row.status = patch.status;
+    if ("acceptedAt" in patch) row.accepted_at = patch.acceptedAt;
+    if ("deliveredAt" in patch) row.delivered_at = patch.deliveredAt;
+    if ("acknowledgedAt" in patch) row.acknowledged_at = patch.acknowledgedAt;
+    if ("expiredAt" in patch) row.expired_at = patch.expiredAt;
+    if ("escalatedAt" in patch) row.escalated_at = patch.escalatedAt;
+    if ("providerErrorCode" in patch) row.provider_error_code = patch.providerErrorCode;
+    const { data, error } = await this.db.from("incident_notifications").update(row).eq("id", id).select(NOTIFICATION_COLUMNS).single();
+    if (error) throw error;
+    return notificationFromRow(data);
+  }
+
+  async notificationByProviderId(provider: NotificationProvider, providerMessageId: string): Promise<StoredNotification | null> {
+    const { data, error } = await this.db.from("incident_notifications")
+      .select(NOTIFICATION_COLUMNS)
+      .eq("provider", provider)
+      .eq("provider_message_id", providerMessageId)
+      .maybeSingle();
+    if (error) throw error;
+    return data ? notificationFromRow(data) : null;
+  }
+
+  async latestProviderNotifications(): Promise<StoredNotification[]> {
+    const { data, error } = await this.db.from("incident_notifications")
+      .select(NOTIFICATION_COLUMNS)
+      .in("provider", ["pushover", "twilio_sms"])
+      .order("updated_at", { ascending: false })
+      .limit(100);
+    if (error) throw error;
+    const latest = new Map<NotificationProvider, StoredNotification>();
+    for (const row of data ?? []) {
+      const notification = notificationFromRow(row);
+      if (!latest.has(notification.provider)) latest.set(notification.provider, notification);
+    }
+    return [...latest.values()];
+  }
+
+  async findNotification(incidentId: string, provider: NotificationProvider, kind: NotificationKind): Promise<StoredNotification | null> {
+    return this.notificationByKey(incidentId, provider, kind);
+  }
+
+  async appendIncidentEvent(incidentId: string, eventType: "ESCALATED", detail: Record<string, unknown>): Promise<void> {
+    const { error } = await this.db.from("monitoring_incident_events").insert({
+      incident_id: incidentId,
+      event_type: eventType,
+      actor: "monitor-service",
+      detail,
+      occurred_at: new Date().toISOString()
+    });
+    if (error) throw error;
+  }
+
+  private async notificationByKey(incidentId: string, provider: NotificationProvider, kind: NotificationKind): Promise<StoredNotification | null> {
+    const { data, error } = await this.db.from("incident_notifications")
+      .select(NOTIFICATION_COLUMNS)
+      .eq("incident_id", incidentId)
+      .eq("provider", provider)
+      .eq("notification_kind", kind)
+      .maybeSingle();
+    if (error) throw error;
+    return data ? notificationFromRow(data) : null;
+  }
+}
+
+const NOTIFICATION_COLUMNS = "id,incident_id,provider,notification_kind,provider_message_id,status,submitted_at,accepted_at,delivered_at,acknowledged_at,expired_at,escalated_at,provider_error_code";
+
+function notificationFromRow(row: Record<string, unknown>): StoredNotification {
+  return {
+    id: String(row.id),
+    incidentId: String(row.incident_id),
+    provider: row.provider as NotificationProvider,
+    kind: row.notification_kind as NotificationKind,
+    providerMessageId: typeof row.provider_message_id === "string" ? row.provider_message_id : null,
+    status: row.status as NotificationStatus,
+    submittedAt: String(row.submitted_at),
+    acceptedAt: typeof row.accepted_at === "string" ? row.accepted_at : null,
+    deliveredAt: typeof row.delivered_at === "string" ? row.delivered_at : null,
+    acknowledgedAt: typeof row.acknowledged_at === "string" ? row.acknowledged_at : null,
+    expiredAt: typeof row.expired_at === "string" ? row.expired_at : null,
+    escalatedAt: typeof row.escalated_at === "string" ? row.escalated_at : null,
+    providerErrorCode: typeof row.provider_error_code === "string" ? row.provider_error_code : null
+  };
 }
 
 function fromRow(row: IncidentRow): IncidentSnapshot {

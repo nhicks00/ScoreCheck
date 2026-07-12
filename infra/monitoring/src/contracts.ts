@@ -264,6 +264,12 @@ export type YouTubeMonitorSnapshot = {
   courts: YouTubeCourtSnapshot[];
 };
 
+export type NotificationHealth = {
+  state: "NOT_APPLICABLE" | "UNKNOWN" | "HEALTHY" | "DEGRADED";
+  pushover: { configured: boolean; lastSuccessAt: string | null; lastFailureAt: string | null };
+  twilioSms: { configured: boolean; lastSuccessAt: string | null; lastFailureAt: string | null };
+};
+
 export const agentSnapshotSchema = z.object({
   version: z.literal(MONITORING_CONTRACT_VERSION),
   agentId: boundedId,
@@ -353,6 +359,7 @@ export type MonitorSnapshot = {
   };
   event: ControlPlaneSnapshot["event"];
   youtube: { state: HealthState; observedAt: string | null; ageMs: number | null };
+  notifications: NotificationHealth;
   courts: CourtMonitorSnapshot[];
   agents: Array<{
     agentId: string;

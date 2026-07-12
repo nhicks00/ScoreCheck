@@ -31,11 +31,14 @@ describe("monitoring configuration", () => {
       MONITOR_API_TOKEN: "abcdefghijklmnopqrstuvwxyz",
       ALERTMANAGER_WEBHOOK_TOKEN: "zyxwvutsrqponmlkjihgfedcba",
       MONITOR_BROWSER_HEARTBEAT_SECRET: "browser-heartbeat-secret-that-is-long-enough",
-      HEALTHCHECKS_PING_URL: "",
+      MONITOR_PUBLIC_HOST: "monitor.example.test",
+      HEALTHCHECKS_BASELINE_PING_URL: "",
+      HEALTHCHECKS_ACTIVE_PING_URL: "",
       SUPABASE_URL: "",
       SUPABASE_SERVICE_ROLE_KEY: ""
     });
-    expect(service.healthchecksPingUrl).toBeNull();
+    expect(service.healthchecksBaselinePingUrl).toBeNull();
+    expect(service.healthchecksActivePingUrl).toBeNull();
     expect(service.supabaseUrl).toBeNull();
     expect(service.browserAllowedOrigins).toEqual(["https://score.beachvolleyballmedia.com"]);
   });

@@ -241,3 +241,15 @@ groups:
         annotations:
           summary: "YouTube reports a warning-level ingestion issue on court {{ $labels.court }}."
           first_action: "Inspect the bounded YouTube configuration issue codes and compare source and egress health."
+
+      - alert: ScoreCheckNotificationProviderFailed
+        expr: scorecheck_notification_provider_healthy == 0
+        for: 30s
+        labels:
+          severity: critical
+          stage: NOTIFICATION
+          issue_code: NOTIFICATION_PROVIDER_FAILED
+          root_dependency: "{{ $labels.provider }}"
+        annotations:
+          summary: "Notification provider {{ $labels.provider }} has failed recent delivery or receipt checks."
+          first_action: "Check provider status and credentials; verify the alternate paging path and external dead-man notification."

@@ -50,4 +50,14 @@ describe("incident manager", () => {
     manager.reconcileActiveAlerts([alert], new Date("2026-07-12T12:00:00Z"));
     expect(manager.reconcileActiveAlerts([alert], new Date("2026-07-12T12:00:30Z"))).toEqual([]);
   });
+
+  it("records a sanitized acknowledgement reason", () => {
+    const manager = new IncidentManager();
+    const [opened] = manager.applyWebhook({
+      status: "firing",
+      alerts: [{ status: "firing", labels: { alertname: "AgentMissing", stage: "MONITORING" }, annotations: {} }]
+    }, new Date("2026-07-12T12:00:00Z"));
+    const change = manager.acknowledge(opened!.incident.id, "operator", "Investigating https://example.test/path?secret=value", new Date("2026-07-12T12:01:00Z"));
+    expect(change?.detail?.reason).toBe("Investigating https://example.test/path");
+  });
 });

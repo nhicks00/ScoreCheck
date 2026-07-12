@@ -10,6 +10,7 @@ import { bearerAuth } from "./security.js";
 import { BrowserHeartbeatManager } from "./browserHeartbeats.js";
 import { ControlPlaneCollector } from "./controlPlane.js";
 import { YouTubeCollector } from "./youtube.js";
+import { NotificationDispatcher } from "./notifications.js";
 
 const config = loadServiceConfig();
 const app = express();
@@ -34,6 +35,7 @@ const scoreSourceAligned = new Gauge({ name: "scorecheck_score_source_aligned", 
 const youtubeApiUp = new Gauge({ name: "scorecheck_youtube_api_up", help: "YouTube provider API state: 1 healthy, 0 unavailable, -1 not applicable.", registers: [registry] });
 const youtubeHealthy = new Gauge({ name: "scorecheck_youtube_healthy", help: "YouTube stream health: 1 healthy, 0 unhealthy, -1 unknown or not applicable.", labelNames: ["court"], registers: [registry] });
 const youtubeDegraded = new Gauge({ name: "scorecheck_youtube_degraded", help: "Whether YouTube reports a warning-level stream or configuration issue.", labelNames: ["court"], registers: [registry] });
+const notificationProviderHealthy = new Gauge({ name: "scorecheck_notification_provider_healthy", help: "Notification provider state: 1 healthy, 0 failed, -1 not configured.", labelNames: ["provider"], registers: [registry] });
 const runtimes = new Map<string, AgentRuntime>(config.targets.map((target) => [target.id, {
   target,
   snapshot: null,
@@ -52,11 +54,13 @@ const youtubeCollector = new YouTubeCollector({
 });
 let youtubeRefreshRunning = false;
 const incidentStore = IncidentStore.create(config.supabaseUrl, config.supabaseServiceRoleKey);
+const notificationDispatcher = new NotificationDispatcher(config, incidentStore);
 if (incidentStore) {
   try {
     incidents.hydrate(await incidentStore.loadActive());
+    notificationDispatcher.hydrate(await incidentStore.latestProviderNotifications());
   } catch {
-    console.error("durable incident state could not be loaded");
+    console.error("durable monitoring state could not be loaded");
   }
 }
 let snapshot: MonitorSnapshot = currentSnapshot();
@@ -118,7 +122,7 @@ app.post("/v1/incidents/:id/acknowledge", bearerAuth(config.token), async (req, 
     res.status(400).json({ error: "Invalid acknowledgement." });
     return;
   }
-  const change = incidents.acknowledge(incidentId.data, parsed.data.actor);
+  const change = incidents.acknowledge(incidentId.data, parsed.data.actor, parsed.data.reason);
   if (!change) {
     res.status(404).json({ error: "Active incident not found." });
     return;
@@ -126,6 +130,16 @@ app.post("/v1/incidents/:id/acknowledge", bearerAuth(config.token), async (req, 
   snapshot = currentSnapshot();
   await persistIncidentChanges([change]);
   res.json({ incident: change.incident, reason: parsed.data.reason });
+});
+app.post("/v1/provider/twilio/status", express.urlencoded({ extended: false, limit: "16kb" }), async (req, res) => {
+  const params = Object.fromEntries(Object.entries(req.body as Record<string, unknown>)
+    .filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+  try {
+    const accepted = await notificationDispatcher.applyTwilioStatus(params, String(req.headers["x-twilio-signature"] ?? ""));
+    res.sendStatus(accepted ? 204 : 403);
+  } catch {
+    res.sendStatus(503);
+  }
 });
 
 async function pollAll() {
@@ -156,6 +170,9 @@ async function pollAll() {
   youtubeDegraded.reset();
   controlPlaneFresh.set(snapshot.controlPlane.state === "HEALTHY" ? 1 : 0);
   youtubeApiUp.set(snapshot.youtube.state === "NOT_APPLICABLE" ? -1 : snapshot.youtube.state === "HEALTHY" ? 1 : 0);
+  const notificationHealth = snapshot.notifications;
+  notificationProviderHealthy.set({ provider: "pushover" }, providerMetric(notificationHealth.pushover));
+  notificationProviderHealthy.set({ provider: "twilio_sms" }, providerMetric(notificationHealth.twilioSms));
   for (const court of snapshot.courts) {
     const labels = { court: String(court.courtNumber) };
     const browser = court.browser;
@@ -193,7 +210,8 @@ function currentSnapshot(): MonitorSnapshot {
     incidents.active(),
     browserHeartbeats.latest(),
     controlPlane.current(),
-    youtubeCollector.current()
+    youtubeCollector.current(),
+    notificationDispatcher.health()
   );
 }
 
@@ -232,6 +250,12 @@ function setOptionalGauge(gauge: Gauge, labels: { court: string }, value: number
   if (value != null && Number.isFinite(value)) gauge.set(labels, value);
 }
 
+function providerMetric(provider: { configured: boolean; lastSuccessAt: string | null; lastFailureAt: string | null }): number {
+  if (!provider.configured) return -1;
+  if (provider.lastFailureAt) return 0;
+  return provider.lastSuccessAt ? 1 : -1;
+}
+
 async function pollAgent(target: AgentTarget) {
   const runtime = runtimes.get(target.id);
   if (!runtime) return;
@@ -250,12 +274,33 @@ async function pollAgent(target: AgentTarget) {
   }
 }
 
-async function pingDeadMan() {
-  if (!config.healthchecksPingUrl) return;
+async function pingDeadMan(url: string | null, name: "baseline" | "active") {
+  if (!url) return;
   try {
-    await fetch(config.healthchecksPingUrl, { method: "POST", signal: AbortSignal.timeout(5_000) });
+    const response = await fetch(url, { method: "POST", signal: AbortSignal.timeout(5_000) });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
   } catch {
-    console.error("external dead-man ping failed");
+    console.error(`external ${name} dead-man ping failed`);
+  }
+}
+
+function activeCoverageExpected(): boolean {
+  return snapshot.courts.some((court) => court.expectation.coveragePhase !== "OFF"
+    || court.expectation.mediaExpectation !== "OFF"
+    || court.expectation.broadcastExpectation !== "OFF");
+}
+
+async function maintainNotifications() {
+  try {
+    const acknowledgements = await notificationDispatcher.maintain(incidents.active());
+    for (const acknowledgement of acknowledgements) {
+      const change = incidents.acknowledge(acknowledgement.incidentId, acknowledgement.actor, acknowledgement.reason);
+      if (!change) continue;
+      snapshot = currentSnapshot();
+      await persistIncidentChanges([change]);
+    }
+  } catch {
+    console.error("notification maintenance failed");
   }
 }
 
@@ -279,6 +324,7 @@ async function persistIncidentChanges(changes: ReturnType<IncidentManager["apply
   try {
     for (const change of changes) await incidentStore.persist(change);
     await incidentStore.checkpoint(snapshot);
+    await notificationDispatcher.handleChanges(changes);
   } catch {
     console.error("durable incident state could not be persisted");
   }
@@ -299,10 +345,16 @@ const pollTimer = setInterval(() => void pollAll(), config.intervalMs);
 pollTimer.unref();
 const youtubeTimer = setInterval(() => void refreshYouTube(), 5_000);
 youtubeTimer.unref();
-if (config.healthchecksPingUrl) {
-  void pingDeadMan();
-  const deadManTimer = setInterval(() => void pingDeadMan(), config.healthchecksIntervalMs);
-  deadManTimer.unref();
+if (config.healthchecksBaselinePingUrl) {
+  void pingDeadMan(config.healthchecksBaselinePingUrl, "baseline");
+  const baselineDeadManTimer = setInterval(() => void pingDeadMan(config.healthchecksBaselinePingUrl, "baseline"), config.healthchecksBaselineIntervalMs);
+  baselineDeadManTimer.unref();
+}
+if (config.healthchecksActivePingUrl) {
+  const pingActive = () => activeCoverageExpected() ? void pingDeadMan(config.healthchecksActivePingUrl, "active") : undefined;
+  pingActive();
+  const activeDeadManTimer = setInterval(pingActive, config.healthchecksActiveIntervalMs);
+  activeDeadManTimer.unref();
 }
 if (incidentStore) {
   void checkpoint();
@@ -312,6 +364,9 @@ if (incidentStore) {
 void reconcileAlertmanager();
 const alertmanagerReconcileTimer = setInterval(() => void reconcileAlertmanager(), 30_000);
 alertmanagerReconcileTimer.unref();
+void maintainNotifications();
+const notificationTimer = setInterval(() => void maintainNotifications(), 15_000);
+notificationTimer.unref();
 
 app.listen(config.port, config.bind, () => {
   console.log(`scorecheck-monitor-service listening on ${config.bind}:${config.port}`);

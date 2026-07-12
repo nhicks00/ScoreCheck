@@ -1,4 +1,4 @@
-import { MONITORING_CONTRACT_VERSION, worstHealthState, type AgentSnapshot, type BrowserHeartbeatSnapshot, type ControlPlaneSnapshot, type CourtExpectation, type HealthState, type IncidentSnapshot, type MediaPathSnapshot, type MonitorSnapshot, type MonitoringStage, type StageHealth, type YouTubeMonitorSnapshot } from "./contracts.js";
+import { MONITORING_CONTRACT_VERSION, worstHealthState, type AgentSnapshot, type BrowserHeartbeatSnapshot, type ControlPlaneSnapshot, type CourtExpectation, type HealthState, type IncidentSnapshot, type MediaPathSnapshot, type MonitorSnapshot, type MonitoringStage, type NotificationHealth, type StageHealth, type YouTubeMonitorSnapshot } from "./contracts.js";
 import type { AgentTarget } from "./config.js";
 
 export type AgentRuntime = {
@@ -16,7 +16,8 @@ export function buildMonitorSnapshot(
   incidents: IncidentSnapshot[] = [],
   browserHeartbeats = new Map<number, BrowserHeartbeatSnapshot>(),
   controlPlane: ControlPlaneSnapshot | null = null,
-  youtubeMonitor: YouTubeMonitorSnapshot | null = null
+  youtubeMonitor: YouTubeMonitorSnapshot | null = null,
+  notifications: NotificationHealth = OFF_NOTIFICATION_HEALTH
 ): MonitorSnapshot {
   const agents = targets.map((target) => {
     const runtime = runtimes.get(target.id);
@@ -86,6 +87,7 @@ export function buildMonitorSnapshot(
     },
     event: controlPlane?.event ?? null,
     youtube: { state: youtubeState, observedAt: youtubeMonitor?.observedAt ?? null, ageMs: youtubeAgeMs },
+    notifications,
     courts,
     agents,
     incidents
@@ -373,6 +375,12 @@ const OFF_EXPECTATION: CourtExpectation = {
   commentaryExpectation: "NONE",
   scoringExpectation: "NONE",
   overrideExpiresAt: null
+};
+
+const OFF_NOTIFICATION_HEALTH: NotificationHealth = {
+  state: "NOT_APPLICABLE",
+  pushover: { configured: false, lastSuccessAt: null, lastFailureAt: null },
+  twilioSms: { configured: false, lastSuccessAt: null, lastFailureAt: null }
 };
 
 

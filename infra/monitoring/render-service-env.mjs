@@ -12,7 +12,8 @@ const requiredNames = [
   "MONITOR_PUBLIC_HOST"
 ];
 const optionalNames = [
-  "HEALTHCHECKS_PING_URL",
+  "HEALTHCHECKS_BASELINE_PING_URL",
+  "HEALTHCHECKS_ACTIVE_PING_URL",
   "SUPABASE_URL",
   "SUPABASE_SERVICE_ROLE_KEY",
   "PUSHOVER_APP_TOKEN",
@@ -34,7 +35,11 @@ values.MONITOR_SERVICE_INTERVAL_MS = process.env.MONITOR_SERVICE_INTERVAL_MS?.tr
 values.ALERTMANAGER_INTERNAL_URL = process.env.ALERTMANAGER_INTERNAL_URL?.trim() || "http://alertmanager:9093";
 values.MONITOR_COURT_COUNT = process.env.MONITOR_COURT_COUNT?.trim() || "8";
 values.MONITOR_BROWSER_ALLOWED_ORIGINS = process.env.MONITOR_BROWSER_ALLOWED_ORIGINS?.trim() || "https://score.beachvolleyballmedia.com";
-values.HEALTHCHECKS_INTERVAL_MS = process.env.HEALTHCHECKS_INTERVAL_MS?.trim() || "60000";
+values.MONITOR_DASHBOARD_URL = process.env.MONITOR_DASHBOARD_URL?.trim() || "https://score.beachvolleyballmedia.com/admin/monitor";
+values.HEALTHCHECKS_BASELINE_INTERVAL_MS = process.env.HEALTHCHECKS_BASELINE_INTERVAL_MS?.trim() || "600000";
+values.HEALTHCHECKS_ACTIVE_INTERVAL_MS = process.env.HEALTHCHECKS_ACTIVE_INTERVAL_MS?.trim() || "60000";
+values.NOTIFICATION_SMS_ESCALATION_MS = process.env.NOTIFICATION_SMS_ESCALATION_MS?.trim() || "120000";
+values.NOTIFICATION_STATUS_INTERVAL_MS = process.env.NOTIFICATION_STATUS_INTERVAL_MS?.trim() || "30000";
 values.YOUTUBE_MONITOR_INTERVAL_MS = process.env.YOUTUBE_MONITOR_INTERVAL_MS?.trim() || "60000";
 
 await mkdir(outputDirectory, { recursive: true });

@@ -64,10 +64,22 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     MONITOR_SERVICE_PORT: port.default(9110),
     MONITOR_SERVICE_INTERVAL_MS: interval.default(5_000),
     MONITOR_COURT_COUNT: z.coerce.number().int().min(1).max(8).default(8),
-    HEALTHCHECKS_PING_URL: optionalHttpsUrl,
-    HEALTHCHECKS_INTERVAL_MS: interval.default(60_000),
+    HEALTHCHECKS_BASELINE_PING_URL: optionalHttpsUrl,
+    HEALTHCHECKS_ACTIVE_PING_URL: optionalHttpsUrl,
+    HEALTHCHECKS_BASELINE_INTERVAL_MS: z.coerce.number().int().min(60_000).max(3_600_000).default(600_000),
+    HEALTHCHECKS_ACTIVE_INTERVAL_MS: interval.default(60_000),
     SUPABASE_URL: optionalHttpsUrl,
     SUPABASE_SERVICE_ROLE_KEY: z.preprocess(emptyStringToUndefined, z.string().min(20).optional()),
+    MONITOR_PUBLIC_HOST: z.string().trim().min(1).max(253).regex(/^[a-zA-Z0-9.-]+$/),
+    MONITOR_DASHBOARD_URL: optionalHttpsUrl,
+    PUSHOVER_APP_TOKEN: z.string().default(""),
+    PUSHOVER_USER_KEY: z.string().default(""),
+    TWILIO_ACCOUNT_SID: z.string().default(""),
+    TWILIO_AUTH_TOKEN: z.string().default(""),
+    TWILIO_FROM_NUMBER: z.string().default(""),
+    TWILIO_TO_NUMBER: z.string().default(""),
+    NOTIFICATION_SMS_ESCALATION_MS: z.coerce.number().int().min(30_000).max(900_000).default(120_000),
+    NOTIFICATION_STATUS_INTERVAL_MS: z.coerce.number().int().min(5_000).max(300_000).default(30_000),
     YOUTUBE_API_KEY: z.string().default(""),
     YOUTUBE_CLIENT_ID: z.string().default(""),
     YOUTUBE_CLIENT_SECRET: z.string().default(""),
@@ -80,6 +92,11 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
   }
   const oauthValues = [parsed.YOUTUBE_CLIENT_ID, parsed.YOUTUBE_CLIENT_SECRET, parsed.YOUTUBE_REFRESH_TOKEN].filter((value) => value.trim());
   if (oauthValues.length !== 0 && oauthValues.length !== 3) throw new Error("YouTube OAuth monitoring requires client id, client secret, and refresh token together.");
+  const pushoverValues = [parsed.PUSHOVER_APP_TOKEN, parsed.PUSHOVER_USER_KEY].filter((value) => value.trim());
+  if (pushoverValues.length !== 0 && pushoverValues.length !== 2) throw new Error("Pushover monitoring requires both app token and user key.");
+  const twilioValues = [parsed.TWILIO_ACCOUNT_SID, parsed.TWILIO_AUTH_TOKEN, parsed.TWILIO_FROM_NUMBER, parsed.TWILIO_TO_NUMBER].filter((value) => value.trim());
+  if (twilioValues.length !== 0 && twilioValues.length !== 4) throw new Error("Twilio monitoring requires account SID, auth token, from number, and to number.");
+  const monitorPublicBaseUrl = `https://${parsed.MONITOR_PUBLIC_HOST}`;
   return {
     token: parsed.MONITOR_API_TOKEN,
     alertmanagerWebhookToken: parsed.ALERTMANAGER_WEBHOOK_TOKEN,
@@ -91,10 +108,22 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     port: parsed.MONITOR_SERVICE_PORT,
     intervalMs: parsed.MONITOR_SERVICE_INTERVAL_MS,
     courtCount: parsed.MONITOR_COURT_COUNT,
-    healthchecksPingUrl: parsed.HEALTHCHECKS_PING_URL ?? null,
-    healthchecksIntervalMs: parsed.HEALTHCHECKS_INTERVAL_MS,
+    healthchecksBaselinePingUrl: parsed.HEALTHCHECKS_BASELINE_PING_URL ?? null,
+    healthchecksActivePingUrl: parsed.HEALTHCHECKS_ACTIVE_PING_URL ?? null,
+    healthchecksBaselineIntervalMs: parsed.HEALTHCHECKS_BASELINE_INTERVAL_MS,
+    healthchecksActiveIntervalMs: parsed.HEALTHCHECKS_ACTIVE_INTERVAL_MS,
     supabaseUrl: parsed.SUPABASE_URL ?? null,
     supabaseServiceRoleKey: parsed.SUPABASE_SERVICE_ROLE_KEY ?? null,
+    monitorPublicBaseUrl,
+    monitorDashboardUrl: parsed.MONITOR_DASHBOARD_URL ?? "https://score.beachvolleyballmedia.com/admin/monitor",
+    pushoverAppToken: parsed.PUSHOVER_APP_TOKEN.trim() || null,
+    pushoverUserKey: parsed.PUSHOVER_USER_KEY.trim() || null,
+    twilioAccountSid: parsed.TWILIO_ACCOUNT_SID.trim() || null,
+    twilioAuthToken: parsed.TWILIO_AUTH_TOKEN.trim() || null,
+    twilioFromNumber: parsed.TWILIO_FROM_NUMBER.trim() || null,
+    twilioToNumber: parsed.TWILIO_TO_NUMBER.trim() || null,
+    notificationSmsEscalationMs: parsed.NOTIFICATION_SMS_ESCALATION_MS,
+    notificationStatusIntervalMs: parsed.NOTIFICATION_STATUS_INTERVAL_MS,
     youtubeApiKey: parsed.YOUTUBE_API_KEY.trim() || null,
     youtubeClientId: parsed.YOUTUBE_CLIENT_ID.trim() || null,
     youtubeClientSecret: parsed.YOUTUBE_CLIENT_SECRET.trim() || null,

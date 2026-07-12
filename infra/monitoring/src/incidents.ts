@@ -23,7 +23,7 @@ const alertmanagerApiAlertsSchema = z.array(z.object({
 }).passthrough()).max(500);
 
 export type IncidentEventType = "OPENED" | "SEVERITY_CHANGED" | "EVIDENCE_UPDATED" | "ACKNOWLEDGED" | "RESOLVED" | "REOPENED";
-export type IncidentChange = { incident: IncidentSnapshot; eventType: IncidentEventType };
+export type IncidentChange = { incident: IncidentSnapshot; eventType: IncidentEventType; detail?: Record<string, string | number | boolean | null> };
 
 export class IncidentManager {
   private readonly incidents = new Map<string, IncidentSnapshot>();
@@ -113,7 +113,7 @@ export class IncidentManager {
     for (const row of rows) this.incidents.set(row.fingerprint, row);
   }
 
-  acknowledge(id: string, actor: string, now = new Date()): IncidentChange | null {
+  acknowledge(id: string, actor: string, reason: string, now = new Date()): IncidentChange | null {
     const existing = [...this.incidents.values()].find((incident) => incident.id === id);
     if (!existing || existing.status === "resolved") return null;
     const next: IncidentSnapshot = {
@@ -124,7 +124,7 @@ export class IncidentManager {
       lastObservedAt: now.toISOString()
     };
     this.incidents.set(next.fingerprint, next);
-    return { incident: next, eventType: "ACKNOWLEDGED" };
+    return { incident: next, eventType: "ACKNOWLEDGED", detail: { reason: sanitizedText(reason, 300) } };
   }
 }
 
