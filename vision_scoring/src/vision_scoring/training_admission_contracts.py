@@ -22,6 +22,11 @@ from typing import Any, ClassVar, Iterable, Mapping, TypeVar
 
 from .annotation_trust import AnnotationMinimumTruthPolicy
 from .capture_contracts import MAX_FINALIZED_SOURCE_BYTES
+from .capture_profile_contracts import (
+    CaptureRiskTagV1,
+    CompressionStratumV1,
+    TrainingCaptureModeV1,
+)
 from .contract_wire import (
     MAX_SIGNED_64,
     CanonicalWireError,
@@ -143,28 +148,6 @@ class TrainingSplitV1(str, Enum):
 
     TRAIN = "TRAIN"
     DEV = "DEV"
-
-
-class TrainingCaptureModeV1(str, Enum):
-    HD_1080P30 = "1080P30"
-    HD_1080P60 = "1080P60"
-    UHD_4K60 = "4K60"
-    DUAL_4K60 = "DUAL_4K60"
-
-
-class CompressionStratumV1(str, Enum):
-    LOSSLESS_OR_INTRA = "LOSSLESS_OR_INTRA"
-    HIGH_BITRATE_INTERFRAME = "HIGH_BITRATE_INTERFRAME"
-    CONSTRAINED_INTERFRAME = "CONSTRAINED_INTERFRAME"
-
-
-class CaptureRiskTagV1(str, Enum):
-    COMPATIBILITY_1080P30 = "COMPATIBILITY_1080P30"
-    SINGLE_VIEW_OCCLUSION = "SINGLE_VIEW_OCCLUSION"
-    MULTI_VIEW_SYNCHRONIZATION = "MULTI_VIEW_SYNCHRONIZATION"
-    LOW_LIGHT = "LOW_LIGHT"
-    HIGH_COMPRESSION = "HIGH_COMPRESSION"
-    MOTION_BLUR = "MOTION_BLUR"
 
 
 class ExampleStratumTagV1(str, Enum):
@@ -1379,11 +1362,6 @@ class TrainingExampleManifestV2(_CanonicalContract):
             and CaptureRiskTagV1.SINGLE_VIEW_OCCLUSION not in self.capture_risk_tags
         ):
             raise ValueError("single-view examples must carry occlusion risk")
-        if (
-            self.capture_mode is TrainingCaptureModeV1.DUAL_4K60
-            and CaptureRiskTagV1.MULTI_VIEW_SYNCHRONIZATION not in self.capture_risk_tags
-        ):
-            raise ValueError("dual-view examples must carry synchronization risk")
         if (
             self.compression_stratum is CompressionStratumV1.CONSTRAINED_INTERFRAME
             and CaptureRiskTagV1.HIGH_COMPRESSION not in self.capture_risk_tags

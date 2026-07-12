@@ -10,9 +10,15 @@ import unittest
 from unittest.mock import patch
 
 import vision_scoring.training_admission_compiler as training_admission_compiler
+import vision_scoring.training_admission_contracts as training_admission_contracts
 from vision_scoring.annotation_trust import AnnotationMinimumTruthPolicy
-from vision_scoring.contract_wire import CanonicalWireError
 from vision_scoring.capture_contracts import MAX_FINALIZED_SOURCE_BYTES
+from vision_scoring.capture_profile_contracts import (
+    CaptureRiskTagV1,
+    CompressionStratumV1,
+    TrainingCaptureModeV1,
+)
+from vision_scoring.contract_wire import CanonicalWireError
 from vision_scoring.dataset_split import DatasetSplit
 from vision_scoring.training_admission_compiler import (
     TrainingAdmissionCompilerError,
@@ -34,8 +40,6 @@ from vision_scoring.training_admission_contracts import (
     CAUSAL_BALL_MAX_WIDTH,
     CAUSAL_BALL_MODEL_CONFIG_DOMAIN,
     CAUSAL_BALL_OPTIMIZER_CONFIG_DOMAIN,
-    CaptureRiskTagV1,
-    CompressionStratumV1,
     CoverageRequirementV1,
     DevScheduleEntryV1,
     ExampleStratumTagV1,
@@ -49,7 +53,6 @@ from vision_scoring.training_admission_contracts import (
     TargetTensorFieldV1,
     TrainingAdmissionContractError,
     TrainingAdmissionPolicyV1,
-    TrainingCaptureModeV1,
     TrainingCoverageReportV1,
     TrainingDatasetManifestV1,
     TRAINING_EXAMPLE_DOMAIN,
@@ -840,6 +843,26 @@ class TrainingAdmissionContractTests(unittest.TestCase):
             TrainingSplitV1("TEST")
         with self.assertRaises(ValueError):
             replace(_example(), split=DatasetSplit.TEST)  # type: ignore[arg-type]
+
+    def test_capture_enums_are_shared_and_dual_mode_is_unrepresentable(self) -> None:
+        self.assertIs(
+            training_admission_contracts.TrainingCaptureModeV1,
+            TrainingCaptureModeV1,
+        )
+        self.assertIs(
+            training_admission_contracts.CompressionStratumV1,
+            CompressionStratumV1,
+        )
+        self.assertIs(
+            training_admission_contracts.CaptureRiskTagV1,
+            CaptureRiskTagV1,
+        )
+        self.assertNotIn(
+            "DUAL_4K60",
+            {item.value for item in TrainingCaptureModeV1},
+        )
+        with self.assertRaises(ValueError):
+            TrainingCaptureModeV1("DUAL_4K60")
 
     def test_test_exclusion_commitment_is_deterministic_and_omits_ids(self) -> None:
         first = test_exclusion_commitment_sha256_v1(
