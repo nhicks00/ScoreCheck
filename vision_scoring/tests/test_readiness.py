@@ -266,14 +266,14 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
             )
             rights_policy_path = Path(temporary_directory) / "rights-policy.json"
             rights_policy_path.write_text(
-                json.dumps(rights_policy.to_canonical_dict()),
+                rights_policy.canonical_json(),
                 encoding="utf-8",
             )
             readiness_policy_path = (
                 Path(temporary_directory) / "readiness-policy.json"
             )
             readiness_policy_path.write_text(
-                json.dumps(readiness_policy.to_canonical_dict()),
+                readiness_policy.canonical_json(),
                 encoding="utf-8",
             )
             configuration_generation = ProtectedConfigurationGeneration(
