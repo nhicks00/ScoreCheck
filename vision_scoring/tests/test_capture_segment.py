@@ -261,10 +261,10 @@ class CaptureSegmentHappyPathTests(unittest.TestCase):
             claim.fingerprint(),  # type: ignore[union-attr]
             "849e286db30f85f74db496a631558fc156173dee9450ade1d8ebe0aa1e74cbf5",
         )
-        self.assertEqual(len(metadata.to_json_bytes()), 2_978)  # type: ignore[union-attr]
+        self.assertEqual(len(metadata.to_json_bytes()), 3_168)  # type: ignore[union-attr]
         self.assertEqual(
             metadata.fingerprint(),  # type: ignore[union-attr]
-            "9579aeacd87de5eb6b0b298e961088dd973347786640067839524374a7f6e397",
+            "736f6185ff905900e0a308d762eede3e2c893de832619d87573656a7da6ab627",
         )
         self.assertEqual(len(policy.to_json_bytes()), 1_333)  # type: ignore[union-attr]
         self.assertEqual(

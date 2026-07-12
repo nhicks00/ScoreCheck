@@ -21,17 +21,20 @@ from vision_scoring.capture_assets import (
     CaptureReferenceStatus,
     CaptureSourceScope,
     ContentInspectionStatus,
+    FINALIZED_CAPTURE_METADATA_SIGNING_DOMAIN,
     FinalizedAssetClaim,
     FinalizedCaptureMetadataAttestation,
     FinalizedCaptureMetadataTrustSnapshot,
     FinalizedSourceAssembly,
     FrameDerivationStatus,
     ReviewClipProvenance,
+    STRUCTURALLY_VERIFIED_CAPTURE_METADATA_SCHEMA_VERSION,
     StructurallyVerifiedCaptureMetadata,
     TrustedCaptureMetadataSignerKey,
     CurrentFinalizedCaptureMetadata,
     build_video_only_review_clip_provenance,
     finalized_capture_metadata_signing_message,
+    verify_capture_metadata_policy_binding,
     verify_finalized_capture_metadata_attestation,
     build_structurally_verified_capture_metadata,
 )
@@ -491,6 +494,20 @@ class StructurallyVerifiedCaptureMetadataTests(unittest.TestCase):
         self.assertEqual(source.requested_start_ns, 0)
         self.assertEqual(source.requested_end_ns, 2_000_000_000)
         self.assertEqual(source.evidence_end_ns, 2_000_000_000)
+        session = fixture["session"]
+        assert type(session) is CaptureSessionDescriptor
+        self.assertEqual(
+            source.capture_profile_sha256,
+            session.capture_profile_sha256,
+        )
+        self.assertEqual(
+            source.encoder_configuration_sha256,
+            session.encoder_configuration_sha256,
+        )
+        self.assertEqual(
+            source.schema_version,
+            STRUCTURALLY_VERIFIED_CAPTURE_METADATA_SCHEMA_VERSION,
+        )
         self.assertEqual(
             source.content_inspection_status,
             ContentInspectionStatus.NOT_INSPECTED,
@@ -518,6 +535,109 @@ class StructurallyVerifiedCaptureMetadataTests(unittest.TestCase):
         self.assertEqual(
             StructurallyVerifiedCaptureMetadata.from_json_bytes(source.to_json_bytes()),
             source,
+        )
+
+    def test_capture_profile_and_encoder_are_typed_session_policy_bindings(
+        self,
+    ) -> None:
+        fixture = _fixture()
+        session = fixture["session"]
+        policy = fixture["capture_policy"]
+        assert type(session) is CaptureSessionDescriptor
+        assert type(policy) is CaptureAssetTrustPolicy
+        source = build_structurally_verified_capture_metadata(
+            **fixture  # type: ignore[arg-type]
+        )
+
+        builder_parameters = inspect.signature(
+            build_structurally_verified_capture_metadata
+        ).parameters
+        self.assertNotIn("capture_profile_sha256", builder_parameters)
+        self.assertNotIn("encoder_configuration_sha256", builder_parameters)
+        self.assertEqual(
+            source.capture_profile_sha256,
+            session.capture_profile_sha256,
+        )
+        self.assertEqual(
+            source.encoder_configuration_sha256,
+            session.encoder_configuration_sha256,
+        )
+
+        for field_name, replacement_digest in (
+            ("capture_profile_sha256", "d" * 64),
+            ("encoder_configuration_sha256", "e" * 64),
+        ):
+            with self.subTest(metadata_field=field_name):
+                substituted = replace(source, **{field_name: replacement_digest})
+                with self.assertRaises(CaptureAssetError) as caught:
+                    verify_capture_metadata_policy_binding(substituted, policy)
+                self.assertEqual(caught.exception.code, "CAPTURE_POLICY_SCOPE")
+
+            with self.subTest(policy_field=field_name):
+                substituted_policy = replace(
+                    policy,
+                    **{field_name: replacement_digest},
+                )
+                with self.assertRaises(CaptureAssetError) as caught:
+                    verify_capture_metadata_policy_binding(
+                        source,
+                        substituted_policy,
+                    )
+                self.assertEqual(caught.exception.code, "CAPTURE_POLICY_SCOPE")
+
+        swapped = replace(
+            source,
+            capture_profile_sha256=source.encoder_configuration_sha256,
+            encoder_configuration_sha256=source.capture_profile_sha256,
+        )
+        with self.assertRaises(CaptureAssetError) as caught:
+            verify_capture_metadata_policy_binding(swapped, policy)
+        self.assertEqual(caught.exception.code, "CAPTURE_POLICY_SCOPE")
+
+    def test_capture_profile_and_encoder_reject_typed_digest_aliases(self) -> None:
+        fixture = _fixture()
+        source = build_structurally_verified_capture_metadata(
+            **fixture  # type: ignore[arg-type]
+        )
+        for field_name, alias_digest in (
+            ("capture_profile_sha256", source.encoder_configuration_sha256),
+            ("capture_profile_sha256", source.session_fingerprint),
+            (
+                "encoder_configuration_sha256",
+                source.session_configuration_fingerprint,
+            ),
+        ):
+            with self.subTest(field_name=field_name, alias_digest=alias_digest):
+                with self.assertRaisesRegex(ValueError, "must be distinct"):
+                    replace(source, **{field_name: alias_digest})
+
+    def test_metadata_v2_wire_and_signing_domain_have_no_v1_alias(self) -> None:
+        fixture = _fixture()
+        source = build_structurally_verified_capture_metadata(
+            **fixture  # type: ignore[arg-type]
+        )
+        with self.assertRaisesRegex(ValueError, "unsupported.*schema"):
+            replace(source, schema_version="1.0")
+        message = finalized_capture_metadata_signing_message(
+            source,
+            key_id="source-key",
+            key_role=CaptureAssetKeyRole.FINALIZED_CAPTURE_METADATA_SIGNER,
+            trust_domain_id="source-trust-domain",
+            signed_at_ns=350,
+        )
+        decoded = json.loads(message)
+        self.assertEqual(
+            decoded["domain"],
+            FINALIZED_CAPTURE_METADATA_SIGNING_DOMAIN,
+        )
+        self.assertTrue(decoded["domain"].endswith(":v2"))
+        self.assertEqual(
+            decoded["capture_metadata"]["capture_profile_sha256"],
+            source.capture_profile_sha256,
+        )
+        self.assertEqual(
+            decoded["capture_metadata"]["encoder_configuration_sha256"],
+            source.encoder_configuration_sha256,
         )
 
     def test_fragment_hash_size_and_order_substitution_fail_closed(self) -> None:

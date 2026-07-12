@@ -64,8 +64,9 @@ from .rights import PermittedUse
 
 
 CAPTURE_ASSET_SCHEMA_VERSION = "1.0"
+STRUCTURALLY_VERIFIED_CAPTURE_METADATA_SCHEMA_VERSION = "2.0"
 FINALIZED_CAPTURE_METADATA_SIGNING_DOMAIN = (
-    "multicourt-vision-scoring:finalized-capture-metadata:v1"
+    "multicourt-vision-scoring:finalized-capture-metadata:v2"
 )
 MAX_CAPTURE_ASSET_JSON_BYTES = 2 * 1024 * 1024
 MAX_CAPTURE_ASSET_JSON_DEPTH = 16
@@ -1002,6 +1003,8 @@ class StructurallyVerifiedCaptureMetadata:
     reconnect_epoch: int
     session_fingerprint: str
     session_configuration_fingerprint: str
+    capture_profile_sha256: str
+    encoder_configuration_sha256: str
     window_request_fingerprint: str
     window_plan_fingerprint: str
     requested_start_ns: int
@@ -1043,10 +1046,13 @@ class StructurallyVerifiedCaptureMetadata:
     admissibility_status: BoundaryAdmissibilityStatus = (
         _CAPTURE_METADATA_NOT_ADMISSIBLE
     )
-    schema_version: str = CAPTURE_ASSET_SCHEMA_VERSION
+    schema_version: str = STRUCTURALLY_VERIFIED_CAPTURE_METADATA_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        if self.schema_version != CAPTURE_ASSET_SCHEMA_VERSION:
+        if (
+            self.schema_version
+            != STRUCTURALLY_VERIFIED_CAPTURE_METADATA_SCHEMA_VERSION
+        ):
             raise ValueError("unsupported structurally-verified-capture-metadata schema")
         for field_name in (
             "metadata_id",
@@ -1066,6 +1072,8 @@ class StructurallyVerifiedCaptureMetadata:
             "roster_scope_sha256",
             "session_fingerprint",
             "session_configuration_fingerprint",
+            "capture_profile_sha256",
+            "encoder_configuration_sha256",
             "window_request_fingerprint",
             "window_plan_fingerprint",
             "finalized_trace_sha256",
@@ -1079,6 +1087,19 @@ class StructurallyVerifiedCaptureMetadata:
             "rights_policy_sha256",
         ):
             _require_sha256(getattr(self, field_name), field_name)
+        typed_capture_digests = {
+            "session_fingerprint": self.session_fingerprint,
+            "session_configuration_fingerprint": (
+                self.session_configuration_fingerprint
+            ),
+            "capture_profile_sha256": self.capture_profile_sha256,
+            "encoder_configuration_sha256": self.encoder_configuration_sha256,
+        }
+        if len(set(typed_capture_digests.values())) != len(typed_capture_digests):
+            raise ValueError(
+                "typed session, configuration, profile, and encoder digests "
+                "must be distinct"
+            )
         _require_exact_int(
             self.asset_byte_length,
             "asset_byte_length",
@@ -1917,6 +1938,10 @@ def verify_capture_metadata_policy_binding(
         "session_configuration_fingerprint": (
             capture_metadata.session_configuration_fingerprint
         ),
+        "capture_profile_sha256": capture_metadata.capture_profile_sha256,
+        "encoder_configuration_sha256": (
+            capture_metadata.encoder_configuration_sha256
+        ),
         "clock_mapping_fingerprint": capture_metadata.clock_mapping_fingerprint,
     }
     for field_name, value in expected.items():
@@ -2243,6 +2268,8 @@ def build_structurally_verified_capture_metadata(
         reconnect_epoch=session.reconnect_epoch,
         session_fingerprint=session_fingerprint,
         session_configuration_fingerprint=session_configuration,
+        capture_profile_sha256=session.capture_profile_sha256,
+        encoder_configuration_sha256=session.encoder_configuration_sha256,
         window_request_fingerprint=window_request.fingerprint(),
         window_plan_fingerprint=recomputed_plan.fingerprint(),
         requested_start_ns=recomputed_plan.requested_start_ns,
@@ -2471,6 +2498,7 @@ def build_video_only_review_clip_provenance(
 
 __all__ = [
     "CAPTURE_ASSET_SCHEMA_VERSION",
+    "STRUCTURALLY_VERIFIED_CAPTURE_METADATA_SCHEMA_VERSION",
     "FINALIZED_CAPTURE_METADATA_SIGNING_DOMAIN",
     "MAX_CAPTURE_ASSET_JSON_BYTES",
     "MAX_REVIEW_CLIP_BYTES",
