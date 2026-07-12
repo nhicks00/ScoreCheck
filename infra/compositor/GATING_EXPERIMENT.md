@@ -42,13 +42,31 @@ YouTube stream status/health
 sync observations at beginning/middle/end
 ```
 
+### July 12 result
+
+- Ten-hour post-sync run completed with no egress error, reconnect, restart,
+  OOM, frame stall, or MediaMTX path interruption during the official window.
+- Program held 30 fps. Commentary sync remained `locked`, with about 3.0
+  seconds applied delay and 57-60 ms clock RTT. YouTube health remained good.
+- One egress averaged about 1.3 CPU cores. Container RSS rose from roughly 552
+  MB to 680 MB; the broader process group rose about 13 MB/hour after warmup.
+  The trend was slow and non-accelerating, but event-day egresses must be
+  restarted between coverage days rather than left running indefinitely.
+- Initial subjective sync passed. Midpoint/final subjective checks were not
+  recorded, and camera reconnect recovery was not exercised.
+- Result: endurance pass, conditional Gate 1 pass. Carry the missing sync and
+  recovery checks into the two-court validation.
+
 ## Gate 2: eight-court load
 
-- Eight motion-heavy sources, program pages, encoders, and destinations.
-- Scoring activity on all courts.
-- At least two simultaneous commentary rooms.
-- Two compositor hosts, courts 1-4 and 5-8.
-- Twelve continuous hours preferred.
+Scale only after each prior stage passes:
+
+1. Two motion-heavy sources on one `c-4`, two commentary rooms, two hours.
+2. Four sources on two `c-4` hosts, four hours.
+3. Eight sources on four `c-4` hosts, twelve continuous hours preferred.
+
+Every stage includes program pages, encoders, destinations, and scoring on all
+active courts. A host owns at most two courts.
 
 Gate 2 must include fault injection: camera removal, venue network loss,
 MediaMTX restart, one egress kill, controller restart, one compositor loss,

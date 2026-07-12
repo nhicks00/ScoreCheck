@@ -5,8 +5,8 @@
 #   DIGITALOCEAN_TOKEN=dop_v1_... ./provision.sh [options]
 #
 # Options:
-#   --size SLUG      droplet size slug (default: c-4 — the Phase 2 gating
-#                    experiment host; use c-32 for an 8-court event day, §3.3)
+#   --size SLUG      droplet size slug (default: c-4 — validated for two
+#                    720p30 courts with measured Gate 1 headroom)
 #   --image IMAGE    image slug or numeric snapshot id
 #                    (default: ubuntu-24-04-x64; pass the bvm-compositor-base
 #                    snapshot id once one exists)

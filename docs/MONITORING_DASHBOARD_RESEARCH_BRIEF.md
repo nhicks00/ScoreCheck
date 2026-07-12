@@ -388,7 +388,7 @@ All thresholds should be configurable by stream profile and calibrated using rea
 | Program healthy; YouTube reports ingestion starvation | Egress/RTMPS/destination issue | Check egress output and YouTube issue details |
 | Supabase overlay correct; rendered digest stale | Program overlay subscription/render issue | Check program page overlay client and realtime connection |
 | All scores stale; media remains healthy | Worker, VBL, or Supabase scoring issue | Check worker heartbeat/source errors and VBL availability |
-| Courts 1-4 fail together; 5-8 remain healthy | Shared compositor-host failure | Check compositor A and failover plan |
+| One assigned court pair fails together; other pairs remain healthy | Shared compositor-host failure | Check that pair's compositor and warm-spare failover plan |
 
 The dashboard should state confidence and evidence. It should not overstate uncertain root causes.
 
@@ -409,7 +409,7 @@ Show:
 - Last snapshot age and collector state.
 - Healthy/degraded/critical court counts.
 - Highest-severity active incident.
-- Shared service strip for venue uplink, ingest, commentary, compositor A/B, controller, scoring worker, Supabase, YouTube, and notification delivery.
+- Shared service strip for venue uplink, ingest, commentary, compositors A-D, controller, scoring worker, Supabase, YouTube, and notification delivery.
 - Notification sound state and a test-notification command.
 
 ### 9.3 Court matrix
@@ -643,7 +643,7 @@ Exit criterion: supported upstream diagnoses are evidence-backed and false posit
 ### Phase 5: eight-court load and fault gate
 
 - Run eight motion-heavy camera feeds.
-- Use two compositor hosts and intended production topology.
+- Use four `c-4` compositor hosts with two courts per host.
 - Exercise at least two commentary rooms and live scoring on all courts.
 - Run for 10-12 hours.
 - Inject camera, venue-network, MediaMTX, commentary, compositor, controller, Supabase, YouTube, monitoring-host, and notification-provider failures.
@@ -744,4 +744,3 @@ The external review should return:
 9. A phased implementation plan with gate criteria.
 10. A fault-injection and acceptance-test matrix.
 11. Any simpler architecture that meets the same reliability goal with less operational burden.
-

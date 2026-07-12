@@ -21,6 +21,12 @@
 
 name: bvm-compositor
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "25m"
+    max-file: "4"
+
 services:
   redis:
     # Job/dispatch bus between livekit-server and the egress worker. Nothing else
@@ -28,6 +34,7 @@ services:
     image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     container_name: bvm-redis
     restart: unless-stopped
+    logging: *default-logging
     # Queue duty only — disable RDB snapshots and AOF so burst-droplet disks stay
     # quiet and restarts are instant.
     command: ["redis-server", "--save", "", "--appendonly", "no"]
@@ -43,6 +50,7 @@ services:
     image: livekit/livekit-server:v1.13.3@sha256:483b8b7b5b0654f91f1e8bdc7b46fcd37fd9911612ecf627f97e3185a89825bd
     container_name: bvm-livekit
     restart: unless-stopped
+    logging: *default-logging
     command: ["--config", "/etc/livekit.yaml"]
     environment:
       # The one API keypair (shared with egress and the court scripts).
@@ -68,6 +76,7 @@ services:
     image: livekit/egress:v1.13.0@sha256:980ff439431df2c773573721ab6da19e15bdc1f049ab7cb80e87470bf174c12f
     container_name: bvm-egress
     restart: unless-stopped
+    logging: *default-logging
     environment:
       # Path (inside the container) of the mounted worker config.
       EGRESS_CONFIG_FILE: /etc/egress.yaml
@@ -91,6 +100,12 @@ services:
       # Prometheus metrics (CPU admission, per-egress stats) — the primary data
       # source for the Phase 2 10-hour soak.
       - "127.0.0.1:9090:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9091/ >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 45s
     depends_on:
       redis:
         condition: service_healthy

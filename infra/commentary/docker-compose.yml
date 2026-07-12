@@ -2,12 +2,25 @@
 # validated for ScoreCheck Gate 1. This stack requires Linux host networking.
 name: bvm-commentary
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "25m"
+    max-file: "4"
+
 services:
   caddy:
     image: livekit/caddyl4:latest@sha256:9dd090159a6042a907dbff0ce9dda27a21d2a559dc7b03b60a8e6b1b60b8348e
     command: run --config /etc/caddy.yaml --adapter yaml
     restart: unless-stopped
     network_mode: host
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 443"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
     volumes:
       - ./caddy.yaml:/etc/caddy.yaml:ro
       - ./caddy_data:/data
@@ -17,6 +30,13 @@ services:
     command: --config /etc/livekit.yaml
     restart: unless-stopped
     network_mode: host
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:7880/ >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 30s
     volumes:
       - ./livekit.yaml:/etc/livekit.yaml:ro
     depends_on:
@@ -27,5 +47,12 @@ services:
     command: redis-server /etc/redis.conf
     restart: unless-stopped
     network_mode: host
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 10s
     volumes:
       - ./redis.conf:/etc/redis.conf:ro

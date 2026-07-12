@@ -17,11 +17,11 @@ const vercelLines = [
   ["NEXT_PUBLIC_DEFAULT_EVENT_SLUG", env.defaultEventSlug],
   ["NEXT_PUBLIC_EVENT_NAME", env.eventName],
   ["NEXT_PUBLIC_COURT_COUNT", String(env.courtCount)],
-  ["NEXT_PUBLIC_DEFAULT_TIMEZONE", env.timezone],
-  ["MEDIAMTX_WHEP_BASE_URL", env.mediamtxWhepBaseUrl],
-  ["MEDIAMTX_HLS_BASE_URL", env.mediamtxHlsBaseUrl]
+  ["NEXT_PUBLIC_DEFAULT_TIMEZONE", env.timezone]
 ];
 
+pushIfPresent(vercelLines, "MEDIAMTX_WHEP_BASE_URL", env.mediamtxWhepBaseUrl);
+pushIfPresent(vercelLines, "MEDIAMTX_HLS_BASE_URL", env.mediamtxHlsBaseUrl);
 pushIfPresent(vercelLines, "MEDIAMTX_READ_USER", env.mediamtxReadUser);
 pushIfPresent(vercelLines, "MEDIAMTX_READ_PASS", env.mediamtxReadPass);
 pushIfPresent(vercelLines, "MEDIAMTX_RTMP_INGEST_BASE", env.mediamtxRtmpIngestBase);
@@ -40,7 +40,9 @@ const workerLines = [
   ["SUPABASE_SERVICE_ROLE_KEY", env.supabaseServiceRoleKey],
   ["ADMIN_SECRET", env.adminSecret],
   ["NEXT_PUBLIC_SITE_URL", env.publicSiteUrl],
-  ["WORKER_HEARTBEAT_MS", process.env.WORKER_HEARTBEAT_MS || "15000"]
+  ["WORKER_ACTIVE_INTERVAL_MS", process.env.WORKER_ACTIVE_INTERVAL_MS || "1800"],
+  ["WORKER_IDLE_INTERVAL_MS", process.env.WORKER_IDLE_INTERVAL_MS || "8000"],
+  ["WORKER_OFF_EVENT_INTERVAL_MS", process.env.WORKER_OFF_EVENT_INTERVAL_MS || "900000"]
 ];
 
 for (let court = 1; court <= env.courtCount; court += 1) {

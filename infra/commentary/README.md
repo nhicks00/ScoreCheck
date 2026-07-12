@@ -25,4 +25,5 @@ LIVEKIT_COMMENTARY_PUBLIC_IP=138.197.194.146 \
 
 The current Gate 1 node is a `2 vCPU / 2 GB` DigitalOcean droplet in `sfo2`
 at $18/month. It is sized for the audio-only commentary workload; compositor
-egress does not run here.
+egress does not run here. Each service has an in-container health check and
+Docker logs are capped at four 25 MB files.

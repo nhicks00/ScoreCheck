@@ -20,7 +20,7 @@ rtmp: yes
 rtmpAddress: :1935
 
 srt: yes
-srtAddress: :8890
+srtAddress: 127.0.0.1:8890
 
 hls: no
 
@@ -73,7 +73,9 @@ paths:
   # previews. It starts only when preview or program has a reader.
   "~^court([1-8])_preview$":
     runOnDemand: >
-      /bin/sh -c 'until ffmpeg -nostdin -hide_banner -loglevel warning
+      /bin/sh -c 'while ! wget -qO- "http://127.0.0.1:9997/v3/paths/get/court${G1}_raw"
+      2>/dev/null | grep -q "\"ready\":true"; do sleep 2; done;
+      exec ffmpeg -nostdin -hide_banner -loglevel warning
       -fflags nobuffer -flags low_delay -rtsp_transport tcp
       -i "rtsp://127.0.0.1:${RTSP_PORT}/court${G1}_raw"
       -map 0:v:0 -map 0:a:0?
@@ -81,8 +83,7 @@ paths:
       -pix_fmt yuv420p -vf "scale=-2:720" -g 60 -keyint_min 60 -sc_threshold 0
       -b:v 2500k -maxrate 2750k -bufsize 5000k
       -c:a libopus -b:a 96k -ar 48000 -ac 2 -af "aresample=async=1:first_pts=0"
-      -f rtsp -rtsp_transport tcp "rtsp://127.0.0.1:${RTSP_PORT}/${MTX_PATH}";
-      do sleep 1; done'
+      -f rtsp -rtsp_transport tcp "rtsp://127.0.0.1:${RTSP_PORT}/${MTX_PATH}"'
     runOnDemandRestart: yes
     runOnDemandStartTimeout: 20s
     runOnDemandCloseAfter: 90s
@@ -93,11 +94,12 @@ paths:
   # the program page's Web Audio graph.
   "~^court([1-8])_program$":
     runOnDemand: >
-      /bin/sh -c 'until ffmpeg -nostdin -hide_banner -loglevel warning
+      /bin/sh -c 'while ! wget -qO- "http://127.0.0.1:9997/v3/paths/get/court${G1}_preview"
+      2>/dev/null | grep -q "\"ready\":true"; do sleep 2; done;
+      exec ffmpeg -nostdin -hide_banner -loglevel warning
       -i "srt://127.0.0.1:8890?streamid=read:court${G1}_preview&latency=__PROGRAM_DELAY_US__"
       -map 0:v:0 -map 0:a:0? -c copy
-      -f rtsp -rtsp_transport tcp "rtsp://127.0.0.1:${RTSP_PORT}/${MTX_PATH}";
-      do sleep 1; done'
+      -f rtsp -rtsp_transport tcp "rtsp://127.0.0.1:${RTSP_PORT}/${MTX_PATH}"'
     runOnDemandRestart: yes
     runOnDemandStartTimeout: 25s
     runOnDemandCloseAfter: 90s
@@ -106,7 +108,9 @@ paths:
   # either the commentator preview or the clean program feed.
   "~^court([1-8])_calibration$":
     runOnDemand: >
-      ffmpeg -nostdin -hide_banner -loglevel warning
+      /bin/sh -c 'while ! wget -qO- "http://127.0.0.1:9997/v3/paths/get/court${G1}_preview"
+      2>/dev/null | grep -q "\"ready\":true"; do sleep 2; done;
+      exec ffmpeg -nostdin -hide_banner -loglevel warning
       -fflags nobuffer -flags low_delay -rtsp_transport tcp
       -i "rtsp://127.0.0.1:${RTSP_PORT}/court${G1}_preview"
       -map 0:v:0 -map 0:a:0?
@@ -116,7 +120,7 @@ paths:
       -g 60 -keyint_min 60 -sc_threshold 0
       -b:v 2500k -maxrate 2750k -bufsize 5000k
       -c:a copy
-      -f rtsp -rtsp_transport tcp "rtsp://127.0.0.1:${RTSP_PORT}/${MTX_PATH}"
+      -f rtsp -rtsp_transport tcp "rtsp://127.0.0.1:${RTSP_PORT}/${MTX_PATH}"'
     runOnDemandRestart: yes
     runOnDemandStartTimeout: 20s
     runOnDemandCloseAfter: 30s

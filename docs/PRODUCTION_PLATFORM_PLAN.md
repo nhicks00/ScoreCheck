@@ -5,9 +5,9 @@
 Keep the browser-program-scene architecture and harden it. Do not rebuild around
 cloud OBS or vMix unless the x86 LiveKit Egress benchmark fails.
 
-The July 8 test proved that headless Chrome can capture ScoreCheck WHEP video,
-the DOM scorebug, and browser audio and push a test stream. It did not prove a
-ten-hour real-camera/commentary run or eight-court capacity.
+The July 12 Gate 1 soak proved a ten-hour real-camera, remote-commentary,
+ScoreCheck WHEP, browser-compositor, and YouTube RTMPS path on a DigitalOcean
+`c-4`. It did not prove multi-court capacity or the required failure recovery.
 
 ## Target architecture
 
@@ -28,7 +28,7 @@ Self-hosted LiveKit audio rooms
   TURN/TLS, track presence, real RMS/peak health
 
 PROGRAM
-Two event-day compositor hosts, four courts each
+Four event-day c-4 compositor hosts, two courts each
   program WHEP + DOM scorebug + LiveKit tracks
   Web Audio gain/delay/compression/meters
   controlled signal-loss slate
@@ -58,17 +58,21 @@ Supabase desired/observed state -> outbound controller reconciler
 
 ## Capacity topology
 
-Do not place all eight encoders on one 32-vCPU host. The event-day target is:
+Do not place all eight encoders on one host. Gate 1 measured about 1.3 CPU
+cores per 720p30 web egress. The next event-day target is:
 
 ```text
-Compositor A: dedicated 32 vCPU, courts 1-4
-Compositor B: dedicated 32 vCPU, courts 5-8
-One prewarmed or quickly restorable replacement
+Compositor A: dedicated c-4, courts 1-2
+Compositor B: dedicated c-4, courts 3-4
+Compositor C: dedicated c-4, courts 5-6
+Compositor D: dedicated c-4, courts 7-8
+One prewarmed c-4 replacement
 ```
 
-LiveKit v1.13.0 currently defaults Web Egress admission cost to 3.0 CPU units,
-but admission values do not create capacity. Gate 1 measures actual x86 CPU;
-Gate 2 determines final limits from eight motion-heavy feeds.
+Two measured jobs should use about 2.6 cores, leaving about 35% host CPU
+headroom. LiveKit admission reserves 1.5 CPU and 2 GB per job so a `c-4`
+accepts at most two web egresses. Gate 2 must validate that estimate with two
+motion-heavy feeds before proceeding to four or eight courts.
 
 The ingest node also needs a dedicated capacity test. If all direct cameras
 require H.264 normalization, start Gate 2 planning at 8 dedicated vCPU and
@@ -83,7 +87,7 @@ model where possible.
 - Program pages retry media and LiveKit connections indefinitely.
 - Egress and media images are pulled before event day, never automatically on
   event morning.
-- Two compositor hosts limit a host failure to four courts.
+- Four compositor hosts limit a host failure to two courts.
 - StreamRun remains the break-glass public path through the shadow event.
 - A new stack does not become public because it merely starts; source, audio,
   egress, YouTube receiving status, and health must all be good.
@@ -120,24 +124,29 @@ tokens before cutover.
 
 1. **One court:** real camera, remote audible commentary, real YouTube RTMPS,
    ten hours, sync checked at beginning/middle/end on a DigitalOcean c-4.
-2. **Eight courts:** two-host layout, eight feeds/destinations, scoring on all,
+2. **Two courts:** one `c-4`, two feeds/destinations, two commentary rooms,
+   two hours, plus camera and egress recovery tests.
+3. **Four courts:** two `c-4` hosts, four motion-heavy feeds, four hours.
+4. **Eight courts:** four-host layout, eight feeds/destinations, scoring on all,
    at least two commentary rooms, twelve hours preferred.
-3. **Fault injection:** camera/network/MediaMTX/egress/controller/host/origin
+5. **Fault injection:** camera/network/MediaMTX/egress/controller/host/origin
    failures with unaffected courts remaining live.
-4. **Shadow event:** two real courts, unlisted destinations, StreamRun public,
+6. **Shadow event:** two real courts, unlisted destinations, StreamRun public,
    producer uses only `/admin/production`, zero active-play SSH intervention.
 
 ## Implementation order
 
-1. Complete and validate Gate 1 foundation.
-2. Run the real one-court ten-hour soak and fix measured failures.
-3. Convert the controller to desired-state reconciliation.
-4. Move YouTube/program credentials to proper secret storage.
-5. Provision the two-host four-plus-four topology.
-6. Run the eight-court load and fault-injection gate.
-7. Add reusable-stream/per-match YouTube orchestration.
-8. Run the two-court shadow event, then the full shadow event.
+1. Preserve the July 12 Gate 1 evidence and apply its lifecycle/logging fixes.
+2. Convert the controller to desired-state reconciliation.
+3. Move YouTube/program credentials to proper secret storage.
+4. Run the two-court `c-4` validation, including the missing sync and recovery
+   observations from Gate 1.
+5. Run four courts on two `c-4` hosts.
+6. Provision the four-host two-courts-per-host topology.
+7. Run the eight-court load and fault-injection gate.
+8. Add reusable-stream/per-match YouTube orchestration.
+9. Run the two-court shadow event, then the full shadow event.
 
-The previous tournament and local compositor run do not count as Gate 1: they
-soaked ScoreCheck scoring and a functional browser capture, not the final x86,
-audible-commentary, RTMPS pipeline described above.
+The July 12 soak is an endurance pass for the final x86, audible-commentary,
+RTMPS pipeline. Gate 1 remains conditional because midpoint/final subjective
+sync checks were not recorded and camera reconnection was not tested.
