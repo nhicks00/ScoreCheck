@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate the deterministic synthetic readiness V2 fixture generation.
+"""Regenerate the deterministic synthetic readiness V3 fixture generation.
 
 Run from ``vision_scoring/`` with the locked Python 3.11 environment.  The
 script intentionally imports test builders: these files are executable smoke
@@ -24,6 +24,11 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import tests.test_label_bundle as label_fixture
 from tests.test_ball_label_pack import _contract_payloads
+from vision_scoring.capture_profile_contracts import (
+    CompressionStratumV1,
+    avkans_go_owner_live_1080p30_v1,
+    mevo_core_owner_live_1080p60_v1,
+)
 from vision_scoring.dataset_split import DatasetSplit
 from vision_scoring.immutable_store import (
     GenerationDescriptor,
@@ -54,8 +59,57 @@ from vision_scoring.rights_trust import (
 EXAMPLES = ROOT / "examples"
 DATASET_PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(b"\x44" * 32)
 DEPLOYMENT_BYTES = (
-    b"synthetic trusted readiness launcher v2 with isolated label-pack store\n"
+    b"synthetic trusted readiness launcher v3 with capture reports\n"
 )
+
+
+def _capture_evidence_payloads(
+    profile_name: str,
+) -> tuple[dict[str, str], dict[str, bytes]]:
+    roles = (
+        "encoder-settings",
+        "calibration",
+        "clock-model",
+        "camera-attestation",
+        "exposure-descriptor",
+    )
+    payloads = {
+        role: (
+            f"synthetic readiness V3 {profile_name} {role} evidence\n"
+        ).encode("utf-8")
+        for role in roles
+    }
+    return (
+        {role: hashlib.sha256(payload).hexdigest() for role, payload in payloads.items()},
+        {hashlib.sha256(payload).hexdigest(): payload for payload in payloads.values()},
+    )
+
+
+def _empirical_capture_measurements(*, frames_per_second: int) -> dict[str, object]:
+    if frames_per_second not in {30, 60}:
+        raise ValueError("synthetic readiness fixture supports only 30 or 60 fps")
+    return {
+        "calibration_holdout_p95_px": 1.5,
+        "capture_soak_minutes": 180.0,
+        "court_plane_holdout_p95_cm": 4.0,
+        "critical_unexplained_drop_events": 0,
+        "far_ball_processed_pixels_p10": 7.0,
+        "fixed_mount": True,
+        "frame_interpolation_detected": False,
+        "human_resolvable_visible_ball_ratio": 0.997,
+        "sampled_decisive_event_windows": 1200,
+        "sampled_visible_ball_frames": 1200,
+        "service_zones_fully_visible": True,
+        "shutter_reciprocal": 1000.0 if frames_per_second == 60 else 600.0,
+        "timestamp_regressions": 0,
+        "unexplained_freeze_events": 0,
+        "upscaled_from_lower_resolution": False,
+        "usable_observed_positions_per_eligible_event_p10": 4.0,
+        "visible_ball_blur_to_minor_axis_ratio_p95": (
+            0.8 if frames_per_second == 60 else 1.5
+        ),
+        "visible_serve_frames_meeting_pixel_gate_ratio": 0.995,
+    }
 
 
 def _write_json(path: Path, value: object) -> None:
@@ -110,8 +164,8 @@ def main() -> None:
         EXAMPLES / "rights-verification-policy.json"
     )
 
-    # Preserve the resident synthetic media/capture placeholder bytes, then
-    # republish only the V2 artifact closure (labels move to a separate store).
+    # Preserve the three resident synthetic media payloads. Capture evidence is
+    # rebuilt below from ten deterministic, explicitly synthetic role payloads.
     artifact_payloads: dict[str, bytes] = {}
     for path in (EXAMPLES / "dataset-artifacts" / "generations").glob(
         "*/objects/*"
@@ -120,8 +174,72 @@ def main() -> None:
             artifact_payloads[path.name] = path.read_bytes()
 
     manifest = json.loads(json.dumps(old_manifest))
-    manifest["schema_version"] = "2.0"
-    manifest["dataset_id"] = "synthetic-readiness-example-v2"
+    manifest["domain"] = "multicourt-vision-scoring:readiness-manifest:v3"
+    manifest["schema_version"] = "3.0"
+    manifest["dataset_id"] = "synthetic-readiness-example-v3"
+
+    mevo_digests, mevo_payloads = _capture_evidence_payloads("mevo-core")
+    avkans_digests, avkans_payloads = _capture_evidence_payloads("avkans-go")
+    artifact_payloads.update(mevo_payloads)
+    artifact_payloads.update(avkans_payloads)
+    profile_receipts: dict[str, object] = {}
+    source_receipts: dict[str, object] = {}
+    for source in manifest["data_sources"]:
+        if source["split"] in {"TRAIN", "TEST"}:
+            digests = mevo_digests
+            receipt = mevo_core_owner_live_1080p60_v1(
+                source_id=source["source_id"],
+                encoder_settings_sha256=digests["encoder-settings"],
+                calibration_sha256=digests["calibration"],
+                clock_model_sha256=digests["clock-model"],
+                camera_attestation_sha256=digests["camera-attestation"],
+                exposure_descriptor_sha256=digests["exposure-descriptor"],
+                compression_stratum=(
+                    CompressionStratumV1.CONSTRAINED_INTERFRAME
+                ),
+            )
+            frames_per_second = 60
+        else:
+            digests = avkans_digests
+            # This model-scoped synthetic profile deliberately contains no
+            # claim about six physical cameras, three logical streams, or a
+            # physical-device-to-logical-stream mapping.
+            receipt = avkans_go_owner_live_1080p30_v1(
+                source_id=source["source_id"],
+                encoder_settings_sha256=digests["encoder-settings"],
+                calibration_sha256=digests["calibration"],
+                clock_model_sha256=digests["clock-model"],
+                camera_attestation_sha256=digests["camera-attestation"],
+                exposure_descriptor_sha256=digests["exposure-descriptor"],
+                compression_stratum=(
+                    CompressionStratumV1.CONSTRAINED_INTERFRAME
+                ),
+            )
+            frames_per_second = 30
+        profile_sha256 = receipt.capture_profile.fingerprint()
+        profile_receipts.setdefault(
+            profile_sha256,
+            (receipt, frames_per_second),
+        )
+        source_receipts[source["source_id"]] = receipt
+
+    manifest["capture_profiles"] = [
+        {
+            "capture_profile": receipt.capture_profile.to_dict(),
+            "empirical_capture_measurements": (
+                _empirical_capture_measurements(
+                    frames_per_second=frames_per_second
+                )
+            ),
+            "encoder_configuration": receipt.encoder_configuration.to_dict(),
+        }
+        for _, (receipt, frames_per_second) in sorted(profile_receipts.items())
+    ]
+    for source in manifest["data_sources"]:
+        source.pop("capture_profile_id", None)
+        source["source_capture_facts"] = source_receipts[
+            source["source_id"]
+        ].source_capture_facts.to_dict()
 
     label_store = EXAMPLES / "ball-label-packs"
     _reset_store(label_store)
@@ -151,9 +269,17 @@ def main() -> None:
         source["label_pack_generation_id"] = descriptor.generation_id
 
     required_artifacts = _required_dataset_artifact_sha256s(manifest)
+    missing_artifacts = sorted(set(required_artifacts) - artifact_payloads.keys())
+    if missing_artifacts:
+        raise RuntimeError(
+            "fixture artifact payloads are missing required digests: "
+            + ", ".join(missing_artifacts)
+        )
     selected_artifacts = {
         digest: artifact_payloads[digest] for digest in required_artifacts
     }
+    if len(selected_artifacts) != 13:
+        raise RuntimeError("readiness V3 fixture requires an exact 13-object closure")
     artifact_store = EXAMPLES / "dataset-artifacts"
     _reset_store(artifact_store)
     artifact_descriptor = _publish_generation(artifact_store, selected_artifacts)
@@ -216,7 +342,7 @@ def main() -> None:
     deployment_sha256 = hashlib.sha256(DEPLOYMENT_BYTES).hexdigest()
     readiness_policy = replace(
         old_readiness_policy,
-        policy_id="synthetic-readiness-policy-v2",
+        policy_id="synthetic-readiness-policy-v3",
         dataset_trust_store_sha256=dataset_store.fingerprint(),
         rights_verification_policy_sha256=rights_policy.fingerprint(),
         verifier_source_tree_sha256=verifier_sha256,

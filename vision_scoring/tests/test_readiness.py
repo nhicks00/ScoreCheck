@@ -30,6 +30,7 @@ from vision_scoring.capture_profile_contracts import (
     CompressionStratumV1,
     SourceCaptureFactsV1,
     SourceRepresentationV1,
+    ViewTopologyV1,
     avkans_go_owner_live_1080p30_v1,
     classify_capture_profile_v1,
     mevo_core_owner_live_1080p60_v1,
@@ -101,7 +102,7 @@ LABEL_STORE_ROOT = (
     Path(__file__).parents[1] / "examples" / "ball-label-packs"
 )
 DEPLOYMENT_ARTIFACT_SHA256 = (
-    "b6efd12cebbb91882653219e477b3eff3e90d49f70aa4a77d66d65e57882ca6f"
+    "e2df13809c729ff6f6f6aab234f957f493df2ecbf5296ffd8fbad97aa6bbf124"
 )
 GOVERNANCE_DOMAIN_ID = "example-dataset-governance"
 EXAMPLE_PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(b"\x33" * 32)
@@ -254,6 +255,18 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
 
     def _validate(self, manifest: dict):
         return self._validator_for_manifest(manifest).validate(manifest)
+
+    def _capture_profile_index(self, device_model: str) -> int:
+        return next(
+            index
+            for index, entry in enumerate(self.manifest["capture_profiles"])
+            if entry["capture_profile"]["device_model_or_class"] == device_model
+        )
+
+    def _capture_measurements(self, device_model: str) -> dict:
+        return self.manifest["capture_profiles"][
+            self._capture_profile_index(device_model)
+        ]["empirical_capture_measurements"]
 
     def _run_cli(
         self,
@@ -441,7 +454,43 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
             r"^[0-9a-f]{64}$",
         )
         self.assertTrue(payload["dataset_trust"]["manifest_trust_verified"])
-        self.assertEqual(len(payload["artifact_set_proof"]["artifacts"]), 7)
+        self.assertEqual(len(payload["artifact_set_proof"]["artifacts"]), 13)
+        source_asset_sha256s = {
+            source["asset_sha256"] for source in self.manifest["data_sources"]
+        }
+        self.assertEqual(len(source_asset_sha256s), 3)
+        self.assertEqual(
+            len(set(report.required_artifact_sha256s) - source_asset_sha256s),
+            10,
+        )
+        self.assertEqual(
+            {
+                entry["capture_profile"]["device_model_or_class"]
+                for entry in self.manifest["capture_profiles"]
+            },
+            {"avkans.go", "logitech.mevo-core"},
+        )
+        self.assertTrue(
+            all(
+                entry["capture_profile"]["device_scope"] == "DEVICE_MODEL"
+                and entry["capture_profile"]["exact_device_id"] is None
+                for entry in self.manifest["capture_profiles"]
+            )
+        )
+        self.assertEqual(
+            {
+                receipt.training_capture_mode.value
+                for receipt in report.source_capture_classifications
+            },
+            {"1080P30", "1080P60"},
+        )
+        serialized_manifest = json.dumps(self.manifest, sort_keys=True)
+        for forbidden_mapping_field in (
+            "physical_device_count",
+            "logical_stream_id",
+            "physical_to_logical_stream_mapping",
+        ):
+            self.assertNotIn(forbidden_mapping_field, serialized_manifest)
         self.assertEqual(len(payload["source_label_pack_proofs"]), 3)
         self.assertEqual(
             payload["label_pack_evidence_scope"],
@@ -807,7 +856,9 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
         )
 
     def test_unsigned_manifest_cannot_assert_capture_or_trigger_artifact_trust(self) -> None:
-        self.manifest["capture_profiles"][0]["native_capture_verified"] = False
+        self._capture_measurements("logitech.mevo-core")[
+            "frame_interpolation_detected"
+        ] = True
         report = self.validator.validate(self.manifest)
         codes = {issue.code for issue in report.blockers}
         self.assertIn("DATASET_ATTESTATION_MANIFEST", codes)
@@ -924,19 +975,23 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
         self.assertIn("SPLIT_TEST_VENUE_LEAKAGE", {issue.code for issue in report.blockers})
 
     def test_capture_pixel_and_timestamp_failures_block_training(self) -> None:
-        capture = self.manifest["capture_profiles"][0]
+        profile_index = self._capture_profile_index("logitech.mevo-core")
+        capture = self._capture_measurements("logitech.mevo-core")
         capture["far_ball_processed_pixels_p10"] = 4.0
         capture["timestamp_regressions"] = 1
         report = self._validate(self.manifest)
         paths = {issue.path for issue in report.blockers}
-        self.assertIn("capture_profiles[0].far_ball_processed_pixels_p10", paths)
-        self.assertIn("capture_profiles[0].timestamp_regressions", paths)
+        prefix = (
+            f"capture_profiles[{profile_index}].empirical_capture_measurements"
+        )
+        self.assertIn(f"{prefix}.far_ball_processed_pixels_p10", paths)
+        self.assertIn(f"{prefix}.timestamp_regressions", paths)
 
-    def test_native_freeze_observability_and_calibration_gates_fail_closed(self) -> None:
-        capture = self.manifest["capture_profiles"][0]
+    def test_freeze_observability_and_calibration_gates_fail_closed(self) -> None:
+        profile_index = self._capture_profile_index("logitech.mevo-core")
+        capture = self._capture_measurements("logitech.mevo-core")
         capture.update(
             {
-                "native_capture_verified": False,
                 "frame_interpolation_detected": True,
                 "unexplained_freeze_events": 1,
                 "sampled_decisive_event_windows": 999,
@@ -945,14 +1000,12 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
                 "calibration_holdout_p95_px": 2.01,
                 "court_plane_holdout_p95_cm": 5.01,
                 "capture_soak_minutes": 119.9,
-                "camera_device_attestation_sha256": "not-a-hash",
             }
         )
         report = self._validate(self.manifest)
         blocked_paths = {issue.path for issue in report.blockers}
         for field_name in capture:
             if field_name in {
-                "native_capture_verified",
                 "frame_interpolation_detected",
                 "unexplained_freeze_events",
                 "sampled_decisive_event_windows",
@@ -961,21 +1014,52 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
                 "calibration_holdout_p95_px",
                 "court_plane_holdout_p95_cm",
                 "capture_soak_minutes",
-                "camera_device_attestation_sha256",
             }:
-                self.assertIn(f"capture_profiles[0].{field_name}", blocked_paths)
+                self.assertIn(
+                    f"capture_profiles[{profile_index}]."
+                    f"empirical_capture_measurements.{field_name}",
+                    blocked_paths,
+                )
 
-    def test_dual_view_requires_measured_exposure_sync(self) -> None:
-        capture = self.manifest["capture_profiles"][0]
-        capture["mode"] = "DUAL_4K60"
-        capture["camera_count"] = 2
+    def test_composite_multi_view_explicitly_abstains(self) -> None:
+        receipts = self._capture_v3_template_receipts(
+            mevo_core_owner_live_1080p60_v1
+        )
+        composite_receipts = []
+        for receipt in receipts:
+            profile = replace(
+                receipt.capture_profile,
+                view_topology=ViewTopologyV1.COMPOSITE_MULTI_VIEW,
+                view_count=2,
+            )
+            facts = replace(
+                receipt.source_capture_facts,
+                capture_profile_sha256=profile.fingerprint(),
+            )
+            composite_receipts.append(
+                classify_capture_profile_v1(
+                    receipt.encoder_configuration,
+                    profile,
+                    facts,
+                )
+            )
+        self._install_capture_v3_receipts(tuple(composite_receipts))
         report = self._validate(self.manifest)
-        self.assertIn("EXPOSURE_SYNC", {issue.code for issue in report.blockers})
-        capture["exposure_sync_p95_ms"] = 0.8
-        self.assertTrue(self._validate(self.manifest).ready)
+        self.assertIn(
+            "CAPTURE_CLASSIFICATION_ABSTAINED",
+            {issue.code for issue in report.blockers},
+        )
+        self.assertTrue(
+            all(
+                receipt.abstention_reason.value == "UNSUPPORTED_VIEW_TOPOLOGY"
+                for receipt in report.source_capture_classifications
+            )
+        )
 
     def test_source_must_reference_capture_and_keep_declared_group_together(self) -> None:
-        self.manifest["data_sources"][0]["capture_profile_id"] = "missing-profile"
+        self.manifest["data_sources"][0]["source_capture_facts"][
+            "capture_profile_sha256"
+        ] = "f" * 64
         self.manifest["data_sources"][2]["split_group_id"] = self.manifest["data_sources"][1][
             "split_group_id"
         ]
@@ -985,49 +1069,32 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
         self.assertIn("SPLIT_GROUP_LEAKAGE", codes)
 
     def test_1080p_profile_is_ready_only_as_warned_compatibility_mode(self) -> None:
-        capture = self.manifest["capture_profiles"][0]
-        capture.update(
-            {
-                "mode": "1080P30",
-                "width": 1920,
-                "height": 1080,
-                "fps": 30.0,
-                "shutter_reciprocal": 600.0,
-                "far_ball_processed_pixels_p10": 7.0,
-            }
-        )
         report = self._validate(self.manifest)
         self.assertTrue(report.ready)
         self.assertIn("COMPATIBILITY_CAPTURE", {issue.code for issue in report.warnings})
 
     def test_1080p60_profile_is_an_enhanced_ready_mode(self) -> None:
-        capture = self.manifest["capture_profiles"][0]
-        capture.update(
-            {
-                "mode": "1080P60",
-                "width": 1920,
-                "height": 1080,
-                "fps": 60.0,
-                "bitrate_mbps": 6.0,
-                "shutter_reciprocal": 1000.0,
-                "far_ball_processed_pixels_p10": 7.0,
-            }
-        )
         report = self._validate(self.manifest)
         self.assertTrue(report.ready)
-        self.assertNotIn(
-            "COMPATIBILITY_CAPTURE",
-            {issue.code for issue in report.warnings},
+        mevo_source_ids = {
+            source["source_id"]
+            for source in self.manifest["data_sources"]
+            if source["split"] in {"TRAIN", "TEST"}
+        }
+        self.assertEqual(
+            {
+                receipt.source_capture_facts.source_id
+                for receipt in report.source_capture_classifications
+                if receipt.training_capture_mode.value == "1080P60"
+            },
+            mevo_source_ids,
         )
 
-    def test_1080p60_requires_sixty_fps_shutter_and_low_blur(self) -> None:
-        capture = self.manifest["capture_profiles"][0]
+    def test_1080p60_requires_shutter_and_low_blur(self) -> None:
+        profile_index = self._capture_profile_index("logitech.mevo-core")
+        capture = self._capture_measurements("logitech.mevo-core")
         capture.update(
             {
-                "mode": "1080P60",
-                "width": 1920,
-                "height": 1080,
-                "fps": 58.99,
                 "shutter_reciprocal": 999.99,
                 "far_ball_processed_pixels_p10": 7.0,
                 "visible_ball_blur_to_minor_axis_ratio_p95": 1.01,
@@ -1035,13 +1102,15 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
         )
         report = self._validate(self.manifest)
         blocked_paths = {issue.path for issue in report.blockers}
-        self.assertIn("capture_profiles[0].fps", blocked_paths)
+        prefix = (
+            f"capture_profiles[{profile_index}].empirical_capture_measurements"
+        )
         self.assertIn(
-            "capture_profiles[0].shutter_reciprocal",
+            f"{prefix}.shutter_reciprocal",
             blocked_paths,
         )
         self.assertIn(
-            "capture_profiles[0].visible_ball_blur_to_minor_axis_ratio_p95",
+            f"{prefix}.visible_ball_blur_to_minor_axis_ratio_p95",
             blocked_paths,
         )
 
@@ -1342,7 +1411,7 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
         self.assertIn("does not match", stderr.getvalue())
 
     def test_capture_ratios_must_be_finite_probabilities(self) -> None:
-        capture = self.manifest["capture_profiles"][0]
+        capture = self._capture_measurements("logitech.mevo-core")
         capture["human_resolvable_visible_ball_ratio"] = float("nan")
         report = self.validator.validate(self.manifest)
         self.assertIn(
@@ -1351,28 +1420,34 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
         )
 
         self.manifest = deepcopy(load_manifest(EXAMPLE))
-        self.manifest["capture_profiles"][0][
+        profile_index = self._capture_profile_index("logitech.mevo-core")
+        self._capture_measurements("logitech.mevo-core")[
             "visible_serve_frames_meeting_pixel_gate_ratio"
         ] = 1.01
         report = self._validate(self.manifest)
         blocked_paths = {issue.path for issue in report.blockers}
         self.assertIn(
-            "capture_profiles[0].visible_serve_frames_meeting_pixel_gate_ratio",
+            f"capture_profiles[{profile_index}].empirical_capture_measurements."
+            "visible_serve_frames_meeting_pixel_gate_ratio",
             blocked_paths,
         )
 
     def test_boolean_values_do_not_satisfy_numeric_zero_gates(self) -> None:
-        self.manifest["capture_profiles"][0]["timestamp_regressions"] = False
+        profile_index = self._capture_profile_index("logitech.mevo-core")
+        self._capture_measurements("logitech.mevo-core")[
+            "timestamp_regressions"
+        ] = False
         report = self._validate(self.manifest)
         self.assertIn(
-            "capture_profiles[0].timestamp_regressions",
+            f"capture_profiles[{profile_index}].empirical_capture_measurements."
+            "timestamp_regressions",
             {issue.path for issue in report.blockers},
         )
 
     def test_labels_checksum_and_capture_profile_checks_are_preserved(self) -> None:
         source = self.manifest["data_sources"][0]
         source["labels_sha256"] = "not-a-hash"
-        source["capture_profile_id"] = "not-a-profile"
+        source["source_capture_facts"]["capture_profile_sha256"] = "f" * 64
         report = self._validate(self.manifest)
         codes = {issue.code for issue in report.blockers}
         self.assertIn("SOURCE_CHECKSUM", codes)
@@ -2005,6 +2080,12 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
         )
 
     def test_capture_v3_rejects_v2_flat_capture_fields(self) -> None:
+        self.manifest.pop("domain")
+        self.manifest["schema_version"] = "2.0"
+        self.manifest["capture_profiles"][0]["mode"] = "1080P60"
+        for source in self.manifest["data_sources"]:
+            source["capture_profile_id"] = "legacy-profile"
+            source.pop("source_capture_facts")
         report = self._validate(self.manifest)
         codes = {issue.code for issue in report.blockers}
         self.assertIn("MANIFEST_DOMAIN", codes)
