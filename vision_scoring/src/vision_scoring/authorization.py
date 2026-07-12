@@ -1284,6 +1284,125 @@ def _check_archive_revocation(
         _fail(f"{label}_KEY_REVOKED", f"{label.lower()} key is currently revoked")
 
 
+def _verify_signed_policy_assessment_for_policy(
+    signed_assessment: SignedPolicyAssessment,
+    *,
+    assessment: PolicyAssessment,
+    policy: AuthorizationPolicy,
+    policy_archive: AuthorizationPolicyArchive,
+    signed_not_after_ns: int,
+    revoked_as_of_ns: int,
+) -> PolicyAssessment:
+    """Verify one exact assessment against an already-selected policy generation."""
+
+    if (
+        type(signed_assessment) is not SignedPolicyAssessment
+        or signed_assessment.assessment != assessment
+        or signed_assessment.assessment_fingerprint != assessment.fingerprint()
+    ):
+        _fail(
+            "ASSESSMENT_SIGNATURE_REQUIRED",
+            "verification requires the exact signed assessment",
+        )
+    _timestamp(signed_not_after_ns, "signed_not_after_ns")
+    _timestamp(revoked_as_of_ns, "revoked_as_of_ns")
+    if assessment.match_id != policy.match_id:
+        _fail(
+            "ASSESSMENT_CONTEXT",
+            "assessment match scope differs from the protected policy",
+        )
+    if not (
+        assessment.causal_cutoff_timestamp_ns
+        <= signed_assessment.signed_at_ns
+        <= signed_not_after_ns
+    ) or not policy.is_active(signed_assessment.signed_at_ns):
+        _fail("ASSESSMENT_TIME", "assessment signature has invalid causality")
+    assessment_key = _assessment_key(policy, signed_assessment)
+    _check_key_time(
+        assessment_key,
+        used_at_ns=signed_assessment.signed_at_ns,
+        revoked_as_of_ns=revoked_as_of_ns,
+        label="ASSESSMENT",
+    )
+    _check_archive_revocation(
+        policy_archive,
+        assessment_key,
+        revoked_as_of_ns=revoked_as_of_ns,
+        label="ASSESSMENT",
+    )
+    try:
+        assessment_key.public_key.verify(
+            _canonical_base64(
+                signed_assessment.signature_base64,
+                "assessment signature_base64",
+                expected_bytes=64,
+            ),
+            _assessment_signing_message(
+                assessment=assessment,
+                assessment_fingerprint=signed_assessment.assessment_fingerprint,
+                assessor_id=signed_assessment.assessor_id,
+                assessment_key_id=signed_assessment.assessment_key_id,
+                signed_at_ns=signed_assessment.signed_at_ns,
+            ),
+        )
+    except InvalidSignature as exc:
+        raise AuthorizationError(
+            "ASSESSMENT_SIGNATURE_INVALID",
+            "assessment signature is invalid",
+        ) from exc
+    if (
+        assessment.policy_fingerprint
+        not in policy.accepted_assessment_policy_fingerprints
+    ):
+        _fail(
+            "ASSESSMENT_POLICY_UNTRUSTED",
+            "assessment policy is not protected by authorization policy",
+        )
+    return assessment
+
+
+def verify_signed_policy_assessment(
+    signed_assessment: SignedPolicyAssessment,
+    *,
+    assessment: PolicyAssessment,
+    policy_archive: AuthorizationPolicyArchive,
+    verified_at_ns: int,
+) -> PolicyAssessment:
+    """Verify an optional-case assessment under the current protected policy.
+
+    This verifies provenance only.  It does not assert that the assessment is
+    authorization-ready and does not construct an ``AuthorizationCommand``.
+    """
+
+    if type(assessment) is not PolicyAssessment:
+        raise ValueError("assessment must be an exact PolicyAssessment")
+    if type(policy_archive) is not AuthorizationPolicyArchive:
+        raise ValueError("policy_archive must be an exact AuthorizationPolicyArchive")
+    verified_at_ns = _timestamp(verified_at_ns, "verified_at_ns")
+    policy = policy_archive.current_policy
+    if not policy.is_active(verified_at_ns):
+        _fail(
+            "POLICY_ARCHIVE_STALE",
+            "protected archive has no current policy active at verification time",
+        )
+    if (
+        policy_archive.match_id != assessment.match_id
+        or policy_archive.trust_domain_id != policy.trust_domain_id
+    ):
+        _fail(
+            "ASSESSMENT_CONTEXT",
+            "assessment scope differs from the current protected archive",
+        )
+    return _verify_signed_policy_assessment_for_policy(
+        signed_assessment,
+        assessment=assessment,
+        policy=policy,
+        policy_archive=policy_archive,
+        signed_not_after_ns=verified_at_ns,
+        revoked_as_of_ns=verified_at_ns,
+    )
+
+
 def _assessment_evidence(event: RuleEvent) -> tuple[str, ...] | None:
     payload = event.payload
     if isinstance(payload, (PointAwardedPayload, ReplayNoPointPayload)):
@@ -1315,57 +1434,18 @@ def _check_assessment_context(
             "ASSESSMENT_SIGNATURE_REQUIRED",
             "assisted command requires the exact signed assessment",
         )
-    assessment_key = _assessment_key(policy, signed_assessment)
-    if not (
-        assessment.causal_cutoff_timestamp_ns
-        <= signed_assessment.signed_at_ns
-        <= command.issued_at_ns
-    ) or not policy.is_active(signed_assessment.signed_at_ns):
-        _fail("ASSESSMENT_TIME", "assessment signature has invalid causality")
-    _check_key_time(
-        assessment_key,
-        used_at_ns=signed_assessment.signed_at_ns,
+    _verify_signed_policy_assessment_for_policy(
+        signed_assessment,
+        assessment=assessment,
+        policy=policy,
+        policy_archive=archive,
+        signed_not_after_ns=command.issued_at_ns,
         revoked_as_of_ns=revoked_as_of_ns,
-        label="ASSESSMENT",
     )
-    _check_archive_revocation(
-        archive,
-        assessment_key,
-        revoked_as_of_ns=revoked_as_of_ns,
-        label="ASSESSMENT",
-    )
-    try:
-        assessment_key.public_key.verify(
-            _canonical_base64(
-                signed_assessment.signature_base64,
-                "assessment signature_base64",
-                expected_bytes=64,
-            ),
-            _assessment_signing_message(
-                assessment=assessment,
-                assessment_fingerprint=signed_assessment.assessment_fingerprint,
-                assessor_id=signed_assessment.assessor_id,
-                assessment_key_id=signed_assessment.assessment_key_id,
-                signed_at_ns=signed_assessment.signed_at_ns,
-            ),
-        )
-    except InvalidSignature as exc:
-        raise AuthorizationError(
-            "ASSESSMENT_SIGNATURE_INVALID",
-            "assessment signature is invalid",
-        ) from exc
     if assessment.status is not PolicyAssessmentStatus.HUMAN_AUTHORIZATION_REQUIRED:
         _fail(
             "ASSESSMENT_NOT_READY",
             "assisted assessment does not require human authorization",
-        )
-    if (
-        assessment.policy_fingerprint
-        not in policy.accepted_assessment_policy_fingerprints
-    ):
-        _fail(
-            "ASSESSMENT_POLICY_UNTRUSTED",
-            "assisted assessment policy is not protected by authorization policy",
         )
     allowed_reasons = {
         PolicyReason.HUMAN_AUTHORIZATION_REQUIRED,
@@ -2204,4 +2284,5 @@ __all__ = [
     "sign_authorization_command",
     "sign_policy_assessment",
     "verify_authorized_rule_event",
+    "verify_signed_policy_assessment",
 ]

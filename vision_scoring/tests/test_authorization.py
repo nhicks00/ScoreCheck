@@ -32,6 +32,7 @@ from vision_scoring.authorization import (
     sign_authorization_command,
     sign_policy_assessment,
     verify_authorized_rule_event,
+    verify_signed_policy_assessment,
 )
 from vision_scoring.domain_events import (
     CourtSide,
@@ -376,6 +377,42 @@ class AuthorizationTests(unittest.TestCase):
             self.command(assessment_value=assessment())
         with self.assertRaisesRegex(ValueError, "assessment-assisted"):
             self.command(origin=AuthorizationOrigin.ASSESSMENT_ASSISTED)
+
+    def test_public_assessment_verifier_checks_exact_trust_scope_and_causality(self) -> None:
+        exact_assessment = assessment()
+        signed_assessment = sign_policy_assessment(
+            assessment=exact_assessment,
+            assessor_id=self.assessment_key.assessor_id,
+            assessment_key_id=self.assessment_key.key_id,
+            signed_at_ns=850,
+            assessment_private_key=self.assessment_private,
+        )
+        self.assertEqual(
+            verify_signed_policy_assessment(
+                signed_assessment,
+                assessment=exact_assessment,
+                policy_archive=self.archive,
+                verified_at_ns=900,
+            ),
+            exact_assessment,
+        )
+
+        with self.assertRaisesRegex(AuthorizationError, "ASSESSMENT_TIME"):
+            verify_signed_policy_assessment(
+                dataclasses.replace(signed_assessment, signed_at_ns=799),
+                assessment=exact_assessment,
+                policy_archive=self.archive,
+                verified_at_ns=900,
+            )
+        with self.assertRaisesRegex(
+            AuthorizationError, "ASSESSMENT_SIGNATURE_REQUIRED"
+        ):
+            verify_signed_policy_assessment(
+                signed_assessment,
+                assessment=assessment(winner=Team.B),
+                policy_archive=self.archive,
+                verified_at_ns=900,
+            )
 
     def test_changed_assessment_intent_is_rejected_even_when_human_signed(self) -> None:
         changed = assessment(winner=Team.B)
