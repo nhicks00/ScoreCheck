@@ -60,7 +60,13 @@ DEPLOYMENT_BYTES = (
 
 def _write_json(path: Path, value: object) -> None:
     path.write_text(
-        json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
         encoding="utf-8",
     )
 

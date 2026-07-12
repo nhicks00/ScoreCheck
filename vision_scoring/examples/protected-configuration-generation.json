@@ -1,10 +1,1 @@
-{
-  "dataset_manifest_attestation_sha256": "25b6138bef27de6e27e5ac55cb7dce97cde56e3a3d9a19552727723d046f75d8",
-  "dataset_trust_store_sha256": "0ec8cf441b3d5f7d2562f5e0010548747480699305229f366d82382a698bfb6b",
-  "governance_domain_id": "example-dataset-governance",
-  "readiness_verification_policy_sha256": "a7feeb84611aa7a8e83b32914c9e80325122c9fa6fb23e536fbb5825bbc35df7",
-  "rights_trust_store_sha256": "929311822cbb7b1311cc3e8b697b7c788a1dab81cdf3efb30153519bcc8cdaeb",
-  "rights_verification_policy_sha256": "ba3bd8d92b57727141399d5ebc02e3b3c5b16a5b8ebdf433295a0a167df51b00",
-  "schema_version": "1.0",
-  "trusted_launcher_deployment_artifact_sha256": "b6efd12cebbb91882653219e477b3eff3e90d49f70aa4a77d66d65e57882ca6f"
-}
+{"dataset_manifest_attestation_sha256":"25b6138bef27de6e27e5ac55cb7dce97cde56e3a3d9a19552727723d046f75d8","dataset_trust_store_sha256":"0ec8cf441b3d5f7d2562f5e0010548747480699305229f366d82382a698bfb6b","governance_domain_id":"example-dataset-governance","readiness_verification_policy_sha256":"a7feeb84611aa7a8e83b32914c9e80325122c9fa6fb23e536fbb5825bbc35df7","rights_trust_store_sha256":"929311822cbb7b1311cc3e8b697b7c788a1dab81cdf3efb30153519bcc8cdaeb","rights_verification_policy_sha256":"ba3bd8d92b57727141399d5ebc02e3b3c5b16a5b8ebdf433295a0a167df51b00","schema_version":"1.0","trusted_launcher_deployment_artifact_sha256":"b6efd12cebbb91882653219e477b3eff3e90d49f70aa4a77d66d65e57882ca6f"}

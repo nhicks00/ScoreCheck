@@ -1,10 +1,1 @@
-{
-  "deployment_geography": "US",
-  "policy_id": "example-commercial-assistive-us",
-  "schema_version": "1.0",
-  "trust_store_sha256": "929311822cbb7b1311cc3e8b697b7c788a1dab81cdf3efb30153519bcc8cdaeb",
-  "use_profile": "COMMERCIAL_ASSISTIVE_SCORING_V1",
-  "valid_from": "2026-01-01",
-  "valid_until": "2099-12-31",
-  "verifier_source_tree_sha256": "08f1a1ab623ef902d0e3a95fda37e68aab7b17f8268d09d5a494a4fe7576ba80"
-}
+{"deployment_geography":"US","policy_id":"example-commercial-assistive-us","schema_version":"1.0","trust_store_sha256":"929311822cbb7b1311cc3e8b697b7c788a1dab81cdf3efb30153519bcc8cdaeb","use_profile":"COMMERCIAL_ASSISTIVE_SCORING_V1","valid_from":"2026-01-01","valid_until":"2099-12-31","verifier_source_tree_sha256":"08f1a1ab623ef902d0e3a95fda37e68aab7b17f8268d09d5a494a4fe7576ba80"}
