@@ -50,15 +50,30 @@ export function ProgramAudioMixer({
     let reconnectTimer: number | null = null;
     let reconnectAttempt = 0;
     let connecting = false;
+    let cameraSource: MediaStreamAudioSourceNode | null = null;
+    let attachedCameraStream: MediaStream | null = null;
     let lastNonSilenceAtMs: number | null = null;
     let peakDb = -120;
     const context = new AudioContext();
-    const cameraSource = context.createMediaElementSource(cameraElement);
     const cameraGain = context.createGain();
     const cameraAnalyser = context.createAnalyser();
     cameraAnalyser.fftSize = 1024;
     cameraGain.gain.value = dbToGain(cameraGainDb);
-    cameraSource.connect(cameraGain).connect(cameraAnalyser).connect(context.destination);
+    cameraGain.connect(cameraAnalyser).connect(context.destination);
+
+    // WHEP assigns a MediaStream to video.srcObject after the element mounts.
+    // MediaElementAudioSourceNode is silent for this Chromium/WebRTC shape, so
+    // attach the actual stream and repeat whenever a reconnect replaces it.
+    const attachCameraStream = () => {
+      const stream = cameraElement.srcObject;
+      if (!(stream instanceof MediaStream) || stream === attachedCameraStream || stream.getAudioTracks().length === 0) return;
+      cameraSource?.disconnect();
+      cameraSource = context.createMediaStreamSource(stream);
+      cameraSource.connect(cameraGain);
+      attachedCameraStream = stream;
+    };
+    attachCameraStream();
+    const cameraAttachTimer = window.setInterval(attachCameraStream, 500);
 
     const commentaryDelay = context.createDelay(10);
     const commentaryGain = context.createGain();
@@ -155,11 +170,12 @@ export function ProgramAudioMixer({
     return () => {
       cancelled = true;
       window.clearInterval(meter);
+      window.clearInterval(cameraAttachTimer);
       if (reconnectTimer != null) window.clearTimeout(reconnectTimer);
       for (const source of commentarySources.values()) source.disconnect();
       commentarySources.clear();
       room?.disconnect();
-      cameraSource.disconnect();
+      cameraSource?.disconnect();
       cameraGain.disconnect();
       cameraAnalyser.disconnect();
       commentaryDelay.disconnect();
