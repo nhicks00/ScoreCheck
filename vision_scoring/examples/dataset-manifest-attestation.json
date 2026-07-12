@@ -1,0 +1,10 @@
+{
+  "curator_id": "example-dataset-curator",
+  "dataset_id": "synthetic-readiness-example-v1",
+  "key_id": "example-dataset-key-1",
+  "manifest_sha256": "fb48328593fe2d1b6eb8ebfd4aec6c628493784321be6dd26e36aad5fd69f77f",
+  "schema_version": "1.0",
+  "signature_base64": "opwOlQZlIyhP6p09JknnfS/oXSZYLMnBzSsTHXLaa3VrmOY5L1uAQ66xEqE+zVJzOEC23C0MZ/zrRqwqVRjbBQ==",
+  "signed_on": "2026-07-12",
+  "trust_domain_id": "example-dataset-governance"
+}

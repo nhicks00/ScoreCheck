@@ -1,6 +1,9 @@
 .DS_Store
 *.swp
 *.lock
+!vision_scoring/uv.lock
+!vision_scoring/examples/dataset-artifacts/locks/*.lock
+!vision_scoring/examples/rights-evidence/locks/*.lock
 *~
 
 # Xcode
@@ -23,6 +26,7 @@ DerivedData/
 __pycache__/
 *.py[cod]
 *$py.class
+*.egg-info/
 venv/
 .venv*/
 scraper_venv/

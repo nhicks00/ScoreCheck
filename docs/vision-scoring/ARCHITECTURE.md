@@ -8,6 +8,9 @@
 
 **Related readiness plan:** [DATA_CAPTURE_READINESS.md](./DATA_CAPTURE_READINESS.md)
 
+**Independent review adoption:**
+[SECOND_STUDY_ADOPTION.md](./SECOND_STUDY_ADOPTION.md)
+
 ## Decision
 
 Build a new event-driven vision service. Do not resume the legacy perception pipeline as the production base. Salvage its deterministic scoring concepts, schemas, test cases, and operator-review ideas, but replace the model orchestration and data lifecycle.
@@ -54,8 +57,12 @@ Specialist observations
 Causal temporal fusion + rules context
         |
         v
-RallyDecision proposal
-  PENDING | REVIEW | REPLAY_NO_POINT | UNRESOLVED | AUTO_CONFIRM
+RallyHypothesis
+  uncertain causal inference; no policy or scoring authority
+        |
+        v
+Exception-first PolicyAssessment
+  abstain | review | eligible authorization path
         |
         v
 Authenticated authorizer / human review       [not implemented]
@@ -84,7 +91,7 @@ ScoreCheck remains the official presentation and operator surface. The vision se
 | Player perception | Active-player boxes and court membership | D-FINE-S or RT-DETRv2-S; typically 15–30 Hz |
 | Tracking | Rally-local identity, team/side constraints, and occlusion continuity | ByteTrack baseline; BoT-SORT only if held-out tests justify added ReID complexity |
 | Pose | Contact-window body/hand evidence | RTMPose-m on player crops only around candidate events |
-| Temporal fusion | Serve/contact/dead-ball/next-server evidence with uncertainty | Small causal TCN/GRU or constrained state model over geometry, tracks, pose, audio, and rules context |
+| Temporal fusion | Serve/contact/dead-ball/next-server evidence with uncertainty | Transparent constrained factor graph/HSMM first; a small causal TCN/GRU is a later challenger only if held-out evidence justifies it |
 | Decision policy | Eligibility, calibration, contradiction checks, and abstention | Versioned policy producing a proposal, never a score |
 | Authenticated authorizer | Resolve actor/role, enforce human/referee/automatic policy, bind evidence, sign canonical events | Not implemented; required before any external or official mutation path |
 | Authenticated event store | In one transaction: verify signer/ruleset/sequence, run reducer, append event and derived state, and expose replay | Not implemented; in-memory reducer state is not durable proof |
@@ -98,9 +105,13 @@ All durable messages use UTC timestamps, monotonic source time, a schema version
 
 `RulesReducer` performs domain validation only: match and set identity, contiguous sequence, exact ruleset fingerprint, event payload, scoring legality, and idempotency. It does not authenticate `actor_id`, establish that an `authority` enum came from a trusted principal, verify `authorization_id`, verify a cryptographic signature, or persist an event atomically. Those are responsibilities of the not-yet-implemented authorizer and event store.
 
-### `RallyDecision`
+### Transitional executable contract: `RallyDecision`
 
-This is a proposal and has no scoring authority.
+The Phase 0 executable foundation still contains this pre-adoption proposal
+type. It has no scoring authority and is scheduled for hard removal before any
+persistence, authorizer, or external API is built. New consumers must not use
+it. The authoritative target contract is the separated
+`RallyHypothesis -> PolicyAssessment -> Authorization` flow above.
 
 ```json
 {
@@ -127,7 +138,9 @@ Required statuses are:
 - `REVIEW`: coherent proposal requiring human/referee review;
 - `REPLAY_NO_POINT`: evidence proposes a replay, but the decision itself cannot close the rally;
 - `UNRESOLVED`: evidence is missing, contradictory, or outside the trained domain;
-- `AUTO_CONFIRM`: passes the decision contract, but still has no authority to issue or persist a `RuleEvent`.
+- `AUTO_CONFIRM`: a legacy name scheduled for removal because a model cannot
+  confirm its own output; it currently has no authority to issue or persist a
+  `RuleEvent`.
 
 ### `RuleEvent` domain contract
 
@@ -311,7 +324,9 @@ Calendar dates never waive a gate. If 3,000 eligible shadow opportunities or ade
 1. Who owns and can authorize use of each existing or future video source?
 2. What camera/lens/placement can consistently satisfy the measured 4K60 preflight at target venues?
 3. Is an enterprise detector license preferable to an all-permissive stack after benchmark results?
-4. Which storage/versioning system will back content-addressed media and immutable manifests?
+4. Which production object store or read-only snapshot service will replace the
+   implemented local immutable-generation/lease primitive while preserving its
+   exact membership, staged-consumption, and publisher/consumer isolation?
 5. Which authenticated human/referee roles may authorize ordinary, terminal, replay, basic administrative-point, and correction events at each rollout stage?
 6. What regulatory or league process would be required before marketing any feature as referee support?
 7. What complete sanctions/defaults/discipline model is required, if any, beyond the v0 administrative-point aliases?

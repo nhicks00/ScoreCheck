@@ -57,25 +57,57 @@ Every source asset must have a manifest record containing at least:
 | Capture | camera/lens/position, resolution/fps, shutter/exposure if available, codec/bitrate, audio, PTS/timebase, transcode history |
 | Geometry | calibration ID, named court points, lens model, camera-motion segments |
 | Lineage | parent asset hash, extraction command/version, annotation-set version, reviewer/adjudicator |
-| Split | immutable match/venue/camera/day group and `train`, `validation`, or `test` assignment |
+| Split | immutable match/venue/camera/day group and exact `TRAIN`, `DEV`, or `TEST` assignment (`DEV` is validation/model selection) |
 | Status | quarantine/accepted/rejected, validation failures, retention/deletion date |
 
 Rules:
 
 - Training and evaluation jobs accept only manifest IDs, never arbitrary paths.
+- The complete canonical manifest is detached from caller-owned memory, signed
+  by a trusted dataset curator, checked against the sole current manifest for
+  that dataset, and revalidated on the actual UTC date. A payload enum or hash
+  without the separately pinned signature/current-manifest store is not trust.
+- Every declared media, label, calibration, camera-attestation,
+  clock-verification, and encoder artifact must be resident in the exact
+  protected immutable generation derived from its digest set. One shared
+  generation lease covers the whole batch; every object must match both its raw
+  SHA-256 filename and exact staged bytes. Syntax-only checks cannot produce
+  `ready=true`.
+- The trusted launcher loads one protected configuration generation per
+  single-use validation and rechecks its current pointer at completion. A
+  concurrent policy, key-compromise, current-manifest, decision, or revocation
+  publication invalidates the run. Publisher rollback is forbidden.
+- Published content generations are atomically renamed and never mutated.
+  Consumer UIDs have read-only filesystem access, cooperative shared locks are
+  held through verification/consumption, and every training/evaluation consumer
+  reacquires the generation and independently stages/hashes bytes before use.
+- The protected readiness policy—not the dataset—pins unseen-TEST-venue
+  enforcement, the rights policy, source-tree commitment, trusted-launcher
+  deployment artifact, executing runtime identity, governance domain, and
+  validity window.
 - Rights must be `accepted` for the exact intended use; `unknown` is a hard failure.
+- TRAIN and DEV both require deployment permission because training, tuning,
+  early stopping, and model selection all influence the released artifact.
 - Split assignment happens before clip/frame extraction. Every derivative inherits the parent's split.
 - Test assets and labels are access-controlled and rejected by training jobs.
 - Original media is immutable. Derived artifacts reference parent hashes and transformation versions.
 - Annotation corrections create a new dataset version; they do not overwrite history.
+- Passing manifest/artifact intake is necessary but not semantic-label approval.
+  Each task-specific training/evaluation entry point must parse its exact label
+  bytes into the strict annotation contracts and verify every declared
+  reviewer/adjudicator signature, current annotation fingerprint, revocation,
+  evidence file, evaluator identity, and minimum truth policy before use.
 - Model cards list source-manifest versions, code commit, environment lock, seed, hyperparameters, weights hash, and evaluation report hash.
+- All leakage identities are bounded ASCII-stable IDs; lineage traversal is
+  iterative and record-count bounded, so Unicode aliases and deep recursive
+  chains cannot bypass or crash split validation.
 - Pretrained weights and source code are separate artifacts with separate licenses. Dataset terms do not follow automatically from a code license.
 
 ## Capture tiers
 
 | Tier | Minimum capture | Intended use | Release limitation |
 |---|---|---|---|
-| A: compatibility | One fixed 1920×1080 camera at 30 progressive fps plus synchronized audio | Feasibility, server identity, delayed assistive review | No automatic scoring unless every preflight and event gate passes; no referee claims |
+| A: compatibility | One fixed 1920×1080 camera at 30 progressive fps plus synchronized audio | Feasibility, server identity, delayed assistive review, and no-mutation shadow | Compatibility/shadow only; never eligible for automatic score mutation or referee claims |
 | B: assistive baseline | One fixed 3840×2160 camera at 59.94/60 progressive fps, native-resolution recording, synchronized audio | Ball continuity, contact candidates, rally/server/team attribution, statistics | Occluded/depth-dependent and terminal cases remain human-authorized |
 | C: multi-view | At least two genlocked or independently verified synchronized 4K60 cameras with joint calibration | Occlusion recovery, triangulation, stronger contact attribution | Still requires fault-specific validation before referee support |
 
@@ -93,6 +125,8 @@ Collect at least:
 - a lighting/noise range representative of deployment, including transitions if outdoor;
 - audio containing ball contacts, whistles, speech, wind, music, and crowd noise;
 - reconnect, dropped-frame, and clock-drift tests;
+- at least 1,000 stratified decisive-event windows, plus a continuous
+  two-hour-or-longer capture soak for every production profile;
 - for multi-view, a synchronization and joint-calibration sequence across the whole court volume.
 
 ### Provisional engineering gates
@@ -103,11 +137,14 @@ These thresholds are **engineering assumptions for the first experiment**, not p
 |---|---|---|---|
 | Visible-ball diameter after production preprocessing | 10th percentile at least 6 pixels | 10th percentile at least 10–12 pixels | Below this, center/blur/contact evidence becomes dominated by sampling and compression |
 | Preprocessing | Native-resolution ROI or overlapping tiles; no global 640-wide resize | Native-resolution ROI or overlapping tiles | Preserves the small target |
-| Ball motion blur | 95th-percentile streak no more than 2 apparent ball diameters | Same initial limit | Forces exposure/lighting tradeoff to be measured; temporal blur modeling still remains necessary |
-| Frame integrity | Dropped plus duplicated frames below 0.1%; no timestamp reversal; no unmarked reconnect | Same | Temporal evidence is invalid without a trustworthy clock |
+| Ball motion blur | 95th-percentile streak no more than 2 apparent ball diameters | 95th percentile no more than 1 apparent ball diameter | Forces exposure/lighting tradeoff to be measured; temporal blur modeling still remains necessary |
+| Decisive-event observability | At least 1,000 stratified windows; report usable observed positions | Same; provisional 10th percentile at least 3 observed positions for an eligible ordinary event | Prevents average visible-frame results from hiding unobservable outcomes |
+| Native source | Device/encoder configuration attested; no interpolation or lower-resolution upscale | Same | A 4K/60 label does not prove native photons or cadence |
+| Frame integrity | No unexplained timestamp reversal, critical drop, or frozen/duplicated sequence in decisive windows; no unmarked reconnect | Same | Temporal evidence is invalid without a trustworthy clock |
 | Audio/video alignment | Absolute error and drift within one frame (33.3 ms) over a 10-minute test | Within one frame (16.7 ms) over a 10-minute test | Contact audio is only useful when time-aligned |
 | Court visibility | All four court corners, lines, net intersections, and both service zones visible with recorded occlusion map | Same | Calibration and side/service reasoning need stable landmarks |
 | Ground-plane calibration check | 95th-percentile surveyed-checkpoint error at or below 5 cm in the playable area | Same initial target | Adequate for geometry features; **not authorization for line calls** |
+| Image reprojection check | 95th-percentile independent holdout error at or below 2 pixels | Same initial target | Detects a calibration that appears plausible but misses image evidence |
 | Fixed-camera stability | Drift monitor remains within the calibration check; zoom/stabilization crop is disabled or explicitly modeled | Same | Prevents stale geometry |
 
 For Tier C, the provisional cross-camera timestamp target is at most 2 ms and must be verified under motion, not inferred from device settings. Joint 3D residuals and rolling-shutter effects determine the final acceptable limit.
@@ -131,7 +168,7 @@ Annotation is temporal and uncertainty-aware. Do not turn every ambiguous frame 
 
 | Layer | Required labels |
 |---|---|
-| Ball | Center or blur endpoints/ellipse, visible/occluded/out-of-frame, blur direction/extent, confidence/ambiguity, duplicate-frame flag, track segment |
+| Ball | Full selected-stream/decode identity; center or exactly one blur representation; visible/occluded/out-of-frame; apparent size; ambiguity; track segment; pixel-equivalent versus capture-attested duplicate classification |
 | Players | Box/mask as needed, rally-local identity, team, physical side, active/non-active player, occlusion/truncation |
 | Pose/contact | Visible keypoints with visibility, candidate hand/arm contact interval, contacting player/team, ambiguity window; label selectively around events |
 | Court | Named keypoints, line masks, playable polygon, posts, net/antenna geometry, lens-distortion and camera-motion segment |
@@ -158,7 +195,13 @@ Split only by match plus venue/camera/day group. Never place adjacent frames, cl
 
 Use active learning only after the initial stratified seed exists. Sample uncertainty, model disagreement, rare strata, identity switches, and false-score-risk cases; continue to reserve randomly sampled negatives so the loop does not collapse onto unusual failures.
 
-## Required first experiment
+## Required first perception experiment
+
+This experiment starts only after the scorer-copilot control plane, review
+workflow, authenticated authorization boundary, transactional shadow sink, and
+rights-cleared intake path exist. The first temporal baseline is the transparent
+constrained factor graph/HSMM; learned TCN/GRU fusion is a challenger after that
+baseline is reproducible. Perception does not block building those controls.
 
 Run one controlled matrix before choosing the ball architecture:
 
@@ -179,7 +222,7 @@ Report point estimates, confidence intervals where meaningful, per-condition sli
 
 | Layer | Required metrics |
 |---|---|
-| Ball | Precision/recall/F1 and AP at declared pixel and physical thresholds; center error; visibility accuracy; track gap length; slices by apparent size, blur, occlusion, zone, venue, and light |
+| Ball | Precision/recall/F1 at a preregistered operating-confidence threshold; AP101 over the full confidence ranking; center error in pixels and apparent ball diameters; negative-frame activation count/rate on negative-only suites; visibility accuracy; track gap length; slices by apparent size, blur, occlusion, zone, venue, and light |
 | Player/tracking | Detection AP, HOTA, IDF1, identity switches per player-minute/rally, team and side attribution |
 | Pose/contact | Keypoint accuracy for visible points; contact-team and contact-time precision/recall at ±1, ±2, and tolerance windows |
 | Court | Reprojection error and surveyed physical error by court zone; drift-detection delay and false alarms |
@@ -258,8 +301,8 @@ With zero observed errors, the binomial “rule of three” gives only an approx
 
 | Window | Work | Exit decision |
 |---|---|---|
-| Days 0–30 | Preserve/inventory legacy artifacts; resolve rights; choose object manifest/versioning; implement event and annotation schemas; validate canonical ruleset fingerprint, pending obligations, basic administrative aliases, and latest-resolution correction boundaries; test camera placements; run Tier A/B preflights; lock dataset groups; annotate the stratified seed | Select supported capture profile and label plan, or stop and change hardware/placement |
-| Days 31–60 | Complete first benchmark tranche; run ball/detector/tracker/pose/calibration matrix; build causal fusion and calibrated abstention; prototype authenticated authorizer, signed transactional event log, and durable replay; replay complete matches; publish model/capture cards and error taxonomy | Select production baseline and challenger only if held-out product and event-security tests justify them |
+| Days 0–30 | Preserve/inventory legacy artifacts; resolve rights; choose object manifest/versioning; hard-cut proposal/policy/authorization contracts; implement scorer-copilot review, authenticated authorizer, signed transactional shadow event log, outbox, and deterministic replay; validate canonical ruleset fingerprint and correction boundaries; test camera placements; run Tier A/B preflights; lock dataset groups | Demonstrate a no-mutation control plane and select a supported capture/label plan, or stop and redesign |
+| Days 31–60 | Complete the first benchmark tranche; establish constrained factor-graph/HSMM and simple vision baselines; then run the justified ball/detector/tracker/pose/calibration challengers and calibrated abstention studies; replay complete matches; publish model/capture cards and error taxonomy | Select a production baseline and challenger only if held-out product and event-security tests justify them |
 | Days 61–90 | Operate one court in no-mutation shadow; harden operator review and audit replay; accumulate independent eligible cases; test failure injection; decide whether dual-camera value justifies cost | Approve continued shadow, human-confirmed assistive release, or redesign; automatic mutation only if every gate actually passes |
 
 If adequate rights-cleared diversity, preflight quality, or 3,000 eligible opportunities are unavailable by day 90, remain in shadow. The deadline is not a reason to relax the architecture.

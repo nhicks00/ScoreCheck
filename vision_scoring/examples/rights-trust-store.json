@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0",
+  "keyring_id": "example-rights-keyring",
+  "keys": [
+    {
+      "key_id": "example-rights-key-1",
+      "public_key_base64": "F8t5+ytBIPKx7GXkGY1uCLKOgT/rAeSkAIObheGAgM4=",
+      "reviewer_id": "example-rights-reviewer",
+      "compromised_on": null,
+      "valid_from": "2026-01-01",
+      "valid_until": "2099-12-31"
+    }
+  ],
+  "current_decisions": [
+    {
+      "asset_sha256": "285e291b9aafc6567a0842465f416cb8e6ab673c70fd478a4e00ced07f970099",
+      "decision_sha256": "b0cdb1e402d30b18e3c7085f49c247d7a5a8a3fbf623c8f6abf38c80aee2083e"
+    },
+    {
+      "asset_sha256": "47742417b06f3b45bd6e389fbd7a7234cbde07777405bf3dc1722a05c1fcc7e0",
+      "decision_sha256": "5ae300b99876a405cdf89f06807a85264043ebe726688b87d68c4269a6a98814"
+    },
+    {
+      "asset_sha256": "48b4e4598f59887fb5371732286df066c0d3a424fb82e489cf7cb058eca432b4",
+      "decision_sha256": "40e4b194f2fb34ba6d8982c64ea133b2e0aa50b23581a5e3c768efe9b56b0248"
+    }
+  ],
+  "revoked_decision_sha256s": []
+}

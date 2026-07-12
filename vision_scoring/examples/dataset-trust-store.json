@@ -1,0 +1,21 @@
+{
+  "current_manifests": [
+    {
+      "dataset_id": "synthetic-readiness-example-v1",
+      "manifest_sha256": "fb48328593fe2d1b6eb8ebfd4aec6c628493784321be6dd26e36aad5fd69f77f"
+    }
+  ],
+  "keyring_id": "example-dataset-governance",
+  "keys": [
+    {
+      "compromised_on": null,
+      "curator_id": "example-dataset-curator",
+      "key_id": "example-dataset-key-1",
+      "public_key_base64": "11l5O7wTooGagnx2rbb7qKSa7gB/SfLQmS2ZuCWtLEg=",
+      "valid_from": "2026-07-01",
+      "valid_until": "2099-12-31"
+    }
+  ],
+  "revoked_manifest_sha256s": [],
+  "schema_version": "1.0"
+}

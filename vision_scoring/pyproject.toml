@@ -7,10 +7,13 @@ name = "multicourt-vision-scoring"
 version = "0.1.0"
 description = "Fail-closed contracts and rules foundation for assistive beach-volleyball scoring"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+  "cryptography>=49,<50",
+]
 
 [project.scripts]
 vision-scoring-readiness = "vision_scoring.readiness:main"
+vision-scoring-media-preflight = "vision_scoring.media_preflight:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

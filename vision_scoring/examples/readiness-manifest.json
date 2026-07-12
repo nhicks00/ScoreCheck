@@ -1,8 +1,11 @@
 {
   "schema_version": "1.0",
+  "dataset_id": "synthetic-readiness-example-v1",
   "capture_profiles": [
     {
       "profile_id": "controlled-4k60-v1",
+      "camera_device_id": "camera-device-example-1",
+      "lens_configuration_id": "lens-config-example-1",
       "mode": "4K60",
       "width": 3840,
       "height": 2160,
@@ -14,11 +17,24 @@
       "human_resolvable_visible_ball_ratio": 0.997,
       "visible_serve_frames_meeting_pixel_gate_ratio": 0.995,
       "sampled_visible_ball_frames": 1200,
+      "sampled_decisive_event_windows": 1200,
       "timestamp_regressions": 0,
       "critical_unexplained_drop_events": 0,
+      "unexplained_freeze_events": 0,
+      "native_capture_verified": true,
+      "frame_interpolation_detected": false,
+      "upscaled_from_lower_resolution": false,
       "service_zones_fully_visible": true,
       "fixed_mount": true,
-      "calibration_profile_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "calibration_profile_sha256": "a3b0e567dccb17bc70b7b54ad1ed32d7c5e55591ea8eccce3be4fdc53d7bb242",
+      "camera_device_attestation_sha256": "1f7f8f7419f0c54cb6da55b583791869522f03e97e0bf653a59d460729f4dc0c",
+      "capture_clock_verification_sha256": "309f4aba103be6b59105772bc371cecc329fdde81e55ddb2c249bee86ddf6064",
+      "encoder_configuration_sha256": "19d6117a6efc349ac6cb2e1786992075a867aacdb18537c6d0a173b556709640",
+      "visible_ball_blur_to_minor_axis_ratio_p95": 0.8,
+      "usable_observed_positions_per_eligible_event_p10": 4.0,
+      "calibration_holdout_p95_px": 1.5,
+      "court_plane_holdout_p95_cm": 4.0,
+      "capture_soak_minutes": 180.0
     }
   ],
   "data_sources": [
@@ -27,51 +43,152 @@
       "match_id": "match-train-001",
       "venue_id": "venue-a",
       "capture_profile_id": "controlled-4k60-v1",
-      "camera_id": "camera-a",
+      "camera_setup_id": "camera-a",
       "recording_date": "2026-07-01",
       "ball_design_id": "ball-a",
       "lighting_condition": "sunny",
+      "synchronized_capture_group_id": "sync-match-train-001",
       "split_group_id": "venue-a-camera-a-2026-07-01",
       "split": "TRAIN",
-      "rights_status": "OWNED",
-      "rights_ref": "contract://owned-production-2026",
-      "media_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
-      "labels_sha256": "2111111111111111111111111111111111111111111111111111111111111111"
+      "asset_sha256": "285e291b9aafc6567a0842465f416cb8e6ab673c70fd478a4e00ced07f970099",
+      "root_asset_sha256": "285e291b9aafc6567a0842465f416cb8e6ab673c70fd478a4e00ced07f970099",
+      "parent_asset_sha256": null,
+      "labels_sha256": "67e94508d14dcb2f2a45c42d0db534ccc8e0a77a909f6f9bbb1e8bf77c4c7d8c",
+      "rights_decision": {
+        "asset_sha256": "285e291b9aafc6567a0842465f416cb8e6ab673c70fd478a4e00ced07f970099",
+        "basis": "OWNED",
+        "evidence_sha256s": [
+          "f085c1f877336b5830388d5c2261bef8a9bbd32ad23c4e945418b5a1ee6ca483"
+        ],
+        "expires_on": null,
+        "geography_scope": [
+          "US"
+        ],
+        "license_id": null,
+        "owner_or_licensor": "Example Fixture Media LLC",
+        "participant_age_status": "NO_MINORS",
+        "participant_release_sha256s": [],
+        "permitted_uses": [
+          "BIOMETRIC_POSE_ANALYSIS",
+          "COMMERCIAL_MODEL_TRAINING",
+          "DERIVATIVE_DATASET_CREATION",
+          "MODEL_DEPLOYMENT"
+        ],
+        "reviewed_on": "2026-07-10",
+        "reviewer_id": "example-rights-reviewer",
+        "schema_version": "1.0",
+        "state": "ACCEPTED"
+      },
+      "rights_decision_sha256": "b0cdb1e402d30b18e3c7085f49c247d7a5a8a3fbf623c8f6abf38c80aee2083e",
+      "rights_attestation": {
+        "decision_sha256": "b0cdb1e402d30b18e3c7085f49c247d7a5a8a3fbf623c8f6abf38c80aee2083e",
+        "key_id": "example-rights-key-1",
+        "schema_version": "1.0",
+        "signature_base64": "oFjUUbthCEeRGlG4I/fQaaBG20NV7qZJ1XPpcJrT1qP8Aiz1KN88GwC0omPtgl9J2nN3XeHacV4OE2kH0YfRCg==",
+        "signed_on": "2026-07-11",
+        "trust_domain_id": "example-rights-keyring"
+      }
     },
     {
       "source_id": "match-dev-001",
       "match_id": "match-dev-001",
       "venue_id": "venue-b",
       "capture_profile_id": "controlled-4k60-v1",
-      "camera_id": "camera-b",
+      "camera_setup_id": "camera-b",
       "recording_date": "2026-07-02",
       "ball_design_id": "ball-a",
       "lighting_condition": "overcast",
+      "synchronized_capture_group_id": "sync-match-dev-001",
       "split_group_id": "venue-b-camera-b-2026-07-02",
       "split": "DEV",
-      "rights_status": "OWNED",
-      "rights_ref": "contract://owned-production-2026",
-      "media_sha256": "3111111111111111111111111111111111111111111111111111111111111111",
-      "labels_sha256": "4111111111111111111111111111111111111111111111111111111111111111"
+      "asset_sha256": "47742417b06f3b45bd6e389fbd7a7234cbde07777405bf3dc1722a05c1fcc7e0",
+      "root_asset_sha256": "47742417b06f3b45bd6e389fbd7a7234cbde07777405bf3dc1722a05c1fcc7e0",
+      "parent_asset_sha256": null,
+      "labels_sha256": "27770af28568a374617db1125ef75b7341f1bd89f408a56e96c14c55b5d8154e",
+      "rights_decision": {
+        "asset_sha256": "47742417b06f3b45bd6e389fbd7a7234cbde07777405bf3dc1722a05c1fcc7e0",
+        "basis": "OWNED",
+        "evidence_sha256s": [
+          "6ef74ea8847ad8c8c341e1cdd98f246811f82c002607327370525eecbe385658"
+        ],
+        "expires_on": null,
+        "geography_scope": [
+          "US"
+        ],
+        "license_id": null,
+        "owner_or_licensor": "Example Fixture Media LLC",
+        "participant_age_status": "NO_MINORS",
+        "participant_release_sha256s": [],
+        "permitted_uses": [
+          "BIOMETRIC_POSE_ANALYSIS",
+          "COMMERCIAL_MODEL_TRAINING",
+          "MODEL_DEPLOYMENT",
+          "DERIVATIVE_DATASET_CREATION"
+        ],
+        "reviewed_on": "2026-07-10",
+        "reviewer_id": "example-rights-reviewer",
+        "schema_version": "1.0",
+        "state": "ACCEPTED"
+      },
+      "rights_decision_sha256": "5ae300b99876a405cdf89f06807a85264043ebe726688b87d68c4269a6a98814",
+      "rights_attestation": {
+        "decision_sha256": "5ae300b99876a405cdf89f06807a85264043ebe726688b87d68c4269a6a98814",
+        "key_id": "example-rights-key-1",
+        "schema_version": "1.0",
+        "signature_base64": "2MzapmRbMzMxIKcPfoULz2scjLM1+2D7wtXuqc5Xgl2jtJzTaKd9Ig6YtOkpnb40W+h2X+W5zICj/qW68ZK3DA==",
+        "signed_on": "2026-07-11",
+        "trust_domain_id": "example-rights-keyring"
+      }
     },
     {
       "source_id": "match-test-001",
       "match_id": "match-test-001",
       "venue_id": "venue-unseen",
       "capture_profile_id": "controlled-4k60-v1",
-      "camera_id": "camera-c",
+      "camera_setup_id": "camera-c",
       "recording_date": "2026-07-03",
       "ball_design_id": "ball-b",
       "lighting_condition": "backlit",
+      "synchronized_capture_group_id": "sync-match-test-001",
       "split_group_id": "venue-unseen-camera-c-2026-07-03",
       "split": "TEST",
-      "rights_status": "LICENSED",
-      "rights_ref": "contract://licensed-test-venue-2026",
-      "media_sha256": "5111111111111111111111111111111111111111111111111111111111111111",
-      "labels_sha256": "6111111111111111111111111111111111111111111111111111111111111111"
+      "asset_sha256": "48b4e4598f59887fb5371732286df066c0d3a424fb82e489cf7cb058eca432b4",
+      "root_asset_sha256": "48b4e4598f59887fb5371732286df066c0d3a424fb82e489cf7cb058eca432b4",
+      "parent_asset_sha256": null,
+      "labels_sha256": "37e93eee54907e625f85dfbf21e5d1e12a2456254b5b5bb5b8f22e47b8dcadc2",
+      "rights_decision": {
+        "asset_sha256": "48b4e4598f59887fb5371732286df066c0d3a424fb82e489cf7cb058eca432b4",
+        "basis": "LICENSED",
+        "evidence_sha256s": [
+          "5683fbfb5e5b801d770ec40c076d7acdee413a0263fbb58bec7489bce6cbd2a4"
+        ],
+        "expires_on": "2099-12-31",
+        "geography_scope": [
+          "US"
+        ],
+        "license_id": "example-license-test-2026",
+        "owner_or_licensor": "Example Fixture Media LLC",
+        "participant_age_status": "NO_MINORS",
+        "participant_release_sha256s": [],
+        "permitted_uses": [
+          "BIOMETRIC_POSE_ANALYSIS",
+          "COMMERCIAL_MODEL_EVALUATION",
+          "DERIVATIVE_DATASET_CREATION"
+        ],
+        "reviewed_on": "2026-07-10",
+        "reviewer_id": "example-rights-reviewer",
+        "schema_version": "1.0",
+        "state": "ACCEPTED"
+      },
+      "rights_decision_sha256": "40e4b194f2fb34ba6d8982c64ea133b2e0aa50b23581a5e3c768efe9b56b0248",
+      "rights_attestation": {
+        "decision_sha256": "40e4b194f2fb34ba6d8982c64ea133b2e0aa50b23581a5e3c768efe9b56b0248",
+        "key_id": "example-rights-key-1",
+        "schema_version": "1.0",
+        "signature_base64": "riJnMI1ow/NRwLG8otOP4Tur1bRwTWzs+KM6QwguaAV1iTB3DW9Y6Yv6IfXitpkLVIEuTwlorUBfDJbfu7ymDQ==",
+        "signed_on": "2026-07-11",
+        "trust_domain_id": "example-rights-keyring"
+      }
     }
-  ],
-  "policies": {
-    "require_unseen_test_venue": true
-  }
+  ]
 }
