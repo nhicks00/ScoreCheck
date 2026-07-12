@@ -71,6 +71,7 @@ from .contract_wire import (
     require_stable_id,
 )
 from .capture_contracts import MAX_FINALIZED_SOURCE_BYTES
+from .decoder_commands import decoder_decode_argv_v1, decoder_probe_argv_v1
 from .decoder_runtime import (
     MAX_DECODER_VERSION_OUTPUT_BYTES,
     DecoderRuntimeError,
@@ -1192,22 +1193,12 @@ def _probe_clip(
 ) -> _ProbeResultV1:
     with media._open_immediate_child_reader() as input_fd:
         ffprobe = runtime._executable_path("ffprobe")
-        argv = (
-            str(ffprobe),
-            "-v",
-            "error",
-            "-protocol_whitelist",
-            "fd",
-            "-fd",
-            str(input_fd),
-            "-select_streams",
-            str(plan.statement.selected_video_stream_index),
-            "-show_frames",
-            "-show_entries",
-            "stream=index,codec_type,time_base,width,height,pix_fmt,color_space,color_range,start_pts:stream_side_data=rotation:frame=stream_index,pts,width,height,pix_fmt,color_space,color_range",
-            "-of",
-            "json",
-            "fd:",
+        argv = decoder_probe_argv_v1(
+            ffprobe,
+            input_fd=input_fd,
+            selected_video_stream_index=(
+                plan.statement.selected_video_stream_index
+            ),
         )
         result = _execute_process(
             argv,
@@ -1267,78 +1258,13 @@ def _decode_clip(
         os.set_inheritable(hash_write_fd, False)
         with media._open_immediate_child_reader() as input_fd:
             ffmpeg = runtime._executable_path("ffmpeg")
-            stream = str(plan.statement.selected_video_stream_index)
-            argv = (
-                str(ffmpeg),
-                "-hide_banner",
-                "-nostdin",
-                "-loglevel",
-                "error",
-                "-bitexact",
-                "-filter_threads",
-                "1",
-                "-filter_complex_threads",
-                "1",
-                "-copyts",
-                "-threads",
-                "1",
-                "-hwaccel",
-                "none",
-                "-noautorotate",
-                "-protocol_whitelist",
-                "fd",
-                "-fd",
-                str(input_fd),
-                "-i",
-                "fd:",
-                "-filter_complex",
-                f"[0:{stream}]scale=w=iw:h=ih:in_color_matrix=bt709:out_color_matrix=bt709:in_range=tv:out_range=pc:flags=accurate_rnd+full_chroma_int+bitexact:sws_dither=none,format=pix_fmts=rgb24,split=outputs=2[raw][hash]",
-                "-map",
-                "[raw]",
-                "-an",
-                "-sn",
-                "-dn",
-                "-c:v",
-                "rawvideo",
-                "-threads:v",
-                "1",
-                "-pix_fmt",
-                "rgb24",
-                "-fps_mode",
-                "passthrough",
-                "-enc_time_base",
-                "-1",
-                "-f",
-                "rawvideo",
-                "-protocol_whitelist",
-                "pipe",
-                "pipe:1",
-                "-map",
-                "[hash]",
-                "-an",
-                "-sn",
-                "-dn",
-                "-c:v",
-                "rawvideo",
-                "-threads:v",
-                "1",
-                "-pix_fmt",
-                "rgb24",
-                "-fps_mode",
-                "passthrough",
-                "-enc_time_base",
-                "-1",
-                "-f",
-                "framehash",
-                "-hash",
-                "sha256",
-                "-format_version",
-                "2",
-                "-protocol_whitelist",
-                "fd",
-                "-fd",
-                str(hash_write_fd),
-                "fd:",
+            argv = decoder_decode_argv_v1(
+                ffmpeg,
+                input_fd=input_fd,
+                framehash_output_fd=hash_write_fd,
+                selected_video_stream_index=(
+                    plan.statement.selected_video_stream_index
+                ),
             )
             # Exact ownership of both pipe descriptors transfers to the runner.
             # Clear the caller's numeric values before the call: if runner close
