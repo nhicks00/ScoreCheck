@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { supabaseAdmin } from "./supabase";
-import type { MonitorCourtPipelineRange, MonitorSnapshot, MonitorSnapshotEnvelope } from "./monitoringTypes";
+import type { MonitorCourtPipelineRange, MonitorSilence, MonitorSnapshot, MonitorSnapshotEnvelope, MonitorStageName } from "./monitoringTypes";
 
 const envelopeSnapshotSchema = z.object({
   version: z.literal(1),
@@ -10,7 +10,8 @@ const envelopeSnapshotSchema = z.object({
   notifications: z.object({ state: z.string() }).passthrough(),
   courts: z.array(z.object({ courtNumber: z.number().int().min(1).max(8), overallState: z.string(), stages: z.array(z.unknown()) }).passthrough()).max(8),
   agents: z.array(z.object({ agentId: z.string(), state: z.string() }).passthrough()).max(32),
-  incidents: z.array(z.object({ id: z.string().uuid(), status: z.string(), severity: z.string() }).passthrough()).max(200)
+  incidents: z.array(z.object({ id: z.string().uuid(), status: z.string(), severity: z.string() }).passthrough()).max(200),
+  silences: z.array(z.object({ id: z.string().uuid(), expiresAt: z.string().datetime({ offset: true }) }).passthrough()).max(100)
 }).passthrough();
 
 export function monitorConfigured(): boolean {
@@ -46,6 +47,28 @@ export async function acknowledgeMonitorIncident(id: string, actor: string, reas
   const payload = await response.json().catch(() => null);
   if (!response.ok) throw new Error(response.status === 404 ? "Incident is no longer active." : "Monitor acknowledgement failed.");
   return payload;
+}
+
+export async function createMonitorSilence(input: {
+  eventId: string | null;
+  courtNumber: number | null;
+  stage: MonitorStageName | null;
+  issueCode: string | null;
+  reason: string;
+  actor: string;
+  expiresAt: string;
+}): Promise<{ silence: MonitorSilence }> {
+  const connection = requiredMonitorConnection();
+  const response = await fetch(`${connection.baseUrl}/v1/silences`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${connection.token}`, "content-type": "application/json" },
+    body: JSON.stringify(input),
+    cache: "no-store",
+    signal: AbortSignal.timeout(5_000)
+  });
+  const payload = await response.json().catch(() => null) as { silence?: MonitorSilence; error?: string } | null;
+  if (!response.ok || !payload?.silence) throw new Error(payload?.error ?? "Monitor silence failed.");
+  return { silence: payload.silence };
 }
 
 export async function loadMonitorThumbnail(courtNumber: number): Promise<{ body: ArrayBuffer; contentType: string; sampledAt: string | null } | null> {

@@ -1,7 +1,7 @@
 import express from "express";
 import { Counter, Gauge, Registry } from "prom-client";
 import { z } from "zod";
-import { agentSnapshotSchema, type MonitorSnapshot } from "./contracts.js";
+import { agentSnapshotSchema, STAGES, type MonitoringSilence, type MonitorSnapshot } from "./contracts.js";
 import { loadServiceConfig, type AgentTarget } from "./config.js";
 import { buildMonitorSnapshot, type AgentRuntime } from "./correlator.js";
 import { IncidentManager } from "./incidents.js";
@@ -13,6 +13,7 @@ import { YouTubeCollector } from "./youtube.js";
 import { NotificationDispatcher } from "./notifications.js";
 import { loadCourtPipelineRange, parseRangeInput } from "./rangeQueries.js";
 import { BrowserThumbnailManager } from "./browserThumbnails.js";
+import { activeSilences, incidentIsSilenced, silenceMatchesIncident } from "./silences.js";
 
 const config = loadServiceConfig();
 const app = express();
@@ -58,9 +59,11 @@ const youtubeCollector = new YouTubeCollector({
 let youtubeRefreshRunning = false;
 const incidentStore = IncidentStore.create(config.supabaseUrl, config.supabaseServiceRoleKey);
 const notificationDispatcher = new NotificationDispatcher(config, incidentStore);
+let silences: MonitoringSilence[] = [];
 if (incidentStore) {
   try {
     incidents.hydrate(await incidentStore.loadActive());
+    silences = await incidentStore.loadActiveSilences();
     notificationDispatcher.hydrate(await incidentStore.latestProviderNotifications());
   } catch {
     console.error("durable monitoring state could not be loaded");
@@ -168,6 +171,19 @@ app.post("/v1/alertmanager", bearerAuth(config.alertmanagerWebhookToken), async 
     res.status(400).json({ error: "Invalid Alertmanager payload." });
   }
 });
+app.get("/v1/incidents/:id", bearerAuth(config.token), (req, res) => {
+  const incidentId = z.string().uuid().safeParse(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id);
+  if (!incidentId.success) {
+    res.status(400).json({ error: "Invalid incident identifier." });
+    return;
+  }
+  const incident = incidents.all().find((entry) => entry.id === incidentId.data);
+  if (!incident) {
+    res.status(404).json({ error: "Incident not found." });
+    return;
+  }
+  res.json({ incident });
+});
 app.post("/v1/incidents/:id/acknowledge", bearerAuth(config.token), async (req, res) => {
   const incidentId = z.string().uuid().safeParse(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id);
   const parsed = z.object({
@@ -186,6 +202,50 @@ app.post("/v1/incidents/:id/acknowledge", bearerAuth(config.token), async (req, 
   snapshot = currentSnapshot();
   await persistIncidentChanges([change]);
   res.json({ incident: change.incident, reason: parsed.data.reason });
+});
+app.post("/v1/silences", bearerAuth(config.token), async (req, res) => {
+  const parsed = z.object({
+    eventId: z.string().uuid().nullable().default(null),
+    courtNumber: z.number().int().min(1).max(8).nullable().default(null),
+    stage: z.enum(STAGES).nullable().default(null),
+    issueCode: z.string().trim().min(1).max(80).regex(/^[A-Z0-9_.:-]+$/).nullable().default(null),
+    reason: z.string().trim().min(3).max(300).refine((value) => !/[\u0000-\u001f\u007f]/.test(value)),
+    actor: z.string().trim().min(1).max(80).regex(/^[a-zA-Z0-9_.:@-]+$/),
+    expiresAt: z.string().datetime({ offset: true })
+  }).strict().refine((value) => value.eventId != null || value.courtNumber != null || value.stage != null || value.issueCode != null, {
+    message: "At least one silence scope is required."
+  }).safeParse(req.body);
+  if (!parsed.success || !incidentStore) {
+    res.status(parsed.success ? 503 : 400).json({ error: parsed.success ? "Durable silence storage is unavailable." : "Invalid silence request." });
+    return;
+  }
+  const now = new Date();
+  const expiresAtMs = Date.parse(parsed.data.expiresAt);
+  if (expiresAtMs < now.getTime() + 60_000 || expiresAtMs > now.getTime() + 24 * 60 * 60_000) {
+    res.status(400).json({ error: "Silence expiry must be between one minute and 24 hours from now." });
+    return;
+  }
+  try {
+    const silence = await incidentStore.createSilence({
+      eventId: parsed.data.eventId,
+      courtNumber: parsed.data.courtNumber,
+      stage: parsed.data.stage,
+      issueCode: parsed.data.issueCode,
+      reason: parsed.data.reason,
+      createdBy: parsed.data.actor,
+      expiresAt: parsed.data.expiresAt
+    });
+    silences = activeSilences([...silences, silence], now);
+    for (const incident of incidents.active().filter((entry) => silenceMatchesIncident(silence, entry, now))) {
+      await incidentStore.appendSilencedEvent(incident.id, silence);
+      await notificationDispatcher.silence(incident, now);
+    }
+    snapshot = currentSnapshot();
+    await incidentStore.checkpoint(snapshot);
+    res.status(201).json({ silence });
+  } catch {
+    res.status(503).json({ error: "Silence could not be persisted." });
+  }
 });
 app.post("/v1/provider/twilio/status", express.urlencoded({ extended: false, limit: "16kb" }), async (req, res) => {
   const params = Object.fromEntries(Object.entries(req.body as Record<string, unknown>)
@@ -258,6 +318,7 @@ async function pollAll() {
 }
 
 function currentSnapshot(): MonitorSnapshot {
+  silences = activeSilences(silences);
   return buildMonitorSnapshot(
     config.targets,
     runtimes,
@@ -268,7 +329,8 @@ function currentSnapshot(): MonitorSnapshot {
     controlPlane.current(),
     youtubeCollector.current(),
     notificationDispatcher.health(),
-    browserThumbnails.metadata()
+    browserThumbnails.metadata(),
+    silences
   );
 }
 
@@ -349,7 +411,11 @@ function activeCoverageExpected(): boolean {
 
 async function maintainNotifications() {
   try {
-    const acknowledgements = await notificationDispatcher.maintain(incidents.active());
+    const acknowledgements = await notificationDispatcher.maintain(
+      incidents.active(),
+      new Date(),
+      (incident) => incidentIsSilenced(incident, silences)
+    );
     for (const acknowledgement of acknowledgements) {
       const change = incidents.acknowledge(acknowledgement.incidentId, acknowledgement.actor, acknowledgement.reason);
       if (!change) continue;
@@ -381,7 +447,11 @@ async function persistIncidentChanges(changes: ReturnType<IncidentManager["apply
   try {
     for (const change of changes) await incidentStore.persist(change);
     await incidentStore.checkpoint(snapshot);
-    await notificationDispatcher.handleChanges(changes);
+    await notificationDispatcher.handleChanges(
+      changes,
+      new Date(),
+      (incident) => incidentIsSilenced(incident, silences)
+    );
   } catch {
     console.error("durable incident state could not be persisted");
   }

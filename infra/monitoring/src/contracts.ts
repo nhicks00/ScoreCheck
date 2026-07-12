@@ -364,6 +364,18 @@ export type IncidentSnapshot = {
   resolvedAt: string | null;
 };
 
+export type MonitoringSilence = {
+  id: string;
+  eventId: string | null;
+  courtNumber: number | null;
+  stage: MonitoringStage | null;
+  issueCode: string | null;
+  reason: string;
+  createdBy: string;
+  createdAt: string;
+  expiresAt: string;
+};
+
 export type MonitorSnapshot = {
   version: typeof MONITORING_CONTRACT_VERSION;
   generatedAt: string;
@@ -394,6 +406,7 @@ export type MonitorSnapshot = {
     nativeServices: NativeServiceSnapshot | null;
   }>;
   incidents: IncidentSnapshot[];
+  silences: MonitoringSilence[];
 };
 
 const stateAttentionRank: Record<HealthState, number> = {

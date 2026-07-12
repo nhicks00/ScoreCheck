@@ -56,6 +56,30 @@ Supabase desired/observed state -> outbound controller reconciler
 - LiveKit Chrome sandbox seccomp profile instead of broad `SYS_ADMIN`.
 - Explicit YouTube 720p30/4 Mbps/2 second keyframe/AAC RTMPS request.
 
+## Implemented unified monitoring foundation
+
+- Dedicated observability VPS with Prometheus, Alertmanager, correlator, bounded
+  monitor API, durable incident store, and independent dead-man sender.
+- Read-only agents on MediaMTX, Commentary, and all four compositor hosts.
+- Explicit compositor telemetry mapping A=1-2, B=3-4, C=5-6, D=7-8.
+- MediaMTX bitrate/path telemetry, FFmpeg `-progress`, program-browser frame and
+  WebRTC stats, LiveKit commentary health, Egress capacity, score/render
+  alignment, YouTube health, and host/container metrics.
+- Authenticated `/admin/monitor` 4x2 matrix with low-rate thumbnails, one selected
+  full WHEP preview, exact first actions, trends, shared-host capacity, and
+  durable checkpoint fallback.
+- Durable deduplicated incidents, acknowledgement, audited timed silences,
+  Pushover emergency acknowledgement, Twilio SMS escalation, and recovery logic.
+- Expected-state lifecycle wired to event activation/completion and Production
+  Console start/stop so idle courts do not poll or page as if live.
+- High-frequency telemetry retained in Prometheus; Supabase receives only
+  low-churn control and audit records plus one checkpoint per minute.
+
+Phone-provider and external dead-man delivery remain conditional on protected
+Pushover, Twilio, and Healthchecks credentials. Real one-court and eight-court
+fault gates remain test-session work; monitoring must not prove itself by
+stopping public production services.
+
 ## Capacity topology
 
 Do not place all eight encoders on one host. Gate 1 measured about 1.3 CPU
@@ -142,13 +166,15 @@ tokens before cutover.
 
 ## Implementation order
 
-1. Preserve the July 12 Gate 1 evidence and apply its lifecycle/logging fixes.
-2. Provision the one-ingest/four-compositor direct-eight topology.
-3. Run the full-eight load, sync, recovery, and fault-injection gate.
-4. Convert the controller to desired-state reconciliation.
-5. Move YouTube/program credentials to proper secret storage.
-6. Add reusable-stream/per-match YouTube orchestration.
-7. Run the two-court shadow event, then the full shadow event.
+1. Preserve the July 12 Gate 1 evidence and apply its lifecycle/logging fixes. Done.
+2. Deploy the independent unified monitoring foundation. Done.
+3. Activate and prove phone paging plus external dead-man delivery.
+4. Run the one-court monitoring fault gate using a test broadcast.
+5. Provision and run the full-eight load, sync, recovery, and fault gate.
+6. Convert the controller to desired-state reconciliation.
+7. Move YouTube/program credentials to proper secret storage.
+8. Add reusable-stream/per-match YouTube orchestration.
+9. Run the two-court shadow event, then the full shadow event.
 
 The July 12 soak is an endurance pass for the final x86, audible-commentary,
 RTMPS pipeline. Gate 1 remains conditional because midpoint/final subjective

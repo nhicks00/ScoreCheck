@@ -95,6 +95,17 @@ silently unmonitored.
 PromQL and bounded window/step values; the browser cannot submit PromQL. The
 admin dashboard requests a five-minute view every 30 seconds while visible.
 
+## Incident operations
+
+Acknowledgement stops repeated emergency delivery without hiding the incident.
+The admin dashboard can also create an exact, durable 15-120 minute maintenance
+silence. A silence suppresses paging only; health and incident evidence remain
+visible. If the fault survives expiry, primary paging is re-armed before the SMS
+escalation timer begins again.
+
+The full event-day workflow, credential checklist, and fault gates are in
+`docs/MONITORING_OPERATIONS_RUNBOOK.md`.
+
 ## Current gate
 
 The infrastructure gate passes when MediaMTX, Commentary, and every assigned

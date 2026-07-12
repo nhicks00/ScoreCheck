@@ -185,8 +185,11 @@ GET  /healthz
 GET  /v1/snapshot
 GET  /v1/incidents/:id
 GET  /v1/range/court-pipeline
+GET  /v1/courts/:courtNumber/thumbnail
 POST /v1/browser-heartbeats
-POST /v1/provider-callbacks/:provider
+POST /v1/browser-thumbnails
+POST /v1/alertmanager
+POST /v1/provider/twilio/status
 POST /v1/incidents/:id/acknowledge
 POST /v1/silences
 ```
@@ -194,6 +197,11 @@ POST /v1/silences
 Range queries use allowlisted names, bounded time windows, and bounded resolution. Arbitrary PromQL is forbidden.
 The initial `court-pipeline` query returns only raw bitrate, preview FPS, and
 program FPS for courts 1–8, with a maximum of 240 samples per series.
+
+Silences require at least one bounded event, court, stage, or issue-code scope,
+an operator, a reason, and an expiry no more than 24 hours away. They suppress
+notifications only. Incidents and degraded stage health remain visible, and a
+still-active critical condition re-arms primary paging when the silence expires.
 
 ## Browser heartbeat security
 

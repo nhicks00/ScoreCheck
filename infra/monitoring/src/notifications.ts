@@ -62,7 +62,7 @@ export class NotificationDispatcher {
     }
   }
 
-  async handleChanges(changes: IncidentChange[], now = new Date()): Promise<void> {
+  async handleChanges(changes: IncidentChange[], now = new Date(), isSilenced: (incident: IncidentSnapshot) => boolean = () => false): Promise<void> {
     if (!this.store) return;
     for (const change of changes) {
       if (change.eventType === "ACKNOWLEDGED") {
@@ -71,30 +71,37 @@ export class NotificationDispatcher {
       }
       if (change.eventType === "RESOLVED") {
         await this.cancelEmergency(change.incident, now);
-        await this.sendRecovery(change.incident, now);
+        if (!isSilenced(change.incident)) await this.sendRecovery(change.incident, now);
         continue;
       }
+      if (isSilenced(change.incident)) continue;
       if (change.incident.severity === "critical" && ["OPENED", "REOPENED", "SEVERITY_CHANGED"].includes(change.eventType)) {
         await this.ensureCriticalPage(change.incident, now);
       }
     }
   }
 
-  async maintain(activeIncidents: IncidentSnapshot[], now = new Date()): Promise<Array<{ incidentId: string; actor: string; reason: string }>> {
+  async maintain(activeIncidents: IncidentSnapshot[], now = new Date(), isSilenced: (incident: IncidentSnapshot) => boolean = () => false): Promise<Array<{ incidentId: string; actor: string; reason: string }>> {
     if (!this.store) return [];
     const acknowledgements: Array<{ incidentId: string; actor: string; reason: string }> = [];
     for (const incident of activeIncidents) {
-      if (incident.severity !== "critical" || incident.status === "acknowledged") continue;
+      if (incident.severity !== "critical" || incident.status === "acknowledged" || isSilenced(incident)) continue;
       const pushover = await this.ensureCriticalPage(incident, now);
       if (pushover?.providerMessageId && ["accepted", "delivered"].includes(pushover.status)) {
         const acknowledged = await this.pollPushoverReceipt(pushover, now);
         if (acknowledged) acknowledgements.push({ incidentId: incident.id, actor: "pushover", reason: "Acknowledged from the emergency push notification." });
       }
-      if (now.getTime() - Date.parse(incident.openedAt) >= this.config.notificationSmsEscalationMs) {
+      const primaryAcceptedAt = pushover?.acceptedAt ? Date.parse(pushover.acceptedAt) : now.getTime();
+      const escalationStartedAt = Math.max(Date.parse(incident.openedAt), primaryAcceptedAt);
+      if (this.pushoverConfigured() && now.getTime() - escalationStartedAt >= this.config.notificationSmsEscalationMs) {
         await this.ensureSms(incident, "escalation", now);
       }
     }
     return acknowledgements;
+  }
+
+  async silence(incident: IncidentSnapshot, now = new Date()): Promise<void> {
+    await this.cancelEmergency(incident, now);
   }
 
   async applyTwilioStatus(params: Record<string, string>, signature: string): Promise<boolean> {
@@ -123,11 +130,17 @@ export class NotificationDispatcher {
       return null;
     }
     const claim = await this.store.ensureNotification(incident.id, "pushover", "open", now);
-    const ageMs = now.getTime() - Date.parse(claim.notification.submittedAt);
-    if (!claim.created && (claim.notification.status !== "pending" || ageMs < 30_000)) return claim.notification;
+    let notification = claim.notification;
+    let shouldSubmit = claim.created;
+    if (!claim.created && ["cancelled", "expired"].includes(notification.status)) {
+      notification = await this.store.rearmNotification(notification.id, now);
+      shouldSubmit = true;
+    }
+    const ageMs = now.getTime() - Date.parse(notification.submittedAt);
+    if (!shouldSubmit && (notification.status !== "pending" || ageMs < 30_000)) return notification;
     try {
       const result = await this.sendPushover(incident, true);
-      const accepted = await this.store.updateNotification(claim.notification.id, {
+      const accepted = await this.store.updateNotification(notification.id, {
         providerMessageId: result.receipt,
         status: "accepted",
         acceptedAt: now.toISOString(),
@@ -136,7 +149,7 @@ export class NotificationDispatcher {
       this.mark("pushover", "success", now.toISOString());
       return accepted;
     } catch {
-      await this.store.updateNotification(claim.notification.id, { status: "failed", providerErrorCode: "submission-failed" });
+      await this.store.updateNotification(notification.id, { status: "failed", providerErrorCode: "submission-failed" });
       this.mark("pushover", "failure", now.toISOString());
       if (this.twilioConfigured()) await this.ensureSms(incident, "open", now);
       return null;

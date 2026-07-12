@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import type { IncidentSnapshot, MonitorSnapshot } from "./contracts.js";
+import type { IncidentSnapshot, MonitoringSilence, MonitoringStage, MonitorSnapshot } from "./contracts.js";
 import type { IncidentChange } from "./incidents.js";
 
 export type NotificationProvider = "pushover" | "twilio_sms";
@@ -41,6 +41,18 @@ type IncidentRow = {
   resolved_at: string | null;
 };
 
+type SilenceRow = {
+  id: string;
+  event_id: string | null;
+  court_number: number | null;
+  stage: MonitoringStage | null;
+  issue_code: string | null;
+  reason: string;
+  created_by: string;
+  created_at: string;
+  expires_at: string;
+};
+
 export class IncidentStore {
   private constructor(private readonly db: SupabaseClient) {}
 
@@ -58,6 +70,39 @@ export class IncidentStore {
       .neq("status", "resolved");
     if (error) throw error;
     return (data ?? []).map((row) => fromRow(row as IncidentRow));
+  }
+
+  async loadActiveSilences(now = new Date()): Promise<MonitoringSilence[]> {
+    const { data, error } = await this.db
+      .from("monitoring_silences")
+      .select("id,event_id,court_number,stage,issue_code,reason,created_by,created_at,expires_at")
+      .is("revoked_at", null)
+      .gt("expires_at", now.toISOString())
+      .order("expires_at", { ascending: true });
+    if (error) throw error;
+    return (data ?? []).map((row) => silenceFromRow(row as SilenceRow));
+  }
+
+  async createSilence(input: {
+    eventId: string | null;
+    courtNumber: number | null;
+    stage: MonitoringStage | null;
+    issueCode: string | null;
+    reason: string;
+    createdBy: string;
+    expiresAt: string;
+  }): Promise<MonitoringSilence> {
+    const { data, error } = await this.db.from("monitoring_silences").insert({
+      event_id: input.eventId,
+      court_number: input.courtNumber,
+      stage: input.stage,
+      issue_code: input.issueCode,
+      reason: input.reason,
+      created_by: input.createdBy,
+      expires_at: input.expiresAt
+    }).select("id,event_id,court_number,stage,issue_code,reason,created_by,created_at,expires_at").single();
+    if (error) throw error;
+    return silenceFromRow(data as SilenceRow);
   }
 
   async persist(change: IncidentChange): Promise<void> {
@@ -157,6 +202,23 @@ export class IncidentStore {
     return notificationFromRow(data);
   }
 
+  async rearmNotification(id: string, now = new Date()): Promise<StoredNotification> {
+    const { data, error } = await this.db.from("incident_notifications").update({
+      provider_message_id: null,
+      status: "pending",
+      submitted_at: now.toISOString(),
+      accepted_at: null,
+      delivered_at: null,
+      acknowledged_at: null,
+      expired_at: null,
+      escalated_at: null,
+      provider_error_code: null,
+      updated_at: now.toISOString()
+    }).eq("id", id).select(NOTIFICATION_COLUMNS).single();
+    if (error) throw error;
+    return notificationFromRow(data);
+  }
+
   async notificationByProviderId(provider: NotificationProvider, providerMessageId: string): Promise<StoredNotification | null> {
     const { data, error } = await this.db.from("incident_notifications")
       .select(NOTIFICATION_COLUMNS)
@@ -193,6 +255,17 @@ export class IncidentStore {
       actor: "monitor-service",
       detail,
       occurred_at: new Date().toISOString()
+    });
+    if (error) throw error;
+  }
+
+  async appendSilencedEvent(incidentId: string, silence: MonitoringSilence): Promise<void> {
+    const { error } = await this.db.from("monitoring_incident_events").insert({
+      incident_id: incidentId,
+      event_type: "SILENCED",
+      actor: silence.createdBy,
+      detail: { silenceId: silence.id, reason: silence.reason, expiresAt: silence.expiresAt },
+      occurred_at: silence.createdAt
     });
     if (error) throw error;
   }
@@ -248,6 +321,20 @@ function fromRow(row: IncidentRow): IncidentSnapshot {
     acknowledgedAt: row.acknowledged_at,
     acknowledgedBy: row.acknowledged_by,
     resolvedAt: row.resolved_at
+  };
+}
+
+function silenceFromRow(row: SilenceRow): MonitoringSilence {
+  return {
+    id: row.id,
+    eventId: row.event_id,
+    courtNumber: row.court_number,
+    stage: row.stage,
+    issueCode: row.issue_code,
+    reason: row.reason,
+    createdBy: row.created_by,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at
   };
 }
 

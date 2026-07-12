@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StreamPlayer } from "@/components/StreamPlayer";
-import type { MonitorCourt, MonitorCourtPipelineRange, MonitorHealthState, MonitorIncident, MonitorSnapshotEnvelope, MonitorStage } from "@/lib/monitoringTypes";
+import type { MonitorCourt, MonitorCourtPipelineRange, MonitorHealthState, MonitorIncident, MonitorSilence, MonitorSnapshotEnvelope, MonitorStage } from "@/lib/monitoringTypes";
 
 const POLL_INTERVAL_MS = 5_000;
 const STATE_RANK: Record<MonitorHealthState, number> = { CRITICAL: 9, UNKNOWN: 8, DEGRADED: 7, RECOVERING: 6, STARTING: 5, HEALTHY: 4, MAINTENANCE: 3, EXPECTED_OFF: 2, NOT_APPLICABLE: 1 };
@@ -36,6 +36,10 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
   const [ackReasons, setAckReasons] = useState<Record<string, string>>({});
   const [ackBusy, setAckBusy] = useState<string | null>(null);
   const [ackError, setAckError] = useState<Record<string, string | undefined>>({});
+  const [silenceReasons, setSilenceReasons] = useState<Record<string, string>>({});
+  const [silenceDurations, setSilenceDurations] = useState<Record<string, number>>({});
+  const [silenceBusy, setSilenceBusy] = useState<string | null>(null);
+  const [silenceError, setSilenceError] = useState<Record<string, string | undefined>>({});
   const [nowMs, setNowMs] = useState(Date.now());
   const [history, setHistory] = useState<MonitorCourtPipelineRange | null>(null);
   const previousCriticalIds = useRef(new Set(initial?.snapshot.incidents.filter((incident) => incident.severity === "critical").map((incident) => incident.id) ?? []));
@@ -136,6 +140,38 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
     }
   }
 
+  async function silenceIncident(incident: MonitorIncident) {
+    const reason = silenceReasons[incident.id]?.trim() ?? "";
+    if (reason.length < 3) {
+      setSilenceError((current) => ({ ...current, [incident.id]: "Enter a brief maintenance reason." }));
+      return;
+    }
+    setSilenceBusy(incident.id);
+    setSilenceError((current) => ({ ...current, [incident.id]: undefined }));
+    try {
+      const response = await fetch("/api/admin/monitor/silences", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          eventId: incident.eventId,
+          courtNumber: incident.courtNumber,
+          stage: incident.stage,
+          issueCode: incident.issueCode,
+          reason,
+          durationMinutes: silenceDurations[incident.id] ?? 30
+        })
+      });
+      const payload = await response.json().catch(() => null) as { error?: string } | null;
+      if (!response.ok) throw new Error(payload?.error ?? "Silence failed.");
+      setSilenceReasons((current) => ({ ...current, [incident.id]: "" }));
+      await refresh();
+    } catch (error) {
+      setSilenceError((current) => ({ ...current, [incident.id]: error instanceof Error ? error.message : "Silence failed." }));
+    } finally {
+      setSilenceBusy(null);
+    }
+  }
+
   if (!envelope) {
     return (
       <section className="monitor-empty" role="status">
@@ -152,6 +188,7 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
   const overall = systemState(snapshot.courts.map((court) => court.overallState), snapshot.incidents);
   const selected = snapshot.courts.find((court) => court.courtNumber === selectedCourt) ?? snapshot.courts[0] ?? null;
   const activeIncidents = snapshot.incidents.filter((incident) => incident.status !== "resolved");
+  const activeSilences = snapshot.silences.filter((silence) => Date.parse(silence.expiresAt) > nowMs);
 
   return (
     <div className="monitor-dashboard">
@@ -233,30 +270,59 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
       </section>
 
       <section className="monitor-incidents-band" aria-label="Active incidents">
-        <div className="monitor-section-heading"><div><p className="eyebrow">Incident queue</p><h2>{activeIncidents.length ? `${activeIncidents.length} active` : "No active incidents"}</h2></div></div>
+        <div className="monitor-section-heading"><div><p className="eyebrow">Incident queue</p><h2>{activeIncidents.length ? `${activeIncidents.length} active${activeSilences.length ? ` · ${activeSilences.length} silenced` : ""}` : "No active incidents"}</h2></div></div>
         {activeIncidents.length > 0 && (
           <div className="monitor-incident-list">
-            {activeIncidents.map((incident) => (
+            {activeIncidents.map((incident) => {
+              const silence = matchingSilence(incident, activeSilences, nowMs);
+              return (
               <article className="monitor-incident" key={incident.id} data-severity={incident.severity}>
                 <div className="monitor-incident-main">
                   <div className="monitor-incident-title"><StateDot state={incident.severity === "critical" ? "CRITICAL" : "DEGRADED"} /><strong>{incident.issueCode}</strong><span>{incident.courtNumber ? `Court ${incident.courtNumber}` : incident.rootDependency}</span></div>
                   <p>{incident.summary}</p>
                   {incident.firstAction && <p className="monitor-first-action"><strong>First action:</strong> {incident.firstAction}</p>}
                 </div>
-                {incident.status === "open" ? (
-                  <div className="monitor-ack-form">
-                    <input aria-label={`Acknowledgement reason for ${incident.issueCode}`} value={ackReasons[incident.id] ?? ""} onChange={(event) => setAckReasons((current) => ({ ...current, [incident.id]: event.target.value }))} placeholder="Acknowledgement reason" maxLength={300} />
-                    <button type="button" onClick={() => void acknowledge(incident)} disabled={ackBusy === incident.id}><CheckCircle2 size={16} /> Acknowledge</button>
-                    {ackError[incident.id] && <span className="monitor-form-error">{ackError[incident.id]}</span>}
-                  </div>
-                ) : <span className="status info">Acknowledged by {incident.acknowledgedBy ?? "operator"}</span>}
+                <div className="monitor-incident-actions">
+                  {incident.status === "open" ? (
+                    <div className="monitor-ack-form">
+                      <input aria-label={`Acknowledgement reason for ${incident.issueCode}`} value={ackReasons[incident.id] ?? ""} onChange={(event) => setAckReasons((current) => ({ ...current, [incident.id]: event.target.value }))} placeholder="Acknowledgement reason" maxLength={300} />
+                      <button type="button" onClick={() => void acknowledge(incident)} disabled={ackBusy === incident.id}><CheckCircle2 size={16} /> Acknowledge</button>
+                      {ackError[incident.id] && <span className="monitor-form-error">{ackError[incident.id]}</span>}
+                    </div>
+                  ) : <span className="status info">Acknowledged by {incident.acknowledgedBy ?? "operator"}</span>}
+                  {silence ? (
+                    <span className="status warning">Paging silenced until {formatTime(silence.expiresAt)} · {silence.reason}</span>
+                  ) : incident.status === "open" && (
+                    <div className="monitor-silence-form">
+                      <input aria-label={`Silence reason for ${incident.issueCode}`} value={silenceReasons[incident.id] ?? ""} onChange={(event) => setSilenceReasons((current) => ({ ...current, [incident.id]: event.target.value }))} placeholder="Planned maintenance reason" maxLength={300} />
+                      <select aria-label={`Silence duration for ${incident.issueCode}`} value={silenceDurations[incident.id] ?? 30} onChange={(event) => setSilenceDurations((current) => ({ ...current, [incident.id]: Number(event.target.value) }))}>
+                        <option value={15}>15 min</option><option value={30}>30 min</option><option value={60}>1 hour</option><option value={120}>2 hours</option>
+                      </select>
+                      <button type="button" onClick={() => void silenceIncident(incident)} disabled={silenceBusy === incident.id}><BellOff size={16} /> Silence</button>
+                      {silenceError[incident.id] && <span className="monitor-form-error">{silenceError[incident.id]}</span>}
+                    </div>
+                  )}
+                </div>
               </article>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>
     </div>
   );
+}
+
+function matchingSilence(incident: MonitorIncident, silences: MonitorSilence[], nowMs: number): MonitorSilence | null {
+  return silences.find((silence) => Date.parse(silence.expiresAt) > nowMs
+    && (silence.eventId == null || silence.eventId === incident.eventId)
+    && (silence.courtNumber == null || silence.courtNumber === incident.courtNumber)
+    && (silence.stage == null || silence.stage === incident.stage)
+    && (silence.issueCode == null || silence.issueCode === incident.issueCode)) ?? null;
+}
+
+function formatTime(value: string): string {
+  return new Date(value).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
 function CourtCard({ court, history, selected, nowMs, onSelect }: { court: MonitorCourt; history: MonitorCourtPipelineRange["courts"][number] | null; selected: boolean; nowMs: number; onSelect: () => void }) {

@@ -1,4 +1,4 @@
-import { MONITORING_CONTRACT_VERSION, worstHealthState, type AgentSnapshot, type BrowserHeartbeatSnapshot, type BrowserThumbnailMetadata, type ControlPlaneSnapshot, type CourtExpectation, type FfmpegBranchSnapshot, type HealthState, type IncidentSnapshot, type MediaPathSnapshot, type MonitorSnapshot, type MonitoringStage, type NotificationHealth, type StageHealth, type YouTubeMonitorSnapshot } from "./contracts.js";
+import { MONITORING_CONTRACT_VERSION, worstHealthState, type AgentSnapshot, type BrowserHeartbeatSnapshot, type BrowserThumbnailMetadata, type ControlPlaneSnapshot, type CourtExpectation, type FfmpegBranchSnapshot, type HealthState, type IncidentSnapshot, type MediaPathSnapshot, type MonitoringSilence, type MonitorSnapshot, type MonitoringStage, type NotificationHealth, type StageHealth, type YouTubeMonitorSnapshot } from "./contracts.js";
 import type { AgentTarget } from "./config.js";
 
 export type AgentRuntime = {
@@ -18,7 +18,8 @@ export function buildMonitorSnapshot(
   controlPlane: ControlPlaneSnapshot | null = null,
   youtubeMonitor: YouTubeMonitorSnapshot | null = null,
   notifications: NotificationHealth = OFF_NOTIFICATION_HEALTH,
-  thumbnails = new Map<number, BrowserThumbnailMetadata>()
+  thumbnails = new Map<number, BrowserThumbnailMetadata>(),
+  silences: MonitoringSilence[] = []
 ): MonitorSnapshot {
   const agents = targets.map((target) => {
     const runtime = runtimes.get(target.id);
@@ -104,7 +105,8 @@ export function buildMonitorSnapshot(
     notifications,
     courts,
     agents,
-    incidents
+    incidents,
+    silences
   };
 }
 

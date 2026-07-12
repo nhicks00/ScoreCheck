@@ -5321,11 +5321,25 @@ body:has(.program-root) {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
-.monitor-ack-form input {
+.monitor-incident-actions {
+  display: grid;
+  gap: 7px;
+}
+
+.monitor-silence-form {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(0, 1fr) 88px auto;
+}
+
+.monitor-ack-form input,
+.monitor-silence-form input,
+.monitor-silence-form select {
   min-width: 0;
 }
 
-.monitor-ack-form button {
+.monitor-ack-form button,
+.monitor-silence-form button {
   min-height: 40px;
   padding: 8px 11px;
 }
@@ -5334,6 +5348,11 @@ body:has(.program-root) {
   color: var(--danger);
   font-size: 10px;
   grid-column: 1 / -1;
+}
+
+@media (max-width: 720px) {
+  .monitor-silence-form { grid-template-columns: minmax(0, 1fr) auto; }
+  .monitor-silence-form input { grid-column: 1 / -1; }
 }
 
 .is-spinning {

@@ -134,6 +134,7 @@ export type MonitorCourt = {
 
 export type MonitorIncident = {
   id: string;
+  eventId: string | null;
   status: "open" | "acknowledged" | "resolved";
   severity: "info" | "warning" | "critical";
   stage: MonitorStageName;
@@ -147,6 +148,18 @@ export type MonitorIncident = {
   lastObservedAt: string;
   acknowledgedAt: string | null;
   acknowledgedBy: string | null;
+};
+
+export type MonitorSilence = {
+  id: string;
+  eventId: string | null;
+  courtNumber: number | null;
+  stage: MonitorStageName | null;
+  issueCode: string | null;
+  reason: string;
+  createdBy: string;
+  createdAt: string;
+  expiresAt: string;
 };
 
 export type MonitorAgent = {
@@ -176,6 +189,7 @@ export type MonitorSnapshot = {
   courts: MonitorCourt[];
   agents: MonitorAgent[];
   incidents: MonitorIncident[];
+  silences: MonitorSilence[];
 };
 
 export type MonitorSnapshotEnvelope = {
