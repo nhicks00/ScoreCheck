@@ -15,7 +15,9 @@ from vision_scoring.annotation_trust import AnnotationMinimumTruthPolicy
 from vision_scoring.capture_contracts import MAX_FINALIZED_SOURCE_BYTES
 from vision_scoring.capture_profile_contracts import (
     CaptureRiskTagV1,
+    CaptureSourceClassificationV1,
     CompressionStratumV1,
+    SourceRepresentationV1,
     TrainingCaptureModeV1,
 )
 from vision_scoring.contract_wire import CanonicalWireError
@@ -57,7 +59,7 @@ from vision_scoring.training_admission_contracts import (
     TrainingDatasetManifestV1,
     TRAINING_EXAMPLE_DOMAIN,
     TRAINING_EXAMPLE_SCHEMA_VERSION,
-    TrainingExampleManifestV2,
+    TrainingExampleManifestV3,
     TrainingExampleReferenceV1,
     TrainingOutputRoleV1,
     TrainingRunManifestV1,
@@ -65,7 +67,7 @@ from vision_scoring.training_admission_contracts import (
     TrainingSamplingScheduleV1,
     TrainingScheduleDrawV1,
     TrainingSplitV1,
-    camera_risk_key_sha256_v1,
+    camera_risk_key_sha256_v2,
     causal_ball_loss_config_descriptor_v1,
     causal_ball_model_config_descriptor_v1,
     causal_ball_optimizer_config_descriptor_v1,
@@ -200,17 +202,21 @@ def _policy() -> TrainingAdmissionPolicyV1:
     )
 
 
-def _example() -> TrainingExampleManifestV2:
+def _example() -> TrainingExampleManifestV3:
     rows = _target_rows()
     root = _digest(1)
     profile = _digest(10)
     encoder = _digest(11)
-    risk_key = camera_risk_key_sha256_v1(
+    source_representation = SourceRepresentationV1.ORIGINAL_CAMERA_MASTER
+    source_classification = CaptureSourceClassificationV1.OWNER_PRODUCED_ARCHIVE
+    risk_key = camera_risk_key_sha256_v2(
         capture_mode=TrainingCaptureModeV1.UHD_4K60,
         camera_setup_id="camera-A",
         capture_profile_sha256=profile,
         lighting_condition_id="daylight",
         encoder_configuration_sha256=encoder,
+        source_representation=source_representation,
+        source_classification=source_classification,
     )
     leakage = leakage_group_sha256_v1(
         match_id="match-A",
@@ -221,7 +227,7 @@ def _example() -> TrainingExampleManifestV2:
         camera_setup_id="camera-A",
         recording_date="2026-07-01",
     )
-    return TrainingExampleManifestV2(
+    return TrainingExampleManifestV3(
         source_id="source-A",
         source_asset_sha256=root,
         root_asset_sha256=root,
@@ -243,6 +249,12 @@ def _example() -> TrainingExampleManifestV2:
         capture_risk_tags=(CaptureRiskTagV1.SINGLE_VIEW_OCCLUSION,),
         compression_stratum=CompressionStratumV1.HIGH_BITRATE_INTERFRAME,
         encoder_configuration_sha256=encoder,
+        protected_training_configuration_generation_sha256=_digest(40),
+        capture_classification_current_pin_set_sha256=_digest(41),
+        capture_classification_generation_id=_digest(42),
+        capture_profile_classification_sha256=_digest(43),
+        source_representation=source_representation,
+        source_classification=source_classification,
         artifact_generation_id=_digest(12),
         source_byte_length=8192,
         finalized_trace_sha256=_digest(13),
@@ -367,12 +379,12 @@ def _request() -> TrainingRunRequestV1:
 
 
 def _compiler_variant(
-    base: TrainingExampleManifestV2,
+    base: TrainingExampleManifestV3,
     *,
     suffix: int,
     split: TrainingSplitV1,
     frame_count: int = 2,
-) -> TrainingExampleManifestV2:
+) -> TrainingExampleManifestV3:
     root_asset_sha256 = _digest(4_000 + suffix)
     camera_setup_id = f"camera-{suffix}"
     match_id = f"match-{suffix}"
@@ -389,12 +401,14 @@ def _compiler_variant(
         camera_setup_id=camera_setup_id,
         recording_date=base.recording_date,
     )
-    camera_risk_key_sha256 = camera_risk_key_sha256_v1(
+    camera_risk_key_sha256 = camera_risk_key_sha256_v2(
         capture_mode=base.capture_mode,
         camera_setup_id=camera_setup_id,
         capture_profile_sha256=base.capture_profile_sha256,
         lighting_condition_id=base.lighting_condition_id,
         encoder_configuration_sha256=base.encoder_configuration_sha256,
+        source_representation=base.source_representation,
+        source_classification=base.source_classification,
     )
     return replace(
         base,
@@ -415,7 +429,7 @@ def _compiler_variant(
     )
 
 
-def _compiler_examples() -> tuple[TrainingExampleManifestV2, ...]:
+def _compiler_examples() -> tuple[TrainingExampleManifestV3, ...]:
     train = _example()
     dev = _compiler_variant(
         train,
@@ -446,9 +460,9 @@ def _schedule_compiler_examples(
     *,
     train_counts: tuple[int, int, int, int] = (2, 2, 2, 2),
     dev_count: int = 2,
-) -> tuple[TrainingExampleManifestV2, ...]:
+) -> tuple[TrainingExampleManifestV3, ...]:
     base = _example()
-    examples: list[TrainingExampleManifestV2] = []
+    examples: list[TrainingExampleManifestV3] = []
     suffix = 100
     for stratum, count in zip(PrimarySamplingStratumV1, train_counts, strict=True):
         for _ in range(count):
@@ -478,7 +492,7 @@ def _schedule_compiler_examples(
 
 
 def _schedule_references(
-    examples: tuple[TrainingExampleManifestV2, ...],
+    examples: tuple[TrainingExampleManifestV3, ...],
 ) -> tuple[TrainingExampleReferenceV1, ...]:
     split_order = {TrainingSplitV1.TRAIN: 0, TrainingSplitV1.DEV: 1}
     return tuple(
@@ -506,7 +520,7 @@ def _schedule_references(
 
 def _schedule_dataset(
     *,
-    examples: tuple[TrainingExampleManifestV2, ...],
+    examples: tuple[TrainingExampleManifestV3, ...],
     policy: TrainingAdmissionPolicyV1,
 ) -> TrainingDatasetManifestV1:
     references = _schedule_references(examples)
@@ -1035,23 +1049,36 @@ class TrainingAdmissionContractTests(unittest.TestCase):
 
     def test_example_round_trips_with_exact_derived_joins_and_no_authority(self) -> None:
         example = _example()
-        parsed = TrainingExampleManifestV2.from_json_bytes(example.to_json_bytes())
+        parsed = TrainingExampleManifestV3.from_json_bytes(example.to_json_bytes())
         self.assertEqual(parsed, example)
         self.assert_all_authority_false(parsed)
         self.assertEqual(parsed.schema_version, TRAINING_EXAMPLE_SCHEMA_VERSION)
         wire = json.loads(parsed.to_json_bytes())
         self.assertEqual(wire["domain"], TRAINING_EXAMPLE_DOMAIN)
+        self.assertEqual(
+            wire["domain"], "multicourt-vision-scoring:training-example:v3"
+        )
         self.assertEqual(wire["schema_version"], TRAINING_EXAMPLE_SCHEMA_VERSION)
+        self.assertEqual(wire["schema_version"], "3.0")
+        self.assertFalse(
+            hasattr(training_admission_contracts, "TrainingExampleManifestV2")
+        )
+        self.assertNotIn(
+            "TrainingExampleManifestV2", training_admission_contracts.__all__
+        )
+        self.assertFalse(
+            hasattr(training_admission_contracts, "camera_risk_key_sha256_v1")
+        )
         for field_name, stale_value in (
-            ("domain", "multicourt-vision-scoring:training-example:v1"),
-            ("schema_version", "1.0"),
+            ("domain", "multicourt-vision-scoring:training-example:v2"),
+            ("schema_version", "2.0"),
         ):
             stale = dict(wire)
             stale[field_name] = stale_value
             with self.subTest(field_name=field_name), self.assertRaises(
                 TrainingAdmissionContractError
             ):
-                TrainingExampleManifestV2.from_json_bytes(
+                TrainingExampleManifestV3.from_json_bytes(
                     json.dumps(
                         stale,
                         ensure_ascii=False,
@@ -1083,6 +1110,12 @@ class TrainingAdmissionContractTests(unittest.TestCase):
             "annotation_configuration_generation_sha256",
             "annotation_evidence_set_sha256",
             "annotation_evidence_generation_id",
+            "protected_training_configuration_generation_sha256",
+            "capture_classification_current_pin_set_sha256",
+            "capture_classification_generation_id",
+            "capture_profile_classification_sha256",
+            "source_representation",
+            "source_classification",
             "curator_trust_snapshot_generation",
             "protected_verified_at_ns",
             "requested_truth_policy",
@@ -1114,7 +1147,7 @@ class TrainingAdmissionContractTests(unittest.TestCase):
             with self.subTest(wire_truth_policy=invalid), self.assertRaises(
                 TrainingAdmissionContractError
             ):
-                TrainingExampleManifestV2.from_json_bytes(
+                TrainingExampleManifestV3.from_json_bytes(
                     json.dumps(
                         payload,
                         ensure_ascii=False,
@@ -1194,12 +1227,14 @@ class TrainingAdmissionContractTests(unittest.TestCase):
 
     def test_1080p60_is_single_view_without_compatibility_tier(self) -> None:
         example = _example()
-        risk_key = camera_risk_key_sha256_v1(
+        risk_key = camera_risk_key_sha256_v2(
             capture_mode=TrainingCaptureModeV1.HD_1080P60,
             camera_setup_id=example.camera_setup_id,
             capture_profile_sha256=example.capture_profile_sha256,
             lighting_condition_id=example.lighting_condition_id,
             encoder_configuration_sha256=example.encoder_configuration_sha256,
+            source_representation=example.source_representation,
+            source_classification=example.source_classification,
         )
         sixty = replace(
             example,
@@ -1213,12 +1248,14 @@ class TrainingAdmissionContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             replace(sixty, capture_risk_tags=())
 
-        thirty_risk_key = camera_risk_key_sha256_v1(
+        thirty_risk_key = camera_risk_key_sha256_v2(
             capture_mode=TrainingCaptureModeV1.HD_1080P30,
             camera_setup_id=example.camera_setup_id,
             capture_profile_sha256=example.capture_profile_sha256,
             lighting_condition_id=example.lighting_condition_id,
             encoder_configuration_sha256=example.encoder_configuration_sha256,
+            source_representation=example.source_representation,
+            source_classification=example.source_classification,
         )
         thirty = replace(
             example,
@@ -1510,7 +1547,6 @@ class TrainingAdmissionContractTests(unittest.TestCase):
             replace(run, admissible_for_deployment=True)
 
     def test_all_eight_persisted_contracts_keep_authority_false(self) -> None:
-        references = _references()
         coverage = TrainingCoverageReportV1(
             dataset_id="dataset-A",
             readiness_manifest_sha256=_digest(2000),
@@ -1583,7 +1619,7 @@ class TrainingAdmissionCoverageCompilerTests(unittest.TestCase):
         self,
         *,
         policy: TrainingAdmissionPolicyV1 | None = None,
-        examples: tuple[TrainingExampleManifestV2, ...] | None = None,
+        examples: tuple[TrainingExampleManifestV3, ...] | None = None,
         readiness_manifest_sha256: str = _digest(5_000),
     ) -> TrainingCoverageReportV1:
         return compile_training_coverage_v1(
@@ -1910,9 +1946,9 @@ class TrainingAdmissionCoverageCompilerTests(unittest.TestCase):
         train, dev = _compiler_examples()
 
         def replace_and_rebind_leakage(
-            example: TrainingExampleManifestV2,
+            example: TrainingExampleManifestV3,
             **changes: object,
-        ) -> TrainingExampleManifestV2:
+        ) -> TrainingExampleManifestV3:
             values = {
                 "match_id": changes.get("match_id", example.match_id),
                 "root_asset_sha256": changes.get(
@@ -1964,7 +2000,7 @@ class TrainingAdmissionCoverageCompilerTests(unittest.TestCase):
                     train.leakage_group_sha256,
                 )
                 self.assertEqual(
-                    TrainingExampleManifestV2.from_json_bytes(
+                    TrainingExampleManifestV3.from_json_bytes(
                         candidate.to_json_bytes()
                     ),
                     candidate,
@@ -2005,12 +2041,14 @@ class TrainingAdmissionCoverageCompilerTests(unittest.TestCase):
             dev,
             venue_id=train.venue_id,
             camera_setup_id=train.camera_setup_id,
-            camera_risk_key_sha256=camera_risk_key_sha256_v1(
+            camera_risk_key_sha256=camera_risk_key_sha256_v2(
                 capture_mode=dev.capture_mode,
                 camera_setup_id=train.camera_setup_id,
                 capture_profile_sha256=dev.capture_profile_sha256,
                 lighting_condition_id=dev.lighting_condition_id,
                 encoder_configuration_sha256=dev.encoder_configuration_sha256,
+                source_representation=dev.source_representation,
+                source_classification=dev.source_classification,
             ),
         )
         report = self.compile(examples=(train, allowed))
@@ -2245,7 +2283,7 @@ class TrainingSamplingScheduleCompilerTests(unittest.TestCase):
 
         found: tuple[
             StratifiedSamplingPlanV1,
-            tuple[tuple[str, TrainingExampleManifestV2], ...],
+            tuple[tuple[str, TrainingExampleManifestV3], ...],
         ] | None = None
         for seed in range(64):
             plan = _schedule_plan(
@@ -2348,8 +2386,8 @@ class TrainingSamplingScheduleCompilerTests(unittest.TestCase):
         shared_match = "two-draw-dead-end-match"
 
         def share_match(
-            example: TrainingExampleManifestV2,
-        ) -> TrainingExampleManifestV2:
+            example: TrainingExampleManifestV3,
+        ) -> TrainingExampleManifestV3:
             return replace(
                 example,
                 match_id=shared_match,
@@ -2430,7 +2468,7 @@ class TrainingSamplingScheduleCompilerTests(unittest.TestCase):
             item for item in base_examples if item.split is TrainingSplitV1.DEV
         )
 
-        same_match: list[TrainingExampleManifestV2] = []
+        same_match: list[TrainingExampleManifestV3] = []
         for example in train:
             match_id = "shared-match"
             same_match.append(
@@ -2496,12 +2534,14 @@ class TrainingSamplingScheduleCompilerTests(unittest.TestCase):
                 synchronized_capture_group_id=shared_sync,
                 split_group_id=shared_split,
                 leakage_group_sha256=shared_leakage,
-                camera_risk_key_sha256=camera_risk_key_sha256_v1(
+                camera_risk_key_sha256=camera_risk_key_sha256_v2(
                     capture_mode=example.capture_mode,
                     camera_setup_id=shared_camera,
                     capture_profile_sha256=example.capture_profile_sha256,
                     lighting_condition_id=example.lighting_condition_id,
                     encoder_configuration_sha256=example.encoder_configuration_sha256,
+                    source_representation=example.source_representation,
+                    source_classification=example.source_classification,
                 ),
             )
             for example in train

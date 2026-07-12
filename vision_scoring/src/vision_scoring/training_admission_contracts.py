@@ -24,7 +24,9 @@ from .annotation_trust import AnnotationMinimumTruthPolicy
 from .capture_contracts import MAX_FINALIZED_SOURCE_BYTES
 from .capture_profile_contracts import (
     CaptureRiskTagV1,
+    CaptureSourceClassificationV1,
     CompressionStratumV1,
+    SourceRepresentationV1,
     TrainingCaptureModeV1,
 )
 from .contract_wire import (
@@ -42,7 +44,7 @@ from .contract_wire import (
 
 
 TRAINING_ADMISSION_SCHEMA_VERSION = "1.0"
-TRAINING_EXAMPLE_SCHEMA_VERSION = "2.0"
+TRAINING_EXAMPLE_SCHEMA_VERSION = "3.0"
 
 TRAINING_ADMISSION_POLICY_DOMAIN = (
     "multicourt-vision-scoring:training-admission-policy:v1"
@@ -50,7 +52,7 @@ TRAINING_ADMISSION_POLICY_DOMAIN = (
 TRAINING_COVERAGE_REPORT_DOMAIN = (
     "multicourt-vision-scoring:training-coverage-report:v1"
 )
-TRAINING_EXAMPLE_DOMAIN = "multicourt-vision-scoring:training-example:v2"
+TRAINING_EXAMPLE_DOMAIN = "multicourt-vision-scoring:training-example:v3"
 TRAINING_DATASET_MANIFEST_DOMAIN = (
     "multicourt-vision-scoring:training-dataset-manifest:v1"
 )
@@ -69,7 +71,8 @@ TRAINING_RUN_MANIFEST_DOMAIN = (
 TEST_EXCLUSION_COMMITMENT_DOMAIN = (
     "multicourt-vision-scoring:test-exclusion-commitment:v1"
 )
-CAMERA_RISK_KEY_DOMAIN = "multicourt-vision-scoring:camera-risk-key:v1"
+CAMERA_RISK_KEY_DOMAIN = "multicourt-vision-scoring:camera-risk-key:v2"
+CAMERA_RISK_KEY_SCHEMA_VERSION = "2.0"
 LEAKAGE_GROUP_DOMAIN = "multicourt-vision-scoring:leakage-group:v1"
 TARGET_TENSOR_SET_DOMAIN = (
     "multicourt-vision-scoring:causal-ball-target-tensor-set:v1"
@@ -551,16 +554,26 @@ def test_exclusion_commitment_sha256_v1(
     )
 
 
-def camera_risk_key_sha256_v1(
+def camera_risk_key_sha256_v2(
     *,
     capture_mode: TrainingCaptureModeV1,
     camera_setup_id: str,
     capture_profile_sha256: str,
     lighting_condition_id: str,
     encoder_configuration_sha256: str,
+    source_representation: SourceRepresentationV1,
+    source_classification: CaptureSourceClassificationV1,
 ) -> str:
     if type(capture_mode) is not TrainingCaptureModeV1:
         raise ValueError("capture_mode must be an exact TrainingCaptureModeV1")
+    if type(source_representation) is not SourceRepresentationV1:
+        raise ValueError(
+            "source_representation must be an exact SourceRepresentationV1"
+        )
+    if type(source_classification) is not CaptureSourceClassificationV1:
+        raise ValueError(
+            "source_classification must be an exact CaptureSourceClassificationV1"
+        )
     require_stable_id(camera_setup_id, "camera_setup_id")
     require_stable_id(lighting_condition_id, "lighting_condition_id")
     _require_distinct_digests(
@@ -578,7 +591,9 @@ def camera_risk_key_sha256_v1(
             "domain": CAMERA_RISK_KEY_DOMAIN,
             "encoder_configuration_sha256": encoder_configuration_sha256,
             "lighting_condition_id": lighting_condition_id,
-            "schema_version": TRAINING_ADMISSION_SCHEMA_VERSION,
+            "schema_version": CAMERA_RISK_KEY_SCHEMA_VERSION,
+            "source_classification": source_classification.value,
+            "source_representation": source_representation.value,
         },
         label="camera risk key",
         maximum_bytes=MAX_POLICY_CONTRACT_BYTES,
@@ -1152,7 +1167,7 @@ def _validate_target_tensor_rows_for_example(
 
 
 @dataclass(frozen=True, slots=True)
-class TrainingExampleManifestV2(_CanonicalContract):
+class TrainingExampleManifestV3(_CanonicalContract):
     """Exact non-authorizing TRAIN/DEV receipt, trust, and target binding."""
 
     source_id: str
@@ -1176,6 +1191,12 @@ class TrainingExampleManifestV2(_CanonicalContract):
     capture_risk_tags: tuple[CaptureRiskTagV1, ...]
     compression_stratum: CompressionStratumV1
     encoder_configuration_sha256: str
+    protected_training_configuration_generation_sha256: str
+    capture_classification_current_pin_set_sha256: str
+    capture_classification_generation_id: str
+    capture_profile_classification_sha256: str
+    source_representation: SourceRepresentationV1
+    source_classification: CaptureSourceClassificationV1
     artifact_generation_id: str
     source_byte_length: int
     finalized_trace_sha256: str
@@ -1260,6 +1281,10 @@ class TrainingExampleManifestV2(_CanonicalContract):
             raise ValueError("capture_mode has the wrong exact enum type")
         if type(self.compression_stratum) is not CompressionStratumV1:
             raise ValueError("compression_stratum has the wrong exact enum type")
+        if type(self.source_representation) is not SourceRepresentationV1:
+            raise ValueError("source_representation has the wrong exact enum type")
+        if type(self.source_classification) is not CaptureSourceClassificationV1:
+            raise ValueError("source_classification has the wrong exact enum type")
         if type(self.primary_sampling_stratum) is not PrimarySamplingStratumV1:
             raise ValueError("primary_sampling_stratum has the wrong exact enum type")
         _require_date(self.recording_date, "recording_date")
@@ -1279,6 +1304,10 @@ class TrainingExampleManifestV2(_CanonicalContract):
             "leakage_group_sha256",
             "camera_risk_key_sha256",
             "encoder_configuration_sha256",
+            "protected_training_configuration_generation_sha256",
+            "capture_classification_current_pin_set_sha256",
+            "capture_classification_generation_id",
+            "capture_profile_classification_sha256",
             "artifact_generation_id",
             "finalized_trace_sha256",
             "capture_policy_sha256",
@@ -1333,12 +1362,14 @@ class TrainingExampleManifestV2(_CanonicalContract):
         )
         if self.leakage_group_sha256 != expected_leakage:
             raise ValueError("leakage_group_sha256 does not bind its exact inputs")
-        expected_risk_key = camera_risk_key_sha256_v1(
+        expected_risk_key = camera_risk_key_sha256_v2(
             capture_mode=self.capture_mode,
             camera_setup_id=self.camera_setup_id,
             capture_profile_sha256=self.capture_profile_sha256,
             lighting_condition_id=self.lighting_condition_id,
             encoder_configuration_sha256=self.encoder_configuration_sha256,
+            source_representation=self.source_representation,
+            source_classification=self.source_classification,
         )
         if self.camera_risk_key_sha256 != expected_risk_key:
             raise ValueError("camera_risk_key_sha256 does not bind its exact inputs")
@@ -1488,6 +1519,8 @@ class TrainingExampleManifestV2(_CanonicalContract):
         payload["split"] = self.split.value
         payload["capture_mode"] = self.capture_mode.value
         payload["compression_stratum"] = self.compression_stratum.value
+        payload["source_representation"] = self.source_representation.value
+        payload["source_classification"] = self.source_classification.value
         payload["requested_truth_policy"] = self.requested_truth_policy.value
         payload["primary_sampling_stratum"] = self.primary_sampling_stratum.value
         payload["capture_risk_tags"] = [item.value for item in self.capture_risk_tags]
@@ -1496,7 +1529,7 @@ class TrainingExampleManifestV2(_CanonicalContract):
         return payload
 
     @classmethod
-    def from_json_bytes(cls, raw: bytes) -> "TrainingExampleManifestV2":
+    def from_json_bytes(cls, raw: bytes) -> "TrainingExampleManifestV3":
         try:
             fields = _parse_contract(
                 raw,
@@ -1514,6 +1547,16 @@ class TrainingExampleManifestV2(_CanonicalContract):
             )
             fields["compression_stratum"] = enum_from_json(
                 CompressionStratumV1, fields["compression_stratum"], "compression_stratum"
+            )
+            fields["source_representation"] = enum_from_json(
+                SourceRepresentationV1,
+                fields["source_representation"],
+                "source_representation",
+            )
+            fields["source_classification"] = enum_from_json(
+                CaptureSourceClassificationV1,
+                fields["source_classification"],
+                "source_classification",
             )
             fields["requested_truth_policy"] = enum_from_json(
                 AnnotationMinimumTruthPolicy,
@@ -2674,6 +2717,8 @@ __all__ = [
     "CAUSAL_BALL_OPTIMIZER_CONFIG_SHA256",
     "CAUSAL_BALL_TARGET_ENCODING_SHA256",
     "CAMERA_RISK_KEY_DOMAIN",
+    "CAMERA_RISK_KEY_SCHEMA_VERSION",
+    "CaptureSourceClassificationV1",
     "CaptureRiskTagV1",
     "CompressionStratumV1",
     "CoverageRequirementV1",
@@ -2687,6 +2732,7 @@ __all__ = [
     "MAX_TRAINING_EXAMPLES",
     "PPM",
     "PrimarySamplingStratumV1",
+    "SourceRepresentationV1",
     "STRATIFIED_SAMPLING_PLAN_DOMAIN",
     "StratifiedSamplingPlanV1",
     "StratumQuotaV1",
@@ -2710,7 +2756,7 @@ __all__ = [
     "TrainingCaptureModeV1",
     "TrainingCoverageReportV1",
     "TrainingDatasetManifestV1",
-    "TrainingExampleManifestV2",
+    "TrainingExampleManifestV3",
     "TrainingExampleReferenceV1",
     "TrainingOutputRoleV1",
     "TrainingRunManifestV1",
@@ -2718,7 +2764,7 @@ __all__ = [
     "TrainingSamplingScheduleV1",
     "TrainingScheduleDrawV1",
     "TrainingSplitV1",
-    "camera_risk_key_sha256_v1",
+    "camera_risk_key_sha256_v2",
     "causal_ball_loss_config_descriptor_v1",
     "causal_ball_model_config_descriptor_v1",
     "causal_ball_optimizer_config_descriptor_v1",
