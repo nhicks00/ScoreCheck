@@ -4,6 +4,7 @@ import base64
 from dataclasses import replace
 from datetime import date
 import hashlib
+import json
 import multiprocessing
 import os
 from pathlib import Path
@@ -749,12 +750,36 @@ class AnnotationTrustTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(ValueError, "duplicate JSON object key"):
+            with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
                 load_protected_annotation_configuration_generation(duplicate)
 
+            noncanonical = root / "noncanonical.json"
+            noncanonical.write_text(
+                generation.canonical_json().replace(",", ", ", 1),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "NONCANONICAL_JSON"):
+                load_protected_annotation_configuration_generation(noncanonical)
+
+            trailing = root / "trailing.json"
+            trailing.write_text(
+                generation.canonical_json() + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "NONCANONICAL_JSON"):
+                load_protected_annotation_configuration_generation(trailing)
+
             unknown = root / "unknown.json"
+            unknown_payload = generation.to_canonical_dict()
+            unknown_payload["dataset_pin"] = "bad"
             unknown.write_text(
-                generation.canonical_json()[:-1] + ',"dataset_pin":"bad"}',
+                json.dumps(
+                    unknown_payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ),
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "unsupported fields"):
@@ -762,7 +787,7 @@ class AnnotationTrustTests(unittest.TestCase):
 
             array = root / "array.json"
             array.write_text("[]", encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "root must be a JSON object"):
+            with self.assertRaisesRegex(ValueError, "root must be an object"):
                 load_protected_annotation_configuration_generation(array)
 
             invalid_utf8 = root / "invalid-utf8.json"
@@ -773,13 +798,21 @@ class AnnotationTrustTests(unittest.TestCase):
             oversize = root / "oversize.json"
             with oversize.open("wb") as output:
                 output.truncate(64 * 1024 + 1)
-            with self.assertRaisesRegex(ValueError, "exceeds 65536 bytes"):
+            with self.assertRaisesRegex(ValueError, "byte limit"):
                 load_protected_annotation_configuration_generation(oversize)
 
             symlink = root / "symlink.json"
             symlink.symlink_to(path)
             with self.assertRaisesRegex(ValueError, "non-symlink regular file"):
                 load_protected_annotation_configuration_generation(symlink)
+
+            hardlink = root / "hardlink.json"
+            os.link(path, hardlink)
+            try:
+                with self.assertRaisesRegex(ValueError, "exactly one filesystem link"):
+                    load_protected_annotation_configuration_generation(hardlink)
+            finally:
+                hardlink.unlink()
 
             if hasattr(os, "mkfifo"):
                 fifo = root / "generation.fifo"
@@ -812,7 +845,7 @@ class AnnotationTrustTests(unittest.TestCase):
                 annotation_trust_module.os,
                 "open",
                 side_effect=replace_after_open,
-            ), self.assertRaisesRegex(ValueError, "changed while"):
+            ), self.assertRaisesRegex(ValueError, "changed"):
                 load_protected_annotation_configuration_generation(path)
 
             path.write_text(generation.canonical_json(), encoding="utf-8")
@@ -832,7 +865,7 @@ class AnnotationTrustTests(unittest.TestCase):
                 annotation_trust_module.os,
                 "read",
                 side_effect=grow_after_read,
-            ), self.assertRaisesRegex(ValueError, "grew while reading"):
+            ), self.assertRaisesRegex(ValueError, "grew while being read"):
                 load_protected_annotation_configuration_generation(path)
 
     def test_forged_signature_and_principal_key_binding_are_rejected(self) -> None:

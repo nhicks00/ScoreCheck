@@ -59,6 +59,7 @@ from .contract_wire import (
     canonical_finite_json_bytes,
     enum_from_json,
     parse_canonical_finite_json_object,
+    parse_canonical_json_object,
     require_exact_fields,
 )
 from .immutable_store import (
@@ -66,6 +67,7 @@ from .immutable_store import (
     generation_id_for,
     generation_read_lease,
 )
+from .protected_file import read_protected_file_bytes
 
 
 SCHEMA_VERSION = "2.0"
@@ -280,113 +282,6 @@ def _exact_fields(
         raise ValueError(f"{label} has unsupported fields: {', '.join(unknown)}")
     if missing:
         raise ValueError(f"{label} is missing fields: {', '.join(missing)}")
-
-
-def _stat_identity(value: os.stat_result) -> tuple[int, int]:
-    return value.st_dev, value.st_ino
-
-
-def _stat_state(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
-    return (
-        value.st_dev,
-        value.st_ino,
-        value.st_mode,
-        value.st_size,
-        value.st_mtime_ns,
-        value.st_ctime_ns,
-    )
-
-
-def _strict_protected_configuration_json(path: Path) -> Mapping[str, Any]:
-    """Read one bounded regular descriptor through a stable file descriptor."""
-
-    label = "protected annotation configuration generation"
-    if not isinstance(path, Path):
-        raise ValueError(f"{label} path must be a pathlib.Path")
-    try:
-        path_stat = os.lstat(path)
-    except OSError as error:
-        raise ValueError(f"{label} is unavailable") from error
-    if stat.S_ISLNK(path_stat.st_mode) or not stat.S_ISREG(path_stat.st_mode):
-        raise ValueError(f"{label} must be a non-symlink regular file")
-    if path_stat.st_size > _MAX_PROTECTED_CONFIGURATION_BYTES:
-        raise ValueError(
-            f"{label} exceeds {_MAX_PROTECTED_CONFIGURATION_BYTES} bytes"
-        )
-
-    flags = os.O_RDONLY
-    if hasattr(os, "O_CLOEXEC"):
-        flags |= os.O_CLOEXEC
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    if hasattr(os, "O_NONBLOCK"):
-        flags |= os.O_NONBLOCK
-    try:
-        descriptor = os.open(path, flags)
-    except OSError as error:
-        raise ValueError(f"{label} could not be opened safely") from error
-    try:
-        descriptor_before = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(descriptor_before.st_mode)
-            or _stat_identity(path_stat) != _stat_identity(descriptor_before)
-            or _stat_state(path_stat) != _stat_state(descriptor_before)
-        ):
-            raise ValueError(f"{label} changed while opening")
-        if descriptor_before.st_size > _MAX_PROTECTED_CONFIGURATION_BYTES:
-            raise ValueError(
-                f"{label} exceeds {_MAX_PROTECTED_CONFIGURATION_BYTES} bytes"
-            )
-
-        remaining = descriptor_before.st_size
-        chunks: list[bytes] = []
-        while remaining:
-            chunk = os.read(descriptor, min(64 * 1024, remaining))
-            if not chunk:
-                raise ValueError(f"{label} was truncated while reading")
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        if os.read(descriptor, 1):
-            raise ValueError(f"{label} grew while reading")
-
-        descriptor_after = os.fstat(descriptor)
-        try:
-            final_path_stat = os.lstat(path)
-        except OSError as error:
-            raise ValueError(f"{label} changed while reading") from error
-        if (
-            not stat.S_ISREG(descriptor_after.st_mode)
-            or stat.S_ISLNK(final_path_stat.st_mode)
-            or not stat.S_ISREG(final_path_stat.st_mode)
-            or _stat_state(descriptor_before) != _stat_state(descriptor_after)
-            or _stat_identity(descriptor_after) != _stat_identity(final_path_stat)
-            or _stat_state(descriptor_after) != _stat_state(final_path_stat)
-        ):
-            raise ValueError(f"{label} changed while reading")
-        raw = b"".join(chunks)
-    finally:
-        os.close(descriptor)
-
-    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError(
-                    f"{label} contains duplicate JSON object key: {key}"
-                )
-            result[key] = value
-        return result
-
-    try:
-        payload = json.loads(
-            raw.decode("utf-8", errors="strict"),
-            object_pairs_hook=reject_duplicate_keys,
-        )
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ValueError(f"{label} must be valid UTF-8 JSON") from error
-    if not isinstance(payload, Mapping):
-        raise ValueError(f"{label} root must be a JSON object")
-    return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -670,9 +565,24 @@ def protected_annotation_configuration_generation_from_dict(
 def load_protected_annotation_configuration_generation(
     path: Path,
 ) -> ProtectedAnnotationConfigurationGeneration:
-    return protected_annotation_configuration_generation_from_dict(
-        _strict_protected_configuration_json(path)
+    label = "protected annotation configuration generation"
+    raw = read_protected_file_bytes(
+        path,
+        max_bytes=_MAX_PROTECTED_CONFIGURATION_BYTES,
+        label=label,
     )
+    payload = parse_canonical_json_object(
+        raw,
+        label=label,
+        maximum_bytes=_MAX_PROTECTED_CONFIGURATION_BYTES,
+        maximum_depth=2,
+        maximum_nodes=16,
+        maximum_containers=1,
+    )
+    result = protected_annotation_configuration_generation_from_dict(payload)
+    if raw != result.canonical_json().encode("utf-8"):
+        raise ValueError(f"{label} did not reconstruct exactly")
+    return result
 
 
 @dataclass(frozen=True, slots=True)
