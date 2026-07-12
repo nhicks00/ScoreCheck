@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+from pathlib import Path
 from typing import Any, ClassVar, Iterable
 
 from .annotation_trust import AnnotationMinimumTruthPolicy
@@ -26,6 +27,7 @@ from .contract_wire import (
     require_sha256,
     require_stable_id,
 )
+from .protected_file import read_protected_file_bytes
 from .training_admission_contracts import MAX_TRAINING_EXAMPLES
 
 
@@ -603,6 +605,65 @@ class ProtectedTrainingConfigurationGenerationV1(_CanonicalContract):
         return result
 
 
+def load_decoder_runtime_pins_v1(path: Path) -> DecoderRuntimePinsV1:
+    """Read one protected decoder-runtime pin contract from an exact path."""
+
+    raw = read_protected_file_bytes(
+        path,
+        max_bytes=MAX_DECODER_RUNTIME_PINS_BYTES,
+        label="decoder runtime pins",
+    )
+    result = DecoderRuntimePinsV1.from_json_bytes(raw)
+    if type(result) is not DecoderRuntimePinsV1 or result.to_json_bytes() != raw:
+        _fail(
+            "DECODER_RUNTIME_PINS_WIRE",
+            "loaded decoder runtime pins did not reconstruct exactly",
+        )
+    return result
+
+
+def load_label_bundle_current_pin_set_v1(
+    path: Path,
+) -> LabelBundleCurrentPinSetV1:
+    """Read one protected current-label pin set from an exact path."""
+
+    raw = read_protected_file_bytes(
+        path,
+        max_bytes=MAX_LABEL_BUNDLE_CURRENT_PIN_SET_BYTES,
+        label="label bundle current pin set",
+    )
+    result = LabelBundleCurrentPinSetV1.from_json_bytes(raw)
+    if type(result) is not LabelBundleCurrentPinSetV1 or (
+        result.to_json_bytes() != raw
+    ):
+        _fail(
+            "LABEL_BUNDLE_CURRENT_PIN_SET_WIRE",
+            "loaded label bundle current pin set did not reconstruct exactly",
+        )
+    return result
+
+
+def load_protected_training_configuration_generation_v1(
+    path: Path,
+) -> ProtectedTrainingConfigurationGenerationV1:
+    """Read one protected training configuration generation from an exact path."""
+
+    raw = read_protected_file_bytes(
+        path,
+        max_bytes=MAX_PROTECTED_TRAINING_CONFIGURATION_BYTES,
+        label="protected training configuration generation",
+    )
+    result = ProtectedTrainingConfigurationGenerationV1.from_json_bytes(raw)
+    if type(result) is not ProtectedTrainingConfigurationGenerationV1 or (
+        result.to_json_bytes() != raw
+    ):
+        _fail(
+            "PROTECTED_TRAINING_CONFIGURATION_WIRE",
+            "loaded protected training configuration did not reconstruct exactly",
+        )
+    return result
+
+
 __all__ = [
     "DECODER_RUNTIME_PINS_DOMAIN",
     "LABEL_BUNDLE_CURRENT_PIN_DOMAIN",
@@ -618,4 +679,7 @@ __all__ = [
     "LabelBundleCurrentPinV1",
     "ProtectedTrainingConfigurationGenerationV1",
     "TrainingProtectedConfigurationError",
+    "load_decoder_runtime_pins_v1",
+    "load_label_bundle_current_pin_set_v1",
+    "load_protected_training_configuration_generation_v1",
 ]

@@ -2,22 +2,41 @@ from __future__ import annotations
 
 from dataclasses import replace
 import hashlib
+import inspect
 import json
+import os
+from pathlib import Path
+import tempfile
 import unittest
+from unittest.mock import patch
 
+import vision_scoring.training_protected_configuration as protected_configuration
 from vision_scoring.annotation_trust import AnnotationMinimumTruthPolicy
 from vision_scoring.contract_wire import CanonicalWireError, MAX_SIGNED_64
+from vision_scoring.protected_file import (
+    PROTECTED_FILE_CHANGED,
+    PROTECTED_FILE_INPUT,
+    PROTECTED_FILE_SHAPE,
+    ProtectedFileError,
+    read_protected_file_bytes,
+)
 from vision_scoring.training_admission_contracts import MAX_TRAINING_EXAMPLES
 from vision_scoring.training_protected_configuration import (
     DECODER_RUNTIME_PINS_DOMAIN,
     LABEL_BUNDLE_CURRENT_PIN_DOMAIN,
     LABEL_BUNDLE_CURRENT_PIN_SET_DOMAIN,
+    MAX_DECODER_RUNTIME_PINS_BYTES,
+    MAX_LABEL_BUNDLE_CURRENT_PIN_SET_BYTES,
+    MAX_PROTECTED_TRAINING_CONFIGURATION_BYTES,
     PROTECTED_TRAINING_CONFIGURATION_GENERATION_DOMAIN,
     DecoderRuntimePinsV1,
     LabelBundleCurrentPinSetV1,
     LabelBundleCurrentPinV1,
     ProtectedTrainingConfigurationGenerationV1,
     TrainingProtectedConfigurationError,
+    load_decoder_runtime_pins_v1,
+    load_label_bundle_current_pin_set_v1,
+    load_protected_training_configuration_generation_v1,
 )
 
 
@@ -494,6 +513,191 @@ class TrainingProtectedConfigurationTests(unittest.TestCase):
             self.assertFalse(
                 any(type(item) is bool for item in value.to_dict().values())
             )
+
+    def test_protected_loaders_read_exact_caps_and_return_typed_values(self) -> None:
+        values = (
+            (
+                "decoder.json",
+                _decoder_pins(),
+                load_decoder_runtime_pins_v1,
+                MAX_DECODER_RUNTIME_PINS_BYTES,
+                "decoder runtime pins",
+            ),
+            (
+                "labels.json",
+                _pin_set(),
+                load_label_bundle_current_pin_set_v1,
+                MAX_LABEL_BUNDLE_CURRENT_PIN_SET_BYTES,
+                "label bundle current pin set",
+            ),
+            (
+                "configuration.json",
+                _protected_configuration(),
+                load_protected_training_configuration_generation_v1,
+                MAX_PROTECTED_TRAINING_CONFIGURATION_BYTES,
+                "protected training configuration generation",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths: list[Path] = []
+            for filename, value, _, _, _ in values:
+                path = root / filename
+                path.write_bytes(value.to_json_bytes())
+                paths.append(path)
+
+            calls: list[tuple[Path, int, str]] = []
+
+            def recording_reader(
+                path: Path,
+                *,
+                max_bytes: int,
+                label: str,
+            ) -> bytes:
+                calls.append((path, max_bytes, label))
+                return read_protected_file_bytes(
+                    path,
+                    max_bytes=max_bytes,
+                    label=label,
+                )
+
+            with patch.object(
+                protected_configuration,
+                "read_protected_file_bytes",
+                side_effect=recording_reader,
+            ):
+                loaded = tuple(
+                    loader(path)
+                    for path, (_, _, loader, _, _) in zip(
+                        paths,
+                        values,
+                        strict=True,
+                    )
+                )
+
+        self.assertEqual(
+            loaded,
+            tuple(value for _, value, _, _, _ in values),
+        )
+        self.assertEqual(
+            calls,
+            [
+                (path, maximum, label)
+                for path, (_, _, _, maximum, label) in zip(
+                    paths,
+                    values,
+                    strict=True,
+                )
+            ],
+        )
+
+    def test_protected_loader_surface_accepts_only_one_path_coordinate(self) -> None:
+        loaders = (
+            load_decoder_runtime_pins_v1,
+            load_label_bundle_current_pin_set_v1,
+            load_protected_training_configuration_generation_v1,
+        )
+        concrete_path_type = type(Path())
+
+        class DerivedPath(concrete_path_type):  # type: ignore[misc, valid-type]
+            pass
+
+        for loader in loaders:
+            with self.subTest(loader=loader.__name__):
+                self.assertEqual(tuple(inspect.signature(loader).parameters), ("path",))
+                for invalid in (
+                    "pins.json",
+                    Path("pins.json"),
+                    DerivedPath("pins.json"),
+                ):
+                    with self.assertRaises(ProtectedFileError) as caught:
+                        loader(invalid)  # type: ignore[arg-type]
+                    self.assertEqual(caught.exception.code, PROTECTED_FILE_INPUT)
+
+    def test_protected_loaders_reject_noncanonical_and_trailing_bytes(self) -> None:
+        values = (
+            (_decoder_pins(), load_decoder_runtime_pins_v1),
+            (_pin_set(), load_label_bundle_current_pin_set_v1),
+            (
+                _protected_configuration(),
+                load_protected_training_configuration_generation_v1,
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "pins.json"
+            for value, loader in values:
+                payload = json.loads(value.to_json_bytes())
+                candidates = (
+                    value.to_json_bytes() + b"\n",
+                    json.dumps(payload, indent=2, sort_keys=True).encode("ascii"),
+                )
+                for candidate in candidates:
+                    path.write_bytes(candidate)
+                    with self.subTest(loader=loader.__name__, size=len(candidate)):
+                        with self.assertRaises(CanonicalWireError) as caught:
+                            loader(path)
+                        self.assertEqual(
+                            caught.exception.code,
+                            "NONCANONICAL_JSON",
+                        )
+
+    def test_protected_loaders_reject_symlink_and_hardlink_shapes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original = root / "decoder.json"
+            original.write_bytes(_decoder_pins().to_json_bytes())
+
+            symlink = root / "decoder-symlink.json"
+            symlink.symlink_to(original)
+            with self.assertRaises(ProtectedFileError) as caught:
+                load_decoder_runtime_pins_v1(symlink)
+            self.assertEqual(caught.exception.code, PROTECTED_FILE_SHAPE)
+
+            hardlink = root / "decoder-hardlink.json"
+            os.link(original, hardlink)
+            with self.assertRaises(ProtectedFileError) as caught:
+                load_decoder_runtime_pins_v1(hardlink)
+            self.assertEqual(caught.exception.code, PROTECTED_FILE_SHAPE)
+
+    def test_protected_loaders_preserve_reader_race_error(self) -> None:
+        failure = ProtectedFileError(
+            PROTECTED_FILE_CHANGED,
+            "protected file changed during the bounded read",
+        )
+        for loader in (
+            load_decoder_runtime_pins_v1,
+            load_label_bundle_current_pin_set_v1,
+            load_protected_training_configuration_generation_v1,
+        ):
+            with self.subTest(loader=loader.__name__):
+                with (
+                    patch.object(
+                        protected_configuration,
+                        "read_protected_file_bytes",
+                        side_effect=failure,
+                    ),
+                    self.assertRaises(ProtectedFileError) as caught,
+                ):
+                    loader(Path("unused.json"))
+                self.assertIs(caught.exception, failure)
+                self.assertEqual(caught.exception.code, PROTECTED_FILE_CHANGED)
+
+    def test_loader_rechecks_parser_byte_reconstruction(self) -> None:
+        original = _decoder_pins()
+        changed = replace(original, architecture="arm64e")
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "decoder.json"
+            path.write_bytes(original.to_json_bytes())
+            with patch.object(
+                DecoderRuntimePinsV1,
+                "from_json_bytes",
+                return_value=changed,
+            ):
+                with self.assertRaises(
+                    TrainingProtectedConfigurationError
+                ) as caught:
+                    load_decoder_runtime_pins_v1(path)
+        self.assertEqual(caught.exception.code, "DECODER_RUNTIME_PINS_WIRE")
 
 
 if __name__ == "__main__":
