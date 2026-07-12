@@ -87,11 +87,12 @@ and adjudicator, resident content-addressed evidence, and an out-of-band
 trust store, evaluator artifact, minimum truth policy, validity window, and
 governance domain. A launcher-owned protected configuration generation binds
 that store, policy, evaluator, and governance domain atomically. Verification
-uses actual UTC. The exact manifest, protected configuration, policy,
-trust-store, attestation-set, evidence-set, immutable evidence-generation,
-evaluator-artifact, governance-domain, and verification-time proofs are bound
-into both the evaluation-input hash and the report. The report hash is
-integrity evidence, not authority by itself.
+uses one launcher-supplied, protected Unix-epoch-nanosecond snapshot. The exact
+manifest, protected configuration, policy, trust-store, attestation-set,
+evidence-set, immutable evidence-generation, evaluator-artifact,
+governance-domain, and verification-time proofs are bound into both the
+evaluation-input hash and the report. The report hash is integrity evidence,
+not authority by itself.
 """
 
 from __future__ import annotations
@@ -104,7 +105,7 @@ import re
 import sys
 import types
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -139,10 +140,10 @@ from .immutable_store import generation_id_for
 from .dataset_split import DatasetSplit, SplitManifest
 
 
-_SCHEMA_VERSION = "7.0"
+_SCHEMA_VERSION = "8.0"
 _METRIC_NAME = "MATCH_BALL_CENTER_LOCALIZATION_V2"
 _EVALUATOR_ARTIFACT_DOMAIN = (
-    "multicourt-vision-scoring:ball-localization-evaluator-artifact:v9"
+    "multicourt-vision-scoring:ball-localization-evaluator-artifact:v10"
 )
 _EVALUATOR_MODULE_NAMES = (
     "vision_scoring.contracts",
@@ -155,15 +156,15 @@ _EVALUATOR_MODULE_NAMES = (
 )
 _TRUTH_SET_DOMAIN = "multicourt-vision-scoring:ball-observation-truth-set:v3"
 _PREDICTION_SET_DOMAIN = "multicourt-vision-scoring:ball-prediction-set:v2"
-_EVALUATION_INPUT_DOMAIN = "multicourt-vision-scoring:ball-evaluation-input:v9"
+_EVALUATION_INPUT_DOMAIN = "multicourt-vision-scoring:ball-evaluation-input:v10"
 _EVALUATED_NEGATIVE_IDENTITY_SET_DOMAIN = (
     "multicourt-vision-scoring:evaluated-confident-negative-frames:v1"
 )
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _ASCII_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/+~-]{0,127}$")
-_UTC_TIMESTAMP_RE = re.compile(
-    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$"
-)
+_MAX_SIGNED_64 = (1 << 63) - 1
+_NANOSECONDS_PER_DAY = 86_400_000_000_000
+_UNIX_EPOCH_DATE = date(1970, 1, 1)
 _LOCALIZABLE_VISIBILITIES = frozenset(
     {BallVisibility.VISIBLE, BallVisibility.PARTIALLY_OCCLUDED}
 )
@@ -180,6 +181,15 @@ _MAX_TRUTH_ANNOTATION_COUNT = 100_000
 _MAX_PREDICTION_COUNT = 500_000
 _MAX_PREDICTIONS_PER_FRAME = 256
 _MATCH_BALL_INSTANCE_ID = "match-ball"
+
+
+def _date_from_protected_unix_epoch_ns(value: object) -> date:
+    if type(value) is not int or not 0 <= value <= _MAX_SIGNED_64:
+        raise ValueError(
+            "protected_verified_at_ns must be an exact nonnegative signed-64 "
+            "Unix epoch nanosecond"
+        )
+    return _UNIX_EPOCH_DATE + timedelta(days=value // _NANOSECONDS_PER_DAY)
 
 
 class TruthPolicy(str, Enum):
@@ -1132,7 +1142,7 @@ class BallLocalizationReport:
     protected_configuration_generation_sha256: str
     governance_domain_id: str
     evaluator_artifact_sha256: str
-    verified_at_utc: str
+    protected_verified_at_ns: int
     normalized_tolerance_ball_diameters: float
     operating_confidence_threshold: float
     truth_set_sha256: str
@@ -1352,27 +1362,15 @@ class BallLocalizationReport:
                 "annotation_evidence_generation_id must commit the exact "
                 "annotation_evidence_refs"
             )
-        if type(self.verified_at_utc) is not str or not _UTC_TIMESTAMP_RE.fullmatch(
-            self.verified_at_utc
-        ):
-            raise ValueError("verified_at_utc must be a canonical UTC timestamp")
-        try:
-            parsed_verified_at = datetime.fromisoformat(
-                self.verified_at_utc[:-1] + "+00:00"
-            )
-        except ValueError as error:
-            raise ValueError(
-                "verified_at_utc must be a canonical UTC timestamp"
-            ) from error
-        if parsed_verified_at.astimezone(timezone.utc).isoformat(
-            timespec="microseconds"
-        ).replace("+00:00", "Z") != self.verified_at_utc:
-            raise ValueError("verified_at_utc must be a canonical UTC timestamp")
+        protected_verified_on = _date_from_protected_unix_epoch_ns(
+            self.protected_verified_at_ns
+        )
         if not self.annotation_verification_policy.is_active(
-            parsed_verified_at.date()
+            protected_verified_on
         ):
             raise ValueError(
-                "verified_at_utc must fall within the verification policy validity window"
+                "protected_verified_at_ns must fall within the verification "
+                "policy validity window"
             )
         if (
             type(self.normalized_tolerance_ball_diameters) is not float
@@ -1623,7 +1621,7 @@ class BallLocalizationReport:
             ),
             governance_domain_id=self.governance_domain_id,
             evaluator_artifact_sha256=self.evaluator_artifact_sha256,
-            verified_at_utc=self.verified_at_utc,
+            protected_verified_at_ns=self.protected_verified_at_ns,
         )
         if self.evaluation_input_sha256 != expected_evaluation_input_sha256:
             raise ValueError(
@@ -2243,7 +2241,7 @@ class BallLocalizationReport:
                 "verification_policy_sha256": (
                     self.annotation_verification_policy_sha256
                 ),
-                "verified_at_utc": self.verified_at_utc,
+                "protected_verified_at_ns": self.protected_verified_at_ns,
             },
             "annotation_schema_version": ANNOTATION_SCHEMA_VERSION,
             "center_error_px": {
@@ -2424,6 +2422,7 @@ def evaluate_ball_localization(
     annotation_protected_configuration_generation_path: Path,
     annotation_verification_policy: AnnotationVerificationPolicy,
     expected_annotation_verification_policy_sha256: str,
+    protected_verified_at_ns: int,
 ) -> BallLocalizationReport:
     """Evaluate candidates only after cryptographic annotation verification.
 
@@ -2475,6 +2474,7 @@ def evaluate_ball_localization(
         raise ValueError(
             "annotation_verification_policy must be an AnnotationVerificationPolicy"
         )
+    _date_from_protected_unix_epoch_ns(protected_verified_at_ns)
     if (
         type(expected_annotation_verification_policy_sha256) is not str
         or not _SHA256_RE.fullmatch(
@@ -2643,10 +2643,15 @@ def evaluate_ball_localization(
         ),
         evaluator_artifact_sha256=evaluator_artifact_sha256,
         requested_truth_policy=truth_policy.value,
+        protected_verified_at_ns=protected_verified_at_ns,
     )
     if annotation_verification.requested_truth_policy.value != truth_policy.value:
         raise RuntimeError(
             "annotation trust verification did not bind the requested truth policy"
+        )
+    if annotation_verification.protected_verified_at_ns != protected_verified_at_ns:
+        raise RuntimeError(
+            "annotation trust verification did not preserve the protected time"
         )
 
     duplicate_frame_keys = _validated_duplicate_frame_keys(truth_by_frame)
@@ -3090,7 +3095,9 @@ def evaluate_ball_localization(
         ),
         governance_domain_id=annotation_verification.governance_domain_id,
         evaluator_artifact_sha256=annotation_verification.evaluator_artifact_sha256,
-        verified_at_utc=annotation_verification.verified_at_utc,
+        protected_verified_at_ns=(
+            annotation_verification.protected_verified_at_ns
+        ),
     )
 
     return BallLocalizationReport(
@@ -3126,7 +3133,9 @@ def evaluate_ball_localization(
         evaluator_artifact_sha256=(
             annotation_verification.evaluator_artifact_sha256
         ),
-        verified_at_utc=annotation_verification.verified_at_utc,
+        protected_verified_at_ns=(
+            annotation_verification.protected_verified_at_ns
+        ),
         normalized_tolerance_ball_diameters=normalized_tolerance,
         operating_confidence_threshold=normalized_operating_threshold,
         truth_set_sha256=truth_set_sha256,
@@ -4256,7 +4265,7 @@ def _evaluation_input_sha256_from_commitments(
     protected_configuration_generation_sha256: str,
     governance_domain_id: str,
     evaluator_artifact_sha256: str,
-    verified_at_utc: str,
+    protected_verified_at_ns: int,
 ) -> str:
     payload = {
         "annotation_trust": {
@@ -4277,7 +4286,7 @@ def _evaluation_input_sha256_from_commitments(
             "trust_store_sha256": annotation_trust_store_sha256,
             "verification_policy": annotation_verification_policy.to_canonical_dict(),
             "verification_policy_sha256": annotation_verification_policy_sha256,
-            "verified_at_utc": verified_at_utc,
+            "protected_verified_at_ns": protected_verified_at_ns,
         },
         "annotation_schema_version": ANNOTATION_SCHEMA_VERSION,
         "domain": _EVALUATION_INPUT_DOMAIN,

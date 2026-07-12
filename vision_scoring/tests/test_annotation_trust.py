@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 from dataclasses import replace
-from datetime import date
 import hashlib
 import json
 import multiprocessing
@@ -80,6 +79,8 @@ ADJUDICATION_REF = "sha256:" + ADJUDICATION_SHA
 CAPTURE_REF = "sha256:" + CAPTURE_SHA
 TRUST_DOMAIN_ID = "fixture-annotation-keyring"
 EVALUATOR_ARTIFACT_SHA256 = "e" * 64
+PROTECTED_VERIFIED_AT_NS = 1_783_814_400_000_000_000
+NANOSECONDS_PER_DAY = 86_400_000_000_000
 
 REVIEW_PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(b"\x31" * 32)
 ADJUDICATION_PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(b"\x32" * 32)
@@ -365,6 +366,7 @@ def _verify(
     expected_policy_sha256: str | None = None,
     evaluator_artifact_sha256: str = EVALUATOR_ARTIFACT_SHA256,
     requested_truth_policy: str = "REVIEWED_OR_ADJUDICATED",
+    protected_verified_at_ns: int = PROTECTED_VERIFIED_AT_NS,
     protected_generation: ProtectedAnnotationConfigurationGeneration | None = None,
     protected_generation_path: Path | None = None,
 ):
@@ -393,6 +395,7 @@ def _verify(
         protected_configuration_generation_path=selected_generation_path,
         evaluator_artifact_sha256=evaluator_artifact_sha256,
         requested_truth_policy=requested_truth_policy,
+        protected_verified_at_ns=protected_verified_at_ns,
     )
 
 
@@ -506,9 +509,9 @@ class AnnotationTrustTests(unittest.TestCase):
                 verified,
                 requested_truth_policy="REVIEWED_OR_ADJUDICATED",  # type: ignore[arg-type]
             )
-        self.assertRegex(
-            verified.verified_at_utc,
-            r"^\d{4}-\d{2}-\d{2}T.*Z$",
+        self.assertEqual(
+            verified.protected_verified_at_ns,
+            PROTECTED_VERIFIED_AT_NS,
         )
         self.assertEqual(
             annotation_attestation_set_fingerprint(attestations),
@@ -677,13 +680,7 @@ class AnnotationTrustTests(unittest.TestCase):
                 annotation_trust_module,
                 "load_protected_annotation_configuration_generation",
                 wraps=load_protected_annotation_configuration_generation,
-            ) as loader, patch.object(
-                annotation_trust_module,
-                "_canonical_utc_now",
-                side_effect=(
-                    ("2026-07-12T12:00:00.000000Z", date(2026, 7, 12)),
-                ),
-            ), self.assertRaises(AnnotationTrustError) as changed:
+            ) as loader, self.assertRaises(AnnotationTrustError) as changed:
                 _verify(
                     store,
                     (annotation,),
@@ -699,7 +696,7 @@ class AnnotationTrustTests(unittest.TestCase):
             )
             self.assertEqual(loader.call_count, 2)
 
-    def test_protected_generation_reload_clock_order_closes_midnight_window(
+    def test_protected_generation_reload_preserves_one_logical_time_snapshot(
         self,
     ) -> None:
         annotation = _annotation(review_state=ReviewState.REVIEWED)
@@ -711,29 +708,22 @@ class AnnotationTrustTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory:
             root = _evidence_store_root(directory)
+            protected_time = PROTECTED_VERIFIED_AT_NS + NANOSECONDS_PER_DAY - 1
             with patch.object(
-                annotation_trust_module,
-                "_canonical_utc_now",
-                side_effect=(
-                    ("2026-07-12T23:59:59.999999Z", date(2026, 7, 12)),
-                    ("2026-07-13T00:00:00.000000Z", date(2026, 7, 13)),
-                ),
-            ), patch.object(
                 annotation_trust_module,
                 "load_protected_annotation_configuration_generation",
                 wraps=load_protected_annotation_configuration_generation,
-            ) as loader, self.assertRaisesRegex(
-                AnnotationTrustError,
-                "completion date",
-            ):
-                _verify(
+            ) as loader:
+                verified = _verify(
                     store,
                     (annotation,),
                     _attestations(annotation),
                     root,
                     policy=policy,
+                    protected_verified_at_ns=protected_time,
                 )
             self.assertEqual(loader.call_count, 2)
+            self.assertEqual(verified.protected_verified_at_ns, protected_time)
 
     def test_protected_policy_loader_is_exact_canonical_and_typed(self) -> None:
         annotation = _annotation()
@@ -1469,6 +1459,7 @@ class AnnotationTrustTests(unittest.TestCase):
                         protected_configuration_generation_path=Path("unused"),
                         evaluator_artifact_sha256=EVALUATOR_ARTIFACT_SHA256,
                         requested_truth_policy="REVIEWED_OR_ADJUDICATED",
+                        protected_verified_at_ns=PROTECTED_VERIFIED_AT_NS,
                     )
                 self.assertEqual(annotations_over.exception.code, "ANNOTATION_COUNT")
 
@@ -1482,6 +1473,7 @@ class AnnotationTrustTests(unittest.TestCase):
                         protected_configuration_generation_path=Path("unused"),
                         evaluator_artifact_sha256=EVALUATOR_ARTIFACT_SHA256,
                         requested_truth_policy="REVIEWED_OR_ADJUDICATED",
+                        protected_verified_at_ns=PROTECTED_VERIFIED_AT_NS,
                     )
                 self.assertEqual(
                     attestations_over.exception.code,
@@ -1732,64 +1724,70 @@ class AnnotationTrustTests(unittest.TestCase):
                 )
                 _verify(store, (annotation,), base_attestation, root)
 
-    def test_completion_time_is_reported_and_midnight_expiry_fails_closed(self) -> None:
+    def test_protected_time_epoch_boundaries_and_exact_preservation(self) -> None:
+        self.assertEqual(
+            annotation_trust_module._date_from_protected_unix_epoch_ns(0).isoformat(),
+            "1970-01-01",
+        )
+        self.assertEqual(
+            annotation_trust_module._date_from_protected_unix_epoch_ns(
+                NANOSECONDS_PER_DAY - 1
+            ).isoformat(),
+            "1970-01-01",
+        )
+        self.assertEqual(
+            annotation_trust_module._date_from_protected_unix_epoch_ns(
+                NANOSECONDS_PER_DAY
+            ).isoformat(),
+            "1970-01-02",
+        )
+        for invalid in (True, -1, 1 << 63):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                ValueError,
+                "exact nonnegative signed-64",
+            ):
+                annotation_trust_module._date_from_protected_unix_epoch_ns(invalid)
+
         annotation = _annotation(review_state=ReviewState.REVIEWED)
         store = _store(annotation)
         attestations = _attestations(annotation)
         with tempfile.TemporaryDirectory() as directory:
             root = _evidence_store_root(directory)
-            active_policy = _policy(
+            verified = _verify(
                 store,
-                valid_from="2026-07-11",
-                valid_until="2026-07-12",
+                (annotation,),
+                attestations,
+                root,
+                protected_verified_at_ns=PROTECTED_VERIFIED_AT_NS + 123,
             )
-            with patch.object(
-                annotation_trust_module,
-                "_canonical_utc_now",
-                side_effect=(
-                    ("2026-07-11T23:59:59.900000Z", date(2026, 7, 11)),
-                    ("2026-07-11T23:59:59.950000Z", date(2026, 7, 11)),
-                ),
-            ):
-                verified = _verify(
-                    store,
-                    (annotation,),
-                    attestations,
-                    root,
-                    policy=active_policy,
-                )
             self.assertEqual(
-                verified.verified_at_utc,
-                "2026-07-11T23:59:59.950000Z",
+                verified.protected_verified_at_ns,
+                PROTECTED_VERIFIED_AT_NS + 123,
             )
+            for invalid in (True, -1, 1 << 63):
+                with self.subTest(report_invalid=invalid), self.assertRaisesRegex(
+                    ValueError,
+                    "exact nonnegative signed-64",
+                ):
+                    replace(verified, protected_verified_at_ns=invalid)
+                with self.subTest(verifier_invalid=invalid), self.assertRaisesRegex(
+                    ValueError,
+                    "exact nonnegative signed-64",
+                ):
+                    _verify(
+                        store,
+                        (annotation,),
+                        attestations,
+                        root,
+                        protected_verified_at_ns=invalid,
+                    )
 
-            expiring_policy = _policy(
-                store,
-                valid_from="2026-07-11",
-                valid_until="2026-07-11",
-            )
-            with patch.object(
-                annotation_trust_module,
-                "_canonical_utc_now",
-                side_effect=(
-                    ("2026-07-11T23:59:59.900000Z", date(2026, 7, 11)),
-                    ("2026-07-12T00:00:00.100000Z", date(2026, 7, 12)),
-                ),
-            ), self.assertRaisesRegex(AnnotationTrustError, "completion date"):
-                _verify(
-                    store,
-                    (annotation,),
-                    attestations,
-                    root,
-                    policy=expiring_policy,
-                )
-
-    def test_midnight_rechecks_currentness_and_key_compromise(self) -> None:
+    def test_protected_time_controls_policy_and_compromise_once(self) -> None:
         annotation = _annotation(review_state=ReviewState.REVIEWED)
         store = _store(annotation)
         policy = _policy(
             store,
-            valid_from="2026-07-11",
+            valid_from="2026-07-12",
             valid_until="2026-07-12",
         )
         attestations = _attestations(annotation)
@@ -1800,14 +1798,6 @@ class AnnotationTrustTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = _evidence_store_root(directory)
             with patch.object(
-                annotation_trust_module,
-                "_canonical_utc_now",
-                side_effect=(
-                    ("2026-07-11T23:59:59.900000Z", date(2026, 7, 11)),
-                    ("2026-07-12T00:00:00.100000Z", date(2026, 7, 12)),
-                    ("2026-07-12T00:00:00.200000Z", date(2026, 7, 12)),
-                ),
-            ), patch.object(
                 annotation_trust_module,
                 "_enforce_annotation_currentness_and_truth_policy",
                 wraps=currentness_check,
@@ -1822,42 +1812,52 @@ class AnnotationTrustTests(unittest.TestCase):
                     attestations,
                     root,
                     policy=policy,
+                    protected_verified_at_ns=(
+                        PROTECTED_VERIFIED_AT_NS + NANOSECONDS_PER_DAY - 1
+                    ),
                 )
-            self.assertEqual(currentness_mock.call_count, 2)
-            self.assertEqual(key_mock.call_count, 2)
+            self.assertEqual(currentness_mock.call_count, 1)
+            self.assertEqual(key_mock.call_count, 1)
             self.assertEqual(
-                verified.verified_at_utc,
-                "2026-07-12T00:00:00.200000Z",
+                verified.protected_verified_at_ns,
+                PROTECTED_VERIFIED_AT_NS + NANOSECONDS_PER_DAY - 1,
             )
+            with self.assertRaisesRegex(AnnotationTrustError, "not active"):
+                _verify(
+                    store,
+                    (annotation,),
+                    attestations,
+                    root,
+                    policy=policy,
+                    protected_verified_at_ns=(
+                        PROTECTED_VERIFIED_AT_NS + NANOSECONDS_PER_DAY
+                    ),
+                )
 
             compromised_store = _store(
                 annotation,
                 keys=(
                     _key(
                         AnnotationAttestationRole.REVIEWER,
-                        compromised_on="2026-07-12",
+                        compromised_on="2026-07-13",
                     ),
                 ),
             )
             compromised_policy = _policy(
                 compromised_store,
-                valid_from="2026-07-11",
-                valid_until="2026-07-12",
+                valid_from="2026-07-12",
+                valid_until="2026-07-13",
             )
-            with patch.object(
-                annotation_trust_module,
-                "_canonical_utc_now",
-                side_effect=(
-                    ("2026-07-11T23:59:59.900000Z", date(2026, 7, 11)),
-                    ("2026-07-12T00:00:00.100000Z", date(2026, 7, 12)),
-                ),
-            ), self.assertRaisesRegex(AnnotationTrustError, "compromised"):
+            with self.assertRaisesRegex(AnnotationTrustError, "compromised"):
                 _verify(
                     compromised_store,
                     (annotation,),
                     attestations,
                     root,
                     policy=compromised_policy,
+                    protected_verified_at_ns=(
+                        PROTECTED_VERIFIED_AT_NS + NANOSECONDS_PER_DAY
+                    ),
                 )
 
     def test_missing_wrong_generation_and_capture_evidence_are_rejected(self) -> None:

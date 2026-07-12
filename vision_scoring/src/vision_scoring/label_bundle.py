@@ -965,6 +965,18 @@ class VerifiedCausalBallLabelBundleEvidence(Protocol):
     def annotation_attestation_set_sha256(self) -> str: ...
 
     @property
+    def annotation_configuration_generation_sha256(self) -> str: ...
+
+    @property
+    def annotation_evidence_set_sha256(self) -> str: ...
+
+    @property
+    def annotation_evidence_generation_id(self) -> str: ...
+
+    @property
+    def requested_truth_policy(self) -> AnnotationMinimumTruthPolicy: ...
+
+    @property
     def trust_snapshot_generation(self) -> int: ...
 
     @property
@@ -986,6 +998,9 @@ class VerifiedCausalBallLabelBundleEvidence(Protocol):
     def admissible_for_evaluation(self) -> bool: ...
 
     @property
+    def admissible_for_test(self) -> bool: ...
+
+    @property
     def admissible_for_deployment(self) -> bool: ...
 
     @property
@@ -1000,6 +1015,10 @@ class _VerifiedCausalBallLabelBundleEvidence:
         "_annotation_trust_store_sha256",
         "_annotation_verification_policy_sha256",
         "_annotation_attestation_set_sha256",
+        "_annotation_configuration_generation_sha256",
+        "_annotation_evidence_set_sha256",
+        "_annotation_evidence_generation_id",
+        "_requested_truth_policy",
         "_trust_snapshot_generation",
         "_protected_verified_at_ns",
         "_bundle_id",
@@ -1015,6 +1034,10 @@ class _VerifiedCausalBallLabelBundleEvidence:
         annotation_trust_store_sha256: str,
         annotation_verification_policy_sha256: str,
         annotation_attestation_set_sha256: str,
+        annotation_configuration_generation_sha256: str,
+        annotation_evidence_set_sha256: str,
+        annotation_evidence_generation_id: str,
+        requested_truth_policy: AnnotationMinimumTruthPolicy,
         trust_snapshot_generation: int,
         protected_verified_at_ns: int,
         bundle_id: str,
@@ -1033,8 +1056,21 @@ class _VerifiedCausalBallLabelBundleEvidence:
                 "annotation_attestation_set_sha256",
                 annotation_attestation_set_sha256,
             ),
+            (
+                "annotation_configuration_generation_sha256",
+                annotation_configuration_generation_sha256,
+            ),
+            ("annotation_evidence_set_sha256", annotation_evidence_set_sha256),
+            (
+                "annotation_evidence_generation_id",
+                annotation_evidence_generation_id,
+            ),
         ):
             require_sha256(value, field_name)
+        if type(requested_truth_policy) is not AnnotationMinimumTruthPolicy:
+            raise ValueError(
+                "requested_truth_policy must be an AnnotationMinimumTruthPolicy"
+            )
         require_exact_int(trust_snapshot_generation, "trust_snapshot_generation")
         require_exact_int(protected_verified_at_ns, "protected_verified_at_ns")
         require_stable_id(bundle_id, "bundle_id")
@@ -1060,6 +1096,26 @@ class _VerifiedCausalBallLabelBundleEvidence:
         )
         object.__setattr__(
             self,
+            "_annotation_configuration_generation_sha256",
+            annotation_configuration_generation_sha256,
+        )
+        object.__setattr__(
+            self,
+            "_annotation_evidence_set_sha256",
+            annotation_evidence_set_sha256,
+        )
+        object.__setattr__(
+            self,
+            "_annotation_evidence_generation_id",
+            annotation_evidence_generation_id,
+        )
+        object.__setattr__(
+            self,
+            "_requested_truth_policy",
+            requested_truth_policy,
+        )
+        object.__setattr__(
+            self,
             "_trust_snapshot_generation",
             trust_snapshot_generation,
         )
@@ -1072,6 +1128,9 @@ class _VerifiedCausalBallLabelBundleEvidence:
         object.__setattr__(self, "_split", split)
 
     def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError("verified label-bundle receipts are immutable")
+
+    def __delattr__(self, name: str) -> None:
         raise AttributeError("verified label-bundle receipts are immutable")
 
     @property
@@ -1099,6 +1158,22 @@ class _VerifiedCausalBallLabelBundleEvidence:
         return self._annotation_attestation_set_sha256
 
     @property
+    def annotation_configuration_generation_sha256(self) -> str:
+        return self._annotation_configuration_generation_sha256
+
+    @property
+    def annotation_evidence_set_sha256(self) -> str:
+        return self._annotation_evidence_set_sha256
+
+    @property
+    def annotation_evidence_generation_id(self) -> str:
+        return self._annotation_evidence_generation_id
+
+    @property
+    def requested_truth_policy(self) -> AnnotationMinimumTruthPolicy:
+        return self._requested_truth_policy
+
+    @property
     def trust_snapshot_generation(self) -> int:
         return self._trust_snapshot_generation
 
@@ -1124,6 +1199,10 @@ class _VerifiedCausalBallLabelBundleEvidence:
 
     @property
     def admissible_for_evaluation(self) -> bool:
+        return False
+
+    @property
+    def admissible_for_test(self) -> bool:
         return False
 
     @property
@@ -1549,6 +1628,7 @@ def verify_causal_ball_label_bundle_v1(
         ),
         evaluator_artifact_sha256=evaluator_artifact_sha256,
         requested_truth_policy=requested_truth_policy.value,
+        protected_verified_at_ns=protected_verified_at,
     )
     if (
         annotation_verification.trust_store_sha256
@@ -1557,6 +1637,10 @@ def verify_causal_ball_label_bundle_v1(
         != statement.annotation_verification_policy_sha256
         or annotation_verification.attestation_set_sha256
         != statement.annotation_attestation_set_sha256
+        or annotation_verification.requested_truth_policy
+        is not requested_truth_policy
+        or annotation_verification.protected_verified_at_ns
+        != protected_verified_at
     ):
         _fail(
             "LABEL_BUNDLE_ANNOTATION_VERIFICATION_BINDING",
@@ -1573,8 +1657,20 @@ def verify_causal_ball_label_bundle_v1(
         annotation_attestation_set_sha256=(
             annotation_verification.attestation_set_sha256
         ),
+        annotation_configuration_generation_sha256=(
+            annotation_verification.protected_configuration_generation_sha256
+        ),
+        annotation_evidence_set_sha256=(
+            annotation_verification.evidence_set_sha256
+        ),
+        annotation_evidence_generation_id=(
+            annotation_verification.evidence_generation_id
+        ),
+        requested_truth_policy=annotation_verification.requested_truth_policy,
         trust_snapshot_generation=trust_snapshot.snapshot_generation,
-        protected_verified_at_ns=protected_verified_at,
+        protected_verified_at_ns=(
+            annotation_verification.protected_verified_at_ns
+        ),
         bundle_id=statement.bundle_id,
         split=statement.split,
     )

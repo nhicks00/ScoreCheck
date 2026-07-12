@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 import vision_scoring.training_admission_compiler as training_admission_compiler
+from vision_scoring.annotation_trust import AnnotationMinimumTruthPolicy
 from vision_scoring.contract_wire import CanonicalWireError
 from vision_scoring.capture_contracts import MAX_FINALIZED_SOURCE_BYTES
 from vision_scoring.dataset_split import DatasetSplit
@@ -51,7 +52,9 @@ from vision_scoring.training_admission_contracts import (
     TrainingCaptureModeV1,
     TrainingCoverageReportV1,
     TrainingDatasetManifestV1,
-    TrainingExampleManifestV1,
+    TRAINING_EXAMPLE_DOMAIN,
+    TRAINING_EXAMPLE_SCHEMA_VERSION,
+    TrainingExampleManifestV2,
     TrainingExampleReferenceV1,
     TrainingOutputRoleV1,
     TrainingRunManifestV1,
@@ -194,7 +197,7 @@ def _policy() -> TrainingAdmissionPolicyV1:
     )
 
 
-def _example() -> TrainingExampleManifestV1:
+def _example() -> TrainingExampleManifestV2:
     rows = _target_rows()
     root = _digest(1)
     profile = _digest(10)
@@ -215,7 +218,7 @@ def _example() -> TrainingExampleManifestV1:
         camera_setup_id="camera-A",
         recording_date="2026-07-01",
     )
-    return TrainingExampleManifestV1(
+    return TrainingExampleManifestV2(
         source_id="source-A",
         source_asset_sha256=root,
         root_asset_sha256=root,
@@ -256,9 +259,17 @@ def _example() -> TrainingExampleManifestV1:
         bundle_id="bundle-A",
         curator_attestation_sha256=_digest(22),
         curator_trust_snapshot_sha256=_digest(23),
+        curator_trust_snapshot_generation=4,
+        requested_truth_policy=(
+            AnnotationMinimumTruthPolicy.REVIEWED_OR_ADJUDICATED
+        ),
         annotation_attestation_set_sha256=_digest(24),
         annotation_trust_store_sha256=_digest(25),
         annotation_verification_policy_sha256=_digest(26),
+        annotation_configuration_generation_sha256=_digest(37),
+        annotation_evidence_set_sha256=_digest(38),
+        annotation_evidence_generation_id=_digest(39),
+        protected_verified_at_ns=1_783_814_400_000_000_000,
         rights_decision_sha256=_digest(27),
         rights_attestation_sha256=_digest(28),
         rights_evidence_generation_id=_digest(29),
@@ -353,12 +364,12 @@ def _request() -> TrainingRunRequestV1:
 
 
 def _compiler_variant(
-    base: TrainingExampleManifestV1,
+    base: TrainingExampleManifestV2,
     *,
     suffix: int,
     split: TrainingSplitV1,
     frame_count: int = 2,
-) -> TrainingExampleManifestV1:
+) -> TrainingExampleManifestV2:
     root_asset_sha256 = _digest(4_000 + suffix)
     camera_setup_id = f"camera-{suffix}"
     match_id = f"match-{suffix}"
@@ -401,7 +412,7 @@ def _compiler_variant(
     )
 
 
-def _compiler_examples() -> tuple[TrainingExampleManifestV1, ...]:
+def _compiler_examples() -> tuple[TrainingExampleManifestV2, ...]:
     train = _example()
     dev = _compiler_variant(
         train,
@@ -432,9 +443,9 @@ def _schedule_compiler_examples(
     *,
     train_counts: tuple[int, int, int, int] = (2, 2, 2, 2),
     dev_count: int = 2,
-) -> tuple[TrainingExampleManifestV1, ...]:
+) -> tuple[TrainingExampleManifestV2, ...]:
     base = _example()
-    examples: list[TrainingExampleManifestV1] = []
+    examples: list[TrainingExampleManifestV2] = []
     suffix = 100
     for stratum, count in zip(PrimarySamplingStratumV1, train_counts, strict=True):
         for _ in range(count):
@@ -464,7 +475,7 @@ def _schedule_compiler_examples(
 
 
 def _schedule_references(
-    examples: tuple[TrainingExampleManifestV1, ...],
+    examples: tuple[TrainingExampleManifestV2, ...],
 ) -> tuple[TrainingExampleReferenceV1, ...]:
     split_order = {TrainingSplitV1.TRAIN: 0, TrainingSplitV1.DEV: 1}
     return tuple(
@@ -492,7 +503,7 @@ def _schedule_references(
 
 def _schedule_dataset(
     *,
-    examples: tuple[TrainingExampleManifestV1, ...],
+    examples: tuple[TrainingExampleManifestV2, ...],
     policy: TrainingAdmissionPolicyV1,
 ) -> TrainingDatasetManifestV1:
     references = _schedule_references(examples)
@@ -1001,9 +1012,31 @@ class TrainingAdmissionContractTests(unittest.TestCase):
 
     def test_example_round_trips_with_exact_derived_joins_and_no_authority(self) -> None:
         example = _example()
-        parsed = TrainingExampleManifestV1.from_json_bytes(example.to_json_bytes())
+        parsed = TrainingExampleManifestV2.from_json_bytes(example.to_json_bytes())
         self.assertEqual(parsed, example)
         self.assert_all_authority_false(parsed)
+        self.assertEqual(parsed.schema_version, TRAINING_EXAMPLE_SCHEMA_VERSION)
+        wire = json.loads(parsed.to_json_bytes())
+        self.assertEqual(wire["domain"], TRAINING_EXAMPLE_DOMAIN)
+        self.assertEqual(wire["schema_version"], TRAINING_EXAMPLE_SCHEMA_VERSION)
+        for field_name, stale_value in (
+            ("domain", "multicourt-vision-scoring:training-example:v1"),
+            ("schema_version", "1.0"),
+        ):
+            stale = dict(wire)
+            stale[field_name] = stale_value
+            with self.subTest(field_name=field_name), self.assertRaises(
+                TrainingAdmissionContractError
+            ):
+                TrainingExampleManifestV2.from_json_bytes(
+                    json.dumps(
+                        stale,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    ).encode("utf-8")
+                )
         self.assertEqual(
             parsed.leakage_group_sha256,
             leakage_group_sha256_v1(
@@ -1017,6 +1050,69 @@ class TrainingAdmissionContractTests(unittest.TestCase):
             ),
         )
         self.assertNotIn(b'"split":"TEST"', parsed.to_json_bytes())
+        self.assertIs(
+            parsed.requested_truth_policy,
+            AnnotationMinimumTruthPolicy.REVIEWED_OR_ADJUDICATED,
+        )
+        self.assertEqual(parsed.curator_trust_snapshot_generation, 4)
+        self.assertEqual(parsed.protected_verified_at_ns, 1_783_814_400_000_000_000)
+        for field_name in (
+            "annotation_configuration_generation_sha256",
+            "annotation_evidence_set_sha256",
+            "annotation_evidence_generation_id",
+            "curator_trust_snapshot_generation",
+            "protected_verified_at_ns",
+            "requested_truth_policy",
+        ):
+            self.assertIn(field_name, wire)
+
+    def test_example_protected_provenance_types_bounds_and_roles_are_exact(
+        self,
+    ) -> None:
+        example = _example()
+        for field_name in (
+            "curator_trust_snapshot_generation",
+            "protected_verified_at_ns",
+        ):
+            for invalid in (True, -1, 1 << 63):
+                with self.subTest(
+                    field_name=field_name,
+                    invalid=invalid,
+                ), self.assertRaises(ValueError):
+                    replace(example, **{field_name: invalid})
+        with self.assertRaisesRegex(ValueError, "requested_truth_policy"):
+            replace(
+                example,
+                requested_truth_policy="REVIEWED_OR_ADJUDICATED",  # type: ignore[arg-type]
+            )
+        for invalid in (True, "DRAFT_ALLOWED"):
+            payload = json.loads(example.to_json_bytes())
+            payload["requested_truth_policy"] = invalid
+            with self.subTest(wire_truth_policy=invalid), self.assertRaises(
+                TrainingAdmissionContractError
+            ):
+                TrainingExampleManifestV2.from_json_bytes(
+                    json.dumps(
+                        payload,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    ).encode("utf-8")
+                )
+        for field_name in (
+            "annotation_configuration_generation_sha256",
+            "annotation_evidence_set_sha256",
+            "annotation_evidence_generation_id",
+        ):
+            with self.subTest(field_name=field_name), self.assertRaisesRegex(
+                ValueError,
+                "digest roles must not alias",
+            ):
+                replace(
+                    example,
+                    **{field_name: example.annotation_attestation_set_sha256},
+                )
 
     def test_primary_sampling_stratum_is_fully_derived_from_exact_tags(self) -> None:
         self.assertIs(
@@ -1464,7 +1560,7 @@ class TrainingAdmissionCoverageCompilerTests(unittest.TestCase):
         self,
         *,
         policy: TrainingAdmissionPolicyV1 | None = None,
-        examples: tuple[TrainingExampleManifestV1, ...] | None = None,
+        examples: tuple[TrainingExampleManifestV2, ...] | None = None,
         readiness_manifest_sha256: str = _digest(5_000),
     ) -> TrainingCoverageReportV1:
         return compile_training_coverage_v1(
@@ -1791,9 +1887,9 @@ class TrainingAdmissionCoverageCompilerTests(unittest.TestCase):
         train, dev = _compiler_examples()
 
         def replace_and_rebind_leakage(
-            example: TrainingExampleManifestV1,
+            example: TrainingExampleManifestV2,
             **changes: object,
-        ) -> TrainingExampleManifestV1:
+        ) -> TrainingExampleManifestV2:
             values = {
                 "match_id": changes.get("match_id", example.match_id),
                 "root_asset_sha256": changes.get(
@@ -1845,7 +1941,7 @@ class TrainingAdmissionCoverageCompilerTests(unittest.TestCase):
                     train.leakage_group_sha256,
                 )
                 self.assertEqual(
-                    TrainingExampleManifestV1.from_json_bytes(
+                    TrainingExampleManifestV2.from_json_bytes(
                         candidate.to_json_bytes()
                     ),
                     candidate,
@@ -2126,7 +2222,7 @@ class TrainingSamplingScheduleCompilerTests(unittest.TestCase):
 
         found: tuple[
             StratifiedSamplingPlanV1,
-            tuple[tuple[str, TrainingExampleManifestV1], ...],
+            tuple[tuple[str, TrainingExampleManifestV2], ...],
         ] | None = None
         for seed in range(64):
             plan = _schedule_plan(
@@ -2229,8 +2325,8 @@ class TrainingSamplingScheduleCompilerTests(unittest.TestCase):
         shared_match = "two-draw-dead-end-match"
 
         def share_match(
-            example: TrainingExampleManifestV1,
-        ) -> TrainingExampleManifestV1:
+            example: TrainingExampleManifestV2,
+        ) -> TrainingExampleManifestV2:
             return replace(
                 example,
                 match_id=shared_match,
@@ -2311,7 +2407,7 @@ class TrainingSamplingScheduleCompilerTests(unittest.TestCase):
             item for item in base_examples if item.split is TrainingSplitV1.DEV
         )
 
-        same_match: list[TrainingExampleManifestV1] = []
+        same_match: list[TrainingExampleManifestV2] = []
         for example in train:
             match_id = "shared-match"
             same_match.append(

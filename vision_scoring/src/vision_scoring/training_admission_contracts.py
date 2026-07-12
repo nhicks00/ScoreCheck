@@ -20,6 +20,7 @@ import math
 import re
 from typing import Any, ClassVar, Iterable, Mapping, TypeVar
 
+from .annotation_trust import AnnotationMinimumTruthPolicy
 from .capture_contracts import MAX_FINALIZED_SOURCE_BYTES
 from .contract_wire import (
     MAX_SIGNED_64,
@@ -36,6 +37,7 @@ from .contract_wire import (
 
 
 TRAINING_ADMISSION_SCHEMA_VERSION = "1.0"
+TRAINING_EXAMPLE_SCHEMA_VERSION = "2.0"
 
 TRAINING_ADMISSION_POLICY_DOMAIN = (
     "multicourt-vision-scoring:training-admission-policy:v1"
@@ -43,7 +45,7 @@ TRAINING_ADMISSION_POLICY_DOMAIN = (
 TRAINING_COVERAGE_REPORT_DOMAIN = (
     "multicourt-vision-scoring:training-coverage-report:v1"
 )
-TRAINING_EXAMPLE_DOMAIN = "multicourt-vision-scoring:training-example:v1"
+TRAINING_EXAMPLE_DOMAIN = "multicourt-vision-scoring:training-example:v2"
 TRAINING_DATASET_MANIFEST_DOMAIN = (
     "multicourt-vision-scoring:training-dataset-manifest:v1"
 )
@@ -278,8 +280,13 @@ def _require_date(value: object, field_name: str) -> str:
     return value
 
 
-def _require_schema_version(value: object, *, label: str) -> None:
-    if type(value) is not str or value != TRAINING_ADMISSION_SCHEMA_VERSION:
+def _require_schema_version(
+    value: object,
+    *,
+    label: str,
+    expected: str = TRAINING_ADMISSION_SCHEMA_VERSION,
+) -> None:
+    if type(value) is not str or value != expected:
         raise ValueError(f"unsupported {label} schema")
 
 
@@ -1162,7 +1169,7 @@ def _validate_target_tensor_rows_for_example(
 
 
 @dataclass(frozen=True, slots=True)
-class TrainingExampleManifestV1(_CanonicalContract):
+class TrainingExampleManifestV2(_CanonicalContract):
     """Exact non-authorizing TRAIN/DEV receipt, trust, and target binding."""
 
     source_id: str
@@ -1205,9 +1212,15 @@ class TrainingExampleManifestV1(_CanonicalContract):
     bundle_id: str
     curator_attestation_sha256: str
     curator_trust_snapshot_sha256: str
+    curator_trust_snapshot_generation: int
+    requested_truth_policy: AnnotationMinimumTruthPolicy
     annotation_attestation_set_sha256: str
     annotation_trust_store_sha256: str
     annotation_verification_policy_sha256: str
+    annotation_configuration_generation_sha256: str
+    annotation_evidence_set_sha256: str
+    annotation_evidence_generation_id: str
+    protected_verified_at_ns: int
     rights_decision_sha256: str
     rights_attestation_sha256: str
     rights_evidence_generation_id: str
@@ -1232,14 +1245,18 @@ class TrainingExampleManifestV1(_CanonicalContract):
     admissible_for_test: bool = False
     admissible_for_deployment: bool = False
     admissible_for_live_scoring: bool = False
-    schema_version: str = TRAINING_ADMISSION_SCHEMA_VERSION
+    schema_version: str = TRAINING_EXAMPLE_SCHEMA_VERSION
 
     _DOMAIN = TRAINING_EXAMPLE_DOMAIN
     _LABEL = "training example manifest"
     _MAXIMUM_BYTES = MAX_EXAMPLE_CONTRACT_BYTES
 
     def __post_init__(self) -> None:
-        _require_schema_version(self.schema_version, label="training example")
+        _require_schema_version(
+            self.schema_version,
+            label="training example",
+            expected=TRAINING_EXAMPLE_SCHEMA_VERSION,
+        )
         for field_name in (
             "source_id",
             "match_id",
@@ -1294,6 +1311,9 @@ class TrainingExampleManifestV1(_CanonicalContract):
             "annotation_attestation_set_sha256",
             "annotation_trust_store_sha256",
             "annotation_verification_policy_sha256",
+            "annotation_configuration_generation_sha256",
+            "annotation_evidence_set_sha256",
+            "annotation_evidence_generation_id",
             "rights_decision_sha256",
             "rights_attestation_sha256",
             "rights_evidence_generation_id",
@@ -1370,6 +1390,10 @@ class TrainingExampleManifestV1(_CanonicalContract):
         ):
             raise ValueError("constrained compression must carry high-compression risk")
         _require_date(self.rights_verified_on, "rights_verified_on")
+        if type(self.requested_truth_policy) is not AnnotationMinimumTruthPolicy:
+            raise ValueError(
+                "requested_truth_policy must be an AnnotationMinimumTruthPolicy"
+            )
         require_exact_int(
             self.source_byte_length,
             "source_byte_length",
@@ -1379,6 +1403,18 @@ class TrainingExampleManifestV1(_CanonicalContract):
         require_exact_int(
             self.capture_policy_generation,
             "capture_policy_generation",
+            minimum=0,
+            maximum=MAX_SIGNED_64,
+        )
+        require_exact_int(
+            self.curator_trust_snapshot_generation,
+            "curator_trust_snapshot_generation",
+            minimum=0,
+            maximum=MAX_SIGNED_64,
+        )
+        require_exact_int(
+            self.protected_verified_at_ns,
+            "protected_verified_at_ns",
             minimum=0,
             maximum=MAX_SIGNED_64,
         )
@@ -1474,6 +1510,7 @@ class TrainingExampleManifestV1(_CanonicalContract):
         payload["split"] = self.split.value
         payload["capture_mode"] = self.capture_mode.value
         payload["compression_stratum"] = self.compression_stratum.value
+        payload["requested_truth_policy"] = self.requested_truth_policy.value
         payload["primary_sampling_stratum"] = self.primary_sampling_stratum.value
         payload["capture_risk_tags"] = [item.value for item in self.capture_risk_tags]
         payload["example_stratum_tags"] = [item.value for item in self.example_stratum_tags]
@@ -1481,7 +1518,7 @@ class TrainingExampleManifestV1(_CanonicalContract):
         return payload
 
     @classmethod
-    def from_json_bytes(cls, raw: bytes) -> "TrainingExampleManifestV1":
+    def from_json_bytes(cls, raw: bytes) -> "TrainingExampleManifestV2":
         try:
             fields = _parse_contract(
                 raw,
@@ -1499,6 +1536,11 @@ class TrainingExampleManifestV1(_CanonicalContract):
             )
             fields["compression_stratum"] = enum_from_json(
                 CompressionStratumV1, fields["compression_stratum"], "compression_stratum"
+            )
+            fields["requested_truth_policy"] = enum_from_json(
+                AnnotationMinimumTruthPolicy,
+                fields["requested_truth_policy"],
+                "requested_truth_policy",
             )
             fields["primary_sampling_stratum"] = enum_from_json(
                 PrimarySamplingStratumV1,
@@ -2677,6 +2719,7 @@ __all__ = [
     "TRAINING_COVERAGE_REPORT_DOMAIN",
     "TRAINING_DATASET_MANIFEST_DOMAIN",
     "TRAINING_EXAMPLE_DOMAIN",
+    "TRAINING_EXAMPLE_SCHEMA_VERSION",
     "TRAINING_RUN_MANIFEST_DOMAIN",
     "TRAINING_RUN_REQUEST_DOMAIN",
     "TRAINING_SAMPLING_SCHEDULE_DOMAIN",
@@ -2689,7 +2732,7 @@ __all__ = [
     "TrainingCaptureModeV1",
     "TrainingCoverageReportV1",
     "TrainingDatasetManifestV1",
-    "TrainingExampleManifestV1",
+    "TrainingExampleManifestV2",
     "TrainingExampleReferenceV1",
     "TrainingOutputRoleV1",
     "TrainingRunManifestV1",

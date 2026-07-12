@@ -96,6 +96,7 @@ REVIEW_PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(b"\x41" * 32)
 ADJUDICATION_PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(b"\x42" * 32)
 UNUSED_PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(b"\x43" * 32)
 DEFAULT_NORMALIZED_TOLERANCE = 5.0 / 12.0
+PROTECTED_VERIFIED_AT_NS = 1_783_814_400_000_000_000
 
 
 def _decoded_frame_sha256(source_sha256: str, frame_index: int) -> str:
@@ -632,6 +633,7 @@ def evaluate_ball_localization(
     operating_confidence_threshold: float = 0.0,
     truth_policy: TruthPolicy = TruthPolicy.ADJUDICATED_ONLY,
     evaluation_manifest: UnitBallEvaluationManifest | None = None,
+    protected_verified_at_ns: int = PROTECTED_VERIFIED_AT_NS,
 ):
     """Test-only alias supplying fixture trust, including a fixture-local pin.
 
@@ -672,10 +674,46 @@ def evaluate_ball_localization(
             ),
             annotation_verification_policy=policy,
             expected_annotation_verification_policy_sha256=policy.fingerprint(),
+            protected_verified_at_ns=protected_verified_at_ns,
         )
 
 
 class BallMetricsTests(unittest.TestCase):
+    def test_protected_time_is_exact_and_binds_report_and_input_commitment(
+        self,
+    ) -> None:
+        truth = (_truth(0),)
+        predictions = (_prediction("candidate", 0),)
+        first = evaluate_ball_localization(
+            truth,
+            predictions,
+            DEFAULT_NORMALIZED_TOLERANCE,
+            protected_verified_at_ns=PROTECTED_VERIFIED_AT_NS,
+        )
+        changed = evaluate_ball_localization(
+            truth,
+            predictions,
+            DEFAULT_NORMALIZED_TOLERANCE,
+            protected_verified_at_ns=PROTECTED_VERIFIED_AT_NS + 1,
+        )
+        self.assertEqual(first.protected_verified_at_ns, PROTECTED_VERIFIED_AT_NS)
+        self.assertNotEqual(
+            first.evaluation_input_sha256,
+            changed.evaluation_input_sha256,
+        )
+        self.assertNotEqual(first.fingerprint(), changed.fingerprint())
+        for invalid in (True, -1, 1 << 63):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                ValueError,
+                "exact nonnegative signed-64",
+            ):
+                evaluate_ball_localization(
+                    truth,
+                    predictions,
+                    DEFAULT_NORMALIZED_TOLERANCE,
+                    protected_verified_at_ns=invalid,
+                )
+
     def test_evaluator_artifact_binds_loaded_code_and_runtime_scope(self) -> None:
         baseline = ball_localization_evaluator_artifact_sha256()
         self.assertRegex(baseline, r"^[0-9a-f]{64}$")
@@ -1080,7 +1118,7 @@ class BallMetricsTests(unittest.TestCase):
         self.assertEqual(first.average_precision_101, 0.5)
         normalized_reordered = replace(
             reordered,
-            verified_at_utc=first.verified_at_utc,
+            protected_verified_at_ns=first.protected_verified_at_ns,
             evaluation_input_sha256=first.evaluation_input_sha256,
         )
         self.assertEqual(first.canonical_json(), normalized_reordered.canonical_json())
@@ -1958,6 +1996,7 @@ class BallMetricsTests(unittest.TestCase):
             "annotation_protected_configuration_generation_path": Path("unused"),
             "annotation_verification_policy": None,
             "expected_annotation_verification_policy_sha256": "0" * 64,
+            "protected_verified_at_ns": PROTECTED_VERIFIED_AT_NS,
         }
         truth = (_truth(0), _truth(1))
         direct_arguments["evaluation_manifest"] = _unit_evaluation_manifest(truth)
@@ -2048,7 +2087,10 @@ class BallMetricsTests(unittest.TestCase):
         self.assertRegex(report.evaluator_artifact_sha256, r"^[0-9a-f]{64}$")
         self.assertRegex(report.truth_set_sha256, r"^[0-9a-f]{64}$")
         self.assertRegex(report.prediction_set_sha256, r"^[0-9a-f]{64}$")
-        self.assertRegex(report.verified_at_utc, r"^\d{4}-\d{2}-\d{2}T.*Z$")
+        self.assertEqual(
+            report.protected_verified_at_ns,
+            PROTECTED_VERIFIED_AT_NS,
+        )
         self.assertEqual(
             report.evaluation_manifest_sha256,
             report.evaluation_manifest.fingerprint(),
@@ -2108,6 +2150,7 @@ class BallMetricsTests(unittest.TestCase):
                 "annotation_protected_configuration_generation_path": (
                     protected_configuration_path
                 ),
+                "protected_verified_at_ns": PROTECTED_VERIFIED_AT_NS,
             }
             with self.assertRaisesRegex(
                 ValueError,
@@ -2304,6 +2347,7 @@ class BallMetricsTests(unittest.TestCase):
                 ),
                 annotation_verification_policy=policy,
                 expected_annotation_verification_policy_sha256=policy.fingerprint(),
+                protected_verified_at_ns=PROTECTED_VERIFIED_AT_NS,
             )
             with self.assertRaisesRegex(ValueError, "trust store"):
                 _evaluate_ball_localization(
@@ -2322,6 +2366,7 @@ class BallMetricsTests(unittest.TestCase):
                     ),
                     annotation_verification_policy=policy,
                     expected_annotation_verification_policy_sha256=policy.fingerprint(),
+                    protected_verified_at_ns=PROTECTED_VERIFIED_AT_NS,
                 )
             changed_store_report = _evaluate_ball_localization(
                 truth,
@@ -2341,6 +2386,7 @@ class BallMetricsTests(unittest.TestCase):
                 expected_annotation_verification_policy_sha256=(
                     changed_policy.fingerprint()
                 ),
+                protected_verified_at_ns=PROTECTED_VERIFIED_AT_NS,
             )
 
         self.assertEqual(report.annotation_trust_store_sha256, store.fingerprint())
@@ -2425,7 +2471,7 @@ class BallMetricsTests(unittest.TestCase):
             ),
             "governance_domain_id": report.governance_domain_id,
             "evaluator_artifact_sha256": report.evaluator_artifact_sha256,
-            "verified_at_utc": report.verified_at_utc,
+            "protected_verified_at_ns": report.protected_verified_at_ns,
         }
         self.assertEqual(
             ball_metrics_module._evaluation_input_sha256_from_commitments(
@@ -2581,9 +2627,10 @@ class BallMetricsTests(unittest.TestCase):
             {"truth_set_sha256": "0" * 64},
             {"prediction_set_sha256": "0" * 64},
             {"evaluation_input_sha256": "0" * 64},
-            {"verified_at_utc": "2026-02-30T00:00:00.000000Z"},
-            {"verified_at_utc": "2019-01-01T00:00:00.000000Z"},
-            {"verified_at_utc": "2025-01-01T00:00:00.000000Z"},
+            {"protected_verified_at_ns": True},
+            {"protected_verified_at_ns": -1},
+            {"protected_verified_at_ns": 1 << 63},
+            {"protected_verified_at_ns": 0},
             {
                 "confidence_ranking_points": (
                     ConfidenceRankingPoint(
@@ -2673,7 +2720,7 @@ class BallMetricsTests(unittest.TestCase):
 
         normalized_reordered = replace(
             reordered,
-            verified_at_utc=first.verified_at_utc,
+            protected_verified_at_ns=first.protected_verified_at_ns,
             evaluation_input_sha256=first.evaluation_input_sha256,
         )
         self.assertEqual(first.canonical_json(), normalized_reordered.canonical_json())
@@ -2681,7 +2728,7 @@ class BallMetricsTests(unittest.TestCase):
         self.assertNotEqual(first.fingerprint(), renamed.fingerprint())
         self.assertRegex(first.fingerprint(), r"^[0-9a-f]{64}$")
         payload = json.loads(first.canonical_json())
-        self.assertEqual(payload["schema_version"], "7.0")
+        self.assertEqual(payload["schema_version"], "8.0")
         self.assertEqual(
             payload["metric"],
             "MATCH_BALL_CENTER_LOCALIZATION_V2",
@@ -2696,9 +2743,9 @@ class BallMetricsTests(unittest.TestCase):
             payload["annotation_trust"]["evaluator_artifact_sha256"],
             ball_localization_evaluator_artifact_sha256(),
         )
-        self.assertRegex(
-            payload["annotation_trust"]["verified_at_utc"],
-            r"^\d{4}-\d{2}-\d{2}T.*Z$",
+        self.assertEqual(
+            payload["annotation_trust"]["protected_verified_at_ns"],
+            PROTECTED_VERIFIED_AT_NS,
         )
         self.assertEqual(
             payload["annotation_trust"]["evidence_generation_id"],

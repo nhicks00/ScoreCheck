@@ -21,7 +21,7 @@ from .training_admission_contracts import (
     TrainingAdmissionPolicyV1,
     TrainingCoverageReportV1,
     TrainingDatasetManifestV1,
-    TrainingExampleManifestV1,
+    TrainingExampleManifestV2,
     TrainingExampleReferenceV1,
     TrainingSamplingScheduleV1,
     TrainingScheduleDrawV1,
@@ -77,9 +77,9 @@ def _normalize_policy(
 
 
 def _normalized_examples_and_references(
-    example_manifests: tuple[TrainingExampleManifestV1, ...],
+    example_manifests: tuple[TrainingExampleManifestV2, ...],
 ) -> tuple[
-    tuple[TrainingExampleManifestV1, ...],
+    tuple[TrainingExampleManifestV2, ...],
     tuple[TrainingExampleReferenceV1, ...],
 ]:
     if type(example_manifests) is not tuple:
@@ -87,9 +87,9 @@ def _normalized_examples_and_references(
     if not 2 <= len(example_manifests) <= MAX_TRAINING_EXAMPLES:
         _fail("TRAIN_COMPILER_INPUT", "example_manifests exceeds its fixed bound")
 
-    normalized_rows: list[tuple[TrainingExampleManifestV1, str]] = []
+    normalized_rows: list[tuple[TrainingExampleManifestV2, str]] = []
     for example in example_manifests:
-        if type(example) is not TrainingExampleManifestV1:
+        if type(example) is not TrainingExampleManifestV2:
             _fail(
                 "TRAIN_COMPILER_INPUT",
                 "example_manifests contains a row with the wrong exact type",
@@ -109,13 +109,13 @@ def _normalized_examples_and_references(
                 "an example primary stratum does not match its tags",
             )
         try:
-            normalized = TrainingExampleManifestV1.from_json_bytes(
+            normalized = TrainingExampleManifestV2.from_json_bytes(
                 example.to_json_bytes()
             )
         except (AttributeError, TypeError, ValueError) as exc:
             raise TrainingAdmissionCompilerError(
                 "TRAIN_COMPILER_INPUT",
-                "an example manifest is not exact canonical V1",
+                "an example manifest is not exact canonical V2",
             ) from exc
         if normalized != example:
             _fail(
@@ -183,7 +183,7 @@ def _normalized_examples_and_references(
 
 
 def _maximum_group_frames_ppm(
-    examples: tuple[TrainingExampleManifestV1, ...],
+    examples: tuple[TrainingExampleManifestV2, ...],
     *,
     key_name: str,
     total_frames: int,
@@ -200,7 +200,7 @@ def compile_training_coverage_v1(
     dataset_id: str,
     readiness_manifest_sha256: str,
     admission_policy: TrainingAdmissionPolicyV1,
-    example_manifests: tuple[TrainingExampleManifestV1, ...],
+    example_manifests: tuple[TrainingExampleManifestV2, ...],
 ) -> TrainingCoverageReportV1:
     """Compile one exact, non-authorizing TRAIN/DEV aggregate coverage report."""
 
@@ -531,7 +531,7 @@ def _compile_epoch_selection_v1(
     stratum_order: tuple[PrimarySamplingStratumV1, ...],
     example_rows_by_stratum: dict[
         PrimarySamplingStratumV1,
-        tuple[tuple[TrainingExampleManifestV1, str], ...],
+        tuple[tuple[TrainingExampleManifestV2, str], ...],
     ],
     search_states_used: list[int],
 ) -> tuple[TrainingScheduleDrawV1, ...]:
@@ -543,7 +543,7 @@ def _compile_epoch_selection_v1(
     """
 
     ranked_candidates_by_draw: list[
-        tuple[tuple[str, str, TrainingExampleManifestV1], ...]
+        tuple[tuple[str, str, TrainingExampleManifestV2], ...]
     ] = []
     for draw_index, stratum in enumerate(stratum_order):
         candidates = tuple(
@@ -586,7 +586,7 @@ def _compile_epoch_selection_v1(
         remaining_stratum_draws[draw_index][stratum_order[draw_index]] += 1
 
     used_example_sha256s: set[str] = set()
-    selected: list[tuple[str, str, TrainingExampleManifestV1]] = []
+    selected: list[tuple[str, str, TrainingExampleManifestV2]] = []
     match_draws: Counter[str] = Counter()
     root_asset_draws: Counter[str] = Counter()
     leakage_group_draws: Counter[str] = Counter()
@@ -730,7 +730,7 @@ def compile_training_sampling_schedule_v1(
     dataset_manifest: TrainingDatasetManifestV1,
     admission_policy: TrainingAdmissionPolicyV1,
     sampling_plan: StratifiedSamplingPlanV1,
-    example_manifests: tuple[TrainingExampleManifestV1, ...],
+    example_manifests: tuple[TrainingExampleManifestV2, ...],
 ) -> TrainingSamplingScheduleV1:
     """Compile a deterministic TRAIN schedule and exact-once DEV order.
 
@@ -750,7 +750,7 @@ def compile_training_sampling_schedule_v1(
     if not 2 <= len(example_manifests) <= MAX_TRAINING_EXAMPLES:
         _fail("TRAIN_COMPILER_INPUT", "example_manifests exceeds its fixed bound")
     if any(
-        type(example) is not TrainingExampleManifestV1
+        type(example) is not TrainingExampleManifestV2
         for example in example_manifests
     ):
         _fail("TRAIN_COMPILER_INPUT", "example_manifests has a wrong exact row type")

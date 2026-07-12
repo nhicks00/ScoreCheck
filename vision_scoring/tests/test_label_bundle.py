@@ -13,6 +13,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 if __package__:
     from .test_annotation_trust import (
         EVALUATOR_ARTIFACT_SHA256,
+        ADJUDICATION_REF,
+        REVIEW_REF,
         _annotation,
         _attestations,
         _evidence_store_root,
@@ -24,6 +26,8 @@ if __package__:
 else:
     from test_annotation_trust import (  # type: ignore[no-redef]
         EVALUATOR_ARTIFACT_SHA256,
+        ADJUDICATION_REF,
+        REVIEW_REF,
         _annotation,
         _attestations,
         _evidence_store_root,
@@ -34,6 +38,7 @@ else:
     )
 from vision_scoring.annotation_trust import (
     AnnotationMinimumTruthPolicy,
+    annotation_evidence_set_fingerprint,
 )
 from vision_scoring.annotations import (
     BallAppearance,
@@ -64,6 +69,7 @@ from vision_scoring.label_bundle import (
     causal_ball_label_bundle_signing_message,
     verify_causal_ball_label_bundle_v1,
 )
+from vision_scoring.immutable_store import generation_id_for
 
 
 CURATOR_KEY = Ed25519PrivateKey.from_private_bytes(b"\x81" * 32)
@@ -74,6 +80,9 @@ TRACE = "c" * 64
 CAPTURE_POLICY = "d" * 64
 CAPTURE_REF = "sha256:" + "9" * 64
 GAP_REF = "sha256:" + "8" * 64
+PROTECTED_VERIFIED_AT_NS = 1_783_814_400_000_000_000
+NANOSECONDS_PER_DAY = 86_400_000_000_000
+CURATOR_SIGNED_AT_NS = PROTECTED_VERIFIED_AT_NS - 100
 
 
 def _public_base64(key: Ed25519PrivateKey) -> str:
@@ -267,7 +276,7 @@ def _attest_bundle(
     key_id: str = "curator-key-current",
 ) -> CausalBallLabelBundleAttestationV1:
     role = LabelBundleCuratorKeyRole.COMPLETE_BALL_ENUMERATION_CURATOR
-    signed_at_ns = 150
+    signed_at_ns = CURATOR_SIGNED_AT_NS
     signature = key.sign(
         causal_ball_label_bundle_signing_message(
             statement,
@@ -295,7 +304,9 @@ def _snapshot(
     *,
     current_key_id: str = "curator-key-current",
     include_old_key: bool = False,
-    current_key_valid_until_ns: int = 1_000,
+    current_key_valid_until_ns: int = (
+        PROTECTED_VERIFIED_AT_NS + NANOSECONDS_PER_DAY
+    ),
     current_key_revoked_at_ns: int | None = None,
 ) -> CausalBallLabelBundleTrustSnapshotV1:
     role = LabelBundleCuratorKeyRole.COMPLETE_BALL_ENUMERATION_CURATOR
@@ -305,7 +316,7 @@ def _snapshot(
             key_role=role,
             curator_id="dataset-curator-1",
             public_key_base64=_public_base64(CURATOR_KEY),
-            valid_from_ns=1,
+            valid_from_ns=PROTECTED_VERIFIED_AT_NS - NANOSECONDS_PER_DAY,
             valid_until_ns=current_key_valid_until_ns,
             revoked_at_ns=current_key_revoked_at_ns,
         )
@@ -317,8 +328,8 @@ def _snapshot(
                 key_role=role,
                 curator_id="dataset-curator-1",
                 public_key_base64=_public_base64(OLD_CURATOR_KEY),
-                valid_from_ns=1,
-                valid_until_ns=1_000,
+                valid_from_ns=PROTECTED_VERIFIED_AT_NS - NANOSECONDS_PER_DAY,
+                valid_until_ns=PROTECTED_VERIFIED_AT_NS + NANOSECONDS_PER_DAY,
                 revoked_at_ns=None,
             )
         )
@@ -702,18 +713,29 @@ class CausalBallLabelBundleTests(unittest.TestCase):
         statement, _, _ = _bundle()
         attestation = _attest_bundle(statement)
         snapshot = _snapshot(statement, attestation)
+        for invalid in (True, -1, 1 << 63):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                ValueError,
+                "protected_verified_at_ns",
+            ):
+                self._verify_without_reaching_annotation_io(
+                    statement,
+                    attestation,
+                    snapshot,
+                    protected_time=invalid,
+                )
         with self.assertRaisesRegex(LabelBundleError, "not current at verification"):
             self._verify_without_reaching_annotation_io(
                 statement,
                 attestation,
                 snapshot,
-                protected_time=100,
+                protected_time=CURATOR_SIGNED_AT_NS - 1,
             )
 
         expired = _snapshot(
             statement,
             attestation,
-            current_key_valid_until_ns=175,
+            current_key_valid_until_ns=PROTECTED_VERIFIED_AT_NS - 1,
         )
         with self.assertRaisesRegex(LabelBundleError, "not current at verification"):
             self._verify_without_reaching_annotation_io(
@@ -725,7 +747,7 @@ class CausalBallLabelBundleTests(unittest.TestCase):
         revoked = _snapshot(
             statement,
             attestation,
-            current_key_revoked_at_ns=175,
+            current_key_revoked_at_ns=PROTECTED_VERIFIED_AT_NS - 1,
         )
         with self.assertRaisesRegex(LabelBundleError, "current curator key is revoked"):
             self._verify_without_reaching_annotation_io(
@@ -800,8 +822,12 @@ class CausalBallLabelBundleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             evidence_root = _evidence_store_root(directory)
             protected_path = Path(directory) / "protected-configuration.json"
+            protected_configuration = _protected_configuration_generation(
+                store,
+                policy,
+            )
             protected_path.write_text(
-                _protected_configuration_generation(store, policy).canonical_json(),
+                protected_configuration.canonical_json(),
                 encoding="utf-8",
             )
             receipt = verify_causal_ball_label_bundle_v1(
@@ -823,18 +849,82 @@ class CausalBallLabelBundleTests(unittest.TestCase):
                 expected_current_attestation_sha256=attestation.fingerprint(),
                 expected_curator_id="dataset-curator-1",
                 expected_trust_domain_id="label-curation-domain",
-                protected_verified_at_ns=200,
+                protected_verified_at_ns=PROTECTED_VERIFIED_AT_NS,
+            )
+            annotation_verification = store.verify_annotation_set(
+                (annotation,),
+                attestations,
+                evidence_store_root=evidence_root,
+                verification_policy=policy,
+                expected_verification_policy_sha256=policy.fingerprint(),
+                protected_configuration_generation_path=protected_path,
+                evaluator_artifact_sha256=EVALUATOR_ARTIFACT_SHA256,
+                requested_truth_policy=(
+                    AnnotationMinimumTruthPolicy.REVIEWED_OR_ADJUDICATED.value
+                ),
+                protected_verified_at_ns=PROTECTED_VERIFIED_AT_NS,
             )
 
         self.assertIs(receipt.split, LabelBundleSplit.TEST)
         self.assertEqual(receipt.trust_snapshot_generation, 4)
-        self.assertEqual(receipt.protected_verified_at_ns, 200)
+        self.assertEqual(
+            receipt.protected_verified_at_ns,
+            PROTECTED_VERIFIED_AT_NS,
+        )
+        self.assertIs(
+            receipt.requested_truth_policy,
+            AnnotationMinimumTruthPolicy.REVIEWED_OR_ADJUDICATED,
+        )
+        self.assertEqual(
+            receipt.annotation_configuration_generation_sha256,
+            protected_configuration.fingerprint(),
+        )
+        expected_evidence_refs = tuple(sorted((REVIEW_REF, ADJUDICATION_REF)))
+        self.assertEqual(
+            receipt.annotation_evidence_set_sha256,
+            annotation_evidence_set_fingerprint(expected_evidence_refs),
+        )
+        self.assertEqual(
+            receipt.annotation_evidence_generation_id,
+            generation_id_for(
+                tuple(
+                    reference.removeprefix("sha256:")
+                    for reference in expected_evidence_refs
+                )
+            ),
+        )
         self.assertFalse(receipt.admissible_for_training)
         self.assertFalse(receipt.admissible_for_evaluation)
+        self.assertFalse(receipt.admissible_for_test)
         self.assertFalse(receipt.admissible_for_deployment)
         self.assertFalse(receipt.admissible_for_live_scoring)
+        with patch.object(
+            type(store),
+            "verify_annotation_set",
+            return_value=replace(
+                annotation_verification,
+                protected_verified_at_ns=PROTECTED_VERIFIED_AT_NS + 1,
+            ),
+        ), self.assertRaisesRegex(
+            LabelBundleError,
+            "annotation verification result differs",
+        ):
+            self._verify_without_reaching_annotation_io(
+                statement,
+                attestation,
+                snapshot,
+                annotations=(annotation,),
+                annotation_attestations=attestations,
+                store=store,
+                policy=policy,
+                protected_time=PROTECTED_VERIFIED_AT_NS,
+            )
         with self.assertRaises(AttributeError):
             receipt._split = LabelBundleSplit.TRAIN  # type: ignore[attr-defined]
+        with self.assertRaises(AttributeError):
+            del receipt._split  # type: ignore[attr-defined]
+        with self.assertRaises(AttributeError):
+            del receipt._requested_truth_policy  # type: ignore[attr-defined]
         self.assertFalse(hasattr(receipt, "__dict__"))
 
     def test_concrete_annotation_mismatch_is_rejected_even_if_curator_signature_is_valid(
@@ -884,7 +974,7 @@ class CausalBallLabelBundleTests(unittest.TestCase):
         annotation_attestations: tuple[object, ...] = (),
         store: object | None = None,
         policy: object | None = None,
-        protected_time: int = 200,
+        protected_time: int = PROTECTED_VERIFIED_AT_NS,
     ) -> None:
         if store is None or policy is None:
             annotation = _ball(0)

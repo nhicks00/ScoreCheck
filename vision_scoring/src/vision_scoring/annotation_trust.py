@@ -39,7 +39,7 @@ import re
 import stat
 import time
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, timedelta
 from enum import Enum
 from multiprocessing.connection import Connection
 from pathlib import Path
@@ -82,9 +82,9 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _CONTENT_ADDRESS_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
 _STABLE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/+~-]{0,127}$")
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_UTC_TIMESTAMP_RE = re.compile(
-    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$"
-)
+_MAX_SIGNED_64 = (1 << 63) - 1
+_NANOSECONDS_PER_DAY = 86_400_000_000_000
+_UNIX_EPOCH_DATE = date(1970, 1, 1)
 _WORKER_ERROR_CODE_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 _MAX_EVIDENCE_FILES = 256
 _MAX_EVIDENCE_BYTES = 16 * 1024 * 1024
@@ -267,25 +267,13 @@ def _parse_date(value: object, field_name: str) -> date:
     return parsed
 
 
-def _canonical_utc_now() -> tuple[str, date]:
-    verified_at = datetime.now(timezone.utc)
-    canonical = verified_at.isoformat(timespec="microseconds").replace("+00:00", "Z")
-    return canonical, verified_at.date()
-
-
-def _parse_utc_timestamp(value: object, field_name: str) -> datetime:
-    if type(value) is not str or not _UTC_TIMESTAMP_RE.fullmatch(value):
-        raise ValueError(f"{field_name} must be a canonical UTC timestamp")
-    try:
-        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
-    except ValueError as error:
-        raise ValueError(f"{field_name} must be a canonical UTC timestamp") from error
-    canonical = parsed.astimezone(timezone.utc).isoformat(
-        timespec="microseconds"
-    ).replace("+00:00", "Z")
-    if canonical != value:
-        raise ValueError(f"{field_name} must be a canonical UTC timestamp")
-    return parsed
+def _date_from_protected_unix_epoch_ns(value: object) -> date:
+    if type(value) is not int or not 0 <= value <= _MAX_SIGNED_64:
+        raise ValueError(
+            "protected_verified_at_ns must be an exact nonnegative signed-64 "
+            "Unix epoch nanosecond"
+        )
+    return _UNIX_EPOCH_DATE + timedelta(days=value // _NANOSECONDS_PER_DAY)
 
 
 def _canonical_base64(
@@ -929,7 +917,7 @@ class AnnotationTrustVerification:
     governance_domain_id: str
     protected_configuration_generation: ProtectedAnnotationConfigurationGeneration
     protected_configuration_generation_sha256: str
-    verified_at_utc: str
+    protected_verified_at_ns: int
     verified_evidence_refs: tuple[str, ...]
 
     def __post_init__(self) -> None:
@@ -994,7 +982,7 @@ class AnnotationTrustVerification:
                     "protected_configuration_generation must match report "
                     f"{field_name}"
                 )
-        _parse_utc_timestamp(self.verified_at_utc, "verified_at_utc")
+        _date_from_protected_unix_epoch_ns(self.protected_verified_at_ns)
         if type(self.verified_evidence_refs) is not tuple:
             raise ValueError("verified_evidence_refs must be an immutable tuple")
         if (
@@ -1154,13 +1142,14 @@ class AnnotationTrustStore:
         protected_configuration_generation_path: Path,
         evaluator_artifact_sha256: str,
         requested_truth_policy: str,
+        protected_verified_at_ns: int,
     ) -> AnnotationTrustVerification:
         """Verify one bounded set against one protected generation snapshot.
 
         The protected current-generation descriptor is loaded and matched
-        before any annotation fingerprint or signature work, then reloaded
-        after evidence verification even when the UTC date did not change.
-        A publisher update invalidates the whole run and requires a fresh call.
+        before any annotation fingerprint or signature work, then reloaded after
+        evidence verification. ``protected_verified_at_ns`` is the sole logical
+        time snapshot and must come from a protected coordinator clock.
         """
 
         evidence_refs = _preflight_annotation_verification_bounds(
@@ -1184,6 +1173,9 @@ class AnnotationTrustStore:
             )
         if not isinstance(evidence_store_root, Path):
             raise ValueError("evidence_store_root must be a pathlib.Path")
+        protected_verified_on = _date_from_protected_unix_epoch_ns(
+            protected_verified_at_ns
+        )
         _require_sha256(evaluator_artifact_sha256, "evaluator_artifact_sha256")
         _require_sha256(
             expected_verification_policy_sha256,
@@ -1232,11 +1224,10 @@ class AnnotationTrustStore:
                 "ANNOTATION_POLICY_TRUTH",
                 "requested truth policy is weaker than the protected minimum",
             )
-        verification_started_at_utc, verification_started_on = _canonical_utc_now()
-        if not verification_policy.is_active(verification_started_on):
+        if not verification_policy.is_active(protected_verified_on):
             raise AnnotationTrustError(
                 "ANNOTATION_POLICY_DATE",
-                "annotation verification policy is not active on the UTC verification date",
+                "annotation verification policy is not active at the protected time",
             )
         annotation_ids = [
             (annotation.annotation_type, annotation.annotation_id)
@@ -1352,7 +1343,7 @@ class AnnotationTrustStore:
                     "trusted key is not permitted for the attestation role",
                 )
             signed_on = _parse_date(attestation.signed_on, "signed_on")
-            if signed_on > verification_started_on:
+            if signed_on > protected_verified_on:
                 raise AnnotationTrustError(
                     "ANNOTATION_ATTESTATION_DATE",
                     "annotation attestation cannot postdate the UTC verification date",
@@ -1369,7 +1360,7 @@ class AnnotationTrustStore:
                 )
             _enforce_key_not_compromised(
                 trusted_key,
-                verified_on=verification_started_on,
+                verified_on=protected_verified_on,
             )
             try:
                 trusted_key.public_key.verify(
@@ -1395,79 +1386,26 @@ class AnnotationTrustStore:
         )
         attestation_set_sha256 = annotation_attestation_set_fingerprint(attestations)
         evidence_set_sha256 = annotation_evidence_set_fingerprint(evidence_refs)
-        validated_on = verification_started_on
-        previous_timestamp = verification_started_at_utc
-        for _ in range(3):
-            completed_configuration_generation = (
-                load_protected_annotation_configuration_generation(
-                    protected_configuration_generation_path
-                )
+        completed_configuration_generation = (
+            load_protected_annotation_configuration_generation(
+                protected_configuration_generation_path
             )
-            if completed_configuration_generation.fingerprint() != (
-                protected_configuration_generation_sha256
-            ):
-                raise AnnotationTrustError(
-                    "ANNOTATION_PROTECTED_CONFIGURATION_CHANGED",
-                    "protected annotation configuration generation changed during "
-                    "verification; discard the result and retry",
-                )
-            self._verify_protected_configuration_generation(
-                completed_configuration_generation,
-                verification_policy=verification_policy,
-                policy_sha256=policy_sha256,
-                store_sha256=store_sha256,
-                evaluator_artifact_sha256=evaluator_artifact_sha256,
-            )
-            verified_at_utc, completed_on = _canonical_utc_now()
-            if verified_at_utc < previous_timestamp:
-                raise AnnotationTrustError(
-                    "ANNOTATION_VERIFICATION_CLOCK",
-                    "UTC verification time moved backward during annotation verification",
-                )
-            if completed_on == validated_on:
-                break
-            if not verification_policy.is_active(completed_on):
-                raise AnnotationTrustError(
-                    "ANNOTATION_POLICY_DATE",
-                    "annotation verification policy is not active on the UTC completion date",
-                )
-            if self.fingerprint() != store_sha256:
-                raise AnnotationTrustError(
-                    "ANNOTATION_TRUST_STORE_CHANGED",
-                    "annotation trust store changed during verification",
-                )
-            completion_current_by_id = {
-                (item.annotation_type, item.annotation_id): item.annotation_sha256
-                for item in self.current_annotations
-            }
-            completion_revoked = set(self.revoked_annotation_sha256s)
-            _enforce_annotation_currentness_and_truth_policy(
-                annotations,
-                current_by_id=completion_current_by_id,
-                revoked=completion_revoked,
-                requested_truth_policy=requested_policy,
-            )
-            completion_keys_by_id = {key.key_id: key for key in self.keys}
-            for signer_key in expected_signers:
-                attestation = supplied[signer_key]
-                trusted_key = completion_keys_by_id.get(attestation.key_id)
-                if trusted_key is None:
-                    raise AnnotationTrustError(
-                        "ANNOTATION_KEY_UNTRUSTED",
-                        "annotation attestation key ceased to be trusted during verification",
-                    )
-                _enforce_key_not_compromised(
-                    trusted_key,
-                    verified_on=completed_on,
-                )
-            validated_on = completed_on
-            previous_timestamp = verified_at_utc
-        else:
+        )
+        if completed_configuration_generation.fingerprint() != (
+            protected_configuration_generation_sha256
+        ):
             raise AnnotationTrustError(
-                "ANNOTATION_VERIFICATION_CLOCK",
-                "UTC verification date and protected generation did not stabilize "
-                "after annotation verification",
+                "ANNOTATION_PROTECTED_CONFIGURATION_CHANGED",
+                "protected annotation configuration generation changed during "
+                "verification; discard the result and retry",
             )
+        self._verify_protected_configuration_generation(
+            completed_configuration_generation,
+            verification_policy=verification_policy,
+            policy_sha256=policy_sha256,
+            store_sha256=store_sha256,
+            evaluator_artifact_sha256=evaluator_artifact_sha256,
+        )
         return AnnotationTrustVerification(
             verification_policy_sha256=policy_sha256,
             requested_truth_policy=requested_policy,
@@ -1483,7 +1421,7 @@ class AnnotationTrustStore:
             protected_configuration_generation_sha256=(
                 protected_configuration_generation_sha256
             ),
-            verified_at_utc=verified_at_utc,
+            protected_verified_at_ns=protected_verified_at_ns,
             verified_evidence_refs=evidence_refs,
         )
 
