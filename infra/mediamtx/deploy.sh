@@ -8,7 +8,12 @@ SSH_KEY="${MEDIAMTX_SSH_KEY:-$HOME/.ssh/scorecheck_do}"
 REMOTE_DIR="${MEDIAMTX_REMOTE_DIR:-/opt/mediamtx}"
 GENERATED="$SCRIPT_DIR/.generated/mediamtx.yml"
 
-: "${MEDIAMTX_PUBLISH_PASS:?MEDIAMTX_PUBLISH_PASS is required}"
+for court in $(seq 1 8); do
+  user_var="MEDIAMTX_COURT_${court}_PUBLISH_USER"
+  pass_var="MEDIAMTX_COURT_${court}_PUBLISH_PASS"
+  [[ -n "${!user_var:-}" ]] || { echo "error: $user_var is required" >&2; exit 1; }
+  [[ -n "${!pass_var:-}" ]] || { echo "error: $pass_var is required" >&2; exit 1; }
+done
 export MEDIAMTX_PUBLIC_IP="${MEDIAMTX_PUBLIC_IP:-${SSH_HOST#*@}}"
 
 node "$SCRIPT_DIR/render-config.mjs"

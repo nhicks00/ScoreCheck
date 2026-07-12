@@ -71,13 +71,17 @@ One prewarmed c-4 replacement
 
 Two measured jobs should use about 2.6 cores, leaving about 35% host CPU
 headroom. LiveKit admission reserves 1.5 CPU and 2 GB per job so a `c-4`
-accepts at most two web egresses. Gate 2 must validate that estimate with two
-motion-heavy feeds before proceeding to four or eight courts.
+accepts at most two web egresses. The July full-eight test deliberately skips
+the staged two- and four-court runs, so the same estimate must be validated on
+all four hosts at once rather than inferred from a partial load.
 
-The ingest node also needs a dedicated capacity test. If all direct cameras
-require H.264 normalization, start Gate 2 planning at 8 dedicated vCPU and
-8-16 GB RAM. Use stream-copy or audio-only conversion per qualified camera
-model where possible.
+The full-eight ingest candidate is one dedicated `c-4` with 8 GB RAM. Every
+input is normalized once to 720p30 with a one-second GOP; this intentionally
+drops the two Mevo 1080p60 test inputs to the actual program cadence before
+distribution. Sustained ingest CPU at or above 80%, frame stalls, or growing
+normalizer queues fail the candidate and require two ingest hosts split four
+courts each. Stream-copy or audio-only conversion may replace normalization
+only after a camera model is explicitly qualified.
 
 ## Reliability rules
 
@@ -124,29 +128,26 @@ tokens before cutover.
 
 1. **One court:** real camera, remote audible commentary, real YouTube RTMPS,
    ten hours, sync checked at beginning/middle/end on a DigitalOcean c-4.
-2. **Two courts:** one `c-4`, two feeds/destinations, two commentary rooms,
-   two hours, plus camera and egress recovery tests.
-3. **Four courts:** two `c-4` hosts, four motion-heavy feeds, four hours.
-4. **Eight courts:** four-host layout, eight feeds/destinations, scoring on all,
-   at least two commentary rooms, twelve hours preferred.
-5. **Fault injection:** camera/network/MediaMTX/egress/controller/host/origin
+2. **Eight courts:** four-host layout, eight real feeds and destinations,
+   scoring on all, at least two commentary rooms, two hours minimum and twelve
+   hours preferred. The direct-eight run replaces separate two- and four-court
+   gates by explicit operator decision; it does not relax any per-host limit.
+3. **Fault injection:** camera/network/MediaMTX/egress/controller/host/origin
    failures with unaffected courts remaining live.
-6. **Shadow event:** two real courts, unlisted destinations, StreamRun public,
+4. **Shadow event:** two real courts, unlisted destinations, StreamRun public,
    producer uses only `/admin/production`, zero active-play SSH intervention.
 
 ## Implementation order
 
 1. Preserve the July 12 Gate 1 evidence and apply its lifecycle/logging fixes.
-2. Convert the controller to desired-state reconciliation.
-3. Move YouTube/program credentials to proper secret storage.
-4. Run the two-court `c-4` validation, including the missing sync and recovery
-   observations from Gate 1.
-5. Run four courts on two `c-4` hosts.
-6. Provision the four-host two-courts-per-host topology.
-7. Run the eight-court load and fault-injection gate.
-8. Add reusable-stream/per-match YouTube orchestration.
-9. Run the two-court shadow event, then the full shadow event.
+2. Provision the one-ingest/four-compositor direct-eight topology.
+3. Run the full-eight load, sync, recovery, and fault-injection gate.
+4. Convert the controller to desired-state reconciliation.
+5. Move YouTube/program credentials to proper secret storage.
+6. Add reusable-stream/per-match YouTube orchestration.
+7. Run the two-court shadow event, then the full shadow event.
 
 The July 12 soak is an endurance pass for the final x86, audible-commentary,
 RTMPS pipeline. Gate 1 remains conditional because midpoint/final subjective
-sync checks were not recorded and camera reconnection was not tested.
+sync checks were not recorded and camera reconnection was not tested. Those
+checks move into the direct-eight run rather than being waived.
