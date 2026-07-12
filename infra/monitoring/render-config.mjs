@@ -87,12 +87,22 @@ async function writeSecure(name, content) {
 function parseTargets(raw) {
   if (!raw.trim()) return [];
   return raw.split(",").map((entry) => {
-    const [id, role, url, token, ...extra] = entry.split("|").map((value) => value.trim());
-    if (extra.length || !safeId(id) || !safeId(role) || !url || !token || token.length < 24) throw new Error("Invalid MONITOR_AGENT_TARGETS entry.");
+    const [id, role, url, token, courtList, ...extra] = entry.split("|").map((value) => value.trim());
+    if (extra.length || courtList == null || !safeId(id) || !safeId(role) || !url || !token || token.length < 24) throw new Error("Invalid MONITOR_AGENT_TARGETS entry.");
+    const assignedCourts = parseCourts(courtList);
+    if (role === "compositor" && assignedCourts.length === 0) throw new Error("Compositor target has no court assignment.");
+    if (role !== "compositor" && assignedCourts.length > 0) throw new Error("Non-compositor target has a court assignment.");
     const parsed = new URL(url);
     if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error("Agent target must use HTTP(S).");
-    return { id, role, url: parsed.toString(), token };
+    return { id, role, url: parsed.toString(), token, assignedCourts };
   });
+}
+
+function parseCourts(raw) {
+  if (!raw) return [];
+  const courts = raw.split("+").map(Number);
+  if (courts.some((court) => !Number.isInteger(court) || court < 1 || court > 8)) throw new Error("Invalid target court assignment.");
+  return [...new Set(courts)];
 }
 
 function required(name) {

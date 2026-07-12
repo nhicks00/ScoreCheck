@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { AgentTarget } from "./config.js";
-import type { AgentSnapshot, ControlPlaneSnapshot, IncidentSnapshot } from "./contracts.js";
+import { browserHeartbeatPayloadSchema, type AgentSnapshot, type BrowserHeartbeatSnapshot, type ControlPlaneSnapshot, type IncidentSnapshot } from "./contracts.js";
 import { buildMonitorSnapshot, type AgentRuntime } from "./correlator.js";
 
-const target: AgentTarget = { id: "preview", role: "mediamtx", url: "http://agent", token: "abcdefghijklmnopqrstuvwxyz" };
-const compositorTarget: AgentTarget = { id: "compositor-a", role: "compositor", url: "http://compositor-agent", token: "zyxwvutsrqponmlkjihgfedcba" };
+const target: AgentTarget = { id: "preview", role: "mediamtx", url: "http://agent", token: "abcdefghijklmnopqrstuvwxyz", assignedCourts: [] };
+const compositorTarget: AgentTarget = { id: "compositor-a", role: "compositor", url: "http://compositor-agent", token: "zyxwvutsrqponmlkjihgfedcba", assignedCourts: [1, 2] };
 
 describe("monitor correlator", () => {
   it("never preserves stale green agent state", () => {
@@ -151,7 +151,130 @@ describe("monitor correlator", () => {
     expect(egress?.state).toBe("HEALTHY");
     expect(egress?.evidence.host).toBe(compositorTarget.id);
   });
+
+  it("detects a repeated full-bitrate picture while transport frames continue", () => {
+    const generatedAt = "2026-07-12T12:00:00.000Z";
+    const agent = rawAgentSnapshot(generatedAt);
+    const runtimes = new Map<string, AgentRuntime>([[target.id, { target, snapshot: agent, lastSeenAt: generatedAt, lastErrorAt: null }]]);
+    const browser = browserHeartbeat(generatedAt, { frozenDurationMs: 16_000 });
+    const result = buildMonitorSnapshot([target], runtimes, 1, Date.parse(generatedAt) + 1_000, [], new Map([[1, browser]]), liveControlPlane(generatedAt));
+    const ingest = result.courts[0]?.stages.find((stage) => stage.stage === "RAW_INGEST");
+    expect(ingest?.state).toBe("CRITICAL");
+    expect(ingest?.issueCode).toBe("FULL_BITRATE_VISUAL_FREEZE");
+    expect(ingest?.evidence.renderedFps).toBe(30);
+  });
+
+  it("distinguishes a persistently black picture from a missing transport", () => {
+    const generatedAt = "2026-07-12T12:00:00.000Z";
+    const agent = rawAgentSnapshot(generatedAt);
+    const runtimes = new Map<string, AgentRuntime>([[target.id, { target, snapshot: agent, lastSeenAt: generatedAt, lastErrorAt: null }]]);
+    const browser = browserHeartbeat(generatedAt, { blackDurationMs: 21_000, meanLuma: 2, lumaVariance: 1, darkPixelRatio: 1 });
+    const result = buildMonitorSnapshot([target], runtimes, 1, Date.parse(generatedAt) + 1_000, [], new Map([[1, browser]]), liveControlPlane(generatedAt));
+    const ingest = result.courts[0]?.stages.find((stage) => stage.stage === "RAW_INGEST");
+    expect(ingest?.issueCode).toBe("CAMERA_CONTENT_BLACK");
+    expect(ingest?.evidence.renderedFps).toBe(30);
+  });
+
+  it("makes a missing required commentary track critical without declaring video down", () => {
+    const generatedAt = "2026-07-12T12:00:00.000Z";
+    const agent = rawAgentSnapshot(generatedAt);
+    const runtimes = new Map<string, AgentRuntime>([[target.id, { target, snapshot: agent, lastSeenAt: generatedAt, lastErrorAt: null }]]);
+    const browser = browserHeartbeat(generatedAt);
+    const result = buildMonitorSnapshot([target], runtimes, 1, Date.parse(generatedAt) + 1_000, [], new Map([[1, browser]]), liveControlPlane(generatedAt));
+    expect(result.courts[0]?.stages.find((stage) => stage.stage === "COMMENTARY")?.issueCode).toBe("COMMENTARY_TRACK_MISSING");
+    expect(result.courts[0]?.stages.find((stage) => stage.stage === "PROGRAM_BROWSER")?.state).toBe("HEALTHY");
+  });
 });
+
+function rawAgentSnapshot(generatedAt: string): AgentSnapshot {
+  return {
+    ...emptyAgentSnapshot(generatedAt),
+    mediaPaths: [{
+      name: "court1_raw",
+      courtNumber: 1,
+      branch: "raw",
+      ready: true,
+      readySince: generatedAt,
+      bytesReceived: 10_000_000,
+      bytesSent: 0,
+      inboundBitrateBps: 4_000_000,
+      frameErrors: 0,
+      readerCount: 1,
+      videoCodec: "H264",
+      audioCodec: "MPEG4Audio"
+    }]
+  };
+}
+
+function browserHeartbeat(observedAt: string, visual: Partial<BrowserHeartbeatSnapshot["visual"]> = {}): BrowserHeartbeatSnapshot {
+  const payload = browserHeartbeatPayloadSchema.parse({
+    version: 1,
+    credentialId: "40000000-0000-4000-8000-000000000001",
+    courtNumber: 1,
+    heartbeatSeq: 1,
+    sampledAt: observedAt,
+    pageLoadedAt: observedAt,
+    pageBuildVersion: "test",
+    configurationVersion: "test",
+    video: {
+      state: "playing",
+      transport: "whep",
+      connectionState: "connected",
+      framesRendered: 900,
+      framesPerSecond: 30,
+      width: 1280,
+      height: 720,
+      rttMs: 20,
+      jitterBufferMs: 80,
+      packetsLost: 0,
+      packetsReceived: 1_000,
+      framesDropped: 0,
+      bytesReceived: 5_000_000,
+      reconnectCount: 0,
+      reloadCount: 0
+    },
+    visual: {
+      sampledAt: observedAt,
+      meanLuma: 120,
+      lumaVariance: 900,
+      darkPixelRatio: 0.02,
+      frameDifference: 14,
+      frozenDurationMs: 0,
+      blackDurationMs: 0,
+      ...visual
+    },
+    commentary: {
+      configured: true,
+      roomConnected: true,
+      participantCount: 0,
+      audioTrackCount: 0,
+      rmsDb: null,
+      peakDb: null,
+      secondsSinceAudio: null,
+      cameraTrackPresent: true,
+      cameraRmsDb: -24,
+      syncStatus: "fallback",
+      configuredDelayMs: null,
+      targetDelayMs: null,
+      appliedDelayMs: null,
+      clockRttMs: null,
+      syncSampleAgeMs: null
+    },
+    scoreRender: {
+      loaded: true,
+      connected: true,
+      stale: false,
+      frozen: false,
+      matchId: null,
+      phase: "LIVE",
+      sourceSignature: "same",
+      renderedSignature: "same",
+      domMismatchReason: null,
+      stateUpdatedAt: observedAt
+    }
+  });
+  return { ...payload, receivedAt: observedAt };
+}
 
 function liveControlPlane(observedAt: string): ControlPlaneSnapshot {
   return {

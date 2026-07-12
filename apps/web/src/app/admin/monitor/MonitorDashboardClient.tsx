@@ -367,7 +367,8 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
         {current ? <><div><strong>{current.teamA ?? "TBD"}</strong><span>{score ? `${score.teamASets} · ${score.teamAScore}` : "--"}</span></div><div><strong>{current.teamB ?? "TBD"}</strong><span>{score ? `${score.teamBSets} · ${score.teamBScore}` : "--"}</span></div><p>{current.roundName ?? "Match"}{current.matchNumber ? ` · #${current.matchNumber}` : ""}</p></> : <p>No current match</p>}
       </div>
       <div className="monitor-court-footer">
-        <span><Headphones size={14} /> {browser?.commentary.configured ? browser.commentary.syncStatus : "off"}</span>
+        <span><Camera size={14} /> {visualLabel(browser)}</span>
+        <span><Headphones size={14} /> {commentaryLabel(browser)}</span>
         <span><Youtube size={14} /> {friendlyState(court.youtube?.state ?? "NOT_APPLICABLE")}</span>
         <span><Gauge size={14} /> {browser ? `${browser.video.reconnectCount} reconnects` : "--"}</span>
       </div>
@@ -460,6 +461,26 @@ function formatDuration(ms: number): string {
   if (ms < 1_000) return "<1s";
   if (ms < 60_000) return `${Math.floor(ms / 1_000)}s`;
   return `${Math.floor(ms / 60_000)}m`;
+}
+
+function visualLabel(browser: MonitorCourt["browser"]): string {
+  if (!browser?.visual.sampledAt) return "picture --";
+  if (browser.visual.blackDurationMs > 0) return `black ${formatDuration(browser.visual.blackDurationMs)}`;
+  if (browser.visual.frozenDurationMs > 0) return `still ${formatDuration(browser.visual.frozenDurationMs)}`;
+  if (!browser.commentary.cameraTrackPresent) return "audio missing";
+  if ((browser.commentary.cameraClippedSampleRatio ?? 0) > 0.05) return "audio clipping";
+  return "picture active";
+}
+
+function commentaryLabel(browser: MonitorCourt["browser"]): string {
+  const commentary = browser?.commentary;
+  if (!commentary?.configured) return "off";
+  if (!commentary.roomConnected) return "disconnected";
+  if (commentary.audioTrackCount === 0) return "no track";
+  if (commentary.mutedAudioTrackCount > 0) return "muted";
+  if ((commentary.clippedSampleRatio ?? 0) > 0.05) return "clipping";
+  if ((commentary.secondsSinceAudio ?? 0) > 60) return "silent";
+  return commentary.syncStatus;
 }
 
 function pagingLabel(notifications: MonitorSnapshotEnvelope["snapshot"]["notifications"]): string {

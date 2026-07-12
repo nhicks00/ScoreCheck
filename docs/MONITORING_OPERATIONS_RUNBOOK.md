@@ -34,6 +34,9 @@ tokens, or dead-man ping URLs into tickets, chat, logs, or screenshots.
 
 Every production host agent is read-only. Docker is exposed through a GET-only
 socket proxy; the agent cannot start, stop, or reconfigure production services.
+Compositor ownership is stored centrally and repeated by the agent. A mismatched
+assignment is rejected, and an unreachable compositor remains attributable to
+its pair even if observability restarts during the outage.
 
 ## Dashboard reading order
 
@@ -83,6 +86,8 @@ before public coverage.
 | Five-minute sparklines | 30 seconds while visible | optional |
 | Durable Supabase checkpoint | 60 seconds | fallback only |
 | Browser thumbnail | 15 seconds | 45 seconds |
+| Local visual content sample | 1 second | carried by browser heartbeat |
+| Local audio level sample | 0.5 seconds | carried by browser heartbeat |
 
 High-frequency samples stay in Prometheus. Supabase receives only expectations,
 incident transitions, acknowledgements, silences, notification receipts, and a
@@ -99,6 +104,25 @@ single sanitized fallback checkpoint per minute.
 Incident fingerprints exclude timestamps and message text, so repeated samples
 update one durable incident. Acknowledgement stops repeated emergency push
 delivery but leaves the incident visible until the evidence recovers.
+
+### Content and audio thresholds
+
+- Repeated picture: warning after 5 seconds, critical after 15 seconds, only
+  during `LIVE_MATCH` and only while raw transport remains healthy.
+- Uniform black or covered picture: critical after 20 seconds. It suppresses the
+  repeated-picture alert so one physical symptom does not produce two pages.
+- Camera or required commentary silence: warning after 60 seconds from track
+  arrival or the last audible sample.
+- Camera or commentary clipping: warning when more than 5 percent of recent
+  samples are at or above 0.99 absolute amplitude.
+- Commentary packet loss: warning above 10 percent over one minute.
+- Commentary jitter-buffer delay: warning above 300 ms for 20 seconds.
+- Commentary sync: warning when not locked or target-to-applied delay differs by
+  more than 250 ms for 30 seconds.
+
+Use the current thumbnail and stage evidence before changing equipment. Content
+analysis distinguishes changing from repeated pixels, but cannot prove whether
+a static view was intentional.
 
 ### Timed silence
 
@@ -191,10 +215,13 @@ public StreamRun path or a live production output for a monitoring test.
 | Fault | Expected diagnosis | Maximum detection |
 | --- | --- | ---: |
 | Stop camera publishing | `RAW_INGEST`, camera/venue first action | 20 seconds |
+| Freeze full-bitrate camera content | `FULL_BITRATE_VISUAL_FREEZE`; seven peers unaffected | 20 seconds |
+| Cover camera or send uniform black | `CAMERA_CONTENT_BLACK`; no duplicate freeze page | 25 seconds |
 | Degrade venue uplink | bitrate/FPS/loss trend degrades before downstream failure | 30 seconds |
 | Stall preview normalizer | `PREVIEW`, FFmpeg/path evidence | 20 seconds |
 | Close program browser | `PROGRAM_BROWSER`, stale heartbeat | 15 seconds |
 | Disconnect commentator | `COMMENTARY` only when commentary is required | 20 seconds |
+| Mute, clip, or silence commentator | exact commentary issue code; no camera-stage fault | 75 seconds |
 | Corrupt score/render fixture | `SCORE_SOURCE` or `SCORE_RENDER`; detect 67-67 | 15 seconds |
 | Stop test Egress job | `EGRESS`; program input remains diagnosable | 20 seconds |
 | Unbind test YouTube stream | `YOUTUBE`; upstream stages remain healthy | 180 seconds |
@@ -224,7 +251,12 @@ active commentary rooms. Acceptance requires:
 
 - Browser-independent six-agent collection: passed.
 - Eight-court mapping and Egress capacity visibility: passed while idle.
-- Prometheus rules and correlator unit/fault fixtures: passed.
+- Prometheus rules (36 validated) and correlator unit/fault fixtures: passed.
+- Deterministic eight-court isolation fixtures for camera loss, repeated picture,
+  compositor-pair loss, score-render mismatch, YouTube API unknown, and shared
+  score-worker deduplication: passed. These are code gates, not real-feed gates.
+- Expanded WebRTC, visual-content, camera-audio, and commentary telemetry: passed
+  type/schema/unit validation; awaits the next real program-page session.
 - Durable incident, acknowledgement, checkpoint, and silence lifecycle: passed.
 - Production web and monitor builds: passed.
 - Pushover, Twilio, and external dead-man delivery: awaiting protected provider credentials.

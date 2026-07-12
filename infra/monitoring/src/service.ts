@@ -24,16 +24,36 @@ const snapshotGenerated = new Gauge({ name: "scorecheck_monitor_snapshot_generat
 const browserFresh = new Gauge({ name: "scorecheck_program_browser_heartbeat_fresh", help: "Whether a court program browser heartbeat was received within ten seconds.", labelNames: ["court"], registers: [registry] });
 const browserFps = new Gauge({ name: "scorecheck_program_browser_frames_per_second", help: "Program browser rendered video frames per second.", labelNames: ["court"], registers: [registry] });
 const browserRtt = new Gauge({ name: "scorecheck_program_browser_rtt_ms", help: "Program browser selected WebRTC candidate round-trip time in milliseconds.", labelNames: ["court"], registers: [registry] });
+const browserJitter = new Gauge({ name: "scorecheck_program_browser_jitter_ms", help: "Program browser inbound RTP jitter in milliseconds.", labelNames: ["court"], registers: [registry] });
+const browserFreezeCount = new Gauge({ name: "scorecheck_program_browser_freeze_count", help: "Program browser cumulative WebRTC freeze count.", labelNames: ["court"], registers: [registry] });
+const browserLastPacketAge = new Gauge({ name: "scorecheck_program_browser_last_packet_age_seconds", help: "Age of the most recently received video packet.", labelNames: ["court"], registers: [registry] });
 const browserPacketsLost = new Gauge({ name: "scorecheck_program_browser_packets_lost", help: "Program browser cumulative inbound video packets lost for the current page connection.", labelNames: ["court"], registers: [registry] });
 const browserFramesDropped = new Gauge({ name: "scorecheck_program_browser_frames_dropped", help: "Program browser cumulative video frames dropped for the current page connection.", labelNames: ["court"], registers: [registry] });
 const commentaryConnected = new Gauge({ name: "scorecheck_program_commentary_room_connected", help: "Whether the program browser is connected to its commentary room.", labelNames: ["court"], registers: [registry] });
 const commentaryTracks = new Gauge({ name: "scorecheck_program_commentary_audio_tracks", help: "Subscribed commentary audio tracks in the program browser.", labelNames: ["court"], registers: [registry] });
+const commentaryMutedTracks = new Gauge({ name: "scorecheck_program_commentary_muted_tracks", help: "Muted subscribed commentary tracks.", labelNames: ["court"], registers: [registry] });
+const commentaryClipping = new Gauge({ name: "scorecheck_program_commentary_clipped_sample_ratio", help: "Recent commentary clipped-sample ratio.", labelNames: ["court"], registers: [registry] });
+const commentarySilenceAge = new Gauge({ name: "scorecheck_program_commentary_silence_age_seconds", help: "Seconds since commentary last exceeded the non-silence threshold.", labelNames: ["court"], registers: [registry] });
+const commentaryPacketsLost = new Gauge({ name: "scorecheck_program_commentary_packets_lost", help: "Cumulative commentary packets lost for subscribed tracks.", labelNames: ["court"], registers: [registry] });
+const commentaryPacketsReceived = new Gauge({ name: "scorecheck_program_commentary_packets_received", help: "Cumulative commentary packets received for subscribed tracks.", labelNames: ["court"], registers: [registry] });
+const commentaryJitterBuffer = new Gauge({ name: "scorecheck_program_commentary_jitter_buffer_ms", help: "Recent commentary receiver jitter-buffer delay in milliseconds.", labelNames: ["court"], registers: [registry] });
+const commentarySyncLocked = new Gauge({ name: "scorecheck_program_commentary_sync_locked", help: "Whether adaptive commentary synchronization is locked.", labelNames: ["court"], registers: [registry] });
+const commentarySyncGap = new Gauge({ name: "scorecheck_program_commentary_sync_gap_ms", help: "Absolute target-to-applied commentary delay gap.", labelNames: ["court"], registers: [registry] });
+const cameraAudioTrack = new Gauge({ name: "scorecheck_program_camera_audio_track_present", help: "Whether the camera media stream contains a live audio track.", labelNames: ["court"], registers: [registry] });
+const cameraAudioClipping = new Gauge({ name: "scorecheck_program_camera_audio_clipped_sample_ratio", help: "Recent camera-audio clipped-sample ratio.", labelNames: ["court"], registers: [registry] });
+const cameraAudioSilenceAge = new Gauge({ name: "scorecheck_program_camera_audio_silence_age_seconds", help: "Seconds since camera audio last exceeded the non-silence threshold.", labelNames: ["court"], registers: [registry] });
+const visualFrozenDuration = new Gauge({ name: "scorecheck_program_visual_frozen_duration_seconds", help: "Duration of low inter-frame visual change while rendered frames continue.", labelNames: ["court"], registers: [registry] });
+const visualBlackDuration = new Gauge({ name: "scorecheck_program_visual_black_duration_seconds", help: "Duration of a high-confidence black or covered program image.", labelNames: ["court"], registers: [registry] });
+const visualDarkRatio = new Gauge({ name: "scorecheck_program_visual_dark_pixel_ratio", help: "Fraction of sampled program pixels below the dark threshold.", labelNames: ["court"], registers: [registry] });
+const visualFrameDifference = new Gauge({ name: "scorecheck_program_visual_frame_difference", help: "Mean absolute luminance difference from the prior sampled frame.", labelNames: ["court"], registers: [registry] });
 const scoreRenderAligned = new Gauge({ name: "scorecheck_program_score_render_aligned", help: "Whether scorebug source and rendered DOM signatures agree.", labelNames: ["court"], registers: [registry] });
 const controlPlaneFresh = new Gauge({ name: "scorecheck_control_plane_fresh", help: "Whether the latest Supabase control-plane sample is fresh.", registers: [registry] });
+const scoreWorkerHealthy = new Gauge({ name: "scorecheck_score_worker_healthy", help: "Score worker state: 1 healthy, 0 unavailable, -1 not applicable.", registers: [registry] });
 const courtMediaRequired = new Gauge({ name: "scorecheck_court_media_required", help: "Whether media is currently required for a court.", labelNames: ["court"], registers: [registry] });
 const courtBroadcastLive = new Gauge({ name: "scorecheck_court_broadcast_live", help: "Whether a court broadcast is expected live.", labelNames: ["court"], registers: [registry] });
 const courtCommentaryRequired = new Gauge({ name: "scorecheck_court_commentary_required", help: "Whether commentary is required for a court.", labelNames: ["court"], registers: [registry] });
 const courtScoringLive = new Gauge({ name: "scorecheck_court_scoring_live", help: "Whether live scoring is required for a court.", labelNames: ["court"], registers: [registry] });
+const courtLiveMatch = new Gauge({ name: "scorecheck_court_live_match", help: "Whether the court is in the LIVE_MATCH coverage phase.", labelNames: ["court"], registers: [registry] });
 const scoreSourceAligned = new Gauge({ name: "scorecheck_score_source_aligned", help: "Whether canonical score, current match, and overlay state are aligned.", labelNames: ["court"], registers: [registry] });
 const youtubeApiUp = new Gauge({ name: "scorecheck_youtube_api_up", help: "YouTube provider API state: 1 healthy, 0 unavailable, -1 not applicable.", registers: [registry] });
 const youtubeHealthy = new Gauge({ name: "scorecheck_youtube_healthy", help: "YouTube stream health: 1 healthy, 0 unhealthy, -1 unknown or not applicable.", labelNames: ["court"], registers: [registry] });
@@ -272,19 +292,39 @@ async function pollAll() {
   browserFresh.reset();
   browserFps.reset();
   browserRtt.reset();
+  browserJitter.reset();
+  browserFreezeCount.reset();
+  browserLastPacketAge.reset();
   browserPacketsLost.reset();
   browserFramesDropped.reset();
   commentaryConnected.reset();
   commentaryTracks.reset();
+  commentaryMutedTracks.reset();
+  commentaryClipping.reset();
+  commentarySilenceAge.reset();
+  commentaryPacketsLost.reset();
+  commentaryPacketsReceived.reset();
+  commentaryJitterBuffer.reset();
+  commentarySyncLocked.reset();
+  commentarySyncGap.reset();
+  cameraAudioTrack.reset();
+  cameraAudioClipping.reset();
+  cameraAudioSilenceAge.reset();
+  visualFrozenDuration.reset();
+  visualBlackDuration.reset();
+  visualDarkRatio.reset();
+  visualFrameDifference.reset();
   scoreRenderAligned.reset();
   courtMediaRequired.reset();
   courtBroadcastLive.reset();
   courtCommentaryRequired.reset();
   courtScoringLive.reset();
+  courtLiveMatch.reset();
   scoreSourceAligned.reset();
   youtubeHealthy.reset();
   youtubeDegraded.reset();
   controlPlaneFresh.set(snapshot.controlPlane.state === "HEALTHY" ? 1 : 0);
+  scoreWorkerHealthy.set(snapshot.controlPlane.worker.state === "NOT_APPLICABLE" ? -1 : snapshot.controlPlane.worker.state === "HEALTHY" ? 1 : 0);
   youtubeApiUp.set(snapshot.youtube.state === "NOT_APPLICABLE" ? -1 : snapshot.youtube.state === "HEALTHY" ? 1 : 0);
   const notificationHealth = snapshot.notifications;
   notificationProviderHealthy.set({ provider: "pushover" }, providerMetric(notificationHealth.pushover));
@@ -296,6 +336,7 @@ async function pollAll() {
     courtBroadcastLive.set(labels, court.expectation.broadcastExpectation === "LIVE" ? 1 : 0);
     courtCommentaryRequired.set(labels, court.expectation.commentaryExpectation === "REQUIRED" ? 1 : 0);
     courtScoringLive.set(labels, court.expectation.scoringExpectation === "LIVE" ? 1 : 0);
+    courtLiveMatch.set(labels, court.expectation.coveragePhase === "LIVE_MATCH" ? 1 : 0);
     scoreSourceAligned.set(labels, court.competition && court.competition.alignment.state !== "CRITICAL" && court.competition.alignment.state !== "DEGRADED" ? 1 : 0);
     youtubeHealthy.set(labels, court.youtube?.state === "HEALTHY" ? 1 : court.youtube?.state === "CRITICAL" ? 0 : -1);
     youtubeDegraded.set(labels, court.youtube?.state === "DEGRADED" ? 1 : 0);
@@ -304,10 +345,31 @@ async function pollAll() {
     if (!browser) continue;
     setOptionalGauge(browserFps, labels, browser.video.framesPerSecond);
     setOptionalGauge(browserRtt, labels, browser.video.rttMs);
+    setOptionalGauge(browserJitter, labels, browser.video.jitterMs);
+    setOptionalGauge(browserFreezeCount, labels, browser.video.freezeCount);
+    setOptionalGauge(browserLastPacketAge, labels, browser.video.lastPacketAgeMs == null ? null : browser.video.lastPacketAgeMs / 1_000);
     setOptionalGauge(browserPacketsLost, labels, browser.video.packetsLost);
     setOptionalGauge(browserFramesDropped, labels, browser.video.framesDropped);
     commentaryConnected.set(labels, browser.commentary.roomConnected ? 1 : 0);
     commentaryTracks.set(labels, browser.commentary.audioTrackCount);
+    commentaryMutedTracks.set(labels, browser.commentary.mutedAudioTrackCount);
+    commentarySyncLocked.set(labels, browser.commentary.syncStatus === "locked" ? 1 : 0);
+    cameraAudioTrack.set(labels, browser.commentary.cameraTrackPresent ? 1 : 0);
+    setOptionalGauge(commentaryClipping, labels, browser.commentary.clippedSampleRatio);
+    setOptionalGauge(commentarySilenceAge, labels, browser.commentary.secondsSinceAudio);
+    setOptionalGauge(commentaryPacketsLost, labels, browser.commentary.packetsLost);
+    setOptionalGauge(commentaryPacketsReceived, labels, browser.commentary.packetsReceived);
+    setOptionalGauge(commentaryJitterBuffer, labels, browser.commentary.jitterBufferMs);
+    const syncGapMs = browser.commentary.targetDelayMs != null && browser.commentary.appliedDelayMs != null
+      ? Math.abs(browser.commentary.targetDelayMs - browser.commentary.appliedDelayMs)
+      : null;
+    setOptionalGauge(commentarySyncGap, labels, syncGapMs);
+    setOptionalGauge(cameraAudioClipping, labels, browser.commentary.cameraClippedSampleRatio);
+    setOptionalGauge(cameraAudioSilenceAge, labels, browser.commentary.secondsSinceCameraAudio);
+    visualFrozenDuration.set(labels, browser.visual.frozenDurationMs / 1_000);
+    visualBlackDuration.set(labels, browser.visual.blackDurationMs / 1_000);
+    setOptionalGauge(visualDarkRatio, labels, browser.visual.darkPixelRatio);
+    setOptionalGauge(visualFrameDifference, labels, browser.visual.frameDifference);
     const render = browser.scoreRender;
     scoreRenderAligned.set(labels, render.loaded
       && render.connected
@@ -384,13 +446,19 @@ async function pollAgent(target: AgentTarget) {
       signal: AbortSignal.timeout(3_000)
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    runtime.snapshot = agentSnapshotSchema.parse(await response.json());
-    if (runtime.snapshot.agentId !== target.id || runtime.snapshot.role !== target.role) throw new Error("Agent identity mismatch.");
+    const agentSnapshot = agentSnapshotSchema.parse(await response.json());
+    if (agentSnapshot.agentId !== target.id || agentSnapshot.role !== target.role) throw new Error("Agent identity mismatch.");
+    if (!sameCourts(agentSnapshot.assignedCourts, target.assignedCourts)) throw new Error("Agent court assignment mismatch.");
+    runtime.snapshot = agentSnapshot;
     runtime.lastSeenAt = new Date().toISOString();
   } catch {
     runtime.lastErrorAt = new Date().toISOString();
     agentPollErrors.inc({ agent: target.id, role: target.role });
   }
+}
+
+function sameCourts(left: number[], right: number[]): boolean {
+  return left.length === right.length && left.every((court, index) => court === right[index]);
 }
 
 async function pingDeadMan(url: string | null, name: "baseline" | "active") {

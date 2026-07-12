@@ -3,17 +3,24 @@ import { loadAgentConfig, loadServiceConfig, parseAgentTargets } from "./config.
 
 describe("monitoring configuration", () => {
   it("parses bounded agent targets", () => {
-    expect(parseAgentTargets("preview|mediamtx|http://10.0.0.2:9108|abcdefghijklmnopqrstuvwxyz")).toEqual([{
+    expect(parseAgentTargets("preview|mediamtx|http://10.0.0.2:9108|abcdefghijklmnopqrstuvwxyz|")).toEqual([{
       id: "preview",
       role: "mediamtx",
       url: "http://10.0.0.2:9108",
-      token: "abcdefghijklmnopqrstuvwxyz"
+      token: "abcdefghijklmnopqrstuvwxyz",
+      assignedCourts: []
     }]);
+    expect(parseAgentTargets("compositor-a|compositor|http://10.0.0.3:9108|abcdefghijklmnopqrstuvwxyz|2+1")[0]?.assignedCourts).toEqual([1, 2]);
   });
 
   it("rejects malformed and short-token targets", () => {
     expect(() => parseAgentTargets("preview|mediamtx|http://10.0.0.2:9108|short")).toThrow();
     expect(() => parseAgentTargets("preview|invalid|http://10.0.0.2:9108|abcdefghijklmnopqrstuvwxyz")).toThrow();
+    expect(() => parseAgentTargets("preview|mediamtx|http://10.0.0.2:9108|abcdefghijklmnopqrstuvwxyz")).toThrow();
+    expect(() => parseAgentTargets("preview|mediamtx|http://10.0.0.2:9108|abcdefghijklmnopqrstuvwxyz|1")).toThrow();
+    expect(() => parseAgentTargets("compositor-a|compositor|http://10.0.0.3:9108|abcdefghijklmnopqrstuvwxyz|")).toThrow();
+    expect(() => parseAgentTargets("compositor-a|compositor|http://10.0.0.3:9108|abcdefghijklmnopqrstuvwxyz|1,2")).toThrow();
+    expect(() => parseAgentTargets("compositor-a|compositor|http://10.0.0.3:9108|abcdefghijklmnopqrstuvwxyz|1,compositor-b|compositor|http://10.0.0.4:9108|zyxwvutsrqponmlkjihgfedcba|1")).toThrow();
   });
 
   it("treats empty optional URLs and provider values as unset", () => {

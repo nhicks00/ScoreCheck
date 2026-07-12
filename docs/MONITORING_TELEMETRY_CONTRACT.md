@@ -14,6 +14,9 @@ Status: normative version 1 contract for the unified monitoring system.
 8. Court, branch, host role, service, protocol, state, and bounded issue code are the only variable metric dimensions.
 9. Team names, participant names, remote addresses, connection IDs, container IDs, and error text are never Prometheus labels.
 10. A downstream symptom may be inhibited for paging, but it remains visible as incident evidence.
+11. Compositor court ownership is declared in central target configuration and
+    repeated by the host agent. A mismatch rejects the sample without replacing
+    the last known-good snapshot.
 
 ## Versioning
 
@@ -94,9 +97,11 @@ Each host runs one `scorecheck-monitor-agent`. The agent:
 - Sends bounded lifecycle events to the correlator when configured.
 - Does not expose a shell, arbitrary proxy, arbitrary file read, arbitrary query, or mutation endpoint.
 
-Compositor agents also publish their bounded `assignedCourts` list. The current
-two-court topology is A=1–2, B=3–4, C=5–6, and D=7–8. This mapping is telemetry,
-not a dashboard convention, and replacement hosts must register it explicitly.
+Compositor agents also publish their bounded `assignedCourts` list. Central
+targets persist the same ownership, so attribution survives an observability
+restart while a compositor is unreachable. The current two-court topology is
+A=1–2, B=3–4, C=5–6, and D=7–8. A court may be owned by exactly one compositor;
+replacement hosts must register ownership explicitly.
 
 ## Stable metric labels
 
@@ -151,6 +156,50 @@ scorecheck_egress_memory_load_ratio
 ```
 
 Counters remain cumulative. Prometheus recording rules derive rates.
+
+## Program-browser and content metrics
+
+The program page reports bounded WebRTC and rendered-content evidence through
+its five-second heartbeat. This is supplemental to browser-independent host
+collection: a missing browser heartbeat is never inferred as healthy.
+
+```text
+rendered FPS and dimensions
+inbound RTP jitter and jitter-buffer delay
+packets received/lost and most-recent-packet age
+frames received/decoded/dropped and keyframes decoded
+freeze count and cumulative freeze duration
+NACK, PLI, and FIR counts
+reconnect and page-reload counts
+mean luma, luma variance, dark-pixel ratio, and inter-frame difference
+continuous repeated-picture and black-picture duration
+commentary room, participant, track, mute, level, clipping, silence, packet,
+jitter-buffer, sync-lock, delay-gap, clock-RTT, and timing-sample evidence
+camera audio track, level, peak, clipping, and silence evidence
+```
+
+Visual analysis samples the already-decoded camera element once per second at
+160x90. It does not create another media connection or decoder. A frame is a
+black-picture candidate only when at least 97 percent of sampled pixels have
+luma at or below 16, mean luma is at most 16, and luma variance is at most 40.
+An inter-frame mean luma difference at or below 0.8 is a repeated-picture
+candidate. During `LIVE_MATCH`, repeated content is warning evidence after five
+seconds and critical after fifteen; black content is critical after twenty.
+Black and repeated-picture pages are mutually exclusive.
+
+Because a genuinely static camera view can resemble a repeated encoder frame,
+the operator must confirm the current thumbnail before changing equipment. The
+alert is high-value during volleyball play but is not proof of a specific
+camera defect by itself.
+
+Audio meters sample every 500 ms and define non-silence as RMS above -52 dBFS.
+Silence age starts when a live track first appears, even if no audible sample is
+ever observed. A required live track is warning evidence after 60 seconds of
+silence; a clipped-sample ratio above five percent is warning evidence. Missing
+or muted required commentary tracks are classified separately from silence and
+clipping. Recent packet loss is calculated in Prometheus over one minute;
+cumulative loss remains evidence only and cannot hold a recovered track in a
+permanent degraded state.
 
 ## Snapshot freshness
 

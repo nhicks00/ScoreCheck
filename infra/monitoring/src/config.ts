@@ -58,6 +58,7 @@ export type AgentTarget = {
   role: AgentRole;
   url: string;
   token: string;
+  assignedCourts: number[];
 };
 
 export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
@@ -150,16 +151,33 @@ function parseOrigins(raw: string): string[] {
 
 export function parseAgentTargets(raw: string): AgentTarget[] {
   if (!raw.trim()) return [];
-  return raw.split(",").map((entry) => {
-    const [id, role, url, token, ...extra] = entry.split("|").map((value) => value.trim());
+  const targets = raw.split(",").map((entry) => {
+    const [id, roleValue, url, token, courtList, ...extra] = entry.split("|").map((value) => value.trim());
+    const role = z.enum(AGENT_ROLES).parse(roleValue);
     if (extra.length || !id || !role || !url || !token) throw new Error("Invalid MONITOR_AGENT_TARGETS entry.");
+    if (courtList == null) throw new Error("MONITOR_AGENT_TARGETS must include an explicit court-assignment field.");
+    const assignedCourts = parseTargetCourtList(courtList);
+    if (role === "compositor" && assignedCourts.length === 0) throw new Error("Compositor targets must own at least one court.");
+    if (role !== "compositor" && assignedCourts.length > 0) throw new Error("Only compositor targets may own courts.");
     return {
       id: safeIdSchema.parse(id),
-      role: z.enum(AGENT_ROLES).parse(role),
+      role,
       url: safeHttpUrl.parse(url).replace(/\/+$/, ""),
-      token: z.string().min(24).parse(token)
+      token: z.string().min(24).parse(token),
+      assignedCourts
     };
   });
+  if (new Set(targets.map((target) => target.id)).size !== targets.length) throw new Error("MONITOR_AGENT_TARGETS contains duplicate agent identifiers.");
+  const assignedCourts = targets.flatMap((target) => target.assignedCourts);
+  if (new Set(assignedCourts).size !== assignedCourts.length) throw new Error("MONITOR_AGENT_TARGETS assigns a court to more than one compositor.");
+  return targets;
+}
+
+function parseTargetCourtList(raw: string): number[] {
+  if (!raw) return [];
+  const courts = raw.split("+").map((value) => Number(value.trim()));
+  if (courts.some((court) => !Number.isInteger(court) || court < 1 || court > 8)) throw new Error("Target court assignments must contain court numbers 1-8 joined with '+'.");
+  return [...new Set(courts)].sort((left, right) => left - right);
 }
 
 const safeIdSchema = z.string().trim().min(1).max(80).regex(/^[a-zA-Z0-9_.:-]+$/);

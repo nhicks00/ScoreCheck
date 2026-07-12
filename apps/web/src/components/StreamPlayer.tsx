@@ -36,11 +36,21 @@ export type StreamConnectionHealth = {
   width: number | null;
   height: number | null;
   rttMs: number | null;
+  jitterMs: number | null;
   jitterBufferMs: number | null;
   packetsLost: number | null;
   packetsReceived: number | null;
+  framesReceived: number | null;
+  framesDecoded: number | null;
+  keyFramesDecoded: number | null;
   framesDropped: number | null;
   bytesReceived: number | null;
+  freezeCount: number | null;
+  totalFreezesDurationMs: number | null;
+  lastPacketAgeMs: number | null;
+  nackCount: number | null;
+  pliCount: number | null;
+  firCount: number | null;
 };
 
 type StreamSources = {
@@ -365,24 +375,46 @@ function extractTimingSample(
 ): { sample: StreamTimingSample; totals: RtcJitterTotals | null; health: Omit<StreamConnectionHealth, "transport" | "connectionState"> } {
   let totals: RtcJitterTotals | null = null;
   let rttMs: number | null = null;
+  let jitterMs: number | null = null;
   let framesPerSecond: number | null = null;
   let width: number | null = null;
   let height: number | null = null;
   let packetsLost: number | null = null;
   let packetsReceived: number | null = null;
+  let framesReceived: number | null = null;
+  let framesDecoded: number | null = null;
+  let keyFramesDecoded: number | null = null;
   let framesDropped: number | null = null;
   let bytesReceived: number | null = null;
+  let freezeCount: number | null = null;
+  let totalFreezesDurationMs: number | null = null;
+  let lastPacketAgeMs: number | null = null;
+  let nackCount: number | null = null;
+  let pliCount: number | null = null;
+  let firCount: number | null = null;
 
   reports.forEach((report) => {
     const row = report as RTCStats & Record<string, unknown>;
     if (row.type === "inbound-rtp" && (row.kind === "video" || row.mediaType === "video")) {
       framesPerSecond = finiteNumber(row.framesPerSecond);
+      const jitterSeconds = finiteNumber(row.jitter);
+      jitterMs = jitterSeconds == null ? null : jitterSeconds * 1000;
       width = finiteInteger(row.frameWidth);
       height = finiteInteger(row.frameHeight);
       packetsLost = finiteInteger(row.packetsLost);
       packetsReceived = finiteInteger(row.packetsReceived);
+      framesReceived = finiteInteger(row.framesReceived);
+      framesDecoded = finiteInteger(row.framesDecoded);
+      keyFramesDecoded = finiteInteger(row.keyFramesDecoded);
       framesDropped = finiteInteger(row.framesDropped);
       bytesReceived = finiteInteger(row.bytesReceived);
+      freezeCount = finiteInteger(row.freezeCount);
+      const totalFreezesDuration = finiteNumber(row.totalFreezesDuration);
+      totalFreezesDurationMs = totalFreezesDuration == null ? null : totalFreezesDuration * 1000;
+      lastPacketAgeMs = packetAgeMs(row.lastPacketReceivedTimestamp);
+      nackCount = finiteInteger(row.nackCount);
+      pliCount = finiteInteger(row.pliCount);
+      firCount = finiteInteger(row.firCount);
       const emittedCount = finiteNumber(row.jitterBufferEmittedCount);
       const jitterBufferDelaySeconds = finiteNumber(row.jitterBufferDelay);
       if (emittedCount != null && jitterBufferDelaySeconds != null) {
@@ -418,11 +450,21 @@ function extractTimingSample(
       width,
       height,
       rttMs,
+      jitterMs,
       jitterBufferMs: jitter.jitterBufferTargetMs ?? jitter.jitterBufferMs,
       packetsLost,
       packetsReceived,
+      framesReceived,
+      framesDecoded,
+      keyFramesDecoded,
       framesDropped,
-      bytesReceived
+      bytesReceived,
+      freezeCount,
+      totalFreezesDurationMs,
+      lastPacketAgeMs,
+      nackCount,
+      pliCount,
+      firCount
     }
   };
 }
@@ -444,12 +486,31 @@ function emptyConnectionHealth(): StreamConnectionHealth {
     width: null,
     height: null,
     rttMs: null,
+    jitterMs: null,
     jitterBufferMs: null,
     packetsLost: null,
     packetsReceived: null,
+    framesReceived: null,
+    framesDecoded: null,
+    keyFramesDecoded: null,
     framesDropped: null,
-    bytesReceived: null
+    bytesReceived: null,
+    freezeCount: null,
+    totalFreezesDurationMs: null,
+    lastPacketAgeMs: null,
+    nackCount: null,
+    pliCount: null,
+    firCount: null
   };
+}
+
+function packetAgeMs(value: unknown): number | null {
+  const timestamp = finiteNumber(value);
+  if (timestamp == null) return null;
+  const age = timestamp > 1_000_000_000_000
+    ? Date.now() - timestamp
+    : globalThis.performance.now() - timestamp;
+  return Number.isFinite(age) ? Math.max(0, age) : null;
 }
 
 function normalizeConnectionState(value: RTCPeerConnectionState): StreamConnectionHealth["connectionState"] {

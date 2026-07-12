@@ -5,6 +5,8 @@
  * this and vitest can exercise every decision (src/test/programPage.test.ts).
  */
 
+import type { ProgramVisualHealth } from "./visualHealth";
+
 /** The stage is authored at 720p logical size and scaled to the viewport. */
 export const PROGRAM_STAGE_WIDTH = 1280;
 export const PROGRAM_STAGE_HEIGHT = 720;
@@ -124,23 +126,43 @@ export type ProgramMonitorHeartbeatBody = {
     width: number | null;
     height: number | null;
     rttMs: number | null;
+    jitterMs: number | null;
     jitterBufferMs: number | null;
     packetsLost: number | null;
     packetsReceived: number | null;
+    framesReceived: number | null;
+    framesDecoded: number | null;
+    keyFramesDecoded: number | null;
     framesDropped: number | null;
     bytesReceived: number | null;
+    freezeCount: number | null;
+    totalFreezesDurationMs: number | null;
+    lastPacketAgeMs: number | null;
+    nackCount: number | null;
+    pliCount: number | null;
+    firCount: number | null;
     reconnectCount: number;
     reloadCount: number;
   };
+  visual: ProgramVisualHealth;
   commentary: {
     configured: boolean;
     roomConnected: boolean;
     participantCount: number;
     audioTrackCount: number;
+    mutedAudioTrackCount: number;
     rmsDb: number | null;
     peakDb: number | null;
+    clippedSampleRatio: number | null;
     secondsSinceAudio: number | null;
+    packetsLost: number | null;
+    packetsReceived: number | null;
+    jitterBufferMs: number | null;
+    cameraTrackPresent: boolean;
     cameraRmsDb: number | null;
+    cameraPeakDb: number | null;
+    cameraClippedSampleRatio: number | null;
+    secondsSinceCameraAudio: number | null;
     syncStatus: "fallback" | "calibrating" | "locked";
     configuredDelayMs: number | null;
     targetDelayMs: number | null;
@@ -192,22 +214,42 @@ export function buildProgramMonitorHeartbeat(input: {
     width: number | null;
     height: number | null;
     rttMs: number | null;
+    jitterMs: number | null;
     jitterBufferMs: number | null;
     packetsLost: number | null;
     packetsReceived: number | null;
+    framesReceived: number | null;
+    framesDecoded: number | null;
+    keyFramesDecoded: number | null;
     framesDropped: number | null;
     bytesReceived: number | null;
+    freezeCount: number | null;
+    totalFreezesDurationMs: number | null;
+    lastPacketAgeMs: number | null;
+    nackCount: number | null;
+    pliCount: number | null;
+    firCount: number | null;
   } | null;
+  visualHealth: ProgramVisualHealth;
   reconnectCount: number;
   reloadCount: number;
   commentaryConfigured: boolean;
   commentaryRoomConnected: boolean;
   commentaryParticipantCount: number | null | undefined;
   commentaryAudioTrackCount: number | null | undefined;
+  commentaryMutedAudioTrackCount: number | null | undefined;
   commentaryRmsDb: number | null | undefined;
   commentaryPeakDb: number | null | undefined;
+  commentaryClippedSampleRatio: number | null | undefined;
   secondsSinceCommentaryAudio: number | null | undefined;
+  commentaryPacketsLost: number | null | undefined;
+  commentaryPacketsReceived: number | null | undefined;
+  commentaryJitterBufferMs: number | null | undefined;
+  cameraAudioTrackPresent: boolean;
   cameraAudioRmsDb: number | null | undefined;
+  cameraAudioPeakDb: number | null | undefined;
+  cameraAudioClippedSampleRatio: number | null | undefined;
+  secondsSinceCameraAudio: number | null | undefined;
   commentarySyncStatus: string | null | undefined;
   commentaryDelayConfiguredMs: number | null | undefined;
   commentaryDelayTargetMs: number | null | undefined;
@@ -246,23 +288,51 @@ export function buildProgramMonitorHeartbeat(input: {
       width: clampOptionalInteger(stream?.width, 1, 8192),
       height: clampOptionalInteger(stream?.height, 1, 8192),
       rttMs: clampOptionalRange(stream?.rttMs, 0, 60_000),
+      jitterMs: clampOptionalRange(stream?.jitterMs, 0, 60_000),
       jitterBufferMs: clampOptionalRange(stream?.jitterBufferMs, 0, 60_000),
       packetsLost: clampOptionalInteger(stream?.packetsLost, 0, Number.MAX_SAFE_INTEGER),
       packetsReceived: clampOptionalInteger(stream?.packetsReceived, 0, Number.MAX_SAFE_INTEGER),
+      framesReceived: clampOptionalInteger(stream?.framesReceived, 0, Number.MAX_SAFE_INTEGER),
+      framesDecoded: clampOptionalInteger(stream?.framesDecoded, 0, Number.MAX_SAFE_INTEGER),
+      keyFramesDecoded: clampOptionalInteger(stream?.keyFramesDecoded, 0, Number.MAX_SAFE_INTEGER),
       framesDropped: clampOptionalInteger(stream?.framesDropped, 0, Number.MAX_SAFE_INTEGER),
       bytesReceived: clampOptionalInteger(stream?.bytesReceived, 0, Number.MAX_SAFE_INTEGER),
+      freezeCount: clampOptionalInteger(stream?.freezeCount, 0, Number.MAX_SAFE_INTEGER),
+      totalFreezesDurationMs: clampOptionalRange(stream?.totalFreezesDurationMs, 0, 86_400_000),
+      lastPacketAgeMs: clampOptionalRange(stream?.lastPacketAgeMs, 0, 86_400_000),
+      nackCount: clampOptionalInteger(stream?.nackCount, 0, Number.MAX_SAFE_INTEGER),
+      pliCount: clampOptionalInteger(stream?.pliCount, 0, Number.MAX_SAFE_INTEGER),
+      firCount: clampOptionalInteger(stream?.firCount, 0, Number.MAX_SAFE_INTEGER),
       reconnectCount: clampCount(input.reconnectCount),
       reloadCount: clampCount(input.reloadCount)
+    },
+    visual: {
+      sampledAt: input.visualHealth.sampledAt,
+      meanLuma: clampOptionalRange(input.visualHealth.meanLuma, 0, 255),
+      lumaVariance: clampOptionalRange(input.visualHealth.lumaVariance, 0, 65_025),
+      darkPixelRatio: clampOptionalRange(input.visualHealth.darkPixelRatio, 0, 1),
+      frameDifference: clampOptionalRange(input.visualHealth.frameDifference, 0, 255),
+      frozenDurationMs: clampCount(input.visualHealth.frozenDurationMs),
+      blackDurationMs: clampCount(input.visualHealth.blackDurationMs)
     },
     commentary: {
       configured: Boolean(input.commentaryConfigured),
       roomConnected: Boolean(input.commentaryRoomConnected),
       participantCount: Math.min(32, clampCount(input.commentaryParticipantCount)),
       audioTrackCount: Math.min(32, clampCount(input.commentaryAudioTrackCount)),
+      mutedAudioTrackCount: Math.min(32, clampCount(input.commentaryMutedAudioTrackCount)),
       rmsDb: clampDb(input.commentaryRmsDb),
       peakDb: clampDb(input.commentaryPeakDb),
+      clippedSampleRatio: clampOptionalRange(input.commentaryClippedSampleRatio, 0, 1),
       secondsSinceAudio: clampOptionalRange(input.secondsSinceCommentaryAudio, 0, 86_400),
+      packetsLost: clampOptionalInteger(input.commentaryPacketsLost, 0, Number.MAX_SAFE_INTEGER),
+      packetsReceived: clampOptionalInteger(input.commentaryPacketsReceived, 0, Number.MAX_SAFE_INTEGER),
+      jitterBufferMs: clampOptionalMs(input.commentaryJitterBufferMs, 60_000),
+      cameraTrackPresent: Boolean(input.cameraAudioTrackPresent),
       cameraRmsDb: clampDb(input.cameraAudioRmsDb),
+      cameraPeakDb: clampDb(input.cameraAudioPeakDb),
+      cameraClippedSampleRatio: clampOptionalRange(input.cameraAudioClippedSampleRatio, 0, 1),
+      secondsSinceCameraAudio: clampOptionalRange(input.secondsSinceCameraAudio, 0, 86_400),
       syncStatus: clampSyncStatus(input.commentarySyncStatus),
       configuredDelayMs: clampOptionalMs(input.commentaryDelayConfiguredMs, 10_000),
       targetDelayMs: clampOptionalMs(input.commentaryDelayTargetMs, 10_000),

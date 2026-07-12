@@ -40,10 +40,19 @@ export type ProgramAudioHealth = {
   roomConnected: boolean;
   participantCount: number;
   audioTrackCount: number;
+  mutedAudioTrackCount: number;
   commentaryRmsDb: number | null;
   commentaryPeakDb: number | null;
+  commentaryClippedSampleRatio: number | null;
   secondsSinceCommentaryAudio: number | null;
+  commentaryPacketsLost: number | null;
+  commentaryPacketsReceived: number | null;
+  commentaryJitterBufferMs: number | null;
+  cameraTrackPresent: boolean;
   cameraRmsDb: number | null;
+  cameraPeakDb: number | null;
+  cameraClippedSampleRatio: number | null;
+  secondsSinceCameraAudio: number | null;
   commentarySyncStatus: CommentarySyncStatus;
   commentaryDelayConfiguredMs: number | null;
   commentaryDelayTargetMs: number | null;
@@ -56,10 +65,19 @@ export const EMPTY_PROGRAM_AUDIO_HEALTH: ProgramAudioHealth = {
   roomConnected: false,
   participantCount: 0,
   audioTrackCount: 0,
+  mutedAudioTrackCount: 0,
   commentaryRmsDb: null,
   commentaryPeakDb: null,
+  commentaryClippedSampleRatio: null,
   secondsSinceCommentaryAudio: null,
+  commentaryPacketsLost: null,
+  commentaryPacketsReceived: null,
+  commentaryJitterBufferMs: null,
+  cameraTrackPresent: false,
   cameraRmsDb: null,
+  cameraPeakDb: null,
+  cameraClippedSampleRatio: null,
+  secondsSinceCameraAudio: null,
   commentarySyncStatus: "fallback",
   commentaryDelayConfiguredMs: null,
   commentaryDelayTargetMs: null,
@@ -116,7 +134,14 @@ export function ProgramAudioMixer({
     let cameraSource: MediaStreamAudioSourceNode | null = null;
     let attachedCameraStream: MediaStream | null = null;
     let lastNonSilenceAtMs: number | null = null;
+    let lastCameraNonSilenceAtMs: number | null = null;
+    let commentaryTrackObservedAtMs: number | null = null;
+    let cameraTrackObservedAtMs: number | null = null;
     let peakDb = -120;
+    let cameraPeakDb = -120;
+    let commentaryPacketsLost: number | null = null;
+    let commentaryPacketsReceived: number | null = null;
+    let commentaryJitterBufferMs: number | null = null;
     let syncSampling = false;
     let syncStatus: CommentarySyncStatus = "fallback";
     let syncTargetDelayMs: number | null = null;
@@ -137,11 +162,23 @@ export function ProgramAudioMixer({
     // attach the actual stream and repeat whenever a reconnect replaces it.
     const attachCameraStream = () => {
       const stream = cameraElement.srcObject;
-      if (!(stream instanceof MediaStream) || stream === attachedCameraStream || stream.getAudioTracks().length === 0) return;
+      if (!(stream instanceof MediaStream)) {
+        cameraSource?.disconnect();
+        cameraSource = null;
+        attachedCameraStream = null;
+        lastCameraNonSilenceAtMs = null;
+        cameraTrackObservedAtMs = null;
+        return;
+      }
+      if (stream === attachedCameraStream) return;
       cameraSource?.disconnect();
+      cameraSource = null;
+      attachedCameraStream = stream;
+      lastCameraNonSilenceAtMs = null;
+      cameraTrackObservedAtMs = null;
+      if (stream.getAudioTracks().length === 0) return;
       cameraSource = context.createMediaStreamSource(stream);
       cameraSource.connect(cameraGain);
-      attachedCameraStream = stream;
     };
     attachCameraStream();
     const cameraAttachTimer = window.setInterval(attachCameraStream, 500);
@@ -172,6 +209,10 @@ export function ProgramAudioMixer({
       participant: RemoteParticipant
     ) => {
       if (track.kind !== Track.Kind.Audio || commentarySources.has(track.mediaStreamTrack.id)) return;
+      if (commentarySources.size === 0) {
+        lastNonSilenceAtMs = null;
+        commentaryTrackObservedAtMs = Date.now();
+      }
       const source = context.createMediaStreamSource(new MediaStream([track.mediaStreamTrack]));
       const delay = context.createDelay(10);
       const configuredDelay = clamp(commentaryDelayMs, 0, 10_000);
@@ -193,6 +234,10 @@ export function ProgramAudioMixer({
       state?.source.disconnect();
       state?.delay.disconnect();
       commentarySources.delete(track.mediaStreamTrack.id);
+      if (commentarySources.size === 0) {
+        lastNonSilenceAtMs = null;
+        commentaryTrackObservedAtMs = null;
+      }
     };
 
     void context.resume();
@@ -310,6 +355,10 @@ export function ProgramAudioMixer({
         const appliedDelays: number[] = [];
         const rtts: number[] = [];
         const ages: number[] = [];
+        const audioJitters: number[] = [];
+        let packetsLost = 0;
+        let packetsReceived = 0;
+        let packetCountersAvailable = false;
 
         await Promise.all([...commentarySources.values()].map(async (sourceState) => {
           const participantTiming = participantTimings.get(sourceState.participantIdentity);
@@ -320,7 +369,14 @@ export function ProgramAudioMixer({
           const previewAgeMs = previewTiming && clock
             ? previewSampleAgeOnProgramClock(previewTiming, clock, nowMs)
             : null;
-          const audioJitterMs = await sampleAudioJitter(sourceState);
+          const network = await sampleAudioNetwork(sourceState);
+          const audioJitterMs = network?.jitterBufferMs ?? null;
+          if (audioJitterMs != null) audioJitters.push(audioJitterMs);
+          if (network?.packetsLost != null && network.packetsReceived != null) {
+            packetsLost += network.packetsLost;
+            packetsReceived += network.packetsReceived;
+            packetCountersAvailable = true;
+          }
           const observation = previewAgeMs != null
             && previewAgeMs <= COMMENTARY_SYNC_SAMPLE_MAX_AGE_MS
             ? syncObservation({
@@ -344,6 +400,9 @@ export function ProgramAudioMixer({
         syncAppliedDelayMs = average(appliedDelays);
         syncRttMs = average(rtts);
         syncSampleAgeMs = ages.length > 0 ? Math.max(...ages) : null;
+        commentaryJitterBufferMs = average(audioJitters);
+        commentaryPacketsLost = packetCountersAvailable ? packetsLost : null;
+        commentaryPacketsReceived = packetCountersAvailable ? packetsReceived : null;
       } finally {
         syncSampling = false;
       }
@@ -354,18 +413,41 @@ export function ProgramAudioMixer({
 
     const meter = window.setInterval(() => {
       if (cancelled) return;
-      const commentaryDb = analyserRmsDb(commentaryAnalyser);
-      const cameraDb = analyserRmsDb(cameraAnalyser);
-      peakDb = Math.max(commentaryDb, peakDb - 2);
-      if (commentarySources.size > 0 && commentaryDb > -52) lastNonSilenceAtMs = Date.now();
+      const nowMs = Date.now();
+      const commentaryLevels = analyserLevels(commentaryAnalyser);
+      const cameraLevels = analyserLevels(cameraAnalyser);
+      peakDb = Math.max(commentaryLevels.peakDb, peakDb - 2);
+      cameraPeakDb = Math.max(cameraLevels.peakDb, cameraPeakDb - 2);
+      const cameraTrackPresent = attachedCameraStream?.getAudioTracks().some((track) => track.readyState === "live") ?? false;
+      const mutedAudioTrackCount = [...commentarySources.values()].filter((state) => state.track.isMuted).length;
+      if (commentarySources.size > 0 && commentaryTrackObservedAtMs == null) commentaryTrackObservedAtMs = nowMs;
+      if (commentarySources.size === 0) commentaryTrackObservedAtMs = null;
+      if (cameraTrackPresent && cameraTrackObservedAtMs == null) cameraTrackObservedAtMs = nowMs;
+      if (!cameraTrackPresent) {
+        cameraTrackObservedAtMs = null;
+        lastCameraNonSilenceAtMs = null;
+      }
+      if (commentarySources.size > 0 && commentaryLevels.rmsDb > -52) lastNonSilenceAtMs = nowMs;
+      if (cameraTrackPresent && cameraLevels.rmsDb > -52) lastCameraNonSilenceAtMs = nowMs;
+      const commentaryAudioReferenceMs = lastNonSilenceAtMs ?? commentaryTrackObservedAtMs;
+      const cameraAudioReferenceMs = lastCameraNonSilenceAtMs ?? cameraTrackObservedAtMs;
       onHealth({
         roomConnected,
         participantCount,
         audioTrackCount: commentarySources.size,
-        commentaryRmsDb: commentarySources.size > 0 ? commentaryDb : null,
+        mutedAudioTrackCount,
+        commentaryRmsDb: commentarySources.size > 0 ? commentaryLevels.rmsDb : null,
         commentaryPeakDb: commentarySources.size > 0 ? peakDb : null,
-        secondsSinceCommentaryAudio: lastNonSilenceAtMs == null ? null : Math.max(0, (Date.now() - lastNonSilenceAtMs) / 1000),
-        cameraRmsDb: cameraDb,
+        commentaryClippedSampleRatio: commentarySources.size > 0 ? commentaryLevels.clippedSampleRatio : null,
+        secondsSinceCommentaryAudio: commentaryAudioReferenceMs == null ? null : Math.max(0, (nowMs - commentaryAudioReferenceMs) / 1000),
+        commentaryPacketsLost,
+        commentaryPacketsReceived,
+        commentaryJitterBufferMs,
+        cameraTrackPresent,
+        cameraRmsDb: cameraTrackPresent ? cameraLevels.rmsDb : null,
+        cameraPeakDb: cameraTrackPresent ? cameraPeakDb : null,
+        cameraClippedSampleRatio: cameraTrackPresent ? cameraLevels.clippedSampleRatio : null,
+        secondsSinceCameraAudio: cameraAudioReferenceMs == null ? null : Math.max(0, (nowMs - cameraAudioReferenceMs) / 1000),
         commentarySyncStatus: syncStatus,
         commentaryDelayConfiguredMs: commentarySources.size > 0 ? clamp(commentaryDelayMs, 0, 10_000) : null,
         commentaryDelayTargetMs: syncTargetDelayMs,
@@ -411,15 +493,23 @@ export function ProgramAudioMixer({
   return null;
 }
 
-async function sampleAudioJitter(state: CommentarySourceState): Promise<number | null> {
+async function sampleAudioNetwork(state: CommentarySourceState): Promise<{
+  jitterBufferMs: number | null;
+  packetsLost: number | null;
+  packetsReceived: number | null;
+} | null> {
   const receiver = state.track.receiver;
   if (!receiver) return null;
   try {
     const reports = await receiver.getStats();
     let totals: RtcJitterTotals | null = null;
+    let packetsLost: number | null = null;
+    let packetsReceived: number | null = null;
     reports.forEach((report) => {
       const row = report as RTCStats & Record<string, unknown>;
       if (row.type !== "inbound-rtp" || (row.kind !== "audio" && row.mediaType !== "audio")) return;
+      packetsLost = finiteNumber(row.packetsLost);
+      packetsReceived = finiteNumber(row.packetsReceived);
       const emittedCount = finiteNumber(row.jitterBufferEmittedCount);
       const jitterBufferDelaySeconds = finiteNumber(row.jitterBufferDelay);
       if (emittedCount == null || jitterBufferDelaySeconds == null) return;
@@ -429,10 +519,16 @@ async function sampleAudioJitter(state: CommentarySourceState): Promise<number |
         jitterBufferTargetDelaySeconds: finiteNumber(row.jitterBufferTargetDelay)
       };
     });
-    if (!totals) return null;
+    if (!totals) return packetsLost != null || packetsReceived != null
+      ? { jitterBufferMs: null, packetsLost, packetsReceived }
+      : null;
     const sample = intervalJitterSample(state.previousJitterTotals, totals);
     state.previousJitterTotals = totals;
-    return sample.jitterBufferTargetMs ?? sample.jitterBufferMs;
+    return {
+      jitterBufferMs: sample.jitterBufferTargetMs ?? sample.jitterBufferMs,
+      packetsLost,
+      packetsReceived
+    };
   } catch {
     return null;
   }
@@ -464,13 +560,24 @@ function dbToGain(db: number): number {
   return 10 ** (safe / 20);
 }
 
-function analyserRmsDb(analyser: AnalyserNode): number {
+function analyserLevels(analyser: AnalyserNode): { rmsDb: number; peakDb: number; clippedSampleRatio: number } {
   const samples = new Float32Array(analyser.fftSize);
   analyser.getFloatTimeDomainData(samples);
   let sum = 0;
-  for (const sample of samples) sum += sample * sample;
+  let peak = 0;
+  let clipped = 0;
+  for (const sample of samples) {
+    const absolute = Math.abs(sample);
+    sum += sample * sample;
+    peak = Math.max(peak, absolute);
+    if (absolute >= 0.99) clipped += 1;
+  }
   const rms = Math.sqrt(sum / samples.length);
-  return rms > 0 ? Math.max(-120, 20 * Math.log10(rms)) : -120;
+  return {
+    rmsDb: rms > 0 ? Math.max(-120, 20 * Math.log10(rms)) : -120,
+    peakDb: peak > 0 ? Math.max(-120, 20 * Math.log10(peak)) : -120,
+    clippedSampleRatio: clipped / samples.length
+  };
 }
 
 function finiteNumber(value: unknown): number | null {

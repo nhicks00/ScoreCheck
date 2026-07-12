@@ -27,7 +27,7 @@ export function buildMonitorSnapshot(
     return {
       agentId: target.id,
       role: target.role,
-      assignedCourts: runtime?.snapshot?.assignedCourts ?? [],
+      assignedCourts: runtime?.snapshot?.assignedCourts.length ? runtime.snapshot.assignedCourts : target.assignedCourts,
       state: agentState(runtime?.snapshot ?? null, ageMs),
       lastSeenAt: runtime?.lastSeenAt ?? null,
       ageMs,
@@ -51,7 +51,7 @@ export function buildMonitorSnapshot(
     const egressAgent = agents.find((agent) => agent.role === "compositor" && agent.assignedCourts.includes(courtNumber)) ?? null;
     const expectation = competition?.expectation ?? OFF_EXPECTATION;
     const observedStages = [
-      pathStage("RAW_INGEST", "raw", byBranch.raw ?? null, nowMs, expectation),
+      contentAwareRawStage(pathStage("RAW_INGEST", "raw", byBranch.raw ?? null, nowMs, expectation), browser, expectation, nowMs),
       pathStage("PREVIEW", "preview", byBranch.preview ?? null, nowMs, expectation),
       pathStage("PROGRAM_PATH", "program", byBranch.program ?? null, nowMs, expectation),
       programBrowserStage(browser, nowMs, expectation),
@@ -227,10 +227,20 @@ function programBrowserStage(browser: BrowserHeartbeatSnapshot | null, nowMs: nu
       width: video.width,
       height: video.height,
       rttMs: video.rttMs,
+      jitterMs: video.jitterMs,
       jitterBufferMs: video.jitterBufferMs,
       packetsLost: video.packetsLost,
       packetsReceived: video.packetsReceived,
+      framesReceived: video.framesReceived,
+      framesDecoded: video.framesDecoded,
+      keyFramesDecoded: video.keyFramesDecoded,
       framesDropped: video.framesDropped,
+      freezeCount: video.freezeCount,
+      totalFreezesDurationMs: video.totalFreezesDurationMs,
+      lastPacketAgeMs: video.lastPacketAgeMs,
+      nackCount: video.nackCount,
+      pliCount: video.pliCount,
+      firCount: video.firCount,
       reconnects: video.reconnectCount,
       reloads: video.reloadCount
     }
@@ -248,34 +258,110 @@ function commentaryStage(browser: BrowserHeartbeatSnapshot | null, nowMs: number
     return stage("COMMENTARY", "NOT_APPLICABLE", "info", null, "Commentary is not configured for this scene.", null, browser.sampledAt, timing.ageMs, {});
   }
   if (!commentary.roomConnected) {
-    return stage("COMMENTARY", "DEGRADED", "warning", "COMMENTARY_ROOM_DISCONNECTED", "Program browser is disconnected from the commentary room.", "Check LiveKit reachability and the browser room connection.", browser.sampledAt, timing.ageMs, {
+    const required = expectation.commentaryExpectation === "REQUIRED";
+    return stage("COMMENTARY", required ? "CRITICAL" : "DEGRADED", required ? "critical" : "warning", "COMMENTARY_ROOM_DISCONNECTED", "Program browser is disconnected from the commentary room.", "Check LiveKit reachability and the browser room connection.", browser.sampledAt, timing.ageMs, {
       participants: commentary.participantCount,
       audioTracks: commentary.audioTrackCount
     });
   }
-  const syncDegraded = commentary.audioTrackCount > 0 && commentary.syncStatus !== "locked";
+  const requiredTrackMissing = expectation.commentaryExpectation === "REQUIRED" && commentary.audioTrackCount === 0;
+  const packetTotal = (commentary.packetsLost ?? 0) + (commentary.packetsReceived ?? 0);
+  const packetLossRatio = packetTotal > 0 ? (commentary.packetsLost ?? 0) / packetTotal : null;
+  const syncGapMs = commentary.targetDelayMs != null && commentary.appliedDelayMs != null
+    ? Math.abs(commentary.targetDelayMs - commentary.appliedDelayMs)
+    : null;
+  const muted = commentary.mutedAudioTrackCount > 0;
+  const clipping = (commentary.clippedSampleRatio ?? 0) > 0.05;
+  const silent = commentary.audioTrackCount > 0 && (commentary.secondsSinceAudio ?? 0) > 60;
+  const networkDegraded = (commentary.jitterBufferMs ?? 0) > 300;
+  const syncDegraded = commentary.audioTrackCount > 0 && (commentary.syncStatus !== "locked" || (syncGapMs ?? 0) > 250);
+  const degraded = muted || clipping || silent || networkDegraded || syncDegraded;
+  const issueCode = requiredTrackMissing ? "COMMENTARY_TRACK_MISSING"
+    : muted ? "COMMENTARY_TRACK_MUTED"
+      : clipping ? "COMMENTARY_AUDIO_CLIPPING"
+        : silent ? "COMMENTARY_AUDIO_SILENT"
+          : networkDegraded ? "COMMENTARY_JITTER_HIGH"
+            : syncDegraded ? "COMMENTARY_SYNC_UNLOCKED" : null;
   return stage(
     "COMMENTARY",
-    syncDegraded ? "DEGRADED" : "HEALTHY",
-    syncDegraded ? "warning" : "info",
-    syncDegraded ? "COMMENTARY_SYNC_UNLOCKED" : null,
-    commentary.audioTrackCount > 0
-      ? syncDegraded ? `Commentary sync is ${commentary.syncStatus}.` : "Commentary audio and synchronization are healthy."
+    requiredTrackMissing ? "CRITICAL" : degraded ? "DEGRADED" : "HEALTHY",
+    requiredTrackMissing ? "critical" : degraded ? "warning" : "info",
+    issueCode,
+    requiredTrackMissing ? "Required commentary has no subscribed audio track."
+      : commentary.audioTrackCount > 0
+        ? degraded ? "Commentary audio quality, network, or synchronization is degraded." : "Commentary audio and synchronization are healthy."
       : "Commentary room is healthy with no active audio track.",
-    syncDegraded ? "Check timing sample age, LiveKit RTT, and configured delay." : null,
+    requiredTrackMissing ? "Confirm the commentator is connected, unmuted, and publishing an audio track."
+      : degraded ? "Check mute state, levels, clipping, packet loss, jitter, and synchronization evidence." : null,
     browser.sampledAt,
     timing.ageMs,
     {
       participants: commentary.participantCount,
       audioTracks: commentary.audioTrackCount,
+      mutedTracks: commentary.mutedAudioTrackCount,
       rmsDb: commentary.rmsDb,
+      peakDb: commentary.peakDb,
+      clippedSampleRatio: commentary.clippedSampleRatio,
       secondsSinceAudio: commentary.secondsSinceAudio,
+      cumulativePacketLossRatio: packetLossRatio,
+      jitterBufferMs: commentary.jitterBufferMs,
       syncStatus: commentary.syncStatus,
+      syncGapMs,
       appliedDelayMs: commentary.appliedDelayMs,
       clockRttMs: commentary.clockRttMs,
       syncSampleAgeMs: commentary.syncSampleAgeMs
     }
   );
+}
+
+function contentAwareRawStage(
+  raw: StageHealth,
+  browser: BrowserHeartbeatSnapshot | null,
+  expectation: CourtExpectation,
+  nowMs: number
+): StageHealth {
+  if (!browser || expectation.coveragePhase !== "LIVE_MATCH" || raw.state !== "HEALTHY") return raw;
+  const visual = browser.visual;
+  const visualAgeMs = age(visual.sampledAt, nowMs);
+  if (visual.sampledAt && visualAgeMs != null && visualAgeMs <= 15_000) {
+    if (visual.blackDurationMs > 20_000) {
+      return stage("RAW_INGEST", "CRITICAL", "critical", "CAMERA_CONTENT_BLACK", "Camera picture is persistently black or covered while encoded frames continue.", "Inspect the physical camera view and lens before changing network or encoder settings.", visual.sampledAt, visualAgeMs, visualEvidence(browser));
+    }
+    if (visual.frozenDurationMs > 15_000) {
+      return stage("RAW_INGEST", "CRITICAL", "critical", "FULL_BITRATE_VISUAL_FREEZE", "Camera picture is repeating while transport and rendered frames continue.", "Check the camera encoder and source capture; do not treat healthy bitrate as healthy video content.", visual.sampledAt, visualAgeMs, visualEvidence(browser));
+    }
+    if (visual.frozenDurationMs > 5_000) {
+      return stage("RAW_INGEST", "DEGRADED", "warning", "VISUAL_FREEZE_SUSPECTED", "Camera picture has very low inter-frame change while frames continue.", "Confirm on the live thumbnail and watch whether motion returns before escalating.", visual.sampledAt, visualAgeMs, visualEvidence(browser));
+    }
+  }
+  const audio = browser.commentary;
+  if (!audio.cameraTrackPresent) {
+    return stage("RAW_INGEST", "DEGRADED", "warning", "CAMERA_AUDIO_TRACK_MISSING", "Camera video is present but its audio track is missing.", "Check the camera audio input and encoder audio configuration.", browser.sampledAt, age(browser.sampledAt, nowMs), visualEvidence(browser));
+  }
+  if ((audio.secondsSinceCameraAudio ?? 0) > 60) {
+    return stage("RAW_INGEST", "DEGRADED", "warning", "CAMERA_AUDIO_SILENT", "Camera audio track is present but has remained silent.", "Check the camera microphone, gain, and physical audio source.", browser.sampledAt, age(browser.sampledAt, nowMs), visualEvidence(browser));
+  }
+  if ((audio.cameraClippedSampleRatio ?? 0) > 0.05) {
+    return stage("RAW_INGEST", "DEGRADED", "warning", "CAMERA_AUDIO_CLIPPING", "Camera audio is clipping heavily.", "Reduce camera input or program camera gain and confirm peak level recovery.", browser.sampledAt, age(browser.sampledAt, nowMs), visualEvidence(browser));
+  }
+  return raw;
+}
+
+function visualEvidence(browser: BrowserHeartbeatSnapshot): StageHealth["evidence"] {
+  return {
+    renderedFps: browser.video.framesPerSecond,
+    meanLuma: browser.visual.meanLuma,
+    lumaVariance: browser.visual.lumaVariance,
+    darkPixelRatio: browser.visual.darkPixelRatio,
+    frameDifference: browser.visual.frameDifference,
+    frozenDurationMs: browser.visual.frozenDurationMs,
+    blackDurationMs: browser.visual.blackDurationMs,
+    cameraTrackPresent: browser.commentary.cameraTrackPresent,
+    cameraRmsDb: browser.commentary.cameraRmsDb,
+    cameraPeakDb: browser.commentary.cameraPeakDb,
+    cameraClippedSampleRatio: browser.commentary.cameraClippedSampleRatio,
+    secondsSinceCameraAudio: browser.commentary.secondsSinceCameraAudio
+  };
 }
 
 function scoreRenderStage(browser: BrowserHeartbeatSnapshot | null, nowMs: number, expectation: CourtExpectation): StageHealth {
@@ -319,6 +405,20 @@ function scoreSourceStage(
 ): StageHealth {
   if (expectation.scoringExpectation === "NONE") {
     return stage("SCORE_SOURCE", "NOT_APPLICABLE", "info", null, "Scoring is not expected.", null, controlPlane?.observedAt ?? null, age(controlPlane?.observedAt ?? null, nowMs), {});
+  }
+  if (expectation.scoringExpectation === "LIVE" && controlPlane?.worker.state !== "HEALTHY") {
+    const conclusivelyFailed = controlPlane?.worker.state === "CRITICAL";
+    return stage(
+      "SCORE_SOURCE",
+      conclusivelyFailed ? "CRITICAL" : "UNKNOWN",
+      conclusivelyFailed ? "critical" : "warning",
+      "SCORE_WORKER_UNAVAILABLE",
+      "Shared score worker health is unavailable while live scoring is expected.",
+      "Check the shared worker heartbeat and poller errors; do not repair courts independently.",
+      controlPlane?.worker.lastSeenAt ?? controlPlane?.observedAt ?? null,
+      controlPlane?.worker.ageMs ?? age(controlPlane?.observedAt ?? null, nowMs),
+      { workerState: controlPlane?.worker.state ?? "UNKNOWN", workerStatus: controlPlane?.worker.status ?? null }
+    );
   }
   if (!competition) {
     return stage("SCORE_SOURCE", "UNKNOWN", "warning", "COURT_STATE_UNAVAILABLE", "Court score state is unavailable.", "Check the active event and court mapping in Supabase.", controlPlane?.observedAt ?? null, age(controlPlane?.observedAt ?? null, nowMs), {});

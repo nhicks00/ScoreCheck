@@ -7,6 +7,15 @@ import type { CommentaryConnection } from "@/lib/commentary";
 import type { ProgramMonitoringConnection } from "@/lib/programMonitoring";
 import type { StreamTimingSample } from "@/lib/rtcTiming";
 import {
+  analyzeVisualFrame,
+  EMPTY_PROGRAM_VISUAL_HEALTH,
+  initialVisualAnalysisState,
+  VISUAL_ANALYSIS_HEIGHT,
+  VISUAL_ANALYSIS_INTERVAL_MS,
+  VISUAL_ANALYSIS_WIDTH,
+  type ProgramVisualHealth
+} from "@/lib/visualHealth";
+import {
   buildProgramMonitorHeartbeat,
   initialProgramWatchdog,
   PROGRAM_COMMENTARY_WAIT_MS,
@@ -76,6 +85,7 @@ export function ProgramClient({
   const audioHealthRef = useRef<ProgramAudioHealth>(EMPTY_PROGRAM_AUDIO_HEALTH);
   const programTimingRef = useRef<StreamTimingSample | null>(null);
   const streamHealthRef = useRef<StreamConnectionHealth | null>(null);
+  const visualHealthRef = useRef<ProgramVisualHealth>(EMPTY_PROGRAM_VISUAL_HEALTH);
   const overlayHealthRef = useRef<OverlayRenderHealth>(EMPTY_OVERLAY_RENDER_HEALTH);
   const pageLoadedAtRef = useRef(new Date().toISOString());
   const heartbeatSeqRef = useRef(0);
@@ -177,6 +187,39 @@ export function ProgramClient({
       cancelled = true;
       cameraElement.cancelVideoFrameCallback(callbackId);
       presentedFramesRef.current = 0;
+    };
+  }, [cameraElement]);
+
+  useEffect(() => {
+    if (!cameraElement) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = VISUAL_ANALYSIS_WIDTH;
+    canvas.height = VISUAL_ANALYSIS_HEIGHT;
+    const context = canvas.getContext("2d", { alpha: false, willReadFrequently: true });
+    if (!context) return;
+    let state = initialVisualAnalysisState();
+    const sample = () => {
+      if (videoStateRef.current !== "playing" || cameraElement.readyState < 2 || cameraElement.videoWidth <= 0) {
+        state = initialVisualAnalysisState();
+        visualHealthRef.current = EMPTY_PROGRAM_VISUAL_HEALTH;
+        return;
+      }
+      try {
+        drawCover(context, cameraElement, canvas.width, canvas.height);
+        const image = context.getImageData(0, 0, canvas.width, canvas.height);
+        const result = analyzeVisualFrame(state, image.data, canvas.width, canvas.height, Date.now());
+        state = result.state;
+        visualHealthRef.current = result.health;
+      } catch {
+        state = initialVisualAnalysisState();
+        visualHealthRef.current = EMPTY_PROGRAM_VISUAL_HEALTH;
+      }
+    };
+    sample();
+    const timer = window.setInterval(sample, VISUAL_ANALYSIS_INTERVAL_MS);
+    return () => {
+      window.clearInterval(timer);
+      visualHealthRef.current = EMPTY_PROGRAM_VISUAL_HEALTH;
     };
   }, [cameraElement]);
 
@@ -284,16 +327,26 @@ export function ProgramClient({
               videoState: videoStateRef.current,
               framesRendered: framesRef.current,
               streamHealth: streamHealthRef.current,
+              visualHealth: visualHealthRef.current,
               reconnectCount: reconnectsRef.current,
               reloadCount: reloadCountRef.current,
               commentaryConfigured: Boolean(commentary),
               commentaryRoomConnected: audio.roomConnected,
               commentaryParticipantCount: audio.participantCount,
               commentaryAudioTrackCount: audio.audioTrackCount,
+              commentaryMutedAudioTrackCount: audio.mutedAudioTrackCount,
               commentaryRmsDb: audio.commentaryRmsDb,
               commentaryPeakDb: audio.commentaryPeakDb,
+              commentaryClippedSampleRatio: audio.commentaryClippedSampleRatio,
               secondsSinceCommentaryAudio: audio.secondsSinceCommentaryAudio,
+              commentaryPacketsLost: audio.commentaryPacketsLost,
+              commentaryPacketsReceived: audio.commentaryPacketsReceived,
+              commentaryJitterBufferMs: audio.commentaryJitterBufferMs,
+              cameraAudioTrackPresent: audio.cameraTrackPresent,
               cameraAudioRmsDb: audio.cameraRmsDb,
+              cameraAudioPeakDb: audio.cameraPeakDb,
+              cameraAudioClippedSampleRatio: audio.cameraClippedSampleRatio,
+              secondsSinceCameraAudio: audio.secondsSinceCameraAudio,
               commentarySyncStatus: audio.commentarySyncStatus,
               commentaryDelayConfiguredMs: audio.commentaryDelayConfiguredMs,
               commentaryDelayTargetMs: audio.commentaryDelayTargetMs,
