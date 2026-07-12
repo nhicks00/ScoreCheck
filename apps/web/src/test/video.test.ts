@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { courtStreamPath, courtStreamSources, videoConfigured } from "../lib/video";
+import { courtPreviewStreamPath, courtProgramStreamPath, courtRawStreamPath, courtStreamSources, videoConfigured } from "../lib/video";
 
 const VIDEO_ENV_KEYS = [
   "MEDIAMTX_WHEP_BASE_URL",
   "MEDIAMTX_HLS_BASE_URL",
   "MEDIAMTX_READ_USER",
   "MEDIAMTX_READ_PASS",
-  "COURT_3_STREAM_PATH"
+  "COURT_3_PREVIEW_STREAM_PATH",
+  "COURT_4_PROGRAM_STREAM_PATH"
 ];
 
 const savedEnv = new Map<string, string | undefined>();
@@ -45,24 +46,42 @@ describe("videoConfigured", () => {
   });
 });
 
-describe("courtStreamPath", () => {
-  it("defaults to court{n}", () => {
-    expect(courtStreamPath(4)).toBe("court4");
+describe("courtPreviewStreamPath", () => {
+  it("defaults to a distinct preview path", () => {
+    expect(courtPreviewStreamPath(4)).toBe("court4_preview");
   });
 
-  it("prefers the COURT_{N}_STREAM_PATH env over the default", () => {
-    process.env.COURT_3_STREAM_PATH = "center-court";
-    expect(courtStreamPath(3)).toBe("center-court");
+  it("prefers the COURT_{N}_PREVIEW_STREAM_PATH env over the default", () => {
+    process.env.COURT_3_PREVIEW_STREAM_PATH = "center-court";
+    expect(courtPreviewStreamPath(3)).toBe("center-court");
   });
 
   it("prefers the database path over env and default", () => {
-    process.env.COURT_3_STREAM_PATH = "center-court";
-    expect(courtStreamPath(3, "custom-path")).toBe("custom-path");
+    process.env.COURT_3_PREVIEW_STREAM_PATH = "center-court";
+    expect(courtPreviewStreamPath(3, "custom-path")).toBe("custom-path");
   });
 
   it("ignores blank database values and trims slashes", () => {
-    expect(courtStreamPath(2, "   ")).toBe("court2");
-    expect(courtStreamPath(2, "/court-two/")).toBe("court-two");
+    expect(courtPreviewStreamPath(2, "   ")).toBe("court2_preview");
+    expect(courtPreviewStreamPath(2, "/court-two/ ")).toBe("court-two");
+  });
+});
+
+describe("courtRawStreamPath", () => {
+  it("keeps a permanent encoder identity separate from preview and program", () => {
+    expect(courtRawStreamPath(4)).toBe("court4_raw");
+  });
+});
+
+describe("courtProgramStreamPath", () => {
+  it("defaults to a distinct program path", () => {
+    expect(courtProgramStreamPath(4)).toBe("court4_program");
+  });
+
+  it("prefers database, then environment, then default", () => {
+    process.env.COURT_4_PROGRAM_STREAM_PATH = "court-four-delayed";
+    expect(courtProgramStreamPath(4)).toBe("court-four-delayed");
+    expect(courtProgramStreamPath(4, "/custom-program/")).toBe("custom-program");
   });
 });
 

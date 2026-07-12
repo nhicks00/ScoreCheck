@@ -13,7 +13,7 @@ import {
 } from "./opsConsole";
 import { supabaseAdmin } from "./supabase";
 import { getActiveEvent } from "./eventConfig";
-import { courtStreamPath } from "./video";
+import { courtPreviewStreamPath, courtProgramStreamPath } from "./video";
 import { getEnv } from "./env";
 import { workerHeartbeatStale, type WorkerHeartbeatRow } from "./workerSchedule";
 
@@ -50,14 +50,19 @@ export type ConsoleHeartbeat = {
   ageSeconds: number | null;
   videoState: string | null;
   framesRendered: number | null;
-  commentaryLoaded: boolean | null;
+  commentaryRoomConnected: boolean | null;
+  commentaryParticipantCount: number | null;
+  commentaryAudioTrackCount: number | null;
+  commentaryRmsDb: number | null;
+  secondsSinceCommentaryAudio: number | null;
 };
 
 export type ConsoleCourt = {
   courtId: string | null;
   courtNumber: number;
   displayName: string;
-  streamPath: string;
+  previewStreamPath: string;
+  programStreamPath: string;
   courtStatus: string | null;
   match: ConsoleMatch | null;
   score: ConsoleScore | null;
@@ -88,7 +93,8 @@ type CourtRow = {
   court_number: number;
   display_name: string | null;
   status?: string | null;
-  stream_path?: string | null;
+  preview_stream_path?: string | null;
+  program_stream_path?: string | null;
   current_match_id?: string | null;
   youtube_stream_key?: string | null;
   youtube_video_id?: string | null;
@@ -120,7 +126,11 @@ type HeartbeatRow = {
   last_seen_at: string | null;
   video_state: string | null;
   frames_rendered: number | null;
-  commentary_loaded: boolean | null;
+  commentary_room_connected: boolean | null;
+  commentary_participant_count: number | null;
+  commentary_audio_track_count: number | null;
+  commentary_rms_db: number | null;
+  seconds_since_commentary_audio: number | null;
 };
 
 export async function loadProductionSnapshot(): Promise<ProductionSnapshot> {
@@ -181,7 +191,8 @@ function buildConsoleCourt(
     courtId: row?.id ?? null,
     courtNumber,
     displayName: row?.display_name?.trim() || `Court ${courtNumber}`,
-    streamPath: courtStreamPath(courtNumber, row?.stream_path),
+    previewStreamPath: courtPreviewStreamPath(courtNumber, row?.preview_stream_path),
+    programStreamPath: courtProgramStreamPath(courtNumber, row?.program_stream_path),
     courtStatus: row?.status ?? null,
     match: match
       ? {
@@ -210,7 +221,11 @@ function buildConsoleCourt(
       ageSeconds: heartbeatAgeSeconds(heartbeat?.last_seen_at, nowMs),
       videoState: heartbeat?.video_state ?? null,
       framesRendered: heartbeat?.frames_rendered ?? null,
-      commentaryLoaded: heartbeat?.commentary_loaded ?? null
+      commentaryRoomConnected: heartbeat?.commentary_room_connected ?? null,
+      commentaryParticipantCount: heartbeat?.commentary_participant_count ?? null,
+      commentaryAudioTrackCount: heartbeat?.commentary_audio_track_count ?? null,
+      commentaryRmsDb: heartbeat?.commentary_rms_db ?? null,
+      secondsSinceCommentaryAudio: heartbeat?.seconds_since_commentary_audio ?? null
     }
   };
 }
@@ -285,7 +300,7 @@ export async function checkMediamtxPreview(timeoutMs = HEALTH_PROBE_TIMEOUT_MS):
   const whepBase = getEnv().mediamtxWhepBaseUrl.trim().replace(/\/+$/, "");
   if (!whepBase) return { configured: false, up: null };
   try {
-    await fetch(`${whepBase}/court1/whep`, {
+    await fetch(`${whepBase}/${courtPreviewStreamPath(1)}/whep`, {
       method: "HEAD",
       cache: "no-store",
       signal: AbortSignal.timeout(timeoutMs)

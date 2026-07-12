@@ -10,7 +10,7 @@
  *   GET  /health           liveness (unauthenticated, for container checks)
  *   GET  /courts           active egresses mapped to courts
  *   POST /courts/:n/start  StartWebEgress for court n's program page
- *                          body (optional): { "youtubeKey": "...", "preset": "H264_1080P_30" }
+ *                          body (optional): { "youtubeKey": "..." }
  *   POST /courts/:n/stop   StopEgress for court n
  */
 
@@ -19,11 +19,13 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import {
+  AudioCodec,
   EgressClient,
   EgressStatus,
-  EncodingOptionsPreset,
+  EncodingOptions,
   StreamOutput,
   StreamProtocol,
+  VideoCodec,
 } from 'livekit-server-sdk';
 import type { EgressInfo } from 'livekit-server-sdk';
 
@@ -48,7 +50,7 @@ const config = {
   /** Court N's scene: `${programPageBaseUrl}/${n}?token=${programPageToken}` */
   programPageBaseUrl: requireEnv('PROGRAM_PAGE_BASE_URL'),
   programPageToken: requireEnv('PROGRAM_PAGE_TOKEN'),
-  youtubeRtmpBase: process.env.YOUTUBE_RTMP_BASE ?? 'rtmp://a.rtmp.youtube.com/live2',
+  youtubeRtmpsBase: process.env.YOUTUBE_RTMPS_BASE ?? 'rtmps://a.rtmps.youtube.com/live2',
 };
 
 const egress = new EgressClient(config.livekitUrl, config.livekitApiKey, config.livekitApiSecret);
@@ -65,10 +67,17 @@ function redactedProgramPageUrl(court: number): string {
   return `${config.programPageBaseUrl}/${court}?token=<redacted>`;
 }
 
-const PRESETS: Record<string, EncodingOptionsPreset> = {
-  H264_720P_30: EncodingOptionsPreset.H264_720P_30,
-  H264_1080P_30: EncodingOptionsPreset.H264_1080P_30,
-};
+const encodingOptions = new EncodingOptions({
+  width: 1280,
+  height: 720,
+  framerate: 30,
+  audioCodec: AudioCodec.AAC,
+  audioBitrate: 128,
+  audioFrequency: 48_000,
+  videoCodec: VideoCodec.H264_HIGH,
+  videoBitrate: 4_000,
+  keyFrameInterval: 2,
+});
 
 /** Best-effort reverse map: which court does an active egress belong to? */
 function courtForEgress(info: EgressInfo): number | undefined {
@@ -120,8 +129,8 @@ function parseCourt(req: Request, res: Response): number | undefined {
   // routes, which we don't use — treat anything else as invalid).
   const raw = req.params.n;
   const n = Number.parseInt(typeof raw === 'string' ? raw : '', 10);
-  if (!Number.isInteger(n) || n < 1 || n > 99) {
-    res.status(400).json({ error: 'court number must be an integer 1-99' });
+  if (!Number.isInteger(n) || n < 1 || n > 8) {
+    res.status(400).json({ error: 'court number must be an integer 1-8' });
     return undefined;
   }
   return n;
@@ -150,20 +159,13 @@ courts.post('/:n/start', async (req: Request, res: Response) => {
   const court = parseCourt(req, res);
   if (court === undefined) return;
 
-  const body = (req.body ?? {}) as { youtubeKey?: string; preset?: string };
+  const body = (req.body ?? {}) as { youtubeKey?: string };
 
   // Stream key: request body wins; else per-court env (Phase 3 moves these to
   // Supabase `courts.youtube_stream_key`, encrypted — plan §3.4).
   const youtubeKey = body.youtubeKey ?? process.env[`COURT_${court}_YOUTUBE_KEY`];
   if (youtubeKey === undefined || youtubeKey === '') {
     res.status(400).json({ error: `no YouTube key: pass "youtubeKey" or set COURT_${court}_YOUTUBE_KEY` });
-    return;
-  }
-
-  const presetName = body.preset ?? process.env.EGRESS_PRESET ?? 'H264_720P_30';
-  const preset = PRESETS[presetName];
-  if (preset === undefined) {
-    res.status(400).json({ error: `unknown preset "${presetName}"`, supported: Object.keys(PRESETS) });
     return;
   }
 
@@ -175,11 +177,11 @@ courts.post('/:n/start', async (req: Request, res: Response) => {
 
   const info = await egress.startWebEgress(
     programPageUrl(court),
-    { stream: new StreamOutput({ protocol: StreamProtocol.RTMP, urls: [`${config.youtubeRtmpBase}/${youtubeKey}`] }) },
+    { stream: new StreamOutput({ protocol: StreamProtocol.RTMP, urls: [`${config.youtubeRtmpsBase}/${youtubeKey}`] }) },
     {
       // Hold capture until the page logs START_RECORDING (WHEP + audio up).
       awaitStartSignal: true,
-      encodingOptions: preset,
+      encodingOptions,
     },
   );
   courtEgressIds.set(court, info.egressId);

@@ -22,7 +22,13 @@ const schema = z.object({
   courtNumber: z.coerce.number().int().min(1).max(99),
   videoState: z.string().max(64).optional(),
   framesRendered: z.coerce.number().int().min(0).optional(),
-  commentaryLoaded: z.boolean().optional(),
+  commentaryRoomConnected: z.boolean().optional(),
+  commentaryParticipantCount: z.coerce.number().int().min(0).optional(),
+  commentaryAudioTrackCount: z.coerce.number().int().min(0).optional(),
+  commentaryRmsDb: z.number().min(-120).max(12).nullable().optional(),
+  commentaryPeakDb: z.number().min(-120).max(12).nullable().optional(),
+  secondsSinceCommentaryAudio: z.number().min(0).nullable().optional(),
+  cameraAudioRmsDb: z.number().min(-120).max(12).nullable().optional(),
   pageVersion: z.string().max(64).optional()
 });
 
@@ -54,7 +60,13 @@ export async function POST(req: NextRequest) {
         last_seen_at: new Date().toISOString(),
         video_state: parsed.data.videoState ?? null,
         frames_rendered: parsed.data.framesRendered ?? null,
-        commentary_loaded: parsed.data.commentaryLoaded ?? null,
+        commentary_room_connected: parsed.data.commentaryRoomConnected ?? null,
+        commentary_participant_count: parsed.data.commentaryParticipantCount ?? null,
+        commentary_audio_track_count: parsed.data.commentaryAudioTrackCount ?? null,
+        commentary_rms_db: parsed.data.commentaryRmsDb ?? null,
+        commentary_peak_db: parsed.data.commentaryPeakDb ?? null,
+        seconds_since_commentary_audio: parsed.data.secondsSinceCommentaryAudio ?? null,
+        camera_audio_rms_db: parsed.data.cameraAudioRmsDb ?? null,
         page_version: parsed.data.pageVersion ?? null
       },
       { onConflict: "court_number" }

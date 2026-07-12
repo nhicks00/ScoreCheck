@@ -10,12 +10,24 @@ export function videoConfigured(): boolean {
   return Boolean(env.mediamtxWhepBaseUrl.trim() || env.mediamtxHlsBaseUrl.trim());
 }
 
-export function courtStreamPath(courtNumber: number, dbPath?: string | null): string {
+export function courtPreviewStreamPath(courtNumber: number, dbPath?: string | null): string {
   const fromDb = normalizePath(dbPath);
   if (fromDb) return fromDb;
-  const fromEnv = normalizePath(process.env[`COURT_${courtNumber}_STREAM_PATH`]);
+  const fromEnv = normalizePath(process.env[`COURT_${courtNumber}_PREVIEW_STREAM_PATH`]);
   if (fromEnv) return fromEnv;
-  return `court${courtNumber}`;
+  return `court${courtNumber}_preview`;
+}
+
+export function courtRawStreamPath(courtNumber: number): string {
+  return `court${courtNumber}_raw`;
+}
+
+export function courtProgramStreamPath(courtNumber: number, dbPath?: string | null): string {
+  const fromDb = normalizePath(dbPath);
+  if (fromDb) return fromDb;
+  const fromEnv = normalizePath(process.env[`COURT_${courtNumber}_PROGRAM_STREAM_PATH`]);
+  if (fromEnv) return fromEnv;
+  return `court${courtNumber}_program`;
 }
 
 export function courtStreamSources(path: string): StreamSources {

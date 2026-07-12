@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getEnv } from "../../lib/env";
-import { courtStreamPath } from "../../lib/video";
+import { courtRawStreamPath } from "../../lib/video";
 import { loadLocalEnv } from "../envLoader";
 import { redact } from "./redact";
 
@@ -178,9 +178,9 @@ function main() {
 
 function mediaMtxIngestForCourt(court: number): MediaMtxIngest | null {
   if (!rtmpIngestBase) return null;
-  // Publishers send to court{n}_raw (AAC ok); the server's ffmpeg sidecar
-  // republishes to court{n} with Opus audio, which is what browsers watch.
-  const streamPath = `${courtStreamPath(court)}_raw`;
+  // Publishers always send to the permanent raw identity. MediaMTX branches
+  // raw into distinct low-latency preview and delayed program paths.
+  const streamPath = courtRawStreamPath(court);
   const credentials = publishUser && publishPass
     ? `?user=${encodeURIComponent(publishUser)}&pass=${encodeURIComponent(publishPass)}`
     : "";

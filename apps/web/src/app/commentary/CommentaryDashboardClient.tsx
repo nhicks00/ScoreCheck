@@ -1,13 +1,12 @@
 "use client";
 
-import { Headphones, Mic, MonitorPlay, RefreshCw, WifiOff } from "lucide-react";
+import { Headphones, MonitorPlay, RefreshCw, WifiOff } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 type DashboardRoom = {
   streamNumber: number;
   roomName: string;
-  guestUrl: string;
 };
 
 type CourtCard = {
@@ -148,9 +147,6 @@ export function CommentaryDashboardClient({
                 <Link className="button primary fan-cta" href={`/commentary/court/${room.streamNumber}`}>
                   <MonitorPlay size={18} /> Open court
                 </Link>
-                <a className="button fan-cta" href={room.guestUrl} target="_blank" rel="noreferrer">
-                  <Mic size={18} /> Join audio room
-                </a>
               </article>
             );
           })}

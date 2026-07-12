@@ -1,10 +1,10 @@
 import { redirect } from "next/navigation";
-import { vdoGuestUrl, vdoRoomName } from "@/lib/commentary";
+import { commentaryLiveKitConfigured } from "@/lib/commentary";
 import { isCommentaryRequest } from "@/lib/commentaryAuth";
 import { getEnv } from "@/lib/env";
 import { getActiveEvent } from "@/lib/eventConfig";
 import { supabaseAdmin } from "@/lib/supabase";
-import { courtStreamPath, courtStreamSources, videoConfigured } from "@/lib/video";
+import { courtPreviewStreamPath, courtStreamSources, videoConfigured } from "@/lib/video";
 import { CommentaryCourtClient } from "./CommentaryCourtClient";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +24,7 @@ export default async function CommentaryCourtPage({ params }: { params: Promise<
 
   const court = await loadCourt(event.id, courtNumber);
   const sources = videoConfigured()
-    ? courtStreamSources(courtStreamPath(courtNumber, court.streamPath))
+    ? courtStreamSources(courtPreviewStreamPath(courtNumber, court.previewStreamPath))
     : { whepUrl: null, hlsUrl: null };
 
   return (
@@ -34,8 +34,7 @@ export default async function CommentaryCourtPage({ params }: { params: Promise<
       eventSlug={event.slug ?? ""}
       eventName={event.name}
       sources={sources}
-      roomName={vdoRoomName(courtNumber)}
-      guestUrl={vdoGuestUrl(courtNumber)}
+      commentaryConfigured={commentaryLiveKitConfigured()}
     />
   );
 }
@@ -57,17 +56,17 @@ function NoActiveEvent() {
   );
 }
 
-async function loadCourt(eventId: string, courtNumber: number): Promise<{ streamPath: string | null; displayName: string | null }> {
+async function loadCourt(eventId: string, courtNumber: number): Promise<{ previewStreamPath: string | null; displayName: string | null }> {
   const db = supabaseAdmin();
   const { data: court } = await db
     .from("courts")
-    .select("stream_path, display_name")
+    .select("preview_stream_path, display_name")
     .eq("event_id", eventId)
     .eq("court_number", courtNumber)
     .maybeSingle();
 
   return {
-    streamPath: court?.stream_path ?? null,
+    previewStreamPath: court?.preview_stream_path ?? null,
     displayName: court?.display_name ?? null
   };
 }

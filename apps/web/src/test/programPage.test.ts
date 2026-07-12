@@ -3,7 +3,6 @@ import {
   checkProgramToken,
   programBuildVersion,
   programCommentaryBufferMs,
-  programCommentarySceneUrl,
   programPageToken
 } from "../lib/program";
 import {
@@ -18,9 +17,6 @@ import {
 
 const PROGRAM_ENV_KEYS = [
   "PROGRAM_PAGE_TOKEN",
-  "VDO_ROOM_PREFIX",
-  "VDO_ROOM_PASSWORD",
-  "VDO_SCENE_BUFFER_MS",
   "VERCEL_GIT_COMMIT_SHA",
   "NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA",
   "RENDER_GIT_COMMIT"
@@ -84,38 +80,12 @@ describe("programCommentaryBufferMs", () => {
     expect(programCommentaryBufferMs("fast")).toBeNull();
   });
 
-  it("clamps into 0..4000 and rounds to whole milliseconds", () => {
+  it("clamps into 0..10000 and rounds to whole milliseconds", () => {
     expect(programCommentaryBufferMs("0")).toBe(0);
     expect(programCommentaryBufferMs("2500")).toBe(2500);
-    expect(programCommentaryBufferMs("99999")).toBe(4000);
+    expect(programCommentaryBufferMs("99999")).toBe(10000);
     expect(programCommentaryBufferMs("-300")).toBe(0);
     expect(programCommentaryBufferMs("1500.6")).toBe(1501);
-  });
-});
-
-describe("programCommentarySceneUrl", () => {
-  it("is the StreamRun scene link WITHOUT the buffer param by default", () => {
-    expect(programCommentarySceneUrl(3)).toBe(
-      "https://vdo.ninja/?scene&room=BVMCOURT3&password=bvm2026&novideo&audiobitrate=80&retry"
-    );
-  });
-
-  it("strips the buffer even when VDO_SCENE_BUFFER_MS is configured", () => {
-    process.env.VDO_SCENE_BUFFER_MS = "700";
-    expect(programCommentarySceneUrl(1)).not.toContain("buffer=");
-  });
-
-  it("appends the ?cbuf override as &buffer, clamped into 0..4000", () => {
-    expect(programCommentarySceneUrl(3, 1200)).toBe(
-      "https://vdo.ninja/?scene&room=BVMCOURT3&password=bvm2026&novideo&audiobitrate=80&retry&buffer=1200"
-    );
-    expect(programCommentarySceneUrl(3, 0)).toContain("&buffer=0");
-    expect(programCommentarySceneUrl(3, 99999)).toContain("&buffer=4000");
-  });
-
-  it("follows the room prefix override", () => {
-    process.env.VDO_ROOM_PREFIX = "AVPDEN";
-    expect(programCommentarySceneUrl(5)).toContain("?scene&room=AVPDEN5&");
   });
 });
 
@@ -243,7 +213,13 @@ describe("buildProgramHeartbeat", () => {
         courtNumber: 3,
         videoState: "playing",
         framesRendered: 5400,
-        commentaryLoaded: true,
+        commentaryRoomConnected: true,
+        commentaryParticipantCount: 2,
+        commentaryAudioTrackCount: 1,
+        commentaryRmsDb: -24.04,
+        commentaryPeakDb: -10.02,
+        secondsSinceCommentaryAudio: 0.26,
+        cameraAudioRmsDb: -18.02,
         pageVersion: "abc1234"
       })
     ).toEqual({
@@ -251,7 +227,13 @@ describe("buildProgramHeartbeat", () => {
       courtNumber: 3,
       videoState: "playing",
       framesRendered: 5400,
-      commentaryLoaded: true,
+      commentaryRoomConnected: true,
+      commentaryParticipantCount: 2,
+      commentaryAudioTrackCount: 1,
+      commentaryRmsDb: -24,
+      commentaryPeakDb: -10,
+      secondsSinceCommentaryAudio: 0.3,
+      cameraAudioRmsDb: -18,
       pageVersion: "abc1234"
     });
   });
@@ -262,12 +244,24 @@ describe("buildProgramHeartbeat", () => {
       courtNumber: 3.9,
       videoState: "   ",
       framesRendered: Number.NaN,
-      commentaryLoaded: false,
+      commentaryRoomConnected: false,
+      commentaryParticipantCount: Number.NaN,
+      commentaryAudioTrackCount: -2,
+      commentaryRmsDb: Number.NaN,
+      commentaryPeakDb: 99,
+      secondsSinceCommentaryAudio: -4,
+      cameraAudioRmsDb: -999,
       pageVersion: ""
     });
     expect(body.courtNumber).toBe(3);
     expect(body.videoState).toBe("unknown");
     expect(body.framesRendered).toBe(0);
+    expect(body.commentaryParticipantCount).toBe(0);
+    expect(body.commentaryAudioTrackCount).toBe(0);
+    expect(body.commentaryRmsDb).toBeNull();
+    expect(body.commentaryPeakDb).toBe(12);
+    expect(body.secondsSinceCommentaryAudio).toBe(0);
+    expect(body.cameraAudioRmsDb).toBe(-120);
     expect(body.pageVersion).toBe("local");
   });
 
@@ -290,7 +284,13 @@ function base(overrides: Partial<Parameters<typeof buildProgramHeartbeat>[0]>) {
     courtNumber: 1,
     videoState: "playing",
     framesRendered: 0,
-    commentaryLoaded: false,
+    commentaryRoomConnected: false,
+    commentaryParticipantCount: 0,
+    commentaryAudioTrackCount: 0,
+    commentaryRmsDb: null,
+    commentaryPeakDb: null,
+    secondsSinceCommentaryAudio: null,
+    cameraAudioRmsDb: null,
     pageVersion: "local",
     ...overrides
   };

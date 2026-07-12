@@ -1,0 +1,9 @@
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:1.19.2-ffmpeg@sha256:08c837deb7bac85d509e2a4c2737308e5a34f8f084a46a0d8793cdb0579a6e5d
+    container_name: mediamtx
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+      - ./fonts:/fonts:ro

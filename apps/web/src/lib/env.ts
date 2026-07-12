@@ -28,6 +28,7 @@ export type AppEnv = {
   /** Master switch for the worker's live-chat polling. Off by default so the
    * feature is inert (no quota spend) until an operator opts in. */
   youtubeChatEnabled: boolean;
+  livekitCommentaryUrl: string;
 };
 
 export function getEnv(): AppEnv {
@@ -52,7 +53,8 @@ export function getEnv(): AppEnv {
     youtubeClientId: process.env.YOUTUBE_CLIENT_ID ?? "",
     youtubeClientSecret: process.env.YOUTUBE_CLIENT_SECRET ?? "",
     youtubeRefreshToken: process.env.YOUTUBE_REFRESH_TOKEN ?? "",
-    youtubeChatEnabled: boolEnv("YOUTUBE_CHAT_ENABLED", false)
+    youtubeChatEnabled: boolEnv("YOUTUBE_CHAT_ENABLED", false),
+    livekitCommentaryUrl: process.env.NEXT_PUBLIC_LIVEKIT_COMMENTARY_URL ?? ""
   };
 }
 

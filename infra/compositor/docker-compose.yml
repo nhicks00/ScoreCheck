@@ -2,7 +2,7 @@
 #
 # Phase 2 of docs/PRODUCTION_PLATFORM_PLAN.md ("program page as scene"): headless
 # Chrome inside the egress container renders the ScoreCheck program page
-# (/program/court/N — WHEP video + scorebug DOM + VDO.Ninja commentary audio),
+# (/program/court/N — delayed WHEP video + scorebug DOM + LiveKit audio),
 # GStreamer/x264 encodes it, and the result is pushed to YouTube RTMP.
 #
 # No LiveKit rooms are ever used. livekit-server exists purely as the Egress
@@ -25,7 +25,7 @@ services:
   redis:
     # Job/dispatch bus between livekit-server and the egress worker. Nothing else
     # uses it; state is disposable.
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     container_name: bvm-redis
     restart: unless-stopped
     # Queue duty only — disable RDB snapshots and AOF so burst-droplet disks stay
@@ -40,7 +40,7 @@ services:
   livekit:
     # Control-plane only: hosts the twirp Egress API. No WebRTC media flows
     # through it in this deployment.
-    image: livekit/livekit-server:latest
+    image: livekit/livekit-server:v1.13.3@sha256:483b8b7b5b0654f91f1e8bdc7b46fcd37fd9911612ecf627f97e3185a89825bd
     container_name: bvm-livekit
     restart: unless-stopped
     command: ["--config", "/etc/livekit.yaml"]
@@ -65,7 +65,7 @@ services:
     # program page; GStreamer encodes x264 and muxes/pushes RTMP. One container
     # runs multiple web egresses, admission-controlled by cpu_cost
     # (web_cpu_cost default = 4 vCPU budgeted per court; see egress.yaml).
-    image: livekit/egress:latest
+    image: livekit/egress:v1.13.0@sha256:980ff439431df2c773573721ab6da19e15bdc1f049ab7cb80e87470bf174c12f
     container_name: bvm-egress
     restart: unless-stopped
     environment:
@@ -77,10 +77,10 @@ services:
       LIVEKIT_API_SECRET: "${LIVEKIT_API_SECRET}"
     volumes:
       - ./egress.yaml:/etc/egress.yaml:ro
-    # Chrome requires SYS_ADMIN unless enable_chrome_sandbox + a custom seccomp
-    # profile is used; upstream documents this exact flag for docker runs.
-    cap_add:
-      - SYS_ADMIN
+    # Run Chrome's sandbox with LiveKit's version-matched seccomp profile rather
+    # than giving every egress process broad SYS_ADMIN capability.
+    security_opt:
+      - seccomp=./chrome-sandboxing-seccomp-profile.json
     # Chrome renders via /dev/shm; docker's 64 MB default causes tab crashes
     # mid-broadcast. 3 GB covers 1–2 concurrent 720p courts — scale up with
     # court count on event-day hosts (rule of thumb: ~1 GB per court + 1 GB).

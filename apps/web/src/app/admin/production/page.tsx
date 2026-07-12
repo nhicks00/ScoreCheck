@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { isAdminRequest } from "@/lib/auth";
-import { vdoSceneBufferMs } from "@/lib/commentary";
 import { getEnv, missingEnvKeys } from "@/lib/env";
 import { buildProgramMonitorPath, controllerConfiguredFromEnv } from "@/lib/opsConsole";
 import { programPageToken } from "@/lib/program";
@@ -53,7 +52,7 @@ export default async function ProductionConsolePage() {
     // Pre-resolved playback sources for the lazy monitor players (same shape
     // StreamPlayer's `sources` prop takes; read creds ride along like they do
     // for scorer/commentary players).
-    sources: hasVideo ? courtStreamSources(court.streamPath) : null,
+    sources: hasVideo ? courtStreamSources(court.previewStreamPath) : null,
     // Token-gated program-page link: null unless PROGRAM_PAGE_TOKEN is set,
     // so the token never reaches the client as an empty/implied value.
     programUrl: buildProgramMonitorPath(court.courtNumber, token)
@@ -65,7 +64,6 @@ export default async function ProductionConsolePage() {
       courtConfigs={courtConfigs}
       controllerConfigured={controllerConfiguredFromEnv()}
       videoConfigured={hasVideo}
-      sceneBufferMs={vdoSceneBufferMs()}
       courtCount={env.courtCount}
     />
   );

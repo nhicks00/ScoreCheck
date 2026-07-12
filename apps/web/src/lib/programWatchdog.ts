@@ -111,7 +111,13 @@ export type ProgramHeartbeatBody = {
   courtNumber: number;
   videoState: string;
   framesRendered: number;
-  commentaryLoaded: boolean;
+  commentaryRoomConnected: boolean;
+  commentaryParticipantCount: number;
+  commentaryAudioTrackCount: number;
+  commentaryRmsDb: number | null;
+  commentaryPeakDb: number | null;
+  secondsSinceCommentaryAudio: number | null;
+  cameraAudioRmsDb: number | null;
   pageVersion: string;
 };
 
@@ -128,7 +134,13 @@ export function buildProgramHeartbeat(input: {
   courtNumber: number;
   videoState: string | null | undefined;
   framesRendered: number | null | undefined;
-  commentaryLoaded: boolean;
+  commentaryRoomConnected: boolean;
+  commentaryParticipantCount: number | null | undefined;
+  commentaryAudioTrackCount: number | null | undefined;
+  commentaryRmsDb: number | null | undefined;
+  commentaryPeakDb: number | null | undefined;
+  secondsSinceCommentaryAudio: number | null | undefined;
+  cameraAudioRmsDb: number | null | undefined;
   pageVersion: string | null | undefined;
 }): ProgramHeartbeatBody {
   return {
@@ -136,7 +148,13 @@ export function buildProgramHeartbeat(input: {
     courtNumber: Math.trunc(input.courtNumber),
     videoState: clampText(input.videoState, "unknown"),
     framesRendered: clampCount(input.framesRendered),
-    commentaryLoaded: Boolean(input.commentaryLoaded),
+    commentaryRoomConnected: Boolean(input.commentaryRoomConnected),
+    commentaryParticipantCount: clampCount(input.commentaryParticipantCount),
+    commentaryAudioTrackCount: clampCount(input.commentaryAudioTrackCount),
+    commentaryRmsDb: clampDb(input.commentaryRmsDb),
+    commentaryPeakDb: clampDb(input.commentaryPeakDb),
+    secondsSinceCommentaryAudio: clampOptionalNonNegative(input.secondsSinceCommentaryAudio),
+    cameraAudioRmsDb: clampDb(input.cameraAudioRmsDb),
     pageVersion: clampText(input.pageVersion, "local")
   };
 }
@@ -150,4 +168,16 @@ function clampCount(value: number | null | undefined): number {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 0) return 0;
   return Math.floor(numeric);
+}
+
+function clampDb(value: number | null | undefined): number | null {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  return Math.min(12, Math.max(-120, Math.round(numeric * 10) / 10));
+}
+
+function clampOptionalNonNegative(value: number | null | undefined): number | null {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  return Math.max(0, Math.round(numeric * 10) / 10);
 }

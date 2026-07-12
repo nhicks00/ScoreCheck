@@ -1,10 +1,11 @@
 "use client";
 
-import { ArrowLeft, Copy, ExternalLink, Headphones, RotateCcw } from "lucide-react";
+import { ArrowLeft, RotateCcw } from "lucide-react";
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { ScorerSessionClient } from "@/app/score/session/[sessionToken]/ScorerSessionClient";
 import { StreamPlayer } from "@/components/StreamPlayer";
+import { CommentaryAudioClient } from "./CommentaryAudioClient";
 
 type CommentaryCourtClientProps = {
   courtNumber: number;
@@ -12,8 +13,7 @@ type CommentaryCourtClientProps = {
   eventSlug: string;
   eventName: string;
   sources: { whepUrl: string | null; hlsUrl: string | null };
-  roomName: string;
-  guestUrl: string;
+  commentaryConfigured: boolean;
 };
 
 export function CommentaryCourtClient({
@@ -22,8 +22,7 @@ export function CommentaryCourtClient({
   eventSlug,
   eventName,
   sources,
-  roomName,
-  guestUrl
+  commentaryConfigured
 }: CommentaryCourtClientProps) {
   const storageKey = `commentary-session-court-${courtNumber}`;
   // null = no session; undefined = not yet hydrated from localStorage.
@@ -31,7 +30,6 @@ export function CommentaryCourtClient({
   const [displayName, setDisplayName] = useState("Commentator");
   const [busy, setBusy] = useState(false);
   const [claimError, setClaimError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     try {
@@ -76,12 +74,6 @@ export function CommentaryCourtClient({
     }
     setToken(null);
     setClaimError(null);
-  }
-
-  function copyGuestUrl() {
-    void navigator.clipboard.writeText(guestUrl);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1600);
   }
 
   return (
@@ -150,32 +142,7 @@ export function CommentaryCourtClient({
           </div>
 
           <aside className="commentary-rail" aria-label="Audio room">
-            <section className="panel stack commentary-audio-panel">
-              <div className="commentary-room-head">
-                <h2><Headphones size={18} aria-hidden="true" /> Audio room</h2>
-                <span className="stream-key-badge">Room {roomName}</span>
-              </div>
-              <p className="muted">
-                Join with a headset — no open speakers. The producer hears you here and mixes you over the broadcast.
-              </p>
-              <iframe
-                className="commentary-audio-frame"
-                src={guestUrl}
-                allow="microphone; camera; autoplay; display-capture"
-                title={`VDO.Ninja audio room ${roomName}`}
-              />
-              <div className="commentary-audio-actions">
-                <a className="button primary" href={guestUrl} target="_blank" rel="noreferrer">
-                  <ExternalLink size={16} /> Open in new tab
-                </a>
-                <button type="button" onClick={copyGuestUrl}>
-                  <Copy size={16} /> {copied ? "Copied" : "Copy link"}
-                </button>
-              </div>
-              <small className="muted">
-                If the embed cannot reach your microphone, use “Open in new tab” and keep this page for video + scoring.
-              </small>
-            </section>
+            <CommentaryAudioClient courtNumber={courtNumber} displayName={displayName} configured={commentaryConfigured} />
           </aside>
         </div>
       </div>

@@ -1,4 +1,4 @@
-import { commentaryPortalEnabled, vdoGuestUrl, vdoRoomName } from "@/lib/commentary";
+import { commentaryPortalEnabled, commentaryRoomName } from "@/lib/commentary";
 import { isCommentaryRequest } from "@/lib/commentaryAuth";
 import { getEnv } from "@/lib/env";
 import { getActiveEvent } from "@/lib/eventConfig";
@@ -49,8 +49,7 @@ export default async function CommentaryPage({ searchParams }: { searchParams: P
     const streamNumber = index + 1;
     return {
       streamNumber,
-      roomName: vdoRoomName(streamNumber),
-      guestUrl: vdoGuestUrl(streamNumber)
+      roomName: commentaryRoomName(streamNumber)
     };
   });
 

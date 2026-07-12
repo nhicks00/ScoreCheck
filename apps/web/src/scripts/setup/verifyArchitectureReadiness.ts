@@ -3,7 +3,7 @@ import path from "node:path";
 import { getEnv } from "../../lib/env";
 import { getActiveEvent } from "../../lib/eventConfig";
 import { supabaseAdmin } from "../../lib/supabase";
-import { courtStreamPath, videoConfigured } from "../../lib/video";
+import { courtPreviewStreamPath, courtProgramStreamPath, videoConfigured } from "../../lib/video";
 import { loadLocalEnv } from "../envLoader";
 
 type Status = "ok" | "warning" | "blocked";
@@ -69,7 +69,7 @@ async function supabaseSection() {
     if (!event) return { status: "blocked" as Status, issues: ["No active event found."] };
     const db = supabaseAdmin();
     const [courts, sources, matches, overlays] = await Promise.all([
-      db.from("courts").select("id,court_number,current_match_id,stream_path,vbl_court_number,mode").eq("event_id", event.id).order("court_number"),
+      db.from("courts").select("id,court_number,current_match_id,preview_stream_path,program_stream_path,vbl_court_number,mode").eq("event_id", event.id).order("court_number"),
       db.from("bracket_sources").select("source_url,status,last_error").eq("event_id", event.id),
       db.from("matches").select("id,source_type,api_url").eq("event_id", event.id),
       db.from("overlay_states").select("court_id,court_number,stale,updated_at").eq("event_id", event.id)
@@ -106,7 +106,8 @@ async function supabaseSection() {
         courtNumber: court.court_number,
         mode: court.mode,
         hasMatch: Boolean(court.current_match_id),
-        streamPath: courtStreamPath(court.court_number, court.stream_path),
+        previewStreamPath: courtPreviewStreamPath(court.court_number, court.preview_stream_path),
+        programStreamPath: courtProgramStreamPath(court.court_number, court.program_stream_path),
         vblCourtNumber: court.vbl_court_number ?? null
       })),
       counts: {

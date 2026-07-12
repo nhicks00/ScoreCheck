@@ -4,7 +4,7 @@ import { requireAdmin } from "@/lib/auth";
 import { getEnv } from "@/lib/env";
 import { getActiveEvent } from "@/lib/eventConfig";
 import { supabaseAdmin } from "@/lib/supabase";
-import { courtStreamPath, courtStreamSources, videoConfigured } from "@/lib/video";
+import { courtPreviewStreamPath, courtStreamSources, videoConfigured } from "@/lib/video";
 
 export const runtime = "nodejs";
 
@@ -26,8 +26,8 @@ export async function GET(req: NextRequest) {
   }
 
   const courtNumber = parsed.data.courtNumber;
-  const streamPath = courtStreamPath(courtNumber, await loadStreamPath(courtNumber));
-  const sources = courtStreamSources(streamPath);
+  const previewStreamPath = courtPreviewStreamPath(courtNumber, await loadPreviewStreamPath(courtNumber));
+  const sources = courtStreamSources(previewStreamPath);
   if (!sources.whepUrl && !sources.hlsUrl) {
     return NextResponse.json({ error: "Stream preview is not configured for this court." }, { status: 503 });
   }
@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json(sources);
 }
 
-async function loadStreamPath(courtNumber: number): Promise<string | null> {
+async function loadPreviewStreamPath(courtNumber: number): Promise<string | null> {
   const env = getEnv();
   if (!env.supabaseUrl || !env.supabaseServiceRoleKey) return null;
 
@@ -45,10 +45,10 @@ async function loadStreamPath(courtNumber: number): Promise<string | null> {
 
   const { data: court } = await db
     .from("courts")
-    .select("stream_path")
+    .select("preview_stream_path")
     .eq("event_id", event.id)
     .eq("court_number", courtNumber)
     .maybeSingle();
 
-  return court?.stream_path ?? null;
+  return court?.preview_stream_path ?? null;
 }

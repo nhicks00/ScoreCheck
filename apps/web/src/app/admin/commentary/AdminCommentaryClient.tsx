@@ -7,43 +7,30 @@ import { useEffect, useRef, useState } from "react";
 type StreamRow = {
   streamNumber: number;
   roomName: string;
-  directorUrl: string;
-  sceneUrl: string;
-  guestUrl: string;
-  guestRelayUrl: string;
+  commentatorUrl: string;
 };
 
 export function AdminCommentaryClient({
   streams,
-  bufferMs,
-  portalEnabled
+  portalEnabled,
+  liveKitConfigured
 }: {
   streams: StreamRow[];
-  bufferMs: number;
   portalEnabled: boolean;
+  liveKitConfigured: boolean;
 }) {
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [copiedCourt, setCopiedCourt] = useState<number | null>(null);
   const copyTimer = useRef<number | null>(null);
 
   useEffect(() => () => {
     if (copyTimer.current != null) window.clearTimeout(copyTimer.current);
   }, []);
 
-  function copy(key: string, value: string) {
-    void navigator.clipboard.writeText(value);
-    setCopiedKey(key);
+  function copy(stream: StreamRow) {
+    void navigator.clipboard.writeText(stream.commentatorUrl);
+    setCopiedCourt(stream.streamNumber);
     if (copyTimer.current != null) window.clearTimeout(copyTimer.current);
-    copyTimer.current = window.setTimeout(() => setCopiedKey(null), 1600);
-  }
-
-  function copyCell(key: string, label: string, value: string) {
-    return (
-      <div className="commentary-url-cell">
-        <button type="button" onClick={() => copy(key, value)} title={value}>
-          <Copy size={14} /> {copiedKey === key ? "Copied" : label}
-        </button>
-      </div>
-    );
+    copyTimer.current = window.setTimeout(() => setCopiedCourt(null), 1600);
   }
 
   return (
@@ -61,18 +48,18 @@ export function AdminCommentaryClient({
           <div>
             <p className="eyebrow">Producer tools</p>
             <h1>Commentary Rooms</h1>
-            <p className="muted">
-              One VDO.Ninja room per stream. Directors monitor talent, scene links feed StreamRun, guest links go to commentators.
-            </p>
+            <p className="muted">One authenticated self-hosted LiveKit audio room per court.</p>
           </div>
-          <span className="status"><Headphones size={14} aria-hidden="true" /> {streams.length} rooms</span>
+          <span className={`status ${liveKitConfigured ? "success" : "error"}`}>
+            <Headphones size={14} aria-hidden="true" /> {liveKitConfigured ? "Audio server ready" : "Audio server offline"}
+          </span>
         </header>
 
-        {!portalEnabled && (
+        {(!portalEnabled || !liveKitConfigured) && (
           <div className="panel warn-surface">
             <p>
-              The commentator portal at <code>/commentary</code> is disabled — set <code>COMMENTATOR_PASSCODE</code> to open it.
-              The room links below work either way.
+              {!portalEnabled ? <><code>COMMENTATOR_PASSCODE</code> must be set. </> : null}
+              {!liveKitConfigured ? <>The LiveKit commentary URL and API credentials must be configured.</> : null}
             </p>
           </div>
         )}
@@ -81,16 +68,7 @@ export function AdminCommentaryClient({
           <h2>Room links per stream</h2>
           <div className="scroll-table">
             <table className="table">
-              <thead>
-                <tr>
-                  <th>Stream</th>
-                  <th>Room</th>
-                  <th>Director</th>
-                  <th>Scene (StreamRun)</th>
-                  <th>Guest</th>
-                  <th>Guest (bad wifi)</th>
-                </tr>
-              </thead>
+              <thead><tr><th>Stream</th><th>Room</th><th>Commentator link</th><th>Program subscription</th></tr></thead>
               <tbody>
                 {streams.map((stream) => (
                   <tr key={stream.streamNumber}>
@@ -98,47 +76,35 @@ export function AdminCommentaryClient({
                     <td><code>{stream.roomName}</code></td>
                     <td>
                       <div className="commentary-url-cell">
-                        <a className="button" href={stream.directorUrl} target="_blank" rel="noreferrer" title={stream.directorUrl}>
+                        <a className="button" href={stream.commentatorUrl} target="_blank" rel="noreferrer">
                           <ExternalLink size={14} /> Open
                         </a>
-                        <button type="button" onClick={() => copy(`director-${stream.streamNumber}`, stream.directorUrl)} title={stream.directorUrl}>
-                          <Copy size={14} /> {copiedKey === `director-${stream.streamNumber}` ? "Copied" : "Copy"}
+                        <button type="button" onClick={() => copy(stream)}>
+                          <Copy size={14} /> {copiedCourt === stream.streamNumber ? "Copied" : "Copy"}
                         </button>
                       </div>
                     </td>
-                    <td>{copyCell(`scene-${stream.streamNumber}`, "Copy scene URL", stream.sceneUrl)}</td>
-                    <td>{copyCell(`guest-${stream.streamNumber}`, "Copy guest URL", stream.guestUrl)}</td>
-                    <td>{copyCell(`relay-${stream.streamNumber}`, "Copy relay URL", stream.guestRelayUrl)}</td>
+                    <td>Automatic when the court program scene starts</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <p className="muted commentary-buffer-note">
-            Scene URLs carry <code>buffer={bufferMs}</code>: {bufferMs}ms delays commentary audio to align with the delayed
-            program video — tune via <code>VDO_SCENE_BUFFER_MS</code>; clap-test per court.
-          </p>
         </section>
 
         <section className="grid two">
           <div className="panel stack">
-            <h2>Wire-up order</h2>
+            <h2>Commentator check</h2>
             <ol className="commentary-admin-steps">
-              <li>Open the Director link for the court and stay in it — you are the room owner.</li>
-              <li>Paste the Scene URL into a StreamRun HTML/browser element on that stream&apos;s YouTube branch only.</li>
-              <li>Send commentators to <code>/commentary</code> with the passcode; they join the room from their court page.</li>
-              <li>Clap-test: talent claps on a visible rally end, adjust <code>VDO_SCENE_BUFFER_MS</code> until audio matches video.</li>
+              <li>Open the court link and sign in with the commentator passcode.</li>
+              <li>Join audio, approve microphone access, and verify that the level meter moves.</li>
+              <li>Keep headphones on and the low-latency court preview muted.</li>
+              <li>Confirm the production console reports an audio track and recent non-silence.</li>
             </ol>
           </div>
           <div className="panel stack">
-            <h2>Guest link flags</h2>
-            <p className="muted">
-              Guest links are mic-only with a noise gate and 80 kbps opus. The bad-wifi variant adds <code>&amp;relay</code> to
-              force TURN routing — steadier on hotel wifi and hotspots, at slightly higher latency.
-            </p>
-            <p className="muted">
-              Keep the MediaMTX preview branch commentary-free so commentators and scorers keep an undelayed, clean feed.
-            </p>
+            <h2>Network recovery</h2>
+            <p className="muted">LiveKit automatically attempts direct UDP, TURN/UDP, ICE/TCP, and TURN/TLS. There is no separate bad-wifi URL.</p>
           </div>
         </section>
       </div>

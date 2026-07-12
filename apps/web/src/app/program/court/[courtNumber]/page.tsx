@@ -2,14 +2,14 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getEnv } from "@/lib/env";
 import { getActiveEvent } from "@/lib/eventConfig";
+import { createCommentaryConnection } from "@/lib/commentary";
 import {
   checkProgramToken,
   programBuildVersion,
-  programCommentaryBufferMs,
-  programCommentarySceneUrl
+  programCommentaryBufferMs
 } from "@/lib/program";
 import { supabaseAdmin } from "@/lib/supabase";
-import { courtStreamPath, courtStreamSources, videoConfigured } from "@/lib/video";
+import { courtProgramStreamPath, courtStreamSources, videoConfigured } from "@/lib/video";
 import { ProgramClient } from "./ProgramClient";
 
 export const dynamic = "force-dynamic";
@@ -46,39 +46,67 @@ export default async function ProgramCourtPage({ params, searchParams }: {
 
   const court = await loadCourt(courtNumber);
   const sources = videoConfigured()
-    ? courtStreamSources(courtStreamPath(courtNumber, court.streamPath))
+    ? courtStreamSources(courtProgramStreamPath(courtNumber, court.programStreamPath))
     : { whepUrl: null, hlsUrl: null };
 
-  const commentaryUrl = scene === "0"
+  const commentary = scene === "0"
     ? null
-    : programCommentarySceneUrl(courtNumber, programCommentaryBufferMs(cbuf));
+    : await createCommentaryConnection({ courtNumber, displayName: "Program mixer", role: "program" }).catch(() => null);
+  const commentaryDelayOverride = programCommentaryBufferMs(cbuf);
 
   return (
     <ProgramClient
       courtNumber={courtNumber}
       token={tokenValue}
       sources={sources}
-      commentaryUrl={commentaryUrl}
+      commentary={commentary}
+      cameraGainDb={court.cameraGainDb}
+      commentaryGainDb={court.commentaryGainDb}
+      commentaryDelayMs={commentaryDelayOverride ?? court.commentaryDelayMs}
       debug={debug === "1"}
       buildVersion={programBuildVersion()}
     />
   );
 }
 
-async function loadCourt(courtNumber: number): Promise<{ streamPath: string | null }> {
+type ProgramCourtConfig = {
+  programStreamPath: string | null;
+  cameraGainDb: number;
+  commentaryGainDb: number;
+  commentaryDelayMs: number;
+};
+
+const EMPTY_PROGRAM_COURT: ProgramCourtConfig = {
+  programStreamPath: null,
+  cameraGainDb: 0,
+  commentaryGainDb: 0,
+  commentaryDelayMs: 0
+};
+
+async function loadCourt(courtNumber: number): Promise<ProgramCourtConfig> {
   const env = getEnv();
-  if (!env.supabaseUrl || !env.supabaseServiceRoleKey) return { streamPath: null };
+  if (!env.supabaseUrl || !env.supabaseServiceRoleKey) return EMPTY_PROGRAM_COURT;
 
   const db = supabaseAdmin();
   const event = await getActiveEvent(db);
-  if (!event) return { streamPath: null };
+  if (!event) return EMPTY_PROGRAM_COURT;
 
   const { data: court } = await db
     .from("courts")
-    .select("stream_path")
+    .select("program_stream_path,camera_audio_gain_db,commentary_gain_db,commentary_delay_ms")
     .eq("event_id", event.id)
     .eq("court_number", courtNumber)
     .maybeSingle();
 
-  return { streamPath: court?.stream_path ?? null };
+  return {
+    programStreamPath: court?.program_stream_path ?? null,
+    cameraGainDb: finiteNumber(court?.camera_audio_gain_db),
+    commentaryGainDb: finiteNumber(court?.commentary_gain_db),
+    commentaryDelayMs: Math.max(0, finiteNumber(court?.commentary_delay_ms))
+  };
+}
+
+function finiteNumber(value: unknown): number {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
 }

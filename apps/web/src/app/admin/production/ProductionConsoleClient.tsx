@@ -59,14 +59,12 @@ export function ProductionConsoleClient({
   courtConfigs,
   controllerConfigured,
   videoConfigured,
-  sceneBufferMs,
   courtCount
 }: {
   initialSnapshot: ProductionSnapshot;
   courtConfigs: CourtClientConfig[];
   controllerConfigured: boolean;
   videoConfigured: boolean;
-  sceneBufferMs: number;
   courtCount: number;
 }) {
   const [snapshot, setSnapshot] = useState<ProductionSnapshot>(initialSnapshot);
@@ -309,7 +307,7 @@ export function ProductionConsoleClient({
                   <div>
                     <h2>{court.displayName}</h2>
                     <p className="production-court-sub">
-                      Stream {court.courtNumber} · <code>{court.streamPath}</code>
+                      Stream {court.courtNumber} · preview <code>{court.previewStreamPath}</code> · program <code>{court.programStreamPath}</code>
                     </p>
                   </div>
                   <div className="production-chips">
@@ -560,8 +558,7 @@ export function ProductionConsoleClient({
           <div className="panel stack">
             <h2>Commentary &amp; sync</h2>
             <p className="muted">
-              Scene links delay commentary audio by <code>buffer={sceneBufferMs}</code> ({sceneBufferMs} ms) on
-              every stream — set <code>VDO_SCENE_BUFFER_MS</code> and clap-test per court.
+              Each court has an isolated LiveKit room, Web Audio gain controls, and a persisted fine-delay trim.
             </p>
             <div className="production-actions">
               <Link className="button" href="/admin/commentary">
@@ -577,12 +574,12 @@ export function ProductionConsoleClient({
                 <dd>Coarse video delay at MediaMTX — sets the overall program delay.</dd>
               </div>
               <div>
-                <dt>Scene <code>&amp;buffer</code></dt>
-                <dd>Fine audio alignment — delays commentary in the VDO.Ninja scene link.</dd>
+                <dt>Commentary delay</dt>
+                <dd>Fine audio alignment in the program scene Web Audio graph.</dd>
               </div>
               <div>
-                <dt>Director micdelay</dt>
-                <dd>Live micro-trim from the director view while on air.</dd>
+                <dt>Commentary gain</dt>
+                <dd>Live level control without changing the commentator connection.</dd>
               </div>
             </dl>
           </div>
@@ -630,7 +627,12 @@ function courtHeartbeatDetail(heartbeat: ConsoleHeartbeat): string | null {
   const parts: string[] = [];
   if (heartbeat.videoState) parts.push(`video ${heartbeat.videoState}`);
   if (heartbeat.framesRendered != null) parts.push(`${heartbeat.framesRendered.toLocaleString()} frames`);
-  if (heartbeat.commentaryLoaded != null) parts.push(heartbeat.commentaryLoaded ? "commentary loaded" : "no commentary");
+  if (heartbeat.commentaryRoomConnected != null) {
+    parts.push(heartbeat.commentaryRoomConnected ? "audio room connected" : "audio room disconnected");
+  }
+  if (heartbeat.commentaryAudioTrackCount != null) parts.push(`${heartbeat.commentaryAudioTrackCount} commentary track(s)`);
+  if (heartbeat.commentaryRmsDb != null) parts.push(`${heartbeat.commentaryRmsDb.toFixed(1)} dB commentary`);
+  if (heartbeat.secondsSinceCommentaryAudio != null) parts.push(`${Math.round(heartbeat.secondsSinceCommentaryAudio)}s since speech`);
   return parts.length ? parts.join(" · ") : null;
 }
 

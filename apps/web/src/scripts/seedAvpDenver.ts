@@ -1,6 +1,6 @@
 import { getEnv } from "../lib/env";
 import { ensureAvpDenverSeeded } from "../lib/eventConfig";
-import { courtStreamPath } from "../lib/video";
+import { courtPreviewStreamPath } from "../lib/video";
 import { loadLocalEnv } from "./envLoader";
 
 async function main() {
@@ -8,7 +8,7 @@ async function main() {
   const env = getEnv();
   const courtStreamPaths: Record<number, string> = {};
   for (let court = 1; court <= env.courtCount; court += 1) {
-    courtStreamPaths[court] = courtStreamPath(court);
+    courtStreamPaths[court] = courtPreviewStreamPath(court);
   }
   const event = await ensureAvpDenverSeeded({ courtStreamPaths });
   console.log(`Seeded ${event.name} (${event.slug ?? event.id})`);

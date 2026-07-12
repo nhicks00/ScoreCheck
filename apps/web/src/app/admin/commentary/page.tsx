@@ -1,15 +1,12 @@
 import { redirect } from "next/navigation";
 import { isAdminRequest } from "@/lib/auth";
 import {
+  commentaryLiveKitConfigured,
   commentaryPortalEnabled,
-  VDO_ROOM_COUNT,
-  vdoDirectorUrl,
-  vdoGuestRelayUrl,
-  vdoGuestUrl,
-  vdoRoomName,
-  vdoSceneBufferMs,
-  vdoSceneUrl
+  COMMENTARY_ROOM_COUNT,
+  commentaryRoomName
 } from "@/lib/commentary";
+import { publicOrigin } from "@/lib/env";
 import { AdminCommentaryClient } from "./AdminCommentaryClient";
 
 export const dynamic = "force-dynamic";
@@ -17,23 +14,20 @@ export const dynamic = "force-dynamic";
 export default async function AdminCommentaryPage() {
   if (!(await isAdminRequest())) redirect(`/admin/login?next=${encodeURIComponent("/admin/commentary")}`);
 
-  const streams = Array.from({ length: VDO_ROOM_COUNT }, (_, index) => {
+  const streams = Array.from({ length: COMMENTARY_ROOM_COUNT }, (_, index) => {
     const streamNumber = index + 1;
     return {
       streamNumber,
-      roomName: vdoRoomName(streamNumber),
-      directorUrl: vdoDirectorUrl(streamNumber),
-      sceneUrl: vdoSceneUrl(streamNumber),
-      guestUrl: vdoGuestUrl(streamNumber),
-      guestRelayUrl: vdoGuestRelayUrl(streamNumber)
+      roomName: commentaryRoomName(streamNumber),
+      commentatorUrl: `${publicOrigin()}/commentary/court/${streamNumber}`
     };
   });
 
   return (
     <AdminCommentaryClient
       streams={streams}
-      bufferMs={vdoSceneBufferMs()}
       portalEnabled={commentaryPortalEnabled()}
+      liveKitConfigured={commentaryLiveKitConfigured()}
     />
   );
 }

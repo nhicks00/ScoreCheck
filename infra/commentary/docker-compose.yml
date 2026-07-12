@@ -1,0 +1,31 @@
+# Generated from LiveKit's production VM template, then pinned to the images
+# validated for ScoreCheck Gate 1. This stack requires Linux host networking.
+name: bvm-commentary
+
+services:
+  caddy:
+    image: livekit/caddyl4:latest@sha256:9dd090159a6042a907dbff0ce9dda27a21d2a559dc7b03b60a8e6b1b60b8348e
+    command: run --config /etc/caddy.yaml --adapter yaml
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./caddy.yaml:/etc/caddy.yaml:ro
+      - ./caddy_data:/data
+
+  livekit:
+    image: livekit/livekit-server:v1.13.3@sha256:483b8b7b5b0654f91f1e8bdc7b46fcd37fd9911612ecf627f97e3185a89825bd
+    command: --config /etc/livekit.yaml
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+    command: redis-server /etc/redis.conf
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./redis.conf:/etc/redis.conf:ro

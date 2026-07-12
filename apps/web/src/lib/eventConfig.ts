@@ -61,7 +61,12 @@ export type CourtRow = {
   last_update_at: string | null;
   scoring_open?: boolean | null;
   backup_requested?: boolean | null;
-  stream_path?: string | null;
+  preview_stream_path: string;
+  program_stream_path: string;
+  program_video_delay_ms?: number | null;
+  camera_audio_gain_db?: number | null;
+  commentary_gain_db?: number | null;
+  commentary_delay_ms?: number | null;
   public_score_url?: string | null;
   vbl_court_number?: string | null;
   vbl_court_label?: string | null;
@@ -311,7 +316,8 @@ export async function ensureAvpDenverSeeded(input: {
       scoring_open: true,
       backup_requested: true,
       public_score_url: `${siteUrl}/score/court/${courtNumber}`,
-      stream_path: input.courtStreamPaths?.[courtNumber] || `court${courtNumber}`,
+      preview_stream_path: input.courtStreamPaths?.[courtNumber] || `court${courtNumber}_preview`,
+      program_stream_path: `court${courtNumber}_program`,
       vbl_court_number: streamCourt?.vblCourtNumber ?? generatedVblCourt.number,
       vbl_court_label: streamCourt?.vblCourtLabel ?? generatedVblCourt.label,
       updated_at: now

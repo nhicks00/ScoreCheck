@@ -1,138 +1,103 @@
-# Remote Commentary Workflow
+# ScoreCheck Commentary Workflow
 
-How remote commentators call matches without being at the venue, using the MediaMTX
-WHEP feed for a sub-second program view, VDO.Ninja for voice, and StreamRun to mix
-commentary back over the program feed.
+ScoreCheck commentary uses self-hosted LiveKit audio. VDO.Ninja and StreamRun
+are not part of this path.
 
-## Architecture
+## Signal flow
 
 ```text
-Venue camera ──RTMP/SRT──> MediaMTX droplet ──WHEP (~0.5s)──> Commentator browser
-                                                                    │ (watches + talks)
-                                                                    ▼
-                                                             VDO.Ninja room
-                                                                    │ (browser-source /
-                                                                    ▼  return feed)
-Venue camera ──────────────────────────> StreamRun ── mixes commentary audio over
-                                             │        the program feed
-                                             ▼
-                                YouTube / broadcast destinations
+Mevo -> courtN_raw -> MediaMTX courtN_preview -> commentator browser
+                    -> MediaMTX courtN_program -> program page video/ambient
+
+Commentator microphone -> LiveKit court room -> program page Web Audio mixer
+
+Program page = delayed video + ambient gain + commentary gain/delay/compression
+             + scorebug + health meters
+             -> LiveKit Web Egress -> YouTube RTMPS
 ```
 
-Key idea: commentators never watch the YouTube output (10-30 s behind). They watch
-the same MediaMTX WHEP feed the scorers use, which is sub-second, so their audio
-lines up with the live action when StreamRun mixes it in.
+## Commentator steps
 
-## Commentator Portal (recommended flow)
+1. Open `https://score.beachvolleyballmedia.com/commentary`.
+2. Enter the event commentary passcode.
+3. Open the assigned court.
+4. Enter a display name and select **Join live audio**.
+5. Allow microphone access and use headphones.
+6. Confirm the microphone meter moves while speaking.
+7. Leave the tab open for the entire match.
 
-The portal at `/commentary` wraps the whole commentator workflow behind one
-passcode — no admin access, no hand-built links:
+Remote co-commentators in the same court room hear one another. A commentator
+never subscribes to their own microphone, so headphones prevent the court feed
+or another participant from feeding back into the microphone.
 
-1. The producer shares the site URL and the commentator passcode
-   (`COMMENTATOR_PASSCODE`).
-2. The commentator opens `/commentary`, enters the passcode once (24h cookie),
-   and lands on the court dashboard: every court with its current match, score
-   snapshot, and stream number.
-3. They pick their court → `/commentary/court/{n}`, which gives them everything
-   on one screen:
-   - the low-latency MediaMTX feed (WHEP first, HLS fallback) — confirm the
-     status chip reads `Live — low latency`;
-   - the fan scorer session, claimed inline with one tap (they score the match
-     they are calling, in `courtside` mode so no duplicate video loads);
-   - the VDO.Ninja audio room for that court (`{VDO_ROOM_PREFIX}{n}`, e.g.
-     `BVMCOURT3`) embedded in the right rail, with "Open in new tab" and copy
-     buttons if the embed cannot reach the microphone.
-4. Headphones always — no open speakers. Keep the program audio muted in the
-   player and rely on VDO.Ninja monitoring to avoid echo.
+## Program mixer
 
-Setting the portal up requires four env vars on the web app (see
-`apps/web/.env.example`):
+The program page joins the same room as a subscribe-only participant. Its Web
+Audio graph is:
 
-| Env var | Meaning | Default |
-| --- | --- | --- |
-| `COMMENTATOR_PASSCODE` | Shared passcode for `/commentary`. Blank = portal disabled. | unset |
-| `VDO_ROOM_PREFIX` | VDO.Ninja room name prefix per stream. | `BVMCOURT` |
-| `VDO_ROOM_PASSWORD` | Room password baked into every link (alphanumeric only). | `bvm2026` |
-| `VDO_SCENE_BUFFER_MS` | Commentary audio delay in the StreamRun scene link (0-4000). | `2000` |
+```text
+camera MediaStream -> camera gain -> camera meter -> browser output
+LiveKit tracks -> delay -> commentary gain -> compressor -> meter -> output
+```
 
-## Producer Setup (per court)
+The mixer reports these values every five seconds:
 
-All links below are generated on `/admin/commentary` (admin login) with copy
-buttons per stream — director console, StreamRun scene URL, and guest links.
+- LiveKit room connection state.
+- Remote participant and audio-track counts.
+- Commentary RMS and peak dB.
+- Seconds since commentary crossed the speech threshold.
+- Camera/ambient RMS dB.
 
-1. Open the Director link for the court and keep it open — it uses
-   `?director&room={prefix}{n}&...&rooms={prefix}1,...,{prefix}8` so you can hop
-   between all eight rooms from one console.
-2. Bring the room's audio into StreamRun: paste the Scene URL
-   (`?scene&room={prefix}{n}&...&novideo&audiobitrate=80&buffer={ms}&retry`)
-   into a StreamRun HTML/browser-source element. The `buffer` value delays the
-   commentary audio to align with the delayed program video — tune it via
-   `VDO_SCENE_BUFFER_MS` and clap-test per court.
-3. In the StreamRun editor, mix that commentary audio element over the program
-   (camera) feed on the YouTube output branch. Keep the MediaMTX preview output
-   branch clean (camera only) so scorers and commentators see an undelayed,
-   commentary-free feed.
-4. Send the commentators the site URL and the portal passcode. For a talent on
-   flaky wifi, send the "bad wifi" guest link variant (`&relay`) from
-   `/admin/commentary` instead — it forces TURN relay routing.
+An empty room does not prevent a broadcast from starting. A room that is
+connected but has no audio track is visible as a production warning.
 
-## Latency Budget
+## Configuration
 
-| Hop | Typical latency |
-| --- | --- |
-| Venue camera/encoder -> MediaMTX (RTMP/SRT ingest) | 0.5 - 1.0 s |
-| MediaMTX -> commentator browser (WHEP) | 0.3 - 0.5 s |
-| Commentator voice -> VDO.Ninja -> StreamRun | 0.3 - 0.5 s |
-| StreamRun mix -> platform ingest | 1 - 2 s |
-| YouTube delivery to viewers (ultra-low-latency mode) | 3 - 10 s |
+Required Vercel variables:
 
-What matters for sync is only the first three rows: the commentator reacts about
-1 - 2 s after the real play, and their voice arrives at StreamRun roughly when the
-matching program video frames do, because the program feed reaching StreamRun and
-the WHEP feed the commentator watched share the same upstream. Viewers then see
-video+voice together, delayed as a unit by the platform.
+```text
+NEXT_PUBLIC_LIVEKIT_COMMENTARY_URL=wss://rtc.beachvolleyballmedia.com
+LIVEKIT_COMMENTARY_API_KEY=<secret>
+LIVEKIT_COMMENTARY_API_SECRET=<secret>
+COMMENTATOR_PASSCODE=<secret>
+PROGRAM_PAGE_TOKEN=<secret>
+```
 
-## Sync Tips
+Optional variables:
 
-- Measure the true offset once per court: have the commentator clap on a visible
-  rally end, then compare against the StreamRun preview. If commentary consistently
-  leads the program video, raise the scene link's `buffer` value (via
-  `VDO_SCENE_BUFFER_MS`, or per-element in StreamRun) rather than delaying video.
-- Keep commentators on WHEP. If a commentator's network forces the player onto HLS,
-  their calls will trail the action by several seconds — fix their network or have
-  them rejoin, do not compensate in the mix.
-- One commentary room per court. Cross-court rooms make delay compensation
-  impossible because each court's encoder chain differs slightly.
-- Commentators should mute the program audio in the player (default) and rely on
-  their own voice monitoring in VDO.Ninja to avoid echo and doubled crowd noise.
-- VDO.Ninja quality flags worth using: `&stereo=0&autogain=0&denoise=1` for speech,
-  and `&novideo` for audio-only participants to save bandwidth.
-- If YouTube chat interaction matters to the talent, give them a second (muted)
-  browser tab with the YouTube stream for chat only — never for watching the game.
+```text
+LIVEKIT_COMMENTARY_ROOM_PREFIX=scorecheck-court-
+```
 
-## Program Pages (compositor scenes)
+Infrastructure is versioned in `infra/commentary`. Secrets are rendered only
+into gitignored local files and `/opt/livekit/livekit.yaml` on the commentary
+node.
 
-`/program/court/{n}?token={PROGRAM_PAGE_TOKEN}` is the self-hosted replacement
-for the StreamRun mix (see `docs/PRODUCTION_PLATFORM_PLAN.md` §3.1): one page
-per court renders the court video (WHEP/HLS via `StreamPlayer`), the exact
-broadcast scorebug (`OverlayClient`, hosted on a 1920x1080 virtual canvas so
-placement matches the StreamRun overlay), and the court's VDO.Ninja scene as a
-hidden audio iframe. A headless-Chrome LiveKit egress captures the page and
-pushes it to YouTube.
+## Sync calibration
 
-- **Gate**: `PROGRAM_PAGE_TOKEN` env; wrong/missing token is a plain 404. The
-  same token authenticates the page's 5s heartbeat POSTs to
-  `/api/program/heartbeat` (upserted into `program_heartbeats`, one row per
-  court — the console alarms on stale `last_seen_at`).
-- **Commentary sync**: unlike the StreamRun scene link, the embedded scene has
-  **no `&buffer` by default** — the egress path gets its own alignment. Trim
-  with `?cbuf={0..4000}` (ms, appended as `&buffer`); disable commentary
-  entirely with `?scene=0`.
-- **Egress signals**: the page logs `START_RECORDING` once video frames are
-  flowing and commentary has loaded (or 10s passed, or `scene=0`), and
-  `END_RECORDING` only in the unrecoverable no-sources state — wire the egress
-  with `await_start_signal`.
-- **Self-healing**: frame progress stalled >5s remounts the player; three
-  fruitless remounts reload the page, indefinitely — a court feed returning
-  mid-event recovers on its own. `?debug=1` shows a diagnostics strip
-  (video state, frames, reconnects, reloads, commentary, heartbeat).
+`courts.program_video_delay_ms` records the coarse program-video target. The
+MediaMTX Gate 1 deployment currently renders that target as a 3500 ms SRT
+receiver buffer. `courts.commentary_delay_ms` is a 0-10000 ms fine adjustment
+inside the browser audio graph.
+
+Calibrate with a real clap in frame:
+
+1. Keep `commentary_delay_ms` at zero.
+2. Record a local Mevo clap and a remote commentator repeating the clap.
+3. Inspect the unlisted YouTube archive at the beginning, middle, and end.
+4. Change only the fine commentary delay unless the camera-to-cloud baseline
+   changes materially.
+
+Never switch the program page to HLS to fix sync. Program mode is WHEP-only so
+its latency class cannot change silently.
+
+## Failure behavior
+
+- LiveKit initial connection failures retry with exponential backoff.
+- Established rooms use LiveKit reconnect handling.
+- Camera loss leaves the scorebug and commentary alive over a controlled slate.
+- The program remains on `courtN_program`; it never falls back to HLS.
+- Audio-health failures are reported through program heartbeats.
+
+The production gate is not complete until a real remote voice remains audible
+and in sync throughout the ten-hour one-court soak.

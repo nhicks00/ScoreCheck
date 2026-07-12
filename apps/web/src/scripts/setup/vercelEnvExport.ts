@@ -25,6 +25,12 @@ const vercelLines = [
 pushIfPresent(vercelLines, "MEDIAMTX_READ_USER", env.mediamtxReadUser);
 pushIfPresent(vercelLines, "MEDIAMTX_READ_PASS", env.mediamtxReadPass);
 pushIfPresent(vercelLines, "MEDIAMTX_RTMP_INGEST_BASE", env.mediamtxRtmpIngestBase);
+pushIfPresent(vercelLines, "NEXT_PUBLIC_LIVEKIT_COMMENTARY_URL", process.env.NEXT_PUBLIC_LIVEKIT_COMMENTARY_URL ?? "");
+pushIfPresent(vercelLines, "LIVEKIT_COMMENTARY_API_KEY", process.env.LIVEKIT_COMMENTARY_API_KEY ?? "");
+pushIfPresent(vercelLines, "LIVEKIT_COMMENTARY_API_SECRET", process.env.LIVEKIT_COMMENTARY_API_SECRET ?? "");
+pushIfPresent(vercelLines, "LIVEKIT_COMMENTARY_ROOM_PREFIX", process.env.LIVEKIT_COMMENTARY_ROOM_PREFIX ?? "");
+pushIfPresent(vercelLines, "COMMENTATOR_PASSCODE", process.env.COMMENTATOR_PASSCODE ?? "");
+pushIfPresent(vercelLines, "PROGRAM_PAGE_TOKEN", process.env.PROGRAM_PAGE_TOKEN ?? "");
 
 const workerLines = [
   ["NODE_ENV", "production"],
@@ -38,7 +44,8 @@ const workerLines = [
 ];
 
 for (let court = 1; court <= env.courtCount; court += 1) {
-  pushIfPresent(vercelLines, `COURT_${court}_STREAM_PATH`, process.env[`COURT_${court}_STREAM_PATH`] ?? "");
+  pushIfPresent(vercelLines, `COURT_${court}_PREVIEW_STREAM_PATH`, process.env[`COURT_${court}_PREVIEW_STREAM_PATH`] ?? "");
+  pushIfPresent(vercelLines, `COURT_${court}_PROGRAM_STREAM_PATH`, process.env[`COURT_${court}_PROGRAM_STREAM_PATH`] ?? "");
 }
 
 fs.writeFileSync(path.join(outputDir, "vercel-env.generated.env"), serializeEnv(vercelLines));

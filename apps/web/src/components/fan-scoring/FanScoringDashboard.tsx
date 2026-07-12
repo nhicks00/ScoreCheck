@@ -11,7 +11,8 @@ type Court = {
   display_name: string;
   scoring_open?: boolean | null;
   backup_requested?: boolean | null;
-  stream_path?: string | null;
+  preview_stream_path?: string | null;
+  program_stream_path?: string | null;
   vbl_court_number?: string | null;
   vbl_court_label?: string | null;
   matches?: Match | Match[] | null;
@@ -115,7 +116,8 @@ export function FanScoringDashboard({
     eventSubmit.preventDefault();
     const form = new FormData(eventSubmit.currentTarget);
     void updateCourt(courtId, {
-      streamPath: form.get("streamPath"),
+      previewStreamPath: form.get("previewStreamPath"),
+      programStreamPath: form.get("programStreamPath"),
       vblCourtNumber: form.get("vblCourtNumber"),
       vblCourtLabel: form.get("vblCourtLabel")
     });
@@ -248,7 +250,8 @@ export function FanScoringDashboard({
               <details className="metadata-panel">
                 <summary><Edit3 size={16} /> Edit stream / VBL metadata</summary>
                 <form className="metadata-form" onSubmit={(eventSubmit) => saveMetadata(eventSubmit, court.id)}>
-                  <label>Stream path<input name="streamPath" defaultValue={court.stream_path ?? ""} placeholder={`court${court.court_number}`} /></label>
+                  <label>Preview path<input name="previewStreamPath" defaultValue={court.preview_stream_path ?? ""} placeholder={`court${court.court_number}_preview`} required /></label>
+                  <label>Program path<input name="programStreamPath" defaultValue={court.program_stream_path ?? ""} placeholder={`court${court.court_number}_program`} required /></label>
                   <label>VBL court number<input name="vblCourtNumber" defaultValue={court.vbl_court_number ?? ""} placeholder="7" /></label>
                   <label>VBL court label<input name="vblCourtLabel" defaultValue={court.vbl_court_label ?? ""} placeholder="Court 7" /></label>
                   <button className="primary" type="submit" disabled={busy != null}>Save metadata</button>

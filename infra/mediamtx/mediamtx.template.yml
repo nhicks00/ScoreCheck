@@ -1,0 +1,122 @@
+# ScoreCheck MediaMTX ingest and branch configuration.
+#
+# Permanent encoder identities publish to courtN_raw. MediaMTX creates a clean,
+# undelayed WebRTC preview and a clean program branch delayed at the SRT packet
+# receiver. The delayed branch is stream-copy only, so it does not add a second
+# H.264 encoder to the ingest node.
+
+logLevel: info
+
+api: yes
+apiAddress: 127.0.0.1:9997
+metrics: yes
+metricsAddress: 127.0.0.1:9998
+
+rtsp: yes
+rtspAddress: 127.0.0.1:8554
+rtspTransports: [tcp]
+
+rtmp: yes
+rtmpAddress: :1935
+
+srt: yes
+srtAddress: :8890
+
+hls: no
+
+# ScoreCheck does not use Media-over-QUIC. Keep the unused public listeners
+# closed instead of inheriting new server defaults on upgrade.
+moq: no
+
+webrtc: yes
+webrtcAddress: :8889
+webrtcLocalUDPAddress: :8189
+webrtcAdditionalHosts: [__PUBLIC_IP__, __PUBLIC_HOST__]
+webrtcIPsFromInterfaces: no
+
+authInternalUsers:
+  # The browser-facing preview/program outputs are intentionally public during
+  # Gate 1. Raw camera paths are not readable from outside the server.
+  - user: any
+    permissions:
+      - action: read
+        path: "~^court[1-8]_(preview|program|calibration)$"
+      - action: playback
+        path: "~^court[1-8]_(preview|program|calibration)$"
+
+  # Venue encoders may publish only to permanent raw court identities.
+  - user: streamrun
+    pass: __PUBLISH_PASSWORD__
+    permissions:
+      - action: publish
+        path: "~^court[1-8]_raw$"
+
+  # Internal branch processes and health probes never leave loopback.
+  - user: any
+    ips: ['127.0.0.1', '::1']
+    permissions:
+      - action: publish
+      - action: read
+      - action: playback
+      - action: api
+      - action: metrics
+
+pathDefaults:
+  overridePublisher: true
+
+paths:
+  # Mevo/venue encoders publish H.264 + AAC here.
+  "~^court([1-8])_raw$":
+    source: publisher
+
+  # Low-latency normalized H.264 + Opus for commentators, scorers, and producer
+  # previews. It starts only when preview or program has a reader.
+  "~^court([1-8])_preview$":
+    runOnDemand: >
+      ffmpeg -nostdin -hide_banner -loglevel warning
+      -fflags nobuffer -flags low_delay -rtsp_transport tcp
+      -i "rtsp://127.0.0.1:${RTSP_PORT}/court${G1}_raw"
+      -map 0:v:0 -map 0:a:0?
+      -c:v libx264 -preset ultrafast -tune zerolatency -profile:v main
+      -pix_fmt yuv420p -vf "scale=-2:720" -g 60 -keyint_min 60 -sc_threshold 0
+      -b:v 2500k -maxrate 2750k -bufsize 5000k
+      -c:a libopus -b:a 96k -ar 48000 -ac 2
+      -f rtsp -rtsp_transport tcp "rtsp://127.0.0.1:${RTSP_PORT}/${MTX_PATH}"
+    runOnDemandRestart: yes
+    runOnDemandStartTimeout: 20s
+    runOnDemandCloseAfter: 90s
+
+  # Program-only path. SRT receiver latency deliberately holds both video and
+  # ambient audio for the configured coarse delay, then stream-copies the
+  # normalized codecs into a distinct WHEP path. Commentary gets fine delay in
+  # the program page's Web Audio graph.
+  "~^court([1-8])_program$":
+    runOnDemand: >
+      ffmpeg -nostdin -hide_banner -loglevel warning
+      -i "srt://127.0.0.1:8890?streamid=read:court${G1}_preview&latency=__PROGRAM_DELAY_US__"
+      -map 0:v:0 -map 0:a:0? -c copy
+      -f rtsp -rtsp_transport tcp "rtsp://127.0.0.1:${RTSP_PORT}/${MTX_PATH}"
+    runOnDemandRestart: yes
+    runOnDemandStartTimeout: 25s
+    runOnDemandCloseAfter: 90s
+
+  # Gate calibration only. This path adds UTC timecode without contaminating
+  # either the commentator preview or the clean program feed.
+  "~^court([1-8])_calibration$":
+    runOnDemand: >
+      ffmpeg -nostdin -hide_banner -loglevel warning
+      -fflags nobuffer -flags low_delay -rtsp_transport tcp
+      -i "rtsp://127.0.0.1:${RTSP_PORT}/court${G1}_preview"
+      -map 0:v:0 -map 0:a:0?
+      -c:v libx264 -preset ultrafast -tune zerolatency -profile:v main
+      -pix_fmt yuv420p
+      -vf "drawtext=fontfile=/fonts/DejaVuSansMono-Bold.ttf:text='%{gmtime\:%Y-%m-%d %H\\\:%M\\\:%S} UTC':fontsize=24:fontcolor=white:box=1:boxcolor=black@0.65:boxborderw=8:x=w-tw-16:y=h-th-16"
+      -g 60 -keyint_min 60 -sc_threshold 0
+      -b:v 2500k -maxrate 2750k -bufsize 5000k
+      -c:a copy
+      -f rtsp -rtsp_transport tcp "rtsp://127.0.0.1:${RTSP_PORT}/${MTX_PATH}"
+    runOnDemandRestart: yes
+    runOnDemandStartTimeout: 20s
+    runOnDemandCloseAfter: 30s
+
+  all_others:

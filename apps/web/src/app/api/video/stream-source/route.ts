@@ -3,7 +3,7 @@ import { z } from "zod";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { hashToken, requestIpHash } from "@/lib/security";
 import { supabaseAdmin } from "@/lib/supabase";
-import { courtStreamPath, courtStreamSources, videoConfigured } from "@/lib/video";
+import { courtPreviewStreamPath, courtStreamSources, videoConfigured } from "@/lib/video";
 
 export const runtime = "nodejs";
 
@@ -39,8 +39,8 @@ export async function POST(req: NextRequest) {
   if (!court || court.court_number !== parsed.data.courtNumber) {
     return NextResponse.json({ error: "Scorer session does not match this court." }, { status: 403 });
   }
-  const streamPath = courtStreamPath(parsed.data.courtNumber, court.stream_path);
-  const sources = courtStreamSources(streamPath);
+  const previewStreamPath = courtPreviewStreamPath(parsed.data.courtNumber, court.preview_stream_path);
+  const sources = courtStreamSources(previewStreamPath);
   if (!sources.whepUrl && !sources.hlsUrl) {
     return NextResponse.json({ error: "Preview video is not available yet." }, { status: 503 });
   }
@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
     match_id: session.match_id,
     session_id: session.id,
     type: "video_source_issued",
-    payload: { courtNumber: parsed.data.courtNumber, streamPath }
+    payload: { courtNumber: parsed.data.courtNumber, previewStreamPath }
   });
   return NextResponse.json(sources);
 }

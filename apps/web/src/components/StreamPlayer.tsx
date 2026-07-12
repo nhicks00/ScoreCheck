@@ -12,6 +12,10 @@ type StreamPlayerProps = {
   sources?: { whepUrl: string | null; hlsUrl: string | null };
   /** Hides all player chrome (status chip, buttons, error fallback, native controls) for capture surfaces like /program. */
   chromeless?: boolean;
+  /** Program capture must never change latency classes by falling back to HLS. */
+  mode?: "preview" | "program";
+  /** Gives the program mixer access to the camera media element. */
+  onVideoElement?: (element: HTMLVideoElement | null) => void;
 };
 
 type StreamSources = {
@@ -30,18 +34,31 @@ const WHEP_FAILURES_BEFORE_HLS = 3;
 const MAX_RETRY_DELAY_MS = 15_000;
 const OFFLINE_MESSAGE = "Stream offline — retrying";
 
-export function StreamPlayer({ courtNumber, sessionToken, enabled = true, sources: providedSources, chromeless = false }: StreamPlayerProps) {
+export function StreamPlayer({
+  courtNumber,
+  sessionToken,
+  enabled = true,
+  sources: providedSources,
+  chromeless = false,
+  mode = "preview",
+  onVideoElement
+}: StreamPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [sources, setSources] = useState<StreamSources | null>(null);
   const [loadRevision, setLoadRevision] = useState(0);
   const [status, setStatus] = useState("Loading stream...");
   const [error, setError] = useState<string | null>(null);
-  const [muted, setMuted] = useState(true);
+  const [muted, setMuted] = useState(mode !== "program");
   // Depend on the primitive URLs so a parent re-render with an identical
   // sources object never tears down a healthy connection.
   const hasProvidedSources = providedSources != null;
   const providedWhepUrl = providedSources?.whepUrl ?? null;
   const providedHlsUrl = providedSources?.hlsUrl ?? null;
+
+  useEffect(() => {
+    onVideoElement?.(videoRef.current);
+    return () => onVideoElement?.(null);
+  }, [onVideoElement]);
 
   const loadSources = useCallback(async () => {
     if (!enabled) return;
@@ -119,7 +136,7 @@ export function StreamPlayer({ courtNumber, sessionToken, enabled = true, source
       teardownPlayback();
       whepFailures += 1;
       setStatus(offline ? OFFLINE_MESSAGE : "Reconnecting stream...");
-      if (whepFailures >= WHEP_FAILURES_BEFORE_HLS && sources?.hlsUrl) {
+      if (mode === "preview" && whepFailures >= WHEP_FAILURES_BEFORE_HLS && sources?.hlsUrl) {
         scheduleRetry(() => void startHls(), 0);
         return;
       }
@@ -234,7 +251,8 @@ export function StreamPlayer({ courtNumber, sessionToken, enabled = true, source
         await startWhep();
         return;
       }
-      await startHls();
+      if (mode === "preview") await startHls();
+      else failWhep(true);
     }
 
     void start();
@@ -245,7 +263,7 @@ export function StreamPlayer({ courtNumber, sessionToken, enabled = true, source
       video.removeEventListener("playing", onPlaying);
       teardownPlayback();
     };
-  }, [enabled, loadRevision, sources]);
+  }, [enabled, loadRevision, mode, sources]);
 
   if (!enabled) return null;
 

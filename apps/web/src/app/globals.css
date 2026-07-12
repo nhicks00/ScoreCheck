@@ -3611,7 +3611,7 @@ label.score-field {
   letter-spacing: 0.02em;
 }
 
-/* -- Court workspace: main column + VDO.Ninja rail ------------------------- */
+/* -- Court workspace: main column + LiveKit audio rail --------------------- */
 
 .commentary-court-layout {
   align-items: start;
@@ -3681,15 +3681,6 @@ label.score-field {
   margin: 0;
 }
 
-.commentary-audio-frame {
-  background: var(--bg-deep);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  display: block;
-  height: 440px;
-  width: 100%;
-}
-
 .commentary-audio-actions {
   display: flex;
   flex-wrap: wrap;
@@ -3739,9 +3730,6 @@ label.score-field {
     max-width: none;
   }
 
-  .commentary-audio-frame {
-    height: 380px;
-  }
 }
 
 /* ---------------------------------------------------------------------------
@@ -3805,6 +3793,61 @@ body:has(.program-root) {
   width: 100%;
 }
 
+.program-signal-slate {
+  align-items: center;
+  background: #07090d;
+  color: #f7f8fa;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  inset: 0;
+  justify-content: center;
+  position: absolute;
+  z-index: 20;
+}
+
+.program-signal-slate span {
+  color: #ff695e;
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 800;
+}
+
+.program-signal-slate strong {
+  font-family: var(--font-display);
+  font-size: 34px;
+  font-weight: 700;
+}
+
+.program-signal-slate small {
+  color: #b8bec9;
+  font-family: var(--font-ui);
+  font-size: 18px;
+}
+
+.commentary-live-meter {
+  background: #202631;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  height: 14px;
+  overflow: hidden;
+  width: 100%;
+}
+
+.commentary-live-meter span {
+  background: #48d6bc;
+  display: block;
+  height: 100%;
+  transition: width 80ms linear;
+}
+
+.commentary-audio-meta {
+  color: var(--muted);
+  display: flex;
+  font-size: 13px;
+  justify-content: space-between;
+}
+
 /* The scorebug is designed against a 1920x1080 canvas (its StreamRun browser
    source today), so give OverlayClient that exact virtual canvas and scale it
    into the 720p stage: 720/1080 = 2/3. OverlayClient's own position: fixed
@@ -3820,20 +3863,6 @@ body:has(.program-root) {
   transform-origin: top left;
   width: 1920px;
   z-index: 30;
-}
-
-/* Keep commentary audio alive: 1px and transparent, never display:none
-   (which lets browsers suspend the iframe's media pipeline). */
-.program-commentary-frame {
-  border: 0;
-  height: 1px;
-  left: 0;
-  opacity: 0;
-  pointer-events: none;
-  position: absolute;
-  top: 0;
-  width: 1px;
-  z-index: 1;
 }
 
 /* ?debug=1 diagnostics strip; pinned to the real viewport, outside the
