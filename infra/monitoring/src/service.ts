@@ -556,7 +556,9 @@ if (incidentStore) {
   const checkpointTimer = setInterval(() => void checkpoint(), 60_000);
   checkpointTimer.unref();
 }
-void reconcileAlertmanager();
+// Compose starts Alertmanager only after this service is healthy. The first
+// interval therefore doubles as startup grace instead of logging an expected
+// dependency race on every deployment.
 const alertmanagerReconcileTimer = setInterval(() => void reconcileAlertmanager(), 30_000);
 alertmanagerReconcileTimer.unref();
 void maintainNotifications();
