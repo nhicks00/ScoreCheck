@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import FrozenInstanceError, fields, replace
 import hashlib
 import json
 import math
@@ -14,6 +14,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 import vision_scoring.ball_metrics as ball_metrics_module
 import vision_scoring.immutable_store as immutable_store_module
+import vision_scoring.domain_events as domain_events_module
 from vision_scoring.annotation_trust import (
     AnnotationAttestation,
     AnnotationAttestationRole,
@@ -27,9 +28,14 @@ from vision_scoring.annotation_trust import (
     annotation_attestation_signing_message,
 )
 from vision_scoring.annotations import (
+    AnnotationType,
     AutorotationPolicy,
-    BallFrameAnnotation,
-    BallState,
+    BallAppearance,
+    BallFrameAnnotationV2,
+    BallPlayState,
+    BallRole,
+    BallVisibility,
+    CaptureUnavailabilityReason,
     DecodedColorRange,
     DecodedColorSpace,
     DecodedFrameIdentity,
@@ -38,17 +44,31 @@ from vision_scoring.annotations import (
     FrameDecodeContract,
     FrameDuplicateKind,
     FrameReference,
+    PixelRegion,
     PixelCoordinateSpace,
     PixelPoint,
     ReviewState,
+    SearchRegionObservabilityAttestation,
+    SearchRegionScope,
+    SearchRegionVisibility,
     TimestampBasis,
+    UnavailableFrameReference,
 )
 from vision_scoring.ball_metrics import (
     BallPrediction,
+    BenchmarkTrustScope,
     ConfidenceRankingPoint,
     TruthPolicy,
+    UnitBallEvaluationManifest,
+    UnitEvaluationCoverageProof,
+    UnitEvaluationSplitProof,
     ball_localization_evaluator_artifact_sha256,
     evaluate_ball_localization as _evaluate_ball_localization,
+)
+from vision_scoring.dataset_split import (
+    DatasetSplit,
+    SourceSplitRecord,
+    SplitManifest,
 )
 from vision_scoring.immutable_store import (
     GenerationDescriptor,
@@ -58,6 +78,7 @@ from vision_scoring.immutable_store import (
 
 
 SHA = "a" * 64
+ONTOLOGY_SHA256 = "b" * 64
 REVIEW_EVIDENCE_BYTES = b"ball metric review evidence\n"
 ADJUDICATION_EVIDENCE_BYTES = b"ball metric adjudication evidence\n"
 CAPTURE_ATTESTATION_BYTES = b"ball metric capture integrity evidence\n"
@@ -74,7 +95,6 @@ CAPTURE_ATTESTATION = "sha256:" + CAPTURE_ATTESTATION_SHA256
 REVIEW_PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(b"\x41" * 32)
 ADJUDICATION_PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(b"\x42" * 32)
 UNUSED_PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(b"\x43" * 32)
-EVALUATION_MANIFEST_SHA256 = "9" * 64
 DEFAULT_NORMALIZED_TOLERANCE = 5.0 / 12.0
 
 
@@ -146,10 +166,55 @@ def _frame(
     )
 
 
+def _unavailable_frame(
+    index: int,
+    *,
+    source_sha256: str = SHA,
+    selected_video_stream_index: int = 0,
+) -> UnavailableFrameReference:
+    return UnavailableFrameReference(
+        source_sha256=source_sha256,
+        selected_video_stream_index=selected_video_stream_index,
+        frame_index=index,
+        expected_interval_start_ns=index * 16_666_667,
+        expected_interval_end_ns=(index + 1) * 16_666_667,
+        timestamp_basis=TimestampBasis.SOURCE_PRESENTATION_OFFSET_NS,
+        capture_segment_ref=CAPTURE_ATTESTATION,
+        unavailability_reason=CaptureUnavailabilityReason.PRESENTATION_GAP,
+        capture_integrity_attestation_refs=(CAPTURE_ATTESTATION,),
+        gap_evidence_refs=(REVIEW_EVIDENCE,),
+    )
+
+
+def _search_attestation(
+    frame: FrameReference,
+    *,
+    reviewer_ids: tuple[str, ...],
+    review_evidence_refs: tuple[str, ...],
+) -> SearchRegionObservabilityAttestation:
+    return SearchRegionObservabilityAttestation(
+        source_sha256=frame.source_sha256,
+        selected_video_stream_index=frame.selected_video_stream_index,
+        frame_index=frame.frame_index,
+        decoded_frame_sha256=frame.decoded_frame_sha256,
+        frame_identity_sha256=frame.identity.fingerprint(),
+        target_role=BallRole.MATCH_BALL,
+        region_scope=SearchRegionScope.FULL_DECODED_FRAME,
+        searched_region=PixelRegion(0, 0, frame.width - 1, frame.height - 1),
+        region_visibility=SearchRegionVisibility.FULLY_OBSERVABLE,
+        capture_integrity_attestation_refs=(CAPTURE_ATTESTATION,),
+        reviewer_ids=reviewer_ids,
+        review_evidence_refs=review_evidence_refs,
+    )
+
+
 def _truth(
     index: int,
     *,
-    state: BallState = BallState.VISIBLE,
+    visibility: BallVisibility = BallVisibility.VISIBLE,
+    appearance: BallAppearance | None = None,
+    role: BallRole | None = None,
+    play_state: BallPlayState | None = None,
     center: PixelPoint | None = None,
     decoded_frame_sha256: str | None = None,
     duplicate_kind: FrameDuplicateKind = FrameDuplicateKind.NONE,
@@ -166,12 +231,34 @@ def _truth(
     uncertainty_radius_px: float | None = None,
     ambiguity_reason: str | None = None,
     track_segment_id: str | None = "track-1",
-) -> BallFrameAnnotation:
-    if center is None and state in {BallState.VISIBLE, BallState.BLUR}:
+    ball_instance_id: str = "match-ball",
+) -> BallFrameAnnotationV2:
+    localizable = visibility in {
+        BallVisibility.VISIBLE,
+        BallVisibility.PARTIALLY_OCCLUDED,
+    }
+    selected_appearance = appearance or (
+        BallAppearance.SHARP if localizable else BallAppearance.NOT_OBSERVABLE
+    )
+    selected_role = role or (
+        BallRole.MATCH_BALL
+    )
+    selected_play_state = play_state or (
+        BallPlayState.NOT_APPLICABLE
+        if visibility is BallVisibility.NOT_PRESENT
+        else BallPlayState.IN_PLAY
+    )
+    if center is None and localizable:
         center = PixelPoint(100 + index, 200 + index)
-    values: dict[str, object] = {
-        "annotation_id": annotation_id or f"truth-{source_sha256[:4]}-{index}",
-        "frame": _frame(
+    selected_frame: FrameReference | UnavailableFrameReference
+    if visibility is BallVisibility.CAPTURE_UNKNOWN:
+        selected_frame = _unavailable_frame(
+            index,
+            source_sha256=source_sha256,
+            selected_video_stream_index=selected_video_stream_index,
+        )
+    else:
+        selected_frame = _frame(
             index,
             source_sha256=source_sha256,
             selected_video_stream_index=selected_video_stream_index,
@@ -182,19 +269,36 @@ def _truth(
             width=width,
             height=height,
             decode_contract=decode_contract,
-        ),
-        "state": state,
+        )
+    values: dict[str, object] = {
+        "annotation_id": annotation_id or f"truth-{source_sha256[:4]}-{index}",
+        "ontology_sha256": ONTOLOGY_SHA256,
+        "ball_instance_id": ball_instance_id,
+        "frame": selected_frame,
+        "visibility": visibility,
+        "appearance": selected_appearance,
+        "role": selected_role,
+        "play_state": selected_play_state,
         "center": center,
         "uncertainty_radius_px": uncertainty_radius_px,
         "ambiguity_reason": ambiguity_reason,
-        "track_segment_id": None if state is BallState.ABSENT else track_segment_id,
+        "track_segment_id": (
+            None
+            if visibility
+            in {
+                BallVisibility.NOT_PRESENT,
+                BallVisibility.INDISTINGUISHABLE,
+                BallVisibility.CAPTURE_UNKNOWN,
+            }
+            else track_segment_id
+        ),
         "review_state": review_state,
     }
-    if state in {BallState.VISIBLE, BallState.BLUR}:
+    if localizable:
         values["apparent_minor_axis_diameter_px"] = (
             apparent_minor_axis_diameter_px
         )
-    if state is BallState.BLUR:
+    if selected_appearance is BallAppearance.MOTION_BLURRED:
         assert center is not None
         major_radius = max(5.0, apparent_minor_axis_diameter_px / 2.0)
         values["blur_start"] = PixelPoint(center.x - major_radius, center.y)
@@ -205,7 +309,14 @@ def _truth(
     if review_state is ReviewState.ADJUDICATED:
         values["adjudicator_id"] = "adjudicator-1"
         values["adjudication_evidence_refs"] = (ADJUDICATION_EVIDENCE,)
-    return BallFrameAnnotation(**values)  # type: ignore[arg-type]
+    if visibility is BallVisibility.NOT_PRESENT:
+        assert type(selected_frame) is FrameReference
+        values["search_region_observability_attestation"] = _search_attestation(
+            selected_frame,
+            reviewer_ids=values.get("reviewer_ids", ()),  # type: ignore[arg-type]
+            review_evidence_refs=values.get("review_evidence_refs", ()),  # type: ignore[arg-type]
+        )
+    return BallFrameAnnotationV2(**values)  # type: ignore[arg-type]
 
 
 def _prediction(
@@ -241,7 +352,7 @@ def _public_key_base64(private_key: Ed25519PrivateKey) -> str:
 
 
 def _annotation_attestation(
-    annotation: BallFrameAnnotation,
+    annotation: BallFrameAnnotationV2,
     role: AnnotationAttestationRole,
     principal_id: str,
 ) -> AnnotationAttestation:
@@ -260,6 +371,7 @@ def _annotation_attestation(
         )
     )
     return AnnotationAttestation(
+        annotation_type=AnnotationType.BALL_FRAME_OBSERVATION,
         annotation_sha256=annotation.fingerprint(),
         role=role,
         principal_id=principal_id,
@@ -271,13 +383,17 @@ def _annotation_attestation(
 
 
 def _annotation_trust_store(
-    truth: tuple[BallFrameAnnotation, ...] | list[BallFrameAnnotation],
+    truth: tuple[BallFrameAnnotationV2, ...] | list[BallFrameAnnotationV2],
 ) -> AnnotationTrustStore:
     current_by_id: dict[str, CurrentAnnotation] = {}
     for annotation in truth:
         current_by_id.setdefault(
             annotation.annotation_id,
-            CurrentAnnotation(annotation.annotation_id, annotation.fingerprint()),
+            CurrentAnnotation(
+                AnnotationType.BALL_FRAME_OBSERVATION,
+                annotation.annotation_id,
+                annotation.fingerprint(),
+            ),
         )
     return AnnotationTrustStore(
         keyring_id="ball-metric-fixture-keyring",
@@ -309,7 +425,7 @@ def _annotation_trust_store(
 
 
 def _annotation_attestations(
-    truth: tuple[BallFrameAnnotation, ...] | list[BallFrameAnnotation],
+    truth: tuple[BallFrameAnnotationV2, ...] | list[BallFrameAnnotationV2],
 ) -> tuple[AnnotationAttestation, ...]:
     attestations: list[AnnotationAttestation] = []
     for annotation in truth:
@@ -357,7 +473,7 @@ def _annotation_verification_policy(
 
 def _publish_annotation_evidence_store(
     directory: str,
-    truth: tuple[BallFrameAnnotation, ...] | list[BallFrameAnnotation],
+    truth: tuple[BallFrameAnnotationV2, ...] | list[BallFrameAnnotationV2],
 ) -> tuple[Path, GenerationDescriptor]:
     root = Path(directory)
     (root / "locks").mkdir()
@@ -376,6 +492,21 @@ def _publish_annotation_evidence_store(
                     annotation.review_evidence_refs
                     + annotation.adjudication_evidence_refs
                     + annotation.frame.capture_integrity_attestation_refs
+                    + (
+                        annotation.search_region_observability_attestation.review_evidence_refs
+                        + (
+                            annotation.search_region_observability_attestation
+                            .capture_integrity_attestation_refs
+                        )
+                        if annotation.search_region_observability_attestation is not None
+                        else ()
+                    )
+                    + (
+                        (annotation.frame.capture_segment_ref,)
+                        + annotation.frame.gap_evidence_refs
+                        if type(annotation.frame) is UnavailableFrameReference
+                        else ()
+                    )
                 )
             }
         )
@@ -423,13 +554,84 @@ def _write_protected_annotation_configuration_generation(
     return path, generation
 
 
+def _unit_evaluation_manifest(
+    truth: tuple[BallFrameAnnotationV2, ...] | list[BallFrameAnnotationV2],
+) -> UnitBallEvaluationManifest:
+    sources = tuple(sorted({annotation.frame.source_sha256 for annotation in truth}))
+    records: list[SourceSplitRecord] = []
+    for index, source in enumerate(sources):
+        records.append(
+            SourceSplitRecord(
+                asset_sha256=source,
+                root_asset_sha256=source,
+                parent_asset_sha256=None,
+                match_id=f"test-match-{index}",
+                venue_id=f"test-venue-{index}",
+                camera_setup_id=f"test-camera-{index}",
+                recording_date="2026-07-11",
+                synchronized_capture_group_id=f"test-sync-{index}",
+                split_group_id=f"test-group-{index}",
+                split=DatasetSplit.TEST,
+            )
+        )
+    for split, digest, suffix in (
+        (DatasetSplit.TRAIN, "c" * 64, "train"),
+        (DatasetSplit.DEV, "e" * 64, "dev"),
+    ):
+        while digest in sources:
+            digest = hashlib.sha256((digest + suffix).encode("ascii")).hexdigest()
+        records.append(
+            SourceSplitRecord(
+                asset_sha256=digest,
+                root_asset_sha256=digest,
+                parent_asset_sha256=None,
+                match_id=f"{suffix}-match",
+                venue_id=f"{suffix}-venue",
+                camera_setup_id=f"{suffix}-camera",
+                recording_date="2026-07-10",
+                synchronized_capture_group_id=f"{suffix}-sync",
+                split_group_id=f"{suffix}-group",
+                split=split,
+            )
+        )
+    split_manifest = SplitManifest(records=tuple(records))
+    match_frames = {
+        (
+            annotation.frame.source_sha256,
+            annotation.frame.selected_video_stream_index,
+            annotation.frame.frame_index,
+        )
+        for annotation in truth
+        if annotation.ball_instance_id == "match-ball"
+    }
+    coverage = UnitEvaluationCoverageProof(
+        ontology_sha256=ONTOLOGY_SHA256,
+        annotation_sha256s=tuple(
+            sorted(annotation.fingerprint() for annotation in truth)
+        ),
+        match_ball_frame_count=len(match_frames),
+        non_match_ball_annotation_count=len(truth) - len(match_frames),
+    )
+    return UnitBallEvaluationManifest(
+        manifest_id="fixture-unit-benchmark",
+        ontology_sha256=ONTOLOGY_SHA256,
+        split_proof=UnitEvaluationSplitProof(
+            split_manifest=split_manifest,
+            evaluated_source_sha256s=sources,
+        ),
+        coverage_proof=coverage,
+        trust_scope=BenchmarkTrustScope.UNVERIFIED_UNIT_BENCHMARK,
+    )
+
+
 def evaluate_ball_localization(
-    truth: tuple[BallFrameAnnotation, ...] | list[BallFrameAnnotation],
+    truth: tuple[BallFrameAnnotationV2, ...] | list[BallFrameAnnotationV2],
     predictions: tuple[BallPrediction, ...] | list[BallPrediction],
     normalized_tolerance_ball_diameters: float,
     *,
     operating_confidence_threshold: float = 0.0,
     truth_policy: TruthPolicy = TruthPolicy.ADJUDICATED_ONLY,
+    evaluation_manifest: UnitBallEvaluationManifest | None = None,
 ):
     """Test-only alias supplying fixture trust, including a fixture-local pin.
 
@@ -459,7 +661,9 @@ def evaluate_ball_localization(
             ),
             operating_confidence_threshold=operating_confidence_threshold,
             truth_policy=truth_policy,
-            evaluation_manifest_sha256=EVALUATION_MANIFEST_SHA256,
+            evaluation_manifest=(
+                evaluation_manifest or _unit_evaluation_manifest(truth)
+            ),
             annotation_attestations=_annotation_attestations(truth),
             annotation_trust_store=store,
             annotation_evidence_store_root=evidence_store_root,
@@ -508,6 +712,79 @@ class BallMetricsTests(unittest.TestCase):
             )
         self.assertEqual(baseline, ball_localization_evaluator_artifact_sha256())
 
+        def altered_domain_integer(value: object, name: str, maximum: int) -> int:
+            return 0
+
+        with patch.object(
+            domain_events_module,
+            "_positive_int",
+            altered_domain_integer,
+        ):
+            self.assertNotEqual(
+                baseline,
+                ball_localization_evaluator_artifact_sha256(),
+            )
+        self.assertEqual(baseline, ball_localization_evaluator_artifact_sha256())
+
+    def test_typed_unit_manifest_binds_ontology_split_and_exact_coverage(self) -> None:
+        truth = (_truth(0),)
+        manifest = _unit_evaluation_manifest(truth)
+        self.assertFalse(manifest.readiness_claim_permitted)
+        self.assertIs(
+            manifest.trust_scope,
+            BenchmarkTrustScope.UNVERIFIED_UNIT_BENCHMARK,
+        )
+
+        bad_coverage = replace(
+            manifest.coverage_proof,
+            annotation_sha256s=("0" * 64,),
+        )
+        with self.assertRaisesRegex(ValueError, "exact annotation set"):
+            evaluate_ball_localization(
+                truth,
+                (),
+                DEFAULT_NORMALIZED_TOLERANCE,
+                evaluation_manifest=replace(
+                    manifest,
+                    coverage_proof=bad_coverage,
+                ),
+            )
+
+        other_ontology = "7" * 64
+        with self.assertRaisesRegex(ValueError, "manifest ontology"):
+            evaluate_ball_localization(
+                truth,
+                (),
+                DEFAULT_NORMALIZED_TOLERANCE,
+                evaluation_manifest=replace(
+                    manifest,
+                    ontology_sha256=other_ontology,
+                    coverage_proof=replace(
+                        manifest.coverage_proof,
+                        ontology_sha256=other_ontology,
+                    ),
+                ),
+            )
+
+        train_source = next(
+            record.asset_sha256
+            for record in manifest.split_proof.split_manifest.records
+            if record.split is DatasetSplit.TRAIN
+        )
+        with self.assertRaisesRegex(ValueError, "exact TEST assignment"):
+            UnitEvaluationSplitProof(
+                split_manifest=manifest.split_proof.split_manifest,
+                evaluated_source_sha256s=(train_source,),
+            )
+        with self.assertRaisesRegex(ValueError, "unseen TEST venue"):
+            UnitEvaluationSplitProof(
+                split_manifest=replace(
+                    manifest.split_proof.split_manifest,
+                    require_unseen_test_venue=False,
+                ),
+                evaluated_source_sha256s=(SHA,),
+            )
+
     def test_perfect_localization_reports_exact_metrics(self) -> None:
         truth = (_truth(0), _truth(1))
         predictions = (_prediction("candidate-0", 0), _prediction("candidate-1", 1))
@@ -525,11 +802,11 @@ class BallMetricsTests(unittest.TestCase):
         self.assertEqual(report.matched_center_error_p95_px, 0.0)
         self.assertEqual(report.matched_center_error_max_px, 0.0)
 
-    def test_extra_candidates_negative_frames_and_misses_are_fp_and_fn(self) -> None:
+    def test_extra_candidates_confident_negatives_and_misses_are_fp_and_fn(self) -> None:
         truth = (
             _truth(0),
             _truth(1),
-            _truth(2, state=BallState.ABSENT),
+            _truth(2, visibility=BallVisibility.NOT_PRESENT),
         )
         predictions = (
             _prediction("correct", 0, confidence=0.9),
@@ -546,10 +823,48 @@ class BallMetricsTests(unittest.TestCase):
         self.assertAlmostEqual(report.precision, 1 / 3)
         self.assertAlmostEqual(report.recall, 1 / 2)
         self.assertAlmostEqual(report.f1, 0.4)
-        self.assertEqual(report.evaluated_negative_frame_count, 1)
+        self.assertEqual(report.evaluated_confident_negative_frame_count, 1)
+        self.assertIn(CAPTURE_ATTESTATION, report.annotation_evidence_refs)
+        self.assertIn(REVIEW_EVIDENCE, report.annotation_evidence_refs)
+        self.assertEqual(
+            report.evaluated_confident_negative_frame_identities,
+            (truth[2].frame.identity,),
+        )
+        with self.assertRaisesRegex(ValueError, "exact subset"):
+            replace(
+                report,
+                activated_confident_negative_frame_identities=(
+                    truth[0].frame.identity,
+                ),
+            )
+        with self.assertRaisesRegex(ValueError, "identity commitment"):
+            replace(
+                report,
+                evaluated_confident_negative_frame_identity_set_sha256="0" * 64,
+            )
+        outside_identity = replace(
+            truth[2].frame.identity,
+            source_sha256="f" * 64,
+        )
+        outside_identities = (outside_identity,)
+        outside_commitment = ball_metrics_module._frame_identity_set_sha256(
+            outside_identities,
+            domain=(
+                ball_metrics_module._EVALUATED_NEGATIVE_IDENTITY_SET_DOMAIN
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "exact subset"):
+            replace(
+                report,
+                evaluated_confident_negative_frame_identities=outside_identities,
+                evaluated_confident_negative_frame_identity_set_sha256=(
+                    outside_commitment
+                ),
+                activated_confident_negative_frame_identities=outside_identities,
+            )
 
     def test_confidence_order_controls_interpolated_ap(self) -> None:
-        truth = (_truth(0), _truth(1, state=BallState.ABSENT))
+        truth = (_truth(0), _truth(1, visibility=BallVisibility.NOT_PRESENT))
         tp_first = (
             _prediction("tp", 0, confidence=0.9),
             _prediction("fp", 1, confidence=0.1),
@@ -571,7 +886,7 @@ class BallMetricsTests(unittest.TestCase):
         truth = (
             _truth(0),
             _truth(1),
-            _truth(2, state=BallState.ABSENT),
+            _truth(2, visibility=BallVisibility.NOT_PRESENT),
         )
         predictions = (
             _prediction("high-tp", 0, confidence=0.9),
@@ -610,7 +925,7 @@ class BallMetricsTests(unittest.TestCase):
             (middle.true_positives, middle.false_positives, middle.false_negatives),
             (1, 1, 1),
         )
-        self.assertEqual(middle.negative_frame_activation_count, 1)
+        self.assertEqual(middle.confident_negative_frame_activation_count, 1)
         self.assertNotEqual(
             full.evaluation_input_sha256,
             between.evaluation_input_sha256,
@@ -687,8 +1002,8 @@ class BallMetricsTests(unittest.TestCase):
         self,
     ) -> None:
         truth = (
-            _truth(0, state=BallState.ABSENT),
-            _truth(1, state=BallState.OCCLUDED),
+            _truth(0, visibility=BallVisibility.NOT_PRESENT),
+            _truth(1, visibility=BallVisibility.FULLY_OCCLUDED),
         )
         predictions = (
             _prediction("activation-a", 0, confidence=0.8),
@@ -705,12 +1020,14 @@ class BallMetricsTests(unittest.TestCase):
 
         self.assertFalse(report.localization_metrics_defined)
         self.assertEqual(report.evaluated_localizable_frame_count, 0)
-        self.assertEqual(report.evaluated_negative_frame_count, 2)
+        self.assertEqual(report.evaluated_confident_negative_frame_count, 1)
+        self.assertEqual(report.evaluated_nonlocalizable_frame_count, 1)
+        self.assertEqual(report.ignored_nonlocalizable_prediction_count, 1)
         self.assertEqual(report.operating_prediction_count, 2)
-        self.assertEqual(report.negative_frame_activation_count, 1)
-        self.assertEqual(report.negative_frame_activation_rate, 0.5)
+        self.assertEqual(report.confident_negative_frame_activation_count, 1)
+        self.assertEqual(report.confident_negative_frame_activation_rate, 1.0)
         self.assertEqual(
-            report.activated_negative_frame_identities,
+            report.activated_confident_negative_frame_identities,
             (truth[0].frame.identity,),
         )
         self.assertEqual(
@@ -727,7 +1044,7 @@ class BallMetricsTests(unittest.TestCase):
         )
 
     def test_equal_confidence_group_is_invariant_to_ids_and_input_order(self) -> None:
-        truth = (_truth(0), _truth(1, state=BallState.ABSENT))
+        truth = (_truth(0), _truth(1, visibility=BallVisibility.NOT_PRESENT))
         correct = _prediction("a-correct", 0, confidence=0.5)
         false = _prediction("z-false", 1, confidence=0.5)
 
@@ -817,22 +1134,25 @@ class BallMetricsTests(unittest.TestCase):
             renamed_and_reordered.to_canonical_dict()["metrics"],
         )
 
-    def test_blur_truth_is_localizable_at_its_center(self) -> None:
-        truth = (_truth(0, state=BallState.BLUR),)
+    def test_motion_blurred_truth_is_localizable_at_its_center(self) -> None:
+        truth = (_truth(0, appearance=BallAppearance.MOTION_BLURRED),)
         prediction = _prediction("blur-center", 0, center=PixelPoint(103, 204))
 
         report = evaluate_ball_localization(truth, (prediction,), DEFAULT_NORMALIZED_TOLERANCE)
 
         self.assertEqual(report.true_positives, 1)
         self.assertEqual(report.matched_center_error_mean_px, 5.0)
-        self.assertEqual(dict(report.state_counts)[BallState.BLUR], 1)
+        self.assertEqual(
+            dict(report.appearance_counts)[BallAppearance.MOTION_BLURRED],
+            1,
+        )
 
-    def test_every_nonlocalizable_state_is_a_negative_frame(self) -> None:
+    def test_nonlocalizable_strata_are_disclosed_not_scored_as_negatives(self) -> None:
         truth = (
             _truth(0),
-            _truth(1, state=BallState.OCCLUDED),
-            _truth(2, state=BallState.OUT_OF_FRAME),
-            _truth(3, state=BallState.ABSENT),
+            _truth(1, visibility=BallVisibility.FULLY_OCCLUDED),
+            _truth(2, visibility=BallVisibility.OUT_OF_FRAME),
+            _truth(3, visibility=BallVisibility.NOT_PRESENT),
         )
         predictions = tuple(
             _prediction(f"candidate-{index}", index) for index in range(4)
@@ -841,12 +1161,90 @@ class BallMetricsTests(unittest.TestCase):
         report = evaluate_ball_localization(truth, predictions, DEFAULT_NORMALIZED_TOLERANCE)
 
         self.assertEqual(report.true_positives, 1)
-        self.assertEqual(report.false_positives, 3)
-        self.assertEqual(report.evaluated_negative_frame_count, 3)
-        counts = dict(report.state_counts)
-        self.assertEqual(counts[BallState.OCCLUDED], 1)
-        self.assertEqual(counts[BallState.OUT_OF_FRAME], 1)
-        self.assertEqual(counts[BallState.ABSENT], 1)
+        self.assertEqual(report.false_positives, 1)
+        self.assertEqual(report.evaluated_confident_negative_frame_count, 1)
+        self.assertEqual(report.evaluated_nonlocalizable_frame_count, 2)
+        self.assertEqual(report.ignored_nonlocalizable_prediction_count, 2)
+        self.assertEqual(
+            dict(report.nonlocalizable_visibility_activation_counts),
+            {
+                BallVisibility.FULLY_OCCLUDED: 1,
+                BallVisibility.OUT_OF_FRAME: 1,
+                BallVisibility.INDISTINGUISHABLE: 0,
+                BallVisibility.CAPTURE_UNKNOWN: 0,
+            },
+        )
+        counts = dict(report.visibility_counts)
+        self.assertEqual(counts[BallVisibility.FULLY_OCCLUDED], 1)
+        self.assertEqual(counts[BallVisibility.OUT_OF_FRAME], 1)
+        self.assertEqual(counts[BallVisibility.NOT_PRESENT], 1)
+
+    def test_v2_visibility_appearance_role_and_play_strata_are_complete(self) -> None:
+        truth = (
+            _truth(0),
+            _truth(
+                1,
+                visibility=BallVisibility.PARTIALLY_OCCLUDED,
+                appearance=BallAppearance.MOTION_BLURRED,
+            ),
+            _truth(2, visibility=BallVisibility.FULLY_OCCLUDED),
+            _truth(3, visibility=BallVisibility.OUT_OF_FRAME),
+            _truth(4, visibility=BallVisibility.NOT_PRESENT),
+            _truth(
+                5,
+                visibility=BallVisibility.INDISTINGUISHABLE,
+                role=BallRole.UNKNOWN,
+                play_state=BallPlayState.UNKNOWN,
+                ambiguity_reason="multiple ball candidates cannot be separated",
+            ),
+            _truth(
+                6,
+                visibility=BallVisibility.CAPTURE_UNKNOWN,
+                role=BallRole.MATCH_BALL,
+                play_state=BallPlayState.UNKNOWN,
+                ambiguity_reason="capture continuity is unknown",
+            ),
+        )
+        predictions = tuple(
+            _prediction(f"candidate-{index}", index)
+            for index in range(len(truth) - 1)
+        )
+
+        report = evaluate_ball_localization(
+            truth,
+            predictions,
+            DEFAULT_NORMALIZED_TOLERANCE,
+        )
+
+        self.assertEqual(report.evaluated_localizable_frame_count, 2)
+        self.assertEqual(report.evaluated_confident_negative_frame_count, 1)
+        self.assertEqual(report.evaluated_nonlocalizable_frame_count, 3)
+        self.assertEqual(report.unresolved_role_frame_count, 1)
+        self.assertEqual(report.evaluated_prediction_count, 3)
+        self.assertEqual(report.ignored_nonlocalizable_prediction_count, 2)
+        self.assertEqual(report.unresolved_role_prediction_count, 1)
+        self.assertEqual(report.operating_unresolved_role_prediction_count, 1)
+        self.assertEqual(
+            (report.true_positives, report.false_positives, report.false_negatives),
+            (2, 1, 0),
+        )
+        self.assertEqual(
+            dict(report.visibility_counts),
+            {visibility: 1 for visibility in BallVisibility},
+        )
+        self.assertEqual(
+            dict(report.appearance_counts),
+            {
+                BallAppearance.SHARP: 1,
+                BallAppearance.MOTION_BLURRED: 1,
+                BallAppearance.NOT_OBSERVABLE: 5,
+            },
+        )
+        self.assertEqual(dict(report.role_counts)[BallRole.UNKNOWN], 1)
+        self.assertEqual(
+            dict(report.play_state_counts)[BallPlayState.UNKNOWN],
+            2,
+        )
 
     def test_duplicate_frames_and_predictions_are_excluded_and_counted(self) -> None:
         truth = (
@@ -858,10 +1256,10 @@ class BallMetricsTests(unittest.TestCase):
                 duplicate_of_frame_index=0,
                 capture_integrity_attestation_refs=(CAPTURE_ATTESTATION,),
             ),
-            _truth(2, state=BallState.ABSENT),
+            _truth(2, visibility=BallVisibility.NOT_PRESENT),
             _truth(
                 3,
-                state=BallState.ABSENT,
+                visibility=BallVisibility.NOT_PRESENT,
                 duplicate_kind=FrameDuplicateKind.VERIFIED_CAPTURE_DUPLICATE,
                 duplicate_of_frame_index=2,
                 capture_integrity_attestation_refs=(CAPTURE_ATTESTATION,),
@@ -893,12 +1291,12 @@ class BallMetricsTests(unittest.TestCase):
         self.assertEqual(report.excluded_duplicate_prediction_count, 2)
         self.assertEqual(report.evaluated_frame_count, 2)
         self.assertEqual(report.evaluated_prediction_count, 1)
-        self.assertEqual(report.negative_frame_activation_count, 0)
-        self.assertEqual(sum(dict(report.state_counts).values()), 2)
+        self.assertEqual(report.confident_negative_frame_activation_count, 0)
+        self.assertEqual(sum(dict(report.visibility_counts).values()), 2)
 
     def test_verified_duplicate_rejects_semantic_disagreement(self) -> None:
         truth = (
-            _truth(0, state=BallState.ABSENT),
+            _truth(0, visibility=BallVisibility.NOT_PRESENT),
             _truth(
                 1,
                 duplicate_kind=FrameDuplicateKind.VERIFIED_CAPTURE_DUPLICATE,
@@ -906,7 +1304,7 @@ class BallMetricsTests(unittest.TestCase):
                 capture_integrity_attestation_refs=(CAPTURE_ATTESTATION,),
             ),
         )
-        with self.assertRaisesRegex(ValueError, "disagrees.*state"):
+        with self.assertRaisesRegex(ValueError, "disagrees.*visibility"):
             evaluate_ball_localization(truth, (), DEFAULT_NORMALIZED_TOLERANCE)
 
     def test_verified_duplicate_checks_every_semantic_field_and_adjudication(self) -> None:
@@ -950,12 +1348,12 @@ class BallMetricsTests(unittest.TestCase):
 
         blur_original = _truth(
             0,
-            state=BallState.BLUR,
+            appearance=BallAppearance.MOTION_BLURRED,
             center=PixelPoint(100, 200),
         )
         blur_duplicate = _truth(
             1,
-            state=BallState.BLUR,
+            appearance=BallAppearance.MOTION_BLURRED,
             center=PixelPoint(100, 200),
             duplicate_kind=FrameDuplicateKind.VERIFIED_CAPTURE_DUPLICATE,
             duplicate_of_frame_index=0,
@@ -1179,15 +1577,331 @@ class BallMetricsTests(unittest.TestCase):
                 DEFAULT_NORMALIZED_TOLERANCE,
             )
 
-    def test_truth_frames_and_annotation_ids_must_be_unique(self) -> None:
+    def test_truth_ball_keys_and_annotation_ids_must_be_unique(self) -> None:
         first = _truth(0)
         same_frame = _truth(0, annotation_id="other")
-        with self.assertRaisesRegex(ValueError, "exactly one"):
+        with self.assertRaisesRegex(ValueError, "unique by source frame"):
             evaluate_ball_localization((first, same_frame), (), DEFAULT_NORMALIZED_TOLERANCE)
 
         same_id = _truth(1, annotation_id=first.annotation_id)
         with self.assertRaisesRegex(ValueError, "annotation IDs must be unique"):
             evaluate_ball_localization((first, same_id), (), DEFAULT_NORMALIZED_TOLERANCE)
+
+    def test_multiple_ball_instances_do_not_mask_match_ball_failure(self) -> None:
+        match_ball = _truth(0, center=PixelPoint(100, 200))
+        spare_ball = _truth(
+            0,
+            annotation_id="spare-ball-0",
+            ball_instance_id="spare-1",
+            role=BallRole.SPARE_BALL,
+            play_state=BallPlayState.NOT_IN_PLAY,
+            center=PixelPoint(300, 300),
+        )
+        prediction = _prediction(
+            "spare-only",
+            0,
+            center=PixelPoint(300, 300),
+        )
+
+        report = evaluate_ball_localization(
+            (match_ball, spare_ball),
+            (prediction,),
+            DEFAULT_NORMALIZED_TOLERANCE,
+        )
+
+        self.assertEqual(report.truth_annotation_count, 2)
+        self.assertEqual(report.truth_frame_count, 1)
+        self.assertEqual(report.non_match_ball_annotation_count, 1)
+        self.assertEqual(
+            (report.true_positives, report.false_positives, report.false_negatives),
+            (0, 1, 1),
+        )
+        self.assertEqual(
+            dict(report.non_match_role_activation_counts)[BallRole.SPARE_BALL],
+            1,
+        )
+        self.assertFalse(
+            report.to_canonical_dict()["claim_scope"]["readiness_claim_permitted"]
+        )
+
+    def test_unknown_logical_match_ball_is_diagnostic_and_never_a_primary_tp(self) -> None:
+        truth = (
+            _truth(
+                0,
+                role=BallRole.UNKNOWN,
+                ambiguity_reason="visible ball role cannot be resolved",
+            ),
+        )
+        prediction = (_prediction("role-unresolved", 0),)
+
+        report = evaluate_ball_localization(
+            truth,
+            prediction,
+            DEFAULT_NORMALIZED_TOLERANCE,
+        )
+
+        self.assertEqual(report.evaluated_localizable_frame_count, 0)
+        self.assertEqual(report.unresolved_role_frame_count, 1)
+        self.assertEqual(report.evaluated_prediction_count, 0)
+        self.assertEqual(report.unresolved_role_prediction_count, 1)
+        self.assertEqual(report.operating_unresolved_role_prediction_count, 1)
+        self.assertEqual(
+            (report.true_positives, report.false_positives, report.false_negatives),
+            (0, 0, 0),
+        )
+        unknown_slice = dict(
+            (item.slice_value, item) for item in report.role_performance_slices
+        )[BallRole.UNKNOWN.value]
+        self.assertIs(
+            unknown_slice.semantics,
+            ball_metrics_module.PerformanceSliceSemantics.UNRESOLVED_ROLE_DIAGNOSTIC,
+        )
+        self.assertEqual(unknown_slice.evaluated_prediction_count, 0)
+        self.assertEqual(unknown_slice.ignored_prediction_count, 1)
+
+    def test_non_match_activation_uses_predictions_on_primary_ignored_frames(self) -> None:
+        primary = _truth(
+            0,
+            visibility=BallVisibility.FULLY_OCCLUDED,
+            center=None,
+            apparent_minor_axis_diameter_px=12.0,
+        )
+        spare = _truth(
+            0,
+            annotation_id="spare-on-occluded-primary",
+            ball_instance_id="spare-on-ignored-frame",
+            role=BallRole.SPARE_BALL,
+            play_state=BallPlayState.NOT_IN_PLAY,
+            center=PixelPoint(300, 300),
+        )
+        prediction = (
+            _prediction(
+                "spare-activation",
+                0,
+                center=PixelPoint(300, 300),
+            ),
+        )
+
+        report = evaluate_ball_localization(
+            (primary, spare),
+            prediction,
+            DEFAULT_NORMALIZED_TOLERANCE,
+        )
+
+        self.assertEqual(report.evaluated_prediction_count, 0)
+        self.assertEqual(report.ignored_nonlocalizable_prediction_count, 1)
+        self.assertEqual(
+            dict(report.non_match_role_activation_counts)[BallRole.SPARE_BALL],
+            1,
+        )
+        spare_slice = dict(
+            (item.slice_value, item) for item in report.role_performance_slices
+        )[BallRole.SPARE_BALL.value]
+        self.assertEqual(spare_slice.false_positives, 1)
+        self.assertEqual(spare_slice.activated_negative_target_count, 1)
+
+    def test_typed_performance_slices_partition_primary_and_disclose_roles(self) -> None:
+        match_sharp = _truth(0, center=PixelPoint(100, 200))
+        match_blurred = _truth(
+            1,
+            appearance=BallAppearance.MOTION_BLURRED,
+            center=PixelPoint(101, 201),
+        )
+        negative = _truth(2, visibility=BallVisibility.NOT_PRESENT)
+        spare = _truth(
+            0,
+            annotation_id="spare-slice",
+            ball_instance_id="spare-slice-instance",
+            role=BallRole.SPARE_BALL,
+            play_state=BallPlayState.NOT_IN_PLAY,
+            center=PixelPoint(300, 300),
+        )
+        predictions = (
+            _prediction("match-tp", 0, center=PixelPoint(100, 200)),
+            _prediction("spare-hard-negative", 0, center=PixelPoint(300, 300)),
+            _prediction("empty-frame-fp", 2),
+        )
+
+        report = evaluate_ball_localization(
+            (match_sharp, match_blurred, negative, spare),
+            predictions,
+            DEFAULT_NORMALIZED_TOLERANCE,
+        )
+        appearance = {
+            item.slice_value: item for item in report.appearance_performance_slices
+        }
+        role = {item.slice_value: item for item in report.role_performance_slices}
+        play = {
+            item.slice_value: item for item in report.play_state_performance_slices
+        }
+
+        self.assertEqual(
+            (report.true_positives, report.false_positives, report.false_negatives),
+            (1, 2, 1),
+        )
+        self.assertEqual(
+            (
+                appearance[BallAppearance.SHARP.value].true_positives,
+                appearance[BallAppearance.SHARP.value].false_positives,
+                appearance[BallAppearance.SHARP.value].false_negatives,
+            ),
+            (1, 1, 0),
+        )
+        self.assertEqual(
+            appearance[BallAppearance.MOTION_BLURRED.value].false_negatives,
+            1,
+        )
+        self.assertEqual(
+            appearance[BallAppearance.NOT_OBSERVABLE.value].false_positives,
+            1,
+        )
+        self.assertEqual(
+            role[BallRole.MATCH_BALL.value].matched_center_errors_px,
+            report.matched_center_errors_px,
+        )
+        self.assertEqual(role[BallRole.SPARE_BALL.value].false_positives, 1)
+        self.assertEqual(
+            play[BallPlayState.IN_PLAY.value].false_negatives,
+            1,
+        )
+        claims = report.to_canonical_dict()["claim_scope"]
+        self.assertTrue(claims["appearance_performance_claimed"])
+        self.assertTrue(claims["role_performance_claimed"])
+        self.assertTrue(claims["play_state_performance_claimed"])
+        self.assertFalse(claims["readiness_claim_permitted"])
+        with self.assertRaisesRegex(ValueError, "slice precision"):
+            replace(
+                appearance[BallAppearance.SHARP.value],
+                precision=0.0,
+            )
+        with self.assertRaisesRegex(ValueError, "enum order"):
+            replace(
+                report,
+                appearance_performance_slices=tuple(
+                    reversed(report.appearance_performance_slices)
+                ),
+            )
+
+        def transplanted_evidence(target, source):
+            return replace(
+                target,
+                **{
+                    item.name: getattr(source, item.name)
+                    for item in fields(target)
+                    if item.name not in {"dimension", "slice_value"}
+                },
+            )
+
+        sharp = appearance[BallAppearance.SHARP.value]
+        blurred = appearance[BallAppearance.MOTION_BLURRED.value]
+        swapped_appearance = tuple(
+            transplanted_evidence(item, blurred)
+            if item.slice_value == BallAppearance.SHARP.value
+            else transplanted_evidence(item, sharp)
+            if item.slice_value == BallAppearance.MOTION_BLURRED.value
+            else item
+            for item in report.appearance_performance_slices
+        )
+        with self.assertRaisesRegex(ValueError, "retained evaluation preimages"):
+            replace(report, appearance_performance_slices=swapped_appearance)
+
+        absent_role = role[BallRole.ADJACENT_COURT_BALL.value]
+        forged_absent_role = replace(
+            absent_role,
+            operating_prediction_count=1,
+            evaluated_prediction_count=1,
+            false_positives=1,
+        )
+        forged_roles = tuple(
+            forged_absent_role
+            if item.slice_value == BallRole.ADJACENT_COURT_BALL.value
+            else item
+            for item in report.role_performance_slices
+        )
+        with self.assertRaisesRegex(ValueError, "retained evaluation preimages"):
+            replace(report, role_performance_slices=forged_roles)
+
+        visible_count = dict(report.visibility_counts)[BallVisibility.VISIBLE]
+        forged_visibility_counts = tuple(
+            (
+                visibility,
+                0
+                if visibility is BallVisibility.VISIBLE
+                else count + visible_count
+                if visibility is BallVisibility.PARTIALLY_OCCLUDED
+                else count,
+            )
+            for visibility, count in report.visibility_counts
+        )
+        with self.assertRaisesRegex(ValueError, "retained evaluation preimages"):
+            replace(
+                report,
+                visibility_counts=forged_visibility_counts,
+            )
+
+        with self.assertRaisesRegex(ValueError, "requires an evaluated prediction"):
+            replace(
+                role[BallRole.SPARE_BALL.value],
+                operating_prediction_count=0,
+                evaluated_prediction_count=0,
+                false_positives=0,
+            )
+
+    def test_unresolved_role_slice_is_bound_to_retained_prediction_preimage(self) -> None:
+        truth = (
+            _truth(
+                0,
+                role=BallRole.UNKNOWN,
+                ambiguity_reason="visible ball role cannot be resolved",
+            ),
+        )
+        predictions = (_prediction("unresolved", 0),)
+        report = evaluate_ball_localization(
+            truth,
+            predictions,
+            DEFAULT_NORMALIZED_TOLERANCE,
+        )
+        unknown_slice = next(
+            item
+            for item in report.role_performance_slices
+            if item.slice_value == BallRole.UNKNOWN.value
+        )
+        forged_unknown_slice = replace(
+            unknown_slice,
+            operating_prediction_count=0,
+            ignored_prediction_count=0,
+        )
+        forged_roles = tuple(
+            forged_unknown_slice
+            if item.slice_value == BallRole.UNKNOWN.value
+            else item
+            for item in report.role_performance_slices
+        )
+        with self.assertRaisesRegex(ValueError, "retained evaluation preimages"):
+            replace(report, role_performance_slices=forged_roles)
+
+        def move_visible_count(values):
+            visible_count = dict(values)[BallVisibility.VISIBLE]
+            return tuple(
+                (
+                    visibility,
+                    0
+                    if visibility is BallVisibility.VISIBLE
+                    else count + visible_count
+                    if visibility is BallVisibility.PARTIALLY_OCCLUDED
+                    else count,
+                )
+                for visibility, count in values
+            )
+
+        with self.assertRaisesRegex(ValueError, "retained evaluation preimages"):
+            replace(
+                report,
+                visibility_counts=move_visible_count(report.visibility_counts),
+                unresolved_role_visibility_counts=move_visible_count(
+                    report.unresolved_role_visibility_counts
+                ),
+            )
 
     def test_prediction_and_evaluator_inputs_fail_closed(self) -> None:
         valid = _prediction("valid", 0)
@@ -1237,7 +1951,7 @@ class BallMetricsTests(unittest.TestCase):
         direct_arguments = {
             "normalized_tolerance_ball_diameters": DEFAULT_NORMALIZED_TOLERANCE,
             "operating_confidence_threshold": 0.0,
-            "evaluation_manifest_sha256": EVALUATION_MANIFEST_SHA256,
+            "evaluation_manifest": None,
             "annotation_attestations": (),
             "annotation_trust_store": None,
             "annotation_evidence_store_root": Path("unused"),
@@ -1246,11 +1960,12 @@ class BallMetricsTests(unittest.TestCase):
             "expected_annotation_verification_policy_sha256": "0" * 64,
         }
         truth = (_truth(0), _truth(1))
+        direct_arguments["evaluation_manifest"] = _unit_evaluation_manifest(truth)
         predictions = (
             _prediction("candidate-0", 0),
             _prediction("candidate-1", 1),
         )
-        with patch.object(ball_metrics_module, "_MAX_TRUTH_FRAME_COUNT", 1):
+        with patch.object(ball_metrics_module, "_MAX_TRUTH_ANNOTATION_COUNT", 1):
             with self.assertRaisesRegex(ValueError, "truth cannot exceed 1"):
                 _evaluate_ball_localization(
                     truth,
@@ -1336,8 +2051,9 @@ class BallMetricsTests(unittest.TestCase):
         self.assertRegex(report.verified_at_utc, r"^\d{4}-\d{2}-\d{2}T.*Z$")
         self.assertEqual(
             report.evaluation_manifest_sha256,
-            EVALUATION_MANIFEST_SHA256,
+            report.evaluation_manifest.fingerprint(),
         )
+        self.assertFalse(report.evaluation_manifest.readiness_claim_permitted)
 
     def test_annotation_payload_review_state_cannot_bypass_missing_trust_args(self) -> None:
         truth = (_truth(0),)
@@ -1385,7 +2101,7 @@ class BallMetricsTests(unittest.TestCase):
             common = {
                 "operating_confidence_threshold": 0.0,
                 "truth_policy": TruthPolicy.REVIEWED_OR_ADJUDICATED,
-                "evaluation_manifest_sha256": EVALUATION_MANIFEST_SHA256,
+                "evaluation_manifest": _unit_evaluation_manifest(truth),
                 "annotation_attestations": attestations,
                 "annotation_trust_store": store,
                 "annotation_evidence_store_root": evidence_store_root,
@@ -1579,7 +2295,7 @@ class BallMetricsTests(unittest.TestCase):
                     DEFAULT_NORMALIZED_TOLERANCE
                 ),
                 operating_confidence_threshold=0.0,
-                evaluation_manifest_sha256=EVALUATION_MANIFEST_SHA256,
+                evaluation_manifest=_unit_evaluation_manifest(truth),
                 annotation_attestations=attestations,
                 annotation_trust_store=store,
                 annotation_evidence_store_root=evidence_store_root,
@@ -1597,7 +2313,7 @@ class BallMetricsTests(unittest.TestCase):
                         DEFAULT_NORMALIZED_TOLERANCE
                     ),
                     operating_confidence_threshold=0.0,
-                    evaluation_manifest_sha256=EVALUATION_MANIFEST_SHA256,
+                    evaluation_manifest=_unit_evaluation_manifest(truth),
                     annotation_attestations=attestations,
                     annotation_trust_store=changed_store,
                     annotation_evidence_store_root=evidence_store_root,
@@ -1614,7 +2330,7 @@ class BallMetricsTests(unittest.TestCase):
                     DEFAULT_NORMALIZED_TOLERANCE
                 ),
                 operating_confidence_threshold=0.0,
-                evaluation_manifest_sha256=EVALUATION_MANIFEST_SHA256,
+                evaluation_manifest=_unit_evaluation_manifest(truth),
                 annotation_attestations=attestations,
                 annotation_trust_store=changed_store,
                 annotation_evidence_store_root=evidence_store_root,
@@ -1671,6 +2387,7 @@ class BallMetricsTests(unittest.TestCase):
         commitments = {
             "truth_set_sha256": report.truth_set_sha256,
             "prediction_set_sha256": report.prediction_set_sha256,
+            "truth_annotation_count": report.truth_annotation_count,
             "truth_frame_count": report.truth_frame_count,
             "prediction_count": report.prediction_count,
             "normalized_tolerance_ball_diameters": (
@@ -1680,7 +2397,7 @@ class BallMetricsTests(unittest.TestCase):
                 report.operating_confidence_threshold
             ),
             "truth_policy": report.truth_policy,
-            "evaluation_manifest_sha256": report.evaluation_manifest_sha256,
+            "evaluation_manifest": report.evaluation_manifest,
             "annotation_verification_policy": (
                 report.annotation_verification_policy
             ),
@@ -1746,6 +2463,33 @@ class BallMetricsTests(unittest.TestCase):
             report.evaluation_input_sha256,
         )
 
+        forged_ontology = "d" * 64
+        forged_manifest = replace(
+            report.evaluation_manifest,
+            ontology_sha256=forged_ontology,
+            coverage_proof=replace(
+                report.evaluation_manifest.coverage_proof,
+                ontology_sha256=forged_ontology,
+            ),
+        )
+        forged_manifest_commitments = commitments | {
+            "evaluation_manifest": forged_manifest,
+        }
+        with self.assertRaisesRegex(
+            ValueError,
+            "manifest does not match retained truth preimage",
+        ):
+            replace(
+                report,
+                evaluation_manifest=forged_manifest,
+                evaluation_manifest_sha256=forged_manifest.fingerprint(),
+                evaluation_input_sha256=(
+                    ball_metrics_module._evaluation_input_sha256_from_commitments(
+                        **forged_manifest_commitments,
+                    )
+                ),
+            )
+
     def test_report_constructor_rejects_forged_derived_metrics_and_errors(self) -> None:
         report = evaluate_ball_localization(
             (_truth(0),),
@@ -1767,14 +2511,49 @@ class BallMetricsTests(unittest.TestCase):
             {"normalized_tolerance_ball_diameters": 0.5},
             {"operating_prediction_count": 0},
             {"full_ranking_true_positive_count": 0},
-            {"negative_frame_activation_count": 1},
-            {"negative_frame_activation_rate": 0.5},
-            {"activated_negative_frame_identities": (_truth(0).frame.identity,)},
+            {"truth_annotation_count": 2},
+            {"truth_frame_count": 2},
+            {"non_match_ball_annotation_count": 1},
+            {"evaluated_nonlocalizable_frame_count": 1},
+            {"ignored_nonlocalizable_prediction_count": 1},
+            {"confident_negative_frame_activation_count": 1},
+            {"confident_negative_frame_activation_rate": 0.5},
+            {"activated_confident_negative_frame_identities": (_truth(0).frame.identity,)},
             {"matched_center_errors_px": (999.0,)},
             {"matched_apparent_minor_axis_diameters_px": (6.0,)},
             {"matched_center_errors_normalized": (999.0,)},
             {"matched_center_error_mean_px": 999.0},
             {"matched_center_error_normalized_mean": 999.0},
+            {
+                "appearance_counts": (
+                    (BallAppearance.SHARP, 0),
+                    (BallAppearance.MOTION_BLURRED, 0),
+                    (BallAppearance.NOT_OBSERVABLE, 1),
+                )
+            },
+            {
+                "nonlocalizable_visibility_activation_counts": (
+                    (BallVisibility.FULLY_OCCLUDED, 1),
+                    (BallVisibility.OUT_OF_FRAME, 0),
+                    (BallVisibility.INDISTINGUISHABLE, 0),
+                    (BallVisibility.CAPTURE_UNKNOWN, 0),
+                )
+            },
+            {
+                "non_match_role_activation_counts": tuple(
+                    (
+                        role,
+                        1 if role is BallRole.SPARE_BALL else 0,
+                    )
+                    for role in BallRole
+                )
+            },
+            {
+                "evaluation_manifest": replace(
+                    report.evaluation_manifest,
+                    manifest_id="forged-unit-benchmark",
+                )
+            },
             {"evaluation_manifest_sha256": "A" * 64},
             {"evaluation_manifest_sha256": "0" * 64},
             {"annotation_verification_policy_sha256": "A" * 64},
@@ -1818,6 +2597,42 @@ class BallMetricsTests(unittest.TestCase):
             with self.subTest(overrides=overrides), self.assertRaises(ValueError):
                 replace(report, **overrides)
 
+    def test_report_count_pairs_and_slice_collections_are_deeply_immutable(self) -> None:
+        class TupleSubclass(tuple):
+            pass
+
+        report = evaluate_ball_localization(
+            (_truth(0),),
+            (_prediction("candidate", 0),),
+            DEFAULT_NORMALIZED_TOLERANCE,
+        )
+        mutable_pair_counts = (
+            [*report.visibility_counts[0]],
+            *report.visibility_counts[1:],
+        )
+        with self.assertRaisesRegex(ValueError, "exact two-item"):
+            replace(report, visibility_counts=mutable_pair_counts)
+        subclass_pair_counts = (
+            TupleSubclass(report.role_counts[0]),
+            *report.role_counts[1:],
+        )
+        with self.assertRaisesRegex(ValueError, "exact two-item"):
+            replace(report, role_counts=subclass_pair_counts)
+        with self.assertRaisesRegex(ValueError, "exact built-in tuple"):
+            replace(
+                report,
+                non_match_role_counts=TupleSubclass(
+                    report.non_match_role_counts
+                ),
+            )
+        with self.assertRaisesRegex(ValueError, "exact tuple of performance"):
+            replace(
+                report,
+                appearance_performance_slices=TupleSubclass(
+                    report.appearance_performance_slices
+                ),
+            )
+
     def test_percentiles_use_documented_linear_interpolation(self) -> None:
         truth = tuple(_truth(index) for index in range(3))
         predictions = (
@@ -1838,7 +2653,7 @@ class BallMetricsTests(unittest.TestCase):
         self.assertEqual(report.matched_center_error_normalized_max, 0.5)
 
     def test_canonical_report_and_fingerprint_are_order_independent(self) -> None:
-        truth = (_truth(0), _truth(1, state=BallState.ABSENT))
+        truth = (_truth(0), _truth(1, visibility=BallVisibility.NOT_PRESENT))
         predictions = (
             _prediction("a", 0, confidence=0.8),
             _prediction("b", 1, confidence=0.2),
@@ -1866,12 +2681,17 @@ class BallMetricsTests(unittest.TestCase):
         self.assertNotEqual(first.fingerprint(), renamed.fingerprint())
         self.assertRegex(first.fingerprint(), r"^[0-9a-f]{64}$")
         payload = json.loads(first.canonical_json())
-        self.assertEqual(payload["schema_version"], "3.0")
-        self.assertEqual(payload["metric"], "BALL_CENTER_LOCALIZATION")
+        self.assertEqual(payload["schema_version"], "7.0")
+        self.assertEqual(
+            payload["metric"],
+            "MATCH_BALL_CENTER_LOCALIZATION_V2",
+        )
+        self.assertEqual(payload["annotation_schema_version"], "2.0")
         self.assertEqual(
             payload["annotation_trust"]["evaluation_manifest_sha256"],
-            EVALUATION_MANIFEST_SHA256,
+            first.evaluation_manifest.fingerprint(),
         )
+        self.assertFalse(payload["claim_scope"]["readiness_claim_permitted"])
         self.assertEqual(
             payload["annotation_trust"]["evaluator_artifact_sha256"],
             ball_localization_evaluator_artifact_sha256(),

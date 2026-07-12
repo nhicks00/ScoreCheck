@@ -32,9 +32,13 @@ from vision_scoring.annotation_trust import (
     verify_annotation_evidence,
 )
 from vision_scoring.annotations import (
+    AnnotationType,
     AutorotationPolicy,
-    BallFrameAnnotation,
-    BallState,
+    BallAppearance,
+    BallFrameAnnotationV2,
+    BallPlayState,
+    BallRole,
+    BallVisibility,
     DecodedColorRange,
     DecodedColorSpace,
     DecodedFrameHashBasis,
@@ -56,6 +60,7 @@ from vision_scoring.immutable_store import (
 
 
 SOURCE = "a" * 64
+ONTOLOGY = "b" * 64
 REVIEW_BYTES = b"annotation review evidence\n"
 ADJUDICATION_BYTES = b"annotation adjudication evidence\n"
 CAPTURE_BYTES = b"capture duplicate integrity evidence\n"
@@ -124,11 +129,16 @@ def _annotation(
     frame: FrameReference | None = None,
     annotation_id: str = "truth-1",
     center: PixelPoint = PixelPoint(100, 200),
-) -> BallFrameAnnotation:
+) -> BallFrameAnnotationV2:
     values: dict[str, object] = {
         "annotation_id": annotation_id,
+        "ontology_sha256": ONTOLOGY,
+        "ball_instance_id": "match-ball",
         "frame": frame or _frame(),
-        "state": BallState.VISIBLE,
+        "visibility": BallVisibility.VISIBLE,
+        "appearance": BallAppearance.SHARP,
+        "role": BallRole.MATCH_BALL,
+        "play_state": BallPlayState.IN_PLAY,
         "center": center,
         "apparent_minor_axis_diameter_px": 12.0,
         "track_segment_id": "track-1",
@@ -140,11 +150,11 @@ def _annotation(
     if review_state is ReviewState.ADJUDICATED:
         values["adjudicator_id"] = "adjudicator-1"
         values["adjudication_evidence_refs"] = (ADJUDICATION_REF,)
-    return BallFrameAnnotation(**values)  # type: ignore[arg-type]
+    return BallFrameAnnotationV2(**values)  # type: ignore[arg-type]
 
 
 def _attestation(
-    annotation: BallFrameAnnotation,
+    annotation: BallFrameAnnotationV2,
     role: AnnotationAttestationRole,
     principal_id: str,
     *,
@@ -152,7 +162,7 @@ def _attestation(
     key_id: str | None = None,
     signed_on: str = "2026-07-11",
     trust_domain_id: str = TRUST_DOMAIN_ID,
-    message_annotation: BallFrameAnnotation | None = None,
+    message_annotation: BallFrameAnnotationV2 | None = None,
 ) -> AnnotationAttestation:
     if private_key is None:
         private_key = (
@@ -177,6 +187,7 @@ def _attestation(
         )
     )
     return AnnotationAttestation(
+        annotation_type=AnnotationType.BALL_FRAME_OBSERVATION,
         annotation_sha256=annotation.fingerprint(),
         role=role,
         principal_id=principal_id,
@@ -188,7 +199,7 @@ def _attestation(
 
 
 def _attestations(
-    annotation: BallFrameAnnotation,
+    annotation: BallFrameAnnotationV2,
 ) -> tuple[AnnotationAttestation, ...]:
     values = [
         _attestation(
@@ -236,7 +247,7 @@ def _key(
 
 
 def _store(
-    annotation: BallFrameAnnotation,
+    annotation: BallFrameAnnotationV2,
     **overrides: object,
 ) -> AnnotationTrustStore:
     values: dict[str, object] = {
@@ -247,6 +258,7 @@ def _store(
         ),
         "current_annotations": (
             CurrentAnnotation(
+                annotation_type=AnnotationType.BALL_FRAME_OBSERVATION,
                 annotation_id=annotation.annotation_id,
                 annotation_sha256=annotation.fingerprint(),
             ),
@@ -337,7 +349,7 @@ def _protected_configuration_generation(
 
 def _verify(
     store: AnnotationTrustStore,
-    annotations: tuple[BallFrameAnnotation, ...],
+    annotations: tuple[BallFrameAnnotationV2, ...],
     attestations: tuple[AnnotationAttestation, ...],
     evidence_store_root: Path,
     *,
@@ -377,6 +389,44 @@ def _verify(
 
 
 class AnnotationTrustTests(unittest.TestCase):
+    def test_v2_trust_is_typed_and_fails_closed_for_unimplemented_layers(self) -> None:
+        annotation = _annotation()
+        attestation = _attestation(
+            annotation,
+            AnnotationAttestationRole.REVIEWER,
+            "reviewer-1",
+        )
+        current = CurrentAnnotation(
+            AnnotationType.BALL_FRAME_OBSERVATION,
+            annotation.annotation_id,
+            annotation.fingerprint(),
+        )
+        self.assertIs(
+            attestation.annotation_type,
+            AnnotationType.BALL_FRAME_OBSERVATION,
+        )
+        self.assertIs(
+            current.annotation_type,
+            AnnotationType.BALL_FRAME_OBSERVATION,
+        )
+        for annotation_type in (
+            AnnotationType.OBSERVED_TEMPORAL_EVENT,
+            AnnotationType.PHYSICAL_EVENT_ADJUDICATION,
+            AnnotationType.REPORTED_OFFICIAL_EVENT,
+        ):
+            with self.subTest(annotation_type=annotation_type), self.assertRaisesRegex(
+                ValueError,
+                "supports BALL_FRAME_OBSERVATION only",
+            ):
+                replace(attestation, annotation_type=annotation_type)
+            with self.subTest(
+                current_annotation_type=annotation_type
+            ), self.assertRaisesRegex(
+                ValueError,
+                "supports BALL_FRAME_OBSERVATION only",
+            ):
+                replace(current, annotation_type=annotation_type)
+
     def test_valid_exact_signers_current_annotation_and_evidence_verify(self) -> None:
         annotation = _annotation()
         attestations = _attestations(annotation)
@@ -694,8 +744,8 @@ class AnnotationTrustTests(unittest.TestCase):
             duplicate = root / "duplicate.json"
             duplicate.write_text(
                 generation.canonical_json().replace(
-                    '"schema_version":"1.0"',
-                    '"schema_version":"1.0","schema_version":"hidden"',
+                    '"schema_version":"2.0"',
+                    '"schema_version":"2.0","schema_version":"hidden"',
                 ),
                 encoding="utf-8",
             )
@@ -867,7 +917,11 @@ class AnnotationTrustTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "cannot exceed 2"):
                 replace(store, keys=store.keys + (extra_key,))
 
-        extra_current = CurrentAnnotation("truth-extra", "b" * 64)
+        extra_current = CurrentAnnotation(
+            AnnotationType.BALL_FRAME_OBSERVATION,
+            "truth-extra",
+            "b" * 64,
+        )
         with patch.object(annotation_trust_module, "_MAX_CURRENT_ANNOTATIONS", 1):
             self.assertEqual(
                 replace(store, current_annotations=store.current_annotations).current_annotations,
@@ -917,7 +971,7 @@ class AnnotationTrustTests(unittest.TestCase):
                 (REVIEW_REF,),
             )
             with patch.object(
-                BallFrameAnnotation,
+                BallFrameAnnotationV2,
                 "fingerprint",
                 side_effect=AssertionError("fingerprint must not run"),
             ):

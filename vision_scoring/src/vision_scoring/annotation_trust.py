@@ -1,4 +1,4 @@
-"""Trusted Ed25519 review attestations for evaluation annotations.
+"""Trusted Ed25519 review attestations for V2 ball observations.
 
 An annotation's ``REVIEWED`` or ``ADJUDICATED`` enum is descriptive payload,
 not authority. This module verifies one detached signature from every declared
@@ -14,6 +14,12 @@ the complete required raw SHA-256 set, and one shared read lease is held while
 every bounded object is staged and verified. The trust store and evidence store
 root are deployment inputs; they must not be taken from the dataset being
 evaluated.
+
+This V2 module intentionally supports ``BALL_FRAME_OBSERVATION`` only. Observed
+temporal, physical-adjudication, and official/legal records have distinct type
+tags but are not accepted by this verifier until their separate role and
+signature policies are implemented. They never fall through a generic ball
+verifier.
 
 The verification policy is also a protected deployment input. Its expected
 fingerprint must come from an independent protected configuration or release
@@ -42,7 +48,12 @@ from typing import Any, Mapping
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from .annotations import BallFrameAnnotation, ReviewState
+from .annotations import (
+    AnnotationType,
+    BallFrameAnnotationV2,
+    ReviewState,
+    UnavailableFrameReference,
+)
 from .immutable_store import (
     ImmutableStoreError,
     generation_id_for,
@@ -50,12 +61,14 @@ from .immutable_store import (
 )
 
 
-SCHEMA_VERSION = "1.0"
-_SIGNING_DOMAIN = "multicourt-vision-scoring:annotation-attestation:v1"
-_ATTESTATION_SET_DOMAIN = (
-    "multicourt-vision-scoring:annotation-attestation-set:v1"
+SCHEMA_VERSION = "2.0"
+_SIGNING_DOMAIN = (
+    "multicourt-vision-scoring:annotation-attestation:ball-frame-observation:v2"
 )
-_EVIDENCE_SET_DOMAIN = "multicourt-vision-scoring:annotation-evidence-set:v1"
+_ATTESTATION_SET_DOMAIN = (
+    "multicourt-vision-scoring:annotation-attestation-set:v2"
+)
+_EVIDENCE_SET_DOMAIN = "multicourt-vision-scoring:annotation-evidence-set:v2"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _CONTENT_ADDRESS_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
 _STABLE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/+~-]{0,127}$")
@@ -369,6 +382,7 @@ def _strict_protected_configuration_json(path: Path) -> Mapping[str, Any]:
 class AnnotationAttestation:
     """Detached signature by one declared annotation principal."""
 
+    annotation_type: AnnotationType
     annotation_sha256: str
     role: AnnotationAttestationRole
     principal_id: str
@@ -378,6 +392,12 @@ class AnnotationAttestation:
     signature_base64: str
 
     def __post_init__(self) -> None:
+        if type(self.annotation_type) is not AnnotationType:
+            raise ValueError("annotation_type must be an AnnotationType")
+        if self.annotation_type is not AnnotationType.BALL_FRAME_OBSERVATION:
+            raise ValueError(
+                "annotation trust V2 currently supports BALL_FRAME_OBSERVATION only"
+            )
         _require_sha256(self.annotation_sha256, "annotation_sha256")
         if type(self.role) is not AnnotationAttestationRole:
             raise ValueError("role must be an AnnotationAttestationRole")
@@ -401,6 +421,7 @@ class AnnotationAttestation:
 
     def to_canonical_dict(self) -> dict[str, Any]:
         return {
+            "annotation_type": self.annotation_type.value,
             "annotation_sha256": self.annotation_sha256,
             "key_id": self.key_id,
             "principal_id": self.principal_id,
@@ -633,15 +654,23 @@ class TrustedAnnotationKey:
 
 @dataclass(frozen=True, slots=True)
 class CurrentAnnotation:
+    annotation_type: AnnotationType
     annotation_id: str
     annotation_sha256: str
 
     def __post_init__(self) -> None:
+        if type(self.annotation_type) is not AnnotationType:
+            raise ValueError("annotation_type must be an AnnotationType")
+        if self.annotation_type is not AnnotationType.BALL_FRAME_OBSERVATION:
+            raise ValueError(
+                "annotation trust V2 currently supports BALL_FRAME_OBSERVATION only"
+            )
         _require_stable_id(self.annotation_id, "annotation_id")
         _require_sha256(self.annotation_sha256, "annotation_sha256")
 
     def to_canonical_dict(self) -> dict[str, str]:
         return {
+            "annotation_type": self.annotation_type.value,
             "annotation_id": self.annotation_id,
             "annotation_sha256": self.annotation_sha256,
         }
@@ -812,10 +841,15 @@ class AnnotationTrustStore:
                 "current_annotations must be an immutable tuple of "
                 "CurrentAnnotation values"
             )
-        if len({item.annotation_id for item in self.current_annotations}) != len(
-            self.current_annotations
-        ):
-            raise ValueError("each annotation ID may have only one current fingerprint")
+        if len(
+            {
+                (item.annotation_type, item.annotation_id)
+                for item in self.current_annotations
+            }
+        ) != len(self.current_annotations):
+            raise ValueError(
+                "each typed annotation ID may have only one current fingerprint"
+            )
         if type(self.revoked_annotation_sha256s) is not tuple:
             raise ValueError(
                 "revoked_annotation_sha256s must be an immutable tuple"
@@ -845,7 +879,10 @@ class AnnotationTrustStore:
                 item.to_canonical_dict()
                 for item in sorted(
                     self.current_annotations,
-                    key=lambda item: item.annotation_id,
+                    key=lambda item: (
+                        item.annotation_type.value,
+                        item.annotation_id,
+                    ),
                 )
             ],
             "keyring_id": self.keyring_id,
@@ -867,7 +904,7 @@ class AnnotationTrustStore:
 
     def verify_annotation_set(
         self,
-        annotations: tuple[BallFrameAnnotation, ...],
+        annotations: tuple[BallFrameAnnotationV2, ...],
         attestations: tuple[AnnotationAttestation, ...],
         *,
         evidence_store_root: Path,
@@ -960,7 +997,10 @@ class AnnotationTrustStore:
                 "ANNOTATION_POLICY_DATE",
                 "annotation verification policy is not active on the UTC verification date",
             )
-        annotation_ids = [annotation.annotation_id for annotation in annotations]
+        annotation_ids = [
+            (annotation.annotation_type, annotation.annotation_id)
+            for annotation in annotations
+        ]
         if len(set(annotation_ids)) != len(annotation_ids):
             raise AnnotationTrustError(
                 "ANNOTATION_ID_DUPLICATE",
@@ -968,7 +1008,7 @@ class AnnotationTrustStore:
             )
 
         current_by_id = {
-            item.annotation_id: item.annotation_sha256
+            (item.annotation_type, item.annotation_id): item.annotation_sha256
             for item in self.current_annotations
         }
         revoked = set(self.revoked_annotation_sha256s)
@@ -979,14 +1019,15 @@ class AnnotationTrustStore:
             requested_truth_policy=requested_policy,
         )
         expected_signers: dict[
-            tuple[str, AnnotationAttestationRole, str],
-            BallFrameAnnotation,
+            tuple[AnnotationType, str, AnnotationAttestationRole, str],
+            BallFrameAnnotationV2,
         ] = {}
         for annotation in annotations:
             fingerprint = annotation.fingerprint()
             for reviewer_id in annotation.reviewer_ids:
                 expected_signers[
                     (
+                        annotation.annotation_type,
                         fingerprint,
                         AnnotationAttestationRole.REVIEWER,
                         reviewer_id,
@@ -996,6 +1037,7 @@ class AnnotationTrustStore:
                 assert annotation.adjudicator_id is not None
                 expected_signers[
                     (
+                        annotation.annotation_type,
                         fingerprint,
                         AnnotationAttestationRole.ADJUDICATOR,
                         annotation.adjudicator_id,
@@ -1003,11 +1045,12 @@ class AnnotationTrustStore:
                 ] = annotation
 
         supplied: dict[
-            tuple[str, AnnotationAttestationRole, str],
+            tuple[AnnotationType, str, AnnotationAttestationRole, str],
             AnnotationAttestation,
         ] = {}
         for attestation in attestations:
             signer_key = (
+                attestation.annotation_type,
                 attestation.annotation_sha256,
                 attestation.role,
                 attestation.principal_id,
@@ -1020,29 +1063,29 @@ class AnnotationTrustStore:
             supplied[signer_key] = attestation
         missing = sorted(
             expected_signers.keys() - supplied.keys(),
-            key=lambda item: (item[0], item[1].value, item[2]),
+            key=lambda item: (item[0].value, item[1], item[2].value, item[3]),
         )
         if missing:
             raise AnnotationTrustError(
                 "ANNOTATION_ATTESTATION_MISSING",
                 "missing required annotation attestation for "
-                f"{missing[0][1].value}:{missing[0][2]}",
+                f"{missing[0][2].value}:{missing[0][3]}",
             )
         extra = sorted(
             supplied.keys() - expected_signers.keys(),
-            key=lambda item: (item[0], item[1].value, item[2]),
+            key=lambda item: (item[0].value, item[1], item[2].value, item[3]),
         )
         if extra:
             raise AnnotationTrustError(
                 "ANNOTATION_ATTESTATION_EXTRA",
                 "attestation set contains an undeclared or unrelated signer: "
-                f"{extra[0][1].value}:{extra[0][2]}",
+                f"{extra[0][2].value}:{extra[0][3]}",
             )
 
         keys_by_id = {key.key_id: key for key in self.keys}
         for signer_key in sorted(
             expected_signers,
-            key=lambda item: (item[0], item[1].value, item[2]),
+            key=lambda item: (item[0].value, item[1], item[2].value, item[3]),
         ):
             annotation = expected_signers[signer_key]
             attestation = supplied[signer_key]
@@ -1153,7 +1196,7 @@ class AnnotationTrustStore:
                     "annotation trust store changed during verification",
                 )
             completion_current_by_id = {
-                item.annotation_id: item.annotation_sha256
+                (item.annotation_type, item.annotation_id): item.annotation_sha256
                 for item in self.current_annotations
             }
             completion_revoked = set(self.revoked_annotation_sha256s)
@@ -1260,7 +1303,7 @@ def _preflight_annotation_verification_bounds(
 
     if type(annotations) is not tuple:
         raise ValueError(
-            "annotations must be an immutable tuple of BallFrameAnnotation values"
+            "annotations must be an immutable tuple of BallFrameAnnotationV2 values"
         )
     if not annotations or len(annotations) > _MAX_ANNOTATIONS:
         raise AnnotationTrustError(
@@ -1281,10 +1324,10 @@ def _preflight_annotation_verification_bounds(
     references: set[str] = set()
     expected_attestation_count = 0
     for annotation in annotations:
-        if type(annotation) is not BallFrameAnnotation:
+        if type(annotation) is not BallFrameAnnotationV2:
             raise ValueError(
                 "annotations must be an immutable tuple of "
-                "BallFrameAnnotation values"
+                "BallFrameAnnotationV2 values"
             )
         if len(annotation.reviewer_ids) > _MAX_REVIEWERS_PER_ANNOTATION:
             raise AnnotationTrustError(
@@ -1301,17 +1344,43 @@ def _preflight_annotation_verification_bounds(
                 "required annotation attestation count cannot exceed "
                 f"{_MAX_ATTESTATIONS}",
             )
+        search_attestation = annotation.search_region_observability_attestation
+        search_review_refs = (
+            search_attestation.review_evidence_refs
+            if search_attestation is not None
+            else ()
+        )
+        search_capture_refs = (
+            search_attestation.capture_integrity_attestation_refs
+            if search_attestation is not None
+            else ()
+        )
+        unavailable_segment_refs = (
+            (annotation.frame.capture_segment_ref,)
+            if type(annotation.frame) is UnavailableFrameReference
+            else ()
+        )
+        unavailable_gap_refs = (
+            annotation.frame.gap_evidence_refs
+            if type(annotation.frame) is UnavailableFrameReference
+            else ()
+        )
         if (
             type(annotation.review_evidence_refs) is not tuple
             or type(annotation.adjudication_evidence_refs) is not tuple
             or type(annotation.frame.capture_integrity_attestation_refs)
             is not tuple
+            or type(search_review_refs) is not tuple
+            or type(search_capture_refs) is not tuple
+            or type(unavailable_gap_refs) is not tuple
         ):
             raise ValueError(
                 "annotation evidence references must be immutable tuples"
             )
-        if len(annotation.frame.capture_integrity_attestation_refs) > (
-            _MAX_CAPTURE_ATTESTATION_REFS
+        if (
+            len(annotation.frame.capture_integrity_attestation_refs)
+            + len(search_capture_refs)
+            > _MAX_CAPTURE_ATTESTATION_REFS
         ):
             raise AnnotationTrustError(
                 "ANNOTATION_CAPTURE_EVIDENCE_COUNT",
@@ -1322,6 +1391,10 @@ def _preflight_annotation_verification_bounds(
             len(annotation.review_evidence_refs)
             + len(annotation.adjudication_evidence_refs)
             + len(annotation.frame.capture_integrity_attestation_refs)
+            + len(search_review_refs)
+            + len(search_capture_refs)
+            + len(unavailable_segment_refs)
+            + len(unavailable_gap_refs)
             > _MAX_EVIDENCE_REFS_PER_ANNOTATION
         ):
             raise AnnotationTrustError(
@@ -1333,6 +1406,10 @@ def _preflight_annotation_verification_bounds(
             annotation.review_evidence_refs,
             annotation.adjudication_evidence_refs,
             annotation.frame.capture_integrity_attestation_refs,
+            search_review_refs,
+            search_capture_refs,
+            unavailable_segment_refs,
+            unavailable_gap_refs,
         ):
             for reference in collection:
                 if type(reference) is not str or not _CONTENT_ADDRESS_RE.fullmatch(
@@ -1364,9 +1441,9 @@ def _preflight_annotation_verification_bounds(
 
 
 def _enforce_annotation_currentness_and_truth_policy(
-    annotations: tuple[BallFrameAnnotation, ...],
+    annotations: tuple[BallFrameAnnotationV2, ...],
     *,
-    current_by_id: dict[str, str],
+    current_by_id: dict[tuple[AnnotationType, str], str],
     revoked: set[str],
     requested_truth_policy: AnnotationMinimumTruthPolicy,
 ) -> None:
@@ -1379,7 +1456,9 @@ def _enforce_annotation_currentness_and_truth_policy(
                 "ANNOTATION_REVOKED",
                 f"annotation has been revoked: {annotation.annotation_id}",
             )
-        current = current_by_id.get(annotation.annotation_id)
+        current = current_by_id.get(
+            (annotation.annotation_type, annotation.annotation_id)
+        )
         if current is None:
             raise AnnotationTrustError(
                 "ANNOTATION_UNTRUSTED",
@@ -1424,7 +1503,7 @@ def _enforce_key_not_compromised(
 
 
 def annotation_attestation_signing_message(
-    annotation: BallFrameAnnotation,
+    annotation: BallFrameAnnotationV2,
     *,
     role: AnnotationAttestationRole,
     principal_id: str,
@@ -1434,8 +1513,8 @@ def annotation_attestation_signing_message(
 ) -> bytes:
     """Return the domain-separated bytes an annotation principal signs."""
 
-    if type(annotation) is not BallFrameAnnotation:
-        raise ValueError("annotation must be a BallFrameAnnotation")
+    if type(annotation) is not BallFrameAnnotationV2:
+        raise ValueError("annotation must be a BallFrameAnnotationV2")
     if type(role) is not AnnotationAttestationRole:
         raise ValueError("role must be an AnnotationAttestationRole")
     _require_stable_id(principal_id, "principal_id")
@@ -1445,6 +1524,7 @@ def annotation_attestation_signing_message(
     return _canonical_json(
         {
             "annotation": annotation.to_canonical_dict(),
+            "annotation_type": annotation.annotation_type.value,
             "domain": _SIGNING_DOMAIN,
             "key_id": key_id,
             "principal_id": principal_id,
@@ -1476,6 +1556,7 @@ def annotation_attestation_set_fingerprint(
     ordered = sorted(
         attestations,
         key=lambda attestation: (
+            attestation.annotation_type.value,
             attestation.annotation_sha256,
             attestation.role.value,
             attestation.principal_id,
