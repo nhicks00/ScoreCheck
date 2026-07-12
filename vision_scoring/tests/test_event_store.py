@@ -28,6 +28,7 @@ from vision_scoring.authorization import (
     TrustedKeyKind,
     authorize_rule_event,
     encode_authorized_rule_event,
+    parse_authorized_rule_event,
     sign_authorization_command,
     sign_policy_assessment,
 )
@@ -62,6 +63,7 @@ from vision_scoring.policy import (
     ScoringIntentKind,
 )
 from vision_scoring.rules import Ruleset
+from vision_scoring.state_codec import match_state_fingerprint
 
 
 REDUCER_BUILD_SHA256 = "d" * 64
@@ -219,6 +221,7 @@ class _Fixture:
         authorized_at_ns: int | None = None,
         origin: AuthorizationOrigin = AuthorizationOrigin.HUMAN_DIRECT,
         assessment_value: PolicyAssessment | None = None,
+        signed_assessment_value=None,
         assessment_key: TrustedAssessmentKey | None = None,
         assessment_private_key: Ed25519PrivateKey | None = None,
     ) -> bytes:
@@ -232,8 +235,10 @@ class _Fixture:
             actor_private = self.scorekeeper_private
         issued = event.created_at_ns + 2
         authorized = authorized_at_ns or event.created_at_ns + 5
-        signed_assessment = None
-        if assessment_value is not None:
+        signed_assessment = signed_assessment_value
+        if signed_assessment is not None and assessment_value is None:
+            raise ValueError("signed assessment requires assessment_value")
+        if assessment_value is not None and signed_assessment is None:
             if assessment_key is None or assessment_private_key is None:
                 raise ValueError("assessment signing key pair is required")
             signed_assessment = sign_policy_assessment(
@@ -1110,6 +1115,223 @@ class EventStoreTests(unittest.TestCase):
                         verified_at_ns=141,
                     ),
                 )
+
+    def test_generic_append_text_projection_matches_persisted_v3_rows(self) -> None:
+        seed = self.fixture.envelope(self.fixture.event(1))
+        with self.fixture.store() as store:
+            self.fixture.initialize(store)
+            with store._transaction(immediate=False):  # type: ignore[attr-defined]
+                before = store._ledger_preflight_locked(  # type: ignore[attr-defined]
+                    self.fixture.match_id
+                )
+            projected_text_values: list[int] = []
+            original_budget_check = SQLiteEventStore._check_projected_ledger_budget  # type: ignore[attr-defined]
+
+            def capture_budget_check(
+                instance,
+                preflight,
+                *,
+                envelope_bytes,
+                state_bytes,
+                outbox_bytes,
+                text_bytes,
+            ):
+                projected_text_values.append(text_bytes)
+                return original_budget_check(
+                    instance,
+                    preflight,
+                    envelope_bytes=envelope_bytes,
+                    state_bytes=state_bytes,
+                    outbox_bytes=outbox_bytes,
+                    text_bytes=text_bytes,
+                )
+
+            with mock.patch.object(
+                SQLiteEventStore,
+                "_check_projected_ledger_budget",
+                new=capture_budget_check,
+            ):
+                store.append_authorized_event(
+                    seed,
+                    policy_archive=self.fixture.archive,
+                    verified_at_ns=140,
+                )
+            with store._transaction(immediate=False):  # type: ignore[attr-defined]
+                after = store._ledger_preflight_locked(  # type: ignore[attr-defined]
+                    self.fixture.match_id
+                )
+            self.assertEqual(len(projected_text_values), 1)
+            self.assertEqual(
+                after.text_bytes - before.text_bytes,
+                projected_text_values[0],
+            )
+
+    def test_replay_rejects_self_consistent_outbox_id_reordering(self) -> None:
+        with self.fixture.store() as store:
+            self.fixture.initialize(store)
+            for revision, verified_at_ns in ((1, 140), (2, 160)):
+                store.append_authorized_event(
+                    self.fixture.envelope(self.fixture.event(revision)),
+                    policy_archive=self.fixture.archive,
+                    verified_at_ns=verified_at_ns,
+                )
+
+            connection = store._connection  # type: ignore[attr-defined]
+            match_row = store._load_match_locked(self.fixture.match_id)  # type: ignore[attr-defined]
+            rows = connection.execute(
+                "SELECT * FROM event_log WHERE match_id = ? ORDER BY revision",
+                (self.fixture.match_id,),
+            ).fetchall()
+            state = store.reducer.new_match(self.fixture.match_id)
+            state0_fingerprint = match_state_fingerprint(
+                state,
+                ruleset=store.ruleset,
+            )
+            initial_archive = connection.execute(
+                """
+                SELECT adopted_archive_fingerprint FROM archive_adoptions
+                WHERE match_id = ? AND generation = 0
+                """,
+                (self.fixture.match_id,),
+            ).fetchone()[0]
+            head = store._genesis_head(  # type: ignore[attr-defined]
+                match_binding_fingerprint=match_row["match_binding_fingerprint"],
+                initial_state_fingerprint=state0_fingerprint,
+                initial_archive_fingerprint=initial_archive,
+            )
+            updates: list[tuple[object, ...]] = []
+            for row, new_outbox_id in zip(rows, (2, 1)):
+                envelope = parse_authorized_rule_event(row["envelope_bytes"])
+                state = store.reducer.reduce(state, envelope.event).after
+                state_fingerprint = match_state_fingerprint(
+                    state,
+                    ruleset=store.ruleset,
+                )
+                message_id = (
+                    f"shadow:{new_outbox_id}:{envelope.event.event_id}"
+                )
+                payload = store._outbox_payload(  # type: ignore[attr-defined]
+                    envelope=envelope,
+                    state=state,
+                    state_fingerprint=state_fingerprint,
+                    archive_fingerprint=row["adopted_archive_fingerprint"],
+                    message_id=message_id,
+                    outbox_id=new_outbox_id,
+                    appended_at_ns=row["appended_at_ns"],
+                    review_position=row["review_position_at_append"],
+                    review_history_head_sha256=row[
+                        "review_history_head_at_append"
+                    ],
+                )
+                payload_fingerprint = hashlib.sha256(payload).hexdigest()
+                head = store._next_head(  # type: ignore[attr-defined]
+                    head,
+                    event=envelope.event,
+                    envelope_fingerprint=envelope.fingerprint(),
+                    authorization_record_fingerprint=(
+                        envelope.authorization_record.fingerprint()
+                    ),
+                    state_fingerprint=state_fingerprint,
+                    outbox_payload_fingerprint=payload_fingerprint,
+                    archive_fingerprint=row["adopted_archive_fingerprint"],
+                    outbox_id=new_outbox_id,
+                    appended_at_ns=row["appended_at_ns"],
+                    review_position=row["review_position_at_append"],
+                    review_history_head_sha256=row[
+                        "review_history_head_at_append"
+                    ],
+                )
+                result_fingerprint = store._event_result_identity_fingerprint(  # type: ignore[attr-defined]
+                    envelope_fingerprint=envelope.fingerprint(),
+                    state_fingerprint=state_fingerprint,
+                    outbox_id=new_outbox_id,
+                    outbox_payload_fingerprint=payload_fingerprint,
+                )
+                updates.append(
+                    (
+                        row["revision"],
+                        new_outbox_id,
+                        message_id,
+                        payload,
+                        payload_fingerprint,
+                        head,
+                        result_fingerprint,
+                        envelope.authorization_record.signed_command.command.idempotency_key,
+                    )
+                )
+
+            connection.execute("PRAGMA foreign_keys = OFF")
+            connection.execute(
+                "UPDATE shadow_outbox SET outbox_id = outbox_id + 10"
+            )
+            connection.execute(
+                "UPDATE idempotency_log SET outbox_id = outbox_id + 10"
+            )
+            for (
+                revision,
+                new_outbox_id,
+                message_id,
+                payload,
+                payload_fingerprint,
+                prefix_head,
+                result_fingerprint,
+                idempotency_key,
+            ) in updates:
+                connection.execute(
+                    """
+                    UPDATE shadow_outbox SET outbox_id = ?, message_id = ?,
+                        payload_bytes = ?, payload_fingerprint = ?
+                    WHERE match_id = ? AND revision = ?
+                    """,
+                    (
+                        new_outbox_id,
+                        message_id,
+                        payload,
+                        payload_fingerprint,
+                        self.fixture.match_id,
+                        revision,
+                    ),
+                )
+                connection.execute(
+                    """
+                    UPDATE idempotency_log SET outbox_id = ?,
+                        outbox_payload_fingerprint = ?
+                    WHERE match_id = ? AND result_revision = ?
+                    """,
+                    (
+                        new_outbox_id,
+                        payload_fingerprint,
+                        self.fixture.match_id,
+                        revision,
+                    ),
+                )
+                connection.execute(
+                    """
+                    UPDATE request_identities SET result_identity_fingerprint = ?
+                    WHERE idempotency_key = ?
+                    """,
+                    (result_fingerprint, idempotency_key),
+                )
+                connection.execute(
+                    """
+                    UPDATE state_history SET ledger_head_sha256 = ?
+                    WHERE match_id = ? AND revision = ?
+                    """,
+                    (prefix_head, self.fixture.match_id, revision),
+                )
+            connection.execute(
+                "UPDATE matches SET ledger_head_sha256 = ? WHERE match_id = ?",
+                (updates[-1][5], self.fixture.match_id),
+            )
+            connection.execute("PRAGMA foreign_keys = ON")
+
+            with self.assertRaises(EventStoreError) as caught:
+                store.audit_replay(
+                    self.fixture.match_id,
+                    policy_archive=self.fixture.archive,
+                    verified_at_ns=170,
+                )
+            self.assertEqual(caught.exception.code, "OUTBOX_ID_ORDER")
 
     def test_safe_archive_rotation_is_audited_and_old_archive_cannot_return(self) -> None:
         seed = self.fixture.envelope(self.fixture.event(1))

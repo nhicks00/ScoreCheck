@@ -1414,6 +1414,8 @@ def _verify_signed_policy_assessment_for_policy_boundary(
 ) -> PolicyAssessment:
     """Shared selected-policy verifier with an explicit revocation horizon."""
 
+    if type(signed_assessment) is not SignedPolicyAssessment:
+        raise ValueError("signed_assessment must be an exact SignedPolicyAssessment")
     if type(assessment) is not PolicyAssessment:
         raise ValueError("assessment must be an exact PolicyAssessment")
     if type(policy) is not AuthorizationPolicy:

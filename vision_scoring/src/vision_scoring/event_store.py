@@ -22,6 +22,7 @@ import json
 import os
 import re
 import sqlite3
+from bisect import bisect_left
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from functools import wraps
@@ -95,7 +96,7 @@ from .review_signing import (
     verify_signed_review_disposition,
     verify_signed_review_disposition_at_historical_acceptance,
 )
-from .rules import MatchState, RulesError, RulesReducer, Ruleset
+from .rules import MatchState, RulesError, RulesReducer, Ruleset, SetPhase
 from .state_codec import (
     MAX_RAW_STATE_BYTES,
     encode_match_state,
@@ -681,8 +682,10 @@ def verify_checkpoint_progression(
 ) -> LedgerCheckpoint:
     """Fail closed on locally provable external-checkpoint rollback.
 
-    A hash-chain inclusion proof is still required externally when ``revision``
-    advances; this comparator enforces exact identity and monotonic fields.
+    External inclusion proofs are still required when the event revision,
+    review position, or archive-adoption generation advances; this comparator
+    enforces exact identity and monotonic fields but cannot prove that a changed
+    head extends the previously protected chain rather than a fork.
     """
 
     if type(previous) is not LedgerCheckpoint or type(candidate) is not LedgerCheckpoint:
@@ -970,14 +973,15 @@ class _LedgerPreflight:
 @dataclass(frozen=True, slots=True)
 class _ReviewCaseState:
     case_fingerprint: str
-    signed_case: SignedScorerCopilotCase
+    signed_case_fingerprint: str
     admission_review_position: int
+    state_revision: int
+    set_number: int
+    rally_id: str
     case_sequence: int
     head_fingerprint: str
-    latest_signed_at_ns: int
     head_kind: ReviewDispositionKind | None
     head_outcome: RallyOutcome | None
-    admitted_at_ns: int
     latest_accepted_at_ns: int
     linked_event_id: str | None
     authorization_link_fingerprint: str | None
@@ -998,7 +1002,6 @@ class _ReviewHistoryEntry:
 @dataclass(frozen=True, slots=True)
 class _ReplayLink:
     case_fingerprint: str
-    signed_case: SignedScorerCopilotCase
     context: ReviewAuthorizationContext
     link: CaseAuthorizationLink
     link_fingerprint: str
@@ -1007,8 +1010,18 @@ class _ReplayLink:
     case_sequence: int
     head_kind: ReviewDispositionKind | None
     head_outcome: RallyOutcome | None
-    admitted_at_ns: int
     latest_accepted_at_ns: int
+    assessment_fingerprint: str
+    signed_assessment_fingerprint: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ScoreRevisionContext:
+    """The only historical MatchState facts needed by review replay."""
+
+    current_set_number: int | None
+    current_set_in_progress: bool
+    match_complete: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -1749,6 +1762,11 @@ class SQLiteEventStore:
                     current_set = replay.state.current_set
                     if current_set is None or current_set.number != case.set_number:
                         _fail("CASE_SET_CONTEXT", "case set is not the current active set")
+                    if current_set.phase is not SetPhase.IN_PROGRESS:
+                        _fail(
+                            "CASE_SET_NOT_IN_PROGRESS",
+                            "cases require an in-progress current set",
+                        )
                     if replay.state.match_complete:
                         _fail("CASE_MATCH_COMPLETE", "completed matches cannot admit cases")
                     if replay.state.rally_resolution(case.rally_id) is not None:
@@ -1839,22 +1857,38 @@ class SQLiteEventStore:
                     projected_blob = (
                         replay.review.preflight.blob_bytes + len(signed_case_bytes)
                     )
+                    case_row_text = (
+                        signed_case.case_fingerprint,
+                        case.match_id,
+                        signed_case_fingerprint,
+                        admission_key,
+                        case.rally_id,
+                        case.ruleset_fingerprint,
+                        signed_case_fingerprint,
+                        review_head,
+                    )
+                    history_row_text = (
+                        case.match_id,
+                        "CASE",
+                        signed_case.case_fingerprint,
+                        signed_case_fingerprint,
+                        previous_review_head,
+                        review_head,
+                    )
+                    request_row_text = (
+                        admission_key,
+                        case.match_id,
+                        "CASE_ADMISSION",
+                        request_fingerprint,
+                        signed_case_fingerprint,
+                        result_fingerprint,
+                    )
                     projected_text = replay.review.preflight.text_bytes + sum(
                         len(value)
                         for value in (
-                            signed_case.case_fingerprint,
-                            case.match_id,
-                            signed_case_fingerprint,
-                            admission_key,
-                            case.rally_id,
-                            case.ruleset_fingerprint,
-                            signed_case_fingerprint,
-                            review_head,
-                            "CASE",
-                            previous_review_head,
-                            request_fingerprint,
-                            result_fingerprint,
-                            "CASE_ADMISSION",
+                            *case_row_text,
+                            *history_row_text,
+                            *request_row_text,
                         )
                     )
                     if projected_text > MAX_COPILOT_REVIEW_TEXT_BYTES_PER_MATCH:
@@ -2363,23 +2397,40 @@ class SQLiteEventStore:
                     projected_blob = replay.review.preflight.blob_bytes + len(
                         signed_record_bytes
                     )
+                    journal_row_text = (
+                        signed_record_fingerprint,
+                        case_row["match_id"],
+                        signed_case.case_fingerprint,
+                        signed_case.fingerprint(),
+                        record_type,
+                        unsigned.fingerprint(),
+                        unsigned.previous_record_fingerprint,
+                        unsigned.idempotency_key,
+                        signed_record.policy_fingerprint,
+                        review_head,
+                    )
+                    history_row_text = (
+                        case_row["match_id"],
+                        record_type,
+                        signed_case.case_fingerprint,
+                        signed_record_fingerprint,
+                        previous_review_head,
+                        review_head,
+                    )
+                    request_row_text = (
+                        unsigned.idempotency_key,
+                        case_row["match_id"],
+                        request_kind,
+                        request_fingerprint,
+                        signed_record_fingerprint,
+                        result_fingerprint,
+                    )
                     projected_text = replay.review.preflight.text_bytes + sum(
                         len(value)
                         for value in (
-                            signed_record_fingerprint,
-                            case_row["match_id"],
-                            signed_case.case_fingerprint,
-                            signed_case.fingerprint(),
-                            record_type,
-                            unsigned.fingerprint(),
-                            unsigned.previous_record_fingerprint,
-                            unsigned.idempotency_key,
-                            signed_record.policy_fingerprint,
-                            review_head,
-                            request_kind,
-                            request_fingerprint,
-                            result_fingerprint,
-                            previous_review_head,
+                            *journal_row_text,
+                            *history_row_text,
+                            *request_row_text,
                         )
                     )
                     if projected_text > MAX_COPILOT_REVIEW_TEXT_BYTES_PER_MATCH:
@@ -2560,11 +2611,20 @@ class SQLiteEventStore:
             _fail("COPILOT_CONTEXT_NONCANONICAL", "context bytes are not canonical")
         # Reject callers without live actor/authorizer credentials before any
         # immutable media object can be opened.
-        verify_authorized_rule_event(
-            envelope,
-            policy_archive=policy_archive,
-            verified_at_ns=verified_at_ns,
-        )
+        try:
+            verify_authorized_rule_event(
+                envelope,
+                policy_archive=policy_archive,
+                verified_at_ns=verified_at_ns,
+            )
+        except AuthorizationError:
+            self._persist_block_for_exact_copilot_retry(
+                envelope_bytes=envelope_bytes,
+                envelope=envelope,
+                policy_archive=policy_archive,
+                verified_at_ns=verified_at_ns,
+            )
+            raise
         preloaded_case = self._preload_signed_case_for_clip_verification(
             context.signed_case_fingerprint
         )
@@ -3016,14 +3076,14 @@ class SQLiteEventStore:
                 if command.origin is not AuthorizationOrigin.HUMAN_DIRECT:
                     _fail(
                         "ASSISTED_CONTEXT_REQUIRED",
-                        "assessment-assisted commands require the future atomic case-link API",
+                        "assessment-assisted commands require the dedicated atomic case-link API",
                     )
                 if command.idempotency_key.startswith(
                     ("copilot-v1:", "case-admission-v1:")
                 ):
                     _fail(
                         "COPILOT_CONTEXT_REQUIRED",
-                        "reserved copilot request IDs require the future atomic case-link path",
+                        "reserved copilot request IDs require the dedicated atomic case-link path",
                     )
                 request_kind = "HUMAN_EVENT"
                 request_fingerprint = self._event_request_fingerprint(
@@ -3119,6 +3179,25 @@ class SQLiteEventStore:
                     review_history_head_sha256=review_history_head,
                 )
                 payload_fingerprint = hashlib.sha256(payload_bytes).hexdigest()
+                result_identity_fingerprint = self._event_result_identity_fingerprint(
+                    envelope_fingerprint=envelope_fingerprint,
+                    state_fingerprint=state_fingerprint,
+                    outbox_id=outbox_id,
+                    outbox_payload_fingerprint=payload_fingerprint,
+                )
+                v3_text_bytes = sum(
+                    len(value)
+                    for value in (
+                        review_history_head,
+                        review_history_head,
+                        command.idempotency_key,
+                        event.match_id,
+                        request_kind,
+                        request_fingerprint,
+                        envelope_fingerprint,
+                        result_identity_fingerprint,
+                    )
+                )
                 self._check_projected_ledger_budget(
                     replay.preflight,
                     envelope_bytes=envelope_bytes,
@@ -3130,7 +3209,8 @@ class SQLiteEventStore:
                         archive_fingerprint=archive_fingerprint,
                         state_fingerprint=state_fingerprint,
                         payload_fingerprint=payload_fingerprint,
-                    ),
+                    )
+                    + v3_text_bytes,
                 )
                 new_head = self._next_head(
                     replay.ledger_head_sha256,
@@ -3161,12 +3241,6 @@ class SQLiteEventStore:
                     review_history_head_sha256=review_history_head,
                     case_authorization_link_fingerprint=None,
                     review_context_fingerprint=None,
-                )
-                result_identity_fingerprint = self._event_result_identity_fingerprint(
-                    envelope_fingerprint=envelope_fingerprint,
-                    state_fingerprint=state_fingerprint,
-                    outbox_id=outbox_id,
-                    outbox_payload_fingerprint=payload_fingerprint,
                 )
                 self._connection.execute(
                     """
@@ -3628,6 +3702,11 @@ class SQLiteEventStore:
         current_set = replay.state.current_set
         if current_set is None or current_set.number != case.set_number:
             _fail("CASE_SET_CONTEXT", "case set is not the current active set")
+        if current_set.phase is not SetPhase.IN_PROGRESS:
+            _fail(
+                "CASE_SET_NOT_IN_PROGRESS",
+                "cases require an in-progress current set",
+            )
         if replay.state.match_complete:
             _fail("CASE_MATCH_COMPLETE", "completed matches cannot admit cases")
         if replay.state.rally_resolution(case.rally_id) is not None:
@@ -3762,6 +3841,65 @@ class SQLiteEventStore:
             _fail("COPILOT_CASE_TAMPER", "signed case fingerprint differs from row")
         return rows[0], signed_case
 
+    def _persist_block_for_exact_copilot_retry(
+        self,
+        *,
+        envelope_bytes: bytes,
+        envelope: AuthorizedRuleEvent,
+        policy_archive: AuthorizationPolicyArchive,
+        verified_at_ns: int,
+    ) -> None:
+        """Persist a scheduled authorization failure for an exact retry only.
+
+        New invalid envelopes still fail before media and without taking the
+        writer lock. An exact retained envelope is rechecked under the normal
+        full replay path so a newly effective actor/authorizer revocation
+        records the ledger's documented terminal integrity block.
+        """
+
+        event = envelope.event
+        envelope_fingerprint = envelope.fingerprint()
+        rows = self._connection.execute(
+            """
+            SELECT envelope_bytes, envelope_fingerprint FROM event_log
+            WHERE match_id = ? AND event_id = ?
+            """,
+            (event.match_id, event.event_id),
+        ).fetchmany(2)
+        if (
+            len(rows) != 1
+            or rows[0]["envelope_bytes"] != envelope_bytes
+            or rows[0]["envelope_fingerprint"] != envelope_fingerprint
+        ):
+            return
+        with self._transaction(immediate=True):
+            self._validate_schema()
+            locked_rows = self._connection.execute(
+                """
+                SELECT envelope_bytes, envelope_fingerprint FROM event_log
+                WHERE match_id = ? AND event_id = ?
+                """,
+                (event.match_id, event.event_id),
+            ).fetchmany(2)
+            if (
+                len(locked_rows) != 1
+                or locked_rows[0]["envelope_bytes"] != envelope_bytes
+                or locked_rows[0]["envelope_fingerprint"] != envelope_fingerprint
+            ):
+                return
+            match_row = self._load_match_locked(event.match_id)
+            self._check_match_pins(match_row, policy_archive=policy_archive)
+            if match_row["integrity_blocked"]:
+                _fail(
+                    "INTEGRITY_BLOCKED",
+                    f"ledger is already blocked: {match_row['integrity_failure_code']}",
+                )
+            self._replay_or_permanently_block_locked(
+                match_id=event.match_id,
+                policy_archive=policy_archive,
+                verified_at_ns=verified_at_ns,
+            )
+
     def _preload_signed_case_for_clip_verification(
         self,
         signed_case_fingerprint: str,
@@ -3888,6 +4026,29 @@ class SQLiteEventStore:
                 )
             # This is historical receipt retrieval, not a current presentation.
             return True
+
+        request_kind = (
+            "REVIEW_DISPOSITION"
+            if record_type == "DISPOSITION"
+            else "REVIEW_ADJUDICATION"
+        )
+        request_fingerprint = self._review_request_fingerprint(
+            record_type=record_type,
+            signed_record_fingerprint=signed_record.fingerprint(),
+        )
+        occupied_requests = self._connection.execute(
+            """
+            SELECT idempotency_key FROM request_identities
+            WHERE idempotency_key = ? OR request_fingerprint = ?
+            LIMIT 2
+            """,
+            (unsigned.idempotency_key, request_fingerprint),
+        ).fetchmany(2)
+        if occupied_requests:
+            _fail(
+                "REVIEW_IDEMPOTENCY_CONFLICT",
+                "review request identity is occupied by another request kind",
+            )
 
         if case_state.linked_event_id is not None:
             _fail("CASE_ALREADY_LINKED", "linked case cannot accept actions")
@@ -4239,7 +4400,8 @@ class SQLiteEventStore:
         *,
         envelope: AuthorizedRuleEvent,
         context: ReviewAuthorizationContext,
-        signed_case: SignedScorerCopilotCase,
+        assessment_fingerprint: str,
+        signed_assessment_fingerprint: str | None,
         pre_state: MatchState,
         case_sequence: int,
         head_kind: ReviewDispositionKind | None,
@@ -4251,7 +4413,6 @@ class SQLiteEventStore:
 
         event = envelope.event
         command = envelope.authorization_record.signed_command.command
-        case = signed_case.case
         outcome = self._copilot_event_outcome(event)
         if (
             context.match_id != event.match_id
@@ -4282,6 +4443,11 @@ class SQLiteEventStore:
         current_set = pre_state.current_set
         if current_set is None or current_set.number != context.set_number:
             _fail("COPILOT_SET_CONTEXT", "case set is not the current active set")
+        if current_set.phase is not SetPhase.IN_PROGRESS:
+            _fail(
+                "COPILOT_SET_NOT_IN_PROGRESS",
+                "case-linked events require an in-progress current set",
+            )
         causal_floor = latest_accepted_at_ns
         record = envelope.authorization_record
         if (
@@ -4297,9 +4463,12 @@ class SQLiteEventStore:
         if case_sequence == 0:
             if command.origin is AuthorizationOrigin.ASSESSMENT_ASSISTED:
                 if (
-                    case.signed_assessment is None
-                    or command.assessment != case.assessment
-                    or command.signed_assessment != case.signed_assessment
+                    signed_assessment_fingerprint is None
+                    or command.assessment is None
+                    or command.assessment.fingerprint() != assessment_fingerprint
+                    or command.signed_assessment is None
+                    or command.signed_assessment.fingerprint()
+                    != signed_assessment_fingerprint
                 ):
                     _fail(
                         "COPILOT_ASSESSMENT_MISMATCH",
@@ -4448,7 +4617,12 @@ class SQLiteEventStore:
         self._validate_copilot_event_semantics(
             envelope=envelope,
             context=context,
-            signed_case=signed_case,
+            assessment_fingerprint=signed_case.case.assessment.fingerprint(),
+            signed_assessment_fingerprint=(
+                signed_case.case.signed_assessment.fingerprint()
+                if signed_case.case.signed_assessment is not None
+                else None
+            ),
             pre_state=replay.state,
             case_sequence=case_state.case_sequence,
             head_kind=case_state.head_kind,
@@ -5121,6 +5295,7 @@ class SQLiteEventStore:
             (match_id,),
         )
         streamed_cases = 0
+        previous_case_review_position = 0
         for expected_ordinal, case_row in enumerate(case_rows, start=1):
             streamed_cases = expected_ordinal
             raw = case_row["signed_case_bytes"]
@@ -5241,6 +5416,12 @@ class SQLiteEventStore:
                 case_row["review_history_head_sha256"],
                 case_sequence=0,
             )
+            if case_entry.position <= previous_case_review_position:
+                _fail(
+                    "COPILOT_CASE_ORDER",
+                    "case ordinal does not follow admission history order",
+                )
+            previous_case_review_position = case_entry.position
             if case_entry.position in source_entries:
                 _fail("REVIEW_HISTORY_POSITION", "review source positions collide")
             source_entries[case_entry.position] = case_entry
@@ -5271,7 +5452,6 @@ class SQLiteEventStore:
 
             case_sequence = 0
             current_head = signed_case_fingerprint
-            latest_signed_at_ns = signed_case.signed_at_ns
             latest_accepted_at_ns = admitted_at_ns
             head_kind: ReviewDispositionKind | None = None
             head_outcome: RallyOutcome | None = None
@@ -5424,7 +5604,6 @@ class SQLiteEventStore:
                 source_entries[entry.position] = entry
                 case_sequence = expected_sequence
                 current_head = signed_record_fingerprint
-                latest_signed_at_ns = signed_record.signed_at_ns
                 latest_accepted_at_ns = accepted_at_ns
                 head_kind = unsigned_record.kind
                 head_outcome = unsigned_record.outcome
@@ -5557,7 +5736,6 @@ class SQLiteEventStore:
                 links.append(
                     _ReplayLink(
                         signed_case.case_fingerprint,
-                        signed_case,
                         context,
                         link,
                         link_fingerprint,
@@ -5566,8 +5744,13 @@ class SQLiteEventStore:
                         case_sequence,
                         head_kind,
                         head_outcome,
-                        admitted_at_ns,
                         latest_accepted_at_ns,
+                        case.assessment.fingerprint(),
+                        (
+                            case.signed_assessment.fingerprint()
+                            if case.signed_assessment is not None
+                            else None
+                        ),
                     )
                 )
             expected_projection = (
@@ -5590,14 +5773,15 @@ class SQLiteEventStore:
             case_states.append(
                 _ReviewCaseState(
                     signed_case.case_fingerprint,
-                    signed_case,
+                    signed_case_fingerprint,
                     case_entry.position,
+                    case.state_revision,
+                    case.set_number,
+                    case.rally_id,
                     case_sequence,
                     current_head,
-                    latest_signed_at_ns,
                     head_kind,
                     head_outcome,
-                    admitted_at_ns,
                     latest_accepted_at_ns,
                     linked_event_id,
                     authorization_link_fingerprint,
@@ -5688,9 +5872,11 @@ class SQLiteEventStore:
         self,
         *,
         review: _ReviewReplayResult,
-        states_by_revision: tuple[MatchState, ...],
-        event_review_positions: tuple[int, ...],
-        event_appended_times: tuple[int, ...],
+        event_review_positions: list[int],
+        event_appended_times: list[int],
+        revision_contexts: dict[int, _ScoreRevisionContext],
+        rally_resolution_revisions: dict[str, int],
+        event_count: int,
     ) -> None:
         """Prove each review record against its exact historical score prefix.
 
@@ -5701,20 +5887,35 @@ class SQLiteEventStore:
         """
 
         if (
-            len(states_by_revision) != len(event_review_positions) + 1
-            or len(event_appended_times) != len(event_review_positions)
+            event_count != len(event_review_positions)
+            or len(event_appended_times) != event_count
+            or any(
+                later < earlier
+                for earlier, later in zip(
+                    event_review_positions,
+                    event_review_positions[1:],
+                )
+            )
         ):
             raise AssertionError("score prefix state cardinality differs")
         cases = {item.case_fingerprint: item for item in review.cases}
         if len(cases) != len(review.cases):
             _fail("COPILOT_CASE_CARDINALITY", "case replay identities collide")
+        history_by_case: dict[str, list[_ReviewHistoryEntry]] = {
+            case_fingerprint: [] for case_fingerprint in cases
+        }
+        for entry in review.history_entries:
+            case_history = history_by_case.get(entry.case_fingerprint)
+            if case_history is None:
+                _fail("REVIEW_HISTORY_SOURCE", "history names an unknown case")
+            case_history.append(entry)
         for case_state in review.cases:
+            case_history = history_by_case[case_state.case_fingerprint]
             journal = sorted(
                 (
                     entry
-                    for entry in review.history_entries
-                    if entry.case_fingerprint == case_state.case_fingerprint
-                    and entry.entry_kind != "AUTHORIZATION_LINK"
+                    for entry in case_history
+                    if entry.entry_kind != "AUTHORIZATION_LINK"
                 ),
                 key=lambda entry: (
                     entry.case_sequence
@@ -5737,9 +5938,8 @@ class SQLiteEventStore:
                 )
             case_links = tuple(
                 entry
-                for entry in review.history_entries
-                if entry.case_fingerprint == case_state.case_fingerprint
-                and entry.entry_kind == "AUTHORIZATION_LINK"
+                for entry in case_history
+                if entry.entry_kind == "AUTHORIZATION_LINK"
             )
             if case_links and (
                 len(case_links) != 1
@@ -5765,12 +5965,9 @@ class SQLiteEventStore:
                         "event predates the review prefix it binds",
                     )
         for entry in review.history_entries:
-            prefix_revision = sum(
-                position < entry.position for position in event_review_positions
-            )
-            if not 0 <= prefix_revision < len(states_by_revision):
+            prefix_revision = bisect_left(event_review_positions, entry.position)
+            if not 0 <= prefix_revision <= event_count:
                 _fail("REVIEW_SCORE_PREFIX", "review score prefix is out of range")
-            pre_state = states_by_revision[prefix_revision]
             if (
                 prefix_revision > 0
                 and entry.committed_at_ns
@@ -5783,7 +5980,6 @@ class SQLiteEventStore:
             case_state = cases.get(entry.case_fingerprint)
             if case_state is None:
                 _fail("REVIEW_HISTORY_SOURCE", "history names an unknown case")
-            case = case_state.signed_case.case
             if entry.entry_kind in {"CASE", "DISPOSITION", "ADJUDICATION"}:
                 if entry.entry_kind == "CASE":
                     if entry.position != case_state.admission_review_position:
@@ -5796,28 +5992,44 @@ class SQLiteEventStore:
                         "REVIEW_ACTION_POSITION",
                         "review action does not follow case admission",
                     )
-                if case.state_revision != prefix_revision:
+                if case_state.state_revision != prefix_revision:
                     _fail(
                         "HISTORICAL_STALE_CASE_REVISION",
                         "case/action was not accepted at its bound score revision",
                     )
-                current_set = pre_state.current_set
-                if current_set is None:
+                revision_context = revision_contexts.get(prefix_revision)
+                if revision_context is None:
+                    _fail(
+                        "REVIEW_SCORE_PREFIX",
+                        "needed historical score context was not retained",
+                    )
+                if revision_context.current_set_number is None:
                     _fail(
                         "HISTORICAL_CASE_PRESEED",
                         "case/action predates the initial set seed",
                     )
-                if current_set.number != case.set_number:
+                if revision_context.current_set_number != case_state.set_number:
                     _fail(
                         "HISTORICAL_CASE_SET_CONTEXT",
                         "case/action set differs from its historical score prefix",
                     )
-                if pre_state.match_complete:
+                if not revision_context.current_set_in_progress:
+                    _fail(
+                        "HISTORICAL_CASE_SET_NOT_IN_PROGRESS",
+                        "case/action was accepted outside an in-progress set",
+                    )
+                if revision_context.match_complete:
                     _fail(
                         "HISTORICAL_CASE_MATCH_COMPLETE",
                         "case/action was accepted after match completion",
                     )
-                if pre_state.rally_resolution(case.rally_id) is not None:
+                resolved_at_revision = rally_resolution_revisions.get(
+                    case_state.rally_id
+                )
+                if (
+                    resolved_at_revision is not None
+                    and resolved_at_revision <= prefix_revision
+                ):
                     _fail(
                         "HISTORICAL_CASE_RALLY_RESOLVED",
                         "case/action was accepted after rally resolution",
@@ -5839,10 +6051,9 @@ class SQLiteEventStore:
                     "link is not the first event at its exact review prefix",
                 )
             if any(
-                source.case_fingerprint == entry.case_fingerprint
-                and source.entry_kind != "AUTHORIZATION_LINK"
+                source.entry_kind != "AUTHORIZATION_LINK"
                 and source.position >= entry.position
-                for source in review.history_entries
+                for source in history_by_case[entry.case_fingerprint]
             ):
                 _fail(
                     "COPILOT_LINK_ORDER",
@@ -5876,7 +6087,16 @@ class SQLiteEventStore:
         adoption_fingerprints = tuple(item.archive_fingerprint for item in adoptions)
         preflight = self._ledger_preflight_locked(match_id)
         state = self.reducer.new_match(match_id)
-        states_by_revision: list[MatchState] = [state]
+        needed_revisions = {case.state_revision for case in review.cases}
+        needed_rally_ids = {case.rally_id for case in review.cases}
+        revision_contexts: dict[int, _ScoreRevisionContext] = {}
+        if state.revision in needed_revisions:
+            revision_contexts[state.revision] = _ScoreRevisionContext(
+                None,
+                False,
+                False,
+            )
+        rally_resolution_revisions: dict[str, int] = {}
         event_review_positions: list[int] = []
         event_appended_times: list[int] = []
         state_bytes = encode_match_state(state, ruleset=self.ruleset)
@@ -6029,7 +6249,10 @@ class SQLiteEventStore:
                 self._validate_copilot_event_semantics(
                     envelope=envelope,
                     context=replay_link.context,
-                    signed_case=replay_link.signed_case,
+                    assessment_fingerprint=replay_link.assessment_fingerprint,
+                    signed_assessment_fingerprint=(
+                        replay_link.signed_assessment_fingerprint
+                    ),
                     pre_state=state,
                     case_sequence=replay_link.case_sequence,
                     head_kind=replay_link.head_kind,
@@ -6081,7 +6304,24 @@ class SQLiteEventStore:
                 state = self.reducer.reduce(state, event).after
             except RulesError as exc:
                 raise EventStoreError("REPLAY_RULE_REJECTED", str(exc)) from exc
-            states_by_revision.append(state)
+            if state.revision in needed_revisions:
+                current_set = state.current_set
+                revision_contexts[state.revision] = _ScoreRevisionContext(
+                    current_set.number if current_set is not None else None,
+                    (
+                        current_set is not None
+                        and current_set.phase is SetPhase.IN_PROGRESS
+                    ),
+                    state.match_complete,
+                )
+            if (
+                event.related_rally_id in needed_rally_ids
+                and state.rally_resolution(event.related_rally_id) is not None
+            ):
+                rally_resolution_revisions.setdefault(
+                    event.related_rally_id,
+                    state.revision,
+                )
             state_bytes = encode_match_state(state, ruleset=self.ruleset)
             state_fingerprint = match_state_fingerprint(state, ruleset=self.ruleset)
             state_row = self._one_row_locked(
@@ -6101,6 +6341,11 @@ class SQLiteEventStore:
             outbox_id = outbox_row["outbox_id"]
             if type(outbox_id) is not int or not 1 <= outbox_id <= MAX_SEQUENCE_NUMBER:
                 _fail("OUTBOX_TAMPER", "shadow outbox identity is invalid")
+            if outbox_id <= outbox_position:
+                _fail(
+                    "OUTBOX_ID_ORDER",
+                    "shadow outbox identities are not increasing with match revision",
+                )
             message_id = f"shadow:{outbox_id}:{event.event_id}"
             payload = self._outbox_payload(
                 envelope=envelope,
@@ -6237,9 +6482,11 @@ class SQLiteEventStore:
                 _fail("STATE_HISTORY_TAMPER", "persisted prefix ledger head differs")
         self._validate_review_score_order_locked(
             review=review,
-            states_by_revision=tuple(states_by_revision),
-            event_review_positions=tuple(event_review_positions),
-            event_appended_times=tuple(event_appended_times),
+            event_review_positions=event_review_positions,
+            event_appended_times=event_appended_times,
+            revision_contexts=revision_contexts,
+            rally_resolution_revisions=rally_resolution_revisions,
+            event_count=replayed_count,
         )
         self._validate_match_row_after_replay(
             match_row,

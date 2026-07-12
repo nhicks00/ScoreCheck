@@ -429,10 +429,10 @@ def _verify_signed_scorer_copilot_case(
             "CASE_PRODUCER_TIME",
             "revocation verification time must follow signing and not exceed verification",
         )
-    if verified_at_ns < case.opened_at_ns:
+    if revoked_as_of_ns < case.opened_at_ns or verified_at_ns < case.opened_at_ns:
         _fail(
             "CASE_ADMISSION_TIME",
-            "case producer attestation cannot be verified before case open",
+            "case acceptance and verification cannot predate case open",
         )
     if signed.case != case or signed.case_fingerprint != case.fingerprint():
         _fail("CASE_MISMATCH", "producer signature does not bind the exact case")

@@ -32,6 +32,7 @@ from vision_scoring.case_attestation import (
     parse_signed_scorer_copilot_case,
     sign_scorer_copilot_case,
     verify_signed_scorer_copilot_case,
+    verify_signed_scorer_copilot_case_at_historical_acceptance,
 )
 from vision_scoring.review_contracts import (
     MAX_REVIEW_JSON_CONTAINERS,
@@ -333,6 +334,18 @@ class CaseAttestationTests(unittest.TestCase):
             "CASE_ADMISSION_TIME",
         ):
             self.verify_case(self.sign_case(), verified_at_ns=1_399)
+
+        with self.assertRaisesRegex(
+            CaseAttestationError,
+            "CASE_ADMISSION_TIME",
+        ):
+            verify_signed_scorer_copilot_case_at_historical_acceptance(
+                self.sign_case(),
+                case=self.case,
+                policy_archive=self.archive,
+                accepted_at_ns=1_399,
+                verified_at_ns=1_500,
+            )
 
     def test_nested_signed_assessment_must_predate_producer(self) -> None:
         signed_assessment = sign_policy_assessment(

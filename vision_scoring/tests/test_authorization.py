@@ -35,6 +35,8 @@ from vision_scoring.authorization import (
     sign_policy_assessment,
     verify_authorized_rule_event,
     verify_signed_policy_assessment,
+    verify_signed_policy_assessment_for_policy,
+    verify_signed_policy_assessment_for_policy_at_historical_acceptance,
 )
 from vision_scoring.domain_events import (
     CourtSide,
@@ -449,6 +451,30 @@ class AuthorizationTests(unittest.TestCase):
                 policy_archive=self.archive,
                 verified_at_ns=900,
             )
+
+    def test_selected_policy_verifiers_reject_malformed_signed_input_stably(self) -> None:
+        exact_assessment = assessment()
+        verifiers = (
+            (
+                verify_signed_policy_assessment_for_policy,
+                {},
+            ),
+            (
+                verify_signed_policy_assessment_for_policy_at_historical_acceptance,
+                {"accepted_at_ns": 875},
+            ),
+        )
+        for verifier, extra in verifiers:
+            with self.subTest(verifier=verifier.__name__):
+                with self.assertRaisesRegex(ValueError, "signed_assessment"):
+                    verifier(
+                        object(),  # type: ignore[arg-type]
+                        assessment=exact_assessment,
+                        policy=self.policy,
+                        policy_archive=self.archive,
+                        verified_at_ns=900,
+                        **extra,
+                    )
 
     def test_changed_assessment_intent_is_rejected_even_when_human_signed(self) -> None:
         changed = assessment(winner=Team.B)
