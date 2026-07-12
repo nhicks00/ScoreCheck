@@ -45,8 +45,10 @@ logging:
 
 # CPU admission control: the worker refuses a new egress when it lacks headroom
 # (accept iff numCPUs * max_cpu_utilization - committed >= web_cpu_cost).
-# LiveKit v1.13.0 currently defaults a web job to 3.0 units. Keep the tested
+# LiveKit v1.13.0 currently defaults a web job to 4.0 units. Keep the tested
 # upstream default and measure actual x86 utilization during Gate 1.
 #
-# KNOWN PITFALL for the Phase 2 c-4 benchmark: on a 4-vCPU host the defaults
-# A c-4 therefore admits one Gate 1 job: 4 * 0.8 = 3.2 available.
+# LiveKit exposes all 4 units while no jobs are running, so a c-4 admits one
+# Gate 1 web job. Once a job is active, the 80% utilization cap prevents a
+# second 4-unit job from being admitted. Multi-court sizing must be benchmarked
+# from measured load; do not lower web_cpu_cost to force overcommit.

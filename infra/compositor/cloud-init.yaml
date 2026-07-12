@@ -1,5 +1,5 @@
 #cloud-config
-# Burst compositor droplet bootstrap (Ubuntu 24.04) — passed as user_data by
+# Burst compositor droplet bootstrap (Ubuntu 24.04) - passed as user_data by
 # provision.sh, or already baked in when creating from the bvm-compositor
 # snapshot (in which case it simply re-runs idempotently on first boot).
 #
@@ -9,7 +9,7 @@
 #   3. installs + enables compositor.service, a systemd unit that runs
 #      `docker compose up -d` in /opt/compositor at every boot
 #
-# IMPORTANT — the compose bundle itself (docker-compose.yml, livekit.yaml,
+# IMPORTANT - the compose bundle itself (docker-compose.yml, livekit.yaml,
 # egress.yaml, .env, *.sh) is NOT embedded in this user_data. Get it onto the
 # droplet one of two ways:
 #
@@ -21,10 +21,10 @@
 #   b) bake a snapshot: provision once via (a), verify, power off, snapshot as
 #      bvm-compositor-base. Droplets created from that snapshot boot with the
 #      bundle already in place, so compositor.service starts the stack
-#      automatically — that is the event-day path (plan §3.6, phase 5).
+#      automatically - that is the event-day path (plan section 3.6, phase 5).
 #
 # Until the bundle exists, ConditionPathExists below makes the unit a clean
-# no-op — first boot never errors.
+# no-op - first boot never errors.
 
 package_update: true
 package_upgrade: false
@@ -52,7 +52,7 @@ write_files:
       WorkingDirectory=/opt/compositor
       ExecStart=/usr/bin/docker compose up -d
       ExecStop=/usr/bin/docker compose down
-      # First `up` pulls livekit/egress images (~2 GB) — allow time for it.
+      # First `up` pulls livekit/egress images (~2 GB) - allow time for it.
       TimeoutStartSec=900
 
       [Install]
@@ -63,6 +63,10 @@ runcmd:
   # for cattle droplets that live for hours; the snapshot freezes the version).
   - curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
   - sh /tmp/get-docker.sh
+  - curl -fsSL https://github.com/livekit/livekit-cli/releases/download/v2.17.0/lk_2.17.0_linux_amd64.tar.gz -o /tmp/lk.tar.gz
+  - echo '1c0fecd4ed672573e796a923f883730d97f9222170ef835d5d99b1dd1f301cd4  /tmp/lk.tar.gz' | sha256sum -c -
+  - tar -xzf /tmp/lk.tar.gz -C /usr/local/bin lk
+  - chmod 0755 /usr/local/bin/lk
   - mkdir -p /opt/compositor
   - systemctl daemon-reload
   - systemctl enable compositor.service
