@@ -76,6 +76,8 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     MONITOR_COURT_COUNT: z.coerce.number().int().min(1).max(8).default(8),
     HEALTHCHECKS_BASELINE_PING_URL: optionalHttpsUrl,
     HEALTHCHECKS_ACTIVE_PING_URL: optionalHttpsUrl,
+    HEALTHCHECKS_API_KEY: z.string().default(""),
+    HEALTHCHECKS_ACTIVE_CHECK_ID: z.preprocess(emptyStringToUndefined, z.string().uuid().optional()),
     HEALTHCHECKS_BASELINE_INTERVAL_MS: z.coerce.number().int().min(60_000).max(3_600_000).default(600_000),
     HEALTHCHECKS_ACTIVE_INTERVAL_MS: interval.default(60_000),
     SUPABASE_URL: optionalHttpsUrl,
@@ -104,6 +106,11 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
   if (oauthValues.length !== 0 && oauthValues.length !== 3) throw new Error("YouTube OAuth monitoring requires client id, client secret, and refresh token together.");
   const pushoverValues = [parsed.PUSHOVER_APP_TOKEN, parsed.PUSHOVER_USER_KEY].filter((value) => value.trim());
   if (pushoverValues.length !== 0 && pushoverValues.length !== 2) throw new Error("Pushover monitoring requires both app token and user key.");
+  const activeDeadManValues = [parsed.HEALTHCHECKS_ACTIVE_PING_URL, parsed.HEALTHCHECKS_API_KEY, parsed.HEALTHCHECKS_ACTIVE_CHECK_ID]
+    .filter((value) => String(value ?? "").trim());
+  if (activeDeadManValues.length !== 0 && activeDeadManValues.length !== 3) {
+    throw new Error("The active Healthchecks dead-man requires its ping URL, write API key, and check id together.");
+  }
   const twilioValues = [parsed.TWILIO_ACCOUNT_SID, parsed.TWILIO_AUTH_TOKEN, parsed.TWILIO_FROM_NUMBER, parsed.TWILIO_TO_NUMBER].filter((value) => value.trim());
   if (twilioValues.length !== 0 && twilioValues.length !== 4) throw new Error("Twilio monitoring requires account SID, auth token, from number, and to number.");
   const monitorPublicBaseUrl = `https://${parsed.MONITOR_PUBLIC_HOST}`;
@@ -121,6 +128,8 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     courtCount: parsed.MONITOR_COURT_COUNT,
     healthchecksBaselinePingUrl: parsed.HEALTHCHECKS_BASELINE_PING_URL ?? null,
     healthchecksActivePingUrl: parsed.HEALTHCHECKS_ACTIVE_PING_URL ?? null,
+    healthchecksApiKey: parsed.HEALTHCHECKS_API_KEY.trim() || null,
+    healthchecksActiveCheckId: parsed.HEALTHCHECKS_ACTIVE_CHECK_ID ?? null,
     healthchecksBaselineIntervalMs: parsed.HEALTHCHECKS_BASELINE_INTERVAL_MS,
     healthchecksActiveIntervalMs: parsed.HEALTHCHECKS_ACTIVE_INTERVAL_MS,
     supabaseUrl: parsed.SUPABASE_URL ?? null,

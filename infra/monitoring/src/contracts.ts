@@ -313,6 +313,19 @@ export type NotificationHealth = {
   twilioSms: { configured: boolean; lastSuccessAt: string | null; lastFailureAt: string | null };
 };
 
+export type DeadManCheckHealth = {
+  configured: boolean;
+  mode: "NOT_CONFIGURED" | "UNKNOWN" | "RUNNING" | "PAUSED";
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+};
+
+export type DeadManHealth = {
+  state: "NOT_APPLICABLE" | "UNKNOWN" | "HEALTHY" | "DEGRADED";
+  baseline: DeadManCheckHealth;
+  active: DeadManCheckHealth;
+};
+
 export type BrowserThumbnailMetadata = {
   courtNumber: number;
   credentialId: string;
@@ -429,6 +442,7 @@ export type MonitorSnapshot = {
   event: ControlPlaneSnapshot["event"];
   youtube: { state: HealthState; observedAt: string | null; ageMs: number | null };
   notifications: NotificationHealth;
+  deadMan: DeadManHealth;
   courts: CourtMonitorSnapshot[];
   agents: Array<{
     agentId: string;

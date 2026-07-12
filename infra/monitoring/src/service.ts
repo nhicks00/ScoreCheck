@@ -14,6 +14,7 @@ import { NotificationDispatcher } from "./notifications.js";
 import { loadCourtPipelineRange, parseRangeInput } from "./rangeQueries.js";
 import { BrowserThumbnailManager } from "./browserThumbnails.js";
 import { activeSilences, incidentIsSilenced, silenceMatchesIncident } from "./silences.js";
+import { ExternalDeadMan } from "./deadMan.js";
 
 const config = loadServiceConfig();
 const app = express();
@@ -59,6 +60,8 @@ const youtubeApiUp = new Gauge({ name: "scorecheck_youtube_api_up", help: "YouTu
 const youtubeHealthy = new Gauge({ name: "scorecheck_youtube_healthy", help: "YouTube stream health: 1 healthy, 0 unhealthy, -1 unknown or not applicable.", labelNames: ["court"], registers: [registry] });
 const youtubeDegraded = new Gauge({ name: "scorecheck_youtube_degraded", help: "Whether YouTube reports a warning-level stream or configuration issue.", labelNames: ["court"], registers: [registry] });
 const notificationProviderHealthy = new Gauge({ name: "scorecheck_notification_provider_healthy", help: "Notification provider state: 1 healthy, 0 failed, -1 not configured.", labelNames: ["provider"], registers: [registry] });
+const deadManCheckHealthy = new Gauge({ name: "scorecheck_external_dead_man_healthy", help: "External dead-man sender state: 1 verified, 0 failed, -1 not configured or unverified.", labelNames: ["check"], registers: [registry] });
+const deadManActiveRunning = new Gauge({ name: "scorecheck_external_dead_man_active_running", help: "Active-coverage dead-man mode: 1 running, 0 intentionally paused, -1 unknown or not configured.", registers: [registry] });
 const runtimes = new Map<string, AgentRuntime>(config.targets.map((target) => [target.id, {
   target,
   snapshot: null,
@@ -79,6 +82,8 @@ const youtubeCollector = new YouTubeCollector({
 let youtubeRefreshRunning = false;
 const incidentStore = IncidentStore.create(config.supabaseUrl, config.supabaseServiceRoleKey);
 const notificationDispatcher = new NotificationDispatcher(config, incidentStore);
+const externalDeadMan = new ExternalDeadMan(config);
+let deadManMaintenanceRunning = false;
 let silences: MonitoringSilence[] = [];
 if (incidentStore) {
   try {
@@ -391,6 +396,7 @@ function currentSnapshot(): MonitorSnapshot {
     controlPlane.current(),
     youtubeCollector.current(),
     notificationDispatcher.health(),
+    externalDeadMan.health(),
     browserThumbnails.metadata(),
     silences
   );
@@ -437,6 +443,13 @@ function providerMetric(provider: { configured: boolean; lastSuccessAt: string |
   return provider.lastSuccessAt ? 1 : -1;
 }
 
+function updateDeadManMetrics(): void {
+  const health = externalDeadMan.health();
+  deadManCheckHealthy.set({ check: "baseline" }, providerMetric(health.baseline));
+  deadManCheckHealthy.set({ check: "active" }, providerMetric(health.active));
+  deadManActiveRunning.set(health.active.mode === "RUNNING" ? 1 : health.active.mode === "PAUSED" ? 0 : -1);
+}
+
 async function pollAgent(target: AgentTarget) {
   const runtime = runtimes.get(target.id);
   if (!runtime) return;
@@ -461,20 +474,22 @@ function sameCourts(left: number[], right: number[]): boolean {
   return left.length === right.length && left.every((court, index) => court === right[index]);
 }
 
-async function pingDeadMan(url: string | null, name: "baseline" | "active") {
-  if (!url) return;
-  try {
-    const response = await fetch(url, { method: "POST", signal: AbortSignal.timeout(5_000) });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  } catch {
-    console.error(`external ${name} dead-man ping failed`);
-  }
-}
-
 function activeCoverageExpected(): boolean {
   return snapshot.courts.some((court) => court.expectation.coveragePhase !== "OFF"
     || court.expectation.mediaExpectation !== "OFF"
     || court.expectation.broadcastExpectation !== "OFF");
+}
+
+async function maintainDeadMan(): Promise<void> {
+  if (deadManMaintenanceRunning) return;
+  deadManMaintenanceRunning = true;
+  try {
+    await externalDeadMan.maintain(activeCoverageExpected());
+    snapshot = currentSnapshot();
+    updateDeadManMetrics();
+  } finally {
+    deadManMaintenanceRunning = false;
+  }
 }
 
 async function maintainNotifications() {
@@ -536,21 +551,13 @@ async function checkpoint() {
 
 await pollAll();
 await refreshYouTube();
+await maintainDeadMan();
 const pollTimer = setInterval(() => void pollAll(), config.intervalMs);
 pollTimer.unref();
 const youtubeTimer = setInterval(() => void refreshYouTube(), 5_000);
 youtubeTimer.unref();
-if (config.healthchecksBaselinePingUrl) {
-  void pingDeadMan(config.healthchecksBaselinePingUrl, "baseline");
-  const baselineDeadManTimer = setInterval(() => void pingDeadMan(config.healthchecksBaselinePingUrl, "baseline"), config.healthchecksBaselineIntervalMs);
-  baselineDeadManTimer.unref();
-}
-if (config.healthchecksActivePingUrl) {
-  const pingActive = () => activeCoverageExpected() ? void pingDeadMan(config.healthchecksActivePingUrl, "active") : undefined;
-  pingActive();
-  const activeDeadManTimer = setInterval(pingActive, config.healthchecksActiveIntervalMs);
-  activeDeadManTimer.unref();
-}
+const deadManTimer = setInterval(() => void maintainDeadMan(), 5_000);
+deadManTimer.unref();
 if (incidentStore) {
   void checkpoint();
   const checkpointTimer = setInterval(() => void checkpoint(), 60_000);

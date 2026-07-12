@@ -8,6 +8,7 @@ const envelopeSnapshotSchema = z.object({
   collector: z.object({ state: z.string(), agentsExpected: z.number(), agentsFresh: z.number() }).passthrough(),
   controlPlane: z.object({ state: z.string() }).passthrough(),
   notifications: z.object({ state: z.string() }).passthrough(),
+  deadMan: z.object({ state: z.string(), baseline: z.object({ mode: z.string() }).passthrough(), active: z.object({ mode: z.string() }).passthrough() }).passthrough(),
   courts: z.array(z.object({ courtNumber: z.number().int().min(1).max(8), overallState: z.string(), stages: z.array(z.unknown()) }).passthrough()).max(8),
   agents: z.array(z.object({ agentId: z.string(), state: z.string() }).passthrough()).max(32),
   incidents: z.array(z.object({ id: z.string().uuid(), status: z.string(), severity: z.string() }).passthrough()).max(200),

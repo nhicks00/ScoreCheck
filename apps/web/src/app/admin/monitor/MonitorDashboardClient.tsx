@@ -213,6 +213,7 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
         <GlobalItem icon={<Signal size={17} />} label="Control" value={snapshot.controlPlane.worker.state === "NOT_APPLICABLE" ? "Idle" : snapshot.controlPlane.worker.state} state={snapshot.controlPlane.state} />
         <GlobalItem icon={<Youtube size={17} />} label="YouTube" value={friendlyState(snapshot.youtube.state)} state={snapshot.youtube.state} />
         <GlobalItem icon={<Bell size={17} />} label="Paging" value={pagingLabel(snapshot.notifications)} state={snapshot.notifications.state === "DEGRADED" ? "DEGRADED" : snapshot.notifications.state === "UNKNOWN" ? "UNKNOWN" : snapshot.notifications.state === "HEALTHY" ? "HEALTHY" : "NOT_APPLICABLE"} />
+        <GlobalItem icon={<Radio size={17} />} label="Watchdog" value={deadManLabel(snapshot.deadMan)} state={snapshot.deadMan.state === "DEGRADED" ? "DEGRADED" : snapshot.deadMan.state === "UNKNOWN" ? "UNKNOWN" : snapshot.deadMan.state === "HEALTHY" ? "HEALTHY" : "NOT_APPLICABLE"} />
         <GlobalItem icon={<ShieldAlert size={17} />} label="Incidents" value={activeIncidents.length ? `${activeIncidents.length} active` : "Clear"} state={activeIncidents.some((incident) => incident.severity === "critical") ? "CRITICAL" : activeIncidents.length ? "DEGRADED" : "HEALTHY"} />
         <div className={`monitor-freshness ${stale ? "is-stale" : ""}`}>
           <Clock3 size={16} aria-hidden="true" />
@@ -487,6 +488,13 @@ function pagingLabel(notifications: MonitorSnapshotEnvelope["snapshot"]["notific
   if (notifications.state === "NOT_APPLICABLE") return "Not configured";
   if (notifications.state === "UNKNOWN") return "Not tested";
   return notifications.state === "HEALTHY" ? "Verified" : "Degraded";
+}
+
+function deadManLabel(deadMan: MonitorSnapshotEnvelope["snapshot"]["deadMan"]): string {
+  if (deadMan.state === "NOT_APPLICABLE") return "Not configured";
+  if (deadMan.state === "DEGRADED") return "Delivery failed";
+  if (deadMan.state === "UNKNOWN") return "Verifying";
+  return deadMan.active.mode === "RUNNING" ? "Coverage active" : "Idle protected";
 }
 
 function playAlertTone() {

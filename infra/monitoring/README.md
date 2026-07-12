@@ -125,3 +125,8 @@ The infrastructure gate passes when MediaMTX, Commentary, and every assigned
 compositor agent are scraped from the observability host, missing agents become
 `UNKNOWN`, Alertmanager incidents are deduplicated, Egress capacity is visible,
 and the external dead-man continues with all browsers closed.
+
+The external dead-man has two independent checks. The ten-minute baseline is
+always running. The one-minute active check is resumed by a ping when coverage is
+expected and paused through the Healthchecks management API while idle; all three
+active-check values in `.env.example` must be configured together.

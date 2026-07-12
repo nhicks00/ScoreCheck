@@ -41,13 +41,36 @@ describe("monitoring configuration", () => {
       MONITOR_PUBLIC_HOST: "monitor.example.test",
       HEALTHCHECKS_BASELINE_PING_URL: "",
       HEALTHCHECKS_ACTIVE_PING_URL: "",
+      HEALTHCHECKS_API_KEY: "",
+      HEALTHCHECKS_ACTIVE_CHECK_ID: "",
       SUPABASE_URL: "",
       SUPABASE_SERVICE_ROLE_KEY: ""
     });
     expect(service.healthchecksBaselinePingUrl).toBeNull();
     expect(service.healthchecksActivePingUrl).toBeNull();
+    expect(service.healthchecksApiKey).toBeNull();
+    expect(service.healthchecksActiveCheckId).toBeNull();
     expect(service.supabaseUrl).toBeNull();
     expect(service.browserAllowedOrigins).toEqual(["https://score.beachvolleyballmedia.com"]);
+  });
+
+  it("requires active Healthchecks lifecycle credentials as one unit", () => {
+    const base = {
+      MONITOR_API_TOKEN: "abcdefghijklmnopqrstuvwxyz",
+      ALERTMANAGER_WEBHOOK_TOKEN: "zyxwvutsrqponmlkjihgfedcba",
+      MONITOR_BROWSER_HEARTBEAT_SECRET: "browser-heartbeat-secret-that-is-long-enough",
+      MONITOR_PUBLIC_HOST: "monitor.example.test"
+    };
+    expect(() => loadServiceConfig({
+      ...base,
+      HEALTHCHECKS_ACTIVE_PING_URL: "https://hc-ping.com/active"
+    })).toThrow(/ping URL, write API key, and check id/);
+    expect(loadServiceConfig({
+      ...base,
+      HEALTHCHECKS_ACTIVE_PING_URL: "https://hc-ping.com/active",
+      HEALTHCHECKS_API_KEY: "healthchecks-write-key",
+      HEALTHCHECKS_ACTIVE_CHECK_ID: "220650f2-ed19-479c-933e-b0df1246ba81"
+    }).healthchecksActiveCheckId).toBe("220650f2-ed19-479c-933e-b0df1246ba81");
   });
 
   it("normalizes API base URLs without a trailing slash", () => {

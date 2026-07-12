@@ -169,13 +169,18 @@ TWILIO_FROM_NUMBER
 TWILIO_TO_NUMBER
 HEALTHCHECKS_BASELINE_PING_URL
 HEALTHCHECKS_ACTIVE_PING_URL
+HEALTHCHECKS_API_KEY
+HEALTHCHECKS_ACTIVE_CHECK_ID
 ```
 
 Store them only in the protected monitoring environment on the observability
-host and in the protected local deployment file. Never commit them. Baseline
-dead-man pings prove the monitor is alive when no event is active; the faster
-active ping runs only while coverage is expected. The external provider must
-notify a phone independently of DigitalOcean, Supabase, Vercel, and ScoreCheck.
+host and in the protected local deployment file. Never commit them. The baseline
+dead-man pings every ten minutes at all times. The active check pings every minute
+while any court expects coverage and is explicitly paused through the Healthchecks
+management API while the system is idle. A live ping resumes it automatically.
+The dashboard must show `Coverage active` or `Idle protected`, and any ping/pause
+failure must degrade the Watchdog item. The external provider must notify a phone
+independently of DigitalOcean, Supabase, Vercel, and ScoreCheck.
 
 Provider activation is not accepted until all of these pass:
 
@@ -268,7 +273,7 @@ active commentary rooms. Acceptance requires:
 
 - Browser-independent six-agent collection: passed.
 - Eight-court mapping and Egress capacity visibility: passed while idle.
-- Prometheus rules (36 syntax-validated plus executable timing/isolation tests)
+- Prometheus rules (37 syntax-validated plus executable timing/isolation tests)
   and correlator unit/fault fixtures: passed. Every observability deployment
   reruns these gates before replacing files or restarting containers.
 - Deterministic eight-court isolation fixtures for camera loss, repeated picture,
@@ -278,7 +283,11 @@ active commentary rooms. Acceptance requires:
   type/schema/unit validation; awaits the next real program-page session.
 - Durable incident, acknowledgement, checkpoint, and silence lifecycle: passed.
 - Production web and monitor builds: passed.
-- Pushover, Twilio, and external dead-man delivery: awaiting protected provider credentials.
+- Healthchecks baseline delivery and active idle-pause lifecycle: configured; the
+  withheld-ping phone delivery gate remains outstanding because the project
+  currently has email as its Healthchecks notification channel.
+- Pushover delivery: awaiting an app token and user key. Twilio authentication is
+  valid, but SMS remains disabled until the account has an SMS-capable sender.
 - Authenticated production visual check: requires an existing admin login.
 - Real one-court and eight-court fault injection: requires the next test-feed
   session; code must not simulate this by stopping public production services.

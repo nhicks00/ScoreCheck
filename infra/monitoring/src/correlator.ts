@@ -1,4 +1,4 @@
-import { MONITORING_CONTRACT_VERSION, worstHealthState, type AgentSnapshot, type BrowserHeartbeatSnapshot, type BrowserThumbnailMetadata, type ControlPlaneSnapshot, type CourtExpectation, type FfmpegBranchSnapshot, type HealthState, type IncidentSnapshot, type MediaPathSnapshot, type MonitoringSilence, type MonitorSnapshot, type MonitoringStage, type NotificationHealth, type StageHealth, type YouTubeMonitorSnapshot } from "./contracts.js";
+import { MONITORING_CONTRACT_VERSION, worstHealthState, type AgentSnapshot, type BrowserHeartbeatSnapshot, type BrowserThumbnailMetadata, type ControlPlaneSnapshot, type CourtExpectation, type DeadManHealth, type FfmpegBranchSnapshot, type HealthState, type IncidentSnapshot, type MediaPathSnapshot, type MonitoringSilence, type MonitorSnapshot, type MonitoringStage, type NotificationHealth, type StageHealth, type YouTubeMonitorSnapshot } from "./contracts.js";
 import type { AgentTarget } from "./config.js";
 
 export type AgentRuntime = {
@@ -18,6 +18,7 @@ export function buildMonitorSnapshot(
   controlPlane: ControlPlaneSnapshot | null = null,
   youtubeMonitor: YouTubeMonitorSnapshot | null = null,
   notifications: NotificationHealth = OFF_NOTIFICATION_HEALTH,
+  deadMan: DeadManHealth = OFF_DEAD_MAN_HEALTH,
   thumbnails = new Map<number, BrowserThumbnailMetadata>(),
   silences: MonitoringSilence[] = []
 ): MonitorSnapshot {
@@ -103,6 +104,7 @@ export function buildMonitorSnapshot(
     event: controlPlane?.event ?? null,
     youtube: { state: youtubeState, observedAt: youtubeMonitor?.observedAt ?? null, ageMs: youtubeAgeMs },
     notifications,
+    deadMan,
     courts,
     agents,
     incidents,
@@ -571,6 +573,19 @@ const OFF_NOTIFICATION_HEALTH: NotificationHealth = {
   state: "NOT_APPLICABLE",
   pushover: { configured: false, lastSuccessAt: null, lastFailureAt: null },
   twilioSms: { configured: false, lastSuccessAt: null, lastFailureAt: null }
+};
+
+const OFF_DEAD_MAN_CHECK = {
+  configured: false,
+  mode: "NOT_CONFIGURED" as const,
+  lastSuccessAt: null,
+  lastFailureAt: null
+};
+
+const OFF_DEAD_MAN_HEALTH: DeadManHealth = {
+  state: "NOT_APPLICABLE",
+  baseline: { ...OFF_DEAD_MAN_CHECK },
+  active: { ...OFF_DEAD_MAN_CHECK }
 };
 
 

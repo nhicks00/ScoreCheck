@@ -433,3 +433,15 @@ groups:
         annotations:
           summary: "Notification provider {{ $labels.provider }} has failed recent delivery or receipt checks."
           first_action: "Check provider status and credentials; verify the alternate paging path and external dead-man notification."
+
+      - alert: ScoreCheckDeadManDeliveryFailed
+        expr: scorecheck_external_dead_man_healthy == 0
+        for: 30s
+        labels:
+          severity: critical
+          stage: NOTIFICATION
+          issue_code: EXTERNAL_DEAD_MAN_FAILED
+          root_dependency: healthchecks
+        annotations:
+          summary: "External dead-man {{ $labels.check }} delivery is failing."
+          first_action: "Check outbound connectivity and Healthchecks status; verify the other dead-man check before changing its cadence."

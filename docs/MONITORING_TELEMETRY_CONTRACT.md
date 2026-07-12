@@ -261,6 +261,11 @@ Range queries use allowlisted names, bounded time windows, and bounded resolutio
 The initial `court-pipeline` query returns only raw bitrate, preview FPS, and
 program FPS for courts 1–8, with a maximum of 240 samples per series.
 
+The snapshot includes separate paging-provider and external dead-man health.
+Dead-man check mode is bounded to `NOT_CONFIGURED`, `UNKNOWN`, `RUNNING`, or
+`PAUSED`; an intentional idle pause is healthy, while a failed ping or pause is
+degraded. Ping URLs, check ids, and API keys are never returned.
+
 Silences require at least one bounded event, court, stage, or issue-code scope,
 an operator, a reason, and an expiry no more than 24 hours away. They suppress
 notifications only. Incidents and degraded stage health remain visible, and a

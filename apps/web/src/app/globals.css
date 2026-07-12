@@ -4752,7 +4752,7 @@ body:has(.program-root) {
   border: 1px solid var(--line);
   border-radius: 8px;
   display: grid;
-  grid-template-columns: repeat(5, minmax(126px, 1fr)) auto;
+  grid-template-columns: repeat(6, minmax(126px, 1fr)) auto;
   min-width: 0;
   overflow: hidden;
 }

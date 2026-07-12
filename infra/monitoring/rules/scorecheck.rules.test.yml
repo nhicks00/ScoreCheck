@@ -252,3 +252,24 @@ tests:
       - eval_time: 35s
         alertname: ScoreCheckYouTubeUnhealthy
         exp_alerts: []
+
+  - name: external dead-man delivery failure is explicit and check-scoped
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_external_dead_man_healthy{check="baseline"}'
+        values: '0 0 0 0 0 0 0 0'
+      - series: 'scorecheck_external_dead_man_healthy{check="active"}'
+        values: '1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 35s
+        alertname: ScoreCheckDeadManDeliveryFailed
+        exp_alerts:
+          - exp_labels:
+              check: baseline
+              severity: critical
+              stage: NOTIFICATION
+              issue_code: EXTERNAL_DEAD_MAN_FAILED
+              root_dependency: healthchecks
+            exp_annotations:
+              summary: External dead-man baseline delivery is failing.
+              first_action: Check outbound connectivity and Healthchecks status; verify the other dead-man check before changing its cadence.
