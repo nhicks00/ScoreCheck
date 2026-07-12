@@ -1,18 +1,22 @@
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import FrozenInstanceError, replace
 import hashlib
 import inspect
 import json
 import unittest
+from unittest.mock import patch
 
+import vision_scoring.training_admission_compiler as training_admission_compiler
 from vision_scoring.contract_wire import CanonicalWireError
 from vision_scoring.capture_contracts import MAX_FINALIZED_SOURCE_BYTES
 from vision_scoring.dataset_split import DatasetSplit
 from vision_scoring.training_admission_compiler import (
     TrainingAdmissionCompilerError,
     compile_training_coverage_v1,
+    compile_training_sampling_schedule_v1,
 )
 from vision_scoring.training_admission_contracts import (
     CAUSAL_BALL_LOSS_CONFIG_SHA256,
@@ -405,6 +409,152 @@ def _compiler_examples() -> tuple[TrainingExampleManifestV1, ...]:
         split=TrainingSplitV1.DEV,
     )
     return train, dev
+
+
+_SCHEDULE_STRATUM_TAGS = {
+    PrimarySamplingStratumV1.LOCALIZABLE_BALL: (
+        ExampleStratumTagV1.VISIBLE_BALL,
+    ),
+    PrimarySamplingStratumV1.OCCLUDED_OR_OUT_OF_FRAME: (
+        ExampleStratumTagV1.BALL_OUT_OF_FRAME,
+    ),
+    PrimarySamplingStratumV1.NO_BALL_HARD_NEGATIVE: (
+        ExampleStratumTagV1.HARD_NEGATIVE,
+        ExampleStratumTagV1.NO_BALL,
+    ),
+    PrimarySamplingStratumV1.OTHER_SUPERVISED: (
+        ExampleStratumTagV1.MOTION_BLUR,
+    ),
+}
+
+
+def _schedule_compiler_examples(
+    *,
+    train_counts: tuple[int, int, int, int] = (2, 2, 2, 2),
+    dev_count: int = 2,
+) -> tuple[TrainingExampleManifestV1, ...]:
+    base = _example()
+    examples: list[TrainingExampleManifestV1] = []
+    suffix = 100
+    for stratum, count in zip(PrimarySamplingStratumV1, train_counts, strict=True):
+        for _ in range(count):
+            tags = _SCHEDULE_STRATUM_TAGS[stratum]
+            examples.append(
+                replace(
+                    _compiler_variant(
+                        base,
+                        suffix=suffix,
+                        split=TrainingSplitV1.TRAIN,
+                    ),
+                    primary_sampling_stratum=stratum,
+                    example_stratum_tags=tags,
+                )
+            )
+            suffix += 1
+    for _ in range(dev_count):
+        examples.append(
+            _compiler_variant(
+                base,
+                suffix=suffix,
+                split=TrainingSplitV1.DEV,
+            )
+        )
+        suffix += 1
+    return tuple(examples)
+
+
+def _schedule_references(
+    examples: tuple[TrainingExampleManifestV1, ...],
+) -> tuple[TrainingExampleReferenceV1, ...]:
+    split_order = {TrainingSplitV1.TRAIN: 0, TrainingSplitV1.DEV: 1}
+    return tuple(
+        sorted(
+            (
+                TrainingExampleReferenceV1(
+                    source_id=example.source_id,
+                    split=example.split,
+                    example_manifest_sha256=example.fingerprint(),
+                    leakage_group_sha256=example.leakage_group_sha256,
+                    frame_count=example.frame_count,
+                    primary_sampling_stratum=example.primary_sampling_stratum,
+                    example_stratum_tags=example.example_stratum_tags,
+                )
+                for example in examples
+            ),
+            key=lambda value: (
+                split_order[value.split],
+                value.source_id,
+                value.example_manifest_sha256,
+            ),
+        )
+    )
+
+
+def _schedule_dataset(
+    *,
+    examples: tuple[TrainingExampleManifestV1, ...],
+    policy: TrainingAdmissionPolicyV1,
+) -> TrainingDatasetManifestV1:
+    references = _schedule_references(examples)
+    train_references = tuple(
+        item for item in references if item.split is TrainingSplitV1.TRAIN
+    )
+    dev_references = tuple(
+        item for item in references if item.split is TrainingSplitV1.DEV
+    )
+    return TrainingDatasetManifestV1(
+        dataset_id="schedule-dataset-v1",
+        readiness_manifest_sha256=_digest(7_000),
+        readiness_report_sha256=_digest(7_001),
+        protected_configuration_generation_sha256=_digest(7_002),
+        admission_policy_sha256=policy.fingerprint(),
+        artifact_generation_id=_digest(7_003),
+        rights_evidence_generation_id=_digest(7_004),
+        source_rights_proof_set_sha256=_digest(7_005),
+        source_label_pack_proof_set_sha256=_digest(7_006),
+        split_manifest_sha256=_digest(7_007),
+        test_exclusion_commitment_sha256=test_exclusion_commitment_sha256_v1(
+            "schedule-dataset-v1", ("private-test-source",)
+        ),
+        test_source_count=1,
+        test_label_pack_count=1,
+        coverage_report_sha256=_digest(7_008),
+        example_reference_set_sha256=training_example_reference_set_sha256_v1(
+            references
+        ),
+        example_references=references,
+        train_example_count=len(train_references),
+        dev_example_count=len(dev_references),
+        train_frame_count=sum(item.frame_count for item in train_references),
+        dev_frame_count=sum(item.frame_count for item in dev_references),
+    )
+
+
+def _schedule_plan(
+    *,
+    dataset: TrainingDatasetManifestV1,
+    seed: int = 17,
+    epoch_count: int = 2,
+    train_draws_per_epoch: int = 8,
+    weights: tuple[int, int, int, int] = (400_000, 200_000, 200_000, 200_000),
+    minima: tuple[int, int, int, int] = (1, 1, 1, 1),
+    maximum_leakage_group_draws_ppm: int = 500_000,
+) -> StratifiedSamplingPlanV1:
+    return StratifiedSamplingPlanV1(
+        dataset_manifest_sha256=dataset.fingerprint(),
+        seed=seed,
+        epoch_count=epoch_count,
+        train_draws_per_epoch=train_draws_per_epoch,
+        maximum_leakage_group_draws_ppm=maximum_leakage_group_draws_ppm,
+        stratum_quotas=tuple(
+            StratumQuotaV1(
+                stratum=stratum,
+                weight_ppm=weights[index],
+                minimum_draws_per_epoch=minima[index],
+            )
+            for index, stratum in enumerate(PrimarySamplingStratumV1)
+        ),
+    )
 
 
 def _quotas() -> tuple[StratumQuotaV1, ...]:
@@ -1635,6 +1785,1082 @@ class TrainingAdmissionCoverageCompilerTests(unittest.TestCase):
         self.assert_compiler_error(
             "TRAIN_COMPILER_POLICY_BINDING",
             lambda: self.compile(policy=corrupted_policy),
+        )
+
+    def test_canonical_train_dev_group_overlaps_fail_independently(self) -> None:
+        train, dev = _compiler_examples()
+
+        def replace_and_rebind_leakage(
+            example: TrainingExampleManifestV1,
+            **changes: object,
+        ) -> TrainingExampleManifestV1:
+            values = {
+                "match_id": changes.get("match_id", example.match_id),
+                "root_asset_sha256": changes.get(
+                    "root_asset_sha256", example.root_asset_sha256
+                ),
+                "synchronized_capture_group_id": changes.get(
+                    "synchronized_capture_group_id",
+                    example.synchronized_capture_group_id,
+                ),
+                "split_group_id": changes.get(
+                    "split_group_id", example.split_group_id
+                ),
+                "venue_id": changes.get("venue_id", example.venue_id),
+                "camera_setup_id": changes.get(
+                    "camera_setup_id", example.camera_setup_id
+                ),
+                "recording_date": changes.get(
+                    "recording_date", example.recording_date
+                ),
+            }
+            return replace(
+                example,
+                **changes,  # type: ignore[arg-type]
+                leakage_group_sha256=leakage_group_sha256_v1(**values),
+            )
+
+        overlaps = (
+            replace_and_rebind_leakage(dev, match_id=train.match_id),
+            replace_and_rebind_leakage(
+                dev,
+                root_asset_sha256=train.root_asset_sha256,
+                parent_asset_sha256=train.root_asset_sha256,
+            ),
+            replace_and_rebind_leakage(
+                dev,
+                synchronized_capture_group_id=(
+                    train.synchronized_capture_group_id
+                ),
+            ),
+            replace_and_rebind_leakage(
+                dev,
+                split_group_id=train.split_group_id,
+            ),
+        )
+        for candidate in overlaps:
+            with self.subTest(candidate=candidate.source_id):
+                self.assertNotEqual(
+                    candidate.leakage_group_sha256,
+                    train.leakage_group_sha256,
+                )
+                self.assertEqual(
+                    TrainingExampleManifestV1.from_json_bytes(
+                        candidate.to_json_bytes()
+                    ),
+                    candidate,
+                )
+                self.assert_compiler_error(
+                    "TRAIN_COMPILER_INPUT",
+                    lambda candidate=candidate: self.compile(
+                        examples=(train, candidate)
+                    ),
+                )
+                policy = _policy()
+                schedule_examples = (train, candidate)
+                dataset = _schedule_dataset(
+                    examples=schedule_examples,
+                    policy=policy,
+                )
+                plan = _schedule_plan(
+                    dataset=dataset,
+                    epoch_count=1,
+                    train_draws_per_epoch=1,
+                    weights=(PPM, 0, 0, 0),
+                    minima=(0, 0, 0, 0),
+                )
+                self.assert_compiler_error(
+                    "TRAIN_COMPILER_BINDING",
+                    lambda candidate=candidate,
+                    dataset=dataset,
+                    plan=plan,
+                    policy=policy: compile_training_sampling_schedule_v1(
+                        dataset_manifest=dataset,
+                        admission_policy=policy,
+                        sampling_plan=plan,
+                        example_manifests=(train, candidate),
+                    ),
+                )
+
+        allowed = replace_and_rebind_leakage(
+            dev,
+            venue_id=train.venue_id,
+            camera_setup_id=train.camera_setup_id,
+            camera_risk_key_sha256=camera_risk_key_sha256_v1(
+                capture_mode=dev.capture_mode,
+                camera_setup_id=train.camera_setup_id,
+                capture_profile_sha256=dev.capture_profile_sha256,
+                lighting_condition_id=dev.lighting_condition_id,
+                encoder_configuration_sha256=dev.encoder_configuration_sha256,
+            ),
+        )
+        report = self.compile(examples=(train, allowed))
+        self.assertTrue(report.coverage_requirements_satisfied)
+
+
+class TrainingSamplingScheduleCompilerTests(unittest.TestCase):
+    def assert_schedule_error(
+        self, code: str, callback: Callable[[], object]
+    ) -> None:
+        with self.assertRaises(TrainingAdmissionCompilerError) as caught:
+            callback()
+        self.assertEqual(caught.exception.code, code)
+        self.assertLess(len(str(caught.exception)), 160)
+
+    def test_schedule_is_canonical_order_independent_exact_dev_and_non_authorizing(
+        self,
+    ) -> None:
+        policy = _policy()
+        examples = _schedule_compiler_examples()
+        dataset = _schedule_dataset(examples=examples, policy=policy)
+        plan = _schedule_plan(dataset=dataset)
+        schedule = compile_training_sampling_schedule_v1(
+            dataset_manifest=dataset,
+            admission_policy=policy,
+            sampling_plan=plan,
+            example_manifests=examples,
+        )
+        reversed_schedule = compile_training_sampling_schedule_v1(
+            dataset_manifest=dataset,
+            admission_policy=policy,
+            sampling_plan=plan,
+            example_manifests=tuple(reversed(examples)),
+        )
+        self.assertEqual(schedule, reversed_schedule)
+        self.assertEqual(
+            TrainingSamplingScheduleV1.from_json_bytes(schedule.to_json_bytes()),
+            schedule,
+        )
+        self.assertEqual(schedule.dataset_manifest_sha256, dataset.fingerprint())
+        self.assertEqual(schedule.sampling_plan_sha256, plan.fingerprint())
+        self.assertEqual(len(schedule.train_draws), 16)
+        for epoch_index in range(2):
+            epoch_draws = tuple(
+                item
+                for item in schedule.train_draws
+                if item.epoch_index == epoch_index
+            )
+            self.assertEqual(len(epoch_draws), 8)
+            self.assertEqual(
+                len({item.example_manifest_sha256 for item in epoch_draws}),
+                8,
+            )
+            self.assertEqual(
+                Counter(item.stratum for item in epoch_draws),
+                Counter({stratum: 2 for stratum in PrimarySamplingStratumV1}),
+            )
+        expected_dev = tuple(
+            (reference.source_id, reference.example_manifest_sha256)
+            for reference in dataset.example_references
+            if reference.split is TrainingSplitV1.DEV
+        )
+        self.assertEqual(
+            tuple(
+                (entry.source_id, entry.example_manifest_sha256)
+                for entry in schedule.dev_entries
+            ),
+            expected_dev,
+        )
+        self.assertEqual(
+            tuple(entry.dev_index for entry in schedule.dev_entries),
+            tuple(range(len(expected_dev))),
+        )
+        self.assertNotIn(b"TEST", schedule.to_json_bytes())
+        for field_name in (
+            "admissible_for_training",
+            "admissible_for_evaluation",
+            "admissible_for_test",
+            "admissible_for_deployment",
+            "admissible_for_live_scoring",
+        ):
+            self.assertIs(getattr(schedule, field_name), False)
+
+    def test_hamilton_minima_ties_and_prefix_deficit_interleaving(self) -> None:
+        policy = _policy()
+        examples = _schedule_compiler_examples(
+            train_counts=(2, 2, 2, 1), dev_count=1
+        )
+        dataset = _schedule_dataset(examples=examples, policy=policy)
+        plan = _schedule_plan(
+            dataset=dataset,
+            epoch_count=1,
+            train_draws_per_epoch=7,
+            weights=(400_000, 200_000, 200_000, 200_000),
+            minima=(1, 1, 1, 1),
+        )
+        schedule = compile_training_sampling_schedule_v1(
+            dataset_manifest=dataset,
+            admission_policy=policy,
+            sampling_plan=plan,
+            example_manifests=examples,
+        )
+        expected = (
+            PrimarySamplingStratumV1.LOCALIZABLE_BALL,
+            PrimarySamplingStratumV1.OCCLUDED_OR_OUT_OF_FRAME,
+            PrimarySamplingStratumV1.NO_BALL_HARD_NEGATIVE,
+            PrimarySamplingStratumV1.OTHER_SUPERVISED,
+            PrimarySamplingStratumV1.LOCALIZABLE_BALL,
+            PrimarySamplingStratumV1.OCCLUDED_OR_OUT_OF_FRAME,
+            PrimarySamplingStratumV1.NO_BALL_HARD_NEGATIVE,
+        )
+        self.assertEqual(tuple(item.stratum for item in schedule.train_draws), expected)
+        self.assertEqual(
+            Counter(item.stratum for item in schedule.train_draws),
+            Counter(
+                {
+                    PrimarySamplingStratumV1.LOCALIZABLE_BALL: 2,
+                    PrimarySamplingStratumV1.OCCLUDED_OR_OUT_OF_FRAME: 2,
+                    PrimarySamplingStratumV1.NO_BALL_HARD_NEGATIVE: 2,
+                    PrimarySamplingStratumV1.OTHER_SUPERVISED: 1,
+                }
+            ),
+        )
+
+    def test_ranked_search_chooses_exact_lowest_digest_and_seed_is_effective(
+        self,
+    ) -> None:
+        policy = replace(
+            _policy(),
+            maximum_match_frames_ppm=PPM,
+            maximum_root_asset_frames_ppm=PPM,
+            maximum_leakage_group_frames_ppm=PPM,
+            maximum_match_draws_ppm=PPM,
+            maximum_root_asset_draws_ppm=PPM,
+            maximum_leakage_group_draws_ppm=PPM,
+        )
+        examples = _schedule_compiler_examples(
+            train_counts=(8, 0, 0, 0), dev_count=1
+        )
+        dataset = _schedule_dataset(examples=examples, policy=policy)
+        train_examples = tuple(
+            item for item in examples if item.split is TrainingSplitV1.TRAIN
+        )
+        selected_examples: set[str] = set()
+        for seed in range(16):
+            plan = _schedule_plan(
+                dataset=dataset,
+                seed=seed,
+                epoch_count=1,
+                train_draws_per_epoch=1,
+                weights=(PPM, 0, 0, 0),
+                minima=(0, 0, 0, 0),
+                maximum_leakage_group_draws_ppm=PPM,
+            )
+            schedule = compile_training_sampling_schedule_v1(
+                dataset_manifest=dataset,
+                admission_policy=policy,
+                sampling_plan=plan,
+                example_manifests=tuple(reversed(examples)),
+            )
+            ranked = tuple(
+                sorted(
+                    (
+                        training_schedule_ranking_sha256_v1(
+                            dataset_manifest_sha256=dataset.fingerprint(),
+                            sampling_plan_sha256=plan.fingerprint(),
+                            seed=seed,
+                            epoch_index=0,
+                            draw_index=0,
+                            stratum=PrimarySamplingStratumV1.LOCALIZABLE_BALL,
+                            leakage_group_sha256=example.leakage_group_sha256,
+                            example_manifest_sha256=example.fingerprint(),
+                        ),
+                        example.fingerprint(),
+                    )
+                    for example in train_examples
+                )
+            )
+            self.assertEqual(
+                schedule.train_draws[0].ranking_sha256,
+                ranked[0][0],
+            )
+            self.assertEqual(
+                schedule.train_draws[0].example_manifest_sha256,
+                ranked[0][1],
+            )
+            selected_examples.add(schedule.train_draws[0].example_manifest_sha256)
+        self.assertGreater(len(selected_examples), 1)
+
+    def test_ranked_search_skips_lower_ranked_candidate_blocked_by_match_cap(
+        self,
+    ) -> None:
+        policy = replace(
+            _policy(),
+            maximum_match_draws_ppm=500_000,
+            maximum_root_asset_draws_ppm=PPM,
+            maximum_leakage_group_draws_ppm=PPM,
+        )
+        original_examples = _schedule_compiler_examples(
+            train_counts=(3, 0, 0, 0), dev_count=1
+        )
+        original_train = tuple(
+            item
+            for item in original_examples
+            if item.split is TrainingSplitV1.TRAIN
+        )
+        shared_match = "ranked-search-shared-match"
+        adjusted_train = tuple(
+            replace(
+                example,
+                match_id=shared_match,
+                leakage_group_sha256=leakage_group_sha256_v1(
+                    match_id=shared_match,
+                    root_asset_sha256=example.root_asset_sha256,
+                    synchronized_capture_group_id=example.synchronized_capture_group_id,
+                    split_group_id=example.split_group_id,
+                    venue_id=example.venue_id,
+                    camera_setup_id=example.camera_setup_id,
+                    recording_date=example.recording_date,
+                ),
+            )
+            if index < 2
+            else example
+            for index, example in enumerate(original_train)
+        )
+        examples = adjusted_train + tuple(
+            item
+            for item in original_examples
+            if item.split is TrainingSplitV1.DEV
+        )
+        dataset = _schedule_dataset(examples=examples, policy=policy)
+
+        found: tuple[
+            StratifiedSamplingPlanV1,
+            tuple[tuple[str, TrainingExampleManifestV1], ...],
+        ] | None = None
+        for seed in range(64):
+            plan = _schedule_plan(
+                dataset=dataset,
+                seed=seed,
+                epoch_count=1,
+                train_draws_per_epoch=2,
+                weights=(PPM, 0, 0, 0),
+                minima=(0, 0, 0, 0),
+                maximum_leakage_group_draws_ppm=PPM,
+            )
+            first_ranked = tuple(
+                sorted(
+                    (
+                        training_schedule_ranking_sha256_v1(
+                            dataset_manifest_sha256=dataset.fingerprint(),
+                            sampling_plan_sha256=plan.fingerprint(),
+                            seed=seed,
+                            epoch_index=0,
+                            draw_index=0,
+                            stratum=PrimarySamplingStratumV1.LOCALIZABLE_BALL,
+                            leakage_group_sha256=example.leakage_group_sha256,
+                            example_manifest_sha256=example.fingerprint(),
+                        ),
+                        example,
+                    )
+                    for example in adjusted_train
+                )
+            )
+            first = first_ranked[0][1]
+            remaining = tuple(example for example in adjusted_train if example != first)
+            second_ranked = tuple(
+                sorted(
+                    (
+                        training_schedule_ranking_sha256_v1(
+                            dataset_manifest_sha256=dataset.fingerprint(),
+                            sampling_plan_sha256=plan.fingerprint(),
+                            seed=seed,
+                            epoch_index=0,
+                            draw_index=1,
+                            stratum=PrimarySamplingStratumV1.LOCALIZABLE_BALL,
+                            leakage_group_sha256=example.leakage_group_sha256,
+                            example_manifest_sha256=example.fingerprint(),
+                        ),
+                        example,
+                    )
+                    for example in remaining
+                )
+            )
+            if (
+                first.match_id == shared_match
+                and second_ranked[0][1].match_id == shared_match
+            ):
+                found = plan, second_ranked
+                break
+        self.assertIsNotNone(found)
+        assert found is not None
+        plan, second_ranked = found
+        schedule = compile_training_sampling_schedule_v1(
+            dataset_manifest=dataset,
+            admission_policy=policy,
+            sampling_plan=plan,
+            example_manifests=examples,
+        )
+        self.assertNotEqual(
+            schedule.train_draws[1].example_manifest_sha256,
+            second_ranked[0][1].fingerprint(),
+        )
+        allowed = tuple(
+            row for row in second_ranked if row[1].match_id != shared_match
+        )
+        self.assertEqual(schedule.train_draws[1].ranking_sha256, allowed[0][0])
+        self.assertEqual(
+            schedule.train_draws[1].example_manifest_sha256,
+            allowed[0][1].fingerprint(),
+        )
+
+    def test_ranked_search_backtracks_when_top_first_draw_causes_dead_end(
+        self,
+    ) -> None:
+        policy = replace(
+            _policy(),
+            maximum_match_frames_ppm=PPM,
+            maximum_root_asset_frames_ppm=PPM,
+            maximum_leakage_group_frames_ppm=PPM,
+            maximum_match_draws_ppm=500_000,
+            maximum_root_asset_draws_ppm=PPM,
+            maximum_leakage_group_draws_ppm=PPM,
+        )
+        original = _schedule_compiler_examples(
+            train_counts=(2, 1, 0, 0), dev_count=1
+        )
+        train = tuple(
+            example for example in original if example.split is TrainingSplitV1.TRAIN
+        )
+        dev = tuple(
+            example for example in original if example.split is TrainingSplitV1.DEV
+        )
+        local_shared, local_unique, occluded_shared = train
+        shared_match = "two-draw-dead-end-match"
+
+        def share_match(
+            example: TrainingExampleManifestV1,
+        ) -> TrainingExampleManifestV1:
+            return replace(
+                example,
+                match_id=shared_match,
+                leakage_group_sha256=leakage_group_sha256_v1(
+                    match_id=shared_match,
+                    root_asset_sha256=example.root_asset_sha256,
+                    synchronized_capture_group_id=example.synchronized_capture_group_id,
+                    split_group_id=example.split_group_id,
+                    venue_id=example.venue_id,
+                    camera_setup_id=example.camera_setup_id,
+                    recording_date=example.recording_date,
+                ),
+            )
+
+        local_shared = share_match(local_shared)
+        occluded_shared = share_match(occluded_shared)
+        examples = (local_shared, local_unique, occluded_shared, *dev)
+        dataset = _schedule_dataset(examples=examples, policy=policy)
+
+        selected_plan: StratifiedSamplingPlanV1 | None = None
+        for seed in range(64):
+            plan = _schedule_plan(
+                dataset=dataset,
+                seed=seed,
+                epoch_count=1,
+                train_draws_per_epoch=2,
+                weights=(500_000, 500_000, 0, 0),
+                minima=(1, 1, 0, 0),
+                maximum_leakage_group_draws_ppm=PPM,
+            )
+            ranked_local = tuple(
+                sorted(
+                    (
+                        training_schedule_ranking_sha256_v1(
+                            dataset_manifest_sha256=dataset.fingerprint(),
+                            sampling_plan_sha256=plan.fingerprint(),
+                            seed=seed,
+                            epoch_index=0,
+                            draw_index=0,
+                            stratum=PrimarySamplingStratumV1.LOCALIZABLE_BALL,
+                            leakage_group_sha256=example.leakage_group_sha256,
+                            example_manifest_sha256=example.fingerprint(),
+                        ),
+                        example,
+                    )
+                    for example in (local_shared, local_unique)
+                )
+            )
+            if ranked_local[0][1] == local_shared:
+                selected_plan = plan
+                break
+        self.assertIsNotNone(selected_plan)
+        assert selected_plan is not None
+
+        schedule = compile_training_sampling_schedule_v1(
+            dataset_manifest=dataset,
+            admission_policy=policy,
+            sampling_plan=selected_plan,
+            example_manifests=examples,
+        )
+        self.assertEqual(
+            schedule.train_draws[0].example_manifest_sha256,
+            local_unique.fingerprint(),
+        )
+        self.assertEqual(
+            schedule.train_draws[1].example_manifest_sha256,
+            occluded_shared.fingerprint(),
+        )
+
+    def test_match_root_leakage_and_stricter_plan_caps_fail_closed(self) -> None:
+        base_examples = _schedule_compiler_examples(
+            train_counts=(4, 0, 0, 0), dev_count=1
+        )
+        train = tuple(
+            item for item in base_examples if item.split is TrainingSplitV1.TRAIN
+        )
+        dev = tuple(
+            item for item in base_examples if item.split is TrainingSplitV1.DEV
+        )
+
+        same_match: list[TrainingExampleManifestV1] = []
+        for example in train:
+            match_id = "shared-match"
+            same_match.append(
+                replace(
+                    example,
+                    match_id=match_id,
+                    leakage_group_sha256=leakage_group_sha256_v1(
+                        match_id=match_id,
+                        root_asset_sha256=example.root_asset_sha256,
+                        synchronized_capture_group_id=(
+                            example.synchronized_capture_group_id
+                        ),
+                        split_group_id=example.split_group_id,
+                        venue_id=example.venue_id,
+                        camera_setup_id=example.camera_setup_id,
+                        recording_date=example.recording_date,
+                    ),
+                )
+            )
+
+        shared_root = _digest(9_000)
+        same_root = tuple(
+            replace(
+                example,
+                root_asset_sha256=shared_root,
+                parent_asset_sha256=shared_root,
+                leakage_group_sha256=leakage_group_sha256_v1(
+                    match_id=example.match_id,
+                    root_asset_sha256=shared_root,
+                    synchronized_capture_group_id=example.synchronized_capture_group_id,
+                    split_group_id=example.split_group_id,
+                    venue_id=example.venue_id,
+                    camera_setup_id=example.camera_setup_id,
+                    recording_date=example.recording_date,
+                ),
+            )
+            for example in train
+        )
+
+        first = train[0]
+        shared_match = "shared-leak-match"
+        shared_venue = "shared-leak-venue"
+        shared_camera = "shared-leak-camera"
+        shared_sync = "shared-leak-sync"
+        shared_split = "shared-leak-split"
+        shared_leakage = leakage_group_sha256_v1(
+            match_id=shared_match,
+            root_asset_sha256=shared_root,
+            synchronized_capture_group_id=shared_sync,
+            split_group_id=shared_split,
+            venue_id=shared_venue,
+            camera_setup_id=shared_camera,
+            recording_date=first.recording_date,
+        )
+        same_leakage = tuple(
+            replace(
+                example,
+                root_asset_sha256=shared_root,
+                parent_asset_sha256=shared_root,
+                match_id=shared_match,
+                venue_id=shared_venue,
+                camera_setup_id=shared_camera,
+                synchronized_capture_group_id=shared_sync,
+                split_group_id=shared_split,
+                leakage_group_sha256=shared_leakage,
+                camera_risk_key_sha256=camera_risk_key_sha256_v1(
+                    capture_mode=example.capture_mode,
+                    camera_setup_id=shared_camera,
+                    capture_profile_sha256=example.capture_profile_sha256,
+                    lighting_condition_id=example.lighting_condition_id,
+                    encoder_configuration_sha256=example.encoder_configuration_sha256,
+                ),
+            )
+            for example in train
+        )
+
+        scenarios = (
+            (
+                tuple(same_match) + dev,
+                replace(
+                    _policy(),
+                    maximum_match_draws_ppm=250_000,
+                    maximum_root_asset_draws_ppm=PPM,
+                    maximum_leakage_group_draws_ppm=PPM,
+                ),
+                PPM,
+            ),
+            (
+                same_root + dev,
+                replace(
+                    _policy(),
+                    maximum_match_draws_ppm=PPM,
+                    maximum_root_asset_draws_ppm=250_000,
+                    maximum_leakage_group_draws_ppm=PPM,
+                ),
+                PPM,
+            ),
+            (
+                same_leakage + dev,
+                replace(
+                    _policy(),
+                    maximum_match_draws_ppm=PPM,
+                    maximum_root_asset_draws_ppm=PPM,
+                    maximum_leakage_group_draws_ppm=250_000,
+                ),
+                250_000,
+            ),
+            (
+                same_leakage + dev,
+                replace(
+                    _policy(),
+                    maximum_match_draws_ppm=PPM,
+                    maximum_root_asset_draws_ppm=PPM,
+                    maximum_leakage_group_draws_ppm=PPM,
+                ),
+                250_000,
+            ),
+        )
+        for examples, policy, plan_leakage_cap in scenarios:
+            with self.subTest(
+                policy_match_cap=policy.maximum_match_draws_ppm,
+                policy_root_cap=policy.maximum_root_asset_draws_ppm,
+                policy_leakage_cap=policy.maximum_leakage_group_draws_ppm,
+                plan_leakage_cap=plan_leakage_cap,
+            ):
+                dataset = _schedule_dataset(examples=examples, policy=policy)
+                plan = _schedule_plan(
+                    dataset=dataset,
+                    epoch_count=1,
+                    train_draws_per_epoch=4,
+                    weights=(PPM, 0, 0, 0),
+                    minima=(0, 0, 0, 0),
+                    maximum_leakage_group_draws_ppm=plan_leakage_cap,
+                )
+                self.assert_schedule_error(
+                    "TRAIN_COMPILER_CAPACITY",
+                    lambda: compile_training_sampling_schedule_v1(
+                        dataset_manifest=dataset,
+                        admission_policy=policy,
+                        sampling_plan=plan,
+                        example_manifests=examples,
+                    ),
+                )
+
+    def test_unequal_frame_share_backtracks_to_feasible_pair_and_rejects_forced_pair(
+        self,
+    ) -> None:
+        policy = replace(
+            _policy(),
+            maximum_match_frames_ppm=750_000,
+            maximum_root_asset_frames_ppm=PPM,
+            maximum_leakage_group_frames_ppm=PPM,
+            maximum_match_draws_ppm=PPM,
+            maximum_root_asset_draws_ppm=PPM,
+            maximum_leakage_group_draws_ppm=PPM,
+        )
+        base = _example()
+        heavy = _compiler_variant(
+            base,
+            suffix=500,
+            split=TrainingSplitV1.TRAIN,
+            frame_count=32,
+        )
+        light_one = _compiler_variant(
+            base,
+            suffix=501,
+            split=TrainingSplitV1.TRAIN,
+            frame_count=1,
+        )
+        light_two = _compiler_variant(
+            base,
+            suffix=502,
+            split=TrainingSplitV1.TRAIN,
+            frame_count=1,
+        )
+        dev = _compiler_variant(
+            base,
+            suffix=503,
+            split=TrainingSplitV1.DEV,
+        )
+        feasible_examples = (heavy, light_one, light_two, dev)
+        feasible_dataset = _schedule_dataset(
+            examples=feasible_examples,
+            policy=policy,
+        )
+        selected_plan: StratifiedSamplingPlanV1 | None = None
+        for seed in range(64):
+            plan = _schedule_plan(
+                dataset=feasible_dataset,
+                seed=seed,
+                epoch_count=1,
+                train_draws_per_epoch=2,
+                weights=(PPM, 0, 0, 0),
+                minima=(0, 0, 0, 0),
+                maximum_leakage_group_draws_ppm=PPM,
+            )
+            first_ranked = min(
+                (
+                    training_schedule_ranking_sha256_v1(
+                        dataset_manifest_sha256=feasible_dataset.fingerprint(),
+                        sampling_plan_sha256=plan.fingerprint(),
+                        seed=seed,
+                        epoch_index=0,
+                        draw_index=0,
+                        stratum=PrimarySamplingStratumV1.LOCALIZABLE_BALL,
+                        leakage_group_sha256=example.leakage_group_sha256,
+                        example_manifest_sha256=example.fingerprint(),
+                    ),
+                    example,
+                )
+                for example in (heavy, light_one, light_two)
+            )
+            if first_ranked[1] == heavy:
+                selected_plan = plan
+                break
+        self.assertIsNotNone(selected_plan)
+        assert selected_plan is not None
+
+        schedule = compile_training_sampling_schedule_v1(
+            dataset_manifest=feasible_dataset,
+            admission_policy=policy,
+            sampling_plan=selected_plan,
+            example_manifests=feasible_examples,
+        )
+        selected_sha256s = {
+            draw.example_manifest_sha256 for draw in schedule.train_draws
+        }
+        self.assertNotIn(heavy.fingerprint(), selected_sha256s)
+        self.assertEqual(
+            selected_sha256s,
+            {light_one.fingerprint(), light_two.fingerprint()},
+        )
+
+        infeasible_examples = (heavy, light_one, dev)
+        infeasible_dataset = _schedule_dataset(
+            examples=infeasible_examples,
+            policy=policy,
+        )
+        infeasible_plan = _schedule_plan(
+            dataset=infeasible_dataset,
+            epoch_count=1,
+            train_draws_per_epoch=2,
+            weights=(PPM, 0, 0, 0),
+            minima=(0, 0, 0, 0),
+            maximum_leakage_group_draws_ppm=PPM,
+        )
+        self.assert_schedule_error(
+            "TRAIN_COMPILER_CAPACITY",
+            lambda: compile_training_sampling_schedule_v1(
+                dataset_manifest=infeasible_dataset,
+                admission_policy=policy,
+                sampling_plan=infeasible_plan,
+                example_manifests=infeasible_examples,
+            ),
+        )
+
+        for frame_cap_field in (
+            "maximum_root_asset_frames_ppm",
+            "maximum_leakage_group_frames_ppm",
+        ):
+            selected_policy = replace(
+                policy,
+                maximum_match_frames_ppm=PPM,
+                **{frame_cap_field: 750_000},
+            )
+            selected_dataset = _schedule_dataset(
+                examples=infeasible_examples,
+                policy=selected_policy,
+            )
+            selected_plan = _schedule_plan(
+                dataset=selected_dataset,
+                epoch_count=1,
+                train_draws_per_epoch=2,
+                weights=(PPM, 0, 0, 0),
+                minima=(0, 0, 0, 0),
+                maximum_leakage_group_draws_ppm=PPM,
+            )
+            self.assert_schedule_error(
+                "TRAIN_COMPILER_CAPACITY",
+                lambda selected_dataset=selected_dataset,
+                selected_plan=selected_plan,
+                selected_policy=selected_policy: (
+                    compile_training_sampling_schedule_v1(
+                        dataset_manifest=selected_dataset,
+                        admission_policy=selected_policy,
+                        sampling_plan=selected_plan,
+                        example_manifests=infeasible_examples,
+                    )
+                ),
+            )
+
+    def test_insufficient_stratum_and_ranked_search_dead_end_are_capacity_errors(
+        self,
+    ) -> None:
+        policy = replace(
+            _policy(),
+            maximum_match_draws_ppm=PPM,
+            maximum_root_asset_draws_ppm=PPM,
+            maximum_leakage_group_draws_ppm=PPM,
+        )
+        examples = _schedule_compiler_examples(
+            train_counts=(1, 0, 0, 0), dev_count=1
+        )
+        dataset = _schedule_dataset(examples=examples, policy=policy)
+        plan = _schedule_plan(
+            dataset=dataset,
+            epoch_count=1,
+            train_draws_per_epoch=2,
+            weights=(PPM, 0, 0, 0),
+            minima=(0, 0, 0, 0),
+            maximum_leakage_group_draws_ppm=PPM,
+        )
+        self.assert_schedule_error(
+            "TRAIN_COMPILER_CAPACITY",
+            lambda: compile_training_sampling_schedule_v1(
+                dataset_manifest=dataset,
+                admission_policy=policy,
+                sampling_plan=plan,
+                example_manifests=examples,
+            ),
+        )
+
+    def test_group_caps_use_exact_cross_multiplication_without_rounding(self) -> None:
+        examples = _schedule_compiler_examples(
+            train_counts=(3, 0, 0, 0), dev_count=1
+        )
+        rejected_policy = replace(
+            _policy(),
+            maximum_match_draws_ppm=333_333,
+            maximum_root_asset_draws_ppm=PPM,
+            maximum_leakage_group_draws_ppm=PPM,
+        )
+        rejected_dataset = _schedule_dataset(
+            examples=examples, policy=rejected_policy
+        )
+        rejected_plan = _schedule_plan(
+            dataset=rejected_dataset,
+            epoch_count=1,
+            train_draws_per_epoch=3,
+            weights=(PPM, 0, 0, 0),
+            minima=(0, 0, 0, 0),
+            maximum_leakage_group_draws_ppm=PPM,
+        )
+        self.assert_schedule_error(
+            "TRAIN_COMPILER_CAPACITY",
+            lambda: compile_training_sampling_schedule_v1(
+                dataset_manifest=rejected_dataset,
+                admission_policy=rejected_policy,
+                sampling_plan=rejected_plan,
+                example_manifests=examples,
+            ),
+        )
+
+        accepted_policy = replace(
+            rejected_policy, maximum_match_draws_ppm=333_334
+        )
+        accepted_dataset = _schedule_dataset(
+            examples=examples, policy=accepted_policy
+        )
+        accepted_plan = _schedule_plan(
+            dataset=accepted_dataset,
+            epoch_count=1,
+            train_draws_per_epoch=3,
+            weights=(PPM, 0, 0, 0),
+            minima=(0, 0, 0, 0),
+            maximum_leakage_group_draws_ppm=PPM,
+        )
+        schedule = compile_training_sampling_schedule_v1(
+            dataset_manifest=accepted_dataset,
+            admission_policy=accepted_policy,
+            sampling_plan=accepted_plan,
+            example_manifests=examples,
+        )
+        self.assertEqual(len(schedule.train_draws), 3)
+
+        frame_rejected_policy = replace(
+            _policy(),
+            maximum_match_frames_ppm=333_333,
+            maximum_root_asset_frames_ppm=PPM,
+            maximum_leakage_group_frames_ppm=PPM,
+            maximum_match_draws_ppm=PPM,
+            maximum_root_asset_draws_ppm=PPM,
+            maximum_leakage_group_draws_ppm=PPM,
+        )
+        frame_rejected_dataset = _schedule_dataset(
+            examples=examples,
+            policy=frame_rejected_policy,
+        )
+        frame_rejected_plan = _schedule_plan(
+            dataset=frame_rejected_dataset,
+            epoch_count=1,
+            train_draws_per_epoch=3,
+            weights=(PPM, 0, 0, 0),
+            minima=(0, 0, 0, 0),
+            maximum_leakage_group_draws_ppm=PPM,
+        )
+        self.assert_schedule_error(
+            "TRAIN_COMPILER_CAPACITY",
+            lambda: compile_training_sampling_schedule_v1(
+                dataset_manifest=frame_rejected_dataset,
+                admission_policy=frame_rejected_policy,
+                sampling_plan=frame_rejected_plan,
+                example_manifests=examples,
+            ),
+        )
+
+        frame_accepted_policy = replace(
+            frame_rejected_policy,
+            maximum_match_frames_ppm=333_334,
+        )
+        frame_accepted_dataset = _schedule_dataset(
+            examples=examples,
+            policy=frame_accepted_policy,
+        )
+        frame_accepted_plan = _schedule_plan(
+            dataset=frame_accepted_dataset,
+            epoch_count=1,
+            train_draws_per_epoch=3,
+            weights=(PPM, 0, 0, 0),
+            minima=(0, 0, 0, 0),
+            maximum_leakage_group_draws_ppm=PPM,
+        )
+        frame_schedule = compile_training_sampling_schedule_v1(
+            dataset_manifest=frame_accepted_dataset,
+            admission_policy=frame_accepted_policy,
+            sampling_plan=frame_accepted_plan,
+            example_manifests=examples,
+        )
+        self.assertEqual(len(frame_schedule.train_draws), 3)
+
+    def test_exact_types_and_every_cross_contract_join_fail_closed(self) -> None:
+        examples = _schedule_compiler_examples()
+        policy = _policy()
+        dataset = _schedule_dataset(examples=examples, policy=policy)
+        plan = _schedule_plan(dataset=dataset)
+
+        class TupleSubclass(tuple):
+            pass
+
+        input_scenarios = (
+            {"dataset_manifest": object()},
+            {"admission_policy": object()},
+            {"sampling_plan": object()},
+            {"example_manifests": TupleSubclass(examples)},
+            {"example_manifests": (examples[0], object())},
+        )
+        for overrides in input_scenarios:
+            arguments: dict[str, object] = {
+                "dataset_manifest": dataset,
+                "admission_policy": policy,
+                "sampling_plan": plan,
+                "example_manifests": examples,
+            }
+            arguments.update(overrides)
+            self.assert_schedule_error(
+                "TRAIN_COMPILER_INPUT",
+                lambda arguments=arguments: compile_training_sampling_schedule_v1(
+                    **arguments  # type: ignore[arg-type]
+                ),
+            )
+
+        other_policy = replace(policy, maximum_match_draws_ppm=700_000)
+        other_dataset = _schedule_dataset(examples=examples, policy=other_policy)
+        binding_scenarios = (
+            (other_dataset, policy, _schedule_plan(dataset=other_dataset), examples),
+            (
+                dataset,
+                policy,
+                replace(plan, dataset_manifest_sha256=_digest(8_000)),
+                examples,
+            ),
+            (
+                dataset,
+                policy,
+                replace(plan, maximum_leakage_group_draws_ppm=750_000),
+                examples,
+            ),
+            (
+                dataset,
+                policy,
+                plan,
+                _schedule_compiler_examples(train_counts=(3, 2, 2, 1)),
+            ),
+        )
+        for selected_dataset, selected_policy, selected_plan, selected_examples in (
+            binding_scenarios
+        ):
+            self.assert_schedule_error(
+                "TRAIN_COMPILER_BINDING",
+                lambda selected_dataset=selected_dataset,
+                selected_policy=selected_policy,
+                selected_plan=selected_plan,
+                selected_examples=selected_examples: (
+                    compile_training_sampling_schedule_v1(
+                        dataset_manifest=selected_dataset,
+                        admission_policy=selected_policy,
+                        sampling_plan=selected_plan,
+                        example_manifests=selected_examples,
+                    )
+                ),
+            )
+
+        bounded_policy = replace(policy, maximum_schedule_rows=4)
+        bounded_dataset = _schedule_dataset(examples=examples, policy=bounded_policy)
+        oversized_plan = _schedule_plan(
+            dataset=bounded_dataset,
+            epoch_count=2,
+            train_draws_per_epoch=4,
+        )
+        self.assert_schedule_error(
+            "TRAIN_COMPILER_BINDING",
+            lambda: compile_training_sampling_schedule_v1(
+                dataset_manifest=bounded_dataset,
+                admission_policy=bounded_policy,
+                sampling_plan=oversized_plan,
+                example_manifests=examples,
+            ),
+        )
+
+    def test_bounded_feasibility_search_exhaustion_fails_closed(self) -> None:
+        policy = _policy()
+        examples = _schedule_compiler_examples()
+        dataset = _schedule_dataset(examples=examples, policy=policy)
+        plan = _schedule_plan(dataset=dataset)
+        with patch.object(
+            training_admission_compiler,
+            "MAX_TRAINING_SCHEDULE_SEARCH_STATES_V1",
+            0,
+        ):
+            self.assert_schedule_error(
+                "TRAIN_COMPILER_CAPACITY",
+                lambda: compile_training_sampling_schedule_v1(
+                    dataset_manifest=dataset,
+                    admission_policy=policy,
+                    sampling_plan=plan,
+                    example_manifests=examples,
+                ),
+            )
+
+        corrupted_dataset = replace(dataset)
+        object.__setattr__(corrupted_dataset, "train_example_count", 7)
+        self.assert_schedule_error(
+            "TRAIN_COMPILER_BINDING",
+            lambda: compile_training_sampling_schedule_v1(
+                dataset_manifest=corrupted_dataset,
+                admission_policy=policy,
+                sampling_plan=plan,
+                example_manifests=examples,
+            ),
         )
 
 
