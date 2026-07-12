@@ -18,8 +18,9 @@ change; it does not supersede the Phase 0 safety boundaries
    has unbounded exception latency, and does not exist after a terminal point.
 3. **Separate inference from policy.** Perception produces observations and a
    `RallyHypothesis`; a reproducible exception-first policy produces a
-   `PolicyAssessment`; an authenticated human/service separately creates an
-   authorized event. A model never labels its own output legally confirmed.
+   `PolicyAssessment`; an authenticated human separately creates an authorized
+   event. No model or service principal can authorize score mutation, and a
+   model never labels its own output legally confirmed.
 4. **Exception screening precedes winner optimization.** Capture gaps,
    replay/no-point, challenges, corrections, administrative points, timeouts,
    side switches, terminal states, and rules/version conflicts are explicit
