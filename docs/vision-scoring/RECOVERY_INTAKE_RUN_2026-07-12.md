@@ -61,6 +61,23 @@ content. The six hold records are zero-byte or historically failed probe
 entries. This run did not identify a resident full-match corpus suitable for
 model training.
 
+One low-band resident filename is a plausible volleyball-service lead: a
+23.483-second, historically reported 1080x1920 HEVC short-form clip also has a
+same-size/duration locator on the absent Nathan Footage volume. This is still
+only unverified filename and prior-probe metadata. It is too short/edited to be
+a training corpus, but it may become a bounded pipeline smoke input after
+Nathan gives separate, explicit approval to open it for byte-level preflight.
+That approval would authorize only the preflight read; it would not establish
+ownership, a participant release, signed rights, provenance, capture
+observability, label truth, or admission for training/evaluation. Those
+decisions require their own evidence and protected gates. No bytes from either
+locator were read during this review.
+
+The reported 1080p metadata does not establish a current feed. At most, this or
+other recovered footage could later instantiate the historical Tier A profile
+after bytes are recovered, accepted rights/releases are signed, and the exact
+camera/content passes observability preflight.
+
 ## Safety interpretation
 
 The manifest carries the sealed-observer claims:
@@ -85,7 +102,10 @@ Empirical camera/model work still requires one of these external changes:
    publish signed rights decisions and release evidence; or
 3. capture a new controlled native 4K60 rights-cleared pilot.
 
-After that, select at most 256 explicitly approved candidates per batch for the
-existing byte-level media preflight. Do not bulk-preflight the 32,955 leads or
-infer permission from filenames, paths, historical probe success, or this
-manifest.
+Byte inspection is a separate authority from every item above. Nathan must
+explicitly approve each bounded byte-preflight batch even when a locator is
+resident; that approval does not substitute for a signed rights decision,
+participant/venue release, provenance decision, or downstream admission.
+Select at most 256 explicitly approved candidates per batch for the existing
+byte-level media preflight. Do not bulk-preflight the 32,955 leads or infer
+permission from filenames, paths, historical probe success, or this manifest.

@@ -2,10 +2,17 @@
 
 **Study received:** 2026-07-12
 **Decision recorded:** 2026-07-12
-**Source:** independent GPT Sol Pro architecture study supplied by the project
-owner
-**Relationship to Phase 0:** corroborating review with one material sequencing
-change; it does not supersede the Phase 0 safety boundaries
+**Source:** owner-reported ChatGPT GPT-5.6 Sol Pro architecture study
+**Source artifact:** SHA-256
+`7c5249ae4d8b92f332ee2aa8280da7633171c61e715fca11464a71f8f7233f6d`;
+94,492 bytes; 1,905 lines
+**Source caveat:** the supplied artifact does not self-identify the model. The
+model name is Nathan's corrected owner report after the earlier speech-to-text
+error. The attachment remains external to the repository; this record does not
+claim it is repo-resident.
+**Relationship to Phase 0:** corroborating review that changed both product
+sequencing and the primary-evidence strategy; it does not supersede the Phase 0
+safety boundaries
 
 ## Adopted changes
 
@@ -40,13 +47,17 @@ change; it does not supersede the Phase 0 safety boundaries
 
 ## Confirmed existing decisions
 
-- Native single-camera 4K60 remains the prospective baseline; historical
-  1080p30 is compatibility/shadow material only after rights and observability
-  gates pass.
+- Native single-camera 4K60 remains the prospective baseline. No current camera
+  feed is established; recovered historical 1080p30 footage could become only
+  a compatibility/shadow profile after explicit byte preflight, signed rights
+  and releases, and observability gates pass.
 - Dual synchronized calibrated 4K60 is an experiment, not an assumed purchase;
   it must materially improve risk-bounded coverage, review time, or geometry.
 - The ball baseline remains a custom causal, blur-aware, high-resolution
-  temporal heatmap model trained on cleared beach footage.
+  temporal heatmap model. Its owned ConvGRU runtime is implemented and has 15
+  PyTorch tests plus a 50-step synthetic overfit smoke, but it has never been
+  trained on beach footage and has no real checkpoint, export, latency,
+  calibration, or deployable-service claim.
 - D-FINE-S/RT-DETR-family player detection, ByteTrack plus volleyball
   constraints, manual OpenCV calibration, selective RTMPose, and owned-data
   audio remain the first benchmark family.
@@ -92,6 +103,28 @@ change; it does not supersede the Phase 0 safety boundaries
 6. Train rally/referee/scoreboard/server evidence first, then ball/player/pose/
    audio specialists.
 7. Add exception-first constrained fusion and prospective shadow evaluation.
+
+The control-plane sequencing change is now reflected in the implementation:
+signed scorer-copilot persistence precedes empirical perception, and ScoreCheck
+has authenticated append-only receipts plus fixed
+`VERIFIED_RECEIPT_PREFIX` replay without any official-score edge. The latter is
+not live integration: its external monotonic rollback checkpoint, real
+Supabase/PostgREST/JWT role mapping, protected target resolver, endpoint, and UI
+remain absent.
+
+The primary-evidence change is also retained: next-server observations can
+corroborate or downgrade one earlier causal rally hypothesis but can never
+promote policy eligibility or stand in for direct evidence at terminal and
+same-server/replay cases.
+
+`CausalBallLabelBundleV1` now addresses one provenance gap discovered while
+following this order. A loose `labels_sha256` and coverage declaration did not
+prove complete decoded-frame/all-localizable-ball enumeration. The new
+curator-signed bundle authenticates only the curator's bounded derived-asset
+completeness assertion; it does not objectively prove source-frame
+completeness. Every receipt admission flag remains `False`, and source
+residency, rights, derivation, annotation truth, the trusted training launcher,
+and immutable media lease remain pending.
 
 Empirical training remains gated on exact rights, resident source bytes,
 capture observability, timestamp/freeze integrity, reproducible calibration,

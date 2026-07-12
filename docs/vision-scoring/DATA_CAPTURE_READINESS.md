@@ -1,14 +1,27 @@
 # Vision Scoring Data and Capture Readiness
 
-**Readiness:** blocked for production training claims; scoring work is V0 shadow-only
+**Readiness:** blocked for rights-cleared empirical training and deployment
+claims; the owned causal ball runtime is synthetic-smoke-tested only and scoring
+work is V0 no-mutation shadow
 
 **Date:** 2026-07-11
 
 **Architecture:** [ARCHITECTURE.md](./ARCHITECTURE.md)
 
+**Current evidence contracts:**
+[CAPTURE_SEGMENT_ATTESTATION.md](./CAPTURE_SEGMENT_ATTESTATION.md),
+[CAUSAL_BALL_BASELINE.md](./CAUSAL_BALL_BASELINE.md), and
+[CAUSAL_BALL_LABEL_BUNDLE.md](./CAUSAL_BALL_LABEL_BUNDLE.md)
+
 ## Current verdict
 
-The project does not currently have a reproducible training dataset, deployable model artifact, or validated capture profile. Work can start now, but the first deliverable is evidence and infrastructure—not another long training run.
+The project does not currently have a reproducible training dataset, a real-data
+checkpoint, a deployable model artifact, or a validated capture profile. An
+owned causal ConvGRU ball architecture and loss runtime now exist. They have 15
+PyTorch regression tests and a 50-step synthetic overfit smoke, but have never
+seen beach-volleyball footage and have no export, latency, probability
+calibration, or service result. The next empirical deliverable is trusted data
+admission and a bounded real-data baseline—not an ungoverned long training run.
 
 The legacy handoff is useful for finding failure modes and candidate labels. It is not a trusted baseline until its inputs, outputs, versions, splits, and metrics can be reproduced.
 
@@ -97,6 +110,20 @@ Rules:
   bytes into the strict annotation contracts and verify every declared
   reviewer/adjudicator signature, current annotation fingerprint, revocation,
   evidence file, evaluator identity, and minimum truth policy before use.
+- A manifest `labels_sha256` and a declared coverage manifest did not, by
+  themselves, prove complete decoded-frame or all-localizable-ball enumeration.
+  `CausalBallLabelBundleV1` adds a curator-signed
+  `COMPLETE_FULL_DECODED_FRAME` claim for one bounded derived asset and binds
+  every frame to exact Annotation Truth V2 preimages and attestations. It
+  authenticates only the curator's enumeration assertion; it does not
+  objectively prove source-frame completeness. Its receipt keeps training,
+  evaluation, deployment, and live-scoring admission fixed to `False`; source
+  residency, derivation, rights, pixel truth, annotation truth, and capture
+  lineage remain independently gated.
+- A trusted single-use training launcher and immutable media lease must
+  reverify the exact current readiness, rights, derivation, split, annotation,
+  label-bundle, and source-byte authorities before any trainer can consume the
+  data. That launcher does not exist yet.
 - Model cards list source-manifest versions, code commit, environment lock, seed, hyperparameters, weights hash, and evaluation report hash.
 - All leakage identities are bounded ASCII-stable IDs; lineage traversal is
   iterative and record-count bounded, so Unicode aliases and deep recursive
@@ -107,7 +134,7 @@ Rules:
 
 | Tier | Minimum capture | Intended use | Release limitation |
 |---|---|---|---|
-| A: compatibility | One fixed 1920×1080 camera at 30 progressive fps plus synchronized audio | Feasibility, server identity, delayed assistive review, and no-mutation shadow | Compatibility/shadow only; never eligible for an official score mutation or referee claim |
+| A: compatibility | One fixed 1920×1080 camera at 30 progressive fps plus synchronized audio | Feasibility, server identity, delayed assistive review, and no-mutation shadow, but only if the exact footage is recovered, rights-cleared, released, and observable | Historical profile only; no current feed is established, and it is never eligible for an official score mutation or referee claim |
 | B: assistive baseline | One fixed 3840×2160 camera at 59.94/60 progressive fps, native-resolution recording, synchronized audio | Ball continuity, contact candidates, rally/server/team attribution, statistics | Occluded/depth-dependent and terminal cases remain human-authorized |
 | C: multi-view | At least two genlocked or independently verified synchronized 4K60 cameras with joint calibration | Occlusion recovery, triangulation, stronger contact attribution | Still requires fault-specific validation before referee support |
 
@@ -166,6 +193,20 @@ Produce one immutable report per capture profile containing:
 
 Annotation is temporal and uncertainty-aware. Do not turn every ambiguous frame into a false exact label.
 
+Keep four truth layers distinct throughout collection, review, and evaluation:
+
+1. **Media truth** records the exact captured bytes, stream/frame/sample timing,
+   decode identity, and capture-integrity state.
+2. **Observational truth** records only what a reviewer can see or hear,
+   including explicit occluded, indistinguishable, and capture-unknown states.
+3. **Physical adjudication** records an expert conclusion about what physically
+   happened and may remain unresolved or use an uncertainty interval.
+4. **Official/legal truth** records the authenticated referee/scorer decision
+   under one exact ruleset. It is not rewritten to agree with physical evidence.
+
+An inconclusive review that leaves an official call standing therefore creates
+different physical and official labels; neither may overwrite the other.
+
 | Layer | Required labels |
 |---|---|
 | Ball | Full selected-stream/decode identity; center or exactly one blur representation; visible/occluded/out-of-frame; apparent size; ambiguity; track segment; pixel-equivalent versus capture-attested duplicate classification |
@@ -202,22 +243,26 @@ Use active learning only after the initial stratified seed exists. Sample uncert
 
 ## Required first perception experiment
 
-This experiment starts only after the scorer-copilot control plane, review
-workflow, authenticated authorization boundary, transactional shadow sink, and
-rights-cleared intake path exist. The first temporal baseline is the transparent
-constrained factor graph/HSMM; learned TCN/GRU fusion is a challenger after that
-baseline is reproducible. Perception does not block building those controls.
+The scorer-copilot control plane, authenticated authorization boundary, local
+transactional shadow sink, append-only ScoreCheck receipt store, and fixed
+receipt-prefix replay now exist. The rights-cleared intake path is not complete,
+and ScoreCheck still lacks its external rollback checkpoint, real deployment
+role mapping, target resolver, endpoint, UI, and live integration. The owned
+causal ball runtime is ready only as a synthetic-tested implementation baseline.
+The first event-fusion baseline remains a transparent constrained factor
+graph/HSMM; learned TCN/GRU event fusion is a challenger after that baseline is
+reproducible. The ball model's ConvGRU is not an event-fusion implementation.
 
-Run one controlled matrix before choosing the ball architecture:
+Run one controlled matrix before selecting a trained production ball model:
 
-| Dimension | Variants |
-|---|---|
-| Ball family | Owned causal temporal heatmap; WASB-derived baseline; BlurBall-style blur head; D-FINE-S; RT-DETRv2-S |
-| Input | Global 640 control; native ROI; overlapping source-resolution tiles |
-| Temporal context | 1, 3, 5, and 9 causal frames at both 30 and 60 fps |
-| Capture | Tier A 1080p30 and Tier B 4K60, including matched downsample pairs where possible |
-| Fusion ablation | Ball only; +court; +players/tracks; +selective pose; +audio; +rules context |
-| Generalization | Seen-condition validation; held-out venue/camera; held-out lighting/compression |
+| Dimension | Planned empirical variants | Current runtime state |
+|---|---|---|
+| Ball family | Owned causal temporal heatmap; WASB-derived baseline; BlurBall-style blur head; D-FINE-S; RT-DETRv2-S | Only the owned causal ConvGRU heatmap/attribute runtime exists, synthetic-smoke-tested with no real checkpoint. Every external family remains planned. |
+| Input | Global 640 control; native ROI; overlapping source-resolution tiles | Base tensor runtime exists; ROI/tiling merger and empirical input comparison do not. |
+| Temporal context | 1, 3, 5, and 9 causal frames at both 30 and 60 fps | Architectural prefix-causality is tested; no real-data comparison exists. |
+| Capture | Tier A 1080p30 and Tier B 4K60, including matched downsample pairs where possible | No current rights-cleared, preflight-approved feed exists for either tier. |
+| Fusion ablation | Ball only; +court; +players/tracks; +selective pose; +audio; +rules context | Planned only. |
+| Generalization | Seen-condition validation; held-out venue/camera; held-out lighting/compression | Planned only; no real split or empirical result exists. |
 
 The global-640 variant is a control, not the assumed deployment choice. Reject a more complex candidate if it does not improve held-out event-level risk/coverage or if its runtime prevents the latency budget.
 
@@ -234,7 +279,7 @@ Report point estimates, confidence intervals where meaningful, per-condition sli
 | Events | Precision/recall/F1 for serve, dead-ball, replay, next-server, terminal, and team attribution; event latency |
 | Calibration | Reliability diagram, ECE/Brier or appropriate alternative, and accuracy-versus-coverage/risk-versus-coverage curves |
 | Rules | Exact state after every event, complete-match score accuracy, illegal transition count, canonical ruleset-fingerprint rejection, pending-obligation audit behavior, rejection of unsupported event classes, and replay determinism |
-| Product | False human-authorization-ready assessments per 1,000 eligible rallies and per match; review/abstention rate; operator acceptance/correction rate; p50/p95 evidence-to-assessment latency |
+| Product | False human-authorization-ready assessments per 1,000 eligible rallies and per match; review/abstention rate; proposal override rate; p50/p95 evidence-to-assessment latency; median operator actions and review time per rally; scorer error rate, missed-exception rate, and automation-bias errors versus an unaided manual-scoring control |
 
 The live inference target is initially p95 at or below two seconds after the
 decisive primary evidence, using the bounded 0.5–2 second buffer. Independent
@@ -248,6 +293,11 @@ Gates are cumulative. A schedule, demo, or high subsystem AP cannot waive them.
 ### 1. Provenance gate
 
 - 100% of used assets and derivatives have accepted rights, hashes, lineage, split, and review state.
+- Every ball-training clip has a current curator-signed
+  `CausalBallLabelBundleV1` that authenticates the curator's bounded
+  full-decoded-frame/all-ball enumeration claim, plus independently current
+  Annotation Truth V2, source, derivation, rights, and immutable-media evidence.
+  A bundle receipt alone is never admission or objective completeness proof.
 - Environment, code, weights, calibration, and report hashes reproduce the evaluation.
 - Every event/evaluation run records the exact canonical ruleset SHA-256 (including reducer semantics version) and reducer artifact/container/commit digest, not only a human-readable ruleset id/version.
 - No train/test family leakage is detected.
@@ -278,8 +328,9 @@ Absolute subsystem thresholds beyond the preflight assumptions are intentionally
 ### 4. Authorization and persistence gate
 
 The reducer accepting a domain-valid event does not satisfy this gate. The
-signed human-authorization contracts exist, but the complete gate also
-requires the transactional shadow store and deployment trust boundary:
+signed human-authorization contracts and local transactional shadow store
+exist, but the complete deployment gate still requires these external trust
+controls:
 
 - resolve a human identity/session to a protected per-match scorekeeper,
   referee, or match-admin key; V0 contains no model or service principal;
@@ -316,6 +367,13 @@ are unsupported.
 ### 5. Shadow gate
 
 - Run on complete live matches with no credentials capable of official mutation.
+- Keep ScoreCheck as the existing official manual-score surface. The
+  authenticated append-only receipt store and fixed
+  `VERIFIED_RECEIPT_PREFIX` historical replay are implemented, but no vision
+  endpoint or UI exists. Before live use, add an externally protected monotonic
+  ScoreCheck receipt checkpoint, prove the real Supabase/PostgREST/JWT-to-role
+  mapping, and provide a separately protected target resolver. None grants an
+  official-score mutation path.
 - Record every hypothesis, optional reconciliation, assessment, abstention,
   signed human ruling, late/corrected annotation truth, outage, and version
   boundary.

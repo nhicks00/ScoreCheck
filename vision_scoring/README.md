@@ -1,10 +1,28 @@
 # Vision Scoring Foundation
 
 This package is the hard-cutover foundation for assistive beach-volleyball
-scoring. It intentionally contains no detector, tracker, or model runtime yet.
+scoring. It includes an owned causal ConvGRU ball-perception runtime, but that
+runtime is synthetic-smoke-tested only and is not a trained or deployable beach
+volleyball model. Player, tracking, pose, audio, and event-model runtimes remain
+unimplemented.
 
 Architecture and readiness decisions live in
 [the vision-scoring documentation](../docs/vision-scoring/ARCHITECTURE.md).
+The atomic review-to-event contract is documented in
+[SCORER_COPILOT_TRANSACTION_DESIGN.md](
+../docs/vision-scoring/SCORER_COPILOT_TRANSACTION_DESIGN.md),
+and the isolated ScoreCheck delivery boundary is documented in
+[SCORECHECK_SHADOW_INTEGRATION.md](../docs/vision-scoring/SCORECHECK_SHADOW_INTEGRATION.md).
+The source/derivation, rights, and capture boundary for operator clips is in
+[TRUSTED_REVIEW_CLIP_PIPELINE.md](../docs/vision-scoring/TRUSTED_REVIEW_CLIP_PIPELINE.md).
+The no-camera trace evaluator and evidence-window plan are in
+[CAPTURE_INTEGRITY_GATEWAY.md](../docs/vision-scoring/CAPTURE_INTEGRITY_GATEWAY.md).
+The current genesis-only signed capture-service boundary is in
+[CAPTURE_SEGMENT_ATTESTATION.md](../docs/vision-scoring/CAPTURE_SEGMENT_ATTESTATION.md).
+The implemented synthetic-only ball runtime and its bounded curator-signed
+frame/all-localizable-ball enumeration contract are documented in
+[CAUSAL_BALL_BASELINE.md](../docs/vision-scoring/CAUSAL_BALL_BASELINE.md) and
+[CAUSAL_BALL_LABEL_BUNDLE.md](../docs/vision-scoring/CAUSAL_BALL_LABEL_BUNDLE.md).
 
 The adopted V0 boundary is explicit:
 
@@ -20,9 +38,11 @@ The adopted V0 boundary is explicit:
 6. a trusted authorizer verifies the protected per-match policy, human role,
    signatures, assessment provenance, context, and event, then countersigns an
    `AuthorizedRuleEvent` envelope;
-7. a transactional shadow processor must reverify that envelope, replay the
-   immutable log, call `RulesReducer.reduce()`, and atomically append the event
-   and derived state.
+7. the transactional shadow processor reverifies that envelope, replays the
+   immutable log, calls `RulesReducer.reduce()`, and atomically appends the
+   event, derived state, and shadow outbox row. Its dedicated scorer-copilot
+   path additionally admits and replays the exact signed case/review history,
+   derives the authorization context, and commits the case link with the event.
 
 There is no model or service principal that can authorize a score in V0. The
 only trusted actor roles are `SCOREKEEPER`, `REFEREE`, and `MATCH_ADMIN`, and
@@ -129,17 +149,31 @@ under the then-current stores and policies; passing a pre-training
 `MODEL_DEPLOYMENT` check never permanently authorizes a later release.
 
 `ready=true` is the capture/data-intake gate, not permission to start an
-arbitrary trainer and not evidence that label semantics are correct. A training
-or evaluation entry point must additionally parse the exact label artifact into
-the strict annotation contracts, verify the current detached signature from
-every declared reviewer/adjudicator and all resident review evidence under its
-independently pinned annotation policy, require a launcher-owned protected
-annotation-configuration pointer, and recheck that generation after evidence
-work. The evaluation report binds the exact trust store, policy, evaluator,
-governance domain, evidence generation, and protected configuration generation.
-It also enforces its task-specific coverage manifest. The checked-in label files
-are deliberately synthetic placeholders; they demonstrate content addressing
-only and are not trainable truth.
+arbitrary trainer and not evidence that label semantics are correct. The current
+trusted evaluator accepts only `BallFrameAnnotationV2`. It verifies the current
+detached signature from every declared ball reviewer/adjudicator and all resident
+ball-review evidence under its independently pinned ball-annotation policy,
+requires a launcher-owned protected annotation-configuration pointer, and
+rechecks that generation after evidence work. Observed-temporal, physical, and
+reported-official contracts are structural types only; their distinct signature
+verifiers and trusted evaluation paths do not exist yet. The ball-evaluation
+report binds the exact trust store, policy, evaluator, governance domain,
+evidence generation, and protected configuration generation. It also enforces
+its typed, explicitly unverified unit-benchmark split and coverage manifest. The
+checked-in label files are deliberately synthetic placeholders; they demonstrate
+content addressing only and are not trainable truth.
+
+A readiness-manifest `labels_sha256` and its declared coverage did not prove
+that every decoded frame, or every localizable ball in a full frame, had been
+enumerated. `CausalBallLabelBundleV1` adds a separately curator-signed
+`COMPLETE_FULL_DECODED_FRAME` claim for one bounded derived asset and binds each
+frame to the exact Annotation Truth V2 preimages and attestations. Verification
+authenticates only the curator's enumeration assertion; it does not objectively
+prove source-frame completeness, source residency, derivation, rights, pixels,
+annotation truth, or capture lineage. Every receipt property for training,
+evaluation, deployment, and live scoring is hard-coded `False`. A trusted
+single-use launcher and immutable media lease that reverify every current
+authority are still required before a trainer may consume any bundle.
 
 Create a conservative technical inventory for one or more resident local media
 files (the Python module is standard-library-only; `ffprobe` must be installed
@@ -223,6 +257,25 @@ values likewise do not prove duplicate packets, frames, or content.
 Metadata inspection times out after 60 seconds and the streaming packet scan
 after 300 seconds. Download macOS cloud placeholders locally before preflight.
 
+Create a sealed, metadata-only quarantine inventory from an existing probe CSV
+without opening, hashing, decoding, or copying any candidate media bytes:
+
+```bash
+PYTHONPATH=src python3 -m vision_scoring.recovery_intake build \
+  --probe-csv /absolute/path/to/prior-probe.csv \
+  --expected-input-sha256 <lowercase-sha256> \
+  --present-root-pin '/absolute/resident/root::DEVICE::INODE' \
+  --offline-root '/Volumes/Offline Media' \
+  --output /absolute/path/outside-all-media-roots/quarantine-manifest.json
+```
+
+Repeat `--present-root-pin` and `--offline-root` as needed. A present-root pin
+must use the root's exact decimal `st_dev` and `st_ino`. File output is
+owner-only, no-replace, and permitted only for a sealed production-observer
+manifest outside every input, candidate, present, and offline media namespace.
+The completed 2026-07-12 run and its exact bounds are recorded in
+[RECOVERY_INTAKE_RUN_2026-07-12.md](../docs/vision-scoring/RECOVERY_INTAKE_RUN_2026-07-12.md).
+
 The readiness thresholds are engineering gates, not governing-body standards.
 
 Implemented now:
@@ -242,23 +295,61 @@ Implemented now:
   authorized-event envelopes;
 - canonical match-state encoding and validation for cache comparison; the
   event log, not a decoded state snapshot, remains the replay source of truth;
+- a strict SQLite shadow ledger that transactionally reverifies protected
+  policy history and authorized envelopes, replays every event, compares every
+  derived state, and atomically appends human-direct event/state/outbox rows;
+- externally comparable monotonic ledger checkpoints, global outbox identity,
+  bounded streaming replay, and permanent integrity blocking when retained
+  authorization history becomes invalid;
+- signed scorer-copilot cases, exact clip-presentation manifests, signed review
+  dispositions/adjudications, store-derived authorization contexts, and
+  producer attestations, plus atomic case/journal/context/event/state/outbox
+  linkage and cross-ledger historical replay. These records remain evidence
+  and never score authority;
+- authenticated append-only ScoreCheck vision receipts plus the fixed,
+  decimal/base64, historical-signature-verified `VERIFIED_RECEIPT_PREFIX`
+  read/replay projection. It has no edge to official scoring tables and is not
+  rollback-complete without the still-external monotonic receipt checkpoint;
+- a sealed, bounded recovery-intake tool and completed metadata-only quarantine
+  inventory; it deliberately performs no resident media byte reads or rights
+  inference;
+- a genesis-only signed capture-service evidence record that reverifies current
+  metadata, rights, policy, window, trace, and structural integrity. All of its
+  media/product admission flags remain `False`; it proves neither physical
+  camera truth nor resident/decoded asset bytes;
 - detached-snapshot, curator-signed readiness manifests with current/revoked
   governance and byte-verified resident media, label, calibration, camera,
   clock, and encoder artifacts;
 - signed commercial-rights decisions with batched evidence verification plus
   immutable, bounded, leakage-safe dataset splits;
-- strict decoded-frame/ball/event annotation identity and signed reviewer/
-  adjudicator trust;
+- strict decoded-frame and layered ball/event annotation identities, with signed
+  reviewer/adjudicator trust implemented for ball observations only;
+- a curator-signed `CausalBallLabelBundleV1` that authenticates the curator's
+  bounded full-decoded-frame/all-localizable-ball completeness claim against
+  exact current Annotation Truth V2 preimages and attestations. It does not
+  objectively prove source-frame completeness, is evidence only, and keeps
+  every admission flag `False`;
 - a deterministic ball-localization benchmark with an explicit operating
   threshold, full-ranking AP101, apparent-ball-diameter-normalized errors,
-  duplicate handling, and negative-only activation metrics.
+  duplicate handling, retained input-preimage validation for negative and
+  unresolved frame identities, and recomputed typed appearance/role/play-state
+  performance slices;
+- an owned stride-four causal ConvGRU ball runtime with all-ball heatmap,
+  visibility, candidate role, sub-pixel offset, blur, and heteroscedastic
+  uncertainty losses. Fifteen PyTorch tests plus a 50-step synthetic overfit
+  smoke exercise causality, gap reset, masks, loss plumbing, and backpropagation;
+  the runtime has never seen beach-volleyball footage.
 
 Not implemented yet:
 
-- persistence/transactional append storage;
 - deployment identity/session resolution that maps a signed human key to the
   protected per-match authorization policy;
-- the scorer-copilot review workflow and shadow outbox;
+- trusted source/clip derivation and the operator-review UI;
+- live dispatch of the local shadow outbox, an externally protected monotonic
+  ScoreCheck receipt checkpoint, real Supabase/PostgREST/JWT-to-role mapping, a
+  protected target resolver, and any ScoreCheck vision endpoint or UI.
+  ScoreCheck remains the existing official manual-score surface, and no vision
+  control may mutate it;
 - full misconduct/sanction progression, defaults, forfeits, expulsions, or
   disciplinary case handling;
 - every form of score correction. Correction is intentionally absent from the
@@ -267,8 +358,13 @@ Not implemented yet:
   rebuilds from the immutable event log, and revalidates all dependent state;
 - media decoding/content inspection and calibration measurement; the technical
   ffprobe/hash preflight above is structural inventory only;
-- ball, player, tracking, pose, audio, or event models;
-- live ScoreCheck integration.
+- a rights-cleared ball checkpoint, model export, latency/calibration result,
+  and deployable ball service; player, tracking, pose, audio, and event models;
+- the trusted single-use training launcher and immutable media-consumption
+  lease that would turn independently verified evidence into train admission;
+- trusted signature verification/evaluation for observed-temporal, physical,
+  or reported-official annotation records;
+- any automated score origin or official ScoreCheck mutation path.
 
 An authorized human point entry may continue while a side-switch or
 technical-timeout obligation is pending; the obligation remains latched during

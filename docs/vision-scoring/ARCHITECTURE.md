@@ -1,6 +1,11 @@
 # Beach Volleyball Vision Scoring Architecture
 
-**Status:** V0 domain, policy, reducer, state-codec, and signed human-authorization contracts implemented; transactional shadow persistence, scorer-copilot workflow, perception, and training remain gated
+**Status:** V0 domain, policy, reducer, signed human authorization, atomic
+replay-verified scorer-copilot persistence, authenticated append-only
+ScoreCheck receipts, signed evidence contracts, sealed recovery intake, and an
+owned causal ball runtime are implemented. The ball runtime has synthetic test
+coverage only; rights-cleared training, deployable perception, and live product
+integration remain gated.
 
 **Decision date:** 2026-07-11
 
@@ -11,11 +16,24 @@
 **Independent review adoption:**
 [SECOND_STUDY_ADOPTION.md](./SECOND_STUDY_ADOPTION.md)
 
+**Trusted clip-production design:**
+[TRUSTED_REVIEW_CLIP_PIPELINE.md](./TRUSTED_REVIEW_CLIP_PIPELINE.md)
+
+**Capture-integrity gateway design:**
+[CAPTURE_INTEGRITY_GATEWAY.md](./CAPTURE_INTEGRITY_GATEWAY.md)
+
+**Current signed capture-service genesis:**
+[CAPTURE_SEGMENT_ATTESTATION.md](./CAPTURE_SEGMENT_ATTESTATION.md)
+
+**Current ball runtime and label-completeness contract:**
+[CAUSAL_BALL_BASELINE.md](./CAUSAL_BALL_BASELINE.md) and
+[CAUSAL_BALL_LABEL_BUNDLE.md](./CAUSAL_BALL_LABEL_BUNDLE.md)
+
 ## Decision
 
 Build a new event-driven vision service. Do not resume the legacy perception pipeline as the production base. Salvage its deterministic scoring concepts, schemas, test cases, and operator-review ideas, but replace the model orchestration and data lifecycle.
 
-Computer vision produces evidence and hypotheses; it never writes a score. The deterministic rules reducer is the sole domain function that derives a new score state from an accepted event. It is not, by itself, an access-control or security boundary. The foundation now implements protected per-match authorization policy, signed human commands, authorizer countersignatures, and strict envelope verification. Transactional append/replay is still required before an envelope can affect even the isolated shadow state.
+Computer vision produces evidence and hypotheses; it never writes a score. The deterministic rules reducer is the sole domain function that derives a new score state from an accepted event. It is not, by itself, an access-control or security boundary. The foundation now implements protected per-match authorization policy, signed human commands, authorizer countersignatures, strict envelope verification, and transactional replay/append for both human-direct and signed-case scorer-copilot shadow events. A scorer-copilot transition is accepted only when its signed case, historical review prefix, store-derived context, authorization link, event, state, idempotency result, and outbox row commit and replay atomically.
 
 The first product is deliberately narrower than referee-grade officiating:
 
@@ -25,7 +43,13 @@ The first product is deliberately narrower than referee-grade officiating:
 | Advanced statistics | Rally segmentation, contacts, trajectories, player movement, and derived statistics after validation | Claims that monocular estimates are referee-accurate |
 | Referee support | Fault-specific evidence from synchronized, calibrated multi-camera capture | Certification or unattended officiating without a separate validation program |
 
-The current 1080p30 fixed-camera feed is a compatibility input, not the assumed production optimum. Single-camera 4K60 is the proposed assistive baseline. Synchronized multi-view capture is required before pursuing credible 3D reconstruction or referee-support claims.
+No current camera feed has been recovered, rights-cleared, and shown observable
+for this system. Historical 1080p30 material is only a possible Tier A
+compatibility profile if its bytes are recovered, its rights and releases are
+accepted, and its exact capture profile passes the observability gates.
+Single-camera native 4K60 is the proposed prospective assistive baseline.
+Synchronized multi-view capture is required before pursuing credible 3D
+reconstruction or referee-support claims.
 
 ## Non-negotiable design rules
 
@@ -78,34 +102,41 @@ Trusted authorizer verifies policy/roles/signatures
 Countersigned AuthorizedRuleEvent
         |
         v
-Transactional shadow processor                [not implemented]
+Transactional shadow processor
   reverify envelope and complete immutable history
   run reducer; append event/state/outbox atomically
+  replay signed case/journal and historical score prefix
+  commit case link with event/state/outbox atomically
         |
         v
 Committed shadow state + scorer-copilot audit
   no credential or path to official ScoreCheck mutation
 ```
 
-ScoreCheck remains the official presentation and operator surface. V0 is shadow-only: the vision subsystem has no credential or code path that can write `score_states`, `overlay_states`, or their successors. Calling `RulesReducer.reduce()` in-process is only a domain-library operation and must not be described as an authorized or official mutation.
+ScoreCheck remains the existing official manual-score surface. It has no vision
+endpoint or vision UI. V0 is shadow-only: the vision subsystem has no credential
+or code path that can write `score_states`, `overlay_states`, or their
+successors. Calling `RulesReducer.reduce()` in-process is only a domain-library
+operation and must not be described as an authorized or official mutation.
 
 ### Runtime stages
 
-| Stage | Responsibility | Initial implementation |
-|---|---|---|
-| Capture gateway | Preserve source resolution, audio, presentation timestamps, frame IDs, and drop/duplicate diagnostics | GStreamer/FFmpeg ingest with a bounded 0.5–2 second buffer |
-| Calibration | Lens correction, named court points, homography/PnP, fixed-camera drift detection | Manual intrinsics/extrinsics with OpenCV; learned refinement only for recovery |
-| Ball perception | Center, visibility, blur extent/orientation, uncertainty, and short track | Causal temporal heatmap model inspired by WASB/BlurBall; run every frame on native-resolution ROI or tiles |
-| Player perception | Active-player boxes and court membership | D-FINE-S or RT-DETRv2-S; typically 15–30 Hz |
-| Tracking | Rally-local identity, team/side constraints, and occlusion continuity | ByteTrack baseline; BoT-SORT only if held-out tests justify added ReID complexity |
-| Pose | Contact-window body/hand evidence | RTMPose-m on player crops only around candidate events |
-| Temporal fusion | Primary serve/contact/dead-ball and team-attribution evidence with uncertainty | Transparent constrained factor graph/HSMM first; a small causal TCN/GRU is a later challenger only if held-out evidence justifies it |
-| Next-server reconciliation | Compare a separately timed server observation to one exact primary hypothesis and state revision | Delayed consistency check only; never a source of policy promotion |
-| Decision policy | Eligibility, calibration, contradiction checks, and abstention | Versioned policy producing an assessment, never an event or score |
-| Human authorization | Bind one exact event to a signed human command, optionally assisted by a separately signed eligible assessment | Ed25519 command/signature contracts; only scorekeeper, referee, and match-admin human roles exist |
-| Trusted authorizer | Verify protected per-match policy generation, current revocations, role/event allowlist, command, assessment provenance, and context; countersign the envelope | Implemented canonical authorization boundary; deployment identity/session resolution remains external |
-| Authenticated event store | In one transaction: verify signer/ruleset/sequence, run reducer, append event and derived state, and expose replay | Not implemented; in-memory reducer state is not durable proof |
-| Rules reducer | Beach-volleyball scoring, service order, set/match completion, and pending side-switch/timeout obligations | Pure deterministic domain library; validates semantics, not identity or access |
+| Stage | Responsibility | Planned baseline | Current runtime state |
+|---|---|---|---|
+| Capture gateway | Preserve source resolution, audio, presentation timestamps, frame IDs, and drop/duplicate diagnostics | GStreamer/FFmpeg ingest with a bounded 0.5–2 second buffer | Structural trace/window evaluators and one signed, genesis-only capture-service evidence contract exist. No media ingest service or admitted asset exists. |
+| Calibration | Lens correction, named court points, homography/PnP, fixed-camera drift detection | Manual intrinsics/extrinsics with OpenCV; learned refinement only for recovery | No calibration runtime or validated profile. |
+| Ball perception | Center, visibility, blur extent/orientation, uncertainty, and short track | Owned causal temporal heatmap model on native-resolution ROI or tiles | A small stride-four encoder plus causal ConvGRU and heatmap/visibility/role/offset/blur/variance heads is implemented. It has 15 PyTorch regression tests and a 50-step synthetic overfit smoke only; it has never seen beach footage. |
+| Player perception | Active-player boxes and court membership | D-FINE-S or RT-DETRv2-S; typically 15–30 Hz | Planned only. |
+| Tracking | Rally-local identity, team/side constraints, and occlusion continuity | ByteTrack baseline; BoT-SORT only if held-out tests justify added ReID complexity | Planned only. |
+| Pose | Contact-window body/hand evidence | RTMPose-m on player crops only around candidate events | Planned only. |
+| Temporal fusion | Primary serve/contact/dead-ball and team-attribution evidence with uncertainty | Transparent constrained factor graph/HSMM first; a small causal TCN/GRU only if held-out evidence justifies it | Contracts exist; no fusion runtime. The ball ConvGRU is a perception model, not this event-fusion stage. |
+| Next-server reconciliation | Compare a separately timed server observation to one exact primary hypothesis and state revision | Delayed consistency check only; never a source of policy promotion | Deterministic contract/reconciliation logic implemented; no live observation producer. |
+| Decision policy | Eligibility, calibration, contradiction checks, and abstention | Versioned policy producing an assessment, never an event or score | Deterministic policy contract implemented; no live perception input. |
+| Human authorization | Bind one exact event to a signed human command, optionally assisted by a separately signed eligible assessment | Ed25519 command/signature contracts; only scorekeeper, referee, and match-admin human roles exist | Implemented control-plane contract. |
+| Trusted authorizer | Verify protected per-match policy generation, current revocations, role/event allowlist, command, assessment provenance, and context; countersign the envelope | Protected deployment identity/session resolution around the canonical authorizer | Canonical authorization boundary implemented; deployment identity/session resolution remains external. |
+| Authenticated event store | In one transaction: verify signer/ruleset/sequence, run reducer, append event and derived state, and expose replay | Replay-verified no-mutation shadow ledger | Strict SQLite ledger implemented with full event and scorer-copilot history replay, exact cache/outbox/link comparison, global idempotency, historical score/review ordering, bounded history, externally comparable checkpoints, and permanent integrity blocking. |
+| ScoreCheck receipt sink | Preserve authenticated source evidence without any official-score capability | Immutable receipt table and fixed historical-signature-verified read/replay boundary | Append-only persistence and `VERIFIED_RECEIPT_PREFIX` replay implemented. External rollback checkpoint, real Supabase/PostgREST/JWT role mapping, protected target resolver, endpoint, UI, and live dispatch are absent. |
+| Rules reducer | Beach-volleyball scoring, service order, set/match completion, and pending side-switch/timeout obligations | Pure deterministic domain library | Implemented; validates semantics, not identity or access. |
 
 LLMs and general-purpose VLMs are not in the live scoring path. They may help with offline labeling review, provided their output remains untrusted and human-verified.
 
@@ -118,13 +149,29 @@ those fields are not inference power. Large tensors and video remain in
 content-addressed storage, and records carry immutable evidence references and
 exact model/configuration provenance where applicable.
 
+A readiness-manifest `labels_sha256` and a task coverage declaration identify
+bytes but do not prove that every decoded frame—or every localizable ball in a
+frame—was enumerated. `CausalBallLabelBundleV1` adds a separate curator-signed
+completeness claim for one bounded derived asset. It binds the exact ordered
+decoded-frame identities and the complete per-frame set of Annotation Truth V2
+preimages and attestations. Verification authenticates only the curator's
+stated `COMPLETE_FULL_DECODED_FRAME` enumeration assertion; it does not
+objectively prove source-frame completeness, source residency, derivation,
+rights, pixel truth, annotation truth, or capture lineage. Its verification
+receipt keeps training, evaluation, deployment, and live-scoring admission
+fixed to `False`. A trusted single-use training launcher and an immutable media
+lease that reverify all of those independent authorities are still pending.
+
 `RulesReducer` performs domain validation only: match and set identity,
 contiguous sequence, exact ruleset fingerprint, event payload, scoring legality,
 rally-resolution uniqueness, and idempotency. It receives a pure domain event;
 actor identity, role, policy, and signatures exist only in the outer authorized
 envelope. The authorization module verifies the signed human command and
-countersigned envelope. The future transactional event store must repeat that
-verification before reduction and append.
+countersigned envelope. The transactional store repeats that verification
+before reduction and append. Its dedicated scorer-copilot path also replays the
+exact signed case journal and historical score prefix, binds the store-derived
+review context, and commits the one-to-one case authorization link inside the
+same transaction.
 
 ### Inference, reconciliation, and policy contracts
 
@@ -224,13 +271,23 @@ outside the package's ability to detect.
 
 The ordered canonical authorized-event log is the source of truth. Encoded
 `MatchState` is a validated cache only; decoding a self-consistent snapshot is
-not evidence that the reducer produced it. Before append or audit, the future
-transactional shadow store must strictly parse and reverify every retained
-envelope against the protected archive and current revocations, replay the
-complete contiguous event stream under the pinned ruleset/reducer artifact,
-and compare each stored derived-state snapshot byte-for-byte. The envelope,
-event, derived state, idempotency result, and shadow outbox record must commit
-atomically. A failed write leaves none of them committed.
+not evidence that the reducer produced it. Before append or audit, the
+implemented transactional shadow store strictly parses and reverifies every
+retained envelope against the protected archive and current revocations,
+replays the complete contiguous event stream under the pinned ruleset/reducer
+artifact, and compares each stored derived-state snapshot byte-for-byte. The
+envelope, event, derived state, idempotency result, and shadow outbox record must
+commit atomically. A failed write leaves none of them committed.
+
+The existing ScoreCheck `scorer_shadow_states` table is not a valid vision sink
+because scorer handoff can promote it into the official/broadcast score. The
+implemented boundary instead stores authenticated, append-only receipts and
+exposes only a fixed historical-signature-verified
+`VERIFIED_RECEIPT_PREFIX` read/replay result. That status is neither a score nor
+a rollback-completeness claim. An externally protected monotonic ScoreCheck
+receipt checkpoint, real Supabase role/JWT/PostgREST mapping, a protected target
+resolver, live dispatch, endpoint, and UI are not implemented. See
+[SCORECHECK_SHADOW_INTEGRATION.md](./SCORECHECK_SHADOW_INTEGRATION.md).
 
 ### Ruleset fingerprint
 
@@ -301,24 +358,24 @@ Detailed measurement gates live in [DATA_CAPTURE_READINESS.md](./DATA_CAPTURE_RE
 
 | Capture tier | Supported target | Unsupported target |
 |---|---|---|
-| Single fixed 1080p30 | Compatibility experiments, server identity, delayed assistive review when the preflight passes | Reliable contact timing, line calls, touch/net adjudication, referee-grade 3D |
+| Recovered fixed 1080p30 profile | Compatibility experiments, server identity, delayed assistive review only after byte recovery, signed rights/releases, and observability preflight | Any claim that a current feed exists; reliable contact timing, line calls, touch/net adjudication, referee-grade 3D |
 | Single fixed 4K60 | Production assistive baseline, better ball continuity, contact candidates, useful player/rally statistics | Authoritative calls hidden by occlusion or requiring depth |
 | Dual synchronized calibrated 4K60 | Occlusion recovery, triangulation, stronger contact/team attribution, advanced statistics | Unattended referee decisions without fault-specific validation and operations controls |
 | Fault-specific multi-camera | Future challenge/referee support | Assumed certification; each fault type requires its own evidence and acceptance program |
 
-## Model and license shortlist
+## Planned model-family shortlist and current runtime
 
 Reported benchmark results are screening evidence, not product guarantees. Every code license, pretrained-weight license, dataset license, export path, and model card must be captured in the artifact manifest before adoption.
 
-| Area | Preferred candidates | Current license posture | Decision |
+| Area | Planned baseline/challengers | Current license posture | Runtime implementation |
 |---|---|---|---|
-| Ball | [WASB](https://github.com/nttcom/WASB-SBDT), [BlurBall](https://github.com/cogsys-tuebingen/BlurBall) concepts | Repositories report permissive licenses; verify weights/data separately | Fine-tune/reimplement a causal volleyball model; benchmark both temporal heatmap and generic detector families |
-| Player detection | [D-FINE](https://github.com/Peterande/D-FINE), [RT-DETRv2](https://github.com/lyuwenyu/RT-DETR) | Apache-2.0 code at review time; verify chosen weights | Preferred baseline/challenger pair |
-| Alternative detector | [RF-DETR](https://github.com/roboflow/rf-detr) | Code and weights have had distinct product/licensing surfaces; pin exact artifact and terms | Challenger only after legal/artifact review |
-| Tracking | [ByteTrack](https://github.com/FoundationVision/ByteTrack), [BoT-SORT](https://github.com/NirAharon/BoT-SORT) | Permissive repositories; transitive model licenses still apply | ByteTrack first; add appearance only when measured |
-| Pose | [RTMPose/MMPose](https://github.com/open-mmlab/mmpose) | Apache-2.0 code; verify weights and training sources | Selective-window inference, not every-frame whole-body pose |
-| Calibration | [OpenCV calib3d](https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html), [TVCalib](https://github.com/MM4SPA/tvcalib) concepts | OpenCV is permissive; verify learned-model artifacts independently | Manual fixed-camera solution first |
-| Temporal events | Small owned TCN/GRU; [MoViNet](https://github.com/tensorflow/models/tree/master/official/projects/movinet) or [E2E-Spot](https://github.com/jhong93/spot) as challengers | Check exact repository and pretrained artifacts | Keep the live path causal and small |
+| Ball | Owned causal heatmap baseline; [WASB](https://github.com/nttcom/WASB-SBDT), [BlurBall](https://github.com/cogsys-tuebingen/BlurBall), D-FINE-S, and RT-DETRv2-S concepts as empirical comparators | Candidate repositories report permissive licenses; exact weights/data remain separately gated | Owned causal ConvGRU baseline implemented and synthetic-smoke-tested only. No beach-data checkpoint, export, latency result, calibration result, or service. External candidate families are not integrated. |
+| Player detection | [D-FINE](https://github.com/Peterande/D-FINE), [RT-DETRv2](https://github.com/lyuwenyu/RT-DETR) | Apache-2.0 code at review time; verify chosen weights | Planned only. |
+| Alternative detector | [RF-DETR](https://github.com/roboflow/rf-detr) | Code and weights have had distinct product/licensing surfaces; pin exact artifact and terms | Planned challenger only after legal/artifact review. |
+| Tracking | [ByteTrack](https://github.com/FoundationVision/ByteTrack), [BoT-SORT](https://github.com/NirAharon/BoT-SORT) | Permissive repositories; transitive model licenses still apply | Planned only; ByteTrack first, appearance only when measured. |
+| Pose | [RTMPose/MMPose](https://github.com/open-mmlab/mmpose) | Apache-2.0 code; verify weights and training sources | Planned only; selective-window inference is preferred. |
+| Calibration | [OpenCV calib3d](https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html), [TVCalib](https://github.com/MM4SPA/tvcalib) concepts | OpenCV is permissive; verify learned-model artifacts independently | Planned only; manual fixed-camera solution first. |
+| Temporal events | Transparent factor graph/HSMM; small owned causal TCN/GRU, [MoViNet](https://github.com/tensorflow/models/tree/master/official/projects/movinet), or [E2E-Spot](https://github.com/jhong93/spot) as challengers | Check exact repository and pretrained artifacts | No event-model runtime. The current ball ConvGRU is not an implementation of this stage. |
 
 Initial rejection list:
 
@@ -337,7 +394,7 @@ Initial rejection list:
 | Model process/OOM/export error | Mark subsystem unavailable; keep manual scoring operational | Substitute another confidence field or fail open |
 | Ball/player/pose disagreement | Route to review with all evidence | Average unrelated scores into confidence |
 | Side/team identity uncertain | Require human/referee `SIDE_SWITCH_CONFIRMED` or remain unresolved | Guess from jersey color or last location |
-| Stream reconnect/model version change | Start a new provenance segment | Join observations across the boundary silently |
+| Stream reconnect/model version change | Block current genesis-only admission; require a future protected cross-epoch checkpoint before starting a separately authenticated segment | Join observations across the boundary silently or accept an unlinked new genesis |
 | Human/authorizer signature or protected role cannot be verified | Reject before append/reduction and alert | Trust fields embedded in the domain event |
 | Ruleset fingerprint mismatch | Reject the event before state transition | Accept matching id/version alone |
 | Any score or seed correction request | Stop shadow progression, retain the request for audit, and require manual takeover pending the future privileged replay design | Edit/delete history, overwrite state, or manufacture a current V0 event |
