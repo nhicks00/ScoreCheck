@@ -1,7 +1,8 @@
 # Scorer-Copilot Transaction Design
 
-**Status:** implementation contract; persistence is not complete until every
-invariant below has an adversarial test
+**Status:** schema-v3 transaction/replay path and mandatory adversarial matrix
+implemented and independently re-audited; production-scale ceiling benchmarks
+remain an operational follow-up
 
 **Decision date:** 2026-07-12
 
@@ -25,8 +26,9 @@ feature flag, official ScoreCheck write, or correction event.
   per-match record and aggregate-byte ceilings.
 - A normal score-confirmation click does not require a second signed review
   disposition. The human-signed `AuthorizationCommand` is the approval. A case
-  with no review actions therefore has sequence zero and the case fingerprint
-  as its review head.
+  with no review actions therefore has sequence zero and the complete signed
+  case fingerprint as its review head. The unsigned case fingerprint is content
+  lookup only and is never journal identity.
 - Signed dispositions are for non-score outcomes, conflict handling, and
   escalation. If one has been recorded, scoring from that case is forbidden
   until a referee adjudication or later signed observed-outcome record resolves
@@ -38,6 +40,15 @@ feature flag, official ScoreCheck write, or correction event.
   route to mutate or undo an already human-authorized rule event. Any ledger
   compromise or authorization-key revocation still fails closed under the
   authorization archive rules.
+- A newly effective case-producer or review-key revocation makes an affected
+  case ineligible for any new presentation, action, or link. Historical review
+  acceptance is replayed under revocation truth as of acceptance, so this
+  evidence-only revocation never removes or undoes an already linked
+  human-authorized event. Authorization-envelope revocation retains the event
+  ledger's terminal integrity-block semantics.
+- Without a case supersession/abandonment workflow, V0 permits only one case
+  for a `(match_id, rally_id, state_revision)` tuple. An alternate presentation
+  is a conflict, not an implicit replacement.
 
 ## Trust-separated record flow
 
@@ -45,7 +56,7 @@ feature flag, official ScoreCheck write, or correction event.
 untrusted observations/models
         |
         v
-ScorerCopilotCase + immutable clip references
+SignedScorerCopilotCase + immutable clip references
         |
         v
 case-producer attestation (assessment key, separate signature domain)
@@ -100,11 +111,21 @@ a human command or authorize an event. Case admission must prove that its
 policy was ledger-current when signed and that current archive revocation truth
 still accepts the key.
 
+The store persists both identities: `case_fingerprint` for the exact unsigned
+content and `signed_case_fingerprint` for provenance and journal identity. A
+second signature over identical unsigned bytes is not an exact retry and is
+rejected as an alternate-case conflict. Every review action, derived context,
+authorization link, history receipt, and copilot idempotency key binds the
+signed-case fingerprint.
+
 If a case includes `SignedPolicyAssessment`, admission verifies that signature,
-accepted assessment-policy fingerprint, match scope, causal time, exact current
-archive generation, and current revocation status. An absent signed assessment
-is permitted only for a human-direct path. It can never be upgraded into an
-assessment-assisted command later.
+accepted assessment-policy fingerprint, match scope, causal time, exact signing
+policy generation, verification archive generation, and current revocation
+status. The store selects the most recent policy adoption whose
+`adopted_at_ns <= signed_at_ns`; exact equality is valid, while a signature
+before first adoption or under a staged-but-never-current policy fails. An
+absent signed assessment is permitted only for a human-direct path. It can
+never be upgraded into an assessment-assisted command later.
 
 ## Clip admission
 
@@ -124,24 +145,38 @@ through admission commit. The trusted boundary must:
 
 Clip hashes prove byte identity, not live capture, clock correctness, camera
 identity, or physical truth. Those claims remain separately attested evidence.
+The current two-object clip generation proves canonical manifest identity and
+rendered-object identity/size only. Its `source_sha256`, decoder contract,
+frame/timestamp selection, and render-profile fields are signed manifest
+claims; it does not prove source residency or rendered derivation. A stronger
+claim requires a leased source-object reference or a separately trusted
+renderer/capture derivation attestation. The store also binds case material,
+not proof that a human watched every frame or exact UI pixels; that would need a
+separate signed presentation/view receipt and UI-build commitment.
 
 ## Signed journal semantics
 
 The source of truth is an append-only per-match review journal. Mutable lane,
 status, and head columns are projections checked by replay.
 
-- The first action names the case fingerprint as `previous_record_fingerprint`
-  and has `expected_case_sequence = 0`.
+- The first action names the complete signed-case fingerprint as
+  `previous_record_fingerprint` and has `expected_case_sequence = 0`.
 - After acceptance, the next head is the complete
   `SignedReviewDisposition.fingerprint()`, never the unsigned disposition
   fingerprint.
 - Adjudications name exact accepted signed-disposition fingerprints and the
   immediately previous signed head. They cannot refer to unsigned content
   fingerprints as journal identities.
+- After adjudication, the next head is the complete signed-adjudication
+  fingerprint. A later disposition may follow any exact current signed head;
+  an adjudication may consider only accepted signed dispositions for the same
+  case.
 - A newly accepted signature time cannot precede the case, prior accepted
   action, or any disposition it adjudicates.
 - Review idempotency keys are globally unique across record types. An exact
   retry returns its original result; the same key with different bytes fails.
+  Disposition and adjudication keys cannot use the reserved `copilot-v1:`
+  namespace or the derived `case-admission-v1:` namespace.
 - Each case accepts at most `MAX_REVIEW_ACTIONS` actions. Input sequence values
   range from zero through `MAX_REVIEW_ACTIONS - 1`; a derived post-action
   context may reach `MAX_REVIEW_ACTIONS`.
@@ -151,6 +186,9 @@ status, and head columns are projections checked by replay.
 `ReviewAuthorizationContext` is never trusted from caller bytes. The store
 derives it from the canonical case and replayed current signed head, returns it
 to the command-signing surface, and recomputes it inside the append transaction.
+The store reacquires and byte-verifies every clip when deriving a presentation
+context and again during atomic append, holding leases until the operation
+finishes. Admission-only verification is insufficient after object retirement.
 
 ## Atomic case-to-event link
 
@@ -161,20 +199,24 @@ accepts human-direct envelopes only and rejects the reserved namespace.
 Inside one `BEGIN IMMEDIATE` transaction, the copilot append must prove:
 
 - the case exists, is unlinked, and its complete journal replays;
+- both unsigned and signed case identities match the persisted admission;
 - its context equals the store-derived current context byte-for-byte;
 - `command.idempotency_key == copilot_idempotency_key(context)`;
 - match, rally, set, state revision, ruleset, and event sequence match the case;
+- the case still targets the current `IN_PROGRESS` set; the gap after one set
+  completes and before the next seed is not an active rally context;
 - `related_rally_id` equals the case rally;
 - point/replay event evidence equals the case evidence exactly;
 - event creation, command issuance, authorization, verification, and commit
   times do not precede case admission or move backward;
 - the command policy was ledger-current at assessment signing (when assisted),
   command issuance, and authorization;
-- an assisted command carries the exact case assessment and valid signed
-  assessment;
+- a sequence-zero assisted command carries the exact case assessment and valid
+  signed assessment and matches its exact recommended intent;
 - a human-direct sequence-zero command is allowed after viewing the case;
-- after a journal action, only an exact signed/adjudicated observed outcome may
-  be linked, and it must match `POINT_AWARDED` or `REPLAY_NO_POINT`;
+- after a journal action, assistance is forbidden and only a human-direct exact
+  signed/adjudicated observed outcome may be linked; it must match
+  `POINT_AWARDED` or `REPLAY_NO_POINT`;
 - `NO_DECISION`, `CASE_INVALID`, and `ESCALATE` heads cannot link a score event;
 - one case cannot link twice and one event cannot link to two cases.
 
@@ -183,15 +225,26 @@ and the context fingerprint are included in the outbox payload and ledger hash
 chain. Post-write replay checks all event, case, journal, link, projection,
 idempotency, and outbox rows before commit.
 
+Every event row stores the exact review position and history head visible at
+its append. Position zero means review genesis; position `N` must equal the
+fully replayed `copilot_history` head at row `N`. A copilot event binds the head
+*after* its same-transaction authorization-link receipt. A direct event binds
+the current prefix that existed before it. Timestamps never infer this order,
+because independent transactions can have equal trusted nanosecond values.
+
 ## SQLite source tables and projections
 
-The schema will contain at least:
+The schema contains:
 
 - `copilot_cases`: canonical signed case, immutable identity, current-head and
   linked-state projections;
 - `copilot_journal`: canonical signed actions plus a per-match hash-chain
   position and exact archive verification generation;
 - `copilot_authorization_links`: canonical one-to-one context/event link;
+- `copilot_history`: one cross-record per-match review chain covering case
+  admissions, journal actions, and links;
+- `request_identities`: a global cross-kind idempotency registry used by direct
+  events, case admissions, dispositions, adjudications, and copilot links;
 - existing authorization, event, state, idempotency, archive, and shadow-outbox
   tables.
 
@@ -199,22 +252,34 @@ Case and journal rows are append-only source records. Projection fields may be
 updated only by fixed store code and must equal full replay. No delete, replace,
 upsert, purge, compatibility, or arbitrary transaction-callback API exists.
 
-The match projection and external `LedgerCheckpoint` additionally bind a
-per-match review-history head and counts, so rolling back an unresolved or
-unlinked review is detectable even when the score revision did not change.
+The match projection and external `LedgerCheckpoint` additionally bind
+`review_position`, case/action/link counts, and a domain-separated per-match
+review-history head, so rolling back an unresolved or unlinked review is
+detectable even when the score revision did not change. Review position equals
+the sum of those counts. Counts never decrease; equal position requires exact
+count/head equality, and advancing position requires a changed head.
+
+Case admission has no caller-selected request key. The store derives
+`case-admission-v1:<signed_case_fingerprint>` and reserves that prefix from
+every event and review-action API. An exact signed-case retry returns the
+original historical admission receipt and prefix checkpoint after ledger
+integrity replay. A retry does not establish current presentation or linking
+eligibility and therefore does not reopen or hash media; current use is checked
+only by deriving a fresh context. A second producer signature over the same
+unsigned case is a conflict, not an idempotent retry.
 
 ## Fixed bounds
 
-Before schema freeze, tests must pin conservative constants for:
+The schema and tests pin these conservative V0 ceilings:
 
-- cases per match;
-- review actions and total review records per match;
-- canonical case, action, and link bytes;
-- cumulative review bytes per match;
-- clip count, object size, and total verified clip bytes per case;
-- SQLite rows and aggregate envelope/archive bytes replayed per match;
-- accepted clock skew and maximum action age, if the deployment clock contract
-  permits either.
+- 512 cases per match;
+- 32 actions per case and 2,048 actions per match;
+- 512 KiB per canonical signed review record, below the configured SQLite
+  768 KiB value limit;
+- 128 MiB cumulative review BLOB/text bytes per match;
+- 8 clips and no more than 512 MiB declared rendered bytes per case;
+- existing event-ledger row and aggregate envelope/archive budgets;
+- no caller-configurable clock skew or maximum-age exception.
 
 All count and aggregate-byte checks occur before fetching BLOBs. Replay streams
 bounded rows rather than materializing the complete history.
@@ -222,6 +287,8 @@ bounded rows rather than materializing the complete history.
 ## Required adversarial tests
 
 - unsigned-head signer substitution;
+- alternate producer signatures over one unsigned case and reserved
+  cross-record idempotency-key squatting;
 - invalid case-producer and policy-assessment signatures;
 - policy staged but never current, or signature backdated before adoption;
 - clip manifest mismatch, missing object, same bytes under two roles, and
@@ -236,6 +303,7 @@ bounded rows rather than materializing the complete history.
   chain;
 - scheduled revocation becoming effective after admission;
 - whole-file rollback checked against an external monotonic checkpoint;
+- rollback of an unlinked case/action while score revision is unchanged;
 - oversized row, count, aggregate-byte, depth, duplicate-key, and SQLite
   corruption inputs.
 
