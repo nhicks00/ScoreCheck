@@ -107,6 +107,7 @@ _VERIFIER_SOURCE_FILES = (
     "domain_events.py",
     "immutable_store.py",
     "label_bundle.py",
+    "protected_file.py",
     "readiness.py",
     "readiness_label_packs.py",
     "readiness_trust.py",
