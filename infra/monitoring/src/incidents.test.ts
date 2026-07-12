@@ -15,10 +15,10 @@ describe("incident manager", () => {
     };
     const first = manager.applyWebhook(payload, new Date("2026-07-12T12:00:10Z"));
     const second = manager.applyWebhook(payload, new Date("2026-07-12T12:00:20Z"));
-    expect(first[0]?.id).toBe(second[0]?.id);
-    expect(first[0]?.summary).toContain("https://example.test/path");
-    expect(first[0]?.summary).not.toContain("token=secret");
-    expect(JSON.stringify(first[0])).not.toContain("remoteAddr");
+    expect(first[0]?.incident.id).toBe(second[0]?.incident.id);
+    expect(first[0]?.incident.summary).toContain("https://example.test/path");
+    expect(first[0]?.incident.summary).not.toContain("token=secret");
+    expect(JSON.stringify(first[0]?.incident)).not.toContain("remoteAddr");
   });
 
   it("resolves the existing incident", () => {

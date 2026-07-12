@@ -127,6 +127,8 @@ export type CourtMonitorSnapshot = {
 export type IncidentSnapshot = {
   id: string;
   fingerprint: string;
+  eventId: string | null;
+  rootDependency: string;
   status: "open" | "acknowledged" | "resolved";
   severity: Severity;
   stage: MonitoringStage;
@@ -137,6 +139,8 @@ export type IncidentSnapshot = {
   firstAction: string | null;
   openedAt: string;
   lastObservedAt: string;
+  acknowledgedAt: string | null;
+  acknowledgedBy: string | null;
   resolvedAt: string | null;
 };
 

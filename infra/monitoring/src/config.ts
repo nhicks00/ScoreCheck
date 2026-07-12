@@ -60,9 +60,14 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     MONITOR_SERVICE_INTERVAL_MS: interval.default(5_000),
     MONITOR_COURT_COUNT: z.coerce.number().int().min(1).max(8).default(8),
     HEALTHCHECKS_PING_URL: safeHttpsUrl.optional(),
-    HEALTHCHECKS_INTERVAL_MS: interval.default(60_000)
+    HEALTHCHECKS_INTERVAL_MS: interval.default(60_000),
+    SUPABASE_URL: safeHttpsUrl.optional(),
+    SUPABASE_SERVICE_ROLE_KEY: z.string().min(20).optional()
   });
   const parsed = schema.parse(env);
+  if (Boolean(parsed.SUPABASE_URL) !== Boolean(parsed.SUPABASE_SERVICE_ROLE_KEY)) {
+    throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be configured together.");
+  }
   return {
     token: parsed.MONITOR_API_TOKEN,
     alertmanagerWebhookToken: parsed.ALERTMANAGER_WEBHOOK_TOKEN,
@@ -72,7 +77,9 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     intervalMs: parsed.MONITOR_SERVICE_INTERVAL_MS,
     courtCount: parsed.MONITOR_COURT_COUNT,
     healthchecksPingUrl: parsed.HEALTHCHECKS_PING_URL ?? null,
-    healthchecksIntervalMs: parsed.HEALTHCHECKS_INTERVAL_MS
+    healthchecksIntervalMs: parsed.HEALTHCHECKS_INTERVAL_MS,
+    supabaseUrl: parsed.SUPABASE_URL ?? null,
+    supabaseServiceRoleKey: parsed.SUPABASE_SERVICE_ROLE_KEY ?? null
   };
 }
 

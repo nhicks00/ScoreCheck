@@ -15,12 +15,15 @@ export const alertmanagerWebhookSchema = z.object({
   alerts: z.array(alertSchema).max(200)
 }).passthrough();
 
+export type IncidentEventType = "OPENED" | "SEVERITY_CHANGED" | "EVIDENCE_UPDATED" | "ACKNOWLEDGED" | "RESOLVED" | "REOPENED";
+export type IncidentChange = { incident: IncidentSnapshot; eventType: IncidentEventType };
+
 export class IncidentManager {
   private readonly incidents = new Map<string, IncidentSnapshot>();
 
-  applyWebhook(input: unknown, now = new Date()): IncidentSnapshot[] {
+  applyWebhook(input: unknown, now = new Date()): IncidentChange[] {
     const payload = alertmanagerWebhookSchema.parse(input);
-    const changed: IncidentSnapshot[] = [];
+    const changed: IncidentChange[] = [];
     for (const alert of payload.alerts) {
       const normalized = normalizeAlert(alert);
       const existing = this.incidents.get(normalized.fingerprint);
@@ -33,13 +36,15 @@ export class IncidentManager {
           resolvedAt: validIso(alert.endsAt) ?? now.toISOString()
         };
         this.incidents.set(resolved.fingerprint, resolved);
-        changed.push(resolved);
+        changed.push({ incident: resolved, eventType: "RESOLVED" });
         continue;
       }
 
       const next: IncidentSnapshot = {
         id: existing?.id ?? crypto.randomUUID(),
         fingerprint: normalized.fingerprint,
+        eventId: normalized.eventId,
+        rootDependency: normalized.rootDependency,
         status: existing?.status === "acknowledged" ? "acknowledged" : "open",
         severity: normalized.severity,
         stage: normalized.stage,
@@ -50,10 +55,15 @@ export class IncidentManager {
         firstAction: normalized.firstAction,
         openedAt: existing?.openedAt ?? validIso(alert.startsAt) ?? now.toISOString(),
         lastObservedAt: now.toISOString(),
+        acknowledgedAt: existing?.acknowledgedAt ?? null,
+        acknowledgedBy: existing?.acknowledgedBy ?? null,
         resolvedAt: null
       };
       this.incidents.set(next.fingerprint, next);
-      changed.push(next);
+      changed.push({
+        incident: next,
+        eventType: !existing ? "OPENED" : existing.status === "resolved" ? "REOPENED" : existing.severity !== next.severity ? "SEVERITY_CHANGED" : "EVIDENCE_UPDATED"
+      });
     }
     return changed;
   }
@@ -68,6 +78,24 @@ export class IncidentManager {
   all(): IncidentSnapshot[] {
     return [...this.incidents.values()];
   }
+
+  hydrate(rows: IncidentSnapshot[]) {
+    for (const row of rows) this.incidents.set(row.fingerprint, row);
+  }
+
+  acknowledge(id: string, actor: string, now = new Date()): IncidentChange | null {
+    const existing = [...this.incidents.values()].find((incident) => incident.id === id);
+    if (!existing || existing.status === "resolved") return null;
+    const next: IncidentSnapshot = {
+      ...existing,
+      status: "acknowledged",
+      acknowledgedAt: now.toISOString(),
+      acknowledgedBy: boundedOptional(actor) ?? "admin",
+      lastObservedAt: now.toISOString()
+    };
+    this.incidents.set(next.fingerprint, next);
+    return { incident: next, eventType: "ACKNOWLEDGED" };
+  }
 }
 
 function normalizeAlert(alert: z.infer<typeof alertSchema>) {
@@ -78,6 +106,7 @@ function normalizeAlert(alert: z.infer<typeof alertSchema>) {
   const courtNumber = court(labels.court);
   const host = boundedOptional(labels.host);
   const rootDependency = boundedCode(labels.root_dependency ?? labels.job ?? labels.alertname ?? "monitoring");
+  const eventId = boundedOptional(labels.event_id);
   const summary = sanitizedText(alert.annotations.summary ?? alert.annotations.description ?? `${issueCode} detected.`, 240);
   const firstAction = optionalSanitizedText(alert.annotations.first_action, 300);
   return {
@@ -86,10 +115,12 @@ function normalizeAlert(alert: z.infer<typeof alertSchema>) {
     issueCode,
     courtNumber,
     host,
+    eventId,
+    rootDependency,
     summary,
     firstAction,
     fingerprint: incidentFingerprint({
-      eventId: boundedOptional(labels.event_id),
+      eventId,
       rootDependency,
       stage,
       courtOrHost: courtNumber != null ? `court-${courtNumber}` : host ?? "shared",
