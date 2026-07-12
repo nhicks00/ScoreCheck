@@ -52,12 +52,12 @@ install -m 0644 .incoming/tsconfig.json tsconfig.json
 install -m 0644 .incoming/Caddyfile Caddyfile
 install -m 0600 .incoming/service.env .env
 mkdir -m 0700 .generated
-install -m 0600 .incoming/prometheus.yml .generated/prometheus.yml
-install -m 0600 .incoming/alertmanager.yml .generated/alertmanager.yml
+install -o 65534 -g 65534 -m 0400 .incoming/prometheus.yml .generated/prometheus.yml
+install -o 65534 -g 65534 -m 0400 .incoming/alertmanager.yml .generated/alertmanager.yml
 mv .incoming/src src
 mv .incoming/rules rules
 compose config -q
-compose up -d --build --remove-orphans
+compose up -d --build --force-recreate --remove-orphans
 for attempt in $(seq 1 90); do
   monitor_container="$(compose ps -q monitor-service 2>/dev/null || true)"
   if [[ -n "$monitor_container" ]] \
