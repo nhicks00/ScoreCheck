@@ -40,12 +40,13 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
   const [silenceDurations, setSilenceDurations] = useState<Record<string, number>>({});
   const [silenceBusy, setSilenceBusy] = useState<string | null>(null);
   const [silenceError, setSilenceError] = useState<Record<string, string | undefined>>({});
-  const [nowMs, setNowMs] = useState(Date.now());
+  const [nowMs, setNowMs] = useState(() => initial ? Date.parse(initial.fetchedAt) : 0);
   const [history, setHistory] = useState<MonitorCourtPipelineRange | null>(null);
   const previousCriticalIds = useRef(new Set(initial?.snapshot.incidents.filter((incident) => incident.severity === "critical").map((incident) => incident.id) ?? []));
 
   useEffect(() => {
     setSoundEnabled(window.localStorage.getItem("scorecheck-monitor-sound") === "on");
+    setNowMs(Date.now());
     const timer = window.setInterval(() => setNowMs(Date.now()), 1_000);
     return () => window.clearInterval(timer);
   }, []);
