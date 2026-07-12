@@ -8,7 +8,10 @@ the canonical receipt that a later protected decoder coordinator may issue.
 
 PyTorch tensors remain mutable after construction.  The tensor content digest
 detects later mutation when it is recomputed; neither a frozen envelope nor a
-receipt is an admission or persistence-integrity boundary.
+receipt is an admission or persistence-integrity boundary.  Hash callers must
+exclusively own the tensor storage and prevent concurrent mutation or resizing
+during validation and hashing; the trusted loader/coordinator path supplies
+fresh private tensors on one thread.
 """
 
 from __future__ import annotations
@@ -257,6 +260,69 @@ def _require_exact_v1_normalized_codewords(frames: Any) -> None:
             raise ValueError(
                 "frames must contain only exact V1 U8/255 binary32 codewords"
             )
+
+
+def _require_exact_cpu_storage_window_v1(
+    tensor: Any,
+    *,
+    expected_dtype: Any,
+    element_bytes: int,
+    label: str,
+) -> tuple[int, int]:
+    """Return one exclusively owned tensor's checked logical storage window."""
+
+    try:
+        exact_storage = (
+            type(tensor) is torch.Tensor
+            and tensor.dtype is expected_dtype
+            and tensor.device.type == "cpu"
+            and tensor.layout is torch.strided
+            and tensor.is_contiguous()
+            and not tensor.is_conj()
+            and not tensor.is_neg()
+            and not tensor.requires_grad
+            and tensor.element_size() == element_bytes
+        )
+    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        raise ValueError(f"{label} storage properties cannot be inspected") from exc
+    if not exact_storage:
+        requirement = (
+            "frames must be contiguous non-gradient CPU torch.float32 with "
+            "exact allocated storage"
+            if label == "frames"
+            else "valid_frame_mask must be contiguous CPU bool [1,T] with "
+            "exact allocated storage"
+        )
+        raise ValueError(requirement)
+    try:
+        byte_count = tensor.numel() * element_bytes
+        storage = tensor.untyped_storage()
+        storage_nbytes = storage.nbytes()
+        storage_address = storage.data_ptr()
+        storage_offset = tensor.storage_offset()
+        address = tensor.data_ptr()
+    except (RuntimeError, TypeError, ValueError) as exc:
+        raise ValueError(f"{label} has no readable storage") from exc
+    if (
+        type(byte_count) is not int
+        or type(storage_nbytes) is not int
+        or type(storage_address) is not int
+        or type(storage_offset) is not int
+        or type(address) is not int
+        or byte_count < 1
+        or storage_nbytes < 1
+        or storage_address <= 0
+        or storage_offset < 0
+        or address <= 0
+    ):
+        raise ValueError(f"{label} has no readable storage")
+    offset_bytes = storage_offset * element_bytes
+    if (
+        address != storage_address + offset_bytes
+        or offset_bytes + byte_count > storage_nbytes
+    ):
+        raise ValueError(f"{label} storage does not cover its logical bytes")
+    return address, byte_count
 
 
 @dataclass(frozen=True, slots=True)
@@ -593,9 +659,16 @@ def _validate_causal_ball_input_v1(
         raise ValueError("model_input must have exact CausalBallInput type")
     frames = model_input.frames
     mask = model_input.valid_frame_mask
-    if type(frames) is not torch.Tensor or frames.ndim != 5:
+    if type(frames) is not torch.Tensor:
         raise ValueError("frames must be an exact five-dimensional torch.Tensor")
-    batch, frame_count, channels, height, width = frames.shape
+    try:
+        if frames.ndim != 5:
+            raise ValueError(
+                "frames must be an exact five-dimensional torch.Tensor"
+            )
+        batch, frame_count, channels, height, width = frames.shape
+    except (AttributeError, RuntimeError, TypeError) as exc:
+        raise ValueError("frames shape cannot be inspected") from exc
     _validate_clip_shape(
         frame_count=frame_count,
         output_width=width,
@@ -603,31 +676,45 @@ def _validate_causal_ball_input_v1(
     )
     if batch != 1 or channels != 3:
         raise ValueError("frames must have exact shape [1,T,3,H,W]")
-    if (
-        frames.device.type != "cpu"
-        or frames.dtype is not torch.float32
-        or frames.layout is not torch.strided
-        or not frames.is_contiguous()
-        or frames.requires_grad
-    ):
+    _require_exact_cpu_storage_window_v1(
+        frames,
+        expected_dtype=torch.float32,
+        element_bytes=4,
+        label="frames",
+    )
+    try:
+        if not bool(torch.isfinite(frames).all()):
+            raise ValueError("frames must contain only finite values")
+        if bool((frames < 0).any()) or bool((frames > 1).any()):
+            raise ValueError("frames must remain in the closed interval [0, 1]")
+        _require_exact_v1_normalized_codewords(frames)
+    except ValueError:
+        raise
+    except (RuntimeError, TypeError) as exc:
+        raise ValueError("frames values cannot be inspected") from exc
+    if type(mask) is not torch.Tensor:
         raise ValueError(
-            "frames must be contiguous non-gradient CPU torch.float32"
+            "valid_frame_mask must be contiguous CPU bool [1,T] and all true"
         )
-    if not bool(torch.isfinite(frames).all()):
-        raise ValueError("frames must contain only finite values")
-    if bool((frames < 0).any()) or bool((frames > 1).any()):
-        raise ValueError("frames must remain in the closed interval [0, 1]")
-    _require_exact_v1_normalized_codewords(frames)
-    if (
-        type(mask) is not torch.Tensor
-        or mask.shape != (1, frame_count)
-        or mask.device.type != "cpu"
-        or mask.dtype is not torch.bool
-        or mask.layout is not torch.strided
-        or not mask.is_contiguous()
-        or mask.requires_grad
-        or not bool(mask.all())
-    ):
+    try:
+        mask_shape = tuple(mask.shape)
+    except (AttributeError, RuntimeError, TypeError) as exc:
+        raise ValueError("valid_frame_mask shape cannot be inspected") from exc
+    if mask_shape != (1, frame_count):
+        raise ValueError(
+            "valid_frame_mask must be contiguous CPU bool [1,T] and all true"
+        )
+    _require_exact_cpu_storage_window_v1(
+        mask,
+        expected_dtype=torch.bool,
+        element_bytes=1,
+        label="valid_frame_mask",
+    )
+    try:
+        mask_is_all_true = bool(mask.all())
+    except (RuntimeError, TypeError, ValueError) as exc:
+        raise ValueError("valid_frame_mask values cannot be inspected") from exc
+    if not mask_is_all_true:
         raise ValueError(
             "valid_frame_mask must be contiguous CPU bool [1,T] and all true"
         )
@@ -644,14 +731,18 @@ def causal_ball_input_tensor_sha256_v1(model_input: CausalBallInput) -> str:
             "V1 tensor hashing requires a little-endian CPU",
         )
     frames = model_input.frames
-    byte_count = frames.numel() * frames.element_size()
+    address, byte_count = _require_exact_cpu_storage_window_v1(
+        frames,
+        expected_dtype=torch.float32,
+        element_bytes=4,
+        label="frames",
+    )
     if byte_count > MAX_CLIP_INPUT_FLOAT32_BYTES:
         _fail(
             "CLIP_INPUT_ENCODING_TENSOR",
             "tensor exceeds the fixed V1 byte bound",
         )
     digest = hashlib.sha256()
-    address = frames.data_ptr()
     for offset in range(0, byte_count, _TENSOR_HASH_CHUNK_BYTES):
         count = min(_TENSOR_HASH_CHUNK_BYTES, byte_count - offset)
         digest.update(ctypes.string_at(address + offset, count))

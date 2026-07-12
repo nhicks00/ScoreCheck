@@ -194,7 +194,6 @@ def _hash_tensor(
             and tensor.is_contiguous()
             and not tensor.is_conj()
             and not tensor.is_neg()
-            and not tensor._is_zerotensor()
             and not tensor.requires_grad
             and tensor.element_size() == element_bytes
         )

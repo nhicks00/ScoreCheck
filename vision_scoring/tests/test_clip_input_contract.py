@@ -222,6 +222,31 @@ class ClipInputContractTests(unittest.TestCase):
             hashlib.sha256(ncthw_bytes).hexdigest(),
         )
 
+    def test_contiguous_nonzero_storage_offset_hashes_only_logical_window(
+        self,
+    ) -> None:
+        assert torch is not None
+        encoded = self._encoded()
+        original = encoded.model_input.frames
+        backing = torch.empty(
+            original.numel() + 1,
+            dtype=original.dtype,
+            device="cpu",
+        )
+        offset_frames = backing[1:].view(original.shape)
+        offset_frames.copy_(original)
+        self.assertTrue(offset_frames.is_contiguous())
+        self.assertEqual(offset_frames.storage_offset(), 1)
+        self.assertEqual(
+            causal_ball_input_tensor_sha256_v1(
+                CausalBallInput(
+                    frames=offset_frames,
+                    valid_frame_mask=encoded.model_input.valid_frame_mask,
+                )
+            ),
+            encoded.input_tensor_sha256,
+        )
+
     def test_rgb24_input_shape_and_exact_type_bounds_fail_closed(self) -> None:
         frame = bytes(16 * 16 * 3)
         self.assert_contract_error(
@@ -543,6 +568,58 @@ class ClipInputContractTests(unittest.TestCase):
                 CausalBallInput(
                     frames=encoded.model_input.frames,
                     valid_frame_mask=forged_mask,
+                )
+            )
+
+    def test_lazy_storage_less_and_undersized_tensors_fail_before_raw_read(
+        self,
+    ) -> None:
+        assert torch is not None
+        encoded = self._encoded()
+        frames = encoded.model_input.frames
+        mask = encoded.model_input.valid_frame_mask
+
+        batched_frames = torch._C._functorch._add_batch_dim(
+            frames.unsqueeze(0),
+            0,
+            1,
+        )
+        self.assertEqual(batched_frames.shape, frames.shape)
+        undersized_frames = frames.clone()
+        undersized_frames.untyped_storage().resize_(
+            undersized_frames.element_size()
+        )
+        self.assertLess(
+            undersized_frames.untyped_storage().nbytes(),
+            undersized_frames.numel() * undersized_frames.element_size(),
+        )
+        frame_variants = (
+            torch._neg_view(frames),
+            torch._efficientzerotensor(
+                frames.shape,
+                dtype=frames.dtype,
+                device="cpu",
+            ),
+            torch._to_functional_tensor(frames),
+            batched_frames,
+            undersized_frames,
+        )
+        for variant in frame_variants:
+            with self.subTest(variant_type=type(variant).__name__):
+                with self.assertRaisesRegex(ValueError, "frames"):
+                    causal_ball_input_tensor_sha256_v1(
+                        CausalBallInput(
+                            frames=variant,
+                            valid_frame_mask=mask,
+                        )
+                    )
+
+        functional_mask = torch._to_functional_tensor(mask)
+        with self.assertRaisesRegex(ValueError, "valid_frame_mask"):
+            causal_ball_input_tensor_sha256_v1(
+                CausalBallInput(
+                    frames=frames,
+                    valid_frame_mask=functional_mask,
                 )
             )
 
