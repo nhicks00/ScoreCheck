@@ -22,6 +22,18 @@ from vision_scoring.artifact_store import (
     DatasetArtifactSetProof,
     canonical_artifact_set_fingerprint,
 )
+from vision_scoring.capture_profile_contracts import (
+    CadenceTypeV1,
+    CaptureRiskTagV1,
+    CaptureSourceClassificationV1,
+    CaptureTransportV1,
+    CompressionStratumV1,
+    SourceCaptureFactsV1,
+    SourceRepresentationV1,
+    avkans_go_owner_live_1080p30_v1,
+    classify_capture_profile_v1,
+    mevo_core_owner_live_1080p60_v1,
+)
 from vision_scoring.immutable_store import generation_id_for
 from vision_scoring.dataset_split import DatasetSplit as CanonicalDatasetSplit
 from vision_scoring.readiness import (
@@ -1447,6 +1459,336 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
             "SPLIT_VENUE_CAMERA_DAY_LEAKAGE",
             {blocker["code"] for blocker in payload["blockers"]},
         )
+
+    @staticmethod
+    def _capture_v3_measurements() -> dict:
+        return {
+            "capture_soak_minutes": 180.0,
+            "calibration_holdout_p95_px": 1.5,
+            "court_plane_holdout_p95_cm": 4.0,
+            "critical_unexplained_drop_events": 0,
+            "far_ball_processed_pixels_p10": 7.0,
+            "fixed_mount": True,
+            "frame_interpolation_detected": False,
+            "human_resolvable_visible_ball_ratio": 0.997,
+            "sampled_decisive_event_windows": 1200,
+            "sampled_visible_ball_frames": 1200,
+            "service_zones_fully_visible": True,
+            "shutter_reciprocal": 1000.0,
+            "timestamp_regressions": 0,
+            "unexplained_freeze_events": 0,
+            "upscaled_from_lower_resolution": False,
+            "usable_observed_positions_per_eligible_event_p10": 4.0,
+            "visible_ball_blur_to_minor_axis_ratio_p95": 0.8,
+            "visible_serve_frames_meeting_pixel_gate_ratio": 0.995,
+        }
+
+    def _capture_v3_template_receipts(self, template) -> tuple:
+        return tuple(
+            template(
+                source_id=source["source_id"],
+                encoder_settings_sha256="0" * 64,
+                calibration_sha256="1" * 64,
+                clock_model_sha256="2" * 64,
+                camera_attestation_sha256="3" * 64,
+                exposure_descriptor_sha256="4" * 64,
+                compression_stratum=CompressionStratumV1.CONSTRAINED_INTERFRAME,
+            )
+            for source in self.manifest["data_sources"]
+        )
+
+    def _install_capture_v3_receipts(self, receipts: tuple) -> None:
+        by_profile: dict[str, object] = {}
+        for receipt in receipts:
+            by_profile.setdefault(receipt.capture_profile.fingerprint(), receipt)
+        self.manifest["domain"] = (
+            "multicourt-vision-scoring:readiness-manifest:v3"
+        )
+        self.manifest["schema_version"] = "3.0"
+        self.manifest["capture_profiles"] = [
+            {
+                "encoder_configuration": receipt.encoder_configuration.to_dict(),
+                "capture_profile": receipt.capture_profile.to_dict(),
+                "empirical_capture_measurements": (
+                    self._capture_v3_measurements()
+                ),
+            }
+            for _, receipt in sorted(by_profile.items())
+        ]
+        receipts_by_source = {
+            receipt.source_capture_facts.source_id: receipt
+            for receipt in receipts
+        }
+        for source in self.manifest["data_sources"]:
+            source.pop("capture_profile_id", None)
+            source["source_capture_facts"] = receipts_by_source[
+                source["source_id"]
+            ].source_capture_facts.to_dict()
+
+    def _capture_v3_receipts_for_representation(
+        self,
+        *,
+        source_classification: CaptureSourceClassificationV1,
+        source_representation: SourceRepresentationV1,
+        transport: CaptureTransportV1,
+        cadence_type: CadenceTypeV1 = CadenceTypeV1.CFR,
+        source_provenance_complete: bool = True,
+    ) -> tuple:
+        base_receipts = self._capture_v3_template_receipts(
+            mevo_core_owner_live_1080p60_v1
+        )
+        results = []
+        for index, base in enumerate(base_receipts):
+            cadence_numerator = 60 if cadence_type is CadenceTypeV1.CFR else 0
+            cadence_denominator = 1 if cadence_type is CadenceTypeV1.CFR else 0
+            encoder = replace(
+                base.encoder_configuration,
+                encoder_configuration_id=f"representation-encoder-{index}",
+                source_representation=source_representation,
+                transport=transport,
+                cadence_type=cadence_type,
+                cadence_numerator=cadence_numerator,
+                cadence_denominator=cadence_denominator,
+            )
+            profile = replace(
+                base.capture_profile,
+                capture_profile_id=f"representation-profile-{index}",
+                device_model_or_class="consumer-or-archive-camera",
+                encoder_configuration_sha256=encoder.fingerprint(),
+            )
+            source_facts = SourceCaptureFactsV1(
+                source_id=base.source_capture_facts.source_id,
+                capture_profile_sha256=profile.fingerprint(),
+                source_classification=source_classification,
+                source_provenance_complete=source_provenance_complete,
+                source_risk_tags=(
+                    CaptureRiskTagV1.MOTION_BLUR,
+                ),
+            )
+            results.append(
+                classify_capture_profile_v1(encoder, profile, source_facts)
+            )
+        return tuple(results)
+
+    def test_capture_v3_mevo_and_avkans_derive_ordered_receipts(self) -> None:
+        for template, expected_mode in (
+            (mevo_core_owner_live_1080p60_v1, "1080P60"),
+            (avkans_go_owner_live_1080p30_v1, "1080P30"),
+        ):
+            with self.subTest(template=template.__name__):
+                self.manifest = deepcopy(load_manifest(EXAMPLE))
+                receipts = self._capture_v3_template_receipts(template)
+                self._install_capture_v3_receipts(receipts)
+                validator = self._validator_for_manifest(self.manifest)
+                report = validator.validate(self.manifest)
+                self.assertFalse(
+                    {
+                        issue.code
+                        for issue in report.blockers
+                        if (
+                            issue.code.startswith("CAPTURE")
+                            or issue.code.startswith("SOURCE_CAPTURE")
+                        )
+                        and issue.code != "CAPTURE_REPORT_BINDING_PENDING"
+                    },
+                    report.to_dict(),
+                )
+                self.assertNotIn(
+                    "UNKNOWN_FIELD",
+                    {issue.code for issue in report.blockers},
+                    report.to_dict(),
+                )
+                self.assertIn(
+                    "CAPTURE_REPORT_BINDING_PENDING",
+                    {issue.code for issue in report.blockers},
+                    report.to_dict(),
+                )
+                self.assertFalse(report.ready)
+                derived = validator._validated_capture_classifications
+                self.assertEqual(
+                    tuple(
+                        receipt.source_capture_facts.source_id
+                        for receipt in derived
+                    ),
+                    tuple(
+                        sorted(
+                            source["source_id"]
+                            for source in self.manifest["data_sources"]
+                        )
+                    ),
+                )
+                self.assertEqual(
+                    {receipt.training_capture_mode.value for receipt in derived},
+                    {expected_mode},
+                )
+
+    def test_capture_v3_avkans_does_not_invent_physical_mapping(self) -> None:
+        receipt = self._capture_v3_template_receipts(
+            avkans_go_owner_live_1080p30_v1
+        )[0]
+        profile = receipt.capture_profile.to_dict()
+        source_facts = receipt.source_capture_facts.to_dict()
+        self.assertEqual(profile["device_scope"], "DEVICE_MODEL")
+        self.assertIsNone(profile["exact_device_id"])
+        self.assertEqual(profile["view_count"], 1)
+        self.assertFalse(
+            {
+                "physical_device_count",
+                "logical_stream_id",
+                "physical_to_logical_stream_mapping",
+            }
+            & (profile.keys() | source_facts.keys())
+        )
+
+    def test_capture_v3_exact_phone_and_archive_representations_classify(self) -> None:
+        cases = (
+            (
+                CaptureSourceClassificationV1.PHONE_OR_CONSUMER_CAMERA,
+                SourceRepresentationV1.PHONE_OR_CONSUMER_CAPTURE,
+                CaptureTransportV1.LOCAL_CAPTURE,
+            ),
+            (
+                CaptureSourceClassificationV1.OWNER_PRODUCED_ARCHIVE,
+                SourceRepresentationV1.ORIGINAL_CAMERA_MASTER,
+                CaptureTransportV1.FILE,
+            ),
+            (
+                CaptureSourceClassificationV1.OWNER_PRODUCED_ARCHIVE,
+                SourceRepresentationV1.PLATFORM_TRANSCODE,
+                CaptureTransportV1.FILE,
+            ),
+        )
+        for source_classification, representation, transport in cases:
+            with self.subTest(representation=representation.value):
+                self.manifest = deepcopy(load_manifest(EXAMPLE))
+                receipts = self._capture_v3_receipts_for_representation(
+                    source_classification=source_classification,
+                    source_representation=representation,
+                    transport=transport,
+                )
+                self._install_capture_v3_receipts(receipts)
+                validator = self._validator_for_manifest(self.manifest)
+                report = validator.validate(self.manifest)
+                self.assertFalse(
+                    {
+                        issue.code
+                        for issue in report.blockers
+                        if (
+                            issue.code.startswith("CAPTURE")
+                            or issue.code.startswith("SOURCE_CAPTURE")
+                        )
+                        and issue.code != "CAPTURE_REPORT_BINDING_PENDING"
+                    },
+                    report.to_dict(),
+                )
+                self.assertTrue(
+                    all(
+                        receipt.status.value == "CLASSIFIED"
+                        for receipt in validator._validated_capture_classifications
+                    )
+                )
+
+    def test_capture_v3_vfr_phone_and_unknown_source_abstain(self) -> None:
+        cases = (
+            self._capture_v3_receipts_for_representation(
+                source_classification=(
+                    CaptureSourceClassificationV1.PHONE_OR_CONSUMER_CAMERA
+                ),
+                source_representation=(
+                    SourceRepresentationV1.PHONE_OR_CONSUMER_CAPTURE
+                ),
+                transport=CaptureTransportV1.LOCAL_CAPTURE,
+                cadence_type=CadenceTypeV1.VFR,
+            ),
+            self._capture_v3_receipts_for_representation(
+                source_classification=(
+                    CaptureSourceClassificationV1.EXTERNAL_OR_UNKNOWN
+                ),
+                source_representation=SourceRepresentationV1.UNKNOWN,
+                transport=CaptureTransportV1.FILE,
+                source_provenance_complete=False,
+            ),
+        )
+        for receipts in cases:
+            with self.subTest(reason=receipts[0].abstention_reason.value):
+                self.manifest = deepcopy(load_manifest(EXAMPLE))
+                self._install_capture_v3_receipts(receipts)
+                validator = self._validator_for_manifest(self.manifest)
+                report = validator.validate(self.manifest)
+                self.assertFalse(report.ready)
+                self.assertIn(
+                    "CAPTURE_CLASSIFICATION_ABSTAINED",
+                    {issue.code for issue in report.blockers},
+                )
+                self.assertTrue(
+                    all(
+                        receipt.status.value == "ABSTAINED"
+                        for receipt in validator._validated_capture_classifications
+                    )
+                )
+
+    def test_capture_v3_source_profile_and_source_id_mismatches_block(self) -> None:
+        receipts = self._capture_v3_template_receipts(
+            mevo_core_owner_live_1080p60_v1
+        )
+        self._install_capture_v3_receipts(receipts)
+        source_facts = self.manifest["data_sources"][0]["source_capture_facts"]
+        source_facts["capture_profile_sha256"] = "e" * 64
+        report = self._validate(self.manifest)
+        self.assertIn(
+            "CAPTURE_PROFILE_REFERENCE", {issue.code for issue in report.blockers}
+        )
+
+        self.manifest = deepcopy(load_manifest(EXAMPLE))
+        self._install_capture_v3_receipts(receipts)
+        self.manifest["data_sources"][0]["source_capture_facts"][
+            "source_id"
+        ] = "different-source"
+        report = self._validate(self.manifest)
+        self.assertIn(
+            "SOURCE_CAPTURE_BINDING", {issue.code for issue in report.blockers}
+        )
+
+        self.manifest = deepcopy(load_manifest(EXAMPLE))
+        self._install_capture_v3_receipts(receipts)
+        self.manifest["capture_profiles"][0]["capture_profile"][
+            "encoder_configuration_sha256"
+        ] = "d" * 64
+        report = self._validate(self.manifest)
+        self.assertIn(
+            "CAPTURE_PROFILE_ENCODER_BINDING",
+            {issue.code for issue in report.blockers},
+        )
+
+    def test_capture_v3_mode_drives_nested_empirical_thresholds(self) -> None:
+        receipts = self._capture_v3_template_receipts(
+            mevo_core_owner_live_1080p60_v1
+        )
+        self._install_capture_v3_receipts(receipts)
+        measurements = self.manifest["capture_profiles"][0][
+            "empirical_capture_measurements"
+        ]
+        measurements["shutter_reciprocal"] = 999.0
+        measurements["visible_ball_blur_to_minor_axis_ratio_p95"] = 1.01
+        report = self._validate(self.manifest)
+        blocker_paths = {issue.path for issue in report.blockers}
+        self.assertIn(
+            "capture_profiles[0].empirical_capture_measurements."
+            "shutter_reciprocal",
+            blocker_paths,
+        )
+        self.assertIn(
+            "capture_profiles[0].empirical_capture_measurements."
+            "visible_ball_blur_to_minor_axis_ratio_p95",
+            blocker_paths,
+        )
+
+    def test_capture_v3_rejects_v2_flat_capture_fields(self) -> None:
+        report = self._validate(self.manifest)
+        codes = {issue.code for issue in report.blockers}
+        self.assertIn("MANIFEST_DOMAIN", codes)
+        self.assertIn("SCHEMA_VERSION", codes)
+        self.assertIn("UNKNOWN_FIELD", codes)
 
 
 if __name__ == "__main__":

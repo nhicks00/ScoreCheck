@@ -27,6 +27,15 @@ from .artifact_store import (
     MAX_ARTIFACT_FILES,
     verify_dataset_artifacts,
 )
+from .capture_profile_contracts import (
+    CaptureClassificationStatusV1,
+    CaptureProfileClassificationV1,
+    CaptureProfileDescriptorV1,
+    EncoderConfigurationDescriptorV1,
+    SourceCaptureFactsV1,
+    TrainingCaptureModeV1,
+    classify_capture_profile_v1,
+)
 from .dataset_split import (
     DatasetSplit,
     SourceSplitRecord,
@@ -76,6 +85,8 @@ _STABLE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/+~-]{0,127}$")
 _ISSUE_CODE_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 _UTC_SECONDS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 _REPORT_SCHEMA_VERSION = "3.0"
+_MANIFEST_SCHEMA_VERSION = "3.0"
+_MANIFEST_DOMAIN = "multicourt-vision-scoring:readiness-manifest:v3"
 _MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 _MAX_CAPTURE_PROFILES = 256
 _MAX_DATA_SOURCES = MAX_READINESS_LABEL_PACKS
@@ -102,6 +113,7 @@ _VERIFIER_SOURCE_FILES = (
     "annotations.py",
     "artifact_store.py",
     "ball_label_pack.py",
+    "capture_profile_contracts.py",
     "contract_wire.py",
     "dataset_split.py",
     "domain_events.py",
@@ -157,13 +169,6 @@ def _store_roots_are_same(first: Path, second: Path) -> bool:
 class Severity(str, Enum):
     BLOCKER = "BLOCKER"
     WARNING = "WARNING"
-
-
-class CaptureMode(str, Enum):
-    HD_1080P30 = "1080P30"
-    HD_1080P60 = "1080P60"
-    UHD_4K60 = "4K60"
-    DUAL_4K60 = "DUAL_4K60"
 
 
 def _bounded_issue_text(value: str, maximum: int) -> str:
@@ -342,6 +347,25 @@ class _PreparedSourceRights:
     path: str
 
 
+@dataclass(frozen=True, slots=True)
+class _ValidatedCaptureProfile:
+    """One exact reusable profile plus its detached empirical measurements."""
+
+    encoder_configuration: EncoderConfigurationDescriptorV1
+    capture_profile: CaptureProfileDescriptorV1
+    empirical_capture_measurements: Mapping[str, Any]
+    path: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ValidatedSourceInputs:
+    """Private handoff retained for the later readiness-report wire migration."""
+
+    source_rights_proofs: tuple[SourceRightsProof, ...]
+    source_label_pack_requests: tuple[_SourceLabelPackRequest, ...]
+    capture_classifications: tuple[CaptureProfileClassificationV1, ...]
+
+
 def _source_rights_proof_set_sha256(
     proofs: tuple[SourceRightsProof, ...],
 ) -> str:
@@ -506,7 +530,7 @@ class ReadinessReport:
                 "dataset manifest attestation proof does not match the attestation"
             )
         if self.dataset_manifest_trust_verified:
-            if self.manifest_schema_version != "2.0" and not any(
+            if self.manifest_schema_version != _MANIFEST_SCHEMA_VERSION and not any(
                 type(issue) is ReadinessIssue
                 and issue.severity is Severity.BLOCKER
                 and issue.code == "SCHEMA_VERSION"
@@ -514,7 +538,7 @@ class ReadinessReport:
             ):
                 raise ValueError(
                     "trusted readiness report requires manifest schema_version "
-                    "2.0 or an explicit schema blocker"
+                    f"{_MANIFEST_SCHEMA_VERSION} or an explicit schema blocker"
                 )
             if self.manifest_sha256 is None:
                 raise ValueError(
@@ -852,7 +876,7 @@ class ReadinessReport:
         return (
             not self.blockers
             and self.dataset_manifest_trust_verified
-            and self.manifest_schema_version == "2.0"
+            and self.manifest_schema_version == _MANIFEST_SCHEMA_VERSION
             and self.manifest_sha256 is not None
             and self.artifact_set_proof is not None
             and bool(self.required_artifact_sha256s)
@@ -981,19 +1005,23 @@ class ManifestValidator:
     """
 
     _TOP_LEVEL_FIELDS = frozenset(
-        {"schema_version", "dataset_id", "capture_profiles", "data_sources"}
+        {
+            "domain",
+            "schema_version",
+            "dataset_id",
+            "capture_profiles",
+            "data_sources",
+        }
     )
     _CAPTURE_FIELDS = frozenset(
         {
-            "profile_id",
-            "camera_device_id",
-            "lens_configuration_id",
-            "mode",
-            "width",
-            "height",
-            "fps",
-            "camera_count",
-            "bitrate_mbps",
+            "encoder_configuration",
+            "capture_profile",
+            "empirical_capture_measurements",
+        }
+    )
+    _EMPIRICAL_CAPTURE_MEASUREMENT_FIELDS = frozenset(
+        {
             "shutter_reciprocal",
             "far_ball_processed_pixels_p10",
             "human_resolvable_visible_ball_ratio",
@@ -1003,21 +1031,15 @@ class ManifestValidator:
             "timestamp_regressions",
             "critical_unexplained_drop_events",
             "unexplained_freeze_events",
-            "native_capture_verified",
             "frame_interpolation_detected",
             "upscaled_from_lower_resolution",
             "service_zones_fully_visible",
             "fixed_mount",
-            "calibration_profile_sha256",
-            "camera_device_attestation_sha256",
-            "capture_clock_verification_sha256",
-            "encoder_configuration_sha256",
             "visible_ball_blur_to_minor_axis_ratio_p95",
             "usable_observed_positions_per_eligible_event_p10",
             "calibration_holdout_p95_px",
             "court_plane_holdout_p95_cm",
             "capture_soak_minutes",
-            "exposure_sync_p95_ms",
         }
     )
     _SOURCE_FIELDS = frozenset(
@@ -1028,7 +1050,7 @@ class ManifestValidator:
             "parent_asset_sha256",
             "match_id",
             "venue_id",
-            "capture_profile_id",
+            "source_capture_facts",
             "camera_setup_id",
             "recording_date",
             "ball_design_id",
@@ -1159,6 +1181,12 @@ class ManifestValidator:
         )
         self._use_lock = threading.Lock()
         self._used = False
+        # Non-authorizing private evidence for the next report-schema slice.
+        # It is populated once from the detached manifest and never consulted
+        # to grant readiness in the current report wire.
+        self._validated_capture_classifications: tuple[
+            CaptureProfileClassificationV1, ...
+        ] = ()
 
     def validate(self, manifest: Mapping[str, Any]) -> ReadinessReport:
         with self._use_lock:
@@ -1260,9 +1288,21 @@ class ManifestValidator:
             "manifest",
             issues,
         )
+        if detached_manifest.get("domain") != _MANIFEST_DOMAIN:
+            self._block(
+                issues,
+                "MANIFEST_DOMAIN",
+                "domain",
+                f"expected domain {_MANIFEST_DOMAIN!r}",
+            )
         schema_version = detached_manifest.get("schema_version")
-        if schema_version != "2.0":
-            self._block(issues, "SCHEMA_VERSION", "schema_version", "expected schema_version 2.0")
+        if schema_version != _MANIFEST_SCHEMA_VERSION:
+            self._block(
+                issues,
+                "SCHEMA_VERSION",
+                "schema_version",
+                f"expected schema_version {_MANIFEST_SCHEMA_VERSION}",
+            )
             schema_version = str(schema_version or "unknown")
         dataset_id = detached_manifest.get("dataset_id")
         dataset_manifest_trust_verified = False
@@ -1293,6 +1333,7 @@ class ManifestValidator:
                 dataset_manifest_trust_verified = True
 
         capture_profiles = detached_manifest.get("capture_profiles")
+        validated_capture_profiles: dict[str, _ValidatedCaptureProfile] = {}
         if not isinstance(capture_profiles, list) or not capture_profiles:
             self._block(
                 issues,
@@ -1308,21 +1349,17 @@ class ManifestValidator:
                 f"at most {_MAX_CAPTURE_PROFILES} capture profiles are allowed",
             )
         else:
-            self._validate_capture_profiles(capture_profiles, issues)
-        capture_profile_ids = {
-            profile.get("profile_id")
-            for profile in capture_profiles or []
-            if (
-                isinstance(profile, Mapping)
-                and type(profile.get("profile_id")) is str
-                and _STABLE_ID_RE.fullmatch(profile.get("profile_id"))
+            validated_capture_profiles = self._validate_capture_profiles(
+                capture_profiles, issues
             )
-        }
 
         data_sources = detached_manifest.get("data_sources")
         source_rights_proofs: tuple[SourceRightsProof, ...] = ()
         source_label_pack_requests: tuple[_SourceLabelPackRequest, ...] = ()
         source_label_pack_proofs: tuple[SourceLabelPackProof, ...] = ()
+        source_capture_classifications: tuple[
+            CaptureProfileClassificationV1, ...
+        ] = ()
         rights_evidence_generation_id: str | None = None
         if not isinstance(data_sources, list) or not data_sources:
             self._block(issues, "DATA_SOURCES", "data_sources", "at least one data source is required")
@@ -1334,18 +1371,34 @@ class ManifestValidator:
                 f"at most {_MAX_DATA_SOURCES} data sources are allowed",
             )
         else:
-            (
-                source_rights_proofs,
-                source_label_pack_requests,
-            ) = self._validate_data_sources(
+            validated_sources = self._validate_data_sources(
                 data_sources,
-                capture_profile_ids,
+                validated_capture_profiles,
                 verified_on,
                 issues,
                 verify_rights=(
-                    dataset_manifest_trust_verified and schema_version == "2.0"
+                    dataset_manifest_trust_verified
+                    and schema_version == _MANIFEST_SCHEMA_VERSION
                 ),
             )
+            source_rights_proofs = validated_sources.source_rights_proofs
+            source_label_pack_requests = (
+                validated_sources.source_label_pack_requests
+            )
+            source_capture_classifications = (
+                validated_sources.capture_classifications
+            )
+            self._validated_capture_classifications = (
+                source_capture_classifications
+            )
+            if source_capture_classifications:
+                self._block(
+                    issues,
+                    "CAPTURE_REPORT_BINDING_PENDING",
+                    "data_sources",
+                    "capture classifications are validated but not yet bound "
+                    "into the readiness report proof set",
+                )
             rights_evidence_generation_id = (
                 self._rights_evidence_generation_id(source_rights_proofs)
             )
@@ -1361,7 +1414,10 @@ class ManifestValidator:
                 "manifest",
                 "a readiness manifest must reference resident dataset artifacts",
             )
-        elif dataset_manifest_trust_verified and schema_version == "2.0":
+        elif (
+            dataset_manifest_trust_verified
+            and schema_version == _MANIFEST_SCHEMA_VERSION
+        ):
             try:
                 artifact_set_proof = verify_dataset_artifacts(
                     required_artifact_sha256s,
@@ -1377,7 +1433,7 @@ class ManifestValidator:
 
         if (
             dataset_manifest_trust_verified
-            and schema_version == "2.0"
+            and schema_version == _MANIFEST_SCHEMA_VERSION
             and isinstance(data_sources, list)
             and len(source_label_pack_requests) == len(data_sources)
         ):
@@ -1482,16 +1538,20 @@ class ManifestValidator:
             if (
                 completion_on != rights_proof_date
                 and dataset_manifest_trust_verified
-                and schema_version == "2.0"
+                and schema_version == _MANIFEST_SCHEMA_VERSION
                 and isinstance(data_sources, list)
                 and 0 < len(data_sources) <= _MAX_DATA_SOURCES
             ):
-                source_rights_proofs, _ = self._validate_data_sources(
+                completion_sources = self._validate_data_sources(
                     data_sources,
-                    capture_profile_ids,
+                    validated_capture_profiles,
                     completion_on,
                     issues,
                     verify_rights=True,
+                    verify_capture=False,
+                )
+                source_rights_proofs = (
+                    completion_sources.source_rights_proofs
                 )
                 rights_evidence_generation_id = (
                     self._rights_evidence_generation_id(source_rights_proofs)
@@ -1676,223 +1736,275 @@ class ManifestValidator:
         self,
         profiles: Sequence[Mapping[str, Any]],
         issues: list[ReadinessIssue],
-    ) -> None:
+    ) -> dict[str, _ValidatedCaptureProfile]:
         seen_ids: set[str] = set()
-        for index, profile in enumerate(profiles):
+        validated: dict[str, _ValidatedCaptureProfile] = {}
+        for index, raw_profile in enumerate(profiles):
             path = f"capture_profiles[{index}]"
-            if not isinstance(profile, Mapping):
-                self._block(issues, "CAPTURE_SHAPE", path, "capture profile must be an object")
-                continue
-            self._reject_unknown_fields(profile, self._CAPTURE_FIELDS, path, issues)
-            profile_id = profile.get("profile_id")
-            if type(profile_id) is not str or not _STABLE_ID_RE.fullmatch(profile_id):
+            if not isinstance(raw_profile, Mapping):
                 self._block(
                     issues,
-                    "CAPTURE_ID",
-                    f"{path}.profile_id",
-                    "profile_id must be a 1-128 character ASCII-stable identifier",
-                )
-            elif profile_id in seen_ids:
-                self._block(issues, "CAPTURE_ID_DUPLICATE", f"{path}.profile_id", "profile_id must be unique")
-            else:
-                seen_ids.add(profile_id)
-
-            try:
-                mode = CaptureMode(profile.get("mode"))
-            except (TypeError, ValueError):
-                self._block(issues, "CAPTURE_MODE", f"{path}.mode", "unsupported capture mode")
-                continue
-
-            gates = {
-                CaptureMode.HD_1080P30: {
-                    "width": 1920,
-                    "height": 1080,
-                    "fps": 29.0,
-                    "ball_pixels": 6.0,
-                    "shutter": 500.0,
-                    "camera_count": 1,
-                    "max_blur_ratio": 2.0,
-                },
-                CaptureMode.HD_1080P60: {
-                    "width": 1920,
-                    "height": 1080,
-                    "fps": 59.0,
-                    "ball_pixels": 6.0,
-                    "shutter": 1000.0,
-                    "camera_count": 1,
-                    "max_blur_ratio": 1.0,
-                },
-                CaptureMode.UHD_4K60: {
-                    "width": 3840,
-                    "height": 2160,
-                    "fps": 59.0,
-                    "ball_pixels": 10.0,
-                    "shutter": 1000.0,
-                    "camera_count": 1,
-                    "max_blur_ratio": 1.0,
-                },
-                CaptureMode.DUAL_4K60: {
-                    "width": 3840,
-                    "height": 2160,
-                    "fps": 59.0,
-                    "ball_pixels": 10.0,
-                    "shutter": 1000.0,
-                    "camera_count": 2,
-                    "max_blur_ratio": 1.0,
-                },
-            }[mode]
-
-            if mode is CaptureMode.HD_1080P30:
-                self._warn(
-                    issues,
-                    "COMPATIBILITY_CAPTURE",
+                    "CAPTURE_SHAPE",
                     path,
-                    "1080p30 is a conditional compatibility profile, not the preferred production baseline",
+                    "capture profile must be an object",
+                )
+                continue
+            self._reject_unknown_fields(
+                raw_profile, self._CAPTURE_FIELDS, path, issues
+            )
+            encoder = self._parse_capture_contract(
+                raw_profile.get("encoder_configuration"),
+                contract_type=EncoderConfigurationDescriptorV1,
+                issue_code="ENCODER_CONFIGURATION",
+                path=f"{path}.encoder_configuration",
+                issues=issues,
+            )
+            profile = self._parse_capture_contract(
+                raw_profile.get("capture_profile"),
+                contract_type=CaptureProfileDescriptorV1,
+                issue_code="CAPTURE_PROFILE_CONTRACT",
+                path=f"{path}.capture_profile",
+                issues=issues,
+            )
+            measurements = raw_profile.get("empirical_capture_measurements")
+            if not isinstance(measurements, Mapping):
+                self._block(
+                    issues,
+                    "CAPTURE_MEASUREMENTS_SHAPE",
+                    f"{path}.empirical_capture_measurements",
+                    "empirical_capture_measurements must be an object",
+                )
+            else:
+                self._reject_unknown_fields(
+                    measurements,
+                    self._EMPIRICAL_CAPTURE_MEASUREMENT_FIELDS,
+                    f"{path}.empirical_capture_measurements",
+                    issues,
+                )
+                self._validate_empirical_capture_measurements_common(
+                    measurements,
+                    f"{path}.empirical_capture_measurements",
+                    issues,
                 )
 
-            for field_name in (
-                "width",
-                "height",
-                "camera_count",
-                "sampled_visible_ball_frames",
-                "sampled_decisive_event_windows",
+            if encoder is None or profile is None or not isinstance(
+                measurements, Mapping
             ):
-                value = profile.get(field_name)
-                if not isinstance(value, int) or isinstance(value, bool):
-                    self._block(issues, "CAPTURE_NUMBER", f"{path}.{field_name}", "must be an integer")
-            for field_name in (
-                "fps",
-                "bitrate_mbps",
-                "shutter_reciprocal",
-                "far_ball_processed_pixels_p10",
-                "human_resolvable_visible_ball_ratio",
-                "visible_serve_frames_meeting_pixel_gate_ratio",
-                "visible_ball_blur_to_minor_axis_ratio_p95",
-                "usable_observed_positions_per_eligible_event_p10",
-                "calibration_holdout_p95_px",
-                "court_plane_holdout_p95_cm",
-                "capture_soak_minutes",
-            ):
-                value = profile.get(field_name)
-                if not isinstance(value, (int, float)) or isinstance(value, bool):
-                    self._block(issues, "CAPTURE_NUMBER", f"{path}.{field_name}", "must be numeric")
-
-            self._minimum(profile, "width", gates["width"], path, issues)
-            self._minimum(profile, "height", gates["height"], path, issues)
-            self._minimum(profile, "fps", gates["fps"], path, issues)
-            self._minimum(profile, "camera_count", gates["camera_count"], path, issues)
-            self._minimum(profile, "shutter_reciprocal", gates["shutter"], path, issues)
-            self._minimum(profile, "far_ball_processed_pixels_p10", gates["ball_pixels"], path, issues)
-            self._minimum(profile, "human_resolvable_visible_ball_ratio", 0.995, path, issues)
-            self._minimum(profile, "visible_serve_frames_meeting_pixel_gate_ratio", 0.99, path, issues)
-            self._maximum(profile, "human_resolvable_visible_ball_ratio", 1.0, path, issues)
-            self._maximum(
-                profile,
-                "visible_serve_frames_meeting_pixel_gate_ratio",
-                1.0,
-                path,
-                issues,
+                continue
+            if profile.encoder_configuration_sha256 != encoder.fingerprint():
+                self._block(
+                    issues,
+                    "CAPTURE_PROFILE_ENCODER_BINDING",
+                    f"{path}.capture_profile.encoder_configuration_sha256",
+                    "capture profile must bind the nested encoder configuration",
+                )
+                continue
+            if profile.capture_profile_id in seen_ids:
+                self._block(
+                    issues,
+                    "CAPTURE_ID_DUPLICATE",
+                    f"{path}.capture_profile.capture_profile_id",
+                    "capture_profile_id must be unique",
+                )
+                continue
+            profile_sha256 = profile.fingerprint()
+            if profile_sha256 in validated:
+                self._block(
+                    issues,
+                    "CAPTURE_PROFILE_DUPLICATE",
+                    f"{path}.capture_profile",
+                    "capture profile fingerprints must be unique",
+                )
+                continue
+            seen_ids.add(profile.capture_profile_id)
+            validated[profile_sha256] = _ValidatedCaptureProfile(
+                encoder_configuration=encoder,
+                capture_profile=profile,
+                empirical_capture_measurements=dict(measurements),
+                path=path,
             )
-            self._minimum(profile, "sampled_visible_ball_frames", 1000, path, issues)
-            self._minimum(
-                profile,
-                "sampled_decisive_event_windows",
-                1000,
-                path,
+        return validated
+
+    def _validate_empirical_capture_measurements_common(
+        self,
+        measurements: Mapping[str, Any],
+        path: str,
+        issues: list[ReadinessIssue],
+    ) -> None:
+        for field_name in (
+            "sampled_visible_ball_frames",
+            "sampled_decisive_event_windows",
+            "timestamp_regressions",
+            "critical_unexplained_drop_events",
+            "unexplained_freeze_events",
+        ):
+            value = measurements.get(field_name)
+            if not isinstance(value, int) or isinstance(value, bool):
+                self._block(
+                    issues,
+                    "CAPTURE_NUMBER",
+                    f"{path}.{field_name}",
+                    "must be an integer",
+                )
+        for field_name in (
+            "shutter_reciprocal",
+            "far_ball_processed_pixels_p10",
+            "human_resolvable_visible_ball_ratio",
+            "visible_serve_frames_meeting_pixel_gate_ratio",
+            "visible_ball_blur_to_minor_axis_ratio_p95",
+            "usable_observed_positions_per_eligible_event_p10",
+            "calibration_holdout_p95_px",
+            "court_plane_holdout_p95_cm",
+            "capture_soak_minutes",
+        ):
+            value = measurements.get(field_name)
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                self._block(
+                    issues,
+                    "CAPTURE_NUMBER",
+                    f"{path}.{field_name}",
+                    "must be numeric",
+                )
+        self._minimum(
+            measurements, "human_resolvable_visible_ball_ratio", 0.995, path, issues
+        )
+        self._minimum(
+            measurements,
+            "visible_serve_frames_meeting_pixel_gate_ratio",
+            0.99,
+            path,
+            issues,
+        )
+        self._maximum(
+            measurements, "human_resolvable_visible_ball_ratio", 1.0, path, issues
+        )
+        self._maximum(
+            measurements,
+            "visible_serve_frames_meeting_pixel_gate_ratio",
+            1.0,
+            path,
+            issues,
+        )
+        self._minimum(
+            measurements, "sampled_visible_ball_frames", 1000, path, issues
+        )
+        self._minimum(
+            measurements, "sampled_decisive_event_windows", 1000, path, issues
+        )
+        self._minimum(
+            measurements,
+            "usable_observed_positions_per_eligible_event_p10",
+            3.0,
+            path,
+            issues,
+        )
+        for field_name in (
+            "visible_ball_blur_to_minor_axis_ratio_p95",
+            "calibration_holdout_p95_px",
+            "court_plane_holdout_p95_cm",
+        ):
+            self._minimum(measurements, field_name, 0.0, path, issues)
+        self._minimum(measurements, "capture_soak_minutes", 120.0, path, issues)
+        self._maximum(
+            measurements, "calibration_holdout_p95_px", 2.0, path, issues
+        )
+        self._maximum(
+            measurements, "court_plane_holdout_p95_cm", 5.0, path, issues
+        )
+        for field_name, expected in (
+            ("timestamp_regressions", 0),
+            ("critical_unexplained_drop_events", 0),
+            ("unexplained_freeze_events", 0),
+            ("frame_interpolation_detected", False),
+            ("upscaled_from_lower_resolution", False),
+            ("service_zones_fully_visible", True),
+            ("fixed_mount", True),
+        ):
+            self._must_equal(measurements, field_name, expected, path, issues)
+
+    def _validate_mode_dependent_capture_measurements(
+        self,
+        measurements: Mapping[str, Any],
+        mode: TrainingCaptureModeV1,
+        path: str,
+        issues: list[ReadinessIssue],
+    ) -> None:
+        gates = {
+            TrainingCaptureModeV1.HD_1080P30: (500.0, 6.0, 2.0),
+            TrainingCaptureModeV1.HD_1080P60: (1000.0, 6.0, 1.0),
+            TrainingCaptureModeV1.UHD_4K60: (1000.0, 10.0, 1.0),
+        }[mode]
+        shutter, ball_pixels, max_blur_ratio = gates
+        self._minimum(
+            measurements, "shutter_reciprocal", shutter, path, issues
+        )
+        self._minimum(
+            measurements,
+            "far_ball_processed_pixels_p10",
+            ball_pixels,
+            path,
+            issues,
+        )
+        self._maximum(
+            measurements,
+            "visible_ball_blur_to_minor_axis_ratio_p95",
+            max_blur_ratio,
+            path,
+            issues,
+        )
+        if mode is TrainingCaptureModeV1.HD_1080P30:
+            self._warn(
                 issues,
-            )
-            self._minimum(profile, "bitrate_mbps", 0.001, path, issues)
-            self._minimum(
-                profile,
-                "usable_observed_positions_per_eligible_event_p10",
-                3.0,
+                "COMPATIBILITY_CAPTURE",
                 path,
-                issues,
+                "1080p30 is a conditional compatibility profile, not the "
+                "preferred production baseline",
             )
-            for nonnegative_field in (
-                "visible_ball_blur_to_minor_axis_ratio_p95",
-                "calibration_holdout_p95_px",
-                "court_plane_holdout_p95_cm",
-            ):
-                self._minimum(profile, nonnegative_field, 0.0, path, issues)
-            self._minimum(profile, "capture_soak_minutes", 120.0, path, issues)
-            self._maximum(
-                profile,
-                "visible_ball_blur_to_minor_axis_ratio_p95",
-                gates["max_blur_ratio"],
-                path,
-                issues,
+
+    def _parse_capture_contract(
+        self,
+        value: object,
+        *,
+        contract_type: type[
+            EncoderConfigurationDescriptorV1
+            | CaptureProfileDescriptorV1
+            | SourceCaptureFactsV1
+        ],
+        issue_code: str,
+        path: str,
+        issues: list[ReadinessIssue],
+    ) -> (
+        EncoderConfigurationDescriptorV1
+        | CaptureProfileDescriptorV1
+        | SourceCaptureFactsV1
+        | None
+    ):
+        if not isinstance(value, Mapping):
+            self._block(
+                issues, issue_code, path, "capture contract must be an object"
             )
-            self._maximum(profile, "calibration_holdout_p95_px", 2.0, path, issues)
-            self._maximum(profile, "court_plane_holdout_p95_cm", 5.0, path, issues)
-
-            self._must_equal(profile, "timestamp_regressions", 0, path, issues)
-            self._must_equal(profile, "critical_unexplained_drop_events", 0, path, issues)
-            self._must_equal(profile, "unexplained_freeze_events", 0, path, issues)
-            self._must_equal(profile, "native_capture_verified", True, path, issues)
-            self._must_equal(profile, "frame_interpolation_detected", False, path, issues)
-            self._must_equal(profile, "upscaled_from_lower_resolution", False, path, issues)
-            self._must_equal(profile, "service_zones_fully_visible", True, path, issues)
-            self._must_equal(profile, "fixed_mount", True, path, issues)
-
-            for checksum_field in (
-                "calibration_profile_sha256",
-                "camera_device_attestation_sha256",
-                "capture_clock_verification_sha256",
-                "encoder_configuration_sha256",
-            ):
-                checksum = profile.get(checksum_field)
-                if not isinstance(checksum, str) or not _SHA256_RE.fullmatch(checksum):
-                    self._block(
-                        issues,
-                        "CAPTURE_CHECKSUM",
-                        f"{path}.{checksum_field}",
-                        f"{checksum_field} requires a lowercase SHA-256",
-                    )
-
-            for identity_field in ("camera_device_id", "lens_configuration_id"):
-                value = profile.get(identity_field)
-                if (
-                    type(value) is not str
-                    or not _STABLE_ID_RE.fullmatch(value)
-                ):
-                    self._block(
-                        issues,
-                        "CAPTURE_IDENTITY",
-                        f"{path}.{identity_field}",
-                        f"{identity_field} must be a 1-128 character ASCII-stable identifier",
-                    )
-
-            if mode is CaptureMode.DUAL_4K60:
-                sync_p95 = profile.get("exposure_sync_p95_ms")
-                if (
-                    not isinstance(sync_p95, (int, float))
-                    or isinstance(sync_p95, bool)
-                    or not math.isfinite(sync_p95)
-                    or sync_p95 < 0
-                    or sync_p95 > 1.0
-                ):
-                    self._block(
-                        issues,
-                        "EXPOSURE_SYNC",
-                        f"{path}.exposure_sync_p95_ms",
-                        "dual-view exposure synchronization P95 must be measured at <=1 ms",
-                    )
+            return None
+        try:
+            contract = contract_type.from_json_bytes(canonical_json_bytes(value))
+        except (TypeError, ValueError, UnicodeEncodeError) as error:
+            self._block(issues, issue_code, path, str(error))
+            return None
+        return contract
 
     def _validate_data_sources(
         self,
         sources: Sequence[Mapping[str, Any]],
-        capture_profile_ids: set[str],
+        capture_profiles: Mapping[str, _ValidatedCaptureProfile],
         verified_on: str,
         issues: list[ReadinessIssue],
         *,
         verify_rights: bool,
-    ) -> tuple[
-        tuple[SourceRightsProof, ...],
-        tuple[_SourceLabelPackRequest, ...],
-    ]:
+        verify_capture: bool = True,
+    ) -> _ValidatedSourceInputs:
         if type(verify_rights) is not bool:
             raise ValueError("verify_rights must be a boolean")
+        if type(verify_capture) is not bool:
+            raise ValueError("verify_capture must be a boolean")
         starting_blocker_count = sum(
             issue.severity is Severity.BLOCKER for issue in issues
         )
@@ -1902,6 +2014,8 @@ class ManifestValidator:
         rights_candidates: list[
             tuple[Mapping[str, Any], DatasetSplit, str]
         ] = []
+        capture_classifications: list[CaptureProfileClassificationV1] = []
+        gated_capture_profile_sha256s: set[str] = set()
 
         for index, source in enumerate(sources):
             path = f"data_sources[{index}]"
@@ -1911,29 +2025,114 @@ class ManifestValidator:
             self._reject_unknown_fields(source, self._SOURCE_FIELDS, path, issues)
 
             source_id = source.get("source_id")
-            if (
-                type(source_id) is not str
-                or not _STABLE_ID_RE.fullmatch(source_id)
-            ):
+            source_id_is_stable = (
+                type(source_id) is str
+                and _STABLE_ID_RE.fullmatch(source_id) is not None
+            )
+            source_id_valid = source_id_is_stable and source_id not in seen_ids
+            if not source_id_valid:
+                duplicate = source_id_is_stable and source_id in seen_ids
                 self._block(
                     issues,
-                    "SOURCE_ID",
+                    "SOURCE_ID_DUPLICATE" if duplicate else "SOURCE_ID",
                     f"{path}.source_id",
-                    "source_id must be a 1-128 character ASCII-stable identifier",
+                    (
+                        "source_id must be unique"
+                        if duplicate
+                        else "source_id must be a 1-128 character ASCII-stable identifier"
+                    ),
                 )
-            elif source_id in seen_ids:
-                self._block(issues, "SOURCE_ID_DUPLICATE", f"{path}.source_id", "source_id must be unique")
             else:
                 seen_ids.add(source_id)
 
-            profile_id = source.get("capture_profile_id")
-            if not isinstance(profile_id, str) or profile_id not in capture_profile_ids:
-                self._block(
-                    issues,
-                    "CAPTURE_PROFILE_REFERENCE",
-                    f"{path}.capture_profile_id",
-                    "data source must reference a declared capture profile",
+            if verify_capture:
+                source_facts = self._parse_capture_contract(
+                    source.get("source_capture_facts"),
+                    contract_type=SourceCaptureFactsV1,
+                    issue_code="SOURCE_CAPTURE_FACTS",
+                    path=f"{path}.source_capture_facts",
+                    issues=issues,
                 )
+                if source_facts is not None and source_id_valid:
+                    if source_facts.source_id != source_id:
+                        self._block(
+                            issues,
+                            "SOURCE_CAPTURE_BINDING",
+                            f"{path}.source_capture_facts.source_id",
+                            "source capture facts must bind the enclosing source_id",
+                        )
+                    else:
+                        validated_profile = capture_profiles.get(
+                            source_facts.capture_profile_sha256
+                        )
+                        if validated_profile is None:
+                            self._block(
+                                issues,
+                                "CAPTURE_PROFILE_REFERENCE",
+                                (
+                                    f"{path}.source_capture_facts."
+                                    "capture_profile_sha256"
+                                ),
+                                "source capture facts must reference one exact "
+                                "declared capture profile fingerprint",
+                            )
+                        else:
+                            try:
+                                classification = classify_capture_profile_v1(
+                                    validated_profile.encoder_configuration,
+                                    validated_profile.capture_profile,
+                                    source_facts,
+                                )
+                            except ValueError as error:
+                                self._block(
+                                    issues,
+                                    "CAPTURE_CLASSIFICATION",
+                                    f"{path}.source_capture_facts",
+                                    str(error),
+                                )
+                            else:
+                                capture_classifications.append(classification)
+                                if (
+                                    classification.status
+                                    is CaptureClassificationStatusV1.ABSTAINED
+                                ):
+                                    reason = classification.abstention_reason
+                                    self._block(
+                                        issues,
+                                        "CAPTURE_CLASSIFICATION_ABSTAINED",
+                                        f"{path}.source_capture_facts",
+                                        "capture classifier abstained: "
+                                        + (
+                                            "UNKNOWN"
+                                            if reason is None
+                                            else reason.value
+                                        ),
+                                    )
+                                elif (
+                                    classification.training_capture_mode is None
+                                ):
+                                    self._block(
+                                        issues,
+                                        "CAPTURE_CLASSIFICATION",
+                                        f"{path}.source_capture_facts",
+                                        "classified capture requires an exact mode",
+                                    )
+                                elif (
+                                    source_facts.capture_profile_sha256
+                                    not in gated_capture_profile_sha256s
+                                ):
+                                    self._validate_mode_dependent_capture_measurements(
+                                        validated_profile.empirical_capture_measurements,
+                                        classification.training_capture_mode,
+                                        (
+                                            f"{validated_profile.path}."
+                                            "empirical_capture_measurements"
+                                        ),
+                                        issues,
+                                    )
+                                    gated_capture_profile_sha256s.add(
+                                        source_facts.capture_profile_sha256
+                                    )
             for field_name in (
                 "ball_design_id",
                 "lighting_condition",
@@ -2138,7 +2337,16 @@ class ManifestValidator:
                         str(exc),
                     )
                     rights_proofs.clear()
-        return tuple(rights_proofs), label_pack_requests
+        return _ValidatedSourceInputs(
+            source_rights_proofs=tuple(rights_proofs),
+            source_label_pack_requests=label_pack_requests,
+            capture_classifications=tuple(
+                sorted(
+                    capture_classifications,
+                    key=lambda receipt: receipt.source_capture_facts.source_id,
+                )
+            ),
+        )
 
     def _prepare_rights_fields(
         self,
