@@ -1,0 +1,10 @@
+{$MONITOR_PUBLIC_HOST} {
+  encode zstd gzip
+
+  @allowed path /healthz /v1/*
+  handle @allowed {
+    reverse_proxy monitor-service:9110
+  }
+
+  respond 404
+}

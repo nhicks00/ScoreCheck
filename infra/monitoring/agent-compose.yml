@@ -1,0 +1,57 @@
+name: scorecheck-monitor-agent
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "4"
+
+services:
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:v0.4.2@sha256:1f3a6f303320723d199d2316a3e82b2e2685d86c275d5e3deeaf182573b47476
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      CONTAINERS: "1"
+      INFO: "1"
+      PING: "1"
+      VERSION: "1"
+      POST: "0"
+      LOG_LEVEL: warning
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "127.0.0.1:2375:2375"
+    read_only: true
+    tmpfs:
+      - /run
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  monitor-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: scorecheck-monitoring:local
+    command: ["npm", "run", "start:agent"]
+    restart: unless-stopped
+    network_mode: host
+    logging: *default-logging
+    env_file:
+      - .env
+    depends_on:
+      - docker-proxy
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:'+(process.env.MONITOR_AGENT_PORT||9108)+'/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s

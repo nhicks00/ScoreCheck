@@ -1,0 +1,129 @@
+name: scorecheck-observability
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "25m"
+    max-file: "4"
+
+services:
+  monitor-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: scorecheck-monitoring:local
+    command: ["npm", "run", "start:service"]
+    restart: unless-stopped
+    logging: *default-logging
+    env_file:
+      - .env
+    expose:
+      - "9110"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:9110/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
+
+  prometheus:
+    image: prom/prometheus:v3.13.1@sha256:3c42b892cf723fa54d2f262c37a0e1f80aa8c8ddb1da7b9b0df9455a35a7f893
+    restart: unless-stopped
+    logging: *default-logging
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=14d
+      - --storage.tsdb.retention.size=48GB
+      - --web.enable-lifecycle
+    volumes:
+      - ./.generated/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      monitor-service:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  alertmanager:
+    image: prom/alertmanager:v0.33.1@sha256:9e082985f56f4c8c9f724e18f2288c6708f472e56a5286b8863d080434ea065d
+    restart: unless-stopped
+    logging: *default-logging
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ./.generated/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "127.0.0.1:9093:9093"
+    depends_on:
+      monitor-service:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  node-exporter:
+    image: prom/node-exporter:v1.12.0@sha256:9b0ade5e607f9dbedb0a8e11151b6011ae5bd79304c261804cfdd2cadf200a80
+    restart: unless-stopped
+    logging: *default-logging
+    command:
+      - --path.rootfs=/host
+      - --web.listen-address=:9100
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    expose:
+      - "9100"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  caddy:
+    image: caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      MONITOR_PUBLIC_HOST: "${MONITOR_PUBLIC_HOST}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      monitor-service:
+        condition: service_healthy
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  prometheus-data:
+  alertmanager-data:
+  caddy-data:
+  caddy-config:

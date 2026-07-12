@@ -1,0 +1,87 @@
+groups:
+  - name: scorecheck-monitoring
+    interval: 5s
+    rules:
+      - alert: ScoreCheckAgentMissing
+        expr: scorecheck_monitor_agent_fresh == 0
+        for: 15s
+        labels:
+          severity: critical
+          stage: MONITORING
+          issue_code: AGENT_MISSING
+          root_dependency: monitoring-agent
+        annotations:
+          summary: "Monitoring agent {{ $labels.agent }} is stale or unreachable."
+          first_action: "Check the host, private network, and scorecheck-monitor-agent service."
+
+      - alert: ScoreCheckServiceNotRunning
+        expr: scorecheck_service_running == 0
+        for: 15s
+        labels:
+          severity: critical
+          stage: HOST
+          issue_code: SERVICE_NOT_RUNNING
+          root_dependency: "{{ $labels.service }}"
+        annotations:
+          summary: "Required service {{ $labels.service }} is not running on {{ $labels.agent }}."
+          first_action: "Inspect the service health and recent lifecycle events on the affected host."
+
+      - alert: ScoreCheckServiceUnhealthy
+        expr: scorecheck_service_healthy == 0
+        for: 30s
+        labels:
+          severity: critical
+          stage: HOST
+          issue_code: SERVICE_UNHEALTHY
+          root_dependency: "{{ $labels.service }}"
+        annotations:
+          summary: "Service {{ $labels.service }} is unhealthy on {{ $labels.agent }}."
+          first_action: "Inspect the service health endpoint and bounded local logs."
+
+      - alert: ScoreCheckServiceOomKilled
+        expr: scorecheck_service_oom_killed == 1
+        for: 0s
+        labels:
+          severity: critical
+          stage: HOST
+          issue_code: SERVICE_OOM_KILLED
+          root_dependency: "{{ $labels.service }}"
+        annotations:
+          summary: "Service {{ $labels.service }} was OOM killed on {{ $labels.agent }}."
+          first_action: "Preserve evidence, verify memory pressure, and restore only the affected service."
+
+      - alert: ScoreCheckHostMemoryLow
+        expr: scorecheck_host_memory_available_bytes / scorecheck_host_memory_total_bytes < 0.15
+        for: 5m
+        labels:
+          severity: warning
+          stage: HOST
+          issue_code: HOST_MEMORY_LOW
+          root_dependency: "{{ $labels.agent }}"
+        annotations:
+          summary: "Available memory is below 15 percent on {{ $labels.agent }}."
+          first_action: "Inspect per-service memory trends and capacity headroom."
+
+      - alert: ScoreCheckHostDiskLow
+        expr: scorecheck_host_disk_free_bytes / scorecheck_host_disk_total_bytes < 0.20
+        for: 5m
+        labels:
+          severity: warning
+          stage: HOST
+          issue_code: HOST_DISK_LOW
+          root_dependency: "{{ $labels.agent }}"
+        annotations:
+          summary: "Free disk is below 20 percent on {{ $labels.agent }}."
+          first_action: "Inspect bounded logs, container storage, and retention before disk pressure becomes critical."
+
+      - alert: ScoreCheckMediaFrameErrors
+        expr: increase(scorecheck_media_path_frame_errors_total[1m]) > 0
+        for: 15s
+        labels:
+          severity: warning
+          stage: RAW_INGEST
+          issue_code: MEDIA_FRAME_ERRORS
+          root_dependency: mediamtx
+        annotations:
+          summary: "Media frame errors are increasing on court {{ $labels.court }} {{ $labels.branch }}."
+          first_action: "Compare raw bitrate, publisher reconnects, and the normalization branch before assigning an upstream cause."
