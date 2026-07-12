@@ -30,6 +30,14 @@ rsync -a -e "ssh -i $SSH_KEY -o IdentitiesOnly=yes" \
 ssh -i "$SSH_KEY" -o IdentitiesOnly=yes "$SSH_HOST" "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE'
 set -euo pipefail
 cd "$REMOTE_DIR"
+if docker compose version >/dev/null 2>&1; then
+  compose() { docker compose "$@"; }
+elif command -v docker-compose >/dev/null 2>&1; then
+  compose() { docker-compose "$@"; }
+else
+  echo "Docker Compose is not installed." >&2
+  exit 1
+fi
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 if [[ -f docker-compose.yml ]]; then
   mkdir -p backups
@@ -48,11 +56,12 @@ install -m 0600 .incoming/prometheus.yml .generated/prometheus.yml
 install -m 0600 .incoming/alertmanager.yml .generated/alertmanager.yml
 mv .incoming/src src
 mv .incoming/rules rules
-docker compose config -q
-docker compose up -d --build --remove-orphans
+compose config -q
+compose up -d --build --remove-orphans
 for attempt in $(seq 1 90); do
-  if docker compose ps --status running --services | grep -qx monitor-service \
-    && docker inspect scorecheck-observability-monitor-service-1 --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null | grep -qx healthy \
+  monitor_container="$(compose ps -q monitor-service 2>/dev/null || true)"
+  if [[ -n "$monitor_container" ]] \
+    && docker inspect "$monitor_container" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null | grep -qx healthy \
     && curl -fsS http://127.0.0.1:9090/-/ready >/dev/null \
     && curl -fsS http://127.0.0.1:9093/-/ready >/dev/null; then
     echo "ScoreCheck observability stack healthy."
@@ -60,7 +69,7 @@ for attempt in $(seq 1 90); do
   fi
   sleep 2
 done
-docker compose ps >&2
-docker compose logs --tail=120 monitor-service prometheus alertmanager >&2 || true
+compose ps >&2
+compose logs --tail=120 monitor-service prometheus alertmanager >&2 || true
 exit 1
 REMOTE

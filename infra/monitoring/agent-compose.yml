@@ -50,7 +50,7 @@ services:
     security_opt:
       - no-new-privileges:true
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:'+(process.env.MONITOR_AGENT_PORT||9108)+'/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))\""]
+      test: ["CMD-SHELL", "node -e \"fetch('http://'+(process.env.MONITOR_AGENT_BIND||'127.0.0.1')+':'+(process.env.MONITOR_AGENT_PORT||9108)+'/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))\""]
       interval: 15s
       timeout: 5s
       retries: 4

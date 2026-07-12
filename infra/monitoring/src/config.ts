@@ -18,11 +18,11 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv = process.env) {
     MONITOR_AGENT_CONTAINERS: z.string().default(""),
     MONITOR_DISK_PATH: z.string().default("/"),
     DOCKER_API_URL: safeHttpUrl.optional(),
-    MEDIAMTX_API_URL: safeHttpUrl.optional(),
-    MEDIAMTX_METRICS_URL: safeHttpUrl.optional(),
-    LIVEKIT_METRICS_URL: safeHttpUrl.optional(),
-    EGRESS_METRICS_URL: safeHttpUrl.optional(),
-    EGRESS_HEALTH_URL: safeHttpUrl.optional()
+    MEDIAMTX_API_URL: optionalHttpUrl,
+    MEDIAMTX_METRICS_URL: optionalHttpUrl,
+    LIVEKIT_METRICS_URL: optionalHttpUrl,
+    EGRESS_METRICS_URL: optionalHttpUrl,
+    EGRESS_HEALTH_URL: optionalHttpUrl
   });
   const parsed = schema.parse(env);
   return {
@@ -35,7 +35,7 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv = process.env) {
     containers: parsed.MONITOR_AGENT_CONTAINERS.split(",").map((value) => value.trim()).filter(Boolean).map((value) => safeIdSchema.parse(value)),
     diskPath: parsed.MONITOR_DISK_PATH,
     dockerApiUrl: parsed.DOCKER_API_URL ?? null,
-    mediamtxApiUrl: parsed.MEDIAMTX_API_URL ?? null,
+    mediamtxApiUrl: parsed.MEDIAMTX_API_URL ? parsed.MEDIAMTX_API_URL.replace(/\/+$/, "") : null,
     mediamtxMetricsUrl: parsed.MEDIAMTX_METRICS_URL ?? null,
     livekitMetricsUrl: parsed.LIVEKIT_METRICS_URL ?? null,
     egressMetricsUrl: parsed.EGRESS_METRICS_URL ?? null,
@@ -59,10 +59,10 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     MONITOR_SERVICE_PORT: port.default(9110),
     MONITOR_SERVICE_INTERVAL_MS: interval.default(5_000),
     MONITOR_COURT_COUNT: z.coerce.number().int().min(1).max(8).default(8),
-    HEALTHCHECKS_PING_URL: safeHttpsUrl.optional(),
+    HEALTHCHECKS_PING_URL: optionalHttpsUrl,
     HEALTHCHECKS_INTERVAL_MS: interval.default(60_000),
-    SUPABASE_URL: safeHttpsUrl.optional(),
-    SUPABASE_SERVICE_ROLE_KEY: z.string().min(20).optional()
+    SUPABASE_URL: optionalHttpsUrl,
+    SUPABASE_SERVICE_ROLE_KEY: z.preprocess(emptyStringToUndefined, z.string().min(20).optional())
   });
   const parsed = schema.parse(env);
   if (Boolean(parsed.SUPABASE_URL) !== Boolean(parsed.SUPABASE_SERVICE_ROLE_KEY)) {
@@ -100,3 +100,9 @@ export function parseAgentTargets(raw: string): AgentTarget[] {
 const safeIdSchema = z.string().trim().min(1).max(80).regex(/^[a-zA-Z0-9_.:-]+$/);
 const safeHttpUrl = z.string().url().refine((value) => ["http:", "https:"].includes(new URL(value).protocol));
 const safeHttpsUrl = z.string().url().refine((value) => new URL(value).protocol === "https:");
+const optionalHttpUrl = z.preprocess(emptyStringToUndefined, safeHttpUrl.optional());
+const optionalHttpsUrl = z.preprocess(emptyStringToUndefined, safeHttpsUrl.optional());
+
+function emptyStringToUndefined(value: unknown): unknown {
+  return typeof value === "string" && value.trim() === "" ? undefined : value;
+}

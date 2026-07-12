@@ -29,6 +29,16 @@ rsync -a -e "ssh -i $SSH_KEY -o IdentitiesOnly=yes" "$GENERATED_ENV" "$SSH_HOST:
 ssh -i "$SSH_KEY" -o IdentitiesOnly=yes "$SSH_HOST" "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE'
 set -euo pipefail
 cd "$REMOTE_DIR"
+if docker compose version >/dev/null 2>&1; then
+  compose() { docker compose "$@"; }
+elif command -v docker-compose >/dev/null 2>&1; then
+  compose() { docker-compose "$@"; }
+elif [[ -x /usr/local/bin/docker-compose ]]; then
+  compose() { /usr/local/bin/docker-compose "$@"; }
+else
+  echo "Docker Compose is not installed." >&2
+  exit 1
+fi
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 if [[ -f agent-compose.yml ]]; then
   mkdir -p backups
@@ -42,17 +52,18 @@ install -m 0644 .incoming/package-lock.json package-lock.json
 install -m 0644 .incoming/tsconfig.json tsconfig.json
 install -m 0600 .incoming/.env .env
 mv .incoming/src src
-docker compose -f agent-compose.yml config -q
-docker compose -f agent-compose.yml up -d --build --remove-orphans
+compose -f agent-compose.yml config -q
+compose -f agent-compose.yml up -d --build --remove-orphans
 for attempt in $(seq 1 60); do
-  if docker compose -f agent-compose.yml ps --status running --services | grep -qx monitor-agent \
-    && docker inspect scorecheck-monitor-agent-monitor-agent-1 --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null | grep -qx healthy; then
+  agent_container="$(compose -f agent-compose.yml ps -q monitor-agent 2>/dev/null || true)"
+  if [[ -n "$agent_container" ]] \
+    && docker inspect "$agent_container" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null | grep -qx healthy; then
     echo "ScoreCheck monitor agent healthy."
     exit 0
   fi
   sleep 2
 done
-docker compose -f agent-compose.yml ps >&2
-docker compose -f agent-compose.yml logs --tail=100 monitor-agent >&2 || true
+compose -f agent-compose.yml ps >&2
+compose -f agent-compose.yml logs --tail=100 monitor-agent >&2 || true
 exit 1
 REMOTE
