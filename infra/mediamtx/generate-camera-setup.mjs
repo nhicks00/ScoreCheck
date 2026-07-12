@@ -19,7 +19,7 @@ const lines = [
   "Speedify mode: Speed",
   "Enhance Streaming: On",
   "Speedify transport: UDP (not Auto)",
-  "Router PEP: On for the two RTMP cameras, when available",
+  "Router PEP: On for all RTMP cameras, when available",
   "Reconnect: On",
   "CBR / AAC 48 kHz 128 kbps / one-second keyframe interval",
   "Local camera recording: On",
