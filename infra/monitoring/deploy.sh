@@ -38,6 +38,27 @@ else
   echo "Docker Compose is not installed." >&2
   exit 1
 fi
+prometheus_image='prom/prometheus:v3.13.1@sha256:3c42b892cf723fa54d2f262c37a0e1f80aa8c8ddb1da7b9b0df9455a35a7f893'
+alertmanager_image='prom/alertmanager:v0.33.1@sha256:9e082985f56f4c8c9f724e18f2288c6708f472e56a5286b8863d080434ea065d'
+docker run --rm --network none --read-only --cap-drop ALL --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m --entrypoint promtool -w /rules \
+  -v "$REMOTE_DIR/.incoming/rules:/rules:ro" \
+  "$prometheus_image" check rules /rules/scorecheck.rules.yml
+docker run --rm --network none --read-only --cap-drop ALL --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m --entrypoint promtool -w /rules \
+  -v "$REMOTE_DIR/.incoming/rules:/rules:ro" \
+  "$prometheus_image" test rules /rules/scorecheck.rules.test.yml
+if ! docker run --rm --network none --read-only --cap-drop ALL --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m --user 0:0 --entrypoint promtool \
+  -v "$REMOTE_DIR/.incoming/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
+  -v "$REMOTE_DIR/.incoming/rules:/etc/prometheus/rules:ro" \
+  "$prometheus_image" check config /etc/prometheus/prometheus.yml >/dev/null 2>&1; then
+  echo "Candidate Prometheus configuration validation failed." >&2
+  exit 1
+fi
+if ! docker run --rm --network none --read-only --cap-drop ALL --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m --user 0:0 --entrypoint amtool \
+  -v "$REMOTE_DIR/.incoming/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro" \
+  "$alertmanager_image" check-config /etc/alertmanager/alertmanager.yml >/dev/null 2>&1; then
+  echo "Candidate Alertmanager configuration validation failed." >&2
+  exit 1
+fi
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 if [[ -f docker-compose.yml ]]; then
   mkdir -p backups

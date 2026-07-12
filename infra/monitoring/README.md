@@ -22,6 +22,14 @@ npm run typecheck
 npm test
 ```
 
+Prometheus rule behavior is also executable in
+`rules/scorecheck.rules.test.yml`. `deploy.sh` runs both `promtool check rules`
+and `promtool test rules` against the candidate directory on the observability
+host before replacing files or restarting containers. It also validates the
+rendered Prometheus and Alertmanager configuration without printing their
+credential-bearing contents. A failing config, alert timing, label, isolation,
+or deduplication case aborts deployment.
+
 Render protected Prometheus and Alertmanager configuration:
 
 ```bash

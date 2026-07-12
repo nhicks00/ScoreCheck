@@ -30,7 +30,7 @@ const prometheus = `global:
     system: scorecheck
 
 rule_files:
-  - /etc/prometheus/rules/*.yml
+  - /etc/prometheus/rules/*.rules.yml
 
 alerting:
   alertmanagers:

@@ -251,7 +251,9 @@ active commentary rooms. Acceptance requires:
 
 - Browser-independent six-agent collection: passed.
 - Eight-court mapping and Egress capacity visibility: passed while idle.
-- Prometheus rules (36 validated) and correlator unit/fault fixtures: passed.
+- Prometheus rules (36 syntax-validated plus executable timing/isolation tests)
+  and correlator unit/fault fixtures: passed. Every observability deployment
+  reruns these gates before replacing files or restarting containers.
 - Deterministic eight-court isolation fixtures for camera loss, repeated picture,
   compositor-pair loss, score-render mismatch, YouTube API unknown, and shared
   score-worker deduplication: passed. These are code gates, not real-feed gates.
