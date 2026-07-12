@@ -2,7 +2,7 @@
   "current_manifests": [
     {
       "dataset_id": "synthetic-readiness-example-v1",
-      "manifest_sha256": "fb48328593fe2d1b6eb8ebfd4aec6c628493784321be6dd26e36aad5fd69f77f"
+      "manifest_sha256": "e40ace38973b73b23b31b3d6fb24f3cbed6deada0b50ccbc84cf24bff16e2fb9"
     }
   ],
   "keyring_id": "example-dataset-governance",

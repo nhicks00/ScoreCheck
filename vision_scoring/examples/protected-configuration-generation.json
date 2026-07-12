@@ -1,10 +1,10 @@
 {
-  "dataset_manifest_attestation_sha256": "14e7b30d26802ff076f476a4c6bfd77a190059d97563202e304a4cafd5d83ffc",
-  "dataset_trust_store_sha256": "87eb205874849ee387d8fba241c3a5e1c3fe4c7e0355c23cba665c6d6c0ded30",
+  "dataset_manifest_attestation_sha256": "d6e924ed15a27a05d6f38140455a75d32e1fe727df630ec3d399191e563d2035",
+  "dataset_trust_store_sha256": "3ef782c3c2fa3cada0b5b513ad73380f7a815a3ae6366df3ab1b90c7fd981254",
   "governance_domain_id": "example-dataset-governance",
-  "readiness_verification_policy_sha256": "77dc5aeafc6f4c3697ad545456545639f736009838288c2dd37f29e49866577a",
-  "rights_trust_store_sha256": "749326a2cd0c720fa0c019ade594b96dbe1f3182361eb67ebbc694ffead20f72",
-  "rights_verification_policy_sha256": "e4e87616222b632a36f6d2aed1e76e92ce27bf04c3c1c0f34677df448754ffde",
+  "readiness_verification_policy_sha256": "026eb9f2df75646ff9cec35d36b2e7cc72902b1a6f8a397c6d0648b79b35a7ca",
+  "rights_trust_store_sha256": "929311822cbb7b1311cc3e8b697b7c788a1dab81cdf3efb30153519bcc8cdaeb",
+  "rights_verification_policy_sha256": "59d3216083ad85a43ab0c329f3c6983fbbba8568d8a9aff502a25a19e7f8025f",
   "schema_version": "1.0",
   "trusted_launcher_deployment_artifact_sha256": "ada0689d8c632e1ec54c0d97bd5428afc6875b6d36fe6f363d3e12c0b81dda38"
 }

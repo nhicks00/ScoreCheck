@@ -2,9 +2,9 @@
   "deployment_geography": "US",
   "policy_id": "example-commercial-assistive-us",
   "schema_version": "1.0",
-  "trust_store_sha256": "749326a2cd0c720fa0c019ade594b96dbe1f3182361eb67ebbc694ffead20f72",
+  "trust_store_sha256": "929311822cbb7b1311cc3e8b697b7c788a1dab81cdf3efb30153519bcc8cdaeb",
   "use_profile": "COMMERCIAL_ASSISTIVE_SCORING_V1",
   "valid_from": "2026-01-01",
   "valid_until": "2099-12-31",
-  "verifier_source_tree_sha256": "0d0408c7ed25c4469956221a2fa93ac0f4d9a3f3289994e0d5f2c916e2e884b9"
+  "verifier_source_tree_sha256": "aac4fbff3cbac3cbbf84202f388cb6c7cb9c42519817eed0a524353fffc3208f"
 }

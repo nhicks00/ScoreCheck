@@ -76,15 +76,15 @@
         ],
         "reviewed_on": "2026-07-10",
         "reviewer_id": "example-rights-reviewer",
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "state": "ACCEPTED"
       },
-      "rights_decision_sha256": "b0cdb1e402d30b18e3c7085f49c247d7a5a8a3fbf623c8f6abf38c80aee2083e",
+      "rights_decision_sha256": "fb655bb30d0cde275d5ebf8172530eee55e7b3f6a3b7da671ecf0a3a88c4499f",
       "rights_attestation": {
-        "decision_sha256": "b0cdb1e402d30b18e3c7085f49c247d7a5a8a3fbf623c8f6abf38c80aee2083e",
+        "decision_sha256": "fb655bb30d0cde275d5ebf8172530eee55e7b3f6a3b7da671ecf0a3a88c4499f",
         "key_id": "example-rights-key-1",
         "schema_version": "1.0",
-        "signature_base64": "oFjUUbthCEeRGlG4I/fQaaBG20NV7qZJ1XPpcJrT1qP8Aiz1KN88GwC0omPtgl9J2nN3XeHacV4OE2kH0YfRCg==",
+        "signature_base64": "xzG0466f1VGONLi99kEezC5Vnbh0tNk4CubAtUmPGOtsshcRjJaSJSOl8JnA5cXsg9GPYSnlyW+S5lZ0qd1UAg==",
         "signed_on": "2026-07-11",
         "trust_domain_id": "example-rights-keyring"
       }
@@ -127,15 +127,15 @@
         ],
         "reviewed_on": "2026-07-10",
         "reviewer_id": "example-rights-reviewer",
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "state": "ACCEPTED"
       },
-      "rights_decision_sha256": "5ae300b99876a405cdf89f06807a85264043ebe726688b87d68c4269a6a98814",
+      "rights_decision_sha256": "0e8cc3d16efe8c92f071d83b37572736682b8d0c54cc7d7fafdd90e6433034dd",
       "rights_attestation": {
-        "decision_sha256": "5ae300b99876a405cdf89f06807a85264043ebe726688b87d68c4269a6a98814",
+        "decision_sha256": "0e8cc3d16efe8c92f071d83b37572736682b8d0c54cc7d7fafdd90e6433034dd",
         "key_id": "example-rights-key-1",
         "schema_version": "1.0",
-        "signature_base64": "2MzapmRbMzMxIKcPfoULz2scjLM1+2D7wtXuqc5Xgl2jtJzTaKd9Ig6YtOkpnb40W+h2X+W5zICj/qW68ZK3DA==",
+        "signature_base64": "eHk18B3R0LiMI9nwQ50JDNe7t/ma9Ho8+HDl/C2qfuSoUasq+SWVjdI1SipMvYhEe7y1eSj1LDuBO2cZIjrqBA==",
         "signed_on": "2026-07-11",
         "trust_domain_id": "example-rights-keyring"
       }
@@ -177,15 +177,15 @@
         ],
         "reviewed_on": "2026-07-10",
         "reviewer_id": "example-rights-reviewer",
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "state": "ACCEPTED"
       },
-      "rights_decision_sha256": "40e4b194f2fb34ba6d8982c64ea133b2e0aa50b23581a5e3c768efe9b56b0248",
+      "rights_decision_sha256": "5390f3883968a973ab07f497d7a96b27cff4633d27623e78de9123a1dafc3774",
       "rights_attestation": {
-        "decision_sha256": "40e4b194f2fb34ba6d8982c64ea133b2e0aa50b23581a5e3c768efe9b56b0248",
+        "decision_sha256": "5390f3883968a973ab07f497d7a96b27cff4633d27623e78de9123a1dafc3774",
         "key_id": "example-rights-key-1",
         "schema_version": "1.0",
-        "signature_base64": "riJnMI1ow/NRwLG8otOP4Tur1bRwTWzs+KM6QwguaAV1iTB3DW9Y6Yv6IfXitpkLVIEuTwlorUBfDJbfu7ymDQ==",
+        "signature_base64": "03q3H155NoESYjupVckwxMn7RelvHVC5+Et3QooWbkailXf83OWB1C5Lnxs137ikvb4NX4Vu3x9wjcPjpqKOAA==",
         "signed_on": "2026-07-11",
         "trust_domain_id": "example-rights-keyring"
       }

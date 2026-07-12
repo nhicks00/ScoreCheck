@@ -141,6 +141,13 @@ class RightsDecisionTests(unittest.TestCase):
             _accepted(
                 evidence_sha256s=tuple(f"{index:064x}" for index in range(65))
             )
+        with self.assertRaisesRegex(ValueError, "combined rights"):
+            _accepted(
+                evidence_sha256s=tuple(f"{index:064x}" for index in range(40)),
+                participant_release_sha256s=tuple(
+                    f"{index:064x}" for index in range(40, 80)
+                ),
+            )
 
     def test_principal_ids_are_ascii_and_free_text_is_utf8_nfc(self) -> None:
         with self.assertRaisesRegex(ValueError, "ASCII stable ID"):
@@ -154,6 +161,8 @@ class RightsDecisionTests(unittest.TestCase):
             _accepted(owner_or_licensor="Cafe\u0301 Media")
         with self.assertRaisesRegex(ValueError, "UTF-8 NFC"):
             _accepted(owner_or_licensor="invalid-\ud800")
+        with self.assertRaisesRegex(ValueError, "UTF-8 NFC"):
+            _accepted(owner_or_licensor="x" * 257)
 
     def test_authorization_request_is_strict(self) -> None:
         decision = _accepted()
@@ -198,8 +207,41 @@ class RightsDecisionTests(unittest.TestCase):
         self.assertEqual(first.fingerprint(), reordered.fingerprint())
         self.assertNotEqual(first.fingerprint(), changed.fingerprint())
         payload = json.loads(first.canonical_json())
-        self.assertEqual(payload["schema_version"], "1.0")
+        self.assertEqual(payload["schema_version"], "2.0")
         self.assertRegex(first.fingerprint(), r"^[0-9a-f]{64}$")
+
+    def test_operational_uses_are_distinct_from_training_and_distribution(self) -> None:
+        decision = _accepted(
+            permitted_uses=(
+                PermittedUse.ASSISTIVE_SCORING_PROCESSING,
+                PermittedUse.SCORER_COPILOT_REVIEW,
+            )
+        )
+        operational = (
+            PermittedUse.ASSISTIVE_SCORING_PROCESSING,
+            PermittedUse.SCORER_COPILOT_REVIEW,
+        )
+        self.assertTrue(
+            decision.authorizes(
+                operational,
+                as_of="2026-07-11",
+                geography="US",
+            )
+        )
+        self.assertFalse(
+            decision.authorizes(
+                (PermittedUse.COMMERCIAL_MODEL_TRAINING,),
+                as_of="2026-07-11",
+                geography="US",
+            )
+        )
+        self.assertFalse(
+            decision.authorizes(
+                (PermittedUse.SOURCE_REDISTRIBUTION,),
+                as_of="2026-07-11",
+                geography="US",
+            )
+        )
 
     def test_decision_is_frozen_and_slotted(self) -> None:
         decision = _accepted()
@@ -221,7 +263,7 @@ class RightsDecisionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing fields"):
             rights_decision_from_dict(missing)
         with self.assertRaisesRegex(ValueError, "schema_version"):
-            rights_decision_from_dict({**payload, "schema_version": "2.0"})
+            rights_decision_from_dict({**payload, "schema_version": "1.0"})
         with self.assertRaisesRegex(ValueError, "JSON array"):
             rights_decision_from_dict({**payload, "permitted_uses": "MODEL_DEPLOYMENT"})
 
