@@ -29,7 +29,13 @@ from vision_scoring.annotation_trust import (
     annotation_evidence_set_fingerprint,
     annotation_attestation_set_fingerprint,
     annotation_attestation_signing_message,
+    annotation_trust_store_from_dict,
+    annotation_verification_policy_from_dict,
+    current_annotation_from_dict,
+    load_annotation_trust_store,
+    load_annotation_verification_policy,
     load_protected_annotation_configuration_generation,
+    trusted_annotation_key_from_dict,
     verify_annotation_evidence,
 )
 from vision_scoring.annotations import (
@@ -53,6 +59,7 @@ from vision_scoring.annotations import (
     ReviewState,
     TimestampBasis,
 )
+from vision_scoring.protected_file import PROTECTED_FILE_INPUT, ProtectedFileError
 from vision_scoring.immutable_store import (
     GenerationDescriptor,
     bootstrap_generation_lock,
@@ -727,6 +734,450 @@ class AnnotationTrustTests(unittest.TestCase):
                     policy=policy,
                 )
             self.assertEqual(loader.call_count, 2)
+
+    def test_protected_policy_loader_is_exact_canonical_and_typed(self) -> None:
+        annotation = _annotation()
+        store = _store(annotation)
+        policy = _policy(store)
+        self.assertEqual(
+            annotation_verification_policy_from_dict(policy.to_canonical_dict()),
+            policy,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "annotation-policy.json"
+            path.write_text(policy.canonical_json(), encoding="utf-8")
+            loaded = load_annotation_verification_policy(path)
+            self.assertEqual(loaded, policy)
+            self.assertEqual(loaded.fingerprint(), policy.fingerprint())
+            self.assertIs(
+                loaded.minimum_truth_policy,
+                AnnotationMinimumTruthPolicy.REVIEWED_OR_ADJUDICATED,
+            )
+
+            duplicate = root / "duplicate-policy.json"
+            duplicate.write_text(
+                policy.canonical_json().replace(
+                    '"policy_id":"fixture-annotation-policy"',
+                    '"policy_id":"fixture-annotation-policy","policy_id":"hidden"',
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
+                load_annotation_verification_policy(duplicate)
+
+            for name, raw in (
+                ("pretty", policy.canonical_json().replace(",", ", ", 1)),
+                ("trailing", policy.canonical_json() + "\n"),
+            ):
+                with self.subTest(name=name):
+                    candidate = root / f"{name}-policy.json"
+                    candidate.write_text(raw, encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, "NONCANONICAL_JSON"):
+                        load_annotation_verification_policy(candidate)
+
+            invalid_payloads = (
+                (
+                    "unknown",
+                    {**policy.to_canonical_dict(), "dataset_pin": "forbidden"},
+                    "unsupported fields",
+                ),
+                (
+                    "wrong-enum",
+                    {
+                        **policy.to_canonical_dict(),
+                        "minimum_truth_policy": "DRAFT_ALLOWED",
+                    },
+                    "unsupported enum",
+                ),
+                (
+                    "bool-enum",
+                    {
+                        **policy.to_canonical_dict(),
+                        "minimum_truth_policy": True,
+                    },
+                    "must be a string",
+                ),
+            )
+            for name, payload, message in invalid_payloads:
+                with self.subTest(name=name):
+                    candidate = root / f"{name}-policy.json"
+                    candidate.write_text(
+                        json.dumps(
+                            payload,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            allow_nan=False,
+                        ),
+                        encoding="utf-8",
+                    )
+                    with self.assertRaisesRegex(ValueError, message):
+                        load_annotation_verification_policy(candidate)
+
+            oversize = root / "oversize-policy.json"
+            with oversize.open("wb") as output:
+                output.truncate(
+                    annotation_trust_module._MAX_ANNOTATION_POLICY_BYTES + 1
+                )
+            with self.assertRaisesRegex(ValueError, "byte limit"):
+                load_annotation_verification_policy(oversize)
+
+    def test_protected_trust_store_loader_reconstructs_exact_nested_rows(self) -> None:
+        annotation = _annotation()
+        store = _store(
+            annotation,
+            keys=(
+                _key(
+                    AnnotationAttestationRole.REVIEWER,
+                    permitted_roles=(
+                        AnnotationAttestationRole.REVIEWER,
+                        AnnotationAttestationRole.ADJUDICATOR,
+                    ),
+                ),
+                _key(AnnotationAttestationRole.ADJUDICATOR),
+            ),
+            revoked_annotation_sha256s=("f" * 64,),
+        )
+        canonical = store.to_canonical_dict()
+        self.assertIsInstance(
+            trusted_annotation_key_from_dict(canonical["keys"][0]),
+            TrustedAnnotationKey,
+        )
+        self.assertIsInstance(
+            current_annotation_from_dict(canonical["current_annotations"][0]),
+            CurrentAnnotation,
+        )
+        reconstructed = annotation_trust_store_from_dict(canonical)
+        self.assertEqual(reconstructed.canonical_json(), store.canonical_json())
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "annotation-trust-store.json"
+            path.write_text(store.canonical_json(), encoding="utf-8")
+            loaded = load_annotation_trust_store(path)
+            self.assertEqual(loaded.canonical_json(), store.canonical_json())
+            self.assertEqual(loaded.fingerprint(), store.fingerprint())
+            self.assertTrue(
+                all(type(key) is TrustedAnnotationKey for key in loaded.keys)
+            )
+            self.assertTrue(
+                all(
+                    type(item) is CurrentAnnotation
+                    for item in loaded.current_annotations
+                )
+            )
+            self.assertTrue(any(len(key.permitted_roles) == 2 for key in loaded.keys))
+            self.assertEqual(loaded.revoked_annotation_sha256s, ("f" * 64,))
+
+            duplicate = root / "duplicate-nested-key.json"
+            duplicate.write_text(
+                store.canonical_json().replace(
+                    '"key_id":"adjudication-key-1"',
+                    '"key_id":"adjudication-key-1","key_id":"hidden"',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
+                load_annotation_trust_store(duplicate)
+
+            for name, raw in (
+                ("pretty", store.canonical_json().replace(",", ", ", 1)),
+                ("trailing", store.canonical_json() + "\n"),
+            ):
+                with self.subTest(name=name):
+                    candidate = root / f"{name}-trust-store.json"
+                    candidate.write_text(raw, encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, "not canonical"):
+                        load_annotation_trust_store(candidate)
+
+            invalid_payloads = []
+            unknown = store.to_canonical_dict()
+            unknown["keys"][0]["unknown"] = "forbidden"
+            invalid_payloads.append(("nested-unknown", unknown, "unsupported fields"))
+
+            wrong_role = store.to_canonical_dict()
+            wrong_role["keys"][0]["permitted_roles"] = ["OWNER"]
+            invalid_payloads.append(("wrong-role", wrong_role, "unsupported enum"))
+
+            wrong_annotation_type = store.to_canonical_dict()
+            wrong_annotation_type["current_annotations"][0][
+                "annotation_type"
+            ] = AnnotationType.OBSERVED_TEMPORAL_EVENT.value
+            invalid_payloads.append(
+                (
+                    "wrong-annotation-type",
+                    wrong_annotation_type,
+                    "supports BALL_FRAME_OBSERVATION only",
+                )
+            )
+
+            bool_array = store.to_canonical_dict()
+            bool_array["current_annotations"] = True
+            invalid_payloads.append(("bool-array", bool_array, "must be a JSON array"))
+
+            too_deep = store.to_canonical_dict()
+            too_deep["keys"][0]["permitted_roles"] = [
+                [[AnnotationAttestationRole.ADJUDICATOR.value]]
+            ]
+            invalid_payloads.append(("too-deep", too_deep, "exceeds JSON depth"))
+
+            for name, payload, message in invalid_payloads:
+                with self.subTest(name=name):
+                    candidate = root / f"{name}.json"
+                    candidate.write_text(
+                        json.dumps(
+                            payload,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            allow_nan=False,
+                        ),
+                        encoding="utf-8",
+                    )
+                    with self.assertRaisesRegex(ValueError, message):
+                        load_annotation_trust_store(candidate)
+
+            invalid_raw_payloads = (
+                ("invalid-utf8", b"\xff", "valid UTF-8 JSON"),
+                ("array-root", b"[]", "root must be an object"),
+                (
+                    "json-number",
+                    b'{"current_annotations":[],"keyring_id":"keyring",'
+                    b'"keys":[],"revoked_annotation_sha256s":[],'
+                    b'"schema_version":2}',
+                    "cannot contain JSON numbers",
+                ),
+            )
+            for name, raw, message in invalid_raw_payloads:
+                with self.subTest(name=name):
+                    candidate = root / f"{name}.json"
+                    candidate.write_bytes(raw)
+                    with self.assertRaisesRegex(ValueError, message):
+                        load_annotation_trust_store(candidate)
+
+            unsorted_keys = store.to_canonical_dict()
+            unsorted_keys["keys"].reverse()
+            unsorted_path = root / "unsorted-keys.json"
+            unsorted_path.write_text(
+                json.dumps(
+                    unsorted_keys,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "did not reconstruct exactly"):
+                load_annotation_trust_store(unsorted_path)
+
+            unsorted_roles = store.to_canonical_dict()
+            unsorted_roles["keys"][0]["permitted_roles"] = [
+                AnnotationAttestationRole.REVIEWER.value,
+                AnnotationAttestationRole.ADJUDICATOR.value,
+            ]
+            unsorted_roles_path = root / "unsorted-roles.json"
+            unsorted_roles_path.write_text(
+                json.dumps(
+                    unsorted_roles,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "did not reconstruct exactly"):
+                load_annotation_trust_store(unsorted_roles_path)
+
+            unsorted_current = store.to_canonical_dict()
+            second_current = dict(unsorted_current["current_annotations"][0])
+            second_current["annotation_id"] = "truth-0"
+            second_current["annotation_sha256"] = "e" * 64
+            unsorted_current["current_annotations"] = [
+                unsorted_current["current_annotations"][0],
+                second_current,
+            ]
+            unsorted_current_path = root / "unsorted-current.json"
+            unsorted_current_path.write_text(
+                json.dumps(
+                    unsorted_current,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "did not reconstruct exactly"):
+                load_annotation_trust_store(unsorted_current_path)
+
+            unsorted_revoked = store.to_canonical_dict()
+            unsorted_revoked["revoked_annotation_sha256s"] = ["f" * 64, "e" * 64]
+            unsorted_revoked_path = root / "unsorted-revoked.json"
+            unsorted_revoked_path.write_text(
+                json.dumps(
+                    unsorted_revoked,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "did not reconstruct exactly"):
+                load_annotation_trust_store(unsorted_revoked_path)
+
+            with patch.object(
+                annotation_trust_module,
+                "_MAX_ANNOTATION_TRUST_STORE_JSON_NODES",
+                1,
+            ), self.assertRaisesRegex(ValueError, "JSON node limit"):
+                load_annotation_trust_store(path)
+
+            with patch.object(
+                annotation_trust_module,
+                "_MAX_ANNOTATION_TRUST_STORE_JSON_CONTAINERS",
+                1,
+            ), self.assertRaisesRegex(ValueError, "JSON container limit"):
+                load_annotation_trust_store(path)
+
+    def test_trust_store_arrays_are_preflighted_before_object_construction(
+        self,
+    ) -> None:
+        payload = _store(_annotation()).to_canonical_dict()
+        with (
+            patch.object(annotation_trust_module, "_MAX_CURRENT_ANNOTATIONS", 0),
+            patch.object(
+                annotation_trust_module,
+                "trusted_annotation_key_from_dict",
+            ) as key_parser,
+            self.assertRaisesRegex(ValueError, "exceeds 0 current annotations"),
+        ):
+            annotation_trust_store_from_dict(payload)
+        key_parser.assert_not_called()
+
+        self.assertGreater(
+            annotation_trust_module._MAX_ANNOTATION_TRUST_STORE_BYTES,
+            2 * 1024 * 1024,
+        )
+        self.assertGreater(
+            annotation_trust_module._MAX_ANNOTATION_TRUST_STORE_JSON_NODES,
+            50_000,
+        )
+        self.assertEqual(
+            annotation_trust_module._MAX_ANNOTATION_TRUST_STORE_JSON_CONTAINERS,
+            4
+            + (2 * annotation_trust_module._MAX_TRUSTED_KEYS)
+            + annotation_trust_module._MAX_CURRENT_ANNOTATIONS,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            oversized = Path(directory) / "oversized-trust-store.json"
+            with oversized.open("wb") as output:
+                output.truncate(
+                    annotation_trust_module._MAX_ANNOTATION_TRUST_STORE_BYTES + 1
+                )
+            with self.assertRaisesRegex(ValueError, "byte limit"):
+                load_annotation_trust_store(oversized)
+
+    def test_policy_and_trust_store_loaders_reject_links_and_replacement(self) -> None:
+        store = _store(_annotation())
+        policy = _policy(store)
+        cases = (
+            (
+                "policy",
+                policy.canonical_json().encode("utf-8"),
+                load_annotation_verification_policy,
+            ),
+            (
+                "trust-store",
+                store.canonical_json().encode("utf-8"),
+                load_annotation_trust_store,
+            ),
+        )
+        for _, _, loader in cases:
+            with self.subTest(loader=loader.__name__, shape="relative-path"):
+                with self.assertRaises(ProtectedFileError) as caught:
+                    loader(Path("relative-protected-input.json"))
+                self.assertEqual(caught.exception.code, PROTECTED_FILE_INPUT)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, raw, loader in cases:
+                with self.subTest(name=name):
+                    path = root / f"{name}.json"
+                    path.write_bytes(raw)
+
+                    symlink = root / f"{name}-symlink.json"
+                    symlink.symlink_to(path)
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        "non-symlink regular file",
+                    ):
+                        loader(symlink)
+
+                    hardlink = root / f"{name}-hardlink.json"
+                    os.link(path, hardlink)
+                    try:
+                        with self.assertRaisesRegex(
+                            ValueError,
+                            "exactly one filesystem link",
+                        ):
+                            loader(hardlink)
+                    finally:
+                        hardlink.unlink()
+
+                    replacement = root / f"{name}-replacement.json"
+                    replacement.write_bytes(raw)
+                    real_open = os.open
+                    replaced = False
+
+                    def replace_after_open(target: object, flags: int) -> int:
+                        nonlocal replaced
+                        descriptor = real_open(target, flags)
+                        if not replaced:
+                            os.replace(replacement, path)
+                            replaced = True
+                        return descriptor
+
+                    with (
+                        patch.object(
+                            annotation_trust_module.os,
+                            "open",
+                            side_effect=replace_after_open,
+                        ),
+                        self.assertRaisesRegex(ValueError, "changed"),
+                    ):
+                        loader(path)
+
+    def test_trust_store_growth_during_read_is_rejected(self) -> None:
+        store = _store(_annotation())
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "annotation-trust-store.json"
+            path.write_text(store.canonical_json(), encoding="utf-8")
+            real_read = os.read
+            mutated = False
+
+            def grow_after_read(descriptor: int, count: int) -> bytes:
+                nonlocal mutated
+                chunk = real_read(descriptor, count)
+                if chunk and not mutated:
+                    mutated = True
+                    with path.open("ab") as output:
+                        output.write(b" ")
+                return chunk
+
+            with (
+                patch.object(
+                    annotation_trust_module.os,
+                    "read",
+                    side_effect=grow_after_read,
+                ),
+                self.assertRaisesRegex(ValueError, "grew while being read"),
+            ):
+                load_annotation_trust_store(path)
 
     def test_protected_generation_loader_is_exact_bounded_and_race_safe(self) -> None:
         annotation = _annotation()

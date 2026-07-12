@@ -98,6 +98,18 @@ _MAX_TRUSTED_KEYS = 128
 _MAX_CURRENT_ANNOTATIONS = 100_000
 _MAX_REVOKED_ANNOTATIONS = 100_000
 _MAX_PROTECTED_CONFIGURATION_BYTES = 64 * 1024
+_MAX_ANNOTATION_POLICY_BYTES = 4 * 1024
+_MAX_ANNOTATION_TRUST_STORE_BYTES = 64 * 1024 * 1024
+_MAX_ANNOTATION_TRUST_STORE_JSON_DEPTH = 5
+_MAX_ANNOTATION_TRUST_STORE_JSON_NODES = (
+    6
+    + (10 * _MAX_TRUSTED_KEYS)
+    + (4 * _MAX_CURRENT_ANNOTATIONS)
+    + _MAX_REVOKED_ANNOTATIONS
+)
+_MAX_ANNOTATION_TRUST_STORE_JSON_CONTAINERS = (
+    4 + (2 * _MAX_TRUSTED_KEYS) + _MAX_CURRENT_ANNOTATIONS
+)
 _MAX_ANNOTATION_ATTESTATION_JSON_BYTES = 4 * 1024
 _MAX_ANNOTATION_ATTESTATION_JSON_DEPTH = 2
 _MAX_ANNOTATION_ATTESTATION_JSON_NODES = 32
@@ -110,6 +122,45 @@ _PROTECTED_CONFIGURATION_FIELDS = frozenset(
         "annotation_verification_policy_sha256",
         "evaluator_artifact_sha256",
         "governance_domain_id",
+        "schema_version",
+    }
+)
+
+_ANNOTATION_POLICY_FIELDS = frozenset(
+    {
+        "evaluator_artifact_sha256",
+        "governance_domain_id",
+        "minimum_truth_policy",
+        "policy_id",
+        "schema_version",
+        "trust_store_sha256",
+        "valid_from",
+        "valid_until",
+    }
+)
+
+_TRUSTED_ANNOTATION_KEY_FIELDS = frozenset(
+    {
+        "compromised_on",
+        "key_id",
+        "permitted_roles",
+        "principal_id",
+        "public_key_base64",
+        "valid_from",
+        "valid_until",
+    }
+)
+
+_CURRENT_ANNOTATION_FIELDS = frozenset(
+    {"annotation_id", "annotation_sha256", "annotation_type"}
+)
+
+_ANNOTATION_TRUST_STORE_FIELDS = frozenset(
+    {
+        "current_annotations",
+        "keyring_id",
+        "keys",
+        "revoked_annotation_sha256s",
         "schema_version",
     }
 )
@@ -282,6 +333,102 @@ def _exact_fields(
         raise ValueError(f"{label} has unsupported fields: {', '.join(unknown)}")
     if missing:
         raise ValueError(f"{label} is missing fields: {', '.join(missing)}")
+
+
+def _exact_json_array(
+    payload: Mapping[str, Any],
+    field_name: str,
+    *,
+    label: str,
+) -> list[Any]:
+    value = payload[field_name]
+    if type(value) is not list:
+        raise ValueError(f"{label}.{field_name} must be a JSON array")
+    return value
+
+
+def _parse_large_canonical_json_object(
+    raw: bytes,
+    *,
+    label: str,
+    maximum_bytes: int,
+    maximum_depth: int,
+    maximum_nodes: int,
+    maximum_containers: int,
+) -> dict[str, Any]:
+    """Parse canonical JSON beyond the generic wire parser's 50k-node cap."""
+
+    if type(raw) is not bytes or not 1 <= len(raw) <= maximum_bytes:
+        raise ValueError(f"{label} must be 1 to {maximum_bytes} exact bytes")
+
+    try:
+        decoded = raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{label} must be valid UTF-8 JSON") from exc
+
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"{label} contains duplicate JSON key: {key}")
+            result[key] = value
+        return result
+
+    def reject_number(value: str) -> object:
+        raise ValueError(f"{label} cannot contain JSON numbers: {value[:32]}")
+
+    try:
+        value = json.loads(
+            decoded,
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_number,
+            parse_float=reject_number,
+            parse_int=reject_number,
+        )
+    except RecursionError as exc:
+        raise ValueError(f"{label} exceeds JSON depth {maximum_depth}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{label} must be valid UTF-8 JSON") from exc
+
+    nodes = 0
+    containers = 0
+    pending: list[tuple[object, int]] = [(value, 1)]
+    while pending:
+        item, depth = pending.pop()
+        if depth > maximum_depth:
+            raise ValueError(f"{label} exceeds JSON depth {maximum_depth}")
+        nodes += 1
+        if nodes > maximum_nodes:
+            raise ValueError(f"{label} exceeds JSON node limit {maximum_nodes}")
+        if type(item) is dict:
+            containers += 1
+            if containers > maximum_containers:
+                raise ValueError(
+                    f"{label} exceeds JSON container limit {maximum_containers}"
+                )
+            for key, child in item.items():
+                if type(key) is not str:
+                    raise ValueError(f"{label} JSON object keys must be strings")
+                pending.append((child, depth + 1))
+        elif type(item) is list:
+            containers += 1
+            if containers > maximum_containers:
+                raise ValueError(
+                    f"{label} exceeds JSON container limit {maximum_containers}"
+                )
+            pending.extend((child, depth + 1) for child in item)
+        elif item is not None and type(item) not in (str, bool):
+            raise ValueError(f"{label} contains an unsupported JSON value")
+
+    if type(value) is not dict:
+        raise ValueError(f"{label} root must be an object")
+    try:
+        canonical = _canonical_json(value).encode("utf-8", errors="strict")
+    except (TypeError, ValueError, UnicodeEncodeError) as exc:
+        raise ValueError(f"{label} contains an unsupported JSON value") from exc
+    if raw != canonical:
+        raise ValueError(f"{label} bytes are not canonical")
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -491,6 +638,53 @@ class AnnotationVerificationPolicy:
         return hashlib.sha256(self.canonical_json().encode("utf-8")).hexdigest()
 
 
+def annotation_verification_policy_from_dict(
+    payload: Mapping[str, Any],
+) -> AnnotationVerificationPolicy:
+    label = "annotation verification policy"
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{label} must be a JSON object")
+    _exact_fields(payload, _ANNOTATION_POLICY_FIELDS, label)
+    if payload.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError(f"{label} schema_version must be {SCHEMA_VERSION}")
+    return AnnotationVerificationPolicy(
+        policy_id=payload.get("policy_id"),
+        governance_domain_id=payload.get("governance_domain_id"),
+        trust_store_sha256=payload.get("trust_store_sha256"),
+        evaluator_artifact_sha256=payload.get("evaluator_artifact_sha256"),
+        minimum_truth_policy=enum_from_json(
+            AnnotationMinimumTruthPolicy,
+            payload.get("minimum_truth_policy"),
+            "annotation verification policy.minimum_truth_policy",
+        ),  # type: ignore[arg-type]
+        valid_from=payload.get("valid_from"),
+        valid_until=payload.get("valid_until"),
+    )
+
+
+def load_annotation_verification_policy(
+    path: Path,
+) -> AnnotationVerificationPolicy:
+    label = "annotation verification policy"
+    raw = read_protected_file_bytes(
+        path,
+        max_bytes=_MAX_ANNOTATION_POLICY_BYTES,
+        label=label,
+    )
+    payload = parse_canonical_json_object(
+        raw,
+        label=label,
+        maximum_bytes=_MAX_ANNOTATION_POLICY_BYTES,
+        maximum_depth=2,
+        maximum_nodes=16,
+        maximum_containers=1,
+    )
+    result = annotation_verification_policy_from_dict(payload)
+    if raw != result.canonical_json().encode("utf-8"):
+        raise ValueError(f"{label} did not reconstruct exactly")
+    return result
+
+
 @dataclass(frozen=True, slots=True)
 class ProtectedAnnotationConfigurationGeneration:
     """Publisher-atomic current generation of protected annotation inputs."""
@@ -671,6 +865,56 @@ class CurrentAnnotation:
             "annotation_id": self.annotation_id,
             "annotation_sha256": self.annotation_sha256,
         }
+
+
+def trusted_annotation_key_from_dict(
+    payload: Mapping[str, Any],
+) -> TrustedAnnotationKey:
+    label = "trusted annotation key"
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{label} must be a JSON object")
+    _exact_fields(payload, _TRUSTED_ANNOTATION_KEY_FIELDS, label)
+    raw_roles = _exact_json_array(payload, "permitted_roles", label=label)
+    if not 1 <= len(raw_roles) <= len(AnnotationAttestationRole):
+        raise ValueError(
+            "trusted annotation key.permitted_roles count must be between 1 and "
+            f"{len(AnnotationAttestationRole)}"
+        )
+    roles = tuple(
+        enum_from_json(
+            AnnotationAttestationRole,
+            role,
+            "trusted annotation key.permitted_roles item",
+        )
+        for role in raw_roles
+    )
+    return TrustedAnnotationKey(
+        key_id=payload.get("key_id"),
+        principal_id=payload.get("principal_id"),
+        permitted_roles=roles,  # type: ignore[arg-type]
+        public_key_base64=payload.get("public_key_base64"),
+        valid_from=payload.get("valid_from"),
+        valid_until=payload.get("valid_until"),
+        compromised_on=payload.get("compromised_on"),
+    )
+
+
+def current_annotation_from_dict(
+    payload: Mapping[str, Any],
+) -> CurrentAnnotation:
+    label = "current annotation"
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{label} must be a JSON object")
+    _exact_fields(payload, _CURRENT_ANNOTATION_FIELDS, label)
+    return CurrentAnnotation(
+        annotation_type=enum_from_json(
+            AnnotationType,
+            payload.get("annotation_type"),
+            "current annotation.annotation_type",
+        ),  # type: ignore[arg-type]
+        annotation_id=payload.get("annotation_id"),
+        annotation_sha256=payload.get("annotation_sha256"),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1290,6 +1534,102 @@ class AnnotationTrustStore:
                     "protected annotation configuration generation does not "
                     f"match {label}",
                 )
+
+
+def annotation_trust_store_from_dict(
+    payload: Mapping[str, Any],
+) -> AnnotationTrustStore:
+    label = "annotation trust store"
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{label} must be a JSON object")
+    _exact_fields(payload, _ANNOTATION_TRUST_STORE_FIELDS, label)
+    if payload.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError(f"{label} schema_version must be {SCHEMA_VERSION}")
+
+    raw_keys = _exact_json_array(payload, "keys", label=label)
+    raw_current = _exact_json_array(
+        payload,
+        "current_annotations",
+        label=label,
+    )
+    raw_revoked = _exact_json_array(
+        payload,
+        "revoked_annotation_sha256s",
+        label=label,
+    )
+    if len(raw_keys) > _MAX_TRUSTED_KEYS:
+        raise ValueError(f"{label} exceeds {_MAX_TRUSTED_KEYS} keys")
+    if len(raw_current) > _MAX_CURRENT_ANNOTATIONS:
+        raise ValueError(
+            f"{label} exceeds {_MAX_CURRENT_ANNOTATIONS} current annotations"
+        )
+    if len(raw_revoked) > _MAX_REVOKED_ANNOTATIONS:
+        raise ValueError(
+            f"{label} exceeds {_MAX_REVOKED_ANNOTATIONS} revocations"
+        )
+
+    for index, raw_key in enumerate(raw_keys):
+        if not isinstance(raw_key, Mapping):
+            raise ValueError(f"{label}.keys[{index}] must be an object")
+        _exact_fields(
+            raw_key,
+            _TRUSTED_ANNOTATION_KEY_FIELDS,
+            f"{label}.keys[{index}]",
+        )
+        raw_roles = _exact_json_array(
+            raw_key,
+            "permitted_roles",
+            label=f"{label}.keys[{index}]",
+        )
+        if not 1 <= len(raw_roles) <= len(AnnotationAttestationRole):
+            raise ValueError(
+                f"{label}.keys[{index}].permitted_roles count must be between "
+                f"1 and {len(AnnotationAttestationRole)}"
+            )
+    for index, raw_item in enumerate(raw_current):
+        if not isinstance(raw_item, Mapping):
+            raise ValueError(
+                f"{label}.current_annotations[{index}] must be an object"
+            )
+        _exact_fields(
+            raw_item,
+            _CURRENT_ANNOTATION_FIELDS,
+            f"{label}.current_annotations[{index}]",
+        )
+    for fingerprint in raw_revoked:
+        _require_sha256(fingerprint, "revoked annotation fingerprint")
+
+    keys = tuple(trusted_annotation_key_from_dict(raw_key) for raw_key in raw_keys)
+    current_annotations = tuple(
+        current_annotation_from_dict(raw_item) for raw_item in raw_current
+    )
+    return AnnotationTrustStore(
+        keyring_id=payload.get("keyring_id"),
+        keys=keys,
+        current_annotations=current_annotations,
+        revoked_annotation_sha256s=tuple(raw_revoked),
+    )
+
+
+def load_annotation_trust_store(path: Path) -> AnnotationTrustStore:
+    label = "annotation trust store"
+    raw = read_protected_file_bytes(
+        path,
+        max_bytes=_MAX_ANNOTATION_TRUST_STORE_BYTES,
+        label=label,
+    )
+    payload = _parse_large_canonical_json_object(
+        raw,
+        label=label,
+        maximum_bytes=_MAX_ANNOTATION_TRUST_STORE_BYTES,
+        maximum_depth=_MAX_ANNOTATION_TRUST_STORE_JSON_DEPTH,
+        maximum_nodes=_MAX_ANNOTATION_TRUST_STORE_JSON_NODES,
+        maximum_containers=_MAX_ANNOTATION_TRUST_STORE_JSON_CONTAINERS,
+    )
+    result = annotation_trust_store_from_dict(payload)
+    if raw != result.canonical_json().encode("utf-8"):
+        raise ValueError(f"{label} did not reconstruct exactly")
+    return result
 
 
 def _preflight_annotation_verification_bounds(
