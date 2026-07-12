@@ -55,18 +55,25 @@ sync observations at beginning/middle/end
 - Initial subjective sync passed. Midpoint/final subjective checks were not
   recorded, and camera reconnect recovery was not exercised.
 - Result: endurance pass, conditional Gate 1 pass. Carry the missing sync and
-  recovery checks into the two-court validation.
+  recovery checks into the direct eight-court validation.
 
 ## Gate 2: eight-court load
 
-Scale only after each prior stage passes:
+The current operator decision is to test all eight real cameras directly,
+without synthetic sources or separate two- and four-court stages:
 
-1. Two motion-heavy sources on one `c-4`, two commentary rooms, two hours.
-2. Four sources on two `c-4` hosts, four hours.
-3. Eight sources on four `c-4` hosts, twelve continuous hours preferred.
+- One dedicated `c-4` ingest node normalizes all inputs to 720p30.
+- Streams 1-2 enter as Mevo H.264 RTMP 1080p60 stress inputs at 6 Mbps.
+- Streams 3-5 enter as AVKANS Go HEVC SRT caller 1080p30 inputs at 3 Mbps
+  with 2500 ms latency.
+- Streams 6-8 enter as Maki Live H.264 RTMP 1080p30 inputs at 3 Mbps.
+- Four dedicated `c-4` compositor hosts own courts 1-2, 3-4, 5-6, and 7-8.
+- Eight separate unlisted destinations have auto-start and auto-stop disabled.
+- Run at least two continuous hours; twelve hours remains preferred.
 
-Every stage includes program pages, encoders, destinations, and scoring on all
-active courts. A host owns at most two courts.
+Every court includes its program page, encoder, destination, and scoring. A
+compositor host owns at most two courts. Sustained 80% CPU, frame loss, growing
+queues/RSS, or one court affecting its paired court fails the topology.
 
 Gate 2 must include fault injection: camera removal, venue network loss,
 MediaMTX restart, one egress kill, controller restart, one compositor loss,

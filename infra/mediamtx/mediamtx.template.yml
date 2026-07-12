@@ -20,7 +20,7 @@ rtmp: yes
 rtmpAddress: :1935
 
 srt: yes
-srtAddress: 127.0.0.1:8890
+srtAddress: :8890
 
 hls: no
 
@@ -44,12 +44,49 @@ authInternalUsers:
       - action: playback
         path: "~^court[1-8]_(preview|program|calibration)$"
 
-  # Venue encoders may publish only to permanent raw court identities.
-  - user: streamrun
-    pass: __PUBLISH_PASSWORD__
+  # Each venue encoder has a separate credential and can publish only to its
+  # permanent raw court identity. This limits a copied or stale camera profile
+  # to one court instead of the entire event.
+  - user: __COURT_1_PUBLISH_USER__
+    pass: __COURT_1_PUBLISH_PASSWORD__
     permissions:
       - action: publish
-        path: "~^court[1-8]_raw$"
+        path: court1_raw
+  - user: __COURT_2_PUBLISH_USER__
+    pass: __COURT_2_PUBLISH_PASSWORD__
+    permissions:
+      - action: publish
+        path: court2_raw
+  - user: __COURT_3_PUBLISH_USER__
+    pass: __COURT_3_PUBLISH_PASSWORD__
+    permissions:
+      - action: publish
+        path: court3_raw
+  - user: __COURT_4_PUBLISH_USER__
+    pass: __COURT_4_PUBLISH_PASSWORD__
+    permissions:
+      - action: publish
+        path: court4_raw
+  - user: __COURT_5_PUBLISH_USER__
+    pass: __COURT_5_PUBLISH_PASSWORD__
+    permissions:
+      - action: publish
+        path: court5_raw
+  - user: __COURT_6_PUBLISH_USER__
+    pass: __COURT_6_PUBLISH_PASSWORD__
+    permissions:
+      - action: publish
+        path: court6_raw
+  - user: __COURT_7_PUBLISH_USER__
+    pass: __COURT_7_PUBLISH_PASSWORD__
+    permissions:
+      - action: publish
+        path: court7_raw
+  - user: __COURT_8_PUBLISH_USER__
+    pass: __COURT_8_PUBLISH_PASSWORD__
+    permissions:
+      - action: publish
+        path: court8_raw
 
   # Internal branch processes and health probes never leave loopback.
   - user: any
@@ -81,7 +118,7 @@ paths:
       -i "rtsp://127.0.0.1:${RTSP_PORT}/court${G1}_raw"
       -map 0:v:0 -map 0:a:0?
       -c:v libx264 -preset ultrafast -tune zerolatency -profile:v main
-      -pix_fmt yuv420p -vf "scale=-2:720" -g 60 -keyint_min 60 -sc_threshold 0
+      -pix_fmt yuv420p -vf "fps=30,scale=-2:720" -g 30 -keyint_min 30 -sc_threshold 0
       -b:v 2500k -maxrate 2750k -bufsize 5000k
       -c:a libopus -b:a 96k -ar 48000 -ac 2 -af "aresample=async=1:first_pts=0"
       -f rtsp -rtsp_transport tcp "rtsp://127.0.0.1:${RTSP_PORT}/${MTX_PATH}"'

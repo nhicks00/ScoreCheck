@@ -6,12 +6,14 @@ The ingest server owns three distinct path classes per court:
 - `courtN_preview`: clean, normalized, low-latency H.264/Opus for people.
 - `courtN_program`: clean preview delayed at the SRT receiver for compositing.
 
-The SRT listener is loopback-only; it is an internal delay transport between
-MediaMTX branches and is never a public ingest endpoint.
+The SRT listener accepts caller-mode venue-camera publishers and also carries
+the internal delayed-program read on loopback. Camera publishers authenticate
+with a court-scoped SRT stream ID; the loopback reader is separately authorized
+by IP.
 
 Both UFW and the DigitalOcean `bvm-preview-firewall` allow only SSH, HTTP/TLS,
-RTMP ingest, and WebRTC UDP media. Keep those two rule sets aligned when an
-ingest protocol changes.
+RTMP ingest, SRT ingest, and WebRTC UDP media. Keep those two rule sets aligned
+when an ingest protocol changes.
 
 `courtN_calibration` is an on-demand UTC-burned test path and is never used by
 the production scene.
@@ -31,3 +33,8 @@ new process fails health checks. Docker logs are capped at four 25 MB files.
 On-demand branches poll local path readiness every two seconds and start FFmpeg
 only after their upstream exists, so an open offline preview cannot create a
 process or log storm.
+
+Every H.264 or HEVC input is normalized to H.264/Opus at 720p30 before
+preview/program distribution. A 1080p60 camera is therefore an ingest stress
+source, not a 60 fps program output. The one-second normalized GOP limits
+decoder recovery time after an upstream loss event.
