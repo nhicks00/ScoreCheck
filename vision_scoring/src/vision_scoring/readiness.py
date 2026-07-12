@@ -160,6 +160,7 @@ class Severity(str, Enum):
 
 class CaptureMode(str, Enum):
     HD_1080P30 = "1080P30"
+    HD_1080P60 = "1080P60"
     UHD_4K60 = "4K60"
     DUAL_4K60 = "DUAL_4K60"
 
@@ -1710,6 +1711,15 @@ class ManifestValidator:
                     "shutter": 500.0,
                     "camera_count": 1,
                     "max_blur_ratio": 2.0,
+                },
+                CaptureMode.HD_1080P60: {
+                    "width": 1920,
+                    "height": 1080,
+                    "fps": 59.0,
+                    "ball_pixels": 6.0,
+                    "shutter": 1000.0,
+                    "camera_count": 1,
+                    "max_blur_ratio": 1.0,
                 },
                 CaptureMode.UHD_4K60: {
                     "width": 3840,

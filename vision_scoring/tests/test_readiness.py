@@ -982,6 +982,51 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
         self.assertTrue(report.ready)
         self.assertIn("COMPATIBILITY_CAPTURE", {issue.code for issue in report.warnings})
 
+    def test_1080p60_profile_is_an_enhanced_ready_mode(self) -> None:
+        capture = self.manifest["capture_profiles"][0]
+        capture.update(
+            {
+                "mode": "1080P60",
+                "width": 1920,
+                "height": 1080,
+                "fps": 60.0,
+                "bitrate_mbps": 6.0,
+                "shutter_reciprocal": 1000.0,
+                "far_ball_processed_pixels_p10": 7.0,
+            }
+        )
+        report = self._validate(self.manifest)
+        self.assertTrue(report.ready)
+        self.assertNotIn(
+            "COMPATIBILITY_CAPTURE",
+            {issue.code for issue in report.warnings},
+        )
+
+    def test_1080p60_requires_sixty_fps_shutter_and_low_blur(self) -> None:
+        capture = self.manifest["capture_profiles"][0]
+        capture.update(
+            {
+                "mode": "1080P60",
+                "width": 1920,
+                "height": 1080,
+                "fps": 58.99,
+                "shutter_reciprocal": 999.99,
+                "far_ball_processed_pixels_p10": 7.0,
+                "visible_ball_blur_to_minor_axis_ratio_p95": 1.01,
+            }
+        )
+        report = self._validate(self.manifest)
+        blocked_paths = {issue.path for issue in report.blockers}
+        self.assertIn("capture_profiles[0].fps", blocked_paths)
+        self.assertIn(
+            "capture_profiles[0].shutter_reciprocal",
+            blocked_paths,
+        )
+        self.assertIn(
+            "capture_profiles[0].visible_ball_blur_to_minor_axis_ratio_p95",
+            blocked_paths,
+        )
+
     def test_dataset_cannot_supply_or_weaken_split_and_rights_policy(self) -> None:
         self.manifest["capture_profiles"][0]["far_ball_processed_pixel_p10"] = 11.0
         self.manifest["policies"] = {

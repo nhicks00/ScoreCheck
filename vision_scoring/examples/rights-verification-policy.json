@@ -6,5 +6,5 @@
   "use_profile": "COMMERCIAL_ASSISTIVE_SCORING_V1",
   "valid_from": "2026-01-01",
   "valid_until": "2099-12-31",
-  "verifier_source_tree_sha256": "00367a5fddb89d39d06bc021f05b2a56c07a48b96eb271a3bfd874928410c5db"
+  "verifier_source_tree_sha256": "ba579a4be22f0fe32bc00204fc269d3f8e2f23cd837de823a394b08e1610ec34"
 }
