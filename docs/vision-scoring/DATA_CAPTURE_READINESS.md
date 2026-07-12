@@ -1,0 +1,279 @@
+# Vision Scoring Data and Capture Readiness
+
+**Readiness:** blocked for production training claims and automatic scoring
+
+**Date:** 2026-07-11
+
+**Architecture:** [ARCHITECTURE.md](./ARCHITECTURE.md)
+
+## Current verdict
+
+The project does not currently have a reproducible training dataset, deployable model artifact, or validated capture profile. Work can start now, but the first deliverable is evidence and infrastructure—not another long training run.
+
+The legacy handoff is useful for finding failure modes and candidate labels. It is not a trusted baseline until its inputs, outputs, versions, splits, and metrics can be reproduced.
+
+### What the legacy repository appears to contain
+
+The following figures were recovered from an unreachable legacy commit and its handoff files. The corresponding media/artifacts are absent from the current checkout, so these are **claims to audit**, not accepted ground truth.
+
+| Legacy item | Reported state | Readiness implication |
+|---|---|---|
+| Source registry | 17 YouTube source IDs; the first six represented 110,056 seconds (about 30.57 hours) | Source availability and training rights are unresolved |
+| Detector review | 15 frames, 114 person boxes, 168 ball boxes; all reportedly unverified | Too small and unverified for evaluation |
+| Serve review | 2,155 clips: 525 `serve_contact`, 181 `setup_no_contact`, 1,449 `not_serve` | Potential label lead; media, lineage, adjudication, and split are missing |
+| Separate serve chunks | 1,053 items: 358 contact and 695 non-serve; 7/9 chunks processed | Overlap with the prior snapshot is unknown |
+| TrackNet plan | 1,500–3,000 intended dense labels | No surviving labeled set, model card, or weights found |
+| Player validation | 2,700 frames, 441 identity switches, approximately 99.7% pose-row coverage | Coverage did not establish identity or keypoint/contact correctness |
+| Court validation | 30-frame old YOLO report, mean quad IoU about 0.948 | Predated the last architecture and does not validate current calibration |
+| Strict serve smoke | Strict recall 0 at strict coverage 0 | Abstention produced safety without usefulness |
+
+There is no discovered DVC/LFS lineage, remote artifact inventory, durable checksums, or reproducible map from source video to labels, split, model, calibration, and report. Treat every legacy asset found later as quarantined until it passes the intake process below.
+
+## Gate 0: preserve and inventory
+
+Before model work:
+
+1. Keep legacy commit `f2d0600a114114d500ededf287211935502d0974` anchored to rescue branch `codex/rescue-live-score-f2d0600a` so Git garbage collection cannot remove it.
+2. Search local disks, cloud buckets, annotation tools, prior worktrees, and backups for videos, label exports, weights, calibrations, reports, and environment locks.
+3. Hash every recovered artifact before opening or transforming it.
+4. Build a recovery ledger with `found`, `missing`, `corrupt`, `duplicate`, `rights_unknown`, `quarantined`, or `accepted` status.
+5. Never restore generated assets into Git history. Use content-addressed object storage plus a versioned manifest.
+
+Exit condition: every referenced legacy asset has a disposition, and the rescue reference plus recovery ledger exist. Recovery can continue later, but unknown legacy data cannot enter a training run.
+
+The initial recovery ledger is [LEGACY_RECOVERY_LEDGER.md](./LEGACY_RECOVERY_LEDGER.md).
+
+## Data provenance and rights
+
+A public URL or the ability to download a video does not grant commercial model-training, redistribution, biometric/pose-analysis, or derivative-dataset rights. Athlete likeness, venue agreements, broadcaster ownership, music/audio rights, and youth participants require explicit review.
+
+Every source asset must have a manifest record containing at least:
+
+| Category | Required fields |
+|---|---|
+| Identity | `asset_id`, original URI/device ID, SHA-256, byte length, acquisition timestamp |
+| Rights | owner/licensor, evidence document, permitted purposes, redistribution/model rights, expiration, geography, participant/minor constraints, reviewer, decision |
+| Match | event, venue, court, date, match/set, teams, competition level, official-score source |
+| Capture | camera/lens/position, resolution/fps, shutter/exposure if available, codec/bitrate, audio, PTS/timebase, transcode history |
+| Geometry | calibration ID, named court points, lens model, camera-motion segments |
+| Lineage | parent asset hash, extraction command/version, annotation-set version, reviewer/adjudicator |
+| Split | immutable match/venue/camera/day group and `train`, `validation`, or `test` assignment |
+| Status | quarantine/accepted/rejected, validation failures, retention/deletion date |
+
+Rules:
+
+- Training and evaluation jobs accept only manifest IDs, never arbitrary paths.
+- Rights must be `accepted` for the exact intended use; `unknown` is a hard failure.
+- Split assignment happens before clip/frame extraction. Every derivative inherits the parent's split.
+- Test assets and labels are access-controlled and rejected by training jobs.
+- Original media is immutable. Derived artifacts reference parent hashes and transformation versions.
+- Annotation corrections create a new dataset version; they do not overwrite history.
+- Model cards list source-manifest versions, code commit, environment lock, seed, hyperparameters, weights hash, and evaluation report hash.
+- Pretrained weights and source code are separate artifacts with separate licenses. Dataset terms do not follow automatically from a code license.
+
+## Capture tiers
+
+| Tier | Minimum capture | Intended use | Release limitation |
+|---|---|---|---|
+| A: compatibility | One fixed 1920×1080 camera at 30 progressive fps plus synchronized audio | Feasibility, server identity, delayed assistive review | No automatic scoring unless every preflight and event gate passes; no referee claims |
+| B: assistive baseline | One fixed 3840×2160 camera at 59.94/60 progressive fps, native-resolution recording, synchronized audio | Ball continuity, contact candidates, rally/server/team attribution, statistics | Occluded/depth-dependent and terminal cases remain human-authorized |
+| C: multi-view | At least two genlocked or independently verified synchronized 4K60 cameras with joint calibration | Occlusion recovery, triangulation, stronger contact attribution | Still requires fault-specific validation before referee support |
+
+Camera placement is not prescribed yet. A high centered end-line view, diagonal view, and side view have different line visibility, depth, net-plane, and player-occlusion tradeoffs. Select placement from measured observability maps at representative courts, not preference.
+
+## Capture preflight
+
+Run the preflight for every camera/lens/encoder/placement profile and again whenever the camera moves. Record source-native frames; a stream transcode may be tested separately but must not replace the archival capture.
+
+Collect at least:
+
+- an empty-court calibration sequence and surveyed/named court points;
+- serves and rallies covering near/far corners, sidelines, end lines, high arcs, net play, dives, and player occlusion;
+- hard negatives such as heads, spectators, glare, white/yellow clothing, logos, posts, lines, spare balls, and adjacent courts;
+- a lighting/noise range representative of deployment, including transitions if outdoor;
+- audio containing ball contacts, whistles, speech, wind, music, and crowd noise;
+- reconnect, dropped-frame, and clock-drift tests;
+- for multi-view, a synchronization and joint-calibration sequence across the whole court volume.
+
+### Provisional engineering gates
+
+These thresholds are **engineering assumptions for the first experiment**, not published universal truths. They must be challenged with outcome data and replaced by measured operating limits. Passing them means “worth benchmarking,” not “safe to score.”
+
+| Measurement | Tier A: 1080p30 assumption | Tier B: 4K60 assumption | Why it exists |
+|---|---|---|---|
+| Visible-ball diameter after production preprocessing | 10th percentile at least 6 pixels | 10th percentile at least 10–12 pixels | Below this, center/blur/contact evidence becomes dominated by sampling and compression |
+| Preprocessing | Native-resolution ROI or overlapping tiles; no global 640-wide resize | Native-resolution ROI or overlapping tiles | Preserves the small target |
+| Ball motion blur | 95th-percentile streak no more than 2 apparent ball diameters | Same initial limit | Forces exposure/lighting tradeoff to be measured; temporal blur modeling still remains necessary |
+| Frame integrity | Dropped plus duplicated frames below 0.1%; no timestamp reversal; no unmarked reconnect | Same | Temporal evidence is invalid without a trustworthy clock |
+| Audio/video alignment | Absolute error and drift within one frame (33.3 ms) over a 10-minute test | Within one frame (16.7 ms) over a 10-minute test | Contact audio is only useful when time-aligned |
+| Court visibility | All four court corners, lines, net intersections, and both service zones visible with recorded occlusion map | Same | Calibration and side/service reasoning need stable landmarks |
+| Ground-plane calibration check | 95th-percentile surveyed-checkpoint error at or below 5 cm in the playable area | Same initial target | Adequate for geometry features; **not authorization for line calls** |
+| Fixed-camera stability | Drift monitor remains within the calibration check; zoom/stabilization crop is disabled or explicitly modeled | Same | Prevents stale geometry |
+
+For Tier C, the provisional cross-camera timestamp target is at most 2 ms and must be verified under motion, not inferred from device settings. Joint 3D residuals and rolling-shutter effects determine the final acceptable limit.
+
+Use shutter, aperture, gain, lighting, focus, codec, and bitrate as controls to satisfy measured size/blur/noise gates. Do not use “4K” or a bitrate number as a proxy for usable ball pixels. If low light cannot meet the blur gate without destructive noise, that deployment profile is unsupported and the system must remain manual.
+
+### Preflight report
+
+Produce one immutable report per capture profile containing:
+
+- ball-size, blur-length, visibility, compression, and occlusion distributions by court zone;
+- frame-drop, duplicate, PTS-monotonicity, reconnect, and A/V-drift results;
+- court reprojection and physical checkpoint errors;
+- representative native crops, not only resized screenshots;
+- camera/lens/settings diagram and calibration hashes;
+- a clear `pass`, `conditional`, or `unsupported` decision with failed assumptions.
+
+## Annotation contract
+
+Annotation is temporal and uncertainty-aware. Do not turn every ambiguous frame into a false exact label.
+
+| Layer | Required labels |
+|---|---|
+| Ball | Center or blur endpoints/ellipse, visible/occluded/out-of-frame, blur direction/extent, confidence/ambiguity, duplicate-frame flag, track segment |
+| Players | Box/mask as needed, rally-local identity, team, physical side, active/non-active player, occlusion/truncation |
+| Pose/contact | Visible keypoints with visibility, candidate hand/arm contact interval, contacting player/team, ambiguity window; label selectively around events |
+| Court | Named keypoints, line masks, playable polygon, posts, net/antenna geometry, lens-distortion and camera-motion segment |
+| Temporal events | Set start, serve preparation, serve contact, rally start/end, candidate contacts, bounce/dead ball, next authorized serve, replay, challenge, reported administrative point, correction, terminal point, side switch |
+| Audio | Contact transient, whistle, speech/crowd/music/wind hard negative, uncertainty interval |
+| Rules truth | Official rally winner, event reason, service order, set/match state after every authorized event, adjudicator and evidence source |
+
+Scoreboard OCR and audio may create weak labels or surface review candidates. They are never sole evaluation truth. Two reviewers adjudicate event boundaries, replay/administrative cases, and any disagreement that affects scoring. Store label uncertainty as an interval rather than forcing an exact contact frame.
+
+Preserve a governing-body/referee source's original sanction, default, misconduct, or service-order-fault label instead of collapsing it into a generic training target. The v0 reducer's `PENALTY_POINT` and `SERVICE_ORDER_FAULT` are only basic authorized point aliases; they are not a complete discipline or fault-remedy ontology.
+
+## Initial dataset design
+
+The first benchmark tranche is intentionally source-diverse:
+
+- 12–16 rights-cleared full matches spanning at least six venue/camera/lighting condition groups;
+- at least two entire venue/camera groups locked as test holdouts before extraction;
+- 30,000–60,000 densely labeled ball frames sampled as continuous clips, not independent easy frames;
+- at least 100 serve sequences, 100 difficult rallies, and 50 replay/interruption/terminal/hard-negative sequences;
+- near/far-zone, blur, occlusion, low-light, compression, adjacent-court, and spare-ball strata explicitly represented;
+- additional player/pose labels selected to answer measured failure modes rather than satisfy an arbitrary box count.
+
+Split only by match plus venue/camera/day group. Never place adjacent frames, clips from the same rally, alternate transcodes, or synchronized views of the same match into different splits.
+
+Use active learning only after the initial stratified seed exists. Sample uncertainty, model disagreement, rare strata, identity switches, and false-score-risk cases; continue to reserve randomly sampled negatives so the loop does not collapse onto unusual failures.
+
+## Required first experiment
+
+Run one controlled matrix before choosing the ball architecture:
+
+| Dimension | Variants |
+|---|---|
+| Ball family | Owned causal temporal heatmap; WASB-derived baseline; BlurBall-style blur head; D-FINE-S; RT-DETRv2-S |
+| Input | Global 640 control; native ROI; overlapping source-resolution tiles |
+| Temporal context | 1, 3, 5, and 9 causal frames at both 30 and 60 fps |
+| Capture | Tier A 1080p30 and Tier B 4K60, including matched downsample pairs where possible |
+| Fusion ablation | Ball only; +court; +players/tracks; +selective pose; +audio; +rules context |
+| Generalization | Seen-condition validation; held-out venue/camera; held-out lighting/compression |
+
+The global-640 variant is a control, not the assumed deployment choice. Reject a more complex candidate if it does not improve held-out event-level risk/coverage or if its runtime prevents the latency budget.
+
+## Metrics
+
+Report point estimates, confidence intervals where meaningful, per-condition slices, and raw error examples.
+
+| Layer | Required metrics |
+|---|---|
+| Ball | Precision/recall/F1 and AP at declared pixel and physical thresholds; center error; visibility accuracy; track gap length; slices by apparent size, blur, occlusion, zone, venue, and light |
+| Player/tracking | Detection AP, HOTA, IDF1, identity switches per player-minute/rally, team and side attribution |
+| Pose/contact | Keypoint accuracy for visible points; contact-team and contact-time precision/recall at ±1, ±2, and tolerance windows |
+| Court | Reprojection error and surveyed physical error by court zone; drift-detection delay and false alarms |
+| Events | Precision/recall/F1 for serve, dead-ball, replay, next-server, terminal, and team attribution; event latency |
+| Calibration | Reliability diagram, ECE/Brier or appropriate alternative, and accuracy-versus-coverage/risk-versus-coverage curves |
+| Rules | Exact state after every event, complete-match score accuracy, illegal transition count, canonical ruleset-fingerprint rejection, pending-obligation audit behavior, latest-resolution correction boundaries, and replay determinism |
+| Product | False official mutations per 1,000 eligible rallies and per match; review/abstention rate; operator acceptance/correction rate; p50/p95 evidence-to-proposal latency |
+
+The live inference target is initially p95 at or below two seconds after the decisive evidence, using the bounded 0.5–2 second buffer. Next-server-based scoring is inherently delayed until the next authorized serve; report that delay separately rather than hiding it in model latency.
+
+## Release gates
+
+Gates are cumulative. A schedule, demo, or high subsystem AP cannot waive them.
+
+### 1. Provenance gate
+
+- 100% of used assets and derivatives have accepted rights, hashes, lineage, split, and review state.
+- Environment, code, weights, calibration, and report hashes reproduce the evaluation.
+- Every event/evaluation run records the exact canonical ruleset SHA-256 (including reducer semantics version) and reducer artifact/container/commit digest, not only a human-readable ruleset id/version.
+- No train/test family leakage is detected.
+
+### 2. Capture gate
+
+- The exact deployment profile passes its preflight under representative lighting and load.
+- Failure injection proves timestamp, reconnect, calibration, and model failures block proposals.
+- Manual scoring remains usable independently; once authenticated upstream, human/referee point entry can continue while side-switch or timeout obligations remain latched.
+
+### 3. Offline model gate
+
+- The candidate beats declared baselines on locked held-out conditions at the event/product level, not only detector AP.
+- Risk/coverage is calibrated on validation and reported unchanged on the locked test set.
+- Every supported and unsupported condition is documented in a model/capture card.
+- Full-match replay produces zero illegal reducer transitions.
+- Tests show `AUTO_POLICY` is blocked by pending side-switch/timeout obligations while trusted human/referee points preserve—rather than silently clear—those obligations.
+- Tests reject historical/local correction after any later event or set; that case is reserved for the replay service.
+
+Absolute subsystem thresholds beyond the preflight assumptions are intentionally not invented here. Pre-register them after the first baseline, before opening the locked test set.
+
+### 4. Authorization and persistence gate
+
+The reducer accepting a domain-valid event does not satisfy this gate. Before any external or official mutation path:
+
+- authenticate the actor/service and map it to an allowlisted authority; callers cannot self-assert `OPERATOR`, `SCOREKEEPER`, `REFEREE_FEED`, or `AUTO_POLICY`;
+- create a durable authorization record and place its identifier in `authorization_id` for provenance; the identifier alone is never treated as proof;
+- sign the canonical rule-event fingerprint and verify the signature and signer before reduction;
+- compute the effective ruleset's canonical SHA-256, persist it in match state, and reject exact mismatches;
+- within one transaction, lock the match sequence/idempotency key, verify the event, run the reducer, and atomically append both event and derived state before publication;
+- implement durable replay before permitting a correction that targets anything except the latest score/replay/correction event in the current/latest set;
+- pass forged authority/id, changed payload, changed ruleset parameter, replay, duplicate/conflict, stale sequence, and storage-failure tests.
+
+The v0 `PENALTY_POINT` and `SERVICE_ORDER_FAULT` aliases may enter this path only as basic authorized point awards. Full sanctions, defaults, forfeits, and discipline are unsupported until separately modeled and validated.
+
+### 5. Shadow gate
+
+- Run on complete live matches with no credentials capable of official mutation.
+- Record every proposal, abstention, operator ruling, late/corrected truth, outage, and version boundary.
+- Include replays, side switches, reconnects, terminal points, latest-resolution corrections, basic administrative points, and adverse weather/lighting—or explicitly keep missing classes unsupported.
+- Keep historical corrections and full sanction/default/discipline cases unsupported unless the replay/domain services are implemented first.
+
+### 6. Automatic-mutation gate
+
+The first eligible automatic policy must achieve all of the following:
+
+- zero false official mutations across at least 3,000 independently adjudicated **eligible** opportunities;
+- exact committed score after every authorized event and zero illegal reducer transitions;
+- useful coverage reported beside safety, with event- and condition-level slices;
+- all terminal points, replays, challenges, corrections, administrative points, and identity-uncertain cases still human/referee-authorized;
+- no score mutation during any integrity, calibration, model, or version failure;
+- no `AUTO_POLICY` point while a side-switch or timeout obligation is pending;
+- authenticated authorizer, signature verification, transactional append, and canonical ruleset matching remain healthy under failure injection;
+- owner sign-off on the specific policy/model/capture/rules versions.
+
+With zero observed errors, the binomial “rule of three” gives only an approximate 95% upper error bound of `3/N`, or 0.1% at 3,000 observations. Real rallies are correlated by venue, camera, and weather, so 3,000 is an initial gate—not proof of perfection. Continue to report venue-clustered results and operate a kill switch at the authorization service.
+
+## 30/60/90-day sequence
+
+| Window | Work | Exit decision |
+|---|---|---|
+| Days 0–30 | Preserve/inventory legacy artifacts; resolve rights; choose object manifest/versioning; implement event and annotation schemas; validate canonical ruleset fingerprint, pending obligations, basic administrative aliases, and latest-resolution correction boundaries; test camera placements; run Tier A/B preflights; lock dataset groups; annotate the stratified seed | Select supported capture profile and label plan, or stop and change hardware/placement |
+| Days 31–60 | Complete first benchmark tranche; run ball/detector/tracker/pose/calibration matrix; build causal fusion and calibrated abstention; prototype authenticated authorizer, signed transactional event log, and durable replay; replay complete matches; publish model/capture cards and error taxonomy | Select production baseline and challenger only if held-out product and event-security tests justify them |
+| Days 61–90 | Operate one court in no-mutation shadow; harden operator review and audit replay; accumulate independent eligible cases; test failure injection; decide whether dual-camera value justifies cost | Approve continued shadow, human-confirmed assistive release, or redesign; automatic mutation only if every gate actually passes |
+
+If adequate rights-cleared diversity, preflight quality, or 3,000 eligible opportunities are unavailable by day 90, remain in shadow. The deadline is not a reason to relax the architecture.
+
+## Stop conditions
+
+Pause and redesign instead of collecting more of the same data when:
+
+- the ball fails the provisional size/blur gate across meaningful court zones;
+- held-out venue performance collapses despite stratified data and realistic augmentation;
+- same-server replays cannot be separated at the required precision;
+- team/side identity errors dominate scoring risk;
+- one-camera occlusion makes decisive evidence unobservable;
+- rights prevent retaining or training on the footage needed for deployment;
+- operator review burden remains comparable to manual scoring at the required safety level.
+
+Those outcomes are useful architecture evidence. They point to a camera, synchronization, product-scope, or human-workflow change—not automatically to a larger model.

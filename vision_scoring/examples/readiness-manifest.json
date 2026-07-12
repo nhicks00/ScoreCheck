@@ -1,0 +1,77 @@
+{
+  "schema_version": "1.0",
+  "capture_profiles": [
+    {
+      "profile_id": "controlled-4k60-v1",
+      "mode": "4K60",
+      "width": 3840,
+      "height": 2160,
+      "fps": 60.0,
+      "camera_count": 1,
+      "bitrate_mbps": 200.0,
+      "shutter_reciprocal": 1200.0,
+      "far_ball_processed_pixels_p10": 11.0,
+      "human_resolvable_visible_ball_ratio": 0.997,
+      "visible_serve_frames_meeting_pixel_gate_ratio": 0.995,
+      "sampled_visible_ball_frames": 1200,
+      "timestamp_regressions": 0,
+      "critical_unexplained_drop_events": 0,
+      "service_zones_fully_visible": true,
+      "fixed_mount": true,
+      "calibration_profile_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  "data_sources": [
+    {
+      "source_id": "match-train-001",
+      "match_id": "match-train-001",
+      "venue_id": "venue-a",
+      "capture_profile_id": "controlled-4k60-v1",
+      "camera_id": "camera-a",
+      "recording_date": "2026-07-01",
+      "ball_design_id": "ball-a",
+      "lighting_condition": "sunny",
+      "split_group_id": "venue-a-camera-a-2026-07-01",
+      "split": "TRAIN",
+      "rights_status": "OWNED",
+      "rights_ref": "contract://owned-production-2026",
+      "media_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "labels_sha256": "2111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "source_id": "match-dev-001",
+      "match_id": "match-dev-001",
+      "venue_id": "venue-b",
+      "capture_profile_id": "controlled-4k60-v1",
+      "camera_id": "camera-b",
+      "recording_date": "2026-07-02",
+      "ball_design_id": "ball-a",
+      "lighting_condition": "overcast",
+      "split_group_id": "venue-b-camera-b-2026-07-02",
+      "split": "DEV",
+      "rights_status": "OWNED",
+      "rights_ref": "contract://owned-production-2026",
+      "media_sha256": "3111111111111111111111111111111111111111111111111111111111111111",
+      "labels_sha256": "4111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "source_id": "match-test-001",
+      "match_id": "match-test-001",
+      "venue_id": "venue-unseen",
+      "capture_profile_id": "controlled-4k60-v1",
+      "camera_id": "camera-c",
+      "recording_date": "2026-07-03",
+      "ball_design_id": "ball-b",
+      "lighting_condition": "backlit",
+      "split_group_id": "venue-unseen-camera-c-2026-07-03",
+      "split": "TEST",
+      "rights_status": "LICENSED",
+      "rights_ref": "contract://licensed-test-venue-2026",
+      "media_sha256": "5111111111111111111111111111111111111111111111111111111111111111",
+      "labels_sha256": "6111111111111111111111111111111111111111111111111111111111111111"
+    }
+  ],
+  "policies": {
+    "require_unseen_test_venue": true
+  }
+}
