@@ -102,9 +102,25 @@ pathDefaults:
   overridePublisher: true
 
 paths:
-  # Mevo/venue encoders publish H.264 + AAC here.
-  "~^court([1-8])_raw$":
-    source: publisher
+  # A raw court can be supplied by a direct publisher or pulled from a private
+  # camera listener. Exact paths make the hardware assignment explicit and let
+  # the same downstream preview/program rules serve both ingest modes.
+  court1_raw:
+    source: __COURT_1_RAW_SOURCE__
+  court2_raw:
+    source: __COURT_2_RAW_SOURCE__
+  court3_raw:
+    source: __COURT_3_RAW_SOURCE__
+  court4_raw:
+    source: __COURT_4_RAW_SOURCE__
+  court5_raw:
+    source: __COURT_5_RAW_SOURCE__
+  court6_raw:
+    source: __COURT_6_RAW_SOURCE__
+  court7_raw:
+    source: __COURT_7_RAW_SOURCE__
+  court8_raw:
+    source: __COURT_8_RAW_SOURCE__
 
   # Low-latency normalized H.264 + Opus for commentators, scorers, and producer
   # previews. It starts only when preview or program has a reader.

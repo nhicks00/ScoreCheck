@@ -9,7 +9,8 @@ The ingest server owns three distinct path classes per court:
 The SRT listener accepts caller-mode venue-camera publishers and also carries
 the internal delayed-program read on loopback. Camera publishers authenticate
 with a court-scoped SRT stream ID; the loopback reader is separately authorized
-by IP.
+by IP. Listener-only cameras are configured as private `srt://` raw sources, so
+MediaMTX owns their caller connection and reconnect lifecycle directly.
 
 Both UFW and the DigitalOcean `bvm-preview-firewall` allow only SSH, HTTP/TLS,
 RTMP ingest, SRT ingest, and WebRTC UDP media. Keep those two rule sets aligned
@@ -26,6 +27,17 @@ source ../../apps/web/.env.setup.local
 set +a
 MEDIAMTX_PROGRAM_DELAY_MS=3500 ./deploy.sh
 ```
+
+Each `MEDIAMTX_COURT_N_RAW_SOURCE` defaults to `publisher`. Set it to a private
+SRT listener URL when the ingest node must pull that camera. Camera 8 is the
+working MAKI listener in the current Gate 8 hardware mix:
+
+```bash
+export MEDIAMTX_COURT_8_RAW_SOURCE='srt://192.168.8.206:1025?mode=caller&latency=2500000'
+```
+
+Private camera addresses are reachable only through the router-to-ingest
+WireGuard tunnel. No Mac or venue relay process is part of the runtime.
 
 The deploy script backs up the active remote files, recreates the pinned
 container, verifies the local MediaMTX API, and restores the prior files if the

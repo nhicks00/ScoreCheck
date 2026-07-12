@@ -66,7 +66,11 @@ without synthetic sources or separate two- and four-court stages:
 - Streams 1-2 enter as Mevo H.264 RTMP 1080p60 stress inputs at 6 Mbps.
 - Streams 3-5 enter as AVKANS Go HEVC SRT caller 1080p30 inputs at 3 Mbps
   with 2500 ms latency.
-- Streams 6-8 enter as Maki Live H.264 RTMP 1080p30 inputs at 3 Mbps.
+- Streams 6-7 are temporary MAKI Live H.264 RTMP 1080p30 inputs at 3 Mbps;
+  their current firmware did not bind SRT listeners reliably during setup.
+- Stream 8 is a MAKI Live H.264 SRT listener at 1080p30 and 3 Mbps. MediaMTX
+  pulls it through the site-to-site tunnel with 2500 ms receiver latency and
+  owns reconnects; no Mac or separate relay process participates.
 - Four dedicated `c-4` compositor hosts own courts 1-2, 3-4, 5-6, and 7-8.
 - Eight separate unlisted destinations have auto-start and auto-stop disabled.
 - Run at least two continuous hours; twelve hours remains preferred.

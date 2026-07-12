@@ -19,7 +19,13 @@ config = config
   .replaceAll("__PROGRAM_DELAY_US__", String(delayMs * 1_000));
 
 for (let court = 1; court <= 8; court += 1) {
+  const rawSource = process.env[`MEDIAMTX_COURT_${court}_RAW_SOURCE`]?.trim() || "publisher";
+  if (rawSource !== "publisher" && !rawSource.startsWith("srt://")) {
+    throw new Error(`MEDIAMTX_COURT_${court}_RAW_SOURCE must be publisher or an srt:// URL.`);
+  }
+
   config = config
+    .replaceAll(`__COURT_${court}_RAW_SOURCE__`, JSON.stringify(rawSource))
     .replaceAll(`__COURT_${court}_PUBLISH_USER__`, JSON.stringify(required(`MEDIAMTX_COURT_${court}_PUBLISH_USER`)))
     .replaceAll(`__COURT_${court}_PUBLISH_PASSWORD__`, JSON.stringify(required(`MEDIAMTX_COURT_${court}_PUBLISH_PASS`)));
 }

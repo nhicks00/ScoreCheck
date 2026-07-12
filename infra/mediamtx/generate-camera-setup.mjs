@@ -7,6 +7,12 @@ const outputPath = process.env.CAMERA_SETUP_OUTPUT
   ? path.resolve(process.env.CAMERA_SETUP_OUTPUT)
   : path.join(directory, ".generated", "eight-camera-setup.txt");
 const host = process.env.MEDIAMTX_PUBLIC_HOST?.trim() || "preview.beachvolleyballmedia.com";
+const makiSrtHosts = new Map([
+  [6, "192.168.8.170"],
+  [7, "192.168.8.238"],
+  [8, "192.168.8.206"]
+]);
+const makiSrtPort = 1025;
 const lines = [
   "SCORECHECK EIGHT-CAMERA TEST - COPY/PASTE SETTINGS",
   "=================================================",
@@ -35,56 +41,62 @@ for (let court = 1; court <= 8; court += 1) {
   const pass = required(`MEDIAMTX_COURT_${court}_PUBLISH_PASS`);
   lines.push(`STREAM ${court} / COURT ${court}`);
   lines.push("----------------------------------------");
-  if (court <= 2) {
+  const isMevo = court <= 2;
+  const isMakiRtmp = court === 6 || court === 7;
+  if (isMevo || isMakiRtmp) {
     const key = `court${court}_raw?user=${user}&pass=${pass}`;
-    lines.push(`Camera: Mevo Core ${court}`);
+    lines.push(`Camera: ${isMevo ? `Mevo Core ${court}` : `MAKI Live ${court - 5}`}`);
     lines.push("Protocol: RTMP");
     lines.push("Video codec: H.264");
-    lines.push("Resolution / frame rate: 1920x1080 at 60 fps");
-    lines.push("Video bitrate: 6000 kbps CBR");
+    lines.push(`Resolution / frame rate: 1920x1080 at ${isMevo ? 60 : 30} fps`);
+    lines.push(`Video bitrate: ${isMevo ? 6000 : 3000} kbps CBR`);
     lines.push(`Server URL: rtmp://${host}:1935`);
     lines.push(`Stream key: ${key}`);
     lines.push(`Complete URL: rtmp://${host}:1935/${key}`);
-  } else if (court <= 5) {
+  } else {
+    const isAvkans = court <= 5;
     const streamId = `publish:court${court}_raw:${user}:${pass}`;
     const standardStreamId = `#!::m=publish,r=court${court}_raw,u=${user},s=${pass}`;
-    lines.push(`Camera: AVKANS Go ${court - 2}`);
+    lines.push(`Camera: ${isAvkans ? `AVKANS Go ${court - 2}` : `MAKI Live ${court - 5}`}`);
     lines.push("Protocol: SRT");
-    lines.push("Connection role: Caller");
+    lines.push(`Connection role: ${isAvkans ? "Caller" : "Listener (ingest VPS connects as Caller)"}`);
     lines.push("Transmission type: Live");
-    lines.push("Video codec: HEVC / H.265");
+    lines.push(`Video codec: ${isAvkans ? "HEVC / H.265" : "H.264"}`);
     lines.push("Resolution / frame rate: 1920x1080 at 30 fps");
     lines.push("Video bitrate: 3000 kbps CBR");
     lines.push("Input bandwidth: 3000 kbps");
     lines.push("Recovery overhead: 25%");
-    lines.push("Latency: 2500 ms");
+    lines.push(`Latency: ${isAvkans ? "2500 ms" : "500 ms (camera firmware maximum)"}`);
     lines.push("Packet size / payload size: 1316 bytes");
     lines.push("TSBPD / timestamp delivery: On");
     lines.push("Too-late packet drop: On");
     lines.push("NAK / loss reporting: On");
     lines.push("Reconnect: On with a short retry interval");
-    lines.push(`Server URL: srt://${host}:8890`);
-    lines.push(`Stream ID / stream key: ${streamId}`);
-    lines.push(`Complete URL: srt://${host}:8890?streamid=${streamId}&pkt_size=1316`);
-    lines.push(`Standard Stream ID alternative: ${standardStreamId}`);
-  } else {
-    const key = `court${court}_raw?user=${user}&pass=${pass}`;
-    lines.push(`Camera: Maki Live ${court - 5}`);
-    lines.push("Protocol: RTMP");
-    lines.push("Video codec: H.264");
-    lines.push("Resolution / frame rate: 1920x1080 at 30 fps");
-    lines.push("Video bitrate: 3000 kbps CBR");
-    lines.push(`Server URL: rtmp://${host}:1935`);
-    lines.push(`Stream key: ${key}`);
-    lines.push(`Complete URL: rtmp://${host}:1935/${key}`);
+    if (isAvkans) {
+      lines.push(`Server URL: srt://${host}:8890`);
+      lines.push(`Stream ID / stream key: ${streamId}`);
+      lines.push(`Complete URL: srt://${host}:8890?streamid=${streamId}&pkt_size=1316`);
+      lines.push(`Standard Stream ID alternative: ${standardStreamId}`);
+    } else {
+      const localHost = makiSrtHosts.get(court);
+      lines.push(`Camera listener port: ${makiSrtPort}`);
+      lines.push(`Camera SRT address: srt://${localHost}:${makiSrtPort}`);
+      lines.push(`MediaMTX raw source: srt://${localHost}:${makiSrtPort}?mode=caller&latency=2500000`);
+      lines.push(`MediaMTX path: court${court}_raw`);
+      lines.push("Stream ID / stream key: None (private listener pulled through WireGuard)");
+    }
   }
   lines.push("");
 }
 
 lines.push("SRT NOTES");
-lines.push("Use the custom Stream ID first. Use the standard alternative only if the camera rejects it.");
-lines.push("Set latency in the camera UI to 2500 ms; do not leave a prior 350-400 ms value.");
+lines.push("AVKANS cameras publish directly in Caller mode using their custom Stream ID.");
+lines.push("MAKI 6-7 use RTMP for this test because their SRT encoder control plane failed to bind reliably.");
+lines.push("MAKI 8 stays in Listener mode; MediaMTX reaches it through WireGuard and owns the Caller/reconnect lifecycle.");
+lines.push("Use the custom Stream ID first for AVKANS. The MAKI 8 listener does not use a stream key.");
+lines.push("Set AVKANS latency to 2500 ms. MAKI 8 caps camera latency at 500 ms; MediaMTX applies 2500 ms receive latency.");
 lines.push("Encryption/passphrase: Off for this test; the Speedify tunnel provides the encrypted transport.");
+lines.push("Do not paste a public server URL or stream key into the MAKI 8 listener screen.");
 lines.push("");
 lines.push("Do not start changing fields after a camera connects. Report which stream is online and leave it running.");
 
