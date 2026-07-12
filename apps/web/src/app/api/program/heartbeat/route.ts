@@ -29,6 +29,12 @@ const schema = z.object({
   commentaryPeakDb: z.number().min(-120).max(12).nullable().optional(),
   secondsSinceCommentaryAudio: z.number().min(0).nullable().optional(),
   cameraAudioRmsDb: z.number().min(-120).max(12).nullable().optional(),
+  commentarySyncStatus: z.enum(["fallback", "calibrating", "locked"]).optional(),
+  commentaryDelayConfiguredMs: z.number().min(0).max(10_000).nullable().optional(),
+  commentaryDelayTargetMs: z.number().min(0).max(10_000).nullable().optional(),
+  commentaryDelayAppliedMs: z.number().min(0).max(10_000).nullable().optional(),
+  commentarySyncRttMs: z.number().min(0).max(60_000).nullable().optional(),
+  commentarySyncSampleAgeMs: z.number().min(0).max(60_000).nullable().optional(),
   pageVersion: z.string().max(64).optional()
 });
 
@@ -67,6 +73,12 @@ export async function POST(req: NextRequest) {
         commentary_peak_db: parsed.data.commentaryPeakDb ?? null,
         seconds_since_commentary_audio: parsed.data.secondsSinceCommentaryAudio ?? null,
         camera_audio_rms_db: parsed.data.cameraAudioRmsDb ?? null,
+        commentary_sync_status: parsed.data.commentarySyncStatus ?? null,
+        commentary_delay_configured_ms: parsed.data.commentaryDelayConfiguredMs ?? null,
+        commentary_delay_target_ms: parsed.data.commentaryDelayTargetMs ?? null,
+        commentary_delay_applied_ms: parsed.data.commentaryDelayAppliedMs ?? null,
+        commentary_sync_rtt_ms: parsed.data.commentarySyncRttMs ?? null,
+        commentary_sync_sample_age_ms: parsed.data.commentarySyncSampleAgeMs ?? null,
         page_version: parsed.data.pageVersion ?? null
       },
       { onConflict: "court_number" }

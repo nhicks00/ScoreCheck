@@ -54,7 +54,9 @@ export async function createCommentaryConnection(input: {
     room: commentaryRoomName(input.courtNumber),
     canPublish: input.role !== "program",
     canSubscribe: true,
-    canPublishData: input.role !== "program"
+    // Program participants publish only clock pings; media publication remains
+    // disabled. Court-scoped tokens keep this data channel isolated.
+    canPublishData: true
   });
   return {
     serverUrl: config.publicUrl,

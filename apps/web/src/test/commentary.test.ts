@@ -55,7 +55,7 @@ describe("LiveKit commentary rooms", () => {
     expect(commentaryLiveKitConfigured()).toBe(false);
   });
 
-  it("mints publish-capable commentator and subscribe-only program grants", async () => {
+  it("mints media-capable commentator and data-only program publish grants", async () => {
     configureLiveKit();
     const commentator = await createCommentaryConnection({ courtNumber: 3, displayName: "  Alex Caller  ", role: "commentator" });
     const program = await createCommentaryConnection({ courtNumber: 3, displayName: "", role: "program" });
@@ -65,7 +65,13 @@ describe("LiveKit commentary rooms", () => {
     expect(commentator.roomName).toBe("scorecheck-court-3");
     expect(commentatorClaims.name).toBe("Alex Caller");
     expect(commentatorClaims.video).toMatchObject({ room: "scorecheck-court-3", roomJoin: true, canPublish: true, canSubscribe: true });
-    expect(programClaims.video).toMatchObject({ room: "scorecheck-court-3", roomJoin: true, canPublish: false, canSubscribe: true });
+    expect(programClaims.video).toMatchObject({
+      room: "scorecheck-court-3",
+      roomJoin: true,
+      canPublish: false,
+      canPublishData: true,
+      canSubscribe: true
+    });
   });
 });
 

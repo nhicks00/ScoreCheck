@@ -20,6 +20,8 @@ Pass criteria:
 
 - Ten continuous hours without operator intervention.
 - Camera and commentary audible in the archive.
+- Commentary sync heartbeat reaches `locked`; target/applied delay remains
+  bounded and does not make abrupt corrections.
 - Scorebug remains correct and does not flash or duplicate sets.
 - Sync measured and acceptable at hour 0, hour 5, and hour 10.
 - No unexpected player reloads or terminal LiveKit disconnects.

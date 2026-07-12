@@ -2,9 +2,10 @@
 
 import { ArrowLeft, RotateCcw } from "lucide-react";
 import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { ScorerSessionClient } from "@/app/score/session/[sessionToken]/ScorerSessionClient";
 import { StreamPlayer } from "@/components/StreamPlayer";
+import type { StreamTimingSample } from "@/lib/rtcTiming";
 import { CommentaryAudioClient } from "./CommentaryAudioClient";
 
 type CommentaryCourtClientProps = {
@@ -30,6 +31,10 @@ export function CommentaryCourtClient({
   const [displayName, setDisplayName] = useState("Commentator");
   const [busy, setBusy] = useState(false);
   const [claimError, setClaimError] = useState<string | null>(null);
+  const previewTimingRef = useRef<StreamTimingSample | null>(null);
+  const updatePreviewTiming = useCallback((sample: StreamTimingSample | null) => {
+    previewTimingRef.current = sample;
+  }, []);
 
   useEffect(() => {
     try {
@@ -101,7 +106,7 @@ export function CommentaryCourtClient({
 
         <div className="commentary-court-layout">
           <div className="commentary-main">
-            <StreamPlayer courtNumber={courtNumber} sources={sources} />
+            <StreamPlayer courtNumber={courtNumber} sources={sources} onTimingSample={updatePreviewTiming} />
 
             {token === undefined ? null : token ? (
               <>
@@ -142,7 +147,12 @@ export function CommentaryCourtClient({
           </div>
 
           <aside className="commentary-rail" aria-label="Audio room">
-            <CommentaryAudioClient courtNumber={courtNumber} displayName={displayName} configured={commentaryConfigured} />
+            <CommentaryAudioClient
+              courtNumber={courtNumber}
+              displayName={displayName}
+              configured={commentaryConfigured}
+              previewTimingRef={previewTimingRef}
+            />
           </aside>
         </div>
       </div>

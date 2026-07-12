@@ -2,6 +2,13 @@
 
 import { Play, RefreshCw, VideoOff, Volume2, VolumeX } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  intervalJitterSample,
+  monotonicEpochMs,
+  STREAM_TIMING_INTERVAL_MS,
+  type RtcJitterTotals,
+  type StreamTimingSample
+} from "@/lib/rtcTiming";
 
 type StreamPlayerProps = {
   courtNumber: number;
@@ -16,6 +23,8 @@ type StreamPlayerProps = {
   mode?: "preview" | "program";
   /** Gives the program mixer access to the camera media element. */
   onVideoElement?: (element: HTMLVideoElement | null) => void;
+  /** WHEP transport timing used by the commentary/program synchronization controller. */
+  onTimingSample?: (sample: StreamTimingSample | null) => void;
 };
 
 type StreamSources = {
@@ -41,7 +50,8 @@ export function StreamPlayer({
   sources: providedSources,
   chromeless = false,
   mode = "preview",
-  onVideoElement
+  onVideoElement,
+  onTimingSample
 }: StreamPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [sources, setSources] = useState<StreamSources | null>(null);
@@ -107,6 +117,8 @@ export function StreamPlayer({
     let pc: RTCPeerConnection | null = null;
     let hls: HlsInstance | null = null;
     let retryTimer: number | null = null;
+    let timingTimer: number | null = null;
+    let previousTimingTotals: RtcJitterTotals | null = null;
     let whepFailures = 0;
     let hlsFailures = 0;
 
@@ -118,6 +130,10 @@ export function StreamPlayer({
     video.addEventListener("playing", onPlaying);
 
     function teardownPlayback() {
+      if (timingTimer != null) window.clearInterval(timingTimer);
+      timingTimer = null;
+      previousTimingTotals = null;
+      onTimingSample?.(null);
       pc?.close();
       pc = null;
       hls?.destroy();
@@ -175,6 +191,7 @@ export function StreamPlayer({
             whepFailures = 0;
             setError(null);
             setStatus("Live — low latency");
+            startTimingSampling(connection);
           }
           if (["failed", "disconnected", "closed"].includes(connection.connectionState)) {
             failWhep(false);
@@ -204,6 +221,23 @@ export function StreamPlayer({
       } catch {
         if (!cancelled) failWhep(false);
       }
+    }
+
+    function startTimingSampling(connection: RTCPeerConnection) {
+      if (timingTimer != null) return;
+      const sample = async () => {
+        if (cancelled || pc !== connection || connection.connectionState !== "connected") return;
+        try {
+          const stats = await connection.getStats();
+          const timing = extractTimingSample(stats, previousTimingTotals);
+          previousTimingTotals = timing.totals;
+          onTimingSample?.(timing.sample);
+        } catch {
+          onTimingSample?.(null);
+        }
+      };
+      void sample();
+      timingTimer = window.setInterval(() => void sample(), STREAM_TIMING_INTERVAL_MS);
     }
 
     async function startHls() {
@@ -263,7 +297,7 @@ export function StreamPlayer({
       video.removeEventListener("playing", onPlaying);
       teardownPlayback();
     };
-  }, [enabled, loadRevision, mode, sources]);
+  }, [enabled, loadRevision, mode, onTimingSample, sources]);
 
   if (!enabled) return null;
 
@@ -292,6 +326,53 @@ export function StreamPlayer({
       )}
     </section>
   );
+}
+
+function extractTimingSample(
+  reports: RTCStatsReport,
+  previous: RtcJitterTotals | null
+): { sample: StreamTimingSample; totals: RtcJitterTotals | null } {
+  let totals: RtcJitterTotals | null = null;
+  let rttMs: number | null = null;
+
+  reports.forEach((report) => {
+    const row = report as RTCStats & Record<string, unknown>;
+    if (row.type === "inbound-rtp" && (row.kind === "video" || row.mediaType === "video")) {
+      const emittedCount = finiteNumber(row.jitterBufferEmittedCount);
+      const jitterBufferDelaySeconds = finiteNumber(row.jitterBufferDelay);
+      if (emittedCount != null && jitterBufferDelaySeconds != null) {
+        totals = {
+          emittedCount,
+          jitterBufferDelaySeconds,
+          jitterBufferTargetDelaySeconds: finiteNumber(row.jitterBufferTargetDelay)
+        };
+      }
+    }
+    if (row.type === "candidate-pair"
+      && row.state === "succeeded"
+      && (row.nominated === true || row.selected === true)) {
+      const candidateRtt = finiteNumber(row.currentRoundTripTime);
+      if (candidateRtt != null) rttMs = Math.min(rttMs ?? Number.POSITIVE_INFINITY, candidateRtt * 1000);
+    }
+  });
+
+  const jitter = totals
+    ? intervalJitterSample(previous, totals)
+    : { jitterBufferMs: null, jitterBufferTargetMs: null };
+  return {
+    sample: {
+      version: 1,
+      sampledAtMonotonicMs: monotonicEpochMs(),
+      jitterBufferMs: jitter.jitterBufferMs,
+      jitterBufferTargetMs: jitter.jitterBufferTargetMs,
+      rttMs
+    },
+    totals
+  };
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
 function waitForIceGathering(connection: RTCPeerConnection, timeoutMs: number): Promise<void> {

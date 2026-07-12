@@ -633,6 +633,11 @@ function courtHeartbeatDetail(heartbeat: ConsoleHeartbeat): string | null {
   if (heartbeat.commentaryAudioTrackCount != null) parts.push(`${heartbeat.commentaryAudioTrackCount} commentary track(s)`);
   if (heartbeat.commentaryRmsDb != null) parts.push(`${heartbeat.commentaryRmsDb.toFixed(1)} dB commentary`);
   if (heartbeat.secondsSinceCommentaryAudio != null) parts.push(`${Math.round(heartbeat.secondsSinceCommentaryAudio)}s since speech`);
+  if (heartbeat.commentarySyncStatus) parts.push(`sync ${heartbeat.commentarySyncStatus}`);
+  if (heartbeat.commentaryDelayAppliedMs != null) {
+    parts.push(`${Math.round(heartbeat.commentaryDelayAppliedMs)}ms commentary delay`);
+  }
+  if (heartbeat.commentarySyncRttMs != null) parts.push(`${Math.round(heartbeat.commentarySyncRttMs)}ms sync RTT`);
   return parts.length ? parts.join(" · ") : null;
 }
 

@@ -55,6 +55,12 @@ export type ConsoleHeartbeat = {
   commentaryAudioTrackCount: number | null;
   commentaryRmsDb: number | null;
   secondsSinceCommentaryAudio: number | null;
+  commentarySyncStatus: string | null;
+  commentaryDelayConfiguredMs: number | null;
+  commentaryDelayTargetMs: number | null;
+  commentaryDelayAppliedMs: number | null;
+  commentarySyncRttMs: number | null;
+  commentarySyncSampleAgeMs: number | null;
 };
 
 export type ConsoleCourt = {
@@ -131,6 +137,12 @@ type HeartbeatRow = {
   commentary_audio_track_count: number | null;
   commentary_rms_db: number | null;
   seconds_since_commentary_audio: number | null;
+  commentary_sync_status: string | null;
+  commentary_delay_configured_ms: number | null;
+  commentary_delay_target_ms: number | null;
+  commentary_delay_applied_ms: number | null;
+  commentary_sync_rtt_ms: number | null;
+  commentary_sync_sample_age_ms: number | null;
 };
 
 export async function loadProductionSnapshot(): Promise<ProductionSnapshot> {
@@ -225,7 +237,13 @@ function buildConsoleCourt(
       commentaryParticipantCount: heartbeat?.commentary_participant_count ?? null,
       commentaryAudioTrackCount: heartbeat?.commentary_audio_track_count ?? null,
       commentaryRmsDb: heartbeat?.commentary_rms_db ?? null,
-      secondsSinceCommentaryAudio: heartbeat?.seconds_since_commentary_audio ?? null
+      secondsSinceCommentaryAudio: heartbeat?.seconds_since_commentary_audio ?? null,
+      commentarySyncStatus: heartbeat?.commentary_sync_status ?? null,
+      commentaryDelayConfiguredMs: heartbeat?.commentary_delay_configured_ms ?? null,
+      commentaryDelayTargetMs: heartbeat?.commentary_delay_target_ms ?? null,
+      commentaryDelayAppliedMs: heartbeat?.commentary_delay_applied_ms ?? null,
+      commentarySyncRttMs: heartbeat?.commentary_sync_rtt_ms ?? null,
+      commentarySyncSampleAgeMs: heartbeat?.commentary_sync_sample_age_ms ?? null
     }
   };
 }

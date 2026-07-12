@@ -118,6 +118,12 @@ export type ProgramHeartbeatBody = {
   commentaryPeakDb: number | null;
   secondsSinceCommentaryAudio: number | null;
   cameraAudioRmsDb: number | null;
+  commentarySyncStatus: string;
+  commentaryDelayConfiguredMs: number | null;
+  commentaryDelayTargetMs: number | null;
+  commentaryDelayAppliedMs: number | null;
+  commentarySyncRttMs: number | null;
+  commentarySyncSampleAgeMs: number | null;
   pageVersion: string;
 };
 
@@ -141,6 +147,12 @@ export function buildProgramHeartbeat(input: {
   commentaryPeakDb: number | null | undefined;
   secondsSinceCommentaryAudio: number | null | undefined;
   cameraAudioRmsDb: number | null | undefined;
+  commentarySyncStatus: string | null | undefined;
+  commentaryDelayConfiguredMs: number | null | undefined;
+  commentaryDelayTargetMs: number | null | undefined;
+  commentaryDelayAppliedMs: number | null | undefined;
+  commentarySyncRttMs: number | null | undefined;
+  commentarySyncSampleAgeMs: number | null | undefined;
   pageVersion: string | null | undefined;
 }): ProgramHeartbeatBody {
   return {
@@ -155,6 +167,12 @@ export function buildProgramHeartbeat(input: {
     commentaryPeakDb: clampDb(input.commentaryPeakDb),
     secondsSinceCommentaryAudio: clampOptionalNonNegative(input.secondsSinceCommentaryAudio),
     cameraAudioRmsDb: clampDb(input.cameraAudioRmsDb),
+    commentarySyncStatus: clampSyncStatus(input.commentarySyncStatus),
+    commentaryDelayConfiguredMs: clampOptionalMs(input.commentaryDelayConfiguredMs, 10_000),
+    commentaryDelayTargetMs: clampOptionalMs(input.commentaryDelayTargetMs, 10_000),
+    commentaryDelayAppliedMs: clampOptionalMs(input.commentaryDelayAppliedMs, 10_000),
+    commentarySyncRttMs: clampOptionalMs(input.commentarySyncRttMs, 60_000),
+    commentarySyncSampleAgeMs: clampOptionalMs(input.commentarySyncSampleAgeMs, 60_000),
     pageVersion: clampText(input.pageVersion, "local")
   };
 }
@@ -180,4 +198,15 @@ function clampOptionalNonNegative(value: number | null | undefined): number | nu
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return null;
   return Math.max(0, Math.round(numeric * 10) / 10);
+}
+
+function clampSyncStatus(value: string | null | undefined): "fallback" | "calibrating" | "locked" {
+  return value === "calibrating" || value === "locked" ? value : "fallback";
+}
+
+function clampOptionalMs(value: number | null | undefined, max: number): number | null {
+  if (value == null) return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  return Math.min(max, Math.max(0, Math.round(numeric)));
 }

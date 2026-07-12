@@ -77,16 +77,38 @@ node.
 
 `courts.program_video_delay_ms` records the coarse program-video target. The
 MediaMTX Gate 1 deployment currently renders that target as a 3500 ms SRT
-receiver buffer. `courts.commentary_delay_ms` is a 0-10000 ms fine adjustment
-inside the browser audio graph.
+receiver buffer. `courts.commentary_delay_ms` is the 0-10000 ms
+human-calibrated baseline inside the browser audio graph. It accounts for the
+commentator reacting to the low-latency preview; software cannot infer that
+semantic reaction time from network packets alone.
+
+After the baseline is established, the program mixer automatically holds sync:
+
+1. The commentator page samples preview WHEP jitter-buffer and selected-path
+   RTT once per second.
+2. Program and commentator participants run an NTP-style four-timestamp clock
+   exchange over their court-scoped LiveKit data channel.
+3. The program samples its own WHEP transport and each incoming commentary
+   track's audio jitter buffer.
+4. Eight valid observations establish a transport baseline. Subsequent changes
+   steer each track's DelayNode independently, capped at +/-500 ms from the
+   persisted baseline and slewed by at most 25 ms per second.
+5. Missing, stale, malformed, or high-RTT telemetry freezes the last safe value
+   and reports `fallback`; it never removes the persisted delay.
+
+Browser `mediaTime` and RTP timestamp offsets are deliberately not compared
+across preview and program sessions. MediaMTX/WebRTC rebase those independent
+sessions, so treating either value as a shared source clock would create false
+corrections.
 
 Calibrate with a real clap in frame:
 
-1. Keep `commentary_delay_ms` at zero.
+1. Start with `commentary_delay_ms` approximately 500 ms below the configured
+   program-video buffer; for the Gate 1 path that is 3000 ms.
 2. Record a local Mevo clap and a remote commentator repeating the clap.
 3. Inspect the unlisted YouTube archive at the beginning, middle, and end.
-4. Change only the fine commentary delay unless the camera-to-cloud baseline
-   changes materially.
+4. Change only the persisted commentary baseline unless the camera-to-cloud
+   buffer changes materially. The runtime controller handles transport drift.
 
 Never switch the program page to HLS to fix sync. Program mode is WHEP-only so
 its latency class cannot change silently.

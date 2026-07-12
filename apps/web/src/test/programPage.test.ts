@@ -220,6 +220,12 @@ describe("buildProgramHeartbeat", () => {
         commentaryPeakDb: -10.02,
         secondsSinceCommentaryAudio: 0.26,
         cameraAudioRmsDb: -18.02,
+        commentarySyncStatus: "locked",
+        commentaryDelayConfiguredMs: 3000,
+        commentaryDelayTargetMs: 3025.4,
+        commentaryDelayAppliedMs: 3012.6,
+        commentarySyncRttMs: 54.8,
+        commentarySyncSampleAgeMs: 210.2,
         pageVersion: "abc1234"
       })
     ).toEqual({
@@ -234,6 +240,12 @@ describe("buildProgramHeartbeat", () => {
       commentaryPeakDb: -10,
       secondsSinceCommentaryAudio: 0.3,
       cameraAudioRmsDb: -18,
+      commentarySyncStatus: "locked",
+      commentaryDelayConfiguredMs: 3000,
+      commentaryDelayTargetMs: 3025,
+      commentaryDelayAppliedMs: 3013,
+      commentarySyncRttMs: 55,
+      commentarySyncSampleAgeMs: 210,
       pageVersion: "abc1234"
     });
   });
@@ -251,6 +263,12 @@ describe("buildProgramHeartbeat", () => {
       commentaryPeakDb: 99,
       secondsSinceCommentaryAudio: -4,
       cameraAudioRmsDb: -999,
+      commentarySyncStatus: " ",
+      commentaryDelayConfiguredMs: -4,
+      commentaryDelayTargetMs: Number.NaN,
+      commentaryDelayAppliedMs: 99_999,
+      commentarySyncRttMs: 60.4,
+      commentarySyncSampleAgeMs: null,
       pageVersion: ""
     });
     expect(body.courtNumber).toBe(3);
@@ -262,6 +280,12 @@ describe("buildProgramHeartbeat", () => {
     expect(body.commentaryPeakDb).toBe(12);
     expect(body.secondsSinceCommentaryAudio).toBe(0);
     expect(body.cameraAudioRmsDb).toBe(-120);
+    expect(body.commentarySyncStatus).toBe("fallback");
+    expect(body.commentaryDelayConfiguredMs).toBe(0);
+    expect(body.commentaryDelayTargetMs).toBeNull();
+    expect(body.commentaryDelayAppliedMs).toBe(10_000);
+    expect(body.commentarySyncRttMs).toBe(60);
+    expect(body.commentarySyncSampleAgeMs).toBeNull();
     expect(body.pageVersion).toBe("local");
   });
 
@@ -291,6 +315,12 @@ function base(overrides: Partial<Parameters<typeof buildProgramHeartbeat>[0]>) {
     commentaryPeakDb: null,
     secondsSinceCommentaryAudio: null,
     cameraAudioRmsDb: null,
+    commentarySyncStatus: "fallback",
+    commentaryDelayConfiguredMs: null,
+    commentaryDelayTargetMs: null,
+    commentaryDelayAppliedMs: null,
+    commentarySyncRttMs: null,
+    commentarySyncSampleAgeMs: null,
     pageVersion: "local",
     ...overrides
   };

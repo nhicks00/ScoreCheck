@@ -1,13 +1,34 @@
 "use client";
 
 import { Headphones, LogOut, Mic, MicOff } from "lucide-react";
-import { createLocalAudioTrack, LocalAudioTrack, Room, RoomEvent, Track, type RemoteTrack } from "livekit-client";
-import { useEffect, useRef, useState } from "react";
+import {
+  createLocalAudioTrack,
+  LocalAudioTrack,
+  Room,
+  RoomEvent,
+  Track,
+  type RemoteParticipant,
+  type RemoteTrack
+} from "livekit-client";
+import { type RefObject, useEffect, useRef, useState } from "react";
+import {
+  COMMENTARY_SYNC_CLOCK_TOPIC,
+  COMMENTARY_SYNC_INTERVAL_MS,
+  COMMENTARY_SYNC_PREVIEW_TOPIC,
+  decodeCommentarySyncMessage,
+  encodeCommentarySyncMessage
+} from "@/lib/commentarySync";
+import {
+  monotonicEpochMs,
+  timingSampleAgeMs,
+  type StreamTimingSample
+} from "@/lib/rtcTiming";
 
 type CommentaryAudioClientProps = {
   courtNumber: number;
   displayName: string;
   configured: boolean;
+  previewTimingRef: RefObject<StreamTimingSample | null>;
 };
 
 type ConnectionResponse = {
@@ -18,10 +39,16 @@ type ConnectionResponse = {
 
 type AudioState = "idle" | "connecting" | "live" | "reconnecting" | "error";
 
-export function CommentaryAudioClient({ courtNumber, displayName, configured }: CommentaryAudioClientProps) {
+export function CommentaryAudioClient({
+  courtNumber,
+  displayName,
+  configured,
+  previewTimingRef
+}: CommentaryAudioClientProps) {
   const roomRef = useRef<Room | null>(null);
   const trackRef = useRef<LocalAudioTrack | null>(null);
   const meterCleanupRef = useRef<(() => void) | null>(null);
+  const syncTimerRef = useRef<number | null>(null);
   const remoteAudioRef = useRef<HTMLDivElement | null>(null);
   const remoteElementsRef = useRef(new Map<string, HTMLMediaElement>());
   const [state, setState] = useState<AudioState>("idle");
@@ -60,6 +87,33 @@ export function CommentaryAudioClient({ courtNumber, displayName, configured }: 
       });
       room.on(RoomEvent.TrackSubscribed, attachRemoteAudio);
       room.on(RoomEvent.TrackUnsubscribed, detachRemoteAudio);
+      room.on(RoomEvent.DataReceived, (
+        payload: Uint8Array,
+        participant?: RemoteParticipant,
+        _kind?: unknown,
+        topic?: string
+      ) => {
+        if (topic !== COMMENTARY_SYNC_CLOCK_TOPIC
+          || !participant?.identity.startsWith(`program-${courtNumber}-`)) return;
+        const message = decodeCommentarySyncMessage(payload);
+        if (message?.type !== "clock-ping") return;
+        const t1Ms = monotonicEpochMs();
+        const pong = encodeCommentarySyncMessage({
+          version: 1,
+          type: "clock-pong",
+          id: message.id,
+          t0Ms: message.t0Ms,
+          t1Ms,
+          t2Ms: monotonicEpochMs()
+        });
+        void room.localParticipant.publishData(pong, {
+          reliable: true,
+          topic: COMMENTARY_SYNC_CLOCK_TOPIC,
+          destinationIdentities: [participant.identity]
+        }).catch(() => {
+          // Sync telemetry is fail-safe; fixed commentary delay remains active.
+        });
+      });
 
       await room.connect(connection.serverUrl, connection.token, { autoSubscribe: true });
       await room.startAudio();
@@ -71,6 +125,24 @@ export function CommentaryAudioClient({ courtNumber, displayName, configured }: 
       trackRef.current = track;
       await room.localParticipant.publishTrack(track, { source: Track.Source.Microphone });
       meterCleanupRef.current = startMicrophoneMeter(track, setLevel);
+      const publishPreviewTiming = () => {
+        const timing = previewTimingRef.current;
+        if (!timing || timingSampleAgeMs(timing) > 3000) return;
+        const message = encodeCommentarySyncMessage({
+          version: 1,
+          type: "preview-timing",
+          courtNumber,
+          timing
+        });
+        void room.localParticipant.publishData(message, {
+          reliable: false,
+          topic: COMMENTARY_SYNC_PREVIEW_TOPIC
+        }).catch(() => {
+          // The program mixer holds its last safe delay when telemetry drops.
+        });
+      };
+      publishPreviewTiming();
+      syncTimerRef.current = window.setInterval(publishPreviewTiming, COMMENTARY_SYNC_INTERVAL_MS);
       setRoomName(connection.roomName);
       setParticipants(room.remoteParticipants.size + 1);
       setMuted(false);
@@ -91,6 +163,8 @@ export function CommentaryAudioClient({ courtNumber, displayName, configured }: 
   }
 
   function disconnect() {
+    if (syncTimerRef.current != null) window.clearInterval(syncTimerRef.current);
+    syncTimerRef.current = null;
     meterCleanupRef.current?.();
     meterCleanupRef.current = null;
     trackRef.current?.stop();

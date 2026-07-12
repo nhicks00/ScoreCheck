@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { OverlayClient } from "@/app/overlay/court/[courtNumber]/OverlayClient";
 import { StreamPlayer } from "@/components/StreamPlayer";
 import type { CommentaryConnection } from "@/lib/commentary";
+import type { StreamTimingSample } from "@/lib/rtcTiming";
 import {
   buildProgramHeartbeat,
   initialProgramWatchdog,
@@ -66,6 +67,7 @@ export function ProgramClient({
   const stableFrameTicksRef = useRef(0);
   const videoStateRef = useRef("waiting");
   const audioHealthRef = useRef<ProgramAudioHealth>(EMPTY_PROGRAM_AUDIO_HEALTH);
+  const programTimingRef = useRef<StreamTimingSample | null>(null);
 
   const [playerEpoch, setPlayerEpoch] = useState(0);
   const [reconnects, setReconnects] = useState(0);
@@ -86,6 +88,9 @@ export function ProgramClient({
   const updateAudioHealth = useCallback((next: ProgramAudioHealth) => {
     audioHealthRef.current = next;
     setAudioHealth(next);
+  }, []);
+  const updateProgramTiming = useCallback((sample: StreamTimingSample | null) => {
+    programTimingRef.current = sample;
   }, []);
 
   const logEndOnce = useCallback(() => {
@@ -245,6 +250,12 @@ export function ProgramClient({
               commentaryPeakDb: audioHealthRef.current.commentaryPeakDb,
               secondsSinceCommentaryAudio: audioHealthRef.current.secondsSinceCommentaryAudio,
               cameraAudioRmsDb: audioHealthRef.current.cameraRmsDb,
+              commentarySyncStatus: audioHealthRef.current.commentarySyncStatus,
+              commentaryDelayConfiguredMs: audioHealthRef.current.commentaryDelayConfiguredMs,
+              commentaryDelayTargetMs: audioHealthRef.current.commentaryDelayTargetMs,
+              commentaryDelayAppliedMs: audioHealthRef.current.commentaryDelayAppliedMs,
+              commentarySyncRttMs: audioHealthRef.current.commentarySyncRttMs,
+              commentarySyncSampleAgeMs: audioHealthRef.current.commentarySyncSampleAgeMs,
               pageVersion: buildVersion
             })
           )
@@ -273,6 +284,7 @@ export function ProgramClient({
             chromeless
             mode="program"
             onVideoElement={setCameraElement}
+            onTimingSample={updateProgramTiming}
           />
         </div>
         {videoState !== "playing" && (
@@ -291,7 +303,9 @@ export function ProgramClient({
           />
         </div>
         <ProgramAudioMixer
+          courtNumber={courtNumber}
           cameraElement={cameraElement}
+          programTimingRef={programTimingRef}
           commentary={commentary}
           cameraGainDb={cameraGainDb}
           commentaryGainDb={commentaryGainDb}
@@ -309,6 +323,8 @@ export function ProgramClient({
           <span>commentary <strong>{commentary ? (audioHealth.roomConnected ? `${audioHealth.audioTrackCount} track(s)` : "connecting") : "off"}</strong></span>
           <span>commentary rms <strong>{formatDb(audioHealth.commentaryRmsDb)}</strong></span>
           <span>camera rms <strong>{formatDb(audioHealth.cameraRmsDb)}</strong></span>
+          <span>sync <strong>{audioHealth.commentarySyncStatus}</strong></span>
+          <span>delay <strong>{formatMs(audioHealth.commentaryDelayAppliedMs)}</strong></span>
           <span>heartbeat <strong>{heartbeatState}</strong></span>
         </div>
       )}
@@ -318,6 +334,10 @@ export function ProgramClient({
 
 function formatDb(value: number | null): string {
   return value == null ? "n/a" : `${value.toFixed(1)} dB`;
+}
+
+function formatMs(value: number | null): string {
+  return value == null ? "n/a" : `${Math.round(value)} ms`;
 }
 
 /**
