@@ -13,6 +13,7 @@ from unittest.mock import patch
 import vision_scoring.training_protected_configuration as protected_configuration
 from vision_scoring.annotation_trust import AnnotationMinimumTruthPolicy
 from vision_scoring.contract_wire import CanonicalWireError, MAX_SIGNED_64
+from vision_scoring.immutable_store import generation_id_for
 from vision_scoring.protected_file import (
     PROTECTED_FILE_CHANGED,
     PROTECTED_FILE_INPUT,
@@ -22,21 +23,28 @@ from vision_scoring.protected_file import (
 )
 from vision_scoring.training_admission_contracts import MAX_TRAINING_EXAMPLES
 from vision_scoring.training_protected_configuration import (
+    CAPTURE_CLASSIFICATION_CURRENT_PIN_DOMAIN,
+    CAPTURE_CLASSIFICATION_CURRENT_PIN_SET_DOMAIN,
     DECODER_RUNTIME_PINS_DOMAIN,
     LABEL_BUNDLE_CURRENT_PIN_DOMAIN,
     LABEL_BUNDLE_CURRENT_PIN_SET_DOMAIN,
+    MAX_CAPTURE_CLASSIFICATION_CURRENT_PIN_SET_BYTES,
     MAX_DECODER_RUNTIME_PINS_BYTES,
     MAX_LABEL_BUNDLE_CURRENT_PIN_SET_BYTES,
     MAX_PROTECTED_TRAINING_CONFIGURATION_BYTES,
     PROTECTED_TRAINING_CONFIGURATION_GENERATION_DOMAIN,
+    PROTECTED_TRAINING_CONFIGURATION_GENERATION_SCHEMA_VERSION,
+    CaptureClassificationCurrentPinSetV1,
+    CaptureClassificationCurrentPinV1,
     DecoderRuntimePinsV1,
     LabelBundleCurrentPinSetV1,
     LabelBundleCurrentPinV1,
-    ProtectedTrainingConfigurationGenerationV1,
+    ProtectedTrainingConfigurationGenerationV2,
     TrainingProtectedConfigurationError,
+    load_capture_classification_current_pin_set_v1,
     load_decoder_runtime_pins_v1,
     load_label_bundle_current_pin_set_v1,
-    load_protected_training_configuration_generation_v1,
+    load_protected_training_configuration_generation_v2,
 )
 
 
@@ -87,20 +95,43 @@ def _pin_set(count: int = 2) -> LabelBundleCurrentPinSetV1:
     )
 
 
-def _protected_configuration() -> ProtectedTrainingConfigurationGenerationV1:
-    return ProtectedTrainingConfigurationGenerationV1(
+def _capture_classification_pin(
+    index: int,
+) -> CaptureClassificationCurrentPinV1:
+    return CaptureClassificationCurrentPinV1(
+        source_id=f"source-{index:04d}",
+        capture_profile_classification_sha256=_digest(30_000 + index),
+    )
+
+
+def _capture_classification_pin_set(
+    count: int = 2,
+) -> CaptureClassificationCurrentPinSetV1:
+    pins = tuple(_capture_classification_pin(index) for index in range(count))
+    object_sha256s = tuple(
+        sorted(pin.capture_profile_classification_sha256 for pin in pins)
+    )
+    return CaptureClassificationCurrentPinSetV1(
+        capture_classification_generation_id=generation_id_for(object_sha256s),
+        pins=pins,
+    )
+
+
+def _protected_configuration() -> ProtectedTrainingConfigurationGenerationV2:
+    return ProtectedTrainingConfigurationGenerationV2(
         readiness_configuration_generation_sha256=_digest(101),
         training_admission_policy_sha256=_digest(102),
         annotation_configuration_generation_sha256=_digest(103),
         label_bundle_current_pin_set_sha256=_pin_set().fingerprint(),
         decoder_runtime_pins_sha256=_decoder_pins().fingerprint(),
+        capture_classification_current_pin_set_sha256=(
+            _capture_classification_pin_set().fingerprint()
+        ),
         coordinator_source_tree_sha256=_digest(106),
         coordinator_deployment_artifact_sha256=_digest(107),
         trainer_source_tree_sha256=_digest(108),
         environment_lock_sha256=_digest(109),
-        requested_truth_policy=(
-            AnnotationMinimumTruthPolicy.REVIEWED_OR_ADJUDICATED
-        ),
+        requested_truth_policy=(AnnotationMinimumTruthPolicy.REVIEWED_OR_ADJUDICATED),
         governance_domain_id="training-governance-v1",
     )
 
@@ -109,6 +140,30 @@ def _sorted_pins(
     *pins: LabelBundleCurrentPinV1,
 ) -> tuple[LabelBundleCurrentPinV1, ...]:
     return tuple(sorted(pins, key=lambda pin: pin.canonical_sort_key))
+
+
+def _sorted_capture_classification_pins(
+    *pins: CaptureClassificationCurrentPinV1,
+) -> tuple[CaptureClassificationCurrentPinV1, ...]:
+    return tuple(sorted(pins, key=lambda pin: pin.canonical_sort_key))
+
+
+def _capture_classification_pin_set_for(
+    *pins: CaptureClassificationCurrentPinV1,
+    generation_id: str | None = None,
+) -> CaptureClassificationCurrentPinSetV1:
+    selected = _sorted_capture_classification_pins(*pins)
+    object_sha256s = tuple(
+        sorted(pin.capture_profile_classification_sha256 for pin in selected)
+    )
+    return CaptureClassificationCurrentPinSetV1(
+        capture_classification_generation_id=(
+            generation_id_for(object_sha256s)
+            if generation_id is None
+            else generation_id
+        ),
+        pins=selected,
+    )
 
 
 class TrainingProtectedConfigurationTests(unittest.TestCase):
@@ -209,9 +264,7 @@ class TrainingProtectedConfigurationTests(unittest.TestCase):
     def test_label_pin_set_round_trip_canonical_order_and_maximum(self) -> None:
         pins = _pin_set()
         self.assert_round_trip(pins, LabelBundleCurrentPinSetV1.from_json_bytes)
-        self.assertEqual(
-            pins.to_dict()["domain"], LABEL_BUNDLE_CURRENT_PIN_SET_DOMAIN
-        )
+        self.assertEqual(pins.to_dict()["domain"], LABEL_BUNDLE_CURRENT_PIN_SET_DOMAIN)
         maximum = _pin_set(MAX_TRAINING_EXAMPLES)
         self.assertEqual(len(maximum.pins), MAX_TRAINING_EXAMPLES)
         self.assertEqual(
@@ -228,8 +281,7 @@ class TrainingProtectedConfigurationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             LabelBundleCurrentPinSetV1(
                 pins=tuple(
-                    _label_pin(index)
-                    for index in range(MAX_TRAINING_EXAMPLES + 1)
+                    _label_pin(index) for index in range(MAX_TRAINING_EXAMPLES + 1)
                 )
             )
         with self.assertRaisesRegex(ValueError, "canonical"):
@@ -246,21 +298,23 @@ class TrainingProtectedConfigurationTests(unittest.TestCase):
         class PinSubclass(LabelBundleCurrentPinV1):
             pass
 
-        subclass = PinSubclass(**{
-            name: getattr(first, name)
-            for name in (
-                "source_id",
-                "label_pack_generation_id",
-                "label_pack_sha256",
-                "bundle_id",
-                "curator_trust_snapshot_sha256",
-                "curator_trust_snapshot_generation",
-                "curator_attestation_sha256",
-                "curator_id",
-                "trust_domain_id",
-                "schema_version",
-            )
-        })
+        subclass = PinSubclass(
+            **{
+                name: getattr(first, name)
+                for name in (
+                    "source_id",
+                    "label_pack_generation_id",
+                    "label_pack_sha256",
+                    "bundle_id",
+                    "curator_trust_snapshot_sha256",
+                    "curator_trust_snapshot_generation",
+                    "curator_attestation_sha256",
+                    "curator_id",
+                    "trust_domain_id",
+                    "schema_version",
+                )
+            }
+        )
         with self.assertRaises(ValueError):
             LabelBundleCurrentPinSetV1(pins=(subclass,))
 
@@ -284,9 +338,7 @@ class TrainingProtectedConfigurationTests(unittest.TestCase):
             replace(second, bundle_id=first.bundle_id),
             replace(
                 second,
-                curator_trust_snapshot_sha256=(
-                    first.curator_trust_snapshot_sha256
-                ),
+                curator_trust_snapshot_sha256=(first.curator_trust_snapshot_sha256),
             ),
             replace(
                 second,
@@ -296,24 +348,164 @@ class TrainingProtectedConfigurationTests(unittest.TestCase):
         for candidate in scenarios:
             with self.subTest(candidate=candidate.to_dict()):
                 with self.assertRaisesRegex(ValueError, "unique"):
-                    LabelBundleCurrentPinSetV1(
-                        pins=_sorted_pins(first, candidate)
-                    )
+                    LabelBundleCurrentPinSetV1(pins=_sorted_pins(first, candidate))
 
         cross_role = replace(
             second,
             label_pack_generation_id=first.curator_trust_snapshot_sha256,
         )
         with self.assertRaisesRegex(ValueError, "must not alias"):
-            LabelBundleCurrentPinSetV1(
-                pins=_sorted_pins(first, cross_role)
+            LabelBundleCurrentPinSetV1(pins=_sorted_pins(first, cross_role))
+
+    def test_capture_classification_pin_and_set_round_trip_and_maximum(
+        self,
+    ) -> None:
+        pin = _capture_classification_pin(1)
+        self.assert_round_trip(
+            pin,
+            CaptureClassificationCurrentPinV1.from_json_bytes,
+        )
+        self.assertEqual(
+            pin.to_dict()["domain"],
+            CAPTURE_CLASSIFICATION_CURRENT_PIN_DOMAIN,
+        )
+
+        pin_set = _capture_classification_pin_set()
+        self.assert_round_trip(
+            pin_set,
+            CaptureClassificationCurrentPinSetV1.from_json_bytes,
+        )
+        self.assertEqual(
+            pin_set.to_dict()["domain"],
+            CAPTURE_CLASSIFICATION_CURRENT_PIN_SET_DOMAIN,
+        )
+        self.assertEqual(
+            pin_set.capture_classification_generation_id,
+            generation_id_for(
+                tuple(
+                    sorted(
+                        pin.capture_profile_classification_sha256
+                        for pin in pin_set.pins
+                    )
+                )
+            ),
+        )
+
+        maximum = _capture_classification_pin_set(MAX_TRAINING_EXAMPLES)
+        self.assertEqual(len(maximum.pins), MAX_TRAINING_EXAMPLES)
+        self.assertEqual(
+            CaptureClassificationCurrentPinSetV1.from_json_bytes(
+                maximum.to_json_bytes()
+            ),
+            maximum,
+        )
+        self.assertLess(
+            len(maximum.to_json_bytes()),
+            MAX_CAPTURE_CLASSIFICATION_CURRENT_PIN_SET_BYTES,
+        )
+
+    def test_capture_classification_pin_set_rejects_bounds_order_and_types(
+        self,
+    ) -> None:
+        first = _capture_classification_pin(1)
+        second = _capture_classification_pin(2)
+        with self.assertRaises(ValueError):
+            CaptureClassificationCurrentPinSetV1(
+                capture_classification_generation_id=generation_id_for(()),
+                pins=(),
             )
+        too_many = tuple(
+            _capture_classification_pin(index)
+            for index in range(MAX_TRAINING_EXAMPLES + 1)
+        )
+        with self.assertRaises(ValueError):
+            CaptureClassificationCurrentPinSetV1(
+                capture_classification_generation_id=generation_id_for(
+                    tuple(
+                        sorted(
+                            pin.capture_profile_classification_sha256
+                            for pin in too_many
+                        )
+                    )
+                ),
+                pins=too_many,
+            )
+        valid = _capture_classification_pin_set_for(first, second)
+        with self.assertRaisesRegex(ValueError, "canonical"):
+            replace(valid, pins=(second, first))
+        with self.assertRaises(ValueError):
+            replace(valid, pins=[first, second])  # type: ignore[arg-type]
+
+        class TupleSubclass(tuple):
+            pass
+
+        with self.assertRaises(ValueError):
+            replace(valid, pins=TupleSubclass(valid.pins))
+
+        class PinSubclass(CaptureClassificationCurrentPinV1):
+            pass
+
+        subclass = PinSubclass(
+            source_id=first.source_id,
+            capture_profile_classification_sha256=(
+                first.capture_profile_classification_sha256
+            ),
+            schema_version=first.schema_version,
+        )
+        with self.assertRaises(ValueError):
+            replace(
+                _capture_classification_pin_set_for(first),
+                pins=(subclass,),
+            )
+
+    def test_capture_classification_pin_set_rejects_duplicates_alias_and_drift(
+        self,
+    ) -> None:
+        first = _capture_classification_pin(1)
+        second = _capture_classification_pin(2)
+        for candidate in (
+            replace(second, source_id=first.source_id),
+            replace(
+                second,
+                capture_profile_classification_sha256=(
+                    first.capture_profile_classification_sha256
+                ),
+            ),
+        ):
+            with self.subTest(candidate=candidate.to_dict()):
+                selected = _sorted_capture_classification_pins(first, candidate)
+                with self.assertRaisesRegex(ValueError, "unique"):
+                    CaptureClassificationCurrentPinSetV1(
+                        capture_classification_generation_id=_digest(555_555),
+                        pins=selected,
+                    )
+
+        valid = _capture_classification_pin_set_for(first, second)
+        with self.assertRaisesRegex(ValueError, "exact classification object set"):
+            replace(valid, capture_classification_generation_id=_digest(999_999))
+
+        aliased_pin = replace(
+            first,
+            capture_profile_classification_sha256=_digest(44_444),
+        )
+        with patch.object(
+            protected_configuration,
+            "generation_id_for",
+            return_value=aliased_pin.capture_profile_classification_sha256,
+        ):
+            with self.assertRaisesRegex(ValueError, "must not alias"):
+                CaptureClassificationCurrentPinSetV1(
+                    capture_classification_generation_id=(
+                        aliased_pin.capture_profile_classification_sha256
+                    ),
+                    pins=(aliased_pin,),
+                )
 
     def test_protected_generation_round_trip_enum_and_exact_fields(self) -> None:
         generation = _protected_configuration()
         self.assert_round_trip(
             generation,
-            ProtectedTrainingConfigurationGenerationV1.from_json_bytes,
+            ProtectedTrainingConfigurationGenerationV2.from_json_bytes,
         )
         self.assertEqual(
             generation.to_dict()["domain"],
@@ -328,7 +520,7 @@ class TrainingProtectedConfigurationTests(unittest.TestCase):
             requested_truth_policy=AnnotationMinimumTruthPolicy.ADJUDICATED_ONLY,
         )
         self.assertEqual(
-            ProtectedTrainingConfigurationGenerationV1.from_json_bytes(
+            ProtectedTrainingConfigurationGenerationV2.from_json_bytes(
                 adjudicated.to_json_bytes()
             ),
             adjudicated,
@@ -337,6 +529,7 @@ class TrainingProtectedConfigurationTests(unittest.TestCase):
             set(generation.to_dict()),
             {
                 "annotation_configuration_generation_sha256",
+                "capture_classification_current_pin_set_sha256",
                 "coordinator_deployment_artifact_sha256",
                 "coordinator_source_tree_sha256",
                 "decoder_runtime_pins_sha256",
@@ -351,6 +544,29 @@ class TrainingProtectedConfigurationTests(unittest.TestCase):
                 "training_admission_policy_sha256",
             },
         )
+        self.assertEqual(
+            generation.schema_version,
+            PROTECTED_TRAINING_CONFIGURATION_GENERATION_SCHEMA_VERSION,
+        )
+        self.assertEqual(_decoder_pins().schema_version, "1.0")
+        self.assertEqual(_pin_set().schema_version, "1.0")
+
+    def test_v1_protected_generation_surface_is_removed(self) -> None:
+        self.assertFalse(
+            hasattr(
+                protected_configuration,
+                "ProtectedTrainingConfigurationGenerationV1",
+            )
+        )
+        self.assertFalse(
+            hasattr(
+                protected_configuration,
+                "load_protected_training_configuration_generation_v1",
+            )
+        )
+        self.assertTrue(
+            PROTECTED_TRAINING_CONFIGURATION_GENERATION_DOMAIN.endswith(":v2")
+        )
 
     def test_protected_generation_rejects_every_digest_alias_and_wrong_enum(
         self,
@@ -362,6 +578,7 @@ class TrainingProtectedConfigurationTests(unittest.TestCase):
             "annotation_configuration_generation_sha256",
             "label_bundle_current_pin_set_sha256",
             "decoder_runtime_pins_sha256",
+            "capture_classification_current_pin_set_sha256",
             "coordinator_source_tree_sha256",
             "coordinator_deployment_artifact_sha256",
             "trainer_source_tree_sha256",
@@ -397,8 +614,16 @@ class TrainingProtectedConfigurationTests(unittest.TestCase):
             (_label_pin(1), LabelBundleCurrentPinV1.from_json_bytes),
             (_pin_set(), LabelBundleCurrentPinSetV1.from_json_bytes),
             (
+                _capture_classification_pin(1),
+                CaptureClassificationCurrentPinV1.from_json_bytes,
+            ),
+            (
+                _capture_classification_pin_set(),
+                CaptureClassificationCurrentPinSetV1.from_json_bytes,
+            ),
+            (
                 _protected_configuration(),
-                ProtectedTrainingConfigurationGenerationV1.from_json_bytes,
+                ProtectedTrainingConfigurationGenerationV2.from_json_bytes,
             ),
         )
         for value, parser in values_and_parsers:
@@ -446,10 +671,19 @@ class TrainingProtectedConfigurationTests(unittest.TestCase):
             LabelBundleCurrentPinV1.from_json_bytes(_canonical(pin))
         self.assertEqual(caught.exception.code, "LABEL_BUNDLE_CURRENT_PIN_WIRE")
 
+        capture_pin = json.loads(_capture_classification_pin(1).to_json_bytes())
+        capture_pin["source_id"] = True
+        with self.assertRaises(TrainingProtectedConfigurationError) as caught:
+            CaptureClassificationCurrentPinV1.from_json_bytes(_canonical(capture_pin))
+        self.assertEqual(
+            caught.exception.code,
+            "CAPTURE_CLASSIFICATION_CURRENT_PIN_WIRE",
+        )
+
         generation = json.loads(_protected_configuration().to_json_bytes())
         generation["requested_truth_policy"] = "UNKNOWN"
         with self.assertRaises(TrainingProtectedConfigurationError) as caught:
-            ProtectedTrainingConfigurationGenerationV1.from_json_bytes(
+            ProtectedTrainingConfigurationGenerationV2.from_json_bytes(
                 _canonical(generation)
             )
         self.assertEqual(
@@ -474,6 +708,24 @@ class TrainingProtectedConfigurationTests(unittest.TestCase):
         self.assertEqual(
             caught.exception.code,
             "LABEL_BUNDLE_CURRENT_PIN_SET_WIRE",
+        )
+
+        payload = json.loads(_capture_classification_pin_set().to_json_bytes())
+        payload["pins"][0]["classification_bytes"] = "forbidden"
+        with self.assertRaises(TrainingProtectedConfigurationError) as caught:
+            CaptureClassificationCurrentPinSetV1.from_json_bytes(_canonical(payload))
+        self.assertEqual(
+            caught.exception.code,
+            "CAPTURE_CLASSIFICATION_CURRENT_PIN_SET_WIRE",
+        )
+
+        payload = json.loads(_capture_classification_pin_set().to_json_bytes())
+        payload["pins"] = {}
+        with self.assertRaises(TrainingProtectedConfigurationError) as caught:
+            CaptureClassificationCurrentPinSetV1.from_json_bytes(_canonical(payload))
+        self.assertEqual(
+            caught.exception.code,
+            "CAPTURE_CLASSIFICATION_CURRENT_PIN_SET_WIRE",
         )
 
         payload = json.loads(_pin_set().to_json_bytes())
@@ -506,6 +758,8 @@ class TrainingProtectedConfigurationTests(unittest.TestCase):
             _decoder_pins(),
             _label_pin(1),
             _pin_set(),
+            _capture_classification_pin(1),
+            _capture_classification_pin_set(),
             _protected_configuration(),
         ):
             raw = value.to_json_bytes()
@@ -531,9 +785,16 @@ class TrainingProtectedConfigurationTests(unittest.TestCase):
                 "label bundle current pin set",
             ),
             (
+                "capture-classifications.json",
+                _capture_classification_pin_set(),
+                load_capture_classification_current_pin_set_v1,
+                MAX_CAPTURE_CLASSIFICATION_CURRENT_PIN_SET_BYTES,
+                "capture classification current pin set",
+            ),
+            (
                 "configuration.json",
                 _protected_configuration(),
-                load_protected_training_configuration_generation_v1,
+                load_protected_training_configuration_generation_v2,
                 MAX_PROTECTED_TRAINING_CONFIGURATION_BYTES,
                 "protected training configuration generation",
             ),
@@ -595,7 +856,8 @@ class TrainingProtectedConfigurationTests(unittest.TestCase):
         loaders = (
             load_decoder_runtime_pins_v1,
             load_label_bundle_current_pin_set_v1,
-            load_protected_training_configuration_generation_v1,
+            load_capture_classification_current_pin_set_v1,
+            load_protected_training_configuration_generation_v2,
         )
         concrete_path_type = type(Path())
 
@@ -619,8 +881,12 @@ class TrainingProtectedConfigurationTests(unittest.TestCase):
             (_decoder_pins(), load_decoder_runtime_pins_v1),
             (_pin_set(), load_label_bundle_current_pin_set_v1),
             (
+                _capture_classification_pin_set(),
+                load_capture_classification_current_pin_set_v1,
+            ),
+            (
                 _protected_configuration(),
-                load_protected_training_configuration_generation_v1,
+                load_protected_training_configuration_generation_v2,
             ),
         )
         with tempfile.TemporaryDirectory() as temporary:
@@ -667,7 +933,8 @@ class TrainingProtectedConfigurationTests(unittest.TestCase):
         for loader in (
             load_decoder_runtime_pins_v1,
             load_label_bundle_current_pin_set_v1,
-            load_protected_training_configuration_generation_v1,
+            load_capture_classification_current_pin_set_v1,
+            load_protected_training_configuration_generation_v2,
         ):
             with self.subTest(loader=loader.__name__):
                 with (
@@ -693,9 +960,7 @@ class TrainingProtectedConfigurationTests(unittest.TestCase):
                 "from_json_bytes",
                 return_value=changed,
             ):
-                with self.assertRaises(
-                    TrainingProtectedConfigurationError
-                ) as caught:
+                with self.assertRaises(TrainingProtectedConfigurationError) as caught:
                     load_decoder_runtime_pins_v1(path)
         self.assertEqual(caught.exception.code, "DECODER_RUNTIME_PINS_WIRE")
 
