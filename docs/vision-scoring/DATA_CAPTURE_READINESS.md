@@ -1,12 +1,17 @@
 # Vision Scoring Data and Capture Readiness
 
-**Readiness:** blocked for rights-cleared empirical training and deployment
-claims; the owned causal ball runtime is synthetic-smoke-tested only and scoring
-work is V0 no-mutation shadow
+**Readiness:** the production stream family and an owner-declared candidate
+catalog are known, but exact-asset rights/provenance, resident immutable bytes,
+capture preflight, empirical training, and deployment claims remain gated; the
+owned causal ball runtime is synthetic-smoke-tested only and scoring work is V0
+no-mutation shadow
 
-**Date:** 2026-07-11
+**Date:** 2026-07-12
 
 **Architecture:** [ARCHITECTURE.md](./ARCHITECTURE.md)
+
+**Production input baseline:**
+[PRODUCTION_INPUT_BASELINE.md](./PRODUCTION_INPUT_BASELINE.md)
 
 **Current evidence contracts:**
 [CAPTURE_SEGMENT_ATTESTATION.md](./CAPTURE_SEGMENT_ATTESTATION.md),
@@ -15,13 +20,16 @@ work is V0 no-mutation shadow
 
 ## Current verdict
 
-The project does not currently have a reproducible training dataset, a real-data
-checkpoint, a deployable model artifact, or a validated capture profile. An
-owned causal ConvGRU ball architecture and loss runtime now exist. They have 15
-PyTorch regression tests and a 50-step synthetic overfit smoke, but have never
-seen beach-volleyball footage and have no export, latency, probability
-calibration, or service result. The next empirical deliverable is trusted data
-admission and a bounded real-data baseline—not an ungoverned long training run.
+The project now has an owner-reported production input specification and an
+owner-declared candidate footage catalog. It still does not have a reproducible
+training dataset, an exact admitted real-media asset, a real-data checkpoint, a
+deployable model artifact, or a validated capture profile. An owned causal
+ConvGRU ball architecture and loss runtime exist. They have 15 PyTorch
+regression tests and a 50-step synthetic overfit smoke, but have never seen
+beach-volleyball footage and have no export, latency, probability calibration,
+or service result. The next empirical deliverable is exact-asset admission,
+measured 1080p30/1080p60 preflight, and a bounded real-data baseline—not an
+ungoverned long training run.
 
 The legacy handoff is useful for finding failure modes and candidate labels. It is not a trusted baseline until its inputs, outputs, versions, splits, and metrics can be reproduced.
 
@@ -31,7 +39,7 @@ The following figures were recovered from an unreachable legacy commit and its h
 
 | Legacy item | Reported state | Readiness implication |
 |---|---|---|
-| Source registry | 17 YouTube source IDs; the first six represented 110,056 seconds (about 30.57 hours) | Source availability and training rights are unresolved |
+| Source registry | 17 YouTube source IDs; the first six represented 110,056 seconds (about 30.57 hours) | This legacy inventory is not yet reconciled to the new owner-declared catalog; exact bytes, lineage, rights decisions, and admission remain unresolved |
 | Detector review | 15 frames, 114 person boxes, 168 ball boxes; all reportedly unverified | Too small and unverified for evaluation |
 | Serve review | 2,155 clips: 525 `serve_contact`, 181 `setup_no_contact`, 1,449 `not_serve` | Potential label lead; media, lineage, adjudication, and split are missing |
 | Separate serve chunks | 1,053 items: 358 contact and 695 non-serve; 7/9 chunks processed | Overlap with the prior snapshot is unknown |
@@ -57,6 +65,19 @@ Exit condition: every referenced legacy asset has a disposition, and the rescue 
 The initial recovery ledger is [LEGACY_RECOVERY_LEDGER.md](./LEGACY_RECOVERY_LEDGER.md).
 
 ## Data provenance and rights
+
+The owner declared on 2026-07-12 that the project owns and may use all footage
+on the [Colorado Cupcakes](https://www.youtube.com/@ColoradoCupcakes) and
+[Beach Volleyball Videos](https://www.youtube.com/@BeachVolleyballVideos)
+channels. That materially narrows the source-ownership question and creates a
+candidate catalog, including the observed Denver examples recorded in
+[PRODUCTION_INPUT_BASELINE.md](./PRODUCTION_INPUT_BASELINE.md). It is not an
+accepted decision for any exact asset. Before training admission, preserve a
+signed intended-use decision, participant/minor clearance where applicable,
+platform-compliant original or owner-authenticated export acquisition, exact
+bytes and SHA-256, and complete source/derivative lineage. Prefer original
+masters over YouTube transcodes; register a platform rendition separately when
+it is deliberately used to reproduce deployed compression.
 
 A public URL or the ability to download a video does not grant commercial model-training, redistribution, biometric/pose-analysis, or derivative-dataset rights. Athlete likeness, venue agreements, broadcaster ownership, music/audio rights, and youth participants require explicit review.
 
@@ -147,15 +168,31 @@ Rules:
 
 | Tier | Minimum capture | Intended use | Release limitation |
 |---|---|---|---|
-| A: compatibility | One fixed 1920×1080 camera at 30 progressive fps plus synchronized audio | Feasibility, server identity, delayed assistive review, and no-mutation shadow, but only if the exact footage is recovered, rights-cleared, released, and observable | Historical profile only; no current feed is established, and it is never eligible for an official score mutation or referee claim |
-| B: assistive baseline | One fixed 3840×2160 camera at 59.94/60 progressive fps, native-resolution recording, synchronized audio | Ball continuity, contact candidates, rally/server/team attribution, statistics | Occluded/depth-dependent and terminal cases remain human-authorized |
-| C: multi-view | At least two genlocked or independently verified synchronized 4K60 cameras with joint calibration | Occlusion recovery, triangulation, stronger contact attribution | Still requires fault-specific validation before referee support |
+| A: compatibility/constrained | One 1920×1080 progressive stream at 30 fps; production example is nominal 3 Mbps HEVC over SRT | Feasibility, rally segmentation, server/team evidence, delayed assistive review, and limited ball evidence when exact-profile gates pass | Capability-tested, not guaranteed; compression, blur, timing, or occlusion failure requires downgrade/abstention and it never authorizes an official mutation or referee claim |
+| B: enhanced | One 1920×1080 progressive stream at 59.94/60 fps; production example is nominal 6 Mbps H.264 over RTMP | More temporal evidence for ball continuity and contact candidates, plus Tier A targets | Same observability gates; nominal cadence/bitrate is not proof of short exposure, native frames, or usable evidence, and terminal/depth-dependent cases remain human-authorized |
+| Optional 4K challenger | One native 4K single view at a measured cadence/bitrate | Determine whether additional spatial detail materially improves risk-bounded coverage or review workload | Not a production prerequisite and not a support decision without exact-profile preflight |
+| Future synchronized multi-view | At least two independently verified synchronized views with joint calibration | Occlusion recovery, triangulation, stronger contact attribution | Separate synchronization and fault-specific validation are required before any referee-support claim |
+
+The declared production inventory is two Mevo Core logical streams (1–2) at
+1080p60/H.264/RTMP/nominal 6 Mbps and six AVKANS Go cameras contributing to
+three logical streams (3–5) at 1080p30/HEVC/SRT/nominal 3 Mbps. The exact
+AVKANS physical-camera-to-logical-stream mapping is unspecified and must remain
+unknown until an attested inventory supplies it. Codec, transport, bitrate,
+device, placement, lighting, and transcode history are benchmark strata;
+observability and capture-integrity outcomes decide support.
 
 Camera placement is not prescribed yet. A high centered end-line view, diagonal view, and side view have different line visibility, depth, net-plane, and player-occlusion tradeoffs. Select placement from measured observability maps at representative courts, not preference.
 
 ## Capture preflight
 
-Run the preflight for every camera/lens/encoder/placement profile and again whenever the camera moves. Record source-native frames; a stream transcode may be tested separately but must not replace the archival capture.
+Run the preflight for every camera/lens/encoder/transport/placement profile and
+again whenever the camera moves. Preserve the exact deployed stream as its own
+production representation and acquire an original device recording or
+owner-authenticated export where available. Neither may silently stand in for
+the other; every rendition has separate hashes and lineage. CV capture must
+branch from raw ingress/native archival bytes before the existing H.264/Opus
+720p30 preview/program/YouTube normalization. `courtN_program` and YouTube are
+derived compatibility/visual-QA sources, not native-input substitutes.
 
 Collect at least:
 
@@ -173,13 +210,14 @@ Collect at least:
 
 These thresholds are **engineering assumptions for the first experiment**, not published universal truths. They must be challenged with outcome data and replaced by measured operating limits. Passing them means “worth benchmarking,” not “safe to score.”
 
-| Measurement | Tier A: 1080p30 assumption | Tier B: 4K60 assumption | Why it exists |
+| Measurement | Tier A: 1080p30 constrained assumption | Tier B: 1080p60 enhanced assumption | Why it exists |
 |---|---|---|---|
-| Visible-ball diameter after production preprocessing | 10th percentile at least 6 pixels | 10th percentile at least 10–12 pixels | Below this, center/blur/contact evidence becomes dominated by sampling and compression |
+| Visible-ball diameter after production preprocessing | 10th percentile at least 6 pixels | 10th percentile at least 6 pixels | Both production tiers are 1080p; cadence does not create spatial detail, and below this threshold evidence becomes dominated by sampling and compression |
 | Preprocessing | Native-resolution ROI or overlapping tiles; no global 640-wide resize | Native-resolution ROI or overlapping tiles | Preserves the small target |
 | Ball motion blur | 95th-percentile streak no more than 2 apparent ball diameters | 95th percentile no more than 1 apparent ball diameter | Forces exposure/lighting tradeoff to be measured; temporal blur modeling still remains necessary |
 | Decisive-event observability | At least 1,000 stratified windows; report usable observed positions | Same; provisional 10th percentile at least 3 observed positions for an eligible ordinary event | Prevents average visible-frame results from hiding unobservable outcomes |
-| Native source | Device/encoder configuration attested; no interpolation or lower-resolution upscale | Same | A 4K/60 label does not prove native photons or cadence |
+| Compression | Measure ball-edge destruction, blocking/ringing, negative activations, and event risk by exact HEVC/SRT/bitrate profile | Measure the same outcomes by exact H.264/RTMP/bitrate profile | Codec, transport, and nominal bitrate are strata, not quality proxies |
+| Native source | Device/encoder configuration attested; no interpolation or lower-resolution upscale | Same | A 1080p/30-or-60 label does not prove native photons or cadence |
 | Frame integrity | No unexplained timestamp reversal, critical drop, or frozen/duplicated sequence in decisive windows; no unmarked reconnect | Same | Temporal evidence is invalid without a trustworthy clock |
 | Audio/video alignment | Absolute error and drift within one frame (33.3 ms) over a 10-minute test | Within one frame (16.7 ms) over a 10-minute test | Contact audio is only useful when time-aligned |
 | Court visibility | All four court corners, lines, net intersections, and both service zones visible with recorded occlusion map | Same | Calibration and side/service reasoning need stable landmarks |
@@ -187,7 +225,12 @@ These thresholds are **engineering assumptions for the first experiment**, not p
 | Image reprojection check | 95th-percentile independent holdout error at or below 2 pixels | Same initial target | Detects a calibration that appears plausible but misses image evidence |
 | Fixed-camera stability | Drift monitor remains within the calibration check; zoom/stabilization crop is disabled or explicitly modeled | Same | Prevents stale geometry |
 
-For Tier C, the provisional cross-camera timestamp target is at most 2 ms and must be verified under motion, not inferred from device settings. Joint 3D residuals and rolling-shutter effects determine the final acceptable limit.
+For future synchronized multi-view, the provisional cross-camera timestamp
+target is at most 2 ms and must be verified under motion, not inferred from
+device settings. Joint 3D residuals and rolling-shutter effects determine the
+final acceptable limit. Optional 4K challengers use the same outcome-based
+gates; their initial visible-ball target may be measured against the former
+10–12 pixel assumption, but resolution alone does not pass preflight.
 
 Use shutter, aperture, gain, lighting, focus, codec, and bitrate as controls to satisfy measured size/blur/noise gates. Do not use “4K” or a bitrate number as a proxy for usable ball pixels. If low light cannot meet the blur gate without destructive noise, that deployment profile is unsupported and the system must remain manual.
 
@@ -273,7 +316,7 @@ Run one controlled matrix before selecting a trained production ball model:
 | Ball family | Owned causal temporal heatmap; WASB-derived baseline; BlurBall-style blur head; D-FINE-S; RT-DETRv2-S | Only the owned causal ConvGRU heatmap/attribute runtime exists, synthetic-smoke-tested with no real checkpoint. Every external family remains planned. |
 | Input | Global 640 control; native ROI; overlapping source-resolution tiles | Base tensor runtime exists; ROI/tiling merger and empirical input comparison do not. |
 | Temporal context | 1, 3, 5, and 9 causal frames at both 30 and 60 fps | Architectural prefix-causality is tested; no real-data comparison exists. |
-| Capture | Tier A 1080p30 and Tier B 4K60, including matched downsample pairs where possible | No current rights-cleared, preflight-approved feed exists for either tier. |
+| Capture | Tier A 1080p30 HEVC/SRT at nominal 3 Mbps; Tier B 1080p60 H.264/RTMP at nominal 6 Mbps; consumer/phone 1080p challenge strata; optional 4K matched pairs where available | The input family and owner-declared candidate catalog are known, but no exact asset/session is rights/provenance-admitted and preflight-approved. |
 | Fusion ablation | Ball only; +court; +players/tracks; +selective pose; +audio; +rules context | Planned only. |
 | Generalization | Seen-condition validation; held-out venue/camera; held-out lighting/compression | Planned only; no real split or empirical result exists. |
 

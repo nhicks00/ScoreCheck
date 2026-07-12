@@ -36,7 +36,9 @@ or rights-cleared footage.
 Reuse `SOURCE_PRESENTATION_OFFSET_NS` for finalized source-frame identity and
 the existing `FrameDecodeContract`/`DecodedFrameIdentity` only for selected
 decoded evidence frames. Do not compute canonical RGB24 hashes for every live
-4K60 frame; that would hash roughly 1.5 GB/s of decoded RGB.
+native frame. The declared five-logical-stream 1080p60/1080p30 mix alone would
+produce roughly 1.3 GB/s of decoded RGB24 before any future higher-resolution
+input.
 
 The gateway may compute a pinned 64×36 8-bit luma diagnostic fingerprint to
 surface freeze candidates. Repeated diagnostic hashes never establish
@@ -295,10 +297,11 @@ exact fragment hashing, current metadata/rights replay, genesis-only signing,
 and hard rejection of nonzero sequence or reconnect epoch at the signed
 capture-service boundary.
 
-No FFmpeg/ffprobe capture integration, native 4K60 camera path, production
-spool, or renderer/decoder validation is implemented by this gateway. Any
-future production dependency requires a separately reviewed, pinned build or a
-native Swift AVFoundation/VideoToolbox helper.
+No FFmpeg/ffprobe live-capture integration, native RTMP/H.264 or SRT/HEVC raw
+ingress path, production spool, or renderer/decoder validation is implemented
+by this gateway. Any future production dependency requires a separately
+reviewed, pinned build or a native constrained capture helper. The deterministic
+offline decoder runtime is not a network-ingest runtime.
 
 macOS production capture also requires TCC permission, code signing/
 entitlements, and a stronger App Sandbox/XPC or constrained-service boundary;
@@ -317,9 +320,10 @@ metadata/rights/policy/trace replay, genesis currentness, key revocation and
 role separation, and capture code's inability to perform media I/O or construct
 authorization commands, events, outbox rows, or ScoreCheck mutations.
 
-Hardware validation later covers actual camera/capture-card modes and stable
-IDs, native versus upscaled/interpolated output, AVFoundation drop callbacks,
-clock behavior under load, interruption termination, two-hour 4K60 soak,
+Hardware validation later covers the declared 1080p30 HEVC/SRT and 1080p60
+H.264/RTMP profiles, actual device modes and stable IDs, native versus
+upscaled/interpolated output, backend drop callbacks, clock behavior under
+load, interruption termination, a two-hour soak per production profile,
 thermal/disk sustained-write behavior, audio/video sync, ball pixels/blur/court
 visibility, and calibration. V0 must stop after an interruption; it has no
 post-reconnect capture-service continuation.

@@ -98,14 +98,18 @@ Empirical camera/model work still requires one of these external changes:
 
 1. mount `/Volumes/Nathan Footage` and/or `/Volumes/T9`, then repin the intended
    volume root through a trusted operator;
-2. identify which footage is owned or otherwise commercially trainable and
-   publish signed rights decisions and release evidence; or
-3. capture a new controlled native 4K60 rights-cleared pilot.
+2. acquire immutable original files or owner-authenticated exports for the
+   owner-declared Colorado Cupcakes or Beach Volleyball Videos catalog, then
+   publish exact-asset signed rights decisions and participant/release evidence;
+   or
+3. capture a controlled pilot on the actual 1080p30 HEVC/SRT and 1080p60
+   H.264/RTMP production profiles before the 720p30 program normalization.
 
-Byte inspection is a separate authority from every item above. Nathan must
-explicitly approve each bounded byte-preflight batch even when a locator is
-resident; that approval does not substitute for a signed rights decision,
-participant/venue release, provenance decision, or downstream admission.
-Select at most 256 explicitly approved candidates per batch for the existing
+Byte inspection is a separate authority from every item above. Nathan's
+2026-07-12 owner declaration authorizes candidate discovery and bounded
+byte-preflight for the two named channels; it does not substitute for an exact
+signed rights decision, participant/venue release, provenance decision, or
+downstream admission. Other resident footage still requires explicit scoped
+approval. Select at most 256 authorized candidates per batch for the existing
 byte-level media preflight. Do not bulk-preflight the 32,955 leads or infer
 permission from filenames, paths, historical probe success, or this manifest.

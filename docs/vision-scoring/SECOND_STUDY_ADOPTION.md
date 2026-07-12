@@ -45,14 +45,21 @@ safety boundaries
    evidence hashes, and exact artifact/configuration identity. A content hash
    alone is not authority.
 
-## Confirmed existing decisions
+## Confirmed and subsequently refined decisions
 
-- Native single-camera 4K60 remains the prospective baseline. No current camera
-  feed is established; recovered historical 1080p30 footage could become only
-  a compatibility/shadow profile after explicit byte preflight, signed rights
-  and releases, and observability gates pass.
-- Dual synchronized calibrated 4K60 is an experiment, not an assumed purchase;
-  it must materially improve risk-bounded coverage, review time, or geometry.
+- The study's 4K60-first planning assumption is superseded by the owner's
+  production inventory recorded on 2026-07-12. Tier A is constrained 1080p30
+  (nominal 3 Mbps HEVC/SRT); Tier B is enhanced 1080p60 (nominal 6 Mbps
+  H.264/RTMP). Optional 4K is a challenger, not a prerequisite. Support remains
+  conditional on exact-profile observability and calibrated abstention.
+- The CV path branches from raw ingress or immutable native archival bytes
+  before the streaming stack's H.264/Opus 720p30 normalization. Program and
+  YouTube renditions are derived compatibility/visual-QA sources with explicit
+  lineage, not substitutes for native input.
+- Synchronized calibrated multi-view is future research, not an assumed
+  purchase; it must materially improve risk-bounded coverage, review time, or
+  geometry. The currently reported six-AVKANS-to-three-logical-stream physical
+  mapping is unspecified and no synchronization claim may be inferred.
 - The ball baseline remains a custom causal, blur-aware, high-resolution
   temporal heatmap model. Its owned ConvGRU runtime is implemented and has 15
   PyTorch tests plus a 50-step synthetic overfit smoke, but it has never been

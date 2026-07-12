@@ -13,6 +13,9 @@ integration remain gated.
 
 **Related readiness plan:** [DATA_CAPTURE_READINESS.md](./DATA_CAPTURE_READINESS.md)
 
+**Production input baseline:**
+[PRODUCTION_INPUT_BASELINE.md](./PRODUCTION_INPUT_BASELINE.md)
+
 **Independent review adoption:**
 [SECOND_STUDY_ADOPTION.md](./SECOND_STUDY_ADOPTION.md)
 
@@ -43,13 +46,18 @@ The first product is deliberately narrower than referee-grade officiating:
 | Advanced statistics | Rally segmentation, contacts, trajectories, player movement, and derived statistics after validation | Claims that monocular estimates are referee-accurate |
 | Referee support | Fault-specific evidence from synchronized, calibrated multi-camera capture | Certification or unattended officiating without a separate validation program |
 
-No current camera feed has been recovered, rights-cleared, and shown observable
-for this system. Historical 1080p30 material is only a possible Tier A
-compatibility profile if its bytes are recovered, its rights and releases are
-accepted, and its exact capture profile passes the observability gates.
-Single-camera native 4K60 is the proposed prospective assistive baseline.
-Synchronized multi-view capture is required before pursuing credible 3D
-reconstruction or referee-support claims.
+The production input family is now known: two logical RTMP/H.264 1080p60
+streams at nominal 6 Mbps and three logical SRT/HEVC 1080p30 streams at nominal
+3 Mbps. Six AVKANS cameras contribute to the latter three logical streams, but
+their exact physical-to-logical mapping is unspecified and must not be guessed.
+No exact source asset or live session has yet completed rights, immutable-byte,
+capture-integrity, and observability admission. Tier A 1080p30 is the constrained
+compatibility target, Tier B 1080p60 is the enhanced target, and 4K is an
+optional empirical challenger rather than a production prerequisite. Future
+phone and consumer 1080p inputs are capability-tested and may abstain; resolution
+alone never guarantees a scorable rally. Synchronized multi-view capture
+remains future research for credible 3D reconstruction or referee-support
+claims.
 
 ## Non-negotiable design rules
 
@@ -67,6 +75,11 @@ reconstruction or referee-support claims.
 ```text
 Native camera/audio
         |
+        v
+Raw ingress/native archival bytes
+        |
+        +----> 720p30 preview/program/YouTube normalization
+        |      derived compatibility/visual-QA only
         v
 Capture integrity gate ----fail----> blocked + operator alert
         |
@@ -119,11 +132,17 @@ or code path that can write `score_states`, `overlay_states`, or their
 successors. Calling `RulesReducer.reduce()` in-process is only a domain-library
 operation and must not be described as an authorized or official mutation.
 
+CV branches from raw ingress or immutable native archival bytes before the
+streaming stack's H.264/Opus 720p30 normalization. `courtN_program`, program
+output, and YouTube are derived compatibility/visual-QA sources with explicit
+lineage; they cannot silently replace native 1080p input for training,
+preflight, or deployment validation.
+
 ### Runtime stages
 
 | Stage | Responsibility | Planned baseline | Current runtime state |
 |---|---|---|---|
-| Capture gateway | Preserve source resolution, audio, presentation timestamps, frame IDs, and drop/duplicate diagnostics | GStreamer/FFmpeg ingest with a bounded 0.5–2 second buffer | Structural trace/window evaluators and one signed, genesis-only capture-service evidence contract exist. No media ingest service or admitted asset exists. |
+| Capture gateway | Branch before 720p30 program normalization; preserve source resolution, audio, presentation timestamps, frame IDs, and drop/duplicate diagnostics | GStreamer/FFmpeg ingest for RTMP/H.264 and SRT/HEVC with a bounded 0.5–2 second buffer; retrospective file/phone inputs use the same measured contract | Structural trace/window evaluators and one signed, genesis-only capture-service evidence contract exist. No media ingest service or admitted asset exists. |
 | Calibration | Lens correction, named court points, homography/PnP, fixed-camera drift detection | Manual intrinsics/extrinsics with OpenCV; learned refinement only for recovery | No calibration runtime or validated profile. |
 | Ball perception | Center, visibility, blur extent/orientation, uncertainty, and short track | Owned causal temporal heatmap model on native-resolution ROI or tiles | A small stride-four encoder plus causal ConvGRU and heatmap/visibility/role/offset/blur/variance heads is implemented. It has 15 PyTorch regression tests and a 50-step synthetic overfit smoke only; it has never seen beach footage. |
 | Player perception | Active-player boxes and court membership | D-FINE-S or RT-DETRv2-S; typically 15–30 Hz | Planned only. |
@@ -365,9 +384,10 @@ Detailed measurement gates live in [DATA_CAPTURE_READINESS.md](./DATA_CAPTURE_RE
 
 | Capture tier | Supported target | Unsupported target |
 |---|---|---|
-| Recovered fixed 1080p30 profile | Compatibility experiments, server identity, delayed assistive review only after byte recovery, signed rights/releases, and observability preflight | Any claim that a current feed exists; reliable contact timing, line calls, touch/net adjudication, referee-grade 3D |
-| Single fixed 4K60 | Production assistive baseline, better ball continuity, contact candidates, useful player/rally statistics | Authoritative calls hidden by occlusion or requiring depth |
-| Dual synchronized calibrated 4K60 | Occlusion recovery, triangulation, stronger contact/team attribution, advanced statistics | Unattended referee decisions without fault-specific validation and operations controls |
+| Tier A: 1080p30 compatibility/constrained | Production compatibility, server/team and rally evidence, delayed assistive review, and limited ball evidence only where exact-profile gates pass | Universal scoring from a resolution label; reliable contact timing, line calls, touch/net adjudication, or referee-grade 3D |
+| Tier B: 1080p60 enhanced | More temporal evidence for ball continuity and contact candidates, plus Tier A targets where exact-profile gates pass | Authoritative calls hidden by occlusion or requiring depth; assumed native cadence or short exposure |
+| Optional single-view 4K challenger | Test whether extra spatial detail materially improves held-out risk/coverage and operator workload | A production prerequisite or substitute for observability testing |
+| Future synchronized calibrated multi-view | Occlusion recovery, triangulation, stronger contact/team attribution, advanced statistics | Unattended referee decisions without fault-specific validation and operations controls |
 | Fault-specific multi-camera | Future challenge/referee support | Assumed certification; each fault type requires its own evidence and acceptance program |
 
 ## Planned model-family shortlist and current runtime
@@ -451,8 +471,13 @@ Calendar dates never waive a gate. If 3,000 eligible shadow opportunities or ade
 
 ## Decisions still required
 
-1. Who owns and can authorize use of each existing or future video source?
-2. What camera/lens/placement can consistently satisfy the measured 4K60 preflight at target venues?
+1. Which exact owner-declared channel assets have participant/minor clearance,
+   signed intended-use rights, platform-compliant original/export acquisition,
+   immutable hashes, and complete lineage sufficient for admission?
+2. Which camera/lens/placement and encoder settings make the actual 1080p30
+   HEVC/SRT and 1080p60 H.264/RTMP profiles pass measured observability gates at
+   target venues, and what capability limits should be published for consumer
+   1080p inputs?
 3. Is an enterprise detector license preferable to an all-permissive stack after benchmark results?
 4. Which production object store or read-only snapshot service will replace the
    implemented local immutable-generation/lease primitive while preserving its
