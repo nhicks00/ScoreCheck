@@ -62,6 +62,22 @@ layouts and dtypes, localizability, masks, placeholders, split non-semantics,
 and all geometry rules below. Changing any encoded meaning requires a new
 version and digest.
 
+`vision_scoring.training_target_encoding` provides the separate, still
+non-authorizing content-binding step. It accepts only exact, contiguous,
+non-gradient CPU tensors with readable allocated storage that covers the full
+logical byte window and has no lazy conjugate or negative view bits. In
+canonical field order it hashes the raw row-major little-endian storage bytes:
+IEEE-754 binary32, signed int64, or canonical `0`/`1` bool bytes. Shapes,
+dtypes, the V1 geometry envelope, the aggregate byte bound, and all five false
+authority properties are revalidated before hashing. NaN payload bits are
+content-significant. The raw storage read requires exclusive ownership: no
+other thread or process may mutate, resize, or truncate the storage during a
+hash operation. The planned coordinator satisfies this by hashing fresh,
+private materializer output on one thread. A trusted consumer must call
+`validate_causal_ball_target_tensor_rows_v1` immediately before consuming the
+same mutable tensors; these hashes do not serialize tensors or grant training
+authority.
+
 For a source pixel-center coordinate `p`, the heatmap coordinate is:
 
 ```text
@@ -137,6 +153,6 @@ particular, this module provides none of the following:
 
 The next trusted-training layer must reverify/reacquire the exact immutable
 generation, keep TEST inaccessible to the training worker, bind source RGB
-bytes separately, and persist a deterministic target artifact under an
-independent content address. This materializer remains a pure computation
-inside that larger protocol.
+bytes separately, and revalidate the exact in-memory target-content rows at
+the consumption boundary. This materializer and target encoder remain pure
+computations inside that larger protocol.

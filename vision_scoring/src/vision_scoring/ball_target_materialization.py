@@ -283,6 +283,10 @@ class MaterializedCausalBallTargetsV1:
         return False
 
     @property
+    def admissible_for_test(self) -> bool:
+        return False
+
+    @property
     def admissible_for_deployment(self) -> bool:
         return False
 

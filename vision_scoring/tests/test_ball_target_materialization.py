@@ -761,8 +761,12 @@ class BallTargetMaterializationTests(unittest.TestCase):
             )
         self.assertIs(train.split, LabelBundleSplit.TRAIN)
         self.assertIs(test.split, LabelBundleSplit.TEST)
-        self.assertFalse(train.admissible_for_training)
-        self.assertFalse(test.admissible_for_training)
+        for value in (train, test):
+            self.assertFalse(value.admissible_for_training)
+            self.assertFalse(value.admissible_for_evaluation)
+            self.assertFalse(value.admissible_for_test)
+            self.assertFalse(value.admissible_for_deployment)
+            self.assertFalse(value.admissible_for_live_scoring)
         self.assertEqual(
             tuple(inspect.signature(materialize_causal_ball_targets_v1).parameters),
             ("statement", "annotations", "model_config"),
