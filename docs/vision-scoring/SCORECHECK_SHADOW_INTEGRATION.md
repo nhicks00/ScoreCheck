@@ -1,8 +1,10 @@
 # ScoreCheck Vision Shadow Integration
 
-**Status:** source schema-v3/outbox-v2 contract and bounded dispatcher
-authentication implemented; ScoreCheck receipt/projection implementation is
-pending
+**Status:** source schema-v3/outbox-v2 contract, bounded dispatcher
+authentication, immutable ScoreCheck receipt persistence, and fixed verified
+read/replay implemented. The externally protected monotonic ScoreCheck receipt
+checkpoint is not implemented and remains a deployment gate. No HTTP endpoint,
+server action, or UI consumes this projection yet.
 
 **Decision date:** 2026-07-12
 
@@ -65,8 +67,9 @@ replay-verified SQLite ledger
   -> authenticated transport envelope
   -> fixed ScoreCheck vision-ingest adapter
   -> append-only vision_shadow_receipts
-  -> replay-derived vision_shadow_match_projection
-  -> read-only scorer/admin comparison UI
+  -> fixed decimal-text/base64 receipt-read RPC
+  -> historical-signature-verified in-process projection
+  -> [STOP: no endpoint or UI implemented]
 
 There is no edge to score_states, overlay_states, score_actions,
 scorer_shadow_states, or an official scoring route.
@@ -122,8 +125,15 @@ wrapped in a separate domain-separated signed transport envelope containing:
 The ingest adapter uses a protected current/revoked dispatcher-key registry,
 verifies the signature over canonical bytes, applies fixed byte/depth/count
 limits before parsing, and rejects signing times outside its protected clock
-policy. A known revocation must not intersect any part of the signed envelope
-lifetime, even when verification occurs before the scheduled revocation. The
+policy. Source append, dispatcher signing, and protected ScoreCheck receipt
+timestamps use Unix-epoch nanoseconds but may come from distinct clocks. The
+protected transport policy's explicit skew bound is authoritative for
+signed-versus-received ordering; the database does not impose a contradictory
+zero-skew check. Exact append-versus-sign ordering is likewise not assumed
+until the source clock contract and Python dispatcher parity are explicitly
+implemented. A known revocation must not intersect any part of the signed
+envelope lifetime, even when verification occurs before the scheduled
+revocation. The
 dispatcher key grants only delivery attribution. It is not a human
 score-authority, authorizer, case-producer, policy-assessment, or review key.
 The Python transport boundary contains no database, network, filesystem,
@@ -136,43 +146,74 @@ source until an operator investigates it.
 
 ## Trusted match binding
 
-`vision_match_bindings` is configuration published by a trusted ScoreCheck
-administrator, never inferred from names or accepted from a delivered payload.
-One active generation maps:
+`vision_match_bindings` is immutable configuration published by a trusted
+ScoreCheck administrator, never inferred from names or accepted from a
+delivered payload. Exactly one row maps:
 
 ```text
 (source_ledger_id, source_match_id)
-    -> (event_id, court_id, match_id, binding_generation)
+    -> (event_id, court_id, match_id)
 ```
 
-The adapter verifies that the bound court still names the bound match when a
-receipt is accepted. A reassignment closes the old binding generation; it does
-not retarget historical receipts. Missing, ambiguous, stale, or mismatched
-bindings fail closed and retain the message in the dispatcher's retry/dead
-letter state without writing a ScoreCheck receipt.
+The binding cannot be updated, closed, rotated, or retargeted. A different
+ScoreCheck match requires a new source-ledger `source_match_id`. Binding
+publication and receipt admission serialize on the same advisory lock. The
+adapter requires the authenticated payload's `appended_at_ns` to be at or after
+the binding's `active_from_ns`, then verifies that the bound court still names
+the bound match. Missing, pre-binding, or reassigned bindings fail closed and
+retain the message in the dispatcher's retry/dead-letter state without writing
+a receipt.
 
 ## ScoreCheck persistence
 
 The ScoreCheck source table is append-only `vision_shadow_receipts`. Its
 identity is `(source_ledger_id, outbox_id)`, and it stores the exact transport
 envelope, exact source payload bytes, all source fingerprints, the protected
-binding generation, and receipt time. Database constraints reject mutable
-upserts and identity reuse.
+binding target, literal binding generation `1`, and receipt time. Database
+constraints and immutable-history triggers reject updates, deletion, mutable
+upserts, and identity reuse.
 
-`vision_shadow_match_projection` is a convenience cache derived only by replay
-of receipts ordered by source revision. The replay requires contiguous
-revisions per source match, exact idempotency, matching fingerprints, and a
-single reducer-build/ruleset lineage. Gaps or conflicts make the projection
-`INTEGRITY_BLOCKED`; they do not borrow an official score to fill the gap.
+There is no database projection or directly selectable consumer table. A fixed
+read function returns one metadata row plus bounded receipt rows, capped at
+4,096 records and 32 MiB of stored source/envelope bytes before base64 encoding;
+the TypeScript boundary independently caps the total returned object graph at
+48 MiB. It encodes
+exact bytes as canonical base64 and every database integer, including integers
+nested in event/post-state JSON, as canonical decimal text. The TypeScript read
+adapter validates every derived column against the exact payload and re-runs
+historical Ed25519 verification before returning an in-process projection.
+Replay requires contiguous revisions, exact identities, and one
+reducer-build/ruleset lineage. The database keeps the protected target binding
+only as internal receipt provenance: target UUIDs and binding generation never
+cross the fixed read wire or public projection. Target association must not be
+shown until a separately protected binding attestation/resolver exists. Gaps
+or conflicts yield `INTEGRITY_BLOCKED`; replay never borrows an official score.
 
-Neither table has a trigger, foreign-key cascade, stored procedure, or UI action
-that writes an official scoring table. Receipt deletion and correction are
-absent in V0. Whole-history rollback is checked against an externally protected
-ScoreCheck receipt checkpoint.
+The only successful non-empty public status is
+`VERIFIED_RECEIPT_PREFIX`. It means exactly that the returned bounded receipt
+prefix passed the fixed wire, derived-column, lineage, and retained historical
+dispatcher-signature checks. It does not mean the prefix is rollback-complete,
+that its referenced human/model/media evidence has been independently
+reverified, or that any score, policy, training, evaluation, or deployment
+action is ready.
 
-## Read-only UI semantics
+No vision function, trigger, foreign key, or UI action writes an official
+scoring table. Receipt deletion and correction are absent in V0. No direct
+table `SELECT` grants exist: dedicated NOLOGIN roles may execute only their
+fixed publish, ingest, or verified-read function. The migration removes stale
+memberships in both directions and stale direct object privileges, removes
+ambient `PUBLIC` function execution now and by default, and asserts effective
+catalog privileges for each capability role; deployment
+must then explicitly grant each capability to its exact authenticated
+principal. Whole-history rollback is
+**not yet checked** because the externally protected monotonic ScoreCheck
+receipt checkpoint remains unimplemented.
 
-The comparison UI labels this data as a vision-ledger observation. It may show:
+## Future read-only UI semantics
+
+No endpoint or UI is implemented in this phase. A future comparison UI may be
+built only after a protected target-binding attestation/resolver exists; it
+must label this data as a vision-ledger observation. It may show:
 
 - authorized event and revision;
 - compact post-event score summary;
@@ -191,19 +232,19 @@ mutation on behalf of the receipt.
 
 - a repository guard fails if the vision adapter imports or calls official
   scoring modules/routes or names any forbidden mutation table;
-- a database integration test proves ingest changes only vision receipt and
-  projection tables;
+- a database integration test proves ingest changes only vision binding,
+  receipt, and integrity-block tables;
 - attempts to target `scorer_shadow_states`, change the mutation-permission
   literal, supply a court/match binding, or add unknown fields fail closed;
 - invalid/revoked dispatcher signatures, oversized payloads, duplicate JSON
   keys, non-canonical bytes, hash mismatches, and clock violations fail closed;
 - exact retry is idempotent; same identity with different bytes blocks the
   source;
-- missing/stale/ambiguous bindings and court reassignment never retarget a
+- missing/pre-binding/stale bindings and court reassignment never retarget a
   receipt;
 - out-of-order or skipped revisions cannot advance the projection;
-- tampered receipt, projection, delivery checkpoint, or source fingerprint is
-  detected by full replay;
+- tampered receipt or source fingerprint is detected by full authenticated
+  replay; checkpoint tampering tests remain gated on checkpoint implementation;
 - UI tests prove that no receipt component renders or invokes an official score
   action;
 - a promoted scorer handoff test proves vision receipts are absent from
@@ -211,5 +252,40 @@ mutation on behalf of the receipt.
 
 The bounded transport implementation began only after the schema-3 source
 payload was frozen, so it binds the exact canonical contract instead of a
-temporary compatibility layer. ScoreCheck receipt/projection persistence is
-the next implementation slice and remains absent here.
+temporary compatibility layer. Receipt persistence and verified read/replay
+are implemented; deployment must not treat this slice as rollback-complete
+until the external ScoreCheck checkpoint exists.
+
+## Verification scope
+
+The TypeScript contracts, repository isolation guards, golden cross-language
+transport fixture, and SQL/PLpgSQL syntax are tested locally. Run the repeatable
+plain-PostgreSQL behavioral test from `apps/web` with:
+
+```bash
+npm run test:vision-postgres
+```
+
+The harness uses the digest-pinned PostgreSQL 15 image, publishes no host port,
+creates fixed minimal `auth.users` and side-effect-recording `realtime.send`
+stubs, applies the complete ordered migration chain from `001` through `016`,
+then applies current migration `017` and the fixed SQL fixture. It performs
+idempotent preflight cleanup and removes its uniquely named container on normal
+completion, failure, timeout, `SIGHUP`, `SIGINT`, or `SIGTERM`; it does not start
+Docker or Colima.
+
+The fixture proves the migration's effective role catalog assertions,
+immutable binding/receipt behavior, `INSERTED` and `EXACT_RETRY`, bounded fixed
+read shape, decimal-text nested integers, absence of target fields, terminal
+conflict behavior, exact `42501` official-table and cross-RPC denials, and RLS
+protection after an accidental direct `SELECT` grant. It also inventories live
+public-table defaults that depend on public-schema functions, proves a
+production-like explicitly granted `service_role` can execute current-schema
+default inserts, and proves migration `002`'s overlay broadcast trigger still
+records its `realtime.send` side effect after `017` while direct execution of
+the trigger function remains denied.
+
+This is a plain PostgreSQL 15 test, not a complete Supabase deployment test.
+Supabase/PostgREST RPC exposure, JWT-to-role mapping, and deployment-principal
+membership must still be proven in the real integration environment before
+release.
