@@ -135,7 +135,12 @@ hard-coded `False`, including the explicit test-admission property.
 
 This is true for `TRAIN`, `DEV`, and `TEST` statements. A `TEST` pack cannot be
 mounted by a training worker merely because its storage closure loaded
-successfully. A future coordinator must separately reacquire and verify the
-current curator and annotation authorities, rights/derivation evidence, media,
-split policy, and target-materialization contract before issuing any narrower
-job admission.
+successfully. The implemented schema-2 readiness bridge now reconstructs one
+exact source/split-bound pack generation per source in a separate bounded
+worker and emits schema-3 structural proofs. It still fixes all five admission
+scopes to `False`; it is not the training coordinator. See
+[READINESS_LABEL_PACK_GATE.md](./READINESS_LABEL_PACK_GATE.md).
+
+A future coordinator must separately reacquire and verify the current curator
+and annotation authorities, rights/derivation evidence, media, split policy,
+and target-materialization contract before issuing any narrower job admission.

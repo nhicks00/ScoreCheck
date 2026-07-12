@@ -8,6 +8,7 @@ import base64
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -32,6 +33,10 @@ from vision_scoring.readiness import (
     main,
     readiness_runtime_identity_sha256,
     readiness_verifier_source_tree_sha256,
+)
+from vision_scoring.readiness_label_packs import (
+    source_label_pack_proof_set_sha256,
+    verify_source_label_pack_batch,
 )
 from vision_scoring.readiness_trust import (
     CurrentDatasetManifest,
@@ -78,8 +83,11 @@ PROTECTED_CONFIGURATION_GENERATION = (
 ARTIFACT_STORE_ROOT = (
     Path(__file__).parents[1] / "examples" / "dataset-artifacts"
 )
+LABEL_STORE_ROOT = (
+    Path(__file__).parents[1] / "examples" / "ball-label-packs"
+)
 DEPLOYMENT_ARTIFACT_SHA256 = (
-    "ada0689d8c632e1ec54c0d97bd5428afc6875b6d36fe6f363d3e12c0b81dda38"
+    "b6efd12cebbb91882653219e477b3eff3e90d49f70aa4a77d66d65e57882ca6f"
 )
 GOVERNANCE_DOMAIN_ID = "example-dataset-governance"
 EXAMPLE_PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(b"\x33" * 32)
@@ -143,6 +151,7 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
         deployment_artifact_sha256=DEPLOYMENT_ARTIFACT_SHA256,
         governance_domain_id=GOVERNANCE_DOMAIN_ID,
         artifact_store_root=ARTIFACT_STORE_ROOT,
+        label_store_root=LABEL_STORE_ROOT,
     ) -> ManifestValidator:
         selected_rights_store = rights_store or self.trust_store
         selected_rights_policy = replace(
@@ -220,6 +229,7 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
                 configuration_generation_path
             ),
             artifact_store_root=artifact_store_root,
+            label_store_root=label_store_root,
             rights_trust_store=selected_rights_store,
             rights_evidence_store_root=RIGHTS_EVIDENCE_STORE_ROOT,
             rights_verification_policy=selected_rights_policy,
@@ -231,7 +241,12 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
     def _validate(self, manifest: dict):
         return self._validator_for_manifest(manifest).validate(manifest)
 
-    def _run_cli(self, manifest: dict) -> tuple[int, dict, str]:
+    def _run_cli(
+        self,
+        manifest: dict,
+        *,
+        label_store_root: Path = LABEL_STORE_ROOT,
+    ) -> tuple[int, dict, str]:
         with tempfile.TemporaryDirectory() as temporary_directory:
             manifest_path = Path(temporary_directory) / "manifest.json"
             manifest_path.write_text(
@@ -305,6 +320,8 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
                         str(configuration_generation_path),
                         "--artifact-store-root",
                         str(ARTIFACT_STORE_ROOT),
+                        "--label-store-root",
+                        str(label_store_root),
                         "--rights-trust-store",
                         str(TRUST_STORE),
                         "--rights-verification-policy",
@@ -387,7 +404,7 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
             self.trust_store.fingerprint(),
         )
         payload = report.to_dict()
-        self.assertEqual(payload["report_schema_version"], "2.0")
+        self.assertEqual(payload["report_schema_version"], "3.0")
         self.assertRegex(payload["manifest_sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(
             payload["rights_trust"]["verification_policy_sha256"],
@@ -406,7 +423,25 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
             r"^[0-9a-f]{64}$",
         )
         self.assertTrue(payload["dataset_trust"]["manifest_trust_verified"])
-        self.assertEqual(len(payload["artifact_set_proof"]["artifacts"]), 10)
+        self.assertEqual(len(payload["artifact_set_proof"]["artifacts"]), 7)
+        self.assertEqual(len(payload["source_label_pack_proofs"]), 3)
+        self.assertEqual(
+            payload["label_pack_evidence_scope"],
+            {
+                "verification": "STRUCTURAL_EVIDENCE_ONLY",
+                "training_admission_granted": False,
+                "evaluation_admission_granted": False,
+                "test_admission_granted": False,
+                "deployment_admission_granted": False,
+                "live_scoring_admission_granted": False,
+            },
+        )
+        self.assertTrue(
+            {
+                source["labels_sha256"]
+                for source in self.manifest["data_sources"]
+            }.isdisjoint(report.required_artifact_sha256s)
+        )
         self.assertEqual(
             payload["artifact_set_proof"]["generation_id"],
             generation_id_for(report.required_artifact_sha256s),
@@ -450,6 +485,8 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
             )
         with self.assertRaisesRegex(ValueError, "proof-set commitment"):
             replace(report, source_rights_proofs=())
+        with self.assertRaisesRegex(ValueError, "label-pack proof-set"):
+            replace(report, source_label_pack_proof_set_sha256="0" * 64)
         with self.assertRaisesRegex(ValueError, "rights evidence generation"):
             replace(report, rights_evidence_generation_id="0" * 64)
         report_provenance_forgery_cases = (
@@ -464,7 +501,7 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
             ),
             (
                 {"manifest_schema_version": "totally-invalid"},
-                "schema_version 1.0",
+                "schema_version 2.0",
             ),
             ({"dataset_id": "other-dataset"}, "dataset_id.*attestation"),
         )
@@ -495,8 +532,8 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
                     ),
                 ),
             )
-        with self.assertRaisesRegex(ValueError, "0 through 10000"):
-            replace(report, data_source_count=10_001)
+        with self.assertRaisesRegex(ValueError, "0 through 512"):
+            replace(report, data_source_count=513)
 
         proof = report.source_rights_proofs[0]
         invalid_proof_cases = (
@@ -516,6 +553,36 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
             with self.subTest(proof_changes=changes):
                 with self.assertRaisesRegex(ValueError, message):
                     replace(proof, **changes)
+
+        pack_proof = report.source_label_pack_proofs[0]
+        mismatched_pack_proofs = (
+            replace(pack_proof, asset_sha256="0" * 64),
+        ) + report.source_label_pack_proofs[1:]
+        with self.assertRaisesRegex(ValueError, "different source coordinates"):
+            replace(
+                report,
+                source_label_pack_proofs=mismatched_pack_proofs,
+                source_label_pack_proof_set_sha256=(
+                    source_label_pack_proof_set_sha256(
+                        mismatched_pack_proofs,
+                        report_schema_version="3.0",
+                    )
+                ),
+            )
+        disjoint_pack_proofs = (
+            replace(pack_proof, source_id="different-source"),
+        ) + report.source_label_pack_proofs[1:]
+        with self.assertRaisesRegex(ValueError, "proof ID sets differ"):
+            replace(
+                report,
+                source_label_pack_proofs=disjoint_pack_proofs,
+                source_label_pack_proof_set_sha256=(
+                    source_label_pack_proof_set_sha256(
+                        disjoint_pack_proofs,
+                        report_schema_version="3.0",
+                    )
+                ),
+            )
 
         empty_artifacts = ()
         empty_proof = DatasetArtifactSetProof(
@@ -560,6 +627,8 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
                     str(PROTECTED_CONFIGURATION_GENERATION),
                     "--artifact-store-root",
                     str(ARTIFACT_STORE_ROOT),
+                    "--label-store-root",
+                    str(LABEL_STORE_ROOT),
                     "--rights-trust-store",
                     str(TRUST_STORE),
                     "--rights-verification-policy",
@@ -573,6 +642,120 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
         self.assertEqual(exit_code, 0, stderr.getvalue())
         self.assertEqual(stderr.getvalue(), "")
         self.assertTrue(json.loads(stdout.getvalue())["ready"])
+
+    def test_schema_v1_and_missing_v2_pack_fields_are_hard_rejected(self) -> None:
+        old = deepcopy(self.manifest)
+        old["schema_version"] = "1.0"
+        with patch(
+            "vision_scoring.readiness.verify_source_label_pack_batch"
+        ) as pack_worker:
+            report = self._validate(old)
+        self.assertIn("SCHEMA_VERSION", {item.code for item in report.blockers})
+        pack_worker.assert_not_called()
+
+        for field_name in ("labels_sha256", "label_pack_generation_id"):
+            manifest = deepcopy(self.manifest)
+            del manifest["data_sources"][0][field_name]
+            with self.subTest(field_name=field_name), patch(
+                "vision_scoring.readiness.verify_source_label_pack_batch"
+            ) as pack_worker:
+                report = self._validate(manifest)
+                self.assertIn(
+                    "SOURCE_CHECKSUM",
+                    {item.code for item in report.blockers},
+                )
+                pack_worker.assert_not_called()
+
+    def test_artifact_and_label_store_roots_must_be_distinct(self) -> None:
+        alias = ARTIFACT_STORE_ROOT / ".." / "dataset-artifacts"
+        with self.assertRaisesRegex(ValueError, "distinct stores"):
+            self._validator_for_manifest(
+                self.manifest,
+                label_store_root=alias,
+            )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            symlink = Path(temporary_directory) / "artifact-alias"
+            symlink.symlink_to(ARTIFACT_STORE_ROOT, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "distinct stores"):
+                self._validator_for_manifest(
+                    self.manifest,
+                    label_store_root=symlink,
+                )
+        case_variant = ARTIFACT_STORE_ROOT.with_name(
+            ARTIFACT_STORE_ROOT.name.swapcase()
+        )
+        if case_variant.exists() and case_variant != ARTIFACT_STORE_ROOT:
+            self.assertTrue(os.path.samefile(case_variant, ARTIFACT_STORE_ROOT))
+            with self.assertRaisesRegex(ValueError, "distinct stores"):
+                self._validator_for_manifest(
+                    self.manifest,
+                    label_store_root=case_variant,
+                )
+
+    def test_513_sources_are_rejected_before_label_worker(self) -> None:
+        template = self.manifest["data_sources"][0]
+        self.manifest["data_sources"] = [
+            {**deepcopy(template), "source_id": f"source-{index}"}
+            for index in range(513)
+        ]
+        with patch(
+            "vision_scoring.readiness.verify_source_label_pack_batch"
+        ) as pack_worker:
+            report = self._validate(self.manifest)
+        self.assertIn(
+            "DATA_SOURCE_COUNT",
+            {item.code for item in report.blockers},
+        )
+        self.assertEqual(report.data_source_count, 0)
+        pack_worker.assert_not_called()
+
+    def test_protected_configuration_change_during_pack_worker_discards_result(
+        self,
+    ) -> None:
+        validator = self._validator_for_manifest(self.manifest)
+        generation_path = validator._protected_configuration_generation_path
+        original = load_protected_configuration_generation(generation_path)
+
+        def verify_then_rotate(**kwargs):  # type: ignore[no-untyped-def]
+            proofs = verify_source_label_pack_batch(**kwargs)
+            generation_path.write_text(
+                replace(
+                    original,
+                    governance_domain_id="rotated-governance-domain",
+                ).canonical_json(),
+                encoding="utf-8",
+            )
+            return proofs
+
+        with patch(
+            "vision_scoring.readiness.verify_source_label_pack_batch",
+            side_effect=verify_then_rotate,
+        ), self.assertRaisesRegex(
+            ValueError,
+            "protected configuration generation changed",
+        ):
+            validator.validate(self.manifest)
+
+    def test_cli_requires_a_safe_distinct_label_store_root(self) -> None:
+        stderr = io.StringIO()
+        with redirect_stderr(stderr), self.assertRaises(SystemExit) as caught:
+            main([str(EXAMPLE)])
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("--label-store-root", stderr.getvalue())
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            unsafe_root = Path(temporary_directory) / "not-a-store"
+            unsafe_root.write_text("not a directory", encoding="utf-8")
+            exit_code, payload, _ = self._run_cli(
+                self.manifest,
+                label_store_root=unsafe_root,
+            )
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(payload["ready"])
+        self.assertIn(
+            "LABEL_PACK_PREFLIGHT_STORE",
+            {item["code"] for item in payload["blockers"]},
+        )
 
     def test_validation_uses_one_detached_manifest_snapshot(self) -> None:
         original_asset_sha256 = self.manifest["data_sources"][0]["asset_sha256"]
@@ -1079,6 +1262,8 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
                         ),
                         "--artifact-store-root",
                         str(ARTIFACT_STORE_ROOT),
+                        "--label-store-root",
+                        str(LABEL_STORE_ROOT),
                         "--rights-trust-store",
                         str(TRUST_STORE),
                         "--rights-verification-policy",
@@ -1130,9 +1315,19 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
         self.assertIn("SOURCE_CHECKSUM", codes)
         self.assertIn("CAPTURE_PROFILE_REFERENCE", codes)
 
-    def test_ready_requires_resident_bytes_for_every_declared_artifact(self) -> None:
+    def test_ready_requires_resident_pack_and_media_capture_bytes(self) -> None:
         self.manifest["data_sources"][0]["labels_sha256"] = "e" * 64
         report = self._validate(self.manifest)
+        self.assertFalse(report.ready)
+        self.assertIn(
+            "BALL_LABEL_PACK_MEMBERSHIP",
+            {issue.code for issue in report.blockers},
+        )
+        self.assertIsNotNone(report.artifact_set_proof)
+
+        manifest = deepcopy(load_manifest(EXAMPLE))
+        manifest["data_sources"][0]["asset_sha256"] = "e" * 64
+        report = self._validate(manifest)
         self.assertFalse(report.ready)
         self.assertIn(
             "ARTIFACT_GENERATION_LOCK_MISSING",

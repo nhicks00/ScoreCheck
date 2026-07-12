@@ -1,10 +1,10 @@
 {
   "curator_id": "example-dataset-curator",
-  "dataset_id": "synthetic-readiness-example-v1",
+  "dataset_id": "synthetic-readiness-example-v2",
   "key_id": "example-dataset-key-1",
-  "manifest_sha256": "e40ace38973b73b23b31b3d6fb24f3cbed6deada0b50ccbc84cf24bff16e2fb9",
+  "manifest_sha256": "2a9a3b7e347dfd432bc436b25fcc27339786effb5c9df057b985774829e23649",
   "schema_version": "1.0",
-  "signature_base64": "9mATbza/vUXsKlrJS9LtmIfKyeuTR6G75xc+VTMiDuOLW/ebRusLhKZ53wVBw+qXLMdakplLQ+kDDG2kgBVsAA==",
+  "signature_base64": "YRwBFyPfrE89BO1Y50DUSFukB50ODk338XWjZnIuGztfnbqUMgqavFqK3G1KD89pESsBw75+dz8S52mDjmuNBA==",
   "signed_on": "2026-07-12",
   "trust_domain_id": "example-dataset-governance"
 }

@@ -80,12 +80,21 @@ Rules:
   by a trusted dataset curator, checked against the sole current manifest for
   that dataset, and revalidated on the actual UTC date. A payload enum or hash
   without the separately pinned signature/current-manifest store is not trust.
-- Every declared media, label, calibration, camera-attestation,
-  clock-verification, and encoder artifact must be resident in the exact
-  protected immutable generation derived from its digest set. One shared
-  generation lease covers the whole batch; every object must match both its raw
-  SHA-256 filename and exact staged bytes. Syntax-only checks cannot produce
-  `ready=true`.
+- Readiness manifests are hard-cut to schema `2.0`, and reports to schema
+  `3.0`. Every source binds `labels_sha256` as its exact
+  `BallLabelPackRootV1` hash plus `label_pack_generation_id`; old schema and
+  omitted fields are blockers.
+- Every declared media, calibration, camera-attestation, clock-verification,
+  and encoder artifact must be resident in the exact protected media/capture
+  generation derived from its digest set. Labels are excluded from that
+  artifact proof and reconstructed from a distinct protected label store.
+  Syntax-only checks cannot produce `ready=true`.
+- One killable worker loads the complete source-bound label-pack batch. It is
+  capped at 512 packs, 1,000,000 verified contract objects, 4 GiB verified
+  contract bytes, and a 3,600-second post-start monotonic verification/result
+  deadline. A structurally
+  verified TRAIN, DEV, or TEST pack grants no training, evaluation, TEST,
+  deployment, or live-scoring admission.
 - The trusted launcher loads one protected configuration generation per
   single-use validation and rechecks its current pointer at completion. A
   concurrent policy, key-compromise, current-manifest, decision, or revocation
@@ -110,7 +119,7 @@ Rules:
   bytes into the strict annotation contracts and verify every declared
   reviewer/adjudicator signature, current annotation fingerprint, revocation,
   evidence file, evaluator identity, and minimum truth policy before use.
-- A manifest `labels_sha256` and a declared coverage manifest did not, by
+- A pre-V2 loose `labels_sha256` and a declared coverage manifest did not, by
   themselves, prove complete decoded-frame or all-localizable-ball enumeration.
   `CausalBallLabelBundleV1` adds a curator-signed
   `COMPLETE_FULL_DECODED_FRAME` claim for one bounded derived asset and binds
@@ -120,6 +129,10 @@ Rules:
   evaluation, deployment, and live-scoring admission fixed to `False`; source
   residency, derivation, rights, pixel truth, annotation truth, and capture
   lineage remain independently gated.
+- The implemented V2 readiness bridge authenticates each exact pack root,
+  generation, source asset, and split and emits compact structural proofs only.
+  See [READINESS_LABEL_PACK_GATE.md](./READINESS_LABEL_PACK_GATE.md) for store
+  separation, cross-generation alias, worker, and report invariants.
 - A trusted single-use training launcher and immutable media lease must
   reverify the exact current readiness, rights, derivation, split, annotation,
   label-bundle, and source-byte authorities before any trainer can consume the

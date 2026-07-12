@@ -34,6 +34,16 @@ from .dataset_split import (
     SplitManifest,
 )
 from .immutable_store import generation_id_for
+from .readiness_label_packs import (
+    MAX_READINESS_LABEL_PACKS,
+    MAX_READINESS_LABEL_PACK_CONTRACT_BYTES,
+    MAX_READINESS_LABEL_PACK_CONTRACT_OBJECTS,
+    ReadinessLabelPackError,
+    SourceLabelPackProof,
+    _SourceLabelPackRequest,
+    source_label_pack_proof_set_sha256,
+    verify_source_label_pack_batch,
+)
 from .rights import PermittedUse, RightsDecision, rights_decision_from_dict
 from .rights_trust import (
     RightsAttestation,
@@ -65,10 +75,10 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _STABLE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/+~-]{0,127}$")
 _ISSUE_CODE_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 _UTC_SECONDS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
-_REPORT_SCHEMA_VERSION = "2.0"
+_REPORT_SCHEMA_VERSION = "3.0"
 _MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 _MAX_CAPTURE_PROFILES = 256
-_MAX_DATA_SOURCES = 10_000
+_MAX_DATA_SOURCES = MAX_READINESS_LABEL_PACKS
 _MAX_COMPLETION_STABILIZATION_ATTEMPTS = 4
 _MAX_ISSUE_PATH_CHARS = 512
 _MAX_ISSUE_MESSAGE_CHARS = 1024
@@ -88,14 +98,59 @@ _TEST_REQUIRED_USES = (
 _VERIFIER_DEPENDENCY_NAMES = ("cryptography",)
 _VERIFIER_SOURCE_FILES = (
     "__init__.py",
+    "annotation_trust.py",
+    "annotations.py",
     "artifact_store.py",
+    "ball_label_pack.py",
+    "contract_wire.py",
     "dataset_split.py",
+    "domain_events.py",
     "immutable_store.py",
+    "label_bundle.py",
     "readiness.py",
+    "readiness_label_packs.py",
     "readiness_trust.py",
     "rights.py",
     "rights_trust.py",
 )
+
+
+def _store_roots_are_same(first: Path, second: Path) -> bool:
+    """Compare lexical targets and safely opened directory identities.
+
+    Missing or unsafe roots remain verifier/store errors later in validation;
+    they are not treated as equal merely because this constructor probe cannot
+    open them.
+    """
+
+    if os.path.realpath(first) == os.path.realpath(second):
+        return True
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptors: list[int] = []
+    try:
+        descriptors.append(os.open(first, flags))
+        descriptors.append(os.open(second, flags))
+        first_stat = os.fstat(descriptors[0])
+        second_stat = os.fstat(descriptors[1])
+        return (first_stat.st_dev, first_stat.st_ino) == (
+            second_stat.st_dev,
+            second_stat.st_ino,
+        )
+    except OSError:
+        try:
+            return os.path.samefile(first, second)
+        except OSError:
+            return False
+    finally:
+        for descriptor in descriptors:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
 
 
 class Severity(str, Enum):
@@ -152,6 +207,7 @@ class SourceRightsProof:
     source_id: str
     asset_sha256: str
     labels_sha256: str
+    label_pack_generation_id: str
     split: DatasetSplit
     decision_sha256: str
     attestation_sha256: str
@@ -169,6 +225,7 @@ class SourceRightsProof:
         for field_name in (
             "asset_sha256",
             "labels_sha256",
+            "label_pack_generation_id",
             "decision_sha256",
             "attestation_sha256",
         ):
@@ -260,6 +317,7 @@ class SourceRightsProof:
             "decision_sha256": self.decision_sha256,
             "evidence_sha256s": list(self.evidence_sha256s),
             "labels_sha256": self.labels_sha256,
+            "label_pack_generation_id": self.label_pack_generation_id,
             "required_uses": sorted(value.value for value in self.required_uses),
             "rights_expires_on": self.rights_expires_on,
             "rights_reviewed_on": self.rights_reviewed_on,
@@ -274,6 +332,7 @@ class _PreparedSourceRights:
     source_id: str
     asset_sha256: str
     labels_sha256: str
+    label_pack_generation_id: str
     split: DatasetSplit
     decision: RightsDecision
     attestation: RightsAttestation
@@ -296,7 +355,7 @@ def _source_rights_proof_set_sha256(
     if len(source_ids) != len(set(source_ids)):
         raise ValueError("source rights proof IDs must be unique")
     payload = {
-        "domain": "multicourt-vision-scoring:source-rights-proof-set:v1",
+        "domain": "multicourt-vision-scoring:source-rights-proof-set:v2",
         "proofs": [
             proof.to_dict()
             for proof in sorted(proofs, key=lambda proof: proof.source_id)
@@ -321,7 +380,7 @@ def _required_artifact_digest_set_sha256(digests: tuple[str, ...]) -> str:
         )
     payload = {
         "digests": list(digests),
-        "domain": "multicourt-vision-scoring:required-artifact-digest-set:v1",
+        "domain": "multicourt-vision-scoring:required-artifact-digest-set:v2",
         "schema_version": _REPORT_SCHEMA_VERSION,
     }
     return hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
@@ -365,6 +424,10 @@ class ReadinessReport:
     data_source_count: int
     source_rights_proofs: tuple[SourceRightsProof, ...]
     source_rights_proof_set_sha256: str
+    source_label_pack_proofs: tuple[SourceLabelPackProof, ...]
+    source_label_pack_proof_set_sha256: str
+    label_pack_contract_object_count: int
+    label_pack_total_contract_bytes: int
     issues: tuple[ReadinessIssue, ...]
 
     def __post_init__(self) -> None:
@@ -406,6 +469,10 @@ class ReadinessReport:
                 "source_rights_proof_set_sha256",
             ),
             (
+                self.source_label_pack_proof_set_sha256,
+                "source_label_pack_proof_set_sha256",
+            ),
+            (
                 self.required_artifact_digest_set_sha256,
                 "required_artifact_digest_set_sha256",
             ),
@@ -437,9 +504,15 @@ class ReadinessReport:
                 "dataset manifest attestation proof does not match the attestation"
             )
         if self.dataset_manifest_trust_verified:
-            if self.manifest_schema_version != "1.0":
+            if self.manifest_schema_version != "2.0" and not any(
+                type(issue) is ReadinessIssue
+                and issue.severity is Severity.BLOCKER
+                and issue.code == "SCHEMA_VERSION"
+                for issue in self.issues
+            ):
                 raise ValueError(
-                    "trusted readiness report requires manifest schema_version 1.0"
+                    "trusted readiness report requires manifest schema_version "
+                    "2.0 or an explicit schema blocker"
                 )
             if self.manifest_sha256 is None:
                 raise ValueError(
@@ -647,6 +720,82 @@ class ReadinessReport:
             self.source_rights_proof_set_sha256
         ):
             raise ValueError("source rights proof-set commitment is inconsistent")
+        if type(self.source_label_pack_proofs) is not tuple or any(
+            type(proof) is not SourceLabelPackProof
+            for proof in self.source_label_pack_proofs
+        ):
+            raise ValueError(
+                "source_label_pack_proofs must be immutable proof values"
+            )
+        if source_label_pack_proof_set_sha256(
+            self.source_label_pack_proofs,
+            report_schema_version=_REPORT_SCHEMA_VERSION,
+        ) != self.source_label_pack_proof_set_sha256:
+            raise ValueError(
+                "source label-pack proof-set commitment is inconsistent"
+            )
+        if (
+            type(self.label_pack_contract_object_count) is not int
+            or not 0
+            <= self.label_pack_contract_object_count
+            <= MAX_READINESS_LABEL_PACK_CONTRACT_OBJECTS
+        ):
+            raise ValueError(
+                "label_pack_contract_object_count is outside the fixed bound"
+            )
+        if (
+            type(self.label_pack_total_contract_bytes) is not int
+            or not 0
+            <= self.label_pack_total_contract_bytes
+            <= MAX_READINESS_LABEL_PACK_CONTRACT_BYTES
+        ):
+            raise ValueError(
+                "label_pack_total_contract_bytes is outside the fixed bound"
+            )
+        if self.label_pack_contract_object_count != sum(
+            proof.contract_object_count for proof in self.source_label_pack_proofs
+        ):
+            raise ValueError(
+                "label-pack aggregate object count is inconsistent"
+            )
+        if self.label_pack_total_contract_bytes != sum(
+            proof.total_contract_bytes for proof in self.source_label_pack_proofs
+        ):
+            raise ValueError(
+                "label-pack aggregate verified byte count is inconsistent"
+            )
+        rights_by_source = {
+            proof.source_id: proof for proof in self.source_rights_proofs
+        }
+        packs_by_source = {
+            proof.source_id: proof for proof in self.source_label_pack_proofs
+        }
+        if (
+            self.data_source_count > 0
+            and len(self.source_rights_proofs) == self.data_source_count
+            and len(self.source_label_pack_proofs) == self.data_source_count
+            and rights_by_source.keys() != packs_by_source.keys()
+        ):
+            raise ValueError(
+                "complete source rights and label-pack proof ID sets differ"
+            )
+        for source_id in rights_by_source.keys() & packs_by_source.keys():
+            rights = rights_by_source[source_id]
+            pack = packs_by_source[source_id]
+            if (
+                rights.asset_sha256,
+                rights.labels_sha256,
+                rights.label_pack_generation_id,
+                rights.split,
+            ) != (
+                pack.asset_sha256,
+                pack.labels_sha256,
+                pack.label_pack_generation_id,
+                pack.split,
+            ):
+                raise ValueError(
+                    "source rights and label-pack proofs bind different source coordinates"
+                )
         evidence_digests = tuple(
             sorted(
                 {
@@ -701,12 +850,15 @@ class ReadinessReport:
         return (
             not self.blockers
             and self.dataset_manifest_trust_verified
-            and self.manifest_schema_version == "1.0"
+            and self.manifest_schema_version == "2.0"
             and self.manifest_sha256 is not None
             and self.artifact_set_proof is not None
             and bool(self.required_artifact_sha256s)
             and self.rights_evidence_generation_id is not None
             and len(self.source_rights_proofs) == self.data_source_count
+            and len(self.source_label_pack_proofs) == self.data_source_count
+            and self.label_pack_contract_object_count > 0
+            and self.label_pack_total_contract_bytes > 0
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -780,6 +932,26 @@ class ReadinessReport:
             "source_rights_proof_set_sha256": (
                 self.source_rights_proof_set_sha256
             ),
+            "source_label_pack_proofs": [
+                proof.to_dict() for proof in self.source_label_pack_proofs
+            ],
+            "source_label_pack_proof_set_sha256": (
+                self.source_label_pack_proof_set_sha256
+            ),
+            "label_pack_contract_object_count": (
+                self.label_pack_contract_object_count
+            ),
+            "label_pack_total_contract_bytes": (
+                self.label_pack_total_contract_bytes
+            ),
+            "label_pack_evidence_scope": {
+                "verification": "STRUCTURAL_EVIDENCE_ONLY",
+                "training_admission_granted": False,
+                "evaluation_admission_granted": False,
+                "test_admission_granted": False,
+                "deployment_admission_granted": False,
+                "live_scoring_admission_granted": False,
+            },
             "data_source_count": self.data_source_count,
             "ready": self.ready,
             "blockers": [issue_dict(issue) for issue in self.blockers],
@@ -866,6 +1038,7 @@ class ManifestValidator:
             "rights_decision_sha256",
             "rights_attestation",
             "labels_sha256",
+            "label_pack_generation_id",
         }
     )
     def __init__(
@@ -879,6 +1052,7 @@ class ManifestValidator:
         expected_governance_domain_id: str,
         protected_configuration_generation_path: Path,
         artifact_store_root: Path,
+        label_store_root: Path,
         rights_trust_store: RightsTrustStore,
         rights_evidence_store_root: Path,
         rights_verification_policy: RightsVerificationPolicy,
@@ -922,6 +1096,8 @@ class ManifestValidator:
             )
         if not isinstance(artifact_store_root, Path):
             raise ValueError("artifact_store_root must be a pathlib.Path")
+        if not isinstance(label_store_root, Path):
+            raise ValueError("label_store_root must be a pathlib.Path")
         if type(rights_trust_store) is not RightsTrustStore:
             raise ValueError("rights_trust_store must be a RightsTrustStore")
         if not isinstance(protected_configuration_generation_path, Path):
@@ -962,7 +1138,17 @@ class ManifestValidator:
         self._protected_configuration_generation_path = Path(
             os.path.abspath(os.fspath(protected_configuration_generation_path))
         )
-        self._artifact_store_root = artifact_store_root
+        self._artifact_store_root = Path(
+            os.path.abspath(os.fspath(artifact_store_root))
+        )
+        self._label_store_root = Path(os.path.abspath(os.fspath(label_store_root)))
+        if _store_roots_are_same(
+            self._artifact_store_root,
+            self._label_store_root,
+        ):
+            raise ValueError(
+                "artifact_store_root and label_store_root must be distinct stores"
+            )
         self._rights_trust_store = rights_trust_store
         self._rights_evidence_store_root = rights_evidence_store_root
         self._rights_verification_policy = rights_verification_policy
@@ -1073,8 +1259,8 @@ class ManifestValidator:
             issues,
         )
         schema_version = detached_manifest.get("schema_version")
-        if schema_version != "1.0":
-            self._block(issues, "SCHEMA_VERSION", "schema_version", "expected schema_version 1.0")
+        if schema_version != "2.0":
+            self._block(issues, "SCHEMA_VERSION", "schema_version", "expected schema_version 2.0")
             schema_version = str(schema_version or "unknown")
         dataset_id = detached_manifest.get("dataset_id")
         dataset_manifest_trust_verified = False
@@ -1133,6 +1319,8 @@ class ManifestValidator:
 
         data_sources = detached_manifest.get("data_sources")
         source_rights_proofs: tuple[SourceRightsProof, ...] = ()
+        source_label_pack_requests: tuple[_SourceLabelPackRequest, ...] = ()
+        source_label_pack_proofs: tuple[SourceLabelPackProof, ...] = ()
         rights_evidence_generation_id: str | None = None
         if not isinstance(data_sources, list) or not data_sources:
             self._block(issues, "DATA_SOURCES", "data_sources", "at least one data source is required")
@@ -1144,12 +1332,17 @@ class ManifestValidator:
                 f"at most {_MAX_DATA_SOURCES} data sources are allowed",
             )
         else:
-            source_rights_proofs = self._validate_data_sources(
+            (
+                source_rights_proofs,
+                source_label_pack_requests,
+            ) = self._validate_data_sources(
                 data_sources,
                 capture_profile_ids,
                 verified_on,
                 issues,
-                verify_rights=dataset_manifest_trust_verified,
+                verify_rights=(
+                    dataset_manifest_trust_verified and schema_version == "2.0"
+                ),
             )
             rights_evidence_generation_id = (
                 self._rights_evidence_generation_id(source_rights_proofs)
@@ -1166,7 +1359,7 @@ class ManifestValidator:
                 "manifest",
                 "a readiness manifest must reference resident dataset artifacts",
             )
-        elif dataset_manifest_trust_verified:
+        elif dataset_manifest_trust_verified and schema_version == "2.0":
             try:
                 artifact_set_proof = verify_dataset_artifacts(
                     required_artifact_sha256s,
@@ -1177,6 +1370,28 @@ class ManifestValidator:
                     issues,
                     error.code,
                     "artifact_store_root",
+                    str(error),
+                )
+
+        if (
+            dataset_manifest_trust_verified
+            and schema_version == "2.0"
+            and isinstance(data_sources, list)
+            and len(source_label_pack_requests) == len(data_sources)
+        ):
+            try:
+                source_label_pack_proofs = verify_source_label_pack_batch(
+                    label_store_root=self._label_store_root,
+                    requests=source_label_pack_requests,
+                    media_capture_artifact_sha256s=(
+                        required_artifact_sha256s
+                    ),
+                )
+            except ReadinessLabelPackError as error:
+                self._block(
+                    issues,
+                    error.code,
+                    "label_store_root",
                     str(error),
                 )
 
@@ -1265,10 +1480,11 @@ class ManifestValidator:
             if (
                 completion_on != rights_proof_date
                 and dataset_manifest_trust_verified
+                and schema_version == "2.0"
                 and isinstance(data_sources, list)
                 and 0 < len(data_sources) <= _MAX_DATA_SOURCES
             ):
-                source_rights_proofs = self._validate_data_sources(
+                source_rights_proofs, _ = self._validate_data_sources(
                     data_sources,
                     capture_profile_ids,
                     completion_on,
@@ -1358,11 +1574,31 @@ class ManifestValidator:
             ),
             artifact_set_proof=artifact_set_proof,
             data_source_count=(
-                len(data_sources) if isinstance(data_sources, list) else 0
+                len(data_sources)
+                if (
+                    isinstance(data_sources, list)
+                    and len(data_sources) <= _MAX_DATA_SOURCES
+                )
+                else 0
             ),
             source_rights_proofs=source_rights_proofs,
             source_rights_proof_set_sha256=(
                 _source_rights_proof_set_sha256(source_rights_proofs)
+            ),
+            source_label_pack_proofs=source_label_pack_proofs,
+            source_label_pack_proof_set_sha256=(
+                source_label_pack_proof_set_sha256(
+                    source_label_pack_proofs,
+                    report_schema_version=_REPORT_SCHEMA_VERSION,
+                )
+            ),
+            label_pack_contract_object_count=sum(
+                proof.contract_object_count
+                for proof in source_label_pack_proofs
+            ),
+            label_pack_total_contract_bytes=sum(
+                proof.total_contract_bytes
+                for proof in source_label_pack_proofs
             ),
             issues=tuple(issues),
         )
@@ -1640,9 +1876,15 @@ class ManifestValidator:
         issues: list[ReadinessIssue],
         *,
         verify_rights: bool,
-    ) -> tuple[SourceRightsProof, ...]:
+    ) -> tuple[
+        tuple[SourceRightsProof, ...],
+        tuple[_SourceLabelPackRequest, ...],
+    ]:
         if type(verify_rights) is not bool:
             raise ValueError("verify_rights must be a boolean")
+        starting_blocker_count = sum(
+            issue.severity is Severity.BLOCKER for issue in issues
+        )
         seen_ids: set[str] = set()
         split_records: list[SourceSplitRecord] = []
         rights_proofs: list[SourceRightsProof] = []
@@ -1705,6 +1947,17 @@ class ManifestValidator:
                     f"{path}.labels_sha256",
                     "labels_sha256 requires a lowercase SHA-256",
                 )
+            generation_id = source.get("label_pack_generation_id")
+            if (
+                type(generation_id) is not str
+                or not _SHA256_RE.fullmatch(generation_id)
+            ):
+                self._block(
+                    issues,
+                    "SOURCE_CHECKSUM",
+                    f"{path}.label_pack_generation_id",
+                    "label_pack_generation_id requires a lowercase SHA-256",
+                )
 
             try:
                 split = DatasetSplit(source.get("split"))
@@ -1747,6 +2000,7 @@ class ManifestValidator:
                 )
 
         split_is_valid = False
+        label_pack_requests: tuple[_SourceLabelPackRequest, ...] = ()
         if len(split_records) == len(sources):
             try:
                 SplitManifest(
@@ -1758,6 +2012,31 @@ class ManifestValidator:
                 self._block(issues, exc.code, "data_sources", str(exc))
             except ValueError as exc:
                 self._block(issues, "SPLIT_CONTRACT", "data_sources", str(exc))
+        if (
+            split_is_valid
+            and sum(issue.severity is Severity.BLOCKER for issue in issues)
+            == starting_blocker_count
+        ):
+            try:
+                label_pack_requests = tuple(
+                    _SourceLabelPackRequest(
+                        source_id=source.get("source_id"),
+                        asset_sha256=source.get("asset_sha256"),
+                        labels_sha256=source.get("labels_sha256"),
+                        label_pack_generation_id=source.get(
+                            "label_pack_generation_id"
+                        ),
+                        split=split,
+                    )
+                    for source, split, _ in rights_candidates
+                )
+            except ValueError as exc:
+                self._block(
+                    issues,
+                    "LABEL_PACK_REQUEST",
+                    "data_sources",
+                    str(exc),
+                )
         if split_is_valid and verify_rights:
             # Do not perform signature/evidence work until every cheap source,
             # lineage, grouping, and leakage invariant has passed. This bounds
@@ -1803,6 +2082,9 @@ class ManifestValidator:
                                     source_id=prepared.source_id,
                                     asset_sha256=prepared.asset_sha256,
                                     labels_sha256=prepared.labels_sha256,
+                                    label_pack_generation_id=(
+                                        prepared.label_pack_generation_id
+                                    ),
                                     split=prepared.split,
                                     decision_sha256=prepared.decision.fingerprint(),
                                     attestation_sha256=(
@@ -1845,7 +2127,7 @@ class ManifestValidator:
                         str(exc),
                     )
                     rights_proofs.clear()
-        return tuple(rights_proofs)
+        return tuple(rights_proofs), label_pack_requests
 
     def _prepare_rights_fields(
         self,
@@ -1935,6 +2217,9 @@ class ManifestValidator:
                 source_id=source.get("source_id"),
                 asset_sha256=source.get("asset_sha256"),
                 labels_sha256=source.get("labels_sha256"),
+                label_pack_generation_id=source.get(
+                    "label_pack_generation_id"
+                ),
                 split=split,
                 decision=decision,
                 attestation=attestation,
@@ -2130,7 +2415,7 @@ def readiness_verifier_source_tree_sha256() -> str:
 def _required_dataset_artifact_sha256s(
     manifest: Mapping[str, Any],
 ) -> tuple[str, ...]:
-    """Collect exact media, label, and capture-evidence content addresses."""
+    """Collect exact media and capture-evidence content addresses only."""
 
     digests: set[str] = set()
     capture_profiles = manifest.get("capture_profiles")
@@ -2152,10 +2437,9 @@ def _required_dataset_artifact_sha256s(
         for source in data_sources:
             if not isinstance(source, Mapping):
                 continue
-            for field_name in ("asset_sha256", "labels_sha256"):
-                value = source.get(field_name)
-                if type(value) is str and _SHA256_RE.fullmatch(value):
-                    digests.add(value)
+            value = source.get("asset_sha256")
+            if type(value) is str and _SHA256_RE.fullmatch(value):
+                digests.add(value)
     return tuple(sorted(digests))
 
 
@@ -2269,7 +2553,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=Path,
         help=(
             "protected immutable store root containing locks/ and exact "
-            "generations/ for media, labels, and capture artifacts"
+            "generations/ for media and capture artifacts"
+        ),
+    )
+    parser.add_argument(
+        "--label-store-root",
+        required=True,
+        type=Path,
+        help=(
+            "protected immutable store root containing the exact causal-ball "
+            "label-pack generations"
         ),
     )
     parser.add_argument(
@@ -2337,6 +2630,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.protected_configuration_generation
             ),
             artifact_store_root=args.artifact_store_root,
+            label_store_root=args.label_store_root,
             rights_trust_store=trust_store,
             rights_evidence_store_root=args.rights_evidence_store_root,
             rights_verification_policy=verification_policy,

@@ -72,18 +72,27 @@ uv run --locked python -m vision_scoring.readiness \
   --dataset-manifest-attestation examples/dataset-manifest-attestation.json \
   --readiness-verification-policy examples/readiness-verification-policy.json \
   --expected-readiness-verification-policy-sha256 \
-    77dc5aeafc6f4c3697ad545456545639f736009838288c2dd37f29e49866577a \
+    b493e8f2600b4dd30f192786c23441808832865dff3bb462fc0b4eb8008673ff \
   --trusted-launcher-deployment-artifact-sha256 \
-    ada0689d8c632e1ec54c0d97bd5428afc6875b6d36fe6f363d3e12c0b81dda38 \
+    b6efd12cebbb91882653219e477b3eff3e90d49f70aa4a77d66d65e57882ca6f \
   --expected-governance-domain-id example-dataset-governance \
   --protected-configuration-generation \
     examples/protected-configuration-generation.json \
   --artifact-store-root examples/dataset-artifacts \
+  --label-store-root examples/ball-label-packs \
   --rights-trust-store examples/rights-trust-store.json \
   --rights-verification-policy examples/rights-verification-policy.json \
   --expected-rights-verification-policy-sha256 \
-    e4e87616222b632a36f6d2aed1e76e92ce27bf04c3c1c0f34677df448754ffde \
+    4e332524c15d0e8c593555d1c9e03f3c4e127a2742e6e599c93d2b65aae83481 \
   --rights-evidence-store-root examples/rights-evidence
+```
+
+Regenerate the deterministic synthetic V2 manifest, three TRAIN/DEV/TEST label
+packs, reduced media/capture generation, signatures, policy pins, and protected
+generation from the checked-out source tree:
+
+```bash
+.venv/bin/python scripts/regenerate_readiness_fixtures.py
 ```
 
 This checked-in policy is a host-specific synthetic smoke fixture: its runtime
@@ -93,16 +102,19 @@ matching locked runtime, or publish a new trusted fixture generation with pins
 computed for the target deployment. Do not rewrite pins inside an untrusted
 dataset job merely to make the example pass.
 
-The checked-in media/label placeholders, trust stores, signatures, decisions,
+The checked-in media/label-pack placeholders, trust stores, signatures, decisions,
 hashes, and evidence are synthetic structural examples only. They are
 intentionally not production media or trust anchors. A production launcher must
 independently pin the readiness-policy fingerprint, deployment artifact,
 runtime identity, governance domain, rights policy, and trust stores; those
 values cannot come from the dataset. The signed manifest cannot disable the
 unseen-TEST-venue rule. Validation uses one detached canonical manifest
-snapshot and a fresh UTC trust check, then resolves and hashes every declared
-media, label, calibration, camera-attestation, clock-verification, and encoder
-artifact from a separately supplied immutable content-addressed generation.
+snapshot and a fresh UTC trust check. Manifest schema `2.0` makes each
+`labels_sha256` the exact `BallLabelPackRootV1` hash and requires a per-source
+`label_pack_generation_id`; schema `1.0` is rejected. Media, calibration,
+camera-attestation, clock-verification, and encoder bytes are resolved from the
+media/capture artifact generation. Label contracts are reconstructed from a
+distinct, separately supplied immutable label store in one bounded worker.
 Source rights are verified for currentness and signature first, then their
 deduplicated evidence union is checked in one bounded worker and one immutable
 generation lease. DEV as well as TRAIN requires deployment permission because
@@ -136,11 +148,13 @@ trusted launcher and the exact Python/cryptography/OpenSSL/runtime identity.
 The CLI assumes its invoker, these pins, and the clock are trusted governance
 inputs; never expose them as dataset-controlled job options.
 
-The readiness JSON is a canonical, content-addressed proof report, not a signed
+The schema `3.0` readiness JSON is a canonical, content-addressed proof report, not a signed
 authorization token. It carries the signed-manifest proof, artifact sizes/set
 fingerprint and generation ID, rights-evidence generation ID, protected
 configuration generation, protected policies, runtime/deployment commitments,
-exact source-rights uses, review and expiry dates, and verification time. A
+exact source-rights uses, per-source label-pack generation/root/contract
+proofs, aggregate verified contract counts/bytes, review and expiry dates, and
+verification time. A
 training job must recompute it in-process instead of trusting uploaded report
 JSON, then reacquire the same generation and independently stage/hash each
 object as it is consumed. Model cards retain that lineage, and
@@ -160,10 +174,11 @@ verifiers and trusted evaluation paths do not exist yet. The ball-evaluation
 report binds the exact trust store, policy, evaluator, governance domain,
 evidence generation, and protected configuration generation. It also enforces
 its typed, explicitly unverified unit-benchmark split and coverage manifest. The
-checked-in label files are deliberately synthetic placeholders; they demonstrate
-content addressing only and are not trainable truth.
+checked-in label packs are deliberately synthetic placeholders; they demonstrate
+content addressing, exact closure reconstruction, and source/split binding
+only—not semantic truth, admission, or trainable beach-volleyball data.
 
-A readiness-manifest `labels_sha256` and its declared coverage did not prove
+A pre-V2 loose `labels_sha256` and its declared coverage did not prove
 that every decoded frame, or every localizable ball in a full frame, had been
 enumerated. `CausalBallLabelBundleV1` adds a separately curator-signed
 `COMPLETE_FULL_DECODED_FRAME` claim for one bounded derived asset and binds each
@@ -173,7 +188,13 @@ prove source-frame completeness, source residency, derivation, rights, pixels,
 annotation truth, or capture lineage. Every receipt property for training,
 evaluation, deployment, and live scoring is hard-coded `False`. A trusted
 single-use launcher and immutable media lease that reverify every current
-authority are still required before a trainer may consume any bundle.
+authority are still required before a trainer may consume any bundle. The V2
+readiness gate now reconstructs those packs structurally and serializes
+training, evaluation, TEST, deployment, and live-scoring admission as exact
+`false` values. It accepts at most 512 packs, 1,000,000 contract objects, and
+4 GiB of verified contract bytes in one killable worker with a 3,600-second
+post-start absolute monotonic verification/result deadline. See
+[READINESS_LABEL_PACK_GATE.md](../docs/vision-scoring/READINESS_LABEL_PACK_GATE.md).
 
 Create a conservative technical inventory for one or more resident local media
 files (the Python module is standard-library-only; `ffprobe` must be installed
@@ -317,9 +338,11 @@ Implemented now:
   metadata, rights, policy, window, trace, and structural integrity. All of its
   media/product admission flags remain `False`; it proves neither physical
   camera truth nor resident/decoded asset bytes;
-- detached-snapshot, curator-signed readiness manifests with current/revoked
-  governance and byte-verified resident media, label, calibration, camera,
-  clock, and encoder artifacts;
+- detached-snapshot, curator-signed schema-2 readiness manifests with
+  current/revoked governance, byte-verified resident media/capture artifacts,
+  and separately reconstructed source-bound causal-ball label-pack
+  generations. Schema-3 reports grant no training/evaluation/TEST/deployment/
+  live admission;
 - signed commercial-rights decisions with batched evidence verification plus
   immutable, bounded, leakage-safe dataset splits;
 - strict decoded-frame and layered ball/event annotation identities, with signed

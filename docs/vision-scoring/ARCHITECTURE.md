@@ -149,9 +149,12 @@ those fields are not inference power. Large tensors and video remain in
 content-addressed storage, and records carry immutable evidence references and
 exact model/configuration provenance where applicable.
 
-A readiness-manifest `labels_sha256` and a task coverage declaration identify
-bytes but do not prove that every decoded frame—or every localizable ball in a
-frame—was enumerated. `CausalBallLabelBundleV1` adds a separate curator-signed
+A pre-V2 loose `labels_sha256` and a task coverage declaration identified bytes
+but did not prove that every decoded frame—or every localizable ball in a
+frame—was enumerated. Schema-2 readiness now defines `labels_sha256` as the
+exact `BallLabelPackRootV1` hash and binds its immutable generation, source
+asset, and split through a separate structural label-pack worker.
+`CausalBallLabelBundleV1` supplies the curator-signed
 completeness claim for one bounded derived asset. It binds the exact ordered
 decoded-frame identities and the complete per-frame set of Annotation Truth V2
 preimages and attestations. Verification authenticates only the curator's
@@ -159,8 +162,12 @@ stated `COMPLETE_FULL_DECODED_FRAME` enumeration assertion; it does not
 objectively prove source-frame completeness, source residency, derivation,
 rights, pixel truth, annotation truth, or capture lineage. Its verification
 receipt keeps training, evaluation, deployment, and live-scoring admission
-fixed to `False`. A trusted single-use training launcher and an immutable media
-lease that reverify all of those independent authorities are still pending.
+fixed to `False`. The schema-3 readiness report mirrors all five false
+admission scopes; structural TEST-pack verification is not evaluation or TEST
+admission. A trusted single-use training launcher and an immutable media lease
+that reverify all of those independent authorities are still pending. The
+implemented bounded bridge is specified in
+[READINESS_LABEL_PACK_GATE.md](./READINESS_LABEL_PACK_GATE.md).
 
 `RulesReducer` performs domain validation only: match and set identity,
 contiguous sequence, exact ruleset fingerprint, event payload, scoring legality,

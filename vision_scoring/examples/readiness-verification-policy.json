@@ -1,13 +1,13 @@
 {
-  "dataset_trust_store_sha256": "3ef782c3c2fa3cada0b5b513ad73380f7a815a3ae6366df3ab1b90c7fd981254",
-  "deployment_artifact_sha256": "ada0689d8c632e1ec54c0d97bd5428afc6875b6d36fe6f363d3e12c0b81dda38",
+  "dataset_trust_store_sha256": "0ec8cf441b3d5f7d2562f5e0010548747480699305229f366d82382a698bfb6b",
+  "deployment_artifact_sha256": "b6efd12cebbb91882653219e477b3eff3e90d49f70aa4a77d66d65e57882ca6f",
   "governance_domain_id": "example-dataset-governance",
-  "policy_id": "synthetic-readiness-policy-v1",
+  "policy_id": "synthetic-readiness-policy-v2",
   "require_unseen_test_venue": true,
-  "rights_verification_policy_sha256": "59d3216083ad85a43ab0c329f3c6983fbbba8568d8a9aff502a25a19e7f8025f",
+  "rights_verification_policy_sha256": "4e332524c15d0e8c593555d1c9e03f3c4e127a2742e6e599c93d2b65aae83481",
   "runtime_identity_sha256": "45bcc0b309ac45a0800a6fd2db6397a65538a9055e9beb8566088418e734bf27",
   "schema_version": "1.0",
   "valid_from": "2026-07-01",
   "valid_until": "2099-12-31",
-  "verifier_source_tree_sha256": "aac4fbff3cbac3cbbf84202f388cb6c7cb9c42519817eed0a524353fffc3208f"
+  "verifier_source_tree_sha256": "00367a5fddb89d39d06bc021f05b2a56c07a48b96eb271a3bfd874928410c5db"
 }
