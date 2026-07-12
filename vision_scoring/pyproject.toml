@@ -11,6 +11,11 @@ dependencies = [
   "cryptography>=49,<50",
 ]
 
+[project.optional-dependencies]
+training = [
+  "torch>=2.3,<3",
+]
+
 [project.scripts]
 vision-scoring-readiness = "vision_scoring.readiness:main"
 vision-scoring-media-preflight = "vision_scoring.media_preflight:main"
