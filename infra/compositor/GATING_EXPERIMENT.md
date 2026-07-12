@@ -63,8 +63,10 @@ The current operator decision is to test all eight real cameras directly,
 without synthetic sources or separate two- and four-court stages:
 
 - One dedicated `c-4` ingest node normalizes all inputs to 720p30.
-- Streams 1-2 enter as Mevo RTMP 1080p60 stress inputs.
-- Streams 3-8 enter as SRT caller 1080p30 with 2500 ms latency.
+- Streams 1-2 enter as Mevo H.264 RTMP 1080p60 stress inputs at 6 Mbps.
+- Streams 3-5 enter as AVKANS Go HEVC SRT caller 1080p30 inputs at 3 Mbps
+  with 2500 ms latency.
+- Streams 6-8 enter as Maki Live H.264 RTMP 1080p30 inputs at 3 Mbps.
 - Four dedicated `c-4` compositor hosts own courts 1-2, 3-4, 5-6, and 7-8.
 - Eight separate unlisted destinations have auto-start and auto-stop disabled.
 - Run at least two continuous hours; twelve hours remains preferred.

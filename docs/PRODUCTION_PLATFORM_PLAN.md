@@ -76,12 +76,15 @@ the staged two- and four-court runs, so the same estimate must be validated on
 all four hosts at once rather than inferred from a partial load.
 
 The full-eight ingest candidate is one dedicated `c-4` with 8 GB RAM. Every
-input is normalized once to 720p30 with a one-second GOP; this intentionally
-drops the two Mevo 1080p60 test inputs to the actual program cadence before
-distribution. Sustained ingest CPU at or above 80%, frame stalls, or growing
-normalizer queues fail the candidate and require two ingest hosts split four
-courts each. Stream-copy or audio-only conversion may replace normalization
-only after a camera model is explicitly qualified.
+input is normalized once to H.264/Opus at 720p30 with a one-second GOP. The
+direct-eight input mix is two H.264 RTMP Mevos at 1080p60, three HEVC/SRT
+AVKANS Go cameras at 1080p30, and three H.264 RTMP Maki Live cameras at
+1080p30. This intentionally drops the Mevo stress inputs to the actual program
+cadence and converts HEVC before browser distribution. Sustained ingest CPU at
+or above 80%, frame stalls, or growing normalizer queues fail the candidate and
+require two ingest hosts split four courts each. Stream-copy or audio-only
+conversion may replace normalization only after a camera model is explicitly
+qualified.
 
 ## Reliability rules
 

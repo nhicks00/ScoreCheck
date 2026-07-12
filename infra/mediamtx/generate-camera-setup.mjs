@@ -21,7 +21,7 @@ const lines = [
   "Speedify transport: UDP (not Auto)",
   "Router PEP: On for the two RTMP cameras, when available",
   "Reconnect: On",
-  "H.264 / CBR / AAC 48 kHz 128 kbps / one-second keyframe interval",
+  "CBR / AAC 48 kHz 128 kbps / one-second keyframe interval",
   "Local camera recording: On",
   "Minimum sustained bonded upload: 75 Mbps; preferred: 85-100 Mbps",
   "Keep base camera bitrate at or below 60% of worst sustained bonded upload",
@@ -39,20 +39,23 @@ for (let court = 1; court <= 8; court += 1) {
     const key = `court${court}_raw?user=${user}&pass=${pass}`;
     lines.push(`Camera: Mevo Core ${court}`);
     lines.push("Protocol: RTMP");
+    lines.push("Video codec: H.264");
     lines.push("Resolution / frame rate: 1920x1080 at 60 fps");
     lines.push("Video bitrate: 6000 kbps CBR");
     lines.push(`Server URL: rtmp://${host}:1935`);
     lines.push(`Stream key: ${key}`);
     lines.push(`Complete URL: rtmp://${host}:1935/${key}`);
-  } else {
+  } else if (court <= 5) {
     const streamId = `publish:court${court}_raw:${user}:${pass}`;
     const standardStreamId = `#!::m=publish,r=court${court}_raw,u=${user},s=${pass}`;
+    lines.push(`Camera: AVKANS Go ${court - 2}`);
     lines.push("Protocol: SRT");
     lines.push("Connection role: Caller");
     lines.push("Transmission type: Live");
+    lines.push("Video codec: HEVC / H.265");
     lines.push("Resolution / frame rate: 1920x1080 at 30 fps");
-    lines.push("Video bitrate: 4500-5000 kbps CBR");
-    lines.push("Input bandwidth: Match the configured stream bitrate");
+    lines.push("Video bitrate: 3000 kbps CBR");
+    lines.push("Input bandwidth: 3000 kbps");
     lines.push("Recovery overhead: 25%");
     lines.push("Latency: 2500 ms");
     lines.push("Packet size / payload size: 1316 bytes");
@@ -64,6 +67,16 @@ for (let court = 1; court <= 8; court += 1) {
     lines.push(`Stream ID / stream key: ${streamId}`);
     lines.push(`Complete URL: srt://${host}:8890?streamid=${streamId}&pkt_size=1316`);
     lines.push(`Standard Stream ID alternative: ${standardStreamId}`);
+  } else {
+    const key = `court${court}_raw?user=${user}&pass=${pass}`;
+    lines.push(`Camera: Maki Live ${court - 5}`);
+    lines.push("Protocol: RTMP");
+    lines.push("Video codec: H.264");
+    lines.push("Resolution / frame rate: 1920x1080 at 30 fps");
+    lines.push("Video bitrate: 3000 kbps CBR");
+    lines.push(`Server URL: rtmp://${host}:1935`);
+    lines.push(`Stream key: ${key}`);
+    lines.push(`Complete URL: rtmp://${host}:1935/${key}`);
   }
   lines.push("");
 }

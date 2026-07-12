@@ -34,7 +34,7 @@ On-demand branches poll local path readiness every two seconds and start FFmpeg
 only after their upstream exists, so an open offline preview cannot create a
 process or log storm.
 
-Every input is normalized to 720p30 before preview/program distribution. A
-1080p60 camera is therefore an ingest stress source, not a 60 fps program
-output. The one-second normalized GOP limits decoder recovery time after an
-upstream loss event.
+Every H.264 or HEVC input is normalized to H.264/Opus at 720p30 before
+preview/program distribution. A 1080p60 camera is therefore an ingest stress
+source, not a 60 fps program output. The one-second normalized GOP limits
+decoder recovery time after an upstream loss event.
