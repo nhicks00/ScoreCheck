@@ -6,6 +6,7 @@ import base64
 import binascii
 from enum import Enum
 import json
+import math
 import re
 from typing import Any, Mapping
 
@@ -168,6 +169,68 @@ def canonical_json_bytes(
     return encoded
 
 
+def canonical_finite_json_bytes(
+    value: Mapping[str, Any],
+    *,
+    label: str,
+    maximum_bytes: int = DEFAULT_MAX_JSON_BYTES,
+    maximum_depth: int = DEFAULT_MAX_JSON_DEPTH,
+    maximum_nodes: int = DEFAULT_MAX_JSON_NODES,
+    maximum_containers: int = DEFAULT_MAX_JSON_CONTAINERS,
+) -> bytes:
+    """Encode exact canonical UTF-8 JSON that may contain finite floats.
+
+    This is deliberately separate from :func:`canonical_json_bytes`. The
+    original contract serializer remains integer-only; annotation geometry
+    uses this narrower opt-in surface for finite IEEE-754 values.
+    """
+
+    require_exact_int(
+        maximum_bytes,
+        "maximum_bytes",
+        minimum=1,
+        maximum=DEFAULT_MAX_JSON_BYTES,
+    )
+    require_exact_int(
+        maximum_depth,
+        "maximum_depth",
+        minimum=1,
+        maximum=DEFAULT_MAX_JSON_DEPTH,
+    )
+    require_exact_int(
+        maximum_nodes,
+        "maximum_nodes",
+        minimum=1,
+        maximum=DEFAULT_MAX_JSON_NODES,
+    )
+    require_exact_int(
+        maximum_containers,
+        "maximum_containers",
+        minimum=1,
+        maximum=DEFAULT_MAX_JSON_CONTAINERS,
+    )
+    _measure_finite_json(
+        value,
+        maximum_depth=maximum_depth,
+        maximum_nodes=maximum_nodes,
+        maximum_containers=maximum_containers,
+    )
+    try:
+        encoded = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8", errors="strict")
+    except (TypeError, ValueError, UnicodeEncodeError) as exc:
+        _fail("INVALID_FINITE_JSON", f"{label} must be finite canonical UTF-8 JSON")
+        raise AssertionError from exc
+    if not 1 <= len(encoded) <= maximum_bytes:
+        _fail("JSON_SIZE", f"{label} must be 1 to {maximum_bytes} exact bytes")
+    return encoded
+
+
 def _reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -198,6 +261,17 @@ def _parse_signed_64_integer(token: str) -> int:
 
 def _reject_float(token: str) -> None:
     _fail("INVALID_JSON_NUMBER", f"floating JSON number is forbidden: {token}")
+
+
+def _parse_finite_float(token: str) -> float:
+    try:
+        value = float(token)
+    except ValueError as exc:
+        _fail("INVALID_JSON_NUMBER", "JSON float is invalid")
+        raise AssertionError from exc
+    if not math.isfinite(value):
+        _fail("NONFINITE_JSON_NUMBER", "JSON float must be finite")
+    return value
 
 
 def _measure_json(
@@ -241,6 +315,64 @@ def _measure_json(
     elif type(value) is int:
         if not MIN_SIGNED_64 <= value <= MAX_SIGNED_64:
             _fail("JSON_INTEGER_RANGE", "JSON integer exceeds signed 64-bit")
+    elif value is not None and type(value) not in (str, bool):
+        _fail("INVALID_JSON_VALUE", "unsupported JSON value")
+    if nodes > maximum_nodes:
+        _fail("JSON_NODE_LIMIT_EXCEEDED", "canonical JSON has too many nodes")
+    if containers > maximum_containers:
+        _fail(
+            "JSON_CONTAINER_LIMIT_EXCEEDED",
+            "canonical JSON has too many containers",
+        )
+    return nodes, containers
+
+
+def _measure_finite_json(
+    value: object,
+    *,
+    maximum_depth: int,
+    maximum_nodes: int,
+    maximum_containers: int,
+    depth: int = 1,
+) -> tuple[int, int]:
+    """Bound a JSON tree while permitting only finite floats and signed64 ints."""
+
+    if depth > maximum_depth:
+        _fail("JSON_DEPTH_EXCEEDED", "canonical JSON is too deeply nested")
+    nodes = 1
+    containers = 0
+    if type(value) is dict:
+        containers = 1
+        for key, item in value.items():
+            if type(key) is not str:
+                _fail("INVALID_JSON_KEY", "JSON object keys must be strings")
+            child_nodes, child_containers = _measure_finite_json(
+                item,
+                maximum_depth=maximum_depth,
+                maximum_nodes=maximum_nodes,
+                maximum_containers=maximum_containers,
+                depth=depth + 1,
+            )
+            nodes += child_nodes
+            containers += child_containers
+    elif type(value) in (list, tuple):
+        containers = 1
+        for item in value:
+            child_nodes, child_containers = _measure_finite_json(
+                item,
+                maximum_depth=maximum_depth,
+                maximum_nodes=maximum_nodes,
+                maximum_containers=maximum_containers,
+                depth=depth + 1,
+            )
+            nodes += child_nodes
+            containers += child_containers
+    elif type(value) is int:
+        if not MIN_SIGNED_64 <= value <= MAX_SIGNED_64:
+            _fail("JSON_INTEGER_RANGE", "JSON integer exceeds signed 64-bit")
+    elif type(value) is float:
+        if not math.isfinite(value):
+            _fail("NONFINITE_JSON_NUMBER", "JSON float must be finite")
     elif value is not None and type(value) not in (str, bool):
         _fail("INVALID_JSON_VALUE", "unsupported JSON value")
     if nodes > maximum_nodes:
@@ -322,6 +454,84 @@ def parse_canonical_json_object(
     return value
 
 
+def parse_canonical_finite_json_object(
+    raw: bytes,
+    *,
+    label: str,
+    maximum_bytes: int = DEFAULT_MAX_JSON_BYTES,
+    maximum_depth: int = DEFAULT_MAX_JSON_DEPTH,
+    maximum_nodes: int = DEFAULT_MAX_JSON_NODES,
+    maximum_containers: int = DEFAULT_MAX_JSON_CONTAINERS,
+) -> dict[str, Any]:
+    """Parse one bounded canonical UTF-8 object with finite float support."""
+
+    require_exact_int(
+        maximum_bytes,
+        "maximum_bytes",
+        minimum=1,
+        maximum=DEFAULT_MAX_JSON_BYTES,
+    )
+    require_exact_int(
+        maximum_depth,
+        "maximum_depth",
+        minimum=1,
+        maximum=DEFAULT_MAX_JSON_DEPTH,
+    )
+    require_exact_int(
+        maximum_nodes,
+        "maximum_nodes",
+        minimum=1,
+        maximum=DEFAULT_MAX_JSON_NODES,
+    )
+    require_exact_int(
+        maximum_containers,
+        "maximum_containers",
+        minimum=1,
+        maximum=DEFAULT_MAX_JSON_CONTAINERS,
+    )
+    if type(raw) is not bytes or not 1 <= len(raw) <= maximum_bytes:
+        _fail("JSON_SIZE", f"{label} must be 1 to {maximum_bytes} exact bytes")
+    try:
+        value = json.loads(
+            raw.decode("utf-8", errors="strict"),
+            object_pairs_hook=_reject_duplicate_pairs,
+            parse_constant=_reject_nonfinite,
+            parse_int=_parse_signed_64_integer,
+            parse_float=_parse_finite_float,
+        )
+    except CanonicalWireError:
+        raise
+    except RecursionError as exc:
+        _fail("JSON_DEPTH_EXCEEDED", f"{label} is too deeply nested")
+        raise AssertionError from exc
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        _fail("INVALID_JSON", f"{label} must be valid UTF-8 JSON")
+        raise AssertionError from exc
+    try:
+        _measure_finite_json(
+            value,
+            maximum_depth=maximum_depth,
+            maximum_nodes=maximum_nodes,
+            maximum_containers=maximum_containers,
+        )
+    except RecursionError as exc:
+        _fail("JSON_DEPTH_EXCEEDED", f"{label} is too deeply nested")
+        raise AssertionError from exc
+    if type(value) is not dict:
+        _fail("JSON_ROOT", f"{label} root must be an object")
+    canonical = canonical_finite_json_bytes(
+        value,
+        label=label,
+        maximum_bytes=maximum_bytes,
+        maximum_depth=maximum_depth,
+        maximum_nodes=maximum_nodes,
+        maximum_containers=maximum_containers,
+    )
+    if raw != canonical:
+        _fail("NONCANONICAL_JSON", f"{label} bytes are not canonical")
+    return value
+
+
 __all__ = [
     "CanonicalWireError",
     "DEFAULT_MAX_JSON_BYTES",
@@ -331,9 +541,11 @@ __all__ = [
     "MAX_SIGNED_64",
     "MIN_SIGNED_64",
     "canonical_base64",
+    "canonical_finite_json_bytes",
     "canonical_json_bytes",
     "enum_from_json",
     "exact_list",
+    "parse_canonical_finite_json_object",
     "parse_canonical_json_object",
     "require_canonical_tuple",
     "require_exact_fields",

@@ -54,6 +54,13 @@ from .annotations import (
     ReviewState,
     UnavailableFrameReference,
 )
+from .contract_wire import (
+    CanonicalWireError,
+    canonical_finite_json_bytes,
+    enum_from_json,
+    parse_canonical_finite_json_object,
+    require_exact_fields,
+)
 from .immutable_store import (
     ImmutableStoreError,
     generation_id_for,
@@ -89,6 +96,10 @@ _MAX_TRUSTED_KEYS = 128
 _MAX_CURRENT_ANNOTATIONS = 100_000
 _MAX_REVOKED_ANNOTATIONS = 100_000
 _MAX_PROTECTED_CONFIGURATION_BYTES = 64 * 1024
+_MAX_ANNOTATION_ATTESTATION_JSON_BYTES = 4 * 1024
+_MAX_ANNOTATION_ATTESTATION_JSON_DEPTH = 2
+_MAX_ANNOTATION_ATTESTATION_JSON_NODES = 32
+_MAX_ANNOTATION_ATTESTATION_JSON_CONTAINERS = 1
 _EVIDENCE_TIMEOUT_SECONDS = 30.0
 
 _PROTECTED_CONFIGURATION_FIELDS = frozenset(
@@ -431,6 +442,82 @@ class AnnotationAttestation:
             "signed_on": self.signed_on,
             "trust_domain_id": self.trust_domain_id,
         }
+
+    def to_json_bytes(self) -> bytes:
+        """Return the bounded canonical persisted representation."""
+
+        return canonical_finite_json_bytes(
+            self.to_canonical_dict(),
+            label="annotation attestation",
+            maximum_bytes=_MAX_ANNOTATION_ATTESTATION_JSON_BYTES,
+            maximum_depth=_MAX_ANNOTATION_ATTESTATION_JSON_DEPTH,
+            maximum_nodes=_MAX_ANNOTATION_ATTESTATION_JSON_NODES,
+            maximum_containers=_MAX_ANNOTATION_ATTESTATION_JSON_CONTAINERS,
+        )
+
+    @classmethod
+    def from_json_bytes(cls, raw: bytes) -> AnnotationAttestation:
+        """Reconstruct one attestation only from exact canonical bytes."""
+
+        payload = parse_canonical_finite_json_object(
+            raw,
+            label="annotation attestation",
+            maximum_bytes=_MAX_ANNOTATION_ATTESTATION_JSON_BYTES,
+            maximum_depth=_MAX_ANNOTATION_ATTESTATION_JSON_DEPTH,
+            maximum_nodes=_MAX_ANNOTATION_ATTESTATION_JSON_NODES,
+            maximum_containers=_MAX_ANNOTATION_ATTESTATION_JSON_CONTAINERS,
+        )
+        try:
+            payload = require_exact_fields(
+                payload,
+                {
+                    "annotation_sha256",
+                    "annotation_type",
+                    "key_id",
+                    "principal_id",
+                    "role",
+                    "schema_version",
+                    "signature_base64",
+                    "signed_on",
+                    "trust_domain_id",
+                },
+                label="annotation attestation",
+            )
+            if payload["schema_version"] != SCHEMA_VERSION:
+                raise ValueError(
+                    f"annotation attestation schema_version must be {SCHEMA_VERSION}"
+                )
+            attestation = cls(
+                annotation_type=enum_from_json(
+                    AnnotationType,
+                    payload["annotation_type"],
+                    "annotation attestation.annotation_type",
+                ),  # type: ignore[arg-type]
+                annotation_sha256=payload["annotation_sha256"],
+                role=enum_from_json(
+                    AnnotationAttestationRole,
+                    payload["role"],
+                    "annotation attestation.role",
+                ),  # type: ignore[arg-type]
+                principal_id=payload["principal_id"],
+                key_id=payload["key_id"],
+                trust_domain_id=payload["trust_domain_id"],
+                signed_on=payload["signed_on"],
+                signature_base64=payload["signature_base64"],
+            )
+        except CanonicalWireError:
+            raise
+        except (KeyError, TypeError, ValueError) as exc:
+            raise CanonicalWireError(
+                "ATTESTATION_SHAPE",
+                "annotation attestation fields are invalid",
+            ) from exc
+        if raw != attestation.to_json_bytes():
+            raise CanonicalWireError(
+                "NONCANONICAL_CONTRACT",
+                "annotation attestation bytes changed during reconstruction",
+            )
+        return attestation
 
     def fingerprint(self) -> str:
         return hashlib.sha256(

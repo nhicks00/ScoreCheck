@@ -18,6 +18,14 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from .contract_wire import (
+    CanonicalWireError,
+    canonical_finite_json_bytes,
+    enum_from_json,
+    exact_list,
+    parse_canonical_finite_json_object,
+    require_exact_fields,
+)
 from .domain_events import Team
 
 
@@ -32,6 +40,10 @@ _MAX_EVIDENCE_REFS_PER_ANNOTATION = 64
 _MAX_CAPTURE_ATTESTATION_REFS = 16
 _MAX_SOURCE_DIMENSION_PX = 65_536
 _MAX_SIGNED_64_BIT_INTEGER = (1 << 63) - 1
+_MAX_BALL_FRAME_ANNOTATION_JSON_BYTES = 64 * 1024
+_MAX_BALL_FRAME_ANNOTATION_JSON_DEPTH = 12
+_MAX_BALL_FRAME_ANNOTATION_JSON_NODES = 4_096
+_MAX_BALL_FRAME_ANNOTATION_JSON_CONTAINERS = 512
 
 
 def _require_sha256(value: object, field_name: str) -> None:
@@ -651,6 +663,11 @@ class FrameReference(_CanonicalContract):
             "capture_integrity_attestation_refs",
             max_items=_MAX_CAPTURE_ATTESTATION_REFS,
         )
+        object.__setattr__(
+            self,
+            "capture_integrity_attestation_refs",
+            tuple(sorted(self.capture_integrity_attestation_refs)),
+        )
 
         if self.duplicate_kind is FrameDuplicateKind.NONE:
             if self.duplicate_of_frame_index is not None:
@@ -803,6 +820,16 @@ class UnavailableFrameReference(_CanonicalContract):
             self.capture_integrity_attestation_refs,
             self.gap_evidence_refs,
         )
+        object.__setattr__(
+            self,
+            "capture_integrity_attestation_refs",
+            tuple(sorted(self.capture_integrity_attestation_refs)),
+        )
+        object.__setattr__(
+            self,
+            "gap_evidence_refs",
+            tuple(sorted(self.gap_evidence_refs)),
+        )
 
     def to_canonical_dict(self) -> dict[str, Any]:
         return {
@@ -890,6 +917,21 @@ class SearchRegionObservabilityAttestation(_CanonicalContract):
         _validate_annotation_evidence_total(
             self.capture_integrity_attestation_refs,
             self.review_evidence_refs,
+        )
+        object.__setattr__(
+            self,
+            "capture_integrity_attestation_refs",
+            tuple(sorted(self.capture_integrity_attestation_refs)),
+        )
+        object.__setattr__(
+            self,
+            "reviewer_ids",
+            tuple(sorted(self.reviewer_ids)),
+        )
+        object.__setattr__(
+            self,
+            "review_evidence_refs",
+            tuple(sorted(self.review_evidence_refs)),
         )
 
     def validate_for(
@@ -1123,6 +1165,475 @@ def _validate_annotation_evidence_total(
             "annotation evidence cannot exceed "
             f"{_MAX_EVIDENCE_REFS_PER_ANNOTATION} total refs"
         )
+
+
+def _wire_object(
+    value: object,
+    fields: set[str],
+    *,
+    label: str,
+) -> dict[str, Any]:
+    payload = require_exact_fields(value, fields, label=label)
+    if payload["schema_version"] != SCHEMA_VERSION:
+        raise ValueError(f"{label}.schema_version must be {SCHEMA_VERSION}")
+    return payload
+
+
+def _wire_string_tuple(
+    payload: dict[str, Any],
+    field_name: str,
+    *,
+    label: str,
+) -> tuple[str, ...]:
+    values = exact_list(payload, field_name, label=label)
+    if any(type(value) is not str for value in values):
+        raise ValueError(f"{label}.{field_name} must contain only strings")
+    return tuple(values)
+
+
+def _wire_optional_string(value: object, field_name: str) -> str | None:
+    if value is not None and type(value) is not str:
+        raise ValueError(f"{field_name} must be a string or null")
+    return value
+
+
+def _wire_exact_integer(value: object, field_name: str) -> int:
+    if type(value) is not int:
+        raise ValueError(f"{field_name} must be an exact JSON integer")
+    return value
+
+
+def _wire_optional_number(value: object, field_name: str) -> int | float | None:
+    if value is not None and type(value) not in {int, float}:
+        raise ValueError(f"{field_name} must be a JSON number or null")
+    return value
+
+
+def _wire_frame_decode_contract(value: object) -> FrameDecodeContract:
+    label = "ball annotation frame decode contract"
+    payload = _wire_object(
+        value,
+        {
+            "autorotation_policy",
+            "color_range",
+            "color_space",
+            "decoder_artifact_sha256",
+            "decoder_build_id",
+            "output_height",
+            "output_pixel_format",
+            "output_width",
+            "schema_version",
+        },
+        label=label,
+    )
+    return FrameDecodeContract(
+        decoder_artifact_sha256=payload["decoder_artifact_sha256"],
+        decoder_build_id=payload["decoder_build_id"],
+        autorotation_policy=enum_from_json(
+            AutorotationPolicy,
+            payload["autorotation_policy"],
+            f"{label}.autorotation_policy",
+        ),  # type: ignore[arg-type]
+        color_space=enum_from_json(
+            DecodedColorSpace,
+            payload["color_space"],
+            f"{label}.color_space",
+        ),  # type: ignore[arg-type]
+        color_range=enum_from_json(
+            DecodedColorRange,
+            payload["color_range"],
+            f"{label}.color_range",
+        ),  # type: ignore[arg-type]
+        output_pixel_format=enum_from_json(
+            DecodedPixelFormat,
+            payload["output_pixel_format"],
+            f"{label}.output_pixel_format",
+        ),  # type: ignore[arg-type]
+        output_width=_wire_exact_integer(
+            payload["output_width"], f"{label}.output_width"
+        ),
+        output_height=_wire_exact_integer(
+            payload["output_height"], f"{label}.output_height"
+        ),
+    )
+
+
+def _wire_decoded_frame_identity(value: object) -> DecodedFrameIdentity:
+    label = "ball annotation decoded frame identity"
+    payload = _wire_object(
+        value,
+        {
+            "decode_contract",
+            "decoded_frame_hash_basis",
+            "decoded_frame_sha256",
+            "frame_index",
+            "pixel_coordinate_space",
+            "schema_version",
+            "selected_video_stream_index",
+            "source_sha256",
+            "timestamp_basis",
+            "timestamp_ns",
+        },
+        label=label,
+    )
+    return DecodedFrameIdentity(
+        source_sha256=payload["source_sha256"],
+        selected_video_stream_index=_wire_exact_integer(
+            payload["selected_video_stream_index"],
+            f"{label}.selected_video_stream_index",
+        ),
+        frame_index=_wire_exact_integer(
+            payload["frame_index"], f"{label}.frame_index"
+        ),
+        timestamp_ns=_wire_exact_integer(
+            payload["timestamp_ns"], f"{label}.timestamp_ns"
+        ),
+        timestamp_basis=enum_from_json(
+            TimestampBasis,
+            payload["timestamp_basis"],
+            f"{label}.timestamp_basis",
+        ),  # type: ignore[arg-type]
+        pixel_coordinate_space=enum_from_json(
+            PixelCoordinateSpace,
+            payload["pixel_coordinate_space"],
+            f"{label}.pixel_coordinate_space",
+        ),  # type: ignore[arg-type]
+        decode_contract=_wire_frame_decode_contract(payload["decode_contract"]),
+        decoded_frame_sha256=payload["decoded_frame_sha256"],
+        decoded_frame_hash_basis=enum_from_json(
+            DecodedFrameHashBasis,
+            payload["decoded_frame_hash_basis"],
+            f"{label}.decoded_frame_hash_basis",
+        ),  # type: ignore[arg-type]
+    )
+
+
+def _wire_frame_reference(value: object) -> FrameReference:
+    label = "ball annotation frame reference"
+    payload = _wire_object(
+        value,
+        {
+            "capture_integrity_attestation_refs",
+            "duplicate_kind",
+            "duplicate_of_frame_index",
+            "identity",
+            "schema_version",
+        },
+        label=label,
+    )
+    duplicate_of = payload["duplicate_of_frame_index"]
+    if duplicate_of is not None:
+        duplicate_of = _wire_exact_integer(
+            duplicate_of, f"{label}.duplicate_of_frame_index"
+        )
+    return FrameReference(
+        identity=_wire_decoded_frame_identity(payload["identity"]),
+        duplicate_kind=enum_from_json(
+            FrameDuplicateKind,
+            payload["duplicate_kind"],
+            f"{label}.duplicate_kind",
+        ),  # type: ignore[arg-type]
+        duplicate_of_frame_index=duplicate_of,
+        capture_integrity_attestation_refs=_wire_string_tuple(
+            payload,
+            "capture_integrity_attestation_refs",
+            label=label,
+        ),
+    )
+
+
+def _wire_unavailable_frame_reference(value: object) -> UnavailableFrameReference:
+    label = "ball annotation unavailable frame reference"
+    payload = _wire_object(
+        value,
+        {
+            "capture_integrity_attestation_refs",
+            "capture_segment_ref",
+            "decoded_pixels_available",
+            "expected_interval_end_ns",
+            "expected_interval_start_ns",
+            "frame_index",
+            "gap_evidence_refs",
+            "schema_version",
+            "selected_video_stream_index",
+            "source_sha256",
+            "timestamp_basis",
+            "unavailability_reason",
+        },
+        label=label,
+    )
+    if type(payload["decoded_pixels_available"]) is not bool or payload[
+        "decoded_pixels_available"
+    ]:
+        raise ValueError(f"{label}.decoded_pixels_available must be false")
+    return UnavailableFrameReference(
+        source_sha256=payload["source_sha256"],
+        selected_video_stream_index=_wire_exact_integer(
+            payload["selected_video_stream_index"],
+            f"{label}.selected_video_stream_index",
+        ),
+        frame_index=_wire_exact_integer(
+            payload["frame_index"], f"{label}.frame_index"
+        ),
+        expected_interval_start_ns=_wire_exact_integer(
+            payload["expected_interval_start_ns"],
+            f"{label}.expected_interval_start_ns",
+        ),
+        expected_interval_end_ns=_wire_exact_integer(
+            payload["expected_interval_end_ns"],
+            f"{label}.expected_interval_end_ns",
+        ),
+        timestamp_basis=enum_from_json(
+            TimestampBasis,
+            payload["timestamp_basis"],
+            f"{label}.timestamp_basis",
+        ),  # type: ignore[arg-type]
+        capture_segment_ref=payload["capture_segment_ref"],
+        unavailability_reason=enum_from_json(
+            CaptureUnavailabilityReason,
+            payload["unavailability_reason"],
+            f"{label}.unavailability_reason",
+        ),  # type: ignore[arg-type]
+        capture_integrity_attestation_refs=_wire_string_tuple(
+            payload,
+            "capture_integrity_attestation_refs",
+            label=label,
+        ),
+        gap_evidence_refs=_wire_string_tuple(
+            payload,
+            "gap_evidence_refs",
+            label=label,
+        ),
+    )
+
+
+def _wire_pixel_point(value: object, field_name: str) -> PixelPoint:
+    payload = _wire_object(
+        value,
+        {"schema_version", "x", "y"},
+        label=field_name,
+    )
+    x = _wire_optional_number(payload["x"], f"{field_name}.x")
+    y = _wire_optional_number(payload["y"], f"{field_name}.y")
+    if x is None or y is None:
+        raise ValueError(f"{field_name} coordinates cannot be null")
+    return PixelPoint(x=x, y=y)
+
+
+def _wire_optional_pixel_point(value: object, field_name: str) -> PixelPoint | None:
+    return None if value is None else _wire_pixel_point(value, field_name)
+
+
+def _wire_blur_ellipse(value: object) -> BlurEllipse:
+    label = "ball annotation blur ellipse"
+    payload = _wire_object(
+        value,
+        {
+            "angle_degrees",
+            "major_radius_px",
+            "minor_radius_px",
+            "schema_version",
+        },
+        label=label,
+    )
+    values = {
+        field_name: _wire_optional_number(payload[field_name], f"{label}.{field_name}")
+        for field_name in ("major_radius_px", "minor_radius_px", "angle_degrees")
+    }
+    if any(value is None for value in values.values()):
+        raise ValueError(f"{label} numbers cannot be null")
+    return BlurEllipse(**values)  # type: ignore[arg-type]
+
+
+def _wire_pixel_region(value: object) -> PixelRegion:
+    label = "ball annotation searched region"
+    payload = _wire_object(
+        value,
+        {"bottom", "left", "right", "schema_version", "top"},
+        label=label,
+    )
+    values = {
+        field_name: _wire_optional_number(payload[field_name], f"{label}.{field_name}")
+        for field_name in ("left", "top", "right", "bottom")
+    }
+    if any(value is None for value in values.values()):
+        raise ValueError(f"{label} numbers cannot be null")
+    return PixelRegion(**values)  # type: ignore[arg-type]
+
+
+def _wire_search_attestation(
+    value: object,
+) -> SearchRegionObservabilityAttestation:
+    label = "ball annotation search-region observability attestation"
+    payload = _wire_object(
+        value,
+        {
+            "capture_integrity_attestation_refs",
+            "decoded_frame_sha256",
+            "frame_identity_sha256",
+            "frame_index",
+            "region_scope",
+            "region_visibility",
+            "review_evidence_refs",
+            "reviewer_ids",
+            "schema_version",
+            "searched_region",
+            "selected_video_stream_index",
+            "source_sha256",
+            "target_role",
+        },
+        label=label,
+    )
+    return SearchRegionObservabilityAttestation(
+        source_sha256=payload["source_sha256"],
+        selected_video_stream_index=_wire_exact_integer(
+            payload["selected_video_stream_index"],
+            f"{label}.selected_video_stream_index",
+        ),
+        frame_index=_wire_exact_integer(
+            payload["frame_index"], f"{label}.frame_index"
+        ),
+        decoded_frame_sha256=payload["decoded_frame_sha256"],
+        frame_identity_sha256=payload["frame_identity_sha256"],
+        target_role=enum_from_json(
+            BallRole, payload["target_role"], f"{label}.target_role"
+        ),  # type: ignore[arg-type]
+        region_scope=enum_from_json(
+            SearchRegionScope,
+            payload["region_scope"],
+            f"{label}.region_scope",
+        ),  # type: ignore[arg-type]
+        searched_region=_wire_pixel_region(payload["searched_region"]),
+        region_visibility=enum_from_json(
+            SearchRegionVisibility,
+            payload["region_visibility"],
+            f"{label}.region_visibility",
+        ),  # type: ignore[arg-type]
+        capture_integrity_attestation_refs=_wire_string_tuple(
+            payload,
+            "capture_integrity_attestation_refs",
+            label=label,
+        ),
+        reviewer_ids=_wire_string_tuple(payload, "reviewer_ids", label=label),
+        review_evidence_refs=_wire_string_tuple(
+            payload,
+            "review_evidence_refs",
+            label=label,
+        ),
+    )
+
+
+def _ball_frame_annotation_from_wire_dict(
+    value: object,
+) -> BallFrameAnnotationV2:
+    label = "ball frame annotation V2"
+    payload = _wire_object(
+        value,
+        {
+            "adjudication_evidence_refs",
+            "adjudicator_id",
+            "ambiguity_reason",
+            "annotation_id",
+            "annotation_type",
+            "appearance",
+            "apparent_minor_axis_diameter_px",
+            "ball_instance_id",
+            "blur_ellipse",
+            "blur_end",
+            "blur_start",
+            "center",
+            "frame",
+            "ontology_sha256",
+            "play_state",
+            "review_evidence_refs",
+            "review_state",
+            "reviewer_ids",
+            "role",
+            "schema_version",
+            "search_region_observability_attestation",
+            "track_segment_id",
+            "truth_layer",
+            "uncertainty_radius_px",
+            "visibility",
+        },
+        label=label,
+    )
+    if payload["annotation_type"] != AnnotationType.BALL_FRAME_OBSERVATION.value:
+        raise ValueError(f"{label}.annotation_type is unsupported")
+    if payload["truth_layer"] != TruthLayer.OBSERVATIONAL.value:
+        raise ValueError(f"{label}.truth_layer is unsupported")
+    frame_payload = payload["frame"]
+    if type(frame_payload) is not dict:
+        raise ValueError(f"{label}.frame must be an exact JSON object")
+    frame = (
+        _wire_unavailable_frame_reference(frame_payload)
+        if "decoded_pixels_available" in frame_payload
+        else _wire_frame_reference(frame_payload)
+    )
+    search_payload = payload["search_region_observability_attestation"]
+    blur_ellipse_payload = payload["blur_ellipse"]
+    return BallFrameAnnotationV2(
+        annotation_id=payload["annotation_id"],
+        ontology_sha256=payload["ontology_sha256"],
+        ball_instance_id=payload["ball_instance_id"],
+        frame=frame,
+        visibility=enum_from_json(
+            BallVisibility, payload["visibility"], f"{label}.visibility"
+        ),  # type: ignore[arg-type]
+        appearance=enum_from_json(
+            BallAppearance, payload["appearance"], f"{label}.appearance"
+        ),  # type: ignore[arg-type]
+        role=enum_from_json(
+            BallRole, payload["role"], f"{label}.role"
+        ),  # type: ignore[arg-type]
+        play_state=enum_from_json(
+            BallPlayState, payload["play_state"], f"{label}.play_state"
+        ),  # type: ignore[arg-type]
+        center=_wire_optional_pixel_point(payload["center"], f"{label}.center"),
+        blur_start=_wire_optional_pixel_point(
+            payload["blur_start"], f"{label}.blur_start"
+        ),
+        blur_end=_wire_optional_pixel_point(
+            payload["blur_end"], f"{label}.blur_end"
+        ),
+        blur_ellipse=(
+            None
+            if blur_ellipse_payload is None
+            else _wire_blur_ellipse(blur_ellipse_payload)
+        ),
+        apparent_minor_axis_diameter_px=_wire_optional_number(
+            payload["apparent_minor_axis_diameter_px"],
+            f"{label}.apparent_minor_axis_diameter_px",
+        ),
+        uncertainty_radius_px=_wire_optional_number(
+            payload["uncertainty_radius_px"],
+            f"{label}.uncertainty_radius_px",
+        ),
+        ambiguity_reason=_wire_optional_string(
+            payload["ambiguity_reason"], f"{label}.ambiguity_reason"
+        ),
+        track_segment_id=_wire_optional_string(
+            payload["track_segment_id"], f"{label}.track_segment_id"
+        ),
+        search_region_observability_attestation=(
+            None
+            if search_payload is None
+            else _wire_search_attestation(search_payload)
+        ),
+        review_state=enum_from_json(
+            ReviewState, payload["review_state"], f"{label}.review_state"
+        ),  # type: ignore[arg-type]
+        reviewer_ids=_wire_string_tuple(payload, "reviewer_ids", label=label),
+        review_evidence_refs=_wire_string_tuple(
+            payload, "review_evidence_refs", label=label
+        ),
+        adjudicator_id=_wire_optional_string(
+            payload["adjudicator_id"], f"{label}.adjudicator_id"
+        ),
+        adjudication_evidence_refs=_wire_string_tuple(
+            payload, "adjudication_evidence_refs", label=label
+        ),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1431,6 +1942,21 @@ class BallFrameAnnotationV2(_CanonicalContract):
             ),
             capture_refs=self.frame.capture_integrity_attestation_refs,
         )
+        object.__setattr__(
+            self,
+            "reviewer_ids",
+            tuple(sorted(self.reviewer_ids)),
+        )
+        object.__setattr__(
+            self,
+            "review_evidence_refs",
+            tuple(sorted(self.review_evidence_refs)),
+        )
+        object.__setattr__(
+            self,
+            "adjudication_evidence_refs",
+            tuple(sorted(self.adjudication_evidence_refs)),
+        )
 
     @property
     def annotation_type(self) -> AnnotationType:
@@ -1502,6 +2028,51 @@ class BallFrameAnnotationV2(_CanonicalContract):
             "uncertainty_radius_px": self.uncertainty_radius_px,
             "visibility": self.visibility.value,
         }
+
+    def to_json_bytes(self) -> bytes:
+        """Return the bounded canonical persisted representation."""
+
+        return canonical_finite_json_bytes(
+            self.to_canonical_dict(),
+            label="ball frame annotation V2",
+            maximum_bytes=_MAX_BALL_FRAME_ANNOTATION_JSON_BYTES,
+            maximum_depth=_MAX_BALL_FRAME_ANNOTATION_JSON_DEPTH,
+            maximum_nodes=_MAX_BALL_FRAME_ANNOTATION_JSON_NODES,
+            maximum_containers=_MAX_BALL_FRAME_ANNOTATION_JSON_CONTAINERS,
+        )
+
+    @classmethod
+    def from_json_bytes(cls, raw: bytes) -> BallFrameAnnotationV2:
+        """Reconstruct one annotation only from exact canonical persisted bytes."""
+
+        payload = parse_canonical_finite_json_object(
+            raw,
+            label="ball frame annotation V2",
+            maximum_bytes=_MAX_BALL_FRAME_ANNOTATION_JSON_BYTES,
+            maximum_depth=_MAX_BALL_FRAME_ANNOTATION_JSON_DEPTH,
+            maximum_nodes=_MAX_BALL_FRAME_ANNOTATION_JSON_NODES,
+            maximum_containers=_MAX_BALL_FRAME_ANNOTATION_JSON_CONTAINERS,
+        )
+        try:
+            annotation = _ball_frame_annotation_from_wire_dict(payload)
+        except CanonicalWireError:
+            raise
+        except (KeyError, TypeError, ValueError) as exc:
+            raise CanonicalWireError(
+                "ANNOTATION_SHAPE",
+                "ball frame annotation V2 fields are invalid",
+            ) from exc
+        if type(annotation) is not cls:
+            raise CanonicalWireError(
+                "ANNOTATION_SHAPE",
+                "ball frame annotation V2 reconstructed as an unsupported type",
+            )
+        if raw != annotation.to_json_bytes():
+            raise CanonicalWireError(
+                "NONCANONICAL_CONTRACT",
+                "ball frame annotation V2 bytes changed during reconstruction",
+            )
+        return annotation
 
 
 @dataclass(frozen=True, slots=True)
