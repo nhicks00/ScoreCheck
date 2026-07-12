@@ -1,11 +1,13 @@
 """Strict bounded reads of protected local files.
 
 The reader pins and verifies the final path component while the bytes are being
-consumed.  It intentionally assumes that every ancestor directory is trusted
-and cannot be replaced by an attacker.  Callers with untrusted ancestor paths
-need a capability-style interface that securely walks and pins each directory
-(for example, a trusted ``dir_fd`` boundary); this helper does not claim to
-provide that stronger guarantee.
+consumed.  It requires an absolute path and intentionally assumes that every
+ancestor directory is trusted and cannot be replaced by an attacker.  It also
+assumes a coherent resident local filesystem: ``O_NONBLOCK`` prevents FIFO
+open hangs but cannot make regular-file reads nonblocking on a hostile network
+or FUSE mount.  Callers outside those assumptions need a capability-style
+interface that securely walks and pins each directory and a stronger platform
+residency capability; this helper does not claim those guarantees.
 """
 
 from __future__ import annotations
@@ -116,6 +118,11 @@ def _validate_inputs(path: Path, max_bytes: int, label: str) -> None:
         raise ProtectedFileError(
             PROTECTED_FILE_INPUT,
             "path must be an exact pathlib.Path",
+        )
+    if not path.is_absolute():
+        raise ProtectedFileError(
+            PROTECTED_FILE_INPUT,
+            "path must be absolute under a trusted ancestor chain",
         )
     if type(max_bytes) is not int or max_bytes <= 0:
         raise ProtectedFileError(
@@ -242,15 +249,19 @@ def read_protected_file_bytes(
 ) -> bytes:
     """Return the exact bytes of one bounded, resident, regular local file.
 
-    ``path`` must be an exact platform ``pathlib.Path`` (not a string or custom
-    subclass), ``max_bytes`` must be an exact positive integer, and ``label``
-    must be a stable short ASCII label.  The final path component is checked
-    with ``lstat``, opened read-only with no-follow/nonblocking/close-on-exec
-    protections, and compared with the descriptor before and after the exact
-    read and growth probe.  A final ``lstat`` rejects path replacement.
+    ``path`` must be an exact absolute platform ``pathlib.Path`` (not a string
+    or custom subclass), ``max_bytes`` must be an exact positive integer, and
+    ``label`` must be a stable short ASCII label.  The final path component is
+    checked with ``lstat``, opened read-only with no-follow/nonblocking/
+    close-on-exec protections, and compared with the descriptor before and
+    after the exact read and growth probe.  A final ``lstat`` rejects path
+    replacement.
 
-    Ancestor directories are assumed trusted and non-replaceable.  This helper
-    does not securely walk or pin an untrusted directory chain.
+    Ancestor directories are assumed trusted and non-replaceable, and the file
+    is assumed resident on a coherent local filesystem.  This helper does not
+    securely walk an untrusted directory chain or prevent a hostile mount from
+    blocking a regular-file operation.  If ``close`` itself fails, the function
+    reports that failure but cannot portably prove descriptor reclamation.
     """
 
     _validate_inputs(path, max_bytes, label)
@@ -343,3 +354,19 @@ def read_protected_file_bytes(
                     PROTECTED_FILE_CLOSE,
                     f"{label} descriptor could not be closed safely",
                 ) from exc
+
+
+__all__ = (
+    "PROTECTED_FILE_CHANGED",
+    "PROTECTED_FILE_CLOSE",
+    "PROTECTED_FILE_ERROR_CODES",
+    "PROTECTED_FILE_INPUT",
+    "PROTECTED_FILE_OPEN",
+    "PROTECTED_FILE_PLATFORM_UNSAFE",
+    "PROTECTED_FILE_READ",
+    "PROTECTED_FILE_SHAPE",
+    "PROTECTED_FILE_SIZE",
+    "PROTECTED_FILE_UNAVAILABLE",
+    "ProtectedFileError",
+    "read_protected_file_bytes",
+)

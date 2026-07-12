@@ -110,6 +110,11 @@ class ProtectedFileTests(unittest.TestCase):
                 str(self.path), max_bytes=1024, label="payload"
             ),
             lambda: read_protected_file_bytes(
+                Path("relative-payload.bin"),
+                max_bytes=1024,
+                label="payload",
+            ),
+            lambda: read_protected_file_bytes(
                 DerivedPath(self.path), max_bytes=1024, label="payload"
             ),
             lambda: read_protected_file_bytes(
