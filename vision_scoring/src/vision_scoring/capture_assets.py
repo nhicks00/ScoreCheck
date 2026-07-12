@@ -1861,9 +1861,11 @@ class ReviewClipProvenance:
             raise AssertionError from exc
 
 
-def _finalized_trace_fingerprint(
+def finalized_trace_fingerprint(
     finalized_trace: tuple[FinalizedSourceFrameSignal, ...],
 ) -> str:
+    """Return the stable length-delimited fingerprint of a finalized trace."""
+
     digest = hashlib.sha256()
     digest.update(b"capture-finalized-trace-v1\0")
     for frame in finalized_trace:
@@ -1873,13 +1875,15 @@ def _finalized_trace_fingerprint(
     return digest.hexdigest()
 
 
-def _verify_policy_pin(
+def verify_capture_asset_policy_pin(
     policy: CaptureAssetTrustPolicy,
     *,
     expected_policy_sha256: str,
     expected_policy_generation: int,
     verified_at_ns: int,
 ) -> None:
+    """Verify one policy against protected identity, generation, and time."""
+
     if type(policy) is not CaptureAssetTrustPolicy:
         _fail("CAPTURE_POLICY_TYPE", "capture policy has the wrong exact type")
     _require_sha256(expected_policy_sha256, "expected_policy_sha256")
@@ -1896,10 +1900,12 @@ def _verify_policy_pin(
         _fail("CAPTURE_POLICY_VALIDITY", "capture policy is not active")
 
 
-def _verify_capture_metadata_policy_binding(
+def verify_capture_metadata_policy_binding(
     capture_metadata: StructurallyVerifiedCaptureMetadata,
     policy: CaptureAssetTrustPolicy,
 ) -> None:
+    """Require structural capture metadata to match one exact capture policy."""
+
     expected = {
         "deployment_id": capture_metadata.deployment_id,
         "match_id": capture_metadata.match_id,
@@ -1986,7 +1992,7 @@ def build_structurally_verified_capture_metadata(
             "capture-rights trust snapshot has the wrong exact type",
         )
     verified_at = _require_exact_int(verified_at_ns, "verified_at_ns")
-    _verify_policy_pin(
+    verify_capture_asset_policy_pin(
         capture_policy,
         expected_policy_sha256=expected_capture_policy_sha256,
         expected_policy_generation=expected_capture_policy_generation,
@@ -2247,7 +2253,7 @@ def build_structurally_verified_capture_metadata(
         selected_fragment_fingerprints=(
             recomputed_plan.selected_fragment_fingerprints
         ),
-        finalized_trace_sha256=_finalized_trace_fingerprint(finalized_trace),
+        finalized_trace_sha256=finalized_trace_fingerprint(finalized_trace),
         integrity_report_sha256=report.fingerprint(),
         integrity_window_sha256=report.window_fingerprint,
         clock_mapping_fingerprint=clock_mapping.fingerprint(),
@@ -2313,13 +2319,13 @@ def build_video_only_review_clip_provenance(
     reverified_at = _require_exact_int(
         rights_reverified_at_ns, "rights_reverified_at_ns"
     )
-    _verify_policy_pin(
+    verify_capture_asset_policy_pin(
         capture_policy,
         expected_policy_sha256=expected_capture_policy_sha256,
         expected_policy_generation=expected_capture_policy_generation,
         verified_at_ns=reverified_at,
     )
-    _verify_capture_metadata_policy_binding(capture_metadata, capture_policy)
+    verify_capture_metadata_policy_binding(capture_metadata, capture_policy)
     if capture_metadata.capture_policy_sha256 != capture_policy.fingerprint():
         _fail(
             "CAPTURE_POLICY_ROTATED",
@@ -2379,7 +2385,7 @@ def build_video_only_review_clip_provenance(
         _fail("REVIEW_FRAME_TRACE", "finalized trace must be an immutable frame tuple")
     if (
         len(finalized_trace) != capture_metadata.frame_count
-        or _finalized_trace_fingerprint(finalized_trace)
+        or finalized_trace_fingerprint(finalized_trace)
         != capture_metadata.finalized_trace_sha256
     ):
         _fail(
@@ -2490,6 +2496,9 @@ __all__ = [
     "TrustedCaptureMetadataSignerKey",
     "build_video_only_review_clip_provenance",
     "finalized_capture_metadata_signing_message",
+    "finalized_trace_fingerprint",
     "build_structurally_verified_capture_metadata",
     "verify_finalized_capture_metadata_attestation",
+    "verify_capture_asset_policy_pin",
+    "verify_capture_metadata_policy_binding",
 ]
