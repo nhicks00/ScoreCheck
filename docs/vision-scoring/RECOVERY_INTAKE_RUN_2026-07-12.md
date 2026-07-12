@@ -78,6 +78,23 @@ other recovered footage could later instantiate the historical Tier A profile
 after bytes are recovered, accepted rights/releases are signed, and the exact
 camera/content passes observability preflight.
 
+## Denver candidate refinement
+
+A later metadata-only query of the same sealed manifest found 930 candidate
+paths beneath
+`/Volumes/Nathan Footage/Colorado/2024 AVP Denver/Denver Open Free Film/`.
+Their unverified historical byte counts total 276,584,528,418 bytes. The same
+manifest also references two 4K H.264 files beneath `_Full match YOUTUBE` whose
+names contain `DENVER OPEN`: one reported as 8,208,613,280 bytes and 1,349.933
+seconds, and one reported as 5,614,109,076 bytes and 896.867 seconds.
+
+All of these paths remain `REFERENCED_OFFLINE` because `/Volumes/Nathan
+Footage` is not mounted. The counts are locator facts from the existing sealed
+manifest, not proof that the files are distinct, resident, complete, owned,
+released, or connected to either declared YouTube channel. They describe a
+2024 optional 4K source family and cannot substitute for empirical coverage of
+the production 1080p30 HEVC/SRT and 1080p60 H.264/RTMP streams.
+
 ## Safety interpretation
 
 The manifest carries the sealed-observer claims:
