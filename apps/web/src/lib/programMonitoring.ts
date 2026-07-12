@@ -5,6 +5,7 @@ const CREDENTIAL_TTL_MS = 18 * 60 * 60 * 1_000;
 
 export type ProgramMonitoringConnection = {
   heartbeatUrl: string;
+  thumbnailUrl: string;
   credential: string;
   credentialId: string;
 };
@@ -16,8 +17,14 @@ export function createProgramMonitoringConnection(
   const baseUrl = process.env.MONITOR_PUBLIC_URL?.trim().replace(/\/+$/, "") ?? "";
   const secret = process.env.MONITOR_BROWSER_HEARTBEAT_SECRET?.trim() ?? "";
   if (!baseUrl || secret.length < 32) return null;
-  const parsed = new URL(baseUrl);
-  if (parsed.protocol !== "https:" && parsed.hostname !== "localhost" && parsed.hostname !== "127.0.0.1") return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    return null;
+  }
+  const localHttp = parsed.protocol === "http:" && (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1");
+  if (parsed.protocol !== "https:" && !localHttp) return null;
   if (!Number.isInteger(courtNumber) || courtNumber < 1 || courtNumber > 8) return null;
 
   const nowMs = options.nowMs ?? Date.now();
@@ -32,6 +39,7 @@ export function createProgramMonitoringConnection(
   const signature = createHmac("sha256", secret).update(encoded).digest("base64url");
   return {
     heartbeatUrl: `${parsed.origin}${parsed.pathname.replace(/\/$/, "")}/v1/browser-heartbeats`,
+    thumbnailUrl: `${parsed.origin}${parsed.pathname.replace(/\/$/, "")}/v1/browser-thumbnails`,
     credential: `${encoded}.${signature}`,
     credentialId
   };

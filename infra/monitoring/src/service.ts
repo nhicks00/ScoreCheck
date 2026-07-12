@@ -11,6 +11,7 @@ import { BrowserHeartbeatManager } from "./browserHeartbeats.js";
 import { ControlPlaneCollector } from "./controlPlane.js";
 import { YouTubeCollector } from "./youtube.js";
 import { NotificationDispatcher } from "./notifications.js";
+import { BrowserThumbnailManager } from "./browserThumbnails.js";
 
 const config = loadServiceConfig();
 const app = express();
@@ -44,6 +45,7 @@ const runtimes = new Map<string, AgentRuntime>(config.targets.map((target) => [t
 }]));
 const incidents = new IncidentManager();
 const browserHeartbeats = new BrowserHeartbeatManager(config.browserHeartbeatSecret);
+const browserThumbnails = new BrowserThumbnailManager(config.browserHeartbeatSecret);
 const controlPlane = new ControlPlaneCollector(config.supabaseUrl, config.supabaseServiceRoleKey);
 const youtubeCollector = new YouTubeCollector({
   apiKey: config.youtubeApiKey,
@@ -83,7 +85,7 @@ app.options("/v1/browser-heartbeats", (req, res) => {
   }
   setBrowserCors(res, origin);
   res.setHeader("access-control-allow-methods", "POST, OPTIONS");
-  res.setHeader("access-control-allow-headers", "authorization, content-type");
+  res.setHeader("access-control-allow-headers", "authorization, content-type, x-scorecheck-court, x-scorecheck-credential-id, x-scorecheck-sequence, x-scorecheck-sampled-at");
   res.sendStatus(204);
 });
 app.post("/v1/browser-heartbeats", (req, res) => {
@@ -101,6 +103,49 @@ app.post("/v1/browser-heartbeats", (req, res) => {
   } catch {
     res.status(400).json({ error: "Invalid browser heartbeat." });
   }
+});
+app.options("/v1/browser-thumbnails", (req, res) => {
+  const origin = allowedBrowserOrigin(req.headers.origin);
+  if (!origin) {
+    res.sendStatus(403);
+    return;
+  }
+  setBrowserCors(res, origin);
+  res.setHeader("access-control-allow-methods", "POST, OPTIONS");
+  res.setHeader("access-control-allow-headers", "authorization, content-type, x-scorecheck-court, x-scorecheck-credential-id, x-scorecheck-sequence, x-scorecheck-sampled-at");
+  res.sendStatus(204);
+});
+app.post("/v1/browser-thumbnails", express.raw({ type: "image/jpeg", limit: "96kb" }), (req, res) => {
+  const origin = allowedBrowserOrigin(req.headers.origin);
+  if (!origin) {
+    res.status(403).json({ error: "Origin is not allowed." });
+    return;
+  }
+  setBrowserCors(res, origin);
+  try {
+    browserThumbnails.accept(bearerToken(req.headers.authorization), {
+      credentialId: req.headers["x-scorecheck-credential-id"],
+      courtNumber: req.headers["x-scorecheck-court"],
+      sequence: req.headers["x-scorecheck-sequence"],
+      sampledAt: req.headers["x-scorecheck-sampled-at"]
+    }, req.body);
+    snapshot = currentSnapshot();
+    res.sendStatus(202);
+  } catch {
+    res.status(400).json({ error: "Invalid browser thumbnail." });
+  }
+});
+app.get("/v1/courts/:courtNumber/thumbnail", bearerAuth(config.token), (req, res) => {
+  const courtNumber = Number(Array.isArray(req.params.courtNumber) ? req.params.courtNumber[0] : req.params.courtNumber);
+  const thumbnail = Number.isInteger(courtNumber) ? browserThumbnails.get(courtNumber) : null;
+  if (!thumbnail || Date.now() - Date.parse(thumbnail.receivedAt) > 45_000) {
+    res.sendStatus(404);
+    return;
+  }
+  res.setHeader("cache-control", "private, no-store");
+  res.setHeader("content-type", thumbnail.contentType);
+  res.setHeader("x-scorecheck-sampled-at", thumbnail.sampledAt);
+  res.send(thumbnail.body);
 });
 app.post("/v1/alertmanager", bearerAuth(config.alertmanagerWebhookToken), async (req, res) => {
   try {
@@ -211,7 +256,8 @@ function currentSnapshot(): MonitorSnapshot {
     browserHeartbeats.latest(),
     controlPlane.current(),
     youtubeCollector.current(),
-    notificationDispatcher.health()
+    notificationDispatcher.health(),
+    browserThumbnails.metadata()
   );
 }
 

@@ -43,6 +43,9 @@ type ProgramClientProps = {
 };
 
 const PROGRAM_STABLE_FRAME_TICKS = 3;
+const PROGRAM_THUMBNAIL_INTERVAL_MS = 15_000;
+const PROGRAM_THUMBNAIL_WIDTH = 320;
+const PROGRAM_THUMBNAIL_HEIGHT = 180;
 
 export function ProgramClient({
   courtNumber,
@@ -76,6 +79,8 @@ export function ProgramClient({
   const overlayHealthRef = useRef<OverlayRenderHealth>(EMPTY_OVERLAY_RENDER_HEALTH);
   const pageLoadedAtRef = useRef(new Date().toISOString());
   const heartbeatSeqRef = useRef(0);
+  const thumbnailSeqRef = useRef(0);
+  const thumbnailCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const [playerEpoch, setPlayerEpoch] = useState(0);
   const [reconnects, setReconnects] = useState(0);
@@ -312,6 +317,53 @@ export function ProgramClient({
     };
   }, [buildVersion, commentary, configurationVersion, courtNumber, monitoring]);
 
+  useEffect(() => {
+    if (!monitoring || !cameraElement) return;
+    const connection = monitoring;
+    const video = cameraElement;
+    let cancelled = false;
+    let uploading = false;
+    async function capture() {
+      if (cancelled || uploading || videoStateRef.current !== "playing" || video.readyState < 2 || video.videoWidth <= 0) return;
+      uploading = true;
+      try {
+        const canvas = thumbnailCanvasRef.current ?? document.createElement("canvas");
+        thumbnailCanvasRef.current = canvas;
+        canvas.width = PROGRAM_THUMBNAIL_WIDTH;
+        canvas.height = PROGRAM_THUMBNAIL_HEIGHT;
+        const context = canvas.getContext("2d", { alpha: false });
+        if (!context) return;
+        drawCover(context, video, canvas.width, canvas.height);
+        const blob = await canvasJpeg(canvas, 0.58);
+        if (!blob || cancelled) return;
+        thumbnailSeqRef.current += 1;
+        const sampledAt = new Date().toISOString();
+        await fetch(connection.thumbnailUrl, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${connection.credential}`,
+            "content-type": "image/jpeg",
+            "x-scorecheck-court": String(courtNumber),
+            "x-scorecheck-credential-id": connection.credentialId,
+            "x-scorecheck-sequence": String(thumbnailSeqRef.current),
+            "x-scorecheck-sampled-at": sampledAt
+          },
+          body: blob
+        });
+      } catch {
+        // Visual telemetry is best-effort and must never affect program output.
+      } finally {
+        uploading = false;
+      }
+    }
+    void capture();
+    const id = window.setInterval(() => void capture(), PROGRAM_THUMBNAIL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [cameraElement, courtNumber, monitoring]);
+
   return (
     <div ref={rootRef} className="program-root">
       <div className="program-stage">
@@ -371,6 +423,27 @@ export function ProgramClient({
       )}
     </div>
   );
+}
+
+function canvasJpeg(canvas: HTMLCanvasElement, quality: number): Promise<Blob | null> {
+  return new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+}
+
+function drawCover(context: CanvasRenderingContext2D, video: HTMLVideoElement, width: number, height: number) {
+  const sourceAspect = video.videoWidth / video.videoHeight;
+  const targetAspect = width / height;
+  let sourceX = 0;
+  let sourceY = 0;
+  let sourceWidth = video.videoWidth;
+  let sourceHeight = video.videoHeight;
+  if (sourceAspect > targetAspect) {
+    sourceWidth = video.videoHeight * targetAspect;
+    sourceX = (video.videoWidth - sourceWidth) / 2;
+  } else if (sourceAspect < targetAspect) {
+    sourceHeight = video.videoWidth / targetAspect;
+    sourceY = (video.videoHeight - sourceHeight) / 2;
+  }
+  context.drawImage(video, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, width, height);
 }
 
 const EMPTY_OVERLAY_RENDER_HEALTH: OverlayRenderHealth = {

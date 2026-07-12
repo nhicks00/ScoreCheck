@@ -39,6 +39,7 @@ export function AdminCommentaryClient({
         <div className="topbar">
           <span className="brand-mark">Score<em>Check</em></span>
           <nav className="topbar-nav" aria-label="Admin">
+            <Link className="button ghost" href="/admin/monitor">Monitor</Link>
             <Link className="button ghost" href="/admin/events">Events</Link>
             <Link className="button ghost" href="/commentary">Commentator portal</Link>
           </nav>

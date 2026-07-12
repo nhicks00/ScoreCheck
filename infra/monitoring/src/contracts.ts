@@ -270,6 +270,16 @@ export type NotificationHealth = {
   twilioSms: { configured: boolean; lastSuccessAt: string | null; lastFailureAt: string | null };
 };
 
+export type BrowserThumbnailMetadata = {
+  courtNumber: number;
+  credentialId: string;
+  sequence: number;
+  sampledAt: string;
+  receivedAt: string;
+  contentType: "image/jpeg";
+  byteLength: number;
+};
+
 export const agentSnapshotSchema = z.object({
   version: z.literal(MONITORING_CONTRACT_VERSION),
   agentId: boundedId,
@@ -317,10 +327,12 @@ export type CourtMonitorSnapshot = {
   overallState: HealthState;
   stages: StageHealth[];
   paths: Partial<Record<MediaPathSnapshot["branch"], MediaPathSnapshot>>;
+  ffmpeg: Partial<Record<FfmpegBranchSnapshot["branch"], FfmpegBranchSnapshot>>;
   browser: BrowserHeartbeatSnapshot | null;
   competition: CompetitionCourtSnapshot | null;
   expectation: CourtExpectation;
   youtube: YouTubeCourtSnapshot | null;
+  thumbnail: BrowserThumbnailMetadata | null;
 };
 
 export type IncidentSnapshot = {
@@ -367,6 +379,9 @@ export type MonitorSnapshot = {
     state: HealthState;
     lastSeenAt: string | null;
     ageMs: number | null;
+    host: AgentSnapshot["host"] | null;
+    services: ServiceSnapshot[];
+    nativeServices: NativeServiceSnapshot | null;
   }>;
   incidents: IncidentSnapshot[];
 };

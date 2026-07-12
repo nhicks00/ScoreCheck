@@ -111,6 +111,7 @@ describe("createProgramMonitoringConnection", () => {
       credentialId: "10000000-0000-4000-8000-000000000001"
     })).toEqual({
       heartbeatUrl: "https://monitor.example.test/v1/browser-heartbeats",
+      thumbnailUrl: "https://monitor.example.test/v1/browser-thumbnails",
       credentialId: "10000000-0000-4000-8000-000000000001",
       credential: "eyJ2IjoxLCJjaWQiOiIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJjb3VydCI6MywiaWF0IjoxMDAwLCJleHAiOjY0ODAxMDAwfQ.Zt4AiuJ0hr4jb8kh4nMGqp4E66uUYToLWIn4_7UXuk4"
     });
@@ -118,6 +119,18 @@ describe("createProgramMonitoringConnection", () => {
 
   it("stays disabled unless both endpoint and secret are configured", () => {
     expect(createProgramMonitoringConnection(1)).toBeNull();
+  });
+
+  it("rejects malformed and insecure non-local monitoring URLs", () => {
+    process.env.MONITOR_BROWSER_HEARTBEAT_SECRET = "b".repeat(32);
+    process.env.MONITOR_PUBLIC_URL = "not a url";
+    expect(createProgramMonitoringConnection(1)).toBeNull();
+    process.env.MONITOR_PUBLIC_URL = "http://monitor.example.test";
+    expect(createProgramMonitoringConnection(1)).toBeNull();
+    process.env.MONITOR_PUBLIC_URL = "ftp://localhost";
+    expect(createProgramMonitoringConnection(1)).toBeNull();
+    process.env.MONITOR_PUBLIC_URL = "http://localhost:9109";
+    expect(createProgramMonitoringConnection(1)).not.toBeNull();
   });
 });
 

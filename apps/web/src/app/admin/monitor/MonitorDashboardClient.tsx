@@ -1,0 +1,387 @@
+"use client";
+
+import {
+  Activity,
+  AlertTriangle,
+  Bell,
+  BellOff,
+  Camera,
+  CheckCircle2,
+  Clock3,
+  Eye,
+  Gauge,
+  Headphones,
+  Radio,
+  RefreshCw,
+  Server,
+  ShieldAlert,
+  Signal,
+  WifiOff,
+  Youtube
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { StreamPlayer } from "@/components/StreamPlayer";
+import type { MonitorCourt, MonitorHealthState, MonitorIncident, MonitorSnapshotEnvelope, MonitorStage } from "@/lib/monitoringTypes";
+
+const POLL_INTERVAL_MS = 5_000;
+const STATE_RANK: Record<MonitorHealthState, number> = { CRITICAL: 9, UNKNOWN: 8, DEGRADED: 7, RECOVERING: 6, STARTING: 5, HEALTHY: 4, MAINTENANCE: 3, EXPECTED_OFF: 2, NOT_APPLICABLE: 1 };
+
+export function MonitorDashboardClient({ initial, configured }: { initial: MonitorSnapshotEnvelope | null; configured: boolean }) {
+  const [envelope, setEnvelope] = useState(initial);
+  const [pollError, setPollError] = useState<string | null>(initial ? null : configured ? "Monitoring data is unavailable." : "Monitoring API is not configured.");
+  const [refreshing, setRefreshing] = useState(false);
+  const [selectedCourt, setSelectedCourt] = useState(() => firstAttentionCourt(initial) ?? 1);
+  const [previewEnabled, setPreviewEnabled] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(false);
+  const [ackReasons, setAckReasons] = useState<Record<string, string>>({});
+  const [ackBusy, setAckBusy] = useState<string | null>(null);
+  const [ackError, setAckError] = useState<Record<string, string | undefined>>({});
+  const [nowMs, setNowMs] = useState(Date.now());
+  const previousCriticalIds = useRef(new Set(initial?.snapshot.incidents.filter((incident) => incident.severity === "critical").map((incident) => incident.id) ?? []));
+
+  useEffect(() => {
+    setSoundEnabled(window.localStorage.getItem("scorecheck-monitor-sound") === "on");
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const refresh = useCallback(async () => {
+    if (!configured) return;
+    setRefreshing(true);
+    try {
+      const response = await fetch("/api/admin/monitor/snapshot", { cache: "no-store" });
+      const payload = await response.json().catch(() => null) as MonitorSnapshotEnvelope | { error?: string } | null;
+      if (!response.ok || !payload || !("snapshot" in payload)) throw new Error(payload && "error" in payload ? payload.error : "Monitoring poll failed.");
+      setEnvelope(payload);
+      setPollError(null);
+      const criticalIds = new Set(payload.snapshot.incidents.filter((incident) => incident.severity === "critical" && incident.status === "open").map((incident) => incident.id));
+      const newCritical = [...criticalIds].find((id) => !previousCriticalIds.current.has(id));
+      if (newCritical) {
+        const incident = payload.snapshot.incidents.find((entry) => entry.id === newCritical);
+        if (incident?.courtNumber) {
+          setSelectedCourt(incident.courtNumber);
+          setPreviewEnabled(true);
+        }
+        if (soundEnabled) playAlertTone();
+      }
+      previousCriticalIds.current = criticalIds;
+    } catch (error) {
+      setPollError(error instanceof Error ? error.message : "Monitoring poll failed.");
+    } finally {
+      setRefreshing(false);
+    }
+  }, [configured, soundEnabled]);
+
+  useEffect(() => {
+    if (!configured) return;
+    const timer = window.setInterval(() => {
+      if (!document.hidden) void refresh();
+    }, POLL_INTERVAL_MS);
+    const onVisibility = () => !document.hidden && void refresh();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [configured, refresh]);
+
+  function toggleSound() {
+    const next = !soundEnabled;
+    setSoundEnabled(next);
+    window.localStorage.setItem("scorecheck-monitor-sound", next ? "on" : "off");
+    if (next) playAlertTone();
+  }
+
+  async function acknowledge(incident: MonitorIncident) {
+    const reason = ackReasons[incident.id]?.trim() ?? "";
+    if (reason.length < 3) {
+      setAckError((current) => ({ ...current, [incident.id]: "Enter a brief reason." }));
+      return;
+    }
+    setAckBusy(incident.id);
+    setAckError((current) => ({ ...current, [incident.id]: undefined }));
+    try {
+      const response = await fetch(`/api/admin/monitor/incidents/${incident.id}/acknowledge`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reason })
+      });
+      const payload = await response.json().catch(() => null) as { error?: string } | null;
+      if (!response.ok) throw new Error(payload?.error ?? "Acknowledgement failed.");
+      setAckReasons((current) => ({ ...current, [incident.id]: "" }));
+      await refresh();
+    } catch (error) {
+      setAckError((current) => ({ ...current, [incident.id]: error instanceof Error ? error.message : "Acknowledgement failed." }));
+    } finally {
+      setAckBusy(null);
+    }
+  }
+
+  if (!envelope) {
+    return (
+      <section className="monitor-empty" role="status">
+        <WifiOff size={26} aria-hidden="true" />
+        <div><strong>Monitoring unavailable</strong><p>{pollError}</p></div>
+        <button type="button" onClick={() => void refresh()} disabled={!configured || refreshing}><RefreshCw size={16} /> Retry</button>
+      </section>
+    );
+  }
+
+  const snapshot = envelope.snapshot;
+  const snapshotAgeMs = Math.max(0, nowMs - Date.parse(snapshot.generatedAt));
+  const stale = envelope.source === "checkpoint" || snapshotAgeMs > 15_000;
+  const overall = systemState(snapshot.courts.map((court) => court.overallState), snapshot.incidents);
+  const selected = snapshot.courts.find((court) => court.courtNumber === selectedCourt) ?? snapshot.courts[0] ?? null;
+  const activeIncidents = snapshot.incidents.filter((incident) => incident.status !== "resolved");
+
+  return (
+    <div className="monitor-dashboard">
+      <header className="monitor-heading">
+        <div>
+          <p className="eyebrow">Live operations</p>
+          <div className="monitor-title-line"><h1>System Monitor</h1><StateBadge state={overall} /></div>
+          <p className="monitor-event-name">{snapshot.event?.name ?? "No active event"}</p>
+        </div>
+        <div className="monitor-heading-actions">
+          <button className="monitor-icon-button" type="button" onClick={toggleSound} title={soundEnabled ? "Disable dashboard alert sound" : "Enable dashboard alert sound"} aria-label={soundEnabled ? "Disable dashboard alert sound" : "Enable dashboard alert sound"}>
+            {soundEnabled ? <Bell size={18} /> : <BellOff size={18} />}
+          </button>
+          <button className="monitor-icon-button" type="button" onClick={() => void refresh()} disabled={refreshing} title="Refresh monitoring data" aria-label="Refresh monitoring data">
+            <RefreshCw className={refreshing ? "is-spinning" : ""} size={18} />
+          </button>
+        </div>
+      </header>
+
+      <section className="monitor-global-strip" aria-label="Global health">
+        <GlobalItem icon={<Activity size={17} />} label="Collector" value={`${snapshot.collector.agentsFresh}/${snapshot.collector.agentsExpected} agents`} state={snapshot.collector.state} />
+        <GlobalItem icon={<Signal size={17} />} label="Control" value={snapshot.controlPlane.worker.state === "NOT_APPLICABLE" ? "Idle" : snapshot.controlPlane.worker.state} state={snapshot.controlPlane.state} />
+        <GlobalItem icon={<Youtube size={17} />} label="YouTube" value={friendlyState(snapshot.youtube.state)} state={snapshot.youtube.state} />
+        <GlobalItem icon={<Bell size={17} />} label="Paging" value={pagingLabel(snapshot.notifications)} state={snapshot.notifications.state === "DEGRADED" ? "DEGRADED" : snapshot.notifications.state === "UNKNOWN" ? "UNKNOWN" : snapshot.notifications.state === "HEALTHY" ? "HEALTHY" : "NOT_APPLICABLE"} />
+        <GlobalItem icon={<ShieldAlert size={17} />} label="Incidents" value={activeIncidents.length ? `${activeIncidents.length} active` : "Clear"} state={activeIncidents.some((incident) => incident.severity === "critical") ? "CRITICAL" : activeIncidents.length ? "DEGRADED" : "HEALTHY"} />
+        <div className={`monitor-freshness ${stale ? "is-stale" : ""}`}>
+          <Clock3 size={16} aria-hidden="true" />
+          <span>{envelope.source === "checkpoint" ? "Checkpoint" : `${formatDuration(snapshotAgeMs)} ago`}</span>
+        </div>
+      </section>
+
+      {(pollError || envelope.monitorError || stale) && (
+        <div className="monitor-banner" role="alert"><AlertTriangle size={17} /><span>{pollError ?? envelope.monitorError ?? "Monitoring snapshot is stale."}</span></div>
+      )}
+
+      <section className="monitor-court-matrix" aria-label="Court monitoring matrix">
+        {snapshot.courts.map((court) => (
+          <CourtCard key={court.courtNumber} court={court} selected={court.courtNumber === selectedCourt} nowMs={nowMs} onSelect={() => { setSelectedCourt(court.courtNumber); setPreviewEnabled(true); }} />
+        ))}
+      </section>
+
+      {selected && (
+        <section className="monitor-detail-band" aria-label={`Court ${selected.courtNumber} live inspection`}>
+          <div className="monitor-section-heading">
+            <div><p className="eyebrow">Live inspection</p><h2>{courtName(selected)}</h2></div>
+            <StateBadge state={selected.overallState} />
+          </div>
+          <div className="monitor-inspection-grid">
+            <div className="monitor-live-player">
+              {previewEnabled ? <StreamPlayer courtNumber={selected.courtNumber} enabled /> : (
+                <button className="monitor-preview-start" type="button" onClick={() => setPreviewEnabled(true)}><Eye size={18} /> Open live preview</button>
+              )}
+            </div>
+            <div className="monitor-stage-detail">
+              {selected.stages.map((stage) => <StageDetail key={stage.stage} stage={stage} />)}
+            </div>
+          </div>
+        </section>
+      )}
+
+      <section className="monitor-shared-band" aria-label="Shared services">
+        <div className="monitor-section-heading"><div><p className="eyebrow">Shared dependencies</p><h2>Hosts &amp; services</h2></div></div>
+        <div className="monitor-agent-grid">
+          {snapshot.agents.map((agent) => (
+            <article className="monitor-agent" key={agent.agentId} data-state={agent.state}>
+              <div className="monitor-agent-head"><Server size={17} /><strong>{agent.agentId}</strong><StateDot state={agent.state} /></div>
+              <div className="monitor-agent-metrics">
+                <Metric label="Load" value={agent.host ? agent.host.load1.toFixed(2) : "--"} />
+                <Metric label="Memory" value={agent.host ? percent(agent.host.memoryTotalBytes - agent.host.memoryAvailableBytes, agent.host.memoryTotalBytes) : "--"} />
+                <Metric label="Disk" value={agent.host?.diskTotalBytes && agent.host.diskFreeBytes != null ? percent(agent.host.diskTotalBytes - agent.host.diskFreeBytes, agent.host.diskTotalBytes) : "--"} />
+              </div>
+              <div className="monitor-service-list">
+                {agent.services.map((service) => <span key={service.name} className={service.running && service.healthy !== false && !service.oomKilled ? "is-ok" : "is-bad"}>{service.name} · {service.restartCount}r</span>)}
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="monitor-incidents-band" aria-label="Active incidents">
+        <div className="monitor-section-heading"><div><p className="eyebrow">Incident queue</p><h2>{activeIncidents.length ? `${activeIncidents.length} active` : "No active incidents"}</h2></div></div>
+        {activeIncidents.length > 0 && (
+          <div className="monitor-incident-list">
+            {activeIncidents.map((incident) => (
+              <article className="monitor-incident" key={incident.id} data-severity={incident.severity}>
+                <div className="monitor-incident-main">
+                  <div className="monitor-incident-title"><StateDot state={incident.severity === "critical" ? "CRITICAL" : "DEGRADED"} /><strong>{incident.issueCode}</strong><span>{incident.courtNumber ? `Court ${incident.courtNumber}` : incident.rootDependency}</span></div>
+                  <p>{incident.summary}</p>
+                  {incident.firstAction && <p className="monitor-first-action"><strong>First action:</strong> {incident.firstAction}</p>}
+                </div>
+                {incident.status === "open" ? (
+                  <div className="monitor-ack-form">
+                    <input aria-label={`Acknowledgement reason for ${incident.issueCode}`} value={ackReasons[incident.id] ?? ""} onChange={(event) => setAckReasons((current) => ({ ...current, [incident.id]: event.target.value }))} placeholder="Acknowledgement reason" maxLength={300} />
+                    <button type="button" onClick={() => void acknowledge(incident)} disabled={ackBusy === incident.id}><CheckCircle2 size={16} /> Acknowledge</button>
+                    {ackError[incident.id] && <span className="monitor-form-error">{ackError[incident.id]}</span>}
+                  </div>
+                ) : <span className="status info">Acknowledged by {incident.acknowledgedBy ?? "operator"}</span>}
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function CourtCard({ court, selected, nowMs, onSelect }: { court: MonitorCourt; selected: boolean; nowMs: number; onSelect: () => void }) {
+  const browser = court.browser;
+  const raw = court.paths.raw;
+  const preview = court.ffmpeg.preview;
+  const current = court.competition?.currentMatch;
+  const score = court.competition?.score;
+  const issue = court.stages.find((stage) => stage.state === "CRITICAL") ?? court.stages.find((stage) => ["DEGRADED", "UNKNOWN"].includes(stage.state));
+  const thumbnailFresh = court.thumbnail && nowMs - Date.parse(court.thumbnail.receivedAt) <= 45_000;
+  const loss = browser?.video.packetsLost != null && browser.video.packetsReceived != null ? percent(browser.video.packetsLost, browser.video.packetsLost + browser.video.packetsReceived) : "--";
+  return (
+    <article className={`monitor-court ${selected ? "is-selected" : ""}`} data-state={court.overallState}>
+      <header className="monitor-court-head">
+        <div><span className="monitor-court-number">{court.courtNumber}</span><div><h2>{courtName(court)}</h2><p>{court.expectation.coveragePhase.replaceAll("_", " ")}</p></div></div>
+        <StateBadge state={court.overallState} compact />
+      </header>
+      <button className="monitor-thumbnail" type="button" onClick={onSelect} aria-label={`Inspect ${courtName(court)}`}>
+        {thumbnailFresh ? <>
+          {/* Authenticated no-store snapshots intentionally bypass the Next image optimizer. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={`/api/admin/monitor/courts/${court.courtNumber}/thumbnail?t=${encodeURIComponent(court.thumbnail!.receivedAt)}`} alt={`Latest program frame for ${courtName(court)}`} />
+        </> : <div className="monitor-thumbnail-empty"><Camera size={24} /><span>{court.expectation.mediaExpectation === "OFF" ? "Expected off" : "No current frame"}</span></div>}
+        <span className="monitor-thumbnail-action"><Eye size={15} /> Inspect</span>
+      </button>
+      <div className="monitor-metrics">
+        <Metric label="Raw" value={formatBitrate(raw?.inboundBitrateBps)} />
+        <Metric label="Preview" value={formatFps(preview?.framesPerSecond)} />
+        <Metric label="Program" value={formatFps(browser?.video.framesPerSecond)} />
+        <Metric label="Res" value={browser?.video.width && browser.video.height ? `${browser.video.width}×${browser.video.height}` : "--"} />
+        <Metric label="RTT" value={formatMs(browser?.video.rttMs)} />
+        <Metric label="Loss" value={loss} />
+      </div>
+      <div className="monitor-stage-grid">
+        {court.stages.map((stage) => <StageRow key={stage.stage} stage={stage} />)}
+      </div>
+      <div className="monitor-match">
+        {current ? <><div><strong>{current.teamA ?? "TBD"}</strong><span>{score ? `${score.teamASets} · ${score.teamAScore}` : "--"}</span></div><div><strong>{current.teamB ?? "TBD"}</strong><span>{score ? `${score.teamBSets} · ${score.teamBScore}` : "--"}</span></div><p>{current.roundName ?? "Match"}{current.matchNumber ? ` · #${current.matchNumber}` : ""}</p></> : <p>No current match</p>}
+      </div>
+      <div className="monitor-court-footer">
+        <span><Headphones size={14} /> {browser?.commentary.configured ? browser.commentary.syncStatus : "off"}</span>
+        <span><Youtube size={14} /> {friendlyState(court.youtube?.state ?? "NOT_APPLICABLE")}</span>
+        <span><Gauge size={14} /> {browser ? `${browser.video.reconnectCount} reconnects` : "--"}</span>
+      </div>
+      {issue?.issueCode && <div className="monitor-court-alert"><AlertTriangle size={14} /><span>{issue.issueCode}</span></div>}
+    </article>
+  );
+}
+
+function StageRow({ stage }: { stage: MonitorStage }) {
+  return <div className="monitor-stage-row" title={`${stageLabel(stage.stage)}: ${stage.summary}`}><StateDot state={stage.state} /><span>{compactStageLabel(stage.stage)}</span></div>;
+}
+
+function StageDetail({ stage }: { stage: MonitorStage }) {
+  return <div className="monitor-stage-detail-row" data-state={stage.state}><div><StateDot state={stage.state} /><strong>{stageLabel(stage.stage)}</strong></div><p>{stage.summary}</p>{stage.firstAction && <small>{stage.firstAction}</small>}</div>;
+}
+
+function GlobalItem({ icon, label, value, state }: { icon: React.ReactNode; label: string; value: string; state: MonitorHealthState }) {
+  return <div className="monitor-global-item" data-state={state}>{icon}<div><span>{label}</span><strong>{value}</strong></div><StateDot state={state} /></div>;
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return <div className="monitor-metric"><span>{label}</span><strong>{value}</strong></div>;
+}
+
+function StateBadge({ state, compact = false }: { state: MonitorHealthState; compact?: boolean }) {
+  const Icon = state === "CRITICAL" ? ShieldAlert : state === "DEGRADED" || state === "UNKNOWN" ? AlertTriangle : state === "EXPECTED_OFF" || state === "NOT_APPLICABLE" ? Radio : CheckCircle2;
+  return <span className={`monitor-state-badge ${compact ? "is-compact" : ""}`} data-state={state}><Icon size={compact ? 13 : 15} />{friendlyState(state)}</span>;
+}
+
+function StateDot({ state }: { state: MonitorHealthState }) {
+  return <span className="monitor-state-dot" data-state={state} aria-label={friendlyState(state)} />;
+}
+
+function systemState(courtStates: MonitorHealthState[], incidents: MonitorIncident[]): MonitorHealthState {
+  if (incidents.some((incident) => incident.status !== "resolved" && incident.severity === "critical")) return "CRITICAL";
+  return courtStates.reduce((worst, state) => STATE_RANK[state] > STATE_RANK[worst] ? state : worst, "NOT_APPLICABLE");
+}
+
+function firstAttentionCourt(envelope: MonitorSnapshotEnvelope | null): number | null {
+  const court = envelope?.snapshot.courts.find((entry) => entry.overallState === "CRITICAL") ?? envelope?.snapshot.courts.find((entry) => entry.overallState === "DEGRADED");
+  return court?.courtNumber ?? null;
+}
+
+function courtName(court: MonitorCourt): string {
+  return court.competition?.physicalCourtLabel || court.competition?.displayName || (court.courtNumber === 1 ? "Stadium Court" : `Court ${court.courtNumber}`);
+}
+
+function stageLabel(stage: MonitorStage["stage"]): string {
+  return ({ RAW_INGEST: "Ingest", PREVIEW: "Preview", PROGRAM_PATH: "Program", PROGRAM_BROWSER: "Render", COMMENTARY: "Commentary", SCORE_SOURCE: "Score", SCORE_RENDER: "Scorebug", YOUTUBE: "YouTube", EGRESS: "Egress", VENUE: "Venue", HOST: "Host", CONTROL: "Control", MONITORING: "Monitor", NOTIFICATION: "Paging" } as Record<string, string>)[stage] ?? stage;
+}
+
+function compactStageLabel(stage: MonitorStage["stage"]): string {
+  return ({ RAW_INGEST: "Ingest", PREVIEW: "Pre", PROGRAM_PATH: "Prog", PROGRAM_BROWSER: "Render", COMMENTARY: "Comms", SCORE_SOURCE: "Score", SCORE_RENDER: "Bug", YOUTUBE: "YT" } as Record<string, string>)[stage] ?? stageLabel(stage);
+}
+
+function friendlyState(state: string): string {
+  return state.replaceAll("_", " ").toLowerCase().replace(/(^|\s)\S/g, (letter) => letter.toUpperCase());
+}
+
+function formatBitrate(value: number | null | undefined): string {
+  if (value == null) return "--";
+  return value >= 1_000_000 ? `${(value / 1_000_000).toFixed(1)} Mbps` : `${Math.round(value / 1_000)} kbps`;
+}
+
+function formatFps(value: number | null | undefined): string {
+  return value == null ? "--" : `${value.toFixed(1)} fps`;
+}
+
+function formatMs(value: number | null | undefined): string {
+  return value == null ? "--" : `${Math.round(value)} ms`;
+}
+
+function percent(value: number, total: number): string {
+  return total > 0 ? `${(value / total * 100).toFixed(1)}%` : "0.0%";
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1_000) return "<1s";
+  if (ms < 60_000) return `${Math.floor(ms / 1_000)}s`;
+  return `${Math.floor(ms / 60_000)}m`;
+}
+
+function pagingLabel(notifications: MonitorSnapshotEnvelope["snapshot"]["notifications"]): string {
+  if (notifications.state === "NOT_APPLICABLE") return "Not configured";
+  if (notifications.state === "UNKNOWN") return "Not tested";
+  return notifications.state === "HEALTHY" ? "Verified" : "Degraded";
+}
+
+function playAlertTone() {
+  try {
+    const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const context = new AudioContextClass();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.frequency.value = 740;
+    gain.gain.setValueAtTime(0.0001, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.16, context.currentTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.28);
+    oscillator.connect(gain).connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.3);
+    oscillator.addEventListener("ended", () => void context.close());
+  } catch {
+    // Browser notification sound is supplemental only.
+  }
+}

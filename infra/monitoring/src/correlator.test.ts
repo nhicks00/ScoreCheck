@@ -40,6 +40,31 @@ describe("monitor correlator", () => {
     expect(result.courts[0]?.stages.find((stage) => stage.stage === "PREVIEW")?.state).toBe("EXPECTED_OFF");
   });
 
+  it("keeps an advertised but inactive on-demand path expected-off", () => {
+    const generatedAt = "2026-07-12T12:00:00.000Z";
+    const snapshot: AgentSnapshot = {
+      ...emptyAgentSnapshot(generatedAt),
+      mediaPaths: [{
+        name: "court1_preview",
+        courtNumber: 1,
+        branch: "preview",
+        ready: false,
+        readySince: null,
+        bytesReceived: 0,
+        bytesSent: 0,
+        inboundBitrateBps: 0,
+        frameErrors: 0,
+        readerCount: 0,
+        videoCodec: null,
+        audioCodec: null
+      }]
+    };
+    const runtimes = new Map<string, AgentRuntime>([[target.id, { target, snapshot, lastSeenAt: generatedAt, lastErrorAt: null }]]);
+    const result = buildMonitorSnapshot([target], runtimes, 1, Date.parse(generatedAt) + 1_000);
+    expect(result.courts[0]?.stages.find((stage) => stage.stage === "PREVIEW")?.state).toBe("EXPECTED_OFF");
+    expect(result.courts[0]?.overallState).toBe("EXPECTED_OFF");
+  });
+
   it("escalates missing media and browser telemetry only when explicitly required", () => {
     const generatedAt = "2026-07-12T12:00:00.000Z";
     const snapshot = emptyAgentSnapshot(generatedAt);

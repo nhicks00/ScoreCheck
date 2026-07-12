@@ -1,4 +1,4 @@
-import { MONITORING_CONTRACT_VERSION, worstHealthState, type AgentSnapshot, type BrowserHeartbeatSnapshot, type ControlPlaneSnapshot, type CourtExpectation, type HealthState, type IncidentSnapshot, type MediaPathSnapshot, type MonitorSnapshot, type MonitoringStage, type NotificationHealth, type StageHealth, type YouTubeMonitorSnapshot } from "./contracts.js";
+import { MONITORING_CONTRACT_VERSION, worstHealthState, type AgentSnapshot, type BrowserHeartbeatSnapshot, type BrowserThumbnailMetadata, type ControlPlaneSnapshot, type CourtExpectation, type FfmpegBranchSnapshot, type HealthState, type IncidentSnapshot, type MediaPathSnapshot, type MonitorSnapshot, type MonitoringStage, type NotificationHealth, type StageHealth, type YouTubeMonitorSnapshot } from "./contracts.js";
 import type { AgentTarget } from "./config.js";
 
 export type AgentRuntime = {
@@ -17,7 +17,8 @@ export function buildMonitorSnapshot(
   browserHeartbeats = new Map<number, BrowserHeartbeatSnapshot>(),
   controlPlane: ControlPlaneSnapshot | null = null,
   youtubeMonitor: YouTubeMonitorSnapshot | null = null,
-  notifications: NotificationHealth = OFF_NOTIFICATION_HEALTH
+  notifications: NotificationHealth = OFF_NOTIFICATION_HEALTH,
+  thumbnails = new Map<number, BrowserThumbnailMetadata>()
 ): MonitorSnapshot {
   const agents = targets.map((target) => {
     const runtime = runtimes.get(target.id);
@@ -27,15 +28,21 @@ export function buildMonitorSnapshot(
       role: target.role,
       state: agentState(runtime?.snapshot ?? null, ageMs),
       lastSeenAt: runtime?.lastSeenAt ?? null,
-      ageMs
+      ageMs,
+      host: runtime?.snapshot?.host ?? null,
+      services: runtime?.snapshot?.services ?? [],
+      nativeServices: runtime?.snapshot?.nativeServices ?? null
     };
   });
 
   const paths = latestMediaPaths(runtimes, nowMs);
+  const ffmpegBranches = latestFfmpegBranches(runtimes, nowMs);
   const courts = Array.from({ length: courtCount }, (_, index) => {
     const courtNumber = index + 1;
     const courtPaths = paths.filter((path) => path.courtNumber === courtNumber);
     const byBranch = Object.fromEntries(courtPaths.map((path) => [path.branch, path])) as Partial<Record<MediaPathSnapshot["branch"], MediaPathSnapshot>>;
+    const courtFfmpeg = ffmpegBranches.filter((branch) => branch.courtNumber === courtNumber);
+    const ffmpeg = Object.fromEntries(courtFfmpeg.map((branch) => [branch.branch, branch])) as Partial<Record<FfmpegBranchSnapshot["branch"], FfmpegBranchSnapshot>>;
     const browser = browserHeartbeats.get(courtNumber) ?? null;
     const competition = controlPlane?.courts.find((court) => court.courtNumber === courtNumber) ?? null;
     const youtube = youtubeMonitor?.courts.find((court) => court.courtNumber === courtNumber) ?? null;
@@ -55,10 +62,12 @@ export function buildMonitorSnapshot(
       overallState: worstHealthState(stages.map((stage) => stage.state)),
       stages,
       paths: byBranch,
+      ffmpeg,
       browser,
       competition,
       expectation,
-      youtube
+      youtube,
+      thumbnail: thumbnails.get(courtNumber) ?? null
     };
   });
 
@@ -331,9 +340,25 @@ function latestMediaPaths(runtimes: Map<string, AgentRuntime>, nowMs: number): M
   return [...byName.values()].map((entry) => entry.path);
 }
 
+function latestFfmpegBranches(runtimes: Map<string, AgentRuntime>, nowMs: number): FfmpegBranchSnapshot[] {
+  const byName = new Map<string, { branch: FfmpegBranchSnapshot; observedAtMs: number }>();
+  for (const runtime of runtimes.values()) {
+    if (!runtime.snapshot) continue;
+    const observedAtMs = Date.parse(runtime.snapshot.generatedAt);
+    if (!Number.isFinite(observedAtMs) || nowMs - observedAtMs > 20_000) continue;
+    for (const branch of runtime.snapshot.ffmpegBranches) {
+      const existing = byName.get(branch.name);
+      if (!existing || observedAtMs > existing.observedAtMs) byName.set(branch.name, { branch, observedAtMs });
+    }
+  }
+  return [...byName.values()].map((entry) => entry.branch);
+}
+
 function pathStage(stage: MonitoringStage, branch: MediaPathSnapshot["branch"], path: MediaPathSnapshot | null, nowMs: number, expectation: CourtExpectation): StageHealth {
+  if (expectation.mediaExpectation === "OFF" && !path?.ready) {
+    return expectedOffStage(stage, `${branch} path is not expected.`);
+  }
   if (!path) {
-    if (expectation.mediaExpectation === "OFF") return expectedOffStage(stage, `${branch} path is not expected.`);
     const required = expectation.mediaExpectation === "REQUIRED";
     return {
       stage,
