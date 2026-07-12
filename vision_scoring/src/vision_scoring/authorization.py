@@ -1403,6 +1403,112 @@ def verify_signed_policy_assessment(
     )
 
 
+def _verify_signed_policy_assessment_for_policy_boundary(
+    signed_assessment: SignedPolicyAssessment,
+    *,
+    assessment: PolicyAssessment,
+    policy: AuthorizationPolicy,
+    policy_archive: AuthorizationPolicyArchive,
+    verified_at_ns: int,
+    revoked_as_of_ns: int,
+) -> PolicyAssessment:
+    """Shared selected-policy verifier with an explicit revocation horizon."""
+
+    if type(assessment) is not PolicyAssessment:
+        raise ValueError("assessment must be an exact PolicyAssessment")
+    if type(policy) is not AuthorizationPolicy:
+        raise ValueError("policy must be an exact AuthorizationPolicy")
+    if type(policy_archive) is not AuthorizationPolicyArchive:
+        raise ValueError("policy_archive must be an exact AuthorizationPolicyArchive")
+    verified_at_ns = _timestamp(verified_at_ns, "verified_at_ns")
+    revoked_as_of_ns = _timestamp(revoked_as_of_ns, "revoked_as_of_ns")
+    if not signed_assessment.signed_at_ns <= revoked_as_of_ns <= verified_at_ns:
+        _fail(
+            "ASSESSMENT_TIME",
+            "revocation verification time must follow signing and not exceed verification",
+        )
+    try:
+        retained = policy_archive.resolve_policy(policy.fingerprint())
+    except AuthorizationError as exc:
+        raise AuthorizationError(
+            "POLICY_UNTRUSTED",
+            "selected assessment policy is not retained by the protected archive",
+        ) from exc
+    if retained != policy:
+        _fail("POLICY_MISMATCH", "selected assessment policy is not byte-exact")
+    if (
+        policy_archive.match_id != assessment.match_id
+        or policy_archive.match_id != policy.match_id
+        or policy_archive.trust_domain_id != policy.trust_domain_id
+    ):
+        _fail(
+            "ASSESSMENT_CONTEXT",
+            "assessment scope differs from the selected protected policy",
+        )
+    if not policy_archive.current_policy.is_active(verified_at_ns):
+        _fail(
+            "POLICY_ARCHIVE_STALE",
+            "protected archive has no current policy active at verification time",
+        )
+    return _verify_signed_policy_assessment_for_policy(
+        signed_assessment,
+        assessment=assessment,
+        policy=policy,
+        policy_archive=policy_archive,
+        signed_not_after_ns=verified_at_ns,
+        revoked_as_of_ns=revoked_as_of_ns,
+    )
+
+
+def verify_signed_policy_assessment_for_policy(
+    signed_assessment: SignedPolicyAssessment,
+    *,
+    assessment: PolicyAssessment,
+    policy: AuthorizationPolicy,
+    policy_archive: AuthorizationPolicyArchive,
+    verified_at_ns: int,
+) -> PolicyAssessment:
+    """Verify a selected historical policy using current revocation truth.
+
+    The caller must independently prove that ``policy`` was ledger-current at
+    signing; this function deliberately does not accept a weaker horizon.
+    """
+
+    return _verify_signed_policy_assessment_for_policy_boundary(
+        signed_assessment,
+        assessment=assessment,
+        policy=policy,
+        policy_archive=policy_archive,
+        verified_at_ns=verified_at_ns,
+        revoked_as_of_ns=verified_at_ns,
+    )
+
+
+def verify_signed_policy_assessment_for_policy_at_historical_acceptance(
+    signed_assessment: SignedPolicyAssessment,
+    *,
+    assessment: PolicyAssessment,
+    policy: AuthorizationPolicy,
+    policy_archive: AuthorizationPolicyArchive,
+    verified_at_ns: int,
+    accepted_at_ns: int,
+) -> PolicyAssessment:
+    """Replay a persisted assessment acceptance at its revocation horizon.
+
+    This is historical integrity only and never proves current usability.
+    ``policy`` still must be proven ledger-current-at-signing by the caller.
+    """
+
+    return _verify_signed_policy_assessment_for_policy_boundary(
+        signed_assessment,
+        assessment=assessment,
+        policy=policy,
+        policy_archive=policy_archive,
+        verified_at_ns=verified_at_ns,
+        revoked_as_of_ns=accepted_at_ns,
+    )
+
+
 def _assessment_evidence(event: RuleEvent) -> tuple[str, ...] | None:
     payload = event.payload
     if isinstance(payload, (PointAwardedPayload, ReplayNoPointPayload)):
@@ -2412,4 +2518,6 @@ __all__ = [
     "sign_policy_assessment",
     "verify_authorized_rule_event",
     "verify_signed_policy_assessment",
+    "verify_signed_policy_assessment_for_policy",
+    "verify_signed_policy_assessment_for_policy_at_historical_acceptance",
 ]

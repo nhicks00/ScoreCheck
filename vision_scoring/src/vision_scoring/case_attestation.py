@@ -406,14 +406,15 @@ def sign_scorer_copilot_case(
     )
 
 
-def verify_signed_scorer_copilot_case(
+def _verify_signed_scorer_copilot_case(
     signed: SignedScorerCopilotCase,
     *,
     case: ScorerCopilotCase,
     policy_archive: AuthorizationPolicyArchive,
     verified_at_ns: int,
+    revoked_as_of_ns: int,
 ) -> ScorerCopilotCase:
-    """Verify case provenance and current revocation without granting authority."""
+    """Shared exact verifier with an explicitly selected revocation horizon."""
 
     if type(signed) is not SignedScorerCopilotCase:
         _fail("SIGNED_TYPE", "signed scorer-copilot case must be exact")
@@ -422,6 +423,12 @@ def verify_signed_scorer_copilot_case(
     if type(policy_archive) is not AuthorizationPolicyArchive:
         raise ValueError("policy_archive must be an exact AuthorizationPolicyArchive")
     verified_at_ns = _timestamp(verified_at_ns, "verified_at_ns")
+    revoked_as_of_ns = _timestamp(revoked_as_of_ns, "revoked_as_of_ns")
+    if not signed.signed_at_ns <= revoked_as_of_ns <= verified_at_ns:
+        _fail(
+            "CASE_PRODUCER_TIME",
+            "revocation verification time must follow signing and not exceed verification",
+        )
     if verified_at_ns < case.opened_at_ns:
         _fail(
             "CASE_ADMISSION_TIME",
@@ -456,7 +463,7 @@ def verify_signed_scorer_copilot_case(
         policy=policy,
         key=key,
         signed_at_ns=signed.signed_at_ns,
-        revoked_as_of_ns=verified_at_ns,
+        revoked_as_of_ns=revoked_as_of_ns,
     )
     try:
         key.public_key.verify(
@@ -469,6 +476,47 @@ def verify_signed_scorer_copilot_case(
             "scorer-copilot case producer signature is invalid",
         ) from exc
     return signed.case
+
+
+def verify_signed_scorer_copilot_case(
+    signed: SignedScorerCopilotCase,
+    *,
+    case: ScorerCopilotCase,
+    policy_archive: AuthorizationPolicyArchive,
+    verified_at_ns: int,
+) -> ScorerCopilotCase:
+    """Verify case provenance using current revocation truth."""
+
+    return _verify_signed_scorer_copilot_case(
+        signed,
+        case=case,
+        policy_archive=policy_archive,
+        verified_at_ns=verified_at_ns,
+        revoked_as_of_ns=verified_at_ns,
+    )
+
+
+def verify_signed_scorer_copilot_case_at_historical_acceptance(
+    signed: SignedScorerCopilotCase,
+    *,
+    case: ScorerCopilotCase,
+    policy_archive: AuthorizationPolicyArchive,
+    verified_at_ns: int,
+    accepted_at_ns: int,
+) -> ScorerCopilotCase:
+    """Replay a prior acceptance using its persisted revocation horizon.
+
+    This does not establish current usability.  Callers must separately invoke
+    :func:`verify_signed_scorer_copilot_case` before a new presentation/action.
+    """
+
+    return _verify_signed_scorer_copilot_case(
+        signed,
+        case=case,
+        policy_archive=policy_archive,
+        verified_at_ns=verified_at_ns,
+        revoked_as_of_ns=accepted_at_ns,
+    )
 
 
 class _DuplicateKey(ValueError):
@@ -628,4 +676,5 @@ __all__ = [
     "parse_signed_scorer_copilot_case",
     "sign_scorer_copilot_case",
     "verify_signed_scorer_copilot_case",
+    "verify_signed_scorer_copilot_case_at_historical_acceptance",
 ]

@@ -44,6 +44,7 @@ from tests.test_review_contracts import (
     make_adjudication,
     make_case,
     make_disposition,
+    make_structurally_signed_case,
 )
 
 
@@ -114,7 +115,8 @@ class ReviewSigningTests(unittest.TestCase):
         )
         self.archive = self.archive_for()
         self.case = make_case()
-        self.disposition = make_disposition(self.case)
+        self.signed_case = make_structurally_signed_case(self.case)
+        self.disposition = make_disposition(self.case, self.signed_case)
 
     def archive_for(
         self,
@@ -158,7 +160,7 @@ class ReviewSigningTests(unittest.TestCase):
     def sign_as_scorekeeper(self, **overrides: object):
         values: dict[str, object] = {
             "disposition": self.disposition,
-            "case": self.case,
+            "signed_case": self.signed_case,
             "policy_archive": self.archive,
             "actor_id": self.scorekeeper_key.actor_id,
             "actor_key_id": self.scorekeeper_key.key_id,
@@ -181,7 +183,7 @@ class ReviewSigningTests(unittest.TestCase):
         values: dict[str, object] = {
             "adjudication": adjudication,
             "considered_signed_dispositions": considered,
-            "case": self.case,
+            "signed_case": self.signed_case,
             "policy_archive": self.archive,
             "actor_id": self.referee_key.actor_id,
             "actor_key_id": self.referee_key.key_id,
@@ -209,7 +211,7 @@ class ReviewSigningTests(unittest.TestCase):
         self.assertEqual(
             verify_signed_review_disposition(
                 scorekeeper,
-                case=self.case,
+                signed_case=self.signed_case,
                 policy_archive=self.archive,
                 verified_at_ns=1_600,
             ),
@@ -217,7 +219,7 @@ class ReviewSigningTests(unittest.TestCase):
         )
         referee_review = sign_review_disposition(
             disposition=self.disposition,
-            case=self.case,
+            signed_case=self.signed_case,
             policy_archive=self.archive,
             actor_id=self.referee_key.actor_id,
             actor_key_id=self.referee_key.key_id,
@@ -228,7 +230,7 @@ class ReviewSigningTests(unittest.TestCase):
         self.assertEqual(
             verify_signed_review_disposition(
                 referee_review,
-                case=self.case,
+                signed_case=self.signed_case,
                 policy_archive=self.archive,
                 verified_at_ns=1_600,
             ),
@@ -242,7 +244,7 @@ class ReviewSigningTests(unittest.TestCase):
             sign_review_adjudication(
                 adjudication=adjudication,
                 considered_signed_dispositions=considered,
-                case=self.case,
+                signed_case=self.signed_case,
                 policy_archive=self.archive,
                 actor_id=self.scorekeeper_key.actor_id,
                 actor_key_id=self.scorekeeper_key.key_id,
@@ -258,7 +260,7 @@ class ReviewSigningTests(unittest.TestCase):
             verify_signed_review_adjudication(
                 signed,
                 considered_signed_dispositions=considered,
-                case=self.case,
+                signed_case=self.signed_case,
                 policy_archive=self.archive,
                 verified_at_ns=1_600,
             ),
@@ -269,7 +271,7 @@ class ReviewSigningTests(unittest.TestCase):
         with self.assertRaisesRegex(ReviewSignatureError, "ROLE_FORBIDDEN"):
             sign_review_disposition(
                 disposition=self.disposition,
-                case=self.case,
+                signed_case=self.signed_case,
                 policy_archive=self.archive,
                 actor_id=self.admin_key.actor_id,
                 actor_key_id=self.admin_key.key_id,
@@ -292,15 +294,75 @@ class ReviewSigningTests(unittest.TestCase):
         with self.assertRaisesRegex(ReviewSignatureError, "SIGNATURE_INVALID"):
             verify_signed_review_disposition(
                 tampered,
-                case=self.case,
+                signed_case=self.signed_case,
                 policy_archive=self.archive,
                 verified_at_ns=1_600,
+            )
+
+    def test_review_records_bind_the_exact_case_producer_signature(self) -> None:
+        alternate = make_structurally_signed_case(
+            self.case,
+            signature_byte=b"d",
+        )
+        signed_disposition = self.sign_as_scorekeeper()
+        with self.assertRaisesRegex(ReviewSignatureError, "CASE_MISMATCH"):
+            verify_signed_review_disposition(
+                signed_disposition,
+                signed_case=alternate,
+                policy_archive=self.archive,
+                verified_at_ns=1_600,
+            )
+        with self.assertRaisesRegex(ValueError, "exact signed case"):
+            self.sign_as_scorekeeper(signed_case=alternate)
+
+        considered = (signed_disposition,)
+        signed_adjudication = self.sign_as_referee(
+            considered_signed_dispositions=considered,
+        )
+        with self.assertRaisesRegex(ReviewSignatureError, "CASE_MISMATCH"):
+            verify_signed_review_adjudication(
+                signed_adjudication,
+                considered_signed_dispositions=considered,
+                signed_case=alternate,
+                policy_archive=self.archive,
+                verified_at_ns=1_600,
+            )
+        with self.assertRaisesRegex(ValueError, "exact signed case"):
+            self.sign_as_referee(
+                considered_signed_dispositions=considered,
+                signed_case=alternate,
+            )
+
+    def test_signing_rejects_malformed_signed_case_without_attribute_errors(self) -> None:
+        with self.assertRaisesRegex(ValueError, "exact SignedScorerCopilotCase"):
+            sign_review_disposition(
+                disposition=self.disposition,
+                signed_case=object(),  # type: ignore[arg-type]
+                policy_archive=self.archive,
+                actor_id=self.scorekeeper_key.actor_id,
+                actor_key_id=self.scorekeeper_key.key_id,
+                actor_role=PrincipalRole.SCOREKEEPER,
+                signed_at_ns=1_500,
+                actor_private_key=self.scorekeeper_private,
+            )
+        considered = (self.sign_as_scorekeeper(),)
+        with self.assertRaisesRegex(ValueError, "exact SignedScorerCopilotCase"):
+            sign_review_adjudication(
+                adjudication=make_adjudication(self.case, considered[0]),
+                considered_signed_dispositions=considered,
+                signed_case=object(),  # type: ignore[arg-type]
+                policy_archive=self.archive,
+                actor_id=self.referee_key.actor_id,
+                actor_key_id=self.referee_key.key_id,
+                actor_role=PrincipalRole.REFEREE,
+                signed_at_ns=1_501,
+                actor_private_key=self.referee_private,
             )
 
     def test_review_and_adjudication_signing_domains_are_not_interchangeable(self) -> None:
         referee_review = sign_review_disposition(
             disposition=self.disposition,
-            case=self.case,
+            signed_case=self.signed_case,
             policy_archive=self.archive,
             actor_id=self.referee_key.actor_id,
             actor_key_id=self.referee_key.key_id,
@@ -324,7 +386,7 @@ class ReviewSigningTests(unittest.TestCase):
             verify_signed_review_adjudication(
                 forged,
                 considered_signed_dispositions=(referee_review,),
-                case=self.case,
+                signed_case=self.signed_case,
                 policy_archive=self.archive,
                 verified_at_ns=1_600,
             )
@@ -372,15 +434,18 @@ class ReviewSigningTests(unittest.TestCase):
             )
 
         other_case = dataclasses.replace(self.case, opened_at_ns=1_401)
+        other_signed_case = make_structurally_signed_case(
+            other_case, signature_byte=b"d"
+        )
         wrong_case_adjudication = dataclasses.replace(
             adjudication,
             case_fingerprint=other_case.fingerprint(),
         )
-        with self.assertRaisesRegex(ReviewSignatureError, "CASE_MISMATCH"):
+        with self.assertRaisesRegex(ValueError, "exact signed case"):
             self.sign_as_referee(
                 considered_signed_dispositions=considered,
                 adjudication=wrong_case_adjudication,
-                case=other_case,
+                signed_case=other_signed_case,
             )
 
     def test_adjudication_cannot_precede_any_considered_signature(self) -> None:
@@ -430,7 +495,7 @@ class ReviewSigningTests(unittest.TestCase):
             verify_signed_review_adjudication(
                 backdated,
                 considered_signed_dispositions=considered,
-                case=self.case,
+                signed_case=self.signed_case,
                 policy_archive=self.archive,
                 verified_at_ns=1_600,
             )
@@ -446,7 +511,7 @@ class ReviewSigningTests(unittest.TestCase):
         with self.assertRaisesRegex(ReviewSignatureError, "REVIEW_TIME"):
             verify_signed_review_disposition(
                 backdated,
-                case=self.case,
+                signed_case=self.signed_case,
                 policy_archive=self.archive,
                 verified_at_ns=1_600,
             )
@@ -468,7 +533,7 @@ class ReviewSigningTests(unittest.TestCase):
             verify_signed_review_adjudication(
                 backdated_adjudication,
                 considered_signed_dispositions=considered,
-                case=self.case,
+                signed_case=self.signed_case,
                 policy_archive=self.archive,
                 verified_at_ns=1_600,
             )
@@ -487,7 +552,7 @@ class ReviewSigningTests(unittest.TestCase):
         with self.assertRaisesRegex(ReviewSignatureError, "ACTOR_KEY_REVOKED"):
             verify_signed_review_disposition(
                 signed,
-                case=self.case,
+                signed_case=self.signed_case,
                 policy_archive=revoked_archive,
                 verified_at_ns=1_600,
             )
@@ -496,6 +561,7 @@ class ReviewSigningTests(unittest.TestCase):
         self.assertIsNone(
             verify_case_policy_assessment(
                 self.case,
+                signing_policy=self.policy,
                 policy_archive=self.archive,
                 verified_at_ns=1_500,
             )
@@ -504,6 +570,7 @@ class ReviewSigningTests(unittest.TestCase):
         self.assertEqual(
             verify_case_policy_assessment(
                 signed_case,
+                signing_policy=self.policy,
                 policy_archive=self.archive,
                 verified_at_ns=1_500,
             ),
@@ -523,6 +590,7 @@ class ReviewSigningTests(unittest.TestCase):
         ):
             verify_case_policy_assessment(
                 forged_case,
+                signing_policy=self.policy,
                 policy_archive=self.archive,
                 verified_at_ns=1_500,
             )
@@ -538,6 +606,7 @@ class ReviewSigningTests(unittest.TestCase):
         with self.assertRaisesRegex(AuthorizationError, "ASSESSMENT_KEY_UNTRUSTED"):
             verify_case_policy_assessment(
                 wrong_key_case,
+                signing_policy=self.policy,
                 policy_archive=self.archive,
                 verified_at_ns=1_500,
             )
@@ -553,6 +622,7 @@ class ReviewSigningTests(unittest.TestCase):
         ):
             verify_case_policy_assessment(
                 signed_case,
+                signing_policy=unaccepted_policy,
                 policy_archive=self.archive_for(policy=unaccepted_policy),
                 verified_at_ns=1_500,
             )
@@ -569,6 +639,7 @@ class ReviewSigningTests(unittest.TestCase):
         with self.assertRaisesRegex(AuthorizationError, "ASSESSMENT_KEY_REVOKED"):
             verify_case_policy_assessment(
                 signed_case,
+                signing_policy=self.policy,
                 policy_archive=revoked_archive,
                 verified_at_ns=1_500,
             )
@@ -577,14 +648,18 @@ class ReviewSigningTests(unittest.TestCase):
         with self.assertRaisesRegex(AuthorizationError, "ASSESSMENT_CONTEXT"):
             verify_case_policy_assessment(
                 signed_case,
+                signing_policy=wrong_scope_policy,
                 policy_archive=self.archive_for(policy=wrong_scope_policy),
                 verified_at_ns=1_500,
             )
 
     def test_wrong_case_scope_key_and_private_material_fail_closed(self) -> None:
         wrong_case = dataclasses.replace(self.case, opened_at_ns=1_401)
-        with self.assertRaisesRegex(ValueError, "exact case"):
-            self.sign_as_scorekeeper(case=wrong_case)
+        wrong_signed_case = make_structurally_signed_case(
+            wrong_case, signature_byte=b"d"
+        )
+        with self.assertRaisesRegex(ValueError, "exact signed case"):
+            self.sign_as_scorekeeper(signed_case=wrong_signed_case)
         with self.assertRaisesRegex(ReviewSignatureError, "PRIVATE_KEY_MISMATCH"):
             self.sign_as_scorekeeper(actor_private_key=Ed25519PrivateKey.generate())
         with self.assertRaisesRegex(ReviewSignatureError, "ACTOR_KEY_UNTRUSTED"):
@@ -595,14 +670,14 @@ class ReviewSigningTests(unittest.TestCase):
         with self.assertRaisesRegex(ReviewSignatureError, "FUTURE_SIGNATURE"):
             verify_signed_review_disposition(
                 signed,
-                case=self.case,
+                signed_case=self.signed_case,
                 policy_archive=self.archive,
                 verified_at_ns=1_499,
             )
         with self.assertRaisesRegex(ReviewSignatureError, "POLICY_ARCHIVE_STALE"):
             verify_signed_review_disposition(
                 signed,
-                case=self.case,
+                signed_case=self.signed_case,
                 policy_archive=self.archive,
                 verified_at_ns=10_001,
             )

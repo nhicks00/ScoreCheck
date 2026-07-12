@@ -16,7 +16,7 @@ import json
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Mapping, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Mapping, TypeVar
 
 from .authorization import (
     MAX_ID_LENGTH as MAX_AUTHORIZATION_ID_LENGTH,
@@ -49,9 +49,15 @@ from .policy import (
 )
 from .reconciliation import NextServerOutcome, NextServerReconciliation
 
+if TYPE_CHECKING:
+    from .case_attestation import SignedScorerCopilotCase
 
-REVIEW_SCHEMA_VERSION = "1.0"
-MAX_REVIEW_RECORD_BYTES = 1024 * 1024
+
+REVIEW_SCHEMA_VERSION = "2.0"
+# This bound is deliberately below the ledger's 768 KiB SQLite BLOB/TEXT limit.
+# Keeping the contract ceiling smaller means a record accepted by a codec can be
+# persisted without a second, storage-specific truncation rule.
+MAX_REVIEW_RECORD_BYTES = 512 * 1024
 MAX_REVIEW_JSON_DEPTH = 32
 MAX_REVIEW_JSON_NODES = 20_000
 MAX_REVIEW_JSON_CONTAINERS = 4_000
@@ -66,6 +72,7 @@ MAX_REVIEW_ACTIONS = 32
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _STABLE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$")
 _COPILOT_IDEMPOTENCY_PREFIX = "copilot-v1:"
+_CASE_ADMISSION_IDEMPOTENCY_PREFIX = "case-admission-v1:"
 
 
 class ReviewContractError(ValueError):
@@ -90,6 +97,19 @@ def _require_stable_id(value: object, field_name: str) -> str:
     if type(value) is not str or _STABLE_ID_RE.fullmatch(value) is None:
         raise ValueError(f"{field_name} must be an ASCII stable ID")
     return value
+
+
+def _require_review_action_idempotency_key(value: object) -> str:
+    key = _require_stable_id(value, "idempotency_key")
+    reserved = (
+        _COPILOT_IDEMPOTENCY_PREFIX,
+        _CASE_ADMISSION_IDEMPOTENCY_PREFIX,
+    )
+    if key.startswith(reserved):
+        raise ValueError(
+            "idempotency_key cannot use a reserved scorer-copilot namespace"
+        )
+    return key
 
 
 def _require_timestamp(value: object, field_name: str) -> int:
@@ -629,20 +649,45 @@ def _validate_review_result(
 def _validate_action_head(
     *,
     case_fingerprint: str,
+    signed_case_fingerprint: str,
     expected_case_sequence: int,
     previous_record_fingerprint: str,
 ) -> None:
     _require_sha256(case_fingerprint, "case_fingerprint")
+    _require_sha256(signed_case_fingerprint, "signed_case_fingerprint")
     _require_nonnegative(
         expected_case_sequence,
         "expected_case_sequence",
         maximum=MAX_REVIEW_ACTIONS - 1,
     )
     _require_sha256(previous_record_fingerprint, "previous_record_fingerprint")
-    if expected_case_sequence == 0 and previous_record_fingerprint != case_fingerprint:
+    if (
+        expected_case_sequence == 0
+        and previous_record_fingerprint != signed_case_fingerprint
+    ):
         raise ValueError(
-            "sequence-zero action must name the case fingerprint as its previous record"
+            "sequence-zero action must name the signed case fingerprint as its previous record"
         )
+
+
+def _validate_signed_case_identity(
+    *,
+    case_fingerprint: str,
+    signed_case_fingerprint: str,
+    signed_case: SignedScorerCopilotCase,
+) -> ScorerCopilotCase:
+    # Local import avoids a module cycle: case_attestation imports the
+    # unsigned case codec from this module.
+    from .case_attestation import SignedScorerCopilotCase
+
+    if type(signed_case) is not SignedScorerCopilotCase:
+        raise ValueError("signed_case must be an exact SignedScorerCopilotCase")
+    if (
+        case_fingerprint != signed_case.case_fingerprint
+        or signed_case_fingerprint != signed_case.fingerprint()
+    ):
+        raise ValueError("record does not bind the exact signed case")
+    return signed_case.case
 
 
 @dataclass(frozen=True, slots=True)
@@ -650,6 +695,7 @@ class ReviewDisposition:
     """An advisory human review action; never an authorization command."""
 
     case_fingerprint: str
+    signed_case_fingerprint: str
     expected_case_sequence: int
     previous_record_fingerprint: str
     idempotency_key: str
@@ -663,10 +709,11 @@ class ReviewDisposition:
             raise ValueError("unsupported review-disposition schema")
         _validate_action_head(
             case_fingerprint=self.case_fingerprint,
+            signed_case_fingerprint=self.signed_case_fingerprint,
             expected_case_sequence=self.expected_case_sequence,
             previous_record_fingerprint=self.previous_record_fingerprint,
         )
-        _require_stable_id(self.idempotency_key, "idempotency_key")
+        _require_review_action_idempotency_key(self.idempotency_key)
         object.__setattr__(
             self,
             "reasons",
@@ -688,7 +735,15 @@ class ReviewDisposition:
             "previous_record_fingerprint": self.previous_record_fingerprint,
             "reasons": [reason.value for reason in self.reasons],
             "schema_version": self.schema_version,
+            "signed_case_fingerprint": self.signed_case_fingerprint,
         }
+
+    def validate_signed_case(self, signed_case: SignedScorerCopilotCase) -> None:
+        _validate_signed_case_identity(
+            case_fingerprint=self.case_fingerprint,
+            signed_case_fingerprint=self.signed_case_fingerprint,
+            signed_case=signed_case,
+        )
 
     def fingerprint(self) -> str:
         return _fingerprint(self.canonical_dict(), label="review disposition")
@@ -774,6 +829,7 @@ class ReviewAdjudication:
     """A final advisory resolution of named review dispositions."""
 
     case_fingerprint: str
+    signed_case_fingerprint: str
     expected_case_sequence: int
     previous_record_fingerprint: str
     idempotency_key: str
@@ -788,10 +844,11 @@ class ReviewAdjudication:
             raise ValueError("unsupported review-adjudication schema")
         _validate_action_head(
             case_fingerprint=self.case_fingerprint,
+            signed_case_fingerprint=self.signed_case_fingerprint,
             expected_case_sequence=self.expected_case_sequence,
             previous_record_fingerprint=self.previous_record_fingerprint,
         )
-        _require_stable_id(self.idempotency_key, "idempotency_key")
+        _require_review_action_idempotency_key(self.idempotency_key)
         if (
             type(self.considered_signed_disposition_fingerprints) is not tuple
             or not 1
@@ -847,7 +904,15 @@ class ReviewAdjudication:
             "previous_record_fingerprint": self.previous_record_fingerprint,
             "reasons": [reason.value for reason in self.reasons],
             "schema_version": self.schema_version,
+            "signed_case_fingerprint": self.signed_case_fingerprint,
         }
+
+    def validate_signed_case(self, signed_case: SignedScorerCopilotCase) -> None:
+        _validate_signed_case_identity(
+            case_fingerprint=self.case_fingerprint,
+            signed_case_fingerprint=self.signed_case_fingerprint,
+            signed_case=signed_case,
+        )
 
     def fingerprint(self) -> str:
         return _fingerprint(self.canonical_dict(), label="review adjudication")
@@ -933,6 +998,7 @@ class ReviewAuthorizationContext:
     """Frozen review head and evidence set; this is not authorization."""
 
     case_fingerprint: str
+    signed_case_fingerprint: str
     match_id: str
     rally_id: str
     set_number: int
@@ -947,6 +1013,7 @@ class ReviewAuthorizationContext:
         if self.schema_version != REVIEW_SCHEMA_VERSION:
             raise ValueError("unsupported review-authorization context schema")
         _require_sha256(self.case_fingerprint, "case_fingerprint")
+        _require_sha256(self.signed_case_fingerprint, "signed_case_fingerprint")
         _require_stable_id(self.match_id, "match_id")
         _require_stable_id(self.rally_id, "rally_id")
         _require_positive(self.set_number, "set_number", maximum=MAX_SET_NUMBER)
@@ -962,9 +1029,12 @@ class ReviewAuthorizationContext:
             maximum=MAX_REVIEW_ACTIONS,
         )
         _require_sha256(self.journal_head_fingerprint, "journal_head_fingerprint")
-        if self.case_sequence == 0 and self.journal_head_fingerprint != self.case_fingerprint:
+        if (
+            self.case_sequence == 0
+            and self.journal_head_fingerprint != self.signed_case_fingerprint
+        ):
             raise ValueError(
-                "sequence-zero context must use the case as its journal head"
+                "sequence-zero context must use the signed case as its journal head"
             )
         object.__setattr__(
             self,
@@ -976,12 +1046,14 @@ class ReviewAuthorizationContext:
             ),
         )
 
-    def validate_case(self, case: ScorerCopilotCase) -> None:
-        if type(case) is not ScorerCopilotCase:
-            raise ValueError("case must be an exact ScorerCopilotCase")
+    def validate_signed_case(self, signed_case: SignedScorerCopilotCase) -> None:
+        case = _validate_signed_case_identity(
+            case_fingerprint=self.case_fingerprint,
+            signed_case_fingerprint=self.signed_case_fingerprint,
+            signed_case=signed_case,
+        )
         if (
-            self.case_fingerprint != case.fingerprint()
-            or self.match_id != case.match_id
+            self.match_id != case.match_id
             or self.rally_id != case.rally_id
             or self.set_number != case.set_number
             or self.state_revision != case.state_revision
@@ -1002,6 +1074,7 @@ class ReviewAuthorizationContext:
             "schema_version": self.schema_version,
             "set_number": self.set_number,
             "state_revision": self.state_revision,
+            "signed_case_fingerprint": self.signed_case_fingerprint,
         }
 
     def fingerprint(self) -> str:
@@ -1029,12 +1102,13 @@ class CaseAuthorizationLink:
 
     context: ReviewAuthorizationContext
     context_fingerprint: str
+    signed_case_fingerprint: str
     authorized_envelope_fingerprint: str
     event_fingerprint: str
     event_id: str
     committed_event_sequence: int
     committed_state_revision: int
-    outbox_sequence: int
+    outbox_id: int
     committed_at_ns: int
     schema_version: str = REVIEW_SCHEMA_VERSION
 
@@ -1046,6 +1120,11 @@ class CaseAuthorizationLink:
         _require_sha256(self.context_fingerprint, "context_fingerprint")
         if self.context_fingerprint != self.context.fingerprint():
             raise ValueError("context_fingerprint does not bind the exact context")
+        _require_sha256(self.signed_case_fingerprint, "signed_case_fingerprint")
+        if self.signed_case_fingerprint != self.context.signed_case_fingerprint:
+            raise ValueError(
+                "signed_case_fingerprint does not bind the context's signed case"
+            )
         _require_sha256(
             self.authorized_envelope_fingerprint,
             "authorized_envelope_fingerprint",
@@ -1064,14 +1143,16 @@ class CaseAuthorizationLink:
                 "committed_state_revision must equal the committed event sequence"
             )
         _require_positive(
-            self.outbox_sequence,
-            "outbox_sequence",
+            self.outbox_id,
+            "outbox_id",
             maximum=MAX_SEQUENCE_NUMBER,
         )
         _require_timestamp(self.committed_at_ns, "committed_at_ns")
 
-    def validate_case(self, case: ScorerCopilotCase) -> None:
-        self.context.validate_case(case)
+    def validate_signed_case(self, signed_case: SignedScorerCopilotCase) -> None:
+        self.context.validate_signed_case(signed_case)
+        # validate_signed_case above performs the exact runtime type check.
+        case = signed_case.case
         if self.committed_at_ns < case.opened_at_ns:
             raise ValueError("authorization link cannot commit before the case opened")
 
@@ -1085,8 +1166,9 @@ class CaseAuthorizationLink:
             "context_fingerprint": self.context_fingerprint,
             "event_fingerprint": self.event_fingerprint,
             "event_id": self.event_id,
-            "outbox_sequence": self.outbox_sequence,
+            "outbox_id": self.outbox_id,
             "schema_version": self.schema_version,
+            "signed_case_fingerprint": self.signed_case_fingerprint,
         }
 
     def fingerprint(self) -> str:
@@ -1334,6 +1416,7 @@ _DISPOSITION_FIELDS = frozenset(
         "previous_record_fingerprint",
         "reasons",
         "schema_version",
+        "signed_case_fingerprint",
     }
 )
 _SIGNED_DISPOSITION_FIELDS = frozenset(
@@ -1361,6 +1444,7 @@ _ADJUDICATION_FIELDS = frozenset(
         "previous_record_fingerprint",
         "reasons",
         "schema_version",
+        "signed_case_fingerprint",
     }
 )
 _SIGNED_ADJUDICATION_FIELDS = frozenset(
@@ -1388,6 +1472,7 @@ _CONTEXT_FIELDS = frozenset(
         "ruleset_fingerprint",
         "schema_version",
         "set_number",
+        "signed_case_fingerprint",
         "state_revision",
     }
 )
@@ -1401,8 +1486,9 @@ _LINK_FIELDS = frozenset(
         "context_fingerprint",
         "event_fingerprint",
         "event_id",
-        "outbox_sequence",
+        "outbox_id",
         "schema_version",
+        "signed_case_fingerprint",
     }
 )
 
@@ -1649,6 +1735,7 @@ def _disposition_from_dict(value: object, label: str) -> ReviewDisposition:
     data = _exact_dict(value, _DISPOSITION_FIELDS, label)
     return ReviewDisposition(
         case_fingerprint=data["case_fingerprint"],
+        signed_case_fingerprint=data["signed_case_fingerprint"],
         expected_case_sequence=data["expected_case_sequence"],
         previous_record_fingerprint=data["previous_record_fingerprint"],
         idempotency_key=data["idempotency_key"],
@@ -1687,6 +1774,7 @@ def _adjudication_from_dict(value: object, label: str) -> ReviewAdjudication:
     data = _exact_dict(value, _ADJUDICATION_FIELDS, label)
     return ReviewAdjudication(
         case_fingerprint=data["case_fingerprint"],
+        signed_case_fingerprint=data["signed_case_fingerprint"],
         expected_case_sequence=data["expected_case_sequence"],
         previous_record_fingerprint=data["previous_record_fingerprint"],
         idempotency_key=data["idempotency_key"],
@@ -1734,6 +1822,7 @@ def _context_from_dict(value: object, label: str) -> ReviewAuthorizationContext:
     data = _exact_dict(value, _CONTEXT_FIELDS, label)
     return ReviewAuthorizationContext(
         case_fingerprint=data["case_fingerprint"],
+        signed_case_fingerprint=data["signed_case_fingerprint"],
         match_id=data["match_id"],
         rally_id=data["rally_id"],
         set_number=data["set_number"],
@@ -1757,12 +1846,13 @@ def _link_from_dict(value: object, label: str) -> CaseAuthorizationLink:
     return CaseAuthorizationLink(
         context=_context_from_dict(data["context"], f"{label}.context"),
         context_fingerprint=data["context_fingerprint"],
+        signed_case_fingerprint=data["signed_case_fingerprint"],
         authorized_envelope_fingerprint=data["authorized_envelope_fingerprint"],
         event_fingerprint=data["event_fingerprint"],
         event_id=data["event_id"],
         committed_event_sequence=data["committed_event_sequence"],
         committed_state_revision=data["committed_state_revision"],
-        outbox_sequence=data["outbox_sequence"],
+        outbox_id=data["outbox_id"],
         committed_at_ns=data["committed_at_ns"],
         schema_version=data["schema_version"],
     )

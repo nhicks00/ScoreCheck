@@ -24,8 +24,10 @@ from .authorization import (
     SignedPolicyAssessment,
     TrustedActorKey,
     TrustedKeyKind,
-    verify_signed_policy_assessment,
+    verify_signed_policy_assessment_for_policy,
+    verify_signed_policy_assessment_for_policy_at_historical_acceptance,
 )
+from .case_attestation import SignedScorerCopilotCase
 from .domain_events import MAX_SEQUENCE_NUMBER
 from .policy import PolicyAssessment
 from .review_contracts import (
@@ -202,7 +204,7 @@ def _check_scope(
 
 def _signing_actor(
     *,
-    case: ScorerCopilotCase,
+    signed_case: SignedScorerCopilotCase,
     archive: AuthorizationPolicyArchive,
     actor_id: str,
     actor_key_id: str,
@@ -210,6 +212,9 @@ def _signing_actor(
     signed_at_ns: int,
     allowed_roles: frozenset[PrincipalRole],
 ) -> tuple[AuthorizationPolicy, TrustedActorKey]:
+    if type(signed_case) is not SignedScorerCopilotCase:
+        raise ValueError("signed_case must be an exact SignedScorerCopilotCase")
+    case = signed_case.case
     if type(case) is not ScorerCopilotCase:
         raise ValueError("case must be an exact ScorerCopilotCase")
     if type(archive) is not AuthorizationPolicyArchive:
@@ -247,7 +252,7 @@ def _signing_actor(
 def sign_review_disposition(
     *,
     disposition: ReviewDisposition,
-    case: ScorerCopilotCase,
+    signed_case: SignedScorerCopilotCase,
     policy_archive: AuthorizationPolicyArchive,
     actor_id: str,
     actor_key_id: str,
@@ -259,12 +264,18 @@ def sign_review_disposition(
 
     if type(disposition) is not ReviewDisposition:
         raise ValueError("disposition must be an exact ReviewDisposition")
-    if disposition.case_fingerprint != case.fingerprint():
-        raise ValueError("disposition does not bind the exact case")
+    if type(signed_case) is not SignedScorerCopilotCase:
+        raise ValueError("signed_case must be an exact SignedScorerCopilotCase")
+    case = signed_case.case
+    if (
+        disposition.case_fingerprint != signed_case.case_fingerprint
+        or disposition.signed_case_fingerprint != signed_case.fingerprint()
+    ):
+        raise ValueError("disposition does not bind the exact signed case")
     if not isinstance(actor_private_key, Ed25519PrivateKey):
         raise ValueError("actor_private_key must be Ed25519PrivateKey")
     policy, key = _signing_actor(
-        case=case,
+        signed_case=signed_case,
         archive=policy_archive,
         actor_id=actor_id,
         actor_key_id=actor_key_id,
@@ -304,30 +315,41 @@ def sign_review_disposition(
     )
 
 
-def verify_signed_review_disposition(
+def _verify_signed_review_disposition_boundary(
     signed: SignedReviewDisposition,
     *,
-    case: ScorerCopilotCase,
+    signed_case: SignedScorerCopilotCase,
     policy_archive: AuthorizationPolicyArchive,
     verified_at_ns: int,
+    revoked_as_of_ns: int,
 ) -> ReviewDisposition:
-    """Verify attribution and current revocation without granting authority."""
+    """Shared verifier with an explicitly selected revocation horizon."""
 
     if type(signed) is not SignedReviewDisposition:
         _fail("SIGNED_TYPE", "signed review disposition must be exact")
-    if type(case) is not ScorerCopilotCase:
-        raise ValueError("case must be an exact ScorerCopilotCase")
+    if type(signed_case) is not SignedScorerCopilotCase:
+        raise ValueError("signed_case must be an exact SignedScorerCopilotCase")
+    case = signed_case.case
     if type(policy_archive) is not AuthorizationPolicyArchive:
         raise ValueError("policy_archive must be an exact AuthorizationPolicyArchive")
     verified_at_ns = _timestamp(verified_at_ns, "verified_at_ns")
     if verified_at_ns < signed.signed_at_ns:
         _fail("FUTURE_SIGNATURE", "review cannot be verified before it was signed")
+    revoked_as_of_ns = _timestamp(revoked_as_of_ns, "revoked_as_of_ns")
+    if not signed.signed_at_ns <= revoked_as_of_ns <= verified_at_ns:
+        _fail(
+            "REVIEW_TIME",
+            "revocation verification time must follow signing and not exceed verification",
+        )
     if signed.signed_at_ns < case.opened_at_ns:
         _fail("REVIEW_TIME", "review was signed before the case was opened")
     if signed.actor_role not in _REVIEW_ROLES:
         _fail("ROLE_FORBIDDEN", "actor role cannot sign review dispositions")
-    if signed.disposition.case_fingerprint != case.fingerprint():
-        _fail("CASE_MISMATCH", "signed review does not bind the exact case")
+    if (
+        signed.disposition.case_fingerprint != signed_case.case_fingerprint
+        or signed.disposition.signed_case_fingerprint != signed_case.fingerprint()
+    ):
+        _fail("CASE_MISMATCH", "signed review does not bind the exact signed case")
     if not policy_archive.current_policy.is_active(verified_at_ns):
         _fail(
             "POLICY_ARCHIVE_STALE",
@@ -351,7 +373,7 @@ def verify_signed_review_disposition(
         policy,
         key,
         signed_at_ns=signed.signed_at_ns,
-        revoked_as_of_ns=verified_at_ns,
+        revoked_as_of_ns=revoked_as_of_ns,
     )
     try:
         key.public_key.verify(
@@ -365,9 +387,47 @@ def verify_signed_review_disposition(
     return signed.disposition
 
 
+def verify_signed_review_disposition(
+    signed: SignedReviewDisposition,
+    *,
+    signed_case: SignedScorerCopilotCase,
+    policy_archive: AuthorizationPolicyArchive,
+    verified_at_ns: int,
+) -> ReviewDisposition:
+    """Verify attribution using current revocation truth."""
+
+    return _verify_signed_review_disposition_boundary(
+        signed,
+        signed_case=signed_case,
+        policy_archive=policy_archive,
+        verified_at_ns=verified_at_ns,
+        revoked_as_of_ns=verified_at_ns,
+    )
+
+
+def verify_signed_review_disposition_at_historical_acceptance(
+    signed: SignedReviewDisposition,
+    *,
+    signed_case: SignedScorerCopilotCase,
+    policy_archive: AuthorizationPolicyArchive,
+    verified_at_ns: int,
+    accepted_at_ns: int,
+) -> ReviewDisposition:
+    """Replay a persisted disposition acceptance; not a current-use check."""
+
+    return _verify_signed_review_disposition_boundary(
+        signed,
+        signed_case=signed_case,
+        policy_archive=policy_archive,
+        verified_at_ns=verified_at_ns,
+        revoked_as_of_ns=accepted_at_ns,
+    )
+
+
 def verify_case_policy_assessment(
     case: ScorerCopilotCase,
     *,
+    signing_policy: AuthorizationPolicy,
     policy_archive: AuthorizationPolicyArchive,
     verified_at_ns: int,
 ) -> PolicyAssessment | None:
@@ -383,11 +443,43 @@ def verify_case_policy_assessment(
         return None
     if type(signed_assessment) is not SignedPolicyAssessment:
         raise ValueError("case signed_assessment must be exact")
-    return verify_signed_policy_assessment(
+    return verify_signed_policy_assessment_for_policy(
         signed_assessment,
         assessment=case.assessment,
+        policy=signing_policy,
         policy_archive=policy_archive,
         verified_at_ns=verified_at_ns,
+    )
+
+
+def verify_case_policy_assessment_at_historical_acceptance(
+    case: ScorerCopilotCase,
+    *,
+    signing_policy: AuthorizationPolicy,
+    policy_archive: AuthorizationPolicyArchive,
+    verified_at_ns: int,
+    accepted_at_ns: int,
+) -> PolicyAssessment | None:
+    """Replay a nested assessment as of persisted case acceptance."""
+
+    if type(case) is not ScorerCopilotCase:
+        raise ValueError("case must be an exact ScorerCopilotCase")
+    verified_at_ns = _timestamp(verified_at_ns, "verified_at_ns")
+    accepted_at_ns = _timestamp(accepted_at_ns, "accepted_at_ns")
+    if not case.opened_at_ns <= accepted_at_ns <= verified_at_ns:
+        _fail("CASE_ADMISSION_TIME", "historical case acceptance time is invalid")
+    signed_assessment = case.signed_assessment
+    if signed_assessment is None:
+        return None
+    if type(signed_assessment) is not SignedPolicyAssessment:
+        raise ValueError("case signed_assessment must be exact")
+    return verify_signed_policy_assessment_for_policy_at_historical_acceptance(
+        signed_assessment,
+        assessment=case.assessment,
+        policy=signing_policy,
+        policy_archive=policy_archive,
+        verified_at_ns=verified_at_ns,
+        accepted_at_ns=accepted_at_ns,
     )
 
 
@@ -395,10 +487,11 @@ def _verify_considered_signed_dispositions(
     *,
     adjudication: ReviewAdjudication,
     considered_signed_dispositions: tuple[SignedReviewDisposition, ...],
-    case: ScorerCopilotCase,
+    signed_case: SignedScorerCopilotCase,
     policy_archive: AuthorizationPolicyArchive,
     adjudicated_at_ns: int,
     verified_at_ns: int,
+    revoked_as_of_ns: int,
 ) -> None:
     if (
         type(considered_signed_dispositions) is not tuple
@@ -432,11 +525,12 @@ def _verify_considered_signed_dispositions(
                 "ADJUDICATION_TIME",
                 "adjudication cannot predate a considered signed disposition",
             )
-        verify_signed_review_disposition(
+        _verify_signed_review_disposition_boundary(
             disposition,
-            case=case,
+            signed_case=signed_case,
             policy_archive=policy_archive,
             verified_at_ns=verified_at_ns,
+            revoked_as_of_ns=revoked_as_of_ns,
         )
 
 
@@ -444,7 +538,7 @@ def sign_review_adjudication(
     *,
     adjudication: ReviewAdjudication,
     considered_signed_dispositions: tuple[SignedReviewDisposition, ...],
-    case: ScorerCopilotCase,
+    signed_case: SignedScorerCopilotCase,
     policy_archive: AuthorizationPolicyArchive,
     actor_id: str,
     actor_key_id: str,
@@ -456,13 +550,19 @@ def sign_review_adjudication(
 
     if type(adjudication) is not ReviewAdjudication:
         raise ValueError("adjudication must be an exact ReviewAdjudication")
-    if adjudication.case_fingerprint != case.fingerprint():
-        raise ValueError("adjudication does not bind the exact case")
+    if type(signed_case) is not SignedScorerCopilotCase:
+        raise ValueError("signed_case must be an exact SignedScorerCopilotCase")
+    case = signed_case.case
+    if (
+        adjudication.case_fingerprint != signed_case.case_fingerprint
+        or adjudication.signed_case_fingerprint != signed_case.fingerprint()
+    ):
+        raise ValueError("adjudication does not bind the exact signed case")
     if not isinstance(actor_private_key, Ed25519PrivateKey):
         raise ValueError("actor_private_key must be Ed25519PrivateKey")
     signed_at_ns = _timestamp(signed_at_ns, "signed_at_ns")
     policy, key = _signing_actor(
-        case=case,
+        signed_case=signed_case,
         archive=policy_archive,
         actor_id=actor_id,
         actor_key_id=actor_key_id,
@@ -473,10 +573,11 @@ def sign_review_adjudication(
     _verify_considered_signed_dispositions(
         adjudication=adjudication,
         considered_signed_dispositions=considered_signed_dispositions,
-        case=case,
+        signed_case=signed_case,
         policy_archive=policy_archive,
         adjudicated_at_ns=signed_at_ns,
         verified_at_ns=signed_at_ns,
+        revoked_as_of_ns=signed_at_ns,
     )
     fingerprint = adjudication.fingerprint()
     attestation = SignedReviewAdjudication.attestation_dict(
@@ -510,31 +611,42 @@ def sign_review_adjudication(
     )
 
 
-def verify_signed_review_adjudication(
+def _verify_signed_review_adjudication_boundary(
     signed: SignedReviewAdjudication,
     *,
     considered_signed_dispositions: tuple[SignedReviewDisposition, ...],
-    case: ScorerCopilotCase,
+    signed_case: SignedScorerCopilotCase,
     policy_archive: AuthorizationPolicyArchive,
     verified_at_ns: int,
+    revoked_as_of_ns: int,
 ) -> ReviewAdjudication:
-    """Verify a referee adjudication without converting it into authorization."""
+    """Shared verifier with an explicitly selected revocation horizon."""
 
     if type(signed) is not SignedReviewAdjudication:
         _fail("SIGNED_TYPE", "signed review adjudication must be exact")
-    if type(case) is not ScorerCopilotCase:
-        raise ValueError("case must be an exact ScorerCopilotCase")
+    if type(signed_case) is not SignedScorerCopilotCase:
+        raise ValueError("signed_case must be an exact SignedScorerCopilotCase")
+    case = signed_case.case
     if type(policy_archive) is not AuthorizationPolicyArchive:
         raise ValueError("policy_archive must be an exact AuthorizationPolicyArchive")
     verified_at_ns = _timestamp(verified_at_ns, "verified_at_ns")
     if verified_at_ns < signed.signed_at_ns:
         _fail("FUTURE_SIGNATURE", "adjudication cannot be verified before signing")
+    revoked_as_of_ns = _timestamp(revoked_as_of_ns, "revoked_as_of_ns")
+    if not signed.signed_at_ns <= revoked_as_of_ns <= verified_at_ns:
+        _fail(
+            "REVIEW_TIME",
+            "revocation verification time must follow signing and not exceed verification",
+        )
     if signed.signed_at_ns < case.opened_at_ns:
         _fail("REVIEW_TIME", "adjudication was signed before the case was opened")
     if signed.actor_role not in _ADJUDICATION_ROLES:
         _fail("ROLE_FORBIDDEN", "only a referee may sign adjudication")
-    if signed.adjudication.case_fingerprint != case.fingerprint():
-        _fail("CASE_MISMATCH", "signed adjudication does not bind the exact case")
+    if (
+        signed.adjudication.case_fingerprint != signed_case.case_fingerprint
+        or signed.adjudication.signed_case_fingerprint != signed_case.fingerprint()
+    ):
+        _fail("CASE_MISMATCH", "signed adjudication does not bind the exact signed case")
     if not policy_archive.current_policy.is_active(verified_at_ns):
         _fail(
             "POLICY_ARCHIVE_STALE",
@@ -558,7 +670,7 @@ def verify_signed_review_adjudication(
         policy,
         key,
         signed_at_ns=signed.signed_at_ns,
-        revoked_as_of_ns=verified_at_ns,
+        revoked_as_of_ns=revoked_as_of_ns,
     )
     try:
         key.public_key.verify(
@@ -572,12 +684,54 @@ def verify_signed_review_adjudication(
     _verify_considered_signed_dispositions(
         adjudication=signed.adjudication,
         considered_signed_dispositions=considered_signed_dispositions,
-        case=case,
+        signed_case=signed_case,
         policy_archive=policy_archive,
         adjudicated_at_ns=signed.signed_at_ns,
         verified_at_ns=verified_at_ns,
+        revoked_as_of_ns=revoked_as_of_ns,
     )
     return signed.adjudication
+
+
+def verify_signed_review_adjudication(
+    signed: SignedReviewAdjudication,
+    *,
+    considered_signed_dispositions: tuple[SignedReviewDisposition, ...],
+    signed_case: SignedScorerCopilotCase,
+    policy_archive: AuthorizationPolicyArchive,
+    verified_at_ns: int,
+) -> ReviewAdjudication:
+    """Verify a referee adjudication using current revocation truth."""
+
+    return _verify_signed_review_adjudication_boundary(
+        signed,
+        considered_signed_dispositions=considered_signed_dispositions,
+        signed_case=signed_case,
+        policy_archive=policy_archive,
+        verified_at_ns=verified_at_ns,
+        revoked_as_of_ns=verified_at_ns,
+    )
+
+
+def verify_signed_review_adjudication_at_historical_acceptance(
+    signed: SignedReviewAdjudication,
+    *,
+    considered_signed_dispositions: tuple[SignedReviewDisposition, ...],
+    signed_case: SignedScorerCopilotCase,
+    policy_archive: AuthorizationPolicyArchive,
+    verified_at_ns: int,
+    accepted_at_ns: int,
+) -> ReviewAdjudication:
+    """Replay a persisted adjudication acceptance; not a current-use check."""
+
+    return _verify_signed_review_adjudication_boundary(
+        signed,
+        considered_signed_dispositions=considered_signed_dispositions,
+        signed_case=signed_case,
+        policy_archive=policy_archive,
+        verified_at_ns=verified_at_ns,
+        revoked_as_of_ns=accepted_at_ns,
+    )
 
 
 __all__ = [
@@ -585,6 +739,9 @@ __all__ = [
     "sign_review_adjudication",
     "sign_review_disposition",
     "verify_case_policy_assessment",
+    "verify_case_policy_assessment_at_historical_acceptance",
     "verify_signed_review_adjudication",
+    "verify_signed_review_adjudication_at_historical_acceptance",
     "verify_signed_review_disposition",
+    "verify_signed_review_disposition_at_historical_acceptance",
 ]

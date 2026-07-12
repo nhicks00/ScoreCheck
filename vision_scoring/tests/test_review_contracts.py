@@ -7,6 +7,7 @@ import unittest
 
 import vision_scoring.review_contracts as review_module
 from vision_scoring.authorization import PrincipalRole, SignedPolicyAssessment
+from vision_scoring.case_attestation import SignedScorerCopilotCase
 from vision_scoring.domain_events import Team
 from vision_scoring.hypotheses import (
     EvidenceKind,
@@ -30,6 +31,7 @@ from vision_scoring.review_contracts import (
     MAX_REVIEW_JSON_NODES,
     MAX_REVIEW_RECORD_BYTES,
     MAX_REVIEW_ACTIONS,
+    REVIEW_SCHEMA_VERSION,
     CaseAuthorizationLink,
     ReviewAdjudication,
     ReviewAuthorizationContext,
@@ -252,12 +254,39 @@ def make_case() -> ScorerCopilotCase:
     )
 
 
-def make_disposition(case: ScorerCopilotCase | None = None) -> ReviewDisposition:
+def make_structurally_signed_case(
+    case: ScorerCopilotCase | None = None,
+    *,
+    signature_byte: bytes = b"c",
+) -> SignedScorerCopilotCase:
     case = case or make_case()
+    if type(signature_byte) is not bytes or len(signature_byte) != 1:
+        raise ValueError("signature_byte must be exactly one byte")
+    return SignedScorerCopilotCase(
+        case=case,
+        case_fingerprint=case.fingerprint(),
+        assessor_id="case-producer-1",
+        assessment_key_id="case-producer-key-1",
+        authorization_policy_fingerprint="8" * 64,
+        trust_domain_id="court-control",
+        signed_at_ns=case.opened_at_ns,
+        signature_base64=base64.b64encode(signature_byte * 64).decode("ascii"),
+    )
+
+
+def make_disposition(
+    case: ScorerCopilotCase | None = None,
+    signed_case: SignedScorerCopilotCase | None = None,
+) -> ReviewDisposition:
+    case = case or make_case()
+    signed_case = signed_case or make_structurally_signed_case(case)
+    if signed_case.case != case:
+        raise ValueError("signed_case must bind case")
     return ReviewDisposition(
         case_fingerprint=case.fingerprint(),
+        signed_case_fingerprint=signed_case.fingerprint(),
         expected_case_sequence=0,
-        previous_record_fingerprint=case.fingerprint(),
+        previous_record_fingerprint=signed_case.fingerprint(),
         idempotency_key="review-action-1",
         kind=ReviewDispositionKind.OBSERVED_OUTCOME,
         outcome=RallyOutcome.POINT_TEAM_B,
@@ -294,6 +323,9 @@ def make_adjudication(
     )
     return ReviewAdjudication(
         case_fingerprint=case.fingerprint(),
+        signed_case_fingerprint=(
+            signed_disposition.disposition.signed_case_fingerprint
+        ),
         expected_case_sequence=1,
         previous_record_fingerprint=signed_disposition.fingerprint(),
         idempotency_key="adjudication-1",
@@ -306,38 +338,59 @@ def make_adjudication(
     )
 
 
-def make_context(case: ScorerCopilotCase | None = None) -> ReviewAuthorizationContext:
+def make_context(
+    case: ScorerCopilotCase | None = None,
+    signed_case: SignedScorerCopilotCase | None = None,
+) -> ReviewAuthorizationContext:
     case = case or make_case()
+    signed_case = signed_case or make_structurally_signed_case(case)
+    if signed_case.case != case:
+        raise ValueError("signed_case must bind case")
     return ReviewAuthorizationContext(
         case_fingerprint=case.fingerprint(),
+        signed_case_fingerprint=signed_case.fingerprint(),
         match_id=case.match_id,
         rally_id=case.rally_id,
         set_number=case.set_number,
         state_revision=case.state_revision,
         ruleset_fingerprint=case.ruleset_fingerprint,
         case_sequence=0,
-        journal_head_fingerprint=case.fingerprint(),
+        journal_head_fingerprint=signed_case.fingerprint(),
         evidence_refs=case.assessment.evidence_refs,
     )
 
 
-def make_link(case: ScorerCopilotCase | None = None) -> CaseAuthorizationLink:
+def make_link(
+    case: ScorerCopilotCase | None = None,
+    signed_case: SignedScorerCopilotCase | None = None,
+) -> CaseAuthorizationLink:
     case = case or make_case()
-    context = make_context(case)
+    signed_case = signed_case or make_structurally_signed_case(case)
+    context = make_context(case, signed_case)
     return CaseAuthorizationLink(
         context=context,
         context_fingerprint=context.fingerprint(),
+        signed_case_fingerprint=signed_case.fingerprint(),
         authorized_envelope_fingerprint="8" * 64,
         event_fingerprint="9" * 64,
         event_id="event-4",
         committed_event_sequence=4,
         committed_state_revision=4,
-        outbox_sequence=1,
+        outbox_id=1,
         committed_at_ns=1_500,
     )
 
 
 class ReviewContractRoundTripTests(unittest.TestCase):
+    def test_wire_schema_is_hard_cut_to_v2(self) -> None:
+        self.assertEqual(REVIEW_SCHEMA_VERSION, "2.0")
+        raw = encode_review_disposition(make_disposition())
+        self.assertIn(b'"schema_version":"2.0"', raw)
+        with self.assertRaisesRegex(ReviewContractError, "RECORD_INVALID"):
+            parse_review_disposition(
+                raw.replace(b'"schema_version":"2.0"', b'"schema_version":"1.0"')
+            )
+
     def test_all_unsigned_records_round_trip_canonically(self) -> None:
         case = make_case()
         disposition = make_disposition(case)
@@ -417,6 +470,42 @@ class ReviewParserHardeningTests(unittest.TestCase):
                 ).encode()
             )
 
+        link_data = json.loads(encode_case_authorization_link(make_link()))
+        link_data["outbox_sequence"] = link_data.pop("outbox_id")
+        with self.assertRaisesRegex(ReviewContractError, "FIELD_SET"):
+            parse_case_authorization_link(
+                json.dumps(
+                    link_data,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            )
+
+    def test_signed_case_identity_is_required_in_every_wire_record(self) -> None:
+        records = (
+            (make_disposition(), encode_review_disposition, parse_review_disposition),
+            (make_adjudication(), encode_review_adjudication, parse_review_adjudication),
+            (
+                make_context(),
+                encode_review_authorization_context,
+                parse_review_authorization_context,
+            ),
+            (make_link(), encode_case_authorization_link, parse_case_authorization_link),
+        )
+        for value, encoder, parser in records:
+            with self.subTest(record=type(value).__name__):
+                data = json.loads(encoder(value))
+                self.assertRegex(data["signed_case_fingerprint"], r"^[0-9a-f]{64}$")
+                del data["signed_case_fingerprint"]
+                with self.assertRaisesRegex(ReviewContractError, "FIELD_SET"):
+                    parser(
+                        json.dumps(
+                            data,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode()
+                    )
+
     def test_duplicate_keys_noncanonical_bytes_and_oversize_fail_closed(self) -> None:
         raw = encode_review_clip_manifest(make_primary_clip().manifest)
         duplicate = b'{"source_sha256":"' + SOURCE_SHA.encode() + b'",' + raw[1:]
@@ -426,6 +515,16 @@ class ReviewParserHardeningTests(unittest.TestCase):
             parse_review_clip_manifest(b" " + raw)
         with self.assertRaisesRegex(ReviewContractError, "RAW_SIZE"):
             parse_review_clip_manifest(b"{" + b" " * MAX_REVIEW_RECORD_BYTES)
+
+    def test_record_size_boundary_matches_persistence_budget(self) -> None:
+        self.assertEqual(MAX_REVIEW_RECORD_BYTES, 512 * 1024)
+        exactly_at_limit = b"{" + b" " * (MAX_REVIEW_RECORD_BYTES - 1)
+        with self.assertRaises(ReviewContractError) as at_limit:
+            parse_review_clip_manifest(exactly_at_limit)
+        self.assertEqual(at_limit.exception.code, "INVALID_JSON")
+        with self.assertRaises(ReviewContractError) as over_limit:
+            parse_review_clip_manifest(exactly_at_limit + b" ")
+        self.assertEqual(over_limit.exception.code, "RAW_SIZE")
 
     def test_float_exponent_and_nonfinite_numbers_are_rejected_at_parse_time(self) -> None:
         raw = encode_review_clip_manifest(make_primary_clip().manifest)
@@ -627,7 +726,7 @@ class ReviewActionInvariantTests(unittest.TestCase):
             dataclasses.replace(
                 adjudication,
                 expected_case_sequence=0,
-                previous_record_fingerprint=adjudication.case_fingerprint,
+                previous_record_fingerprint=adjudication.signed_case_fingerprint,
             )
         with self.assertRaisesRegex(ValueError, "immediately previous"):
             dataclasses.replace(
@@ -661,8 +760,9 @@ class ReviewActionInvariantTests(unittest.TestCase):
 
     def test_authorization_context_and_link_bind_exact_case_revision(self) -> None:
         case = make_case()
-        context = make_context(case)
-        context.validate_case(case)
+        signed_case = make_structurally_signed_case(case)
+        context = make_context(case, signed_case)
+        context.validate_signed_case(signed_case)
         self.assertRegex(copilot_idempotency_key(context), r"^copilot-v1:[0-9a-f]{64}$")
 
         wrong_evidence = dataclasses.replace(
@@ -670,16 +770,108 @@ class ReviewActionInvariantTests(unittest.TestCase):
             evidence_refs=("artifact:primary",),
         )
         with self.assertRaisesRegex(ValueError, "exact case"):
-            wrong_evidence.validate_case(case)
+            wrong_evidence.validate_signed_case(signed_case)
 
-        link = make_link(case)
-        link.validate_case(case)
+        link = make_link(case, signed_case)
+        link.validate_signed_case(signed_case)
         with self.assertRaisesRegex(ValueError, "immediately follow"):
             dataclasses.replace(link, committed_event_sequence=5, committed_state_revision=5)
         with self.assertRaisesRegex(ValueError, "before the case opened"):
-            dataclasses.replace(link, committed_at_ns=case.opened_at_ns - 1).validate_case(
-                case
+            dataclasses.replace(
+                link, committed_at_ns=case.opened_at_ns - 1
+            ).validate_signed_case(
+                signed_case
             )
+
+    def test_signed_case_is_the_sequence_zero_head_not_unsigned_case(self) -> None:
+        case = make_case()
+        signed_case = make_structurally_signed_case(case)
+        self.assertNotEqual(case.fingerprint(), signed_case.fingerprint())
+        with self.assertRaisesRegex(ValueError, "signed case fingerprint"):
+            dataclasses.replace(
+                make_disposition(case, signed_case),
+                previous_record_fingerprint=case.fingerprint(),
+            )
+        with self.assertRaisesRegex(ValueError, "signed case"):
+            dataclasses.replace(
+                make_context(case, signed_case),
+                journal_head_fingerprint=case.fingerprint(),
+            )
+
+    def test_exact_signed_case_identity_is_required_by_every_validation_api(self) -> None:
+        case = make_case()
+        signed_case = make_structurally_signed_case(case, signature_byte=b"a")
+        alternate = make_structurally_signed_case(case, signature_byte=b"b")
+        disposition = make_disposition(case, signed_case)
+        signed_disposition = make_structurally_signed_disposition(
+            case, disposition
+        )
+        adjudication = make_adjudication(case, signed_disposition)
+        context = make_context(case, signed_case)
+        link = make_link(case, signed_case)
+
+        for value in (disposition, adjudication, context, link):
+            with self.subTest(record=type(value).__name__):
+                value.validate_signed_case(signed_case)
+                with self.assertRaisesRegex(ValueError, "exact signed case"):
+                    value.validate_signed_case(alternate)
+                with self.assertRaisesRegex(
+                    ValueError, "exact SignedScorerCopilotCase"
+                ):
+                    value.validate_signed_case(case)
+
+        for value in (disposition, adjudication, context, link):
+            with self.subTest(record=type(value).__name__, malformed="uppercase"):
+                with self.assertRaisesRegex(ValueError, "lowercase SHA-256"):
+                    dataclasses.replace(value, signed_case_fingerprint="A" * 64)
+
+    def test_alternate_producer_signature_changes_all_downstream_identities(self) -> None:
+        case = make_case()
+        first = make_structurally_signed_case(case, signature_byte=b"a")
+        alternate = make_structurally_signed_case(case, signature_byte=b"b")
+        self.assertEqual(first.case_fingerprint, alternate.case_fingerprint)
+        self.assertNotEqual(first.fingerprint(), alternate.fingerprint())
+
+        first_disposition = make_disposition(case, first)
+        alternate_disposition = make_disposition(case, alternate)
+        first_context = make_context(case, first)
+        alternate_context = make_context(case, alternate)
+        first_link = make_link(case, first)
+        alternate_link = make_link(case, alternate)
+
+        self.assertNotEqual(
+            first_disposition.fingerprint(), alternate_disposition.fingerprint()
+        )
+        self.assertNotEqual(first_context.fingerprint(), alternate_context.fingerprint())
+        self.assertNotEqual(
+            copilot_idempotency_key(first_context),
+            copilot_idempotency_key(alternate_context),
+        )
+        self.assertNotEqual(first_link.fingerprint(), alternate_link.fingerprint())
+        self.assertEqual(
+            parse_review_authorization_context(
+                encode_review_authorization_context(alternate_context)
+            ),
+            alternate_context,
+        )
+        with self.assertRaisesRegex(ValueError, "exact signed case"):
+            alternate_context.validate_signed_case(first)
+
+    def test_review_action_idempotency_keys_cannot_claim_copilot_namespace(self) -> None:
+        for reserved in (
+            "copilot-v1:" + "0" * 64,
+            "case-admission-v1:" + "0" * 64,
+        ):
+            with self.subTest(reserved=reserved):
+                with self.assertRaisesRegex(ValueError, "reserved"):
+                    dataclasses.replace(make_disposition(), idempotency_key=reserved)
+                with self.assertRaisesRegex(ValueError, "reserved"):
+                    dataclasses.replace(make_adjudication(), idempotency_key=reserved)
+
+    def test_link_uses_global_outbox_id_hard_cut(self) -> None:
+        fields = {field.name for field in dataclasses.fields(CaseAuthorizationLink)}
+        self.assertIn("outbox_id", fields)
+        self.assertNotIn("outbox_sequence", fields)
 
     def test_post_action_context_uses_signed_action_fingerprint(self) -> None:
         case = make_case()
