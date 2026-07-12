@@ -84,9 +84,13 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _STABLE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/+~-]{0,127}$")
 _ISSUE_CODE_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 _UTC_SECONDS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
-_REPORT_SCHEMA_VERSION = "3.0"
+_REPORT_SCHEMA_VERSION = "4.0"
+_REPORT_DOMAIN = "multicourt-vision-scoring:readiness-report:v4"
 _MANIFEST_SCHEMA_VERSION = "3.0"
 _MANIFEST_DOMAIN = "multicourt-vision-scoring:readiness-manifest:v3"
+_SOURCE_CAPTURE_CLASSIFICATION_SET_DOMAIN = (
+    "multicourt-vision-scoring:readiness-source-capture-classification-set:v1"
+)
 _MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 _MAX_CAPTURE_PROFILES = 256
 _MAX_DATA_SOURCES = MAX_READINESS_LABEL_PACKS
@@ -406,7 +410,52 @@ def _required_artifact_digest_set_sha256(digests: tuple[str, ...]) -> str:
         )
     payload = {
         "digests": list(digests),
-        "domain": "multicourt-vision-scoring:required-artifact-digest-set:v2",
+        "domain": "multicourt-vision-scoring:required-artifact-digest-set:v3",
+        "schema_version": _REPORT_SCHEMA_VERSION,
+    }
+    return hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
+
+
+def _source_capture_classification_set_sha256(
+    classifications: tuple[CaptureProfileClassificationV1, ...],
+) -> str:
+    """Commit one canonical source-ID-ordered set of full capture receipts."""
+
+    if type(classifications) is not tuple or any(
+        type(receipt) is not CaptureProfileClassificationV1
+        for receipt in classifications
+    ):
+        raise ValueError(
+            "source capture classifications must be an immutable receipt tuple"
+        )
+    if len(classifications) > _MAX_DATA_SOURCES:
+        raise ValueError(
+            f"source capture classifications cannot exceed {_MAX_DATA_SOURCES} entries"
+        )
+    source_ids = tuple(
+        receipt.source_capture_facts.source_id for receipt in classifications
+    )
+    if source_ids != tuple(sorted(source_ids)) or len(source_ids) != len(
+        set(source_ids)
+    ):
+        raise ValueError(
+            "source capture classifications must have sorted unique source IDs"
+        )
+    payload = {
+        "classifications": [
+            {
+                "capture_classification_receipt_sha256": receipt.fingerprint(),
+                "classification_proof_sha256": (
+                    receipt.capture_classification_proof_set_sha256
+                ),
+                "source_capture_facts_proof_sha256": (
+                    receipt.source_classification_proof_set_sha256
+                ),
+                "source_id": receipt.source_capture_facts.source_id,
+            }
+            for receipt in classifications
+        ],
+        "domain": _SOURCE_CAPTURE_CLASSIFICATION_SET_DOMAIN,
         "schema_version": _REPORT_SCHEMA_VERSION,
     }
     return hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
@@ -448,6 +497,8 @@ class ReadinessReport:
     required_artifact_digest_set_sha256: str
     artifact_set_proof: DatasetArtifactSetProof | None
     data_source_count: int
+    source_capture_classifications: tuple[CaptureProfileClassificationV1, ...]
+    source_capture_classification_set_sha256: str
     source_rights_proofs: tuple[SourceRightsProof, ...]
     source_rights_proof_set_sha256: str
     source_label_pack_proofs: tuple[SourceLabelPackProof, ...]
@@ -493,6 +544,10 @@ class ReadinessReport:
             (
                 self.source_rights_proof_set_sha256,
                 "source_rights_proof_set_sha256",
+            ),
+            (
+                self.source_capture_classification_set_sha256,
+                "source_capture_classification_set_sha256",
             ),
             (
                 self.source_label_pack_proof_set_sha256,
@@ -742,6 +797,31 @@ class ReadinessReport:
                 "data_source_count must be an integer from 0 through "
                 f"{_MAX_DATA_SOURCES}"
             )
+        if type(self.source_capture_classifications) is not tuple or any(
+            type(receipt) is not CaptureProfileClassificationV1
+            for receipt in self.source_capture_classifications
+        ):
+            raise ValueError(
+                "source_capture_classifications must be immutable receipt values"
+            )
+        if len(self.source_capture_classifications) > self.data_source_count:
+            raise ValueError(
+                "source capture classifications cannot exceed data_source_count"
+            )
+        if _source_capture_classification_set_sha256(
+            self.source_capture_classifications
+        ) != self.source_capture_classification_set_sha256:
+            raise ValueError(
+                "source capture classification-set commitment is inconsistent"
+            )
+        for receipt in self.source_capture_classifications:
+            if (
+                receipt.status is CaptureClassificationStatusV1.CLASSIFIED
+                and type(receipt.training_capture_mode) is not TrainingCaptureModeV1
+            ):
+                raise ValueError(
+                    "classified source capture receipt requires an exact mode"
+                )
         if _source_rights_proof_set_sha256(self.source_rights_proofs) != (
             self.source_rights_proof_set_sha256
         ):
@@ -796,6 +876,10 @@ class ReadinessReport:
         packs_by_source = {
             proof.source_id: proof for proof in self.source_label_pack_proofs
         }
+        capture_by_source = {
+            receipt.source_capture_facts.source_id: receipt
+            for receipt in self.source_capture_classifications
+        }
         if (
             self.data_source_count > 0
             and len(self.source_rights_proofs) == self.data_source_count
@@ -805,6 +889,24 @@ class ReadinessReport:
             raise ValueError(
                 "complete source rights and label-pack proof ID sets differ"
             )
+        if (
+            self.data_source_count > 0
+            and len(self.source_capture_classifications) == self.data_source_count
+        ):
+            if (
+                len(self.source_rights_proofs) == self.data_source_count
+                and capture_by_source.keys() != rights_by_source.keys()
+            ):
+                raise ValueError(
+                    "complete source capture and rights proof ID sets differ"
+                )
+            if (
+                len(self.source_label_pack_proofs) == self.data_source_count
+                and capture_by_source.keys() != packs_by_source.keys()
+            ):
+                raise ValueError(
+                    "complete source capture and label-pack proof ID sets differ"
+                )
         for source_id in rights_by_source.keys() & packs_by_source.keys():
             rights = rights_by_source[source_id]
             pack = packs_by_source[source_id]
@@ -846,6 +948,44 @@ class ReadinessReport:
             type(issue) is not ReadinessIssue for issue in self.issues
         ):
             raise ValueError("issues must be immutable ReadinessIssue values")
+        capture_binding_is_blocked = any(
+            issue.severity is Severity.BLOCKER
+            and (
+                issue.code.startswith("CAPTURE")
+                or issue.code.startswith("SOURCE_CAPTURE")
+                or issue.code
+                in {
+                    "DATA_SOURCES",
+                    "DATA_SOURCE_COUNT",
+                    "ENCODER_CONFIGURATION",
+                    "MANIFEST_DOMAIN",
+                    "SCHEMA_VERSION",
+                    "SOURCE_ID",
+                    "SOURCE_ID_DUPLICATE",
+                    "SOURCE_SHAPE",
+                }
+            )
+            for issue in self.issues
+        )
+        if (
+            len(self.source_capture_classifications) != self.data_source_count
+            and not capture_binding_is_blocked
+        ):
+            raise ValueError(
+                "incomplete source capture classification set requires an "
+                "explicit capture binding blocker"
+            )
+        if any(
+            receipt.status is CaptureClassificationStatusV1.ABSTAINED
+            for receipt in self.source_capture_classifications
+        ) and not any(
+            issue.severity is Severity.BLOCKER
+            and issue.code == "CAPTURE_CLASSIFICATION_ABSTAINED"
+            for issue in self.issues
+        ):
+            raise ValueError(
+                "abstained source capture classifications require an explicit blocker"
+            )
         if self.artifact_set_proof is not None and type(
             self.artifact_set_proof
         ) is not DatasetArtifactSetProof:
@@ -881,6 +1021,12 @@ class ReadinessReport:
             and self.artifact_set_proof is not None
             and bool(self.required_artifact_sha256s)
             and self.rights_evidence_generation_id is not None
+            and len(self.source_capture_classifications) == self.data_source_count
+            and all(
+                receipt.status is CaptureClassificationStatusV1.CLASSIFIED
+                and type(receipt.training_capture_mode) is TrainingCaptureModeV1
+                for receipt in self.source_capture_classifications
+            )
             and len(self.source_rights_proofs) == self.data_source_count
             and len(self.source_label_pack_proofs) == self.data_source_count
             and self.label_pack_contract_object_count > 0
@@ -897,6 +1043,7 @@ class ReadinessReport:
             }
 
         payload = {
+            "domain": _REPORT_DOMAIN,
             "report_schema_version": _REPORT_SCHEMA_VERSION,
             "dataset_id": self.dataset_id,
             "manifest_schema_version": self.manifest_schema_version,
@@ -951,6 +1098,13 @@ class ReadinessReport:
             "required_artifact_sha256s": list(self.required_artifact_sha256s),
             "required_artifact_digest_set_sha256": (
                 self.required_artifact_digest_set_sha256
+            ),
+            "source_capture_classifications": [
+                receipt.to_dict()
+                for receipt in self.source_capture_classifications
+            ],
+            "source_capture_classification_set_sha256": (
+                self.source_capture_classification_set_sha256
             ),
             "source_rights_proofs": [
                 proof.to_dict() for proof in self.source_rights_proofs
@@ -1391,14 +1545,6 @@ class ManifestValidator:
             self._validated_capture_classifications = (
                 source_capture_classifications
             )
-            if source_capture_classifications:
-                self._block(
-                    issues,
-                    "CAPTURE_REPORT_BINDING_PENDING",
-                    "data_sources",
-                    "capture classifications are validated but not yet bound "
-                    "into the readiness report proof set",
-                )
             rights_evidence_generation_id = (
                 self._rights_evidence_generation_id(source_rights_proofs)
             )
@@ -1642,6 +1788,12 @@ class ManifestValidator:
                     and len(data_sources) <= _MAX_DATA_SOURCES
                 )
                 else 0
+            ),
+            source_capture_classifications=source_capture_classifications,
+            source_capture_classification_set_sha256=(
+                _source_capture_classification_set_sha256(
+                    source_capture_classifications
+                )
             ),
             source_rights_proofs=source_rights_proofs,
             source_rights_proof_set_sha256=(
@@ -2092,6 +2244,18 @@ class ManifestValidator:
                                 )
                             else:
                                 capture_classifications.append(classification)
+                                for risk in classification.capture_risk_tags:
+                                    if risk.value == "COMPATIBILITY_1080P30":
+                                        # The mode-dependent gate emits the
+                                        # established compatibility warning
+                                        # once per reusable profile below.
+                                        continue
+                                    self._warn(
+                                        issues,
+                                        "CAPTURE_RISK",
+                                        f"{path}.source_capture_facts",
+                                        "capture risk slice: " + risk.value,
+                                    )
                                 if (
                                     classification.status
                                     is CaptureClassificationStatusV1.ABSTAINED
@@ -2639,18 +2803,25 @@ def _required_dataset_artifact_sha256s(
     digests: set[str] = set()
     capture_profiles = manifest.get("capture_profiles")
     if isinstance(capture_profiles, list):
-        for profile in capture_profiles:
-            if not isinstance(profile, Mapping):
+        for entry in capture_profiles:
+            if not isinstance(entry, Mapping):
                 continue
-            for field_name in (
-                "calibration_profile_sha256",
-                "camera_device_attestation_sha256",
-                "capture_clock_verification_sha256",
-                "encoder_configuration_sha256",
-            ):
-                value = profile.get(field_name)
+            encoder = entry.get("encoder_configuration")
+            if isinstance(encoder, Mapping):
+                value = encoder.get("encoder_settings_sha256")
                 if type(value) is str and _SHA256_RE.fullmatch(value):
                     digests.add(value)
+            profile = entry.get("capture_profile")
+            if isinstance(profile, Mapping):
+                for field_name in (
+                    "calibration_sha256",
+                    "clock_model_sha256",
+                    "camera_attestation_sha256",
+                    "exposure_descriptor_sha256",
+                ):
+                    value = profile.get(field_name)
+                    if type(value) is str and _SHA256_RE.fullmatch(value):
+                        digests.add(value)
     data_sources = manifest.get("data_sources")
     if isinstance(data_sources, list):
         for source in data_sources:

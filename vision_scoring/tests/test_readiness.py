@@ -41,6 +41,8 @@ from vision_scoring.readiness import (
     ManifestValidator,
     ReadinessIssue,
     Severity,
+    _required_dataset_artifact_sha256s,
+    _source_capture_classification_set_sha256,
     load_manifest,
     main,
     readiness_runtime_identity_sha256,
@@ -416,7 +418,11 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
             self.trust_store.fingerprint(),
         )
         payload = report.to_dict()
-        self.assertEqual(payload["report_schema_version"], "3.0")
+        self.assertEqual(payload["report_schema_version"], "4.0")
+        self.assertEqual(
+            payload["domain"],
+            "multicourt-vision-scoring:readiness-report:v4",
+        )
         self.assertRegex(payload["manifest_sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(
             payload["rights_trust"]["verification_policy_sha256"],
@@ -513,7 +519,7 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
             ),
             (
                 {"manifest_schema_version": "totally-invalid"},
-                "schema_version 2.0",
+                "schema_version 3.0",
             ),
             ({"dataset_id": "other-dataset"}, "dataset_id.*attestation"),
         )
@@ -577,7 +583,7 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
                 source_label_pack_proof_set_sha256=(
                     source_label_pack_proof_set_sha256(
                         mismatched_pack_proofs,
-                        report_schema_version="3.0",
+                        report_schema_version="4.0",
                     )
                 ),
             )
@@ -591,7 +597,7 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
                 source_label_pack_proof_set_sha256=(
                     source_label_pack_proof_set_sha256(
                         disjoint_pack_proofs,
-                        report_schema_version="3.0",
+                        report_schema_version="4.0",
                     )
                 ),
             )
@@ -1589,7 +1595,6 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
                             issue.code.startswith("CAPTURE")
                             or issue.code.startswith("SOURCE_CAPTURE")
                         )
-                        and issue.code != "CAPTURE_REPORT_BINDING_PENDING"
                     },
                     report.to_dict(),
                 )
@@ -1598,10 +1603,9 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
                     {issue.code for issue in report.blockers},
                     report.to_dict(),
                 )
-                self.assertIn(
+                self.assertNotIn(
                     "CAPTURE_REPORT_BINDING_PENDING",
                     {issue.code for issue in report.blockers},
-                    report.to_dict(),
                 )
                 self.assertFalse(report.ready)
                 derived = validator._validated_capture_classifications
@@ -1621,6 +1625,213 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
                     {receipt.training_capture_mode.value for receipt in derived},
                     {expected_mode},
                 )
+
+    def test_capture_v4_report_binds_full_receipts_and_exact_source_sets(self) -> None:
+        receipts = self._capture_v3_template_receipts(
+            mevo_core_owner_live_1080p60_v1
+        )
+        self._install_capture_v3_receipts(receipts)
+        validator = self._validator_for_manifest(self.manifest)
+        report = validator.validate(self.manifest)
+        payload = report.to_dict()
+
+        self.assertEqual(payload["report_schema_version"], "4.0")
+        self.assertEqual(
+            payload["domain"],
+            "multicourt-vision-scoring:readiness-report:v4",
+        )
+        self.assertEqual(
+            report.source_capture_classifications,
+            validator._validated_capture_classifications,
+        )
+        self.assertEqual(
+            payload["source_capture_classifications"],
+            [receipt.to_dict() for receipt in report.source_capture_classifications],
+        )
+        expected_set_payload = {
+            "classifications": [
+                {
+                    "capture_classification_receipt_sha256": (
+                        receipt.fingerprint()
+                    ),
+                    "classification_proof_sha256": (
+                        receipt.capture_classification_proof_set_sha256
+                    ),
+                    "source_capture_facts_proof_sha256": (
+                        receipt.source_classification_proof_set_sha256
+                    ),
+                    "source_id": receipt.source_capture_facts.source_id,
+                }
+                for receipt in report.source_capture_classifications
+            ],
+            "domain": (
+                "multicourt-vision-scoring:"
+                "readiness-source-capture-classification-set:v1"
+            ),
+            "schema_version": "4.0",
+        }
+        expected_set_sha256 = hashlib.sha256(
+            canonical_json_bytes(expected_set_payload)
+        ).hexdigest()
+        self.assertEqual(
+            report.source_capture_classification_set_sha256,
+            expected_set_sha256,
+        )
+        self.assertEqual(
+            report.source_capture_classification_set_sha256,
+            _source_capture_classification_set_sha256(
+                report.source_capture_classifications
+            ),
+        )
+        self.assertNotIn(
+            "CAPTURE_REPORT_BINDING_PENDING",
+            {issue.code for issue in report.blockers},
+        )
+
+        with self.assertRaisesRegex(ValueError, "classification-set commitment"):
+            replace(
+                report,
+                source_capture_classification_set_sha256="f" * 64,
+            )
+        with self.assertRaisesRegex(ValueError, "sorted unique source IDs"):
+            replace(
+                report,
+                source_capture_classifications=tuple(
+                    reversed(report.source_capture_classifications)
+                ),
+            )
+        with self.assertRaisesRegex(ValueError, "explicit capture binding blocker"):
+            replace(
+                report,
+                source_capture_classifications=(),
+                source_capture_classification_set_sha256=(
+                    _source_capture_classification_set_sha256(())
+                ),
+            )
+
+        first = report.source_capture_classifications[0]
+        changed_facts = replace(
+            first.source_capture_facts,
+            source_id="aaa-different-source",
+        )
+        changed_receipt = classify_capture_profile_v1(
+            first.encoder_configuration,
+            first.capture_profile,
+            changed_facts,
+        )
+        changed_receipts = tuple(
+            sorted(
+                (changed_receipt, *report.source_capture_classifications[1:]),
+                key=lambda receipt: receipt.source_capture_facts.source_id,
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "capture and rights proof ID sets"):
+            replace(
+                report,
+                source_capture_classifications=changed_receipts,
+                source_capture_classification_set_sha256=(
+                    _source_capture_classification_set_sha256(changed_receipts)
+                ),
+            )
+
+    def test_capture_v3_artifact_closure_uses_only_resident_evidence_roles(self) -> None:
+        receipts = self._capture_v3_template_receipts(
+            mevo_core_owner_live_1080p60_v1
+        )
+        self._install_capture_v3_receipts(receipts)
+        required = _required_dataset_artifact_sha256s(self.manifest)
+        expected = tuple(
+            sorted(
+                {
+                    *(character * 64 for character in "01234"),
+                    *(
+                        source["asset_sha256"]
+                        for source in self.manifest["data_sources"]
+                    ),
+                }
+            )
+        )
+        self.assertEqual(required, expected)
+        excluded = {
+            receipts[0].encoder_configuration.fingerprint(),
+            receipts[0].capture_profile.fingerprint(),
+            receipts[0].source_capture_facts.fingerprint(),
+            receipts[0].source_classification_proof_set_sha256,
+            receipts[0].capture_classification_proof_set_sha256,
+            *(
+                source["labels_sha256"]
+                for source in self.manifest["data_sources"]
+            ),
+            *(
+                evidence_sha256
+                for source in self.manifest["data_sources"]
+                for evidence_sha256 in source["rights_decision"][
+                    "evidence_sha256s"
+                ]
+            ),
+        }
+        self.assertTrue(excluded.isdisjoint(required))
+        report = self._validate(self.manifest)
+        self.assertEqual(report.required_artifact_sha256s, required)
+        self.assertEqual(
+            report.required_artifact_digest_set_sha256,
+            hashlib.sha256(
+                canonical_json_bytes(
+                    {
+                        "digests": list(required),
+                        "domain": (
+                            "multicourt-vision-scoring:"
+                            "required-artifact-digest-set:v3"
+                        ),
+                        "schema_version": "4.0",
+                    }
+                )
+            ).hexdigest(),
+        )
+
+    def test_capture_v3_risks_are_reported_as_slices_not_blanket_blockers(self) -> None:
+        receipts = self._capture_v3_receipts_for_representation(
+            source_classification=(
+                CaptureSourceClassificationV1.PHONE_OR_CONSUMER_CAMERA
+            ),
+            source_representation=(
+                SourceRepresentationV1.PHONE_OR_CONSUMER_CAPTURE
+            ),
+            transport=CaptureTransportV1.LOCAL_CAPTURE,
+        )
+        self._install_capture_v3_receipts(receipts)
+        report = self._validate(self.manifest)
+        warning_messages = {
+            issue.message for issue in report.warnings if issue.code == "CAPTURE_RISK"
+        }
+        for risk in (
+            "HIGH_COMPRESSION",
+            "MOTION_BLUR",
+            "SINGLE_VIEW_OCCLUSION",
+        ):
+            self.assertIn(f"capture risk slice: {risk}", warning_messages)
+        self.assertFalse(
+            {
+                "CAPTURE_CLASSIFICATION",
+                "CAPTURE_CLASSIFICATION_ABSTAINED",
+                "CAPTURE_GATE",
+            }
+            & {issue.code for issue in report.blockers}
+        )
+        self.assertTrue(
+            all(
+                CaptureRiskTagV1.MOTION_BLUR in receipt.capture_risk_tags
+                for receipt in report.source_capture_classifications
+            )
+        )
+        for profile in self.manifest["capture_profiles"]:
+            profile["empirical_capture_measurements"][
+                "visible_ball_blur_to_minor_axis_ratio_p95"
+            ] = 1.01
+        blurred_report = self._validate(self.manifest)
+        self.assertIn(
+            "CAPTURE_GATE", {issue.code for issue in blurred_report.blockers}
+        )
 
     def test_capture_v3_avkans_does_not_invent_physical_mapping(self) -> None:
         receipt = self._capture_v3_template_receipts(
@@ -1677,7 +1888,6 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
                             issue.code.startswith("CAPTURE")
                             or issue.code.startswith("SOURCE_CAPTURE")
                         )
-                        and issue.code != "CAPTURE_REPORT_BINDING_PENDING"
                     },
                     report.to_dict(),
                 )
@@ -1726,6 +1936,17 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
                         for receipt in validator._validated_capture_classifications
                     )
                 )
+                with self.assertRaisesRegex(
+                    ValueError, "abstained.*explicit blocker"
+                ):
+                    replace(
+                        report,
+                        issues=tuple(
+                            issue
+                            for issue in report.issues
+                            if issue.code != "CAPTURE_CLASSIFICATION_ABSTAINED"
+                        ),
+                    )
 
     def test_capture_v3_source_profile_and_source_id_mismatches_block(self) -> None:
         receipts = self._capture_v3_template_receipts(
