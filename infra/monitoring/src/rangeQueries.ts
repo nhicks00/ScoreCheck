@@ -8,7 +8,9 @@ const rangeInputSchema = z.object({
 const PROMETHEUS_QUERIES = {
   rawBitrate: 'scorecheck_media_path_inbound_bitrate_bps{branch="raw"}',
   previewFps: 'scorecheck_ffmpeg_frames_per_second{branch="preview"}',
-  programFps: "scorecheck_program_browser_frames_per_second"
+  programFps: "scorecheck_program_browser_frames_per_second",
+  programDropRatio: "scorecheck_program_browser_frame_drop_ratio_2m",
+  programFreezeRatio: "scorecheck_program_browser_freeze_time_ratio_2m"
 } as const;
 
 export type CourtPipelineRange = {
@@ -20,6 +22,8 @@ export type CourtPipelineRange = {
     rawBitrate: Array<[number, number]>;
     previewFps: Array<[number, number]>;
     programFps: Array<[number, number]>;
+    programDropRatio: Array<[number, number]>;
+    programFreezeRatio: Array<[number, number]>;
   }>;
 };
 
@@ -54,7 +58,9 @@ export async function loadCourtPipelineRange(
       courtNumber: index + 1,
       rawBitrate: matrices.rawBitrate.get(index + 1) ?? [],
       previewFps: matrices.previewFps.get(index + 1) ?? [],
-      programFps: matrices.programFps.get(index + 1) ?? []
+      programFps: matrices.programFps.get(index + 1) ?? [],
+      programDropRatio: matrices.programDropRatio.get(index + 1) ?? [],
+      programFreezeRatio: matrices.programFreezeRatio.get(index + 1) ?? []
     }))
   };
 }

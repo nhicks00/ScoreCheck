@@ -194,6 +194,79 @@ groups:
           summary: "Rendered program FPS is below 20 on live court {{ $labels.court }}."
           first_action: "Check source FPS first, then compositor CPU, browser frame drops, and egress encoder load."
 
+      - record: scorecheck_program_browser_frame_drop_ratio_2m
+        expr: rate(scorecheck_program_browser_frames_dropped_total[2m]) / clamp_min(rate(scorecheck_program_browser_frames_received_total[2m]), 0.001)
+
+      - record: scorecheck_program_browser_freeze_time_ratio_2m
+        expr: rate(scorecheck_program_browser_freeze_duration_seconds_total[2m])
+
+      - alert: ScoreCheckProgramFrameDropRatioHigh
+        expr: |
+          (scorecheck_program_browser_frame_drop_ratio_2m > 0.005)
+          and (scorecheck_program_browser_frame_drop_ratio_2m <= 0.05)
+          and on(court) (increase(scorecheck_program_browser_frames_received_total[2m]) >= 900)
+          and on(court) (count_over_time(scorecheck_program_browser_frames_received_total[2m]) >= 12)
+          and on(court) (scorecheck_court_broadcast_live == 1)
+        for: 1m
+        labels:
+          severity: warning
+          stage: PROGRAM_BROWSER
+          issue_code: PROGRAM_FRAME_DROP_RATIO_HIGH
+          root_dependency: program-browser
+        annotations:
+          summary: "Program browser decode drops exceed 0.5% on live court {{ $labels.court }}."
+          first_action: "Compare received, decoded, dropped, jitter-buffer, preview, and host-load telemetry before changing the camera or compositor."
+
+      - alert: ScoreCheckProgramFrameDropRatioCritical
+        expr: |
+          (scorecheck_program_browser_frame_drop_ratio_2m > 0.05)
+          and on(court) (increase(scorecheck_program_browser_frames_received_total[2m]) >= 900)
+          and on(court) (count_over_time(scorecheck_program_browser_frames_received_total[2m]) >= 12)
+          and on(court) (scorecheck_court_broadcast_live == 1)
+        for: 30s
+        labels:
+          severity: critical
+          stage: PROGRAM_BROWSER
+          issue_code: PROGRAM_FRAME_DROP_RATIO_CRITICAL
+          root_dependency: program-browser
+        annotations:
+          summary: "Program browser decode drops exceed 5% on live court {{ $labels.court }}."
+          first_action: "Inspect the program WHEP decoder and timestamp path immediately; verify upstream preview health before changing source encoding."
+
+      - alert: ScoreCheckProgramFreezeRatioHigh
+        expr: |
+          (scorecheck_program_browser_freeze_time_ratio_2m > 0.01)
+          and (scorecheck_program_browser_freeze_time_ratio_2m <= 0.10)
+          and on(court) (increase(scorecheck_program_browser_freezes_total[2m]) >= 2)
+          and on(court) (increase(scorecheck_program_browser_frames_received_total[2m]) >= 900)
+          and on(court) (count_over_time(scorecheck_program_browser_frames_received_total[2m]) >= 12)
+          and on(court) (scorecheck_court_broadcast_live == 1)
+        for: 1m
+        labels:
+          severity: warning
+          stage: PROGRAM_BROWSER
+          issue_code: PROGRAM_FREEZE_RATIO_HIGH
+          root_dependency: program-browser
+        annotations:
+          summary: "Program browser spent more than 1% of the last two minutes frozen on live court {{ $labels.court }}."
+          first_action: "Compare Chrome freeze, frame-drop, jitter-buffer, preview, and host-load telemetry to isolate the affected stage."
+
+      - alert: ScoreCheckProgramFreezeRatioCritical
+        expr: |
+          (scorecheck_program_browser_freeze_time_ratio_2m > 0.10)
+          and on(court) (increase(scorecheck_program_browser_frames_received_total[2m]) >= 900)
+          and on(court) (count_over_time(scorecheck_program_browser_frames_received_total[2m]) >= 12)
+          and on(court) (scorecheck_court_broadcast_live == 1)
+        for: 30s
+        labels:
+          severity: critical
+          stage: PROGRAM_BROWSER
+          issue_code: PROGRAM_FREEZE_RATIO_CRITICAL
+          root_dependency: program-browser
+        annotations:
+          summary: "Program browser spent more than 10% of the last two minutes frozen on live court {{ $labels.court }}."
+          first_action: "Inspect the program WHEP decoder and timestamp path immediately; verify upstream preview health before changing source encoding."
+
       - alert: ScoreCheckCommentaryDisconnected
         expr: (scorecheck_program_commentary_room_connected == 0) and on(court) (scorecheck_court_commentary_required == 1)
         for: 20s

@@ -206,6 +206,17 @@ jitter-buffer, sync-lock, delay-gap, clock-RTT, and timing-sample evidence
 camera audio track, level, peak, clipping, and silence evidence
 ```
 
+Current-page WebRTC counters are exposed as gauges for direct forensic
+inspection. The monitor also converts received frames, decoded frames, dropped
+frames, freeze count, and freeze duration into reset-safe Prometheus counters.
+Baselines are isolated by court and page-load identity; page reloads and
+peer-connection counter decreases re-baseline instead of creating false
+increments. Two-minute recording rules derive decode-drop and frozen-time
+ratios. Live-court alert rules require at least twelve source samples and
+meaningful frame volume before warning at 0.5 percent decode loss or 1 percent
+frozen time, and before paging at 5 percent decode loss or 10 percent frozen
+time.
+
 Visual analysis samples the already-decoded camera element once per second at
 160x90. It does not create another media connection or decoder. A frame is a
 black-picture candidate only when at least 97 percent of sampled pixels have

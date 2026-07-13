@@ -18,8 +18,9 @@ describe("allowlisted range queries", () => {
       }), { status: 200, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
     const result = await loadCourtPipelineRange("http://prometheus:9090", { windowSec: 300, stepSec: 15 }, 400_000, fetcher);
-    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(fetcher).toHaveBeenCalledTimes(5);
     expect(result.courts[0]?.rawBitrate).toEqual([[100, 1.5], [130, 2.5]]);
+    expect(result.courts[0]?.programDropRatio).toEqual([[100, 1.5], [130, 2.5]]);
     expect(result.courts).toHaveLength(8);
   });
 });

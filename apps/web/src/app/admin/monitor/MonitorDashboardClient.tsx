@@ -378,6 +378,7 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
         <span><Camera size={14} /> {visualLabel(browser)}</span>
         <span><Headphones size={14} /> {commentaryLabel(browser)}</span>
         <span><Youtube size={14} /> {friendlyState(court.youtube?.state ?? "NOT_APPLICABLE")}</span>
+        <span title={browserQualityDetail(browser)}><Activity size={14} /> {browserQualityLabel(browser, history)}</span>
         <span><Gauge size={14} /> {browser ? `${browser.video.reconnectCount} reconnects` : "--"}</span>
       </div>
       {issue?.issueCode && <div className="monitor-court-alert"><AlertTriangle size={14} /><span>{issue.issueCode}</span></div>}
@@ -485,6 +486,36 @@ function transportLoss(path: MonitorMediaPath | undefined): string {
 
 function percent(value: number, total: number): string {
   return total > 0 ? `${(value / total * 100).toFixed(1)}%` : "0.0%";
+}
+
+function browserQualityLabel(browser: MonitorCourt["browser"], history: MonitorCourtPipelineRange["courts"][number] | null): string {
+  if (!browser) return "decode --";
+  const recentDropRatio = latestPoint(history?.programDropRatio);
+  const recentFreezeRatio = latestPoint(history?.programFreezeRatio);
+  if (recentDropRatio != null || recentFreezeRatio != null) {
+    return `2m ${formatQualityRatio(recentDropRatio)} drop · ${formatQualityRatio(recentFreezeRatio)} frozen`;
+  }
+  const received = browser.video.framesReceived;
+  const dropped = browser.video.framesDropped;
+  const dropRatio = received != null && dropped != null ? percent(dropped, received) : "--";
+  const freezes = browser.video.freezeCount == null ? "--" : String(browser.video.freezeCount);
+  return `${dropRatio} drop · ${freezes} freezes`;
+}
+
+function browserQualityDetail(browser: MonitorCourt["browser"]): string {
+  if (!browser) return "Program browser decode quality is unavailable.";
+  const video = browser.video;
+  const freezeDuration = video.totalFreezesDurationMs == null ? "--" : formatDuration(video.totalFreezesDurationMs);
+  return `Page session: ${video.framesReceived ?? "--"} received, ${video.framesDecoded ?? "--"} decoded, ${video.framesDropped ?? "--"} dropped, ${video.freezeCount ?? "--"} freezes totaling ${freezeDuration}.`;
+}
+
+function latestPoint(points: Array<[number, number]> | undefined): number | null {
+  const value = points?.at(-1)?.[1];
+  return value != null && Number.isFinite(value) ? value : null;
+}
+
+function formatQualityRatio(value: number | null): string {
+  return value == null ? "--" : `${(value * 100).toFixed(1)}%`;
 }
 
 function formatPercentRatio(value: number | null): string {

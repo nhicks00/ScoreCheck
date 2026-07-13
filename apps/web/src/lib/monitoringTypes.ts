@@ -270,5 +270,7 @@ export type MonitorCourtPipelineRange = {
     rawBitrate: Array<[number, number]>;
     previewFps: Array<[number, number]>;
     programFps: Array<[number, number]>;
+    programDropRatio: Array<[number, number]>;
+    programFreezeRatio: Array<[number, number]>;
   }>;
 };

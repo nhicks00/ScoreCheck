@@ -410,3 +410,128 @@ tests:
             exp_annotations:
               summary: External dead-man baseline delivery is failing.
               first_action: Check outbound connectivity and Healthchecks status; verify the other dead-man check before changing its cadence.
+
+  - name: sustained browser decode loss is live-only and severity-banded
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_program_browser_frames_received_total{court="1"}'
+        values: '0+150x72'
+      - series: 'scorecheck_program_browser_frames_dropped_total{court="1"}'
+        values: '0+2x72'
+      - series: 'scorecheck_court_broadcast_live{court="1"}'
+        values: '1+0x72'
+
+      - series: 'scorecheck_program_browser_frames_received_total{court="2"}'
+        values: '0+150x72'
+      - series: 'scorecheck_program_browser_frames_dropped_total{court="2"}'
+        values: '0+12x72'
+      - series: 'scorecheck_court_broadcast_live{court="2"}'
+        values: '1+0x72'
+
+      - series: 'scorecheck_program_browser_frames_received_total{court="3"}'
+        values: '0+150x72'
+      - series: 'scorecheck_program_browser_frames_dropped_total{court="3"}'
+        values: '0+2x72'
+      - series: 'scorecheck_court_broadcast_live{court="3"}'
+        values: '0+0x72'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ScoreCheckProgramFrameDropRatioHigh
+        exp_alerts:
+          - exp_labels:
+              court: '1'
+              severity: warning
+              stage: PROGRAM_BROWSER
+              issue_code: PROGRAM_FRAME_DROP_RATIO_HIGH
+              root_dependency: program-browser
+            exp_annotations:
+              summary: Program browser decode drops exceed 0.5% on live court 1.
+              first_action: Compare received, decoded, dropped, jitter-buffer, preview, and host-load telemetry before changing the camera or compositor.
+      - eval_time: 4m
+        alertname: ScoreCheckProgramFrameDropRatioCritical
+        exp_alerts:
+          - exp_labels:
+              court: '2'
+              severity: critical
+              stage: PROGRAM_BROWSER
+              issue_code: PROGRAM_FRAME_DROP_RATIO_CRITICAL
+              root_dependency: program-browser
+            exp_annotations:
+              summary: Program browser decode drops exceed 5% on live court 2.
+              first_action: Inspect the program WHEP decoder and timestamp path immediately; verify upstream preview health before changing source encoding.
+
+  - name: sustained browser freeze time is live-only and severity-banded
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_program_browser_frames_received_total{court="4"}'
+        values: '0+150x72'
+      - series: 'scorecheck_program_browser_freezes_total{court="4"}'
+        values: '0+1x72'
+      - series: 'scorecheck_program_browser_freeze_duration_seconds_total{court="4"}'
+        values: '0+0.1x72'
+      - series: 'scorecheck_court_broadcast_live{court="4"}'
+        values: '1+0x72'
+
+      - series: 'scorecheck_program_browser_frames_received_total{court="5"}'
+        values: '0+150x72'
+      - series: 'scorecheck_program_browser_freezes_total{court="5"}'
+        values: '0+1x72'
+      - series: 'scorecheck_program_browser_freeze_duration_seconds_total{court="5"}'
+        values: '0+1x72'
+      - series: 'scorecheck_court_broadcast_live{court="5"}'
+        values: '1+0x72'
+
+      - series: 'scorecheck_program_browser_frames_received_total{court="6"}'
+        values: '0+150x72'
+      - series: 'scorecheck_program_browser_freezes_total{court="6"}'
+        values: '0+1x72'
+      - series: 'scorecheck_program_browser_freeze_duration_seconds_total{court="6"}'
+        values: '0+0.1x72'
+      - series: 'scorecheck_court_broadcast_live{court="6"}'
+        values: '0+0x72'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ScoreCheckProgramFreezeRatioHigh
+        exp_alerts:
+          - exp_labels:
+              court: '4'
+              severity: warning
+              stage: PROGRAM_BROWSER
+              issue_code: PROGRAM_FREEZE_RATIO_HIGH
+              root_dependency: program-browser
+            exp_annotations:
+              summary: Program browser spent more than 1% of the last two minutes frozen on live court 4.
+              first_action: Compare Chrome freeze, frame-drop, jitter-buffer, preview, and host-load telemetry to isolate the affected stage.
+      - eval_time: 4m
+        alertname: ScoreCheckProgramFreezeRatioCritical
+        exp_alerts:
+          - exp_labels:
+              court: '5'
+              severity: critical
+              stage: PROGRAM_BROWSER
+              issue_code: PROGRAM_FREEZE_RATIO_CRITICAL
+              root_dependency: program-browser
+            exp_annotations:
+              summary: Program browser spent more than 10% of the last two minutes frozen on live court 5.
+              first_action: Inspect the program WHEP decoder and timestamp path immediately; verify upstream preview health before changing source encoding.
+
+  - name: browser quality alerts wait for a meaningful sample
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_program_browser_frames_received_total{court="1"}'
+        values: '0+150x10'
+      - series: 'scorecheck_program_browser_frames_dropped_total{court="1"}'
+        values: '0+15x10'
+      - series: 'scorecheck_program_browser_freezes_total{court="1"}'
+        values: '0+1x10'
+      - series: 'scorecheck_program_browser_freeze_duration_seconds_total{court="1"}'
+        values: '0+1x10'
+      - series: 'scorecheck_court_broadcast_live{court="1"}'
+        values: '1+0x10'
+    alert_rule_test:
+      - eval_time: 45s
+        alertname: ScoreCheckProgramFrameDropRatioCritical
+        exp_alerts: []
+      - eval_time: 45s
+        alertname: ScoreCheckProgramFreezeRatioCritical
+        exp_alerts: []
