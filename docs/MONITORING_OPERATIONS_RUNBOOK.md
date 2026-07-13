@@ -154,11 +154,13 @@ setting a court `OFF` after coverage.
 
 ## Phone paging and dead-man activation
 
-The code supports Pushover emergency priority with acknowledgement, followed by
-Twilio SMS after two minutes when the critical incident remains unacknowledged.
-Recovery notifications are deduplicated. Twilio callbacks are signature checked.
+The deployed service supports Pushover emergency priority with acknowledgement,
+followed by Twilio SMS after two minutes when a critical incident remains
+unacknowledged. Recovery notifications are deduplicated and are sent only
+through providers that delivered the opening incident. Twilio callbacks are
+signature checked.
 
-The following protected values must be supplied before paging can be activated:
+The complete provider configuration uses these protected values:
 
 ```text
 PUSHOVER_APP_TOKEN
@@ -174,7 +176,10 @@ HEALTHCHECKS_ACTIVE_CHECK_ID
 ```
 
 Store them only in the protected monitoring environment on the observability
-host and in the protected local deployment file. Never commit them. The baseline
+host and in the protected local deployment file. Never commit them. Pushover,
+Twilio account authentication, and both Healthchecks checks are configured in
+production. Twilio escalation remains disabled until an SMS-capable
+`TWILIO_FROM_NUMBER` is approved. The baseline
 dead-man pings every ten minutes at all times. The active check pings every minute
 while any court expects coverage and is explicitly paused through the Healthchecks
 management API while the system is idle. A live ping resumes it automatically.
@@ -272,7 +277,13 @@ active commentary rooms. Acceptance requires:
 ## Current acceptance status
 
 - Browser-independent six-agent collection: passed.
-- Eight-court mapping and Egress capacity visibility: passed while idle.
+- Eight-court mapping and Egress capacity visibility: passed while idle. Egress
+  busy workers are now classified as healthy, not unavailable, and paging is
+  gated to assigned live work.
+- Monitoring contract v2 media profiles: deployed to all six agents. All eight
+  raw feeds report bounded source protocol/mode, video profile/resolution, and
+  audio format. Push-SRT courts expose RTT and packet counters; pull-SRT and
+  RTMP paths remain explicitly unavailable rather than fabricated.
 - Prometheus rules (37 syntax-validated plus executable timing/isolation tests)
   and correlator unit/fault fixtures: passed. Every observability deployment
   reruns these gates before replacing files or restarting containers.
@@ -280,14 +291,29 @@ active commentary rooms. Acceptance requires:
   compositor-pair loss, score-render mismatch, YouTube API unknown, and shared
   score-worker deduplication: passed. These are code gates, not real-feed gates.
 - Expanded WebRTC, visual-content, camera-audio, and commentary telemetry: passed
-  type/schema/unit validation; awaits the next real program-page session.
+  type/schema/unit validation. A ten-hour one-court transport and sync soak
+  completed without restart, OOM, frame stall, MediaMTX path failure, or egress
+  error; the injected fault matrix and camera reconnect gate remain outstanding.
 - Durable incident, acknowledgement, checkpoint, and silence lifecycle: passed.
 - Production web and monitor builds: passed.
 - Healthchecks baseline delivery and active idle-pause lifecycle: configured; the
   withheld-ping phone delivery gate remains outstanding because the project
   currently has email as its Healthchecks notification channel.
-- Pushover delivery: awaiting an app token and user key. Twilio authentication is
-  valid, but SMS remains disabled until the account has an SMS-capable sender.
-- Authenticated production visual check: requires an existing admin login.
-- Real one-court and eight-court fault injection: requires the next test-feed
-  session; code must not simulate this by stopping public production services.
+- Pushover delivery and one-time recovery: operational. A false Egress storm
+  exposed an idle/busy semantic error and over-broad recovery fan-out; both are
+  corrected in production. Controlled acknowledgement and escalation tests are
+  still required. Twilio authentication is valid, but SMS remains disabled until
+  the account has an approved SMS-capable sender.
+- Authenticated production visual check: requires an existing admin login because
+  Vercel does not export the sensitive admin secret. The exact deployed build
+  passed local authenticated validation against the live read-only API at
+  1600x1000 and 390x844 with eight cards, a four-column wide layout, no
+  horizontal overflow, and no browser console warnings or errors.
+- First eight-feed load attempt: failed the shared-normalizer topology. One `c-4`
+  normalizer reached about 394 percent CPU and sustained only 18-24 fps at
+  0.59-0.81x realtime; Egress accepted all eight jobs and compositor capacity was
+  not the bottleneck. Split normalization or qualify camera-side 720p H.264 before
+  repeating the gate.
+- Remaining real one-court and eight-court fault injection requires the next
+  isolated test-feed session and explicit approval. Never simulate a pass by
+  stopping public production services.
