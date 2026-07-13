@@ -125,17 +125,26 @@ Venue camera routing is selective rather than router-wide. Speedify runs in
 Speed mode over UDP with its default route disabled; only MediaMTX RTMP/SRT
 ingest ports enter the bonded tunnel. This keeps operator and camera-control
 traffic independent and prevents the ingest-IP host route that bypassed
-Speedify during the July 12 test. Routing must be active before publishers
-start, and the worst sustained bonded upload must be at least 75 Mbps. The
-temporary MAKI listener paths still require WireGuard. They remain outside the
-Speedify policy during the staged soak because nesting that tunnel overloaded
-the available home uplink. Production qualification waits for the final six
-direct-caller AVKANS cameras or a stronger venue uplink.
+Speedify during the July 12 test. Production camera traffic is fail-closed:
+table `900` routes it through `connectify0`, table `901` blackholes it if that
+route disappears, and an independent forwarding kill switch rejects it on any
+non-Speedify interface. A persistent watchdog restores the primary route and
+camera connection tracking after a daemon or interface restart. Direct-WAN
+fallback is forbidden. Routing must be active before publishers start, and the
+worst sustained bonded upload must be at least 75 Mbps.
+
+The temporary MAKI listener paths still require WireGuard. They remained
+outside Speedify during the staged home soak because nesting that tunnel
+overloaded the available home uplink; this is test scaffolding, not a production
+exception. Production qualification waits for the final six direct-caller
+AVKANS cameras and requires all eight camera publishers through Speedify.
 
 ## Reliability rules
 
 - Program and preview latency classes are explicit and cannot silently switch.
 - Input loss never ends YouTube; it produces a slate and alarm.
+- Speedify loss blocks camera egress and alarms while the router reconciles;
+  cameras never bypass bonding through a single WAN.
 - Commentary remains available during camera loss.
 - Program pages retry media and LiveKit connections indefinitely.
 - Egress and media images are pulled before event day, never automatically on
