@@ -12,7 +12,7 @@ providers or real media feeds.
 | Separate observability failure domain | Prometheus, Alertmanager, correlator, monitor API, Caddy on observability VPS | Deployed and passing |
 | Eight-court operator dashboard | Authenticated 4x2 matrix, low-rate thumbnails, one selected WHEP player, stage evidence, trends, incidents | Deployed and passing |
 | Media transport telemetry | MediaMTX readiness, bitrate, source protocol/mode, codec/profile/resolution/audio, bounded SRT transport counters, readers, FFmpeg progress | Contract v2 deployed and passing |
-| Program render telemetry | FPS, dimensions, RTP loss/jitter, frames, packet age, feedback counters, reconnects, reloads | Implemented; real-feed revalidation pending |
+| Program render telemetry | FPS, dimensions, RTP loss/jitter, reset-safe receive/decode/drop/freeze rates, packet age, feedback counters, reconnects, reloads | Sustained browser frame-pacing defect confirmed; detector and one-reader A/B/A path comparator validated locally, deployment pending |
 | Full-bitrate repeated-picture detection | Existing decoded element sampled at 160x90/1 Hz; warning/critical correlator and alert rules | Unit and deterministic fault gate passing; real fault pending |
 | Black/covered-picture detection | Luma, dark ratio, variance, persistence; mutually exclusive with freeze paging | Unit and deterministic fault gate passing; real fault pending |
 | Camera and commentary audio quality | Track/mute, RMS/peak, clipping, silence age, RTP loss/jitter, adaptive sync evidence | Implemented; real audio fault gate pending |
@@ -20,12 +20,12 @@ providers or real media feeds.
 | Infrastructure and Egress attribution | Host/container health, idle/busy state, capacity, assigned court pair, mapping mismatch rejection | Deployed; false busy-state paging corrected and restart-during-outage fixture passing |
 | YouTube health | Exact configured video IDs, lifecycle, ingestion health when OAuth is available, API failure remains unknown | Deployed; provider fault gate pending |
 | Durable incidents and operator actions | Fingerprints, open/ack/resolved transitions, checkpoints, acknowledgements, timed silences, expiry re-arm | Deployed and unit-tested |
-| Alert expression behavior | Promtool fixtures validate hold times, labels, annotations, court isolation, black/freeze exclusion, live gating, and shared-worker fan-out | Passing and enforced before deployment |
+| Alert expression behavior | Promtool fixtures validate hold times, labels, annotations, court isolation, black/freeze exclusion, decode/freeze rate bands, live gating, and shared-worker fan-out | 43-rule candidate passing locally; deployment held during active soak |
 | Page suppression behavior | Disposable network-isolated Alertmanager proves same-court and shared-dependency inhibition while peer alerts remain active | Enforced before deployment |
-| Phone paging | Pushover emergency acknowledgement plus Twilio SMS escalation and recovery logic | Pushover delivery/recovery proven; controlled acknowledgement/escalation gate pending; Twilio sender missing |
+| Phone paging | Pushover emergency acknowledgement plus Twilio SMS escalation and recovery logic | Pushover delivery/recovery proven; Twilio sender purchased but blocked by pending A2P registration; controlled acknowledgement/escalation gate pending |
 | Independent dead-man | Baseline and active Healthchecks senders with coverage-aware cadence | Configured; baseline running and active idle-paused; withheld-ping phone gate pending |
 | One-court real fault gate | Camera, network, preview, browser, commentary, score, Egress, YouTube, agent, dead-man faults | Ten-hour transport/sync soak passed; injected fault matrix pending |
-| Eight-court real load/fault gate | Four compositors, eight representative feeds, two commentary rooms, score on all courts | First load attempt exposed an invalid shared-normalizer topology; revised-topology gate pending |
+| Eight-court real load/fault gate | Four compositors, eight representative feeds, two commentary rooms, score on all courts | Fail-closed routing endurance passed under the temporary topology; ingest headroom and viewer quality failed; revised-topology gate pending |
 
 ## Deterministic isolation gate
 
@@ -60,19 +60,74 @@ accepted all eight jobs and the four compositor hosts were not the bottleneck.
 The next gate must split normalization by host/court or qualify camera-side
 720p H.264 before repeating the load test.
 
+The extended soak also produced a sustained ingest-host load spike: load1
+reached 13.85 and remained at 13.47 after 30 seconds on the four-vCPU MediaMTX
+host while three FFmpeg normalizers and MediaMTX were the active CPU leaders.
+All raw and derived paths, browser samples, Egress outputs, routing, and YouTube
+remained healthy during the recheck. This is capacity-headroom risk evidence,
+not proof that host load caused the separate browser pacing defect.
+
+The router briefly showed two exact Speedify watchdog command lines at
+`19:28Z`, then recurred with three exact processes at `19:59Z`. Both episodes
+self-converged to the single long-lived `procd` instance without route,
+firewall, fail-closed, publisher, or output drift. This is a recurring
+transient supervision defect requiring a root-cause review and atomic
+single-instance guard, not sustained steady-state duplication.
+
+The July 13 extended soak exposed a separate downstream quality defect. Courts
+1, 3, and 5 continued accumulating Chrome decode drops and freezes after their
+one-time deployment reload even though they rendered at 30-31 fps, RTP loss was
+zero, RTT was 1-2 ms, FFmpeg and Egress were fresh, and YouTube remained good.
+The strongest current hypothesis is timestamp/jitter behavior in the delayed
+program path plus WHEP decoder scheduling; host load is correlated evidence,
+not a proven cause. Court 1 later remained at 1-2 browser FPS for at least 30
+seconds while adding 413 dropped frames, 22 freezes, and 12.803 seconds of
+freeze duration; Court 3 reconnected WHEP in-page, and Courts 3 and 5 exceeded
+1.2 seconds of jitter-buffer delay. A later synchronized 50-second event added
+599, 130, and 169 browser drops on Courts 1, 3, and 5 while all upstream
+program FFmpeg processes remained at 30 fps and RTP loss stayed zero. Court 5
+then performed an unexplained isolated page reload at `15:13:23Z`; it recovered
+at 30 fps while a contemporaneous four-process zombie increase held stable.
+That timing is recorded as correlation, not causation. Reset-safe quality-rate
+telemetry was further justified when Courts 3 and 5, and later Court 1,
+reconnected WHEP in-page and reset their peer-connection counters without
+changing page-load identity. Live-only alert bands and a sequential
+preview/program/preview comparator pass locally and await a coordinated
+post-soak deployment and test-only gate.
+
+The user-directed final endpoint at `21:01Z-21:02Z` captured another synchronized
+degradation rather than a clean tail. Courts 1 and 3 initially sampled at 21
+and 24 browser fps while Court 5 remained in `stabilizing`; the 52-second
+recheck reached 34 fps catch-up, 27 fps, and still-stabilizing respectively.
+Since `20:43Z`, the three browsers added 16,925 dropped frames, 594 freezes, and
+385.302 seconds of freeze duration in aggregate while RTP loss remained zero
+and upstream program FFmpeg stayed near 30 fps with zero drops. MediaMTX load
+remained above 12 on four vCPUs during the recheck and zombies increased from
+114 to 121. Raw paths, derived branches, routing, Egress, and YouTube stayed
+available. Final classification: fail-closed routing endurance passed under
+this temporary topology; viewer quality and ingest-host production headroom
+failed; final venue capacity remains unqualified because the measured upload
+floor was 31.8 Mbps and Cameras 6-8 were temporary WireGuard pulls.
+
 ## Remaining external blockers
 
-Pushover, Twilio account authentication, and both Healthchecks checks are
-configured. The remaining provider and operator prerequisites are:
+ScoreCheck Pushover and both Healthchecks checks are configured. The
+Healthchecks project still has only its email channel. The remaining provider
+and operator prerequisites are:
 
-1. An SMS-capable `TWILIO_FROM_NUMBER`; no sender will be purchased or selected
-   without operator approval.
-2. A phone notification channel independent of the ScoreCheck hosts for
-   Healthchecks; the current project notification is email-only.
-3. Explicit operator approval and isolated test feeds for destructive fault
-   injection, acknowledgement, escalation, and withheld-ping gates.
-4. An existing production admin session for a production-browser visual pass;
+1. Approval of the purchased SMS sender's A2P registration. A live test on
+   2026-07-13 returned Twilio error `30034`, so production escalation remains
+   disabled until a delivery test passes.
+2. A Pushover channel on the Healthchecks project. Its Management API can list
+   but cannot create integrations, so this requires one authenticated provider
+   subscription in the Healthchecks UI.
+3. An existing production admin session for a production-browser visual pass;
    Vercel intentionally does not export the sensitive admin secret.
+
+Operator approval for isolated monitoring fault gates is recorded, and Camera 4
+is available as a raw-only test feed. The user ended the active soak at 16:00
+CDT on 2026-07-13 after the final recheck. Further test-only gates still require
+explicit coordination, but the soak deployment freeze is closed.
 
 The exact deployed dashboard build passed local authenticated visual validation
 against the live read-only monitor API at 1600x1000 and 390x844: eight cards,
@@ -91,8 +146,8 @@ must not claim RF or camera-encoder certainty without those sources.
 2. Repeat the one-court test broadcast and inject every remaining row in the
    runbook table, including camera reconnect and subjective sync checks.
 3. Replace the shared eight-feed normalizer topology, then run eight
-   representative feeds across all four compositors for at least two hours,
-   with scoring on all courts and at least two commentary rooms.
+   representative feeds across a capacity-qualified compositor pool for at
+   least two hours, with scoring on all courts and at least two commentary rooms.
 4. Preserve detection latency, unaffected-court evidence, duplicate count,
    recovery time, CPU/memory trends, and Supabase growth for every fault.
 5. Only after these gates pass, accept monitoring as ready for the shadow event.

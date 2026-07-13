@@ -54,7 +54,16 @@ class OverlayErrorBoundary extends Component<BoundaryProps, BoundaryState> {
   }
 }
 
-export function OverlayClient(props: { courtNumber: string; eventId: string; theme: string; buildVersion: string; onHealth?: (health: OverlayRenderHealth) => void }) {
+type OverlayClientProps = {
+  courtNumber: string;
+  eventId: string;
+  theme: string;
+  buildVersion: string;
+  reloadOnVersionChange?: boolean;
+  onHealth?: (health: OverlayRenderHealth) => void;
+};
+
+export function OverlayClient(props: OverlayClientProps) {
   return (
     <OverlayErrorBoundary>
       <OverlayClientInner {...props} />
@@ -62,7 +71,7 @@ export function OverlayClient(props: { courtNumber: string; eventId: string; the
   );
 }
 
-function OverlayClientInner({ courtNumber, eventId, buildVersion, onHealth }: { courtNumber: string; eventId: string; theme: string; buildVersion: string; onHealth?: (health: OverlayRenderHealth) => void }) {
+function OverlayClientInner({ courtNumber, eventId, buildVersion, reloadOnVersionChange = true, onHealth }: OverlayClientProps) {
   const courtNumberValue = Number(courtNumber) || 1;
   const [state, setState] = useState(() => fallbackOverlayState(courtNumberValue));
   const [hasLoadedState, setHasLoadedState] = useState(false);
@@ -128,7 +137,7 @@ function OverlayClientInner({ courtNumber, eventId, buildVersion, onHealth }: { 
   }, [realtimeTopic, applyOverlayState]);
 
   useEffect(() => {
-    if (!buildVersion || buildVersion === "local") return;
+    if (!reloadOnVersionChange || !buildVersion || buildVersion === "local") return;
     let cancelled = false;
 
     async function checkVersion() {
@@ -150,7 +159,7 @@ function OverlayClientInner({ courtNumber, eventId, buildVersion, onHealth }: { 
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [buildVersion]);
+  }, [buildVersion, reloadOnVersionChange]);
 
   const layout = state.layout === "bottom-left" ? "bottom-left" : "top-left";
   const isIntermission = state.phase === "IDLE" || state.phase === "PREMATCH";

@@ -229,6 +229,20 @@ export class IncidentStore {
     return data ? notificationFromRow(data) : null;
   }
 
+  async pendingProviderNotifications(provider: NotificationProvider, now = new Date()): Promise<StoredNotification[]> {
+    const cutoff = new Date(now.getTime() - 24 * 60 * 60 * 1_000).toISOString();
+    const { data, error } = await this.db.from("incident_notifications")
+      .select(NOTIFICATION_COLUMNS)
+      .eq("provider", provider)
+      .in("status", ["pending", "accepted"])
+      .not("provider_message_id", "is", null)
+      .gte("submitted_at", cutoff)
+      .order("submitted_at", { ascending: true })
+      .limit(50);
+    if (error) throw error;
+    return (data ?? []).map((row) => notificationFromRow(row));
+  }
+
   async latestProviderNotifications(): Promise<StoredNotification[]> {
     const { data, error } = await this.db.from("incident_notifications")
       .select(NOTIFICATION_COLUMNS)

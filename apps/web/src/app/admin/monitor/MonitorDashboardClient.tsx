@@ -16,12 +16,14 @@ import {
   Server,
   ShieldAlert,
   Signal,
+  VideoOff,
   WifiOff,
   Youtube
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StreamPlayer } from "@/components/StreamPlayer";
 import type { MonitorCourt, MonitorCourtPipelineRange, MonitorHealthState, MonitorIncident, MonitorMediaPath, MonitorSilence, MonitorSnapshotEnvelope, MonitorStage } from "@/lib/monitoringTypes";
+import { PacingComparator } from "./PacingComparator";
 
 const POLL_INTERVAL_MS = 5_000;
 const STATE_RANK: Record<MonitorHealthState, number> = { CRITICAL: 9, UNKNOWN: 8, DEGRADED: 7, RECOVERING: 6, STARTING: 5, HEALTHY: 4, MAINTENANCE: 3, EXPECTED_OFF: 2, NOT_APPLICABLE: 1 };
@@ -32,6 +34,8 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
   const [refreshing, setRefreshing] = useState(false);
   const [selectedCourt, setSelectedCourt] = useState(() => firstAttentionCourt(initial) ?? 1);
   const [previewEnabled, setPreviewEnabled] = useState(false);
+  const [inspectionQuality, setInspectionQuality] = useState<"data_saver" | "detail">("data_saver");
+  const [pacingOpen, setPacingOpen] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(false);
   const [ackReasons, setAckReasons] = useState<Record<string, string>>({});
   const [ackBusy, setAckBusy] = useState<string | null>(null);
@@ -43,6 +47,8 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
   const [nowMs, setNowMs] = useState(() => initial ? Date.parse(initial.fetchedAt) : 0);
   const [history, setHistory] = useState<MonitorCourtPipelineRange | null>(null);
   const previousCriticalIds = useRef(new Set(initial?.snapshot.incidents.filter((incident) => incident.severity === "critical").map((incident) => incident.id) ?? []));
+  const previewBeforePacing = useRef(false);
+  const inspectionRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     setSoundEnabled(window.localStorage.getItem("scorecheck-monitor-sound") === "on");
@@ -66,7 +72,8 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
         const incident = payload.snapshot.incidents.find((entry) => entry.id === newCritical);
         if (incident?.courtNumber) {
           setSelectedCourt(incident.courtNumber);
-          setPreviewEnabled(true);
+          setPreviewEnabled(false);
+          setPacingOpen(false);
         }
         if (soundEnabled) playAlertTone();
       }
@@ -114,6 +121,13 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
     setSoundEnabled(next);
     window.localStorage.setItem("scorecheck-monitor-sound", next ? "on" : "off");
     if (next) playAlertTone();
+  }
+
+  function inspectCamera(courtNumber: number) {
+    setSelectedCourt(courtNumber);
+    setPreviewEnabled(true);
+    setPacingOpen(false);
+    window.requestAnimationFrame(() => inspectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }
 
   async function acknowledge(incident: MonitorIncident) {
@@ -186,17 +200,30 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
   const snapshot = envelope.snapshot;
   const snapshotAgeMs = Math.max(0, nowMs - Date.parse(snapshot.generatedAt));
   const stale = envelope.source === "checkpoint" || snapshotAgeMs > 15_000;
-  const overall = systemState(snapshot.courts.map((court) => court.overallState), snapshot.incidents);
+  const overall = systemState(snapshot.courts, snapshot.incidents);
   const selected = snapshot.courts.find((court) => court.courtNumber === selectedCourt) ?? snapshot.courts[0] ?? null;
+  const dataSaverAdmitted = selected?.expectation.broadcastExpectation !== "LIVE";
+  const activeInspectionQuality = dataSaverAdmitted ? inspectionQuality : "detail";
   const activeIncidents = snapshot.incidents.filter((incident) => incident.status !== "resolved");
   const activeSilences = snapshot.silences.filter((silence) => Date.parse(silence.expiresAt) > nowMs);
+
+  function togglePacing() {
+    if (pacingOpen) {
+      setPacingOpen(false);
+      setPreviewEnabled(previewBeforePacing.current);
+      return;
+    }
+    previewBeforePacing.current = previewEnabled;
+    setPreviewEnabled(false);
+    setPacingOpen(true);
+  }
 
   return (
     <div className="monitor-dashboard">
       <header className="monitor-heading">
         <div>
           <p className="eyebrow">Live operations</p>
-          <div className="monitor-title-line"><h1>System Monitor</h1><StateBadge state={overall} /></div>
+          <div className="monitor-title-line"><h1>System Monitor</h1><StateBadge state={overall} label={systemStateLabel(overall)} /></div>
           <p className="monitor-event-name">{snapshot.event?.name ?? "No active event"}</p>
         </div>
         <div className="monitor-heading-actions">
@@ -226,28 +253,45 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
         <div className="monitor-banner" role="alert"><AlertTriangle size={17} /><span>{pollError ?? envelope.monitorError ?? "Monitoring snapshot is stale."}</span></div>
       )}
 
-      <section className="monitor-court-matrix" aria-label="Court monitoring matrix">
+      <div className="monitor-bandwidth-note">
+        <Camera size={17} aria-hidden="true" />
+        <div><strong>Low-data overview</strong><span>Camera cards use one 256×144 snapshot every 15 seconds. Live video opens only for the selected camera.</span></div>
+      </div>
+
+      <section className="monitor-court-matrix" aria-label="Camera monitoring matrix">
         {snapshot.courts.map((court) => (
-          <CourtCard key={court.courtNumber} court={court} history={history?.courts.find((entry) => entry.courtNumber === court.courtNumber) ?? null} selected={court.courtNumber === selectedCourt} nowMs={nowMs} onSelect={() => { setSelectedCourt(court.courtNumber); setPreviewEnabled(true); }} />
+          <CourtCard key={court.courtNumber} court={court} history={history?.courts.find((entry) => entry.courtNumber === court.courtNumber) ?? null} selected={court.courtNumber === selectedCourt} nowMs={nowMs} onSelect={() => inspectCamera(court.courtNumber)} />
         ))}
       </section>
 
       {selected && (
-        <section className="monitor-detail-band" aria-label={`Court ${selected.courtNumber} live inspection`}>
+        <section ref={inspectionRef} className="monitor-detail-band" aria-label={`Camera ${selected.courtNumber} live inspection`}>
           <div className="monitor-section-heading">
-            <div><p className="eyebrow">Live inspection</p><h2>{courtName(selected)}</h2></div>
-            <StateBadge state={selected.overallState} />
+            <div><p className="eyebrow">Live inspection</p><h2>Camera {selected.courtNumber}</h2><p className="monitor-detail-assignment">{assignedCourtLabel(selected)}</p></div>
+            <div className="monitor-detail-actions">
+              <label className="monitor-quality-control">
+                <span>Video quality</span>
+                <select value={activeInspectionQuality} onChange={(event) => setInspectionQuality(event.target.value as "data_saver" | "detail")}>
+                  <option value="data_saver" disabled={!dataSaverAdmitted}>{dataSaverAdmitted ? "Data saver · 360p / 10 fps · ~0.4 Mbps" : "Data saver · unavailable during full production"}</option>
+                  <option value="detail">Detail · 720p / 30 fps · ~2.6 Mbps</option>
+                </select>
+              </label>
+              <button type="button" className="button ghost" onClick={() => setPreviewEnabled(false)} disabled={!previewEnabled || pacingOpen}><VideoOff size={16} /> Close video</button>
+              <button type="button" className="button ghost" onClick={togglePacing} aria-expanded={pacingOpen}><Gauge size={16} /> {pacingOpen ? "Close path test" : "Path test"}</button>
+              <StateBadge state={effectiveCourtState(selected)} label={systemStateLabel(effectiveCourtState(selected))} />
+            </div>
           </div>
           <div className="monitor-inspection-grid">
             <div className="monitor-live-player">
-              {previewEnabled ? <StreamPlayer courtNumber={selected.courtNumber} enabled /> : (
-                <button className="monitor-preview-start" type="button" onClick={() => setPreviewEnabled(true)}><Eye size={18} /> Open live preview</button>
+              {pacingOpen ? <div className="monitor-preview-paused"><Gauge size={18} /><span>Live video paused for isolated path test</span></div> : previewEnabled ? <StreamPlayer key={`${selected.courtNumber}-${activeInspectionQuality}`} courtNumber={selected.courtNumber} adminQuality={activeInspectionQuality} enabled /> : (
+                <button className="monitor-preview-start" type="button" onClick={() => setPreviewEnabled(true)}><Eye size={18} /> Open live video</button>
               )}
             </div>
             <div className="monitor-stage-detail">
               {selected.stages.map((stage) => <StageDetail key={stage.stage} stage={stage} />)}
             </div>
           </div>
+          {pacingOpen && <PacingComparator courtNumber={selected.courtNumber} />}
         </section>
       )}
 
@@ -331,9 +375,17 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
   const browser = court.browser;
   const raw = court.paths.raw;
   const preview = court.ffmpeg.preview;
+  const cameraStage = court.stages.find((stage) => stage.stage === "RAW_INGEST");
+  const cameraState = cameraStage?.state ?? "UNKNOWN";
+  const productionState = productionPipelineState(court);
+  const effectiveState = effectiveCourtState(court);
   const current = court.competition?.currentMatch;
   const score = court.competition?.score;
-  const issue = court.stages.find((stage) => stage.state === "CRITICAL") ?? court.stages.find((stage) => ["DEGRADED", "UNKNOWN"].includes(stage.state));
+  const relevantStages = court.stages.filter((stage) => stage.stage === "RAW_INGEST"
+    || court.expectation.broadcastExpectation !== "OFF"
+    || court.expectation.commentaryExpectation !== "NONE"
+    || court.expectation.scoringExpectation !== "NONE");
+  const issue = relevantStages.find((stage) => stage.state === "CRITICAL") ?? relevantStages.find((stage) => ["DEGRADED", "UNKNOWN"].includes(stage.state));
   const thumbnailFresh = court.thumbnail && nowMs - Date.parse(court.thumbnail.receivedAt) <= 45_000;
   const browserLost = browser?.video.packetsLost;
   const browserReceived = browser?.video.packetsReceived;
@@ -341,31 +393,40 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
     ? percent(browserLost, browserLost + browserReceived)
     : transportLoss(raw);
   const rttMs = browser?.video.rttMs ?? raw?.transport?.rttMs;
+  const rawTrend = history?.rawBitrate ?? [];
+  const fpsTrend = history?.programFps.length ? history.programFps : history?.previewFps ?? [];
   return (
-    <article className={`monitor-court ${selected ? "is-selected" : ""}`} data-state={court.overallState}>
+    <article className={`monitor-court ${selected ? "is-selected" : ""}`} data-state={effectiveState}>
       <header className="monitor-court-head">
-        <div><span className="monitor-court-number">{court.courtNumber}</span><div><h2>{courtName(court)}</h2><p>{court.expectation.coveragePhase.replaceAll("_", " ")}</p></div></div>
-        <StateBadge state={court.overallState} compact />
+        <div><span className="monitor-court-number">{court.courtNumber}</span><div><h2>Camera {court.courtNumber}</h2><p>{assignedCourtLabel(court)} · {court.expectation.coveragePhase.replaceAll("_", " ")}</p></div></div>
+        <div className="monitor-court-statuses">
+          <StateBadge state={cameraState} compact label={cameraStateLabel(raw, cameraState)} />
+          <StateBadge state={productionState} compact label={pipelineStateLabel(productionState)} />
+        </div>
       </header>
-      <button className="monitor-thumbnail" type="button" onClick={onSelect} aria-label={`Inspect ${courtName(court)}`}>
+      <button className="monitor-thumbnail" type="button" onClick={onSelect} aria-label={`Inspect Camera ${court.courtNumber}`}>
         {thumbnailFresh ? <>
           {/* Authenticated no-store snapshots intentionally bypass the Next image optimizer. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={`/api/admin/monitor/courts/${court.courtNumber}/thumbnail?t=${encodeURIComponent(court.thumbnail!.receivedAt)}`} alt={`Latest program frame for ${courtName(court)}`} />
-        </> : <div className="monitor-thumbnail-empty"><Camera size={24} /><span>{court.expectation.mediaExpectation === "OFF" ? "Expected off" : "No current frame"}</span></div>}
-        <span className="monitor-thumbnail-action"><Eye size={15} /> Inspect</span>
+          <img src={`/api/admin/monitor/courts/${court.courtNumber}/thumbnail?t=${encodeURIComponent(court.thumbnail!.receivedAt)}`} alt={`Latest low-data snapshot from Camera ${court.courtNumber}`} />
+          <span className="monitor-thumbnail-meta">256×144 snapshot · {formatDuration(nowMs - Date.parse(court.thumbnail!.receivedAt))} ago</span>
+        </> : <div className="monitor-thumbnail-empty"><Camera size={24} /><span>{raw?.ready ? "Snapshot not available" : "Camera feed is offline"}</span></div>}
+        <span className="monitor-thumbnail-action"><Eye size={15} /> Open live video</span>
       </button>
       <div className="monitor-metrics">
-        <Metric label="Raw" value={formatBitrate(raw?.inboundBitrateBps)} />
-        <Metric label="Preview" value={formatFps(preview?.framesPerSecond)} />
-        <Metric label="Program" value={formatFps(browser?.video.framesPerSecond)} />
-        <Metric label="Res" value={browser?.video.width && browser.video.height ? `${browser.video.width}×${browser.video.height}` : "--"} />
-        <Metric label="RTT" value={formatMs(rttMs)} />
-        <Metric label="Loss" value={loss} />
+        <Metric label="Camera bitrate" value={formatBitrate(raw?.inboundBitrateBps)} />
+        <Metric label="Preview speed" value={formatFps(preview?.framesPerSecond)} />
+        <Metric label="Rendered speed" value={formatFps(browser?.video.framesPerSecond)} />
+        <Metric label="Picture size" value={browser?.video.width && browser.video.height ? `${browser.video.width}×${browser.video.height}` : "--"} />
+        <Metric label="Network delay" value={formatMs(rttMs)} />
+        <Metric label="Packet loss" value={loss} />
       </div>
       <div className="monitor-trends" aria-label="Five minute trends">
-        <Sparkline values={history?.rawBitrate ?? []} label="Raw bitrate, five minutes" className="is-bitrate" />
-        <Sparkline values={history?.programFps.length ? history.programFps : history?.previewFps ?? []} label="Program frames per second, five minutes" className="is-fps" fixedMax={30} />
+        <div className="monitor-trends-heading"><strong>Last 5 minutes</strong><div className="monitor-trends-legend"><span className="is-bitrate">Camera bitrate · {formatBitrate(latestPoint(rawTrend))}</span><span className="is-fps">Rendered speed · {formatFps(latestPoint(fpsTrend))}</span></div></div>
+        <div className="monitor-trends-plots">
+          <Sparkline values={rawTrend} label="Camera bitrate, five minutes" className="is-bitrate" />
+          <Sparkline values={fpsTrend} label="Rendered frames per second, five minutes" className="is-fps" fixedMax={30} />
+        </div>
       </div>
       <div className="monitor-stage-grid">
         {court.stages.map((stage) => <StageRow key={stage.stage} stage={stage} />)}
@@ -378,15 +439,16 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
         <span><Camera size={14} /> {visualLabel(browser)}</span>
         <span><Headphones size={14} /> {commentaryLabel(browser)}</span>
         <span><Youtube size={14} /> {friendlyState(court.youtube?.state ?? "NOT_APPLICABLE")}</span>
+        <span title={browserQualityDetail(browser)}><Activity size={14} /> {browserQualityLabel(browser, history)}</span>
         <span><Gauge size={14} /> {browser ? `${browser.video.reconnectCount} reconnects` : "--"}</span>
       </div>
-      {issue?.issueCode && <div className="monitor-court-alert"><AlertTriangle size={14} /><span>{issue.issueCode}</span></div>}
+      {issue?.issueCode && <div className="monitor-court-alert"><AlertTriangle size={14} /><span>{issue.summary}</span></div>}
     </article>
   );
 }
 
 function StageRow({ stage }: { stage: MonitorStage }) {
-  return <div className="monitor-stage-row" title={`${stageLabel(stage.stage)}: ${stage.summary}`}><StateDot state={stage.state} /><span>{compactStageLabel(stage.stage)}</span></div>;
+  return <div className="monitor-stage-row" title={`${stageLabel(stage.stage)}: ${stage.summary}`}><StateDot state={stage.state} /><span className="monitor-stage-name">{stageLabel(stage.stage)}</span><span className="monitor-stage-state">{stageStateLabel(stage.state)}</span></div>;
 }
 
 function StageDetail({ stage }: { stage: MonitorStage }) {
@@ -409,35 +471,84 @@ function Sparkline({ values, label, className, fixedMax }: { values: Array<[numb
   return <svg className={`monitor-sparkline ${className}`} viewBox="0 0 100 26" preserveAspectRatio="none" role="img" aria-label={label}><polyline points={points} /></svg>;
 }
 
-function StateBadge({ state, compact = false }: { state: MonitorHealthState; compact?: boolean }) {
+function StateBadge({ state, compact = false, label }: { state: MonitorHealthState; compact?: boolean; label?: string }) {
   const Icon = state === "CRITICAL" ? ShieldAlert : state === "DEGRADED" || state === "UNKNOWN" ? AlertTriangle : state === "EXPECTED_OFF" || state === "NOT_APPLICABLE" ? Radio : CheckCircle2;
-  return <span className={`monitor-state-badge ${compact ? "is-compact" : ""}`} data-state={state}><Icon size={compact ? 13 : 15} />{friendlyState(state)}</span>;
+  return <span className={`monitor-state-badge ${compact ? "is-compact" : ""}`} data-state={state}><Icon size={compact ? 13 : 15} />{label ?? friendlyState(state)}</span>;
 }
 
 function StateDot({ state }: { state: MonitorHealthState }) {
   return <span className="monitor-state-dot" data-state={state} aria-label={friendlyState(state)} />;
 }
 
-function systemState(courtStates: MonitorHealthState[], incidents: MonitorIncident[]): MonitorHealthState {
+function systemState(courts: MonitorCourt[], incidents: MonitorIncident[]): MonitorHealthState {
   if (incidents.some((incident) => incident.status !== "resolved" && incident.severity === "critical")) return "CRITICAL";
-  return courtStates.reduce((worst, state) => STATE_RANK[state] > STATE_RANK[worst] ? state : worst, "NOT_APPLICABLE");
+  return courts.reduce((worst, court) => {
+    const state = effectiveCourtState(court);
+    return STATE_RANK[state] > STATE_RANK[worst] ? state : worst;
+  }, "NOT_APPLICABLE" as MonitorHealthState);
 }
 
 function firstAttentionCourt(envelope: MonitorSnapshotEnvelope | null): number | null {
-  const court = envelope?.snapshot.courts.find((entry) => entry.overallState === "CRITICAL") ?? envelope?.snapshot.courts.find((entry) => entry.overallState === "DEGRADED");
+  const court = envelope?.snapshot.courts.find((entry) => effectiveCourtState(entry) === "CRITICAL")
+    ?? envelope?.snapshot.courts.find((entry) => effectiveCourtState(entry) === "DEGRADED");
   return court?.courtNumber ?? null;
 }
 
-function courtName(court: MonitorCourt): string {
-  return court.competition?.physicalCourtLabel || court.competition?.displayName || (court.courtNumber === 1 ? "Stadium Court" : `Court ${court.courtNumber}`);
+function assignedCourtLabel(court: MonitorCourt): string {
+  const physical = court.competition?.physicalCourtLabel || court.competition?.displayName;
+  return physical ? `Assigned to ${physical}` : "Court assignment not set";
 }
 
 function stageLabel(stage: MonitorStage["stage"]): string {
-  return ({ RAW_INGEST: "Ingest", PREVIEW: "Preview", PROGRAM_PATH: "Program", PROGRAM_BROWSER: "Render", COMMENTARY: "Commentary", SCORE_SOURCE: "Score", SCORE_RENDER: "Scorebug", YOUTUBE: "YouTube", EGRESS: "Egress", VENUE: "Venue", HOST: "Host", CONTROL: "Control", MONITORING: "Monitor", NOTIFICATION: "Paging" } as Record<string, string>)[stage] ?? stage;
+  return ({ RAW_INGEST: "Camera feed", PREVIEW: "Video preview", PROGRAM_PATH: "Broadcast video", PROGRAM_BROWSER: "Video renderer", COMMENTARY: "Commentary", SCORE_SOURCE: "Live score", SCORE_RENDER: "Scoreboard", YOUTUBE: "YouTube", EGRESS: "Broadcast output", VENUE: "Venue internet", HOST: "Server", CONTROL: "Control", MONITORING: "Monitoring", NOTIFICATION: "Phone alerts" } as Record<string, string>)[stage] ?? stage;
 }
 
-function compactStageLabel(stage: MonitorStage["stage"]): string {
-  return ({ RAW_INGEST: "Ingest", PREVIEW: "Pre", PROGRAM_PATH: "Prog", PROGRAM_BROWSER: "Render", COMMENTARY: "Comms", SCORE_SOURCE: "Score", SCORE_RENDER: "Bug", EGRESS: "Out", YOUTUBE: "YT" } as Record<string, string>)[stage] ?? stageLabel(stage);
+function stageStateLabel(state: MonitorHealthState): string {
+  return ({ HEALTHY: "OK", CRITICAL: "Problem", DEGRADED: "Warning", UNKNOWN: "No data", RECOVERING: "Recovering", STARTING: "Starting", MAINTENANCE: "Maintenance", EXPECTED_OFF: "Idle", NOT_APPLICABLE: "Not used" } as Record<MonitorHealthState, string>)[state];
+}
+
+function cameraStateLabel(raw: MonitorMediaPath | undefined, state: MonitorHealthState): string {
+  if (raw?.ready && state === "HEALTHY") return "Camera live";
+  if (raw?.ready && state === "DEGRADED") return "Camera unstable";
+  if (raw?.ready && state === "CRITICAL") return "Camera problem";
+  if (state === "EXPECTED_OFF" || state === "NOT_APPLICABLE") return "Camera off";
+  if (state === "UNKNOWN") return "Camera status unknown";
+  return "Camera offline";
+}
+
+function productionPipelineState(court: MonitorCourt): MonitorHealthState {
+  if (court.expectation.broadcastExpectation === "OFF"
+    && court.expectation.commentaryExpectation === "NONE"
+    && court.expectation.scoringExpectation === "NONE") {
+    return "EXPECTED_OFF";
+  }
+  const productionStages = court.stages.filter((stage) => stage.stage !== "RAW_INGEST");
+  return productionStages.reduce(
+    (worst, stage) => STATE_RANK[stage.state] > STATE_RANK[worst] ? stage.state : worst,
+    "NOT_APPLICABLE" as MonitorHealthState
+  );
+}
+
+function effectiveCourtState(court: MonitorCourt): MonitorHealthState {
+  const cameraState = court.stages.find((stage) => stage.stage === "RAW_INGEST")?.state ?? "UNKNOWN";
+  const productionState = productionPipelineState(court);
+  return STATE_RANK[cameraState] > STATE_RANK[productionState] ? cameraState : productionState;
+}
+
+function pipelineStateLabel(state: MonitorHealthState): string {
+  if (state === "HEALTHY") return "Production ready";
+  if (state === "CRITICAL") return "Production issue";
+  if (state === "DEGRADED" || state === "UNKNOWN") return "Production warning";
+  if (state === "STARTING" || state === "RECOVERING") return friendlyState(state);
+  return "Production idle";
+}
+
+function systemStateLabel(state: MonitorHealthState): string {
+  if (state === "HEALTHY") return "Ready";
+  if (state === "CRITICAL") return "Action needed";
+  if (state === "DEGRADED" || state === "UNKNOWN") return "Check system";
+  if (state === "EXPECTED_OFF" || state === "NOT_APPLICABLE") return "Idle";
+  return friendlyState(state);
 }
 
 function friendlyState(state: string): string {
@@ -485,6 +596,36 @@ function transportLoss(path: MonitorMediaPath | undefined): string {
 
 function percent(value: number, total: number): string {
   return total > 0 ? `${(value / total * 100).toFixed(1)}%` : "0.0%";
+}
+
+function browserQualityLabel(browser: MonitorCourt["browser"], history: MonitorCourtPipelineRange["courts"][number] | null): string {
+  if (!browser) return "decode --";
+  const recentDropRatio = latestPoint(history?.programDropRatio);
+  const recentFreezeRatio = latestPoint(history?.programFreezeRatio);
+  if (recentDropRatio != null || recentFreezeRatio != null) {
+    return `2m ${formatQualityRatio(recentDropRatio)} drop · ${formatQualityRatio(recentFreezeRatio)} frozen`;
+  }
+  const received = browser.video.framesReceived;
+  const dropped = browser.video.framesDropped;
+  const dropRatio = received != null && dropped != null ? percent(dropped, received) : "--";
+  const freezes = browser.video.freezeCount == null ? "--" : String(browser.video.freezeCount);
+  return `${dropRatio} drop · ${freezes} freezes`;
+}
+
+function browserQualityDetail(browser: MonitorCourt["browser"]): string {
+  if (!browser) return "Program browser decode quality is unavailable.";
+  const video = browser.video;
+  const freezeDuration = video.totalFreezesDurationMs == null ? "--" : formatDuration(video.totalFreezesDurationMs);
+  return `Page session: ${video.framesReceived ?? "--"} received, ${video.framesDecoded ?? "--"} decoded, ${video.framesDropped ?? "--"} dropped, ${video.freezeCount ?? "--"} freezes totaling ${freezeDuration}.`;
+}
+
+function latestPoint(points: Array<[number, number]> | undefined): number | null {
+  const value = points?.at(-1)?.[1];
+  return value != null && Number.isFinite(value) ? value : null;
+}
+
+function formatQualityRatio(value: number | null): string {
+  return value == null ? "--" : `${(value * 100).toFixed(1)}%`;
 }
 
 function formatPercentRatio(value: number | null): string {

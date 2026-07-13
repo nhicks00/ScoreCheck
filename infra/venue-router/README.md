@@ -1,37 +1,57 @@
 # Venue Router Speedify Routing
 
-Production camera traffic must use Speedify without making the bonded tunnel
-the default route for laptops, camera control pages, or other venue devices.
-The router therefore policy-routes only these ingest flows:
+Production camera traffic is fail-closed through Speedify. It must never fall
+back to one venue WAN. Ordinary laptops, camera-control pages, and other venue
+traffic stay outside the tunnel.
 
-- UDP `8890` to the MediaMTX ingest address for SRT callers.
-- TCP `1935` to the MediaMTX ingest address for RTMP publishers.
+The router selectively handles only these MediaMTX ingest flows:
 
-Run the route tool before cameras start. It refuses a live migration because
-moving established RTMP/SRT sessions together produces a reconnect burst and
-can trigger a retransmission spiral.
+- UDP `8890` for SRT callers.
+- TCP `1935` for RTMP publishers.
+
+Two independent controls enforce the policy:
+
+1. Primary policy table `900` routes camera traffic through `connectify0`.
+   Guard table `901` blackholes the same traffic if the primary route vanishes.
+2. An early `iptables` forwarding rule rejects camera traffic on every output
+   interface except `connectify0`.
+
+The watchdog checks bounded Speedify state every five seconds. After a daemon,
+interface, or router-network restart, it restores table `900`, replaces the two
+camera rules, and clears only stale MediaMTX connection tracking. The guards
+stay active throughout recovery, so the cameras reconnect through Speedify or
+remain blocked. The watch process holds a separate lifetime `flock`; an
+overlapping `procd` start exits before it can reconcile. The shorter reconcile
+lock still serializes route mutations within the single owner.
+
+## Install
+
+From a trusted operator computer on the router LAN:
 
 ```sh
-chmod 0755 scorecheck-speedify-routing.sh
-./scorecheck-speedify-routing.sh preflight 85
-./scorecheck-speedify-routing.sh apply 85
-./scorecheck-speedify-routing.sh status
+./deploy.sh root@192.168.8.1
+ssh root@192.168.8.1 /usr/sbin/scorecheck-speedify-routing preflight 85
+ssh root@192.168.8.1 /usr/sbin/scorecheck-speedify-routing enable 85
+ssh root@192.168.8.1 /usr/sbin/scorecheck-speedify-routing status
 ```
 
-The numeric argument is the worst sustained bonded upload measured at the
-venue before cameras start. The default floor is 75 Mbps for the current
-nominal 30 Mbps camera payload. Do not substitute an ISP plan speed or a
-single momentary speed-test peak.
+Replace `85` with the worst sustained bonded upload measured at the venue. The
+default floor is 75 Mbps for the current nominal 30 Mbps camera payload. Do not
+substitute an ISP plan speed or a momentary speed-test peak.
 
-Emergency fail-open reset:
+`deploy.sh` installs and starts the watchdog but deliberately does not enable or
+disable camera routing. `enable` installs both guards before connecting or
+migrating active publishers. A failed enable leaves camera traffic blocked and
+the watchdog retrying; it never rolls back to direct WAN.
+
+At an event end, stop every camera first, verify coverage is over, then run:
 
 ```sh
-./scorecheck-speedify-routing.sh reset
+ssh root@192.168.8.1 /usr/sbin/scorecheck-speedify-routing disable EVENT_ENDED
 ```
 
-Reset removes only the ScoreCheck policy rules, clears stale ingest
-connections, and disconnects Speedify. Camera publishers can then reconnect
-over the router's ordinary route.
+The command refuses to remove the guards while camera flows are active. There
+is no emergency fail-open or `reset` command.
 
 ## Required Speedify settings
 
@@ -46,17 +66,51 @@ selected TCP and caused severe loss inside the nested camera-LAN tunnel.
 Multi-TCP carried the five direct publishers but made the WireGuard handshake
 stale and dropped listener-camera paths, so it is also rejected.
 
+## July 13 OOM incident
+
+The overnight Speedify reconnect was not evidence that eight streams exceeded
+Speedify capacity. The router kernel killed Speedify under memory pressure. An
+unbounded diagnostic command, `speedify_cli -s stats`, was left in a pipeline
+that removed newlines and caused roughly 100 MB of buffering on a router with
+about 491 MB RAM. Speedify itself used roughly another 101 MB at the time.
+
+Never invoke `speedify_cli -s stats` from a monitor. It is a continuous stream,
+not a one-shot query. Production scripts use only bounded
+`speedify_cli -s state`. The recorder also tracks available memory, Speedify
+RSS, and any accidental streaming-stats process count.
+
+The watchdog is still required even after fixing this monitor defect. Any
+long-running process can restart because of a software fault, router reboot, or
+package upgrade. Recovery exists to preserve the routing invariant, not because
+routine reconnects are expected.
+
 ## Temporary MAKI cameras
 
-The MAKI Live cameras are listener-only and currently require WireGuard from
-the ingest VPS to the venue LAN. That temporary test topology is not included
-in the production policy tool. The final two-Mevo/six-AVKANS topology sends all
-eight feeds directly to RTMP/SRT ingest and must be requalified through
-Speedify when the remaining AVKANS cameras arrive.
+The three MAKI Live cameras used in the July test are listener-only. Their VPS
+pulls traverse WireGuard and are not representative of the final production
+path. Nesting that temporary WireGuard topology inside Speedify exceeded the
+home test uplink and dropped paths.
 
-The July 12 home-network test could sustain the three direct SRT callers and,
-after staged reconnects, the five direct publishers. Adding the temporary
-WireGuard-carried listeners exceeded the usable bonded path: tunnel input rose
-to roughly 77 Mbps for a nominal 30 Mbps payload and SRT paths dropped. The
-router was restored to direct routing with Speedify disconnected; all eight
-raw feeds recovered.
+The final two-Mevo/six-AVKANS topology has eight direct RTMP/SRT publishers and
+must be qualified with all eight camera flows through Speedify. A test segment
+that routes any production camera publisher directly over one WAN does not
+qualify the design.
+
+## Soak evidence
+
+Run `scorecheck-speedify-soak-recorder` on the router. It records bounded
+Speedify state, protocol-specific route devices, primary and guard rule counts,
+kill-switch state, camera flow counts, interface counters, WireGuard handshake
+age, load, available memory, Speedify RSS, and streaming-stats leak count. It
+does not collect credentials or media payloads.
+
+For a detached OpenWrt run, export the duration, interval, and log path, then
+launch the recorder with `start-stop-daemon`; this router image does not include
+`nohup`:
+
+```sh
+export SCORECHECK_SOAK_DURATION_SECONDS=10800
+export SCORECHECK_SOAK_INTERVAL_SECONDS=60
+export SCORECHECK_SOAK_LOG_FILE=/root/scorecheck-speedify-soak.tsv
+start-stop-daemon -S -b -x /usr/sbin/scorecheck-speedify-soak-recorder
+```

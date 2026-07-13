@@ -101,9 +101,9 @@ export const mediaPathSnapshotSchema = z.object({
 export type MediaPathSnapshot = z.infer<typeof mediaPathSnapshotSchema>;
 
 export const ffmpegBranchSnapshotSchema = z.object({
-  name: z.string().regex(/^court[1-8]_(preview|program|calibration)$/),
+  name: z.string().regex(/^court[1-8]_(preview|program|calibration|monitor)$/),
   courtNumber: z.number().int().min(1).max(8),
-  branch: z.enum(["preview", "program", "calibration"]),
+  branch: z.enum(["preview", "program", "calibration", "monitor"]),
   sampledAt: isoDate,
   frame: z.number().int().nonnegative(),
   framesPerSecond: z.number().nonnegative().max(240).nullable(),
@@ -386,7 +386,7 @@ export const agentSnapshotSchema = z.object({
   }).strict(),
   services: z.array(serviceSnapshotSchema).max(40),
   mediaPaths: z.array(mediaPathSnapshotSchema).max(48),
-  ffmpegBranches: z.array(ffmpegBranchSnapshotSchema).max(24).default([]),
+  ffmpegBranches: z.array(ffmpegBranchSnapshotSchema).max(32).default([]),
   nativeServices: nativeServiceSnapshotSchema.default({ endpoints: [], livekit: null, egress: null })
 }).strict();
 export type AgentSnapshot = z.infer<typeof agentSnapshotSchema>;
@@ -413,6 +413,7 @@ export type CourtMonitorSnapshot = {
   browser: BrowserHeartbeatSnapshot | null;
   competition: CompetitionCourtSnapshot | null;
   expectation: CourtExpectation;
+  faultGate: MonitoringFaultGate | null;
   youtube: YouTubeCourtSnapshot | null;
   thumbnail: BrowserThumbnailMetadata | null;
   egressHost: string | null;
@@ -450,6 +451,14 @@ export type MonitoringSilence = {
   expiresAt: string;
 };
 
+export type MonitoringFaultGate = {
+  courtNumber: number;
+  actor: string;
+  reason: string;
+  armedAt: string;
+  expiresAt: string;
+};
+
 export type MonitorSnapshot = {
   version: typeof MONITORING_CONTRACT_VERSION;
   generatedAt: string;
@@ -482,6 +491,7 @@ export type MonitorSnapshot = {
   }>;
   incidents: IncidentSnapshot[];
   silences: MonitoringSilence[];
+  faultGates: MonitoringFaultGate[];
 };
 
 const stateAttentionRank: Record<HealthState, number> = {

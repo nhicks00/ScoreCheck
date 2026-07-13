@@ -31,6 +31,9 @@ pushIfPresent(vercelLines, "LIVEKIT_COMMENTARY_API_SECRET", process.env.LIVEKIT_
 pushIfPresent(vercelLines, "LIVEKIT_COMMENTARY_ROOM_PREFIX", process.env.LIVEKIT_COMMENTARY_ROOM_PREFIX ?? "");
 pushIfPresent(vercelLines, "COMMENTATOR_PASSCODE", process.env.COMMENTATOR_PASSCODE ?? "");
 pushIfPresent(vercelLines, "PROGRAM_PAGE_TOKEN", process.env.PROGRAM_PAGE_TOKEN ?? "");
+pushIfPresent(vercelLines, "MONITOR_PUBLIC_URL", process.env.MONITOR_PUBLIC_URL ?? "");
+pushIfPresent(vercelLines, "MONITOR_API_TOKEN", process.env.MONITOR_API_TOKEN ?? "");
+pushIfPresent(vercelLines, "MONITOR_BROWSER_HEARTBEAT_SECRET", process.env.MONITOR_BROWSER_HEARTBEAT_SECRET ?? "");
 
 const workerLines = [
   ["NODE_ENV", "production"],
