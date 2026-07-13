@@ -1,33 +1,60 @@
 # Vision Scoring Foundation
 
 This package is the hard-cutover foundation for assistive beach-volleyball
-scoring. It intentionally contains no detector, tracker, or model runtime yet.
+scoring. It includes an owned causal ConvGRU ball-perception runtime, but that
+runtime is synthetic-smoke-tested only and is not a trained or deployable beach
+volleyball model. Player, tracking, pose, audio, and event-model runtimes remain
+unimplemented.
 
 Architecture and readiness decisions live in
 [the vision-scoring documentation](../docs/vision-scoring/ARCHITECTURE.md).
+The atomic review-to-event contract is documented in
+[SCORER_COPILOT_TRANSACTION_DESIGN.md](
+../docs/vision-scoring/SCORER_COPILOT_TRANSACTION_DESIGN.md),
+and the isolated ScoreCheck delivery boundary is documented in
+[SCORECHECK_SHADOW_INTEGRATION.md](../docs/vision-scoring/SCORECHECK_SHADOW_INTEGRATION.md).
+The source/derivation, rights, and capture boundary for operator clips is in
+[TRUSTED_REVIEW_CLIP_PIPELINE.md](../docs/vision-scoring/TRUSTED_REVIEW_CLIP_PIPELINE.md).
+The no-camera trace evaluator and evidence-window plan are in
+[CAPTURE_INTEGRITY_GATEWAY.md](../docs/vision-scoring/CAPTURE_INTEGRITY_GATEWAY.md).
+The current genesis-only signed capture-service boundary is in
+[CAPTURE_SEGMENT_ATTESTATION.md](../docs/vision-scoring/CAPTURE_SEGMENT_ATTESTATION.md).
+The implemented synthetic-only ball runtime and its bounded curator-signed
+frame/all-localizable-ball enumeration contract are documented in
+[CAUSAL_BALL_BASELINE.md](../docs/vision-scoring/CAUSAL_BALL_BASELINE.md) and
+[CAUSAL_BALL_LABEL_BUNDLE.md](../docs/vision-scoring/CAUSAL_BALL_LABEL_BUNDLE.md).
 
-The adopted hard-cut domain boundary is explicit:
+The adopted V0 boundary is explicit:
 
-1. perception creates immutable observations and event proposals;
-2. causal fusion creates a `RallyHypothesis` with no policy authority;
-3. exception-first policy creates a reproducible `PolicyAssessment` with no
-   scoring authority;
-4. a future authenticated human/service authorizer creates and signs a
-   `RuleEvent` only through an eligible authorization path;
-5. `RulesReducer.reduce()` validates domain semantics and derives the next legal
-   score state.
+1. perception creates immutable observations;
+2. causal fusion creates a bounded `RallyHypothesis` from primary rally
+   evidence, with no policy or scoring power;
+3. a separately timed next-server observation may be reconciled against that
+   hypothesis, but can only corroborate it or make the result less eligible;
+4. exception-first policy creates a reproducible `PolicyAssessment`, which is
+   advice and never an authorization;
+5. an authenticated human signs an exact `AuthorizationCommand`, either
+   directly or with a separately signed eligible assessment attached;
+6. a trusted authorizer verifies the protected per-match policy, human role,
+   signatures, assessment provenance, context, and event, then countersigns an
+   `AuthorizedRuleEvent` envelope;
+7. the transactional shadow processor reverifies that envelope, replays the
+   immutable log, calls `RulesReducer.reduce()`, and atomically appends the
+   event, derived state, and shadow outbox row. Its dedicated scorer-copilot
+   path additionally admits and replays the exact signed case/review history,
+   derives the authorization context, and commits the case link with the event.
 
-The current Phase 0 code still contains the pre-adoption `RallyDecision` and
-`AUTO_CONFIRM` names. They are transitional internal artifacts scheduled for
-hard removal before persistence, authorization, or an external API is added;
-new consumers must not depend on them.
+There is no model or service principal that can authorize a score in V0. The
+only trusted actor roles are `SCOREKEEPER`, `REFEREE`, and `MATCH_ADMIN`, and
+the last role may seed a set only. Assessment assistance never replaces the
+human signature.
 
-The reducer is **not** an access-control or security boundary. It does not
-authenticate an actor, verify that an authority label was assigned by a trusted
-service, verify a signature, or transactionally persist an event. The required
-`authorization_id` is provenance linkage only; any in-process caller can
-currently supply it. Do not expose the reducer directly to untrusted input or
-use its acceptance of an event as proof that the event was authorized.
+The reducer is **not** an access-control or security boundary. A `RuleEvent`
+contains domain facts only: no actor, role, permission claim, authorization
+identifier, or signature. The signed envelope is the security boundary, and
+durable use additionally requires transactional verification and append. Do
+not expose the reducer directly to untrusted input or use its acceptance of an
+event as proof that the event was authorized.
 
 Create the locked Python 3.11 environment and run the unit tests:
 
@@ -45,18 +72,27 @@ uv run --locked python -m vision_scoring.readiness \
   --dataset-manifest-attestation examples/dataset-manifest-attestation.json \
   --readiness-verification-policy examples/readiness-verification-policy.json \
   --expected-readiness-verification-policy-sha256 \
-    18d4b55467b0ed81a511d679a592b1f0eee5416d9f1487c1eb88020c08c2bef9 \
+    b493e8f2600b4dd30f192786c23441808832865dff3bb462fc0b4eb8008673ff \
   --trusted-launcher-deployment-artifact-sha256 \
-    ada0689d8c632e1ec54c0d97bd5428afc6875b6d36fe6f363d3e12c0b81dda38 \
+    b6efd12cebbb91882653219e477b3eff3e90d49f70aa4a77d66d65e57882ca6f \
   --expected-governance-domain-id example-dataset-governance \
   --protected-configuration-generation \
     examples/protected-configuration-generation.json \
   --artifact-store-root examples/dataset-artifacts \
+  --label-store-root examples/ball-label-packs \
   --rights-trust-store examples/rights-trust-store.json \
   --rights-verification-policy examples/rights-verification-policy.json \
   --expected-rights-verification-policy-sha256 \
-    2ca5a11bda6219ab2e62c3a36c9e45f9ad41ff739fe9770d6ffee1516b7eaf1f \
+    4e332524c15d0e8c593555d1c9e03f3c4e127a2742e6e599c93d2b65aae83481 \
   --rights-evidence-store-root examples/rights-evidence
+```
+
+Regenerate the deterministic synthetic V2 manifest, three TRAIN/DEV/TEST label
+packs, reduced media/capture generation, signatures, policy pins, and protected
+generation from the checked-out source tree:
+
+```bash
+.venv/bin/python scripts/regenerate_readiness_fixtures.py
 ```
 
 This checked-in policy is a host-specific synthetic smoke fixture: its runtime
@@ -66,16 +102,19 @@ matching locked runtime, or publish a new trusted fixture generation with pins
 computed for the target deployment. Do not rewrite pins inside an untrusted
 dataset job merely to make the example pass.
 
-The checked-in media/label placeholders, trust stores, signatures, decisions,
+The checked-in media/label-pack placeholders, trust stores, signatures, decisions,
 hashes, and evidence are synthetic structural examples only. They are
 intentionally not production media or trust anchors. A production launcher must
 independently pin the readiness-policy fingerprint, deployment artifact,
 runtime identity, governance domain, rights policy, and trust stores; those
 values cannot come from the dataset. The signed manifest cannot disable the
 unseen-TEST-venue rule. Validation uses one detached canonical manifest
-snapshot and a fresh UTC trust check, then resolves and hashes every declared
-media, label, calibration, camera-attestation, clock-verification, and encoder
-artifact from a separately supplied immutable content-addressed generation.
+snapshot and a fresh UTC trust check. Manifest schema `2.0` makes each
+`labels_sha256` the exact `BallLabelPackRootV1` hash and requires a per-source
+`label_pack_generation_id`; schema `1.0` is rejected. Media, calibration,
+camera-attestation, clock-verification, and encoder bytes are resolved from the
+media/capture artifact generation. Label contracts are reconstructed from a
+distinct, separately supplied immutable label store in one bounded worker.
 Source rights are verified for currentness and signature first, then their
 deduplicated evidence union is checked in one bounded worker and one immutable
 generation lease. DEV as well as TRAIN requires deployment permission because
@@ -109,11 +148,13 @@ trusted launcher and the exact Python/cryptography/OpenSSL/runtime identity.
 The CLI assumes its invoker, these pins, and the clock are trusted governance
 inputs; never expose them as dataset-controlled job options.
 
-The readiness JSON is a canonical, content-addressed proof report, not a signed
+The schema `3.0` readiness JSON is a canonical, content-addressed proof report, not a signed
 authorization token. It carries the signed-manifest proof, artifact sizes/set
 fingerprint and generation ID, rights-evidence generation ID, protected
 configuration generation, protected policies, runtime/deployment commitments,
-exact source-rights uses, review and expiry dates, and verification time. A
+exact source-rights uses, per-source label-pack generation/root/contract
+proofs, aggregate verified contract counts/bytes, review and expiry dates, and
+verification time. A
 training job must recompute it in-process instead of trusting uploaded report
 JSON, then reacquire the same generation and independently stage/hash each
 object as it is consumed. Model cards retain that lineage, and
@@ -122,17 +163,38 @@ under the then-current stores and policies; passing a pre-training
 `MODEL_DEPLOYMENT` check never permanently authorizes a later release.
 
 `ready=true` is the capture/data-intake gate, not permission to start an
-arbitrary trainer and not evidence that label semantics are correct. A training
-or evaluation entry point must additionally parse the exact label artifact into
-the strict annotation contracts, verify the current detached signature from
-every declared reviewer/adjudicator and all resident review evidence under its
-independently pinned annotation policy, require a launcher-owned protected
-annotation-configuration pointer, and recheck that generation after evidence
-work. The evaluation report binds the exact trust store, policy, evaluator,
-governance domain, evidence generation, and protected configuration generation.
-It also enforces its task-specific coverage manifest. The checked-in label files
-are deliberately synthetic placeholders; they demonstrate content addressing
-only and are not trainable truth.
+arbitrary trainer and not evidence that label semantics are correct. The current
+trusted evaluator accepts only `BallFrameAnnotationV2`. It verifies the current
+detached signature from every declared ball reviewer/adjudicator and all resident
+ball-review evidence under its independently pinned ball-annotation policy,
+requires a launcher-owned protected annotation-configuration pointer, and
+rechecks that generation after evidence work. Observed-temporal, physical, and
+reported-official contracts are structural types only; their distinct signature
+verifiers and trusted evaluation paths do not exist yet. The ball-evaluation
+report binds the exact trust store, policy, evaluator, governance domain,
+evidence generation, and protected configuration generation. It also enforces
+its typed, explicitly unverified unit-benchmark split and coverage manifest. The
+checked-in label packs are deliberately synthetic placeholders; they demonstrate
+content addressing, exact closure reconstruction, and source/split binding
+only—not semantic truth, admission, or trainable beach-volleyball data.
+
+A pre-V2 loose `labels_sha256` and its declared coverage did not prove
+that every decoded frame, or every localizable ball in a full frame, had been
+enumerated. `CausalBallLabelBundleV1` adds a separately curator-signed
+`COMPLETE_FULL_DECODED_FRAME` claim for one bounded derived asset and binds each
+frame to the exact Annotation Truth V2 preimages and attestations. Verification
+authenticates only the curator's enumeration assertion; it does not objectively
+prove source-frame completeness, source residency, derivation, rights, pixels,
+annotation truth, or capture lineage. Every receipt property for training,
+evaluation, deployment, and live scoring is hard-coded `False`. A trusted
+single-use launcher and immutable media lease that reverify every current
+authority are still required before a trainer may consume any bundle. The V2
+readiness gate now reconstructs those packs structurally and serializes
+training, evaluation, TEST, deployment, and live-scoring admission as exact
+`false` values. It accepts at most 512 packs, 1,000,000 contract objects, and
+4 GiB of verified contract bytes in one killable worker with a 3,600-second
+post-start absolute monotonic verification/result deadline. See
+[READINESS_LABEL_PACK_GATE.md](../docs/vision-scoring/READINESS_LABEL_PACK_GATE.md).
 
 Create a conservative technical inventory for one or more resident local media
 files (the Python module is standard-library-only; `ffprobe` must be installed
@@ -216,56 +278,123 @@ values likewise do not prove duplicate packets, frames, or content.
 Metadata inspection times out after 60 seconds and the streaming packet scan
 after 300 seconds. Download macOS cloud placeholders locally before preflight.
 
+Create a sealed, metadata-only quarantine inventory from an existing probe CSV
+without opening, hashing, decoding, or copying any candidate media bytes:
+
+```bash
+PYTHONPATH=src python3 -m vision_scoring.recovery_intake build \
+  --probe-csv /absolute/path/to/prior-probe.csv \
+  --expected-input-sha256 <lowercase-sha256> \
+  --present-root-pin '/absolute/resident/root::DEVICE::INODE' \
+  --offline-root '/Volumes/Offline Media' \
+  --output /absolute/path/outside-all-media-roots/quarantine-manifest.json
+```
+
+Repeat `--present-root-pin` and `--offline-root` as needed. A present-root pin
+must use the root's exact decimal `st_dev` and `st_ino`. File output is
+owner-only, no-replace, and permitted only for a sealed production-observer
+manifest outside every input, candidate, present, and offline media namespace.
+The completed 2026-07-12 run and its exact bounds are recorded in
+[RECOVERY_INTAKE_RUN_2026-07-12.md](../docs/vision-scoring/RECOVERY_INTAKE_RUN_2026-07-12.md).
+
 The readiness thresholds are engineering gates, not governing-body standards.
 
 Implemented now:
 
-- immutable frame, calibration, observation, proposal, decision, and rule-event contracts;
+- immutable frame, calibration, observation, `RallyHypothesis`, optional
+  next-server reconciliation, `PolicyAssessment`, and typed rule-event
+  contracts;
 - deterministic set/match scoring with service-order validation;
 - explicit replay/no-point plus latched side-switch and technical-timeout obligations;
-- basic non-automatic authorized point aliases named `PENALTY_POINT` and
-  `SERVICE_ORDER_FAULT`; these do not implement a sanctions, defaults, or
-  discipline domain, and they require a unique scoring-opportunity ID in
-  `related_rally_id` plus immutable evidence;
-- a v0 compensating correction limited to the latest score/replay/correction
-  event in the current/latest set;
 - idempotent event replay and simultaneous reducer effects;
-- detached-snapshot, curator-signed readiness manifests with current/revoked
-  governance and byte-verified resident media, label, calibration, camera,
-  clock, and encoder artifacts;
+- exactly five rule-event types: `SET_SEED`, `POINT_AWARDED`,
+  `REPLAY_NO_POINT`, `SIDE_SWITCH_CONFIRMED`, and
+  `TECHNICAL_TIMEOUT_COMPLETED`;
+- Ed25519-signed human commands, signed assessment provenance for the assisted
+  path, protected per-match policy generations and current revocations, fixed
+  role/event allowlists, authorizer countersignatures, and strict canonical
+  authorized-event envelopes;
+- canonical match-state encoding and validation for cache comparison; the
+  event log, not a decoded state snapshot, remains the replay source of truth;
+- a strict SQLite shadow ledger that transactionally reverifies protected
+  policy history and authorized envelopes, replays every event, compares every
+  derived state, and atomically appends human-direct event/state/outbox rows;
+- externally comparable monotonic ledger checkpoints, global outbox identity,
+  bounded streaming replay, and permanent integrity blocking when retained
+  authorization history becomes invalid;
+- signed scorer-copilot cases, exact clip-presentation manifests, signed review
+  dispositions/adjudications, store-derived authorization contexts, and
+  producer attestations, plus atomic case/journal/context/event/state/outbox
+  linkage and cross-ledger historical replay. These records remain evidence
+  and never score authority;
+- authenticated append-only ScoreCheck vision receipts plus the fixed,
+  decimal/base64, historical-signature-verified `VERIFIED_RECEIPT_PREFIX`
+  read/replay projection. It has no edge to official scoring tables and is not
+  rollback-complete without the still-external monotonic receipt checkpoint;
+- a sealed, bounded recovery-intake tool and completed metadata-only quarantine
+  inventory; it deliberately performs no resident media byte reads or rights
+  inference;
+- a genesis-only signed capture-service evidence record that reverifies current
+  metadata, rights, policy, window, trace, and structural integrity. All of its
+  media/product admission flags remain `False`; it proves neither physical
+  camera truth nor resident/decoded asset bytes;
+- detached-snapshot, curator-signed schema-2 readiness manifests with
+  current/revoked governance, byte-verified resident media/capture artifacts,
+  and separately reconstructed source-bound causal-ball label-pack
+  generations. Schema-3 reports grant no training/evaluation/TEST/deployment/
+  live admission;
 - signed commercial-rights decisions with batched evidence verification plus
   immutable, bounded, leakage-safe dataset splits;
-- strict decoded-frame/ball/event annotation identity and signed reviewer/
-  adjudicator trust;
+- strict decoded-frame and layered ball/event annotation identities, with signed
+  reviewer/adjudicator trust implemented for ball observations only;
+- a curator-signed `CausalBallLabelBundleV1` that authenticates the curator's
+  bounded full-decoded-frame/all-localizable-ball completeness claim against
+  exact current Annotation Truth V2 preimages and attestations. It does not
+  objectively prove source-frame completeness, is evidence only, and keeps
+  every admission flag `False`;
 - a deterministic ball-localization benchmark with an explicit operating
   threshold, full-ranking AP101, apparent-ball-diameter-normalized errors,
-  duplicate handling, and negative-only activation metrics.
+  duplicate handling, retained input-preimage validation for negative and
+  unresolved frame identities, and recomputed typed appearance/role/play-state
+  performance slices;
+- an owned stride-four causal ConvGRU ball runtime with all-ball heatmap,
+  visibility, candidate role, sub-pixel offset, blur, and heteroscedastic
+  uncertainty losses. Fifteen PyTorch tests plus a 50-step synthetic overfit
+  smoke exercise causality, gap reset, masks, loss plumbing, and backpropagation;
+  the runtime has never seen beach-volleyball footage.
 
 Not implemented yet:
 
-- persistence/transactional append storage;
-- authenticated actor/role resolution, the evidence-to-`RuleEvent` authorization
-  service, event signing, and signature verification;
+- deployment identity/session resolution that maps a signed human key to the
+  protected per-match authorization policy;
+- trusted source/clip derivation and the operator-review UI;
+- live dispatch of the local shadow outbox, an externally protected monotonic
+  ScoreCheck receipt checkpoint, real Supabase/PostgREST/JWT-to-role mapping, a
+  protected target resolver, and any ScoreCheck vision endpoint or UI.
+  ScoreCheck remains the existing official manual-score surface, and no vision
+  control may mutate it;
 - full misconduct/sanction progression, defaults, forfeits, expulsions, or
   disciplinary case handling;
-- historical correction after a later event or set; that requires a replay
-  service that rebuilds and revalidates all dependent state;
-- correction of an already-seeded player roster or service-order tuple; v0
-  requires rejecting the set seed and restarting before subsequent events;
+- every form of score correction. Correction is intentionally absent from the
+  rule-event schema, reducer, and authorization allowlists. It must wait for a
+  separately designed privileged replay command that binds before/after state,
+  rebuilds from the immutable event log, and revalidates all dependent state;
 - media decoding/content inspection and calibration measurement; the technical
   ffprobe/hash preflight above is structural inventory only;
-- ball, player, tracking, pose, audio, or event models;
-- live ScoreCheck integration.
+- a rights-cleared ball checkpoint, model export, latency/calibration result,
+  and deployable ball service; player, tracking, pose, audio, and event models;
+- the trusted single-use training launcher and immutable media-consumption
+  lease that would turn independently verified evidence into train admission;
+- trusted signature verification/evaluation for observed-temporal, physical,
+  or reported-official annotation records;
+- any automated score origin or official ScoreCheck mutation path.
 
-An authenticated human/referee point entry may continue while a side-switch or
+An authorized human point entry may continue while a side-switch or
 technical-timeout obligation is pending; the obligation remains latched during
-the active set. `AUTO_POLICY` point events are blocked while either obligation
-remains. If an authoritative terminal point closes the set first, any obligation
-that was already overdue before that terminal point is preserved in the
-`SetResult` audit and emits `SET_CLOSED_WITH_OPEN_OBLIGATIONS`; it is never
-silently erased. In this package, however, `OPERATOR`, `SCOREKEEPER`, and
-`REFEREE_FEED` (as well as `IMPORT`) are caller-supplied enum values—not
-authenticated identities.
+the active set. No automated event origin exists. If a terminal point closes
+the set first, any obligation that was already overdue before that point is
+preserved in the `SetResult` audit and emits
+`SET_CLOSED_WITH_OPEN_OBLIGATIONS`; it is never silently erased.
 
 Every rule event carries a `ruleset_fingerprint`: the lowercase SHA-256 of the
 effective ruleset's canonical, UTF-8 JSON (sorted keys, compact separators, all
@@ -273,4 +402,9 @@ scoring/obligation parameters and `reducer_semantics_version` included). This is
 distinct from the rule event's own content fingerprint. The reducer
 computes/stores its ruleset value and rejects an exact mismatch. A hash binds an
 event to ruleset bytes but is not a signature or authorization proof. Durable
-replay must additionally pin the reducer artifact/container/commit digest.
+replay must reparse and reverify every canonical authorized-event envelope,
+reapply the complete ordered stream, compare every persisted derived-state
+snapshot byte-for-byte, and additionally pin the reducer
+artifact/container/commit digest. A state snapshot is only a cache. Rollback of
+the entire log and policy archive remains an outer deployment-boundary threat
+and requires a separately protected monotonic checkpoint.

@@ -17,7 +17,8 @@
     "verify:all": "tsx src/scripts/setup/verifyAll.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:vision-postgres": "tsx src/scripts/testVisionPostgres.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.47.10",

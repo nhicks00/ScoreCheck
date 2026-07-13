@@ -3,12 +3,15 @@ from __future__ import annotations
 from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import base64
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -19,6 +22,19 @@ from vision_scoring.artifact_store import (
     DatasetArtifactSetProof,
     canonical_artifact_set_fingerprint,
 )
+from vision_scoring.capture_profile_contracts import (
+    CadenceTypeV1,
+    CaptureRiskTagV1,
+    CaptureSourceClassificationV1,
+    CaptureTransportV1,
+    CompressionStratumV1,
+    SourceCaptureFactsV1,
+    SourceRepresentationV1,
+    ViewTopologyV1,
+    avkans_go_owner_live_1080p30_v1,
+    classify_capture_profile_v1,
+    mevo_core_owner_live_1080p60_v1,
+)
 from vision_scoring.immutable_store import generation_id_for
 from vision_scoring.dataset_split import DatasetSplit as CanonicalDatasetSplit
 from vision_scoring.readiness import (
@@ -26,10 +42,16 @@ from vision_scoring.readiness import (
     ManifestValidator,
     ReadinessIssue,
     Severity,
+    _required_dataset_artifact_sha256s,
+    _source_capture_classification_set_sha256,
     load_manifest,
     main,
     readiness_runtime_identity_sha256,
     readiness_verifier_source_tree_sha256,
+)
+from vision_scoring.readiness_label_packs import (
+    source_label_pack_proof_set_sha256,
+    verify_source_label_pack_batch,
 )
 from vision_scoring.readiness_trust import (
     CurrentDatasetManifest,
@@ -76,8 +98,11 @@ PROTECTED_CONFIGURATION_GENERATION = (
 ARTIFACT_STORE_ROOT = (
     Path(__file__).parents[1] / "examples" / "dataset-artifacts"
 )
+LABEL_STORE_ROOT = (
+    Path(__file__).parents[1] / "examples" / "ball-label-packs"
+)
 DEPLOYMENT_ARTIFACT_SHA256 = (
-    "ada0689d8c632e1ec54c0d97bd5428afc6875b6d36fe6f363d3e12c0b81dda38"
+    "e2df13809c729ff6f6f6aab234f957f493df2ecbf5296ffd8fbad97aa6bbf124"
 )
 GOVERNANCE_DOMAIN_ID = "example-dataset-governance"
 EXAMPLE_PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(b"\x33" * 32)
@@ -101,6 +126,35 @@ class ReadinessTests(unittest.TestCase):
         )
         self.validator = self._validator_for_manifest(self.manifest)
 
+    def test_verifier_source_manifest_exactly_covers_imported_package_modules(
+        self,
+    ) -> None:
+        probe = """
+import json
+from pathlib import Path
+import sys
+import vision_scoring.readiness as readiness
+
+source_root = Path(readiness.__file__).resolve().parent
+loaded = sorted(
+    {
+        Path(module.__file__).name
+        for module in sys.modules.values()
+        if getattr(module, "__file__", None) is not None
+        and Path(module.__file__).resolve().parent == source_root
+    }
+)
+print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": loaded}))
+"""
+        completed = subprocess.run(
+            [sys.executable, "-c", probe],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["loaded"], result["listed"])
+
     def _validator_for_manifest(
         self,
         manifest: dict,
@@ -112,6 +166,7 @@ class ReadinessTests(unittest.TestCase):
         deployment_artifact_sha256=DEPLOYMENT_ARTIFACT_SHA256,
         governance_domain_id=GOVERNANCE_DOMAIN_ID,
         artifact_store_root=ARTIFACT_STORE_ROOT,
+        label_store_root=LABEL_STORE_ROOT,
     ) -> ManifestValidator:
         selected_rights_store = rights_store or self.trust_store
         selected_rights_policy = replace(
@@ -189,6 +244,7 @@ class ReadinessTests(unittest.TestCase):
                 configuration_generation_path
             ),
             artifact_store_root=artifact_store_root,
+            label_store_root=label_store_root,
             rights_trust_store=selected_rights_store,
             rights_evidence_store_root=RIGHTS_EVIDENCE_STORE_ROOT,
             rights_verification_policy=selected_rights_policy,
@@ -200,7 +256,24 @@ class ReadinessTests(unittest.TestCase):
     def _validate(self, manifest: dict):
         return self._validator_for_manifest(manifest).validate(manifest)
 
-    def _run_cli(self, manifest: dict) -> tuple[int, dict, str]:
+    def _capture_profile_index(self, device_model: str) -> int:
+        return next(
+            index
+            for index, entry in enumerate(self.manifest["capture_profiles"])
+            if entry["capture_profile"]["device_model_or_class"] == device_model
+        )
+
+    def _capture_measurements(self, device_model: str) -> dict:
+        return self.manifest["capture_profiles"][
+            self._capture_profile_index(device_model)
+        ]["empirical_capture_measurements"]
+
+    def _run_cli(
+        self,
+        manifest: dict,
+        *,
+        label_store_root: Path = LABEL_STORE_ROOT,
+    ) -> tuple[int, dict, str]:
         with tempfile.TemporaryDirectory() as temporary_directory:
             manifest_path = Path(temporary_directory) / "manifest.json"
             manifest_path.write_text(
@@ -220,14 +293,14 @@ class ReadinessTests(unittest.TestCase):
             )
             rights_policy_path = Path(temporary_directory) / "rights-policy.json"
             rights_policy_path.write_text(
-                json.dumps(rights_policy.to_canonical_dict()),
+                rights_policy.canonical_json(),
                 encoding="utf-8",
             )
             readiness_policy_path = (
                 Path(temporary_directory) / "readiness-policy.json"
             )
             readiness_policy_path.write_text(
-                json.dumps(readiness_policy.to_canonical_dict()),
+                readiness_policy.canonical_json(),
                 encoding="utf-8",
             )
             configuration_generation = ProtectedConfigurationGeneration(
@@ -274,6 +347,8 @@ class ReadinessTests(unittest.TestCase):
                         str(configuration_generation_path),
                         "--artifact-store-root",
                         str(ARTIFACT_STORE_ROOT),
+                        "--label-store-root",
+                        str(label_store_root),
                         "--rights-trust-store",
                         str(TRUST_STORE),
                         "--rights-verification-policy",
@@ -356,7 +431,11 @@ class ReadinessTests(unittest.TestCase):
             self.trust_store.fingerprint(),
         )
         payload = report.to_dict()
-        self.assertEqual(payload["report_schema_version"], "2.0")
+        self.assertEqual(payload["report_schema_version"], "4.0")
+        self.assertEqual(
+            payload["domain"],
+            "multicourt-vision-scoring:readiness-report:v4",
+        )
         self.assertRegex(payload["manifest_sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(
             payload["rights_trust"]["verification_policy_sha256"],
@@ -375,7 +454,61 @@ class ReadinessTests(unittest.TestCase):
             r"^[0-9a-f]{64}$",
         )
         self.assertTrue(payload["dataset_trust"]["manifest_trust_verified"])
-        self.assertEqual(len(payload["artifact_set_proof"]["artifacts"]), 10)
+        self.assertEqual(len(payload["artifact_set_proof"]["artifacts"]), 13)
+        source_asset_sha256s = {
+            source["asset_sha256"] for source in self.manifest["data_sources"]
+        }
+        self.assertEqual(len(source_asset_sha256s), 3)
+        self.assertEqual(
+            len(set(report.required_artifact_sha256s) - source_asset_sha256s),
+            10,
+        )
+        self.assertEqual(
+            {
+                entry["capture_profile"]["device_model_or_class"]
+                for entry in self.manifest["capture_profiles"]
+            },
+            {"avkans.go", "logitech.mevo-core"},
+        )
+        self.assertTrue(
+            all(
+                entry["capture_profile"]["device_scope"] == "DEVICE_MODEL"
+                and entry["capture_profile"]["exact_device_id"] is None
+                for entry in self.manifest["capture_profiles"]
+            )
+        )
+        self.assertEqual(
+            {
+                receipt.training_capture_mode.value
+                for receipt in report.source_capture_classifications
+            },
+            {"1080P30", "1080P60"},
+        )
+        serialized_manifest = json.dumps(self.manifest, sort_keys=True)
+        for forbidden_mapping_field in (
+            "physical_device_count",
+            "logical_stream_id",
+            "physical_to_logical_stream_mapping",
+        ):
+            self.assertNotIn(forbidden_mapping_field, serialized_manifest)
+        self.assertEqual(len(payload["source_label_pack_proofs"]), 3)
+        self.assertEqual(
+            payload["label_pack_evidence_scope"],
+            {
+                "verification": "STRUCTURAL_EVIDENCE_ONLY",
+                "training_admission_granted": False,
+                "evaluation_admission_granted": False,
+                "test_admission_granted": False,
+                "deployment_admission_granted": False,
+                "live_scoring_admission_granted": False,
+            },
+        )
+        self.assertTrue(
+            {
+                source["labels_sha256"]
+                for source in self.manifest["data_sources"]
+            }.isdisjoint(report.required_artifact_sha256s)
+        )
         self.assertEqual(
             payload["artifact_set_proof"]["generation_id"],
             generation_id_for(report.required_artifact_sha256s),
@@ -419,6 +552,8 @@ class ReadinessTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(ValueError, "proof-set commitment"):
             replace(report, source_rights_proofs=())
+        with self.assertRaisesRegex(ValueError, "label-pack proof-set"):
+            replace(report, source_label_pack_proof_set_sha256="0" * 64)
         with self.assertRaisesRegex(ValueError, "rights evidence generation"):
             replace(report, rights_evidence_generation_id="0" * 64)
         report_provenance_forgery_cases = (
@@ -433,7 +568,7 @@ class ReadinessTests(unittest.TestCase):
             ),
             (
                 {"manifest_schema_version": "totally-invalid"},
-                "schema_version 1.0",
+                "schema_version 3.0",
             ),
             ({"dataset_id": "other-dataset"}, "dataset_id.*attestation"),
         )
@@ -464,15 +599,19 @@ class ReadinessTests(unittest.TestCase):
                     ),
                 ),
             )
-        with self.assertRaisesRegex(ValueError, "0 through 10000"):
-            replace(report, data_source_count=10_001)
+        with self.assertRaisesRegex(ValueError, "0 through 512"):
+            replace(report, data_source_count=513)
 
         proof = report.source_rights_proofs[0]
+        day_after_verification = (
+            datetime.strptime(proof.verified_on, "%Y-%m-%d").date()
+            + timedelta(days=1)
+        ).isoformat()
         invalid_proof_cases = (
             ({"source_id": "söurce"}, "ASCII-stable"),
             ({"evidence_sha256s": ()}, "bounded non-empty"),
             (
-                {"rights_reviewed_on": "2026-07-13"},
+                {"rights_reviewed_on": day_after_verification},
                 "review cannot occur after",
             ),
             ({"rights_expires_on": "2026-07-11"}, "expired"),
@@ -485,6 +624,36 @@ class ReadinessTests(unittest.TestCase):
             with self.subTest(proof_changes=changes):
                 with self.assertRaisesRegex(ValueError, message):
                     replace(proof, **changes)
+
+        pack_proof = report.source_label_pack_proofs[0]
+        mismatched_pack_proofs = (
+            replace(pack_proof, asset_sha256="0" * 64),
+        ) + report.source_label_pack_proofs[1:]
+        with self.assertRaisesRegex(ValueError, "different source coordinates"):
+            replace(
+                report,
+                source_label_pack_proofs=mismatched_pack_proofs,
+                source_label_pack_proof_set_sha256=(
+                    source_label_pack_proof_set_sha256(
+                        mismatched_pack_proofs,
+                        report_schema_version="4.0",
+                    )
+                ),
+            )
+        disjoint_pack_proofs = (
+            replace(pack_proof, source_id="different-source"),
+        ) + report.source_label_pack_proofs[1:]
+        with self.assertRaisesRegex(ValueError, "proof ID sets differ"):
+            replace(
+                report,
+                source_label_pack_proofs=disjoint_pack_proofs,
+                source_label_pack_proof_set_sha256=(
+                    source_label_pack_proof_set_sha256(
+                        disjoint_pack_proofs,
+                        report_schema_version="4.0",
+                    )
+                ),
+            )
 
         empty_artifacts = ()
         empty_proof = DatasetArtifactSetProof(
@@ -529,6 +698,8 @@ class ReadinessTests(unittest.TestCase):
                     str(PROTECTED_CONFIGURATION_GENERATION),
                     "--artifact-store-root",
                     str(ARTIFACT_STORE_ROOT),
+                    "--label-store-root",
+                    str(LABEL_STORE_ROOT),
                     "--rights-trust-store",
                     str(TRUST_STORE),
                     "--rights-verification-policy",
@@ -542,6 +713,120 @@ class ReadinessTests(unittest.TestCase):
         self.assertEqual(exit_code, 0, stderr.getvalue())
         self.assertEqual(stderr.getvalue(), "")
         self.assertTrue(json.loads(stdout.getvalue())["ready"])
+
+    def test_schema_v1_and_missing_v2_pack_fields_are_hard_rejected(self) -> None:
+        old = deepcopy(self.manifest)
+        old["schema_version"] = "1.0"
+        with patch(
+            "vision_scoring.readiness.verify_source_label_pack_batch"
+        ) as pack_worker:
+            report = self._validate(old)
+        self.assertIn("SCHEMA_VERSION", {item.code for item in report.blockers})
+        pack_worker.assert_not_called()
+
+        for field_name in ("labels_sha256", "label_pack_generation_id"):
+            manifest = deepcopy(self.manifest)
+            del manifest["data_sources"][0][field_name]
+            with self.subTest(field_name=field_name), patch(
+                "vision_scoring.readiness.verify_source_label_pack_batch"
+            ) as pack_worker:
+                report = self._validate(manifest)
+                self.assertIn(
+                    "SOURCE_CHECKSUM",
+                    {item.code for item in report.blockers},
+                )
+                pack_worker.assert_not_called()
+
+    def test_artifact_and_label_store_roots_must_be_distinct(self) -> None:
+        alias = ARTIFACT_STORE_ROOT / ".." / "dataset-artifacts"
+        with self.assertRaisesRegex(ValueError, "distinct stores"):
+            self._validator_for_manifest(
+                self.manifest,
+                label_store_root=alias,
+            )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            symlink = Path(temporary_directory) / "artifact-alias"
+            symlink.symlink_to(ARTIFACT_STORE_ROOT, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "distinct stores"):
+                self._validator_for_manifest(
+                    self.manifest,
+                    label_store_root=symlink,
+                )
+        case_variant = ARTIFACT_STORE_ROOT.with_name(
+            ARTIFACT_STORE_ROOT.name.swapcase()
+        )
+        if case_variant.exists() and case_variant != ARTIFACT_STORE_ROOT:
+            self.assertTrue(os.path.samefile(case_variant, ARTIFACT_STORE_ROOT))
+            with self.assertRaisesRegex(ValueError, "distinct stores"):
+                self._validator_for_manifest(
+                    self.manifest,
+                    label_store_root=case_variant,
+                )
+
+    def test_513_sources_are_rejected_before_label_worker(self) -> None:
+        template = self.manifest["data_sources"][0]
+        self.manifest["data_sources"] = [
+            {**deepcopy(template), "source_id": f"source-{index}"}
+            for index in range(513)
+        ]
+        with patch(
+            "vision_scoring.readiness.verify_source_label_pack_batch"
+        ) as pack_worker:
+            report = self._validate(self.manifest)
+        self.assertIn(
+            "DATA_SOURCE_COUNT",
+            {item.code for item in report.blockers},
+        )
+        self.assertEqual(report.data_source_count, 0)
+        pack_worker.assert_not_called()
+
+    def test_protected_configuration_change_during_pack_worker_discards_result(
+        self,
+    ) -> None:
+        validator = self._validator_for_manifest(self.manifest)
+        generation_path = validator._protected_configuration_generation_path
+        original = load_protected_configuration_generation(generation_path)
+
+        def verify_then_rotate(**kwargs):  # type: ignore[no-untyped-def]
+            proofs = verify_source_label_pack_batch(**kwargs)
+            generation_path.write_text(
+                replace(
+                    original,
+                    governance_domain_id="rotated-governance-domain",
+                ).canonical_json(),
+                encoding="utf-8",
+            )
+            return proofs
+
+        with patch(
+            "vision_scoring.readiness.verify_source_label_pack_batch",
+            side_effect=verify_then_rotate,
+        ), self.assertRaisesRegex(
+            ValueError,
+            "protected configuration generation changed",
+        ):
+            validator.validate(self.manifest)
+
+    def test_cli_requires_a_safe_distinct_label_store_root(self) -> None:
+        stderr = io.StringIO()
+        with redirect_stderr(stderr), self.assertRaises(SystemExit) as caught:
+            main([str(EXAMPLE)])
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("--label-store-root", stderr.getvalue())
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            unsafe_root = Path(temporary_directory) / "not-a-store"
+            unsafe_root.write_text("not a directory", encoding="utf-8")
+            exit_code, payload, _ = self._run_cli(
+                self.manifest,
+                label_store_root=unsafe_root,
+            )
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(payload["ready"])
+        self.assertIn(
+            "LABEL_PACK_PREFLIGHT_STORE",
+            {item["code"] for item in payload["blockers"]},
+        )
 
     def test_validation_uses_one_detached_manifest_snapshot(self) -> None:
         original_asset_sha256 = self.manifest["data_sources"][0]["asset_sha256"]
@@ -575,7 +860,9 @@ class ReadinessTests(unittest.TestCase):
         )
 
     def test_unsigned_manifest_cannot_assert_capture_or_trigger_artifact_trust(self) -> None:
-        self.manifest["capture_profiles"][0]["native_capture_verified"] = False
+        self._capture_measurements("logitech.mevo-core")[
+            "frame_interpolation_detected"
+        ] = True
         report = self.validator.validate(self.manifest)
         codes = {issue.code for issue in report.blockers}
         self.assertIn("DATASET_ATTESTATION_MANIFEST", codes)
@@ -692,19 +979,23 @@ class ReadinessTests(unittest.TestCase):
         self.assertIn("SPLIT_TEST_VENUE_LEAKAGE", {issue.code for issue in report.blockers})
 
     def test_capture_pixel_and_timestamp_failures_block_training(self) -> None:
-        capture = self.manifest["capture_profiles"][0]
+        profile_index = self._capture_profile_index("logitech.mevo-core")
+        capture = self._capture_measurements("logitech.mevo-core")
         capture["far_ball_processed_pixels_p10"] = 4.0
         capture["timestamp_regressions"] = 1
         report = self._validate(self.manifest)
         paths = {issue.path for issue in report.blockers}
-        self.assertIn("capture_profiles[0].far_ball_processed_pixels_p10", paths)
-        self.assertIn("capture_profiles[0].timestamp_regressions", paths)
+        prefix = (
+            f"capture_profiles[{profile_index}].empirical_capture_measurements"
+        )
+        self.assertIn(f"{prefix}.far_ball_processed_pixels_p10", paths)
+        self.assertIn(f"{prefix}.timestamp_regressions", paths)
 
-    def test_native_freeze_observability_and_calibration_gates_fail_closed(self) -> None:
-        capture = self.manifest["capture_profiles"][0]
+    def test_freeze_observability_and_calibration_gates_fail_closed(self) -> None:
+        profile_index = self._capture_profile_index("logitech.mevo-core")
+        capture = self._capture_measurements("logitech.mevo-core")
         capture.update(
             {
-                "native_capture_verified": False,
                 "frame_interpolation_detected": True,
                 "unexplained_freeze_events": 1,
                 "sampled_decisive_event_windows": 999,
@@ -713,14 +1004,12 @@ class ReadinessTests(unittest.TestCase):
                 "calibration_holdout_p95_px": 2.01,
                 "court_plane_holdout_p95_cm": 5.01,
                 "capture_soak_minutes": 119.9,
-                "camera_device_attestation_sha256": "not-a-hash",
             }
         )
         report = self._validate(self.manifest)
         blocked_paths = {issue.path for issue in report.blockers}
         for field_name in capture:
             if field_name in {
-                "native_capture_verified",
                 "frame_interpolation_detected",
                 "unexplained_freeze_events",
                 "sampled_decisive_event_windows",
@@ -729,21 +1018,52 @@ class ReadinessTests(unittest.TestCase):
                 "calibration_holdout_p95_px",
                 "court_plane_holdout_p95_cm",
                 "capture_soak_minutes",
-                "camera_device_attestation_sha256",
             }:
-                self.assertIn(f"capture_profiles[0].{field_name}", blocked_paths)
+                self.assertIn(
+                    f"capture_profiles[{profile_index}]."
+                    f"empirical_capture_measurements.{field_name}",
+                    blocked_paths,
+                )
 
-    def test_dual_view_requires_measured_exposure_sync(self) -> None:
-        capture = self.manifest["capture_profiles"][0]
-        capture["mode"] = "DUAL_4K60"
-        capture["camera_count"] = 2
+    def test_composite_multi_view_explicitly_abstains(self) -> None:
+        receipts = self._capture_v3_template_receipts(
+            mevo_core_owner_live_1080p60_v1
+        )
+        composite_receipts = []
+        for receipt in receipts:
+            profile = replace(
+                receipt.capture_profile,
+                view_topology=ViewTopologyV1.COMPOSITE_MULTI_VIEW,
+                view_count=2,
+            )
+            facts = replace(
+                receipt.source_capture_facts,
+                capture_profile_sha256=profile.fingerprint(),
+            )
+            composite_receipts.append(
+                classify_capture_profile_v1(
+                    receipt.encoder_configuration,
+                    profile,
+                    facts,
+                )
+            )
+        self._install_capture_v3_receipts(tuple(composite_receipts))
         report = self._validate(self.manifest)
-        self.assertIn("EXPOSURE_SYNC", {issue.code for issue in report.blockers})
-        capture["exposure_sync_p95_ms"] = 0.8
-        self.assertTrue(self._validate(self.manifest).ready)
+        self.assertIn(
+            "CAPTURE_CLASSIFICATION_ABSTAINED",
+            {issue.code for issue in report.blockers},
+        )
+        self.assertTrue(
+            all(
+                receipt.abstention_reason.value == "UNSUPPORTED_VIEW_TOPOLOGY"
+                for receipt in report.source_capture_classifications
+            )
+        )
 
     def test_source_must_reference_capture_and_keep_declared_group_together(self) -> None:
-        self.manifest["data_sources"][0]["capture_profile_id"] = "missing-profile"
+        self.manifest["data_sources"][0]["source_capture_facts"][
+            "capture_profile_sha256"
+        ] = "f" * 64
         self.manifest["data_sources"][2]["split_group_id"] = self.manifest["data_sources"][1][
             "split_group_id"
         ]
@@ -753,20 +1073,50 @@ class ReadinessTests(unittest.TestCase):
         self.assertIn("SPLIT_GROUP_LEAKAGE", codes)
 
     def test_1080p_profile_is_ready_only_as_warned_compatibility_mode(self) -> None:
-        capture = self.manifest["capture_profiles"][0]
-        capture.update(
-            {
-                "mode": "1080P30",
-                "width": 1920,
-                "height": 1080,
-                "fps": 30.0,
-                "shutter_reciprocal": 600.0,
-                "far_ball_processed_pixels_p10": 7.0,
-            }
-        )
         report = self._validate(self.manifest)
         self.assertTrue(report.ready)
         self.assertIn("COMPATIBILITY_CAPTURE", {issue.code for issue in report.warnings})
+
+    def test_1080p60_profile_is_an_enhanced_ready_mode(self) -> None:
+        report = self._validate(self.manifest)
+        self.assertTrue(report.ready)
+        mevo_source_ids = {
+            source["source_id"]
+            for source in self.manifest["data_sources"]
+            if source["split"] in {"TRAIN", "TEST"}
+        }
+        self.assertEqual(
+            {
+                receipt.source_capture_facts.source_id
+                for receipt in report.source_capture_classifications
+                if receipt.training_capture_mode.value == "1080P60"
+            },
+            mevo_source_ids,
+        )
+
+    def test_1080p60_requires_shutter_and_low_blur(self) -> None:
+        profile_index = self._capture_profile_index("logitech.mevo-core")
+        capture = self._capture_measurements("logitech.mevo-core")
+        capture.update(
+            {
+                "shutter_reciprocal": 999.99,
+                "far_ball_processed_pixels_p10": 7.0,
+                "visible_ball_blur_to_minor_axis_ratio_p95": 1.01,
+            }
+        )
+        report = self._validate(self.manifest)
+        blocked_paths = {issue.path for issue in report.blockers}
+        prefix = (
+            f"capture_profiles[{profile_index}].empirical_capture_measurements"
+        )
+        self.assertIn(
+            f"{prefix}.shutter_reciprocal",
+            blocked_paths,
+        )
+        self.assertIn(
+            f"{prefix}.visible_ball_blur_to_minor_axis_ratio_p95",
+            blocked_paths,
+        )
 
     def test_dataset_cannot_supply_or_weaken_split_and_rights_policy(self) -> None:
         self.manifest["capture_profiles"][0]["far_ball_processed_pixel_p10"] = 11.0
@@ -1048,6 +1398,8 @@ class ReadinessTests(unittest.TestCase):
                         ),
                         "--artifact-store-root",
                         str(ARTIFACT_STORE_ROOT),
+                        "--label-store-root",
+                        str(LABEL_STORE_ROOT),
                         "--rights-trust-store",
                         str(TRUST_STORE),
                         "--rights-verification-policy",
@@ -1063,7 +1415,7 @@ class ReadinessTests(unittest.TestCase):
         self.assertIn("does not match", stderr.getvalue())
 
     def test_capture_ratios_must_be_finite_probabilities(self) -> None:
-        capture = self.manifest["capture_profiles"][0]
+        capture = self._capture_measurements("logitech.mevo-core")
         capture["human_resolvable_visible_ball_ratio"] = float("nan")
         report = self.validator.validate(self.manifest)
         self.assertIn(
@@ -1072,36 +1424,52 @@ class ReadinessTests(unittest.TestCase):
         )
 
         self.manifest = deepcopy(load_manifest(EXAMPLE))
-        self.manifest["capture_profiles"][0][
+        profile_index = self._capture_profile_index("logitech.mevo-core")
+        self._capture_measurements("logitech.mevo-core")[
             "visible_serve_frames_meeting_pixel_gate_ratio"
         ] = 1.01
         report = self._validate(self.manifest)
         blocked_paths = {issue.path for issue in report.blockers}
         self.assertIn(
-            "capture_profiles[0].visible_serve_frames_meeting_pixel_gate_ratio",
+            f"capture_profiles[{profile_index}].empirical_capture_measurements."
+            "visible_serve_frames_meeting_pixel_gate_ratio",
             blocked_paths,
         )
 
     def test_boolean_values_do_not_satisfy_numeric_zero_gates(self) -> None:
-        self.manifest["capture_profiles"][0]["timestamp_regressions"] = False
+        profile_index = self._capture_profile_index("logitech.mevo-core")
+        self._capture_measurements("logitech.mevo-core")[
+            "timestamp_regressions"
+        ] = False
         report = self._validate(self.manifest)
         self.assertIn(
-            "capture_profiles[0].timestamp_regressions",
+            f"capture_profiles[{profile_index}].empirical_capture_measurements."
+            "timestamp_regressions",
             {issue.path for issue in report.blockers},
         )
 
     def test_labels_checksum_and_capture_profile_checks_are_preserved(self) -> None:
         source = self.manifest["data_sources"][0]
         source["labels_sha256"] = "not-a-hash"
-        source["capture_profile_id"] = "not-a-profile"
+        source["source_capture_facts"]["capture_profile_sha256"] = "f" * 64
         report = self._validate(self.manifest)
         codes = {issue.code for issue in report.blockers}
         self.assertIn("SOURCE_CHECKSUM", codes)
         self.assertIn("CAPTURE_PROFILE_REFERENCE", codes)
 
-    def test_ready_requires_resident_bytes_for_every_declared_artifact(self) -> None:
+    def test_ready_requires_resident_pack_and_media_capture_bytes(self) -> None:
         self.manifest["data_sources"][0]["labels_sha256"] = "e" * 64
         report = self._validate(self.manifest)
+        self.assertFalse(report.ready)
+        self.assertIn(
+            "BALL_LABEL_PACK_MEMBERSHIP",
+            {issue.code for issue in report.blockers},
+        )
+        self.assertIsNotNone(report.artifact_set_proof)
+
+        manifest = deepcopy(load_manifest(EXAMPLE))
+        manifest["data_sources"][0]["asset_sha256"] = "e" * 64
+        report = self._validate(manifest)
         self.assertFalse(report.ready)
         self.assertIn(
             "ARTIFACT_GENERATION_LOCK_MISSING",
@@ -1176,6 +1544,557 @@ class ReadinessTests(unittest.TestCase):
             "SPLIT_VENUE_CAMERA_DAY_LEAKAGE",
             {blocker["code"] for blocker in payload["blockers"]},
         )
+
+    @staticmethod
+    def _capture_v3_measurements() -> dict:
+        return {
+            "capture_soak_minutes": 180.0,
+            "calibration_holdout_p95_px": 1.5,
+            "court_plane_holdout_p95_cm": 4.0,
+            "critical_unexplained_drop_events": 0,
+            "far_ball_processed_pixels_p10": 7.0,
+            "fixed_mount": True,
+            "frame_interpolation_detected": False,
+            "human_resolvable_visible_ball_ratio": 0.997,
+            "sampled_decisive_event_windows": 1200,
+            "sampled_visible_ball_frames": 1200,
+            "service_zones_fully_visible": True,
+            "shutter_reciprocal": 1000.0,
+            "timestamp_regressions": 0,
+            "unexplained_freeze_events": 0,
+            "upscaled_from_lower_resolution": False,
+            "usable_observed_positions_per_eligible_event_p10": 4.0,
+            "visible_ball_blur_to_minor_axis_ratio_p95": 0.8,
+            "visible_serve_frames_meeting_pixel_gate_ratio": 0.995,
+        }
+
+    def _capture_v3_template_receipts(self, template) -> tuple:
+        return tuple(
+            template(
+                source_id=source["source_id"],
+                encoder_settings_sha256="0" * 64,
+                calibration_sha256="1" * 64,
+                clock_model_sha256="2" * 64,
+                camera_attestation_sha256="3" * 64,
+                exposure_descriptor_sha256="4" * 64,
+                compression_stratum=CompressionStratumV1.CONSTRAINED_INTERFRAME,
+            )
+            for source in self.manifest["data_sources"]
+        )
+
+    def _install_capture_v3_receipts(self, receipts: tuple) -> None:
+        by_profile: dict[str, object] = {}
+        for receipt in receipts:
+            by_profile.setdefault(receipt.capture_profile.fingerprint(), receipt)
+        self.manifest["domain"] = (
+            "multicourt-vision-scoring:readiness-manifest:v3"
+        )
+        self.manifest["schema_version"] = "3.0"
+        self.manifest["capture_profiles"] = [
+            {
+                "encoder_configuration": receipt.encoder_configuration.to_dict(),
+                "capture_profile": receipt.capture_profile.to_dict(),
+                "empirical_capture_measurements": (
+                    self._capture_v3_measurements()
+                ),
+            }
+            for _, receipt in sorted(by_profile.items())
+        ]
+        receipts_by_source = {
+            receipt.source_capture_facts.source_id: receipt
+            for receipt in receipts
+        }
+        for source in self.manifest["data_sources"]:
+            source.pop("capture_profile_id", None)
+            source["source_capture_facts"] = receipts_by_source[
+                source["source_id"]
+            ].source_capture_facts.to_dict()
+
+    def _capture_v3_receipts_for_representation(
+        self,
+        *,
+        source_classification: CaptureSourceClassificationV1,
+        source_representation: SourceRepresentationV1,
+        transport: CaptureTransportV1,
+        cadence_type: CadenceTypeV1 = CadenceTypeV1.CFR,
+        source_provenance_complete: bool = True,
+    ) -> tuple:
+        base_receipts = self._capture_v3_template_receipts(
+            mevo_core_owner_live_1080p60_v1
+        )
+        results = []
+        for index, base in enumerate(base_receipts):
+            cadence_numerator = 60 if cadence_type is CadenceTypeV1.CFR else 0
+            cadence_denominator = 1 if cadence_type is CadenceTypeV1.CFR else 0
+            encoder = replace(
+                base.encoder_configuration,
+                encoder_configuration_id=f"representation-encoder-{index}",
+                source_representation=source_representation,
+                transport=transport,
+                cadence_type=cadence_type,
+                cadence_numerator=cadence_numerator,
+                cadence_denominator=cadence_denominator,
+            )
+            profile = replace(
+                base.capture_profile,
+                capture_profile_id=f"representation-profile-{index}",
+                device_model_or_class="consumer-or-archive-camera",
+                encoder_configuration_sha256=encoder.fingerprint(),
+            )
+            source_facts = SourceCaptureFactsV1(
+                source_id=base.source_capture_facts.source_id,
+                capture_profile_sha256=profile.fingerprint(),
+                source_classification=source_classification,
+                source_provenance_complete=source_provenance_complete,
+                source_risk_tags=(
+                    CaptureRiskTagV1.MOTION_BLUR,
+                ),
+            )
+            results.append(
+                classify_capture_profile_v1(encoder, profile, source_facts)
+            )
+        return tuple(results)
+
+    def test_capture_v3_mevo_and_avkans_derive_ordered_receipts(self) -> None:
+        for template, expected_mode in (
+            (mevo_core_owner_live_1080p60_v1, "1080P60"),
+            (avkans_go_owner_live_1080p30_v1, "1080P30"),
+        ):
+            with self.subTest(template=template.__name__):
+                self.manifest = deepcopy(load_manifest(EXAMPLE))
+                receipts = self._capture_v3_template_receipts(template)
+                self._install_capture_v3_receipts(receipts)
+                validator = self._validator_for_manifest(self.manifest)
+                report = validator.validate(self.manifest)
+                self.assertFalse(
+                    {
+                        issue.code
+                        for issue in report.blockers
+                        if (
+                            issue.code.startswith("CAPTURE")
+                            or issue.code.startswith("SOURCE_CAPTURE")
+                        )
+                    },
+                    report.to_dict(),
+                )
+                self.assertNotIn(
+                    "UNKNOWN_FIELD",
+                    {issue.code for issue in report.blockers},
+                    report.to_dict(),
+                )
+                self.assertNotIn(
+                    "CAPTURE_REPORT_BINDING_PENDING",
+                    {issue.code for issue in report.blockers},
+                )
+                self.assertFalse(report.ready)
+                derived = validator._validated_capture_classifications
+                self.assertEqual(
+                    tuple(
+                        receipt.source_capture_facts.source_id
+                        for receipt in derived
+                    ),
+                    tuple(
+                        sorted(
+                            source["source_id"]
+                            for source in self.manifest["data_sources"]
+                        )
+                    ),
+                )
+                self.assertEqual(
+                    {receipt.training_capture_mode.value for receipt in derived},
+                    {expected_mode},
+                )
+
+    def test_capture_v4_report_binds_full_receipts_and_exact_source_sets(self) -> None:
+        receipts = self._capture_v3_template_receipts(
+            mevo_core_owner_live_1080p60_v1
+        )
+        self._install_capture_v3_receipts(receipts)
+        validator = self._validator_for_manifest(self.manifest)
+        report = validator.validate(self.manifest)
+        payload = report.to_dict()
+
+        self.assertEqual(payload["report_schema_version"], "4.0")
+        self.assertEqual(
+            payload["domain"],
+            "multicourt-vision-scoring:readiness-report:v4",
+        )
+        self.assertEqual(
+            report.source_capture_classifications,
+            validator._validated_capture_classifications,
+        )
+        self.assertEqual(
+            payload["source_capture_classifications"],
+            [receipt.to_dict() for receipt in report.source_capture_classifications],
+        )
+        expected_set_payload = {
+            "classifications": [
+                {
+                    "capture_classification_receipt_sha256": (
+                        receipt.fingerprint()
+                    ),
+                    "classification_proof_sha256": (
+                        receipt.capture_classification_proof_set_sha256
+                    ),
+                    "source_capture_facts_proof_sha256": (
+                        receipt.source_classification_proof_set_sha256
+                    ),
+                    "source_id": receipt.source_capture_facts.source_id,
+                }
+                for receipt in report.source_capture_classifications
+            ],
+            "domain": (
+                "multicourt-vision-scoring:"
+                "readiness-source-capture-classification-set:v1"
+            ),
+            "schema_version": "4.0",
+        }
+        expected_set_sha256 = hashlib.sha256(
+            canonical_json_bytes(expected_set_payload)
+        ).hexdigest()
+        self.assertEqual(
+            report.source_capture_classification_set_sha256,
+            expected_set_sha256,
+        )
+        self.assertEqual(
+            report.source_capture_classification_set_sha256,
+            _source_capture_classification_set_sha256(
+                report.source_capture_classifications
+            ),
+        )
+        self.assertNotIn(
+            "CAPTURE_REPORT_BINDING_PENDING",
+            {issue.code for issue in report.blockers},
+        )
+
+        with self.assertRaisesRegex(ValueError, "classification-set commitment"):
+            replace(
+                report,
+                source_capture_classification_set_sha256="f" * 64,
+            )
+        with self.assertRaisesRegex(ValueError, "sorted unique source IDs"):
+            replace(
+                report,
+                source_capture_classifications=tuple(
+                    reversed(report.source_capture_classifications)
+                ),
+            )
+        with self.assertRaisesRegex(ValueError, "explicit capture binding blocker"):
+            replace(
+                report,
+                source_capture_classifications=(),
+                source_capture_classification_set_sha256=(
+                    _source_capture_classification_set_sha256(())
+                ),
+            )
+
+        first = report.source_capture_classifications[0]
+        changed_facts = replace(
+            first.source_capture_facts,
+            source_id="aaa-different-source",
+        )
+        changed_receipt = classify_capture_profile_v1(
+            first.encoder_configuration,
+            first.capture_profile,
+            changed_facts,
+        )
+        changed_receipts = tuple(
+            sorted(
+                (changed_receipt, *report.source_capture_classifications[1:]),
+                key=lambda receipt: receipt.source_capture_facts.source_id,
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "capture and rights proof ID sets"):
+            replace(
+                report,
+                source_capture_classifications=changed_receipts,
+                source_capture_classification_set_sha256=(
+                    _source_capture_classification_set_sha256(changed_receipts)
+                ),
+            )
+
+    def test_capture_v3_artifact_closure_uses_only_resident_evidence_roles(self) -> None:
+        receipts = self._capture_v3_template_receipts(
+            mevo_core_owner_live_1080p60_v1
+        )
+        self._install_capture_v3_receipts(receipts)
+        required = _required_dataset_artifact_sha256s(self.manifest)
+        expected = tuple(
+            sorted(
+                {
+                    *(character * 64 for character in "01234"),
+                    *(
+                        source["asset_sha256"]
+                        for source in self.manifest["data_sources"]
+                    ),
+                }
+            )
+        )
+        self.assertEqual(required, expected)
+        excluded = {
+            receipts[0].encoder_configuration.fingerprint(),
+            receipts[0].capture_profile.fingerprint(),
+            receipts[0].source_capture_facts.fingerprint(),
+            receipts[0].source_classification_proof_set_sha256,
+            receipts[0].capture_classification_proof_set_sha256,
+            *(
+                source["labels_sha256"]
+                for source in self.manifest["data_sources"]
+            ),
+            *(
+                evidence_sha256
+                for source in self.manifest["data_sources"]
+                for evidence_sha256 in source["rights_decision"][
+                    "evidence_sha256s"
+                ]
+            ),
+        }
+        self.assertTrue(excluded.isdisjoint(required))
+        report = self._validate(self.manifest)
+        self.assertEqual(report.required_artifact_sha256s, required)
+        self.assertEqual(
+            report.required_artifact_digest_set_sha256,
+            hashlib.sha256(
+                canonical_json_bytes(
+                    {
+                        "digests": list(required),
+                        "domain": (
+                            "multicourt-vision-scoring:"
+                            "required-artifact-digest-set:v3"
+                        ),
+                        "schema_version": "4.0",
+                    }
+                )
+            ).hexdigest(),
+        )
+
+    def test_capture_v3_risks_are_reported_as_slices_not_blanket_blockers(self) -> None:
+        receipts = self._capture_v3_receipts_for_representation(
+            source_classification=(
+                CaptureSourceClassificationV1.PHONE_OR_CONSUMER_CAMERA
+            ),
+            source_representation=(
+                SourceRepresentationV1.PHONE_OR_CONSUMER_CAPTURE
+            ),
+            transport=CaptureTransportV1.LOCAL_CAPTURE,
+        )
+        self._install_capture_v3_receipts(receipts)
+        report = self._validate(self.manifest)
+        warning_messages = {
+            issue.message for issue in report.warnings if issue.code == "CAPTURE_RISK"
+        }
+        for risk in (
+            "HIGH_COMPRESSION",
+            "MOTION_BLUR",
+            "SINGLE_VIEW_OCCLUSION",
+        ):
+            self.assertIn(f"capture risk slice: {risk}", warning_messages)
+        self.assertFalse(
+            {
+                "CAPTURE_CLASSIFICATION",
+                "CAPTURE_CLASSIFICATION_ABSTAINED",
+                "CAPTURE_GATE",
+            }
+            & {issue.code for issue in report.blockers}
+        )
+        self.assertTrue(
+            all(
+                CaptureRiskTagV1.MOTION_BLUR in receipt.capture_risk_tags
+                for receipt in report.source_capture_classifications
+            )
+        )
+        for profile in self.manifest["capture_profiles"]:
+            profile["empirical_capture_measurements"][
+                "visible_ball_blur_to_minor_axis_ratio_p95"
+            ] = 1.01
+        blurred_report = self._validate(self.manifest)
+        self.assertIn(
+            "CAPTURE_GATE", {issue.code for issue in blurred_report.blockers}
+        )
+
+    def test_capture_v3_avkans_does_not_invent_physical_mapping(self) -> None:
+        receipt = self._capture_v3_template_receipts(
+            avkans_go_owner_live_1080p30_v1
+        )[0]
+        profile = receipt.capture_profile.to_dict()
+        source_facts = receipt.source_capture_facts.to_dict()
+        self.assertEqual(profile["device_scope"], "DEVICE_MODEL")
+        self.assertIsNone(profile["exact_device_id"])
+        self.assertEqual(profile["view_count"], 1)
+        self.assertFalse(
+            {
+                "physical_device_count",
+                "logical_stream_id",
+                "physical_to_logical_stream_mapping",
+            }
+            & (profile.keys() | source_facts.keys())
+        )
+
+    def test_capture_v3_exact_phone_and_archive_representations_classify(self) -> None:
+        cases = (
+            (
+                CaptureSourceClassificationV1.PHONE_OR_CONSUMER_CAMERA,
+                SourceRepresentationV1.PHONE_OR_CONSUMER_CAPTURE,
+                CaptureTransportV1.LOCAL_CAPTURE,
+            ),
+            (
+                CaptureSourceClassificationV1.OWNER_PRODUCED_ARCHIVE,
+                SourceRepresentationV1.ORIGINAL_CAMERA_MASTER,
+                CaptureTransportV1.FILE,
+            ),
+            (
+                CaptureSourceClassificationV1.OWNER_PRODUCED_ARCHIVE,
+                SourceRepresentationV1.PLATFORM_TRANSCODE,
+                CaptureTransportV1.FILE,
+            ),
+        )
+        for source_classification, representation, transport in cases:
+            with self.subTest(representation=representation.value):
+                self.manifest = deepcopy(load_manifest(EXAMPLE))
+                receipts = self._capture_v3_receipts_for_representation(
+                    source_classification=source_classification,
+                    source_representation=representation,
+                    transport=transport,
+                )
+                self._install_capture_v3_receipts(receipts)
+                validator = self._validator_for_manifest(self.manifest)
+                report = validator.validate(self.manifest)
+                self.assertFalse(
+                    {
+                        issue.code
+                        for issue in report.blockers
+                        if (
+                            issue.code.startswith("CAPTURE")
+                            or issue.code.startswith("SOURCE_CAPTURE")
+                        )
+                    },
+                    report.to_dict(),
+                )
+                self.assertTrue(
+                    all(
+                        receipt.status.value == "CLASSIFIED"
+                        for receipt in validator._validated_capture_classifications
+                    )
+                )
+
+    def test_capture_v3_vfr_phone_and_unknown_source_abstain(self) -> None:
+        cases = (
+            self._capture_v3_receipts_for_representation(
+                source_classification=(
+                    CaptureSourceClassificationV1.PHONE_OR_CONSUMER_CAMERA
+                ),
+                source_representation=(
+                    SourceRepresentationV1.PHONE_OR_CONSUMER_CAPTURE
+                ),
+                transport=CaptureTransportV1.LOCAL_CAPTURE,
+                cadence_type=CadenceTypeV1.VFR,
+            ),
+            self._capture_v3_receipts_for_representation(
+                source_classification=(
+                    CaptureSourceClassificationV1.EXTERNAL_OR_UNKNOWN
+                ),
+                source_representation=SourceRepresentationV1.UNKNOWN,
+                transport=CaptureTransportV1.FILE,
+                source_provenance_complete=False,
+            ),
+        )
+        for receipts in cases:
+            with self.subTest(reason=receipts[0].abstention_reason.value):
+                self.manifest = deepcopy(load_manifest(EXAMPLE))
+                self._install_capture_v3_receipts(receipts)
+                validator = self._validator_for_manifest(self.manifest)
+                report = validator.validate(self.manifest)
+                self.assertFalse(report.ready)
+                self.assertIn(
+                    "CAPTURE_CLASSIFICATION_ABSTAINED",
+                    {issue.code for issue in report.blockers},
+                )
+                self.assertTrue(
+                    all(
+                        receipt.status.value == "ABSTAINED"
+                        for receipt in validator._validated_capture_classifications
+                    )
+                )
+                with self.assertRaisesRegex(
+                    ValueError, "abstained.*explicit blocker"
+                ):
+                    replace(
+                        report,
+                        issues=tuple(
+                            issue
+                            for issue in report.issues
+                            if issue.code != "CAPTURE_CLASSIFICATION_ABSTAINED"
+                        ),
+                    )
+
+    def test_capture_v3_source_profile_and_source_id_mismatches_block(self) -> None:
+        receipts = self._capture_v3_template_receipts(
+            mevo_core_owner_live_1080p60_v1
+        )
+        self._install_capture_v3_receipts(receipts)
+        source_facts = self.manifest["data_sources"][0]["source_capture_facts"]
+        source_facts["capture_profile_sha256"] = "e" * 64
+        report = self._validate(self.manifest)
+        self.assertIn(
+            "CAPTURE_PROFILE_REFERENCE", {issue.code for issue in report.blockers}
+        )
+
+        self.manifest = deepcopy(load_manifest(EXAMPLE))
+        self._install_capture_v3_receipts(receipts)
+        self.manifest["data_sources"][0]["source_capture_facts"][
+            "source_id"
+        ] = "different-source"
+        report = self._validate(self.manifest)
+        self.assertIn(
+            "SOURCE_CAPTURE_BINDING", {issue.code for issue in report.blockers}
+        )
+
+        self.manifest = deepcopy(load_manifest(EXAMPLE))
+        self._install_capture_v3_receipts(receipts)
+        self.manifest["capture_profiles"][0]["capture_profile"][
+            "encoder_configuration_sha256"
+        ] = "d" * 64
+        report = self._validate(self.manifest)
+        self.assertIn(
+            "CAPTURE_PROFILE_ENCODER_BINDING",
+            {issue.code for issue in report.blockers},
+        )
+
+    def test_capture_v3_mode_drives_nested_empirical_thresholds(self) -> None:
+        receipts = self._capture_v3_template_receipts(
+            mevo_core_owner_live_1080p60_v1
+        )
+        self._install_capture_v3_receipts(receipts)
+        measurements = self.manifest["capture_profiles"][0][
+            "empirical_capture_measurements"
+        ]
+        measurements["shutter_reciprocal"] = 999.0
+        measurements["visible_ball_blur_to_minor_axis_ratio_p95"] = 1.01
+        report = self._validate(self.manifest)
+        blocker_paths = {issue.path for issue in report.blockers}
+        self.assertIn(
+            "capture_profiles[0].empirical_capture_measurements."
+            "shutter_reciprocal",
+            blocker_paths,
+        )
+        self.assertIn(
+            "capture_profiles[0].empirical_capture_measurements."
+            "visible_ball_blur_to_minor_axis_ratio_p95",
+            blocker_paths,
+        )
+
+    def test_capture_v3_rejects_v2_flat_capture_fields(self) -> None:
+        self.manifest.pop("domain")
+        self.manifest["schema_version"] = "2.0"
+        self.manifest["capture_profiles"][0]["mode"] = "1080P60"
+        for source in self.manifest["data_sources"]:
+            source["capture_profile_id"] = "legacy-profile"
+            source.pop("source_capture_facts")
+        report = self._validate(self.manifest)
+        codes = {issue.code for issue in report.blockers}
+        self.assertIn("MANIFEST_DOMAIN", codes)
+        self.assertIn("SCHEMA_VERSION", codes)
+        self.assertIn("UNKNOWN_FIELD", codes)
 
 
 if __name__ == "__main__":

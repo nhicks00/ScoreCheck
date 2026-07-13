@@ -1,61 +1,8 @@
-"""Hard-cutover contracts and rules for assistive vision scoring."""
+"""Assistive beach-volleyball vision scoring.
 
-from .contracts import (
-    Authority,
-    CalibrationSegment,
-    CalibrationState,
-    ConfirmationMode,
-    DecisionState,
-    EventProposal,
-    FramePacket,
-    ModelProvenance,
-    Observation,
-    ObservationType,
-    RallyDecision,
-    RuleEvent,
-    RuleEventType,
-    Team,
-    Visibility,
-)
-from .rules import (
-    AppliedEventRecord,
-    CourtSide,
-    DomainEffect,
-    MatchState,
-    Reduction,
-    RulesError,
-    RulesReducer,
-    Ruleset,
-    SetPhase,
-    SetResult,
-    SetState,
-)
+Public contracts live in explicit submodules.  Keeping package import inert is
+intentional: importing the readiness verifier must not eagerly execute the
+scoring, inference, authorization, or persistence control plane.
+"""
 
-__all__ = [
-    "AppliedEventRecord",
-    "Authority",
-    "CalibrationSegment",
-    "CalibrationState",
-    "ConfirmationMode",
-    "CourtSide",
-    "DomainEffect",
-    "DecisionState",
-    "EventProposal",
-    "FramePacket",
-    "MatchState",
-    "ModelProvenance",
-    "Observation",
-    "ObservationType",
-    "RallyDecision",
-    "Reduction",
-    "RuleEvent",
-    "RuleEventType",
-    "RulesError",
-    "RulesReducer",
-    "Ruleset",
-    "SetPhase",
-    "SetResult",
-    "SetState",
-    "Team",
-    "Visibility",
-]
+__all__: tuple[str, ...] = ()

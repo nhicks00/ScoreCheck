@@ -1,13 +1,1 @@
-{
-  "dataset_trust_store_sha256": "87eb205874849ee387d8fba241c3a5e1c3fe4c7e0355c23cba665c6d6c0ded30",
-  "deployment_artifact_sha256": "ada0689d8c632e1ec54c0d97bd5428afc6875b6d36fe6f363d3e12c0b81dda38",
-  "governance_domain_id": "example-dataset-governance",
-  "policy_id": "synthetic-readiness-policy-v1",
-  "require_unseen_test_venue": true,
-  "rights_verification_policy_sha256": "2ca5a11bda6219ab2e62c3a36c9e45f9ad41ff739fe9770d6ffee1516b7eaf1f",
-  "runtime_identity_sha256": "45bcc0b309ac45a0800a6fd2db6397a65538a9055e9beb8566088418e734bf27",
-  "schema_version": "1.0",
-  "valid_from": "2026-07-01",
-  "valid_until": "2099-12-31",
-  "verifier_source_tree_sha256": "4418d6c430a9d6c149a31b05ebdcff9312fe7fb1b9f8eeea81b8489a23095f28"
-}
+{"dataset_trust_store_sha256":"efefef580146912a1505f6b2dac58c3bc364d5e9b4e15efb4fb913492a060649","deployment_artifact_sha256":"e2df13809c729ff6f6f6aab234f957f493df2ecbf5296ffd8fbad97aa6bbf124","governance_domain_id":"example-dataset-governance","policy_id":"synthetic-readiness-policy-v3","require_unseen_test_venue":true,"rights_verification_policy_sha256":"0fc92173a556d4d69d3ac21f3cd18af24e620d06978015506216f2923b018272","runtime_identity_sha256":"45bcc0b309ac45a0800a6fd2db6397a65538a9055e9beb8566088418e734bf27","schema_version":"1.0","valid_from":"2026-07-01","valid_until":"2099-12-31","verifier_source_tree_sha256":"a5bdef1c90822887cf9b3436f84d04a34b3639fd77f3a53abb41a1a57945c649"}

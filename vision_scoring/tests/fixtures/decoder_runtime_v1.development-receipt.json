@@ -1,0 +1,532 @@
+{
+  "assumptions": [
+    "arm64 macOS deployment target 26.0 for this measured host generation only",
+    "development evidence grants no production, support, security, patent, license, training, evaluation, deployment, or runtime-execution authority",
+    "Apple system runtime remains ambient and is measured rather than bundled"
+  ],
+  "audit_implementation": {
+    "builder_filename": "build_decoder_runtime_v1.py",
+    "builder_source_sha256": "16002a0bb56eb4d6987716330ce043638b2d179e391e22d808abe200b4b15c5d",
+    "decoder_command_module_path": "src/vision_scoring/decoder_commands.py",
+    "decoder_command_module_schema_version": "1.0",
+    "decoder_command_module_source_sha256": "d5d9d7af27983f0d2e2ea3d49ab1dd798512762358038b4e7c578902206c22d1",
+    "download_proxy_policy": "ENVIRONMENT_PROXIES_DISABLED",
+    "external_tool_environment": {
+      "HOME": "/nonexistent",
+      "LANG": "C",
+      "LC_ALL": "C",
+      "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+      "TMPDIR": "/nonexistent",
+      "TZ": "UTC"
+    },
+    "gpg_agent_policy": "NO_AUTOSTART"
+  },
+  "authority": {
+    "admission_approved": false,
+    "deployment_approved": false,
+    "evaluation_approved": false,
+    "license_approved": false,
+    "patent_approved": false,
+    "production_approved": false,
+    "runtime_execution_approved": false,
+    "security_approved": false,
+    "support_approved": false,
+    "training_approved": false
+  },
+  "build": {
+    "byte_identical_across_two_clean_builds": true,
+    "candidate_execution": {
+      "close_fds": true,
+      "controlled_cwd": "$CANDIDATE_DIRECTORY",
+      "environment": {
+        "AV_LOG_FORCE_NOCOLOR": "1",
+        "HOME": "/nonexistent",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "NO_COLOR": "1",
+        "PATH": "/nonexistent",
+        "TMPDIR": "/nonexistent",
+        "TZ": "UTC"
+      },
+      "shell": false,
+      "start_new_session": true,
+      "stdin": "DEVNULL"
+    },
+    "clean_build_object_sha256s": {
+      "a": {
+        "ffmpeg": "780aa8f1fe15a86c97d16181fb8867f13424adc95106f2b5dbf8eee0cac54a1e",
+        "ffprobe": "edbb6ea959a7df036e8d1d7122c21b172f439e63633c19b9908246b2e69d3013"
+      },
+      "b": {
+        "ffmpeg": "780aa8f1fe15a86c97d16181fb8867f13424adc95106f2b5dbf8eee0cac54a1e",
+        "ffprobe": "edbb6ea959a7df036e8d1d7122c21b172f439e63633c19b9908246b2e69d3013"
+      }
+    },
+    "ffmpeg": {
+      "macho": {
+        "architecture": "arm64",
+        "code_directory_sha256": "c59df5c074d420ea869f0a18dc3358ef4083c836284c1be22fb45a3c99b9dcd8",
+        "cpu_subtype": "ALL",
+        "cpu_type": "ARM64",
+        "direct_dylibs": [
+          "/usr/lib/libSystem.B.dylib"
+        ],
+        "dyld_path": "/usr/lib/dyld",
+        "forbidden_imports": [],
+        "import_count": 134,
+        "imports_sha256": "8e2c080ff648e2d3c03fbae0a302a3e5a9c1ff303f0d9c163b564eb0b720640a",
+        "load_commands": [
+          "LC_BUILD_VERSION",
+          "LC_CODE_SIGNATURE",
+          "LC_DATA_IN_CODE",
+          "LC_DYLD_CHAINED_FIXUPS",
+          "LC_DYLD_EXPORTS_TRIE",
+          "LC_DYSYMTAB",
+          "LC_FUNCTION_STARTS",
+          "LC_LOAD_DYLIB",
+          "LC_LOAD_DYLINKER",
+          "LC_MAIN",
+          "LC_SEGMENT_64",
+          "LC_SEGMENT_64",
+          "LC_SEGMENT_64",
+          "LC_SEGMENT_64",
+          "LC_SEGMENT_64",
+          "LC_SOURCE_VERSION",
+          "LC_SYMTAB",
+          "LC_UUID"
+        ],
+        "minos": "26.0",
+        "sdk": "26.5",
+        "signature": "adhoc-linker-signed-valid",
+        "uuid": "77648202-7113-3604-BC22-E6A82E7BEC83"
+      },
+      "object_sha256": "780aa8f1fe15a86c97d16181fb8867f13424adc95106f2b5dbf8eee0cac54a1e",
+      "size_bytes": 4648680,
+      "version_output_sha256": "22983830b6b7044ce877f0cb8a89fefcfde4c70165d619139b131db4913c066d"
+    },
+    "ffprobe": {
+      "macho": {
+        "architecture": "arm64",
+        "code_directory_sha256": "5a3173889f3856d21dc9e7e6832e6161dcd7a899e416f1b6a609c4670a54fc22",
+        "cpu_subtype": "ALL",
+        "cpu_type": "ARM64",
+        "direct_dylibs": [
+          "/usr/lib/libSystem.B.dylib"
+        ],
+        "dyld_path": "/usr/lib/dyld",
+        "forbidden_imports": [],
+        "import_count": 121,
+        "imports_sha256": "9780534fb467eab934b702de74caab2dad52cb34be9040cfc0319e4e9c7d0108",
+        "load_commands": [
+          "LC_BUILD_VERSION",
+          "LC_CODE_SIGNATURE",
+          "LC_DATA_IN_CODE",
+          "LC_DYLD_CHAINED_FIXUPS",
+          "LC_DYLD_EXPORTS_TRIE",
+          "LC_DYSYMTAB",
+          "LC_FUNCTION_STARTS",
+          "LC_LOAD_DYLIB",
+          "LC_LOAD_DYLINKER",
+          "LC_MAIN",
+          "LC_SEGMENT_64",
+          "LC_SEGMENT_64",
+          "LC_SEGMENT_64",
+          "LC_SEGMENT_64",
+          "LC_SEGMENT_64",
+          "LC_SOURCE_VERSION",
+          "LC_SYMTAB",
+          "LC_UUID"
+        ],
+        "minos": "26.0",
+        "sdk": "26.5",
+        "signature": "adhoc-linker-signed-valid",
+        "uuid": "F7C51F0D-33FC-3D6F-89AA-33C5B4C83D71"
+      },
+      "object_sha256": "edbb6ea959a7df036e8d1d7122c21b172f439e63633c19b9908246b2e69d3013",
+      "size_bytes": 4438152,
+      "version_output_sha256": "e3d1b6d8f5efd21ad70466b5cba7bbf4a95f9ac6e7d78e1adb4b9cafcb96f1e9"
+    },
+    "recipe": {
+      "build_command": [
+        "make",
+        "-j1",
+        "V=1"
+      ],
+      "configure_arguments": [
+        "--prefix=/scorecheck/decoder-runtime-v1",
+        "--arch=arm64",
+        "--cpu=generic",
+        "--target-os=darwin",
+        "--sysroot=$SDKROOT",
+        "--cc=$TOOLCHAIN/clang",
+        "--cxx=$TOOLCHAIN/clang++",
+        "--objcc=/usr/bin/false",
+        "--ar=$TOOLCHAIN/ar",
+        "--ranlib=$TOOLCHAIN/ranlib",
+        "--strip=$TOOLCHAIN/strip",
+        "--nm=$TOOLCHAIN/nm",
+        "--pkg-config=/usr/bin/false",
+        "--disable-shared",
+        "--enable-static",
+        "--enable-pic",
+        "--disable-autodetect",
+        "--disable-everything",
+        "--disable-doc",
+        "--disable-debug",
+        "--disable-avdevice",
+        "--disable-swresample",
+        "--disable-ffplay",
+        "--disable-network",
+        "--disable-iamf",
+        "--disable-error-resilience",
+        "--disable-swscale-alpha",
+        "--disable-runtime-cpudetect",
+        "--disable-arm-crc",
+        "--disable-dotprod",
+        "--disable-i8mm",
+        "--disable-sve",
+        "--disable-sve2",
+        "--disable-sme",
+        "--disable-sme-i16i64",
+        "--disable-sme2",
+        "--disable-avfoundation",
+        "--disable-audiotoolbox",
+        "--disable-videotoolbox",
+        "--disable-coreimage",
+        "--disable-metal",
+        "--disable-securetransport",
+        "--disable-iconv",
+        "--disable-zlib",
+        "--disable-bzlib",
+        "--disable-lzma",
+        "--disable-sdl2",
+        "--disable-xlib",
+        "--disable-vulkan",
+        "--disable-gpl",
+        "--disable-version3",
+        "--disable-nonfree",
+        "--enable-pthreads",
+        "--enable-ffmpeg",
+        "--enable-ffprobe",
+        "--enable-demuxer=mov",
+        "--enable-decoder=h264,hevc",
+        "--enable-encoder=rawvideo",
+        "--enable-muxer=rawvideo,framehash",
+        "--enable-filter=scale,format,split",
+        "--enable-protocol=fd,pipe",
+        "--extra-version=scorecheck-v1",
+        "--extra-cflags=-ffile-prefix-map=$SOURCE=/usr/src/ffmpeg-8.1.2 -fdebug-prefix-map=$SOURCE=/usr/src/ffmpeg-8.1.2 -ffile-prefix-map=.=/.build/ffmpeg -fdebug-prefix-map=.=/.build/ffmpeg -fstack-protector-strong -D_FORTIFY_SOURCE=2",
+        "--extra-ldexeflags=-Wl,-reproducible"
+      ],
+      "environment": {
+        "HOME": "$BUILD_HOME",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "MACOSX_DEPLOYMENT_TARGET": "26.0",
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        "SDKROOT": "$SDKROOT",
+        "SOURCE_DATE_EPOCH": "1781675220",
+        "TMPDIR": "$BUILD_TMPDIR",
+        "TZ": "UTC",
+        "ZERO_AR_DATE": "1"
+      },
+      "source_sha256": "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c"
+    },
+    "recipe_sha256": "512307ed1855b9cac3366d921fef89aa4de966a4c4a22b06807e4d71613b2522",
+    "source_tree_sha256": "5b1f97dcc9709a41f5004d13a1cf6380e8b49f31b515d2bef48d200949d5f441",
+    "source_tree_unchanged": true
+  },
+  "capabilities": {
+    "bitstream_filters": [],
+    "decoders": [
+      "h264",
+      "hevc"
+    ],
+    "demuxers": [
+      "3g2",
+      "3gp",
+      "m4a",
+      "mj2",
+      "mov",
+      "mp4"
+    ],
+    "devices": [],
+    "encoders": [
+      "rawvideo"
+    ],
+    "filters": [
+      "abuffer",
+      "abuffersink",
+      "aformat",
+      "anull",
+      "atrim",
+      "buffer",
+      "buffersink",
+      "crop",
+      "format",
+      "hflip",
+      "null",
+      "rotate",
+      "scale",
+      "split",
+      "transpose",
+      "trim",
+      "vflip"
+    ],
+    "hardware_accelerators": [],
+    "muxers": [
+      "framehash",
+      "rawvideo"
+    ],
+    "protocols": {
+      "input": [
+        "fd",
+        "pipe"
+      ],
+      "output": [
+        "fd",
+        "pipe"
+      ]
+    }
+  },
+  "checks": {
+    "exact_capability_closure_passed": true,
+    "h264_golden_passed": true,
+    "hevc10_golden_passed": true,
+    "loader_equivalent_ambient_free_execution_passed": true,
+    "macho_audit_passed": true,
+    "reproducible_bytes_passed": true,
+    "source_signature_passed": true,
+    "two_goldens_present": true
+  },
+  "goldens": {
+    "h264": {
+      "available": true,
+      "codec": "h264",
+      "expected_contract_sha256": "1183c51a30a2398d06134669232c3283b253548367a38c184e51bf5e637eed11",
+      "fixture_sha256": "3dcf5b3701577c1e49b450e4325dceaae20b2c16fc524cb2f0b925136e9860c1",
+      "loader_equivalent_probe_passed": true,
+      "passed": true
+    },
+    "hevc10": {
+      "available": true,
+      "codec": "hevc",
+      "expected_contract_sha256": "d7faaa382018313c5c49f3e02d53915b389f53dc6a026fecdaef02929ea31fa7",
+      "fixture_sha256": "380fc82506dc596f572e5535c99713ee676f7c37e5682506e994d93df1cd3aa0",
+      "loader_equivalent_probe_passed": true,
+      "passed": true
+    }
+  },
+  "host_generation": {
+    "architecture": "arm64",
+    "clang_sha256": "7def90dd8829726686213a747fc5bff1583df933dae5edc55d755479e0bfe00a",
+    "clang_version": "Apple clang 21.0.0 (clang-2100.1.1.101)",
+    "darwin_release": "25.5.0",
+    "gpg_sha256": "415dbe9fbbba5e9dd275105b9fe6fcecc208a4e41eb41a8623c3e07684b6671e",
+    "gpg_version": "2.4.9",
+    "ld_version": "1267",
+    "macos_build": "25F80",
+    "macos_version": "26.5.1",
+    "make_version": "GNU Make 3.81",
+    "sdk_libsystem_tbd_sha256": "20cfce043f11a083e2eb6111efe3579919a8082fa4cc912a7bd839af2010ec57",
+    "sdk_settings_sha256": "f8d005f09381389167f9e0aeaa169bc9e7dff162ef22ca2fd8e98df7ff1acafe",
+    "sdk_version": "26.5",
+    "xcode_build": "17F113",
+    "xcode_version": "26.6"
+  },
+  "license_boundary": {
+    "configure_report": "LGPL version 2.1 or later",
+    "external_libraries": [],
+    "legal_review_complete": false,
+    "patent_review_complete": false
+  },
+  "purpose": "DEVELOPMENT_EVIDENCE_ONLY",
+  "schema_version": "1.0",
+  "source": {
+    "archive_sha256": "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c",
+    "detached_signature_sha256": "0a0963fccd70597838073f3e31b20f4a4d8cc2b5e577472c9a5a1f22624246f8",
+    "release_key_sha256": "397b3becedcd5a98769967ff1ff8501ddc89f8368b8f766e4701377d7dbaabe5",
+    "signature": {
+      "fingerprint": "FCF986EA15E6E293A5644F10B4322F04D67658D8",
+      "signature_epoch": 1781664539,
+      "signature_utc_date": "2026-06-17",
+      "verified": true
+    },
+    "version": "8.1.2"
+  },
+  "system_runtime": {
+    "measurement": {
+      "architecture": "arm64",
+      "darwin_release": "25.5.0",
+      "dyld_arm64e_uuid": "A237EF81-B68B-37BA-A165-92C965529534",
+      "libsystem_arm64e_uuid": "D65E4112-C151-3FF8-BEB7-4841436012D6",
+      "libsystem_reexports": [
+        {
+          "install_name": "/usr/lib/system/libcache.dylib",
+          "uuid": "189B576E-6176-3F82-8FA4-5914B0BEAEE7"
+        },
+        {
+          "install_name": "/usr/lib/system/libcommonCrypto.dylib",
+          "uuid": "CE357BB1-2D49-37CC-9FFE-D093936B1475"
+        },
+        {
+          "install_name": "/usr/lib/system/libcompiler_rt.dylib",
+          "uuid": "AA79151F-C19D-3C7C-92F8-B10F04D82C1C"
+        },
+        {
+          "install_name": "/usr/lib/system/libcopyfile.dylib",
+          "uuid": "8ACFAC7A-88E9-3EF4-853F-A9140FF110E5"
+        },
+        {
+          "install_name": "/usr/lib/system/libcorecrypto.dylib",
+          "uuid": "A01A158D-6FE7-3B1C-A2C4-6BCB90D7314A"
+        },
+        {
+          "install_name": "/usr/lib/system/libdispatch.dylib",
+          "uuid": "F071EFE4-299F-3089-ACC4-0025B8FFB52A"
+        },
+        {
+          "install_name": "/usr/lib/system/libdyld.dylib",
+          "uuid": "B147D877-D0C2-388F-B38D-D3132E39905F"
+        },
+        {
+          "install_name": "/usr/lib/system/libkeymgr.dylib",
+          "uuid": "8C08891A-DF1C-3DCC-AB64-4742FD6BE9BA"
+        },
+        {
+          "install_name": "/usr/lib/system/libmacho.dylib",
+          "uuid": "755441B4-C034-3E3A-8E3C-F424FBB28261"
+        },
+        {
+          "install_name": "/usr/lib/system/libquarantine.dylib",
+          "uuid": "5849009B-ACA3-3796-94C4-BBDF8D300EBA"
+        },
+        {
+          "install_name": "/usr/lib/system/libremovefile.dylib",
+          "uuid": "635E661D-80A7-340D-A165-3F7D318FDFC9"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_asl.dylib",
+          "uuid": "F40838DF-2F15-3F62-970F-DEE25706BF1B"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_blocks.dylib",
+          "uuid": "CC947089-488D-316B-A9C7-46DEC0F73145"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_c.dylib",
+          "uuid": "694B7881-1BF3-3D0F-8F19-B50AE4E8EF8A"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_collections.dylib",
+          "uuid": "72DB5BE7-EF78-37D0-8AAD-53E37CFE4287"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_configuration.dylib",
+          "uuid": "0F7BBC1C-3D50-3E59-A31F-E4672A80BCEB"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_containermanager.dylib",
+          "uuid": "518BE44D-AA31-31E6-B44B-A37AD5E47040"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_coreservices.dylib",
+          "uuid": "9576143B-C303-35A3-BA63-1FD06EDA2BB1"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_darwin.dylib",
+          "uuid": "8858F025-745A-388E-9544-080781CC9A69"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_darwindirectory.dylib",
+          "uuid": "CF277A2C-C818-3F16-8B3F-3C7B39FCD164"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_dnssd.dylib",
+          "uuid": "6F45DF3F-233B-3BC3-BA8C-B43E7DA884BF"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_eligibility.dylib",
+          "uuid": "DDAC0531-0262-3DDC-8EC8-80EB9438847A"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_featureflags.dylib",
+          "uuid": "71FCFFBD-85F8-3365-AFE0-BECEA4369122"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_info.dylib",
+          "uuid": "3D62F2D9-F516-31BF-83C7-E203D872300B"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_kernel.dylib",
+          "uuid": "CC1CF985-BC65-3725-809F-4C1E36B8F4BA"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_m.dylib",
+          "uuid": "A7E0863C-101A-31A0-922B-ED9B02626151"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_malloc.dylib",
+          "uuid": "5FAE4807-4D2B-3A95-A63A-DD96D3DA11B4"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_networkextension.dylib",
+          "uuid": "0331EE20-A1FB-3C0D-990A-F65939CFF505"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_notify.dylib",
+          "uuid": "64D76451-1E0C-369B-A631-54DA3140E083"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_platform.dylib",
+          "uuid": "160FD864-8D15-36FC-9E97-9725388CFAFE"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_pthread.dylib",
+          "uuid": "4F33683C-18C8-39A1-800B-2E3BD43BCC13"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_sandbox.dylib",
+          "uuid": "EC3A75EA-44C0-3A0B-9BF7-71C117B0A9C6"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_sanitizers.dylib",
+          "uuid": "44C4234F-8B2D-38D3-A774-B4B3C75AF3A7"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_secinit.dylib",
+          "uuid": "E525C566-CDA4-3D99-B12B-1615FD54A1F3"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_symptoms.dylib",
+          "uuid": "F5029F5C-1BF3-31C7-892E-BC8606AC829E"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_trace.dylib",
+          "uuid": "D0FABAB3-5AE7-3F10-8C62-60CBF5D70850"
+        },
+        {
+          "install_name": "/usr/lib/system/libsystem_trial.dylib",
+          "uuid": "68C583BA-AFF5-3916-86AE-6E38BFEF98D6"
+        },
+        {
+          "install_name": "/usr/lib/system/libunwind.dylib",
+          "uuid": "FC8F0C4E-6FB0-3E27-ABEF-B0FA720CD5E4"
+        },
+        {
+          "install_name": "/usr/lib/system/libxpc.dylib",
+          "uuid": "C40FCAE8-7A17-3D82-87CB-3DA4802ADEF1"
+        }
+      ],
+      "macos_build": "25F80",
+      "macos_version": "26.5.1"
+    },
+    "measurement_sha256": "4b138abd8d80b3ef221e59ded8d0cdbc76a233a36ee833eda4f3d33ce41d65bf"
+  },
+  "target": {
+    "architecture": "arm64",
+    "deployment_target": "26.0",
+    "platform": "macos",
+    "sdk": "26.5"
+  }
+}

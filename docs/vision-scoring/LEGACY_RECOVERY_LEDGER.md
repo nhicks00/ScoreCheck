@@ -41,13 +41,15 @@ hashed, rights-reviewed, and linked to a manifest before use.
 - corrections were insufficiently constrained and undo could toggle state.
 
 The new foundation already covers first-serve seeding, service order, replay,
-side-switch confirmation, simultaneous timeout effects, terminal auto-mutation
-blocking, deterministic fold, idempotency, exact canonical-ruleset fingerprint
-matching, and a latest-score-resolution/current-set compensating correction. Historical
-correction needs a separate durable replay service. Reducer authority checks are
-domain checks over caller-supplied values, not authentication; actor/role
-authentication, event signatures, verification, and transactional persistence
-remain pending.
+side-switch confirmation, simultaneous timeout effects, terminal transition
+validation, deterministic fold, idempotency, exact canonical-ruleset fingerprint
+matching, strict signed human commands, protected per-match role policy,
+authorizer countersignatures, and canonical state caching. Correction is
+deliberately unsupported by the event schema, reducer, and authorization
+allowlists; every correction must wait for a separately designed privileged
+replay command that rebuilds and revalidates the immutable history. The reducer
+still performs domain checks rather than authentication. Deployment
+identity/session resolution and transactional persistence remain pending.
 
 ## Recovery intake procedure
 

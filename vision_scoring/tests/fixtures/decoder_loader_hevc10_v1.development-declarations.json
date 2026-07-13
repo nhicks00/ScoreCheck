@@ -1,0 +1,61 @@
+{
+  "annotation_trust_store": {
+    "admission_authority": false,
+    "key_derivation_label": "multicourt-vision-scoring:untrusted-development-fixture-annotation-review-key:v1",
+    "key_id": "untrusted-development-fixture-review-key-v1",
+    "principal_id": "untrusted-development-fixture-reviewer-v1",
+    "public_key_base64": "JTo1uotdfMN5guofdyffrxLpE7Le8QuWRsXyh/8MRJA=",
+    "trust_domain_id": "untrusted-development-fixture-annotation-domain-v1"
+  },
+  "annotation_verification_policy": {
+    "admission_authority": false,
+    "minimum_review_state": "REVIEWED",
+    "policy_id": "untrusted-development-fixture-negative-review-policy-v1",
+    "truth_scope": "SYNTHETIC_DECODER_GOLDEN_NEGATIVE_ONLY"
+  },
+  "authority": {
+    "admission_approved": false,
+    "deployment_approved": false,
+    "evaluation_approved": false,
+    "license_approved": false,
+    "patent_approved": false,
+    "production_approved": false,
+    "runtime_execution_approved": false,
+    "security_approved": false,
+    "support_approved": false,
+    "training_approved": false
+  },
+  "capture_policy": {
+    "artifact_scope": "EXACT_REPOSITORY_HEVC10_DECODER_GOLDEN_ONLY",
+    "autorotation_policy": "IGNORE_CONTAINER_DISPLAY_TRANSFORM",
+    "capture_policy_id": "development-hevc10-decoder-golden-capture-policy-v1",
+    "spatial_transform": "NONE",
+    "training_authority": false
+  },
+  "curator_trust": {
+    "admission_authority": false,
+    "curator_id": "untrusted-development-fixture-curator-v1",
+    "key_derivation_label": "multicourt-vision-scoring:untrusted-development-fixture-label-curator-key:v1",
+    "key_id": "untrusted-development-fixture-curator-key-v1",
+    "public_key_base64": "tjzj6TJ/Jyqnf20azsoOJd6LHbXZLKo5pDuOI+idL38=",
+    "trust_domain_id": "untrusted-development-fixture-label-domain-v1"
+  },
+  "label_ontology": {
+    "match_ball_definition": "NO_SEMANTIC_MATCH_BALL_EXISTS_IN_THE_GENERATED_TEST_PATTERN",
+    "ontology_id": "development-synthetic-no-match-ball-v1",
+    "production_ontology": false
+  },
+  "negative_review_evidence": {
+    "evidence_id": "development-hevc10-no-match-ball-review-v1",
+    "frame_scope": "ALL_FIVE_COMPLETE_64X64_DECODED_FRAMES",
+    "review_basis": "REPOSITORY_GENERATED_SYNTHETIC_PATTERN_WITH_NO_BEACH_VOLLEYBALL_SEMANTICS",
+    "training_authority": false
+  },
+  "purpose": "DEVELOPMENT_FIXTURE_ONLY",
+  "rights_boundary": {
+    "external_media_present": false,
+    "rights_admission": false,
+    "scope": "REPOSITORY_GENERATED_SYNTHETIC_FIXTURE_ONLY"
+  },
+  "schema_version": "1.0"
+}

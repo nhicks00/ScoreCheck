@@ -1,4 +1,4 @@
-"""Trusted Ed25519 review attestations for evaluation annotations.
+"""Trusted Ed25519 review attestations for V2 ball observations.
 
 An annotation's ``REVIEWED`` or ``ADJUDICATED`` enum is descriptive payload,
 not authority. This module verifies one detached signature from every declared
@@ -14,6 +14,12 @@ the complete required raw SHA-256 set, and one shared read lease is held while
 every bounded object is staged and verified. The trust store and evidence store
 root are deployment inputs; they must not be taken from the dataset being
 evaluated.
+
+This V2 module intentionally supports ``BALL_FRAME_OBSERVATION`` only. Observed
+temporal, physical-adjudication, and official/legal records have distinct type
+tags but are not accepted by this verifier until their separate role and
+signature policies are implemented. They never fall through a generic ball
+verifier.
 
 The verification policy is also a protected deployment input. Its expected
 fingerprint must come from an independent protected configuration or release
@@ -33,7 +39,7 @@ import re
 import stat
 import time
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, timedelta
 from enum import Enum
 from multiprocessing.connection import Connection
 from pathlib import Path
@@ -42,27 +48,43 @@ from typing import Any, Mapping
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from .annotations import BallFrameAnnotation, ReviewState
+from .annotations import (
+    AnnotationType,
+    BallFrameAnnotationV2,
+    ReviewState,
+    UnavailableFrameReference,
+)
+from .contract_wire import (
+    CanonicalWireError,
+    canonical_finite_json_bytes,
+    enum_from_json,
+    parse_canonical_finite_json_object,
+    parse_canonical_json_object,
+    require_exact_fields,
+)
 from .immutable_store import (
     ImmutableStoreError,
     generation_id_for,
     generation_read_lease,
 )
+from .protected_file import read_protected_file_bytes
 
 
-SCHEMA_VERSION = "1.0"
-_SIGNING_DOMAIN = "multicourt-vision-scoring:annotation-attestation:v1"
-_ATTESTATION_SET_DOMAIN = (
-    "multicourt-vision-scoring:annotation-attestation-set:v1"
+SCHEMA_VERSION = "2.0"
+_SIGNING_DOMAIN = (
+    "multicourt-vision-scoring:annotation-attestation:ball-frame-observation:v2"
 )
-_EVIDENCE_SET_DOMAIN = "multicourt-vision-scoring:annotation-evidence-set:v1"
+_ATTESTATION_SET_DOMAIN = (
+    "multicourt-vision-scoring:annotation-attestation-set:v2"
+)
+_EVIDENCE_SET_DOMAIN = "multicourt-vision-scoring:annotation-evidence-set:v2"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _CONTENT_ADDRESS_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
 _STABLE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/+~-]{0,127}$")
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_UTC_TIMESTAMP_RE = re.compile(
-    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$"
-)
+_MAX_SIGNED_64 = (1 << 63) - 1
+_NANOSECONDS_PER_DAY = 86_400_000_000_000
+_UNIX_EPOCH_DATE = date(1970, 1, 1)
 _WORKER_ERROR_CODE_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 _MAX_EVIDENCE_FILES = 256
 _MAX_EVIDENCE_BYTES = 16 * 1024 * 1024
@@ -76,6 +98,22 @@ _MAX_TRUSTED_KEYS = 128
 _MAX_CURRENT_ANNOTATIONS = 100_000
 _MAX_REVOKED_ANNOTATIONS = 100_000
 _MAX_PROTECTED_CONFIGURATION_BYTES = 64 * 1024
+_MAX_ANNOTATION_POLICY_BYTES = 4 * 1024
+_MAX_ANNOTATION_TRUST_STORE_BYTES = 64 * 1024 * 1024
+_MAX_ANNOTATION_TRUST_STORE_JSON_DEPTH = 5
+_MAX_ANNOTATION_TRUST_STORE_JSON_NODES = (
+    6
+    + (10 * _MAX_TRUSTED_KEYS)
+    + (4 * _MAX_CURRENT_ANNOTATIONS)
+    + _MAX_REVOKED_ANNOTATIONS
+)
+_MAX_ANNOTATION_TRUST_STORE_JSON_CONTAINERS = (
+    4 + (2 * _MAX_TRUSTED_KEYS) + _MAX_CURRENT_ANNOTATIONS
+)
+_MAX_ANNOTATION_ATTESTATION_JSON_BYTES = 4 * 1024
+_MAX_ANNOTATION_ATTESTATION_JSON_DEPTH = 2
+_MAX_ANNOTATION_ATTESTATION_JSON_NODES = 32
+_MAX_ANNOTATION_ATTESTATION_JSON_CONTAINERS = 1
 _EVIDENCE_TIMEOUT_SECONDS = 30.0
 
 _PROTECTED_CONFIGURATION_FIELDS = frozenset(
@@ -84,6 +122,45 @@ _PROTECTED_CONFIGURATION_FIELDS = frozenset(
         "annotation_verification_policy_sha256",
         "evaluator_artifact_sha256",
         "governance_domain_id",
+        "schema_version",
+    }
+)
+
+_ANNOTATION_POLICY_FIELDS = frozenset(
+    {
+        "evaluator_artifact_sha256",
+        "governance_domain_id",
+        "minimum_truth_policy",
+        "policy_id",
+        "schema_version",
+        "trust_store_sha256",
+        "valid_from",
+        "valid_until",
+    }
+)
+
+_TRUSTED_ANNOTATION_KEY_FIELDS = frozenset(
+    {
+        "compromised_on",
+        "key_id",
+        "permitted_roles",
+        "principal_id",
+        "public_key_base64",
+        "valid_from",
+        "valid_until",
+    }
+)
+
+_CURRENT_ANNOTATION_FIELDS = frozenset(
+    {"annotation_id", "annotation_sha256", "annotation_type"}
+)
+
+_ANNOTATION_TRUST_STORE_FIELDS = frozenset(
+    {
+        "current_annotations",
+        "keyring_id",
+        "keys",
+        "revoked_annotation_sha256s",
         "schema_version",
     }
 )
@@ -190,25 +267,13 @@ def _parse_date(value: object, field_name: str) -> date:
     return parsed
 
 
-def _canonical_utc_now() -> tuple[str, date]:
-    verified_at = datetime.now(timezone.utc)
-    canonical = verified_at.isoformat(timespec="microseconds").replace("+00:00", "Z")
-    return canonical, verified_at.date()
-
-
-def _parse_utc_timestamp(value: object, field_name: str) -> datetime:
-    if type(value) is not str or not _UTC_TIMESTAMP_RE.fullmatch(value):
-        raise ValueError(f"{field_name} must be a canonical UTC timestamp")
-    try:
-        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
-    except ValueError as error:
-        raise ValueError(f"{field_name} must be a canonical UTC timestamp") from error
-    canonical = parsed.astimezone(timezone.utc).isoformat(
-        timespec="microseconds"
-    ).replace("+00:00", "Z")
-    if canonical != value:
-        raise ValueError(f"{field_name} must be a canonical UTC timestamp")
-    return parsed
+def _date_from_protected_unix_epoch_ns(value: object) -> date:
+    if type(value) is not int or not 0 <= value <= _MAX_SIGNED_64:
+        raise ValueError(
+            "protected_verified_at_ns must be an exact nonnegative signed-64 "
+            "Unix epoch nanosecond"
+        )
+    return _UNIX_EPOCH_DATE + timedelta(days=value // _NANOSECONDS_PER_DAY)
 
 
 def _canonical_base64(
@@ -258,117 +323,107 @@ def _exact_fields(
         raise ValueError(f"{label} is missing fields: {', '.join(missing)}")
 
 
-def _stat_identity(value: os.stat_result) -> tuple[int, int]:
-    return value.st_dev, value.st_ino
+def _exact_json_array(
+    payload: Mapping[str, Any],
+    field_name: str,
+    *,
+    label: str,
+) -> list[Any]:
+    value = payload[field_name]
+    if type(value) is not list:
+        raise ValueError(f"{label}.{field_name} must be a JSON array")
+    return value
 
 
-def _stat_state(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
-    return (
-        value.st_dev,
-        value.st_ino,
-        value.st_mode,
-        value.st_size,
-        value.st_mtime_ns,
-        value.st_ctime_ns,
-    )
+def _parse_large_canonical_json_object(
+    raw: bytes,
+    *,
+    label: str,
+    maximum_bytes: int,
+    maximum_depth: int,
+    maximum_nodes: int,
+    maximum_containers: int,
+) -> dict[str, Any]:
+    """Parse canonical JSON beyond the generic wire parser's 50k-node cap."""
 
+    if type(raw) is not bytes or not 1 <= len(raw) <= maximum_bytes:
+        raise ValueError(f"{label} must be 1 to {maximum_bytes} exact bytes")
 
-def _strict_protected_configuration_json(path: Path) -> Mapping[str, Any]:
-    """Read one bounded regular descriptor through a stable file descriptor."""
-
-    label = "protected annotation configuration generation"
-    if not isinstance(path, Path):
-        raise ValueError(f"{label} path must be a pathlib.Path")
     try:
-        path_stat = os.lstat(path)
-    except OSError as error:
-        raise ValueError(f"{label} is unavailable") from error
-    if stat.S_ISLNK(path_stat.st_mode) or not stat.S_ISREG(path_stat.st_mode):
-        raise ValueError(f"{label} must be a non-symlink regular file")
-    if path_stat.st_size > _MAX_PROTECTED_CONFIGURATION_BYTES:
-        raise ValueError(
-            f"{label} exceeds {_MAX_PROTECTED_CONFIGURATION_BYTES} bytes"
-        )
-
-    flags = os.O_RDONLY
-    if hasattr(os, "O_CLOEXEC"):
-        flags |= os.O_CLOEXEC
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    if hasattr(os, "O_NONBLOCK"):
-        flags |= os.O_NONBLOCK
-    try:
-        descriptor = os.open(path, flags)
-    except OSError as error:
-        raise ValueError(f"{label} could not be opened safely") from error
-    try:
-        descriptor_before = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(descriptor_before.st_mode)
-            or _stat_identity(path_stat) != _stat_identity(descriptor_before)
-            or _stat_state(path_stat) != _stat_state(descriptor_before)
-        ):
-            raise ValueError(f"{label} changed while opening")
-        if descriptor_before.st_size > _MAX_PROTECTED_CONFIGURATION_BYTES:
-            raise ValueError(
-                f"{label} exceeds {_MAX_PROTECTED_CONFIGURATION_BYTES} bytes"
-            )
-
-        remaining = descriptor_before.st_size
-        chunks: list[bytes] = []
-        while remaining:
-            chunk = os.read(descriptor, min(64 * 1024, remaining))
-            if not chunk:
-                raise ValueError(f"{label} was truncated while reading")
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        if os.read(descriptor, 1):
-            raise ValueError(f"{label} grew while reading")
-
-        descriptor_after = os.fstat(descriptor)
-        try:
-            final_path_stat = os.lstat(path)
-        except OSError as error:
-            raise ValueError(f"{label} changed while reading") from error
-        if (
-            not stat.S_ISREG(descriptor_after.st_mode)
-            or stat.S_ISLNK(final_path_stat.st_mode)
-            or not stat.S_ISREG(final_path_stat.st_mode)
-            or _stat_state(descriptor_before) != _stat_state(descriptor_after)
-            or _stat_identity(descriptor_after) != _stat_identity(final_path_stat)
-            or _stat_state(descriptor_after) != _stat_state(final_path_stat)
-        ):
-            raise ValueError(f"{label} changed while reading")
-        raw = b"".join(chunks)
-    finally:
-        os.close(descriptor)
+        decoded = raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{label} must be valid UTF-8 JSON") from exc
 
     def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         result: dict[str, Any] = {}
         for key, value in pairs:
             if key in result:
-                raise ValueError(
-                    f"{label} contains duplicate JSON object key: {key}"
-                )
+                raise ValueError(f"{label} contains duplicate JSON key: {key}")
             result[key] = value
         return result
 
+    def reject_number(value: str) -> object:
+        raise ValueError(f"{label} cannot contain JSON numbers: {value[:32]}")
+
     try:
-        payload = json.loads(
-            raw.decode("utf-8", errors="strict"),
+        value = json.loads(
+            decoded,
             object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_number,
+            parse_float=reject_number,
+            parse_int=reject_number,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ValueError(f"{label} must be valid UTF-8 JSON") from error
-    if not isinstance(payload, Mapping):
-        raise ValueError(f"{label} root must be a JSON object")
-    return payload
+    except RecursionError as exc:
+        raise ValueError(f"{label} exceeds JSON depth {maximum_depth}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{label} must be valid UTF-8 JSON") from exc
+
+    nodes = 0
+    containers = 0
+    pending: list[tuple[object, int]] = [(value, 1)]
+    while pending:
+        item, depth = pending.pop()
+        if depth > maximum_depth:
+            raise ValueError(f"{label} exceeds JSON depth {maximum_depth}")
+        nodes += 1
+        if nodes > maximum_nodes:
+            raise ValueError(f"{label} exceeds JSON node limit {maximum_nodes}")
+        if type(item) is dict:
+            containers += 1
+            if containers > maximum_containers:
+                raise ValueError(
+                    f"{label} exceeds JSON container limit {maximum_containers}"
+                )
+            for key, child in item.items():
+                if type(key) is not str:
+                    raise ValueError(f"{label} JSON object keys must be strings")
+                pending.append((child, depth + 1))
+        elif type(item) is list:
+            containers += 1
+            if containers > maximum_containers:
+                raise ValueError(
+                    f"{label} exceeds JSON container limit {maximum_containers}"
+                )
+            pending.extend((child, depth + 1) for child in item)
+        elif item is not None and type(item) not in (str, bool):
+            raise ValueError(f"{label} contains an unsupported JSON value")
+
+    if type(value) is not dict:
+        raise ValueError(f"{label} root must be an object")
+    try:
+        canonical = _canonical_json(value).encode("utf-8", errors="strict")
+    except (TypeError, ValueError, UnicodeEncodeError) as exc:
+        raise ValueError(f"{label} contains an unsupported JSON value") from exc
+    if raw != canonical:
+        raise ValueError(f"{label} bytes are not canonical")
+    return value
 
 
 @dataclass(frozen=True, slots=True)
 class AnnotationAttestation:
     """Detached signature by one declared annotation principal."""
 
+    annotation_type: AnnotationType
     annotation_sha256: str
     role: AnnotationAttestationRole
     principal_id: str
@@ -378,6 +433,12 @@ class AnnotationAttestation:
     signature_base64: str
 
     def __post_init__(self) -> None:
+        if type(self.annotation_type) is not AnnotationType:
+            raise ValueError("annotation_type must be an AnnotationType")
+        if self.annotation_type is not AnnotationType.BALL_FRAME_OBSERVATION:
+            raise ValueError(
+                "annotation trust V2 currently supports BALL_FRAME_OBSERVATION only"
+            )
         _require_sha256(self.annotation_sha256, "annotation_sha256")
         if type(self.role) is not AnnotationAttestationRole:
             raise ValueError("role must be an AnnotationAttestationRole")
@@ -401,6 +462,7 @@ class AnnotationAttestation:
 
     def to_canonical_dict(self) -> dict[str, Any]:
         return {
+            "annotation_type": self.annotation_type.value,
             "annotation_sha256": self.annotation_sha256,
             "key_id": self.key_id,
             "principal_id": self.principal_id,
@@ -410,6 +472,82 @@ class AnnotationAttestation:
             "signed_on": self.signed_on,
             "trust_domain_id": self.trust_domain_id,
         }
+
+    def to_json_bytes(self) -> bytes:
+        """Return the bounded canonical persisted representation."""
+
+        return canonical_finite_json_bytes(
+            self.to_canonical_dict(),
+            label="annotation attestation",
+            maximum_bytes=_MAX_ANNOTATION_ATTESTATION_JSON_BYTES,
+            maximum_depth=_MAX_ANNOTATION_ATTESTATION_JSON_DEPTH,
+            maximum_nodes=_MAX_ANNOTATION_ATTESTATION_JSON_NODES,
+            maximum_containers=_MAX_ANNOTATION_ATTESTATION_JSON_CONTAINERS,
+        )
+
+    @classmethod
+    def from_json_bytes(cls, raw: bytes) -> AnnotationAttestation:
+        """Reconstruct one attestation only from exact canonical bytes."""
+
+        payload = parse_canonical_finite_json_object(
+            raw,
+            label="annotation attestation",
+            maximum_bytes=_MAX_ANNOTATION_ATTESTATION_JSON_BYTES,
+            maximum_depth=_MAX_ANNOTATION_ATTESTATION_JSON_DEPTH,
+            maximum_nodes=_MAX_ANNOTATION_ATTESTATION_JSON_NODES,
+            maximum_containers=_MAX_ANNOTATION_ATTESTATION_JSON_CONTAINERS,
+        )
+        try:
+            payload = require_exact_fields(
+                payload,
+                {
+                    "annotation_sha256",
+                    "annotation_type",
+                    "key_id",
+                    "principal_id",
+                    "role",
+                    "schema_version",
+                    "signature_base64",
+                    "signed_on",
+                    "trust_domain_id",
+                },
+                label="annotation attestation",
+            )
+            if payload["schema_version"] != SCHEMA_VERSION:
+                raise ValueError(
+                    f"annotation attestation schema_version must be {SCHEMA_VERSION}"
+                )
+            attestation = cls(
+                annotation_type=enum_from_json(
+                    AnnotationType,
+                    payload["annotation_type"],
+                    "annotation attestation.annotation_type",
+                ),  # type: ignore[arg-type]
+                annotation_sha256=payload["annotation_sha256"],
+                role=enum_from_json(
+                    AnnotationAttestationRole,
+                    payload["role"],
+                    "annotation attestation.role",
+                ),  # type: ignore[arg-type]
+                principal_id=payload["principal_id"],
+                key_id=payload["key_id"],
+                trust_domain_id=payload["trust_domain_id"],
+                signed_on=payload["signed_on"],
+                signature_base64=payload["signature_base64"],
+            )
+        except CanonicalWireError:
+            raise
+        except (KeyError, TypeError, ValueError) as exc:
+            raise CanonicalWireError(
+                "ATTESTATION_SHAPE",
+                "annotation attestation fields are invalid",
+            ) from exc
+        if raw != attestation.to_json_bytes():
+            raise CanonicalWireError(
+                "NONCANONICAL_CONTRACT",
+                "annotation attestation bytes changed during reconstruction",
+            )
+        return attestation
 
     def fingerprint(self) -> str:
         return hashlib.sha256(
@@ -488,6 +626,53 @@ class AnnotationVerificationPolicy:
         return hashlib.sha256(self.canonical_json().encode("utf-8")).hexdigest()
 
 
+def annotation_verification_policy_from_dict(
+    payload: Mapping[str, Any],
+) -> AnnotationVerificationPolicy:
+    label = "annotation verification policy"
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{label} must be a JSON object")
+    _exact_fields(payload, _ANNOTATION_POLICY_FIELDS, label)
+    if payload.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError(f"{label} schema_version must be {SCHEMA_VERSION}")
+    return AnnotationVerificationPolicy(
+        policy_id=payload.get("policy_id"),
+        governance_domain_id=payload.get("governance_domain_id"),
+        trust_store_sha256=payload.get("trust_store_sha256"),
+        evaluator_artifact_sha256=payload.get("evaluator_artifact_sha256"),
+        minimum_truth_policy=enum_from_json(
+            AnnotationMinimumTruthPolicy,
+            payload.get("minimum_truth_policy"),
+            "annotation verification policy.minimum_truth_policy",
+        ),  # type: ignore[arg-type]
+        valid_from=payload.get("valid_from"),
+        valid_until=payload.get("valid_until"),
+    )
+
+
+def load_annotation_verification_policy(
+    path: Path,
+) -> AnnotationVerificationPolicy:
+    label = "annotation verification policy"
+    raw = read_protected_file_bytes(
+        path,
+        max_bytes=_MAX_ANNOTATION_POLICY_BYTES,
+        label=label,
+    )
+    payload = parse_canonical_json_object(
+        raw,
+        label=label,
+        maximum_bytes=_MAX_ANNOTATION_POLICY_BYTES,
+        maximum_depth=2,
+        maximum_nodes=16,
+        maximum_containers=1,
+    )
+    result = annotation_verification_policy_from_dict(payload)
+    if raw != result.canonical_json().encode("utf-8"):
+        raise ValueError(f"{label} did not reconstruct exactly")
+    return result
+
+
 @dataclass(frozen=True, slots=True)
 class ProtectedAnnotationConfigurationGeneration:
     """Publisher-atomic current generation of protected annotation inputs."""
@@ -562,9 +747,24 @@ def protected_annotation_configuration_generation_from_dict(
 def load_protected_annotation_configuration_generation(
     path: Path,
 ) -> ProtectedAnnotationConfigurationGeneration:
-    return protected_annotation_configuration_generation_from_dict(
-        _strict_protected_configuration_json(path)
+    label = "protected annotation configuration generation"
+    raw = read_protected_file_bytes(
+        path,
+        max_bytes=_MAX_PROTECTED_CONFIGURATION_BYTES,
+        label=label,
     )
+    payload = parse_canonical_json_object(
+        raw,
+        label=label,
+        maximum_bytes=_MAX_PROTECTED_CONFIGURATION_BYTES,
+        maximum_depth=2,
+        maximum_nodes=16,
+        maximum_containers=1,
+    )
+    result = protected_annotation_configuration_generation_from_dict(payload)
+    if raw != result.canonical_json().encode("utf-8"):
+        raise ValueError(f"{label} did not reconstruct exactly")
+    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -633,18 +833,76 @@ class TrustedAnnotationKey:
 
 @dataclass(frozen=True, slots=True)
 class CurrentAnnotation:
+    annotation_type: AnnotationType
     annotation_id: str
     annotation_sha256: str
 
     def __post_init__(self) -> None:
+        if type(self.annotation_type) is not AnnotationType:
+            raise ValueError("annotation_type must be an AnnotationType")
+        if self.annotation_type is not AnnotationType.BALL_FRAME_OBSERVATION:
+            raise ValueError(
+                "annotation trust V2 currently supports BALL_FRAME_OBSERVATION only"
+            )
         _require_stable_id(self.annotation_id, "annotation_id")
         _require_sha256(self.annotation_sha256, "annotation_sha256")
 
     def to_canonical_dict(self) -> dict[str, str]:
         return {
+            "annotation_type": self.annotation_type.value,
             "annotation_id": self.annotation_id,
             "annotation_sha256": self.annotation_sha256,
         }
+
+
+def trusted_annotation_key_from_dict(
+    payload: Mapping[str, Any],
+) -> TrustedAnnotationKey:
+    label = "trusted annotation key"
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{label} must be a JSON object")
+    _exact_fields(payload, _TRUSTED_ANNOTATION_KEY_FIELDS, label)
+    raw_roles = _exact_json_array(payload, "permitted_roles", label=label)
+    if not 1 <= len(raw_roles) <= len(AnnotationAttestationRole):
+        raise ValueError(
+            "trusted annotation key.permitted_roles count must be between 1 and "
+            f"{len(AnnotationAttestationRole)}"
+        )
+    roles = tuple(
+        enum_from_json(
+            AnnotationAttestationRole,
+            role,
+            "trusted annotation key.permitted_roles item",
+        )
+        for role in raw_roles
+    )
+    return TrustedAnnotationKey(
+        key_id=payload.get("key_id"),
+        principal_id=payload.get("principal_id"),
+        permitted_roles=roles,  # type: ignore[arg-type]
+        public_key_base64=payload.get("public_key_base64"),
+        valid_from=payload.get("valid_from"),
+        valid_until=payload.get("valid_until"),
+        compromised_on=payload.get("compromised_on"),
+    )
+
+
+def current_annotation_from_dict(
+    payload: Mapping[str, Any],
+) -> CurrentAnnotation:
+    label = "current annotation"
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{label} must be a JSON object")
+    _exact_fields(payload, _CURRENT_ANNOTATION_FIELDS, label)
+    return CurrentAnnotation(
+        annotation_type=enum_from_json(
+            AnnotationType,
+            payload.get("annotation_type"),
+            "current annotation.annotation_type",
+        ),  # type: ignore[arg-type]
+        annotation_id=payload.get("annotation_id"),
+        annotation_sha256=payload.get("annotation_sha256"),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -659,7 +917,7 @@ class AnnotationTrustVerification:
     governance_domain_id: str
     protected_configuration_generation: ProtectedAnnotationConfigurationGeneration
     protected_configuration_generation_sha256: str
-    verified_at_utc: str
+    protected_verified_at_ns: int
     verified_evidence_refs: tuple[str, ...]
 
     def __post_init__(self) -> None:
@@ -724,7 +982,7 @@ class AnnotationTrustVerification:
                     "protected_configuration_generation must match report "
                     f"{field_name}"
                 )
-        _parse_utc_timestamp(self.verified_at_utc, "verified_at_utc")
+        _date_from_protected_unix_epoch_ns(self.protected_verified_at_ns)
         if type(self.verified_evidence_refs) is not tuple:
             raise ValueError("verified_evidence_refs must be an immutable tuple")
         if (
@@ -812,10 +1070,15 @@ class AnnotationTrustStore:
                 "current_annotations must be an immutable tuple of "
                 "CurrentAnnotation values"
             )
-        if len({item.annotation_id for item in self.current_annotations}) != len(
-            self.current_annotations
-        ):
-            raise ValueError("each annotation ID may have only one current fingerprint")
+        if len(
+            {
+                (item.annotation_type, item.annotation_id)
+                for item in self.current_annotations
+            }
+        ) != len(self.current_annotations):
+            raise ValueError(
+                "each typed annotation ID may have only one current fingerprint"
+            )
         if type(self.revoked_annotation_sha256s) is not tuple:
             raise ValueError(
                 "revoked_annotation_sha256s must be an immutable tuple"
@@ -845,7 +1108,10 @@ class AnnotationTrustStore:
                 item.to_canonical_dict()
                 for item in sorted(
                     self.current_annotations,
-                    key=lambda item: item.annotation_id,
+                    key=lambda item: (
+                        item.annotation_type.value,
+                        item.annotation_id,
+                    ),
                 )
             ],
             "keyring_id": self.keyring_id,
@@ -867,7 +1133,7 @@ class AnnotationTrustStore:
 
     def verify_annotation_set(
         self,
-        annotations: tuple[BallFrameAnnotation, ...],
+        annotations: tuple[BallFrameAnnotationV2, ...],
         attestations: tuple[AnnotationAttestation, ...],
         *,
         evidence_store_root: Path,
@@ -876,13 +1142,14 @@ class AnnotationTrustStore:
         protected_configuration_generation_path: Path,
         evaluator_artifact_sha256: str,
         requested_truth_policy: str,
+        protected_verified_at_ns: int,
     ) -> AnnotationTrustVerification:
         """Verify one bounded set against one protected generation snapshot.
 
         The protected current-generation descriptor is loaded and matched
-        before any annotation fingerprint or signature work, then reloaded
-        after evidence verification even when the UTC date did not change.
-        A publisher update invalidates the whole run and requires a fresh call.
+        before any annotation fingerprint or signature work, then reloaded after
+        evidence verification. ``protected_verified_at_ns`` is the sole logical
+        time snapshot and must come from a protected coordinator clock.
         """
 
         evidence_refs = _preflight_annotation_verification_bounds(
@@ -906,6 +1173,9 @@ class AnnotationTrustStore:
             )
         if not isinstance(evidence_store_root, Path):
             raise ValueError("evidence_store_root must be a pathlib.Path")
+        protected_verified_on = _date_from_protected_unix_epoch_ns(
+            protected_verified_at_ns
+        )
         _require_sha256(evaluator_artifact_sha256, "evaluator_artifact_sha256")
         _require_sha256(
             expected_verification_policy_sha256,
@@ -954,13 +1224,15 @@ class AnnotationTrustStore:
                 "ANNOTATION_POLICY_TRUTH",
                 "requested truth policy is weaker than the protected minimum",
             )
-        verification_started_at_utc, verification_started_on = _canonical_utc_now()
-        if not verification_policy.is_active(verification_started_on):
+        if not verification_policy.is_active(protected_verified_on):
             raise AnnotationTrustError(
                 "ANNOTATION_POLICY_DATE",
-                "annotation verification policy is not active on the UTC verification date",
+                "annotation verification policy is not active at the protected time",
             )
-        annotation_ids = [annotation.annotation_id for annotation in annotations]
+        annotation_ids = [
+            (annotation.annotation_type, annotation.annotation_id)
+            for annotation in annotations
+        ]
         if len(set(annotation_ids)) != len(annotation_ids):
             raise AnnotationTrustError(
                 "ANNOTATION_ID_DUPLICATE",
@@ -968,7 +1240,7 @@ class AnnotationTrustStore:
             )
 
         current_by_id = {
-            item.annotation_id: item.annotation_sha256
+            (item.annotation_type, item.annotation_id): item.annotation_sha256
             for item in self.current_annotations
         }
         revoked = set(self.revoked_annotation_sha256s)
@@ -979,14 +1251,15 @@ class AnnotationTrustStore:
             requested_truth_policy=requested_policy,
         )
         expected_signers: dict[
-            tuple[str, AnnotationAttestationRole, str],
-            BallFrameAnnotation,
+            tuple[AnnotationType, str, AnnotationAttestationRole, str],
+            BallFrameAnnotationV2,
         ] = {}
         for annotation in annotations:
             fingerprint = annotation.fingerprint()
             for reviewer_id in annotation.reviewer_ids:
                 expected_signers[
                     (
+                        annotation.annotation_type,
                         fingerprint,
                         AnnotationAttestationRole.REVIEWER,
                         reviewer_id,
@@ -996,6 +1269,7 @@ class AnnotationTrustStore:
                 assert annotation.adjudicator_id is not None
                 expected_signers[
                     (
+                        annotation.annotation_type,
                         fingerprint,
                         AnnotationAttestationRole.ADJUDICATOR,
                         annotation.adjudicator_id,
@@ -1003,11 +1277,12 @@ class AnnotationTrustStore:
                 ] = annotation
 
         supplied: dict[
-            tuple[str, AnnotationAttestationRole, str],
+            tuple[AnnotationType, str, AnnotationAttestationRole, str],
             AnnotationAttestation,
         ] = {}
         for attestation in attestations:
             signer_key = (
+                attestation.annotation_type,
                 attestation.annotation_sha256,
                 attestation.role,
                 attestation.principal_id,
@@ -1020,29 +1295,29 @@ class AnnotationTrustStore:
             supplied[signer_key] = attestation
         missing = sorted(
             expected_signers.keys() - supplied.keys(),
-            key=lambda item: (item[0], item[1].value, item[2]),
+            key=lambda item: (item[0].value, item[1], item[2].value, item[3]),
         )
         if missing:
             raise AnnotationTrustError(
                 "ANNOTATION_ATTESTATION_MISSING",
                 "missing required annotation attestation for "
-                f"{missing[0][1].value}:{missing[0][2]}",
+                f"{missing[0][2].value}:{missing[0][3]}",
             )
         extra = sorted(
             supplied.keys() - expected_signers.keys(),
-            key=lambda item: (item[0], item[1].value, item[2]),
+            key=lambda item: (item[0].value, item[1], item[2].value, item[3]),
         )
         if extra:
             raise AnnotationTrustError(
                 "ANNOTATION_ATTESTATION_EXTRA",
                 "attestation set contains an undeclared or unrelated signer: "
-                f"{extra[0][1].value}:{extra[0][2]}",
+                f"{extra[0][2].value}:{extra[0][3]}",
             )
 
         keys_by_id = {key.key_id: key for key in self.keys}
         for signer_key in sorted(
             expected_signers,
-            key=lambda item: (item[0], item[1].value, item[2]),
+            key=lambda item: (item[0].value, item[1], item[2].value, item[3]),
         ):
             annotation = expected_signers[signer_key]
             attestation = supplied[signer_key]
@@ -1068,7 +1343,7 @@ class AnnotationTrustStore:
                     "trusted key is not permitted for the attestation role",
                 )
             signed_on = _parse_date(attestation.signed_on, "signed_on")
-            if signed_on > verification_started_on:
+            if signed_on > protected_verified_on:
                 raise AnnotationTrustError(
                     "ANNOTATION_ATTESTATION_DATE",
                     "annotation attestation cannot postdate the UTC verification date",
@@ -1085,7 +1360,7 @@ class AnnotationTrustStore:
                 )
             _enforce_key_not_compromised(
                 trusted_key,
-                verified_on=verification_started_on,
+                verified_on=protected_verified_on,
             )
             try:
                 trusted_key.public_key.verify(
@@ -1111,79 +1386,26 @@ class AnnotationTrustStore:
         )
         attestation_set_sha256 = annotation_attestation_set_fingerprint(attestations)
         evidence_set_sha256 = annotation_evidence_set_fingerprint(evidence_refs)
-        validated_on = verification_started_on
-        previous_timestamp = verification_started_at_utc
-        for _ in range(3):
-            completed_configuration_generation = (
-                load_protected_annotation_configuration_generation(
-                    protected_configuration_generation_path
-                )
+        completed_configuration_generation = (
+            load_protected_annotation_configuration_generation(
+                protected_configuration_generation_path
             )
-            if completed_configuration_generation.fingerprint() != (
-                protected_configuration_generation_sha256
-            ):
-                raise AnnotationTrustError(
-                    "ANNOTATION_PROTECTED_CONFIGURATION_CHANGED",
-                    "protected annotation configuration generation changed during "
-                    "verification; discard the result and retry",
-                )
-            self._verify_protected_configuration_generation(
-                completed_configuration_generation,
-                verification_policy=verification_policy,
-                policy_sha256=policy_sha256,
-                store_sha256=store_sha256,
-                evaluator_artifact_sha256=evaluator_artifact_sha256,
-            )
-            verified_at_utc, completed_on = _canonical_utc_now()
-            if verified_at_utc < previous_timestamp:
-                raise AnnotationTrustError(
-                    "ANNOTATION_VERIFICATION_CLOCK",
-                    "UTC verification time moved backward during annotation verification",
-                )
-            if completed_on == validated_on:
-                break
-            if not verification_policy.is_active(completed_on):
-                raise AnnotationTrustError(
-                    "ANNOTATION_POLICY_DATE",
-                    "annotation verification policy is not active on the UTC completion date",
-                )
-            if self.fingerprint() != store_sha256:
-                raise AnnotationTrustError(
-                    "ANNOTATION_TRUST_STORE_CHANGED",
-                    "annotation trust store changed during verification",
-                )
-            completion_current_by_id = {
-                item.annotation_id: item.annotation_sha256
-                for item in self.current_annotations
-            }
-            completion_revoked = set(self.revoked_annotation_sha256s)
-            _enforce_annotation_currentness_and_truth_policy(
-                annotations,
-                current_by_id=completion_current_by_id,
-                revoked=completion_revoked,
-                requested_truth_policy=requested_policy,
-            )
-            completion_keys_by_id = {key.key_id: key for key in self.keys}
-            for signer_key in expected_signers:
-                attestation = supplied[signer_key]
-                trusted_key = completion_keys_by_id.get(attestation.key_id)
-                if trusted_key is None:
-                    raise AnnotationTrustError(
-                        "ANNOTATION_KEY_UNTRUSTED",
-                        "annotation attestation key ceased to be trusted during verification",
-                    )
-                _enforce_key_not_compromised(
-                    trusted_key,
-                    verified_on=completed_on,
-                )
-            validated_on = completed_on
-            previous_timestamp = verified_at_utc
-        else:
+        )
+        if completed_configuration_generation.fingerprint() != (
+            protected_configuration_generation_sha256
+        ):
             raise AnnotationTrustError(
-                "ANNOTATION_VERIFICATION_CLOCK",
-                "UTC verification date and protected generation did not stabilize "
-                "after annotation verification",
+                "ANNOTATION_PROTECTED_CONFIGURATION_CHANGED",
+                "protected annotation configuration generation changed during "
+                "verification; discard the result and retry",
             )
+        self._verify_protected_configuration_generation(
+            completed_configuration_generation,
+            verification_policy=verification_policy,
+            policy_sha256=policy_sha256,
+            store_sha256=store_sha256,
+            evaluator_artifact_sha256=evaluator_artifact_sha256,
+        )
         return AnnotationTrustVerification(
             verification_policy_sha256=policy_sha256,
             requested_truth_policy=requested_policy,
@@ -1199,7 +1421,7 @@ class AnnotationTrustStore:
             protected_configuration_generation_sha256=(
                 protected_configuration_generation_sha256
             ),
-            verified_at_utc=verified_at_utc,
+            protected_verified_at_ns=protected_verified_at_ns,
             verified_evidence_refs=evidence_refs,
         )
 
@@ -1252,6 +1474,102 @@ class AnnotationTrustStore:
                 )
 
 
+def annotation_trust_store_from_dict(
+    payload: Mapping[str, Any],
+) -> AnnotationTrustStore:
+    label = "annotation trust store"
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{label} must be a JSON object")
+    _exact_fields(payload, _ANNOTATION_TRUST_STORE_FIELDS, label)
+    if payload.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError(f"{label} schema_version must be {SCHEMA_VERSION}")
+
+    raw_keys = _exact_json_array(payload, "keys", label=label)
+    raw_current = _exact_json_array(
+        payload,
+        "current_annotations",
+        label=label,
+    )
+    raw_revoked = _exact_json_array(
+        payload,
+        "revoked_annotation_sha256s",
+        label=label,
+    )
+    if len(raw_keys) > _MAX_TRUSTED_KEYS:
+        raise ValueError(f"{label} exceeds {_MAX_TRUSTED_KEYS} keys")
+    if len(raw_current) > _MAX_CURRENT_ANNOTATIONS:
+        raise ValueError(
+            f"{label} exceeds {_MAX_CURRENT_ANNOTATIONS} current annotations"
+        )
+    if len(raw_revoked) > _MAX_REVOKED_ANNOTATIONS:
+        raise ValueError(
+            f"{label} exceeds {_MAX_REVOKED_ANNOTATIONS} revocations"
+        )
+
+    for index, raw_key in enumerate(raw_keys):
+        if not isinstance(raw_key, Mapping):
+            raise ValueError(f"{label}.keys[{index}] must be an object")
+        _exact_fields(
+            raw_key,
+            _TRUSTED_ANNOTATION_KEY_FIELDS,
+            f"{label}.keys[{index}]",
+        )
+        raw_roles = _exact_json_array(
+            raw_key,
+            "permitted_roles",
+            label=f"{label}.keys[{index}]",
+        )
+        if not 1 <= len(raw_roles) <= len(AnnotationAttestationRole):
+            raise ValueError(
+                f"{label}.keys[{index}].permitted_roles count must be between "
+                f"1 and {len(AnnotationAttestationRole)}"
+            )
+    for index, raw_item in enumerate(raw_current):
+        if not isinstance(raw_item, Mapping):
+            raise ValueError(
+                f"{label}.current_annotations[{index}] must be an object"
+            )
+        _exact_fields(
+            raw_item,
+            _CURRENT_ANNOTATION_FIELDS,
+            f"{label}.current_annotations[{index}]",
+        )
+    for fingerprint in raw_revoked:
+        _require_sha256(fingerprint, "revoked annotation fingerprint")
+
+    keys = tuple(trusted_annotation_key_from_dict(raw_key) for raw_key in raw_keys)
+    current_annotations = tuple(
+        current_annotation_from_dict(raw_item) for raw_item in raw_current
+    )
+    return AnnotationTrustStore(
+        keyring_id=payload.get("keyring_id"),
+        keys=keys,
+        current_annotations=current_annotations,
+        revoked_annotation_sha256s=tuple(raw_revoked),
+    )
+
+
+def load_annotation_trust_store(path: Path) -> AnnotationTrustStore:
+    label = "annotation trust store"
+    raw = read_protected_file_bytes(
+        path,
+        max_bytes=_MAX_ANNOTATION_TRUST_STORE_BYTES,
+        label=label,
+    )
+    payload = _parse_large_canonical_json_object(
+        raw,
+        label=label,
+        maximum_bytes=_MAX_ANNOTATION_TRUST_STORE_BYTES,
+        maximum_depth=_MAX_ANNOTATION_TRUST_STORE_JSON_DEPTH,
+        maximum_nodes=_MAX_ANNOTATION_TRUST_STORE_JSON_NODES,
+        maximum_containers=_MAX_ANNOTATION_TRUST_STORE_JSON_CONTAINERS,
+    )
+    result = annotation_trust_store_from_dict(payload)
+    if raw != result.canonical_json().encode("utf-8"):
+        raise ValueError(f"{label} did not reconstruct exactly")
+    return result
+
+
 def _preflight_annotation_verification_bounds(
     annotations: object,
     attestations: object,
@@ -1260,7 +1578,7 @@ def _preflight_annotation_verification_bounds(
 
     if type(annotations) is not tuple:
         raise ValueError(
-            "annotations must be an immutable tuple of BallFrameAnnotation values"
+            "annotations must be an immutable tuple of BallFrameAnnotationV2 values"
         )
     if not annotations or len(annotations) > _MAX_ANNOTATIONS:
         raise AnnotationTrustError(
@@ -1281,10 +1599,10 @@ def _preflight_annotation_verification_bounds(
     references: set[str] = set()
     expected_attestation_count = 0
     for annotation in annotations:
-        if type(annotation) is not BallFrameAnnotation:
+        if type(annotation) is not BallFrameAnnotationV2:
             raise ValueError(
                 "annotations must be an immutable tuple of "
-                "BallFrameAnnotation values"
+                "BallFrameAnnotationV2 values"
             )
         if len(annotation.reviewer_ids) > _MAX_REVIEWERS_PER_ANNOTATION:
             raise AnnotationTrustError(
@@ -1301,17 +1619,43 @@ def _preflight_annotation_verification_bounds(
                 "required annotation attestation count cannot exceed "
                 f"{_MAX_ATTESTATIONS}",
             )
+        search_attestation = annotation.search_region_observability_attestation
+        search_review_refs = (
+            search_attestation.review_evidence_refs
+            if search_attestation is not None
+            else ()
+        )
+        search_capture_refs = (
+            search_attestation.capture_integrity_attestation_refs
+            if search_attestation is not None
+            else ()
+        )
+        unavailable_segment_refs = (
+            (annotation.frame.capture_segment_ref,)
+            if type(annotation.frame) is UnavailableFrameReference
+            else ()
+        )
+        unavailable_gap_refs = (
+            annotation.frame.gap_evidence_refs
+            if type(annotation.frame) is UnavailableFrameReference
+            else ()
+        )
         if (
             type(annotation.review_evidence_refs) is not tuple
             or type(annotation.adjudication_evidence_refs) is not tuple
             or type(annotation.frame.capture_integrity_attestation_refs)
             is not tuple
+            or type(search_review_refs) is not tuple
+            or type(search_capture_refs) is not tuple
+            or type(unavailable_gap_refs) is not tuple
         ):
             raise ValueError(
                 "annotation evidence references must be immutable tuples"
             )
-        if len(annotation.frame.capture_integrity_attestation_refs) > (
-            _MAX_CAPTURE_ATTESTATION_REFS
+        if (
+            len(annotation.frame.capture_integrity_attestation_refs)
+            + len(search_capture_refs)
+            > _MAX_CAPTURE_ATTESTATION_REFS
         ):
             raise AnnotationTrustError(
                 "ANNOTATION_CAPTURE_EVIDENCE_COUNT",
@@ -1322,6 +1666,10 @@ def _preflight_annotation_verification_bounds(
             len(annotation.review_evidence_refs)
             + len(annotation.adjudication_evidence_refs)
             + len(annotation.frame.capture_integrity_attestation_refs)
+            + len(search_review_refs)
+            + len(search_capture_refs)
+            + len(unavailable_segment_refs)
+            + len(unavailable_gap_refs)
             > _MAX_EVIDENCE_REFS_PER_ANNOTATION
         ):
             raise AnnotationTrustError(
@@ -1333,6 +1681,10 @@ def _preflight_annotation_verification_bounds(
             annotation.review_evidence_refs,
             annotation.adjudication_evidence_refs,
             annotation.frame.capture_integrity_attestation_refs,
+            search_review_refs,
+            search_capture_refs,
+            unavailable_segment_refs,
+            unavailable_gap_refs,
         ):
             for reference in collection:
                 if type(reference) is not str or not _CONTENT_ADDRESS_RE.fullmatch(
@@ -1364,9 +1716,9 @@ def _preflight_annotation_verification_bounds(
 
 
 def _enforce_annotation_currentness_and_truth_policy(
-    annotations: tuple[BallFrameAnnotation, ...],
+    annotations: tuple[BallFrameAnnotationV2, ...],
     *,
-    current_by_id: dict[str, str],
+    current_by_id: dict[tuple[AnnotationType, str], str],
     revoked: set[str],
     requested_truth_policy: AnnotationMinimumTruthPolicy,
 ) -> None:
@@ -1379,7 +1731,9 @@ def _enforce_annotation_currentness_and_truth_policy(
                 "ANNOTATION_REVOKED",
                 f"annotation has been revoked: {annotation.annotation_id}",
             )
-        current = current_by_id.get(annotation.annotation_id)
+        current = current_by_id.get(
+            (annotation.annotation_type, annotation.annotation_id)
+        )
         if current is None:
             raise AnnotationTrustError(
                 "ANNOTATION_UNTRUSTED",
@@ -1424,7 +1778,7 @@ def _enforce_key_not_compromised(
 
 
 def annotation_attestation_signing_message(
-    annotation: BallFrameAnnotation,
+    annotation: BallFrameAnnotationV2,
     *,
     role: AnnotationAttestationRole,
     principal_id: str,
@@ -1434,8 +1788,8 @@ def annotation_attestation_signing_message(
 ) -> bytes:
     """Return the domain-separated bytes an annotation principal signs."""
 
-    if type(annotation) is not BallFrameAnnotation:
-        raise ValueError("annotation must be a BallFrameAnnotation")
+    if type(annotation) is not BallFrameAnnotationV2:
+        raise ValueError("annotation must be a BallFrameAnnotationV2")
     if type(role) is not AnnotationAttestationRole:
         raise ValueError("role must be an AnnotationAttestationRole")
     _require_stable_id(principal_id, "principal_id")
@@ -1445,6 +1799,7 @@ def annotation_attestation_signing_message(
     return _canonical_json(
         {
             "annotation": annotation.to_canonical_dict(),
+            "annotation_type": annotation.annotation_type.value,
             "domain": _SIGNING_DOMAIN,
             "key_id": key_id,
             "principal_id": principal_id,
@@ -1476,6 +1831,7 @@ def annotation_attestation_set_fingerprint(
     ordered = sorted(
         attestations,
         key=lambda attestation: (
+            attestation.annotation_type.value,
             attestation.annotation_sha256,
             attestation.role.value,
             attestation.principal_id,

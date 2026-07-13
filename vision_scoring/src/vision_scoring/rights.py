@@ -17,12 +17,13 @@ from enum import Enum
 from typing import Any, Mapping
 
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "2.0"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _COUNTRY_RE = re.compile(r"^[A-Z]{2}$")
 _STABLE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$")
 _MAX_EVIDENCE_REFERENCES = 64
+_MAX_OWNER_OR_LICENSOR_CHARS = 256
 _DECISION_FIELDS = frozenset(
     {
         "asset_sha256",
@@ -64,6 +65,8 @@ class PermittedUse(str, Enum):
     DERIVATIVE_DATASET_CREATION = "DERIVATIVE_DATASET_CREATION"
     SOURCE_REDISTRIBUTION = "SOURCE_REDISTRIBUTION"
     DERIVATIVE_REDISTRIBUTION = "DERIVATIVE_REDISTRIBUTION"
+    ASSISTIVE_SCORING_PROCESSING = "ASSISTIVE_SCORING_PROCESSING"
+    SCORER_COPILOT_REVIEW = "SCORER_COPILOT_REVIEW"
 
 
 class ParticipantAgeStatus(str, Enum):
@@ -79,7 +82,12 @@ def _require_sha256(value: object, field_name: str) -> None:
 
 
 def _require_utf8_nfc_text(value: object, field_name: str) -> None:
-    if type(value) is not str or not value.strip() or value != value.strip():
+    if (
+        type(value) is not str
+        or not value.strip()
+        or value != value.strip()
+        or len(value) > _MAX_OWNER_OR_LICENSOR_CHARS
+    ):
         raise ValueError(f"{field_name} must be non-empty trimmed UTF-8 NFC text")
     try:
         value.encode("utf-8", errors="strict")
@@ -168,6 +176,14 @@ class RightsDecision:
             "participant_release_sha256s",
             required=False,
         )
+        if len(
+            set(self.evidence_sha256s)
+            | set(self.participant_release_sha256s)
+        ) > _MAX_EVIDENCE_REFERENCES:
+            raise ValueError(
+                "combined rights and participant-release evidence cannot exceed "
+                f"{_MAX_EVIDENCE_REFERENCES} unique hashes"
+            )
         _require_stable_id(self.reviewer_id, "reviewer_id")
         reviewed_on = _parse_iso_date(self.reviewed_on, "reviewed_on")
         if self.expires_on is not None:

@@ -4,53 +4,55 @@ import json
 import unittest
 from dataclasses import FrozenInstanceError
 
+import vision_scoring.annotations as annotations_module
 from vision_scoring.annotations import (
+    AnnotationType,
     AttributionState,
     AutorotationPolicy,
-    BallFrameAnnotation,
-    BallState,
+    BallAppearance,
+    BallFrameAnnotationV2,
+    BallPlayState,
+    BallRole,
+    BallVisibility,
     BlurEllipse,
+    CaptureUnavailabilityReason,
     DecodedColorRange,
     DecodedColorSpace,
-    DecodedFrameIdentity,
     DecodedFrameHashBasis,
+    DecodedFrameIdentity,
     DecodedPixelFormat,
-    EventType,
     FrameDecodeContract,
     FrameDuplicateKind,
     FrameReference,
+    ObservedTemporalEventAnnotation,
+    ObservedTemporalEventType,
+    PixelRegion,
+    PhysicalEventAdjudication,
+    PhysicalEventType,
+    PhysicalLandingRegion,
     PixelCoordinateSpace,
     PixelPoint,
-    PlayerAttributionRole,
+    ReportedOfficialEventAnnotation,
+    ReportedOfficialEventType,
     ReviewState,
+    SearchRegionObservabilityAttestation,
+    SearchRegionScope,
+    SearchRegionVisibility,
     TeamAttributionRole,
-    TemporalEventAnnotation,
     TimestampBasis,
+    TruthLayer,
+    UnavailableFrameReference,
 )
-from vision_scoring.contracts import Team
+from vision_scoring.domain_events import Team
 
 
 SHA = "a" * 64
+ONTOLOGY = "b" * 64
+RULESET = "c" * 64
 EVIDENCE_A = "sha256:" + "a" * 64
 EVIDENCE_B = "sha256:" + "b" * 64
 EVIDENCE_C = "sha256:" + "c" * 64
 EVIDENCE_D = "sha256:" + "d" * 64
-TEAM_ATTRIBUTION_EVENTS = {
-    EventType.SERVE_PREPARATION,
-    EventType.SERVE_CONTACT,
-    EventType.RALLY_END,
-    EventType.CANDIDATE_CONTACT,
-    EventType.NEXT_AUTHORIZED_SERVE,
-    EventType.CHALLENGE,
-    EventType.REPORTED_ADMINISTRATIVE_POINT,
-    EventType.TERMINAL_POINT,
-}
-PLAYER_ATTRIBUTION_EVENTS = {
-    EventType.SERVE_PREPARATION,
-    EventType.SERVE_CONTACT,
-    EventType.CANDIDATE_CONTACT,
-    EventType.NEXT_AUTHORIZED_SERVE,
-}
 
 
 def _decode_contract(**overrides: object) -> FrameDecodeContract:
@@ -69,19 +71,19 @@ def _decode_contract(**overrides: object) -> FrameDecodeContract:
 
 
 def _frame(**overrides: object) -> FrameReference:
-    duplicate_values: dict[str, object] = {
+    duplicate_values = {
         "duplicate_kind": overrides.pop("duplicate_kind", FrameDuplicateKind.NONE),
         "duplicate_of_frame_index": overrides.pop("duplicate_of_frame_index", None),
         "capture_integrity_attestation_refs": overrides.pop(
-            "capture_integrity_attestation_refs",
-            (),
+            "capture_integrity_attestation_refs", ()
         ),
     }
     width = overrides.pop("width", 1920)
     height = overrides.pop("height", 1080)
-    decode_contract = overrides.pop("decode_contract", None)
-    if decode_contract is None:
-        decode_contract = _decode_contract(output_width=width, output_height=height)
+    decode_contract = overrides.pop(
+        "decode_contract",
+        _decode_contract(output_width=width, output_height=height),
+    )
     identity_values: dict[str, object] = {
         "source_sha256": SHA,
         "selected_video_stream_index": 0,
@@ -104,726 +106,742 @@ def _frame(**overrides: object) -> FrameReference:
     )
 
 
-def _visible(**overrides: object) -> BallFrameAnnotation:
+def _ball(**overrides: object) -> BallFrameAnnotationV2:
     values: dict[str, object] = {
         "annotation_id": "ball-7",
+        "ontology_sha256": ONTOLOGY,
+        "ball_instance_id": "match-ball",
         "frame": _frame(),
-        "state": BallState.VISIBLE,
+        "visibility": BallVisibility.VISIBLE,
+        "appearance": BallAppearance.SHARP,
+        "role": BallRole.MATCH_BALL,
+        "play_state": BallPlayState.IN_PLAY,
         "center": PixelPoint(960, 540),
         "apparent_minor_axis_diameter_px": 12,
         "uncertainty_radius_px": 2,
         "track_segment_id": "track-3",
     }
     values.update(overrides)
-    return BallFrameAnnotation(**values)  # type: ignore[arg-type]
+    return BallFrameAnnotationV2(**values)  # type: ignore[arg-type]
 
 
-def _event(**overrides: object) -> TemporalEventAnnotation:
+def _unavailable_frame(**overrides: object) -> UnavailableFrameReference:
     values: dict[str, object] = {
-        "annotation_id": "event-1",
         "source_sha256": SHA,
-        "event_type": EventType.SERVE_CONTACT,
+        "selected_video_stream_index": 0,
+        "frame_index": 7,
+        "expected_interval_start_ns": 230_000_000,
+        "expected_interval_end_ns": 240_000_000,
+        "timestamp_basis": TimestampBasis.SOURCE_PRESENTATION_OFFSET_NS,
+        "capture_segment_ref": EVIDENCE_C,
+        "unavailability_reason": CaptureUnavailabilityReason.PRESENTATION_GAP,
+        "capture_integrity_attestation_refs": (EVIDENCE_D,),
+        "gap_evidence_refs": (EVIDENCE_B,),
+    }
+    values.update(overrides)
+    return UnavailableFrameReference(**values)  # type: ignore[arg-type]
+
+
+def _search_attestation(
+    frame: FrameReference,
+    *,
+    reviewer_ids: tuple[str, ...] = ("reviewer-1",),
+    review_evidence_refs: tuple[str, ...] = (EVIDENCE_A,),
+    **overrides: object,
+) -> SearchRegionObservabilityAttestation:
+    values: dict[str, object] = {
+        "source_sha256": frame.source_sha256,
+        "selected_video_stream_index": frame.selected_video_stream_index,
+        "frame_index": frame.frame_index,
+        "decoded_frame_sha256": frame.decoded_frame_sha256,
+        "frame_identity_sha256": frame.identity.fingerprint(),
+        "target_role": BallRole.MATCH_BALL,
+        "region_scope": SearchRegionScope.FULL_DECODED_FRAME,
+        "searched_region": PixelRegion(0, 0, frame.width - 1, frame.height - 1),
+        "region_visibility": SearchRegionVisibility.FULLY_OBSERVABLE,
+        "capture_integrity_attestation_refs": (EVIDENCE_D,),
+        "reviewer_ids": reviewer_ids,
+        "review_evidence_refs": review_evidence_refs,
+    }
+    values.update(overrides)
+    return SearchRegionObservabilityAttestation(**values)  # type: ignore[arg-type]
+
+
+def _observed(**overrides: object) -> ObservedTemporalEventAnnotation:
+    values: dict[str, object] = {
+        "annotation_id": "observed-1",
+        "source_sha256": SHA,
+        "ontology_sha256": ONTOLOGY,
+        "event_type": ObservedTemporalEventType.SERVE_CONTACT,
         "interval_start_ns": 100,
         "interval_end_ns": 120,
         "timestamp_basis": TimestampBasis.SOURCE_PRESENTATION_OFFSET_NS,
         "evidence_refs": (EVIDENCE_A,),
+        "team_attribution_state": AttributionState.KNOWN,
+        "player_attribution_state": AttributionState.KNOWN,
         "team": Team.A,
         "player_id": "a1",
     }
     values.update(overrides)
-    event_type = values["event_type"]
-    if "team_attribution_state" not in overrides:
-        values["team_attribution_state"] = (
-            AttributionState.KNOWN
-            if event_type in TEAM_ATTRIBUTION_EVENTS and isinstance(values.get("team"), Team)
-            else AttributionState.UNKNOWN
-            if event_type in TEAM_ATTRIBUTION_EVENTS
-            else AttributionState.NOT_APPLICABLE
-        )
-    if "player_attribution_state" not in overrides:
-        values["player_attribution_state"] = (
-            AttributionState.KNOWN
-            if event_type in PLAYER_ATTRIBUTION_EVENTS
-            and isinstance(values.get("player_id"), str)
-            else AttributionState.UNKNOWN
-            if event_type in PLAYER_ATTRIBUTION_EVENTS
-            else AttributionState.NOT_APPLICABLE
-        )
-    if (
-        AttributionState.UNKNOWN
-        in (
-            values["team_attribution_state"],
-            values["player_attribution_state"],
-        )
-        and "ambiguity_reason" not in overrides
-    ):
-        values["ambiguity_reason"] = "attribution unresolved"
-    return TemporalEventAnnotation(**values)  # type: ignore[arg-type]
+    return ObservedTemporalEventAnnotation(**values)  # type: ignore[arg-type]
 
 
-class AnnotationContractTests(unittest.TestCase):
-    def test_contract_bounds_accept_boundaries_and_reject_amplification(self) -> None:
-        max_id = "a" * 128
-        self.assertEqual(_visible(annotation_id=max_id).annotation_id, max_id)
-        with self.assertRaisesRegex(ValueError, "ASCII-stable"):
-            _visible(annotation_id="a" * 129)
+def _physical(**overrides: object) -> PhysicalEventAdjudication:
+    values: dict[str, object] = {
+        "annotation_id": "physical-1",
+        "source_sha256": SHA,
+        "ontology_sha256": ONTOLOGY,
+        "event_type": PhysicalEventType.ORDINARY_RALLY_WINNER,
+        "interval_start_ns": 100,
+        "interval_end_ns": 140,
+        "timestamp_basis": TimestampBasis.SOURCE_PRESENTATION_OFFSET_NS,
+        "observational_annotations": (
+            _observed(annotation_id="observed-1"),
+            _observed(annotation_id="observed-2"),
+        ),
+        "team_attribution_state": AttributionState.KNOWN,
+        "player_attribution_state": AttributionState.NOT_APPLICABLE,
+        "team": Team.A,
+        "review_state": ReviewState.ADJUDICATED,
+        "reviewer_ids": ("reviewer-1",),
+        "review_evidence_refs": (EVIDENCE_A,),
+        "adjudicator_id": "adjudicator-1",
+        "adjudication_evidence_refs": (EVIDENCE_B,),
+    }
+    values.update(overrides)
+    return PhysicalEventAdjudication(**values)  # type: ignore[arg-type]
 
-        max_text = "a" * 2_048
-        self.assertEqual(
-            _visible(ambiguity_reason=max_text).ambiguity_reason,
-            max_text,
-        )
-        with self.assertRaisesRegex(ValueError, "2048 UTF-8 bytes"):
-            _visible(ambiguity_reason="a" * 2_049)
 
-        reviewers = tuple(f"reviewer-{index}" for index in range(16))
-        reviewed = _visible(
-            review_state=ReviewState.REVIEWED,
-            reviewer_ids=reviewers,
-            review_evidence_refs=(EVIDENCE_A,),
+def _official(**overrides: object) -> ReportedOfficialEventAnnotation:
+    values: dict[str, object] = {
+        "annotation_id": "official-1",
+        "match_id": "match-1",
+        "ontology_sha256": ONTOLOGY,
+        "ruleset_sha256": RULESET,
+        "event_type": ReportedOfficialEventType.ORDINARY_POINT,
+        "reported_source_label": "venue scoresheet",
+        "reported_authority_label": "first referee",
+        "reported_record_ref": EVIDENCE_A,
+        "source_match_revision": 9,
+        "evidence_refs": (EVIDENCE_A,),
+        "team_attribution_state": AttributionState.KNOWN,
+        "team": Team.A,
+        "review_state": ReviewState.REVIEWED,
+        "reviewer_ids": ("reviewer-1",),
+        "review_evidence_refs": (EVIDENCE_B,),
+    }
+    values.update(overrides)
+    return ReportedOfficialEventAnnotation(**values)  # type: ignore[arg-type]
+
+
+class BallAnnotationV2Tests(unittest.TestCase):
+    def test_hard_cut_removes_ambiguous_v1_surface(self) -> None:
+        self.assertFalse(hasattr(annotations_module, "BallState"))
+        self.assertFalse(hasattr(annotations_module, "EventType"))
+        self.assertFalse(hasattr(annotations_module, "BallFrameAnnotation"))
+        self.assertFalse(hasattr(annotations_module, "TemporalEventAnnotation"))
+        self.assertFalse(hasattr(annotations_module, "OfficialEventAnnotation"))
+        self.assertFalse(hasattr(annotations_module, "OfficialEventType"))
+        self.assertNotIn("NOT_APPLICABLE", {role.value for role in BallRole})
+        payload = _ball().to_canonical_dict()
+        self.assertEqual(payload["schema_version"], "2.0")
+        self.assertEqual(payload["annotation_type"], "BALL_FRAME_OBSERVATION")
+        self.assertEqual(payload["truth_layer"], "OBSERVATIONAL")
+        self.assertNotIn("state", payload)
+
+    def test_visible_and_partial_are_localizable_with_independent_roles(self) -> None:
+        visible = _ball()
+        partial = _ball(
+            annotation_id="partial",
+            visibility=BallVisibility.PARTIALLY_OCCLUDED,
+            role=BallRole.ADJACENT_COURT_BALL,
+            play_state=BallPlayState.NOT_IN_PLAY,
         )
-        self.assertEqual(len(reviewed.reviewer_ids), 16)
-        with self.assertRaisesRegex(ValueError, "reviewer_ids cannot exceed 16"):
-            _visible(
-                review_state=ReviewState.REVIEWED,
-                reviewer_ids=reviewers + ("reviewer-over",),
-                review_evidence_refs=(EVIDENCE_A,),
+        for annotation in (visible, partial):
+            self.assertTrue(annotation.is_localizable_observation)
+            self.assertFalse(
+                annotation.confident_negative_claim_structurally_complete
             )
+            self.assertIsNotNone(annotation.center)
+        self.assertIs(partial.role, BallRole.ADJACENT_COURT_BALL)
 
-        evidence_refs = tuple(
-            "sha256:" + f"{index:064x}" for index in range(64)
-        )
-        bounded_evidence = _visible(
-            review_state=ReviewState.REVIEWED,
-            reviewer_ids=("reviewer-1",),
-            review_evidence_refs=evidence_refs,
-        )
-        self.assertEqual(len(bounded_evidence.review_evidence_refs), 64)
-        with self.assertRaisesRegex(ValueError, "cannot exceed 64"):
-            _visible(
-                review_state=ReviewState.REVIEWED,
-                reviewer_ids=("reviewer-1",),
-                review_evidence_refs=evidence_refs
-                + ("sha256:" + f"{64:064x}",),
-            )
-
-        capture_refs = tuple(
-            "sha256:" + f"{index + 100:064x}" for index in range(16)
-        )
-        duplicate = _frame(
-            duplicate_kind=FrameDuplicateKind.VERIFIED_CAPTURE_DUPLICATE,
-            duplicate_of_frame_index=3,
-            capture_integrity_attestation_refs=capture_refs,
-        )
-        self.assertEqual(len(duplicate.capture_integrity_attestation_refs), 16)
-        with self.assertRaisesRegex(ValueError, "cannot exceed 16"):
-            _frame(
-                duplicate_kind=FrameDuplicateKind.VERIFIED_CAPTURE_DUPLICATE,
-                duplicate_of_frame_index=3,
-                capture_integrity_attestation_refs=capture_refs
-                + ("sha256:" + f"{999:064x}",),
-            )
-
-        event = _event(evidence_refs=evidence_refs)
-        self.assertEqual(len(event.evidence_refs), 64)
-        with self.assertRaisesRegex(ValueError, "cannot exceed 64"):
-            _event(
-                evidence_refs=evidence_refs
-                + ("sha256:" + f"{64:064x}",)
-            )
-
-        self.assertEqual(
-            _frame(frame_index=(1 << 63) - 1).frame_index,
-            (1 << 63) - 1,
-        )
-        with self.assertRaisesRegex(ValueError, "frame_index"):
-            _frame(frame_index=1 << 63)
-        with self.assertRaisesRegex(ValueError, "no greater than 65536"):
-            _decode_contract(output_width=65_537)
-
-    def test_frame_reference_is_strict_and_immutable(self) -> None:
-        frame = _frame(
-            duplicate_kind=FrameDuplicateKind.VERIFIED_CAPTURE_DUPLICATE,
-            duplicate_of_frame_index=3,
-            capture_integrity_attestation_refs=(EVIDENCE_D,),
-        )
-        self.assertEqual(frame.frame_index, 7)
-        self.assertIs(
-            frame.timestamp_basis,
-            TimestampBasis.SOURCE_PRESENTATION_OFFSET_NS,
-        )
-        self.assertIs(
-            frame.pixel_coordinate_space,
-            PixelCoordinateSpace.SOURCE_PIXEL_CENTERS_TOP_LEFT_X_RIGHT_Y_DOWN,
-        )
-        self.assertEqual(frame.decoded_frame_sha256, "d" * 64)
-        self.assertIs(
-            frame.decoded_frame_hash_basis,
-            DecodedFrameHashBasis.RGB24_SOURCE_DIMENSIONS_ROW_MAJOR_NO_PADDING,
-        )
-        self.assertEqual(frame.duplicate_of_frame_index, 3)
-        self.assertTrue(frame.is_excludable_capture_duplicate)
-        self.assertEqual(frame.selected_video_stream_index, 0)
-        self.assertEqual(frame.decode_contract.decoder_build_id, "ffmpeg-8.1-arm64")
-        self.assertFalse(hasattr(frame, "__dict__"))
-        with self.assertRaises(FrozenInstanceError):
-            frame.identity = _frame(width=1280).identity  # type: ignore[misc]
-
+    def test_localizable_truth_requires_real_geometry_track_and_appearance(self) -> None:
         invalid = (
-            {"source_sha256": "A" * 64},
-            {"frame_index": True},
-            {"timestamp_ns": False},
-            {"width": 0},
-            {"height": 1.5},
-            {"decoded_frame_sha256": "D" * 64},
-            {"decoded_frame_hash_basis": "RGB24_SOURCE_DIMENSIONS_ROW_MAJOR_NO_PADDING"},
-            {"selected_video_stream_index": True},
-            {"duplicate_kind": "PIXEL_EQUIVALENT"},
-            {
-                "duplicate_kind": FrameDuplicateKind.PIXEL_EQUIVALENT,
-                "duplicate_of_frame_index": True,
-            },
-            {
-                "duplicate_kind": FrameDuplicateKind.PIXEL_EQUIVALENT,
-                "duplicate_of_frame_index": -1,
-            },
-            {
-                "duplicate_kind": FrameDuplicateKind.PIXEL_EQUIVALENT,
-                "duplicate_of_frame_index": 7,
-            },
-            {
-                "duplicate_kind": FrameDuplicateKind.PIXEL_EQUIVALENT,
-                "duplicate_of_frame_index": 8,
-            },
-            {
-                "duplicate_kind": FrameDuplicateKind.VERIFIED_CAPTURE_DUPLICATE,
-                "duplicate_of_frame_index": 3,
-            },
-            {
-                "duplicate_kind": FrameDuplicateKind.PIXEL_EQUIVALENT,
-                "duplicate_of_frame_index": 3,
-                "capture_integrity_attestation_refs": (EVIDENCE_D,),
-            },
+            ({"center": None}, "observed center"),
+            ({"apparent_minor_axis_diameter_px": None}, "apparent_minor"),
+            ({"track_segment_id": None}, "track_segment_id"),
+            ({"appearance": BallAppearance.NOT_OBSERVABLE}, "observable appearance"),
+            ({"visibility": "VISIBLE"}, "BallVisibility"),
+            ({"appearance": "SHARP"}, "BallAppearance"),
+            ({"role": "MATCH_BALL"}, "BallRole"),
+            ({"play_state": "IN_PLAY"}, "BallPlayState"),
         )
-        for overrides in invalid:
-            with self.subTest(overrides=overrides), self.assertRaises(ValueError):
-                _frame(**overrides)
+        for overrides, message in invalid:
+            with self.subTest(overrides=overrides), self.assertRaisesRegex(
+                ValueError, message
+            ):
+                _ball(**overrides)
 
-    def test_pixel_geometry_rejects_bool_nonfinite_and_out_of_bounds(self) -> None:
-        for x, y in ((True, 1), (float("nan"), 1), (1, float("inf"))):
-            with self.subTest(x=x, y=y), self.assertRaisesRegex(ValueError, "finite number"):
-                PixelPoint(x, y)
-
-        for center in (PixelPoint(-0.1, 1), PixelPoint(1920, 1), PixelPoint(1, 1080)):
-            with self.subTest(center=center), self.assertRaisesRegex(ValueError, "pixel bounds"):
-                _visible(center=center)
-
-    def test_independently_fingerprintable_payloads_carry_schema_version(self) -> None:
-        point = PixelPoint(12, 34)
-        ellipse = BlurEllipse(12, 3, 45)
-        frame = _frame()
-        identity = frame.identity
-        decode_contract = identity.decode_contract
-
-        for contract in (point, ellipse, decode_contract, identity, frame):
-            with self.subTest(contract=type(contract).__name__):
-                payload = json.loads(contract.canonical_json())
-                self.assertEqual(payload["schema_version"], "1.0")
-                self.assertEqual(len(contract.fingerprint()), 64)
-
-        self.assertNotEqual(point.fingerprint(), PixelPoint(13, 34).fingerprint())
-        self.assertNotEqual(ellipse.fingerprint(), BlurEllipse(12, 3, 46).fingerprint())
-        self.assertNotEqual(frame.fingerprint(), _frame(frame_index=8).fingerprint())
-        frame_payload = frame.to_canonical_dict()
-        self.assertEqual(
-            frame_payload["identity"]["pixel_coordinate_space"],
-            "SOURCE_PIXEL_CENTERS_TOP_LEFT_X_RIGHT_Y_DOWN",
-        )
-        self.assertEqual(
-            frame_payload["identity"]["timestamp_basis"],
-            "SOURCE_PRESENTATION_OFFSET_NS",
-        )
-        self.assertEqual(
-            frame_payload["identity"]["decoded_frame_hash_basis"],
-            "RGB24_SOURCE_DIMENSIONS_ROW_MAJOR_NO_PADDING",
-        )
-        self.assertEqual(frame_payload["identity"]["decoded_frame_sha256"], "d" * 64)
-        self.assertIsNone(frame_payload["duplicate_of_frame_index"])
-        self.assertEqual(
-            frame_payload["identity"]["decode_contract"]["decoder_artifact_sha256"],
-            "f" * 64,
-        )
-
-    def test_visible_requires_center_apparent_size_and_track(self) -> None:
-        annotation = _visible()
-        self.assertEqual(annotation.center, PixelPoint(960.0, 540.0))
-        self.assertEqual(annotation.apparent_minor_axis_diameter_px, 12.0)
-        self.assertEqual(annotation.uncertainty_radius_px, 2.0)
-
-        with self.assertRaisesRegex(ValueError, "exact center"):
-            _visible(center=None)
-        with self.assertRaisesRegex(ValueError, "apparent_minor_axis_diameter_px"):
-            _visible(apparent_minor_axis_diameter_px=None)
-        with self.assertRaisesRegex(ValueError, "finite number"):
-            _visible(apparent_minor_axis_diameter_px=True)
-        with self.assertRaisesRegex(ValueError, "positive and fit"):
-            _visible(apparent_minor_axis_diameter_px=1081)
-        with self.assertRaisesRegex(ValueError, "blur geometry"):
-            _visible(blur_start=PixelPoint(950, 540), blur_end=PixelPoint(970, 540))
-        with self.assertRaisesRegex(ValueError, "track_segment_id"):
-            _visible(track_segment_id=None)
-        with self.assertRaisesRegex(ValueError, "finite number"):
-            _visible(uncertainty_radius_px=True)
-
-    def test_blur_accepts_exactly_endpoints_or_ellipse(self) -> None:
-        endpoints = BallFrameAnnotation(
-            annotation_id="blur-1",
-            frame=_frame(),
-            state=BallState.BLUR,
+    def test_sharp_and_motion_blur_are_appearance_not_visibility(self) -> None:
+        sharp = _ball()
+        blurred = _ball(
+            annotation_id="blurred",
+            appearance=BallAppearance.MOTION_BLURRED,
             center=PixelPoint(100, 100),
             blur_start=PixelPoint(90, 100),
             blur_end=PixelPoint(110, 100),
             apparent_minor_axis_diameter_px=6,
-            track_segment_id="track-1",
         )
-        ellipse = BallFrameAnnotation(
-            annotation_id="blur-2",
-            frame=_frame(),
-            state=BallState.BLUR,
+        ellipse = _ball(
+            annotation_id="blurred-ellipse",
+            appearance=BallAppearance.MOTION_BLURRED,
             center=PixelPoint(100, 100),
             blur_ellipse=BlurEllipse(12, 3, 45),
             apparent_minor_axis_diameter_px=6,
-            track_segment_id="track-1",
         )
-        self.assertIsNone(endpoints.blur_ellipse)
-        self.assertIsNotNone(ellipse.blur_ellipse)
-
-    def test_blur_rejects_incomplete_or_contradictory_geometry(self) -> None:
-        base = {
-            "annotation_id": "blur-1",
-            "frame": _frame(),
-            "state": BallState.BLUR,
-            "center": PixelPoint(100, 100),
-            "apparent_minor_axis_diameter_px": 6,
-            "track_segment_id": "track-1",
-        }
+        self.assertIs(sharp.visibility, BallVisibility.VISIBLE)
+        self.assertIs(blurred.visibility, BallVisibility.VISIBLE)
+        self.assertIs(ellipse.appearance, BallAppearance.MOTION_BLURRED)
         invalid = (
-            ({}, "exactly one geometry representation"),
-            ({"blur_start": PixelPoint(90, 100)}, "provided together"),
+            ({"blur_start": PixelPoint(90, 100), "blur_end": PixelPoint(110, 100)}, "SHARP"),
+            ({"appearance": BallAppearance.MOTION_BLURRED}, "exactly one"),
             (
                 {
+                    "appearance": BallAppearance.MOTION_BLURRED,
                     "blur_start": PixelPoint(90, 100),
                     "blur_end": PixelPoint(110, 100),
                     "blur_ellipse": BlurEllipse(12, 3, 0),
                 },
-                "exactly one geometry representation",
+                "exactly one",
             ),
-            (
-                {"blur_start": PixelPoint(90, 100), "blur_end": PixelPoint(120, 100)},
-                "endpoint midpoint",
-            ),
-            (
-                {"blur_start": PixelPoint(100, 100), "blur_end": PixelPoint(100, 100)},
-                "distinct",
-            ),
-            ({"blur_ellipse": BlurEllipse(20, 3, 0), "center": PixelPoint(5, 5)}, "pixel bounds"),
         )
         for overrides, message in invalid:
-            with self.subTest(overrides=overrides), self.assertRaisesRegex(ValueError, message):
-                BallFrameAnnotation(**{**base, **overrides})
+            with self.subTest(overrides=overrides), self.assertRaisesRegex(
+                ValueError, message
+            ):
+                _ball(**overrides)
 
-        with self.assertRaisesRegex(ValueError, "major_radius"):
-            BlurEllipse(2, 3, 0)
-        with self.assertRaisesRegex(ValueError, r"\[0, 180\)"):
-            BlurEllipse(3, 2, 180)
-
-    def test_blur_apparent_minor_axis_must_match_geometry(self) -> None:
-        center = PixelPoint(100, 100)
+    def test_motion_blur_geometry_is_bounded_and_consistent(self) -> None:
+        with self.assertRaisesRegex(ValueError, "endpoint midpoint"):
+            _ball(
+                appearance=BallAppearance.MOTION_BLURRED,
+                center=PixelPoint(100, 100),
+                blur_start=PixelPoint(90, 100),
+                blur_end=PixelPoint(120, 100),
+                apparent_minor_axis_diameter_px=6,
+            )
         with self.assertRaisesRegex(ValueError, "major-axis length"):
-            BallFrameAnnotation(
-                annotation_id="blur-endpoint-mismatch",
-                frame=_frame(),
-                state=BallState.BLUR,
-                center=center,
+            _ball(
+                appearance=BallAppearance.MOTION_BLURRED,
+                center=PixelPoint(100, 100),
                 blur_start=PixelPoint(95, 100),
                 blur_end=PixelPoint(105, 100),
-                apparent_minor_axis_diameter_px=10.000002,
-                track_segment_id="track-1",
+                apparent_minor_axis_diameter_px=11,
             )
         with self.assertRaisesRegex(ValueError, "twice.*minor radius"):
-            BallFrameAnnotation(
-                annotation_id="blur-ellipse-mismatch",
-                frame=_frame(),
-                state=BallState.BLUR,
-                center=center,
+            _ball(
+                appearance=BallAppearance.MOTION_BLURRED,
+                center=PixelPoint(100, 100),
                 blur_ellipse=BlurEllipse(8, 3, 0),
-                apparent_minor_axis_diameter_px=6.000002,
-                track_segment_id="track-1",
+                apparent_minor_axis_diameter_px=7,
             )
+        with self.assertRaisesRegex(ValueError, "pixel bounds"):
+            _ball(center=PixelPoint(1920, 10))
+        with self.assertRaisesRegex(ValueError, "source-frame diagonal"):
+            _ball(uncertainty_radius_px=3_000)
 
-        endpoint_blur = BallFrameAnnotation(
-            annotation_id="blur-endpoint-tolerance",
-            frame=_frame(),
-            state=BallState.BLUR,
-            center=center,
-            blur_start=PixelPoint(95, 100),
-            blur_end=PixelPoint(105, 100),
-            apparent_minor_axis_diameter_px=10.0000005,
-            track_segment_id="track-1",
-        )
-        ellipse_blur = BallFrameAnnotation(
-            annotation_id="blur-ellipse-tolerance",
-            frame=_frame(),
-            state=BallState.BLUR,
-            center=center,
-            blur_ellipse=BlurEllipse(8, 3, 0),
-            apparent_minor_axis_diameter_px=6.0000005,
-            track_segment_id="track-1",
-        )
-        self.assertEqual(endpoint_blur.state, BallState.BLUR)
-        self.assertEqual(ellipse_blur.state, BallState.BLUR)
-
-    def test_non_visible_states_forbid_invented_geometry(self) -> None:
-        for state in (BallState.OCCLUDED, BallState.OUT_OF_FRAME):
-            annotation = BallFrameAnnotation(
-                annotation_id=f"ball-{state.value}",
-                frame=_frame(),
-                state=state,
-                track_segment_id="track-1",
-                ambiguity_reason="trajectory supports this state",
+    def test_occlusion_out_of_frame_and_unknown_never_accept_geometry(self) -> None:
+        for visibility in (
+            BallVisibility.FULLY_OCCLUDED,
+            BallVisibility.OUT_OF_FRAME,
+        ):
+            annotation = _ball(
+                annotation_id=visibility.value,
+                visibility=visibility,
+                appearance=BallAppearance.NOT_OBSERVABLE,
+                center=None,
+                apparent_minor_axis_diameter_px=None,
+                uncertainty_radius_px=None,
             )
-            self.assertIsNone(annotation.center)
-            with self.assertRaisesRegex(ValueError, "invented exact geometry"):
-                BallFrameAnnotation(
-                    annotation_id="bad",
-                    frame=_frame(),
-                    state=state,
-                    center=PixelPoint(100, 100),
-                    track_segment_id="track-1",
+            self.assertFalse(annotation.is_localizable_observation)
+            with self.assertRaisesRegex(ValueError, "invented observation geometry"):
+                _ball(
+                    visibility=visibility,
+                    appearance=BallAppearance.NOT_OBSERVABLE,
+                    apparent_minor_axis_diameter_px=None,
+                    uncertainty_radius_px=None,
                 )
-
-        absent = BallFrameAnnotation(
-            annotation_id="absent",
-            frame=_frame(),
-            state=BallState.ABSENT,
-        )
-        self.assertIsNone(absent.track_segment_id)
-        with self.assertRaisesRegex(ValueError, "ABSENT cannot belong"):
-            BallFrameAnnotation(
-                annotation_id="bad-absent",
-                frame=_frame(),
-                state=BallState.ABSENT,
-                track_segment_id="track-1",
+        with self.assertRaisesRegex(ValueError, "track_segment_id"):
+            _ball(
+                visibility=BallVisibility.FULLY_OCCLUDED,
+                appearance=BallAppearance.NOT_OBSERVABLE,
+                center=None,
+                apparent_minor_axis_diameter_px=None,
+                uncertainty_radius_px=None,
+                track_segment_id=None,
             )
 
-    def test_raw_enum_strings_fail_closed(self) -> None:
-        with self.assertRaisesRegex(ValueError, "BallState"):
-            _visible(state="VISIBLE")
-        with self.assertRaisesRegex(ValueError, "ReviewState"):
-            _visible(review_state="DRAFT")
-        with self.assertRaisesRegex(ValueError, "EventType"):
-            _event(event_type="SERVE_CONTACT")
-        with self.assertRaisesRegex(ValueError, "TimestampBasis"):
-            _frame(timestamp_basis="SOURCE_PRESENTATION_OFFSET_NS")
-        with self.assertRaisesRegex(ValueError, "PixelCoordinateSpace"):
-            _frame(
-                pixel_coordinate_space=(
-                    "SOURCE_PIXEL_CENTERS_TOP_LEFT_X_RIGHT_Y_DOWN"
-                )
-            )
-        with self.assertRaisesRegex(ValueError, "DecodedFrameHashBasis"):
-            _frame(
-                decoded_frame_hash_basis=(
-                    "RGB24_SOURCE_DIMENSIONS_ROW_MAJOR_NO_PADDING"
-                )
-            )
-        with self.assertRaisesRegex(ValueError, "AutorotationPolicy"):
-            _decode_contract(autorotation_policy="IGNORE_CONTAINER_DISPLAY_TRANSFORM")
-        with self.assertRaisesRegex(ValueError, "DecodedColorSpace"):
-            _decode_contract(color_space="BT709")
-        with self.assertRaisesRegex(ValueError, "DecodedColorRange"):
-            _decode_contract(color_range="LIMITED")
-        with self.assertRaisesRegex(ValueError, "DecodedPixelFormat"):
-            _decode_contract(output_pixel_format="RGB24")
-        with self.assertRaisesRegex(ValueError, "TimestampBasis"):
-            _event(timestamp_basis="SOURCE_PRESENTATION_OFFSET_NS")
-        with self.assertRaisesRegex(ValueError, "team must be a Team"):
-            _event(team="A", player_id=None)
-        with self.assertRaisesRegex(ValueError, "AttributionState"):
-            _event(team_attribution_state="KNOWN")
-
-    def test_review_states_require_consistent_people_and_evidence(self) -> None:
-        with self.assertRaisesRegex(ValueError, "DRAFT cannot claim"):
-            _visible(reviewer_ids=("reviewer-1",))
-        with self.assertRaisesRegex(ValueError, "reviewer IDs and review evidence"):
-            _visible(review_state=ReviewState.REVIEWED, reviewer_ids=("reviewer-1",))
-
-        reviewed = _visible(
+    def test_not_present_is_the_only_confident_negative_and_is_attested(self) -> None:
+        frame = _frame()
+        search_attestation = _search_attestation(frame)
+        not_present = _ball(
+            annotation_id="not-present",
+            frame=frame,
+            visibility=BallVisibility.NOT_PRESENT,
+            appearance=BallAppearance.NOT_OBSERVABLE,
+            role=BallRole.MATCH_BALL,
+            play_state=BallPlayState.NOT_APPLICABLE,
+            center=None,
+            apparent_minor_axis_diameter_px=None,
+            uncertainty_radius_px=None,
+            track_segment_id=None,
+            search_region_observability_attestation=search_attestation,
             review_state=ReviewState.REVIEWED,
             reviewer_ids=("reviewer-1",),
             review_evidence_refs=(EVIDENCE_A,),
         )
-        self.assertEqual(reviewed.review_state, ReviewState.REVIEWED)
-
-        with self.assertRaisesRegex(ValueError, "requires an adjudicator"):
-            _visible(
-                review_state=ReviewState.ADJUDICATED,
-                reviewer_ids=("reviewer-1",),
-                review_evidence_refs=(EVIDENCE_A,),
-            )
-        with self.assertRaisesRegex(ValueError, "independent"):
-            _visible(
-                review_state=ReviewState.ADJUDICATED,
-                reviewer_ids=("reviewer-1",),
-                review_evidence_refs=(EVIDENCE_A,),
-                adjudicator_id="reviewer-1",
-                adjudication_evidence_refs=(EVIDENCE_B,),
-            )
-
-        adjudicated = _visible(
-            review_state=ReviewState.ADJUDICATED,
-            reviewer_ids=("reviewer-1",),
-            review_evidence_refs=(EVIDENCE_A,),
-            adjudicator_id="adjudicator-1",
-            adjudication_evidence_refs=(EVIDENCE_B,),
+        self.assertTrue(
+            not_present.confident_negative_claim_structurally_complete
         )
-        self.assertEqual(adjudicated.adjudicator_id, "adjudicator-1")
-
-    def test_every_evidence_reference_is_an_exact_sha256_content_address(self) -> None:
-        invalid_refs = (
-            "decision:1",
-            "a" * 64,
-            "sha256:" + "A" * 64,
-            "sha256:" + "a" * 63,
-            "sha512:" + "a" * 64,
-        )
-        for invalid_ref in invalid_refs:
-            with self.subTest(field="event evidence", invalid_ref=invalid_ref):
-                with self.assertRaisesRegex(ValueError, "exact sha256"):
-                    _event(evidence_refs=(invalid_ref,))
-            with self.subTest(field="ball review evidence", invalid_ref=invalid_ref):
-                with self.assertRaisesRegex(ValueError, "exact sha256"):
-                    _visible(
-                        review_state=ReviewState.REVIEWED,
-                        reviewer_ids=("reviewer-1",),
-                        review_evidence_refs=(invalid_ref,),
-                    )
-            with self.subTest(field="ball adjudication evidence", invalid_ref=invalid_ref):
-                with self.assertRaisesRegex(ValueError, "exact sha256"):
-                    _visible(
-                        review_state=ReviewState.ADJUDICATED,
-                        reviewer_ids=("reviewer-1",),
-                        review_evidence_refs=(EVIDENCE_A,),
-                        adjudicator_id="adjudicator-1",
-                        adjudication_evidence_refs=(invalid_ref,),
-                    )
-            with self.subTest(field="event review evidence", invalid_ref=invalid_ref):
-                with self.assertRaisesRegex(ValueError, "exact sha256"):
-                    _event(
-                        review_state=ReviewState.REVIEWED,
-                        reviewer_ids=("reviewer-1",),
-                        review_evidence_refs=(invalid_ref,),
-                    )
-            with self.subTest(field="event adjudication evidence", invalid_ref=invalid_ref):
-                with self.assertRaisesRegex(ValueError, "exact sha256"):
-                    _event(
-                        review_state=ReviewState.ADJUDICATED,
-                        reviewer_ids=("reviewer-1",),
-                        review_evidence_refs=(EVIDENCE_A,),
-                        adjudicator_id="adjudicator-1",
-                        adjudication_evidence_refs=(invalid_ref,),
-                    )
-
-        with self.assertRaisesRegex(ValueError, "tuple"):
-            _event(evidence_refs=[EVIDENCE_A])
-        with self.assertRaisesRegex(ValueError, "duplicates"):
-            _event(evidence_refs=(EVIDENCE_A, EVIDENCE_A))
-        with self.assertRaisesRegex(ValueError, "ASCII-stable"):
-            _visible(
+        with self.assertRaisesRegex(ValueError, "SearchRegionObservabilityAttestation"):
+            _ball(
+                visibility=BallVisibility.NOT_PRESENT,
+                appearance=BallAppearance.NOT_OBSERVABLE,
+                role=BallRole.MATCH_BALL,
+                play_state=BallPlayState.NOT_APPLICABLE,
+                center=None,
+                apparent_minor_axis_diameter_px=None,
+                uncertainty_radius_px=None,
+                track_segment_id=None,
                 review_state=ReviewState.REVIEWED,
-                reviewer_ids=(" reviewer-1",),
+                reviewer_ids=("reviewer-1",),
                 review_evidence_refs=(EVIDENCE_A,),
             )
+        with self.assertRaisesRegex(ValueError, "role=MATCH_BALL"):
+            _ball(
+                visibility=BallVisibility.NOT_PRESENT,
+                appearance=BallAppearance.NOT_OBSERVABLE,
+                role=BallRole.SPARE_BALL,
+                play_state=BallPlayState.NOT_APPLICABLE,
+                center=None,
+                apparent_minor_axis_diameter_px=None,
+                uncertainty_radius_px=None,
+                track_segment_id=None,
+                search_region_observability_attestation=search_attestation,
+                review_state=ReviewState.REVIEWED,
+                reviewer_ids=("reviewer-1",),
+                review_evidence_refs=(EVIDENCE_A,),
+            )
+        with self.assertRaisesRegex(ValueError, "exact full decoded frame"):
+            _ball(
+                frame=frame,
+                visibility=BallVisibility.NOT_PRESENT,
+                appearance=BallAppearance.NOT_OBSERVABLE,
+                role=BallRole.MATCH_BALL,
+                play_state=BallPlayState.NOT_APPLICABLE,
+                center=None,
+                apparent_minor_axis_diameter_px=None,
+                uncertainty_radius_px=None,
+                track_segment_id=None,
+                search_region_observability_attestation=_search_attestation(
+                    frame,
+                    frame_index=frame.frame_index + 1,
+                ),
+                review_state=ReviewState.REVIEWED,
+                reviewer_ids=("reviewer-1",),
+                review_evidence_refs=(EVIDENCE_A,),
+            )
+        with self.assertRaisesRegex(ValueError, "reviewer authority"):
+            _ball(
+                frame=frame,
+                visibility=BallVisibility.NOT_PRESENT,
+                appearance=BallAppearance.NOT_OBSERVABLE,
+                role=BallRole.MATCH_BALL,
+                play_state=BallPlayState.NOT_APPLICABLE,
+                center=None,
+                apparent_minor_axis_diameter_px=None,
+                uncertainty_radius_px=None,
+                track_segment_id=None,
+                search_region_observability_attestation=_search_attestation(
+                    frame,
+                    reviewer_ids=("reviewer-2",),
+                ),
+                review_state=ReviewState.REVIEWED,
+                reviewer_ids=("reviewer-1",),
+                review_evidence_refs=(EVIDENCE_A,),
+            )
+        with self.assertRaisesRegex(ValueError, "exact full decoded frame"):
+            _ball(
+                frame=frame,
+                visibility=BallVisibility.NOT_PRESENT,
+                appearance=BallAppearance.NOT_OBSERVABLE,
+                role=BallRole.MATCH_BALL,
+                play_state=BallPlayState.NOT_APPLICABLE,
+                center=None,
+                apparent_minor_axis_diameter_px=None,
+                uncertainty_radius_px=None,
+                track_segment_id=None,
+                search_region_observability_attestation=_search_attestation(
+                    frame,
+                    searched_region=PixelRegion(0, 0, 100, 100),
+                ),
+                review_state=ReviewState.REVIEWED,
+                reviewer_ids=("reviewer-1",),
+                review_evidence_refs=(EVIDENCE_A,),
+            )
+        with self.assertRaisesRegex(ValueError, "cannot be empty"):
+            _search_attestation(
+                frame,
+                capture_integrity_attestation_refs=(),
+            )
 
-    def test_ids_are_ascii_stable_and_free_text_is_valid_utf8_nfc(self) -> None:
-        invalid_ids = (
-            {"annotation_id": "báll-7"},
-            {"track_segment_id": "track-α"},
-            {
-                "review_state": ReviewState.REVIEWED,
-                "reviewer_ids": ("réviewer-1",),
-                "review_evidence_refs": (EVIDENCE_A,),
-            },
+    def test_indistinguishable_and_capture_unknown_are_not_negatives(self) -> None:
+        for visibility in (BallVisibility.INDISTINGUISHABLE,):
+            annotation = _ball(
+                annotation_id=visibility.value,
+                visibility=visibility,
+                appearance=BallAppearance.NOT_OBSERVABLE,
+                role=BallRole.UNKNOWN,
+                play_state=BallPlayState.UNKNOWN,
+                center=None,
+                apparent_minor_axis_diameter_px=None,
+                uncertainty_radius_px=None,
+                track_segment_id=None,
+                ambiguity_reason="capture or candidate identity cannot be established",
+            )
+            self.assertFalse(
+                annotation.confident_negative_claim_structurally_complete
+            )
+            self.assertFalse(annotation.is_localizable_observation)
+        capture_unknown = _ball(
+            annotation_id="CAPTURE_UNKNOWN",
+            frame=_unavailable_frame(),
+            visibility=BallVisibility.CAPTURE_UNKNOWN,
+            appearance=BallAppearance.NOT_OBSERVABLE,
+            role=BallRole.MATCH_BALL,
+            play_state=BallPlayState.UNKNOWN,
+            center=None,
+            apparent_minor_axis_diameter_px=None,
+            uncertainty_radius_px=None,
+            track_segment_id=None,
+            ambiguity_reason="capture presentation gap prevents decoded pixels",
         )
-        for overrides in invalid_ids:
+        self.assertFalse(
+            capture_unknown.confident_negative_claim_structurally_complete
+        )
+        self.assertFalse(capture_unknown.is_localizable_observation)
+        self.assertFalse(
+            capture_unknown.frame.to_canonical_dict()["decoded_pixels_available"]
+        )
+        with self.assertRaisesRegex(ValueError, "gap_evidence_refs cannot be empty"):
+            _unavailable_frame(gap_evidence_refs=())
+        with self.assertRaisesRegex(ValueError, "ambiguity_reason"):
+            _ball(
+                frame=_unavailable_frame(),
+                visibility=BallVisibility.CAPTURE_UNKNOWN,
+                appearance=BallAppearance.NOT_OBSERVABLE,
+                role=BallRole.MATCH_BALL,
+                play_state=BallPlayState.UNKNOWN,
+                center=None,
+                apparent_minor_axis_diameter_px=None,
+                uncertainty_radius_px=None,
+                track_segment_id=None,
+            )
+        with self.assertRaisesRegex(ValueError, "UnavailableFrameReference"):
+            _ball(
+                visibility=BallVisibility.CAPTURE_UNKNOWN,
+                appearance=BallAppearance.NOT_OBSERVABLE,
+                role=BallRole.MATCH_BALL,
+                play_state=BallPlayState.UNKNOWN,
+                center=None,
+                apparent_minor_axis_diameter_px=None,
+                uncertainty_radius_px=None,
+                track_segment_id=None,
+                ambiguity_reason="decoded pixels are unavailable",
+            )
+        with self.assertRaisesRegex(ValueError, "UNKNOWN role"):
+            _ball(
+                visibility=BallVisibility.INDISTINGUISHABLE,
+                appearance=BallAppearance.NOT_OBSERVABLE,
+                center=None,
+                apparent_minor_axis_diameter_px=None,
+                uncertainty_radius_px=None,
+                track_segment_id=None,
+                ambiguity_reason="multiple candidates overlap",
+            )
+
+    def test_contracts_reject_str_and_tuple_subclasses(self) -> None:
+        class StrSubclass(str):
+            pass
+
+        class TupleSubclass(tuple):
+            pass
+
+        with self.assertRaisesRegex(ValueError, "ontology_sha256"):
+            _ball(ontology_sha256=StrSubclass(ONTOLOGY))
+        with self.assertRaisesRegex(ValueError, "reviewer_ids"):
+            _ball(reviewer_ids=TupleSubclass())
+        with self.assertRaisesRegex(ValueError, "observational_annotations"):
+            _physical(
+                observational_annotations=TupleSubclass((_observed(),)),
+            )
+
+    def test_any_unknown_role_or_play_state_requires_a_reason(self) -> None:
+        for overrides in (
+            {"role": BallRole.UNKNOWN},
+            {"play_state": BallPlayState.UNKNOWN},
+        ):
             with self.subTest(overrides=overrides), self.assertRaisesRegex(
-                ValueError,
-                "ASCII-stable",
+                ValueError, "ambiguity_reason"
             ):
-                _visible(**overrides)
-        with self.assertRaisesRegex(ValueError, "ASCII-stable"):
-            _event(player_id="pláyer")
+                _ball(**overrides)
+        self.assertIs(
+            _ball(role=BallRole.UNKNOWN, ambiguity_reason="role unresolved").role,
+            BallRole.UNKNOWN,
+        )
 
-        with self.assertRaisesRegex(ValueError, "valid UTF-8"):
-            _visible(ambiguity_reason="bad\ud800text")
-        with self.assertRaisesRegex(ValueError, "NFC"):
-            _visible(ambiguity_reason="Cafe\u0301")
-        accepted = _visible(ambiguity_reason="Café")
-        self.assertEqual(accepted.ambiguity_reason, "Café")
-
-    def test_fingerprint_is_stable_normalized_and_content_sensitive(self) -> None:
-        first = _visible(
-            review_state=ReviewState.ADJUDICATED,
+    def test_review_bounds_fingerprints_and_immutability_remain_strict(self) -> None:
+        reviewed = _ball(
+            review_state=ReviewState.REVIEWED,
             reviewer_ids=("reviewer-2", "reviewer-1"),
             review_evidence_refs=(EVIDENCE_B, EVIDENCE_A),
-            adjudicator_id="adjudicator-1",
-            adjudication_evidence_refs=(EVIDENCE_D, EVIDENCE_C),
         )
-        reordered = _visible(
-            review_state=ReviewState.ADJUDICATED,
+        reordered = _ball(
+            review_state=ReviewState.REVIEWED,
             reviewer_ids=("reviewer-1", "reviewer-2"),
             review_evidence_refs=(EVIDENCE_A, EVIDENCE_B),
-            adjudicator_id="adjudicator-1",
-            adjudication_evidence_refs=(EVIDENCE_C, EVIDENCE_D),
         )
-        changed = _visible(center=PixelPoint(961, 540))
-
-        self.assertEqual(first.fingerprint(), reordered.fingerprint())
-        self.assertNotEqual(first.fingerprint(), changed.fingerprint())
-        self.assertEqual(len(first.fingerprint()), 64)
-        payload = json.loads(first.canonical_json())
-        self.assertEqual(payload["schema_version"], "1.0")
-        self.assertEqual(
-            payload["center"],
-            {"schema_version": "1.0", "x": 960.0, "y": 540.0},
-        )
-
-    def test_ball_annotation_is_immutable(self) -> None:
-        annotation = _visible()
-        self.assertFalse(hasattr(annotation, "__dict__"))
+        self.assertEqual(reviewed.fingerprint(), reordered.fingerprint())
+        self.assertNotEqual(reviewed.fingerprint(), _ball().fingerprint())
+        self.assertFalse(hasattr(reviewed, "__dict__"))
         with self.assertRaises(FrozenInstanceError):
-            annotation.state = BallState.ABSENT  # type: ignore[misc]
+            reviewed.visibility = BallVisibility.NOT_PRESENT  # type: ignore[misc]
+        with self.assertRaisesRegex(ValueError, "reviewer IDs and review evidence"):
+            _ball(review_state=ReviewState.REVIEWED)
+        with self.assertRaisesRegex(ValueError, "2048 UTF-8 bytes"):
+            _ball(role=BallRole.UNKNOWN, ambiguity_reason="a" * 2049)
 
-    def test_temporal_interval_is_inclusive_and_may_be_exact(self) -> None:
-        exact = _event(interval_start_ns=100, interval_end_ns=100)
-        uncertain = _event(interval_start_ns=100, interval_end_ns=140)
-        self.assertEqual(exact.interval_start_ns, exact.interval_end_ns)
-        self.assertIs(
-            exact.timestamp_basis,
-            TimestampBasis.SOURCE_PRESENTATION_OFFSET_NS,
-        )
-        self.assertEqual(uncertain.interval_end_ns - uncertain.interval_start_ns, 40)
-        with self.assertRaisesRegex(ValueError, "inverted"):
-            _event(interval_start_ns=101, interval_end_ns=100)
-        with self.assertRaisesRegex(ValueError, "integers"):
-            _event(interval_start_ns=True)
-        with self.assertRaisesRegex(ValueError, "evidence_refs cannot be empty"):
-            _event(evidence_refs=())
 
-    def test_temporal_attribution_is_event_specific(self) -> None:
-        serve = _event()
-        self.assertEqual(serve.player_id, "a1")
-        self.assertEqual(serve.team_role, TeamAttributionRole.SERVING_TEAM)
-        self.assertEqual(serve.player_role, PlayerAttributionRole.SERVING_PLAYER)
-        team_only = _event(
-            event_type=EventType.REPORTED_ADMINISTRATIVE_POINT,
-            team=Team.B,
+class LayeredTemporalAnnotationTests(unittest.TestCase):
+    def test_observation_is_signal_only_and_has_observational_type_tag(self) -> None:
+        observed = _observed()
+        self.assertIs(observed.annotation_type, AnnotationType.OBSERVED_TEMPORAL_EVENT)
+        self.assertIs(observed.truth_layer, TruthLayer.OBSERVATIONAL)
+        self.assertIs(observed.team_role, TeamAttributionRole.SERVING_TEAM)
+        payload = observed.to_canonical_dict()
+        self.assertEqual(payload["event_type"], "SERVE_CONTACT")
+        self.assertNotIn("ruleset_sha256", payload)
+        self.assertNotIn("official_mutation_permitted", payload)
+
+    def test_observed_attribution_and_interval_fail_closed(self) -> None:
+        no_attribution = _observed(
+            event_type=ObservedTemporalEventType.WHISTLE,
+            team_attribution_state=AttributionState.NOT_APPLICABLE,
+            player_attribution_state=AttributionState.NOT_APPLICABLE,
+            team=None,
             player_id=None,
         )
-        self.assertEqual(team_only.team, Team.B)
-        self.assertEqual(team_only.team_role, TeamAttributionRole.POINT_AWARDED_TEAM)
-        self.assertIsNone(team_only.player_role)
-
+        self.assertIsNone(no_attribution.team_role)
         with self.assertRaisesRegex(ValueError, "does not allow team attribution"):
-            _event(event_type=EventType.SET_START, team=Team.A, player_id=None)
-        with self.assertRaisesRegex(ValueError, "does not allow player attribution"):
-            _event(
-                event_type=EventType.REPORTED_ADMINISTRATIVE_POINT,
-                team=Team.A,
-                player_id="a1",
+            _observed(
+                event_type=ObservedTemporalEventType.WHISTLE,
+                team_attribution_state=AttributionState.NOT_APPLICABLE,
+                player_attribution_state=AttributionState.NOT_APPLICABLE,
+                player_id=None,
             )
-        with self.assertRaisesRegex(ValueError, "requires known team attribution"):
-            _event(team=None, player_id="a1")
+        with self.assertRaisesRegex(ValueError, "inverted"):
+            _observed(interval_start_ns=121, interval_end_ns=120)
+        with self.assertRaisesRegex(ValueError, "integers"):
+            _observed(interval_start_ns=True)
+        with self.assertRaisesRegex(ValueError, "cannot be empty"):
+            _observed(evidence_refs=())
 
-    def test_every_allowed_attribution_has_an_exact_role(self) -> None:
-        team_roles = {
-            EventType.SERVE_PREPARATION: TeamAttributionRole.SERVING_TEAM,
-            EventType.SERVE_CONTACT: TeamAttributionRole.SERVING_TEAM,
-            EventType.RALLY_END: TeamAttributionRole.RALLY_WINNER,
-            EventType.CANDIDATE_CONTACT: TeamAttributionRole.CONTACT_TEAM,
-            EventType.NEXT_AUTHORIZED_SERVE: TeamAttributionRole.SERVING_TEAM,
-            EventType.CHALLENGE: TeamAttributionRole.CHALLENGING_TEAM,
-            EventType.REPORTED_ADMINISTRATIVE_POINT: TeamAttributionRole.POINT_AWARDED_TEAM,
-            EventType.TERMINAL_POINT: TeamAttributionRole.POINT_AWARDED_TEAM,
-        }
-        player_roles = {
-            EventType.SERVE_PREPARATION: PlayerAttributionRole.SERVING_PLAYER,
-            EventType.SERVE_CONTACT: PlayerAttributionRole.SERVING_PLAYER,
-            EventType.CANDIDATE_CONTACT: PlayerAttributionRole.CONTACTING_PLAYER,
-            EventType.NEXT_AUTHORIZED_SERVE: PlayerAttributionRole.SERVING_PLAYER,
-        }
-        for event_type, expected_team_role in team_roles.items():
-            player_id = "a1" if event_type in player_roles else None
-            annotation = _event(event_type=event_type, player_id=player_id)
-            with self.subTest(event_type=event_type):
-                self.assertEqual(annotation.team_role, expected_team_role)
-                self.assertEqual(annotation.player_role, player_roles.get(event_type))
-                payload = annotation.to_canonical_dict()
-                self.assertEqual(payload["team_role"], expected_team_role.value)
-                self.assertEqual(
-                    payload["player_role"],
-                    player_roles[event_type].value if event_type in player_roles else None,
+    def test_physical_adjudication_binds_observation_set_and_no_score_authority(self) -> None:
+        first = _physical()
+        reordered = _physical(
+            observational_annotations=tuple(
+                reversed(first.observational_annotations)
+            )
+        )
+        self.assertEqual(first.fingerprint(), reordered.fingerprint())
+        payload = first.to_canonical_dict()
+        self.assertEqual(payload["truth_layer"], "PHYSICAL_ADJUDICATION")
+        self.assertFalse(payload["score_authority"])
+        self.assertEqual(len(payload["observational_evidence_set_sha256"]), 64)
+        with self.assertRaisesRegex(ValueError, "ADJUDICATED"):
+            _physical(
+                review_state=ReviewState.REVIEWED,
+                adjudicator_id=None,
+                adjudication_evidence_refs=(),
+            )
+        with self.assertRaisesRegex(ValueError, "non-empty bounded tuple"):
+            _physical(observational_annotations=())
+        with self.assertRaisesRegex(ValueError, "duplicate logical annotation_id"):
+            _physical(
+                observational_annotations=(
+                    _observed(annotation_id="same-observation"),
+                    _observed(
+                        annotation_id="same-observation",
+                        interval_end_ns=119,
+                    ),
                 )
+            )
+        with self.assertRaisesRegex(ValueError, "non-empty bounded tuple"):
+            _physical(
+                observational_annotations=tuple(
+                    _observed(annotation_id=f"observed-{index}")
+                    for index in range(65)
+                )
+            )
+        with self.assertRaisesRegex(ValueError, "same source"):
+            _physical(
+                observational_annotations=(
+                    _observed(source_sha256="d" * 64),
+                )
+            )
+        with self.assertRaisesRegex(ValueError, "same ontology"):
+            _physical(
+                observational_annotations=(
+                    _observed(ontology_sha256="d" * 64),
+                )
+            )
+        with self.assertRaisesRegex(ValueError, "within the physical"):
+            _physical(
+                observational_annotations=(
+                    _observed(interval_start_ns=90, interval_end_ns=120),
+                )
+            )
+        self.assertNotIn("REPLAY", {event.value for event in PhysicalEventType})
 
-        unattributed = _event(team=None, player_id=None)
-        self.assertIs(
-            unattributed.team_attribution_state,
-            AttributionState.UNKNOWN,
+    def test_physical_landing_and_unresolved_have_explicit_semantics(self) -> None:
+        landing = _physical(
+            event_type=PhysicalEventType.LANDING_REGION,
+            landing_region=PhysicalLandingRegion.OUT_OF_BOUNDS,
+            team_attribution_state=AttributionState.NOT_APPLICABLE,
+            player_attribution_state=AttributionState.NOT_APPLICABLE,
+            team=None,
         )
-        self.assertIs(
-            unattributed.player_attribution_state,
-            AttributionState.UNKNOWN,
+        self.assertIs(landing.landing_region, PhysicalLandingRegion.OUT_OF_BOUNDS)
+        with self.assertRaisesRegex(ValueError, "requires a landing_region"):
+            _physical(
+                event_type=PhysicalEventType.LANDING_REGION,
+                team_attribution_state=AttributionState.NOT_APPLICABLE,
+                player_attribution_state=AttributionState.NOT_APPLICABLE,
+                team=None,
+            )
+        unresolved = _physical(
+            event_type=PhysicalEventType.UNRESOLVED,
+            team_attribution_state=AttributionState.NOT_APPLICABLE,
+            player_attribution_state=AttributionState.NOT_APPLICABLE,
+            team=None,
+            ambiguity_reason="contact and landing cannot be established",
         )
-        self.assertIs(unattributed.team_role, TeamAttributionRole.SERVING_TEAM)
-        self.assertIs(unattributed.player_role, PlayerAttributionRole.SERVING_PLAYER)
-        self.assertEqual(unattributed.ambiguity_reason, "attribution unresolved")
-
+        self.assertIs(unresolved.event_type, PhysicalEventType.UNRESOLVED)
         with self.assertRaisesRegex(ValueError, "ambiguity_reason"):
-            _event(
+            _physical(
+                event_type=PhysicalEventType.UNRESOLVED,
+                team_attribution_state=AttributionState.NOT_APPLICABLE,
+                player_attribution_state=AttributionState.NOT_APPLICABLE,
                 team=None,
-                player_id=None,
-                ambiguity_reason=None,
-            )
-        with self.assertRaisesRegex(ValueError, "requires a team"):
-            _event(
-                team=None,
-                player_id=None,
-                team_attribution_state=AttributionState.KNOWN,
-                player_attribution_state=AttributionState.UNKNOWN,
-                ambiguity_reason="team unresolved",
             )
 
-    def test_temporal_review_and_fingerprint_are_strict(self) -> None:
-        adjudicated = _event(
-            review_state=ReviewState.ADJUDICATED,
-            reviewer_ids=("reviewer-1",),
-            review_evidence_refs=(EVIDENCE_A,),
-            adjudicator_id="adjudicator-1",
-            adjudication_evidence_refs=(EVIDENCE_B,),
+    def test_reported_official_truth_is_explicitly_unverified_and_annotation_only(self) -> None:
+        official = _official()
+        changed_ruleset = _official(ruleset_sha256="d" * 64)
+        payload = official.to_canonical_dict()
+        self.assertIs(
+            official.annotation_type,
+            AnnotationType.REPORTED_OFFICIAL_EVENT,
         )
-        same = _event(
-            review_state=ReviewState.ADJUDICATED,
-            reviewer_ids=("reviewer-1",),
-            review_evidence_refs=(EVIDENCE_A,),
-            adjudicator_id="adjudicator-1",
-            adjudication_evidence_refs=(EVIDENCE_B,),
+        self.assertIs(
+            official.truth_layer,
+            TruthLayer.REPORTED_OFFICIAL_UNVERIFIED,
         )
-        changed = _event(interval_end_ns=121)
-        self.assertEqual(adjudicated.fingerprint(), same.fingerprint())
-        self.assertNotEqual(adjudicated.fingerprint(), changed.fingerprint())
-        self.assertFalse(hasattr(adjudicated, "__dict__"))
-        with self.assertRaises(FrozenInstanceError):
-            adjudicated.interval_end_ns = 999  # type: ignore[misc]
+        self.assertTrue(payload["annotation_only"])
+        self.assertFalse(payload["official_mutation_permitted"])
+        self.assertFalse(payload["official_source_authenticated"])
+        self.assertFalse(payload["score_authority"])
+        self.assertNotIn("official_source_id", payload)
+        self.assertNotIn("official_authority_id", payload)
+        self.assertEqual(
+            payload["reported_official_verification_state"],
+            "UNVERIFIED",
+        )
+        self.assertEqual(payload["ruleset_sha256"], RULESET)
+        self.assertNotEqual(official.fingerprint(), changed_ruleset.fingerprint())
+        with self.assertRaisesRegex(ValueError, "ruleset_sha256"):
+            _official(ruleset_sha256="D" * 64)
+        with self.assertRaisesRegex(ValueError, "include reported_record_ref"):
+            _official(evidence_refs=(EVIDENCE_B,))
+        with self.assertRaisesRegex(ValueError, "source_match_revision"):
+            _official(source_match_revision=True)
+        with self.assertRaisesRegex(ValueError, "cannot be DRAFT"):
+            _official(
+                review_state=ReviewState.DRAFT,
+                reviewer_ids=(),
+                review_evidence_refs=(),
+            )
+        self.assertFalse(hasattr(annotations_module, "OfficialEventAnnotation"))
+
+    def test_identical_time_and_evidence_do_not_merge_truth_layers(self) -> None:
+        observed = _observed()
+        physical = _physical()
+        official = _official()
+        fingerprints = {
+            observed.fingerprint(),
+            physical.fingerprint(),
+            official.fingerprint(),
+        }
+        self.assertEqual(len(fingerprints), 3)
+        self.assertEqual(
+            {
+                observed.to_canonical_dict()["truth_layer"],
+                physical.to_canonical_dict()["truth_layer"],
+                official.to_canonical_dict()["truth_layer"],
+            },
+            {
+                "OBSERVATIONAL",
+                "PHYSICAL_ADJUDICATION",
+                "REPORTED_OFFICIAL_UNVERIFIED",
+            },
+        )
+
+
+class MediaIdentityV2Tests(unittest.TestCase):
+    def test_nested_media_contracts_are_v2_and_content_sensitive(self) -> None:
+        frame = _frame()
+        for contract in (
+            PixelPoint(1, 2),
+            BlurEllipse(12, 3, 45),
+            frame.decode_contract,
+            frame.identity,
+            frame,
+        ):
+            self.assertEqual(json.loads(contract.canonical_json())["schema_version"], "2.0")
+            self.assertEqual(len(contract.fingerprint()), 64)
+        self.assertNotEqual(frame.fingerprint(), _frame(frame_index=8).fingerprint())
+
+    def test_frame_and_decode_bounds_fail_closed(self) -> None:
+        with self.assertRaisesRegex(ValueError, "frame_index"):
+            _frame(frame_index=1 << 63)
+        with self.assertRaisesRegex(ValueError, "no greater than 65536"):
+            _decode_contract(output_width=65_537)
+        with self.assertRaisesRegex(ValueError, "earlier frame"):
+            _frame(
+                duplicate_kind=FrameDuplicateKind.PIXEL_EQUIVALENT,
+                duplicate_of_frame_index=7,
+            )
+        with self.assertRaisesRegex(ValueError, "capture-integrity"):
+            _frame(
+                duplicate_kind=FrameDuplicateKind.VERIFIED_CAPTURE_DUPLICATE,
+                duplicate_of_frame_index=3,
+            )
+        duplicate = _frame(
+            duplicate_kind=FrameDuplicateKind.VERIFIED_CAPTURE_DUPLICATE,
+            duplicate_of_frame_index=3,
+            capture_integrity_attestation_refs=(EVIDENCE_D,),
+        )
+        self.assertTrue(duplicate.is_excludable_capture_duplicate)
 
 
 if __name__ == "__main__":
