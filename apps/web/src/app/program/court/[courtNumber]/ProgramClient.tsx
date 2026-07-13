@@ -445,6 +445,7 @@ export function ProgramClient({
             eventId=""
             theme="default"
             buildVersion={buildVersion}
+            reloadOnVersionChange={false}
             onHealth={updateOverlayHealth}
           />
         </div>

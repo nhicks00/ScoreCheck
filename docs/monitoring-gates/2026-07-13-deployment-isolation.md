@@ -21,7 +21,9 @@ supported by the page build identifier.
 
 ## Correction
 
-The web project's `vercel.json` now uses this ignored-build command:
+Two independent corrections are required.
+
+First, the web project's `vercel.json` now uses this ignored-build command:
 
 ```text
 git diff HEAD^ HEAD --quiet -- .
@@ -33,20 +35,33 @@ nonzero exit code and proceeds. The guard fails open to a build when Git cannot
 evaluate the parent commit, which is safer than suppressing an uncertain web
 release.
 
-The guard itself changes `apps/web`, so its first coordinated production push
-will perform one expected web deployment. After that cutover, monitoring-only,
-infrastructure-only, and documentation-only commits must not change the
-production program-page build or reload active browsers.
+Second, the overlay embedded inside `/program/court/{court}` no longer performs
+the standalone overlay's automatic build-version reload. A running program
+browser stays pinned to the build it opened with until Egress or an operator
+restarts it, or its existing video watchdog reaches a genuine fatal-recovery
+reload. Standalone overlay browser sources retain their version refresh.
+
+This is a hard cutover, not a feature flag. It separates application release
+cadence from an active program output while preserving crash and media-stall
+self-healing.
+
+The corrections change `apps/web`, so their first coordinated production push
+will perform one expected web deployment. Program browsers still running the
+old build will execute their old version-reload behavior once. After that
+cutover, monitoring-only, infrastructure-only, and documentation-only commits
+must not deploy the web project, and later web deployments must not reload
+already-running program browsers.
 
 ## Acceptance Gate
 
 After the active soak and during a coordinated test window:
 
-1. Deploy the guard with no live match in progress and confirm the expected one-time browser reload.
+1. Deploy both corrections with no live match in progress and confirm the expected one-time reload from browsers still running the old build.
 2. Push a no-op documentation-only test commit or use an equivalent isolated branch deployment trigger.
 3. Confirm Vercel reports the build ignored and the production alias/build identifier does not change.
 4. Confirm every active program browser keeps its heartbeat sequence, reload count, WebRTC counters, and frame continuity.
-5. Record the Vercel deployment result and browser evidence before accepting the guard.
+5. During a later coordinated web deployment, confirm already-running program browsers remain on their pinned build without reloading while standalone overlays still refresh.
+6. Record the Vercel deployment results and browser evidence before accepting the corrections.
 
 Until this gate passes, no repository push is considered harmless during live
 coverage, even when its diff does not touch the web application.
