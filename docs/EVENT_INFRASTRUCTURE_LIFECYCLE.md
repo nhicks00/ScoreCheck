@@ -39,8 +39,10 @@ provision manifest.
 
 ## Lifecycle command
 
-The lifecycle tool uses exact event tags, exact droplet names, protected local
-evidence, and a typed destruction confirmation.
+The lifecycle tool uses exact event tags, an exact manifest-to-inventory name
+match, protected local evidence with integrity hashes, a destruction review
+date, and a typed confirmation. After those checks it deletes the verified
+droplet IDs individually; it never sends a tag-wide bulk deletion request.
 
 ```bash
 cd infra/event-stack
