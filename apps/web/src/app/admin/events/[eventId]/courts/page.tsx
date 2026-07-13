@@ -14,7 +14,7 @@ export default async function CourtsPage({ params }: { params: Promise<{ eventId
   const env = getEnv();
   const { data: courts } = await supabaseAdmin()
     .from("courts")
-    .select("*, matches:current_match_id(*), score_states(*)")
+    .select("*, matches:current_match_id(*), score_states(*), score_source_heartbeats(last_poll_at)")
     .eq("event_id", eventId)
     .order("court_number", { ascending: true });
 
@@ -37,6 +37,9 @@ export default async function CourtsPage({ params }: { params: Promise<{ eventId
           {(courts ?? []).map((court) => {
             const match = Array.isArray(court.matches) ? court.matches[0] : court.matches;
             const score = scoreForCurrentMatch(court.score_states, match?.id);
+            const sourceHeartbeat = Array.isArray(court.score_source_heartbeats)
+              ? court.score_source_heartbeats[0]
+              : court.score_source_heartbeats;
             const overlayUrl = `${env.publicSiteUrl.replace(/\/$/, "")}/overlay/stream/${court.court_number}`;
             const eventOverlayUrl = `${env.publicSiteUrl.replace(/\/$/, "")}/overlay/court/${court.court_number}?eventId=${eventId}`;
             return (
@@ -47,7 +50,7 @@ export default async function CourtsPage({ params }: { params: Promise<{ eventId
                 </div>
                 <p>{match ? `${match.team_a ?? "Team A"} vs ${match.team_b ?? "Team B"}` : "No active match"}</p>
                 <h3>{score ? `${score.team_a_score}-${score.team_b_score}` : "0-0"}</h3>
-                <p className="muted">Last poll: {score?.last_api_poll_at ?? "never"}</p>
+                <p className="muted">Last poll: {sourceHeartbeat?.last_poll_at ?? score?.last_api_poll_at ?? "never"}</p>
                 <code>{overlayUrl}</code>
                 <p className="muted">Event-specific: {eventOverlayUrl}</p>
               </article>

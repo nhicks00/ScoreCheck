@@ -5,9 +5,11 @@ import { supabaseAdmin } from "./supabase";
 const DEFAULT_OFF_EVENT_SLEEP_MS = 15 * 60_000;
 const MAX_OFF_EVENT_SLEEP_MS = 6 * 60 * 60_000;
 const POLLING_STALE_MS = 60_000;
+const ACTIVE_COVERAGE_CACHE_MS = 30_000;
 // A sleeping worker only heartbeats once per sleep interval, so staleness
 // must be judged against its declared interval, not the polling threshold.
 const SLEEP_GRACE_MULTIPLIER = 1.5;
+let coverageCache: { loadedAtMs: number; value: WorkerCoverageStatus } | null = null;
 
 export type WorkerHeartbeatRow = {
   status?: string | null;
@@ -108,6 +110,18 @@ export async function getWorkerCoverageStatus(now = new Date()): Promise<WorkerC
     activeEventCount: activeEvents.length,
     coveredEvents
   };
+}
+
+export async function getCachedWorkerCoverageStatus(now = new Date()): Promise<WorkerCoverageStatus> {
+  const nowMs = now.getTime();
+  if (coverageCache
+    && nowMs >= coverageCache.loadedAtMs
+    && nowMs - coverageCache.loadedAtMs < ACTIVE_COVERAGE_CACHE_MS) {
+    return coverageCache.value;
+  }
+  const value = await getWorkerCoverageStatus(now);
+  coverageCache = { loadedAtMs: nowMs, value };
+  return value;
 }
 
 export function eventCoverageAt(

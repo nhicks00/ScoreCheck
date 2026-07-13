@@ -81,6 +81,13 @@ Supabase desired/observed state -> outbound controller reconciler
   Console start/stop so idle courts do not poll or page as if live.
 - High-frequency telemetry retained in Prometheus; Supabase receives only
   low-churn control and audit records plus one checkpoint per minute.
+- Live score sources remain polled every 1.8 seconds for point latency, but
+  unchanged score and overlay rows are not rewritten. Per-court source
+  freshness is stored outside Realtime at a maximum ten-second cadence, held
+  poller leases renew every 15 seconds, and overlay HTTP repair polls every five
+  seconds behind immediate semantic Realtime broadcasts. Worker coverage and
+  event settings cache for 30 seconds, active bracket-source URLs for 45
+  seconds, and queued-match checks for ten seconds.
 
 Phone-provider and external dead-man delivery remain conditional on protected
 Pushover, Twilio, and Healthchecks credentials. Real one-court and eight-court
@@ -210,8 +217,10 @@ tokens before cutover.
 2. Deploy the independent unified monitoring foundation. Done.
 3. Activate and prove phone paging plus external dead-man delivery.
 4. Run the one-court monitoring fault gate using a test broadcast.
-5. Deploy the post-soak lifecycle and monitoring fixes, then run the one-reader
-   preview/program/preview pacing comparator and branch-churn gate.
+5. Apply the Supabase cadence migration, deploy the post-soak lifecycle and
+   monitoring fixes in dependency order, prove 30 minutes of flat timestamp-only
+   write/Realtime growth, then run the one-reader preview/program/preview pacing
+   comparator and branch-churn gate.
 6. Qualify camera-side normalization or an isolated normalization tier and a
    compositor shape with measured headroom.
 7. Run the full-eight load, sync, recovery, and fault gate.

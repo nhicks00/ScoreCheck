@@ -122,20 +122,22 @@ export async function refreshEventBracketSources(eventId: string): Promise<Brack
         }));
         const { data: existingMatches, error: existingMatchError } = await db
           .from("matches")
-          .select("api_url,team_a,team_b,team_a_seed,team_b_seed")
+          .select("*")
           .eq("event_id", eventId)
           .in("api_url", rows.map((row) => row.api_url));
         if (existingMatchError) throw existingMatchError;
-        const existingByApiUrl = new Map(((existingMatches ?? []) as ExistingMatchTeams[]).map((row) => [row.api_url, row]));
+        const existingByApiUrl = new Map(((existingMatches ?? []) as Array<ExistingMatchTeams & Record<string, unknown>>).map((row) => [row.api_url, row]));
         const mergedRows = rows.map((row) => mergeDiscoveredTeamFields(row, existingByApiUrl.get(row.api_url)));
-        const { data: savedMatches, error } = await db
-          .from("matches")
-          .upsert(mergedRows, { onConflict: "event_id,api_url" })
-          .select("*");
-        if (error) throw error;
-
-        const saved = (savedMatches ?? []) as Record<string, unknown>[];
-        const queueResult = await autoQueueDiscoveredMatches(eventId, saved);
+        const changedRows = mergedRows.filter((row) => matchDiscoveryChanged(row, existingByApiUrl.get(row.api_url)));
+        const saved = changedRows.length
+          ? await upsertDiscoveredMatches(db, changedRows)
+          : [];
+        const savedByApiUrl = new Map(saved.map((row) => [cleanText(row.api_url), row]));
+        const effectiveMatches = mergedRows.map((row) => savedByApiUrl.get(cleanText(row.api_url)) ?? {
+          ...existingByApiUrl.get(row.api_url),
+          ...row
+        });
+        const queueResult = await autoQueueDiscoveredMatches(eventId, effectiveMatches);
         queued += queueResult.queued;
         activated += queueResult.activated;
         moved += queueResult.moved;
@@ -712,31 +714,42 @@ async function refreshActiveOverlaysForMatches(eventId: string, matches: Record<
     const match = firstRelation(court.matches) as Parameters<typeof persistScoreAndOverlay>[1] | null;
     const score = scoreForCurrentMatch(court.score_states, match?.id) as ScoreRow | null;
     if (!match || !score) continue;
-    await persistScoreAndOverlay(court, match, {
-      court_id: score.court_id,
-      match_id: score.match_id,
-      team_a_score: score.team_a_score,
-      team_b_score: score.team_b_score,
-      team_a_sets: score.team_a_sets,
-      team_b_sets: score.team_b_sets,
-      current_set: score.current_set,
-      set_scores: score.set_scores,
-      serving_team: score.serving_team,
-      timeouts: score.timeouts,
-      status: score.status,
-      source: score.source,
-      source_available: Boolean(score.source_available),
-      source_priority: score.source_priority ?? undefined,
-      source_pending_scores: score.source_pending_scores,
+    const overlay = await buildOverlayStateWithEventSettings(court, match, score);
+    const { error: overlayError } = await db.from("overlay_states").upsert({
+      court_id: court.id,
+      event_id: court.event_id,
+      court_number: court.court_number,
+      payload: overlay,
       stale: Boolean(score.stale),
-      message: score.message ?? null,
-      last_api_poll_at: score.last_api_poll_at ?? null,
-      last_score_change_at: score.last_score_change_at ?? null,
-      updated_at: score.updated_at ?? null
+      updated_at: new Date().toISOString()
     });
+    if (overlayError) throw overlayError;
     refreshed += 1;
   }
   return refreshed;
+}
+
+async function upsertDiscoveredMatches(db: ReturnType<typeof supabaseAdmin>, rows: Record<string, unknown>[]) {
+  const { data, error } = await db
+    .from("matches")
+    .upsert(rows, { onConflict: "event_id,api_url" })
+    .select("*");
+  if (error) throw error;
+  return (data ?? []) as Record<string, unknown>[];
+}
+
+export function matchDiscoveryChanged(discovered: Record<string, unknown>, existing: Record<string, unknown> | null | undefined) {
+  if (!existing) return true;
+  return Object.entries(discovered)
+    .filter(([key]) => key !== "updated_at")
+    .some(([key, value]) => !discoveryValuesEqual(existing[key], value));
+}
+
+function discoveryValuesEqual(left: unknown, right: unknown) {
+  if (left === right) return true;
+  if ((left == null || right == null) && left !== right) return false;
+  if (typeof left === "object" || typeof right === "object") return JSON.stringify(left) === JSON.stringify(right);
+  return false;
 }
 
 export function mergeDiscoveredTeamFields<T extends { team_a: string | null; team_b: string | null; team_a_seed: string | null; team_b_seed: string | null }>(

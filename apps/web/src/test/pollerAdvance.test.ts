@@ -5,6 +5,7 @@ import {
   hasScoreClinchedMatch,
   orderedLaterQueueCandidates,
   resolvePostFinalHoldStart,
+  scoreStatePatchMatches,
   shouldAdvanceFinalMatchOverlay,
   vblBracketFinalVisibleAt
 } from "../lib/poller";
@@ -203,5 +204,41 @@ describe("poller final-match advancement", () => {
         ]
       }
     }, "2026-07-04T19:30:00.000Z")).toBe("2026-07-04T19:26:12.000Z");
+  });
+
+  it("suppresses timestamp-only score-state writes while preserving semantic transitions", () => {
+    const current = {
+      court_id: "court-1",
+      match_id: "match-1",
+      team_a_score: 4,
+      team_b_score: 3,
+      team_a_sets: 0,
+      team_b_sets: 0,
+      current_set: 1,
+      set_scores: [],
+      serving_team: "A",
+      status: "In Progress",
+      source: "api" as const,
+      source_available: true,
+      source_priority: "primary" as const,
+      source_pending_scores: [],
+      stale: false,
+      message: null,
+      last_api_poll_at: "2026-07-13T15:00:00.000Z",
+      last_score_change_at: "2026-07-13T15:00:00.000Z",
+      updated_at: "2026-07-13T15:00:00.000Z"
+    };
+
+    expect(scoreStatePatchMatches(current, {
+      match_id: "match-1",
+      source: "api",
+      source_available: true,
+      source_priority: "primary",
+      source_pending_scores: [],
+      stale: false,
+      message: null
+    })).toBe(true);
+    expect(scoreStatePatchMatches(current, { team_a_score: 5 })).toBe(false);
+    expect(scoreStatePatchMatches(current, { stale: true, source_available: false })).toBe(false);
   });
 });

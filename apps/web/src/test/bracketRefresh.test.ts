@@ -1,7 +1,45 @@
 import { describe, expect, it } from "vitest";
-import { mergeDiscoveredTeamFields } from "../lib/bracketRefresh";
+import { matchDiscoveryChanged, mergeDiscoveredTeamFields } from "../lib/bracketRefresh";
 
 describe("bracket refresh match upserts", () => {
+  it("ignores timestamp-only discovery refreshes", () => {
+    expect(matchDiscoveryChanged(
+      {
+        api_url: "https://example.test/match/12",
+        team_a: "Smith / Jones",
+        source_payload: { court: "7" },
+        updated_at: "2026-07-13T20:00:00.000Z"
+      },
+      {
+        api_url: "https://example.test/match/12",
+        team_a: "Smith / Jones",
+        source_payload: { court: "7" },
+        updated_at: "2026-07-13T19:00:00.000Z"
+      }
+    )).toBe(false);
+  });
+
+  it("detects semantic discovery changes", () => {
+    expect(matchDiscoveryChanged(
+      {
+        api_url: "https://example.test/match/12",
+        team_a: "Smith / Johnson",
+        source_payload: { court: "8" },
+        updated_at: "2026-07-13T20:00:00.000Z"
+      },
+      {
+        api_url: "https://example.test/match/12",
+        team_a: "Smith / Jones",
+        source_payload: { court: "7" },
+        updated_at: "2026-07-13T19:00:00.000Z"
+      }
+    )).toBe(true);
+  });
+
+  it("treats newly discovered matches as changed", () => {
+    expect(matchDiscoveryChanged({ api_url: "https://example.test/match/12" }, null)).toBe(true);
+  });
+
   it("applies TD edits from the bracket over previously stored names", () => {
     expect(mergeDiscoveredTeamFields(
       { team_a: "Smith / Jones", team_b: "Lee / Park", team_a_seed: "3", team_b_seed: "6" },

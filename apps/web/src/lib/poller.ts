@@ -4,23 +4,33 @@ import { defaultManualState } from "./manualScoring";
 import { getEnv } from "./env";
 import { eventTimeZone, scheduledTimestamp } from "./scheduleTime";
 import { buildOverlayStateWithEventSettings, persistScoreAndOverlay, scoreForCurrentMatch } from "./scoreState";
+import { recordSourceHeartbeat } from "./sourceHeartbeat";
 import { supabaseAdmin } from "./supabase";
 import type { ScoreSnapshot, SetScore } from "./types";
 import { VBL_OVERLAY_DELAY_MS, VBL_POST_FINAL_HOLD_MS, delayedScoreFromSnapshot, isDelayedScoreBehindVisible, pendingScoresForMatch, queueDelayedVblScore, shouldHoldDelayedFinalScore, splitDueDelayedVblScores, type DelayedVblScorePayload } from "./vblDelay";
 import { buildActiveVblSourceSet, matchBelongsToActiveVblSource } from "./vblSources";
-import { getWorkerCoverageStatus } from "./workerSchedule";
+import { getCachedWorkerCoverageStatus } from "./workerSchedule";
 
 const POLL_WINDOW_MS = 25_000;
 const ACTIVE_INTERVAL_MS = 1_800;
 const LEASE_MS = 35_000;
+const LEASE_RENEWAL_INTERVAL_MS = 15_000;
+const WORKER_HEARTBEAT_INTERVAL_MS = 10_000;
 const BRACKET_REFRESH_INTERVAL_MS = 45_000;
+const EVENT_SETTINGS_CACHE_MS = 30_000;
 const NEXT_MATCH_LIVE_CHECK_TTL_MS = 10_000;
 const NEXT_MATCH_LIVE_CHECK_CACHE_LIMIT = 500;
+const ACTIVE_SOURCE_CACHE_MS = 45_000;
 
 const lastBracketRefreshAtByEvent = new Map<string, number>();
 const nextMatchLiveCheckCache = new Map<string, { checkedAt: number; live: boolean }>();
 const laterLiveQueueScanAtByActiveMatch = new Map<string, number>();
 const fallbackFinalHoldStartByMatch = new Map<string, string>();
+const nextQueuedMatchCache = new Map<string, { checkedAt: number; value: QueueRow | null }>();
+const activeSourceUrlsCache = new Map<string, { checkedAt: number; value: Set<string> }>();
+const eventTimeZoneCache = new Map<string, { checkedAt: number; value: string }>();
+const leaseClaims = new Map<string, { owner: string; renewedAtMs: number; expiresAtMs: number }>();
+const workerHeartbeatWrites = new Map<string, { signature: string; writtenAtMs: number }>();
 
 type Relation<T> = T | T[] | null | undefined;
 
@@ -36,7 +46,6 @@ type CourtRow = {
   current_match_id: string | null;
   matches?: Relation<MatchRow>;
   score_states?: Relation<ScoreRow>;
-  events?: Relation<{ settings?: Record<string, unknown> | null }>;
 };
 
 type MatchRow = {
@@ -70,7 +79,7 @@ type QueueRow = {
   matches?: Relation<MatchRow>;
 };
 
-type ScoreRow = {
+export type ScoreRow = {
   court_id: string;
   match_id: string | null;
   team_a_score: number;
@@ -111,16 +120,21 @@ export async function runPollingWindow(eventId: string, courtId?: string) {
 
 export async function pollActiveCourtsOnce(options: { eventId?: string; eventIds?: string[]; courtId?: string; owner: string }) {
   const db = supabaseAdmin();
-  await recordHeartbeat(options.owner, "polling", options.eventId, { localWindow: Boolean(options.eventId) });
   const scopedEventIds = await eventIdsForPolling(options);
   if (!scopedEventIds.length) {
     await recordHeartbeat(options.owner, "sleeping", undefined, { reason: "No covered active events are scheduled for polling." });
     return { polls: 0, errors: 0 };
   }
+  const heartbeatEventId = options.eventId ?? (scopedEventIds.length === 1 ? scopedEventIds[0] : undefined);
+  const eventTimeZones = await loadEventTimeZones(scopedEventIds);
+  await recordHeartbeat(options.owner, "running", heartbeatEventId, {
+    eventIds: scopedEventIds,
+    localWindow: Boolean(options.eventId)
+  });
 
   let query = db
     .from("courts")
-    .select("*, matches:current_match_id(*), score_states(*), events:event_id(settings)")
+    .select("*, matches:current_match_id(*), score_states(*)")
     .in("mode", ["api", "hybrid"])
     .eq("frozen", false)
     .not("current_match_id", "is", null)
@@ -141,7 +155,7 @@ export async function pollActiveCourtsOnce(options: { eventId?: string; eventIds
     const lease = await acquireLease(court.event_id, court.id, options.owner);
     if (!lease) return;
     try {
-      const polled = await pollCourt(court);
+      const polled = await pollCourt(court, eventTimeZones.get(court.event_id) ?? getEnv().timezone);
       if (polled) polls += 1;
     } catch (err) {
       errors += 1;
@@ -149,15 +163,42 @@ export async function pollActiveCourtsOnce(options: { eventId?: string; eventIds
     }
   }));
 
-  await recordHeartbeat(options.owner, "idle", options.eventId, { polls, errors });
+  await recordHeartbeat(options.owner, errors > 0 ? "degraded" : "running", heartbeatEventId, { polls, errors, eventIds: scopedEventIds });
   return { polls, errors };
 }
 
 async function eventIdsForPolling(options: { eventId?: string; eventIds?: string[] }) {
   if (options.eventId) return [options.eventId];
   if (options.eventIds?.length) return [...new Set(options.eventIds.filter(Boolean))];
-  const coverage = await getWorkerCoverageStatus();
+  const coverage = await getCachedWorkerCoverageStatus();
   return coverage.shouldPoll ? coverage.eventIds : [];
+}
+
+async function loadEventTimeZones(eventIds: string[]) {
+  const now = Date.now();
+  const result = new Map<string, string>();
+  const missing: string[] = [];
+  for (const eventId of eventIds) {
+    const cached = eventTimeZoneCache.get(eventId);
+    if (cached && now - cached.checkedAt < EVENT_SETTINGS_CACHE_MS) result.set(eventId, cached.value);
+    else missing.push(eventId);
+  }
+
+  if (missing.length) {
+    const { data, error } = await supabaseAdmin()
+      .from("events")
+      .select("id,settings")
+      .in("id", missing);
+    if (error) throw error;
+    const settingsByEvent = new Map((data ?? []).map((row) => [row.id, row.settings]));
+    for (const eventId of missing) {
+      const value = eventTimeZone(settingsByEvent.get(eventId) as Record<string, unknown> | null | undefined, getEnv().timezone);
+      eventTimeZoneCache.set(eventId, { checkedAt: now, value });
+      result.set(eventId, value);
+    }
+    pruneTimedCache(eventTimeZoneCache, EVENT_SETTINGS_CACHE_MS);
+  }
+  return result;
 }
 
 async function refreshBracketSourcesForActiveEvents(courts: CourtRow[], scopedEventIds: string[], owner: string) {
@@ -177,44 +218,59 @@ async function refreshBracketSourcesForActiveEvents(courts: CourtRow[], scopedEv
 }
 
 export async function recordHeartbeat(workerId: string, status: string, eventId?: string, metadata: Record<string, unknown> = {}) {
-  const now = new Date().toISOString();
-  await supabaseAdmin().from("worker_heartbeats").upsert({
+  const nowMs = Date.now();
+  const signature = workerHeartbeatSignature(status, eventId, metadata);
+  const previous = workerHeartbeatWrites.get(workerId);
+  const urgentTransition = status === "starting"
+    || ((status === "error" || status === "bracket-refresh-error") && previous?.signature !== signature);
+  if (!urgentTransition && previous && nowMs - previous.writtenAtMs < WORKER_HEARTBEAT_INTERVAL_MS) return false;
+
+  const now = new Date(nowMs).toISOString();
+  const { error } = await supabaseAdmin().from("worker_heartbeats").upsert({
     worker_id: workerId,
     event_id: eventId ?? null,
     status,
     metadata,
     last_seen_at: now
   });
+  if (error) throw error;
+  workerHeartbeatWrites.set(workerId, { signature, writtenAtMs: nowMs });
+  return true;
+}
+
+function workerHeartbeatSignature(status: string, eventId: string | undefined, metadata: Record<string, unknown>) {
+  const diagnostic = status === "error" || status === "bracket-refresh-error" ? JSON.stringify(metadata) : "";
+  return [eventId ?? "no-event", status, diagnostic].join(":");
 }
 
 async function acquireLease(eventId: string, courtId: string, owner: string): Promise<boolean> {
   const db = supabaseAdmin();
-  const expiresAt = new Date(Date.now() + LEASE_MS).toISOString();
-  const { data: existing } = await db
-    .from("poller_leases")
-    .select("owner, expires_at")
-    .eq("court_id", courtId)
-    .maybeSingle();
-
-  if (existing?.expires_at && new Date(String(existing.expires_at)).getTime() > Date.now() && existing.owner !== owner) {
-    return false;
+  const nowMs = Date.now();
+  const cached = leaseClaims.get(courtId);
+  if (cached?.owner === owner && cached.expiresAtMs > nowMs && nowMs - cached.renewedAtMs < LEASE_RENEWAL_INTERVAL_MS) {
+    return true;
   }
 
-  const { error } = await db.from("poller_leases").upsert({
-    event_id: eventId,
-    court_id: courtId,
-    owner,
-    expires_at: expiresAt,
-    last_heartbeat_at: new Date().toISOString()
+  const { data, error } = await db.rpc("try_acquire_poller_lease", {
+    p_event_id: eventId,
+    p_court_id: courtId,
+    p_owner: owner,
+    p_lease_ms: LEASE_MS
   });
-  return !error;
+  if (error) throw error;
+  const acquired = data === true;
+  if (acquired) {
+    leaseClaims.set(courtId, { owner, renewedAtMs: nowMs, expiresAtMs: nowMs + LEASE_MS });
+  } else {
+    leaseClaims.delete(courtId);
+  }
+  return acquired;
 }
 
-async function pollCourt(court: CourtRow) {
+async function pollCourt(court: CourtRow, timeZone: string) {
   const db = supabaseAdmin();
   const match = firstRelation(court.matches);
   if (!match) return false;
-  const timeZone = courtEventTimeZone(court);
   let currentScore = scoreForCurrentMatch(court.score_states, match.id);
   if (currentScore?.source === "override") return false;
 
@@ -264,6 +320,15 @@ async function pollCourt(court: CourtRow) {
   const sourceAvailable = isAuthoritativeScorePayload(payload, snapshot);
   const now = new Date().toISOString();
 
+  await recordSourceHeartbeat({
+    courtId: court.id,
+    eventId: court.event_id,
+    matchId: match.id,
+    sourceAvailable,
+    successful: true,
+    observedAt: now
+  });
+
   const updatedMatch = await updateResolvedTeams(match, snapshot.teamAName, snapshot.teamBName, snapshot.teamASeed, snapshot.teamBSeed);
 
   if (sourceAvailable) {
@@ -291,17 +356,17 @@ async function pollCourt(court: CourtRow) {
   }
 
   if (hasFutureDelayedVblScore(currentScore, now)) {
-    await touchApiPoll(court.id, now, true, "VolleyballLife live scoring active.");
+    await updateApiSourceHealthIfChanged(court.id, currentScore, now, true, "VolleyballLife live scoring active.");
     return true;
   }
 
   if (!sourceAvailable && currentScore?.source === "manual") {
-    await markApiFallbackActive(court.id, now, "VolleyballLife feed connected; waiting for live score.");
+    await updateApiSourceHealthIfChanged(court.id, currentScore, now, false, "VolleyballLife feed connected; waiting for live score.");
     return true;
   }
 
   if (currentScore) {
-    await markApiFallbackActive(court.id, now, "VolleyballLife feed connected; waiting for live score.");
+    await updateApiSourceHealthIfChanged(court.id, currentScore, now, false, "VolleyballLife feed connected; waiting for live score.");
     return true;
   }
 
@@ -696,6 +761,10 @@ function setsToWin(format: Record<string, unknown> | null | undefined) {
 }
 
 async function nextQueuedMatch(courtId: string, timeZone: string) {
+  const cacheKey = `${courtId}:${timeZone}`;
+  const cached = nextQueuedMatchCache.get(cacheKey);
+  if (cached && Date.now() - cached.checkedAt < NEXT_MATCH_LIVE_CHECK_TTL_MS) return cached.value;
+
   const db = supabaseAdmin();
   const { data: active } = await db
     .from("court_match_queue")
@@ -723,8 +792,10 @@ async function nextQueuedMatch(courtId: string, timeZone: string) {
       .filter((item) => Number.isFinite(item.startsAt) && item.startsAt > activeStart)
       .sort((a, b) => a.startsAt - b.startsAt || a.queue.queue_position - b.queue.queue_position)[0]?.queue
     : null;
-  if (nextBySchedule) return nextBySchedule;
-  return queued.find((queue) => queue.queue_position > basePosition) ?? queued[0] ?? null;
+  const value = nextBySchedule ?? queued.find((queue) => queue.queue_position > basePosition) ?? queued[0] ?? null;
+  nextQueuedMatchCache.set(cacheKey, { checkedAt: Date.now(), value });
+  pruneTimedCache(nextQueuedMatchCache, NEXT_MATCH_LIVE_CHECK_TTL_MS);
+  return value;
 }
 
 // Bound on how many later queued matches we live-check per scan. Both the
@@ -797,12 +868,17 @@ function pruneLaterLiveQueueScanCache(now: number) {
 
 async function activeVblSourceUrlsForCourtEvent(db: ReturnType<typeof supabaseAdmin>, eventId: unknown) {
   if (typeof eventId !== "string" || !eventId) return new Set<string>();
+  const cached = activeSourceUrlsCache.get(eventId);
+  if (cached && Date.now() - cached.checkedAt < ACTIVE_SOURCE_CACHE_MS) return cached.value;
   const { data, error } = await db
     .from("bracket_sources")
     .select("source_url")
     .eq("event_id", eventId);
   if (error) throw error;
-  return buildActiveVblSourceSet((data ?? []).map((source) => source.source_url));
+  const value = buildActiveVblSourceSet((data ?? []).map((source) => source.source_url));
+  activeSourceUrlsCache.set(eventId, { checkedAt: Date.now(), value });
+  pruneTimedCache(activeSourceUrlsCache, ACTIVE_SOURCE_CACHE_MS);
+  return value;
 }
 
 async function closeFinalQueuedMatches(db: ReturnType<typeof supabaseAdmin>, queued: QueueRow[]) {
@@ -826,6 +902,7 @@ async function closeFinalQueuedMatches(db: ReturnType<typeof supabaseAdmin>, que
 
 async function activateQueuedMatch(court: CourtRow, next: QueueRow) {
   const db = supabaseAdmin();
+  invalidateNextQueuedMatchCache(court.id);
   const now = new Date().toISOString();
   await db
     .from("court_match_queue")
@@ -879,6 +956,20 @@ async function activateQueuedMatch(court: CourtRow, next: QueueRow) {
   });
   if (match) {
     await persistVblBracketProgressIfAvailable(updatedCourt, match, savedScore as ScoreRow);
+  }
+}
+
+function invalidateNextQueuedMatchCache(courtId: string) {
+  for (const key of nextQueuedMatchCache.keys()) {
+    if (key.startsWith(`${courtId}:`)) nextQueuedMatchCache.delete(key);
+  }
+}
+
+function pruneTimedCache<T>(cache: Map<string, { checkedAt: number; value: T }>, ttlMs: number) {
+  if (cache.size <= NEXT_MATCH_LIVE_CHECK_CACHE_LIMIT) return;
+  const cutoff = Date.now() - ttlMs;
+  for (const [key, entry] of cache) {
+    if (entry.checkedAt < cutoff) cache.delete(key);
   }
 }
 
@@ -975,14 +1066,19 @@ async function queueLiveVblScore(court: CourtRow, match: MatchRow, currentScore:
     return;
   }
 
-  await supabaseAdmin().from("score_states").update({
+  const patch = {
     match_id: match.id,
     source: "api",
     source_available: true,
     source_priority: "primary",
     source_pending_scores: pending,
     stale: false,
-    message: pending.length ? "VolleyballLife live scoring active." : null,
+    message: pending.length ? "VolleyballLife live scoring active." : null
+  } as const;
+  if (scoreStatePatchMatches(currentScore, patch)) return;
+
+  await supabaseAdmin().from("score_states").update({
+    ...patch,
     last_api_poll_at: now,
     updated_at: now
   }).eq("court_id", court.id);
@@ -991,15 +1087,21 @@ async function queueLiveVblScore(court: CourtRow, match: MatchRow, currentScore:
 async function persistImmediateVblScore(court: CourtRow, match: MatchRow, currentScore: ScoreRow | null, snapshot: ReturnType<typeof normalizeScorePayload>, now: string) {
   const immediate = delayedScoreFromSnapshot(match.id, snapshot, now, 0).score;
   const isSameVisibleScore = currentScore ? delayedScoreMatchesVisibleScore(immediate, currentScore) : false;
+  const healthPatch = {
+    match_id: match.id,
+    source: "api",
+    source_available: true,
+    source_priority: "primary",
+    source_pending_scores: [],
+    stale: false,
+    message: null
+  } as const;
+  if (isSameVisibleScore && scoreStatePatchMatches(currentScore, healthPatch)) return;
+
   if (!isSameVisibleScore && currentScore && isDelayedScoreBehindVisible(immediate, currentScore)) {
+    if (scoreStatePatchMatches(currentScore, healthPatch)) return;
     await supabaseAdmin().from("score_states").update({
-      match_id: match.id,
-      source: "api",
-      source_available: true,
-      source_priority: "primary",
-      source_pending_scores: [],
-      stale: false,
-      message: null,
+      ...healthPatch,
       last_api_poll_at: now,
       updated_at: now
     }).eq("court_id", court.id);
@@ -1062,26 +1164,36 @@ function hasFutureDelayedVblScore(score: ScoreRow | null, now: string) {
     .some((item) => !delayedScoreMatchesVisibleScore(item.score, score));
 }
 
-async function touchApiPoll(courtId: string, now: string, sourceAvailable: boolean, message: string) {
-  await supabaseAdmin().from("score_states").update({
+async function updateApiSourceHealthIfChanged(courtId: string, currentScore: ScoreRow | null, now: string, sourceAvailable: boolean, message: string) {
+  if (!currentScore) return false;
+  const patch = {
     source_available: sourceAvailable,
     source_priority: sourceAvailable ? "primary" : "fallback",
     stale: false,
-    message,
+    message
+  } as const;
+  if (scoreStatePatchMatches(currentScore, patch)) return false;
+  const { error } = await supabaseAdmin().from("score_states").update({
+    ...patch,
     last_api_poll_at: now,
     updated_at: now
   }).eq("court_id", courtId);
+  if (error) throw error;
+  return true;
 }
 
-async function markApiFallbackActive(courtId: string, now: string, message: string) {
-  await supabaseAdmin().from("score_states").update({
-    source_available: false,
-    source_priority: "fallback",
-    stale: false,
-    message,
-    last_api_poll_at: now,
-    updated_at: now
-  }).eq("court_id", courtId);
+export function scoreStatePatchMatches(score: ScoreRow | null, patch: Partial<ScoreRow>) {
+  if (!score) return false;
+  return Object.entries(patch).every(([key, expected]) => valuesEqual(score[key as keyof ScoreRow], expected));
+}
+
+function valuesEqual(left: unknown, right: unknown) {
+  if (left === right) return true;
+  if ((left == null || right == null) && left !== right) return false;
+  if (typeof left === "object" || typeof right === "object") {
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+  return false;
 }
 
 async function updateResolvedTeams(match: MatchRow, teamAName: string, teamBName: string, teamASeed: string | null | undefined, teamBSeed: string | null | undefined) {
@@ -1115,15 +1227,30 @@ async function markCourtStale(court: CourtRow, message: string) {
   const now = new Date().toISOString();
   const match = firstRelation(court.matches);
   const currentScore = scoreForCurrentMatch(court.score_states, match?.id);
+  await recordSourceHeartbeat({
+    courtId: court.id,
+    eventId: court.event_id,
+    matchId: match?.id ?? null,
+    sourceAvailable: false,
+    successful: false,
+    errorMessage: message,
+    observedAt: now
+  });
+
   if (currentScore?.source === "manual") {
-    await db.from("score_states").update({
+    const patch = {
       source_available: false,
       source_priority: "fallback",
       stale: false,
-      message: "VolleyballLife unavailable; manual score active.",
+      message: "VolleyballLife unavailable; manual score active."
+    } as const;
+    if (scoreStatePatchMatches(currentScore, patch)) return;
+    const { error } = await db.from("score_states").update({
+      ...patch,
       last_api_poll_at: now,
       updated_at: now
     }).eq("court_id", court.id);
+    if (error) throw error;
     await db.from("poller_errors").insert({
       event_id: court.event_id,
       court_id: court.id,
@@ -1141,24 +1268,33 @@ async function markCourtStale(court: CourtRow, message: string) {
     .maybeSingle();
 
   let staleScore = score;
-  if (score) {
+  const stalePatch = {
+    stale: true,
+    message,
+    source_available: false,
+    source_priority: "fallback"
+  } as const;
+  const scoreNeedsUpdate = Boolean(score) && !scoreStatePatchMatches(score as ScoreRow, stalePatch);
+  if (scoreNeedsUpdate) {
     const { data: updatedScore } = await db.from("score_states").update({
-      stale: true,
-      message,
-      source_available: false,
-      source_priority: "fallback",
+      ...stalePatch,
       last_api_poll_at: now,
       updated_at: now
     }).eq("court_id", court.id).select("*").single();
     staleScore = updatedScore;
   }
 
-  const { data: updatedCourt } = await db
-    .from("courts")
-    .update({ status: "error", last_update_at: now, updated_at: now })
-    .eq("id", court.id)
-    .select("*")
-    .single();
+  const courtNeedsUpdate = court.status !== "error";
+  const updatedCourt = courtNeedsUpdate
+    ? (await db
+      .from("courts")
+      .update({ status: "error", last_update_at: now, updated_at: now })
+      .eq("id", court.id)
+      .select("*")
+      .single()).data
+    : court;
+
+  if (!scoreNeedsUpdate && !courtNeedsUpdate) return;
 
   await db.from("poller_errors").insert({
     event_id: court.event_id,
@@ -1193,10 +1329,6 @@ function shouldReplaceTeam(current: string | null, next: string) {
 
 function firstRelation<T>(value: Relation<T>): T | null {
   return Array.isArray(value) ? value[0] ?? null : value ?? null;
-}
-
-function courtEventTimeZone(court: CourtRow) {
-  return eventTimeZone(firstRelation(court.events)?.settings, getEnv().timezone);
 }
 
 function sleep(ms: number) {

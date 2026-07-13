@@ -16,6 +16,17 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ cour
 
   const eventId = req.nextUrl.searchParams.get("eventId");
   const courtNumberValue = Number(courtNumber);
+  const persisted = await loadPersistedOverlay(courtNumberValue, eventId);
+  if (persisted.error) return NextResponse.json({ error: persisted.error.message }, { status: 500 });
+  if (persisted.data?.payload) {
+    return NextResponse.json(coercePersistedOverlay(persisted.data, courtNumberValue), {
+      headers: { "cache-control": "no-store" }
+    });
+  }
+
+  // Only newly-created or partially-migrated courts should need this repair
+  // path. Normal overlay polling reads the already-materialized payload rather
+  // than rejoining courts, events, matches, and scores every five seconds.
   const { court, error } = await loadOverlayCourt(courtNumberValue, eventId);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   if (!court) return NextResponse.json({ error: "Court not found" }, { status: 404 });
@@ -28,6 +39,75 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ cour
     match: match ?? null,
     score: score ?? null
   }), court), { headers: { "cache-control": "no-store" } });
+}
+
+async function loadPersistedOverlay(courtNumber: number, eventId: string | null) {
+  const db = supabaseAdmin();
+  const select = "payload,stale,updated_at,events!inner(status,settings),courts!inner(display_name,vbl_court_label,vbl_court_number)";
+  if (eventId) {
+    return db
+      .from("overlay_states")
+      .select(select)
+      .eq("court_number", courtNumber)
+      .eq("event_id", eventId)
+      .limit(1)
+      .maybeSingle();
+  }
+
+  const active = await db
+    .from("overlay_states")
+    .select(select)
+    .eq("court_number", courtNumber)
+    .eq("events.status", "active")
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (active.data || active.error) return active;
+
+  return db
+    .from("overlay_states")
+    .select(select)
+    .eq("court_number", courtNumber)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+}
+
+function coercePersistedOverlay(row: {
+  payload: unknown;
+  stale: boolean;
+  updated_at: string | null;
+  events?: unknown;
+  courts?: unknown;
+}, courtNumber: number) {
+  const payload = row.payload && typeof row.payload === "object" && !Array.isArray(row.payload)
+    ? row.payload as Record<string, unknown>
+    : {};
+  const health = payload.health && typeof payload.health === "object" && !Array.isArray(payload.health)
+    ? payload.health as Record<string, unknown>
+    : {};
+  const event = firstRecord(row.events);
+  const court = firstRecord(row.courts);
+  const settings = event?.settings && typeof event.settings === "object" && !Array.isArray(event.settings)
+    ? event.settings as Record<string, unknown>
+    : null;
+  return coerceOverlayState({
+    ...payload,
+    courtLabel: overlayCourtLabel({ ...court, court_number: courtNumber }),
+    layout: overlayLayout(settings),
+    health: {
+      ...health,
+      lastUpdateAt: row.updated_at ?? health.lastUpdateAt ?? null,
+      stale: row.stale || health.stale === true
+    }
+  }, courtNumber);
+}
+
+function firstRecord(value: unknown): Record<string, unknown> {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  return candidate && typeof candidate === "object" && !Array.isArray(candidate)
+    ? candidate as Record<string, unknown>
+    : {};
 }
 
 async function loadOverlayCourt(courtNumber: number, eventId: string | null) {

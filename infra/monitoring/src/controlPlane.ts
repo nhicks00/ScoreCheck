@@ -62,6 +62,14 @@ type ScoreRow = {
   updated_at: string | null;
 };
 
+type SourceHeartbeatRow = {
+  court_id: string;
+  source_available: boolean;
+  last_poll_at: string | null;
+  last_error_at: string | null;
+  error_message: string | null;
+};
+
 type OverlayRow = { court_id: string; payload: unknown; stale: boolean; updated_at: string | null };
 type QueueRow = { court_id: string; queue_position: number; is_active: boolean; status: string; matches: MatchRow | MatchRow[] | null };
 type ExpectationRow = {
@@ -105,7 +113,7 @@ export async function loadControlPlane(db: SupabaseClient, nowMs = Date.now()): 
   if (eventError) throw eventError;
   if (!event) return emptyControlPlane(nowMs);
 
-  const [courtsResult, overlaysResult, queueResult, expectationsResult, workerResult] = await Promise.all([
+  const [courtsResult, overlaysResult, queueResult, expectationsResult, sourceHeartbeatsResult, workerResult] = await Promise.all([
     db.from("courts")
       .select("id,court_number,display_name,vbl_court_label,vbl_court_number,status,current_match_id,youtube_video_id,matches:current_match_id(id,match_number,round_name,scheduled_date,scheduled_time,team_a,team_b),score_states(match_id,team_a_score,team_b_score,team_a_sets,team_b_sets,current_set,set_scores,status,source,source_available,source_priority,stale,last_api_poll_at,updated_at)")
       .eq("event_id", event.id)
@@ -118,19 +126,23 @@ export async function loadControlPlane(db: SupabaseClient, nowMs = Date.now()): 
     db.from("court_monitoring_expectations")
       .select("court_id,coverage_phase,media_expectation,broadcast_expectation,commentary_expectation,scoring_expectation,override_expires_at")
       .eq("event_id", event.id),
+    db.from("score_source_heartbeats")
+      .select("court_id,source_available,last_poll_at,last_error_at,error_message")
+      .eq("event_id", event.id),
     db.from("worker_heartbeats").select("status,last_seen_at").eq("event_id", event.id).order("last_seen_at", { ascending: false }).limit(1).maybeSingle()
   ]);
-  const failure = [courtsResult.error, overlaysResult.error, queueResult.error, expectationsResult.error, workerResult.error].find(Boolean);
+  const failure = [courtsResult.error, overlaysResult.error, queueResult.error, expectationsResult.error, sourceHeartbeatsResult.error, workerResult.error].find(Boolean);
   if (failure) throw failure;
 
   const overlays = new Map((overlaysResult.data as OverlayRow[]).map((row) => [row.court_id, row]));
   const expectations = new Map((expectationsResult.data as ExpectationRow[]).map((row) => [row.court_id, parseExpectation(row, nowMs)]));
+  const sourceHeartbeats = new Map((sourceHeartbeatsResult.data as SourceHeartbeatRow[]).map((row) => [row.court_id, row]));
   const queueByCourt = groupBy(queueResult.data as QueueRow[], (row) => row.court_id);
   const courts = (courtsResult.data as unknown as CourtRow[]).map((court) => {
     const score = first(court.score_states);
     const overlay = overlays.get(court.id) ?? null;
     const queue = queueByCourt.get(court.id) ?? [];
-    return buildCourt(court, score, overlay, queue, expectations.get(court.id) ?? OFF_EXPECTATION, nowMs);
+    return buildCourt(court, score, sourceHeartbeats.get(court.id) ?? null, overlay, queue, expectations.get(court.id) ?? OFF_EXPECTATION, nowMs);
   });
 
   const worker = workerHealth(workerResult.data as { status: string | null; last_seen_at: string | null } | null, nowMs);
@@ -154,13 +166,14 @@ function emptyControlPlane(nowMs: number): ControlPlaneSnapshot {
 function buildCourt(
   court: CourtRow,
   scoreRow: ScoreRow | null,
+  sourceHeartbeat: SourceHeartbeatRow | null,
   overlayRow: OverlayRow | null,
   queue: QueueRow[],
   expectation: CourtExpectation,
   nowMs: number
 ): CompetitionCourtSnapshot {
   const currentMatch = toMatch(first(court.matches));
-  const score = toScore(scoreRow);
+  const score = toScore(scoreRow, sourceHeartbeat);
   const overlay = parseOverlay(overlayRow);
   const effectiveExpectation = deriveObservedExpectation(expectation, score);
   const sourceAgeMs = timestampAge(score?.lastApiPollAt ?? null, nowMs);
@@ -278,7 +291,7 @@ function toMatch(row: MatchRow | null): CompetitionMatchSnapshot | null {
   } : null;
 }
 
-function toScore(row: ScoreRow | null): CompetitionScoreSnapshot | null {
+function toScore(row: ScoreRow | null, sourceHeartbeat: SourceHeartbeatRow | null): CompetitionScoreSnapshot | null {
   return row ? {
     matchId: clean(row.match_id),
     teamAScore: integer(row.team_a_score),
@@ -289,10 +302,10 @@ function toScore(row: ScoreRow | null): CompetitionScoreSnapshot | null {
     setScores: Array.isArray(row.set_scores) ? row.set_scores.slice(0, 5) : [],
     status: clean(row.status) ?? "unknown",
     source: clean(row.source) ?? "unknown",
-    sourceAvailable: row.source_available === true,
+    sourceAvailable: sourceHeartbeat?.source_available ?? row.source_available === true,
     sourcePriority: clean(row.source_priority) ?? "unknown",
     stale: Boolean(row.stale),
-    lastApiPollAt: validIso(row.last_api_poll_at),
+    lastApiPollAt: validIso(sourceHeartbeat?.last_poll_at ?? row.last_api_poll_at),
     updatedAt: validIso(row.updated_at)
   } : null;
 }
