@@ -35,7 +35,7 @@ export class IncidentManager {
       const normalized = normalizeAlert(alert);
       const existing = this.incidents.get(normalized.fingerprint);
       if (alert.status === "resolved") {
-        if (!existing) continue;
+        if (!existing || existing.status === "resolved") continue;
         const resolved: IncidentSnapshot = {
           ...existing,
           status: "resolved",

@@ -1,0 +1,13 @@
+{
+  "event": "gate8-2026-07-13",
+  "destroyAfter": "2026-07-13",
+  "droplets": [
+    { "name": "bvm-commentary-01", "role": "commentary" },
+    { "name": "bvm-compositor-a", "role": "compositor" },
+    { "name": "bvm-compositor-b", "role": "compositor" },
+    { "name": "bvm-compositor-c", "role": "compositor" },
+    { "name": "bvm-compositor-d", "role": "compositor" },
+    { "name": "bvm-observability-01", "role": "observability" },
+    { "name": "bvm-preview-01", "role": "ingest" }
+  ]
+}

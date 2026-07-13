@@ -1,21 +1,9 @@
-import crypto from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { IncidentSnapshot } from "./contracts.js";
 import type { IncidentStore, StoredNotification } from "./incidentStore.js";
-import { NotificationDispatcher, validateTwilioSignature } from "./notifications.js";
+import { NotificationDispatcher } from "./notifications.js";
 
 describe("notification provider validation", () => {
-  it("accepts only the exact Twilio callback signature", () => {
-    const token = "test-auth-token";
-    const url = "https://monitor.example.test/v1/provider/twilio/status";
-    const params = { MessageStatus: "delivered", MessageSid: "SM0123456789" };
-    const material = url + Object.keys(params).sort().map((key) => `${key}${params[key as keyof typeof params]}`).join("");
-    const signature = crypto.createHmac("sha1", token).update(material).digest("base64");
-    expect(validateTwilioSignature(token, url, params, signature)).toBe(true);
-    expect(validateTwilioSignature(token, url, { ...params, MessageStatus: "failed" }, signature)).toBe(false);
-    expect(validateTwilioSignature(token, url, params, "invalid")).toBe(false);
-  });
-
   it("does not page an incident while a matching silence is active", async () => {
     const send = vi.fn<typeof fetch>();
     const dispatcher = new NotificationDispatcher(notificationConfig(), {} as IncidentStore, send);
@@ -23,10 +11,59 @@ describe("notification provider validation", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it("uses the restricted API key pair for Twilio message submission", async () => {
+    const notification = storedNotification({ provider: "twilio_sms" });
+    const store = {
+      ensureNotification: vi.fn(async () => ({ notification, created: true })),
+      updateNotification: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({ ...notification, ...patch }))
+    } as unknown as IncidentStore;
+    const send = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      sid: "SM0123456789",
+      status: "queued",
+      error_code: null
+    }), { status: 201 }));
+    const config = { ...notificationConfig(), pushoverAppToken: null, pushoverUserKey: null };
+    const dispatcher = new NotificationDispatcher(config, store, send);
+    await dispatcher.handleChanges([{ incident: criticalIncident(), eventType: "OPENED" }]);
+
+    expect(send).toHaveBeenCalledOnce();
+    const init = send.mock.calls[0]?.[1];
+    expect(new Headers(init?.headers).get("authorization")).toBe(`Basic ${Buffer.from("SK123:api-secret").toString("base64")}`);
+  });
+
+  it("polls a nonterminal Twilio notification to its terminal delivery state", async () => {
+    const now = new Date("2026-07-12T18:01:00.000Z");
+    const notification = storedNotification({
+      provider: "twilio_sms",
+      providerMessageId: "SM0123456789",
+      status: "accepted",
+      acceptedAt: "2026-07-12T18:00:00.000Z"
+    });
+    const store = {
+      pendingProviderNotifications: vi.fn(async () => [notification]),
+      updateNotification: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({ ...notification, ...patch }))
+    } as unknown as IncidentStore;
+    const send = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      status: "delivered",
+      error_code: null
+    }), { status: 200 }));
+    const dispatcher = new NotificationDispatcher(notificationConfig(), store, send);
+    await dispatcher.maintain([], now);
+
+    expect(store.pendingProviderNotifications).toHaveBeenCalledWith("twilio_sms", now);
+    expect(store.updateNotification).toHaveBeenCalledWith(notification.id, {
+      status: "delivered",
+      deliveredAt: now.toISOString(),
+      providerErrorCode: null
+    });
+    expect(new Headers(send.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(`Basic ${Buffer.from("SK123:api-secret").toString("base64")}`);
+  });
+
   it("re-arms a cancelled emergency after silence expiry before starting SMS escalation", async () => {
     const now = new Date("2026-07-12T18:00:00.000Z");
     let notification = storedNotification({ status: "cancelled", submittedAt: "2026-07-12T17:30:00.000Z", expiredAt: "2026-07-12T17:45:00.000Z" });
     const store = {
+      pendingProviderNotifications: vi.fn(async () => []),
       ensureNotification: vi.fn(async () => ({ notification, created: false })),
       rearmNotification: vi.fn(async () => {
         notification = storedNotification({ status: "pending", submittedAt: now.toISOString() });
@@ -90,11 +127,11 @@ describe("notification provider validation", () => {
 function notificationConfig() {
   return {
     monitorDashboardUrl: "https://score.example.test/admin/monitor",
-    monitorPublicBaseUrl: "https://monitor.example.test",
     pushoverAppToken: "pushover-token",
     pushoverUserKey: "pushover-user",
     twilioAccountSid: "AC123",
-    twilioAuthToken: "twilio-token",
+    twilioApiKeySid: "SK123",
+    twilioApiKeySecret: "api-secret",
     twilioFromNumber: "+15555550100",
     twilioToNumber: "+15555550200",
     notificationSmsEscalationMs: 120_000,

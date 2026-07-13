@@ -413,6 +413,7 @@ export type CourtMonitorSnapshot = {
   browser: BrowserHeartbeatSnapshot | null;
   competition: CompetitionCourtSnapshot | null;
   expectation: CourtExpectation;
+  faultGate: MonitoringFaultGate | null;
   youtube: YouTubeCourtSnapshot | null;
   thumbnail: BrowserThumbnailMetadata | null;
   egressHost: string | null;
@@ -450,6 +451,14 @@ export type MonitoringSilence = {
   expiresAt: string;
 };
 
+export type MonitoringFaultGate = {
+  courtNumber: number;
+  actor: string;
+  reason: string;
+  armedAt: string;
+  expiresAt: string;
+};
+
 export type MonitorSnapshot = {
   version: typeof MONITORING_CONTRACT_VERSION;
   generatedAt: string;
@@ -482,6 +491,7 @@ export type MonitorSnapshot = {
   }>;
   incidents: IncidentSnapshot[];
   silences: MonitoringSilence[];
+  faultGates: MonitoringFaultGate[];
 };
 
 const stateAttentionRank: Record<HealthState, number> = {

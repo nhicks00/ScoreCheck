@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import type { ServiceConfig } from "./config.js";
 import type { IncidentSnapshot, NotificationHealth } from "./contracts.js";
 import type { IncidentChange } from "./incidents.js";
@@ -6,11 +5,11 @@ import { IncidentStore, type NotificationKind, type NotificationStatus, type Sto
 
 type NotificationConfig = Pick<ServiceConfig,
   | "monitorDashboardUrl"
-  | "monitorPublicBaseUrl"
   | "pushoverAppToken"
   | "pushoverUserKey"
   | "twilioAccountSid"
-  | "twilioAuthToken"
+  | "twilioApiKeySid"
+  | "twilioApiKeySecret"
   | "twilioFromNumber"
   | "twilioToNumber"
   | "notificationSmsEscalationMs"
@@ -24,7 +23,7 @@ type ProviderState = {
 };
 
 export class NotificationDispatcher {
-  private readonly lastReceiptPollAt = new Map<string, number>();
+  private readonly lastProviderPollAt = new Map<string, number>();
   private readonly providerHealth: { pushover: ProviderState; twilioSms: ProviderState };
 
   constructor(
@@ -83,6 +82,7 @@ export class NotificationDispatcher {
 
   async maintain(activeIncidents: IncidentSnapshot[], now = new Date(), isSilenced: (incident: IncidentSnapshot) => boolean = () => false): Promise<Array<{ incidentId: string; actor: string; reason: string }>> {
     if (!this.store) return [];
+    await this.pollTwilioStatuses(now);
     const acknowledgements: Array<{ incidentId: string; actor: string; reason: string }> = [];
     for (const incident of activeIncidents) {
       if (incident.severity !== "critical" || incident.status === "acknowledged" || isSilenced(incident)) continue;
@@ -102,25 +102,6 @@ export class NotificationDispatcher {
 
   async silence(incident: IncidentSnapshot, now = new Date()): Promise<void> {
     await this.cancelEmergency(incident, now);
-  }
-
-  async applyTwilioStatus(params: Record<string, string>, signature: string): Promise<boolean> {
-    if (!this.store || !this.config.twilioAuthToken) return false;
-    const callbackUrl = `${this.config.monitorPublicBaseUrl}/v1/provider/twilio/status`;
-    if (!validateTwilioSignature(this.config.twilioAuthToken, callbackUrl, params, signature)) return false;
-    const messageId = boundedProviderId(params.MessageSid);
-    const status = twilioStatus(params.MessageStatus);
-    if (!messageId || !status) return false;
-    const existing = await this.store.notificationByProviderId("twilio_sms", messageId);
-    if (!existing) return true;
-    const timestamp = new Date().toISOString();
-    await this.store.updateNotification(existing.id, {
-      status,
-      deliveredAt: status === "delivered" ? timestamp : existing.deliveredAt,
-      providerErrorCode: boundedError(params.ErrorCode)
-    });
-    this.mark("twilioSms", status === "failed" ? "failure" : "success", timestamp);
-    return true;
   }
 
   private async ensureCriticalPage(incident: IncidentSnapshot, now: Date): Promise<StoredNotification | null> {
@@ -163,15 +144,16 @@ export class NotificationDispatcher {
     if (!claim.created && (claim.notification.status !== "pending" || ageMs < 30_000)) return;
     try {
       const result = await this.sendTwilio(incident, kind);
+      const status = mapTwilioInitialStatus(result.status);
       await this.store.updateNotification(claim.notification.id, {
         providerMessageId: result.sid,
-        status: mapTwilioInitialStatus(result.status),
+        status,
         acceptedAt: now.toISOString(),
         escalatedAt: kind === "escalation" ? now.toISOString() : null,
         providerErrorCode: boundedError(result.errorCode)
       });
       if (kind === "escalation") await this.store.appendIncidentEvent(incident.id, "ESCALATED", { provider: "twilio_sms" });
-      this.mark("twilioSms", "success", now.toISOString());
+      this.mark("twilioSms", status === "failed" ? "failure" : "success", now.toISOString());
     } catch {
       await this.store.updateNotification(claim.notification.id, { status: "failed", providerErrorCode: "submission-failed" });
       this.mark("twilioSms", "failure", now.toISOString());
@@ -211,9 +193,10 @@ export class NotificationDispatcher {
 
   private async pollPushoverReceipt(notification: StoredNotification, now: Date): Promise<boolean> {
     if (!this.store || !this.config.pushoverAppToken || !notification.providerMessageId) return false;
-    const previous = this.lastReceiptPollAt.get(notification.providerMessageId) ?? 0;
+    const pollKey = `pushover:${notification.providerMessageId}`;
+    const previous = this.lastProviderPollAt.get(pollKey) ?? 0;
     if (now.getTime() - previous < this.config.notificationStatusIntervalMs) return false;
-    this.lastReceiptPollAt.set(notification.providerMessageId, now.getTime());
+    this.lastProviderPollAt.set(pollKey, now.getTime());
     const url = new URL(`https://api.pushover.net/1/receipts/${encodeURIComponent(notification.providerMessageId)}.json`);
     url.searchParams.set("token", this.config.pushoverAppToken);
     try {
@@ -289,13 +272,12 @@ export class NotificationDispatcher {
     const body = new URLSearchParams({
       To: this.config.twilioToNumber!,
       From: this.config.twilioFromNumber!,
-      Body: kind === "recovery" ? `ScoreCheck recovered${courtLabel(incident)}: ${incident.stage} - ${incident.summary}` : `${incidentTitle(incident)}: ${incidentMessage(incident)}`,
-      StatusCallback: `${this.config.monitorPublicBaseUrl}/v1/provider/twilio/status`
+      Body: kind === "recovery" ? `ScoreCheck recovered${courtLabel(incident)}: ${incident.stage} - ${incident.summary}` : `${incidentTitle(incident)}: ${incidentMessage(incident)}`
     });
     const response = await this.send(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(this.config.twilioAccountSid!)}/Messages.json`, {
       method: "POST",
       headers: {
-        authorization: `Basic ${Buffer.from(`${this.config.twilioAccountSid}:${this.config.twilioAuthToken}`).toString("base64")}`,
+        authorization: this.twilioAuthorization(),
         "content-type": "application/x-www-form-urlencoded"
       },
       body,
@@ -307,12 +289,53 @@ export class NotificationDispatcher {
     return { sid, status: typeof payload.status === "string" ? payload.status : "accepted", errorCode: payload.error_code };
   }
 
+  private async pollTwilioStatuses(now: Date): Promise<void> {
+    if (!this.store || !this.twilioConfigured()) return;
+    const notifications = await this.store.pendingProviderNotifications("twilio_sms", now);
+    for (const notification of notifications) {
+      if (!notification.providerMessageId) continue;
+      const pollKey = `twilio:${notification.providerMessageId}`;
+      const previous = this.lastProviderPollAt.get(pollKey) ?? 0;
+      if (now.getTime() - previous < this.config.notificationStatusIntervalMs) continue;
+      this.lastProviderPollAt.set(pollKey, now.getTime());
+      try {
+        const response = await this.send(
+          `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(this.config.twilioAccountSid!)}/Messages/${encodeURIComponent(notification.providerMessageId)}.json`,
+          { headers: { authorization: this.twilioAuthorization() }, signal: AbortSignal.timeout(8_000) }
+        );
+        const payload = await response.json() as Record<string, unknown>;
+        const status = twilioStatus(typeof payload.status === "string" ? payload.status : undefined);
+        if (!response.ok || !status) throw new Error("Twilio status lookup failed.");
+        const errorCode = boundedError(payload.error_code);
+        if (status !== notification.status || errorCode !== notification.providerErrorCode || (status === "delivered" && !notification.deliveredAt)) {
+          await this.store.updateNotification(notification.id, {
+            status,
+            deliveredAt: status === "delivered" ? now.toISOString() : notification.deliveredAt,
+            providerErrorCode: errorCode
+          });
+        }
+        this.mark("twilioSms", status === "failed" ? "failure" : "success", now.toISOString());
+      } catch {
+        this.mark("twilioSms", "failure", now.toISOString());
+      }
+    }
+  }
+
+  private twilioAuthorization(): string {
+    return `Basic ${Buffer.from(`${this.config.twilioApiKeySid}:${this.config.twilioApiKeySecret}`).toString("base64")}`;
+  }
+
   private pushoverConfigured(): boolean {
     return Boolean(this.store && this.config.pushoverAppToken && this.config.pushoverUserKey);
   }
 
   private twilioConfigured(): boolean {
-    return Boolean(this.store && this.config.twilioAccountSid && this.config.twilioAuthToken && this.config.twilioFromNumber && this.config.twilioToNumber);
+    return Boolean(this.store
+      && this.config.twilioAccountSid
+      && this.config.twilioApiKeySid
+      && this.config.twilioApiKeySecret
+      && this.config.twilioFromNumber
+      && this.config.twilioToNumber);
   }
 
   private mark(provider: "pushover" | "twilioSms", result: "success" | "failure", timestamp: string) {
@@ -328,19 +351,6 @@ export class NotificationDispatcher {
 function notificationWasSent(notification: StoredNotification | null): boolean {
   if (!notification?.providerMessageId) return false;
   return ["accepted", "delivered", "acknowledged", "expired", "cancelled"].includes(notification.status);
-}
-
-export function validateTwilioSignature(authToken: string, url: string, params: Record<string, string>, presented: string): boolean {
-  if (!authToken || !presented) return false;
-  const material = url + Object.keys(params).sort().map((key) => `${key}${params[key] ?? ""}`).join("");
-  const expected = crypto.createHmac("sha1", authToken).update(material).digest();
-  let received: Buffer;
-  try {
-    received = Buffer.from(presented, "base64");
-  } catch {
-    return false;
-  }
-  return received.length === expected.length && crypto.timingSafeEqual(received, expected);
 }
 
 function incidentTitle(incident: IncidentSnapshot): string {

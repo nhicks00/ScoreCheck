@@ -157,8 +157,9 @@ setting a court `OFF` after coverage.
 The deployed service supports Pushover emergency priority with acknowledgement,
 followed by Twilio SMS after two minutes when a critical incident remains
 unacknowledged. Recovery notifications are deduplicated and are sent only
-through providers that delivered the opening incident. Twilio callbacks are
-signature checked.
+through providers that delivered the opening incident. Twilio message creation
+and bounded receipt polling use a restricted API key; no public status callback
+or account auth token is required.
 
 The complete provider configuration uses these protected values:
 
@@ -166,7 +167,8 @@ The complete provider configuration uses these protected values:
 PUSHOVER_APP_TOKEN
 PUSHOVER_USER_KEY
 TWILIO_ACCOUNT_SID
-TWILIO_AUTH_TOKEN
+TWILIO_API_KEY_SID
+TWILIO_API_KEY_SECRET
 TWILIO_FROM_NUMBER
 TWILIO_TO_NUMBER
 HEALTHCHECKS_BASELINE_PING_URL
@@ -176,10 +178,12 @@ HEALTHCHECKS_ACTIVE_CHECK_ID
 ```
 
 Store them only in the protected monitoring environment on the observability
-host and in the protected local deployment file. Never commit them. Pushover,
-Twilio account authentication, and both Healthchecks checks are configured in
-production. Twilio escalation remains disabled until an SMS-capable
-`TWILIO_FROM_NUMBER` is approved. The baseline
+host and in the protected local deployment file. Never commit them. Pushover
+and both Healthchecks checks are configured in production. Twilio API
+credentials and a sender are available, but escalation remains disabled until
+the sender's A2P registration is approved and an actual test message reaches the
+destination. A `30034` result means the sender is still unregistered and must
+remain disabled. The baseline
 dead-man pings every ten minutes at all times. The active check pings every minute
 while any court expects coverage and is explicitly paused through the Healthchecks
 management API while the system is idle. A live ping resumes it automatically.
@@ -236,6 +240,23 @@ After every deployment verify:
 
 Fault tests must use test broadcasts and explicit operator approval. Never stop a
 public StreamRun path or a live production output for a monitoring test.
+
+When no tournament event is active, arm one test feed through the authenticated
+monitor API instead of creating a fake Supabase event. The override is held only
+in monitor-service memory, requires a healthy raw baseline and all agents fresh,
+permits one court at a time, leaves broadcast/commentary/scoring off, and expires
+after at most ten minutes. Preview and program branches remain expected off; the
+gate requires only the selected raw ingest. A monitor-service restart clears it.
+
+```text
+POST /v1/fault-gates/courts/{court}/arm
+DELETE /v1/fault-gates/courts/{court}
+```
+
+Every alert opened from this override carries `expectation_source=fault_gate`
+and an `INTENTIONAL FAULT GATE` notification prefix. Restore and verify the raw
+feed before disarming; disarming an unrestored feed can only stop test paging,
+not repair the camera path.
 
 ### One-court gate
 

@@ -22,6 +22,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StreamPlayer } from "@/components/StreamPlayer";
 import type { MonitorCourt, MonitorCourtPipelineRange, MonitorHealthState, MonitorIncident, MonitorMediaPath, MonitorSilence, MonitorSnapshotEnvelope, MonitorStage } from "@/lib/monitoringTypes";
+import { PacingComparator } from "./PacingComparator";
 
 const POLL_INTERVAL_MS = 5_000;
 const STATE_RANK: Record<MonitorHealthState, number> = { CRITICAL: 9, UNKNOWN: 8, DEGRADED: 7, RECOVERING: 6, STARTING: 5, HEALTHY: 4, MAINTENANCE: 3, EXPECTED_OFF: 2, NOT_APPLICABLE: 1 };
@@ -32,6 +33,7 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
   const [refreshing, setRefreshing] = useState(false);
   const [selectedCourt, setSelectedCourt] = useState(() => firstAttentionCourt(initial) ?? 1);
   const [previewEnabled, setPreviewEnabled] = useState(false);
+  const [pacingOpen, setPacingOpen] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(false);
   const [ackReasons, setAckReasons] = useState<Record<string, string>>({});
   const [ackBusy, setAckBusy] = useState<string | null>(null);
@@ -43,6 +45,7 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
   const [nowMs, setNowMs] = useState(() => initial ? Date.parse(initial.fetchedAt) : 0);
   const [history, setHistory] = useState<MonitorCourtPipelineRange | null>(null);
   const previousCriticalIds = useRef(new Set(initial?.snapshot.incidents.filter((incident) => incident.severity === "critical").map((incident) => incident.id) ?? []));
+  const previewBeforePacing = useRef(false);
 
   useEffect(() => {
     setSoundEnabled(window.localStorage.getItem("scorecheck-monitor-sound") === "on");
@@ -67,6 +70,7 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
         if (incident?.courtNumber) {
           setSelectedCourt(incident.courtNumber);
           setPreviewEnabled(true);
+          setPacingOpen(false);
         }
         if (soundEnabled) playAlertTone();
       }
@@ -191,6 +195,17 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
   const activeIncidents = snapshot.incidents.filter((incident) => incident.status !== "resolved");
   const activeSilences = snapshot.silences.filter((silence) => Date.parse(silence.expiresAt) > nowMs);
 
+  function togglePacing() {
+    if (pacingOpen) {
+      setPacingOpen(false);
+      setPreviewEnabled(previewBeforePacing.current);
+      return;
+    }
+    previewBeforePacing.current = previewEnabled;
+    setPreviewEnabled(false);
+    setPacingOpen(true);
+  }
+
   return (
     <div className="monitor-dashboard">
       <header className="monitor-heading">
@@ -228,7 +243,7 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
 
       <section className="monitor-court-matrix" aria-label="Court monitoring matrix">
         {snapshot.courts.map((court) => (
-          <CourtCard key={court.courtNumber} court={court} history={history?.courts.find((entry) => entry.courtNumber === court.courtNumber) ?? null} selected={court.courtNumber === selectedCourt} nowMs={nowMs} onSelect={() => { setSelectedCourt(court.courtNumber); setPreviewEnabled(true); }} />
+          <CourtCard key={court.courtNumber} court={court} history={history?.courts.find((entry) => entry.courtNumber === court.courtNumber) ?? null} selected={court.courtNumber === selectedCourt} nowMs={nowMs} onSelect={() => { setSelectedCourt(court.courtNumber); setPreviewEnabled(true); setPacingOpen(false); }} />
         ))}
       </section>
 
@@ -236,11 +251,14 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
         <section className="monitor-detail-band" aria-label={`Court ${selected.courtNumber} live inspection`}>
           <div className="monitor-section-heading">
             <div><p className="eyebrow">Live inspection</p><h2>{courtName(selected)}</h2></div>
-            <StateBadge state={selected.overallState} />
+            <div className="monitor-detail-actions">
+              <button type="button" className="button ghost" onClick={togglePacing} aria-expanded={pacingOpen}><Gauge size={16} /> {pacingOpen ? "Close path test" : "Path test"}</button>
+              <StateBadge state={selected.overallState} />
+            </div>
           </div>
           <div className="monitor-inspection-grid">
             <div className="monitor-live-player">
-              {previewEnabled ? <StreamPlayer courtNumber={selected.courtNumber} enabled /> : (
+              {pacingOpen ? <div className="monitor-preview-paused"><Gauge size={18} /><span>Live preview paused for isolated path test</span></div> : previewEnabled ? <StreamPlayer courtNumber={selected.courtNumber} enabled /> : (
                 <button className="monitor-preview-start" type="button" onClick={() => setPreviewEnabled(true)}><Eye size={18} /> Open live preview</button>
               )}
             </div>
@@ -248,6 +266,7 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
               {selected.stages.map((stage) => <StageDetail key={stage.stage} stage={stage} />)}
             </div>
           </div>
+          {pacingOpen && <PacingComparator courtNumber={selected.courtNumber} />}
         </section>
       )}
 
@@ -378,6 +397,7 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
         <span><Camera size={14} /> {visualLabel(browser)}</span>
         <span><Headphones size={14} /> {commentaryLabel(browser)}</span>
         <span><Youtube size={14} /> {friendlyState(court.youtube?.state ?? "NOT_APPLICABLE")}</span>
+        <span title={browserQualityDetail(browser)}><Activity size={14} /> {browserQualityLabel(browser, history)}</span>
         <span><Gauge size={14} /> {browser ? `${browser.video.reconnectCount} reconnects` : "--"}</span>
       </div>
       {issue?.issueCode && <div className="monitor-court-alert"><AlertTriangle size={14} /><span>{issue.issueCode}</span></div>}
@@ -485,6 +505,36 @@ function transportLoss(path: MonitorMediaPath | undefined): string {
 
 function percent(value: number, total: number): string {
   return total > 0 ? `${(value / total * 100).toFixed(1)}%` : "0.0%";
+}
+
+function browserQualityLabel(browser: MonitorCourt["browser"], history: MonitorCourtPipelineRange["courts"][number] | null): string {
+  if (!browser) return "decode --";
+  const recentDropRatio = latestPoint(history?.programDropRatio);
+  const recentFreezeRatio = latestPoint(history?.programFreezeRatio);
+  if (recentDropRatio != null || recentFreezeRatio != null) {
+    return `2m ${formatQualityRatio(recentDropRatio)} drop · ${formatQualityRatio(recentFreezeRatio)} frozen`;
+  }
+  const received = browser.video.framesReceived;
+  const dropped = browser.video.framesDropped;
+  const dropRatio = received != null && dropped != null ? percent(dropped, received) : "--";
+  const freezes = browser.video.freezeCount == null ? "--" : String(browser.video.freezeCount);
+  return `${dropRatio} drop · ${freezes} freezes`;
+}
+
+function browserQualityDetail(browser: MonitorCourt["browser"]): string {
+  if (!browser) return "Program browser decode quality is unavailable.";
+  const video = browser.video;
+  const freezeDuration = video.totalFreezesDurationMs == null ? "--" : formatDuration(video.totalFreezesDurationMs);
+  return `Page session: ${video.framesReceived ?? "--"} received, ${video.framesDecoded ?? "--"} decoded, ${video.framesDropped ?? "--"} dropped, ${video.freezeCount ?? "--"} freezes totaling ${freezeDuration}.`;
+}
+
+function latestPoint(points: Array<[number, number]> | undefined): number | null {
+  const value = points?.at(-1)?.[1];
+  return value != null && Number.isFinite(value) ? value : null;
+}
+
+function formatQualityRatio(value: number | null): string {
+  return value == null ? "--" : `${(value * 100).toFixed(1)}%`;
 }
 
 function formatPercentRatio(value: number | null): string {

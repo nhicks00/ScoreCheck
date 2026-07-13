@@ -8,6 +8,7 @@ import { IncidentManager } from "./incidents.js";
 import { IncidentStore } from "./incidentStore.js";
 import { bearerAuth } from "./security.js";
 import { BrowserHeartbeatManager } from "./browserHeartbeats.js";
+import { decideBrowserOrigin } from "./browserOrigin.js";
 import { ControlPlaneCollector } from "./controlPlane.js";
 import { YouTubeCollector } from "./youtube.js";
 import { NotificationDispatcher } from "./notifications.js";
@@ -15,6 +16,8 @@ import { loadCourtPipelineRange, parseRangeInput } from "./rangeQueries.js";
 import { BrowserThumbnailManager } from "./browserThumbnails.js";
 import { activeSilences, incidentIsSilenced, silenceMatchesIncident } from "./silences.js";
 import { ExternalDeadMan } from "./deadMan.js";
+import { assertFaultGateCanArm, FaultGateConflictError, FaultGateControl } from "./faultGateControl.js";
+import { BrowserCounterAccumulator } from "./browserCounterAccumulator.js";
 
 const config = loadServiceConfig();
 const app = express();
@@ -29,7 +32,15 @@ const browserJitter = new Gauge({ name: "scorecheck_program_browser_jitter_ms", 
 const browserFreezeCount = new Gauge({ name: "scorecheck_program_browser_freeze_count", help: "Program browser cumulative WebRTC freeze count.", labelNames: ["court"], registers: [registry] });
 const browserLastPacketAge = new Gauge({ name: "scorecheck_program_browser_last_packet_age_seconds", help: "Age of the most recently received video packet.", labelNames: ["court"], registers: [registry] });
 const browserPacketsLost = new Gauge({ name: "scorecheck_program_browser_packets_lost", help: "Program browser cumulative inbound video packets lost for the current page connection.", labelNames: ["court"], registers: [registry] });
+const browserFramesReceived = new Gauge({ name: "scorecheck_program_browser_frames_received", help: "Program browser cumulative video frames received for the current page connection.", labelNames: ["court"], registers: [registry] });
+const browserFramesDecoded = new Gauge({ name: "scorecheck_program_browser_frames_decoded", help: "Program browser cumulative video frames decoded for the current page connection.", labelNames: ["court"], registers: [registry] });
 const browserFramesDropped = new Gauge({ name: "scorecheck_program_browser_frames_dropped", help: "Program browser cumulative video frames dropped for the current page connection.", labelNames: ["court"], registers: [registry] });
+const browserFreezeDuration = new Gauge({ name: "scorecheck_program_browser_freeze_duration_seconds", help: "Program browser cumulative WebRTC freeze duration for the current page connection.", labelNames: ["court"], registers: [registry] });
+const browserFramesReceivedTotal = new Counter({ name: "scorecheck_program_browser_frames_received_total", help: "Reset-safe program browser video frames received.", labelNames: ["court"], registers: [registry] });
+const browserFramesDecodedTotal = new Counter({ name: "scorecheck_program_browser_frames_decoded_total", help: "Reset-safe program browser video frames decoded.", labelNames: ["court"], registers: [registry] });
+const browserFramesDroppedTotal = new Counter({ name: "scorecheck_program_browser_frames_dropped_total", help: "Reset-safe program browser video frames dropped before presentation.", labelNames: ["court"], registers: [registry] });
+const browserFreezesTotal = new Counter({ name: "scorecheck_program_browser_freezes_total", help: "Reset-safe program browser WebRTC freeze events.", labelNames: ["court"], registers: [registry] });
+const browserFreezeDurationTotal = new Counter({ name: "scorecheck_program_browser_freeze_duration_seconds_total", help: "Reset-safe program browser WebRTC freeze duration in seconds.", labelNames: ["court"], registers: [registry] });
 const commentaryConnected = new Gauge({ name: "scorecheck_program_commentary_room_connected", help: "Whether the program browser is connected to its commentary room.", labelNames: ["court"], registers: [registry] });
 const commentaryTracks = new Gauge({ name: "scorecheck_program_commentary_audio_tracks", help: "Subscribed commentary audio tracks in the program browser.", labelNames: ["court"], registers: [registry] });
 const commentaryMutedTracks = new Gauge({ name: "scorecheck_program_commentary_muted_tracks", help: "Muted subscribed commentary tracks.", labelNames: ["court"], registers: [registry] });
@@ -51,6 +62,7 @@ const scoreRenderAligned = new Gauge({ name: "scorecheck_program_score_render_al
 const controlPlaneFresh = new Gauge({ name: "scorecheck_control_plane_fresh", help: "Whether the latest Supabase control-plane sample is fresh.", registers: [registry] });
 const scoreWorkerHealthy = new Gauge({ name: "scorecheck_score_worker_healthy", help: "Score worker state: 1 healthy, 0 unavailable, -1 not applicable.", registers: [registry] });
 const courtMediaRequired = new Gauge({ name: "scorecheck_court_media_required", help: "Whether media is currently required for a court.", labelNames: ["court"], registers: [registry] });
+const courtExpectationContext = new Gauge({ name: "scorecheck_court_expectation_context", help: "Expectation source context for court-scoped alert evidence.", labelNames: ["court", "expectation_source"], registers: [registry] });
 const courtBroadcastLive = new Gauge({ name: "scorecheck_court_broadcast_live", help: "Whether a court broadcast is expected live.", labelNames: ["court"], registers: [registry] });
 const courtCommentaryRequired = new Gauge({ name: "scorecheck_court_commentary_required", help: "Whether commentary is required for a court.", labelNames: ["court"], registers: [registry] });
 const courtScoringLive = new Gauge({ name: "scorecheck_court_scoring_live", help: "Whether live scoring is required for a court.", labelNames: ["court"], registers: [registry] });
@@ -83,6 +95,8 @@ let youtubeRefreshRunning = false;
 const incidentStore = IncidentStore.create(config.supabaseUrl, config.supabaseServiceRoleKey);
 const notificationDispatcher = new NotificationDispatcher(config, incidentStore);
 const externalDeadMan = new ExternalDeadMan(config);
+const faultGateControl = new FaultGateControl();
+const browserCounterAccumulator = new BrowserCounterAccumulator();
 let deadManMaintenanceRunning = false;
 let silences: MonitoringSilence[] = [];
 if (incidentStore) {
@@ -106,6 +120,47 @@ app.get("/metrics", bearerAuth(config.token), async (_req, res) => {
   res.type(registry.contentType).send(await registry.metrics());
 });
 app.get("/v1/snapshot", bearerAuth(config.token), (_req, res) => res.json(snapshot));
+app.get("/v1/fault-gates", bearerAuth(config.token), (_req, res) => res.json({ faultGates: faultGateControl.active() }));
+app.post("/v1/fault-gates/courts/:courtNumber/arm", bearerAuth(config.token), (req, res) => {
+  const courtNumber = Number(Array.isArray(req.params.courtNumber) ? req.params.courtNumber[0] : req.params.courtNumber);
+  const parsed = z.object({
+    actor: z.string().trim().min(1).max(80).regex(/^[a-zA-Z0-9_.:@-]+$/),
+    reason: z.string().trim().min(3).max(300).refine((value) => !/[\u0000-\u001f\u007f]/.test(value)),
+    durationSeconds: z.number().int().min(60).max(600)
+  }).strict().safeParse(req.body);
+  if (!Number.isInteger(courtNumber) || courtNumber < 1 || courtNumber > config.courtCount || !parsed.success) {
+    res.status(400).json({ error: "Invalid fault-gate request." });
+    return;
+  }
+  try {
+    assertFaultGateCanArm(snapshot, courtNumber);
+    const faultGate = faultGateControl.arm({ courtNumber, ...parsed.data });
+    snapshot = currentSnapshot();
+    console.log(`monitoring fault gate armed court=${courtNumber} actor=${parsed.data.actor} expires=${faultGate.expiresAt}`);
+    res.status(201).json({ faultGate });
+  } catch (error) {
+    if (error instanceof FaultGateConflictError) {
+      res.status(409).json({ error: error.message, code: error.code });
+      return;
+    }
+    res.status(503).json({ error: "Fault gate could not be armed." });
+  }
+});
+app.delete("/v1/fault-gates/courts/:courtNumber", bearerAuth(config.token), (req, res) => {
+  const courtNumber = Number(Array.isArray(req.params.courtNumber) ? req.params.courtNumber[0] : req.params.courtNumber);
+  if (!Number.isInteger(courtNumber) || courtNumber < 1 || courtNumber > config.courtCount) {
+    res.status(400).json({ error: "Invalid court number." });
+    return;
+  }
+  const faultGate = faultGateControl.disarm(courtNumber);
+  if (!faultGate) {
+    res.status(404).json({ error: "No active fault gate exists for this court." });
+    return;
+  }
+  snapshot = currentSnapshot();
+  console.log(`monitoring fault gate disarmed court=${courtNumber}`);
+  res.json({ faultGate });
+});
 app.get("/v1/range/court-pipeline", bearerAuth(config.token), async (req, res) => {
   try {
     const input = parseRangeInput({ windowSec: req.query.windowSec, stepSec: req.query.stepSec });
@@ -117,23 +172,23 @@ app.get("/v1/range/court-pipeline", bearerAuth(config.token), async (req, res) =
   }
 });
 app.options("/v1/browser-heartbeats", (req, res) => {
-  const origin = allowedBrowserOrigin(req.headers.origin);
-  if (!origin) {
+  const origin = decideBrowserOrigin(req.headers.origin, config.browserAllowedOrigins, { allowMissing: false });
+  if (!origin.allowed || !origin.corsOrigin) {
     res.sendStatus(403);
     return;
   }
-  setBrowserCors(res, origin);
+  setBrowserCors(res, origin.corsOrigin);
   res.setHeader("access-control-allow-methods", "POST, OPTIONS");
   res.setHeader("access-control-allow-headers", "authorization, content-type, x-scorecheck-court, x-scorecheck-credential-id, x-scorecheck-sequence, x-scorecheck-sampled-at");
   res.sendStatus(204);
 });
 app.post("/v1/browser-heartbeats", (req, res) => {
-  const origin = allowedBrowserOrigin(req.headers.origin);
-  if (!origin) {
+  const origin = decideBrowserOrigin(req.headers.origin, config.browserAllowedOrigins, { allowMissing: true });
+  if (!origin.allowed) {
     res.status(403).json({ error: "Origin is not allowed." });
     return;
   }
-  setBrowserCors(res, origin);
+  if (origin.corsOrigin) setBrowserCors(res, origin.corsOrigin);
   const token = bearerToken(req.headers.authorization);
   try {
     browserHeartbeats.accept(token, req.body);
@@ -144,23 +199,23 @@ app.post("/v1/browser-heartbeats", (req, res) => {
   }
 });
 app.options("/v1/browser-thumbnails", (req, res) => {
-  const origin = allowedBrowserOrigin(req.headers.origin);
-  if (!origin) {
+  const origin = decideBrowserOrigin(req.headers.origin, config.browserAllowedOrigins, { allowMissing: false });
+  if (!origin.allowed || !origin.corsOrigin) {
     res.sendStatus(403);
     return;
   }
-  setBrowserCors(res, origin);
+  setBrowserCors(res, origin.corsOrigin);
   res.setHeader("access-control-allow-methods", "POST, OPTIONS");
   res.setHeader("access-control-allow-headers", "authorization, content-type, x-scorecheck-court, x-scorecheck-credential-id, x-scorecheck-sequence, x-scorecheck-sampled-at");
   res.sendStatus(204);
 });
 app.post("/v1/browser-thumbnails", express.raw({ type: "image/jpeg", limit: "96kb" }), (req, res) => {
-  const origin = allowedBrowserOrigin(req.headers.origin);
-  if (!origin) {
+  const origin = decideBrowserOrigin(req.headers.origin, config.browserAllowedOrigins, { allowMissing: true });
+  if (!origin.allowed) {
     res.status(403).json({ error: "Origin is not allowed." });
     return;
   }
-  setBrowserCors(res, origin);
+  if (origin.corsOrigin) setBrowserCors(res, origin.corsOrigin);
   try {
     browserThumbnails.accept(bearerToken(req.headers.authorization), {
       credentialId: req.headers["x-scorecheck-credential-id"],
@@ -272,17 +327,6 @@ app.post("/v1/silences", bearerAuth(config.token), async (req, res) => {
     res.status(503).json({ error: "Silence could not be persisted." });
   }
 });
-app.post("/v1/provider/twilio/status", express.urlencoded({ extended: false, limit: "16kb" }), async (req, res) => {
-  const params = Object.fromEntries(Object.entries(req.body as Record<string, unknown>)
-    .filter((entry): entry is [string, string] => typeof entry[1] === "string"));
-  try {
-    const accepted = await notificationDispatcher.applyTwilioStatus(params, String(req.headers["x-twilio-signature"] ?? ""));
-    res.sendStatus(accepted ? 204 : 403);
-  } catch {
-    res.sendStatus(503);
-  }
-});
-
 async function pollAll() {
   await Promise.all([
     ...config.targets.map((target) => pollAgent(target)),
@@ -301,7 +345,10 @@ async function pollAll() {
   browserFreezeCount.reset();
   browserLastPacketAge.reset();
   browserPacketsLost.reset();
+  browserFramesReceived.reset();
+  browserFramesDecoded.reset();
   browserFramesDropped.reset();
+  browserFreezeDuration.reset();
   commentaryConnected.reset();
   commentaryTracks.reset();
   commentaryMutedTracks.reset();
@@ -321,6 +368,7 @@ async function pollAll() {
   visualFrameDifference.reset();
   scoreRenderAligned.reset();
   courtMediaRequired.reset();
+  courtExpectationContext.reset();
   courtBroadcastLive.reset();
   courtCommentaryRequired.reset();
   courtScoringLive.reset();
@@ -338,6 +386,7 @@ async function pollAll() {
     const labels = { court: String(court.courtNumber) };
     const browser = court.browser;
     courtMediaRequired.set(labels, court.expectation.mediaExpectation === "REQUIRED" ? 1 : 0);
+    courtExpectationContext.set({ ...labels, expectation_source: court.faultGate ? "fault_gate" : "control_plane" }, 1);
     courtBroadcastLive.set(labels, court.expectation.broadcastExpectation === "LIVE" ? 1 : 0);
     courtCommentaryRequired.set(labels, court.expectation.commentaryExpectation === "REQUIRED" ? 1 : 0);
     courtScoringLive.set(labels, court.expectation.scoringExpectation === "LIVE" ? 1 : 0);
@@ -354,7 +403,23 @@ async function pollAll() {
     setOptionalGauge(browserFreezeCount, labels, browser.video.freezeCount);
     setOptionalGauge(browserLastPacketAge, labels, browser.video.lastPacketAgeMs == null ? null : browser.video.lastPacketAgeMs / 1_000);
     setOptionalGauge(browserPacketsLost, labels, browser.video.packetsLost);
+    setOptionalGauge(browserFramesReceived, labels, browser.video.framesReceived);
+    setOptionalGauge(browserFramesDecoded, labels, browser.video.framesDecoded);
     setOptionalGauge(browserFramesDropped, labels, browser.video.framesDropped);
+    setOptionalGauge(browserFreezeDuration, labels, browser.video.totalFreezesDurationMs == null ? null : browser.video.totalFreezesDurationMs / 1_000);
+    const browserDeltas = browserCounterAccumulator.observe(court.courtNumber, {
+      pageLoadedAt: browser.pageLoadedAt,
+      framesReceived: browser.video.framesReceived,
+      framesDecoded: browser.video.framesDecoded,
+      framesDropped: browser.video.framesDropped,
+      freezeCount: browser.video.freezeCount,
+      totalFreezesDurationMs: browser.video.totalFreezesDurationMs
+    });
+    incrementCounter(browserFramesReceivedTotal, labels, browserDeltas.framesReceived);
+    incrementCounter(browserFramesDecodedTotal, labels, browserDeltas.framesDecoded);
+    incrementCounter(browserFramesDroppedTotal, labels, browserDeltas.framesDropped);
+    incrementCounter(browserFreezesTotal, labels, browserDeltas.freezeCount);
+    incrementCounter(browserFreezeDurationTotal, labels, browserDeltas.totalFreezesDurationMs / 1_000);
     commentaryConnected.set(labels, browser.commentary.roomConnected ? 1 : 0);
     commentaryTracks.set(labels, browser.commentary.audioTrackCount);
     commentaryMutedTracks.set(labels, browser.commentary.mutedAudioTrackCount);
@@ -398,7 +463,8 @@ function currentSnapshot(): MonitorSnapshot {
     notificationDispatcher.health(),
     externalDeadMan.health(),
     browserThumbnails.metadata(),
-    silences
+    silences,
+    faultGateControl.active()
   );
 }
 
@@ -410,16 +476,6 @@ async function refreshYouTube() {
     snapshot = currentSnapshot();
   } finally {
     youtubeRefreshRunning = false;
-  }
-}
-
-function allowedBrowserOrigin(origin: string | undefined): string | null {
-  if (!origin) return null;
-  try {
-    const normalized = new URL(origin).origin;
-    return config.browserAllowedOrigins.includes(normalized) ? normalized : null;
-  } catch {
-    return null;
   }
 }
 
@@ -435,6 +491,10 @@ function bearerToken(header: string | undefined): string {
 
 function setOptionalGauge(gauge: Gauge, labels: { court: string }, value: number | null) {
   if (value != null && Number.isFinite(value)) gauge.set(labels, value);
+}
+
+function incrementCounter(counter: Counter, labels: { court: string }, value: number) {
+  if (Number.isFinite(value) && value > 0) counter.inc(labels, value);
 }
 
 function providerMetric(provider: { configured: boolean; lastSuccessAt: string | null; lastFailureAt: string | null }): number {

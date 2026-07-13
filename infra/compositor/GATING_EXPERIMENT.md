@@ -116,9 +116,66 @@ and a non-congested venue uplink.
 - Multi-TCP used four sockets per WAN and carried the five direct publishers,
   but the nested WireGuard handshake went stale and listener-camera paths
   dropped. Multi-TCP is rejected for this topology.
-- The router was returned to direct routing with Speedify disconnected and all
-  eight raw paths healthy. The final two-Mevo/six-AVKANS direct-publisher mix
-  must be tested on a sustained 75 Mbps or faster bonded upload before Gate 2.
+- A staged overnight run then policy-routed only the five direct publishers
+  through Speedify and left the three temporary MAKI listener pulls on the
+  ordinary WireGuard route. All eight raw paths remained healthy, while the
+  Mac and router default route remained outside Speedify. The final
+  two-Mevo/six-AVKANS direct-publisher mix must still be tested on a sustained
+  75 Mbps or faster bonded upload before Gate 2.
+
+### Staged overnight capacity run (2026-07-13)
+
+- All eight real raw feeds were held concurrently. Courts 1-5 used selective
+  Speedify routing; courts 6-8 used the temporary direct WireGuard listener
+  pulls. Raw frame-error counters remained zero at the start checkpoint.
+- At approximately 02:52 America/Chicago, the router OOM killer terminated
+  Speedify. The primary trigger was a leaked monitoring pipeline built around
+  the continuous `speedify_cli -s stats` stream; newline removal caused about
+  100 MB of buffering while Speedify itself used about 101 MB on a roughly
+  491 MB router. This is a monitoring defect, not evidence that eight streams
+  exceeded Speedify's media capacity.
+- Speedify restarted, but custom route table `900` was not reconstructed. The
+  old monitor then failed open courts 1-5 to a direct mobile route. That kept
+  feeds online but violated the production requirement. The post-fallback
+  segment is useful for MediaMTX/compositor endurance only and does not qualify
+  venue networking.
+- The production correction is fail-closed selective routing: a blackhole
+  guard table plus a forwarding kill switch prevents direct-WAN camera egress,
+  while a persistent watchdog rebuilds Speedify policy after any restart.
+  Monitoring uses only bounded `speedify_cli -s state` and alarms on memory
+  pressure or any streaming-stats process.
+- The correction was deployed at approximately 07:31 America/Chicago. A table
+  `900` flush immediately blocked camera routing and the watchdog restored it
+  in three seconds. A controlled Speedify disconnect also blocked immediately;
+  the tunnel, policy route, and publisher paths recovered in 11 seconds. A
+  firewall reload restored the kill-switch chain while the independent route
+  guard remained present.
+- Courts 1, 3, 4, and 5 reconnected from the Speedify exit after both recovery
+  tests. Court 2 was already absent before the fail-closed cutover and is not a
+  Speedify regression. Courts 6-8 remained temporary WireGuard listener pulls.
+- A concurrent-load Speedify upload test measured about 31.8 Mbps. That is
+  enough to continue a functional recovery run with the current four active
+  publishers, but it is below the 75 Mbps production floor and cannot qualify
+  the final eight-publisher topology.
+- The ingest `c-4` could sustain three active preview/program normalization
+  pairs for courts 1, 3, and 5 at approximately 30 fps, but consumed about
+  three CPU cores. Courts 2, 4, and 6-8 therefore remained raw-only.
+- One current browser-based LiveKit egress consumed roughly 42-59 percent of a
+  four-core compositor at the checkpoint. Starting a second court on the same
+  `c-4` was rejected by LiveKit at approximately 2.14 used cores. The planned
+  two-court-per-`c-4` assignment is not capacity-qualified.
+- Courts 1, 3, and 5 were live end to end with fresh browser heartbeats and
+  YouTube `active`, `live`, and `good` status with no configuration issues.
+- This is a useful eight-camera ingest and three-court end-to-end soak only for
+  the interval in which the stated paths were active. It is not a Speedify
+  qualification because the latter segment bypassed bonding, and it is not a
+  Gate 2 pass because eight simultaneous program outputs were not capacity-safe
+  on the current seven-droplet layout.
+
+Do not convert the current seven-host test layout into the permanent provision
+manifest. First qualify either camera-side H.264 over SRT with no cloud video
+normalization, or a split HEVC normalization tier, plus compositor sizes that
+retain at least 20 percent sustained CPU headroom at the intended court count.
 
 Gate 2 must include fault injection: camera removal, venue network loss,
 MediaMTX restart, one egress kill, controller restart, one compositor loss,

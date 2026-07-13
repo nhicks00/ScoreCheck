@@ -33,6 +33,19 @@ describe("incident manager", () => {
     expect(manager.all()[0]?.status).toBe("resolved");
   });
 
+  it("does not emit or persist duplicate resolved transitions", () => {
+    const manager = new IncidentManager();
+    const firing = {
+      status: "firing" as const,
+      alerts: [{ status: "firing" as const, labels: { alertname: "AgentMissing", stage: "MONITORING" }, annotations: {} }]
+    };
+    manager.applyWebhook(firing, new Date("2026-07-12T12:00:00Z"));
+    const resolved = { ...firing, status: "resolved" as const, alerts: [{ ...firing.alerts[0], status: "resolved" as const }] };
+    expect(manager.applyWebhook(resolved, new Date("2026-07-12T12:01:00Z"))).toHaveLength(1);
+    expect(manager.applyWebhook(resolved, new Date("2026-07-12T12:01:30Z"))).toEqual([]);
+    expect(manager.reconcileActiveAlerts([], new Date("2026-07-12T12:02:00Z"))).toEqual([]);
+  });
+
   it("reconciles a missed resolved webhook from the authoritative active set", () => {
     const manager = new IncidentManager();
     manager.applyWebhook({
