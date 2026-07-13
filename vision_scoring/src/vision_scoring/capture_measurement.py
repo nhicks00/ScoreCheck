@@ -30,14 +30,19 @@ from .capture_measurement_parsers import (
     MAX_CAPTURE_MEASUREMENT_FRAMEHASH_BYTES,
     MAX_CAPTURE_MEASUREMENT_PRESENTATION_METADATA_BYTES,
     MAX_CAPTURE_MEASUREMENT_SELECTED_PACKET_BYTES,
+    ParsedPresentationMetadataV1,
     parse_capture_measurement_presentation_metadata_v1,
     parse_capture_measurement_rgb24_framehash_v1,
     parse_capture_measurement_selected_video_packets_v1,
 )
 from .capture_measurement_rows import (
+    DecodedFrameContentRowV1,
     DecodedMeasurementRecipeV1,
+    PresentationTimingRowV1,
+    SelectedVideoPacketPayloadRowV1,
     build_decoded_capture_measurement_receipt_v1,
 )
+from .capture_profile_contracts import VideoCodecV1
 from .contract_wire import (
     MAX_SIGNED_64,
     require_exact_int,
@@ -227,6 +232,83 @@ class UnverifiedCaptureMeasurementReplayV1:
     @property
     def non_authority_statement(self) -> str:
         return self._NON_AUTHORITY_STATEMENT
+
+
+@dataclass(frozen=True, slots=True)
+class _ProtectedCaptureMeasurementRowsV1:
+    """Private exact rows retained only for the next protected coordinator."""
+
+    replay: UnverifiedCaptureMeasurementReplayV1
+    measurement_recipe: DecodedMeasurementRecipeV1
+    observed_codec: VideoCodecV1
+    presentation_timing_rows: tuple[PresentationTimingRowV1, ...]
+    selected_video_packet_rows: tuple[SelectedVideoPacketPayloadRowV1, ...]
+    decoded_frame_rows: tuple[DecodedFrameContentRowV1, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.replay) is not UnverifiedCaptureMeasurementReplayV1:
+            raise ValueError("protected measurement replay has the wrong type")
+        canonical_replay = UnverifiedCaptureMeasurementReplayV1(
+            **{
+                field: getattr(self.replay, field)
+                for field in self.replay.__dataclass_fields__
+                if not field.startswith("_")
+            }
+        )
+        if canonical_replay != self.replay:
+            raise ValueError("protected measurement replay changed on reconstruction")
+        for rows, row_type, label in (
+            (
+                self.presentation_timing_rows,
+                PresentationTimingRowV1,
+                "presentation timing rows",
+            ),
+            (
+                self.selected_video_packet_rows,
+                SelectedVideoPacketPayloadRowV1,
+                "selected video packet rows",
+            ),
+            (
+                self.decoded_frame_rows,
+                DecodedFrameContentRowV1,
+                "decoded frame rows",
+            ),
+        ):
+            if type(rows) is not tuple or any(
+                type(row) is not row_type for row in rows
+            ):
+                raise ValueError(f"{label} must be an exact row tuple")
+        recipe = _canonical_recipe(self.measurement_recipe)
+        receipt = canonical_replay.receipt
+        rebuilt = build_decoded_capture_measurement_receipt_v1(
+            source_id=receipt.source_id,
+            source_asset_sha256=receipt.source_asset_sha256,
+            source_asset_byte_length=receipt.source_asset_byte_length,
+            artifact_generation_id=receipt.artifact_generation_id,
+            selected_video_stream_index=receipt.selected_video_stream_index,
+            decoder_runtime_manifest_sha256=(receipt.decoder_runtime_manifest_sha256),
+            observed_codec=self.observed_codec,
+            recipe=recipe,
+            presentation_timing_rows=self.presentation_timing_rows,
+            selected_video_packet_rows=self.selected_video_packet_rows,
+            decoded_frame_rows=self.decoded_frame_rows,
+        )
+        if rebuilt != receipt:
+            raise ValueError("protected rows do not rebuild the exact receipt")
+
+    def __reduce__(self) -> object:
+        raise TypeError("protected measurement rows are not serializable")
+
+    def __reduce_ex__(self, protocol: int) -> object:
+        del protocol
+        raise TypeError("protected measurement rows are not serializable")
+
+    def __copy__(self) -> object:
+        raise TypeError("protected measurement rows are not copyable")
+
+    def __deepcopy__(self, memo: object) -> object:
+        del memo
+        raise TypeError("protected measurement rows are not copyable")
 
 
 def _validate_inputs(
@@ -555,7 +637,7 @@ def _run_metadata(
     runtime: _VerifiedDecoderRuntimeLease,
     media: _StagedVerifiedArtifactMediaV1,
     selected_stream: int,
-) -> tuple[object, bytes]:
+) -> tuple[ParsedPresentationMetadataV1, bytes]:
     with media._open_immediate_child_reader() as input_fd:
         executable = runtime._executable_path("ffprobe")
         argv = capture_measurement_presentation_metadata_argv_v1(
@@ -588,7 +670,7 @@ def _run_packets(
     runtime: _VerifiedDecoderRuntimeLease,
     media: _StagedVerifiedArtifactMediaV1,
     selected_stream: int,
-) -> tuple[tuple[object, ...], bytes]:
+) -> tuple[tuple[SelectedVideoPacketPayloadRowV1, ...], bytes]:
     with media._open_immediate_child_reader() as input_fd:
         executable = runtime._executable_path("ffprobe")
         argv = capture_measurement_selected_video_packets_argv_v1(
@@ -621,8 +703,8 @@ def _run_framehash(
     runtime: _VerifiedDecoderRuntimeLease,
     media: _StagedVerifiedArtifactMediaV1,
     selected_stream: int,
-    metadata: object,
-) -> tuple[tuple[object, ...], bytes]:
+    metadata: ParsedPresentationMetadataV1,
+) -> tuple[tuple[DecodedFrameContentRowV1, ...], bytes]:
     read_fd = -1
     write_fd = -1
     try:
@@ -664,7 +746,7 @@ def _run_framehash(
         try:
             rows = parse_capture_measurement_rgb24_framehash_v1(
                 result.auxiliary,
-                metadata=metadata,  # type: ignore[arg-type]
+                metadata=metadata,
             )
         except (TypeError, ValueError) as exc:
             raise CaptureMeasurementError(
@@ -706,7 +788,7 @@ def _execute_core(
     source_asset_byte_length: int,
     selected_video_stream_index: int,
     recipe: DecodedMeasurementRecipeV1,
-) -> UnverifiedCaptureMeasurementReplayV1:
+) -> _ProtectedCaptureMeasurementRowsV1:
     _require_runtime_coordinates(
         runtime,
         manifest,
@@ -758,11 +840,11 @@ def _execute_core(
             artifact_generation_id=artifact_generation_id,
             selected_video_stream_index=selected_video_stream_index,
             decoder_runtime_manifest_sha256=runtime_manifest_sha256,
-            observed_codec=metadata.observed_codec,  # type: ignore[attr-defined]
+            observed_codec=metadata.observed_codec,
             recipe=recipe,
-            presentation_timing_rows=metadata.presentation_timing_rows,  # type: ignore[attr-defined]
-            selected_video_packet_rows=packet_rows,  # type: ignore[arg-type]
-            decoded_frame_rows=frame_rows,  # type: ignore[arg-type]
+            presentation_timing_rows=metadata.presentation_timing_rows,
+            selected_video_packet_rows=packet_rows,
+            decoded_frame_rows=frame_rows,
         )
         replay = UnverifiedCaptureMeasurementReplayV1(
             receipt=receipt,
@@ -776,16 +858,24 @@ def _execute_core(
             packet_output_sha256=hashlib.sha256(packet_raw).hexdigest(),
             framehash_output_sha256=hashlib.sha256(framehash_raw).hexdigest(),
         )
+        protected_rows = _ProtectedCaptureMeasurementRowsV1(
+            replay=replay,
+            measurement_recipe=recipe,
+            observed_codec=metadata.observed_codec,
+            presentation_timing_rows=metadata.presentation_timing_rows,
+            selected_video_packet_rows=packet_rows,
+            decoded_frame_rows=frame_rows,
+        )
     except (TypeError, ValueError) as exc:
         raise CaptureMeasurementError(
             "CAPTURE_MEASUREMENT_RECEIPT",
-            "measurement receipt construction failed",
+            "measurement receipt or protected row binding failed",
         ) from exc
     _require_false_authorities(replay, label="capture replay")
-    return replay
+    return protected_rows
 
 
-def replay_protected_capture_measurement_v1(
+def _replay_protected_capture_measurement_rows_v1(
     *,
     source_id: str,
     artifact_store_root: Path,
@@ -804,8 +894,8 @@ def replay_protected_capture_measurement_v1(
     expected_system_runtime_id: str,
     expected_system_runtime_measurement_sha256: str,
     recipe: DecodedMeasurementRecipeV1,
-) -> UnverifiedCaptureMeasurementReplayV1:
-    """Replay one exact segment; the returned receipt remains unverified."""
+) -> _ProtectedCaptureMeasurementRowsV1:
+    """Replay one exact segment while retaining rows for protected callers."""
 
     canonical_recipe = _validate_inputs(
         source_id=source_id,
@@ -828,7 +918,7 @@ def replay_protected_capture_measurement_v1(
         ),
         recipe=recipe,
     )
-    replay: UnverifiedCaptureMeasurementReplayV1 | None = None
+    protected_rows: _ProtectedCaptureMeasurementRowsV1 | None = None
     deferred: BaseException | None = None
     try:
         with load_verified_decoder_runtime(
@@ -897,7 +987,7 @@ def replay_protected_capture_measurement_v1(
                         source_asset_byte_length,
                     ) as media:
                         try:
-                            replay = _execute_core(
+                            protected_rows = _execute_core(
                                 runtime=runtime,
                                 manifest=manifest,
                                 runtime_generation_id=runtime_generation_id,
@@ -986,12 +1076,57 @@ def replay_protected_capture_measurement_v1(
             "CAPTURE_MEASUREMENT_INTERNAL",
             "protected measurement failed unexpectedly",
         ) from deferred
-    if type(replay) is not UnverifiedCaptureMeasurementReplayV1:
+    if type(protected_rows) is not _ProtectedCaptureMeasurementRowsV1:
         _fail(
             "CAPTURE_MEASUREMENT_PROCESS_CLEANUP",
             "capabilities closed without a replay result",
         )
-    return replay
+    return protected_rows
+
+
+def replay_protected_capture_measurement_v1(
+    *,
+    source_id: str,
+    artifact_store_root: Path,
+    artifact_generation_id: str,
+    artifact_sha256s: tuple[str, ...],
+    source_asset_sha256: str,
+    source_asset_byte_length: int,
+    selected_video_stream_index: int,
+    runtime_store_root: Path,
+    runtime_generation_id: str,
+    runtime_manifest_sha256: str,
+    expected_runtime_manifest_sha256: str,
+    expected_platform: str,
+    expected_architecture: str,
+    expected_abi: str,
+    expected_system_runtime_id: str,
+    expected_system_runtime_measurement_sha256: str,
+    recipe: DecodedMeasurementRecipeV1,
+) -> UnverifiedCaptureMeasurementReplayV1:
+    """Replay one exact segment; the returned receipt remains unverified."""
+
+    return _replay_protected_capture_measurement_rows_v1(
+        source_id=source_id,
+        artifact_store_root=artifact_store_root,
+        artifact_generation_id=artifact_generation_id,
+        artifact_sha256s=artifact_sha256s,
+        source_asset_sha256=source_asset_sha256,
+        source_asset_byte_length=source_asset_byte_length,
+        selected_video_stream_index=selected_video_stream_index,
+        runtime_store_root=runtime_store_root,
+        runtime_generation_id=runtime_generation_id,
+        runtime_manifest_sha256=runtime_manifest_sha256,
+        expected_runtime_manifest_sha256=expected_runtime_manifest_sha256,
+        expected_platform=expected_platform,
+        expected_architecture=expected_architecture,
+        expected_abi=expected_abi,
+        expected_system_runtime_id=expected_system_runtime_id,
+        expected_system_runtime_measurement_sha256=(
+            expected_system_runtime_measurement_sha256
+        ),
+        recipe=recipe,
+    ).replay
 
 
 __all__ = [
