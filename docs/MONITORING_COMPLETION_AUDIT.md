@@ -22,7 +22,7 @@ providers or real media feeds.
 | Durable incidents and operator actions | Fingerprints, open/ack/resolved transitions, checkpoints, acknowledgements, timed silences, expiry re-arm | Deployed and unit-tested |
 | Alert expression behavior | Promtool fixtures validate hold times, labels, annotations, court isolation, black/freeze exclusion, live gating, and shared-worker fan-out | Passing and enforced before deployment |
 | Page suppression behavior | Disposable network-isolated Alertmanager proves same-court and shared-dependency inhibition while peer alerts remain active | Enforced before deployment |
-| Phone paging | Pushover emergency acknowledgement plus Twilio SMS escalation and recovery logic | Pushover delivery/recovery proven; controlled acknowledgement/escalation gate pending; Twilio sender missing |
+| Phone paging | Pushover emergency acknowledgement plus Twilio SMS escalation and recovery logic | Pushover delivery/recovery proven; Twilio sender purchased but blocked by pending A2P registration; controlled acknowledgement/escalation gate pending |
 | Independent dead-man | Baseline and active Healthchecks senders with coverage-aware cadence | Configured; baseline running and active idle-paused; withheld-ping phone gate pending |
 | One-court real fault gate | Camera, network, preview, browser, commentary, score, Egress, YouTube, agent, dead-man faults | Ten-hour transport/sync soak passed; injected fault matrix pending |
 | Eight-court real load/fault gate | Four compositors, eight representative feeds, two commentary rooms, score on all courts | First load attempt exposed an invalid shared-normalizer topology; revised-topology gate pending |
@@ -62,13 +62,16 @@ The next gate must split normalization by host/court or qualify camera-side
 
 ## Remaining external blockers
 
-Pushover, Twilio account authentication, and both Healthchecks checks are
-configured. The remaining provider and operator prerequisites are:
+ScoreCheck Pushover and both Healthchecks checks are configured. The
+Healthchecks project still has only its email channel. The remaining provider
+and operator prerequisites are:
 
-1. An SMS-capable `TWILIO_FROM_NUMBER`; no sender will be purchased or selected
-   without operator approval.
-2. A phone notification channel independent of the ScoreCheck hosts for
-   Healthchecks; the current project notification is email-only.
+1. Approval of the purchased SMS sender's A2P registration. A live test on
+   2026-07-13 returned Twilio error `30034`, so production escalation remains
+   disabled until a delivery test passes.
+2. A Pushover channel on the Healthchecks project. Its Management API can list
+   but cannot create integrations, so this requires one authenticated provider
+   subscription in the Healthchecks UI.
 3. Explicit operator approval and isolated test feeds for destructive fault
    injection, acknowledgement, escalation, and withheld-ping gates.
 4. An existing production admin session for a production-browser visual pass;

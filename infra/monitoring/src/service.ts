@@ -317,17 +317,6 @@ app.post("/v1/silences", bearerAuth(config.token), async (req, res) => {
     res.status(503).json({ error: "Silence could not be persisted." });
   }
 });
-app.post("/v1/provider/twilio/status", express.urlencoded({ extended: false, limit: "16kb" }), async (req, res) => {
-  const params = Object.fromEntries(Object.entries(req.body as Record<string, unknown>)
-    .filter((entry): entry is [string, string] => typeof entry[1] === "string"));
-  try {
-    const accepted = await notificationDispatcher.applyTwilioStatus(params, String(req.headers["x-twilio-signature"] ?? ""));
-    res.sendStatus(accepted ? 204 : 403);
-  } catch {
-    res.sendStatus(503);
-  }
-});
-
 async function pollAll() {
   await Promise.all([
     ...config.targets.map((target) => pollAgent(target)),

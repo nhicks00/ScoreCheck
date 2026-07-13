@@ -277,12 +277,14 @@ GET  /v1/snapshot
 GET  /v1/incidents/:id
 GET  /v1/range/court-pipeline
 GET  /v1/courts/:courtNumber/thumbnail
+GET  /v1/fault-gates
 POST /v1/browser-heartbeats
 POST /v1/browser-thumbnails
 POST /v1/alertmanager
-POST /v1/provider/twilio/status
 POST /v1/incidents/:id/acknowledge
 POST /v1/silences
+POST /v1/fault-gates/courts/:courtNumber/arm
+DELETE /v1/fault-gates/courts/:courtNumber
 ```
 
 Range queries use allowlisted names, bounded time windows, and bounded resolution. Arbitrary PromQL is forbidden.

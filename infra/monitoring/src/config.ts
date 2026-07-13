@@ -87,7 +87,8 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     PUSHOVER_APP_TOKEN: z.string().default(""),
     PUSHOVER_USER_KEY: z.string().default(""),
     TWILIO_ACCOUNT_SID: z.string().default(""),
-    TWILIO_AUTH_TOKEN: z.string().default(""),
+    TWILIO_API_KEY_SID: z.string().default(""),
+    TWILIO_API_KEY_SECRET: z.string().default(""),
     TWILIO_FROM_NUMBER: z.string().default(""),
     TWILIO_TO_NUMBER: z.string().default(""),
     NOTIFICATION_SMS_ESCALATION_MS: z.coerce.number().int().min(30_000).max(900_000).default(120_000),
@@ -111,9 +112,16 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
   if (activeDeadManValues.length !== 0 && activeDeadManValues.length !== 3) {
     throw new Error("The active Healthchecks dead-man requires its ping URL, write API key, and check id together.");
   }
-  const twilioValues = [parsed.TWILIO_ACCOUNT_SID, parsed.TWILIO_AUTH_TOKEN, parsed.TWILIO_FROM_NUMBER, parsed.TWILIO_TO_NUMBER].filter((value) => value.trim());
-  if (twilioValues.length !== 0 && twilioValues.length !== 4) throw new Error("Twilio monitoring requires account SID, auth token, from number, and to number.");
-  const monitorPublicBaseUrl = `https://${parsed.MONITOR_PUBLIC_HOST}`;
+  const twilioValues = [
+    parsed.TWILIO_ACCOUNT_SID,
+    parsed.TWILIO_API_KEY_SID,
+    parsed.TWILIO_API_KEY_SECRET,
+    parsed.TWILIO_FROM_NUMBER,
+    parsed.TWILIO_TO_NUMBER
+  ].filter((value) => value.trim());
+  if (twilioValues.length !== 0 && twilioValues.length !== 5) {
+    throw new Error("Twilio monitoring requires account SID, API key SID/secret, from number, and to number.");
+  }
   return {
     token: parsed.MONITOR_API_TOKEN,
     alertmanagerWebhookToken: parsed.ALERTMANAGER_WEBHOOK_TOKEN,
@@ -134,12 +142,12 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     healthchecksActiveIntervalMs: parsed.HEALTHCHECKS_ACTIVE_INTERVAL_MS,
     supabaseUrl: parsed.SUPABASE_URL ?? null,
     supabaseServiceRoleKey: parsed.SUPABASE_SERVICE_ROLE_KEY ?? null,
-    monitorPublicBaseUrl,
     monitorDashboardUrl: parsed.MONITOR_DASHBOARD_URL ?? "https://score.beachvolleyballmedia.com/admin/monitor",
     pushoverAppToken: parsed.PUSHOVER_APP_TOKEN.trim() || null,
     pushoverUserKey: parsed.PUSHOVER_USER_KEY.trim() || null,
     twilioAccountSid: parsed.TWILIO_ACCOUNT_SID.trim() || null,
-    twilioAuthToken: parsed.TWILIO_AUTH_TOKEN.trim() || null,
+    twilioApiKeySid: parsed.TWILIO_API_KEY_SID.trim() || null,
+    twilioApiKeySecret: parsed.TWILIO_API_KEY_SECRET.trim() || null,
     twilioFromNumber: parsed.TWILIO_FROM_NUMBER.trim() || null,
     twilioToNumber: parsed.TWILIO_TO_NUMBER.trim() || null,
     notificationSmsEscalationMs: parsed.NOTIFICATION_SMS_ESCALATION_MS,
