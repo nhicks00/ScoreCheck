@@ -20,14 +20,11 @@ import json
 import math
 import os
 import re
-import selectors
-import signal
 import stat
-import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, BinaryIO, Iterator
+from typing import Any
 
 from .annotations import (
     AutorotationPolicy,
@@ -86,6 +83,7 @@ from .label_bundle import (
     CausalBallLabelBundleV1,
     LabelBundleSplit,
 )
+from . import protected_process
 from .staged_media import (
     StagedMediaError,
     _StagedVerifiedArtifactMediaV1,
@@ -98,20 +96,6 @@ MAX_PROCESS_STDERR_BYTES = 64 * 1024
 MAX_FRAMEHASH_BYTES = 64 * 1024
 PROBE_TIMEOUT_SECONDS = 60.0
 DECODE_TIMEOUT_SECONDS = 300.0
-PROCESS_TERMINATE_GRACE_SECONDS = 1.0
-
-_READ_CHUNK_BYTES = 64 * 1024
-_SELECT_POLL_SECONDS = 0.05
-_FIXED_ENV = {
-    "AV_LOG_FORCE_NOCOLOR": "1",
-    "HOME": "/nonexistent",
-    "LANG": "C",
-    "LC_ALL": "C",
-    "NO_COLOR": "1",
-    "PATH": "/nonexistent",
-    "TMPDIR": "/nonexistent",
-    "TZ": "UTC",
-}
 _PROBE_MAXIMUM_DEPTH = 8
 _PROBE_MAXIMUM_NODES = 8_192
 _PROBE_MAXIMUM_CONTAINERS = 2_048
@@ -161,47 +145,6 @@ class _ProbeResultV1:
     source_pts: tuple[int, ...]
 
 
-@dataclass(frozen=True, slots=True)
-class _ProcessResult:
-    returncode: int
-    stdout: bytes
-    stderr: bytes
-    auxiliary: bytes
-
-
-@dataclass(slots=True)
-class _DrainState:
-    name: str
-    file: BinaryIO | None
-    descriptor: int
-    maximum_bytes: int
-    data: bytearray
-    total_bytes: int = 0
-    overflowed: bool = False
-    closed: bool = False
-
-    def consume(self, chunk: bytes) -> None:
-        self.total_bytes += len(chunk)
-        remaining = self.maximum_bytes - len(self.data)
-        if remaining > 0:
-            self.data.extend(chunk[:remaining])
-        if self.total_bytes > self.maximum_bytes:
-            self.overflowed = True
-
-    def close(self) -> bool:
-        if self.closed:
-            return True
-        self.closed = True
-        try:
-            if self.file is not None:
-                self.file.close()
-            else:
-                os.close(self.descriptor)
-            return True
-        except OSError:
-            return False
-
-
 def _require_false_admissions(
     value: object,
     *,
@@ -227,7 +170,9 @@ def _annotation_identities(
         if type(annotation) is not BallFrameAnnotationV2:
             _fail("PACK_BINDING", "label pack contains an unexpected annotation type")
         if type(annotation.frame) is not FrameReference:
-            _fail("PACK_BINDING", "complete clip labels cannot contain unavailable frames")
+            _fail(
+                "PACK_BINDING", "complete clip labels cannot contain unavailable frames"
+            )
         if annotation.frame.duplicate_kind is not FrameDuplicateKind.NONE:
             _fail(
                 "PACK_BINDING",
@@ -261,7 +206,9 @@ def _build_clip_plan(evidence: _LoadedBallLabelPackEvidence) -> _ClipPlanV1:
             maximum=MAX_CLIP_INPUT_FRAMES,
         )
     except ValueError as exc:
-        raise ClipLoaderError("BOUNDS", "clip frame count is outside V1 bounds") from exc
+        raise ClipLoaderError(
+            "BOUNDS", "clip frame count is outside V1 bounds"
+        ) from exc
     if len(statement.frames) != frame_count:
         _fail("PACK_BINDING", "statement frame enumeration is incomplete")
 
@@ -278,10 +225,16 @@ def _build_clip_plan(evidence: _LoadedBallLabelPackEvidence) -> _ClipPlanV1:
     width = decode_contract.output_width
     height = decode_contract.output_height
     try:
-        require_exact_int(width, "output_width", minimum=16, maximum=MAX_CLIP_INPUT_WIDTH)
-        require_exact_int(height, "output_height", minimum=16, maximum=MAX_CLIP_INPUT_HEIGHT)
+        require_exact_int(
+            width, "output_width", minimum=16, maximum=MAX_CLIP_INPUT_WIDTH
+        )
+        require_exact_int(
+            height, "output_height", minimum=16, maximum=MAX_CLIP_INPUT_HEIGHT
+        )
     except ValueError as exc:
-        raise ClipLoaderError("BOUNDS", "clip dimensions are outside V1 bounds") from exc
+        raise ClipLoaderError(
+            "BOUNDS", "clip dimensions are outside V1 bounds"
+        ) from exc
     if width % 4 or height % 4:
         _fail("BOUNDS", "clip dimensions must be divisible by four")
     pixels = frame_count * width * height
@@ -300,8 +253,7 @@ def _build_clip_plan(evidence: _LoadedBallLabelPackEvidence) -> _ClipPlanV1:
         or decode_contract.color_space is not DecodedColorSpace.BT709
         or decode_contract.color_range is not DecodedColorRange.LIMITED
         or decode_contract.output_pixel_format is not DecodedPixelFormat.RGB24
-        or statement.timestamp_basis
-        is not TimestampBasis.SOURCE_PRESENTATION_OFFSET_NS
+        or statement.timestamp_basis is not TimestampBasis.SOURCE_PRESENTATION_OFFSET_NS
         or statement.pixel_coordinate_space
         is not PixelCoordinateSpace.SOURCE_PIXEL_CENTERS_TOP_LEFT_X_RIGHT_Y_DOWN
         or statement.decoded_frame_hash_basis
@@ -412,7 +364,9 @@ def _validate_post_pack_coordinates(
             maximum=MAX_FINALIZED_SOURCE_BYTES,
         )
     except ValueError as exc:
-        raise ClipLoaderError("CLIP_LOAD_INPUT", "clip-loader coordinates are invalid") from exc
+        raise ClipLoaderError(
+            "CLIP_LOAD_INPUT", "clip-loader coordinates are invalid"
+        ) from exc
     if runtime_manifest_sha256 != expected_runtime_manifest_sha256:
         _fail(
             "RUNTIME_BINDING",
@@ -551,17 +505,13 @@ def _measure_probe_json(
         for key, item in value.items():
             if type(key) is not str:
                 raise ValueError("probe JSON keys must be strings")
-            child_nodes, child_containers = _measure_probe_json(
-                item, depth=depth + 1
-            )
+            child_nodes, child_containers = _measure_probe_json(item, depth=depth + 1)
             nodes += child_nodes
             containers += child_containers
     elif type(value) is list:
         containers = 1
         for item in value:
-            child_nodes, child_containers = _measure_probe_json(
-                item, depth=depth + 1
-            )
+            child_nodes, child_containers = _measure_probe_json(item, depth=depth + 1)
             nodes += child_nodes
             containers += child_containers
     elif value is not None and type(value) not in {str, int, bool}:
@@ -868,72 +818,7 @@ def _parse_framehash_output(
         raise ClipLoaderError("DECODE_PROTOCOL", "framehash output is invalid") from exc
 
 
-def _process_group_exists(group_id: int) -> bool:
-    try:
-        os.killpg(group_id, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-
-
-def _terminate_process_group(process: subprocess.Popen[bytes]) -> bool:
-    wait_ok = True
-    # Reap an already-exited leader before probing its group.  On Darwin, an
-    # unreaped session leader can make killpg(..., 0) report EPERM even when
-    # no live descendant remains, which must not turn a successful bounded
-    # shutdown into a false cleanup failure.
-    process.poll()
-    try:
-        if _process_group_exists(process.pid):
-            os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    except OSError:
-        # Signal delivery can race a just-exited Darwin session leader.  Final
-        # group disappearance, not the intermediate errno, is authoritative.
-        pass
-    grace_deadline = time.monotonic() + PROCESS_TERMINATE_GRACE_SECONDS
-    while time.monotonic() < grace_deadline:
-        process.poll()
-        if not _process_group_exists(process.pid):
-            break
-        time.sleep(0.01)
-    process.poll()
-    try:
-        if _process_group_exists(process.pid):
-            os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    except OSError:
-        pass
-    try:
-        process.wait(timeout=PROCESS_TERMINATE_GRACE_SECONDS)
-    except (OSError, subprocess.TimeoutExpired):
-        wait_ok = False
-    disappearance_deadline = time.monotonic() + PROCESS_TERMINATE_GRACE_SECONDS
-    while time.monotonic() < disappearance_deadline:
-        if not _process_group_exists(process.pid):
-            return wait_ok
-        time.sleep(0.01)
-    return False
-
-
-def _close_drain(
-    selector: selectors.BaseSelector,
-    state: _DrainState,
-) -> bool:
-    if state.closed:
-        return True
-    try:
-        selector.unregister(state.descriptor)
-    except (KeyError, OSError, ValueError):
-        pass
-    return state.close()
-
-
-def _execute_process(
+def _run_pinned_process(
     argv: tuple[str, ...],
     *,
     pass_fds: tuple[int, ...],
@@ -943,247 +828,54 @@ def _execute_process(
     auxiliary_read_fd: int = -1,
     auxiliary_write_fd: int = -1,
     auxiliary_limit: int = 0,
-) -> _ProcessResult:
-    process: subprocess.Popen[bytes] | None = None
-    selector: selectors.BaseSelector | None = None
-    states: list[_DrainState] = []
-    owned_auxiliary_read_fd = (
-        auxiliary_read_fd
-        if type(auxiliary_read_fd) is int and auxiliary_read_fd >= 0
-        else -1
+) -> protected_process.ProtectedProcessResult:
+    """Run one hash-verified, pinned, non-daemonizing decoder executable."""
+
+    invocation_exact = (
+        type(timeout_seconds) is float
+        and math.isfinite(timeout_seconds)
+        and timeout_seconds > 0.0
+        and type(timeout_code) is str
+        and bool(timeout_code)
     )
-    owned_auxiliary_write_fd = (
-        auxiliary_write_fd
-        if type(auxiliary_write_fd) is int and auxiliary_write_fd >= 0
-        else -1
-    )
-    parent_write_closed = owned_auxiliary_write_fd < 0
-    cleanup_ok = True
-    timed_out = False
-    overflowed = False
-    deadline = 0.0
+    clock_error: BaseException | None = None
+    deadline = math.nan
+    if invocation_exact:
+        try:
+            deadline = time.monotonic() + timeout_seconds
+        except BaseException as exc:
+            # The shared runner still receives the transferred auxiliary
+            # descriptors through an invalid-deadline rejection path.
+            clock_error = exc
     try:
-        # The auxiliary descriptors transfer to this function on a structurally
-        # valid call boundary, including when the remaining invocation shape is
-        # rejected.  Keep validation and every fallible path/executable/selector
-        # check inside cleanup so the caller can relinquish numeric descriptor
-        # values before calling without leaks or ambiguous close retries.
-        has_auxiliary = (
-            owned_auxiliary_read_fd >= 0 and owned_auxiliary_write_fd >= 0
+        return protected_process.run_protected_process(
+            argv,
+            pass_fds=pass_fds,
+            deadline=deadline,
+            stdout_limit=stdout_limit,
+            stderr_limit=MAX_PROCESS_STDERR_BYTES,
+            auxiliary_read_fd=auxiliary_read_fd,
+            auxiliary_write_fd=auxiliary_write_fd,
+            auxiliary_limit=auxiliary_limit,
         )
-        if (
-            type(argv) is not tuple
-            or not argv
-            or any(type(item) is not str or "\x00" in item for item in argv)
-            or not Path(argv[0]).is_absolute()
-            or type(pass_fds) is not tuple
-            or any(type(item) is not int or item < 3 for item in pass_fds)
-            or len(set(pass_fds)) != len(pass_fds)
-            or type(timeout_seconds) is not float
-            or not math.isfinite(timeout_seconds)
-            or timeout_seconds <= 0.0
-            or type(timeout_code) is not str
-            or not timeout_code
-            or type(stdout_limit) is not int
-            or stdout_limit < 1
-            or type(auxiliary_read_fd) is not int
-            or type(auxiliary_write_fd) is not int
-            or auxiliary_read_fd < -1
-            or auxiliary_write_fd < -1
-            or (auxiliary_read_fd >= 0) != (auxiliary_write_fd >= 0)
-            or type(auxiliary_limit) is not int
-            or (has_auxiliary and auxiliary_limit < 1)
-            or (not has_auxiliary and auxiliary_limit != 0)
-            or (
-                has_auxiliary
-                and (
-                    auxiliary_read_fd < 3
-                    or auxiliary_write_fd < 3
-                    or auxiliary_read_fd == auxiliary_write_fd
-                    or auxiliary_read_fd in pass_fds
-                    or auxiliary_write_fd not in pass_fds
-                )
-            )
-        ):
-            _fail("PROCESS_START", "process invocation is not exact")
-        deadline = time.monotonic() + timeout_seconds
-        selector = selectors.DefaultSelector()
-        executable = Path(argv[0])
-        cwd = executable.parent
-        try:
-            cwd_value = cwd.lstat()
-            executable_value = executable.lstat()
-        except OSError as exc:
+    except protected_process.ProtectedProcessError as exc:
+        if clock_error is not None:
+            if exc.code == protected_process.PROTECTED_PROCESS_CLEANUP:
+                raise ClipLoaderError("CLEANUP", str(exc)) from clock_error
+            if isinstance(clock_error, (KeyboardInterrupt, SystemExit)):
+                raise clock_error
             raise ClipLoaderError(
-                "PROCESS_START", "revalidated runtime paths are unavailable"
-            ) from exc
-        if (
-            not stat.S_ISDIR(cwd_value.st_mode)
-            or stat.S_IMODE(cwd_value.st_mode) != 0o500
-            or not stat.S_ISREG(executable_value.st_mode)
-            or stat.S_IMODE(executable_value.st_mode) != 0o500
-        ):
-            _fail("PROCESS_START", "runtime process cwd or executable mode is unsafe")
-        try:
-            process = subprocess.Popen(
-                argv,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                shell=False,
-                close_fds=True,
-                pass_fds=pass_fds,
-                start_new_session=True,
-                cwd=str(cwd),
-                env=dict(_FIXED_ENV),
-            )
-        except (OSError, ValueError) as exc:
-            raise ClipLoaderError("PROCESS_START", "pinned process could not start") from exc
-        if auxiliary_write_fd >= 0:
-            # Ownership of this numeric descriptor is consumed by this one
-            # close attempt.  A close failure is ambiguous and must never be
-            # retried after another thread could reuse the number.
-            parent_write_closed = True
-            try:
-                os.close(auxiliary_write_fd)
-            except OSError:
-                _fail("CLEANUP", "parent framehash writer could not be closed")
-        assert process.stdout is not None and process.stderr is not None
-        states = [
-            _DrainState(
-                name="stdout",
-                file=process.stdout,
-                descriptor=process.stdout.fileno(),
-                maximum_bytes=stdout_limit,
-                data=bytearray(),
+                "CLEANUP", "process deadline construction failed"
+            ) from clock_error
+        code = {
+            protected_process.PROTECTED_PROCESS_START: "PROCESS_START",
+            protected_process.PROTECTED_PROCESS_CLEANUP: "CLEANUP",
+            protected_process.PROTECTED_PROCESS_TIMEOUT: (
+                timeout_code if invocation_exact else "PROCESS_START"
             ),
-            _DrainState(
-                name="stderr",
-                file=process.stderr,
-                descriptor=process.stderr.fileno(),
-                maximum_bytes=MAX_PROCESS_STDERR_BYTES,
-                data=bytearray(),
-            ),
-        ]
-        if auxiliary_read_fd >= 0:
-            states.append(
-                _DrainState(
-                    name="auxiliary",
-                    file=None,
-                    descriptor=auxiliary_read_fd,
-                    maximum_bytes=auxiliary_limit,
-                    data=bytearray(),
-                )
-            )
-        for state in states:
-            os.set_blocking(state.descriptor, False)
-            selector.register(state.descriptor, selectors.EVENT_READ, state)
-
-        while any(not state.closed for state in states) or process.poll() is None:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0.0:
-                timed_out = True
-                break
-            events = selector.select(timeout=min(_SELECT_POLL_SECONDS, remaining))
-            for key, _ in events:
-                state = key.data
-                assert type(state) is _DrainState
-                try:
-                    chunk = os.read(state.descriptor, _READ_CHUNK_BYTES)
-                except BlockingIOError:
-                    continue
-                except OSError:
-                    cleanup_ok = False
-                    _close_drain(selector, state)
-                    continue
-                if not chunk:
-                    if not _close_drain(selector, state):
-                        cleanup_ok = False
-                    continue
-                state.consume(chunk)
-                if state.overflowed:
-                    overflowed = True
-            if overflowed:
-                break
-
-        if timed_out or overflowed:
-            if not _terminate_process_group(process):
-                cleanup_ok = False
-        else:
-            try:
-                process.wait(timeout=max(0.0, deadline - time.monotonic()))
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                if not _terminate_process_group(process):
-                    cleanup_ok = False
-        for state in states:
-            if not _close_drain(selector, state):
-                cleanup_ok = False
-        if process.poll() is None:
-            if not _terminate_process_group(process):
-                cleanup_ok = False
-        elif _process_group_exists(process.pid):
-            # A pinned tool must not leave same-group descendants behind even
-            # when the leader exited and every output pipe reached EOF.
-            _terminate_process_group(process)
-            cleanup_ok = False
-        if not cleanup_ok:
-            _fail("CLEANUP", "process descriptors or process group did not clean up")
-        if timed_out:
-            _fail(timeout_code, "pinned process exceeded its absolute deadline")
-        if overflowed:
-            _fail("OUTPUT_LIMIT", "pinned process exceeded a fixed output bound")
-        return _ProcessResult(
-            returncode=process.returncode,
-            stdout=bytes(states[0].data),
-            stderr=bytes(states[1].data),
-            auxiliary=(bytes(states[2].data) if len(states) == 3 else b""),
-        )
-    except ClipLoaderError:
-        if process is not None and (process.poll() is None or _process_group_exists(process.pid)):
-            _terminate_process_group(process)
-        raise
-    except (OSError, ValueError) as exc:
-        if process is not None and (
-            process.poll() is None or _process_group_exists(process.pid)
-        ):
-            _terminate_process_group(process)
-        raise ClipLoaderError(
-            "CLEANUP", "process I/O or descriptor lifecycle failed"
-        ) from exc
-    finally:
-        if selector is not None:
-            selector.close()
-        for state in states:
-            state.close()
-        if process is not None:
-            represented = {state.file for state in states if state.file is not None}
-            for stream in (process.stdout, process.stderr):
-                if stream is not None and stream not in represented:
-                    try:
-                        stream.close()
-                    except OSError:
-                        pass
-        if not parent_write_closed and owned_auxiliary_write_fd >= 0:
-            parent_write_closed = True
-            try:
-                os.close(owned_auxiliary_write_fd)
-            except OSError:
-                pass
-        if (
-            owned_auxiliary_read_fd >= 0
-            and not (
-                owned_auxiliary_read_fd == owned_auxiliary_write_fd
-                and parent_write_closed
-            )
-            and not any(
-                state.descriptor == owned_auxiliary_read_fd for state in states
-            )
-        ):
-            try:
-                os.close(owned_auxiliary_read_fd)
-            except OSError:
-                pass
+            protected_process.PROTECTED_PROCESS_OUTPUT_LIMIT: "OUTPUT_LIMIT",
+        }[exc.code]
+        raise ClipLoaderError(code, str(exc)) from exc
 
 
 def _probe_clip(
@@ -1196,11 +888,9 @@ def _probe_clip(
         argv = decoder_probe_argv_v1(
             ffprobe,
             input_fd=input_fd,
-            selected_video_stream_index=(
-                plan.statement.selected_video_stream_index
-            ),
+            selected_video_stream_index=(plan.statement.selected_video_stream_index),
         )
-        result = _execute_process(
+        result = _run_pinned_process(
             argv,
             pass_fds=(input_fd,),
             timeout_seconds=PROBE_TIMEOUT_SECONDS,
@@ -1225,7 +915,7 @@ def _remeasure_runtime_versions(
         ("ffmpeg", manifest.ffmpeg_version_output_sha256),
     ):
         executable = runtime._executable_path(tool)
-        result = _execute_process(
+        result = _run_pinned_process(
             (str(executable), "-hide_banner", "-version"),
             pass_fds=(),
             timeout_seconds=PROBE_TIMEOUT_SECONDS,
@@ -1274,7 +964,7 @@ def _decode_clip(
             runner_hash_write_fd = hash_write_fd
             hash_read_fd = -1
             hash_write_fd = -1
-            result = _execute_process(
+            result = _run_pinned_process(
                 argv,
                 pass_fds=(input_fd, runner_hash_write_fd),
                 timeout_seconds=DECODE_TIMEOUT_SECONDS,
@@ -1408,7 +1098,9 @@ def _load_private_core(
             output_height=plan.height,
         )
     except (ClipInputContractError, RuntimeError, TypeError, ValueError) as exc:
-        raise ClipLoaderError("TENSOR_ENCODING", "RGB24 tensor encoding failed") from exc
+        raise ClipLoaderError(
+            "TENSOR_ENCODING", "RGB24 tensor encoding failed"
+        ) from exc
 
     try:
         receipt = CausalBallClipInputReceiptV1(
@@ -1443,7 +1135,9 @@ def _load_private_core(
             model_input=encoded.model_input,
         )
     except (ClipInputContractError, RuntimeError, TypeError, ValueError) as exc:
-        raise ClipLoaderError("TENSOR_ENCODING", "receipt did not bind encoded tensor") from exc
+        raise ClipLoaderError(
+            "TENSOR_ENCODING", "receipt did not bind encoded tensor"
+        ) from exc
     _require_false_admissions(
         loaded,
         label="loaded clip",
@@ -1504,7 +1198,9 @@ def load_causal_ball_clip_input_v1(
     )
 
     loaded: LoadedCausalBallClipInputV1 | None = None
-    deferred_error: ClipLoaderError | DecoderRuntimeError | StagedMediaError | None = None
+    deferred_error: ClipLoaderError | DecoderRuntimeError | StagedMediaError | None = (
+        None
+    )
     try:
         with load_verified_decoder_runtime(
             runtime_store_root=runtime_store_root,
@@ -1570,10 +1266,14 @@ def load_causal_ball_clip_input_v1(
         raise deferred_error
     if type(deferred_error) is DecoderRuntimeError:
         code = "CLEANUP" if deferred_error.code == "CLEANUP" else "RUNTIME_BINDING"
-        raise ClipLoaderError(code, "decoder runtime verification failed") from deferred_error
+        raise ClipLoaderError(
+            code, "decoder runtime verification failed"
+        ) from deferred_error
     if type(deferred_error) is StagedMediaError:
         code = "CLEANUP" if deferred_error.code == "MEDIA_CLEANUP" else "MEDIA_BINDING"
-        raise ClipLoaderError(code, "artifact media verification failed") from deferred_error
+        raise ClipLoaderError(
+            code, "artifact media verification failed"
+        ) from deferred_error
     if type(loaded) is not LoadedCausalBallClipInputV1:
         _fail("CLEANUP", "clip capabilities closed without a loaded result")
     return loaded

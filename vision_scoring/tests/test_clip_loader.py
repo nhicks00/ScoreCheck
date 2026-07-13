@@ -20,6 +20,7 @@ except ModuleNotFoundError:  # Base runtime intentionally omits training extras.
 
 if torch is not None:
     import vision_scoring.clip_loader as clip_loader
+    import vision_scoring.protected_process as protected_process
     from vision_scoring.annotations import (
         AutorotationPolicy,
         DecodedColorRange,
@@ -122,9 +123,7 @@ class ClipLoaderTests(unittest.TestCase):
         dependency: bool = False,
         duplicate_kind: bool = False,
         selected_video_stream_index: int = 2,
-        system_install_names: tuple[str, ...] = (
-            "/usr/lib/libSystem.B.dylib",
-        ),
+        system_install_names: tuple[str, ...] = ("/usr/lib/libSystem.B.dylib",),
     ) -> dict[str, object]:
         selected_split = split or LabelBundleSplit.TRAIN
         dependency_payload = b"synthetic-nonsystem-runtime-dependency-v1\n"
@@ -176,9 +175,7 @@ class ClipLoaderTests(unittest.TestCase):
         decode_contract = FrameDecodeContract(
             decoder_artifact_sha256=manifest.fingerprint(),
             decoder_build_id=manifest.runtime_id,
-            autorotation_policy=(
-                AutorotationPolicy.IGNORE_CONTAINER_DISPLAY_TRANSFORM
-            ),
+            autorotation_policy=(AutorotationPolicy.IGNORE_CONTAINER_DISPLAY_TRANSFORM),
             color_space=DecodedColorSpace.BT709,
             color_range=DecodedColorRange.LIMITED,
             output_pixel_format=DecodedPixelFormat.RGB24,
@@ -405,15 +402,15 @@ class ClipLoaderTests(unittest.TestCase):
                         if ffmpeg_version is None
                         else ffmpeg_version
                     )
-                return clip_loader._ProcessResult(0, value, b"", b"")
+                return protected_process.ProtectedProcessResult(0, value, b"", b"")
             if tool == "ffprobe":
-                return clip_loader._ProcessResult(
+                return protected_process.ProtectedProcessResult(
                     0,
                     self._probe_bytes() if probe_bytes is None else probe_bytes,
                     b"",
                     b"",
                 )
-            return clip_loader._ProcessResult(
+            return protected_process.ProtectedProcessResult(
                 decode_returncode,
                 b"".join(self.frames) if decode_stdout is None else decode_stdout,
                 decode_stderr,
@@ -449,8 +446,8 @@ class ClipLoaderTests(unittest.TestCase):
         assert type(kwargs) is dict
         calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
         with patch.object(
-            clip_loader,
-            "_execute_process",
+            protected_process,
+            "run_protected_process",
             side_effect=self._execution_side_effect(calls=calls),
         ):
             loaded = clip_loader.load_causal_ball_clip_input_v1(**kwargs)
@@ -510,10 +507,19 @@ class ClipLoaderTests(unittest.TestCase):
         )
         self.assertEqual(argv, expected)
         self.assertEqual(process_kwargs["pass_fds"], (int(input_fd),))
+        self.assertIs(type(process_kwargs["deadline"]), float)
+        self.assertGreater(process_kwargs["deadline"], time.monotonic())
         self.assertEqual(
-            process_kwargs["timeout_code"],
-            "PROBE_TIMEOUT",
+            process_kwargs["stdout_limit"],
+            clip_loader.MAX_PROBE_STDOUT_BYTES,
         )
+        self.assertEqual(
+            process_kwargs["stderr_limit"],
+            clip_loader.MAX_PROCESS_STDERR_BYTES,
+        )
+        self.assertEqual(process_kwargs["auxiliary_read_fd"], -1)
+        self.assertEqual(process_kwargs["auxiliary_write_fd"], -1)
+        self.assertEqual(process_kwargs["auxiliary_limit"], 0)
 
     def _assert_exact_decode_call(
         self,
@@ -525,35 +531,103 @@ class ClipLoaderTests(unittest.TestCase):
         input_fd = argv[fd_positions[0] + 1]
         hash_fd = argv[fd_positions[1] + 1]
         expected = (
-            argv[0], "-hide_banner", "-nostdin", "-loglevel", "error",
-            "-bitexact", "-filter_threads", "1", "-filter_complex_threads", "1",
-            "-copyts", "-threads", "1", "-hwaccel", "none", "-noautorotate",
-            "-protocol_whitelist", "fd", "-fd", input_fd, "-i", "fd:",
+            argv[0],
+            "-hide_banner",
+            "-nostdin",
+            "-loglevel",
+            "error",
+            "-bitexact",
+            "-filter_threads",
+            "1",
+            "-filter_complex_threads",
+            "1",
+            "-copyts",
+            "-threads",
+            "1",
+            "-hwaccel",
+            "none",
+            "-noautorotate",
+            "-protocol_whitelist",
+            "fd",
+            "-fd",
+            input_fd,
+            "-i",
+            "fd:",
             "-filter_complex",
             "[0:2]scale=w=iw:h=ih:in_color_matrix=bt709:out_color_matrix=bt709:in_range=tv:out_range=pc:flags=accurate_rnd+full_chroma_int+bitexact:sws_dither=none,format=pix_fmts=rgb24,split=outputs=2[raw][hash]",
-            "-map", "[raw]", "-an", "-sn", "-dn", "-c:v", "rawvideo",
-            "-threads:v", "1", "-pix_fmt", "rgb24", "-fps_mode", "passthrough",
-            "-enc_time_base", "-1", "-f", "rawvideo", "-protocol_whitelist",
-            "pipe", "pipe:1", "-map", "[hash]", "-an", "-sn", "-dn",
-            "-c:v", "rawvideo", "-threads:v", "1", "-pix_fmt", "rgb24",
-            "-fps_mode", "passthrough", "-enc_time_base", "-1", "-f",
-            "framehash", "-hash", "sha256", "-format_version", "2",
-            "-protocol_whitelist", "fd", "-fd", hash_fd, "fd:",
+            "-map",
+            "[raw]",
+            "-an",
+            "-sn",
+            "-dn",
+            "-c:v",
+            "rawvideo",
+            "-threads:v",
+            "1",
+            "-pix_fmt",
+            "rgb24",
+            "-fps_mode",
+            "passthrough",
+            "-enc_time_base",
+            "-1",
+            "-f",
+            "rawvideo",
+            "-protocol_whitelist",
+            "pipe",
+            "pipe:1",
+            "-map",
+            "[hash]",
+            "-an",
+            "-sn",
+            "-dn",
+            "-c:v",
+            "rawvideo",
+            "-threads:v",
+            "1",
+            "-pix_fmt",
+            "rgb24",
+            "-fps_mode",
+            "passthrough",
+            "-enc_time_base",
+            "-1",
+            "-f",
+            "framehash",
+            "-hash",
+            "sha256",
+            "-format_version",
+            "2",
+            "-protocol_whitelist",
+            "fd",
+            "-fd",
+            hash_fd,
+            "fd:",
         )
         self.assertEqual(argv, expected)
         self.assertEqual(
             process_kwargs["pass_fds"],
             (int(input_fd), int(hash_fd)),
         )
-        self.assertEqual(process_kwargs["timeout_code"], "DECODE_TIMEOUT")
+        self.assertIs(type(process_kwargs["deadline"]), float)
+        self.assertGreater(process_kwargs["deadline"], time.monotonic())
+        self.assertEqual(process_kwargs["stdout_limit"], len(b"".join(self.frames)))
+        self.assertEqual(
+            process_kwargs["stderr_limit"],
+            clip_loader.MAX_PROCESS_STDERR_BYTES,
+        )
+        self.assertIs(type(process_kwargs["auxiliary_read_fd"]), int)
+        self.assertEqual(process_kwargs["auxiliary_write_fd"], int(hash_fd))
+        self.assertEqual(
+            process_kwargs["auxiliary_limit"],
+            clip_loader.MAX_FRAMEHASH_BYTES,
+        )
 
     def test_dev_clip_loads_with_same_non_authorizing_contract(self) -> None:
         fixture = self._fixture(split=LabelBundleSplit.DEV)
         kwargs = fixture["kwargs"]
         assert type(kwargs) is dict
         with patch.object(
-            clip_loader,
-            "_execute_process",
+            protected_process,
+            "run_protected_process",
             side_effect=self._execution_side_effect(),
         ):
             loaded = clip_loader.load_causal_ball_clip_input_v1(**kwargs)
@@ -567,8 +641,8 @@ class ClipLoaderTests(unittest.TestCase):
         assert type(kwargs) is dict
         with (
             patch.object(
-                clip_loader,
-                "_execute_process",
+                protected_process,
+                "run_protected_process",
                 side_effect=self._execution_side_effect(
                     ffprobe_version=b"ffprobe wrong pinned version\n"
                 ),
@@ -607,13 +681,11 @@ class ClipLoaderTests(unittest.TestCase):
         assert type(duplicate_kwargs) is dict
         with (
             patch.object(clip_loader, "load_verified_decoder_runtime") as runtime,
-            patch.object(clip_loader, "_execute_process") as process,
+            patch.object(protected_process, "run_protected_process") as process,
         ):
             self.assert_clip_error(
                 "CLIP_LOAD_PACK_BINDING",
-                lambda: clip_loader.load_causal_ball_clip_input_v1(
-                    **duplicate_kwargs
-                ),
+                lambda: clip_loader.load_causal_ball_clip_input_v1(**duplicate_kwargs),
             )
         runtime.assert_not_called()
         process.assert_not_called()
@@ -648,7 +720,7 @@ class ClipLoaderTests(unittest.TestCase):
         with (
             patch.object(clip_loader, "_remeasure_runtime_versions") as version,
             patch.object(clip_loader, "stage_verified_artifact_media_v1") as media,
-            patch.object(clip_loader, "_execute_process") as process,
+            patch.object(protected_process, "run_protected_process") as process,
         ):
             self.assert_clip_error(
                 "CLIP_LOAD_RUNTIME_BINDING",
@@ -665,8 +737,8 @@ class ClipLoaderTests(unittest.TestCase):
         raw = b"".join(self.frames)
         for mutated in (raw[:-1], raw + b"x"):
             with patch.object(
-                clip_loader,
-                "_execute_process",
+                protected_process,
+                "run_protected_process",
                 side_effect=self._execution_side_effect(decode_stdout=mutated),
             ):
                 self.assert_clip_error(
@@ -675,19 +747,17 @@ class ClipLoaderTests(unittest.TestCase):
                 )
         for returncode in (1, -signal.SIGKILL):
             with patch.object(
-                clip_loader,
-                "_execute_process",
-                side_effect=self._execution_side_effect(
-                    decode_returncode=returncode
-                ),
+                protected_process,
+                "run_protected_process",
+                side_effect=self._execution_side_effect(decode_returncode=returncode),
             ):
                 self.assert_clip_error(
                     "CLIP_LOAD_DECODE_FAILED",
                     lambda: clip_loader.load_causal_ball_clip_input_v1(**kwargs),
                 )
         with patch.object(
-            clip_loader,
-            "_execute_process",
+            protected_process,
+            "run_protected_process",
             side_effect=self._execution_side_effect(decode_stderr=b"unexpected\n"),
         ):
             self.assert_clip_error(
@@ -695,21 +765,136 @@ class ClipLoaderTests(unittest.TestCase):
                 lambda: clip_loader.load_causal_ball_clip_input_v1(**kwargs),
             )
 
-        directory, executable = self._script("exit 0\n")
-        executable.chmod(0o700)
-        try:
-            self.assert_clip_error(
+    def test_protected_process_errors_translate_to_clip_codes(self) -> None:
+        cases = (
+            (
+                protected_process.PROTECTED_PROCESS_START,
+                "DECODE_TIMEOUT",
                 "CLIP_LOAD_PROCESS_START",
-                lambda: clip_loader._execute_process(
-                    (str(executable),),
-                    pass_fds=(),
-                    timeout_seconds=1.0,
-                    timeout_code="DECODE_TIMEOUT",
-                    stdout_limit=8,
+            ),
+            (
+                protected_process.PROTECTED_PROCESS_CLEANUP,
+                "DECODE_TIMEOUT",
+                "CLIP_LOAD_CLEANUP",
+            ),
+            (
+                protected_process.PROTECTED_PROCESS_OUTPUT_LIMIT,
+                "DECODE_TIMEOUT",
+                "CLIP_LOAD_OUTPUT_LIMIT",
+            ),
+            (
+                protected_process.PROTECTED_PROCESS_TIMEOUT,
+                "PROBE_TIMEOUT",
+                "CLIP_LOAD_PROBE_TIMEOUT",
+            ),
+            (
+                protected_process.PROTECTED_PROCESS_TIMEOUT,
+                "DECODE_TIMEOUT",
+                "CLIP_LOAD_DECODE_TIMEOUT",
+            ),
+        )
+        for source_code, timeout_code, expected_code in cases:
+            with (
+                self.subTest(source_code=source_code, timeout_code=timeout_code),
+                patch.object(
+                    protected_process,
+                    "run_protected_process",
+                    side_effect=protected_process.ProtectedProcessError(
+                        source_code,
+                        "synthetic protected process failure",
+                    ),
                 ),
-            )
-        finally:
-            directory.chmod(0o700)
+            ):
+                self.assert_clip_error(
+                    expected_code,
+                    lambda: clip_loader._run_pinned_process(
+                        ("/absolute/fixture-tool",),
+                        pass_fds=(),
+                        timeout_seconds=1.0,
+                        timeout_code=timeout_code,
+                        stdout_limit=8,
+                    ),
+                )
+        self.assertFalse(hasattr(clip_loader, "_execute_process"))
+        self.assertFalse(hasattr(clip_loader, "_ProcessResult"))
+
+    def test_pinned_process_timeout_validation_consumes_auxiliary_fds(self) -> None:
+        malformed = (
+            (1, "DECODE_TIMEOUT"),
+            (0.0, "DECODE_TIMEOUT"),
+            (float("inf"), "DECODE_TIMEOUT"),
+            (1.0, ""),
+        )
+        for timeout_seconds, timeout_code in malformed:
+            with self.subTest(
+                timeout_seconds=timeout_seconds,
+                timeout_code=timeout_code,
+            ):
+                read_fd, write_fd = os.pipe()
+                try:
+                    self.assert_clip_error(
+                        "CLIP_LOAD_PROCESS_START",
+                        lambda: clip_loader._run_pinned_process(
+                            ("/absolute/fixture-tool",),
+                            pass_fds=(write_fd,),
+                            timeout_seconds=timeout_seconds,
+                            timeout_code=timeout_code,
+                            stdout_limit=8,
+                            auxiliary_read_fd=read_fd,
+                            auxiliary_write_fd=write_fd,
+                            auxiliary_limit=8,
+                        ),
+                    )
+                    for descriptor in (read_fd, write_fd):
+                        with self.assertRaises(OSError):
+                            os.fstat(descriptor)
+                finally:
+                    for descriptor in (read_fd, write_fd):
+                        try:
+                            os.close(descriptor)
+                        except OSError:
+                            pass
+
+    def test_pinned_process_clock_fault_cleanup_precedes_base_exception(self) -> None:
+        for clock_error, expected in (
+            (RuntimeError("synthetic clock failure"), ClipLoaderError),
+            (KeyboardInterrupt(), KeyboardInterrupt),
+        ):
+            with self.subTest(error=type(clock_error).__name__):
+                read_fd, write_fd = os.pipe()
+                try:
+                    with (
+                        patch.object(
+                            clip_loader.time,
+                            "monotonic",
+                            side_effect=clock_error,
+                        ),
+                        self.assertRaises(expected) as caught,
+                    ):
+                        clip_loader._run_pinned_process(
+                            ("/absolute/fixture-tool",),
+                            pass_fds=(write_fd,),
+                            timeout_seconds=1.0,
+                            timeout_code="DECODE_TIMEOUT",
+                            stdout_limit=8,
+                            auxiliary_read_fd=read_fd,
+                            auxiliary_write_fd=write_fd,
+                            auxiliary_limit=8,
+                        )
+                    if isinstance(caught.exception, ClipLoaderError):
+                        self.assertEqual(
+                            caught.exception.code,
+                            "CLIP_LOAD_CLEANUP",
+                        )
+                    for descriptor in (read_fd, write_fd):
+                        with self.assertRaises(OSError):
+                            os.fstat(descriptor)
+                finally:
+                    for descriptor in (read_fd, write_fd):
+                        try:
+                            os.close(descriptor)
+                        except OSError:
+                            pass
 
     def test_probe_timestamp_mutation_matrix_and_output_bound(self) -> None:
         fixture = self._fixture()
@@ -728,14 +913,10 @@ class ClipLoaderTests(unittest.TestCase):
         for second_pts in (self.pts[0], self.pts[0] - 1, -1, MAX_SIGNED_64 + 1):
             payload = json.loads(self._probe_bytes())
             payload["frames"][1]["pts"] = second_pts
-            timestamp_cases.append(
-                json.dumps(payload, separators=(",", ":")).encode()
-            )
+            timestamp_cases.append(json.dumps(payload, separators=(",", ":")).encode())
         unreduced = json.loads(self._probe_bytes())
         unreduced["streams"][0]["time_base"] = "2/2000"
-        timestamp_cases.append(
-            json.dumps(unreduced, separators=(",", ":")).encode()
-        )
+        timestamp_cases.append(json.dumps(unreduced, separators=(",", ":")).encode())
         for raw in timestamp_cases:
             self.assert_clip_error(
                 "CLIP_LOAD_TIMESTAMP_BINDING",
@@ -767,8 +948,8 @@ class ClipLoaderTests(unittest.TestCase):
         kwargs = fixture["kwargs"]
         assert type(kwargs) is dict
         with patch.object(
-            clip_loader,
-            "_execute_process",
+            protected_process,
+            "run_protected_process",
             side_effect=self._execution_side_effect(),
         ):
             loaded = clip_loader.load_causal_ball_clip_input_v1(**kwargs)
@@ -796,8 +977,7 @@ class ClipLoaderTests(unittest.TestCase):
                 "CLIP_LOAD_TIMESTAMP_BINDING",
             ),
             (
-                self._framehash_bytes()
-                + f"0, 200, 200, 1, 768, {'0' * 64}\n".encode(),
+                self._framehash_bytes() + f"0, 200, 200, 1, 768, {'0' * 64}\n".encode(),
                 "CLIP_LOAD_DECODE_PROTOCOL",
             ),
         ):
@@ -843,8 +1023,8 @@ class ClipLoaderTests(unittest.TestCase):
         kwargs = dict(fixture["kwargs"])
         kwargs["source_byte_length"] = len(self.source) + 1
         with patch.object(
-            clip_loader,
-            "_execute_process",
+            protected_process,
+            "run_protected_process",
             side_effect=self._execution_side_effect(),
         ):
             self.assert_clip_error(
@@ -865,16 +1045,12 @@ class ClipLoaderTests(unittest.TestCase):
             )
 
         self.pts = tuple(range(1, 33))
-        self.frames = tuple(
-            bytes([index]) * (64 * 64 * 3) for index in range(32)
-        )
+        self.frames = tuple(bytes([index]) * (64 * 64 * 3) for index in range(32))
         frame_boundary = self._fixture(width=64, height=64)
         self.assertEqual(self._plan(frame_boundary).frame_count, 32)
 
         self.pts = tuple(range(1, 34))
-        self.frames = tuple(
-            bytes([index]) * (64 * 64 * 3) for index in range(33)
-        )
+        self.frames = tuple(bytes([index]) * (64 * 64 * 3) for index in range(33))
         too_many = self._fixture(width=64, height=64)
         self.assert_clip_error(
             "CLIP_LOAD_BOUNDS",
@@ -903,7 +1079,7 @@ class ClipLoaderTests(unittest.TestCase):
             with (
                 patch.object(clip_loader, "load_verified_decoder_runtime") as runtime,
                 patch.object(clip_loader, "stage_verified_artifact_media_v1") as media,
-                patch.object(clip_loader, "_execute_process") as process,
+                patch.object(protected_process, "run_protected_process") as process,
             ):
                 self.assert_clip_error(
                     expected_code,
@@ -929,7 +1105,12 @@ class ClipLoaderTests(unittest.TestCase):
     def test_linkage_preflight_rejects_dependency_and_system_allowlist(self) -> None:
         fixtures = (
             self._fixture(dependency=True),
-            self._fixture(system_install_names=("/usr/lib/libSystem.B.dylib", "/usr/lib/libz.1.dylib")),
+            self._fixture(
+                system_install_names=(
+                    "/usr/lib/libSystem.B.dylib",
+                    "/usr/lib/libz.1.dylib",
+                )
+            ),
         )
         for fixture in fixtures:
             kwargs = fixture["kwargs"]
@@ -937,7 +1118,7 @@ class ClipLoaderTests(unittest.TestCase):
             with (
                 patch.object(clip_loader, "_remeasure_runtime_versions") as version,
                 patch.object(clip_loader, "stage_verified_artifact_media_v1") as media,
-                patch.object(clip_loader, "_execute_process") as process,
+                patch.object(protected_process, "run_protected_process") as process,
             ):
                 self.assert_clip_error(
                     "CLIP_LOAD_RUNTIME_LINKAGE",
@@ -1010,178 +1191,6 @@ class ClipLoaderTests(unittest.TestCase):
             ),
         )
 
-    def _script(self, body: str) -> tuple[Path, Path]:
-        directory = self.root / f"process-{len(list(self.root.glob('process-*')))}"
-        directory.mkdir(mode=0o700)
-        executable = directory / "fixture-tool"
-        executable.write_text("#!/bin/sh\n" + body, encoding="utf-8")
-        executable.chmod(0o500)
-        directory.chmod(0o500)
-        return directory, executable
-
-    def test_process_runner_sanitizes_environment_and_bounds_output(self) -> None:
-        directory, executable = self._script(
-            'printf "%s" "$PATH|$HOME|$LC_ALL|$TZ|$PWD"\n'
-        )
-        try:
-            result = clip_loader._execute_process(
-                (str(executable),),
-                pass_fds=(),
-                timeout_seconds=2.0,
-                timeout_code="DECODE_TIMEOUT",
-                stdout_limit=4096,
-            )
-            self.assertEqual(result.returncode, 0)
-            self.assertEqual(
-                result.stdout.decode("utf-8"),
-                f"/nonexistent|/nonexistent|C|UTC|{directory.resolve()}",
-            )
-            self.assertEqual(result.stderr, b"")
-            self.assertEqual(result.auxiliary, b"")
-        finally:
-            directory.chmod(0o700)
-
-        directory, executable = self._script('printf "12345"\n')
-        try:
-            self.assert_clip_error(
-                "CLIP_LOAD_OUTPUT_LIMIT",
-                lambda: clip_loader._execute_process(
-                    (str(executable),),
-                    pass_fds=(),
-                    timeout_seconds=2.0,
-                    timeout_code="DECODE_TIMEOUT",
-                    stdout_limit=4,
-                ),
-            )
-        finally:
-            directory.chmod(0o700)
-
-    def test_process_runner_times_out_and_kills_descendant_groups(self) -> None:
-        directory, executable = self._script(
-            "while :; do :; done\n"
-        )
-        try:
-            with patch.object(clip_loader, "PROCESS_TERMINATE_GRACE_SECONDS", 0.1):
-                self.assert_clip_error(
-                    "CLIP_LOAD_DECODE_TIMEOUT",
-                    lambda: clip_loader._execute_process(
-                        (str(executable),),
-                        pass_fds=(),
-                        timeout_seconds=0.05,
-                        timeout_code="DECODE_TIMEOUT",
-                        stdout_limit=8,
-                    ),
-                )
-        finally:
-            directory.chmod(0o700)
-
-        directory, executable = self._script(
-            "/bin/sleep 30 </dev/null >/dev/null 2>&1 &\n"
-            "printf '%s' \"$!\" > \"$1\"\n"
-            "exit 0\n"
-        )
-        directory.chmod(0o700)
-        child_pid_path = directory / "child.pid"
-        child_pid_path.write_text("", encoding="ascii")
-        child_pid_path.chmod(0o600)
-        directory.chmod(0o500)
-        child_pid = -1
-        try:
-            with patch.object(clip_loader, "PROCESS_TERMINATE_GRACE_SECONDS", 0.1):
-                self.assert_clip_error(
-                    "CLIP_LOAD_CLEANUP",
-                    lambda: clip_loader._execute_process(
-                        (str(executable), str(child_pid_path)),
-                        pass_fds=(),
-                        timeout_seconds=2.0,
-                        timeout_code="DECODE_TIMEOUT",
-                        stdout_limit=8,
-                    ),
-                )
-            child_pid = int(child_pid_path.read_text(encoding="ascii"))
-            deadline = time.monotonic() + 5.0
-            while time.monotonic() < deadline:
-                try:
-                    os.kill(child_pid, 0)
-                except ProcessLookupError:
-                    break
-                time.sleep(0.01)
-            else:
-                self.fail(f"descendant process {child_pid} survived group cleanup")
-        finally:
-            if child_pid > 0:
-                try:
-                    os.kill(child_pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            directory.chmod(0o700)
-
-    def test_auxiliary_writer_close_is_single_attempt_owned(self) -> None:
-        real_close = os.close
-        for same_inode in (True, False):
-            with self.subTest(same_inode=same_inode):
-                directory, executable = self._script("exit 0\n")
-                read_fd, write_fd = os.pipe()
-                backup_write_fd = os.dup(write_fd)
-                original_inode = os.fstat(write_fd).st_ino
-                foreign_path = self.root / f"foreign-{int(same_inode)}.bin"
-                foreign_path.write_bytes(b"foreign descriptor fixture")
-                write_close_attempts = 0
-                foreign_fd = -1
-
-                def ambiguous_close(descriptor: int) -> None:
-                    nonlocal write_close_attempts, foreign_fd
-                    if descriptor == write_fd:
-                        write_close_attempts += 1
-                        real_close(descriptor)
-                        foreign_fd = (
-                            os.dup(backup_write_fd)
-                            if same_inode
-                            else os.open(foreign_path, os.O_RDONLY)
-                        )
-                        self.assertEqual(foreign_fd, write_fd)
-                        raise OSError("synthetic ambiguous close")
-                    real_close(descriptor)
-
-                try:
-                    with patch.object(
-                        clip_loader.os,
-                        "close",
-                        side_effect=ambiguous_close,
-                    ):
-                        self.assert_clip_error(
-                            "CLIP_LOAD_CLEANUP",
-                            lambda: clip_loader._execute_process(
-                                (str(executable),),
-                                pass_fds=(write_fd,),
-                                timeout_seconds=2.0,
-                                timeout_code="DECODE_TIMEOUT",
-                                stdout_limit=8,
-                                auxiliary_read_fd=read_fd,
-                                auxiliary_write_fd=write_fd,
-                                auxiliary_limit=8,
-                            ),
-                        )
-                    self.assertEqual(write_close_attempts, 1)
-                    foreign_inode = os.fstat(foreign_fd).st_ino
-                    if same_inode:
-                        self.assertEqual(foreign_inode, original_inode)
-                    else:
-                        self.assertNotEqual(foreign_inode, original_inode)
-                finally:
-                    directory.chmod(0o700)
-                    for descriptor in {
-                        read_fd,
-                        write_fd,
-                        backup_write_fd,
-                        foreign_fd,
-                    }:
-                        if descriptor >= 0:
-                            try:
-                                real_close(descriptor)
-                            except OSError:
-                                pass
-
     def test_decode_transfers_pipe_ownership_before_runner_failure(self) -> None:
         fixture = self._fixture()
         plan = self._plan(fixture)
@@ -1226,8 +1235,8 @@ class ClipLoaderTests(unittest.TestCase):
 
         try:
             with patch.object(
-                clip_loader,
-                "_execute_process",
+                protected_process,
+                "run_protected_process",
                 side_effect=consume_then_fail,
             ):
                 self.assert_clip_error(
@@ -1244,57 +1253,6 @@ class ClipLoaderTests(unittest.TestCase):
                 os.fstat(descriptor)
         finally:
             for descriptor in foreign_fds:
-                try:
-                    os.close(descriptor)
-                except OSError:
-                    pass
-
-    def test_process_runner_consumes_auxiliary_fds_on_path_failure(self) -> None:
-        read_fd, write_fd = os.pipe()
-        try:
-            self.assert_clip_error(
-                "CLIP_LOAD_PROCESS_START",
-                lambda: clip_loader._execute_process(
-                    (str(self.root / "absent-runtime" / "ffmpeg"),),
-                    pass_fds=(write_fd,),
-                    timeout_seconds=2.0,
-                    timeout_code="DECODE_TIMEOUT",
-                    stdout_limit=8,
-                    auxiliary_read_fd=read_fd,
-                    auxiliary_write_fd=write_fd,
-                    auxiliary_limit=8,
-                ),
-            )
-            for descriptor in (read_fd, write_fd):
-                with self.assertRaises(OSError):
-                    os.fstat(descriptor)
-        finally:
-            for descriptor in (read_fd, write_fd):
-                try:
-                    os.close(descriptor)
-                except OSError:
-                    pass
-
-        read_fd, write_fd = os.pipe()
-        try:
-            self.assert_clip_error(
-                "CLIP_LOAD_PROCESS_START",
-                lambda: clip_loader._execute_process(
-                    (str(self.root / "absent-runtime" / "ffmpeg"),),
-                    pass_fds=(2, write_fd),
-                    timeout_seconds=2.0,
-                    timeout_code="DECODE_TIMEOUT",
-                    stdout_limit=8,
-                    auxiliary_read_fd=read_fd,
-                    auxiliary_write_fd=write_fd,
-                    auxiliary_limit=8,
-                ),
-            )
-            for descriptor in (read_fd, write_fd):
-                with self.assertRaises(OSError):
-                    os.fstat(descriptor)
-        finally:
-            for descriptor in (read_fd, write_fd):
                 try:
                     os.close(descriptor)
                 except OSError:
