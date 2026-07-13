@@ -1,9 +1,10 @@
 import { z } from "zod";
 import { supabaseAdmin } from "./supabase";
+import { MONITORING_CONTRACT_VERSION } from "./monitoringContract";
 import type { MonitorCourtPipelineRange, MonitorSilence, MonitorSnapshot, MonitorSnapshotEnvelope, MonitorStageName } from "./monitoringTypes";
 
 const envelopeSnapshotSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(MONITORING_CONTRACT_VERSION),
   generatedAt: z.string().datetime({ offset: true }),
   collector: z.object({ state: z.string(), agentsExpected: z.number(), agentsFresh: z.number() }).passthrough(),
   controlPlane: z.object({ state: z.string() }).passthrough(),

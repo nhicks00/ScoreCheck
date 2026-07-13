@@ -5150,6 +5150,15 @@ body:has(.program-root) {
   gap: 4px;
 }
 
+.monitor-court-footer .monitor-source-profile {
+  color: var(--text-soft);
+  flex-basis: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .monitor-court-alert {
   background: var(--danger-soft);
   color: #ffaaa4;

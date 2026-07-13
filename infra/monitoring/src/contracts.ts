@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const MONITORING_CONTRACT_VERSION = 1 as const;
+export const MONITORING_CONTRACT_VERSION = 2 as const;
 
 export const AGENT_ROLES = [
   "mediamtx",
@@ -61,6 +61,21 @@ export const serviceSnapshotSchema = z.object({
 }).strict();
 export type ServiceSnapshot = z.infer<typeof serviceSnapshotSchema>;
 
+export const MEDIA_SOURCE_PROTOCOLS = ["RTMP", "SRT", "RTSP", "WEBRTC", "HLS"] as const;
+export const MEDIA_SOURCE_MODES = ["PUSH", "PULL"] as const;
+
+export const mediaTransportSnapshotSchema = z.object({
+  rttMs: z.number().nonnegative().max(60_000).nullable(),
+  packetsReceived: z.number().int().nonnegative().nullable(),
+  packetsLost: z.number().int().nonnegative().nullable(),
+  packetsRetransmitted: z.number().int().nonnegative().nullable(),
+  packetsDropped: z.number().int().nonnegative().nullable(),
+  receiveRateBps: z.number().nonnegative().nullable(),
+  receiveBufferMs: z.number().nonnegative().max(60_000).nullable(),
+  configuredLatencyMs: z.number().nonnegative().max(60_000).nullable()
+}).strict();
+export type MediaTransportSnapshot = z.infer<typeof mediaTransportSnapshotSchema>;
+
 export const mediaPathSnapshotSchema = z.object({
   name: z.string().regex(/^court[1-8]_(raw|preview|program|calibration|monitor)$/),
   courtNumber: z.number().int().min(1).max(8),
@@ -72,8 +87,16 @@ export const mediaPathSnapshotSchema = z.object({
   inboundBitrateBps: z.number().nonnegative().nullable(),
   frameErrors: z.number().int().nonnegative(),
   readerCount: z.number().int().nonnegative(),
+  sourceProtocol: z.enum(MEDIA_SOURCE_PROTOCOLS).nullable(),
+  sourceMode: z.enum(MEDIA_SOURCE_MODES).nullable(),
   videoCodec: boundedId.nullable(),
-  audioCodec: boundedId.nullable()
+  audioCodec: boundedId.nullable(),
+  videoWidth: z.number().int().positive().max(8192).nullable(),
+  videoHeight: z.number().int().positive().max(8192).nullable(),
+  videoProfile: boundedId.nullable(),
+  audioSampleRateHz: z.number().int().positive().max(384_000).nullable(),
+  audioChannelCount: z.number().int().positive().max(32).nullable(),
+  transport: mediaTransportSnapshotSchema.nullable()
 }).strict();
 export type MediaPathSnapshot = z.infer<typeof mediaPathSnapshotSchema>;
 
@@ -345,7 +368,9 @@ export const agentSnapshotSchema = z.object({
   collectionDurationMs: z.number().nonnegative(),
   collectionErrors: z.array(z.enum([
     "MEDIAMTX_API_UNAVAILABLE",
+    "MEDIAMTX_PATH_DETAILS_UNAVAILABLE",
     "MEDIAMTX_METRICS_UNAVAILABLE",
+    "MEDIAMTX_TRANSPORT_METRICS_UNAVAILABLE",
     "LIVEKIT_METRICS_UNAVAILABLE",
     "EGRESS_METRICS_UNAVAILABLE",
     "DOCKER_UNAVAILABLE",

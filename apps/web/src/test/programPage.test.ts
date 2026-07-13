@@ -113,7 +113,7 @@ describe("createProgramMonitoringConnection", () => {
       heartbeatUrl: "https://monitor.example.test/v1/browser-heartbeats",
       thumbnailUrl: "https://monitor.example.test/v1/browser-thumbnails",
       credentialId: "10000000-0000-4000-8000-000000000001",
-      credential: "eyJ2IjoxLCJjaWQiOiIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJjb3VydCI6MywiaWF0IjoxMDAwLCJleHAiOjY0ODAxMDAwfQ.Zt4AiuJ0hr4jb8kh4nMGqp4E66uUYToLWIn4_7UXuk4"
+      credential: "eyJ2IjoyLCJjaWQiOiIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJjb3VydCI6MywiaWF0IjoxMDAwLCJleHAiOjY0ODAxMDAwfQ.dszAYhAITTMgjUU85ZivXxm4hoJBQ2kP7VahvOv0lAs"
     });
   });
 
@@ -259,6 +259,7 @@ describe("buildProgramMonitorHeartbeat", () => {
       commentarySyncRttMs: 54.8,
       commentarySyncSampleAgeMs: 210.2
     }));
+    expect(body.version).toBe(2);
     expect(body.video).toMatchObject({ state: "playing", framesRendered: 5400, framesPerSecond: 30, transport: "whep" });
     expect(body.commentary).toMatchObject({
       roomConnected: true,

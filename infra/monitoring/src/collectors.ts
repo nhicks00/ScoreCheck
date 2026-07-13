@@ -3,7 +3,7 @@ import { statfs } from "node:fs/promises";
 import type { AgentConfig } from "./config.js";
 import { agentSnapshotSchema, MONITORING_CONTRACT_VERSION, type AgentSnapshot, type MediaPathSnapshot } from "./contracts.js";
 import { collectDockerServices } from "./docker.js";
-import { parseMediaPath, type ByteSample } from "./media.js";
+import { MediaPathDetailCache, parseMediaPath, parseSrtTransports, type ByteSample, type MediaPathApiRow } from "./media.js";
 import { collectFfmpegProgress } from "./ffmpegProgress.js";
 
 type CollectionError = AgentSnapshot["collectionErrors"][number];
@@ -11,6 +11,7 @@ type MediaMtxListResponse = { items?: unknown[] };
 
 export class AgentCollector {
   private readonly previousBytes = new Map<string, ByteSample>();
+  private readonly mediaPathDetails = new MediaPathDetailCache();
 
   constructor(private readonly config: AgentConfig) {}
 
@@ -76,12 +77,23 @@ export class AgentCollector {
     if (!this.config.mediamtxApiUrl) return [];
     try {
       const response = await fetchJson<MediaMtxListResponse>(`${this.config.mediamtxApiUrl}/v3/paths/list`);
+      const enrichment = await this.mediaPathDetails.enrich(response.items ?? [], (name) =>
+        fetchJson<MediaPathApiRow>(`${this.config.mediamtxApiUrl}/v3/paths/get/${encodeURIComponent(name)}`), sampledAtMs);
+      if (enrichment.failedPaths > 0) errors.add("MEDIAMTX_PATH_DETAILS_UNAVAILABLE");
+      let srtTransports = new Map();
+      if (enrichment.rows.some(hasSrtSource)) {
+        try {
+          srtTransports = parseSrtTransports(await fetchJson<unknown>(`${this.config.mediamtxApiUrl}/v3/srtconns/list`));
+        } catch {
+          errors.add("MEDIAMTX_TRANSPORT_METRICS_UNAVAILABLE");
+        }
+      }
       const nextSamples = new Map<string, ByteSample>();
       const paths: MediaPathSnapshot[] = [];
-      for (const row of response.items ?? []) {
+      for (const row of enrichment.rows) {
         if (!row || typeof row !== "object") continue;
         const name = "name" in row && typeof row.name === "string" ? row.name : "";
-        const parsed = parseMediaPath(row, this.previousBytes.get(name) ?? null, sampledAtMs);
+        const parsed = parseMediaPath(row, this.previousBytes.get(name) ?? null, sampledAtMs, 0, srtTransports.get(name) ?? null);
         if (!parsed) continue;
         paths.push(parsed.path);
         nextSamples.set(parsed.path.name, parsed.byteSample);
@@ -105,6 +117,13 @@ export class AgentCollector {
       return new Map();
     }
   }
+}
+
+function hasSrtSource(input: unknown): boolean {
+  return Boolean(input && typeof input === "object"
+    && "source" in input && input.source && typeof input.source === "object"
+    && "type" in input.source && typeof input.source.type === "string"
+    && input.source.type.toLowerCase().includes("srt"));
 }
 
 export function metricValuesByPath(text: string, metricName: string): Map<string, number> {

@@ -19,7 +19,7 @@ describe("monitoring contract", () => {
 
   it("rejects unbounded service names", () => {
     expect(() => agentSnapshotSchema.parse({
-      version: 1,
+      version: 2,
       agentId: "agent-1",
       role: "mediamtx",
       generatedAt: new Date().toISOString(),
@@ -33,7 +33,7 @@ describe("monitoring contract", () => {
 
   it("hard-cuts Egress activity from available to idle", () => {
     const snapshot = {
-      version: 1,
+      version: 2,
       agentId: "compositor-a",
       role: "compositor",
       assignedCourts: [1, 2],
@@ -51,6 +51,7 @@ describe("monitoring contract", () => {
       }
     };
     expect(agentSnapshotSchema.parse(snapshot).nativeServices.egress?.idle).toBe(false);
+    expect(() => agentSnapshotSchema.parse({ ...snapshot, version: 1 })).toThrow();
     expect(() => agentSnapshotSchema.parse({
       ...snapshot,
       nativeServices: {

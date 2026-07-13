@@ -17,7 +17,7 @@ function token(courtNumber = 1) {
 
 function payload(sequence = 1) {
   return {
-    version: 1,
+    version: 2,
     credentialId,
     courtNumber: 1,
     heartbeatSeq: sequence,
@@ -81,7 +81,7 @@ describe("browser heartbeat manager", () => {
       courtNumber: 3,
       issuedAtMs: 1_000,
       expiresAtMs: 64_801_000
-    })).toBe("eyJ2IjoxLCJjaWQiOiIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJjb3VydCI6MywiaWF0IjoxMDAwLCJleHAiOjY0ODAxMDAwfQ.Zt4AiuJ0hr4jb8kh4nMGqp4E66uUYToLWIn4_7UXuk4");
+    })).toBe("eyJ2IjoyLCJjaWQiOiIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJjb3VydCI6MywiaWF0IjoxMDAwLCJleHAiOjY0ODAxMDAwfQ.dszAYhAITTMgjUU85ZivXxm4hoJBQ2kP7VahvOv0lAs");
   });
 
   it("accepts a scoped fresh heartbeat", () => {

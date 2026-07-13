@@ -129,8 +129,16 @@ function mediaAgent(): AgentSnapshot {
         inboundBitrateBps: 4_000_000,
         frameErrors: 0,
         readerCount: 1,
+        sourceProtocol: "RTMP" as const,
+        sourceMode: "PUSH" as const,
         videoCodec: "H264",
-        audioCodec: "MPEG4Audio"
+        audioCodec: "AAC",
+        videoWidth: 1920,
+        videoHeight: 1080,
+        videoProfile: "Main",
+        audioSampleRateHz: 48_000,
+        audioChannelCount: 2,
+        transport: null
       })))
   };
 }
@@ -149,7 +157,7 @@ function compositorAgent(agentId: string, assignedCourts: number[]): AgentSnapsh
 
 function agentBase(agentId: string, role: AgentSnapshot["role"]): AgentSnapshot {
   return {
-    version: 1,
+    version: 2,
     agentId,
     role,
     assignedCourts: [],
@@ -170,7 +178,7 @@ function healthyBrowsers(): Map<number, BrowserHeartbeatSnapshot> {
 
 function browser(courtNumber: number, visualPatch: Partial<BrowserHeartbeatSnapshot["visual"]> = {}): BrowserHeartbeatSnapshot {
   const payload = browserHeartbeatPayloadSchema.parse({
-    version: 1,
+    version: 2,
     credentialId: `40000000-0000-4000-8000-${String(courtNumber).padStart(12, "0")}`,
     courtNumber,
     heartbeatSeq: 1,
