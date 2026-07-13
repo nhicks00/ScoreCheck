@@ -253,6 +253,113 @@ tests:
         alertname: ScoreCheckYouTubeUnhealthy
         exp_alerts: []
 
+  - name: Egress busy state is healthy and true faults are scoped to assigned live courts
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_egress_idle{agent="compositor-a"}'
+        values: '0 0 0 0 0 0 0 0'
+      - series: 'scorecheck_egress_metrics_valid{agent="compositor-a"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_egress_can_accept_request{agent="compositor-a"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_native_endpoint_up{agent="compositor-a",role="compositor",service="egress-metrics"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_native_endpoint_up{agent="compositor-a",role="compositor",service="egress-health"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_compositor_court_assignment{agent="compositor-a",court="1"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_court_broadcast_live{court="1"}'
+        values: '1 1 1 1 1 1 1 1'
+
+      - series: 'scorecheck_egress_metrics_valid{agent="compositor-b"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_egress_can_accept_request{agent="compositor-b"}'
+        values: '0 0 0 0 0 0 0 0'
+      - series: 'scorecheck_native_endpoint_up{agent="compositor-b",role="compositor",service="egress-metrics"}'
+        values: '0 0 0 0 0 0 0 0'
+      - series: 'scorecheck_native_endpoint_up{agent="compositor-b",role="compositor",service="egress-health"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_compositor_court_assignment{agent="compositor-b",court="2"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_court_broadcast_live{court="2"}'
+        values: '0 0 0 0 0 0 0 0'
+
+      - series: 'scorecheck_egress_metrics_valid{agent="compositor-c"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_egress_can_accept_request{agent="compositor-c"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_native_endpoint_up{agent="compositor-c",role="compositor",service="egress-metrics"}'
+        values: '0 0 0 0 0 0 0 0'
+      - series: 'scorecheck_native_endpoint_up{agent="compositor-c",role="compositor",service="egress-health"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_compositor_court_assignment{agent="compositor-c",court="3"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_court_broadcast_live{court="3"}'
+        values: '1 1 1 1 1 1 1 1'
+
+      - series: 'scorecheck_egress_metrics_valid{agent="compositor-d"}'
+        values: '0 0 0 0 0 0 0 0'
+      - series: 'scorecheck_egress_can_accept_request{agent="compositor-d"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_native_endpoint_up{agent="compositor-d",role="compositor",service="egress-metrics"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_native_endpoint_up{agent="compositor-d",role="compositor",service="egress-health"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_compositor_court_assignment{agent="compositor-d",court="4"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_court_broadcast_live{court="4"}'
+        values: '1 1 1 1 1 1 1 1'
+
+      - series: 'scorecheck_egress_metrics_valid{agent="compositor-e"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_egress_can_accept_request{agent="compositor-e"}'
+        values: '0 0 0 0 0 0 0 0'
+      - series: 'scorecheck_native_endpoint_up{agent="compositor-e",role="compositor",service="egress-metrics"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_native_endpoint_up{agent="compositor-e",role="compositor",service="egress-health"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_compositor_court_assignment{agent="compositor-e",court="5"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_court_broadcast_live{court="5"}'
+        values: '1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 35s
+        alertname: ScoreCheckEgressWorkerUnavailable
+        exp_alerts:
+          - exp_labels:
+              agent: compositor-c
+              severity: critical
+              stage: EGRESS
+              issue_code: EGRESS_WORKER_UNAVAILABLE
+              root_dependency: compositor-c
+            exp_annotations:
+              summary: Egress worker compositor-c is unavailable.
+              first_action: Inspect Egress health, Redis and LiveKit control connectivity, then check host capacity.
+          - exp_labels:
+              agent: compositor-d
+              severity: critical
+              stage: EGRESS
+              issue_code: EGRESS_WORKER_UNAVAILABLE
+              root_dependency: compositor-d
+            exp_annotations:
+              summary: Egress worker compositor-d is unavailable.
+              first_action: Inspect Egress health, Redis and LiveKit control connectivity, then check host capacity.
+      - eval_time: 35s
+        alertname: ScoreCheckEgressCapacityExhausted
+        exp_alerts:
+          - exp_labels:
+              agent: compositor-e
+              severity: warning
+              stage: EGRESS
+              issue_code: EGRESS_CAPACITY_EXHAUSTED
+              root_dependency: compositor-e
+            exp_annotations:
+              summary: Egress worker compositor-e cannot admit another court.
+              first_action: Inspect Egress CPU and memory admission load before starting another court on this host.
+      - eval_time: 35s
+        alertname: ScoreCheckNativeEndpointDown
+        exp_alerts: []
+
   - name: external dead-man delivery failure is explicit and check-scoped
     interval: 5s
     input_series:

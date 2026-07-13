@@ -149,8 +149,8 @@ function egressStage(agent: MonitorSnapshot["agents"][number] | null, expectatio
   }
   const egress = agent.nativeServices?.egress;
   const endpointDown = agent.nativeServices?.endpoints.some((endpoint) => endpoint.service.startsWith("egress-") && !endpoint.up) ?? false;
-  if (!egress || endpointDown || !egress.available) {
-    return stage("EGRESS", "CRITICAL", "critical", "EGRESS_WORKER_UNAVAILABLE", `Egress worker ${agent.agentId} is unavailable.`, "Inspect Egress health, Redis and LiveKit control connectivity on the assigned compositor.", agent.lastSeenAt, agent.ageMs, { host: agent.agentId, endpointDown, available: egress?.available ?? false });
+  if (!egress || endpointDown) {
+    return stage("EGRESS", "CRITICAL", "critical", "EGRESS_WORKER_UNAVAILABLE", `Egress worker ${agent.agentId} is unavailable.`, "Inspect Egress health, Redis and LiveKit control connectivity on the assigned compositor.", agent.lastSeenAt, agent.ageMs, { host: agent.agentId, endpointDown });
   }
   const atCapacity = !egress.canAcceptRequest;
   return stage(
@@ -158,11 +158,11 @@ function egressStage(agent: MonitorSnapshot["agents"][number] | null, expectatio
     atCapacity ? "DEGRADED" : "HEALTHY",
     atCapacity ? "warning" : "info",
     atCapacity ? "EGRESS_CAPACITY_EXHAUSTED" : null,
-    atCapacity ? `Egress worker ${agent.agentId} cannot admit another court.` : `Egress worker ${agent.agentId} is healthy and available.`,
+    atCapacity ? `Egress worker ${agent.agentId} cannot admit another court.` : `Egress worker ${agent.agentId} is healthy and ${egress.idle ? "idle" : "processing output"}.`,
     atCapacity ? "Do not start another court on this host until capacity is restored." : null,
     agent.lastSeenAt,
     agent.ageMs,
-    { host: agent.agentId, canAcceptRequest: egress.canAcceptRequest, cpuLoadRatio: egress.cpuLoadRatio, memoryLoadRatio: egress.memoryLoadRatio, cgroupMemoryBytes: egress.cgroupMemoryBytes }
+    { host: agent.agentId, idle: egress.idle, canAcceptRequest: egress.canAcceptRequest, cpuLoadRatio: egress.cpuLoadRatio, memoryLoadRatio: egress.memoryLoadRatio, cgroupMemoryBytes: egress.cgroupMemoryBytes }
   );
 }
 

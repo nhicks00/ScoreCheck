@@ -29,10 +29,12 @@ MEDIAMTX_PROGRAM_DELAY_MS=3500 ./deploy.sh
 ```
 
 Each `MEDIAMTX_COURT_N_RAW_SOURCE` defaults to `publisher`. Set it to a private
-SRT listener URL when the ingest node must pull that camera. Camera 8 is the
-working MAKI listener in the current Gate 8 hardware mix:
+SRT listener URL when the ingest node must pull that camera. Cameras 6-8 are
+MAKI listeners in the current Gate 8 hardware mix:
 
 ```bash
+export MEDIAMTX_COURT_6_RAW_SOURCE='srt://192.168.8.170:1026?mode=caller&latency=2500000'
+export MEDIAMTX_COURT_7_RAW_SOURCE='srt://192.168.8.238:1027?mode=caller&latency=2500000'
 export MEDIAMTX_COURT_8_RAW_SOURCE='srt://192.168.8.206:1025?mode=caller&latency=2500000'
 ```
 

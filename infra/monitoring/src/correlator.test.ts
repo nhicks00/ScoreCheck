@@ -131,7 +131,7 @@ describe("monitor correlator", () => {
     expect(result.courts[0]?.overallState).toBe("CRITICAL");
   });
 
-  it("maps each court to its assigned compositor and evaluates Egress capacity", () => {
+  it("maps each court to its assigned compositor and treats a busy Egress worker as healthy", () => {
     const generatedAt = "2026-07-12T12:00:00.000Z";
     const compositor = {
       ...emptyAgentSnapshot(generatedAt),
@@ -141,7 +141,7 @@ describe("monitor correlator", () => {
       nativeServices: {
         endpoints: [{ service: "egress-metrics" as const, up: true }, { service: "egress-health" as const, up: true }],
         livekit: null,
-        egress: { available: true, canAcceptRequest: true, cgroupMemoryBytes: 700_000_000, cpuLoadRatio: 0.4, memoryLoadRatio: 0.2 }
+        egress: { idle: false, canAcceptRequest: true, cgroupMemoryBytes: 700_000_000, cpuLoadRatio: 0.4, memoryLoadRatio: 0.2 }
       }
     };
     const runtimes = new Map<string, AgentRuntime>([[compositorTarget.id, { target: compositorTarget, snapshot: compositor, lastSeenAt: generatedAt, lastErrorAt: null }]]);
@@ -149,6 +149,8 @@ describe("monitor correlator", () => {
     const egress = result.courts[0]?.stages.find((stage) => stage.stage === "EGRESS");
     expect(result.courts[0]?.egressHost).toBe(compositorTarget.id);
     expect(egress?.state).toBe("HEALTHY");
+    expect(egress?.summary).toContain("processing output");
+    expect(egress?.evidence.idle).toBe(false);
     expect(egress?.evidence.host).toBe(compositorTarget.id);
   });
 

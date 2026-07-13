@@ -30,4 +30,33 @@ describe("monitoring contract", () => {
       mediaPaths: []
     })).toThrow();
   });
+
+  it("hard-cuts Egress activity from available to idle", () => {
+    const snapshot = {
+      version: 1,
+      agentId: "compositor-a",
+      role: "compositor",
+      assignedCourts: [1, 2],
+      generatedAt: new Date().toISOString(),
+      collectionDurationMs: 1,
+      collectionErrors: [],
+      host: { uptimeSeconds: 1, load1: 0, memoryTotalBytes: 1, memoryAvailableBytes: 1, diskTotalBytes: 1, diskFreeBytes: 1 },
+      services: [],
+      mediaPaths: [],
+      ffmpegBranches: [],
+      nativeServices: {
+        endpoints: [{ service: "egress-metrics", up: true }, { service: "egress-health", up: true }],
+        livekit: null,
+        egress: { idle: false, canAcceptRequest: true, cgroupMemoryBytes: 1, cpuLoadRatio: 0.1, memoryLoadRatio: 0.1 }
+      }
+    };
+    expect(agentSnapshotSchema.parse(snapshot).nativeServices.egress?.idle).toBe(false);
+    expect(() => agentSnapshotSchema.parse({
+      ...snapshot,
+      nativeServices: {
+        ...snapshot.nativeServices,
+        egress: { available: false, canAcceptRequest: true, cgroupMemoryBytes: 1, cpuLoadRatio: 0.1, memoryLoadRatio: 0.1 }
+      }
+    })).toThrow();
+  });
 });

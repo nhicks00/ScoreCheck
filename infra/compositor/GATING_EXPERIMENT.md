@@ -62,14 +62,13 @@ sync observations at beginning/middle/end
 The current operator decision is to test all eight real cameras directly,
 without synthetic sources or separate two- and four-court stages:
 
-- One dedicated `c-4` ingest node normalizes all inputs to 720p30.
+- The first attempt used one dedicated `c-4` ingest node to normalize all
+  inputs to 720p30. That topology failed and must not be repeated.
 - Streams 1-2 enter as Mevo H.264 RTMP 1080p60 stress inputs at 6 Mbps.
 - Streams 3-5 enter as AVKANS Go HEVC SRT caller 1080p30 inputs at 3 Mbps
   with 2500 ms latency.
-- Streams 6-7 are temporary MAKI Live H.264 RTMP 1080p30 inputs at 3 Mbps;
-  their current firmware did not bind SRT listeners reliably during setup.
-- Stream 8 is a MAKI Live H.264 SRT listener at 1080p30 and 3 Mbps. MediaMTX
-  pulls it through the site-to-site tunnel with 2500 ms receiver latency and
+- Streams 6-8 are MAKI Live H.264 SRT listeners at 1080p30 and 3 Mbps. MediaMTX
+  pulls them through the site-to-site tunnel with 2500 ms receiver latency and
   owns reconnects; no Mac or separate relay process participates.
 - Four dedicated `c-4` compositor hosts own courts 1-2, 3-4, 5-6, and 7-8.
 - Eight separate unlisted destinations have auto-start and auto-stop disabled.
@@ -78,6 +77,29 @@ without synthetic sources or separate two- and four-court stages:
 Every court includes its program page, encoder, destination, and scoring. A
 compositor host owns at most two courts. Sustained 80% CPU, frame loss, growing
 queues/RSS, or one court affecting its paired court fails the topology.
+
+### First full-eight result (2026-07-12)
+
+- All eight real raw feeds reached MediaMTX concurrently after Speedify was
+  corrected from Streaming/Auto (which selected TCP) to Speed/UDP. WireGuard
+  packet loss improved from 70% to 10%, but the test uplink remained congested
+  and below the preferred 75 Mbps bonded-upload floor.
+- Program startup exposed an on-demand dependency deadlock: `courtN_program`
+  polled for `courtN_preview`, while `courtN_preview` required a reader before
+  starting. Program and calibration inputs now directly trigger the preview
+  normalizer instead.
+- Eight preview normalizers pinned the four-vCPU ingest node at 393.88% CPU.
+  FFmpeg processes produced only 18-24 fps at 0.59-0.81x speed, so multiple
+  program paths timed out or never produced frames.
+- All eight egress requests were accepted, but no YouTube broadcast was
+  transitioned live. The egress jobs were stopped after the ingest capacity
+  failure; compositor capacity was not the limiting stage.
+
+Gate 2 cannot resume with one `c-4` normalizing eight 1080p inputs. The next
+candidate must either split normalization across two `c-4` hosts (four courts
+each) or qualify camera-side 720p30 H.264 outputs that remove cloud video
+transcoding. A passing run still requires at least 20% sustained CPU headroom
+and a non-congested venue uplink.
 
 Gate 2 must include fault injection: camera removal, venue network loss,
 MediaMTX restart, one egress kill, controller restart, one compositor loss,

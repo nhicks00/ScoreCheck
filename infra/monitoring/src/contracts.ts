@@ -104,7 +104,7 @@ export const nativeServiceSnapshotSchema = z.object({
     packetsDropped: z.number().nonnegative()
   }).strict().nullable(),
   egress: z.object({
-    available: z.boolean(),
+    idle: z.boolean(),
     canAcceptRequest: z.boolean(),
     cgroupMemoryBytes: z.number().nonnegative().nullable(),
     cpuLoadRatio: z.number().nonnegative().nullable(),

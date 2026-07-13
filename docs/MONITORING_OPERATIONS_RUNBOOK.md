@@ -261,7 +261,7 @@ active commentary rooms. Acceptance requires:
 
 - all 6 agents remain fresh;
 - no sustained host CPU above 80% and no growing memory trend;
-- every Egress worker remains available and accepts no more than two jobs;
+- every Egress metrics/health endpoint remains reachable, busy workers remain healthy, and no worker accepts more than its configured job capacity;
 - court bitrate and FPS stay within the selected profile;
 - score source and rendered scorebug remain aligned;
 - every injected single-court fault identifies that court without paging the other seven;

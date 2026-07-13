@@ -264,7 +264,7 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
               </div>
               <div className="monitor-service-list">
                 {agent.services.map((service) => <span key={service.name} className={service.running && service.healthy !== false && !service.oomKilled ? "is-ok" : "is-bad"}>{service.name} · {service.restartCount}r</span>)}
-                {agent.nativeServices?.egress && <span className={agent.nativeServices.egress.available ? "is-ok" : "is-bad"}>Egress {agent.nativeServices.egress.canAcceptRequest ? "ready" : "at capacity"} · CPU {formatPercentRatio(agent.nativeServices.egress.cpuLoadRatio)}</span>}
+                {agent.nativeServices?.egress && <span className={agent.nativeServices.egress.canAcceptRequest ? "is-ok" : "is-bad"}>Egress {agent.nativeServices.egress.idle ? "idle" : "busy"} · {agent.nativeServices.egress.canAcceptRequest ? "ready" : "at capacity"} · CPU {formatPercentRatio(agent.nativeServices.egress.cpuLoadRatio)}</span>}
               </div>
             </article>
           ))}

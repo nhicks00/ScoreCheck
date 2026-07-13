@@ -142,7 +142,7 @@ function compositorAgent(agentId: string, assignedCourts: number[]): AgentSnapsh
     nativeServices: {
       endpoints: [{ service: "egress-metrics", up: true }, { service: "egress-health", up: true }],
       livekit: null,
-      egress: { available: true, canAcceptRequest: true, cgroupMemoryBytes: 750_000_000, cpuLoadRatio: 0.3, memoryLoadRatio: 0.2 }
+      egress: { idle: true, canAcceptRequest: true, cgroupMemoryBytes: 750_000_000, cpuLoadRatio: 0.3, memoryLoadRatio: 0.2 }
     }
   };
 }

@@ -12,7 +12,11 @@ const makiSrtHosts = new Map([
   [7, "192.168.8.238"],
   [8, "192.168.8.206"]
 ]);
-const makiSrtPort = 1025;
+const makiSrtPorts = new Map([
+  [6, 1026],
+  [7, 1027],
+  [8, 1025]
+]);
 const lines = [
   "SCORECHECK EIGHT-CAMERA TEST - COPY/PASTE SETTINGS",
   "=================================================",
@@ -42,14 +46,13 @@ for (let court = 1; court <= 8; court += 1) {
   lines.push(`STREAM ${court} / COURT ${court}`);
   lines.push("----------------------------------------");
   const isMevo = court <= 2;
-  const isMakiRtmp = court === 6 || court === 7;
-  if (isMevo || isMakiRtmp) {
+  if (isMevo) {
     const key = `court${court}_raw?user=${user}&pass=${pass}`;
-    lines.push(`Camera: ${isMevo ? `Mevo Core ${court}` : `MAKI Live ${court - 5}`}`);
+    lines.push(`Camera: Mevo Core ${court}`);
     lines.push("Protocol: RTMP");
     lines.push("Video codec: H.264");
-    lines.push(`Resolution / frame rate: 1920x1080 at ${isMevo ? 60 : 30} fps`);
-    lines.push(`Video bitrate: ${isMevo ? 6000 : 3000} kbps CBR`);
+    lines.push("Resolution / frame rate: 1920x1080 at 60 fps");
+    lines.push("Video bitrate: 6000 kbps CBR");
     lines.push(`Server URL: rtmp://${host}:1935`);
     lines.push(`Stream key: ${key}`);
     lines.push(`Complete URL: rtmp://${host}:1935/${key}`);
@@ -79,9 +82,10 @@ for (let court = 1; court <= 8; court += 1) {
       lines.push(`Standard Stream ID alternative: ${standardStreamId}`);
     } else {
       const localHost = makiSrtHosts.get(court);
-      lines.push(`Camera listener port: ${makiSrtPort}`);
-      lines.push(`Camera SRT address: srt://${localHost}:${makiSrtPort}`);
-      lines.push(`MediaMTX raw source: srt://${localHost}:${makiSrtPort}?mode=caller&latency=2500000`);
+      const listenerPort = makiSrtPorts.get(court);
+      lines.push(`Camera listener port: ${listenerPort}`);
+      lines.push(`Camera SRT address: srt://${localHost}:${listenerPort}`);
+      lines.push(`MediaMTX raw source: srt://${localHost}:${listenerPort}?mode=caller&latency=2500000`);
       lines.push(`MediaMTX path: court${court}_raw`);
       lines.push("Stream ID / stream key: None (private listener pulled through WireGuard)");
     }
@@ -91,12 +95,11 @@ for (let court = 1; court <= 8; court += 1) {
 
 lines.push("SRT NOTES");
 lines.push("AVKANS cameras publish directly in Caller mode using their custom Stream ID.");
-lines.push("MAKI 6-7 use RTMP for this test because their SRT encoder control plane failed to bind reliably.");
-lines.push("MAKI 8 stays in Listener mode; MediaMTX reaches it through WireGuard and owns the Caller/reconnect lifecycle.");
-lines.push("Use the custom Stream ID first for AVKANS. The MAKI 8 listener does not use a stream key.");
-lines.push("Set AVKANS latency to 2500 ms. MAKI 8 caps camera latency at 500 ms; MediaMTX applies 2500 ms receive latency.");
+lines.push("MAKI 6-8 stay in Listener mode; MediaMTX reaches them through WireGuard and owns the Caller/reconnect lifecycle.");
+lines.push("Use the custom Stream ID first for AVKANS. MAKI listeners do not use stream keys.");
+lines.push("Set AVKANS latency to 2500 ms. MAKI cameras cap latency at 500 ms; MediaMTX applies 2500 ms receive latency.");
 lines.push("Encryption/passphrase: Off for this test; the Speedify tunnel provides the encrypted transport.");
-lines.push("Do not paste a public server URL or stream key into the MAKI 8 listener screen.");
+lines.push("Do not paste a public server URL or stream key into a MAKI listener screen.");
 lines.push("");
 lines.push("Do not start changing fields after a camera connects. Report which stream is online and leave it running.");
 

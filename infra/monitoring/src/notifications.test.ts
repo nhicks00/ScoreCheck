@@ -50,6 +50,41 @@ describe("notification provider validation", () => {
     expect(calls.some((url) => url.includes("api.pushover.net/1/messages.json"))).toBe(true);
     expect(calls.some((url) => url.includes("api.twilio.com"))).toBe(false);
   });
+
+  it("does not announce recovery for an incident that never paged", async () => {
+    const store = {
+      findNotification: vi.fn(async () => null)
+    } as unknown as IncidentStore;
+    const send = vi.fn<typeof fetch>();
+    const dispatcher = new NotificationDispatcher(notificationConfig(), store, send);
+    await dispatcher.handleChanges([{
+      incident: criticalIncident({ severity: "warning", status: "resolved", resolvedAt: "2026-07-12T18:01:00.000Z" }),
+      eventType: "RESOLVED"
+    }], new Date("2026-07-12T18:01:00.000Z"));
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("announces one recovery on each provider that sent the incident", async () => {
+    const openPushover = storedNotification({ providerMessageId: "receipt-1", status: "delivered", deliveredAt: "2026-07-12T18:00:30.000Z" });
+    const recovery = storedNotification({ id: "00000000-0000-4000-8000-000000000004", kind: "recovery" });
+    const store = {
+      findNotification: vi.fn(async (_incidentId: string, provider: string, kind: string) => provider === "pushover" && kind === "open" ? openPushover : null),
+      ensureNotification: vi.fn(async () => ({ notification: recovery, created: true })),
+      updateNotification: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({ ...recovery, ...patch }))
+    } as unknown as IncidentStore;
+    const send = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.includes("/cancel.json")) return new Response(JSON.stringify({ status: 1 }), { status: 200 });
+      return new Response(JSON.stringify({ status: 1, request: "request-recovery" }), { status: 200 });
+    });
+    const dispatcher = new NotificationDispatcher(notificationConfig(), store, send);
+    await dispatcher.handleChanges([{
+      incident: criticalIncident({ status: "resolved", resolvedAt: "2026-07-12T18:01:00.000Z" }),
+      eventType: "RESOLVED"
+    }], new Date("2026-07-12T18:01:00.000Z"));
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(store.ensureNotification).toHaveBeenCalledWith(openPushover.incidentId, "pushover", "recovery", expect.any(Date));
+  });
 });
 
 function notificationConfig() {
