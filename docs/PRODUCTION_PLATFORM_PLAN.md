@@ -117,6 +117,16 @@ less than 80% CPU, real-time FFmpeg speed, stable 30 fps output, and a
 non-congested venue uplink before Gate 2 can pass. The temporary MAKI
 assignments do not alter the final AVKANS hardware target.
 
+Venue camera routing is selective rather than router-wide. Speedify runs in
+Speed mode over UDP with its default route disabled; only MediaMTX RTMP/SRT
+ingest ports enter the bonded tunnel. This keeps operator and camera-control
+traffic independent and prevents the ingest-IP host route that bypassed
+Speedify during the July 12 test. Routing must be active before publishers
+start, and the worst sustained bonded upload must be at least 75 Mbps. The
+temporary MAKI listener paths still require WireGuard and failed the available
+home-network capacity test; production qualification waits for the final six
+direct-caller AVKANS cameras or a stronger venue uplink.
+
 ## Reliability rules
 
 - Program and preview latency classes are explicit and cannot silently switch.
