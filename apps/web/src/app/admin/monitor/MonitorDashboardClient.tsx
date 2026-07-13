@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StreamPlayer } from "@/components/StreamPlayer";
-import type { MonitorCourt, MonitorCourtPipelineRange, MonitorHealthState, MonitorIncident, MonitorSilence, MonitorSnapshotEnvelope, MonitorStage } from "@/lib/monitoringTypes";
+import type { MonitorCourt, MonitorCourtPipelineRange, MonitorHealthState, MonitorIncident, MonitorMediaPath, MonitorSilence, MonitorSnapshotEnvelope, MonitorStage } from "@/lib/monitoringTypes";
 
 const POLL_INTERVAL_MS = 5_000;
 const STATE_RANK: Record<MonitorHealthState, number> = { CRITICAL: 9, UNKNOWN: 8, DEGRADED: 7, RECOVERING: 6, STARTING: 5, HEALTHY: 4, MAINTENANCE: 3, EXPECTED_OFF: 2, NOT_APPLICABLE: 1 };
@@ -335,7 +335,12 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
   const score = court.competition?.score;
   const issue = court.stages.find((stage) => stage.state === "CRITICAL") ?? court.stages.find((stage) => ["DEGRADED", "UNKNOWN"].includes(stage.state));
   const thumbnailFresh = court.thumbnail && nowMs - Date.parse(court.thumbnail.receivedAt) <= 45_000;
-  const loss = browser?.video.packetsLost != null && browser.video.packetsReceived != null ? percent(browser.video.packetsLost, browser.video.packetsLost + browser.video.packetsReceived) : "--";
+  const browserLost = browser?.video.packetsLost;
+  const browserReceived = browser?.video.packetsReceived;
+  const loss = browserLost != null && browserReceived != null
+    ? percent(browserLost, browserLost + browserReceived)
+    : transportLoss(raw);
+  const rttMs = browser?.video.rttMs ?? raw?.transport?.rttMs;
   return (
     <article className={`monitor-court ${selected ? "is-selected" : ""}`} data-state={court.overallState}>
       <header className="monitor-court-head">
@@ -355,7 +360,7 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
         <Metric label="Preview" value={formatFps(preview?.framesPerSecond)} />
         <Metric label="Program" value={formatFps(browser?.video.framesPerSecond)} />
         <Metric label="Res" value={browser?.video.width && browser.video.height ? `${browser.video.width}×${browser.video.height}` : "--"} />
-        <Metric label="RTT" value={formatMs(browser?.video.rttMs)} />
+        <Metric label="RTT" value={formatMs(rttMs)} />
         <Metric label="Loss" value={loss} />
       </div>
       <div className="monitor-trends" aria-label="Five minute trends">
@@ -369,6 +374,7 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
         {current ? <><div><strong>{current.teamA ?? "TBD"}</strong><span>{score ? `${score.teamASets} · ${score.teamAScore}` : "--"}</span></div><div><strong>{current.teamB ?? "TBD"}</strong><span>{score ? `${score.teamBSets} · ${score.teamBScore}` : "--"}</span></div><p>{current.roundName ?? "Match"}{current.matchNumber ? ` · #${current.matchNumber}` : ""}</p></> : <p>No current match</p>}
       </div>
       <div className="monitor-court-footer">
+        <span className="monitor-source-profile" title={sourceDetail(raw)}><Signal size={14} /> {sourceProfile(raw)}</span>
         <span><Camera size={14} /> {visualLabel(browser)}</span>
         <span><Headphones size={14} /> {commentaryLabel(browser)}</span>
         <span><Youtube size={14} /> {friendlyState(court.youtube?.state ?? "NOT_APPLICABLE")}</span>
@@ -449,6 +455,32 @@ function formatFps(value: number | null | undefined): string {
 
 function formatMs(value: number | null | undefined): string {
   return value == null ? "--" : `${Math.round(value)} ms`;
+}
+
+function sourceProfile(path: MonitorMediaPath | undefined): string {
+  if (!path?.sourceProtocol) return "source profile --";
+  const mode = path.sourceMode ? ` ${path.sourceMode.toLowerCase()}` : "";
+  const resolution = path.videoWidth && path.videoHeight ? ` ${path.videoWidth}×${path.videoHeight}` : "";
+  const video = path.videoCodec ? ` · ${path.videoCodec}${resolution}` : "";
+  const audio = path.audioCodec ? ` · ${path.audioCodec}` : "";
+  return `${path.sourceProtocol}${mode}${video}${audio}`;
+}
+
+function sourceDetail(path: MonitorMediaPath | undefined): string {
+  if (!path) return "No current media source details.";
+  const details = [sourceProfile(path)];
+  if (path.videoProfile) details.push(`video profile ${path.videoProfile}`);
+  if (path.audioSampleRateHz) details.push(`${Math.round(path.audioSampleRateHz / 1_000)} kHz audio`);
+  if (path.audioChannelCount) details.push(`${path.audioChannelCount} audio channels`);
+  if (path.transport?.receiveBufferMs != null) details.push(`${Math.round(path.transport.receiveBufferMs)} ms receive buffer`);
+  if (path.transport?.configuredLatencyMs != null) details.push(`${Math.round(path.transport.configuredLatencyMs)} ms configured latency`);
+  return details.join(" · ");
+}
+
+function transportLoss(path: MonitorMediaPath | undefined): string {
+  const lost = path?.transport?.packetsLost;
+  const received = path?.transport?.packetsReceived;
+  return lost != null && received != null ? percent(lost, lost + received) : "--";
 }
 
 function percent(value: number, total: number): string {

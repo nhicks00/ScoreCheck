@@ -25,6 +25,15 @@ export class AgentMetrics {
   private readonly pathBytesSent = new Gauge({ name: "scorecheck_media_path_bytes_sent_total", help: "Media path cumulative bytes sent.", labelNames: ["agent", "court", "branch"], registers: [this.registry] });
   private readonly pathBitrate = new Gauge({ name: "scorecheck_media_path_inbound_bitrate_bps", help: "Derived inbound bitrate from consecutive byte samples.", labelNames: ["agent", "court", "branch"], registers: [this.registry] });
   private readonly pathFrameErrors = new Gauge({ name: "scorecheck_media_path_frame_errors_total", help: "Media path cumulative inbound frame errors.", labelNames: ["agent", "court", "branch"], registers: [this.registry] });
+  private readonly transportMetricsAvailable = new Gauge({ name: "scorecheck_media_transport_metrics_available", help: "Whether protocol-specific source transport metrics are available.", labelNames: ["agent", "court", "branch", "protocol"], registers: [this.registry] });
+  private readonly transportRtt = new Gauge({ name: "scorecheck_media_transport_rtt_ms", help: "Source transport round-trip time in milliseconds.", labelNames: ["agent", "court", "branch", "protocol"], registers: [this.registry] });
+  private readonly transportPacketsReceived = new Gauge({ name: "scorecheck_media_transport_packets_received_total", help: "Source transport cumulative received packets.", labelNames: ["agent", "court", "branch", "protocol"], registers: [this.registry] });
+  private readonly transportPacketsLost = new Gauge({ name: "scorecheck_media_transport_packets_lost_total", help: "Source transport cumulative lost packets.", labelNames: ["agent", "court", "branch", "protocol"], registers: [this.registry] });
+  private readonly transportPacketsRetransmitted = new Gauge({ name: "scorecheck_media_transport_packets_retransmitted_total", help: "Source transport cumulative retransmitted packets.", labelNames: ["agent", "court", "branch", "protocol"], registers: [this.registry] });
+  private readonly transportPacketsDropped = new Gauge({ name: "scorecheck_media_transport_packets_dropped_total", help: "Source transport cumulative dropped packets.", labelNames: ["agent", "court", "branch", "protocol"], registers: [this.registry] });
+  private readonly transportReceiveRate = new Gauge({ name: "scorecheck_media_transport_receive_rate_bps", help: "Source transport receive rate in bits per second.", labelNames: ["agent", "court", "branch", "protocol"], registers: [this.registry] });
+  private readonly transportReceiveBuffer = new Gauge({ name: "scorecheck_media_transport_receive_buffer_ms", help: "Source transport receive buffer in milliseconds.", labelNames: ["agent", "court", "branch", "protocol"], registers: [this.registry] });
+  private readonly transportConfiguredLatency = new Gauge({ name: "scorecheck_media_transport_configured_latency_ms", help: "Configured source transport latency in milliseconds.", labelNames: ["agent", "court", "branch", "protocol"], registers: [this.registry] });
   private readonly ffmpegProgressFresh = new Gauge({ name: "scorecheck_ffmpeg_progress_fresh", help: "Whether FFmpeg branch progress has updated within twenty seconds.", labelNames: ["agent", "court", "branch"], registers: [this.registry] });
   private readonly ffmpegFps = new Gauge({ name: "scorecheck_ffmpeg_frames_per_second", help: "FFmpeg branch output frames per second.", labelNames: ["agent", "court", "branch"], registers: [this.registry] });
   private readonly ffmpegBitrate = new Gauge({ name: "scorecheck_ffmpeg_output_bitrate_bps", help: "FFmpeg branch reported output bitrate in bits per second.", labelNames: ["agent", "court", "branch"], registers: [this.registry] });
@@ -75,6 +84,7 @@ export class AgentMetrics {
     }
 
     for (const metric of [this.pathReady, this.pathReaders, this.pathBytesReceived, this.pathBytesSent, this.pathBitrate, this.pathFrameErrors]) metric.reset();
+    for (const metric of [this.transportMetricsAvailable, this.transportRtt, this.transportPacketsReceived, this.transportPacketsLost, this.transportPacketsRetransmitted, this.transportPacketsDropped, this.transportReceiveRate, this.transportReceiveBuffer, this.transportConfiguredLatency]) metric.reset();
     if (snapshot.role === "mediamtx") {
       for (let court = 1; court <= 8; court += 1) {
         for (const branch of ["raw", "preview", "program"] as const) {
@@ -96,6 +106,18 @@ export class AgentMetrics {
       this.pathBytesSent.set(labels, path.bytesSent);
       if (path.inboundBitrateBps != null) this.pathBitrate.set(labels, path.inboundBitrateBps);
       this.pathFrameErrors.set(labels, path.frameErrors);
+      if (path.sourceProtocol) {
+        const transportLabels = { ...labels, protocol: path.sourceProtocol };
+        this.transportMetricsAvailable.set(transportLabels, path.transport ? 1 : 0);
+        if (path.transport?.rttMs != null) this.transportRtt.set(transportLabels, path.transport.rttMs);
+        if (path.transport?.packetsReceived != null) this.transportPacketsReceived.set(transportLabels, path.transport.packetsReceived);
+        if (path.transport?.packetsLost != null) this.transportPacketsLost.set(transportLabels, path.transport.packetsLost);
+        if (path.transport?.packetsRetransmitted != null) this.transportPacketsRetransmitted.set(transportLabels, path.transport.packetsRetransmitted);
+        if (path.transport?.packetsDropped != null) this.transportPacketsDropped.set(transportLabels, path.transport.packetsDropped);
+        if (path.transport?.receiveRateBps != null) this.transportReceiveRate.set(transportLabels, path.transport.receiveRateBps);
+        if (path.transport?.receiveBufferMs != null) this.transportReceiveBuffer.set(transportLabels, path.transport.receiveBufferMs);
+        if (path.transport?.configuredLatencyMs != null) this.transportConfiguredLatency.set(transportLabels, path.transport.configuredLatencyMs);
+      }
     }
 
     for (const metric of [this.ffmpegProgressFresh, this.ffmpegFps, this.ffmpegBitrate, this.ffmpegDropped, this.ffmpegDuplicated, this.ffmpegSpeed]) metric.reset();

@@ -1,6 +1,6 @@
 import { createHmac, randomUUID } from "node:crypto";
+import { MONITORING_CONTRACT_VERSION } from "./monitoringContract";
 
-const MONITORING_CONTRACT_VERSION = 1;
 const CREDENTIAL_TTL_MS = 18 * 60 * 60 * 1_000;
 
 export type ProgramMonitoringConnection = {

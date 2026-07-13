@@ -31,8 +31,16 @@ describe("monitor correlator", () => {
         inboundBitrateBps: null,
         frameErrors: 0,
         readerCount: 0,
+        sourceProtocol: "RTMP",
+        sourceMode: "PUSH",
         videoCodec: "H264",
-        audioCodec: "MPEG4Audio"
+        audioCodec: "AAC",
+        videoWidth: 1920,
+        videoHeight: 1080,
+        videoProfile: "Main",
+        audioSampleRateHz: 48_000,
+        audioChannelCount: 2,
+        transport: null
       }]
     };
     const runtimes = new Map<string, AgentRuntime>([[target.id, { target, snapshot, lastSeenAt: generatedAt, lastErrorAt: null }]]);
@@ -56,8 +64,16 @@ describe("monitor correlator", () => {
         inboundBitrateBps: 0,
         frameErrors: 0,
         readerCount: 0,
+        sourceProtocol: null,
+        sourceMode: null,
         videoCodec: null,
-        audioCodec: null
+        audioCodec: null,
+        videoWidth: null,
+        videoHeight: null,
+        videoProfile: null,
+        audioSampleRateHz: null,
+        audioChannelCount: null,
+        transport: null
       }]
     };
     const runtimes = new Map<string, AgentRuntime>([[target.id, { target, snapshot, lastSeenAt: generatedAt, lastErrorAt: null }]]);
@@ -99,8 +115,16 @@ describe("monitor correlator", () => {
         inboundBitrateBps: 2_000_000,
         frameErrors: 0,
         readerCount: 1,
+        sourceProtocol: "RTMP",
+        sourceMode: "PUSH",
         videoCodec: "H264",
-        audioCodec: "MPEG4Audio"
+        audioCodec: "AAC",
+        videoWidth: 1920,
+        videoHeight: 1080,
+        videoProfile: "Main",
+        audioSampleRateHz: 48_000,
+        audioChannelCount: 2,
+        transport: null
       }]
     };
     const incident: IncidentSnapshot = {
@@ -202,15 +226,23 @@ function rawAgentSnapshot(generatedAt: string): AgentSnapshot {
       inboundBitrateBps: 4_000_000,
       frameErrors: 0,
       readerCount: 1,
+      sourceProtocol: "RTMP",
+      sourceMode: "PUSH",
       videoCodec: "H264",
-      audioCodec: "MPEG4Audio"
+      audioCodec: "AAC",
+      videoWidth: 1920,
+      videoHeight: 1080,
+      videoProfile: "Main",
+      audioSampleRateHz: 48_000,
+      audioChannelCount: 2,
+      transport: null
     }]
   };
 }
 
 function browserHeartbeat(observedAt: string, visual: Partial<BrowserHeartbeatSnapshot["visual"]> = {}): BrowserHeartbeatSnapshot {
   const payload = browserHeartbeatPayloadSchema.parse({
-    version: 1,
+    version: 2,
     credentialId: "40000000-0000-4000-8000-000000000001",
     courtNumber: 1,
     heartbeatSeq: 1,
@@ -309,7 +341,7 @@ function liveControlPlane(observedAt: string): ControlPlaneSnapshot {
 
 function emptyAgentSnapshot(generatedAt: string): AgentSnapshot {
   return {
-    version: 1,
+    version: 2,
     agentId: "preview",
     role: "mediamtx",
     assignedCourts: [],

@@ -6,6 +6,7 @@
  */
 
 import type { ProgramVisualHealth } from "./visualHealth";
+import { MONITORING_CONTRACT_VERSION } from "./monitoringContract";
 
 /** The stage is authored at 720p logical size and scaled to the viewport. */
 export const PROGRAM_STAGE_WIDTH = 1280;
@@ -109,7 +110,7 @@ export function programWatchdogStep(
 }
 
 export type ProgramMonitorHeartbeatBody = {
-  version: 1;
+  version: typeof MONITORING_CONTRACT_VERSION;
   credentialId: string;
   courtNumber: number;
   heartbeatSeq: number;
@@ -271,7 +272,7 @@ export function buildProgramMonitorHeartbeat(input: {
 }): ProgramMonitorHeartbeatBody {
   const stream = input.streamHealth;
   return {
-    version: 1,
+    version: MONITORING_CONTRACT_VERSION,
     credentialId: input.credentialId,
     courtNumber: Math.trunc(input.courtNumber),
     heartbeatSeq: Math.max(1, Math.trunc(input.heartbeatSeq)),

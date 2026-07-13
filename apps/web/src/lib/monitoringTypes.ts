@@ -1,3 +1,5 @@
+import type { MONITORING_CONTRACT_VERSION } from "./monitoringContract";
+
 export type MonitorHealthState = "EXPECTED_OFF" | "STARTING" | "HEALTHY" | "DEGRADED" | "CRITICAL" | "RECOVERING" | "UNKNOWN" | "MAINTENANCE" | "NOT_APPLICABLE";
 export type MonitorStageName = "VENUE" | "RAW_INGEST" | "PREVIEW" | "PROGRAM_PATH" | "PROGRAM_BROWSER" | "COMMENTARY" | "SCORE_SOURCE" | "SCORE_RENDER" | "EGRESS" | "YOUTUBE" | "HOST" | "CONTROL" | "MONITORING" | "NOTIFICATION";
 
@@ -24,8 +26,25 @@ export type MonitorMediaPath = {
   inboundBitrateBps: number | null;
   frameErrors: number;
   readerCount: number;
+  sourceProtocol: "RTMP" | "SRT" | "RTSP" | "WEBRTC" | "HLS" | null;
+  sourceMode: "PUSH" | "PULL" | null;
   videoCodec: string | null;
   audioCodec: string | null;
+  videoWidth: number | null;
+  videoHeight: number | null;
+  videoProfile: string | null;
+  audioSampleRateHz: number | null;
+  audioChannelCount: number | null;
+  transport: {
+    rttMs: number | null;
+    packetsReceived: number | null;
+    packetsLost: number | null;
+    packetsRetransmitted: number | null;
+    packetsDropped: number | null;
+    receiveRateBps: number | null;
+    receiveBufferMs: number | null;
+    configuredLatencyMs: number | null;
+  } | null;
 };
 
 export type MonitorFfmpegBranch = {
@@ -207,7 +226,7 @@ export type MonitorAgent = {
 };
 
 export type MonitorSnapshot = {
-  version: 1;
+  version: typeof MONITORING_CONTRACT_VERSION;
   generatedAt: string;
   collector: { state: MonitorHealthState; agentsExpected: number; agentsFresh: number };
   controlPlane: { state: MonitorHealthState; observedAt: string | null; ageMs: number | null; worker: { state: MonitorHealthState; status: string | null; lastSeenAt: string | null; ageMs: number | null } };

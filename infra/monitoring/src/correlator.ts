@@ -555,7 +555,15 @@ function pathStage(stage: MonitoringStage, branch: MediaPathSnapshot["branch"], 
       ready: path.ready,
       bitrateBps: path.inboundBitrateBps,
       readers: path.readerCount,
-      frameErrors: path.frameErrors
+      frameErrors: path.frameErrors,
+      sourceProtocol: path.sourceProtocol,
+      sourceMode: path.sourceMode,
+      videoCodec: path.videoCodec,
+      videoWidth: path.videoWidth,
+      videoHeight: path.videoHeight,
+      transportRttMs: path.transport?.rttMs ?? null,
+      transportPacketsLost: path.transport?.packetsLost ?? null,
+      transportPacketsReceived: path.transport?.packetsReceived ?? null
     }
   };
 }

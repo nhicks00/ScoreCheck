@@ -1,6 +1,6 @@
 # ScoreCheck Monitoring Telemetry Contract
 
-Status: normative version 1 contract for the unified monitoring system.
+Status: normative version 2 contract for the unified monitoring system.
 
 ## Invariants
 
@@ -23,10 +23,12 @@ Status: normative version 1 contract for the unified monitoring system.
 Every agent snapshot and monitor API response contains:
 
 ```json
-{ "version": 1 }
+{ "version": 2 }
 ```
 
-Version 1 may add optional fields. Removing or changing field meaning requires a new version.
+Version 2 is a hard cutover across the web producer, host agents, monitor API,
+and dashboard. Removing or changing field meaning requires a new version.
+Version 1 is rejected; no compatibility shim is maintained.
 
 ## Stages
 
@@ -147,6 +149,15 @@ scorecheck_media_path_bytes_received_total
 scorecheck_media_path_bytes_sent_total
 scorecheck_media_path_inbound_bitrate_bps
 scorecheck_media_path_frame_errors_total
+scorecheck_media_transport_metrics_available
+scorecheck_media_transport_rtt_ms
+scorecheck_media_transport_packets_received_total
+scorecheck_media_transport_packets_lost_total
+scorecheck_media_transport_packets_retransmitted_total
+scorecheck_media_transport_packets_dropped_total
+scorecheck_media_transport_receive_rate_bps
+scorecheck_media_transport_receive_buffer_ms
+scorecheck_media_transport_configured_latency_ms
 scorecheck_native_endpoint_up
 scorecheck_compositor_court_assignment
 scorecheck_egress_idle
@@ -164,6 +175,15 @@ reachability and required-metric validity; admission capacity is reported
 separately by `scorecheck_egress_can_accept_request`.
 
 Counters remain cumulative. Prometheus recording rules derive rates.
+
+Media path snapshots also carry bounded source protocol and mode, video/audio
+codec, source dimensions/profile, audio sample rate/channel count, and nullable
+transport quality. MediaMTX path details are fetched once per ready epoch and
+cached, rather than polled per path every five seconds; failed detail requests
+retry no more than once every 30 seconds. SRT connection quality
+is collected from one host-local list request per agent interval. Pull-mode SRT
+sources may not expose per-connection transport counters in MediaMTX and remain
+explicitly nullable rather than inferred as healthy.
 
 ## Program-browser and content metrics
 

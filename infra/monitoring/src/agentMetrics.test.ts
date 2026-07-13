@@ -26,11 +26,57 @@ describe("agent metrics", () => {
     expect(output).toContain('scorecheck_egress_metrics_valid{agent="bvm-compositor-a"} 0');
     expect(output).not.toContain('scorecheck_egress_idle{agent="bvm-compositor-a"}');
   });
+
+  it("exports bounded source transport metrics without identity labels", async () => {
+    const metrics = new AgentMetrics();
+    const snapshot = compositorSnapshot({ idle: true, canAcceptRequest: true });
+    snapshot.role = "mediamtx";
+    snapshot.assignedCourts = [];
+    snapshot.mediaPaths = [{
+      name: "court3_raw",
+      courtNumber: 3,
+      branch: "raw",
+      ready: true,
+      readySince: "2026-07-12T18:00:00.000Z",
+      bytesReceived: 12_000_000,
+      bytesSent: 0,
+      inboundBitrateBps: 3_250_000,
+      frameErrors: 0,
+      readerCount: 0,
+      sourceProtocol: "SRT",
+      sourceMode: "PUSH",
+      videoCodec: "H265",
+      audioCodec: "AAC",
+      videoWidth: 1920,
+      videoHeight: 1080,
+      videoProfile: "Main",
+      audioSampleRateHz: 48_000,
+      audioChannelCount: 2,
+      transport: {
+        rttMs: 138,
+        packetsReceived: 20_000,
+        packetsLost: 40,
+        packetsRetransmitted: 120,
+        packetsDropped: 3,
+        receiveRateBps: 3_250_000,
+        receiveBufferMs: 2_610,
+        configuredLatencyMs: 2_500
+      }
+    }];
+    metrics.update(snapshot);
+    const output = await metrics.registry.metrics();
+
+    expect(output).toContain('scorecheck_media_transport_metrics_available{agent="bvm-compositor-a",court="3",branch="raw",protocol="SRT"} 1');
+    expect(output).toContain('scorecheck_media_transport_rtt_ms{agent="bvm-compositor-a",court="3",branch="raw",protocol="SRT"} 138');
+    expect(output).toContain('scorecheck_media_transport_packets_lost_total{agent="bvm-compositor-a",court="3",branch="raw",protocol="SRT"} 40');
+    expect(output).not.toContain("remoteAddr");
+    expect(output).not.toContain("query=");
+  });
 });
 
 function compositorSnapshot(egress: { idle: boolean; canAcceptRequest: boolean }): AgentSnapshot {
   return {
-    version: 1,
+    version: 2,
     agentId: "bvm-compositor-a",
     role: "compositor",
     assignedCourts: [1, 2],

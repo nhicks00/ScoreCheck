@@ -1,7 +1,7 @@
 import express from "express";
 import { Counter, Gauge, Registry } from "prom-client";
 import { z } from "zod";
-import { agentSnapshotSchema, STAGES, type MonitoringSilence, type MonitorSnapshot } from "./contracts.js";
+import { agentSnapshotSchema, MONITORING_CONTRACT_VERSION, STAGES, type MonitoringSilence, type MonitorSnapshot } from "./contracts.js";
 import { loadServiceConfig, type AgentTarget } from "./config.js";
 import { buildMonitorSnapshot, type AgentRuntime } from "./correlator.js";
 import { IncidentManager } from "./incidents.js";
@@ -100,7 +100,7 @@ app.disable("x-powered-by");
 app.use(express.json({ limit: "64kb" }));
 app.get("/healthz", (_req, res) => {
   const ageMs = Date.now() - Date.parse(snapshot.generatedAt);
-  res.status(ageMs <= config.intervalMs * 3 ? 200 : 503).json({ version: 1, status: ageMs <= config.intervalMs * 3 ? "ok" : "stale", ageMs });
+  res.status(ageMs <= config.intervalMs * 3 ? 200 : 503).json({ version: MONITORING_CONTRACT_VERSION, status: ageMs <= config.intervalMs * 3 ? "ok" : "stale", ageMs });
 });
 app.get("/metrics", bearerAuth(config.token), async (_req, res) => {
   res.type(registry.contentType).send(await registry.metrics());

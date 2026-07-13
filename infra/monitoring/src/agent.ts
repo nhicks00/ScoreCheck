@@ -1,7 +1,7 @@
 import express from "express";
 import { AgentCollector } from "./collectors.js";
 import { loadAgentConfig } from "./config.js";
-import type { AgentSnapshot } from "./contracts.js";
+import { MONITORING_CONTRACT_VERSION, type AgentSnapshot } from "./contracts.js";
 import { AgentMetrics } from "./agentMetrics.js";
 import { bearerAuth } from "./security.js";
 
@@ -15,7 +15,7 @@ app.disable("x-powered-by");
 app.get("/healthz", (_req, res) => {
   const ageMs = latest ? Date.now() - Date.parse(latest.generatedAt) : null;
   res.status(ageMs != null && ageMs <= config.intervalMs * 3 ? 200 : 503).json({
-    version: 1,
+    version: MONITORING_CONTRACT_VERSION,
     status: ageMs != null && ageMs <= config.intervalMs * 3 ? "ok" : "stale",
     agentId: config.agentId,
     role: config.role,
