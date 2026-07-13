@@ -4,6 +4,7 @@
 !vision_scoring/uv.lock
 !vision_scoring/examples/dataset-artifacts/locks/*.lock
 !vision_scoring/examples/rights-evidence/locks/*.lock
+!vision_scoring/examples/ball-label-packs/locks/*.lock
 *~
 
 # Xcode
