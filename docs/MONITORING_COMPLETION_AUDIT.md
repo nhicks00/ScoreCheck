@@ -25,7 +25,7 @@ providers or real media feeds.
 | Phone paging | Pushover emergency acknowledgement plus Twilio SMS escalation and recovery logic | Pushover delivery/recovery proven; Twilio sender purchased but blocked by pending A2P registration; controlled acknowledgement/escalation gate pending |
 | Independent dead-man | Baseline and active Healthchecks senders with coverage-aware cadence | Configured; baseline running and active idle-paused; withheld-ping phone gate pending |
 | One-court real fault gate | Camera, network, preview, browser, commentary, score, Egress, YouTube, agent, dead-man faults | Ten-hour transport/sync soak passed; injected fault matrix pending |
-| Eight-court real load/fault gate | Four compositors, eight representative feeds, two commentary rooms, score on all courts | First load attempt exposed an invalid shared-normalizer topology; revised-topology gate pending |
+| Eight-court real load/fault gate | Four compositors, eight representative feeds, two commentary rooms, score on all courts | Fail-closed routing endurance passed under the temporary topology; ingest headroom and viewer quality failed; revised-topology gate pending |
 
 ## Deterministic isolation gate
 
@@ -60,6 +60,20 @@ accepted all eight jobs and the four compositor hosts were not the bottleneck.
 The next gate must split normalization by host/court or qualify camera-side
 720p H.264 before repeating the load test.
 
+The extended soak also produced a sustained ingest-host load spike: load1
+reached 13.85 and remained at 13.47 after 30 seconds on the four-vCPU MediaMTX
+host while three FFmpeg normalizers and MediaMTX were the active CPU leaders.
+All raw and derived paths, browser samples, Egress outputs, routing, and YouTube
+remained healthy during the recheck. This is capacity-headroom risk evidence,
+not proof that host load caused the separate browser pacing defect.
+
+The router briefly showed two exact Speedify watchdog command lines at
+`19:28Z`, then recurred with three exact processes at `19:59Z`. Both episodes
+self-converged to the single long-lived `procd` instance without route,
+firewall, fail-closed, publisher, or output drift. This is a recurring
+transient supervision defect requiring a root-cause review and atomic
+single-instance guard, not sustained steady-state duplication.
+
 The July 13 extended soak exposed a separate downstream quality defect. Courts
 1, 3, and 5 continued accumulating Chrome decode drops and freezes after their
 one-time deployment reload even though they rendered at 30-31 fps, RTP loss was
@@ -71,10 +85,29 @@ seconds while adding 413 dropped frames, 22 freezes, and 12.803 seconds of
 freeze duration; Court 3 reconnected WHEP in-page, and Courts 3 and 5 exceeded
 1.2 seconds of jitter-buffer delay. A later synchronized 50-second event added
 599, 130, and 169 browser drops on Courts 1, 3, and 5 while all upstream
-program FFmpeg processes remained at 30 fps and RTP loss stayed zero. Reset-safe
-quality-rate telemetry, live-only alert bands, and a sequential
+program FFmpeg processes remained at 30 fps and RTP loss stayed zero. Court 5
+then performed an unexplained isolated page reload at `15:13:23Z`; it recovered
+at 30 fps while a contemporaneous four-process zombie increase held stable.
+That timing is recorded as correlation, not causation. Reset-safe quality-rate
+telemetry was further justified when Courts 3 and 5, and later Court 1,
+reconnected WHEP in-page and reset their peer-connection counters without
+changing page-load identity. Live-only alert bands and a sequential
 preview/program/preview comparator pass locally and await a coordinated
 post-soak deployment and test-only gate.
+
+The user-directed final endpoint at `21:01Z-21:02Z` captured another synchronized
+degradation rather than a clean tail. Courts 1 and 3 initially sampled at 21
+and 24 browser fps while Court 5 remained in `stabilizing`; the 52-second
+recheck reached 34 fps catch-up, 27 fps, and still-stabilizing respectively.
+Since `20:43Z`, the three browsers added 16,925 dropped frames, 594 freezes, and
+385.302 seconds of freeze duration in aggregate while RTP loss remained zero
+and upstream program FFmpeg stayed near 30 fps with zero drops. MediaMTX load
+remained above 12 on four vCPUs during the recheck and zombies increased from
+114 to 121. Raw paths, derived branches, routing, Egress, and YouTube stayed
+available. Final classification: fail-closed routing endurance passed under
+this temporary topology; viewer quality and ingest-host production headroom
+failed; final venue capacity remains unqualified because the measured upload
+floor was 31.8 Mbps and Cameras 6-8 were temporary WireGuard pulls.
 
 ## Remaining external blockers
 
@@ -91,9 +124,10 @@ and operator prerequisites are:
 3. An existing production admin session for a production-browser visual pass;
    Vercel intentionally does not export the sensitive admin secret.
 
-Operator approval for isolated monitoring fault gates is recorded, and Court 4
-is available as a raw-only test feed. Execution is intentionally deferred until
-the active soak and deployment freeze end at 16:30 CDT on 2026-07-13.
+Operator approval for isolated monitoring fault gates is recorded, and Camera 4
+is available as a raw-only test feed. The user ended the active soak at 16:00
+CDT on 2026-07-13 after the final recheck. Further test-only gates still require
+explicit coordination, but the soak deployment freeze is closed.
 
 The exact deployed dashboard build passed local authenticated visual validation
 against the live read-only monitor API at 1600x1000 and 390x844: eight cards,
