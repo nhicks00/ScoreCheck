@@ -518,7 +518,7 @@ if (
     raise RuntimeError("a fixed V1 training configuration descriptor changed")
 
 
-def test_exclusion_commitment_sha256_v1(
+def compute_test_exclusion_commitment_sha256_v1(
     dataset_id: str,
     test_source_ids: tuple[str, ...],
 ) -> str:
@@ -2768,10 +2768,10 @@ __all__ = [
     "causal_ball_loss_config_descriptor_v1",
     "causal_ball_model_config_descriptor_v1",
     "causal_ball_optimizer_config_descriptor_v1",
+    "compute_test_exclusion_commitment_sha256_v1",
     "derive_primary_sampling_stratum_v1",
     "leakage_group_sha256_v1",
     "target_tensor_set_sha256_v1",
-    "test_exclusion_commitment_sha256_v1",
     "training_example_reference_set_sha256_v1",
     "training_schedule_ranking_sha256_v1",
 ]

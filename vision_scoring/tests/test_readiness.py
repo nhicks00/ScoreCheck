@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import base64
 import hashlib
 import io
@@ -603,11 +603,15 @@ print(json.dumps({"listed": sorted(readiness._VERIFIER_SOURCE_FILES), "loaded": 
             replace(report, data_source_count=513)
 
         proof = report.source_rights_proofs[0]
+        day_after_verification = (
+            datetime.strptime(proof.verified_on, "%Y-%m-%d").date()
+            + timedelta(days=1)
+        ).isoformat()
         invalid_proof_cases = (
             ({"source_id": "söurce"}, "ASCII-stable"),
             ({"evidence_sha256s": ()}, "bounded non-empty"),
             (
-                {"rights_reviewed_on": "2026-07-13"},
+                {"rights_reviewed_on": day_after_verification},
                 "review cannot occur after",
             ),
             ({"rights_expires_on": "2026-07-11"}, "expired"),

@@ -71,10 +71,10 @@ from vision_scoring.training_admission_contracts import (
     causal_ball_loss_config_descriptor_v1,
     causal_ball_model_config_descriptor_v1,
     causal_ball_optimizer_config_descriptor_v1,
+    compute_test_exclusion_commitment_sha256_v1,
     derive_primary_sampling_stratum_v1,
     leakage_group_sha256_v1,
     target_tensor_set_sha256_v1,
-    test_exclusion_commitment_sha256_v1,
     training_example_reference_set_sha256_v1,
     training_schedule_ranking_sha256_v1,
 )
@@ -343,7 +343,7 @@ def _dataset() -> TrainingDatasetManifestV1:
         source_rights_proof_set_sha256=_digest(1107),
         source_label_pack_proof_set_sha256=_digest(1108),
         split_manifest_sha256=_digest(1109),
-        test_exclusion_commitment_sha256=test_exclusion_commitment_sha256_v1(
+        test_exclusion_commitment_sha256=compute_test_exclusion_commitment_sha256_v1(
             "beach-volleyball-v1", ("secret-test-source",)
         ),
         test_source_count=1,
@@ -541,7 +541,7 @@ def _schedule_dataset(
         source_rights_proof_set_sha256=_digest(7_005),
         source_label_pack_proof_set_sha256=_digest(7_006),
         split_manifest_sha256=_digest(7_007),
-        test_exclusion_commitment_sha256=test_exclusion_commitment_sha256_v1(
+        test_exclusion_commitment_sha256=compute_test_exclusion_commitment_sha256_v1(
             "schedule-dataset-v1", ("private-test-source",)
         ),
         test_source_count=1,
@@ -879,21 +879,21 @@ class TrainingAdmissionContractTests(unittest.TestCase):
             TrainingCaptureModeV1("DUAL_4K60")
 
     def test_test_exclusion_commitment_is_deterministic_and_omits_ids(self) -> None:
-        first = test_exclusion_commitment_sha256_v1(
+        first = compute_test_exclusion_commitment_sha256_v1(
             "dataset-A", ("private-source-A", "private-source-B")
         )
-        second = test_exclusion_commitment_sha256_v1(
+        second = compute_test_exclusion_commitment_sha256_v1(
             "dataset-A", ("private-source-A", "private-source-B")
         )
         self.assertEqual(first, second)
         self.assertNotEqual(
             first,
-            test_exclusion_commitment_sha256_v1(
+            compute_test_exclusion_commitment_sha256_v1(
                 "dataset-B", ("private-source-A", "private-source-B")
             ),
         )
         with self.assertRaises(ValueError):
-            test_exclusion_commitment_sha256_v1(
+            compute_test_exclusion_commitment_sha256_v1(
                 "dataset-A", ("private-source-B", "private-source-A")
             )
         raw = _dataset().to_json_bytes()
@@ -906,7 +906,7 @@ class TrainingAdmissionContractTests(unittest.TestCase):
         self.assertTrue(all(len(source_id) == 128 for source_id in source_ids))
         self.assertEqual(
             len(
-                test_exclusion_commitment_sha256_v1(
+                compute_test_exclusion_commitment_sha256_v1(
                     "dataset-A",
                     source_ids,
                 )
