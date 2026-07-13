@@ -8,6 +8,8 @@ cloud OBS or vMix unless the x86 LiveKit Egress benchmark fails.
 The July 12 Gate 1 soak proved a ten-hour real-camera, remote-commentary,
 ScoreCheck WHEP, browser-compositor, and YouTube RTMPS path on a DigitalOcean
 `c-4`. It did not prove multi-court capacity or the required failure recovery.
+The July 13 failures and revised execution order are detailed in
+[`POST_SOAK_REMEDIATION_PLAN.md`](./POST_SOAK_REMEDIATION_PLAN.md).
 
 ## Target architecture
 
@@ -17,8 +19,10 @@ Mevo/AVKANS cameras -> bonded router -> court1_raw ... court8_raw
 
 INGEST AND PREVIEW
 MediaMTX primary
+  raw paths and derived-path relay only
+Normalization workers, assigned explicitly per event
   raw -> courtN_preview (undelayed normalized H.264/Opus)
-      -> courtN_program (controlled SRT delay, clean stream)
+      -> courtN_program (controlled delay, clean stream)
 MediaMTX warm standby with tested IP failover
 
 COMMENTARY
@@ -28,7 +32,9 @@ Self-hosted LiveKit audio rooms
   TURN/TLS, track presence, real RMS/peak health
 
 PROGRAM
-Four event-day c-4 compositor hosts, two courts each
+Capacity-qualified event-day compositor pool
+  current safe baseline: one c-4 per active court
+  two courts per larger host only after a measured admission test
   program WHEP + DOM scorebug + LiveKit tracks
   Web Audio gain/delay/compression/meters
   controlled signal-loss slate
@@ -61,7 +67,8 @@ Supabase desired/observed state -> outbound controller reconciler
 - Dedicated observability VPS with Prometheus, Alertmanager, correlator, bounded
   monitor API, durable incident store, and independent dead-man sender.
 - Read-only agents on MediaMTX, Commentary, and all four compositor hosts.
-- Explicit compositor telemetry mapping A=1-2, B=3-4, C=5-6, D=7-8.
+- Explicit compositor-to-court mapping from the event manifest; no inferred or
+  silently shared ownership.
 - MediaMTX bitrate/path telemetry, FFmpeg `-progress`, program-browser frame and
   WebRTC stats, LiveKit commentary health, Egress capacity, score/render
   alignment, YouTube health, and host/container metrics.
@@ -82,22 +89,21 @@ stopping public production services.
 
 ## Capacity topology
 
-Do not place all eight encoders on one host. Gate 1 measured about 1.3 CPU
-cores per 720p30 web egress. The next event-day target is:
+Do not place all eight encoders or normalizers on one host. Gate 1 measured
+about 1.3 CPU cores per 720p30 web egress, but the July 13 run later showed one
+current browser egress occupying enough of a `c-4` for LiveKit to reject a
+second job. The safe baseline until a larger-host benchmark passes is:
 
 ```text
-Compositor A: dedicated c-4, courts 1-2
-Compositor B: dedicated c-4, courts 3-4
-Compositor C: dedicated c-4, courts 5-6
-Compositor D: dedicated c-4, courts 7-8
-One prewarmed c-4 replacement
+One dedicated c-4 compositor per active court
+One prewarmed replacement of the same qualified shape
+Or: a larger host with two courts only after the exact two-job workload passes
 ```
 
-Two measured jobs should use about 2.6 cores, leaving about 35% host CPU
-headroom. LiveKit admission reserves 1.5 CPU and 2 GB per job so a `c-4`
-accepts at most two web egresses. The July full-eight test deliberately skips
-the staged two- and four-court runs, so the same estimate must be validated on
-all four hosts at once rather than inferred from a partial load.
+The old estimate that two jobs would leave about 35% headroom was disproved by
+the real admission result and is retired. The direct-eight operator decision
+still removes separate two- and four-court load ramps; it does not permit an
+unbenchmarked two-job host assignment.
 
 The first full-eight ingest candidate, one dedicated `c-4` with 8 GB RAM,
 failed on 2026-07-12. Eight 1080p inputs normalized to H.264/Opus at 720p30
@@ -108,16 +114,18 @@ three HEVC/SRT AVKANS Go cameras at 1080p30, and three H.264/SRT MAKI Live
 listeners pulled through the routed camera-LAN tunnel. No venue computer or
 separate relay process participated.
 
-The next ingest candidate is two dedicated `c-4` normalization workers split
-four courts each. Camera-side 720p30 H.264 plus stream-copy or audio-only
-conversion is the simpler and likely cheaper alternative, but each camera
-model must be explicitly qualified before adopting it. A staged July 13 run
+The preferred next ingest candidate is camera-side 720p30 H.264 plus
+stream-copy or audio-only conversion, but each final camera model must be
+explicitly qualified before adopting it. The fallback is an isolated
+normalization tier whose per-host court count is established by benchmark, not
+by the old four-courts-per-`c-4` estimate. A staged July 13 run
 also disproved the paired-compositor assumption: LiveKit rejected a second
 current browser egress on one `c-4` after roughly 2.14 cores were already in
 use. The next compositor candidate therefore needs either one isolated `c-4`
 per court, a larger host proven with two courts, or a materially cheaper
-compositor workload. Either candidate must sustain less than 80% CPU,
-real-time FFmpeg speed, stable 30 fps output, and a non-congested venue uplink
+compositor workload. Either candidate must sustain less than 80% CPU, at least
+0.98x FFmpeg speed, stable 30 fps output, zero process-zombie growth, and a
+non-congested venue uplink
 before Gate 2 can pass. The temporary MAKI assignments do not alter the final
 AVKANS hardware target.
 
@@ -149,7 +157,8 @@ AVKANS cameras and requires all eight camera publishers through Speedify.
 - Program pages retry media and LiveKit connections indefinitely.
 - Egress and media images are pulled before event day, never automatically on
   event morning.
-- Four compositor hosts limit a host failure to two courts.
+- A compositor assignment may affect only the courts explicitly admitted to
+  that host; the current safe baseline limits a host failure to one court.
 - StreamRun remains the break-glass public path through the shadow event.
 - A new stack does not become public because it merely starts; source, audio,
   egress, YouTube receiving status, and health must all be good.
@@ -186,7 +195,7 @@ tokens before cutover.
 
 1. **One court:** real camera, remote audible commentary, real YouTube RTMPS,
    ten hours, sync checked at beginning/middle/end on a DigitalOcean c-4.
-2. **Eight courts:** four-host layout, eight real feeds and destinations,
+2. **Eight courts:** capacity-qualified layout, eight real feeds and destinations,
    scoring on all, at least two commentary rooms, two hours minimum and twelve
    hours preferred. The direct-eight run replaces separate two- and four-court
    gates by explicit operator decision; it does not relax any per-host limit.
@@ -201,11 +210,15 @@ tokens before cutover.
 2. Deploy the independent unified monitoring foundation. Done.
 3. Activate and prove phone paging plus external dead-man delivery.
 4. Run the one-court monitoring fault gate using a test broadcast.
-5. Provision and run the full-eight load, sync, recovery, and fault gate.
-6. Convert the controller to desired-state reconciliation.
-7. Move YouTube/program credentials to proper secret storage.
-8. Add reusable-stream/per-match YouTube orchestration.
-9. Run the two-court shadow event, then the full shadow event.
+5. Deploy the post-soak lifecycle and monitoring fixes, then run the one-reader
+   preview/program/preview pacing comparator and branch-churn gate.
+6. Qualify camera-side normalization or an isolated normalization tier and a
+   compositor shape with measured headroom.
+7. Run the full-eight load, sync, recovery, and fault gate.
+8. Convert the controller to desired-state reconciliation.
+9. Move YouTube/program credentials to proper secret storage.
+10. Add reusable-stream/per-match YouTube orchestration.
+11. Run the two-court shadow event, then the full shadow event.
 
 The July 12 soak is an endurance pass for the final x86, audible-commentary,
 RTMPS pipeline. Gate 1 remains conditional because midpoint/final subjective

@@ -199,6 +199,7 @@ cat >"$MOCK_BIN/flock" <<'MOCK'
 #!/bin/sh
 # The router provides util-linux flock. Unit tests are single-process, so the
 # mock only needs to acknowledge the already-open lock file descriptor.
+[ ! -f "$MOCK_STATE/flock-deny" ] || exit 1
 exit 0
 MOCK
 
@@ -208,6 +209,8 @@ export MOCK_STATE
 export PATH="$MOCK_BIN:$PATH"
 export SCORECHECK_SPEEDIFY_ENABLED_FILE="$MOCK_STATE/enabled"
 export SCORECHECK_SPEEDIFY_RUNTIME_DIR="$MOCK_STATE/runtime"
+export SCORECHECK_SPEEDIFY_WATCH_LOCK_FILE="$MOCK_STATE/watch.lock"
+export SCORECHECK_SPEEDIFY_WATCH_PID_FILE="$MOCK_STATE/watch.pid"
 export SCORECHECK_SPEEDIFY_CONNECT_RETRY_SECONDS=15
 printf 'validated_upload_mbps=85\n' >"$SCORECHECK_SPEEDIFY_ENABLED_FILE"
 
@@ -260,4 +263,17 @@ if grep -n '^[[:space:]]*speedify_cli -s stats' "$ROUTING_TOOL" "$RECORDER" >/de
   fail "an executable streaming Speedify stats command remains"
 fi
 
-printf 'PASS: fail-closed routing, recovery, teardown, and monitor leak guards\n'
+# A second lifetime watchdog lock holder exits without reconciling or touching
+# enabled state. Real util-linux flock keeps this lock on fd 8 for the loop.
+printf 'validated_upload_mbps=85\n' >"$SCORECHECK_SPEEDIFY_ENABLED_FILE"
+touch "$MOCK_STATE/flock-deny"
+speedify_calls_before="$(wc -l <"$MOCK_STATE/speedify.log")"
+"$ROUTING_TOOL" watch >/dev/null
+speedify_calls_after="$(wc -l <"$MOCK_STATE/speedify.log")"
+[ "$speedify_calls_before" -eq "$speedify_calls_after" ] \
+  || fail "duplicate watchdog reconciled while the lifetime lock was held"
+[ -f "$SCORECHECK_SPEEDIFY_ENABLED_FILE" ] \
+  || fail "duplicate watchdog changed enabled state"
+rm -f "$MOCK_STATE/flock-deny"
+
+printf 'PASS: fail-closed routing, recovery, singleton watch, teardown, and monitor leak guards\n'

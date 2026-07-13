@@ -16,6 +16,8 @@ MIN_UPLOAD_MBPS="${SCORECHECK_MIN_BONDED_UPLOAD_MBPS:-75}"
 ENABLED_FILE="${SCORECHECK_SPEEDIFY_ENABLED_FILE:-/etc/scorecheck-speedify.enabled}"
 RUNTIME_DIR="${SCORECHECK_SPEEDIFY_RUNTIME_DIR:-/var/run/scorecheck-speedify}"
 LOCK_FILE="$RUNTIME_DIR/reconcile.lock"
+WATCH_LOCK_FILE="${SCORECHECK_SPEEDIFY_WATCH_LOCK_FILE:-/var/run/scorecheck-speedify-watch.lock}"
+WATCH_PID_FILE="${SCORECHECK_SPEEDIFY_WATCH_PID_FILE:-/var/run/scorecheck-speedify-watch.pid}"
 LAST_CONNECT_FILE="$RUNTIME_DIR/last-connect-at"
 LAST_STATUS_FILE="$RUNTIME_DIR/last-status"
 WATCH_INTERVAL_SECONDS="${SCORECHECK_SPEEDIFY_WATCH_INTERVAL_SECONDS:-5}"
@@ -389,6 +391,24 @@ enable_routes() {
 
 watch_routes() {
   validate_positive_integer "watch interval" "$WATCH_INTERVAL_SECONDS"
+  mkdir -p "$(dirname "$WATCH_LOCK_FILE")" "$(dirname "$WATCH_PID_FILE")"
+  exec 8>"$WATCH_LOCK_FILE"
+  if ! flock -n 8; then
+    log "another watchdog owns the lifetime lock; exiting duplicate process"
+    return 0
+  fi
+
+  watch_pid="$$"
+  printf '%s\n' "$watch_pid" >"$WATCH_PID_FILE"
+  watch_cleanup() {
+    trap - HUP INT TERM EXIT
+    if [ "$(cat "$WATCH_PID_FILE" 2>/dev/null || true)" = "$watch_pid" ]; then
+      rm -f "$WATCH_PID_FILE"
+    fi
+  }
+  trap watch_cleanup EXIT
+  trap 'watch_cleanup; exit 0' HUP INT TERM
+
   while :; do
     if [ -f "$ENABLED_FILE" ]; then
       reconcile_once || true
@@ -441,6 +461,17 @@ status() {
     echo "Validated state:"
     cat "$ENABLED_FILE"
   fi
+  watchdog_pid="$(cat "$WATCH_PID_FILE" 2>/dev/null || true)"
+  case "$watchdog_pid" in
+    ''|*[!0-9]*) echo "Watchdog lock owner: none" ;;
+    *)
+      if kill -0 "$watchdog_pid" 2>/dev/null; then
+        printf 'Watchdog lock owner: %s\n' "$watchdog_pid"
+      else
+        printf 'Watchdog lock owner: stale (%s)\n' "$watchdog_pid"
+      fi
+      ;;
+  esac
 }
 
 command="${1:-}"

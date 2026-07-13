@@ -20,7 +20,9 @@ The watchdog checks bounded Speedify state every five seconds. After a daemon,
 interface, or router-network restart, it restores table `900`, replaces the two
 camera rules, and clears only stale MediaMTX connection tracking. The guards
 stay active throughout recovery, so the cameras reconnect through Speedify or
-remain blocked.
+remain blocked. The watch process holds a separate lifetime `flock`; an
+overlapping `procd` start exits before it can reconcile. The shorter reconcile
+lock still serializes route mutations within the single owner.
 
 ## Install
 

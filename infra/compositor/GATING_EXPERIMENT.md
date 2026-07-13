@@ -70,13 +70,15 @@ without synthetic sources or separate two- and four-court stages:
 - Streams 6-8 are MAKI Live H.264 SRT listeners at 1080p30 and 3 Mbps. MediaMTX
   pulls them through the site-to-site tunnel with 2500 ms receiver latency and
   owns reconnects; no Mac or separate relay process participates.
-- Four dedicated `c-4` compositor hosts own courts 1-2, 3-4, 5-6, and 7-8.
+- A capacity-qualified compositor pool owns explicit court assignments. Until a
+  larger two-job host passes, the safe baseline is one dedicated `c-4` per court.
 - Eight separate unlisted destinations have auto-start and auto-stop disabled.
 - Run at least two continuous hours; twelve hours remains preferred.
 
 Every court includes its program page, encoder, destination, and scoring. A
-compositor host owns at most two courts. Sustained 80% CPU, frame loss, growing
-queues/RSS, or one court affecting its paired court fails the topology.
+compositor host owns no more courts than its exact benchmark admitted. Sustained
+80% CPU, frame loss, growing queues/RSS, or one court affecting an unassigned
+court fails the topology.
 
 ### First full-eight result (2026-07-12)
 
@@ -95,11 +97,12 @@ queues/RSS, or one court affecting its paired court fails the topology.
   transitioned live. The egress jobs were stopped after the ingest capacity
   failure; compositor capacity was not the limiting stage.
 
-Gate 2 cannot resume with one `c-4` normalizing eight 1080p inputs. The next
-candidate must either split normalization across two `c-4` hosts (four courts
-each) or qualify camera-side 720p30 H.264 outputs that remove cloud video
-transcoding. A passing run still requires at least 20% sustained CPU headroom
-and a non-congested venue uplink.
+Gate 2 cannot resume with one `c-4` normalizing eight 1080p inputs. The preferred
+candidate is camera-side 720p30 H.264 that removes cloud video transcoding. The
+fallback is an isolated normalization tier whose court-per-host count is set by
+benchmark, not the unproven four-courts-per-`c-4` estimate. A passing run still
+requires at least 20% sustained CPU headroom, 0.98x FFmpeg speed, zero zombie
+growth, and a non-congested venue uplink.
 
 ### Speedify routing follow-up (2026-07-12)
 

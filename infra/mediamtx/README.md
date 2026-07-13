@@ -46,9 +46,21 @@ container, verifies the local MediaMTX API, and restores the prior files if the
 new process fails health checks. Docker logs are capped at four 25 MB files.
 On-demand branches poll local path readiness every two seconds and start FFmpeg
 only after their upstream exists, so an open offline preview cannot create a
-process or log storm.
+process or log storm. The hook command directly `exec`s the monitored runner,
+and the runner terminates and waits for both FFmpeg and its progress parser
+before exiting. This ownership is required because MediaMTX is PID 1 in the
+container and otherwise adopts unreaped hook descendants.
 
 Every H.264 or HEVC input is normalized to H.264/Opus at 720p30 before
 preview/program distribution. A 1080p60 camera is therefore an ingest stress
 source, not a 60 fps program output. The one-second normalized GOP limits
 decoder recovery time after an upstream loss event.
+
+The July 13 extended run proved that the four-vCPU MediaMTX host does not have
+production headroom for the final shared normalization load: load remained
+above 12 at the endpoint with only three active preview/program pairs, and hook
+zombies grew to 121. MediaMTX remains the raw/derived path relay, but final
+qualification must use camera-side H.264 or an isolated, benchmarked
+normalization tier. Run `test-scorecheck-ffmpeg-runner.sh` before deployment;
+the live churn gate must then show zero zombie growth across at least 50 branch
+start/stop cycles.

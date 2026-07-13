@@ -146,8 +146,8 @@ must not claim RF or camera-encoder certainty without those sources.
 2. Repeat the one-court test broadcast and inject every remaining row in the
    runbook table, including camera reconnect and subjective sync checks.
 3. Replace the shared eight-feed normalizer topology, then run eight
-   representative feeds across all four compositors for at least two hours,
-   with scoring on all courts and at least two commentary rooms.
+   representative feeds across a capacity-qualified compositor pool for at
+   least two hours, with scoring on all courts and at least two commentary rooms.
 4. Preserve detection latency, unaffected-court evidence, duplicate count,
    recovery time, CPU/memory trends, and Supabase growth for every fault.
 5. Only after these gates pass, accept monitoring as ready for the shadow event.
