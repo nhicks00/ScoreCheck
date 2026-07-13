@@ -116,9 +116,35 @@ and a non-congested venue uplink.
 - Multi-TCP used four sockets per WAN and carried the five direct publishers,
   but the nested WireGuard handshake went stale and listener-camera paths
   dropped. Multi-TCP is rejected for this topology.
-- The router was returned to direct routing with Speedify disconnected and all
-  eight raw paths healthy. The final two-Mevo/six-AVKANS direct-publisher mix
-  must be tested on a sustained 75 Mbps or faster bonded upload before Gate 2.
+- A staged overnight run then policy-routed only the five direct publishers
+  through Speedify and left the three temporary MAKI listener pulls on the
+  ordinary WireGuard route. All eight raw paths remained healthy, while the
+  Mac and router default route remained outside Speedify. The final
+  two-Mevo/six-AVKANS direct-publisher mix must still be tested on a sustained
+  75 Mbps or faster bonded upload before Gate 2.
+
+### Staged overnight capacity run (2026-07-13)
+
+- All eight real raw feeds were held concurrently. Courts 1-5 used selective
+  Speedify routing; courts 6-8 used the temporary direct WireGuard listener
+  pulls. Raw frame-error counters remained zero at the start checkpoint.
+- The ingest `c-4` could sustain three active preview/program normalization
+  pairs for courts 1, 3, and 5 at approximately 30 fps, but consumed about
+  three CPU cores. Courts 2, 4, and 6-8 therefore remained raw-only.
+- One current browser-based LiveKit egress consumed roughly 42-59 percent of a
+  four-core compositor at the checkpoint. Starting a second court on the same
+  `c-4` was rejected by LiveKit at approximately 2.14 used cores. The planned
+  two-court-per-`c-4` assignment is not capacity-qualified.
+- Courts 1, 3, and 5 were live end to end with fresh browser heartbeats and
+  YouTube `active`, `live`, and `good` status with no configuration issues.
+- This is a useful eight-camera ingest soak and three-court end-to-end soak. It
+  is not a Gate 2 pass because eight simultaneous program outputs were not
+  capacity-safe on the current seven-droplet layout.
+
+Do not convert the current seven-host test layout into the permanent provision
+manifest. First qualify either camera-side H.264 over SRT with no cloud video
+normalization, or a split HEVC normalization tier, plus compositor sizes that
+retain at least 20 percent sustained CPU headroom at the intended court count.
 
 Gate 2 must include fault injection: camera removal, venue network loss,
 MediaMTX restart, one egress kill, controller restart, one compositor loss,

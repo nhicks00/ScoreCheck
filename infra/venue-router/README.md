@@ -54,9 +54,19 @@ in the production policy tool. The final two-Mevo/six-AVKANS topology sends all
 eight feeds directly to RTMP/SRT ingest and must be requalified through
 Speedify when the remaining AVKANS cameras arrive.
 
-The July 12 home-network test could sustain the three direct SRT callers and,
-after staged reconnects, the five direct publishers. Adding the temporary
-WireGuard-carried listeners exceeded the usable bonded path: tunnel input rose
-to roughly 77 Mbps for a nominal 30 Mbps payload and SRT paths dropped. The
-router was restored to direct routing with Speedify disconnected; all eight
-raw feeds recovered.
+The first July 12 home-network attempt could sustain the three direct SRT
+callers and, after staged reconnects, the five direct publishers. Routing the
+temporary WireGuard-carried listeners through the same tunnel raised Speedify
+input to roughly 77 Mbps for a nominal 30 Mbps payload and dropped SRT paths.
+
+The overnight qualification uses the supported split instead: exactly five
+direct publishers are source-and-port policy-routed through Speedify, while
+the three temporary MAKI listener pulls use the ordinary WireGuard route. The
+router default route and operator devices remain direct. This produced all
+eight healthy raw feeds while keeping exactly five camera flows in table 900.
+It qualifies selective routing for the current test mix, not the final
+two-Mevo/six-AVKANS topology.
+
+During a soak, run `scorecheck-speedify-soak-recorder.sh` on the router. It
+records Speedify state, rule/flow counts, interface counters, WireGuard
+handshake age, and load without collecting credentials or payloads.

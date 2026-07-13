@@ -8,6 +8,7 @@ import { IncidentManager } from "./incidents.js";
 import { IncidentStore } from "./incidentStore.js";
 import { bearerAuth } from "./security.js";
 import { BrowserHeartbeatManager } from "./browserHeartbeats.js";
+import { decideBrowserOrigin } from "./browserOrigin.js";
 import { ControlPlaneCollector } from "./controlPlane.js";
 import { YouTubeCollector } from "./youtube.js";
 import { NotificationDispatcher } from "./notifications.js";
@@ -117,23 +118,23 @@ app.get("/v1/range/court-pipeline", bearerAuth(config.token), async (req, res) =
   }
 });
 app.options("/v1/browser-heartbeats", (req, res) => {
-  const origin = allowedBrowserOrigin(req.headers.origin);
-  if (!origin) {
+  const origin = decideBrowserOrigin(req.headers.origin, config.browserAllowedOrigins, { allowMissing: false });
+  if (!origin.allowed || !origin.corsOrigin) {
     res.sendStatus(403);
     return;
   }
-  setBrowserCors(res, origin);
+  setBrowserCors(res, origin.corsOrigin);
   res.setHeader("access-control-allow-methods", "POST, OPTIONS");
   res.setHeader("access-control-allow-headers", "authorization, content-type, x-scorecheck-court, x-scorecheck-credential-id, x-scorecheck-sequence, x-scorecheck-sampled-at");
   res.sendStatus(204);
 });
 app.post("/v1/browser-heartbeats", (req, res) => {
-  const origin = allowedBrowserOrigin(req.headers.origin);
-  if (!origin) {
+  const origin = decideBrowserOrigin(req.headers.origin, config.browserAllowedOrigins, { allowMissing: true });
+  if (!origin.allowed) {
     res.status(403).json({ error: "Origin is not allowed." });
     return;
   }
-  setBrowserCors(res, origin);
+  if (origin.corsOrigin) setBrowserCors(res, origin.corsOrigin);
   const token = bearerToken(req.headers.authorization);
   try {
     browserHeartbeats.accept(token, req.body);
@@ -144,23 +145,23 @@ app.post("/v1/browser-heartbeats", (req, res) => {
   }
 });
 app.options("/v1/browser-thumbnails", (req, res) => {
-  const origin = allowedBrowserOrigin(req.headers.origin);
-  if (!origin) {
+  const origin = decideBrowserOrigin(req.headers.origin, config.browserAllowedOrigins, { allowMissing: false });
+  if (!origin.allowed || !origin.corsOrigin) {
     res.sendStatus(403);
     return;
   }
-  setBrowserCors(res, origin);
+  setBrowserCors(res, origin.corsOrigin);
   res.setHeader("access-control-allow-methods", "POST, OPTIONS");
   res.setHeader("access-control-allow-headers", "authorization, content-type, x-scorecheck-court, x-scorecheck-credential-id, x-scorecheck-sequence, x-scorecheck-sampled-at");
   res.sendStatus(204);
 });
 app.post("/v1/browser-thumbnails", express.raw({ type: "image/jpeg", limit: "96kb" }), (req, res) => {
-  const origin = allowedBrowserOrigin(req.headers.origin);
-  if (!origin) {
+  const origin = decideBrowserOrigin(req.headers.origin, config.browserAllowedOrigins, { allowMissing: true });
+  if (!origin.allowed) {
     res.status(403).json({ error: "Origin is not allowed." });
     return;
   }
-  setBrowserCors(res, origin);
+  if (origin.corsOrigin) setBrowserCors(res, origin.corsOrigin);
   try {
     browserThumbnails.accept(bearerToken(req.headers.authorization), {
       credentialId: req.headers["x-scorecheck-credential-id"],
@@ -410,16 +411,6 @@ async function refreshYouTube() {
     snapshot = currentSnapshot();
   } finally {
     youtubeRefreshRunning = false;
-  }
-}
-
-function allowedBrowserOrigin(origin: string | undefined): string | null {
-  if (!origin) return null;
-  try {
-    const normalized = new URL(origin).origin;
-    return config.browserAllowedOrigins.includes(normalized) ? normalized : null;
-  } catch {
-    return null;
   }
 }
 
