@@ -30,8 +30,10 @@ die() {
 }
 
 require_tools() {
-  command -v curl >/dev/null 2>&1 || die "curl is required"
-  command -v jq >/dev/null 2>&1 || die "jq is required"
+  local tool
+  for tool in cmp curl jq shasum ssh; do
+    command -v "$tool" >/dev/null 2>&1 || die "$tool is required"
+  done
 }
 
 validate_manifest() {
@@ -56,6 +58,48 @@ destroy_tag() {
 
 encode() {
   jq -rn --arg value "$1" '$value | @uri'
+}
+
+sha256_file() {
+  shasum -a 256 "$1" | awk '{print $1}'
+}
+
+manifest_droplet_names() {
+  jq -cS '[.droplets[].name] | sort' "$1"
+}
+
+inventory_droplet_names() {
+  jq -cS '[.droplets[].name] | sort' <<<"$1"
+}
+
+inventory_droplet_identities() {
+  jq -cS '[.droplets[] | {id,name}] | sort_by(.name,.id)' <<<"$1"
+}
+
+assert_exact_manifest_inventory() {
+  local manifest="$1"
+  local response="$2"
+  local context="$3"
+  local expected actual
+  expected="$(manifest_droplet_names "$manifest")"
+  actual="$(inventory_droplet_names "$response")"
+  [[ "$actual" == "$expected" ]] || die \
+    "$context droplet set does not exactly match the event manifest (expected $expected, found $actual)"
+  jq -e '([.droplets[].id] | length) == ([.droplets[].id] | unique | length)' <<<"$response" >/dev/null \
+    || die "$context contains duplicate droplet IDs"
+}
+
+assert_same_inventory_identity() {
+  local captured="$1"
+  local current="$2"
+  [[ "$(inventory_droplet_identities "$current")" == "$(inventory_droplet_identities "$captured")" ]] \
+    || die "current droplet IDs do not match captured evidence"
+}
+
+evidence_value() {
+  local evidence_file="$1"
+  local key="$2"
+  sed -n "s/^${key}=//p" "$evidence_file"
 }
 
 auth_headers() {
@@ -115,6 +159,7 @@ inventory() {
   event="$(jq -r '.event' "$manifest")"
   tag="$(event_tag "$event")"
   response="$(list_event_droplets "$tag")"
+  assert_exact_manifest_inventory "$manifest" "$response" "tagged inventory"
   hourly="$(jq '[.droplets[].size.price_hourly // 0] | add // 0' <<<"$response")"
   monthly="$(jq '[.droplets[].size.price_monthly // 0] | add // 0' <<<"$response")"
 
@@ -177,7 +222,7 @@ capture_evidence() {
   event="$(jq -r '.event' "$manifest")"
   tag="$(event_tag "$event")"
   response="$(list_event_droplets "$tag")"
-  [[ "$(jq '.droplets | length' <<<"$response")" -gt 0 ]] || die "no droplets found for $tag"
+  assert_exact_manifest_inventory "$manifest" "$response" "evidence inventory"
 
   umask 077
   mkdir -p "$output/hosts"
@@ -212,7 +257,13 @@ capture_evidence() {
     echo "evidence capture incomplete: $failures host(s) failed" >&2
     exit 1
   fi
-  printf 'event=%s\ncaptured_at=%s\n' "$event" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >"$output/EVIDENCE_COMPLETE"
+  printf 'event=%s\ncaptured_at=%s\ndroplet_count=%s\nmanifest_sha256=%s\ninventory_sha256=%s\n' \
+    "$event" \
+    "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+    "$(jq '.droplets | length' <<<"$response")" \
+    "$(sha256_file "$output/event-manifest.json")" \
+    "$(sha256_file "$output/digitalocean-inventory.json")" \
+    >"$output/EVIDENCE_COMPLETE"
   echo "evidence captured in $output"
 }
 
@@ -220,26 +271,48 @@ destroy_stack() {
   local manifest="$1"
   local evidence="$2"
   local confirmation="$3"
-  local event destroy_after event_label destroy_label response count status remaining
+  local event destroy_after event_label destroy_label response count status remaining today
+  local marker evidence_manifest evidence_inventory expected_sha actual_sha expected_count
   event="$(jq -r '.event' "$manifest")"
   destroy_after="$(jq -r '.destroyAfter' "$manifest")"
   event_label="$(event_tag "$event")"
   destroy_label="$(destroy_tag "$destroy_after")"
   [[ "$confirmation" == "DESTROY:$event" ]] || die "confirmation must be exactly DESTROY:$event"
-  [[ -f "$evidence/EVIDENCE_COMPLETE" ]] || die "protected evidence is incomplete: $evidence"
-  grep -qx "event=$event" "$evidence/EVIDENCE_COMPLETE" || die "evidence belongs to a different event"
+  today="${SCORECHECK_CURRENT_DATE_UTC:-$(date -u '+%Y-%m-%d')}"
+  [[ "$today" < "$destroy_after" ]] \
+    && die "destroy review date is $destroy_after; current UTC date is $today"
+
+  marker="$evidence/EVIDENCE_COMPLETE"
+  evidence_manifest="$evidence/event-manifest.json"
+  evidence_inventory="$evidence/digitalocean-inventory.json"
+  [[ -f "$marker" && -f "$evidence_manifest" && -f "$evidence_inventory" ]] \
+    || die "protected evidence is incomplete: $evidence"
+  [[ "$(evidence_value "$marker" event)" == "$event" ]] || die "evidence belongs to a different event"
+  cmp -s "$manifest" "$evidence_manifest" || die "event manifest changed after evidence capture"
+  expected_sha="$(evidence_value "$marker" manifest_sha256)"
+  actual_sha="$(sha256_file "$evidence_manifest")"
+  [[ -n "$expected_sha" && "$actual_sha" == "$expected_sha" ]] || die "evidence manifest integrity check failed"
+  expected_sha="$(evidence_value "$marker" inventory_sha256)"
+  actual_sha="$(sha256_file "$evidence_inventory")"
+  [[ -n "$expected_sha" && "$actual_sha" == "$expected_sha" ]] || die "DigitalOcean evidence integrity check failed"
+  assert_exact_manifest_inventory "$manifest" "$(cat "$evidence_inventory")" "captured evidence"
 
   response="$(list_event_droplets "$event_label")"
+  assert_exact_manifest_inventory "$manifest" "$response" "current tagged inventory"
+  assert_same_inventory_identity "$(cat "$evidence_inventory")" "$response"
   count="$(jq '.droplets | length' <<<"$response")"
-  [[ "$count" -gt 0 ]] || { echo "no droplets found for $event_label"; return; }
+  expected_count="$(evidence_value "$marker" droplet_count)"
+  [[ "$expected_count" =~ ^[0-9]+$ && "$count" == "$expected_count" ]] \
+    || die "current droplet count does not match captured evidence"
   jq -e --arg destroy "$destroy_label" 'all(.droplets[]; (.tags | index("scorecheck-temporary")) and (.tags | index($destroy)))' <<<"$response" >/dev/null \
     || die "one or more event droplets lack temporary/destroy-date safety tags"
 
   jq -r '.droplets[] | "destroying \(.name) id=\(.id)"' <<<"$response"
-  status="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$API/droplets" \
-    -H "Authorization: Bearer $DIGITALOCEAN_TOKEN" \
-    -G --data-urlencode "tag_name=$event_label")"
-  [[ "$status" == "204" ]] || die "DigitalOcean tag deletion failed (HTTP $status)"
+  while IFS=$'\t' read -r id name; do
+    status="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$API/droplets/$id" \
+      -H "Authorization: Bearer $DIGITALOCEAN_TOKEN")"
+    [[ "$status" == "204" ]] || die "DigitalOcean deletion failed for $name id=$id (HTTP $status)"
+  done < <(jq -r '.droplets[] | [.id,.name] | @tsv' <<<"$response")
 
   for _ in $(seq 1 30); do
     sleep 5
@@ -302,4 +375,6 @@ main() {
   esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
