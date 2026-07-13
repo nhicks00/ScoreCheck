@@ -12,7 +12,7 @@ providers or real media feeds.
 | Separate observability failure domain | Prometheus, Alertmanager, correlator, monitor API, Caddy on observability VPS | Deployed and passing |
 | Eight-court operator dashboard | Authenticated 4x2 matrix, low-rate thumbnails, one selected WHEP player, stage evidence, trends, incidents | Deployed and passing |
 | Media transport telemetry | MediaMTX readiness, bitrate, source protocol/mode, codec/profile/resolution/audio, bounded SRT transport counters, readers, FFmpeg progress | Contract v2 deployed and passing |
-| Program render telemetry | FPS, dimensions, RTP loss/jitter, reset-safe receive/decode/drop/freeze rates, packet age, feedback counters, reconnects, reloads | Sustained browser frame-pacing defect confirmed; detector validated locally and deployment pending |
+| Program render telemetry | FPS, dimensions, RTP loss/jitter, reset-safe receive/decode/drop/freeze rates, packet age, feedback counters, reconnects, reloads | Sustained browser frame-pacing defect confirmed; detector and one-reader A/B/A path comparator validated locally, deployment pending |
 | Full-bitrate repeated-picture detection | Existing decoded element sampled at 160x90/1 Hz; warning/critical correlator and alert rules | Unit and deterministic fault gate passing; real fault pending |
 | Black/covered-picture detection | Luma, dark ratio, variance, persistence; mutually exclusive with freeze paging | Unit and deterministic fault gate passing; real fault pending |
 | Camera and commentary audio quality | Track/mute, RMS/peak, clipping, silence age, RTP loss/jitter, adaptive sync evidence | Implemented; real audio fault gate pending |
@@ -66,8 +66,15 @@ one-time deployment reload even though they rendered at 30-31 fps, RTP loss was
 zero, RTT was 1-2 ms, FFmpeg and Egress were fresh, and YouTube remained good.
 The strongest current hypothesis is timestamp/jitter behavior in the delayed
 program path plus WHEP decoder scheduling; host load is correlated evidence,
-not a proven cause. Reset-safe quality-rate telemetry and live-only alert bands
-pass locally and await a coordinated post-soak deployment and comparator gate.
+not a proven cause. Court 1 later remained at 1-2 browser FPS for at least 30
+seconds while adding 413 dropped frames, 22 freezes, and 12.803 seconds of
+freeze duration; Court 3 reconnected WHEP in-page, and Courts 3 and 5 exceeded
+1.2 seconds of jitter-buffer delay. A later synchronized 50-second event added
+599, 130, and 169 browser drops on Courts 1, 3, and 5 while all upstream
+program FFmpeg processes remained at 30 fps and RTP loss stayed zero. Reset-safe
+quality-rate telemetry, live-only alert bands, and a sequential
+preview/program/preview comparator pass locally and await a coordinated
+post-soak deployment and test-only gate.
 
 ## Remaining external blockers
 
@@ -81,10 +88,12 @@ and operator prerequisites are:
 2. A Pushover channel on the Healthchecks project. Its Management API can list
    but cannot create integrations, so this requires one authenticated provider
    subscription in the Healthchecks UI.
-3. Explicit operator approval and isolated test feeds for destructive fault
-   injection, acknowledgement, escalation, and withheld-ping gates.
-4. An existing production admin session for a production-browser visual pass;
+3. An existing production admin session for a production-browser visual pass;
    Vercel intentionally does not export the sensitive admin secret.
+
+Operator approval for isolated monitoring fault gates is recorded, and Court 4
+is available as a raw-only test feed. Execution is intentionally deferred until
+the active soak and deployment freeze end at 16:30 CDT on 2026-07-13.
 
 The exact deployed dashboard build passed local authenticated visual validation
 against the live read-only monitor API at 1600x1000 and 390x844: eight cards,
