@@ -174,9 +174,18 @@ export type MonitorCourt = {
   browser: MonitorBrowser | null;
   competition: MonitorCompetition | null;
   expectation: MonitorExpectation;
+  faultGate: MonitorFaultGate | null;
   youtube: { state: MonitorHealthState; broadcastLifecycle: string | null; streamStatus: string | null; healthStatus: string | null; configurationIssues: string[]; observedAt: string } | null;
   thumbnail: { sampledAt: string; receivedAt: string; byteLength: number } | null;
   egressHost: string | null;
+};
+
+export type MonitorFaultGate = {
+  courtNumber: number;
+  actor: string;
+  reason: string;
+  armedAt: string;
+  expiresAt: string;
 };
 
 export type MonitorIncident = {
@@ -242,6 +251,7 @@ export type MonitorSnapshot = {
   agents: MonitorAgent[];
   incidents: MonitorIncident[];
   silences: MonitorSilence[];
+  faultGates: MonitorFaultGate[];
 };
 
 export type MonitorSnapshotEnvelope = {

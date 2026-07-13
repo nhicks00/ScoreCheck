@@ -16,6 +16,7 @@ import { loadCourtPipelineRange, parseRangeInput } from "./rangeQueries.js";
 import { BrowserThumbnailManager } from "./browserThumbnails.js";
 import { activeSilences, incidentIsSilenced, silenceMatchesIncident } from "./silences.js";
 import { ExternalDeadMan } from "./deadMan.js";
+import { assertFaultGateCanArm, FaultGateConflictError, FaultGateControl } from "./faultGateControl.js";
 
 const config = loadServiceConfig();
 const app = express();
@@ -52,6 +53,7 @@ const scoreRenderAligned = new Gauge({ name: "scorecheck_program_score_render_al
 const controlPlaneFresh = new Gauge({ name: "scorecheck_control_plane_fresh", help: "Whether the latest Supabase control-plane sample is fresh.", registers: [registry] });
 const scoreWorkerHealthy = new Gauge({ name: "scorecheck_score_worker_healthy", help: "Score worker state: 1 healthy, 0 unavailable, -1 not applicable.", registers: [registry] });
 const courtMediaRequired = new Gauge({ name: "scorecheck_court_media_required", help: "Whether media is currently required for a court.", labelNames: ["court"], registers: [registry] });
+const courtExpectationContext = new Gauge({ name: "scorecheck_court_expectation_context", help: "Expectation source context for court-scoped alert evidence.", labelNames: ["court", "expectation_source"], registers: [registry] });
 const courtBroadcastLive = new Gauge({ name: "scorecheck_court_broadcast_live", help: "Whether a court broadcast is expected live.", labelNames: ["court"], registers: [registry] });
 const courtCommentaryRequired = new Gauge({ name: "scorecheck_court_commentary_required", help: "Whether commentary is required for a court.", labelNames: ["court"], registers: [registry] });
 const courtScoringLive = new Gauge({ name: "scorecheck_court_scoring_live", help: "Whether live scoring is required for a court.", labelNames: ["court"], registers: [registry] });
@@ -84,6 +86,7 @@ let youtubeRefreshRunning = false;
 const incidentStore = IncidentStore.create(config.supabaseUrl, config.supabaseServiceRoleKey);
 const notificationDispatcher = new NotificationDispatcher(config, incidentStore);
 const externalDeadMan = new ExternalDeadMan(config);
+const faultGateControl = new FaultGateControl();
 let deadManMaintenanceRunning = false;
 let silences: MonitoringSilence[] = [];
 if (incidentStore) {
@@ -107,6 +110,47 @@ app.get("/metrics", bearerAuth(config.token), async (_req, res) => {
   res.type(registry.contentType).send(await registry.metrics());
 });
 app.get("/v1/snapshot", bearerAuth(config.token), (_req, res) => res.json(snapshot));
+app.get("/v1/fault-gates", bearerAuth(config.token), (_req, res) => res.json({ faultGates: faultGateControl.active() }));
+app.post("/v1/fault-gates/courts/:courtNumber/arm", bearerAuth(config.token), (req, res) => {
+  const courtNumber = Number(Array.isArray(req.params.courtNumber) ? req.params.courtNumber[0] : req.params.courtNumber);
+  const parsed = z.object({
+    actor: z.string().trim().min(1).max(80).regex(/^[a-zA-Z0-9_.:@-]+$/),
+    reason: z.string().trim().min(3).max(300).refine((value) => !/[\u0000-\u001f\u007f]/.test(value)),
+    durationSeconds: z.number().int().min(60).max(600)
+  }).strict().safeParse(req.body);
+  if (!Number.isInteger(courtNumber) || courtNumber < 1 || courtNumber > config.courtCount || !parsed.success) {
+    res.status(400).json({ error: "Invalid fault-gate request." });
+    return;
+  }
+  try {
+    assertFaultGateCanArm(snapshot, courtNumber);
+    const faultGate = faultGateControl.arm({ courtNumber, ...parsed.data });
+    snapshot = currentSnapshot();
+    console.log(`monitoring fault gate armed court=${courtNumber} actor=${parsed.data.actor} expires=${faultGate.expiresAt}`);
+    res.status(201).json({ faultGate });
+  } catch (error) {
+    if (error instanceof FaultGateConflictError) {
+      res.status(409).json({ error: error.message, code: error.code });
+      return;
+    }
+    res.status(503).json({ error: "Fault gate could not be armed." });
+  }
+});
+app.delete("/v1/fault-gates/courts/:courtNumber", bearerAuth(config.token), (req, res) => {
+  const courtNumber = Number(Array.isArray(req.params.courtNumber) ? req.params.courtNumber[0] : req.params.courtNumber);
+  if (!Number.isInteger(courtNumber) || courtNumber < 1 || courtNumber > config.courtCount) {
+    res.status(400).json({ error: "Invalid court number." });
+    return;
+  }
+  const faultGate = faultGateControl.disarm(courtNumber);
+  if (!faultGate) {
+    res.status(404).json({ error: "No active fault gate exists for this court." });
+    return;
+  }
+  snapshot = currentSnapshot();
+  console.log(`monitoring fault gate disarmed court=${courtNumber}`);
+  res.json({ faultGate });
+});
 app.get("/v1/range/court-pipeline", bearerAuth(config.token), async (req, res) => {
   try {
     const input = parseRangeInput({ windowSec: req.query.windowSec, stepSec: req.query.stepSec });
@@ -322,6 +366,7 @@ async function pollAll() {
   visualFrameDifference.reset();
   scoreRenderAligned.reset();
   courtMediaRequired.reset();
+  courtExpectationContext.reset();
   courtBroadcastLive.reset();
   courtCommentaryRequired.reset();
   courtScoringLive.reset();
@@ -339,6 +384,7 @@ async function pollAll() {
     const labels = { court: String(court.courtNumber) };
     const browser = court.browser;
     courtMediaRequired.set(labels, court.expectation.mediaExpectation === "REQUIRED" ? 1 : 0);
+    courtExpectationContext.set({ ...labels, expectation_source: court.faultGate ? "fault_gate" : "control_plane" }, 1);
     courtBroadcastLive.set(labels, court.expectation.broadcastExpectation === "LIVE" ? 1 : 0);
     courtCommentaryRequired.set(labels, court.expectation.commentaryExpectation === "REQUIRED" ? 1 : 0);
     courtScoringLive.set(labels, court.expectation.scoringExpectation === "LIVE" ? 1 : 0);
@@ -399,7 +445,8 @@ function currentSnapshot(): MonitorSnapshot {
     notificationDispatcher.health(),
     externalDeadMan.health(),
     browserThumbnails.metadata(),
-    silences
+    silences,
+    faultGateControl.active()
   );
 }
 

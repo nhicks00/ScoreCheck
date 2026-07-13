@@ -69,9 +69,13 @@ tests:
         values: '0 0 0 0 0'
       - series: 'scorecheck_court_media_required{court="1"}'
         values: '1 1 1 1 1'
+      - series: 'scorecheck_court_expectation_context{court="1",expectation_source="control_plane"}'
+        values: '1 1 1 1 1'
       - series: 'scorecheck_media_path_ready{court="2",branch="raw"}'
         values: '1 1 1 1 1'
       - series: 'scorecheck_court_media_required{court="2"}'
+        values: '1 1 1 1 1'
+      - series: 'scorecheck_court_expectation_context{court="2",expectation_source="control_plane"}'
         values: '1 1 1 1 1'
     alert_rule_test:
       - eval_time: 10s
@@ -83,6 +87,7 @@ tests:
           - exp_labels:
               court: '1'
               branch: raw
+              expectation_source: control_plane
               severity: critical
               stage: RAW_INGEST
               issue_code: REQUIRED_RAW_PATH_MISSING
@@ -90,6 +95,31 @@ tests:
             exp_annotations:
               summary: Required camera ingest is missing on court 1.
               first_action: Check camera power, venue uplink, encoder publish status, and the MediaMTX raw path.
+
+  - name: intentional fault-gate camera loss remains clearly labeled
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_media_path_ready{court="4",branch="raw"}'
+        values: '1 0 0 0 0'
+      - series: 'scorecheck_court_media_required{court="4"}'
+        values: '1 1 1 1 1'
+      - series: 'scorecheck_court_expectation_context{court="4",expectation_source="fault_gate"}'
+        values: '1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 20s
+        alertname: ScoreCheckRequiredRawPathMissing
+        exp_alerts:
+          - exp_labels:
+              court: '4'
+              branch: raw
+              expectation_source: fault_gate
+              severity: critical
+              stage: RAW_INGEST
+              issue_code: REQUIRED_RAW_PATH_MISSING
+              root_dependency: mediamtx
+            exp_annotations:
+              summary: '[INTENTIONAL FAULT GATE] Required camera ingest is missing on court 4.'
+              first_action: Restore the isolated test feed, verify raw readiness, then disarm the monitoring fault gate.
 
   - name: camera audio failures keep exact issue codes and live-match gating
     interval: 5s

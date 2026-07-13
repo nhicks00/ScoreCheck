@@ -87,7 +87,7 @@ groups:
           first_action: "Compare raw bitrate, publisher reconnects, and the normalization branch before assigning an upstream cause."
 
       - alert: ScoreCheckRequiredRawPathMissing
-        expr: (scorecheck_media_path_ready{branch="raw"} == 0) and on(court) (scorecheck_court_media_required == 1)
+        expr: (((scorecheck_media_path_ready{branch="raw"} == 0) * on(court) group_left(expectation_source) scorecheck_court_expectation_context) and on(court) (scorecheck_court_media_required == 1))
         for: 15s
         labels:
           severity: critical
@@ -95,8 +95,8 @@ groups:
           issue_code: REQUIRED_RAW_PATH_MISSING
           root_dependency: mediamtx
         annotations:
-          summary: "Required camera ingest is missing on court {{ $labels.court }}."
-          first_action: "Check camera power, venue uplink, encoder publish status, and the MediaMTX raw path."
+          summary: '{{ if eq $labels.expectation_source "fault_gate" }}[INTENTIONAL FAULT GATE] {{ end }}Required camera ingest is missing on court {{ $labels.court }}.'
+          first_action: '{{ if eq $labels.expectation_source "fault_gate" }}Restore the isolated test feed, verify raw readiness, then disarm the monitoring fault gate.{{ else }}Check camera power, venue uplink, encoder publish status, and the MediaMTX raw path.{{ end }}'
 
       - alert: ScoreCheckRequiredRawBitrateLow
         expr: (scorecheck_media_path_inbound_bitrate_bps{branch="raw"} < 500000) and on(court) (scorecheck_court_media_required == 1)

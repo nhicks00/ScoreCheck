@@ -1,5 +1,6 @@
-import { MONITORING_CONTRACT_VERSION, worstHealthState, type AgentSnapshot, type BrowserHeartbeatSnapshot, type BrowserThumbnailMetadata, type ControlPlaneSnapshot, type CourtExpectation, type DeadManHealth, type FfmpegBranchSnapshot, type HealthState, type IncidentSnapshot, type MediaPathSnapshot, type MonitoringSilence, type MonitorSnapshot, type MonitoringStage, type NotificationHealth, type StageHealth, type YouTubeMonitorSnapshot } from "./contracts.js";
+import { MONITORING_CONTRACT_VERSION, worstHealthState, type AgentSnapshot, type BrowserHeartbeatSnapshot, type BrowserThumbnailMetadata, type ControlPlaneSnapshot, type CourtExpectation, type DeadManHealth, type FfmpegBranchSnapshot, type HealthState, type IncidentSnapshot, type MediaPathSnapshot, type MonitoringFaultGate, type MonitoringSilence, type MonitorSnapshot, type MonitoringStage, type NotificationHealth, type StageHealth, type YouTubeMonitorSnapshot } from "./contracts.js";
 import type { AgentTarget } from "./config.js";
+import { faultGateExpectation } from "./faultGateControl.js";
 
 export type AgentRuntime = {
   target: AgentTarget;
@@ -20,7 +21,8 @@ export function buildMonitorSnapshot(
   notifications: NotificationHealth = OFF_NOTIFICATION_HEALTH,
   deadMan: DeadManHealth = OFF_DEAD_MAN_HEALTH,
   thumbnails = new Map<number, BrowserThumbnailMetadata>(),
-  silences: MonitoringSilence[] = []
+  silences: MonitoringSilence[] = [],
+  faultGates: MonitoringFaultGate[] = []
 ): MonitorSnapshot {
   const agents = targets.map((target) => {
     const runtime = runtimes.get(target.id);
@@ -50,17 +52,19 @@ export function buildMonitorSnapshot(
     const competition = controlPlane?.courts.find((court) => court.courtNumber === courtNumber) ?? null;
     const youtube = youtubeMonitor?.courts.find((court) => court.courtNumber === courtNumber) ?? null;
     const egressAgent = agents.find((agent) => agent.role === "compositor" && agent.assignedCourts.includes(courtNumber)) ?? null;
-    const expectation = competition?.expectation ?? OFF_EXPECTATION;
+    const faultGate = faultGates.find((gate) => gate.courtNumber === courtNumber) ?? null;
+    const productionExpectation = competition?.expectation ?? OFF_EXPECTATION;
+    const expectation = faultGate ? faultGateExpectation(faultGate) : productionExpectation;
     const observedStages = [
       contentAwareRawStage(pathStage("RAW_INGEST", "raw", byBranch.raw ?? null, nowMs, expectation), browser, expectation, nowMs),
-      pathStage("PREVIEW", "preview", byBranch.preview ?? null, nowMs, expectation),
-      pathStage("PROGRAM_PATH", "program", byBranch.program ?? null, nowMs, expectation),
-      programBrowserStage(browser, nowMs, expectation),
-      commentaryStage(browser, nowMs, expectation),
-      scoreSourceStage(competition, controlPlane, nowMs, expectation),
-      scoreRenderStage(browser, nowMs, expectation),
-      egressStage(egressAgent, expectation),
-      youtubeStage(youtube, youtubeMonitor, nowMs, expectation)
+      pathStage("PREVIEW", "preview", byBranch.preview ?? null, nowMs, productionExpectation),
+      pathStage("PROGRAM_PATH", "program", byBranch.program ?? null, nowMs, productionExpectation),
+      programBrowserStage(browser, nowMs, productionExpectation),
+      commentaryStage(browser, nowMs, productionExpectation),
+      scoreSourceStage(competition, controlPlane, nowMs, productionExpectation),
+      scoreRenderStage(browser, nowMs, productionExpectation),
+      egressStage(egressAgent, productionExpectation),
+      youtubeStage(youtube, youtubeMonitor, nowMs, productionExpectation)
     ];
     const stages = applyCourtIncidents(observedStages, incidents, courtNumber, egressAgent?.agentId ?? null, nowMs);
     return {
@@ -72,6 +76,7 @@ export function buildMonitorSnapshot(
       browser,
       competition,
       expectation,
+      faultGate,
       youtube,
       thumbnail: thumbnails.get(courtNumber) ?? null,
       egressHost: egressAgent?.agentId ?? null
@@ -108,7 +113,8 @@ export function buildMonitorSnapshot(
     courts,
     agents,
     incidents,
-    silences
+    silences,
+    faultGates
   };
 }
 
