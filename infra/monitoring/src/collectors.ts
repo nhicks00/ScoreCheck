@@ -173,11 +173,11 @@ async function collectEgress(url: string | null, errors: Set<CollectionError>) {
   if (!url) return null;
   try {
     const text = await fetchText(url);
-    const available = metricValue(text, "livekit_egress_available");
+    const idle = metricValue(text, "livekit_egress_available");
     const canAccept = metricValue(text, "livekit_egress_can_accept_request");
-    if (available == null || canAccept == null) throw new Error("Required Egress capacity metrics are unavailable.");
+    if (idle == null || canAccept == null) throw new Error("Required Egress state metrics are unavailable.");
     return {
-      available: available > 0,
+      idle: idle > 0,
       canAcceptRequest: canAccept > 0,
       cgroupMemoryBytes: metricValue(text, "livekit_egress_cgroup_memory_bytes"),
       cpuLoadRatio: metricValue(text, "livekit_load_ratio", { type: "cpu" }),

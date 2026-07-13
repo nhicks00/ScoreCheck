@@ -327,7 +327,7 @@ groups:
           first_action: "Inspect source and DOM signatures; do not mutate canonical score data until the rendering fault is isolated."
 
       - alert: ScoreCheckNativeEndpointDown
-        expr: scorecheck_native_endpoint_up == 0
+        expr: scorecheck_native_endpoint_up{service!~"egress-(metrics|health)"} == 0
         for: 20s
         labels:
           severity: critical
@@ -339,7 +339,20 @@ groups:
           first_action: "Inspect the bounded service health and container state on the affected host."
 
       - alert: ScoreCheckEgressWorkerUnavailable
-        expr: scorecheck_egress_available == 0
+        expr: |
+          (
+            min by (agent) (
+              scorecheck_native_endpoint_up{role="compositor",service=~"egress-(metrics|health)"}
+              or scorecheck_egress_metrics_valid
+            ) == 0
+          )
+          and on (agent)
+          (
+            max by (agent) (
+              scorecheck_compositor_court_assignment
+              * on (court) group_left scorecheck_court_broadcast_live
+            ) == 1
+          )
         for: 20s
         labels:
           severity: critical
@@ -351,7 +364,15 @@ groups:
           first_action: "Inspect Egress health, Redis and LiveKit control connectivity, then check host capacity."
 
       - alert: ScoreCheckEgressCapacityExhausted
-        expr: scorecheck_egress_can_accept_request == 0
+        expr: |
+          (scorecheck_egress_can_accept_request == 0)
+          and on (agent)
+          (
+            max by (agent) (
+              scorecheck_compositor_court_assignment
+              * on (court) group_left scorecheck_court_broadcast_live
+            ) == 1
+          )
         for: 30s
         labels:
           severity: warning

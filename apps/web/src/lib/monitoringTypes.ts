@@ -202,7 +202,7 @@ export type MonitorAgent = {
   nativeServices: {
     endpoints: Array<{ service: string; up: boolean }>;
     livekit: { roomCount: number; participantCount: number; packetsOut: number; packetsDropped: number } | null;
-    egress: { available: boolean; canAcceptRequest: boolean; cgroupMemoryBytes: number | null; cpuLoadRatio: number | null; memoryLoadRatio: number | null } | null;
+    egress: { idle: boolean; canAcceptRequest: boolean; cgroupMemoryBytes: number | null; cpuLoadRatio: number | null; memoryLoadRatio: number | null } | null;
   } | null;
 };
 

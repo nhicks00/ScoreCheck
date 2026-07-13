@@ -36,7 +36,9 @@ export class AgentMetrics {
   private readonly livekitParticipants = new Gauge({ name: "scorecheck_livekit_participants", help: "Current LiveKit participant count.", labelNames: ["agent"], registers: [this.registry] });
   private readonly livekitPacketsOut = new Gauge({ name: "scorecheck_livekit_packets_out", help: "LiveKit node outbound packet count.", labelNames: ["agent"], registers: [this.registry] });
   private readonly livekitPacketsDropped = new Gauge({ name: "scorecheck_livekit_packets_dropped", help: "LiveKit node dropped packet count.", labelNames: ["agent"], registers: [this.registry] });
-  private readonly egressAvailable = new Gauge({ name: "scorecheck_egress_available", help: "Whether the Egress worker is available.", labelNames: ["agent"], registers: [this.registry] });
+  private readonly compositorCourtAssignment = new Gauge({ name: "scorecheck_compositor_court_assignment", help: "Static compositor-to-court ownership used to scope Egress alerts.", labelNames: ["agent", "court"], registers: [this.registry] });
+  private readonly egressIdle = new Gauge({ name: "scorecheck_egress_idle", help: "Whether the Egress worker currently has no active request.", labelNames: ["agent"], registers: [this.registry] });
+  private readonly egressMetricsValid = new Gauge({ name: "scorecheck_egress_metrics_valid", help: "Whether required Egress state metrics were collected successfully.", labelNames: ["agent"], registers: [this.registry] });
   private readonly egressCanAccept = new Gauge({ name: "scorecheck_egress_can_accept_request", help: "Whether the Egress worker can admit another request.", labelNames: ["agent"], registers: [this.registry] });
   private readonly egressCgroupMemory = new Gauge({ name: "scorecheck_egress_cgroup_memory_bytes", help: "Egress worker cgroup memory usage.", labelNames: ["agent"], registers: [this.registry] });
   private readonly egressCpuLoad = new Gauge({ name: "scorecheck_egress_cpu_load_ratio", help: "Egress worker CPU admission load ratio.", labelNames: ["agent"], registers: [this.registry] });
@@ -124,6 +126,12 @@ export class AgentMetrics {
     for (const endpoint of snapshot.nativeServices.endpoints) {
       this.nativeEndpointUp.set({ ...base, service: endpoint.service }, endpoint.up ? 1 : 0);
     }
+    this.compositorCourtAssignment.reset();
+    if (snapshot.role === "compositor") {
+      for (const court of snapshot.assignedCourts) {
+        this.compositorCourtAssignment.set({ agent: snapshot.agentId, court: String(court) }, 1);
+      }
+    }
     this.livekitRooms.reset();
     this.livekitParticipants.reset();
     this.livekitPacketsOut.reset();
@@ -135,10 +143,13 @@ export class AgentMetrics {
       this.livekitPacketsOut.set(labels, snapshot.nativeServices.livekit.packetsOut);
       this.livekitPacketsDropped.set(labels, snapshot.nativeServices.livekit.packetsDropped);
     }
-    for (const metric of [this.egressAvailable, this.egressCanAccept, this.egressCgroupMemory, this.egressCpuLoad, this.egressMemoryLoad]) metric.reset();
+    for (const metric of [this.egressIdle, this.egressMetricsValid, this.egressCanAccept, this.egressCgroupMemory, this.egressCpuLoad, this.egressMemoryLoad]) metric.reset();
+    if (snapshot.role === "compositor") {
+      this.egressMetricsValid.set({ agent: snapshot.agentId }, snapshot.nativeServices.egress ? 1 : 0);
+    }
     if (snapshot.nativeServices.egress) {
       const labels = { agent: snapshot.agentId };
-      this.egressAvailable.set(labels, snapshot.nativeServices.egress.available ? 1 : 0);
+      this.egressIdle.set(labels, snapshot.nativeServices.egress.idle ? 1 : 0);
       this.egressCanAccept.set(labels, snapshot.nativeServices.egress.canAcceptRequest ? 1 : 0);
       if (snapshot.nativeServices.egress.cgroupMemoryBytes != null) this.egressCgroupMemory.set(labels, snapshot.nativeServices.egress.cgroupMemoryBytes);
       if (snapshot.nativeServices.egress.cpuLoadRatio != null) this.egressCpuLoad.set(labels, snapshot.nativeServices.egress.cpuLoadRatio);

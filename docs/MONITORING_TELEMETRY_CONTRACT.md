@@ -148,12 +148,20 @@ scorecheck_media_path_bytes_sent_total
 scorecheck_media_path_inbound_bitrate_bps
 scorecheck_media_path_frame_errors_total
 scorecheck_native_endpoint_up
-scorecheck_egress_available
+scorecheck_compositor_court_assignment
+scorecheck_egress_idle
+scorecheck_egress_metrics_valid
 scorecheck_egress_can_accept_request
 scorecheck_egress_cgroup_memory_bytes
 scorecheck_egress_cpu_load_ratio
 scorecheck_egress_memory_load_ratio
 ```
+
+`scorecheck_egress_idle` is an activity signal derived from LiveKit Egress
+`livekit_egress_available`: `1` means no active request and `0` means the worker
+is busy. It is not a health signal. Egress health is derived from endpoint
+reachability and required-metric validity; admission capacity is reported
+separately by `scorecheck_egress_can_accept_request`.
 
 Counters remain cumulative. Prometheus recording rules derive rates.
 

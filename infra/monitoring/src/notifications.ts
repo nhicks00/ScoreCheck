@@ -180,25 +180,33 @@ export class NotificationDispatcher {
 
   private async sendRecovery(incident: IncidentSnapshot, now: Date): Promise<void> {
     if (!this.store) return;
-    if (this.pushoverConfigured()) {
+    const [pushoverOpen, smsOpen, smsEscalation] = await Promise.all([
+      this.store.findNotification(incident.id, "pushover", "open"),
+      this.store.findNotification(incident.id, "twilio_sms", "open"),
+      this.store.findNotification(incident.id, "twilio_sms", "escalation")
+    ]);
+    const pushoverWasSent = notificationWasSent(pushoverOpen);
+    const smsWasSent = notificationWasSent(smsOpen) || notificationWasSent(smsEscalation);
+
+    if (this.pushoverConfigured() && pushoverWasSent) {
       const claim = await this.store.ensureNotification(incident.id, "pushover", "recovery", now);
-      if (!claim.created) return;
-      try {
-        const result = await this.sendPushover(incident, false);
-        await this.store.updateNotification(claim.notification.id, {
-          providerMessageId: result.request,
-          status: "accepted",
-          acceptedAt: now.toISOString(),
-          providerErrorCode: null
-        });
-        this.mark("pushover", "success", now.toISOString());
-      } catch {
-        await this.store.updateNotification(claim.notification.id, { status: "failed", providerErrorCode: "submission-failed" });
-        this.mark("pushover", "failure", now.toISOString());
+      if (claim.created) {
+        try {
+          const result = await this.sendPushover(incident, false);
+          await this.store.updateNotification(claim.notification.id, {
+            providerMessageId: result.request,
+            status: "accepted",
+            acceptedAt: now.toISOString(),
+            providerErrorCode: null
+          });
+          this.mark("pushover", "success", now.toISOString());
+        } catch {
+          await this.store.updateNotification(claim.notification.id, { status: "failed", providerErrorCode: "submission-failed" });
+          this.mark("pushover", "failure", now.toISOString());
+        }
       }
-      return;
     }
-    await this.ensureSms(incident, "recovery", now);
+    if (smsWasSent) await this.ensureSms(incident, "recovery", now);
   }
 
   private async pollPushoverReceipt(notification: StoredNotification, now: Date): Promise<boolean> {
@@ -315,6 +323,11 @@ export class NotificationDispatcher {
       this.providerHealth[provider].lastFailureAt = timestamp;
     }
   }
+}
+
+function notificationWasSent(notification: StoredNotification | null): boolean {
+  if (!notification?.providerMessageId) return false;
+  return ["accepted", "delivered", "acknowledged", "expired", "cancelled"].includes(notification.status);
 }
 
 export function validateTwilioSignature(authToken: string, url: string, params: Record<string, string>, presented: string): boolean {
