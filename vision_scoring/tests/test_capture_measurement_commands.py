@@ -49,10 +49,12 @@ class CaptureMeasurementCommandTests(unittest.TestCase):
                 "-show_entries",
                 (
                     "stream=index,codec_name,codec_type,time_base,width,height,"
-                    "field_order:stream_side_data=rotation:frame=media_type,"
-                    "stream_index,pts,pkt_dts,duration,pkt_pos,pkt_size,width,"
-                    "height,pix_fmt,interlaced_frame,top_field_first,repeat_pict,"
-                    "coded_picture_number,display_picture_number"
+                    "field_order,sample_aspect_ratio:stream_side_data=rotation:"
+                    "frame=media_type,stream_index,pts,pkt_dts,duration,pkt_pos,"
+                    "pkt_size,width,height,sample_aspect_ratio,pix_fmt,"
+                    "interlaced_frame,top_field_first,repeat_pict,"
+                    "coded_picture_number,display_picture_number:stream_tags=:"
+                    "stream_disposition="
                 ),
                 "-of",
                 "json=compact=1",
@@ -89,7 +91,7 @@ class CaptureMeasurementCommandTests(unittest.TestCase):
                 "-show_entries",
                 (
                     "stream=index,codec_type,time_base:packet=stream_index,pts,"
-                    "dts,duration,pos,size,flags"
+                    "dts,duration,pos,size,flags:stream_tags=:stream_disposition="
                 ),
                 "-of",
                 "json=compact=1",
@@ -168,7 +170,15 @@ class CaptureMeasurementCommandTests(unittest.TestCase):
             ),
         )
         self.assertIs(type(actual), tuple)
-        self.assertEqual(actual[22:26], ("-filter_complex", f"[0:6]{MEASUREMENT_RGB24_FRAMEHASH_FILTER_GRAPH_V1}", "-map", "[hash]"))
+        self.assertEqual(
+            actual[22:26],
+            (
+                "-filter_complex",
+                f"[0:6]{MEASUREMENT_RGB24_FRAMEHASH_FILTER_GRAPH_V1}",
+                "-map",
+                "[hash]",
+            ),
+        )
         self.assertIn("-noautorotate", actual)
         self.assertEqual(actual.count("1"), 4)
         self.assertNotIn("pipe:1", actual)
@@ -181,7 +191,9 @@ class CaptureMeasurementCommandTests(unittest.TestCase):
         )
         self.assertIn("bitexact", MEASUREMENT_RGB24_FRAMEHASH_FILTER_GRAPH_V1)
         self.assertIn("sws_dither=none", MEASUREMENT_RGB24_FRAMEHASH_FILTER_GRAPH_V1)
-        self.assertIn("format=pix_fmts=rgb24", MEASUREMENT_RGB24_FRAMEHASH_FILTER_GRAPH_V1)
+        self.assertIn(
+            "format=pix_fmts=rgb24", MEASUREMENT_RGB24_FRAMEHASH_FILTER_GRAPH_V1
+        )
 
     def test_selected_stream_is_absolute_and_unambiguous_in_every_command(self) -> None:
         metadata = capture_measurement_presentation_metadata_argv_v1(
@@ -230,7 +242,9 @@ class CaptureMeasurementCommandTests(unittest.TestCase):
                         selected_video_stream_index=0,
                     )
 
-    def test_fds_and_stream_index_reject_bool_subclasses_and_signed_64_overflow(self) -> None:
+    def test_fds_and_stream_index_reject_bool_subclasses_and_signed_64_overflow(
+        self,
+    ) -> None:
         probe_functions = (
             capture_measurement_presentation_metadata_argv_v1,
             capture_measurement_selected_video_packets_argv_v1,
@@ -249,7 +263,9 @@ class CaptureMeasurementCommandTests(unittest.TestCase):
                     }
                     kwargs[field_name] = invalid
                     with self.subTest(
-                        function=function.__name__, field_name=field_name, invalid=invalid
+                        function=function.__name__,
+                        field_name=field_name,
+                        invalid=invalid,
                     ):
                         with self.assertRaisesRegex(ValueError, field_name):
                             function(Path("/pinned/tool"), **kwargs)  # type: ignore[arg-type]
@@ -274,7 +290,8 @@ class CaptureMeasurementCommandTests(unittest.TestCase):
                 with self.subTest(field_name=field_name, invalid=invalid):
                     with self.assertRaisesRegex(ValueError, field_name):
                         capture_measurement_rgb24_framehash_argv_v1(
-                            Path("/pinned/tool"), **kwargs  # type: ignore[arg-type]
+                            Path("/pinned/tool"),
+                            **kwargs,  # type: ignore[arg-type]
                         )
 
     def test_framehash_requires_distinct_preopened_descriptors(self) -> None:
@@ -286,7 +303,9 @@ class CaptureMeasurementCommandTests(unittest.TestCase):
                 selected_video_stream_index=0,
             )
 
-    def test_commands_have_no_ambient_network_shell_or_source_path_surface(self) -> None:
+    def test_commands_have_no_ambient_network_shell_or_source_path_surface(
+        self,
+    ) -> None:
         commands = (
             capture_measurement_presentation_metadata_argv_v1(
                 Path("/pinned/ffprobe"),
@@ -305,7 +324,15 @@ class CaptureMeasurementCommandTests(unittest.TestCase):
                 selected_video_stream_index=0,
             ),
         )
-        forbidden_protocols = ("file:", "http:", "https:", "rtmp:", "srt:", "tcp:", "udp:")
+        forbidden_protocols = (
+            "file:",
+            "http:",
+            "https:",
+            "rtmp:",
+            "srt:",
+            "tcp:",
+            "udp:",
+        )
         for argv in commands:
             self.assertIs(type(argv), tuple)
             self.assertNotIn("-y", argv)
@@ -313,16 +340,28 @@ class CaptureMeasurementCommandTests(unittest.TestCase):
             self.assertNotIn("-r", argv)
             self.assertNotIn("-vf", argv)
             self.assertNotIn("-filter:v", argv)
-            self.assertFalse(any(token in {"sh", "bash", "zsh", "shell"} for token in argv))
-            self.assertFalse(any(any(protocol in token for protocol in forbidden_protocols) for token in argv))
+            self.assertFalse(
+                any(token in {"sh", "bash", "zsh", "shell"} for token in argv)
+            )
+            self.assertFalse(
+                any(
+                    any(protocol in token for protocol in forbidden_protocols)
+                    for token in argv
+                )
+            )
             for index, token in enumerate(argv[:-1]):
                 if token == "-protocol_whitelist":
                     self.assertEqual(argv[index + 1], "fd")
             self.assertTrue(all(token == argv[0] or "/" not in token for token in argv))
 
     def test_b_frame_packet_timing_is_collected_but_separate_from_cadence(self) -> None:
-        self.assertIn("frame=media_type,stream_index,pts,pkt_dts", PRESENTATION_METADATA_SHOW_ENTRIES_V1)
-        self.assertIn("packet=stream_index,pts,dts", SELECTED_VIDEO_PACKET_SHOW_ENTRIES_V1)
+        self.assertIn(
+            "frame=media_type,stream_index,pts,pkt_dts",
+            PRESENTATION_METADATA_SHOW_ENTRIES_V1,
+        )
+        self.assertIn(
+            "packet=stream_index,pts,dts", SELECTED_VIDEO_PACKET_SHOW_ENTRIES_V1
+        )
         descriptor = capture_measurement_recipe_descriptor_v1()
         self.assertEqual(
             descriptor["presentation_cadence_basis"],
@@ -336,8 +375,15 @@ class CaptureMeasurementCommandTests(unittest.TestCase):
             descriptor["frame_ordinal"],
             "ZERO_BASED_PRESENTATION_FRAMES_JSON_ARRAY_ORDER",
         )
+        self.assertEqual(
+            descriptor["source_extent"],
+            "ONE_COMPLETE_IMMUTABLE_BOUNDED_FINALIZED_SOURCE_SEGMENT_"
+            "NOT_WHOLE_MATCH_OR_LIVE_COVERAGE",
+        )
 
-    def test_recipe_domain_fingerprint_is_fixed_fresh_and_semantic_sensitive(self) -> None:
+    def test_recipe_domain_fingerprint_is_fixed_fresh_and_semantic_sensitive(
+        self,
+    ) -> None:
         self.assertEqual(CAPTURE_MEASUREMENT_COMMAND_SCHEMA_VERSION, "1.0")
         self.assertEqual(
             CAPTURE_MEASUREMENT_RECIPE_DOMAIN,
@@ -345,7 +391,7 @@ class CaptureMeasurementCommandTests(unittest.TestCase):
         )
         self.assertEqual(
             CAPTURE_MEASUREMENT_RECIPE_SHA256_V1,
-            "38cdf53aa9692b49441135d57849404539769f4ab85786511a5886580c9eaea3",
+            "a10ea59201323077f275a88f765cd513fcb320254b4a305d70438c812a2b8cf4",
         )
         self.assertEqual(
             capture_measurement_recipe_sha256_v1(),
@@ -356,7 +402,9 @@ class CaptureMeasurementCommandTests(unittest.TestCase):
         second = capture_measurement_recipe_descriptor_v1()
         self.assertEqual(first, second)
         self.assertIsNot(first, second)
-        self.assertIsNot(first["metadata_argv_template"], second["metadata_argv_template"])
+        self.assertIsNot(
+            first["metadata_argv_template"], second["metadata_argv_template"]
+        )
         first["metadata_argv_template"][1] = "-changed-semantic"
         changed = hashlib.sha256(
             canonical_json_bytes(

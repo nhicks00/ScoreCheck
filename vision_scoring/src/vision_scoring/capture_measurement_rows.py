@@ -17,9 +17,11 @@ from itertools import zip_longest
 import math
 from typing import Any, ClassVar, Iterable
 
+from .capture_contracts import MAX_FINALIZED_FRAMES, MAX_FINALIZED_SOURCE_BYTES
 from .capture_measurement_commands import CAPTURE_MEASUREMENT_RECIPE_SHA256_V1
 from .capture_measurement_contracts import (
     MAX_DECODED_CAPTURE_MEASUREMENT_BYTES,
+    MAX_DECODED_CAPTURE_MEASUREMENT_PACKETS,
     DecodedCadenceDerivationV1,
     DecodedCaptureMeasurementReceiptV1,
     DecodedInterlaceObservationV1,
@@ -117,6 +119,26 @@ def _require_time_base(numerator: object, denominator: object) -> tuple[int, int
     )
     if math.gcd(numerator_value, denominator_value) != 1:
         raise ValueError("source time base must be a reduced positive rational")
+    return numerator_value, denominator_value
+
+
+def _require_sample_aspect_ratio(
+    numerator: object, denominator: object
+) -> tuple[int, int]:
+    numerator_value = require_exact_int(
+        numerator,
+        "sample_aspect_ratio_numerator",
+        minimum=1,
+        maximum=MAX_SIGNED_64,
+    )
+    denominator_value = require_exact_int(
+        denominator,
+        "sample_aspect_ratio_denominator",
+        minimum=1,
+        maximum=MAX_SIGNED_64,
+    )
+    if math.gcd(numerator_value, denominator_value) != 1:
+        raise ValueError("sample aspect ratio must be a reduced positive rational")
     return numerator_value, denominator_value
 
 
@@ -335,6 +357,8 @@ class DecodedFrameContentRowV1(_CanonicalContract):
     decoded_pixel_sha256: str
     decoded_width_px: int
     decoded_height_px: int
+    sample_aspect_ratio_numerator: int
+    sample_aspect_ratio_denominator: int
     display_rotation_degrees: int
     interlace_fact: DecodedFrameInterlaceFactV1
     source_time_base_numerator: int
@@ -376,6 +400,10 @@ class DecodedFrameContentRowV1(_CanonicalContract):
             "decoded_height_px",
             minimum=1,
             maximum=MAX_DECODED_DIMENSION_PX,
+        )
+        _require_sample_aspect_ratio(
+            self.sample_aspect_ratio_numerator,
+            self.sample_aspect_ratio_denominator,
         )
         rotation = require_exact_int(
             self.display_rotation_degrees,
@@ -498,17 +526,18 @@ class DecodedMeasurementRecipeV1(_CanonicalContract):
 class _RollingRowSetDigest:
     """Constant-memory, domain-separated digest over exact ordered row bytes."""
 
-    __slots__ = ("_count", "_hasher")
+    __slots__ = ("_count", "_hasher", "_maximum_rows")
 
-    def __init__(self, domain: str) -> None:
+    def __init__(self, domain: str, *, maximum_rows: int) -> None:
         self._count = 0
+        self._maximum_rows = maximum_rows
         self._hasher = hashlib.sha256()
         self._hasher.update(domain.encode("ascii"))
         self._hasher.update(b"\x00rows\x00")
 
     def add(self, raw: bytes) -> None:
-        if self._count == MAX_SIGNED_64:
-            raise ValueError("row count exceeds signed 64-bit")
+        if self._count == self._maximum_rows:
+            raise ValueError("row count exceeds its bounded segment limit")
         if (
             type(raw) is not bytes
             or not 1 <= len(raw) <= MAX_CAPTURE_MEASUREMENT_ROW_BYTES
@@ -547,10 +576,31 @@ def _exact_iterator(rows: object, label: str) -> Any:
             raise ValueError(f"{label} iteration failed") from exc
 
 
+def _canonical_cadence(value: object) -> DecodedCadenceDerivationV1:
+    if type(value) is not DecodedCadenceDerivationV1:
+        raise ValueError("cadence must be exact DecodedCadenceDerivationV1")
+    try:
+        reconstructed = DecodedCadenceDerivationV1(
+            **{
+                field_name: getattr(value, field_name)
+                for field_name in DecodedCadenceDerivationV1.__dataclass_fields__
+            }
+        )
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError("cadence is not a valid canonical derivation") from exc
+    if reconstructed != value:
+        raise ValueError("cadence canonical reconstruction changed the value")
+    return reconstructed
+
+
 @dataclass(frozen=True, slots=True)
 class PresentationTimingAggregationV1:
     cadence: DecodedCadenceDerivationV1
     rows_sha256: str
+
+    def __post_init__(self) -> None:
+        _canonical_cadence(self.cadence)
+        require_sha256(self.rows_sha256, "rows_sha256")
 
 
 @dataclass(frozen=True, slots=True)
@@ -559,12 +609,31 @@ class SelectedVideoPacketAggregationV1:
     payload_bytes: int
     rows_sha256: str
 
+    def __post_init__(self) -> None:
+        count = require_exact_int(
+            self.packet_count,
+            "packet_count",
+            minimum=1,
+            maximum=MAX_DECODED_CAPTURE_MEASUREMENT_PACKETS,
+        )
+        payload = require_exact_int(
+            self.payload_bytes,
+            "payload_bytes",
+            minimum=1,
+            maximum=MAX_SIGNED_64,
+        )
+        if count > payload:
+            raise ValueError("packet_count exceeds payload_bytes")
+        require_sha256(self.rows_sha256, "rows_sha256")
+
 
 @dataclass(frozen=True, slots=True)
 class DecodedFrameAggregationV1:
     frame_count: int
     decoded_width_px: int
     decoded_height_px: int
+    sample_aspect_ratio_numerator: int
+    sample_aspect_ratio_denominator: int
     display_rotation_degrees: int
     source_time_base_numerator: int
     source_time_base_denominator: int
@@ -573,11 +642,121 @@ class DecodedFrameAggregationV1:
     freeze_candidate_count: int
     rows_sha256: str
 
+    def __post_init__(self) -> None:
+        frame_count = require_exact_int(
+            self.frame_count,
+            "frame_count",
+            minimum=1,
+            maximum=MAX_FINALIZED_FRAMES,
+        )
+        require_exact_int(
+            self.decoded_width_px,
+            "decoded_width_px",
+            minimum=1,
+            maximum=MAX_DECODED_DIMENSION_PX,
+        )
+        require_exact_int(
+            self.decoded_height_px,
+            "decoded_height_px",
+            minimum=1,
+            maximum=MAX_DECODED_DIMENSION_PX,
+        )
+        _require_sample_aspect_ratio(
+            self.sample_aspect_ratio_numerator,
+            self.sample_aspect_ratio_denominator,
+        )
+        rotation = require_exact_int(
+            self.display_rotation_degrees,
+            "display_rotation_degrees",
+            minimum=0,
+            maximum=270,
+        )
+        if rotation not in _DISPLAY_ROTATIONS:
+            raise ValueError("display_rotation_degrees must be 0, 90, 180, or 270")
+        _require_time_base(
+            self.source_time_base_numerator,
+            self.source_time_base_denominator,
+        )
+        _require_exact_enum(
+            self.interlace_observation,
+            DecodedInterlaceObservationV1,
+            "interlace_observation",
+        )
+        identical_runs = require_exact_int(
+            self.identical_frame_run_count,
+            "identical_frame_run_count",
+            minimum=0,
+            maximum=frame_count // 2,
+        )
+        freeze_candidates = require_exact_int(
+            self.freeze_candidate_count,
+            "freeze_candidate_count",
+            minimum=0,
+            maximum=frame_count // 2,
+        )
+        if freeze_candidates > identical_runs:
+            raise ValueError("freeze candidates cannot exceed identical-frame runs")
+        require_sha256(self.rows_sha256, "rows_sha256")
+
+
+def _canonical_presentation_aggregation(
+    value: object,
+) -> PresentationTimingAggregationV1:
+    if type(value) is not PresentationTimingAggregationV1:
+        raise ValueError(
+            "presentation_timing must be exact PresentationTimingAggregationV1"
+        )
+    try:
+        reconstructed = PresentationTimingAggregationV1(
+            cadence=value.cadence,
+            rows_sha256=value.rows_sha256,
+        )
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError(
+            "presentation_timing is not a valid canonical aggregation"
+        ) from exc
+    if reconstructed != value:
+        raise ValueError(
+            "presentation_timing canonical reconstruction changed the value"
+        )
+    return reconstructed
+
+
+def _canonical_frame_aggregation(value: object) -> DecodedFrameAggregationV1:
+    if type(value) is not DecodedFrameAggregationV1:
+        raise ValueError("decoded_frames must be exact DecodedFrameAggregationV1")
+    try:
+        reconstructed = DecodedFrameAggregationV1(
+            **{
+                field_name: getattr(value, field_name)
+                for field_name in DecodedFrameAggregationV1.__dataclass_fields__
+            }
+        )
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError("decoded_frames is not a valid canonical aggregation") from exc
+    if reconstructed != value:
+        raise ValueError("decoded_frames canonical reconstruction changed the value")
+    return reconstructed
+
 
 @dataclass(frozen=True, slots=True)
 class PairedPresentationFrameAggregationV1:
     presentation_timing: PresentationTimingAggregationV1
     decoded_frames: DecodedFrameAggregationV1
+
+    def __post_init__(self) -> None:
+        timing = _canonical_presentation_aggregation(self.presentation_timing)
+        frames = _canonical_frame_aggregation(self.decoded_frames)
+        if timing.cadence.decoded_frame_count != frames.frame_count:
+            raise ValueError("paired presentation and frame counts differ")
+        if (
+            timing.cadence.source_time_base_numerator,
+            timing.cadence.source_time_base_denominator,
+        ) != (
+            frames.source_time_base_numerator,
+            frames.source_time_base_denominator,
+        ):
+            raise ValueError("paired presentation and frame time bases differ")
 
 
 def _canonical_recipe(value: object) -> DecodedMeasurementRecipeV1:
@@ -593,7 +772,10 @@ class _PresentationAccumulator:
     __slots__ = ("_digest", "_selected_stream", "_time_base")
 
     def __init__(self, selected_stream: int) -> None:
-        self._digest = _RollingRowSetDigest(PRESENTATION_TIMING_ROW_SET_DOMAIN)
+        self._digest = _RollingRowSetDigest(
+            PRESENTATION_TIMING_ROW_SET_DOMAIN,
+            maximum_rows=MAX_FINALIZED_FRAMES,
+        )
         self._selected_stream = selected_stream
         self._time_base: tuple[int, int] | None = None
 
@@ -604,6 +786,8 @@ class _PresentationAccumulator:
         return self._time_base
 
     def add(self, value: object, expected_ordinal: int) -> int | None:
+        if expected_ordinal >= MAX_FINALIZED_FRAMES:
+            raise ValueError("presentation timing rows exceed finalized-segment limit")
         row, raw = _reconstruct_canonical_contract(
             value,
             contract_type=PresentationTimingRowV1,
@@ -656,8 +840,11 @@ class _FrameAccumulator:
     ) -> None:
         self._selected_stream = selected_stream
         self._recipe = recipe
-        self._digest = _RollingRowSetDigest(DECODED_FRAME_ROW_SET_DOMAIN)
-        self._geometry: tuple[int, int, int] | None = None
+        self._digest = _RollingRowSetDigest(
+            DECODED_FRAME_ROW_SET_DOMAIN,
+            maximum_rows=MAX_FINALIZED_FRAMES,
+        )
+        self._geometry: tuple[int, int, int, int, int] | None = None
         self._time_base: tuple[int, int] | None = None
         self._observed_scan_facts: set[DecodedFrameInterlaceFactV1] = set()
         self._current_pixel_sha256: str | None = None
@@ -672,6 +859,8 @@ class _FrameAccumulator:
             self._freeze_candidates += 1
 
     def add(self, value: object, expected_ordinal: int) -> int | None:
+        if expected_ordinal >= MAX_FINALIZED_FRAMES:
+            raise ValueError("decoded frame rows exceed finalized-segment limit")
         row, raw = _reconstruct_canonical_contract(
             value,
             contract_type=DecodedFrameContentRowV1,
@@ -684,6 +873,8 @@ class _FrameAccumulator:
         row_geometry = (
             row.decoded_width_px,
             row.decoded_height_px,
+            row.sample_aspect_ratio_numerator,
+            row.sample_aspect_ratio_denominator,
             row.display_rotation_degrees,
         )
         row_time_base = (
@@ -694,7 +885,10 @@ class _FrameAccumulator:
             self._geometry = row_geometry
             self._time_base = row_time_base
         elif row_geometry != self._geometry:
-            raise ValueError("decoded frame geometry or display rotation changed")
+            raise ValueError(
+                "decoded frame geometry, sample aspect ratio, or display rotation "
+                "changed"
+            )
         elif row_time_base != self._time_base:
             raise ValueError("decoded frame time base changed")
         self._observed_scan_facts.add(row.interlace_fact)
@@ -724,7 +918,9 @@ class _FrameAccumulator:
             frame_count=self._digest.count,
             decoded_width_px=self._geometry[0],
             decoded_height_px=self._geometry[1],
-            display_rotation_degrees=self._geometry[2],
+            sample_aspect_ratio_numerator=self._geometry[2],
+            sample_aspect_ratio_denominator=self._geometry[3],
+            display_rotation_degrees=self._geometry[4],
             source_time_base_numerator=self._time_base[0],
             source_time_base_denominator=self._time_base[1],
             interlace_observation=interlace,
@@ -782,11 +978,16 @@ def aggregate_selected_video_packet_rows_v1(
         minimum=0,
         maximum=MAX_SIGNED_64,
     )
-    digest = _RollingRowSetDigest(SELECTED_VIDEO_PACKET_ROW_SET_DOMAIN)
+    digest = _RollingRowSetDigest(
+        SELECTED_VIDEO_PACKET_ROW_SET_DOMAIN,
+        maximum_rows=MAX_DECODED_CAPTURE_MEASUREMENT_PACKETS,
+    )
     payload_bytes = 0
     for expected_ordinal, value in enumerate(
         _exact_iterator(rows, "selected video packet rows")
     ):
+        if expected_ordinal >= MAX_DECODED_CAPTURE_MEASUREMENT_PACKETS:
+            raise ValueError("selected video packet rows exceed bounded segment limit")
         row, raw = _reconstruct_canonical_contract(
             value,
             contract_type=SelectedVideoPacketPayloadRowV1,
@@ -921,7 +1122,7 @@ def build_decoded_capture_measurement_receipt_v1(
         source_asset_byte_length,
         "source_asset_byte_length",
         minimum=1,
-        maximum=MAX_SIGNED_64,
+        maximum=MAX_FINALIZED_SOURCE_BYTES,
     )
     require_sha256(artifact_generation_id, "artifact_generation_id")
     selected_stream = require_exact_int(
@@ -965,11 +1166,13 @@ def build_decoded_capture_measurement_receipt_v1(
         decoder_runtime_manifest_sha256=decoder_runtime_manifest_sha256,
         measurement_recipe_sha256=canonical_recipe.fingerprint(),
         measurement_analysis_status=(
-            DecodedMeasurementAnalysisStatusV1.RECIPE_BOUND_FULL_STREAM_CLAIMS_UNVERIFIED
+            DecodedMeasurementAnalysisStatusV1.RECIPE_BOUND_COMPLETE_BOUNDED_SOURCE_SEGMENT_CLAIMS_UNVERIFIED
         ),
         observed_codec=observed_codec,
         decoded_width_px=frames.decoded_width_px,
         decoded_height_px=frames.decoded_height_px,
+        sample_aspect_ratio_numerator=frames.sample_aspect_ratio_numerator,
+        sample_aspect_ratio_denominator=frames.sample_aspect_ratio_denominator,
         display_rotation_degrees=frames.display_rotation_degrees,
         interlace_observation=frames.interlace_observation,
         source_time_base_numerator=cadence.source_time_base_numerator,

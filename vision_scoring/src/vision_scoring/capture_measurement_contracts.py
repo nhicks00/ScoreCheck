@@ -1,7 +1,7 @@
 """Canonical, non-authorizing decoded-capture measurement contracts.
 
 The V1 receipt commits bounded summaries and opaque, recipe-bound streaming
-row digests for one reportedly complete selected-video-stream decode.  A
+row digests for one reportedly complete immutable finalized-source segment. A
 receipt constructor verifies structural consistency only: it does not replay
 the rows named by those hashes.  In particular, zero identical-frame or
 freeze-candidate counts do not prove the absence of freezes, interpolation,
@@ -26,6 +26,7 @@ import hashlib
 import math
 from typing import Any, ClassVar, Iterable
 
+from .capture_contracts import MAX_FINALIZED_FRAMES, MAX_FINALIZED_SOURCE_BYTES
 from .capture_profile_contracts import VideoCodecV1
 from .contract_wire import (
     MAX_SIGNED_64,
@@ -45,6 +46,7 @@ DECODED_CAPTURE_MEASUREMENT_RECEIPT_DOMAIN = (
     "multicourt-vision-scoring:decoded-capture-measurement-receipt:v1"
 )
 MAX_DECODED_CAPTURE_MEASUREMENT_BYTES = 64 * 1024
+MAX_DECODED_CAPTURE_MEASUREMENT_PACKETS = 65_536
 MAX_DECODED_DIMENSION_PX = 16_384
 
 _SUPPORTED_CADENCES = frozenset(
@@ -99,8 +101,8 @@ class DecodedCadenceStatusV1(str, Enum):
 class DecodedMeasurementAnalysisStatusV1(str, Enum):
     """V1 receipts contain unverified, recipe-bound structural claims only."""
 
-    RECIPE_BOUND_FULL_STREAM_CLAIMS_UNVERIFIED = (
-        "RECIPE_BOUND_FULL_STREAM_CLAIMS_UNVERIFIED"
+    RECIPE_BOUND_COMPLETE_BOUNDED_SOURCE_SEGMENT_CLAIMS_UNVERIFIED = (
+        "RECIPE_BOUND_COMPLETE_BOUNDED_SOURCE_SEGMENT_CLAIMS_UNVERIFIED"
     )
 
 
@@ -173,12 +175,10 @@ class DecodedCadenceDerivationV1:
     cadence_denominator: int
 
     def __post_init__(self) -> None:
-        time_base_numerator, time_base_denominator = (
-            _require_reduced_positive_rational(
-                self.source_time_base_numerator,
-                self.source_time_base_denominator,
-                field_prefix="source_time_base",
-            )
+        time_base_numerator, time_base_denominator = _require_reduced_positive_rational(
+            self.source_time_base_numerator,
+            self.source_time_base_denominator,
+            field_prefix="source_time_base",
         )
         _validate_decoded_cadence_summary_v1(
             frame_count=self.decoded_frame_count,
@@ -222,7 +222,7 @@ def _validate_decoded_cadence_summary_v1(
         frame_count,
         "decoded_frame_count",
         minimum=1,
-        maximum=MAX_SIGNED_64,
+        maximum=MAX_FINALIZED_FRAMES,
     )
     first = _require_optional_pts(first_pts, "first_presentation_pts")
     last = _require_optional_pts(last_pts, "last_presentation_pts")
@@ -384,7 +384,9 @@ def _validate_decoded_cadence_summary_v1(
         assert first is not None and last is not None
         positive_comparison_count = frames - 1 - regressions
         if positive_comparison_count == 0 and last - first > -regressions:
-            raise ValueError("all-regressing PTS summary has an infeasible endpoint span")
+            raise ValueError(
+                "all-regressing PTS summary has an infeasible endpoint span"
+            )
     elif status is DecodedCadenceStatusV1.ABSTAINED_VARIABLE_DELTA:
         if visible_anomaly_kinds or present < 3:
             raise ValueError(
@@ -415,12 +417,10 @@ def derive_exact_decoded_cadence_v1(
     lineage and result rather than silently rounding this observation.
     """
 
-    time_base_numerator, time_base_denominator = (
-        _require_reduced_positive_rational(
-            source_time_base_numerator,
-            source_time_base_denominator,
-            field_prefix="source_time_base",
-        )
+    time_base_numerator, time_base_denominator = _require_reduced_positive_rational(
+        source_time_base_numerator,
+        source_time_base_denominator,
+        field_prefix="source_time_base",
     )
     try:
         iterator = iter(presentation_pts)
@@ -438,8 +438,8 @@ def derive_exact_decoded_cadence_v1(
     variable_delta = False
 
     for value in iterator:
-        if count == MAX_SIGNED_64:
-            raise ValueError("decoded frame count exceeds signed 64-bit")
+        if count == MAX_FINALIZED_FRAMES:
+            raise ValueError("decoded frame count exceeds finalized-segment limit")
         count += 1
         pts = _require_optional_pts(value, "presentation_pts item")
         if count == 1:
@@ -540,12 +540,10 @@ def average_payload_bitrate_rational_v1(
         minimum=0,
         maximum=MAX_SIGNED_64,
     )
-    time_base_numerator, time_base_denominator = (
-        _require_reduced_positive_rational(
-            source_time_base_numerator,
-            source_time_base_denominator,
-            field_prefix="source_time_base",
-        )
+    time_base_numerator, time_base_denominator = _require_reduced_positive_rational(
+        source_time_base_numerator,
+        source_time_base_denominator,
+        field_prefix="source_time_base",
     )
     first_pts = _require_optional_pts(first_presentation_pts, "first_presentation_pts")
     last_pts = _require_optional_pts(last_presentation_pts, "last_presentation_pts")
@@ -572,7 +570,7 @@ def _contract_field_names() -> set[str]:
 
 @dataclass(frozen=True, slots=True)
 class DecodedCaptureMeasurementReceiptV1:
-    """Unverified full-stream measurement claims with no admission authority."""
+    """Unverified complete bounded-segment claims with no admission authority."""
 
     source_id: str
     source_asset_sha256: str
@@ -585,6 +583,8 @@ class DecodedCaptureMeasurementReceiptV1:
     observed_codec: VideoCodecV1
     decoded_width_px: int
     decoded_height_px: int
+    sample_aspect_ratio_numerator: int
+    sample_aspect_ratio_denominator: int
     display_rotation_degrees: int
     interlace_observation: DecodedInterlaceObservationV1
     source_time_base_numerator: int
@@ -635,7 +635,7 @@ class DecodedCaptureMeasurementReceiptV1:
             self.source_asset_byte_length,
             "source_asset_byte_length",
             minimum=1,
-            maximum=MAX_SIGNED_64,
+            maximum=MAX_FINALIZED_SOURCE_BYTES,
         )
         require_exact_int(
             self.selected_video_stream_index,
@@ -651,7 +651,7 @@ class DecodedCaptureMeasurementReceiptV1:
         )
         if (
             self.measurement_analysis_status
-            is not DecodedMeasurementAnalysisStatusV1.RECIPE_BOUND_FULL_STREAM_CLAIMS_UNVERIFIED
+            is not DecodedMeasurementAnalysisStatusV1.RECIPE_BOUND_COMPLETE_BOUNDED_SOURCE_SEGMENT_CLAIMS_UNVERIFIED
         ):
             raise ValueError("V1 decoded measurement analysis status is invalid")
         require_exact_int(
@@ -666,6 +666,11 @@ class DecodedCaptureMeasurementReceiptV1:
             minimum=1,
             maximum=MAX_DECODED_DIMENSION_PX,
         )
+        _require_reduced_positive_rational(
+            self.sample_aspect_ratio_numerator,
+            self.sample_aspect_ratio_denominator,
+            field_prefix="sample_aspect_ratio",
+        )
         rotation = require_exact_int(
             self.display_rotation_degrees,
             "display_rotation_degrees",
@@ -679,12 +684,10 @@ class DecodedCaptureMeasurementReceiptV1:
             DecodedInterlaceObservationV1,
             "interlace_observation",
         )
-        time_base_numerator, time_base_denominator = (
-            _require_reduced_positive_rational(
-                self.source_time_base_numerator,
-                self.source_time_base_denominator,
-                field_prefix="source_time_base",
-            )
+        time_base_numerator, time_base_denominator = _require_reduced_positive_rational(
+            self.source_time_base_numerator,
+            self.source_time_base_denominator,
+            field_prefix="source_time_base",
         )
 
         _validate_decoded_cadence_summary_v1(
@@ -709,7 +712,7 @@ class DecodedCaptureMeasurementReceiptV1:
             self.selected_video_packet_count,
             "selected_video_packet_count",
             minimum=1,
-            maximum=MAX_SIGNED_64,
+            maximum=MAX_DECODED_CAPTURE_MEASUREMENT_PACKETS,
         )
         payload_bytes = require_exact_int(
             self.selected_video_payload_bytes,
@@ -739,13 +742,13 @@ class DecodedCaptureMeasurementReceiptV1:
             self.identical_frame_run_count,
             "identical_frame_run_count",
             minimum=0,
-            maximum=frame_count,
+            maximum=frame_count // 2,
         )
         freeze_candidates = require_exact_int(
             self.freeze_candidate_count,
             "freeze_candidate_count",
             minimum=0,
-            maximum=frame_count,
+            maximum=frame_count // 2,
         )
         if freeze_candidates > identical_runs:
             raise ValueError("freeze candidates cannot exceed identical-frame runs")
@@ -772,21 +775,15 @@ class DecodedCaptureMeasurementReceiptV1:
             "cadence_denominator": self.cadence_denominator,
             "cadence_numerator": self.cadence_numerator,
             "cadence_status": self.cadence_status.value,
-            "constant_presentation_pts_delta": (
-                self.constant_presentation_pts_delta
-            ),
+            "constant_presentation_pts_delta": (self.constant_presentation_pts_delta),
             "decoded_frame_count": self.decoded_frame_count,
             "decoded_frame_rows_sha256": self.decoded_frame_rows_sha256,
             "decoded_height_px": self.decoded_height_px,
             "decoded_width_px": self.decoded_width_px,
-            "decoder_runtime_manifest_sha256": (
-                self.decoder_runtime_manifest_sha256
-            ),
+            "decoder_runtime_manifest_sha256": (self.decoder_runtime_manifest_sha256),
             "display_rotation_degrees": self.display_rotation_degrees,
             "domain": self._DOMAIN,
-            "duplicate_presentation_pts_count": (
-                self.duplicate_presentation_pts_count
-            ),
+            "duplicate_presentation_pts_count": (self.duplicate_presentation_pts_count),
             "first_presentation_pts": self.first_presentation_pts,
             "freeze_candidate_count": self.freeze_candidate_count,
             "identical_frame_run_count": self.identical_frame_run_count,
@@ -794,17 +791,15 @@ class DecodedCaptureMeasurementReceiptV1:
             "last_presentation_pts": self.last_presentation_pts,
             "measurement_analysis_status": self.measurement_analysis_status.value,
             "measurement_recipe_sha256": self.measurement_recipe_sha256,
-            "missing_presentation_pts_count": (
-                self.missing_presentation_pts_count
-            ),
+            "missing_presentation_pts_count": (self.missing_presentation_pts_count),
             "observed_codec": self.observed_codec.value,
-            "presentation_timing_rows_sha256": (
-                self.presentation_timing_rows_sha256
-            ),
+            "presentation_timing_rows_sha256": (self.presentation_timing_rows_sha256),
             "regressing_presentation_pts_count": (
                 self.regressing_presentation_pts_count
             ),
             "schema_version": self.schema_version,
+            "sample_aspect_ratio_denominator": (self.sample_aspect_ratio_denominator),
+            "sample_aspect_ratio_numerator": self.sample_aspect_ratio_numerator,
             "selected_video_packet_count": self.selected_video_packet_count,
             "selected_video_packet_rows_sha256": (
                 self.selected_video_packet_rows_sha256
@@ -854,9 +849,7 @@ class DecodedCaptureMeasurementReceiptV1:
         return cls(**fields)
 
     @classmethod
-    def from_json_bytes(
-        cls, raw: bytes
-    ) -> "DecodedCaptureMeasurementReceiptV1":
+    def from_json_bytes(cls, raw: bytes) -> "DecodedCaptureMeasurementReceiptV1":
         payload = require_exact_fields(
             parse_canonical_json_object(
                 raw,
@@ -882,6 +875,7 @@ class DecodedCaptureMeasurementReceiptV1:
 __all__ = [
     "DECODED_CAPTURE_MEASUREMENT_RECEIPT_DOMAIN",
     "DECODED_CAPTURE_MEASUREMENT_SCHEMA_VERSION",
+    "MAX_DECODED_CAPTURE_MEASUREMENT_PACKETS",
     "DecodedCadenceDerivationV1",
     "DecodedCadenceStatusV1",
     "DecodedCaptureMeasurementReceiptV1",

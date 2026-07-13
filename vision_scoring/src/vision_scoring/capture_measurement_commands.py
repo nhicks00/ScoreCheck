@@ -1,4 +1,4 @@
-"""Pure, exact argv construction for full-stream capture measurement.
+"""Pure, exact argv construction for bounded source-segment measurement.
 
 This module constructs immutable command tokens only.  It opens no path,
 descriptor, or network protocol; executes no process; invokes no shell; and
@@ -30,15 +30,18 @@ CAPTURE_MEASUREMENT_RECIPE_DOMAIN = (
 MAX_CAPTURE_MEASUREMENT_RECIPE_BYTES = 64 * 1024
 
 PRESENTATION_METADATA_SHOW_ENTRIES_V1 = (
-    "stream=index,codec_name,codec_type,time_base,width,height,field_order:"
+    "stream=index,codec_name,codec_type,time_base,width,height,field_order,"
+    "sample_aspect_ratio:"
     "stream_side_data=rotation:"
     "frame=media_type,stream_index,pts,pkt_dts,duration,pkt_pos,pkt_size,"
-    "width,height,pix_fmt,interlaced_frame,top_field_first,repeat_pict,"
-    "coded_picture_number,display_picture_number"
+    "width,height,sample_aspect_ratio,pix_fmt,interlaced_frame,top_field_first,"
+    "repeat_pict,coded_picture_number,display_picture_number:"
+    "stream_tags=:stream_disposition="
 )
 SELECTED_VIDEO_PACKET_SHOW_ENTRIES_V1 = (
     "stream=index,codec_type,time_base:"
-    "packet=stream_index,pts,dts,duration,pos,size,flags"
+    "packet=stream_index,pts,dts,duration,pos,size,flags:"
+    "stream_tags=:stream_disposition="
 )
 FFPROBE_JSON_OUTPUT_FORMAT_V1 = "json=compact=1"
 
@@ -280,9 +283,7 @@ def capture_measurement_rgb24_framehash_argv_v1(
         output_fd_field_name="framehash_output_fd",
         selected_video_stream_index=selected_video_stream_index,
     )
-    return _rgb24_framehash_tokens_v1(
-        executable, input_value, output_value, stream
-    )
+    return _rgb24_framehash_tokens_v1(executable, input_value, output_value, stream)
 
 
 def capture_measurement_recipe_descriptor_v1() -> dict[str, Any]:
@@ -322,6 +323,10 @@ def capture_measurement_recipe_descriptor_v1() -> dict[str, Any]:
         "probe_output_transport": "PROTECTED_RUNNER_BOUNDED_STDOUT",
         "schema_version": CAPTURE_MEASUREMENT_COMMAND_SCHEMA_VERSION,
         "selected_stream_mapping": "ABSOLUTE_DEMUX_STREAM_INDEX",
+        "source_extent": (
+            "ONE_COMPLETE_IMMUTABLE_BOUNDED_FINALIZED_SOURCE_SEGMENT_"
+            "NOT_WHOLE_MATCH_OR_LIVE_COVERAGE"
+        ),
     }
 
 

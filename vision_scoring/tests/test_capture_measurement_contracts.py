@@ -6,8 +6,13 @@ from itertools import product
 import json
 import unittest
 
+from vision_scoring.capture_contracts import (
+    MAX_FINALIZED_FRAMES,
+    MAX_FINALIZED_SOURCE_BYTES,
+)
 from vision_scoring.capture_measurement_contracts import (
     DECODED_CAPTURE_MEASUREMENT_RECEIPT_DOMAIN,
+    MAX_DECODED_CAPTURE_MEASUREMENT_PACKETS,
     DecodedCadenceDerivationV1,
     DecodedCadenceStatusV1,
     DecodedCaptureMeasurementReceiptV1,
@@ -54,15 +59,15 @@ def _measurement(
         "decoder_runtime_manifest_sha256": _digest(3),
         "measurement_recipe_sha256": _digest(4),
         "measurement_analysis_status": (
-            DecodedMeasurementAnalysisStatusV1.RECIPE_BOUND_FULL_STREAM_CLAIMS_UNVERIFIED
+            DecodedMeasurementAnalysisStatusV1.RECIPE_BOUND_COMPLETE_BOUNDED_SOURCE_SEGMENT_CLAIMS_UNVERIFIED
         ),
         "observed_codec": VideoCodecV1.AVC_H264,
         "decoded_width_px": 1920,
         "decoded_height_px": 1080,
+        "sample_aspect_ratio_numerator": 1,
+        "sample_aspect_ratio_denominator": 1,
         "display_rotation_degrees": 0,
-        "interlace_observation": (
-            DecodedInterlaceObservationV1.PROGRESSIVE_ONLY
-        ),
+        "interlace_observation": (DecodedInterlaceObservationV1.PROGRESSIVE_ONLY),
         "source_time_base_numerator": source_time_base_numerator,
         "source_time_base_denominator": source_time_base_denominator,
         "decoded_frame_count": derivation.decoded_frame_count,
@@ -72,9 +77,7 @@ def _measurement(
         "selected_video_packet_count": 30,
         "selected_video_packet_rows_sha256": _digest(6),
         "decoded_frame_rows_sha256": _digest(7),
-        "missing_presentation_pts_count": (
-            derivation.missing_presentation_pts_count
-        ),
+        "missing_presentation_pts_count": (derivation.missing_presentation_pts_count),
         "duplicate_presentation_pts_count": (
             derivation.duplicate_presentation_pts_count
         ),
@@ -82,9 +85,7 @@ def _measurement(
             derivation.regressing_presentation_pts_count
         ),
         "cadence_status": derivation.cadence_status,
-        "constant_presentation_pts_delta": (
-            derivation.constant_presentation_pts_delta
-        ),
+        "constant_presentation_pts_delta": (derivation.constant_presentation_pts_delta),
         "cadence_numerator": derivation.cadence_numerator,
         "cadence_denominator": derivation.cadence_denominator,
         "selected_video_payload_bytes": payload_bytes,
@@ -98,6 +99,22 @@ def _measurement(
 
 
 class ExactCadenceDerivationTests(unittest.TestCase):
+    def test_cadence_derivation_enforces_exact_finalized_frame_cap(self) -> None:
+        at_cap = derive_exact_decoded_cadence_v1(
+            (ordinal * 3_000 for ordinal in range(MAX_FINALIZED_FRAMES)),
+            source_time_base_numerator=1,
+            source_time_base_denominator=90_000,
+        )
+        self.assertEqual(at_cap.decoded_frame_count, MAX_FINALIZED_FRAMES)
+        with self.assertRaisesRegex(ValueError, "decoded_frame_count"):
+            replace(at_cap, decoded_frame_count=MAX_FINALIZED_FRAMES + 1)
+        with self.assertRaisesRegex(ValueError, "finalized-segment limit"):
+            derive_exact_decoded_cadence_v1(
+                (ordinal * 3_000 for ordinal in range(MAX_FINALIZED_FRAMES + 1)),
+                source_time_base_numerator=1,
+                source_time_base_denominator=90_000,
+            )
+
     def test_accepts_only_four_exact_supported_cadences(self) -> None:
         cases = (
             ((0, 3_000, 6_000), 1, 90_000, (30, 1)),
@@ -231,7 +248,9 @@ class ExactCadenceDerivationTests(unittest.TestCase):
                     (0, 0),
                 )
 
-    def test_missing_pts_breaks_adjacency_without_making_derivation_invalid(self) -> None:
+    def test_missing_pts_breaks_adjacency_without_making_derivation_invalid(
+        self,
+    ) -> None:
         result = derive_exact_decoded_cadence_v1(
             (1, None, 0),
             source_time_base_numerator=1,
@@ -325,6 +344,71 @@ class ExactCadenceDerivationTests(unittest.TestCase):
 
 
 class MeasurementReceiptTests(unittest.TestCase):
+    def test_identical_run_counts_fit_disjoint_minimum_two_frame_runs(self) -> None:
+        invalid = ((1, 1), (2, 2), (3, 2))
+        for frame_count, identical_runs in invalid:
+            with (
+                self.subTest(frame_count=frame_count, identical_runs=identical_runs),
+                self.assertRaisesRegex(ValueError, "identical_frame_run_count"),
+            ):
+                _measurement(
+                    presentation_pts=tuple(
+                        ordinal * 3_000 for ordinal in range(frame_count)
+                    ),
+                    identical_frame_run_count=identical_runs,
+                    freeze_candidate_count=0,
+                )
+
+        feasible = ((1, 0), (2, 1), (3, 1), (4, 2))
+        for frame_count, identical_runs in feasible:
+            with self.subTest(frame_count=frame_count, identical_runs=identical_runs):
+                receipt = _measurement(
+                    presentation_pts=tuple(
+                        ordinal * 3_000 for ordinal in range(frame_count)
+                    ),
+                    identical_frame_run_count=identical_runs,
+                    freeze_candidate_count=identical_runs,
+                )
+                self.assertEqual(receipt.identical_frame_run_count, identical_runs)
+
+    def test_complete_segment_source_frame_and_packet_caps_are_exact(self) -> None:
+        maximum_source = _measurement(
+            source_asset_byte_length=MAX_FINALIZED_SOURCE_BYTES
+        )
+        self.assertEqual(
+            maximum_source.source_asset_byte_length, MAX_FINALIZED_SOURCE_BYTES
+        )
+        with self.assertRaisesRegex(ValueError, "source_asset_byte_length"):
+            _measurement(source_asset_byte_length=MAX_FINALIZED_SOURCE_BYTES + 1)
+
+        maximum_frames = _measurement(
+            presentation_pts=tuple(
+                ordinal * 3_000 for ordinal in range(MAX_FINALIZED_FRAMES)
+            )
+        )
+        self.assertEqual(maximum_frames.decoded_frame_count, MAX_FINALIZED_FRAMES)
+        with self.assertRaisesRegex(ValueError, "decoded_frame_count"):
+            replace(
+                maximum_frames,
+                decoded_frame_count=MAX_FINALIZED_FRAMES + 1,
+            )
+
+        maximum_packets = _measurement(
+            payload_bytes=MAX_DECODED_CAPTURE_MEASUREMENT_PACKETS,
+            selected_video_packet_count=MAX_DECODED_CAPTURE_MEASUREMENT_PACKETS,
+        )
+        self.assertEqual(
+            maximum_packets.selected_video_packet_count,
+            MAX_DECODED_CAPTURE_MEASUREMENT_PACKETS,
+        )
+        with self.assertRaisesRegex(ValueError, "selected_video_packet_count"):
+            replace(
+                maximum_packets,
+                selected_video_packet_count=(
+                    MAX_DECODED_CAPTURE_MEASUREMENT_PACKETS + 1
+                ),
+            )
+
     def test_binds_full_decode_measurement_and_exact_payload_bitrate(self) -> None:
         receipt = _measurement()
         self.assertEqual(
@@ -338,13 +422,16 @@ class MeasurementReceiptTests(unittest.TestCase):
         self.assertEqual(receipt.selected_video_packet_count, 30)
         self.assertIs(receipt.observed_codec, VideoCodecV1.AVC_H264)
         self.assertTrue(
-            all(getattr(receipt, field_name) is False for field_name in (
-                "admissible_for_training",
-                "admissible_for_evaluation",
-                "admissible_for_test",
-                "admissible_for_deployment",
-                "admissible_for_live_scoring",
-            ))
+            all(
+                getattr(receipt, field_name) is False
+                for field_name in (
+                    "admissible_for_training",
+                    "admissible_for_evaluation",
+                    "admissible_for_test",
+                    "admissible_for_deployment",
+                    "admissible_for_live_scoring",
+                )
+            )
         )
 
     def test_single_frame_uses_unknown_bitrate_without_estimation(self) -> None:
@@ -456,9 +543,7 @@ class MeasurementReceiptTests(unittest.TestCase):
                 "three complete increasing",
                 {
                     "presentation_pts": (0, 3_000),
-                    "cadence_status": (
-                        DecodedCadenceStatusV1.ABSTAINED_VARIABLE_DELTA
-                    ),
+                    "cadence_status": (DecodedCadenceStatusV1.ABSTAINED_VARIABLE_DELTA),
                     "constant_presentation_pts_delta": 0,
                     "cadence_numerator": 0,
                     "cadence_denominator": 0,
@@ -470,9 +555,7 @@ class MeasurementReceiptTests(unittest.TestCase):
                     "presentation_pts": (0, 1, 2),
                     "source_time_base_numerator": 1,
                     "source_time_base_denominator": 30,
-                    "cadence_status": (
-                        DecodedCadenceStatusV1.ABSTAINED_VARIABLE_DELTA
-                    ),
+                    "cadence_status": (DecodedCadenceStatusV1.ABSTAINED_VARIABLE_DELTA),
                     "constant_presentation_pts_delta": 0,
                     "cadence_numerator": 0,
                     "cadence_denominator": 0,
@@ -537,7 +620,7 @@ class MeasurementReceiptTests(unittest.TestCase):
         )
         self.assertIs(
             receipt.measurement_analysis_status,
-            DecodedMeasurementAnalysisStatusV1.RECIPE_BOUND_FULL_STREAM_CLAIMS_UNVERIFIED,
+            DecodedMeasurementAnalysisStatusV1.RECIPE_BOUND_COMPLETE_BOUNDED_SOURCE_SEGMENT_CLAIMS_UNVERIFIED,
         )
         # Arbitrary distinct hashes are structurally valid by design.  A
         # future protected verifier must replay all committed rows under the
@@ -552,7 +635,9 @@ class MeasurementReceiptTests(unittest.TestCase):
         self.assertEqual(
             DecodedCaptureMeasurementReceiptV1.from_json_bytes(raw), receipt
         )
-        self.assertEqual(json.loads(raw)["domain"], DECODED_CAPTURE_MEASUREMENT_RECEIPT_DOMAIN)
+        self.assertEqual(
+            json.loads(raw)["domain"], DECODED_CAPTURE_MEASUREMENT_RECEIPT_DOMAIN
+        )
         self.assertEqual(receipt.fingerprint(), receipt.fingerprint())
 
         extra = receipt.to_dict()
@@ -577,12 +662,17 @@ class MeasurementReceiptTests(unittest.TestCase):
             _measurement(observed_codec="AVC_H264")
         with self.assertRaisesRegex(ValueError, "display_rotation"):
             _measurement(display_rotation_degrees=45)
+        with self.assertRaisesRegex(ValueError, "sample_aspect_ratio"):
+            _measurement(
+                sample_aspect_ratio_numerator=2,
+                sample_aspect_ratio_denominator=2,
+            )
         with self.assertRaisesRegex(
             ValueError, "exact DecodedMeasurementAnalysisStatusV1"
         ):
             _measurement(
                 measurement_analysis_status=(
-                    "RECIPE_BOUND_FULL_STREAM_CLAIMS_UNVERIFIED"
+                    "RECIPE_BOUND_COMPLETE_BOUNDED_SOURCE_SEGMENT_CLAIMS_UNVERIFIED"
                 )
             )
         with self.assertRaisesRegex(ValueError, "payload bytes"):

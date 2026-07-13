@@ -4,10 +4,15 @@ from dataclasses import replace
 import json
 import unittest
 
+from vision_scoring.capture_contracts import (
+    MAX_FINALIZED_FRAMES,
+    MAX_FINALIZED_SOURCE_BYTES,
+)
 from vision_scoring.capture_measurement_commands import (
     CAPTURE_MEASUREMENT_RECIPE_SHA256_V1,
 )
 from vision_scoring.capture_measurement_contracts import (
+    MAX_DECODED_CAPTURE_MEASUREMENT_PACKETS,
     DecodedCadenceStatusV1,
     DecodedInterlaceObservationV1,
     DecodedMeasurementAnalysisStatusV1,
@@ -17,7 +22,10 @@ from vision_scoring.capture_measurement_rows import (
     DecodedFrameContentRowV1,
     DecodedFrameInterlaceFactV1,
     DecodedMeasurementRecipeV1,
+    PairedPresentationFrameAggregationV1,
+    PresentationTimingAggregationV1,
     PresentationTimingRowV1,
+    SelectedVideoPacketAggregationV1,
     SelectedVideoPacketPayloadRowV1,
     aggregate_decoded_frame_rows_v1,
     aggregate_paired_presentation_and_frame_rows_v1,
@@ -74,6 +82,7 @@ def _frame_rows(
     time_base: tuple[int, int] = (1, 90_000),
     width: int = 1920,
     height: int = 1080,
+    sample_aspect_ratio: tuple[int, int] = (1, 1),
     interlace: DecodedFrameInterlaceFactV1 = DecodedFrameInterlaceFactV1.PROGRESSIVE,
 ) -> tuple[DecodedFrameContentRowV1, ...]:
     if presentation_pts is None:
@@ -88,6 +97,8 @@ def _frame_rows(
             decoded_pixel_sha256=value,
             decoded_width_px=width,
             decoded_height_px=height,
+            sample_aspect_ratio_numerator=sample_aspect_ratio[0],
+            sample_aspect_ratio_denominator=sample_aspect_ratio[1],
             display_rotation_degrees=0,
             interlace_fact=interlace,
             source_time_base_numerator=time_base[0],
@@ -260,6 +271,89 @@ class CanonicalMeasurementRowTests(unittest.TestCase):
 
 
 class StreamingAggregationTests(unittest.TestCase):
+    def test_public_aggregators_enforce_exact_segment_row_caps(self) -> None:
+        timing_at_cap = aggregate_presentation_timing_rows_v1(
+            (
+                PresentationTimingRowV1(
+                    decoded_frame_ordinal=ordinal,
+                    selected_video_stream_index=0,
+                    presentation_pts=ordinal * 3_000,
+                    source_time_base_numerator=1,
+                    source_time_base_denominator=90_000,
+                )
+                for ordinal in range(MAX_FINALIZED_FRAMES)
+            ),
+            selected_video_stream_index=0,
+        )
+        self.assertEqual(
+            timing_at_cap.cadence.decoded_frame_count, MAX_FINALIZED_FRAMES
+        )
+        with self.assertRaisesRegex(ValueError, "finalized-segment limit"):
+            aggregate_presentation_timing_rows_v1(
+                (
+                    PresentationTimingRowV1(
+                        decoded_frame_ordinal=ordinal,
+                        selected_video_stream_index=0,
+                        presentation_pts=ordinal * 3_000,
+                        source_time_base_numerator=1,
+                        source_time_base_denominator=90_000,
+                    )
+                    for ordinal in range(MAX_FINALIZED_FRAMES + 1)
+                ),
+                selected_video_stream_index=0,
+            )
+
+        base_frame = _frame_rows((_digest(1),))[0]
+        frame_at_cap = aggregate_decoded_frame_rows_v1(
+            (
+                replace(
+                    base_frame,
+                    decoded_frame_ordinal=ordinal,
+                    presentation_pts=ordinal * 3_000,
+                )
+                for ordinal in range(MAX_FINALIZED_FRAMES)
+            ),
+            selected_video_stream_index=0,
+            recipe=_recipe(),
+        )
+        self.assertEqual(frame_at_cap.frame_count, MAX_FINALIZED_FRAMES)
+        with self.assertRaisesRegex(ValueError, "finalized-segment limit"):
+            aggregate_decoded_frame_rows_v1(
+                (
+                    replace(
+                        base_frame,
+                        decoded_frame_ordinal=ordinal,
+                        presentation_pts=ordinal * 3_000,
+                    )
+                    for ordinal in range(MAX_FINALIZED_FRAMES + 1)
+                ),
+                selected_video_stream_index=0,
+                recipe=_recipe(),
+            )
+
+        def packet_rows(count: int):
+            for ordinal in range(count):
+                yield SelectedVideoPacketPayloadRowV1(
+                    packet_ordinal=ordinal,
+                    selected_video_stream_index=0,
+                    payload_byte_length=1,
+                    packet_pts=ordinal,
+                    packet_dts=ordinal,
+                )
+
+        packets_at_cap = aggregate_selected_video_packet_rows_v1(
+            packet_rows(MAX_DECODED_CAPTURE_MEASUREMENT_PACKETS),
+            selected_video_stream_index=0,
+        )
+        self.assertEqual(
+            packets_at_cap.packet_count, MAX_DECODED_CAPTURE_MEASUREMENT_PACKETS
+        )
+        with self.assertRaisesRegex(ValueError, "bounded segment limit"):
+            aggregate_selected_video_packet_rows_v1(
+                packet_rows(MAX_DECODED_CAPTURE_MEASUREMENT_PACKETS + 1),
+                selected_video_stream_index=0,
+            )
+
     def test_hostile_iterators_are_normalized_at_every_public_boundary(self) -> None:
         failure = _IteratorAcquisitionFailure()
         calls = (
@@ -386,6 +480,19 @@ class StreamingAggregationTests(unittest.TestCase):
                 selected_video_stream_index=0,
                 recipe=_recipe(),
             )
+        with self.assertRaisesRegex(ValueError, "sample aspect ratio"):
+            aggregate_decoded_frame_rows_v1(
+                (
+                    frames[0],
+                    replace(
+                        frames[1],
+                        sample_aspect_ratio_numerator=2,
+                        sample_aspect_ratio_denominator=1,
+                    ),
+                ),
+                selected_video_stream_index=0,
+                recipe=_recipe(),
+            )
         timing = _timing_rows((0, 3_000))
         with self.assertRaisesRegex(ValueError, "time base changed"):
             aggregate_presentation_timing_rows_v1(
@@ -457,15 +564,221 @@ class StreamingAggregationTests(unittest.TestCase):
         self.assertIs(mixed.interlace_observation, DecodedInterlaceObservationV1.MIXED)
 
 
+class AggregationContractValidationTests(unittest.TestCase):
+    def test_presentation_aggregation_reconstructs_cadence_and_digest(self) -> None:
+        valid = aggregate_presentation_timing_rows_v1(
+            _timing_rows((0, 3_000)), selected_video_stream_index=0
+        )
+        self.assertEqual(
+            PresentationTimingAggregationV1(
+                cadence=valid.cadence,
+                rows_sha256=valid.rows_sha256,
+            ),
+            valid,
+        )
+        with self.assertRaisesRegex(ValueError, "exact DecodedCadenceDerivationV1"):
+            PresentationTimingAggregationV1(  # type: ignore[arg-type]
+                cadence="arbitrary",
+                rows_sha256=valid.rows_sha256,
+            )
+        with self.assertRaisesRegex(ValueError, "rows_sha256"):
+            replace(valid, rows_sha256="not-a-digest")
+
+        mutated = aggregate_presentation_timing_rows_v1(
+            _timing_rows((0, 3_000)), selected_video_stream_index=0
+        )
+        object.__setattr__(
+            mutated.cadence, "decoded_frame_count", MAX_FINALIZED_FRAMES + 1
+        )
+        with self.assertRaisesRegex(ValueError, "valid canonical derivation"):
+            PresentationTimingAggregationV1(
+                cadence=mutated.cadence,
+                rows_sha256=mutated.rows_sha256,
+            )
+
+    def test_frame_aggregation_validates_every_public_coordinate(self) -> None:
+        valid = aggregate_decoded_frame_rows_v1(
+            _frame_rows((_digest(1), _digest(2))),
+            selected_video_stream_index=0,
+            recipe=_recipe(),
+        )
+        invalid_changes = (
+            ({"frame_count": MAX_FINALIZED_FRAMES + 1}, "frame_count"),
+            ({"decoded_width_px": 0}, "decoded_width_px"),
+            ({"decoded_height_px": 0}, "decoded_height_px"),
+            (
+                {
+                    "sample_aspect_ratio_numerator": 2,
+                    "sample_aspect_ratio_denominator": 2,
+                },
+                "sample aspect ratio",
+            ),
+            ({"display_rotation_degrees": 45}, "display_rotation_degrees"),
+            (
+                {
+                    "source_time_base_numerator": 2,
+                    "source_time_base_denominator": 2_000,
+                },
+                "source time base",
+            ),
+            ({"interlace_observation": "PROGRESSIVE_ONLY"}, "exact"),
+            ({"identical_frame_run_count": 3}, "identical_frame_run_count"),
+            ({"freeze_candidate_count": 1}, "freeze candidates"),
+            ({"rows_sha256": "not-a-digest"}, "rows_sha256"),
+        )
+        for changes, message in invalid_changes:
+            with (
+                self.subTest(changes=changes),
+                self.assertRaisesRegex(ValueError, message),
+            ):
+                replace(valid, **changes)
+
+        for frame_count, identical_runs in ((1, 1), (2, 2), (3, 2)):
+            with (
+                self.subTest(frame_count=frame_count, identical_runs=identical_runs),
+                self.assertRaisesRegex(ValueError, "identical_frame_run_count"),
+            ):
+                replace(
+                    valid,
+                    frame_count=frame_count,
+                    identical_frame_run_count=identical_runs,
+                    freeze_candidate_count=0,
+                )
+        for frame_count, identical_runs in ((1, 0), (2, 1), (3, 1), (4, 2)):
+            with self.subTest(frame_count=frame_count, identical_runs=identical_runs):
+                boundary = replace(
+                    valid,
+                    frame_count=frame_count,
+                    identical_frame_run_count=identical_runs,
+                    freeze_candidate_count=identical_runs,
+                )
+                self.assertEqual(boundary.identical_frame_run_count, identical_runs)
+
+    def test_packet_aggregation_validates_cap_payload_and_digest(self) -> None:
+        valid = aggregate_selected_video_packet_rows_v1(
+            _packet_rows((2, 3)), selected_video_stream_index=0
+        )
+        self.assertEqual(
+            SelectedVideoPacketAggregationV1(
+                packet_count=valid.packet_count,
+                payload_bytes=valid.payload_bytes,
+                rows_sha256=valid.rows_sha256,
+            ),
+            valid,
+        )
+        invalid_changes = (
+            (
+                {"packet_count": MAX_DECODED_CAPTURE_MEASUREMENT_PACKETS + 1},
+                "packet_count",
+            ),
+            ({"payload_bytes": 0}, "payload_bytes"),
+            ({"packet_count": 6}, "exceeds payload_bytes"),
+            ({"rows_sha256": "not-a-digest"}, "rows_sha256"),
+        )
+        for changes, message in invalid_changes:
+            with (
+                self.subTest(changes=changes),
+                self.assertRaisesRegex(ValueError, message),
+            ):
+                replace(valid, **changes)
+        object.__setattr__(
+            valid,
+            "packet_count",
+            MAX_DECODED_CAPTURE_MEASUREMENT_PACKETS + 1,
+        )
+        with self.assertRaisesRegex(ValueError, "packet_count"):
+            SelectedVideoPacketAggregationV1(
+                packet_count=valid.packet_count,
+                payload_bytes=valid.payload_bytes,
+                rows_sha256=valid.rows_sha256,
+            )
+
+    def test_paired_aggregation_revalidates_nested_values_and_joins(self) -> None:
+        valid = aggregate_paired_presentation_and_frame_rows_v1(
+            _timing_rows((0, 3_000)),
+            _frame_rows((_digest(1), _digest(2))),
+            selected_video_stream_index=0,
+            recipe=_recipe(),
+        )
+        self.assertEqual(
+            PairedPresentationFrameAggregationV1(
+                presentation_timing=valid.presentation_timing,
+                decoded_frames=valid.decoded_frames,
+            ),
+            valid,
+        )
+        with self.assertRaisesRegex(ValueError, "exact PresentationTiming"):
+            PairedPresentationFrameAggregationV1(  # type: ignore[arg-type]
+                presentation_timing="arbitrary",
+                decoded_frames=valid.decoded_frames,
+            )
+        with self.assertRaisesRegex(ValueError, "counts differ"):
+            PairedPresentationFrameAggregationV1(
+                presentation_timing=valid.presentation_timing,
+                decoded_frames=replace(valid.decoded_frames, frame_count=1),
+            )
+        with self.assertRaisesRegex(ValueError, "time bases differ"):
+            PairedPresentationFrameAggregationV1(
+                presentation_timing=valid.presentation_timing,
+                decoded_frames=replace(
+                    valid.decoded_frames,
+                    source_time_base_numerator=1,
+                    source_time_base_denominator=1_000,
+                ),
+            )
+
+        tampered_timing = aggregate_presentation_timing_rows_v1(
+            _timing_rows((0, 3_000)), selected_video_stream_index=0
+        )
+        object.__setattr__(tampered_timing, "rows_sha256", "not-a-digest")
+        with self.assertRaisesRegex(ValueError, "valid canonical aggregation"):
+            PairedPresentationFrameAggregationV1(
+                presentation_timing=tampered_timing,
+                decoded_frames=valid.decoded_frames,
+            )
+
+        tampered_frames = valid.decoded_frames
+        object.__setattr__(tampered_frames, "decoded_width_px", 0)
+        with self.assertRaisesRegex(ValueError, "valid canonical aggregation"):
+            PairedPresentationFrameAggregationV1(
+                presentation_timing=valid.presentation_timing,
+                decoded_frames=tampered_frames,
+            )
+
+
 class ReceiptConstructionTests(unittest.TestCase):
+    def test_builder_rejects_oversized_source_before_consuming_rows(self) -> None:
+        never_iterated = _IteratorAcquisitionFailure()
+        with self.assertRaisesRegex(ValueError, "source_asset_byte_length"):
+            build_decoded_capture_measurement_receipt_v1(
+                source_id="source-1",
+                source_asset_sha256=_digest(1),
+                source_asset_byte_length=MAX_FINALIZED_SOURCE_BYTES + 1,
+                artifact_generation_id=_digest(2),
+                selected_video_stream_index=0,
+                decoder_runtime_manifest_sha256=_digest(3),
+                observed_codec=VideoCodecV1.AVC_H264,
+                recipe=_recipe(),
+                presentation_timing_rows=never_iterated,
+                selected_video_packet_rows=never_iterated,
+                decoded_frame_rows=never_iterated,
+            )
+
     def test_constructs_complete_non_authorizing_unverified_receipt(self) -> None:
         a, b = _digest(20), _digest(21)
         receipt = _receipt(pixel_digests=(a, a, a, b))
         self.assertIs(
             receipt.measurement_analysis_status,
-            DecodedMeasurementAnalysisStatusV1.RECIPE_BOUND_FULL_STREAM_CLAIMS_UNVERIFIED,
+            DecodedMeasurementAnalysisStatusV1.RECIPE_BOUND_COMPLETE_BOUNDED_SOURCE_SEGMENT_CLAIMS_UNVERIFIED,
         )
         self.assertEqual(receipt.decoded_frame_count, 4)
+        self.assertEqual(
+            (
+                receipt.sample_aspect_ratio_numerator,
+                receipt.sample_aspect_ratio_denominator,
+            ),
+            (1, 1),
+        )
         self.assertEqual(receipt.selected_video_packet_count, 3)
         self.assertEqual(receipt.selected_video_payload_bytes, 6_000)
         self.assertEqual(receipt.identical_frame_run_count, 1)
