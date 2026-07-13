@@ -38,6 +38,12 @@ Confirmed defects:
 
 Correlations, not yet root causes:
 
+- The defect was not unique to Court 1's Mevo profile: active program outputs on
+  Courts 3 and 5 used the AVKANS/HEVC source profile and also accumulated browser
+  quality loss. Court 2 did not run a comparable program output, so the soak
+  cannot prove a same-model Court 1 versus Court 2 camera control. Camera-origin
+  pacing remains testable, but a single Mevo hardware fault is not the leading
+  explanation for the cross-model events.
 - MediaMTX load and zombie growth sometimes coincided with browser degradation.
   They also varied independently, so neither is established as the WHEP cause.
 - The delayed program branch reported large Chrome jitter buffers. The current

@@ -4743,7 +4743,34 @@ body:has(.program-root) {
 .monitor-detail-actions {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+  justify-content: flex-end;
+}
+
+.monitor-detail-assignment {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+
+.monitor-quality-control {
+  align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.monitor-quality-control span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.monitor-quality-control select {
+  min-height: 38px;
+  min-width: 270px;
 }
 
 .monitor-preview-paused {
@@ -4845,6 +4872,35 @@ body:has(.program-root) {
   min-height: 160px;
 }
 
+.monitor-bandwidth-note {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text-soft);
+  display: flex;
+  gap: 10px;
+  padding: 9px 12px;
+}
+
+.monitor-bandwidth-note > svg {
+  color: var(--cyan);
+  flex: 0 0 auto;
+}
+
+.monitor-bandwidth-note > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 9px;
+}
+
+.monitor-bandwidth-note strong { font-size: 12px; }
+
+.monitor-bandwidth-note span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .monitor-empty p {
   color: var(--muted);
   margin: 4px 0 0;
@@ -4853,7 +4909,7 @@ body:has(.program-root) {
 .monitor-court-matrix {
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   min-width: 0;
 }
 
@@ -4889,8 +4945,16 @@ body:has(.program-root) {
   display: flex;
   gap: 10px;
   justify-content: space-between;
-  min-height: 54px;
+  min-height: 68px;
   padding: 9px 10px;
+}
+
+.monitor-court-statuses {
+  align-items: flex-end;
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .monitor-court-number {
@@ -4942,7 +5006,7 @@ body:has(.program-root) {
 }
 
 .monitor-state-badge.is-compact {
-  font-size: 9px;
+  font-size: 10px;
   min-height: 24px;
   padding: 4px 6px;
 }
@@ -4967,7 +5031,7 @@ body:has(.program-root) {
 }
 
 .monitor-thumbnail {
-  aspect-ratio: 16 / 9;
+  aspect-ratio: 16 / 7.25;
   background: var(--bg-deep);
   border: 0;
   border-radius: 0;
@@ -4989,8 +5053,19 @@ body:has(.program-root) {
 .monitor-thumbnail img {
   display: block;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   width: 100%;
+}
+
+.monitor-thumbnail-meta {
+  background: rgba(7, 10, 16, 0.82);
+  border-radius: 4px;
+  color: var(--text-soft);
+  font-size: 10px;
+  left: 7px;
+  padding: 4px 6px;
+  position: absolute;
+  top: 7px;
 }
 
 .monitor-thumbnail-empty {
@@ -5035,7 +5110,7 @@ body:has(.program-root) {
   flex-direction: column;
   gap: 2px;
   min-width: 0;
-  padding: 7px 8px;
+  padding: 9px 10px;
 }
 
 .monitor-metric:nth-child(3n) {
@@ -5043,32 +5118,82 @@ body:has(.program-root) {
 }
 
 .monitor-metric strong {
-  font-size: 12px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.monitor-metric span {
+  font-size: 11px;
+}
+
 .monitor-stage-grid {
   display: grid;
-  gap: 5px 7px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  padding: 8px;
+  gap: 6px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 10px;
 }
 
 .monitor-trends {
   border-top: 1px solid var(--line);
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 74px;
+  padding: 8px 10px;
+}
+
+.monitor-trends-heading {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.monitor-trends-heading > strong {
+  color: var(--text-soft);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.monitor-trends-legend {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 10px;
+  gap: 5px 14px;
+  justify-content: flex-end;
+}
+
+.monitor-trends-legend span {
+  align-items: center;
+  color: var(--muted);
+  display: inline-flex;
   gap: 5px;
+}
+
+.monitor-trends-legend span::before {
+  background: currentColor;
+  border-radius: 50%;
+  content: "";
+  height: 7px;
+  width: 7px;
+}
+
+.monitor-trends-legend .is-bitrate { color: #22d3ee; }
+.monitor-trends-legend .is-fps { color: #fbbf24; }
+
+.monitor-trends-plots {
+  display: grid;
+  gap: 8px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  height: 27px;
-  padding: 3px 8px;
 }
 
 .monitor-sparkline {
   background: rgba(255, 255, 255, 0.015);
-  height: 20px;
+  height: 28px;
   overflow: visible;
   width: 100%;
 }
@@ -5087,16 +5212,27 @@ body:has(.program-root) {
 
 .monitor-stage-row {
   align-items: center;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
   display: flex;
-  font-size: 10px;
-  gap: 5px;
+  font-size: 11px;
+  gap: 7px;
+  min-height: 38px;
   min-width: 0;
+  padding: 6px 8px;
 }
 
-.monitor-stage-row > span:last-child {
+.monitor-stage-name {
+  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.monitor-stage-state {
+  color: var(--muted);
+  flex: 0 0 auto;
+  font-size: 10px;
 }
 
 .monitor-state-dot {
@@ -5154,7 +5290,7 @@ body:has(.program-root) {
   color: var(--muted);
   display: flex;
   flex-wrap: wrap;
-  font-size: 9px;
+  font-size: 10px;
   gap: 5px 10px;
   min-height: 30px;
   padding: 6px 8px;
@@ -5179,8 +5315,10 @@ body:has(.program-root) {
 .monitor-court-alert {
   background: var(--danger-soft);
   color: #ffaaa4;
-  font-size: 10px;
+  align-items: flex-start;
+  font-size: 11px;
   font-weight: 700;
+  line-height: 1.35;
   padding: 6px 8px;
 }
 
@@ -5590,33 +5728,7 @@ body:has(.program-root) {
   to { transform: rotate(360deg); }
 }
 
-@media (min-width: 1321px) {
-  .monitor-thumbnail {
-    aspect-ratio: 16 / 7.25;
-  }
-  .monitor-thumbnail img {
-    object-fit: contain;
-  }
-  .monitor-metrics {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-  }
-  .monitor-metrics .monitor-metric {
-    border-right: 1px solid var(--line);
-    padding: 6px;
-  }
-  .monitor-metrics .monitor-metric:last-child {
-    border-right: 0;
-  }
-  .monitor-metrics .monitor-metric strong {
-    font-size: 10.5px;
-  }
-  .monitor-stage-grid {
-    grid-template-columns: repeat(9, minmax(0, 1fr));
-  }
-}
-
 @media (max-width: 1320px) {
-  .monitor-court-matrix { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .monitor-global-strip { grid-template-columns: repeat(3, minmax(140px, 1fr)); }
   .monitor-freshness { border-top: 1px solid var(--line); }
 }
@@ -5625,17 +5737,24 @@ body:has(.program-root) {
   .monitor-inspection-grid { grid-template-columns: minmax(0, 1fr); }
   .monitor-incident { grid-template-columns: minmax(0, 1fr); }
   .monitor-pacing-live { grid-template-columns: minmax(0, 1fr); }
+  .monitor-stage-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 620px) {
   .monitor-shell { padding: 10px; }
   .monitor-heading { align-items: flex-start; }
+  .monitor-section-heading { align-items: stretch; flex-direction: column; }
   .monitor-title-line { align-items: flex-start; flex-direction: column; }
   .monitor-global-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .monitor-court-matrix { grid-template-columns: minmax(0, 1fr); }
-  .monitor-stage-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .monitor-thumbnail { aspect-ratio: 16 / 9; }
+  .monitor-stage-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .monitor-ack-form { grid-template-columns: minmax(0, 1fr); }
-  .monitor-detail-actions { align-items: flex-end; flex-direction: column-reverse; }
+  .monitor-detail-actions { align-items: center; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; justify-content: stretch; }
+  .monitor-quality-control,
+  .monitor-quality-control select { width: 100%; }
+  .monitor-quality-control { grid-column: 1 / -1; }
+  .monitor-detail-actions > button { width: 100%; }
   .monitor-pacing-head { align-items: stretch; flex-direction: column; }
   .monitor-pacing-controls { align-items: stretch; }
   .monitor-pacing-controls label { flex: 1 1 auto; }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { courtPreviewStreamPath, courtProgramStreamPath, courtRawStreamPath, courtStreamSources, videoConfigured } from "../lib/video";
+import { courtMonitorStreamPath, courtPreviewStreamPath, courtProgramStreamPath, courtRawStreamPath, courtStreamSources, dataSaverStreamAdmitted, videoConfigured } from "../lib/video";
 
 const VIDEO_ENV_KEYS = [
   "MEDIAMTX_WHEP_BASE_URL",
@@ -70,6 +70,22 @@ describe("courtPreviewStreamPath", () => {
 describe("courtRawStreamPath", () => {
   it("keeps a permanent encoder identity separate from preview and program", () => {
     expect(courtRawStreamPath(4)).toBe("court4_raw");
+  });
+});
+
+describe("courtMonitorStreamPath", () => {
+  it("uses the permanent camera number for the low-bandwidth monitor rendition", () => {
+    expect(courtMonitorStreamPath(4)).toBe("court4_monitor");
+  });
+});
+
+describe("dataSaverStreamAdmitted", () => {
+  it("admits the extra monitor transcode only for an explicit off expectation", () => {
+    expect(dataSaverStreamAdmitted("OFF")).toBe(true);
+    expect(dataSaverStreamAdmitted("LIVE")).toBe(false);
+    expect(dataSaverStreamAdmitted("TESTING")).toBe(false);
+    expect(dataSaverStreamAdmitted(null)).toBe(false);
+    expect(dataSaverStreamAdmitted(undefined)).toBe(false);
   });
 });
 

@@ -2,6 +2,7 @@ import type { ServiceConfig } from "./config.js";
 import type { IncidentSnapshot, NotificationHealth } from "./contracts.js";
 import type { IncidentChange } from "./incidents.js";
 import { IncidentStore, type NotificationKind, type NotificationStatus, type StoredNotification } from "./incidentStore.js";
+import { operatorNotificationCopy } from "./operatorNotificationCopy.js";
 
 type NotificationConfig = Pick<ServiceConfig,
   | "monitorDashboardUrl"
@@ -241,11 +242,12 @@ export class NotificationDispatcher {
   }
 
   private async sendPushover(incident: IncidentSnapshot, emergency: boolean): Promise<{ receipt: string | null; request: string | null }> {
+    const copy = operatorNotificationCopy(incident);
     const body = new URLSearchParams({
       token: this.config.pushoverAppToken!,
       user: this.config.pushoverUserKey!,
-      title: emergency ? incidentTitle(incident) : `ScoreCheck recovered${courtLabel(incident)}`,
-      message: emergency ? incidentMessage(incident) : `${incident.stage}: ${incident.summary}`,
+      title: emergency ? copy.title : copy.recoveryTitle,
+      message: emergency ? `Problem: ${copy.problem}\nDo this: ${copy.action}` : copy.recovery,
       url: `${this.config.monitorDashboardUrl}?incident=${encodeURIComponent(incident.id)}`,
       url_title: "Open ScoreCheck monitor",
       priority: emergency ? "2" : "0"
@@ -269,10 +271,11 @@ export class NotificationDispatcher {
   }
 
   private async sendTwilio(incident: IncidentSnapshot, kind: NotificationKind): Promise<{ sid: string; status: string; errorCode: unknown }> {
+    const copy = operatorNotificationCopy(incident);
     const body = new URLSearchParams({
       To: this.config.twilioToNumber!,
       From: this.config.twilioFromNumber!,
-      Body: kind === "recovery" ? `ScoreCheck recovered${courtLabel(incident)}: ${incident.stage} - ${incident.summary}` : `${incidentTitle(incident)}: ${incidentMessage(incident)}`
+      Body: kind === "recovery" ? `${copy.recoveryTitle}: ${copy.recovery}` : `${copy.title}. Problem: ${copy.problem} Do this: ${copy.action}`
     });
     const response = await this.send(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(this.config.twilioAccountSid!)}/Messages.json`, {
       method: "POST",
@@ -351,18 +354,6 @@ export class NotificationDispatcher {
 function notificationWasSent(notification: StoredNotification | null): boolean {
   if (!notification?.providerMessageId) return false;
   return ["accepted", "delivered", "acknowledged", "expired", "cancelled"].includes(notification.status);
-}
-
-function incidentTitle(incident: IncidentSnapshot): string {
-  return `ScoreCheck CRITICAL${courtLabel(incident)}`.slice(0, 250);
-}
-
-function incidentMessage(incident: IncidentSnapshot): string {
-  return `${incident.stage}: ${incident.summary}${incident.firstAction ? ` First: ${incident.firstAction}` : ""}`.slice(0, 1_000);
-}
-
-function courtLabel(incident: IncidentSnapshot): string {
-  return incident.courtNumber == null ? "" : ` · Court ${incident.courtNumber}`;
 }
 
 function boundedProviderId(value: unknown): string | null {

@@ -1,9 +1,10 @@
 # ScoreCheck MediaMTX
 
-The ingest server owns three distinct path classes per court:
+The ingest server owns four operator-facing path classes per camera:
 
 - `courtN_raw`: permanent Mevo/camera publishing identity.
 - `courtN_preview`: clean, normalized, low-latency H.264/Opus for people.
+- `courtN_monitor`: on-demand 360p/10 FPS data-saver view for one selected camera.
 - `courtN_program`: clean preview delayed at the SRT receiver for compositing.
 
 The SRT listener accepts caller-mode venue-camera publishers and also carries
@@ -64,3 +65,7 @@ qualification must use camera-side H.264 or an isolated, benchmarked
 normalization tier. Run `test-scorecheck-ffmpeg-runner.sh` before deployment;
 the live churn gate must then show zero zombie growth across at least 50 branch
 start/stop cycles.
+
+The monitor rendition is also demand-driven and closes 15 seconds after its
+last reader. The dashboard opens at most one monitor or preview reader at a
+time; the eight-camera overview uses JPEG snapshots instead of eight decoders.

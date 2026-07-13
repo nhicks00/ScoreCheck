@@ -125,8 +125,8 @@ unset FAKE_FFMPEG_EXIT_EARLY
   || fail "early FFmpeg failure left stale progress state"
 
 direct_exec_count="$(grep -c '^[[:space:]]*exec /usr/local/bin/scorecheck-ffmpeg-runner ' "$TEMPLATE")"
-[ "$direct_exec_count" -eq 3 ] \
-  || fail "expected three direct MediaMTX runner exec commands, found $direct_exec_count"
+[ "$direct_exec_count" -eq 4 ] \
+  || fail "expected four direct MediaMTX runner exec commands, found $direct_exec_count"
 if grep -q '/bin/sh -c' "$TEMPLATE"; then
   fail "MediaMTX hooks still contain a nested shell that can orphan the runner"
 fi

@@ -53,8 +53,9 @@ type ProgramClientProps = {
 
 const PROGRAM_STABLE_FRAME_TICKS = 3;
 const PROGRAM_THUMBNAIL_INTERVAL_MS = 15_000;
-const PROGRAM_THUMBNAIL_WIDTH = 320;
-const PROGRAM_THUMBNAIL_HEIGHT = 180;
+const PROGRAM_THUMBNAIL_WIDTH = 256;
+const PROGRAM_THUMBNAIL_HEIGHT = 144;
+const PROGRAM_THUMBNAIL_JPEG_QUALITY = 0.48;
 
 export function ProgramClient({
   courtNumber,
@@ -387,7 +388,7 @@ export function ProgramClient({
         const context = canvas.getContext("2d", { alpha: false });
         if (!context) return;
         drawCover(context, video, canvas.width, canvas.height);
-        const blob = await canvasJpeg(canvas, 0.58);
+        const blob = await canvasJpeg(canvas, PROGRAM_THUMBNAIL_JPEG_QUALITY);
         if (!blob || cancelled) return;
         thumbnailSeqRef.current += 1;
         const sampledAt = new Date().toISOString();
