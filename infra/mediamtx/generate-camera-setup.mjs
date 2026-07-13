@@ -30,6 +30,8 @@ const lines = [
   "Enhance Streaming: On",
   "Speedify transport: UDP (not Auto)",
   "Router PEP: On for all RTMP cameras, when available",
+  "Speedify default route: Off; policy-route only MediaMTX RTMP/SRT ingest traffic",
+  "Apply Speedify routing before cameras start; never migrate all active publishers together",
   "Reconnect: On",
   "CBR / AAC 48 kHz 128 kbps / one-second keyframe interval",
   "Local camera recording: On",
@@ -98,7 +100,7 @@ lines.push("AVKANS cameras publish directly in Caller mode using their custom St
 lines.push("MAKI 6-8 stay in Listener mode; MediaMTX reaches them through WireGuard and owns the Caller/reconnect lifecycle.");
 lines.push("Use the custom Stream ID first for AVKANS. MAKI listeners do not use stream keys.");
 lines.push("Set AVKANS latency to 2500 ms. MAKI cameras cap latency at 500 ms; MediaMTX applies 2500 ms receive latency.");
-lines.push("Encryption/passphrase: Off for this test; the Speedify tunnel provides the encrypted transport.");
+lines.push("Encryption/passphrase: Off for this test; direct publishers use Speedify and MAKI listeners use private WireGuard.");
 lines.push("Do not paste a public server URL or stream key into a MAKI listener screen.");
 lines.push("");
 lines.push("Do not start changing fields after a camera connects. Report which stream is online and leave it running.");

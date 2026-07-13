@@ -101,6 +101,25 @@ each) or qualify camera-side 720p30 H.264 outputs that remove cloud video
 transcoding. A passing run still requires at least 20% sustained CPU headroom
 and a non-congested venue uplink.
 
+### Speedify routing follow-up (2026-07-12)
+
+- The low Speedify dashboard rate was real: an ingest-IP host route sent all
+  camera and WireGuard traffic directly through T-Mobile. MediaMTX received
+  about 35 Mbps while Speedify carried less than 1 Mbps.
+- A global ingest-IP override proved the correct Speedify exit identity but
+  also captured operator traffic and caused a reconnect storm. The production
+  route must select RTMP/SRT ports only and must be active before cameras start.
+- Speed/UDP carried one and three direct SRT callers at about 3.5 and 10.6 Mbps.
+  Staged addition of the two RTMP cameras settled near 20 Mbps. Adding the
+  temporary MAKI WireGuard tunnel raised Speedify input to about 77 Mbps and
+  dropped SRT paths, proving the current home uplinks have inadequate headroom.
+- Multi-TCP used four sockets per WAN and carried the five direct publishers,
+  but the nested WireGuard handshake went stale and listener-camera paths
+  dropped. Multi-TCP is rejected for this topology.
+- The router was returned to direct routing with Speedify disconnected and all
+  eight raw paths healthy. The final two-Mevo/six-AVKANS direct-publisher mix
+  must be tested on a sustained 75 Mbps or faster bonded upload before Gate 2.
+
 Gate 2 must include fault injection: camera removal, venue network loss,
 MediaMTX restart, one egress kill, controller restart, one compositor loss,
 temporary Supabase/origin interruption, and one shadow-destination change.
