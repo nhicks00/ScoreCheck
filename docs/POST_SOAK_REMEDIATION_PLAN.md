@@ -14,6 +14,7 @@ result and two production-blocking failures:
 | Compositor capacity | Unqualified | One current Egress job was safe; the tested `c-4` rejected a second current job. |
 | Venue capacity | Unqualified | The measured bonded upload floor was 31.8 Mbps, below the required 75 Mbps. |
 | YouTube output | Availability pass only | Courts 1, 3, and 5 remained active, live, good, and bound, but API health did not reveal the browser presentation loss. |
+| Supabase persistence | Fail | The database reached 1.544 GB because timestamp-only score polling retained about 1.528 GB in the managed Realtime schema. Public application tables were only about 5.4 MB. |
 
 The ten-hour one-court run remains a conditional Gate 1 pass because only the
 initial subjective sync observation was recorded and camera recovery was not
@@ -35,6 +36,12 @@ Confirmed defects:
 5. The four-vCPU ingest host has inadequate production normalization headroom.
 6. Multiple Speedify watch processes can overlap transiently under supervision;
    route state did not drift, but concurrent reconcilers are not acceptable.
+7. `score_states` remained in the Supabase Realtime publication even though no
+   current browser subscribed to it. Unchanged score and overlay state was
+   rewritten on the 1.8-second source loop, producing about 1.53 GB of retained
+   Realtime messages across the July 10-12 partitions. The monitoring control
+   plane was not the source: its durable Supabase cadence is one checkpoint per
+   minute and its high-frequency telemetry stays in Prometheus.
 
 Correlations, not yet root causes:
 
@@ -67,10 +74,24 @@ These changes do not require a feature flag:
    every FFmpeg/parser child on HUP, INT, TERM, and normal exit.
 6. Hold one Speedify watchdog lifetime lock and make duplicate starts exit
    before reconciliation.
+7. Remove unused `score_states` Postgres Changes publication, move source
+   freshness to a server-only non-Realtime heartbeat, and write it at most once
+   per court per ten seconds unless availability, match, or error state changes.
+8. Keep the 1.8-second upstream score poll, but write score/overlay rows only on
+   score, match, source-health, delay-queue, or stale-state transitions.
+9. Replace the poller lease SELECT-plus-UPSERT race with one atomic database
+   function and renew a held lease no more often than every 15 seconds.
+10. Use semantic Realtime broadcasts for immediate overlays and a five-second
+    lightweight `overlay_states` repair poll instead of repeatedly joining
+    courts, events, matches, and scores every two seconds.
+11. Cache low-volatility reads independently: queued-match checks for ten
+    seconds, worker coverage and event settings for 30 seconds, and active
+    bracket-source URLs for 45 seconds. Bracket discovery upserts only new or
+    semantically changed matches.
 
-The first four were validated on the sealed monitoring branch. The last two
-have focused regression tests in this hardening branch. None is accepted as a
-runtime fix until the post-deployment gates below pass.
+Items 1-6 were validated on sealed branches and merged locally. Items 7-11
+have focused regression coverage in this hardening branch. None is accepted as
+a runtime fix until the post-deployment gates below pass.
 
 ## Architecture Correction
 
@@ -104,11 +125,18 @@ Capacity acceptance for every admitted host:
 
 ### Phase 0: integrate and deploy diagnostics
 
-1. Merge the sealed soak evidence and hard-cutover fixes.
+1. Merge the sealed soak evidence, lifecycle fixes, and Supabase write-cadence
+   hard cutover.
 2. Run monitoring, web, MediaMTX lifecycle, router, typecheck, and production
    build validation.
-3. Deploy during a declared test window. Do not combine the deployment with a
-   public broadcast or StreamRun change.
+3. Apply the database migration first, then deploy host/monitoring contracts,
+   and deploy web last during a declared test window. Do not combine this with
+   a public broadcast or StreamRun change.
+4. Verify for 30 minutes that `score_states` is absent from
+   `supabase_realtime`, source heartbeats remain within the ten-second cadence,
+   unchanged score/overlay writes stay flat, and Realtime partition growth does
+   not resume. Managed Realtime history cleanup is a separate Supabase-supported
+   operation and must not precede this verification.
 
 ### Phase 1: short causal diagnostics
 

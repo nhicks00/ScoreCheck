@@ -18,6 +18,7 @@ Full Row Level Security policies for parent scorer claims/sessions are not the c
 That means client code must not be changed to write directly to these tables:
 
 - `score_states`
+- `score_source_heartbeats`
 - `overlay_states`
 - `score_actions`
 - `scorer_claims`

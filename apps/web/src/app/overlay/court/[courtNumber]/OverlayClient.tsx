@@ -110,12 +110,15 @@ function OverlayClientInner({ courtNumber, eventId, buildVersion, reloadOnVersio
       }
     }
     void tick();
-    const id = window.setInterval(tick, connected ? 2000 : 5000);
+    // Realtime broadcasts carry semantic score changes immediately. This poll
+    // repairs a missed broadcast without hammering Supabase on every program
+    // browser for timestamp-only state.
+    const id = window.setInterval(tick, 5000);
     return () => {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [stateUrl, connected, applyOverlayState]);
+  }, [stateUrl, applyOverlayState]);
 
   useEffect(() => {
     if (!realtimeTopic) return;
