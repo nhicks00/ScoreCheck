@@ -22,6 +22,10 @@ export function courtRawStreamPath(courtNumber: number): string {
   return `court${courtNumber}_raw`;
 }
 
+export function courtMonitorStreamPath(courtNumber: number): string {
+  return `court${courtNumber}_monitor`;
+}
+
 export function courtProgramStreamPath(courtNumber: number, dbPath?: string | null): string {
   const fromDb = normalizePath(dbPath);
   if (fromDb) return fromDb;

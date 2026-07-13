@@ -2,7 +2,7 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import type { FfmpegBranchSnapshot } from "./contracts.js";
 
-const FILE_PATTERN = /^(court([1-8])_(preview|program|calibration))\.progress$/;
+const FILE_PATTERN = /^(court([1-8])_(preview|program|calibration|monitor))\.progress$/;
 const MAX_FILE_BYTES = 4_096;
 const MAX_SAMPLE_AGE_MS = 20_000;
 

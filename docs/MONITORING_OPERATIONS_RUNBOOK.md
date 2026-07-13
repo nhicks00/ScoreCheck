@@ -2,7 +2,9 @@
 
 ## Purpose
 
-`/admin/monitor` is the event-day view for all eight ScoreCheck courts. It
+`/admin/monitor` is the event-day view for all eight permanent ScoreCheck camera
+feeds. Camera numbers follow the permanent stream-key identity; the physical
+court assignment is secondary and may change between events. The dashboard
 correlates venue ingest, MediaMTX paths, FFmpeg normalization, browser program
 rendering, remote commentary, score/overlay alignment, LiveKit Egress,
 infrastructure capacity, and YouTube health without controlling those systems.
@@ -41,17 +43,31 @@ its pair even if observability restarts during the outage.
 ## Dashboard reading order
 
 1. Check the global strip. Collector must report `6/6 agents` before coverage.
-2. Find the first red, amber, or unknown court tile.
-3. Read its first issue and first action. This is the correlated upstream cause,
+2. Find the first red, amber, or unknown camera card.
+3. Read `Camera live`, `Camera unstable`, or `Camera offline` separately from
+   the production-pipeline badge. A missing downstream output must never make a
+   healthy incoming camera look offline.
+4. Read its first issue and first action. This is the correlated upstream cause,
    not merely the most visible downstream symptom.
-4. Select the court to open its full WHEP preview and all stage evidence.
-5. Check the assigned compositor and shared host cards for capacity or restart evidence.
-6. Use acknowledgement only after an operator owns the response.
-7. Use a timed silence only for planned work. A silence suppresses paging; it
+5. Select the camera to open its live WHEP inspection and all stage evidence.
+6. Check the assigned compositor and shared host cards for capacity or restart evidence.
+7. Use acknowledgement only after an operator owns the response.
+8. Use a timed silence only for planned work. A silence suppresses paging; it
    never hides the incident or marks the stage healthy.
 
-The 4x2 thumbnails are low-rate browser snapshots, not eight extra decoders.
-Only the selected or newly critical court opens a full live WHEP player.
+The overview is a fixed two-column grid. Its images are 256x144 JPEG snapshots
+captured every 15 seconds, not eight extra video readers. Only a camera the
+operator explicitly opens uses a live WHEP player. New alerts select the affected
+camera without starting video. `Data saver` uses the on-demand
+360p/10 FPS `courtN_monitor` rendition at roughly 0.4 Mbps. `Detail` uses the
+existing 720p/30 FPS preview at roughly 2.6 Mbps. Switching cameras or using
+`Close video` releases the prior reader; the monitor rendition closes after
+15 seconds without a reader. This selected-reader limit controls venue download
+bandwidth, not ingest CPU. On the current central 4-vCPU host, keep `Data saver`
+disabled during full production until camera normalization is offloaded or the
+capacity gate qualifies the added transcode. The dashboard enforces that limit:
+when a camera has a live broadcast expectation, inspection uses the existing
+`Detail` path and the `Data saver` option is unavailable.
 
 ## Expected-state lifecycle
 
@@ -191,6 +207,11 @@ The dashboard must show `Coverage active` or `Idle protected`, and any ping/paus
 failure must degrade the Watchdog item. The external provider must notify a phone
 independently of DigitalOcean, Supabase, Vercel, and ScoreCheck.
 
+Phone notifications use operator language only. Every opening notification has
+`Problem:` and `Do this:` lines, identifies the permanent camera number when
+applicable, and omits internal stage names, service names, and issue codes.
+Recovery messages state what is working again and whether any action remains.
+
 Provider activation is not accepted until all of these pass:
 
 1. Pushover emergency arrives, repeats, deep-links to the monitor, and stops on acknowledgement.
@@ -238,8 +259,8 @@ After every deployment verify:
 
 ## Fault-injection gates
 
-Fault tests must use test broadcasts and explicit operator approval. Never stop a
-public StreamRun path or a live production output for a monitoring test.
+Fault tests must use test broadcasts and explicit operator approval. Never stop
+or alter a public ScoreCheck output for a monitoring test.
 
 When no tournament event is active, arm one test feed through the authenticated
 monitor API instead of creating a fake Supabase event. The override is held only

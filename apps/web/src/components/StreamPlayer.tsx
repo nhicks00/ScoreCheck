@@ -14,6 +14,8 @@ type StreamPlayerProps = {
   courtNumber: number;
   /** Scorer-session auth. When omitted the player uses the admin stream-source route. */
   sessionToken?: string;
+  /** Admin monitor playback profile. Other player consumers keep the existing preview path. */
+  adminQuality?: "data_saver" | "detail";
   enabled?: boolean;
   /** Pre-resolved playback sources. When provided the player skips its internal source fetching entirely. */
   sources?: { whepUrl: string | null; hlsUrl: string | null };
@@ -72,6 +74,7 @@ const OFFLINE_MESSAGE = "Stream offline — retrying";
 export function StreamPlayer({
   courtNumber,
   sessionToken,
+  adminQuality,
   enabled = true,
   sources: providedSources,
   chromeless = false,
@@ -112,7 +115,10 @@ export function StreamPlayer({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ sessionToken, courtNumber })
       })
-      : await fetch(`/api/admin/video/stream-source?courtNumber=${courtNumber}`, { cache: "no-store" });
+      : await fetch(`/api/admin/video/stream-source?${new URLSearchParams({
+        courtNumber: String(courtNumber),
+        ...(adminQuality ? { quality: adminQuality } : {})
+      })}`, { cache: "no-store" });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) {
       setSources(null);
@@ -122,7 +128,7 @@ export function StreamPlayer({
     }
     setSources({ whepUrl: json.whepUrl ?? null, hlsUrl: json.hlsUrl ?? null });
     setLoadRevision((current) => current + 1);
-  }, [courtNumber, enabled, sessionToken, hasProvidedSources, providedWhepUrl, providedHlsUrl]);
+  }, [adminQuality, courtNumber, enabled, sessionToken, hasProvidedSources, providedWhepUrl, providedHlsUrl]);
 
   useEffect(() => {
     if (!enabled) {

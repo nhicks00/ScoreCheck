@@ -6,12 +6,13 @@ in `infra/mediamtx`.
 
 ## Paths
 
-Each camera has one permanent publishing identity and two consumer branches:
+Each camera has one permanent publishing identity and three consumer branches:
 
 | Path | Purpose |
 |---|---|
 | `courtN_raw` | Mevo/camera H.264 + AAC input |
 | `courtN_preview` | Clean, undelayed 720p H.264 + Opus WHEP preview |
+| `courtN_monitor` | On-demand 360p/10 FPS low-bandwidth operator view |
 | `courtN_program` | Clean preview held by the program SRT delay |
 | `courtN_calibration` | On-demand UTC-burned engineering view only |
 
@@ -43,6 +44,7 @@ AAC, 48 kHz, 128 kbps
 
 ```text
 Preview: https://preview.beachvolleyballmedia.com/court1_preview/whep
+Monitor: https://preview.beachvolleyballmedia.com/court1_monitor/whep
 Program: https://preview.beachvolleyballmedia.com/court1_program/whep
 ```
 
@@ -81,12 +83,17 @@ docker logs --tail=100 mediamtx
 ```
 
 Path readiness is demand-driven. `courtN_preview` starts when a human or the
-program branch reads it. `courtN_program` starts when a compositor reads it.
+program branch reads it. `courtN_monitor` starts only for the selected dashboard
+camera and closes after 15 seconds without a reader. `courtN_program` starts
+when a compositor reads it.
 
 ## Capacity boundary
 
-The existing base node is suitable for one-court Gate 1 and low-volume preview
-use. It is not the eight-court production target. Before Gate 2, direct camera
-outputs must be profiled and the ingest plane must be sized from measured
-normalization CPU, with an initial planning floor of 8 dedicated vCPU and
-8-16 GB RAM if all eight feeds require H.264 normalization.
+The July 13 eight-camera soak did not qualify the 4-vCPU ingest host for final
+production capacity. Load remained above core count and peaked above 13 while
+three program branches were active. Scale or split the ingest plane before the
+next full event, then rerun the same viewer-quality and capacity gate. The
+on-demand monitor rendition is limited to one selected camera, but that only
+limits venue bandwidth; it does not create ingest CPU headroom. Do not admit a
+monitor transcode on the central 4-vCPU host during full production until
+normalization is offloaded or the revised capacity gate explicitly qualifies it.

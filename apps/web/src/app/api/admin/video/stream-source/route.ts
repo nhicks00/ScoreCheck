@@ -4,12 +4,13 @@ import { requireAdmin } from "@/lib/auth";
 import { getEnv } from "@/lib/env";
 import { getActiveEvent } from "@/lib/eventConfig";
 import { supabaseAdmin } from "@/lib/supabase";
-import { courtPreviewStreamPath, courtStreamSources, videoConfigured } from "@/lib/video";
+import { courtMonitorStreamPath, courtPreviewStreamPath, courtStreamSources, videoConfigured } from "@/lib/video";
 
 export const runtime = "nodejs";
 
 const querySchema = z.object({
-  courtNumber: z.coerce.number().int().min(1).max(99)
+  courtNumber: z.coerce.number().int().min(1).max(99),
+  quality: z.enum(["data_saver", "detail"]).optional()
 });
 
 export async function GET(req: NextRequest) {
@@ -17,7 +18,8 @@ export async function GET(req: NextRequest) {
   if (unauthorized) return unauthorized;
 
   const parsed = querySchema.safeParse({
-    courtNumber: req.nextUrl.searchParams.get("courtNumber")
+    courtNumber: req.nextUrl.searchParams.get("courtNumber"),
+    quality: req.nextUrl.searchParams.get("quality") ?? undefined
   });
   if (!parsed.success) return NextResponse.json({ error: "Valid court number is required." }, { status: 400 });
 
@@ -26,7 +28,9 @@ export async function GET(req: NextRequest) {
   }
 
   const courtNumber = parsed.data.courtNumber;
-  const previewStreamPath = courtPreviewStreamPath(courtNumber, await loadPreviewStreamPath(courtNumber));
+  const previewStreamPath = parsed.data.quality === "data_saver"
+    ? courtMonitorStreamPath(courtNumber)
+    : courtPreviewStreamPath(courtNumber, await loadPreviewStreamPath(courtNumber));
   const sources = courtStreamSources(previewStreamPath);
   if (!sources.whepUrl && !sources.hlsUrl) {
     return NextResponse.json({ error: "Stream preview is not configured for this court." }, { status: 503 });

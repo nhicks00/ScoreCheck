@@ -123,7 +123,7 @@ export class AgentMetrics {
     for (const metric of [this.ffmpegProgressFresh, this.ffmpegFps, this.ffmpegBitrate, this.ffmpegDropped, this.ffmpegDuplicated, this.ffmpegSpeed]) metric.reset();
     if (snapshot.role === "mediamtx") {
       for (let court = 1; court <= 8; court += 1) {
-        for (const branch of ["preview", "program", "calibration"] as const) {
+        for (const branch of ["preview", "program", "calibration", "monitor"] as const) {
           const labels = { agent: snapshot.agentId, court: String(court), branch };
           this.ffmpegProgressFresh.set(labels, 0);
           this.ffmpegFps.set(labels, 0);

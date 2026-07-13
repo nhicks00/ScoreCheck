@@ -142,6 +142,26 @@ paths:
     runOnDemandStartTimeout: 20s
     runOnDemandCloseAfter: 90s
 
+  # Operator-only data-saver path. At most one monitor reader is opened by the
+  # dashboard, so this does not create an eight-camera transcode mosaic.
+  "~^court([1-8])_monitor$":
+    runOnDemand: >
+      /bin/sh -c 'while ! wget -qO- "http://127.0.0.1:9997/v3/paths/get/court${G1}_raw"
+      2>/dev/null | grep -q "\"ready\":true"; do sleep 2; done;
+      exec /usr/local/bin/scorecheck-ffmpeg-runner "court${G1}_monitor" --
+      -nostdin -hide_banner -loglevel warning
+      -fflags nobuffer -flags low_delay -rtsp_transport tcp
+      -i "rtsp://127.0.0.1:${RTSP_PORT}/court${G1}_raw"
+      -map 0:v:0 -map 0:a:0?
+      -c:v libx264 -preset ultrafast -tune zerolatency -profile:v main
+      -pix_fmt yuv420p -vf "fps=10,scale=-2:360" -g 20 -keyint_min 20 -sc_threshold 0
+      -b:v 350k -maxrate 450k -bufsize 700k
+      -c:a libopus -b:a 48k -ar 48000 -ac 1 -af "aresample=async=1:first_pts=0"
+      -f rtsp -rtsp_transport tcp "rtsp://127.0.0.1:${RTSP_PORT}/${MTX_PATH}"'
+    runOnDemandRestart: yes
+    runOnDemandStartTimeout: 20s
+    runOnDemandCloseAfter: 15s
+
   # Program-only path. SRT receiver latency deliberately holds both video and
   # ambient audio for the configured coarse delay, then stream-copies the
   # normalized codecs into a distinct WHEP path. Opening the preview input is

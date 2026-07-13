@@ -209,8 +209,10 @@ function youtubeStage(
 
 function programBrowserStage(browser: BrowserHeartbeatSnapshot | null, nowMs: number, expectation: CourtExpectation): StageHealth {
   const timing = browserTiming(browser, nowMs);
+  if (expectation.broadcastExpectation === "OFF") {
+    return expectedOffStage("PROGRAM_BROWSER", "Program browser is not expected.");
+  }
   if (!browser || timing.stale) {
-    if (expectation.broadcastExpectation === "OFF") return expectedOffStage("PROGRAM_BROWSER", "Program browser is not expected.");
     return missingBrowserStage("PROGRAM_BROWSER", timing, expectation.broadcastExpectation === "LIVE");
   }
   const video = browser.video;
@@ -257,8 +259,10 @@ function programBrowserStage(browser: BrowserHeartbeatSnapshot | null, nowMs: nu
 
 function commentaryStage(browser: BrowserHeartbeatSnapshot | null, nowMs: number, expectation: CourtExpectation): StageHealth {
   const timing = browserTiming(browser, nowMs);
+  if (expectation.commentaryExpectation === "NONE") {
+    return stage("COMMENTARY", "NOT_APPLICABLE", "info", null, "Commentary is not expected.", null, null, timing.ageMs, {});
+  }
   if (!browser || timing.stale) {
-    if (expectation.commentaryExpectation === "NONE") return stage("COMMENTARY", "NOT_APPLICABLE", "info", null, "Commentary is not expected.", null, null, timing.ageMs, {});
     return missingBrowserStage("COMMENTARY", timing, expectation.commentaryExpectation === "REQUIRED");
   }
   const commentary = browser.commentary;
@@ -374,10 +378,10 @@ function visualEvidence(browser: BrowserHeartbeatSnapshot): StageHealth["evidenc
 
 function scoreRenderStage(browser: BrowserHeartbeatSnapshot | null, nowMs: number, expectation: CourtExpectation): StageHealth {
   const timing = browserTiming(browser, nowMs);
+  if (expectation.scoringExpectation === "NONE" && expectation.broadcastExpectation === "OFF") {
+    return stage("SCORE_RENDER", "NOT_APPLICABLE", "info", null, "Score rendering is not expected.", null, null, timing.ageMs, {});
+  }
   if (!browser || timing.stale) {
-    if (expectation.scoringExpectation === "NONE" && expectation.broadcastExpectation === "OFF") {
-      return stage("SCORE_RENDER", "NOT_APPLICABLE", "info", null, "Score rendering is not expected.", null, null, timing.ageMs, {});
-    }
     return missingBrowserStage("SCORE_RENDER", timing, expectation.broadcastExpectation === "LIVE");
   }
   const render = browser.scoreRender;

@@ -82,6 +82,45 @@ describe("monitor correlator", () => {
     expect(result.courts[0]?.overallState).toBe("EXPECTED_OFF");
   });
 
+  it("keeps idle production stages off despite a fresh failing browser heartbeat", () => {
+    const generatedAt = "2026-07-12T12:00:00.000Z";
+    const browser = browserHeartbeat(generatedAt);
+    const failingBrowser: BrowserHeartbeatSnapshot = {
+      ...browser,
+      video: {
+        ...browser.video,
+        state: "stalled",
+        connectionState: "failed",
+        framesPerSecond: 0
+      },
+      commentary: {
+        ...browser.commentary,
+        configured: true,
+        roomConnected: false
+      },
+      scoreRender: {
+        ...browser.scoreRender,
+        loaded: false,
+        connected: false,
+        stale: true
+      }
+    };
+    const runtimes = new Map<string, AgentRuntime>();
+    const result = buildMonitorSnapshot(
+      [],
+      runtimes,
+      1,
+      Date.parse(generatedAt) + 1_000,
+      [],
+      new Map([[1, failingBrowser]])
+    );
+
+    expect(result.courts[0]?.stages.find((stage) => stage.stage === "PROGRAM_BROWSER")?.state).toBe("EXPECTED_OFF");
+    expect(result.courts[0]?.stages.find((stage) => stage.stage === "COMMENTARY")?.state).toBe("NOT_APPLICABLE");
+    expect(result.courts[0]?.stages.find((stage) => stage.stage === "SCORE_RENDER")?.state).toBe("NOT_APPLICABLE");
+    expect(result.courts[0]?.overallState).toBe("EXPECTED_OFF");
+  });
+
   it("escalates missing media and browser telemetry only when explicitly required", () => {
     const generatedAt = "2026-07-12T12:00:00.000Z";
     const snapshot = emptyAgentSnapshot(generatedAt);
