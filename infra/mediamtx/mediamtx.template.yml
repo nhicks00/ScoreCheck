@@ -144,13 +144,13 @@ paths:
 
   # Program-only path. SRT receiver latency deliberately holds both video and
   # ambient audio for the configured coarse delay, then stream-copies the
-  # normalized codecs into a distinct WHEP path. Commentary gets fine delay in
-  # the program page's Web Audio graph.
+  # normalized codecs into a distinct WHEP path. Opening the preview input is
+  # what triggers its on-demand normalizer; polling for preview readiness here
+  # would deadlock when no separate preview reader is connected. Commentary
+  # gets fine delay in the program page's Web Audio graph.
   "~^court([1-8])_program$":
     runOnDemand: >
-      /bin/sh -c 'while ! wget -qO- "http://127.0.0.1:9997/v3/paths/get/court${G1}_preview"
-      2>/dev/null | grep -q "\"ready\":true"; do sleep 2; done;
-      exec /usr/local/bin/scorecheck-ffmpeg-runner "court${G1}_program" --
+      /bin/sh -c 'exec /usr/local/bin/scorecheck-ffmpeg-runner "court${G1}_program" --
       -nostdin -hide_banner -loglevel warning
       -i "srt://127.0.0.1:8890?streamid=read:court${G1}_preview&latency=__PROGRAM_DELAY_US__"
       -map 0:v:0 -map 0:a:0? -c copy
@@ -160,12 +160,11 @@ paths:
     runOnDemandCloseAfter: 90s
 
   # Gate calibration only. This path adds UTC timecode without contaminating
-  # either the commentator preview or the clean program feed.
+  # either the commentator preview or the clean program feed. Its RTSP read
+  # directly triggers the on-demand preview normalizer.
   "~^court([1-8])_calibration$":
     runOnDemand: >
-      /bin/sh -c 'while ! wget -qO- "http://127.0.0.1:9997/v3/paths/get/court${G1}_preview"
-      2>/dev/null | grep -q "\"ready\":true"; do sleep 2; done;
-      exec /usr/local/bin/scorecheck-ffmpeg-runner "court${G1}_calibration" --
+      /bin/sh -c 'exec /usr/local/bin/scorecheck-ffmpeg-runner "court${G1}_calibration" --
       -nostdin -hide_banner -loglevel warning
       -fflags nobuffer -flags low_delay -rtsp_transport tcp
       -i "rtsp://127.0.0.1:${RTSP_PORT}/court${G1}_preview"

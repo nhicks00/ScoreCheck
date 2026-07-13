@@ -99,20 +99,23 @@ accepts at most two web egresses. The July full-eight test deliberately skips
 the staged two- and four-court runs, so the same estimate must be validated on
 all four hosts at once rather than inferred from a partial load.
 
-The full-eight ingest candidate is one dedicated `c-4` with 8 GB RAM. Every
-input is normalized once to H.264/Opus at 720p30 with a one-second GOP. The
-direct-eight input mix is two H.264 RTMP Mevos at 1080p60, three HEVC/SRT
-AVKANS Go cameras at 1080p30, two temporary H.264/RTMP MAKI Live cameras at
-1080p30, and one H.264/SRT MAKI Live listener pulled natively by MediaMTX
-through a routed tunnel to the camera LAN. No venue computer or separate relay
-process participates in this path. The temporary RTMP assignments do not alter
-the final AVKANS hardware target. This
-intentionally drops the Mevo stress inputs to the actual program
-cadence and converts HEVC before browser distribution. Sustained ingest CPU at
-or above 80%, frame stalls, or growing normalizer queues fail the candidate and
-require two ingest hosts split four courts each. Stream-copy or audio-only
-conversion may replace normalization only after a camera model is explicitly
-qualified.
+The first full-eight ingest candidate, one dedicated `c-4` with 8 GB RAM,
+failed on 2026-07-12. Eight 1080p inputs normalized to H.264/Opus at 720p30
+pinned all four CPUs at 393.88%; individual FFmpeg branches ran at only
+0.59-0.81x and produced 18-24 fps. The single-node normalization topology is
+therefore rejected. The tested input mix was two H.264 RTMP Mevos at 1080p60,
+three HEVC/SRT AVKANS Go cameras at 1080p30, and three H.264/SRT MAKI Live
+listeners pulled through the routed camera-LAN tunnel. No venue computer or
+separate relay process participated.
+
+The next candidate is two dedicated `c-4` normalization workers split four
+courts each, while preserving one logical media namespace and the existing
+four two-court compositor hosts. Camera-side 720p30 H.264 plus stream-copy or
+audio-only conversion is the simpler alternative, but each camera model must
+be explicitly qualified before adopting it. Either candidate must sustain
+less than 80% CPU, real-time FFmpeg speed, stable 30 fps output, and a
+non-congested venue uplink before Gate 2 can pass. The temporary MAKI
+assignments do not alter the final AVKANS hardware target.
 
 ## Reliability rules
 
