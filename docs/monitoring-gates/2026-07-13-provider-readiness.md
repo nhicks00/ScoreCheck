@@ -8,6 +8,16 @@ Date: 2026-07-13
 - The Court 4 raw-ingest gate proved one emergency page, one cancellation/recovery, and no duplicate phone notification.
 - Provider health remains healthy with no recorded submission failure.
 
+An intentional provider-only acknowledgement gate opened at
+`2026-07-13T13:45:21Z`. Pushover accepted and delivered one emergency at
+`13:45:28Z`; the operator did not acknowledge it during the three-minute test
+window. The monitor cancelled the emergency and accepted one recovery at
+`13:48:28Z`. Twilio remained disabled, no SMS was attempted, and provider
+health returned healthy with no active incident. This proves delivery,
+repetition, cancellation, recovery, and deduplication again, but it does not
+close the acknowledgement acceptance row. Repeat the gate when the operator is
+available to tap **Acknowledge**.
+
 ## Twilio
 
 - The Twilio account is reachable with the restricted API key.
@@ -40,3 +50,4 @@ To unblock the independent phone dead-man gate, sign in to Healthchecks.io in th
 - Keep Twilio disabled until A2P delivery succeeds.
 - Keep baseline Healthchecks running and active-coverage Healthchecks paused while all courts are off.
 - Do not run the withheld-ping phone gate until Healthchecks has an independent phone channel.
+- Keep the Pushover acknowledgement gate open until a delivered emergency is acknowledged during the controlled window.
