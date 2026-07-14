@@ -503,13 +503,59 @@ class ScoreTimeline:
         self.committed_states.append({"t_seconds": round(t, 3), **self._state_json()})
 
 
-def events_to_rallies(events: list[TimelineEvent]) -> list[dict]:
-    """Derive rally-outcome labels: each POINT commit marks a rally end."""
+# Label-quality tiers. Scorebug labels come from HUMAN live scoring, so each
+# rally is graded by the noise fingerprints the tracker itself observed:
+# - excluded: within TAINT_RADIUS_S of a correction/jump/anomaly in the same
+#   match — attribution and timing are both unreliable there;
+# - silver: winner is probably right but timing is suspect (batch entry:
+#   committed implausibly soon after the previous point, or synthesized as a
+#   set-closing point at the set-transition commit);
+# - gold: clean, isolated, plausibly timed commits.
+TAINT_RADIUS_S = 45.0
+MIN_PLAUSIBLE_GAP_S = 12.0
 
-    rallies: list[dict] = []
+
+def events_to_rallies(events: list[TimelineEvent]) -> list[dict]:
+    """Derive tiered rally-outcome labels: each POINT commit is a rally end."""
+
+    taint_times: dict[int | None, list[float]] = {}
     for event in events:
-        if event.kind is not EventKind.POINT:
-            continue
+        if event.kind in (EventKind.CORRECTION, EventKind.SCORE_JUMP, EventKind.ANOMALY):
+            taint_times.setdefault(event.match_number, []).append(event.t_seconds)
+    set_end_times = {
+        (e.match_number, e.t_seconds) for e in events if e.kind is EventKind.SET_END
+    }
+
+    points = [e for e in events if e.kind is EventKind.POINT]
+    rallies: list[dict] = []
+    for index, event in enumerate(points):
+        tainted = any(
+            abs(event.t_seconds - t) <= TAINT_RADIUS_S
+            for t in taint_times.get(event.match_number, [])
+        )
+        gap_prev = (
+            event.t_seconds - points[index - 1].t_seconds
+            if index > 0 and points[index - 1].match_number == event.match_number
+            else None
+        )
+        gap_next = (
+            points[index + 1].t_seconds - event.t_seconds
+            if index + 1 < len(points)
+            and points[index + 1].match_number == event.match_number
+            else None
+        )
+        batch_suspect = (gap_prev is not None and gap_prev < MIN_PLAUSIBLE_GAP_S) or (
+            gap_next is not None and gap_next < MIN_PLAUSIBLE_GAP_S
+        )
+        # A set-closing point synthesized at the set-transition commit has
+        # correct attribution but late, artificial timing.
+        synthesized = (event.match_number, event.t_seconds) in set_end_times
+        if tainted:
+            tier = "excluded"
+        elif batch_suspect or synthesized:
+            tier = "silver"
+        else:
+            tier = "gold"
         rallies.append(
             {
                 "rally_end_t": event.t_seconds,
@@ -517,6 +563,7 @@ def events_to_rallies(events: list[TimelineEvent]) -> list[dict]:
                 "score_after": event.detail["score"],
                 "match_number": event.match_number,
                 "set_number": event.set_number,
+                "tier": tier,
             }
         )
     return rallies

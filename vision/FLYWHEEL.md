@@ -107,6 +107,33 @@ against them is a true external check at match scale (~10-15k rallies).
 8. **Human at campaign boundaries only.** Nathan approves goal + budget, reads
    the morning summary, picks the next campaign. No mid-run steering.
 
+## Label-noise reality (the scorebug is weak supervision, not truth)
+
+The scorebug reflects HUMAN live scoring: points are entered late, sometimes
+batched, occasionally mis-attributed then corrected — and some errors were
+never corrected. Measured on the first 941 labeled rallies: 3.2 corrections
+per 100 points, 6.7% of commits landed <12s after the previous one (batch
+entry), ~6% of points per VOD arrived as multi-point jumps. Policy:
+
+1. **Tier every rally label** from the tracker's own noise fingerprints
+   (`events_to_rallies`): *gold* = clean isolated commit; *silver* = winner
+   probably right, timing suspect (batch entry, synthesized set-closers);
+   *excluded* = within 45s of a correction/jump/anomaly. Current corpus:
+   ~74% gold / 13% silver / 12% excluded. Train on gold+silver (winner
+   labels tolerate timing noise); gate models on gold.
+2. **Timing-insensitive eval**: the harness reports per-set winner-ORDER
+   edit similarity alongside matched-rally metrics, so human entry lag can
+   never masquerade as model error.
+3. **Human-verified kernel** (SoccerNet precedent): ~300 rallies across the
+   test VODs confirmed by a one-tap review pass become the true promotion
+   gate and measure the real scorebug error rate. Until it exists, treat
+   winner-accuracy differences smaller than ~2-3% as noise.
+4. **Side-out cross-validation** (the physics check): once serve-side
+   detection exists, the next serve's side independently reveals each
+   rally's winner. Scorebug-vs-side-out disagreement automatically flags
+   mislabeled rallies corpus-wide — the strongest de-noiser we can build,
+   and it needs no human time.
+
 ## Data flywheel specifics
 
 - **Corpus hub:** FiftyOne (Apache-2.0, local, video-native) — one sample per

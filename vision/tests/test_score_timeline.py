@@ -347,3 +347,40 @@ class IdentityJitterTest(unittest.TestCase):
         self.assertEqual(summary["matches"], 1)
         self.assertEqual(summary["points"], 1)
         self.assertEqual(summary["anomalies"], 0)
+
+
+class RallyTierTest(unittest.TestCase):
+    def _timeline_with_points(self) -> ScoreTimeline:
+        timeline = ScoreTimeline(vote_frames=2, anomaly_frames=4)
+        feed(timeline, [reading(float(i), 0, 0) for i in range(4)])
+        score = [0, 0]
+        t = 30.0
+        for winner in ("A", "B", "A"):
+            score[0 if winner == "A" else 1] += 1
+            feed(timeline, [reading(t, score[0], score[1]), reading(t + 1, score[0], score[1])])
+            t += 30.0
+        return timeline
+
+    def test_clean_points_are_gold(self) -> None:
+        rallies = events_to_rallies(self._timeline_with_points().events)
+        self.assertEqual([r["tier"] for r in rallies], ["gold", "gold", "gold"])
+
+    def test_correction_taints_neighbors(self) -> None:
+        timeline = self._timeline_with_points()
+        m = timeline.match
+        assert m is not None
+        # Correction right after the last point (t=90): persistent decrement.
+        feed(timeline, [reading(95.0 + i, 1, 1) for i in range(4)])
+        self.assertEqual(timeline.summary()["corrections"], 1)
+        rallies = events_to_rallies(timeline.events)
+        self.assertEqual(rallies[-1]["tier"], "excluded")  # within 45s
+        self.assertEqual(rallies[0]["tier"], "gold")  # 60+s away
+
+    def test_batch_entry_is_silver(self) -> None:
+        timeline = self._timeline_with_points()
+        # Fourth point lands 5s after the third: batch-entry fingerprint.
+        feed(timeline, [reading(95.0, 2, 2), reading(96.0, 2, 2)])
+        rallies = events_to_rallies(timeline.events)
+        self.assertEqual(rallies[-1]["tier"], "silver")
+        self.assertEqual(rallies[-2]["tier"], "silver")  # both sides of gap
+        self.assertEqual(rallies[0]["tier"], "gold")
