@@ -31,6 +31,51 @@ describe("notification provider validation", () => {
     expect(new Headers(init?.headers).get("authorization")).toBe(`Basic ${Buffer.from("SK123:api-secret").toString("base64")}`);
   });
 
+  it("deduplicates within an episode but pages a recurring fingerprint in a new episode", async () => {
+    const records = new Map<string, StoredNotification>();
+    let sequence = 0;
+    const store = {
+      ensureNotification: vi.fn(async (incidentId: string, provider: "pushover", kind: "open", now: Date) => {
+        const key = `${incidentId}:${provider}:${kind}`;
+        const existing = records.get(key);
+        if (existing) return { notification: existing, created: false };
+        const notification = storedNotification({
+          id: `00000000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`,
+          incidentId,
+          provider,
+          kind,
+          submittedAt: now.toISOString()
+        });
+        records.set(key, notification);
+        return { notification, created: true };
+      }),
+      updateNotification: vi.fn(async (id: string, patch: Partial<StoredNotification>) => {
+        const entry = [...records.entries()].find(([, notification]) => notification.id === id);
+        if (!entry) throw new Error("notification not found");
+        const updated = { ...entry[1], ...patch };
+        records.set(entry[0], updated);
+        return updated;
+      })
+    } as unknown as IncidentStore;
+    let sendSequence = 0;
+    const send = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      status: 1,
+      receipt: `receipt-${++sendSequence}`,
+      request: `request-${sendSequence}`
+    }), { status: 200 }));
+    const dispatcher = new NotificationDispatcher(notificationConfig(), store, send);
+    const first = criticalIncident();
+    const second = criticalIncident({ id: "00000000-0000-4000-8000-000000000099", openedAt: "2026-07-12T19:00:00.000Z" });
+
+    await dispatcher.handleChanges([{ incident: first, eventType: "OPENED" }], new Date("2026-07-12T18:00:00.000Z"));
+    await dispatcher.handleChanges([{ incident: first, eventType: "EVIDENCE_UPDATED" }], new Date("2026-07-12T18:00:10.000Z"));
+    await dispatcher.handleChanges([{ incident: second, eventType: "OPENED" }], new Date("2026-07-12T19:00:00.000Z"));
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(records.size).toBe(2);
+    expect([...records.values()].map((notification) => notification.incidentId)).toEqual([first.id, second.id]);
+  });
+
   it("polls a nonterminal Twilio notification to its terminal delivery state", async () => {
     const now = new Date("2026-07-12T18:01:00.000Z");
     const notification = storedNotification({

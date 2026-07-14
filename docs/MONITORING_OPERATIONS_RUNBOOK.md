@@ -119,9 +119,12 @@ single sanitized fallback checkpoint per minute.
 - `EXPECTED_OFF`: that stage is intentionally inactive.
 - `MAINTENANCE`: reserved for an explicitly bounded maintenance state.
 
-Incident fingerprints exclude timestamps and message text, so repeated samples
-update one durable incident. Acknowledgement stops repeated emergency push
-delivery but leaves the incident visible until the evidence recovers.
+Incident fingerprints exclude timestamps and message text. Repeated samples
+within one active outage update that durable incident. After resolution, the
+same fingerprint opens a new incident episode with a new UUID, `opened_at`,
+event history, and notification receipts. Acknowledgement stops repeated
+emergency push delivery for that episode but leaves it visible until the
+evidence recovers.
 
 Alertmanager inhibits downstream pages when a stronger upstream cause is active:
 
@@ -223,6 +226,42 @@ Provider activation is not accepted until all of these pass:
 5. The dashboard shows provider failure as degraded notification health.
 
 ## Deployment and verification
+
+Migration `022_monitoring_incident_episodes.sql` and the matching monitor
+service are one hard-cutover unit. The old service writes conflicts on
+`fingerprint`; the new service writes conflicts on `id` and refuses startup
+unless `monitoring_incident_episode_contract()` returns `1`. Never run the old
+service after migration 022, and never run the new service before it.
+
+Perform this bounded cutover only while coverage is idle:
+
+1. Capture a database backup and record the current migration list, incident
+   counts, latest incident/event/notification timestamps, monitor image
+   revision, health, and restart count.
+2. Stop only monitor-service so no process can write the old contract during
+   migration.
+3. Dry-run and apply migration 022, then run
+   `infra/monitoring/sql/verify-incident-episodes.sql`. The verification is
+   transactional and leaves no probe rows.
+4. Deploy the matching monitor-service image and require its schema contract
+   startup check, `/healthz`, snapshot, and durable checkpoint to pass.
+5. Record the applied migration version, contract result, image revision,
+   container start time/restart count, and unchanged Prometheus, Alertmanager,
+   Caddy, media, routing, and output provenance.
+
+`infra/monitoring/sql/rollback-incident-episodes.sql` is guarded and
+non-destructive. It may be used only if the new service fails before any
+fingerprint has more than one durable episode. Once recurrence history exists,
+use the pre-cutover backup or a forward fix; never delete incident history to
+make rollback possible.
+
+The repository currently contains two historical files with migration version
+`017`, while the linked project records one `017`. Do not use `--include-all`
+and do not run an unfiltered `supabase db push` for this cutover. Build a
+temporary migration directory from the production-applied history, omit only
+the unmatched `017_vision_shadow_receipts.sql`, and require `db push --dry-run`
+to list exactly migration 022 before applying it. Resolve the duplicate legacy
+version in its owning vision rollout; it is not part of this monitoring change.
 
 From `infra/monitoring` with the protected environment loaded:
 
@@ -342,7 +381,12 @@ active commentary rooms. Acceptance requires:
   type/schema/unit validation. A ten-hour one-court transport and sync soak
   completed without restart, OOM, frame stall, MediaMTX path failure, or egress
   error; the injected fault matrix and camera reconnect gate remain outstanding.
-- Durable incident, acknowledgement, checkpoint, and silence lifecycle: passed.
+- Durable incident, acknowledgement, checkpoint, and silence lifecycle: the
+  original episode passed, but the first post-restart recurrence gate exposed
+  global fingerprint uniqueness and failed durable opening/paging. Migration
+  022 plus the matching monitor-service implements true incident episodes; a
+  fresh physical recurrence gate is still required after deployment and after
+  Camera 1 has returned to a healthy baseline.
 - Production web and monitor builds: passed.
 - Healthchecks baseline delivery and active idle-pause lifecycle: configured; the
   withheld-ping phone delivery gate remains outstanding because the project

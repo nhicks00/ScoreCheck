@@ -46,6 +46,52 @@ describe("incident manager", () => {
     expect(manager.reconcileActiveAlerts([], new Date("2026-07-12T12:02:00Z"))).toEqual([]);
   });
 
+  it("creates a new incident episode when the same fingerprint recurs in one process", () => {
+    const manager = new IncidentManager();
+    const firstFiring = firingAlert("2026-07-12T12:00:00Z");
+    const [first] = manager.applyWebhook(firstFiring, new Date("2026-07-12T12:00:05Z"));
+    manager.acknowledge(first!.incident.id, "operator", "Investigating", new Date("2026-07-12T12:00:20Z"));
+    manager.applyWebhook(resolvedAlert(firstFiring, "2026-07-12T12:01:00Z"), new Date("2026-07-12T12:01:00Z"));
+
+    const [second] = manager.applyWebhook(firingAlert("2026-07-12T12:02:00Z"), new Date("2026-07-12T12:02:05Z"));
+
+    expect(second?.eventType).toBe("OPENED");
+    expect(second?.incident.id).not.toBe(first?.incident.id);
+    expect(second?.incident.openedAt).toBe("2026-07-12T12:02:00.000Z");
+    expect(second?.incident.acknowledgedAt).toBeNull();
+    expect(second?.incident.acknowledgedBy).toBeNull();
+  });
+
+  it("creates a new incident episode after restart because resolved rows are not hydrated", () => {
+    const firstProcess = new IncidentManager();
+    const firstFiring = firingAlert("2026-07-12T12:00:00Z");
+    const [first] = firstProcess.applyWebhook(firstFiring, new Date("2026-07-12T12:00:05Z"));
+    firstProcess.applyWebhook(resolvedAlert(firstFiring, "2026-07-12T12:01:00Z"), new Date("2026-07-12T12:01:00Z"));
+
+    const restartedProcess = new IncidentManager();
+    restartedProcess.hydrate([]);
+    const [second] = restartedProcess.applyWebhook(firingAlert("2026-07-12T12:02:00Z"), new Date("2026-07-12T12:02:05Z"));
+
+    expect(second?.eventType).toBe("OPENED");
+    expect(second?.incident.id).not.toBe(first?.incident.id);
+    expect(second?.incident.fingerprint).toBe(first?.incident.fingerprint);
+    expect(second?.incident.openedAt).toBe("2026-07-12T12:02:00.000Z");
+  });
+
+  it("retains the durable active episode id after restart", () => {
+    const firstProcess = new IncidentManager();
+    const firing = firingAlert("2026-07-12T12:00:00Z");
+    const [first] = firstProcess.applyWebhook(firing, new Date("2026-07-12T12:00:05Z"));
+
+    const restartedProcess = new IncidentManager();
+    restartedProcess.hydrate([first!.incident]);
+    const [continued] = restartedProcess.applyWebhook(firing, new Date("2026-07-12T12:00:30Z"));
+
+    expect(continued?.eventType).toBe("EVIDENCE_UPDATED");
+    expect(continued?.incident.id).toBe(first?.incident.id);
+    expect(continued?.incident.openedAt).toBe(first?.incident.openedAt);
+  });
+
   it("reconciles a missed resolved webhook from the authoritative active set", () => {
     const manager = new IncidentManager();
     manager.applyWebhook({
@@ -74,3 +120,28 @@ describe("incident manager", () => {
     expect(change?.detail?.reason).toBe("Investigating https://example.test/path");
   });
 });
+
+function firingAlert(startsAt: string) {
+  return {
+    status: "firing" as const,
+    alerts: [{
+      status: "firing" as const,
+      labels: {
+        alertname: "ScoreCheckRequiredRawPathMissing",
+        severity: "critical",
+        stage: "RAW_INGEST",
+        court: "1",
+        root_dependency: "mediamtx"
+      },
+      annotations: { summary: "Camera 1 is offline." },
+      startsAt
+    }]
+  };
+}
+
+function resolvedAlert(firing: ReturnType<typeof firingAlert>, endsAt: string) {
+  return {
+    status: "resolved" as const,
+    alerts: firing.alerts.map((alert) => ({ ...alert, status: "resolved" as const, endsAt }))
+  };
+}

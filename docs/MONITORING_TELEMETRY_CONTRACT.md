@@ -278,6 +278,20 @@ eventId | rootDependency | stage | courtOrHost | issueCode
 
 Timestamps and mutable message text are excluded.
 
+The fingerprint identifies a problem class, not a lifetime database row. Only
+one non-resolved incident may exist for a fingerprint. Continuing samples and
+service restarts retain that active incident UUID. A recurrence after
+resolution creates a new incident UUID and `OPENED` event, even when the
+fingerprint is identical. Notification uniqueness is scoped to
+`incident_id + provider + notification_kind`, so delivery deduplicates within
+an episode while preserving independent opening and recovery receipts for each
+recurrence.
+
+The monitor service fails closed at startup unless the database advertises the
+episode contract. Schema migration 022 must therefore be applied immediately
+before the matching service rollout during one bounded idle cutover; mixed
+old-service/new-schema and new-service/old-schema states are unsupported.
+
 ## Incident closure semantics
 
 An Alertmanager `resolved` transition is not, by itself, proof that a monitored

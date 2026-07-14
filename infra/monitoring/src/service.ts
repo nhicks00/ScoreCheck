@@ -12,6 +12,7 @@ import { decideBrowserOrigin } from "./browserOrigin.js";
 import { ControlPlaneCollector } from "./controlPlane.js";
 import { YouTubeCollector } from "./youtube.js";
 import { NotificationDispatcher } from "./notifications.js";
+import { operationalErrorCode } from "./operationalError.js";
 import { loadCourtPipelineRange, parseRangeInput } from "./rangeQueries.js";
 import { BrowserThumbnailManager } from "./browserThumbnails.js";
 import { activeSilences, incidentIsSilenced, silenceMatchesIncident } from "./silences.js";
@@ -101,11 +102,13 @@ let deadManMaintenanceRunning = false;
 let silences: MonitoringSilence[] = [];
 if (incidentStore) {
   try {
+    await incidentStore.assertEpisodeContract();
     incidents.hydrate(await incidentStore.loadActive());
     silences = await incidentStore.loadActiveSilences();
     notificationDispatcher.hydrate(await incidentStore.latestProviderNotifications());
-  } catch {
-    console.error("durable monitoring state could not be loaded");
+  } catch (error) {
+    console.error(`durable monitoring state could not be loaded code=${operationalErrorCode(error)}`);
+    throw new Error("Required durable monitoring contract is unavailable.");
   }
 }
 let snapshot: MonitorSnapshot = currentSnapshot();
@@ -563,8 +566,8 @@ async function maintainNotifications() {
       snapshot = currentSnapshot();
       await persistIncidentChanges([change]);
     }
-  } catch {
-    console.error("notification maintenance failed");
+  } catch (error) {
+    console.error(`notification maintenance failed code=${operationalErrorCode(error)}`);
   }
 }
 
@@ -580,8 +583,8 @@ async function reconcileAlertmanager() {
     changes = incidents.enrichChanges(changes, snapshot);
     snapshot = currentSnapshot();
     await persistIncidentChanges(changes);
-  } catch {
-    console.error("alertmanager active-set reconciliation failed");
+  } catch (error) {
+    console.error(`alertmanager active-set reconciliation failed code=${operationalErrorCode(error)}`);
   }
 }
 
@@ -595,8 +598,8 @@ async function persistIncidentChanges(changes: ReturnType<IncidentManager["apply
       new Date(),
       (incident) => incidentIsSilenced(incident, silences)
     );
-  } catch {
-    console.error("durable incident state could not be persisted");
+  } catch (error) {
+    console.error(`durable incident state could not be persisted code=${operationalErrorCode(error)}`);
   }
 }
 
@@ -604,8 +607,8 @@ async function checkpoint() {
   if (!incidentStore) return;
   try {
     await incidentStore.checkpoint(snapshot);
-  } catch {
-    console.error("monitor checkpoint could not be persisted");
+  } catch (error) {
+    console.error(`monitor checkpoint could not be persisted code=${operationalErrorCode(error)}`);
   }
 }
 

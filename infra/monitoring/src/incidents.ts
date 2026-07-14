@@ -23,7 +23,7 @@ const alertmanagerApiAlertsSchema = z.array(z.object({
   endsAt: z.string().optional()
 }).passthrough()).max(500);
 
-export type IncidentEventType = "OPENED" | "SEVERITY_CHANGED" | "EVIDENCE_UPDATED" | "ACKNOWLEDGED" | "RESOLVED" | "REOPENED";
+export type IncidentEventType = "OPENED" | "SEVERITY_CHANGED" | "EVIDENCE_UPDATED" | "ACKNOWLEDGED" | "RESOLVED";
 export type IncidentChange = { incident: IncidentSnapshot; eventType: IncidentEventType; detail?: Record<string, string | number | boolean | null> };
 
 export class IncidentManager {
@@ -48,12 +48,13 @@ export class IncidentManager {
         continue;
       }
 
+      const newEpisode = !existing || existing.status === "resolved";
       const next: IncidentSnapshot = {
-        id: existing?.id ?? crypto.randomUUID(),
+        id: newEpisode ? crypto.randomUUID() : existing.id,
         fingerprint: normalized.fingerprint,
         eventId: normalized.eventId,
         rootDependency: normalized.rootDependency,
-        status: existing?.status === "acknowledged" ? "acknowledged" : "open",
+        status: !newEpisode && existing.status === "acknowledged" ? "acknowledged" : "open",
         severity: normalized.severity,
         stage: normalized.stage,
         issueCode: normalized.issueCode,
@@ -61,17 +62,17 @@ export class IncidentManager {
         host: normalized.host,
         summary: normalized.summary,
         firstAction: normalized.firstAction,
-        evidence: { ...(existing?.evidence ?? {}), ...normalized.evidence },
-        openedAt: existing?.openedAt ?? validIso(alert.startsAt) ?? now.toISOString(),
+        evidence: newEpisode ? normalized.evidence : { ...existing.evidence, ...normalized.evidence },
+        openedAt: newEpisode ? validIso(alert.startsAt) ?? now.toISOString() : existing.openedAt,
         lastObservedAt: now.toISOString(),
-        acknowledgedAt: existing?.acknowledgedAt ?? null,
-        acknowledgedBy: existing?.acknowledgedBy ?? null,
+        acknowledgedAt: newEpisode ? null : existing.acknowledgedAt,
+        acknowledgedBy: newEpisode ? null : existing.acknowledgedBy,
         resolvedAt: null
       };
       this.incidents.set(next.fingerprint, next);
       changed.push({
         incident: next,
-        eventType: !existing ? "OPENED" : existing.status === "resolved" ? "REOPENED" : existing.severity !== next.severity ? "SEVERITY_CHANGED" : "EVIDENCE_UPDATED"
+        eventType: newEpisode ? "OPENED" : existing.severity !== next.severity ? "SEVERITY_CHANGED" : "EVIDENCE_UPDATED"
       });
     }
     return changed;

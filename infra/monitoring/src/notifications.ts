@@ -77,7 +77,7 @@ export class NotificationDispatcher {
         continue;
       }
       if (isSilenced(change.incident)) continue;
-      if (change.incident.severity === "critical" && ["OPENED", "REOPENED", "SEVERITY_CHANGED"].includes(change.eventType)) {
+      if (change.incident.severity === "critical" && ["OPENED", "SEVERITY_CHANGED"].includes(change.eventType)) {
         await this.ensureCriticalPage(change.incident, now);
       }
     }

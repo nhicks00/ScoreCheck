@@ -64,6 +64,13 @@ export class IncidentStore {
     }));
   }
 
+  async assertEpisodeContract(): Promise<void> {
+    const { data, error } = await this.db.rpc("monitoring_incident_episode_contract");
+    if (error || data !== 1) {
+      throw error ?? Object.assign(new Error("Monitoring incident episode schema is unavailable."), { code: "INCIDENT_EPISODE_SCHEMA_MISSING" });
+    }
+  }
+
   async loadActive(): Promise<IncidentSnapshot[]> {
     const { data, error } = await this.db
       .from("monitoring_incidents")
@@ -129,7 +136,7 @@ export class IncidentStore {
       acknowledged_by: incident.acknowledgedBy,
       resolved_at: incident.resolvedAt,
       updated_at: new Date().toISOString()
-    }, { onConflict: "fingerprint" });
+    }, { onConflict: "id" });
     if (error) throw error;
 
     const { error: eventError } = await this.db.from("monitoring_incident_events").insert({
