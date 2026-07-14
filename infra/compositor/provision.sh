@@ -5,8 +5,8 @@
 #   DIGITALOCEAN_TOKEN=dop_v1_... ./provision.sh [options]
 #
 # Options:
-#   --size SLUG      droplet size slug (default: c-4 — sized for two 720p30
-#                    courts from measured Gate 1 headroom; Gate 2 validates it)
+#   --size SLUG      droplet size slug (default: c-4 — current safe baseline is
+#                    one 720p30 web egress)
 #   --image IMAGE    image slug or numeric snapshot id
 #                    (default: ubuntu-24-04-x64; pass the bvm-compositor-base
 #                    snapshot id once one exists)

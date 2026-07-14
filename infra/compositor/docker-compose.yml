@@ -91,8 +91,8 @@ services:
     security_opt:
       - seccomp=./chrome-sandboxing-seccomp-profile.json
     # Chrome renders via /dev/shm; docker's 64 MB default causes tab crashes
-    # mid-broadcast. 3 GB covers 1–2 concurrent 720p courts — scale up with
-    # court count on event-day hosts (rule of thumb: ~1 GB per court + 1 GB).
+    # mid-broadcast. The current c-4 baseline admits one 720p court; 3 GB keeps
+    # generous browser headroom. Re-size only with a capacity-qualified host.
     shm_size: "3gb"
     ports:
       # HTTP health check endpoint (200 = worker alive).
