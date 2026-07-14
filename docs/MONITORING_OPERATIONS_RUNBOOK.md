@@ -255,13 +255,12 @@ fingerprint has more than one durable episode. Once recurrence history exists,
 use the pre-cutover backup or a forward fix; never delete incident history to
 make rollback possible.
 
-The repository currently contains two historical files with migration version
-`017`, while the linked project records one `017`. Do not use `--include-all`
-and do not run an unfiltered `supabase db push` for this cutover. Build a
-temporary migration directory from the production-applied history, omit only
-the unmatched `017_vision_shadow_receipts.sql`, and require `db push --dry-run`
-to list exactly migration 022 before applying it. Resolve the duplicate legacy
-version in its owning vision rollout; it is not part of this monitoring change.
+The executable migration queue has one file per monotonically increasing
+version. The unapproved vision receipt schema remains outside that queue at
+`apps/web/supabase/proposals/vision_shadow_receipts.sql`; do not copy, mark, or
+apply it during a monitoring cutover. Do not use `--include-all` or run an
+unverified `supabase db push`: require `db push --dry-run` to list exactly the
+intended monitoring migration before applying it.
 
 From `infra/monitoring` with the protected environment loaded:
 

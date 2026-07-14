@@ -268,8 +268,12 @@ npm run test:vision-postgres
 
 The harness uses the digest-pinned PostgreSQL 15 image, publishes no host port,
 creates fixed minimal `auth.users` and side-effect-recording `realtime.send`
-stubs, applies the complete ordered migration chain from `001` through `016`,
-then applies current migration `017` and the fixed SQL fixture. It performs
+stubs, validates unique monotonic versions and applies the complete executable
+migration chain, then explicitly applies the deferred
+`supabase/proposals/vision_shadow_receipts.sql` proposal and the fixed SQL
+fixture. The proposal is intentionally outside the executable migration queue;
+when production deployment is approved, promote the reviewed SQL under the next
+available migration version at that time. The harness performs
 idempotent preflight cleanup and removes its uniquely named container on normal
 completion, failure, timeout, `SIGHUP`, `SIGINT`, or `SIGTERM`; it does not start
 Docker or Colima.
@@ -282,8 +286,8 @@ protection after an accidental direct `SELECT` grant. It also inventories live
 public-table defaults that depend on public-schema functions, proves a
 production-like explicitly granted `service_role` can execute current-schema
 default inserts, and proves migration `002`'s overlay broadcast trigger still
-records its `realtime.send` side effect after `017` while direct execution of
-the trigger function remains denied.
+records its `realtime.send` side effect after the vision proposal while direct
+execution of the trigger function remains denied.
 
 This is a plain PostgreSQL 15 test, not a complete Supabase deployment test.
 Supabase/PostgREST RPC exposure, JWT-to-role mapping, and deployment-principal

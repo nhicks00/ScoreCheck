@@ -25,7 +25,7 @@ grant insert on public.events, public.matches, public.courts, public.overlay_sta
 
 -- Inventory every live public-table default that depends on a public-schema
 -- function. Any such function must remain executable by the production-like
--- insertion principal after migration 017 removes ambient PUBLIC EXECUTE.
+-- insertion principal after the vision proposal removes ambient PUBLIC EXECUTE.
 select
   table_namespace.nspname as table_schema,
   table_object.relname as table_name,
@@ -66,7 +66,7 @@ begin
       and function_namespace.nspname = 'public'
       and not has_function_privilege('service_role', function_object.oid, 'EXECUTE')
   ) then
-    raise exception 'migration 017 stranded a live public-function column default';
+    raise exception 'vision proposal stranded a live public-function column default';
   end if;
 end
 $$;
@@ -126,7 +126,7 @@ begin
           topic = 'overlay:11111111-1111-4111-8111-111111111111:court:1' and
           payload = '{"source":"vision-integration"}'::jsonb
   ) <> 1 then
-    raise exception 'broadcast trigger did not call the realtime.send stub after migration 017';
+    raise exception 'broadcast trigger did not call the realtime.send stub after the vision proposal';
   end if;
 end
 $$;

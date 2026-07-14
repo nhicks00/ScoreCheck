@@ -1036,6 +1036,26 @@ function filesBelow(directory: string): string[] {
 }
 
 describe("vision shadow repository isolation guard", () => {
+  it("keeps deferred vision SQL outside the unique monotonic migration queue", () => {
+    const migrationDirectory = resolve(process.cwd(), "supabase/migrations");
+    const migrationFiles = readdirSync(migrationDirectory)
+      .filter((fileName) => fileName.endsWith(".sql"))
+      .sort();
+    expect(migrationFiles.every((fileName) => /^\d{3}_.+\.sql$/.test(fileName)))
+      .toBe(true);
+
+    const versions = migrationFiles.map((fileName) => Number(fileName.slice(0, 3)));
+    expect(new Set(versions).size).toBe(versions.length);
+    for (let index = 1; index < versions.length; index += 1) {
+      expect(versions[index]).toBeGreaterThan(versions[index - 1]!);
+    }
+
+    expect(migrationFiles).not.toContain("017_vision_shadow_receipts.sql");
+    expect(
+      readdirSync(resolve(process.cwd(), "supabase/proposals"))
+    ).toContain("vision_shadow_receipts.sql");
+  });
+
   it("keeps the PostgreSQL behavior harness fixed, isolated, and digest-pinned", () => {
     const packageJson = JSON.parse(
       readFileSync(resolve(process.cwd(), "package.json"), "utf8")
@@ -1053,23 +1073,9 @@ describe("vision shadow repository isolation guard", () => {
     expect(harness).toContain(
       "postgres@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f"
     );
-    for (const migrationFile of [
-      "001_initial_schema.sql",
-      "002_remote_manual_scoring_and_worker.sql",
-      "003_fan_scoring_claims_sessions_video.sql",
-      "004_vbl_source_priority.sql",
-      "009_vbl_overlay_delay.sql",
-      "010_mediamtx_stream_paths.sql",
-      "011_instant_scoring.sql",
-      "012_program_heartbeats.sql",
-      "013_youtube_stream_keys.sql",
-      "014_chat_messages.sql",
-      "015_program_media_paths.sql",
-      "016_commentary_sync_clock.sql"
-    ]) {
-      expect(harness).toContain(migrationFile);
-    }
-    expect(harness).toContain("supabase/migrations/017_vision_shadow_receipts.sql");
+    expect(harness).toContain('resolve(webRoot, "supabase/migrations")');
+    expect(harness).toContain("VISION_POSTGRES_EXECUTABLE_MIGRATION_VERSION_INVALID");
+    expect(harness).toContain("supabase/proposals/vision_shadow_receipts.sql");
     expect(harness).toContain("create schema auth");
     expect(harness).toContain("create function realtime.send");
     expect(harness).toContain('"--network=none"');
@@ -1099,9 +1105,9 @@ describe("vision shadow repository isolation guard", () => {
       "RLS exposed",
       "conflicting receipt returned",
       "terminal block did not preserve the fixed read prefix",
-      "migration 017 stranded a live public-function column default",
+      "vision proposal stranded a live public-function column default",
       "service_role could not perform a current-schema default insert",
-      "broadcast trigger did not call the realtime.send stub"
+      "broadcast trigger did not call the realtime.send stub after the vision proposal"
     ]) {
       expect(fixture).toContain(behavior);
     }
@@ -1122,7 +1128,7 @@ describe("vision shadow repository isolation guard", () => {
 
   it("keeps the adapter and migration outside every existing mutation-capable path", () => {
     const libraryDirectory = resolve(process.cwd(), "src/lib/vision-shadow");
-    const migration = resolve(process.cwd(), "supabase/migrations/017_vision_shadow_receipts.sql");
+    const migration = resolve(process.cwd(), "supabase/proposals/vision_shadow_receipts.sql");
     const productionText = [...filesBelow(libraryDirectory), migration]
       .map((path) => readFileSync(path, "utf8"))
       .join("\n");
@@ -1143,7 +1149,7 @@ describe("vision shadow repository isolation guard", () => {
 
   it("creates only vision-prefixed relations/functions and enforces immutable receipts", () => {
     const migration = readFileSync(
-      resolve(process.cwd(), "supabase/migrations/017_vision_shadow_receipts.sql"),
+      resolve(process.cwd(), "supabase/proposals/vision_shadow_receipts.sql"),
       "utf8"
     );
     const createdRelations = [...migration.matchAll(/create table public\.([a-z0-9_]+)/g)].map((match) => match[1]);
@@ -1159,7 +1165,7 @@ describe("vision shadow repository isolation guard", () => {
 
   it("limits every SQL write/trigger to vision relations and encodes fail-closed receipt semantics", () => {
     const migration = readFileSync(
-      resolve(process.cwd(), "supabase/migrations/017_vision_shadow_receipts.sql"),
+      resolve(process.cwd(), "supabase/proposals/vision_shadow_receipts.sql"),
       "utf8"
     );
     const writeTargets = [
@@ -1257,7 +1263,7 @@ describe("vision shadow repository isolation guard", () => {
 
   it("keeps each security-sensitive function clause singular", () => {
     const migration = readFileSync(
-      resolve(process.cwd(), "supabase/migrations/017_vision_shadow_receipts.sql"),
+      resolve(process.cwd(), "supabase/proposals/vision_shadow_receipts.sql"),
       "utf8"
     );
     const header = (name: string) => {

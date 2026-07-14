@@ -13,23 +13,9 @@ const READINESS_TIMEOUT_MS = 60_000;
 const READINESS_PROBE_TIMEOUT_MS = 5_000;
 const READINESS_POLL_MS = 500;
 const webRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
-const PRE_VISION_MIGRATION_FILES = [
-  "001_initial_schema.sql",
-  "002_remote_manual_scoring_and_worker.sql",
-  "003_fan_scoring_claims_sessions_video.sql",
-  "004_vbl_source_priority.sql",
-  "009_vbl_overlay_delay.sql",
-  "010_mediamtx_stream_paths.sql",
-  "011_instant_scoring.sql",
-  "012_program_heartbeats.sql",
-  "013_youtube_stream_keys.sql",
-  "014_chat_messages.sql",
-  "015_program_media_paths.sql",
-  "016_commentary_sync_clock.sql"
-] as const;
-const visionMigrationPath = resolve(
+const visionProposalPath = resolve(
   webRoot,
-  "supabase/migrations/017_vision_shadow_receipts.sql"
+  "supabase/proposals/vision_shadow_receipts.sql"
 );
 const fixturePath = resolve(
   webRoot,
@@ -196,24 +182,36 @@ function sha256(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
-function assertFixedMigrationChain(): void {
+function loadExecutableMigrations(): Array<{
+  readonly fileName: string;
+  readonly version: number;
+  readonly sql: string;
+}> {
   const migrationDirectory = resolve(webRoot, "supabase/migrations");
-  const livePreVisionFiles = readdirSync(migrationDirectory)
-    .filter((fileName) => /^\d{3}_.+\.sql$/.test(fileName))
-    .filter((fileName) => Number(fileName.slice(0, 3)) < 17)
+  const sqlFiles = readdirSync(migrationDirectory)
+    .filter((fileName) => fileName.endsWith(".sql"))
     .sort();
-  if (
-    livePreVisionFiles.length !== PRE_VISION_MIGRATION_FILES.length ||
-    livePreVisionFiles.some(
-      (fileName, index) => fileName !== PRE_VISION_MIGRATION_FILES[index]
-    )
-  ) {
+  const invalidFiles = sqlFiles.filter((fileName) => !/^\d{3}_.+\.sql$/.test(fileName));
+  if (invalidFiles.length > 0) {
     throw new Error(
-      `VISION_POSTGRES_MIGRATION_CHAIN_DRIFT: expected ${PRE_VISION_MIGRATION_FILES.join(
-        ","
-      )}; found ${livePreVisionFiles.join(",")}`
+      `VISION_POSTGRES_EXECUTABLE_MIGRATION_NAME_INVALID: ${invalidFiles.join(",")}`
     );
   }
+  const migrations = sqlFiles.map((fileName) => ({
+    fileName,
+    version: Number(fileName.slice(0, 3)),
+    sql: readFileSync(resolve(migrationDirectory, fileName), "utf8")
+  }));
+  for (let index = 1; index < migrations.length; index += 1) {
+    const previous = migrations[index - 1]!;
+    const current = migrations[index]!;
+    if (current.version <= previous.version) {
+      throw new Error(
+        `VISION_POSTGRES_EXECUTABLE_MIGRATION_VERSION_INVALID: ${previous.fileName},${current.fileName}`
+      );
+    }
+  }
+  return migrations;
 }
 
 function sleep(milliseconds: number): Promise<void> {
@@ -317,15 +315,11 @@ const DENIAL_CASES = [
 ] as const;
 
 async function run(): Promise<void> {
-  assertFixedMigrationChain();
+  const executableMigrations = loadExecutableMigrations();
   assertDockerDaemon();
   const containerName =
     `multicourt-vision-pg-${process.pid}-${randomUUID().replaceAll("-", "").slice(0, 12)}`;
-  const preVisionMigrations = PRE_VISION_MIGRATION_FILES.map((fileName) => ({
-    fileName,
-    sql: readFileSync(resolve(webRoot, "supabase/migrations", fileName), "utf8")
-  }));
-  const visionMigration = readFileSync(visionMigrationPath, "utf8");
+  const visionProposal = readFileSync(visionProposalPath, "utf8");
   const fixture = readFileSync(fixturePath, "utf8");
   let failure: unknown = null;
   let handlingSignal = false;
@@ -375,14 +369,14 @@ async function run(): Promise<void> {
     await waitUntilReady(containerName);
 
     runPsql(containerName, "ROLE_BOOTSTRAP_FAILED", ROLE_BOOTSTRAP);
-    for (const migration of preVisionMigrations) {
+    for (const migration of executableMigrations) {
       runPsql(
         containerName,
-        `MIGRATION_${migration.fileName.slice(0, 3)}_FAILED`,
+        `EXECUTABLE_MIGRATION_${migration.fileName.slice(0, 3)}_FAILED`,
         migration.sql
       );
     }
-    runPsql(containerName, "VISION_MIGRATION_017_FAILED", visionMigration);
+    runPsql(containerName, "VISION_PROPOSAL_FAILED", visionProposal);
     runPsql(containerName, "BEHAVIOR_FIXTURE_FAILED", fixture);
     for (const denial of DENIAL_CASES) {
       expectPermissionDenied(containerName, denial.label, denial.sql);
@@ -392,11 +386,11 @@ async function run(): Promise<void> {
       [
         "Vision PostgreSQL integration passed.",
         `image=${POSTGRES_IMAGE}`,
-        `pre_017_migration_count=${preVisionMigrations.length}`,
-        `pre_017_chain_sha256=${sha256(
-          preVisionMigrations.map((migration) => migration.sql).join("\n")
+        `executable_migration_count=${executableMigrations.length}`,
+        `executable_chain_sha256=${sha256(
+          executableMigrations.map((migration) => migration.sql).join("\n")
         )}`,
-        `migration_017_sha256=${sha256(visionMigration)}`,
+        `vision_proposal_sha256=${sha256(visionProposal)}`,
         `denial_cases=${DENIAL_CASES.length}`
       ].join("\n")
     );
