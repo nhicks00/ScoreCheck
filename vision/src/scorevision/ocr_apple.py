@@ -3,21 +3,55 @@
 Wraps VNRecognizeTextRequest so callers pass numpy RGB frames and receive
 plain token tuples. Coordinates are returned in top-left-origin normalized
 form (x, y, w, h) relative to the input image.
+
+Memory-safety note (incident 2026-07-14): the CGImage MUST be built from a
+CFData-backed provider. ``CGDataProviderCreateWithData(None, bytes, ...)``
+with a null release callback pins every frame's pixel buffer for the life of
+the process under pyobjc — at 20 OCR calls/second that leaked tens of GB and
+froze the machine. Measured: +122 MB per 500 calls before, +5 MB after.
 """
 
 from __future__ import annotations
 
+import os
+import resource
 from dataclasses import dataclass
 
 import numpy as np
 
 try:
+    import objc
     import Quartz
     import Vision
 except ModuleNotFoundError as error:  # pragma: no cover - non-macOS
     raise ModuleNotFoundError(
         "scorevision.ocr_apple requires macOS with pyobjc-framework-Vision"
     ) from error
+
+# Hard ceiling: OCR is a bounded-memory workload; blowing past this means a
+# leak has returned. Fail loudly instead of freezing the host.
+_DEFAULT_RSS_LIMIT_MB = 4096
+_RSS_CHECK_EVERY = 500
+_rss_limit_mb = float(os.environ.get("SCOREVISION_RSS_LIMIT_MB", _DEFAULT_RSS_LIMIT_MB))
+_calls_since_check = 0
+
+
+class MemoryGuardExceeded(RuntimeError):
+    """Raised when the process RSS exceeds the configured ceiling."""
+
+
+def _check_memory_guard() -> None:
+    global _calls_since_check
+    _calls_since_check += 1
+    if _calls_since_check < _RSS_CHECK_EVERY:
+        return
+    _calls_since_check = 0
+    rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e6
+    if rss_mb > _rss_limit_mb:
+        raise MemoryGuardExceeded(
+            f"process RSS {rss_mb:.0f} MB exceeds SCOREVISION_RSS_LIMIT_MB="
+            f"{_rss_limit_mb:.0f}; aborting rather than exhausting the host"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +78,9 @@ def _cgimage_from_rgb(frame: np.ndarray):
     frame = np.ascontiguousarray(frame)
     height, width, _ = frame.shape
     data = frame.tobytes()
-    provider = Quartz.CGDataProviderCreateWithData(None, data, len(data), None)
+    # CFData owns a copy with a proper CF lifecycle; see module docstring.
+    cfdata = Quartz.CFDataCreate(None, data, len(data))
+    provider = Quartz.CGDataProviderCreateWithCFData(cfdata)
     colorspace = Quartz.CGColorSpaceCreateDeviceRGB()
     return Quartz.CGImageCreate(
         width,
@@ -63,13 +99,24 @@ def _cgimage_from_rgb(frame: np.ndarray):
 
 def recognize_text(frame: np.ndarray, *, fast: bool = False) -> list[OcrToken]:
     """OCR an RGB frame; returns tokens sorted top-to-bottom, left-to-right."""
-    cg = _cgimage_from_rgb(frame)
-    handler = Vision.VNImageRequestHandler.alloc().initWithCGImage_options_(cg, None)
+    _check_memory_guard()
     collected: list[OcrToken] = []
-
-    def _handle(request, error) -> None:
-        if error is not None:
-            return
+    with objc.autorelease_pool():
+        cg = _cgimage_from_rgb(frame)
+        handler = Vision.VNImageRequestHandler.alloc().initWithCGImage_options_(
+            cg, None
+        )
+        request = Vision.VNRecognizeTextRequest.alloc().init()
+        level = (
+            Vision.VNRequestTextRecognitionLevelFast
+            if fast
+            else Vision.VNRequestTextRecognitionLevelAccurate
+        )
+        request.setRecognitionLevel_(level)
+        request.setUsesLanguageCorrection_(False)
+        ok, err = handler.performRequests_error_([request], None)
+        if not ok:  # pragma: no cover - Vision failures are environmental
+            raise RuntimeError(f"Vision OCR request failed: {err}")
         for observation in request.results() or []:
             candidates = observation.topCandidates_(1)
             if not candidates or not len(candidates):
@@ -91,17 +138,5 @@ def recognize_text(frame: np.ndarray, *, fast: bool = False) -> list[OcrToken]:
                     height=h,
                 )
             )
-
-    request = Vision.VNRecognizeTextRequest.alloc().initWithCompletionHandler_(_handle)
-    level = (
-        Vision.VNRequestTextRecognitionLevelFast
-        if fast
-        else Vision.VNRequestTextRecognitionLevelAccurate
-    )
-    request.setRecognitionLevel_(level)
-    request.setUsesLanguageCorrection_(False)
-    ok, err = handler.performRequests_error_([request], None)
-    if not ok:  # pragma: no cover - Vision failures are environmental
-        raise RuntimeError(f"Vision OCR request failed: {err}")
     collected.sort(key=lambda t: (round(t.center_y, 2), t.x))
     return collected
