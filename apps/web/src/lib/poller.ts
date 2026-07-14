@@ -221,9 +221,7 @@ export async function recordHeartbeat(workerId: string, status: string, eventId?
   const nowMs = Date.now();
   const signature = workerHeartbeatSignature(status, eventId, metadata);
   const previous = workerHeartbeatWrites.get(workerId);
-  const urgentTransition = status === "starting"
-    || ((status === "error" || status === "bracket-refresh-error") && previous?.signature !== signature);
-  if (!urgentTransition && previous && nowMs - previous.writtenAtMs < WORKER_HEARTBEAT_INTERVAL_MS) return false;
+  if (!shouldWriteWorkerHeartbeat(previous, signature, nowMs)) return false;
 
   const now = new Date(nowMs).toISOString();
   const { error } = await supabaseAdmin().from("worker_heartbeats").upsert({
@@ -241,6 +239,17 @@ export async function recordHeartbeat(workerId: string, status: string, eventId?
 function workerHeartbeatSignature(status: string, eventId: string | undefined, metadata: Record<string, unknown>) {
   const diagnostic = status === "error" || status === "bracket-refresh-error" ? JSON.stringify(metadata) : "";
   return [eventId ?? "no-event", status, diagnostic].join(":");
+}
+
+export function shouldWriteWorkerHeartbeat(
+  previous: { signature: string; writtenAtMs: number } | undefined,
+  nextSignature: string,
+  nowMs: number,
+  intervalMs = WORKER_HEARTBEAT_INTERVAL_MS
+) {
+  if (!previous || previous.signature !== nextSignature) return true;
+  const elapsedMs = nowMs - previous.writtenAtMs;
+  return elapsedMs < 0 || elapsedMs >= intervalMs;
 }
 
 async function acquireLease(eventId: string, courtId: string, owner: string): Promise<boolean> {

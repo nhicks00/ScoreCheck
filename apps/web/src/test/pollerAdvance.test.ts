@@ -6,6 +6,7 @@ import {
   orderedLaterQueueCandidates,
   resolvePostFinalHoldStart,
   scoreStatePatchMatches,
+  shouldWriteWorkerHeartbeat,
   shouldAdvanceFinalMatchOverlay,
   vblBracketFinalVisibleAt
 } from "../lib/poller";
@@ -280,5 +281,14 @@ describe("poller final-match advancement", () => {
         { teamBScore: 15, teamAScore: 21, isComplete: true, setNumber: 2 }
       ]
     })).toBe(false);
+  });
+
+  it("persists worker status transitions immediately while bounding same-state heartbeats", () => {
+    const previous = { signature: "no-event:starting:", writtenAtMs: 10_000 };
+
+    expect(shouldWriteWorkerHeartbeat(previous, "no-event:sleeping:", 10_001)).toBe(true);
+    expect(shouldWriteWorkerHeartbeat(previous, "no-event:starting:", 19_999)).toBe(false);
+    expect(shouldWriteWorkerHeartbeat(previous, "no-event:starting:", 20_000)).toBe(true);
+    expect(shouldWriteWorkerHeartbeat(previous, "no-event:starting:", 9_999)).toBe(true);
   });
 });
