@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "gateId": "court1-c4-end-to-end",
+  "court": 1,
+  "minimumDurationSeconds": 1800,
+  "warmupSeconds": 120,
+  "stepSeconds": 5,
+  "requiredBranches": ["raw", "preview", "program"],
+  "ffmpegBranches": ["preview", "program"],
+  "ingest": {
+    "agent": "bvm-preview-01",
+    "service": "mediamtx",
+    "vcpus": 4
+  },
+  "compositor": {
+    "agent": "bvm-compositor-a",
+    "service": "bvm-egress",
+    "vcpus": 4
+  },
+  "requireBrowser": true,
+  "thresholds": {
+    "minimumSampleCoverageRatio": 0.8,
+    "minimumActiveRatio": 0.95,
+    "minimumRawBitrateBps": 1000000,
+    "minimumFfmpegFps": 29,
+    "minimumFfmpegSpeed": 0.98,
+    "minimumBrowserFps": 29,
+    "maximumBrowserDropRatio": 0.005,
+    "maximumBrowserFreezeRatio": 0.01,
+    "maximumCpuP95Ratio": 0.75,
+    "maximumCpuRatio": 0.8,
+    "maximumMemoryGrowthRatio": 0.1,
+    "maximumShmRatio": 0.8
+  }
+}
