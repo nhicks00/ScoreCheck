@@ -63,10 +63,29 @@ while :; do sleep 0.1; done
 MOCK
 chmod 0755 "$MOCK_BIN/ffmpeg"
 
+cat >"$MOCK_BIN/wget" <<'MOCK'
+#!/bin/sh
+set -eu
+
+count=0
+if [ -f "$FAKE_READY_COUNT_FILE" ]; then
+  count="$(cat "$FAKE_READY_COUNT_FILE")"
+fi
+count=$((count + 1))
+printf '%s\n' "$count" >"$FAKE_READY_COUNT_FILE"
+if [ "$count" -ge 3 ]; then
+  printf '%s\n' '{"ready":true}'
+else
+  printf '%s\n' '{"ready":false}'
+fi
+MOCK
+chmod 0755 "$MOCK_BIN/wget"
+
 export PATH="$MOCK_BIN:$PATH"
 export FFMPEG_PROGRESS_DIR="$TEST_ROOT/progress"
 export FAKE_FFMPEG_PID_FILE="$TEST_ROOT/ffmpeg.pid"
 export FAKE_FFMPEG_STOP_FILE="$TEST_ROOT/ffmpeg.stopped"
+export FAKE_READY_COUNT_FILE="$TEST_ROOT/wget.count"
 
 run_shutdown_cycle() {
   shutdown_signal="$1"
@@ -108,6 +127,28 @@ for signal_and_status in TERM:143 HUP:129 TERM:143 HUP:129 TERM:143 HUP:129 TERM
   run_shutdown_cycle "${signal_and_status%:*}" "${signal_and_status#*:}"
 done
 
+rm -f "$FAKE_FFMPEG_PID_FILE" "$FAKE_FFMPEG_STOP_FILE" "$FAKE_READY_COUNT_FILE"
+sh "$RUNNER" court1_preview --wait-ready court1_raw -- -i ignored -f null - &
+RUNNER_PID=$!
+attempt=0
+while [ ! -f "$FAKE_FFMPEG_PID_FILE" ] && [ "$attempt" -lt 200 ]; do
+  attempt=$((attempt + 1))
+  sleep 0.02
+done
+[ -f "$FAKE_FFMPEG_PID_FILE" ] || fail "runner did not start after the raw path became ready"
+[ "$(cat "$FAKE_READY_COUNT_FILE")" -ge 3 ] \
+  || fail "runner bypassed the readiness gate"
+ffmpeg_pid="$(cat "$FAKE_FFMPEG_PID_FILE")"
+kill -TERM "$RUNNER_PID" "$ffmpeg_pid"
+set +e
+wait "$RUNNER_PID"
+ready_status=$?
+set -e
+RUNNER_PID=""
+[ "$ready_status" -eq 143 ] || fail "readiness-gated runner exited with $ready_status"
+[ ! -e "$FFMPEG_PROGRESS_DIR/court1_preview.progress" ] \
+  || fail "readiness-gated runner left stale progress state"
+
 grep -Fq "trap 'exit_for_signal 130' INT" "$RUNNER" \
   || fail "runner does not install the MediaMTX SIGINT cleanup handler"
 grep -Fq "trap '' HUP INT TERM" "$RUNNER" \
@@ -124,11 +165,17 @@ unset FAKE_FFMPEG_EXIT_EARLY
 [ ! -e "$FFMPEG_PROGRESS_DIR/court1_preview.progress" ] \
   || fail "early FFmpeg failure left stale progress state"
 
-direct_exec_count="$(grep -c '^[[:space:]]*exec /usr/local/bin/scorecheck-ffmpeg-runner ' "$TEMPLATE")"
-[ "$direct_exec_count" -eq 4 ] \
-  || fail "expected four direct MediaMTX runner exec commands, found $direct_exec_count"
+direct_runner_count="$(grep -c '^[[:space:]]*/usr/local/bin/scorecheck-ffmpeg-runner ' "$TEMPLATE")"
+[ "$direct_runner_count" -eq 4 ] \
+  || fail "expected four direct MediaMTX runner commands, found $direct_runner_count"
+wait_ready_count="$(grep -c -- '--wait-ready "court${G1}_raw"' "$TEMPLATE")"
+[ "$wait_ready_count" -eq 2 ] \
+  || fail "expected preview and monitor to use the runner readiness gate"
 if grep -q '/bin/sh -c' "$TEMPLATE"; then
   fail "MediaMTX hooks still contain a nested shell that can orphan the runner"
 fi
+if grep -Eq '^[[:space:]]*(exec|while)[[:space:]]' "$TEMPLATE"; then
+  fail "MediaMTX hooks still start with shell builtins"
+fi
 
-printf 'PASS: FFmpeg hook ownership, %s signal cycles, and early failure cleanup\n' "$cycle"
+printf 'PASS: FFmpeg hook ownership, readiness, %s signal cycles, and early failure cleanup\n' "$cycle"

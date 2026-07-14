@@ -8,6 +8,17 @@ case "$name" in
   *) echo "invalid monitored FFmpeg branch" >&2; exit 64 ;;
 esac
 shift
+
+wait_path=""
+if [ "${1:-}" = "--wait-ready" ]; then
+  [ "$#" -ge 2 ] || { echo "--wait-ready requires a path" >&2; exit 64; }
+  wait_path="$2"
+  case "$wait_path" in
+    court[1-8]_raw) ;;
+    *) echo "invalid readiness path" >&2; exit 64 ;;
+  esac
+  shift 2
+fi
 if [ "${1:-}" = "--" ]; then shift; fi
 
 progress_dir="${FFMPEG_PROGRESS_DIR:-/monitoring/ffmpeg}"
@@ -49,6 +60,21 @@ trap cleanup EXIT
 trap 'exit_for_signal 129' HUP
 trap 'exit_for_signal 130' INT
 trap 'exit_for_signal 143' TERM
+
+wait_until_ready() {
+  path="$1"
+  while :; do
+    if wget -qO- "http://127.0.0.1:9997/v3/paths/get/$path" 2>/dev/null \
+      | grep -q '"ready":true'; then
+      return 0
+    fi
+    sleep 2
+  done
+}
+
+if [ -n "$wait_path" ]; then
+  wait_until_ready "$wait_path"
+fi
 
 mkdir -p "$progress_dir"
 rm -f "$progress_file" "$fifo"

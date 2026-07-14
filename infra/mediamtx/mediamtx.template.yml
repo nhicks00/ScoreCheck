@@ -126,9 +126,8 @@ paths:
   # previews. It starts only when preview or program has a reader.
   "~^court([1-8])_preview$":
     runOnDemand: >
-      while ! wget -qO- "http://127.0.0.1:9997/v3/paths/get/court${G1}_raw"
-      2>/dev/null | grep -q "\"ready\":true"; do sleep 2; done;
-      exec /usr/local/bin/scorecheck-ffmpeg-runner "court${G1}_preview" --
+      /usr/local/bin/scorecheck-ffmpeg-runner "court${G1}_preview"
+      --wait-ready "court${G1}_raw" --
       -nostdin -hide_banner -loglevel warning
       -fflags nobuffer -flags low_delay -rtsp_transport tcp
       -i "rtsp://127.0.0.1:${RTSP_PORT}/court${G1}_raw"
@@ -146,9 +145,8 @@ paths:
   # only outside LIVE expectations, and the dashboard opens at most one reader.
   "~^court([1-8])_monitor$":
     runOnDemand: >
-      while ! wget -qO- "http://127.0.0.1:9997/v3/paths/get/court${G1}_raw"
-      2>/dev/null | grep -q "\"ready\":true"; do sleep 2; done;
-      exec /usr/local/bin/scorecheck-ffmpeg-runner "court${G1}_monitor" --
+      /usr/local/bin/scorecheck-ffmpeg-runner "court${G1}_monitor"
+      --wait-ready "court${G1}_raw" --
       -nostdin -hide_banner -loglevel warning
       -fflags nobuffer -flags low_delay -rtsp_transport tcp
       -i "rtsp://127.0.0.1:${RTSP_PORT}/court${G1}_raw"
@@ -170,7 +168,7 @@ paths:
   # gets fine delay in the program page's Web Audio graph.
   "~^court([1-8])_program$":
     runOnDemand: >
-      exec /usr/local/bin/scorecheck-ffmpeg-runner "court${G1}_program" --
+      /usr/local/bin/scorecheck-ffmpeg-runner "court${G1}_program" --
       -nostdin -hide_banner -loglevel warning
       -i "srt://127.0.0.1:8890?streamid=read:court${G1}_preview&latency=__PROGRAM_DELAY_US__"
       -map 0:v:0 -map 0:a:0? -c copy
@@ -184,7 +182,7 @@ paths:
   # directly triggers the on-demand preview normalizer.
   "~^court([1-8])_calibration$":
     runOnDemand: >
-      exec /usr/local/bin/scorecheck-ffmpeg-runner "court${G1}_calibration" --
+      /usr/local/bin/scorecheck-ffmpeg-runner "court${G1}_calibration" --
       -nostdin -hide_banner -loglevel warning
       -fflags nobuffer -flags low_delay -rtsp_transport tcp
       -i "rtsp://127.0.0.1:${RTSP_PORT}/court${G1}_preview"
