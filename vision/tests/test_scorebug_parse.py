@@ -202,3 +202,25 @@ class SportcamParseTest(unittest.TestCase):
         self.assertEqual(reading.row_a.finals_digits, "21")
         self.assertEqual(reading.row_b.current_score, 1)
         self.assertFalse(reading.has_scores)
+
+
+class BottomLeftArrangementTest(unittest.TestCase):
+    """Some courts render the meta strip ABOVE the team rows (bottom-left
+    bug); row clustering must work on both sides of the strip."""
+
+    def test_meta_above_rows(self) -> None:
+        tokens = [
+            token("COURT 8 FINAL MATCH 1", 0.03, 0.05, 0.35, 0.10),
+            token("17 GENNY CRUZ / AMAYA MESSIER", 0.05, 0.30, 0.55, 0.16),
+            token("1214", 0.70, 0.30, 0.10, 0.16),
+            token("16 GELLA ANDREW / JORDAN BOULWARE", 0.05, 0.62, 0.62, 0.16),
+            token("2121", 0.70, 0.62, 0.10, 0.16),
+        ]
+        reading = parse_scorebug(blank_crop(), 7000.0, tokens=tokens)
+        assert reading is not None
+        self.assertTrue(reading.is_final)
+        self.assertEqual(reading.court, 8)
+        self.assertEqual(reading.match_number, 1)
+        self.assertEqual(reading.row_a.seed, 17)
+        self.assertEqual(reading.row_a.name, "GENNY CRUZ / AMAYA MESSIER")
+        self.assertEqual(reading.row_b.name, "GELLA ANDREW / JORDAN BOULWARE")

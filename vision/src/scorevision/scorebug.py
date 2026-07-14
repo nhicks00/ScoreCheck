@@ -110,13 +110,15 @@ def locate_scorebug(
         meta_bottom = max(t.y + t.height for t in meta)
         meta_height = meta_bottom - meta_top
         meta_left = min(t.x for t in meta)
-        # Team rows sit within ~5 meta-strip heights above the strip and
-        # start at roughly the same left edge.
+        # Team rows sit within ~6 meta-strip heights of the strip — above it
+        # (top-left bug arrangement) or below it (bottom-left arrangement) —
+        # and start at roughly the same left edge.
         row_tokens = [
             t
             for t in tokens
-            if t.y + t.height <= meta_top + meta_height * 0.5
-            and t.y >= meta_top - meta_height * 6.0
+            if t not in meta
+            and t.y + t.height >= meta_top - meta_height * 6.5
+            and t.y <= meta_bottom + meta_height * 6.5
             and t.x >= meta_left - 0.05
         ]
         group = row_tokens + meta
@@ -326,9 +328,26 @@ def _parse_row(
 
 
 def _cluster_rows(
-    tokens: list[OcrToken], meta_top: float
+    tokens: list[OcrToken], meta_tokens: list[OcrToken]
 ) -> tuple[list[OcrToken], list[OcrToken]] | None:
-    row_candidates = [t for t in tokens if t.y + t.height <= meta_top + 0.02]
+    """Split non-meta tokens near the meta strip into the two team rows.
+
+    The ScoreCheck bug renders the meta strip below the rows on some courts
+    and above them on others, so candidates are taken from a vertical window
+    on both sides of the strip.
+    """
+
+    meta_top = min(t.y for t in meta_tokens)
+    meta_bottom = max(t.y + t.height for t in meta_tokens)
+    meta_height = max(0.01, meta_bottom - meta_top)
+    meta_ids = set(map(id, meta_tokens))
+    row_candidates = [
+        t
+        for t in tokens
+        if id(t) not in meta_ids
+        and t.y + t.height >= meta_top - meta_height * 6.5
+        and t.y <= meta_bottom + meta_height * 6.5
+    ]
     if not row_candidates:
         return None
     centers = sorted(t.center_y for t in row_candidates)
@@ -412,8 +431,7 @@ def _parse_sportcam(
             meta_tokens.append(token)
     if set_number is None or not meta_tokens:
         return None
-    meta_top = min(t.y for t in meta_tokens)
-    rows = _cluster_rows(tokens, meta_top)
+    rows = _cluster_rows(tokens, meta_tokens)
     if rows is None:
         return None
     parsed_one = _parse_sportcam_row(rows[0], set_number)
@@ -462,9 +480,8 @@ def parse_scorebug(
             is_final = is_final or bool(f)
     if not meta_tokens:
         return _parse_sportcam(crop, t_seconds, tokens, upper)
-    meta_top = min(t.y for t in meta_tokens)
 
-    rows = _cluster_rows(tokens, meta_top)
+    rows = _cluster_rows(tokens, meta_tokens)
     if rows is None:
         return None
     parsed_one = _parse_row(rows[0], crop, serve_column_frac=0.055)
