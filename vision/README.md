@@ -164,6 +164,12 @@ For a new overlay theme, harvest a digit-template bank once
 isolated scorebug digits (a lone gold '0' returns nothing); template
 correlation against the known overlay font is deterministic.
 
+Overlay themes in the corpus: **ScoreCheck** (COURT/SET/MATCH strip, gold
+current cell — template-classified) and **SportCam** (Colorado Cupcakes
+productions: `1st 00:00` ordinal clock, red finals, white-on-black current —
+pure OCR). Streams with no overlay (e.g. AVP Next Miami) archive unlabeled;
+they still serve ball-model frame sampling.
+
 ## Research references
 
 WASB-SBDT (BMVC 2023, MIT, pretrained volleyball weights):
