@@ -16,6 +16,7 @@ const incident: IncidentSnapshot = {
   host: "bvm-preview-01",
   summary: "Raw ingest is missing.",
   firstAction: "Check the camera publish path.",
+  evidence: {},
   openedAt: now.toISOString(),
   lastObservedAt: now.toISOString(),
   acknowledgedAt: null,

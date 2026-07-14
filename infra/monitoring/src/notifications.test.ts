@@ -117,10 +117,32 @@ describe("notification provider validation", () => {
     const dispatcher = new NotificationDispatcher(notificationConfig(), store, send);
     await dispatcher.handleChanges([{
       incident: criticalIncident({ status: "resolved", resolvedAt: "2026-07-12T18:01:00.000Z" }),
-      eventType: "RESOLVED"
+      eventType: "RESOLVED",
+      detail: { resolutionKind: "DEPENDENCY_RECOVERED" }
     }], new Date("2026-07-12T18:01:00.000Z"));
     expect(send).toHaveBeenCalledTimes(2);
     expect(store.ensureNotification).toHaveBeenCalledWith(openPushover.incidentId, "pushover", "recovery", expect.any(Date));
+  });
+
+  it("cancels the emergency without announcing recovery when an expectation ends", async () => {
+    const openPushover = storedNotification({ providerMessageId: "receipt-1", status: "delivered", deliveredAt: "2026-07-12T18:00:30.000Z" });
+    const store = {
+      findNotification: vi.fn(async () => openPushover),
+      updateNotification: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({ ...openPushover, ...patch })),
+      ensureNotification: vi.fn()
+    } as unknown as IncidentStore;
+    const send = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ status: 1 }), { status: 200 }));
+    const dispatcher = new NotificationDispatcher(notificationConfig(), store, send);
+
+    await dispatcher.handleChanges([{
+      incident: criticalIncident({ status: "resolved", resolvedAt: "2026-07-12T18:01:00.000Z" }),
+      eventType: "RESOLVED",
+      detail: { resolutionKind: "FAULT_GATE_EXPIRED" }
+    }], new Date("2026-07-12T18:01:00.000Z"));
+
+    expect(send).toHaveBeenCalledOnce();
+    expect(String(send.mock.calls[0]?.[0])).toContain("/cancel.json");
+    expect(store.ensureNotification).not.toHaveBeenCalled();
   });
 });
 
@@ -153,6 +175,7 @@ function criticalIncident(patch: Partial<IncidentSnapshot> = {}): IncidentSnapsh
     host: "bvm-preview-01",
     summary: "Raw ingest is missing.",
     firstAction: "Check the camera publish path.",
+    evidence: {},
     openedAt: "2026-07-12T17:59:00.000Z",
     lastObservedAt: "2026-07-12T18:00:00.000Z",
     acknowledgedAt: null,

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { z } from "zod";
-import { incidentFingerprint, SEVERITIES, STAGES, type IncidentSnapshot, type MonitoringStage, type Severity } from "./contracts.js";
+import { incidentFingerprint, SEVERITIES, STAGES, type IncidentSnapshot, type MonitorSnapshot, type MonitoringStage, type Severity } from "./contracts.js";
+import { enrichIncidentChange } from "./incidentResolution.js";
 
 const alertSchema = z.object({
   status: z.enum(["firing", "resolved"]),
@@ -60,6 +61,7 @@ export class IncidentManager {
         host: normalized.host,
         summary: normalized.summary,
         firstAction: normalized.firstAction,
+        evidence: { ...(existing?.evidence ?? {}), ...normalized.evidence },
         openedAt: existing?.openedAt ?? validIso(alert.startsAt) ?? now.toISOString(),
         lastObservedAt: now.toISOString(),
         acknowledgedAt: existing?.acknowledgedAt ?? null,
@@ -109,6 +111,14 @@ export class IncidentManager {
     return [...this.incidents.values()];
   }
 
+  enrichChanges(changes: IncidentChange[], snapshot: MonitorSnapshot): IncidentChange[] {
+    return changes.map((change) => {
+      const enriched = enrichIncidentChange(change, snapshot);
+      this.incidents.set(enriched.incident.fingerprint, enriched.incident);
+      return enriched;
+    });
+  }
+
   hydrate(rows: IncidentSnapshot[]) {
     for (const row of rows) this.incidents.set(row.fingerprint, row);
   }
@@ -139,6 +149,7 @@ function normalizeAlert(alert: z.infer<typeof alertSchema>) {
   const eventId = boundedOptional(labels.event_id);
   const summary = sanitizedText(alert.annotations.summary ?? alert.annotations.description ?? `${issueCode} detected.`, 240);
   const firstAction = optionalSanitizedText(alert.annotations.first_action, 300);
+  const expectationSource = boundedExpectationSource(labels.expectation_source);
   return {
     severity,
     stage,
@@ -149,6 +160,10 @@ function normalizeAlert(alert: z.infer<typeof alertSchema>) {
     rootDependency,
     summary,
     firstAction,
+    evidence: {
+      expectationSource,
+      alertName: boundedOptional(labels.alertname)
+    },
     fingerprint: incidentFingerprint({
       eventId,
       rootDependency,
@@ -157,6 +172,10 @@ function normalizeAlert(alert: z.infer<typeof alertSchema>) {
       issueCode
     })
   };
+}
+
+function boundedExpectationSource(value: string | undefined): "fault_gate" | "control_plane" | null {
+  return value === "fault_gate" || value === "control_plane" ? value : null;
 }
 
 function sanitizedText(value: string, maxLength: number): string {

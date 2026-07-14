@@ -16,7 +16,7 @@ import { loadCourtPipelineRange, parseRangeInput } from "./rangeQueries.js";
 import { BrowserThumbnailManager } from "./browserThumbnails.js";
 import { activeSilences, incidentIsSilenced, silenceMatchesIncident } from "./silences.js";
 import { ExternalDeadMan } from "./deadMan.js";
-import { assertFaultGateCanArm, FaultGateConflictError, FaultGateControl } from "./faultGateControl.js";
+import { assertFaultGateCanArm, faultGateArmRequestSchema, FaultGateConflictError, FaultGateControl } from "./faultGateControl.js";
 import { BrowserCounterAccumulator } from "./browserCounterAccumulator.js";
 
 const config = loadServiceConfig();
@@ -123,11 +123,7 @@ app.get("/v1/snapshot", bearerAuth(config.token), (_req, res) => res.json(snapsh
 app.get("/v1/fault-gates", bearerAuth(config.token), (_req, res) => res.json({ faultGates: faultGateControl.active() }));
 app.post("/v1/fault-gates/courts/:courtNumber/arm", bearerAuth(config.token), (req, res) => {
   const courtNumber = Number(Array.isArray(req.params.courtNumber) ? req.params.courtNumber[0] : req.params.courtNumber);
-  const parsed = z.object({
-    actor: z.string().trim().min(1).max(80).regex(/^[a-zA-Z0-9_.:@-]+$/),
-    reason: z.string().trim().min(3).max(300).refine((value) => !/[\u0000-\u001f\u007f]/.test(value)),
-    durationSeconds: z.number().int().min(60).max(600)
-  }).strict().safeParse(req.body);
+  const parsed = faultGateArmRequestSchema.safeParse(req.body);
   if (!Number.isInteger(courtNumber) || courtNumber < 1 || courtNumber > config.courtCount || !parsed.success) {
     res.status(400).json({ error: "Invalid fault-gate request." });
     return;
@@ -243,7 +239,9 @@ app.get("/v1/courts/:courtNumber/thumbnail", bearerAuth(config.token), (req, res
 });
 app.post("/v1/alertmanager", bearerAuth(config.alertmanagerWebhookToken), async (req, res) => {
   try {
-    const changed = incidents.applyWebhook(req.body);
+    let changed = incidents.applyWebhook(req.body);
+    snapshot = currentSnapshot();
+    changed = incidents.enrichChanges(changed, snapshot);
     snapshot = currentSnapshot();
     await persistIncidentChanges(changed);
     res.status(202).json({ accepted: changed.length });
@@ -576,8 +574,10 @@ async function reconcileAlertmanager() {
       signal: AbortSignal.timeout(5_000)
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const changes = incidents.reconcileActiveAlerts(await response.json());
+    let changes = incidents.reconcileActiveAlerts(await response.json());
     if (changes.length === 0) return;
+    snapshot = currentSnapshot();
+    changes = incidents.enrichChanges(changes, snapshot);
     snapshot = currentSnapshot();
     await persistIncidentChanges(changes);
   } catch {

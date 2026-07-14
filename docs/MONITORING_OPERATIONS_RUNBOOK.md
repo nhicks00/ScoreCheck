@@ -268,7 +268,8 @@ When no tournament event is active, arm one test feed through the authenticated
 monitor API instead of creating a fake Supabase event. The override is held only
 in monitor-service memory, requires a healthy raw baseline and all agents fresh,
 permits one court at a time, leaves broadcast/commentary/scoring off, and expires
-after at most ten minutes. Preview and program branches remain expected off; the
+after at most thirty minutes. Use at least fifteen minutes for a human-operated
+physical disconnect/reconnect gate. Preview and program branches remain expected off; the
 gate requires only the selected raw ingest. A monitor-service restart clears it.
 
 ```text
@@ -277,9 +278,12 @@ DELETE /v1/fault-gates/courts/{court}
 ```
 
 Every alert opened from this override carries `expectation_source=fault_gate`
-and an `INTENTIONAL FAULT GATE` notification prefix. Restore and verify the raw
+and a plain-English `TEST` notification title. Restore and verify the raw
 feed before disarming; disarming an unrestored feed can only stop test paging,
-not repair the camera path.
+not repair the camera path. Gate expiry or disarm while a dependency remains
+unhealthy is persisted as expectation cessation, cancels emergency repeats,
+and suppresses the normal recovery notification. Only observed dependency
+recovery may announce that the feed is back.
 
 ### One-court gate
 

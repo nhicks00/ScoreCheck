@@ -17,6 +17,16 @@ export function operatorNotificationCopy(incident: IncidentSnapshot): OperatorNo
   };
   const issue = incident.issueCode;
 
+  if (incident.evidence.expectationSource === "fault_gate" || incident.summary.startsWith("[INTENTIONAL FAULT GATE]")) {
+    return {
+      title: `TEST: ${subject} feed stopped`,
+      problem: `This is the planned ${subject} disconnect test.`,
+      action: `Leave ${subject} off until ScoreCheck tells you to restart it.`,
+      recoveryTitle: `TEST: ${subject} feed is back`,
+      recovery: `${subject} is sending video again. The planned test is complete.`
+    };
+  }
+
   if (matches(issue, ["FULL_BITRATE_VISUAL_FREEZE", "VISUAL_FREEZE_SUSPECTED"])) {
     return { ...base, problem: `${camera ?? "A camera"}'s picture is frozen.`, action: `Check ${camera ?? "the camera"}. If its screen is also frozen, restart that camera's stream.`, recovery: `${camera ?? "The camera"}'s picture is moving again. No action is needed.` };
   }

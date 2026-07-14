@@ -1,4 +1,11 @@
+import { z } from "zod";
 import type { CourtExpectation, MonitoringFaultGate, MonitorSnapshot } from "./contracts.js";
+
+export const faultGateArmRequestSchema = z.object({
+  actor: z.string().trim().min(1).max(80).regex(/^[a-zA-Z0-9_.:@-]+$/),
+  reason: z.string().trim().min(3).max(300).refine((value) => !/[\u0000-\u001f\u007f]/.test(value)),
+  durationSeconds: z.number().int().min(60).max(1_800)
+}).strict();
 
 export class FaultGateConflictError extends Error {
   constructor(readonly code: string, message: string) {

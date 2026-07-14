@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { MonitorSnapshot } from "./contracts.js";
-import { assertFaultGateCanArm, FaultGateConflictError, FaultGateControl, faultGateExpectation } from "./faultGateControl.js";
+import { assertFaultGateCanArm, faultGateArmRequestSchema, FaultGateConflictError, FaultGateControl, faultGateExpectation } from "./faultGateControl.js";
 import { buildMonitorSnapshot } from "./correlator.js";
 
 describe("monitoring fault-gate control", () => {
+  it("accepts a bounded fifteen-minute operator window", () => {
+    expect(faultGateArmRequestSchema.safeParse({ actor: "codex", reason: "Camera 1 recovery gate", durationSeconds: 900 }).success).toBe(true);
+    expect(faultGateArmRequestSchema.safeParse({ actor: "codex", reason: "Camera 1 recovery gate", durationSeconds: 1_801 }).success).toBe(false);
+  });
+
   it("arms exactly one expiring in-memory court expectation", () => {
     const control = new FaultGateControl();
     const nowMs = Date.parse("2026-07-13T13:00:00.000Z");

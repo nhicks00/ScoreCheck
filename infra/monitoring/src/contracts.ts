@@ -432,6 +432,7 @@ export type IncidentSnapshot = {
   host: string | null;
   summary: string;
   firstAction: string | null;
+  evidence: Record<string, string | number | boolean | null>;
   openedAt: string;
   lastObservedAt: string;
   acknowledgedAt: string | null;

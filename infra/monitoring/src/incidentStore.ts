@@ -34,6 +34,7 @@ type IncidentRow = {
   status: IncidentSnapshot["status"];
   summary: string;
   first_action: string | null;
+  evidence: unknown;
   opened_at: string;
   last_observed_at: string;
   acknowledged_at: string | null;
@@ -66,7 +67,7 @@ export class IncidentStore {
   async loadActive(): Promise<IncidentSnapshot[]> {
     const { data, error } = await this.db
       .from("monitoring_incidents")
-      .select("id,fingerprint,event_id,court_number,host,shared_dependency,stage,issue_code,severity,status,summary,first_action,opened_at,last_observed_at,acknowledged_at,acknowledged_by,resolved_at")
+      .select("id,fingerprint,event_id,court_number,host,shared_dependency,stage,issue_code,severity,status,summary,first_action,evidence,opened_at,last_observed_at,acknowledged_at,acknowledged_by,resolved_at")
       .neq("status", "resolved");
     if (error) throw error;
     return (data ?? []).map((row) => fromRow(row as IncidentRow));
@@ -121,7 +122,7 @@ export class IncidentStore {
       confidence: "high",
       summary: incident.summary,
       first_action: incident.firstAction,
-      evidence: {},
+      evidence: incident.evidence,
       opened_at: incident.openedAt,
       last_observed_at: incident.lastObservedAt,
       acknowledged_at: incident.acknowledgedAt,
@@ -330,12 +331,21 @@ function fromRow(row: IncidentRow): IncidentSnapshot {
     host: row.host,
     summary: row.summary,
     firstAction: row.first_action,
+    evidence: flatEvidence(row.evidence),
     openedAt: row.opened_at,
     lastObservedAt: row.last_observed_at,
     acknowledgedAt: row.acknowledged_at,
     acknowledgedBy: row.acknowledged_by,
     resolvedAt: row.resolved_at
   };
+}
+
+function flatEvidence(value: unknown): Record<string, string | number | boolean | null> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string | number | boolean | null] => {
+    const item = entry[1];
+    return item == null || typeof item === "string" || typeof item === "number" || typeof item === "boolean";
+  }));
 }
 
 function silenceFromRow(row: SilenceRow): MonitoringSilence {

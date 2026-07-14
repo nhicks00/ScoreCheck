@@ -278,6 +278,26 @@ eventId | rootDependency | stage | courtOrHost | issueCode
 
 Timestamps and mutable message text are excluded.
 
+## Incident closure semantics
+
+An Alertmanager `resolved` transition is not, by itself, proof that a monitored
+dependency recovered. Monitor-service classifies and persists every closure as
+one of:
+
+- `DEPENDENCY_RECOVERED`: current evidence proves the dependency was healthy at
+  the alert resolution time;
+- `FAULT_GATE_EXPIRED` or `FAULT_GATE_ENDED`: an intentional test expectation
+  ceased while the dependency was not proven healthy;
+- `EXPECTATION_ENDED`: production expectations ceased while the dependency was
+  not proven healthy; or
+- `ALERT_CLEARED_UNVERIFIED`: the alert cleared without enough recovery evidence.
+
+The closure kind, reason, expectation source, gate expiry, and current raw-path
+evidence are written to both the durable incident evidence and its `RESOLVED`
+event. A normal recovery notification is allowed only for
+`DEPENDENCY_RECOVERED`. Ending an expectation cancels an outstanding emergency
+repeat but must never tell the operator that the feed is back.
+
 ## Monitor API
 
 Publicly reachable routes are limited to:

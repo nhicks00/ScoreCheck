@@ -71,7 +71,9 @@ export class NotificationDispatcher {
       }
       if (change.eventType === "RESOLVED") {
         await this.cancelEmergency(change.incident, now);
-        if (!isSilenced(change.incident)) await this.sendRecovery(change.incident, now);
+        if (change.detail?.resolutionKind === "DEPENDENCY_RECOVERED" && !isSilenced(change.incident)) {
+          await this.sendRecovery(change.incident, now);
+        }
         continue;
       }
       if (isSilenced(change.incident)) continue;

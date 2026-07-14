@@ -32,6 +32,20 @@ describe("operator notification copy", () => {
     expect(copy.action).toContain("technical operator");
     expect(JSON.stringify(copy)).not.toContain("UNRECOGNIZED_FAILURE");
   });
+
+  it("labels an intentional camera-loss gate and tells the operator to wait", () => {
+    const copy = operatorNotificationCopy(incident({
+      summary: "[INTENTIONAL FAULT GATE] Required camera ingest is missing on court 4.",
+      evidence: { expectationSource: "fault_gate" }
+    }));
+    expect(copy).toEqual({
+      title: "TEST: Camera 4 feed stopped",
+      problem: "This is the planned Camera 4 disconnect test.",
+      action: "Leave Camera 4 off until ScoreCheck tells you to restart it.",
+      recoveryTitle: "TEST: Camera 4 feed is back",
+      recovery: "Camera 4 is sending video again. The planned test is complete."
+    });
+  });
 });
 
 function incident(patch: Partial<IncidentSnapshot> = {}): IncidentSnapshot {
@@ -48,6 +62,7 @@ function incident(patch: Partial<IncidentSnapshot> = {}): IncidentSnapshot {
     host: "media-host",
     summary: "Technical summary that must not reach the phone.",
     firstAction: "Technical action that must not reach the phone.",
+    evidence: {},
     openedAt: "2026-07-13T21:00:00.000Z",
     lastObservedAt: "2026-07-13T21:00:05.000Z",
     acknowledgedAt: null,

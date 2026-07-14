@@ -179,6 +179,7 @@ describe("monitor correlator", () => {
       host: null,
       summary: "Preview normalization FPS is below 20.",
       firstAction: "Inspect the preview branch.",
+      evidence: {},
       openedAt: generatedAt,
       lastObservedAt: generatedAt,
       acknowledgedAt: generatedAt,
