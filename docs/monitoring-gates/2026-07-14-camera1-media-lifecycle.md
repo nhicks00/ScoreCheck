@@ -1,7 +1,7 @@
 # Camera 1 Media-Lifecycle Gate
 
 Date: 2026-07-14
-Status: media path, comparator, reader churn, durable repeat detection, and feed-driven recovery paging passed; viewer-path continuity and subjective sync remain
+Status: media path, comparator, reader churn, durable repeat detection, feed-driven recovery paging, visible slate, and ordered viewer recovery passed; same-page continuity failed and subjective sync remains
 
 ## Baseline
 
@@ -119,6 +119,50 @@ per-occurrence durability, opening/recovery notification deduplication, and
 peer-court isolation. After explicit disarm, no additional closure notification
 appeared and Camera 1 remained healthy.
 
+## Foreground Viewer Loss And Recovery
+
+A normal foreground Safari viewer established a clean pre-loss baseline. The
+same page remained playing and connected for a 130-second acceptance window and
+an additional 15-minute watch. It held 30 fps, zero frame drops, zero RTP loss,
+no reconnects or reloads, and exactly one reader on each raw, preview, and
+program path. Cameras 2-8 had no readers or incidents.
+
+The operator stop acknowledgement was approximately `22:17:17Z`, but server
+logs place Camera 1 RTMP EOF and raw/downstream retirement at `22:17:08.238Z`
+through `22:17:08.267Z`. Because the media event preceded the approximate
+operator acknowledgement by 8.7 seconds, no technical stop-to-detection latency
+is claimed. Safari visibly showed the interruption slate and heartbeat remained
+available, while all three media paths retired and peer courts stayed isolated.
+
+Same-page continuity failed. The original Safari page reloaded repeatedly while
+the source was absent, and recovery occurred on a new page identity. Its reload
+diagnostic also reset from a previously observed nonzero value to zero, making
+that page-local counter non-authoritative.
+
+From the restart acknowledgement at approximately `22:19:31Z`, recovery was
+ordered and clean:
+
+- raw ready at `22:19:32.237Z` (+1.237 seconds)
+- preview ready at `22:19:36.353Z` (+5.353 seconds)
+- program ready at `22:20:05.660Z` (+34.660 seconds)
+- Safari WHEP established at `22:20:06.457Z` (+35.457 seconds)
+- stable 30 fps playback by `22:20:13.774Z`
+
+Retry overlap briefly produced three program readers, then drained to exactly
+one by `22:20:18.942Z`. The recovered page remained at 30 fps with zero drops,
+freezes, RTP loss, or frame errors through `22:42:40Z`. Raw, preview, and program
+each held exactly one reader; Cameras 2-8 remained isolated and monitoring opened
+no incident or fault gate.
+
+A hard-cutover candidate removes the Program page's full-reload escalation,
+limits remounts to foreground connected presentation stalls, preserves tab-lineage
+reconnect/reload counters, and serializes WHEP teardown and retry ownership. Its
+local production build and forced-WHEP-unavailable browser simulation passed:
+the same page/time origin held, the slate appeared, reload count remained fixed,
+reconnect count advanced, recovery returned to one connected WHEP session, and
+the temporary test reader retired. This candidate is not production-accepted
+until deployed and the physical cycle is repeated.
+
 ## Verdict And Required Follow-Up
 
 Accepted:
@@ -130,14 +174,18 @@ Accepted:
 - physical raw-loss detection, one opening page, deduplication, and court isolation
 - physical publisher reconnection and profile continuity
 - repeat incident persistence and feed-driven recovery paging
+- visible interruption slate, ordered media recovery, post-recovery endurance,
+  and peer isolation
 
 Not accepted:
 
 - completed-test Egress reconciliation
-- active viewer/program continuity across publisher loss
-- subjective slate and audio/video sync
+- original-page/no-reload viewer continuity across publisher loss
+- authoritative reconnect/reload counters across page descendants
+- subjective audio/video sync
 
-Before the next capacity phase, run one short Camera 1 viewer/program recovery
-check and record slate continuity, browser reconnect or reload behavior, counter
-continuity, and subjective audio/video sync. Event teardown must also verify
-zero active Egress jobs before infrastructure is considered idle.
+Before the next capacity phase, deploy the hard-cutover viewer repair and repeat
+the foreground Camera 1 loss/recovery cycle, proving unchanged page identity,
+serialized reader ownership, and cumulative counters. Complete the subjective
+audio/video sync check. Event teardown must also verify zero active Egress jobs
+before infrastructure is considered idle.

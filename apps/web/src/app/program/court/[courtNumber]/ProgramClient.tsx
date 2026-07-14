@@ -5,6 +5,7 @@ import { OverlayClient, type OverlayRenderHealth } from "@/app/overlay/court/[co
 import { StreamPlayer, type StreamConnectionHealth } from "@/components/StreamPlayer";
 import type { CommentaryConnection } from "@/lib/commentary";
 import type { ProgramMonitoringConnection } from "@/lib/programMonitoring";
+import { incrementProgramReconnect, recordProgramPageLoad } from "@/lib/programDiagnostics";
 import type { StreamTimingSample } from "@/lib/rtcTiming";
 import {
   analyzeVisualFrame,
@@ -109,6 +110,16 @@ export function ProgramClient({
     setVideoStateState(next);
   }, []);
 
+  const recordReconnect = useCallback(() => {
+    try {
+      const counters = incrementProgramReconnect(window.sessionStorage, courtNumber);
+      reconnectsRef.current = counters.reconnectCount;
+    } catch {
+      reconnectsRef.current += 1;
+    }
+    setReconnects(reconnectsRef.current);
+  }, [courtNumber]);
+
   const updateAudioHealth = useCallback((next: ProgramAudioHealth) => {
     audioHealthRef.current = next;
     setAudioHealth(next);
@@ -154,11 +165,23 @@ export function ProgramClient({
     logEndOnce();
   }, [hasSources, setVideoState, logEndOnce]);
 
-  /* Reload diagnostics survive location.reload() via sessionStorage. */
+  /* Diagnostics survive reload descendants in this tab and never reset when
+     playback recovers. performance.timeOrigin makes this Strict Mode safe. */
   useEffect(() => {
-    const count = readReloadCount(courtNumber);
-    reloadCountRef.current = count;
-    setReloadCount(count);
+    try {
+      const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+      const counters = recordProgramPageLoad(window.sessionStorage, courtNumber, {
+        type: navigation?.type ?? "navigate",
+        timeOrigin: performance.timeOrigin
+      });
+      reconnectsRef.current = counters.reconnectCount;
+      reloadCountRef.current = counters.reloadCount;
+      setReconnects(counters.reconnectCount);
+      setReloadCount(counters.reloadCount);
+    } catch {
+      reconnectsRef.current = 0;
+      reloadCountRef.current = 0;
+    }
   }, [courtNumber]);
 
   /* A human previewing the page can click to lift an autoplay-policy mute;
@@ -224,9 +247,9 @@ export function ProgramClient({
     };
   }, [cameraElement]);
 
-  /* Watchdog: sample decoded frames + currentTime every second. Stalls over
-     5s remount the player (StreamPlayer reconnects on mount); three fruitless
-     remounts escalate to a full reload. Frame progress resets the ladder. */
+  /* StreamPlayer owns normal source/transport recovery. This watchdog remounts
+     only a foreground connected player that presents no frames past the grace
+     window, including a nominally connected but inbound-stalled peer. */
   useEffect(() => {
     if (!hasSources) return;
     const id = window.setInterval(() => {
@@ -235,19 +258,28 @@ export function ProgramClient({
       const frames = presentedFramesRef.current;
       framesRef.current = frames;
       if (debug) setDebugFrames(frames);
-      const progress = frames;
+      const stream = streamHealthRef.current;
+      const connected = stream?.connectionState === "connected";
+      const inboundFrames = stream?.framesDecoded ?? stream?.framesReceived ?? null;
 
       const step = programWatchdogStep(watchdogRef.current, {
         nowMs: Date.now(),
         hasSources,
-        progress
+        renderWatchdogEligible: connected && document.visibilityState === "visible",
+        presentedFrames: frames,
+        inboundFrames
       });
       watchdogRef.current = step.state;
 
+      if (!connected) {
+        stableFrameTicksRef.current = 0;
+        setFramesFlowing(false);
+        const state = stream?.connectionState;
+        setVideoState(state === "failed" || state === "disconnected" || state === "closed" ? "reconnecting" : "waiting");
+        return;
+      }
+
       if (step.progressed) {
-        clearReloadCount(courtNumber);
-        reloadCountRef.current = 0;
-        setReloadCount(0);
         stableFrameTicksRef.current += 1;
         if (stableFrameTicksRef.current >= PROGRAM_STABLE_FRAME_TICKS) {
           setFramesFlowing(true);
@@ -259,24 +291,12 @@ export function ProgramClient({
         stableFrameTicksRef.current = 0;
         setFramesFlowing(false);
         setVideoState("reconnecting");
-        reconnectsRef.current += 1;
-        setReconnects(reconnectsRef.current);
+        recordReconnect();
         setPlayerEpoch((current) => current + 1);
-      } else if (step.action === "reload") {
-        stableFrameTicksRef.current = 0;
-        setFramesFlowing(false);
-        setVideoState("reloading");
-        bumpReloadCount(courtNumber);
-        reloadCountRef.current = readReloadCount(courtNumber);
-        window.location.reload();
-      } else if (videoStateRef.current === "playing") {
-        stableFrameTicksRef.current = 0;
-        setFramesFlowing(false);
-        setVideoState("stalled");
       }
     }, PROGRAM_WATCHDOG_TICK_MS);
     return () => window.clearInterval(id);
-  }, [hasSources, courtNumber, debug, setVideoState]);
+  }, [hasSources, debug, recordReconnect, setVideoState]);
 
   /* START signal: first stable frames plus a connected audio room. An empty
      room is ready; absence of an audio track is health data, not a start gate. */
@@ -431,6 +451,7 @@ export function ProgramClient({
             onVideoElement={setCameraElement}
             onTimingSample={updateProgramTiming}
             onConnectionHealth={updateStreamHealth}
+            onReconnect={recordReconnect}
           />
         </div>
         {videoState !== "playing" && (
@@ -546,35 +567,5 @@ function ensureProgramPlayback(video: HTMLVideoElement, audioBlockedRef: { curre
         // Still blocked; the watchdog will keep retrying next tick.
       });
     });
-  }
-}
-
-function reloadCountKey(courtNumber: number): string {
-  return `program-reload-count:${courtNumber}`;
-}
-
-function readReloadCount(courtNumber: number): number {
-  try {
-    const raw = window.sessionStorage.getItem(reloadCountKey(courtNumber));
-    const value = Number(raw);
-    return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
-  } catch {
-    return 0;
-  }
-}
-
-function bumpReloadCount(courtNumber: number) {
-  try {
-    window.sessionStorage.setItem(reloadCountKey(courtNumber), String(readReloadCount(courtNumber) + 1));
-  } catch {
-    // Storage unavailable: the reload still happens, we just lose the tally.
-  }
-}
-
-function clearReloadCount(courtNumber: number) {
-  try {
-    window.sessionStorage.removeItem(reloadCountKey(courtNumber));
-  } catch {
-    // Ignore: diagnostics only.
   }
 }

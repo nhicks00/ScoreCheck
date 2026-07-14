@@ -99,6 +99,15 @@ function OverlayClientInner({ courtNumber, eventId, buildVersion, reloadOnVersio
     async function tick() {
       try {
         const res = await fetch(stateUrl, { cache: "no-store" });
+        if (res.status === 204) {
+          if (!cancelled) {
+            lastAppliedUpdateMs.current = null;
+            setState(fallbackOverlayState(courtNumberValue));
+            setHasLoadedState(false);
+            setConnected(true);
+          }
+          return;
+        }
         if (!res.ok) throw new Error(String(res.status));
         const next = await res.json();
         if (!cancelled) {
@@ -118,7 +127,7 @@ function OverlayClientInner({ courtNumber, eventId, buildVersion, reloadOnVersio
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [stateUrl, applyOverlayState]);
+  }, [stateUrl, applyOverlayState, courtNumberValue]);
 
   useEffect(() => {
     if (!realtimeTopic) return;

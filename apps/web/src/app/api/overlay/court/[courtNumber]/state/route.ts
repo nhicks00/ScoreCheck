@@ -29,7 +29,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ cour
   // than rejoining courts, events, matches, and scores every five seconds.
   const { court, error } = await loadOverlayCourt(courtNumberValue, eventId);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  if (!court) return NextResponse.json({ error: "Court not found" }, { status: 404 });
+  if (!court) {
+    if (eventId) return NextResponse.json({ error: "Court not found" }, { status: 404 });
+    return new NextResponse(null, { status: 204, headers: { "cache-control": "no-store" } });
+  }
 
   const match = Array.isArray(court.matches) ? court.matches[0] : court.matches;
   const score = scoreForCurrentMatch(court.score_states, match?.id);
@@ -54,20 +57,11 @@ async function loadPersistedOverlay(courtNumber: number, eventId: string | null)
       .maybeSingle();
   }
 
-  const active = await db
-    .from("overlay_states")
-    .select(select)
-    .eq("court_number", courtNumber)
-    .eq("events.status", "active")
-    .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (active.data || active.error) return active;
-
   return db
     .from("overlay_states")
     .select(select)
     .eq("court_number", courtNumber)
+    .eq("events.status", "active")
     .order("updated_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -137,16 +131,7 @@ async function loadOverlayCourt(courtNumber: number, eventId: string | null) {
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (active.data || active.error) return { court: active.data, error: active.error };
-
-  const latest = await db
-    .from("courts")
-    .select(select)
-    .eq("court_number", courtNumber)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  return { court: latest.data, error: latest.error };
+  return { court: active.data, error: active.error };
 }
 
 function withOverlayLayout(payload: unknown, court: Record<string, unknown>) {

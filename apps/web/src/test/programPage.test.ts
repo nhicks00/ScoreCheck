@@ -9,7 +9,6 @@ import { createProgramMonitoringConnection } from "../lib/programMonitoring";
 import {
   buildProgramMonitorHeartbeat,
   initialProgramWatchdog,
-  PROGRAM_RECONNECTS_BEFORE_RELOAD,
   PROGRAM_WATCHDOG_STALL_MS,
   programWatchdogStep,
   type ProgramWatchdogSample,
@@ -146,7 +145,9 @@ function runWatchdog(
     const step = programWatchdogStep(state, {
       nowMs: sample.atMs,
       hasSources: sample.hasSources ?? true,
-      progress: sample.progress ?? 0
+      renderWatchdogEligible: sample.renderWatchdogEligible ?? true,
+      presentedFrames: sample.presentedFrames ?? 0,
+      inboundFrames: sample.inboundFrames === undefined ? (sample.presentedFrames ?? 0) : sample.inboundFrames
     });
     state = step.state;
     actions.push(step.action);
@@ -158,9 +159,9 @@ function runWatchdog(
 describe("programWatchdogStep", () => {
   it("stays quiet while frames advance, flagging real progress only after the baseline", () => {
     const { actions, progressedFlags } = runWatchdog([
-      { atMs: 1000, progress: 0 },
-      { atMs: 2000, progress: 30 },
-      { atMs: 3000, progress: 61 }
+      { atMs: 1000, presentedFrames: 0, inboundFrames: 0 },
+      { atMs: 2000, presentedFrames: 30, inboundFrames: 30 },
+      { atMs: 3000, presentedFrames: 61, inboundFrames: 61 }
     ]);
     expect(actions).toEqual(["none", "none", "none"]);
     expect(progressedFlags).toEqual([false, true, true]);
@@ -175,68 +176,66 @@ describe("programWatchdogStep", () => {
     expect(actions).toEqual(["none", "none", "none"]);
   });
 
-  it("tolerates a stall up to the grace window, then reconnects", () => {
+  it("tolerates a proven render stall up to the grace window, then reconnects", () => {
     const { actions } = runWatchdog([
-      { atMs: 0, progress: 100 }, // baseline
-      { atMs: 1000, progress: 130 }, // progress
-      { atMs: 1000 + PROGRAM_WATCHDOG_STALL_MS, progress: 130 }, // exactly 5s: still none
-      { atMs: 1001 + PROGRAM_WATCHDOG_STALL_MS, progress: 130 } // >5s: reconnect
+      { atMs: 0, presentedFrames: 100, inboundFrames: 100 },
+      { atMs: 1000, presentedFrames: 130, inboundFrames: 130 },
+      { atMs: 2000, presentedFrames: 130, inboundFrames: 160 }, // render-stall clock starts
+      { atMs: 2000 + PROGRAM_WATCHDOG_STALL_MS, presentedFrames: 130, inboundFrames: 310 },
+      { atMs: 2001 + PROGRAM_WATCHDOG_STALL_MS, presentedFrames: 130, inboundFrames: 340 }
     ]);
-    expect(actions).toEqual(["none", "none", "none", "reconnect"]);
+    expect(actions).toEqual(["none", "none", "none", "none", "reconnect"]);
   });
 
-  it("escalates to reload after three consecutive failed reconnects", () => {
-    expect(PROGRAM_RECONNECTS_BEFORE_RELOAD).toBe(3);
+  it("remounts a stuck connected transport without escalating to a page reload", () => {
     const { actions } = runWatchdog([
-      { atMs: 0, progress: 50 }, // baseline
-      { atMs: 1000, progress: 80 }, // playing
-      { atMs: 7000, progress: 80 }, // stall >5s -> reconnect #1
-      { atMs: 8000, progress: 0 }, // remounted player: baseline only, no reset
-      { atMs: 14_000, progress: 0 }, // stall -> reconnect #2
-      { atMs: 15_000, progress: 0 }, // baseline
-      { atMs: 21_000, progress: 0 }, // stall -> reconnect #3
-      { atMs: 22_000, progress: 0 }, // baseline
-      { atMs: 28_000, progress: 0 } // stall with 3 reconnects spent -> reload
+      { atMs: 0, presentedFrames: 50, inboundFrames: 50 },
+      { atMs: 1000, presentedFrames: 80, inboundFrames: 80 },
+      { atMs: 2000, presentedFrames: 80, inboundFrames: 80 },
+      { atMs: 2000 + PROGRAM_WATCHDOG_STALL_MS, presentedFrames: 80, inboundFrames: 80 },
+      { atMs: 2001 + PROGRAM_WATCHDOG_STALL_MS, presentedFrames: 80, inboundFrames: 80 }
     ]);
-    expect(actions).toEqual([
-      "none",
-      "none",
-      "reconnect",
-      "none",
-      "reconnect",
-      "none",
-      "reconnect",
-      "none",
-      "reload"
+    expect(actions).toEqual(["none", "none", "none", "none", "reconnect"]);
+  });
+
+  it("never acts in a hidden tab or before transport stats are eligible", () => {
+    const { actions } = runWatchdog([
+      { atMs: 0, presentedFrames: 0, inboundFrames: 0, renderWatchdogEligible: false },
+      { atMs: 30_000, presentedFrames: 0, inboundFrames: 900, renderWatchdogEligible: false },
+      { atMs: 60_000, presentedFrames: 0, inboundFrames: null, renderWatchdogEligible: true }
     ]);
+    expect(actions).toEqual(["none", "none", "none"]);
   });
 
   it("never mistakes the post-reconnect metric reset for playback progress", () => {
     const afterReconnect = runWatchdog([
-      { atMs: 0, progress: 4523 }, // baseline
-      { atMs: 1000, progress: 4553 }, // playing
-      { atMs: 7000, progress: 4553 } // reconnect #1
+      { atMs: 0, presentedFrames: 4523, inboundFrames: 4523 },
+      { atMs: 1000, presentedFrames: 4553, inboundFrames: 4553 },
+      { atMs: 2000, presentedFrames: 4553, inboundFrames: 4583 },
+      { atMs: 8000, presentedFrames: 4553, inboundFrames: 4763 }
     ]);
     const step = programWatchdogStep(afterReconnect.state, {
-      nowMs: 8000,
+      nowMs: 9000,
       hasSources: true,
-      progress: 0 // fresh player starts its counters over
+      renderWatchdogEligible: true,
+      presentedFrames: 0,
+      inboundFrames: 0
     });
     expect(step.progressed).toBe(false);
-    expect(step.state.consecutiveReconnects).toBe(1);
+    expect(step.action).toBe("none");
+    expect(step.state.renderStallStartedAtMs).toBeNull();
   });
 
-  it("resets the reconnect ladder once frames actually flow again", () => {
+  it("clears render-stall evidence once presented frames flow again", () => {
     const { state, actions, progressedFlags } = runWatchdog([
-      { atMs: 0, progress: 10 }, // baseline
-      { atMs: 1000, progress: 20 }, // playing
-      { atMs: 7000, progress: 20 }, // reconnect #1
-      { atMs: 8000, progress: 0 }, // baseline after remount
-      { atMs: 9000, progress: 30 } // real recovery
+      { atMs: 0, presentedFrames: 10, inboundFrames: 10 },
+      { atMs: 1000, presentedFrames: 20, inboundFrames: 20 },
+      { atMs: 2000, presentedFrames: 20, inboundFrames: 50 },
+      { atMs: 3000, presentedFrames: 50, inboundFrames: 80 }
     ]);
-    expect(actions).toEqual(["none", "none", "reconnect", "none", "none"]);
-    expect(progressedFlags[4]).toBe(true);
-    expect(state.consecutiveReconnects).toBe(0);
+    expect(actions).toEqual(["none", "none", "none", "none"]);
+    expect(progressedFlags[3]).toBe(true);
+    expect(state.renderStallStartedAtMs).toBeNull();
   });
 });
 

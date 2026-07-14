@@ -16,34 +16,31 @@ export const PROGRAM_OVERLAY_CANVAS_WIDTH = 1920;
 export const PROGRAM_OVERLAY_CANVAS_HEIGHT = 1080;
 
 export const PROGRAM_WATCHDOG_TICK_MS = 1000;
-/** Frame progress must stall for strictly more than this before acting. */
+/** Foreground presentation must stall for strictly more than this before acting. */
 export const PROGRAM_WATCHDOG_STALL_MS = 5000;
-/** Reconnects (player remounts) attempted before escalating to a full reload. */
-export const PROGRAM_RECONNECTS_BEFORE_RELOAD = 3;
 export const PROGRAM_HEARTBEAT_INTERVAL_MS = 5000;
 /** How long START_RECORDING waits for the commentary iframe before proceeding. */
 export const PROGRAM_COMMENTARY_WAIT_MS = 10_000;
 
-export type ProgramWatchdogAction = "none" | "reconnect" | "reload";
+export type ProgramWatchdogAction = "none" | "reconnect";
 
 export type ProgramWatchdogState = {
-  /**
-   * Last progress metric observed. Null right after init/reconnect/source
-   * loss, so the next sample only records a baseline — a metric reset after a
-   * player remount must never read as playback progress.
-   */
-  lastProgress: number | null;
-  lastProgressAtMs: number;
-  /** Reconnects issued since real progress was last observed. */
-  consecutiveReconnects: number;
+  lastPresentedFrames: number | null;
+  lastInboundFrames: number | null;
+  /** Set only while a foreground connected browser presents no frames. */
+  renderStallStartedAtMs: number | null;
 };
 
 export type ProgramWatchdogSample = {
   nowMs: number;
   /** Whether the page has any playback source at all (WHEP or HLS URL). */
   hasSources: boolean;
-  /** Monotone-while-playing progress metric, e.g. decoded frames + currentTime. */
-  progress: number;
+  /** False for hidden/background diagnostic tabs and non-connected transports. */
+  renderWatchdogEligible: boolean;
+  /** requestVideoFrameCallback's monotone presented-frame count. */
+  presentedFrames: number;
+  /** Browser inbound RTP frame count. Null until transport stats are available. */
+  inboundFrames: number | null;
 };
 
 export type ProgramWatchdogStep = {
@@ -54,56 +51,70 @@ export type ProgramWatchdogStep = {
 };
 
 export function initialProgramWatchdog(nowMs: number): ProgramWatchdogState {
-  return { lastProgress: null, lastProgressAtMs: nowMs, consecutiveReconnects: 0 };
+  void nowMs;
+  return { lastPresentedFrames: null, lastInboundFrames: null, renderStallStartedAtMs: null };
 }
 
 /**
  * One watchdog tick: given the previous state and a fresh sample, decide
- * whether to leave the player alone, remount it ("reconnect"), or reload the
- * whole page ("reload", after PROGRAM_RECONNECTS_BEFORE_RELOAD consecutive
- * reconnects failed to restart frame progress).
+ * whether to leave the player alone or remount it. A reconnect is justified
+ * only when a foreground, connected viewer presents no frames. This also
+ * unsticks a peer connection that remains nominally connected after inbound
+ * media stops. Recovery must never become a full-page reload.
  */
 export function programWatchdogStep(
   state: ProgramWatchdogState,
   sample: ProgramWatchdogSample
 ): ProgramWatchdogStep {
-  if (!sample.hasSources) {
-    // Nothing to reconnect to; keep the stall clock fresh so a source
-    // appearing later gets a full grace window.
+  if (!sample.hasSources || !sample.renderWatchdogEligible || sample.inboundFrames == null) {
     return {
-      state: { ...state, lastProgress: null, lastProgressAtMs: sample.nowMs },
+      state: initialProgramWatchdog(sample.nowMs),
       action: "none",
       progressed: false
     };
   }
-  if (state.lastProgress === null) {
-    // Baseline after init/reconnect: record the metric, keep the reconnect
-    // count — a remounted player that stays frozen must still escalate.
+
+  if (state.lastPresentedFrames === null || state.lastInboundFrames === null
+    || sample.presentedFrames < state.lastPresentedFrames
+    || sample.inboundFrames < state.lastInboundFrames) {
     return {
-      state: { ...state, lastProgress: sample.progress, lastProgressAtMs: sample.nowMs },
+      state: {
+        lastPresentedFrames: sample.presentedFrames,
+        lastInboundFrames: sample.inboundFrames,
+        renderStallStartedAtMs: null
+      },
       action: "none",
       progressed: false
     };
   }
-  if (sample.progress !== state.lastProgress) {
+
+  if (sample.presentedFrames > state.lastPresentedFrames) {
     return {
-      state: { lastProgress: sample.progress, lastProgressAtMs: sample.nowMs, consecutiveReconnects: 0 },
+      state: {
+        lastPresentedFrames: sample.presentedFrames,
+        lastInboundFrames: sample.inboundFrames,
+        renderStallStartedAtMs: null
+      },
       action: "none",
       progressed: true
     };
   }
-  if (sample.nowMs - state.lastProgressAtMs <= PROGRAM_WATCHDOG_STALL_MS) {
-    return { state, action: "none", progressed: false };
+
+  const renderStallStartedAtMs = state.renderStallStartedAtMs ?? sample.nowMs;
+  if (sample.nowMs - renderStallStartedAtMs <= PROGRAM_WATCHDOG_STALL_MS) {
+    return {
+      state: {
+        lastPresentedFrames: sample.presentedFrames,
+        lastInboundFrames: sample.inboundFrames,
+        renderStallStartedAtMs
+      },
+      action: "none",
+      progressed: false
+    };
   }
-  if (state.consecutiveReconnects >= PROGRAM_RECONNECTS_BEFORE_RELOAD) {
-    return { state: initialProgramWatchdog(sample.nowMs), action: "reload", progressed: false };
-  }
+
   return {
-    state: {
-      lastProgress: null,
-      lastProgressAtMs: sample.nowMs,
-      consecutiveReconnects: state.consecutiveReconnects + 1
-    },
+    state: initialProgramWatchdog(sample.nowMs),
     action: "reconnect",
     progressed: false
   };

@@ -29,6 +29,8 @@ type StreamPlayerProps = {
   onTimingSample?: (sample: StreamTimingSample | null) => void;
   /** Bounded transport diagnostics for the independent monitoring gateway. */
   onConnectionHealth?: (health: StreamConnectionHealth | null) => void;
+  /** Reports each transport retry so program diagnostics survive player remounts. */
+  onReconnect?: () => void;
 };
 
 export type StreamConnectionHealth = {
@@ -81,7 +83,8 @@ export function StreamPlayer({
   mode = "preview",
   onVideoElement,
   onTimingSample,
-  onConnectionHealth
+  onConnectionHealth,
+  onReconnect
 }: StreamPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [sources, setSources] = useState<StreamSources | null>(null);
@@ -152,6 +155,9 @@ export function StreamPlayer({
     let hls: HlsInstance | null = null;
     let retryTimer: number | null = null;
     let timingTimer: number | null = null;
+    let whepFetchController: AbortController | null = null;
+    let whepSessionUrl: string | null = null;
+    let whepAttempt = 0;
     let previousTimingTotals: RtcJitterTotals | null = null;
     let whepFailures = 0;
     let hlsFailures = 0;
@@ -165,13 +171,19 @@ export function StreamPlayer({
     video.addEventListener("playing", onPlaying);
 
     function teardownPlayback() {
+      whepAttempt += 1;
+      whepFetchController?.abort();
+      whepFetchController = null;
       if (timingTimer != null) window.clearInterval(timingTimer);
       timingTimer = null;
       previousTimingTotals = null;
       onTimingSample?.(null);
       onConnectionHealth?.(null);
-      pc?.close();
+      const closingConnection = pc;
       pc = null;
+      closingConnection?.close();
+      if (whepSessionUrl) releaseWhepSession(whepSessionUrl);
+      whepSessionUrl = null;
       hls?.destroy();
       hls = null;
       video.srcObject = null;
@@ -179,14 +191,19 @@ export function StreamPlayer({
     }
 
     function scheduleRetry(fn: () => void, attempt: number) {
+      if (retryTimer != null) window.clearTimeout(retryTimer);
       const delay = Math.min(1000 * 2 ** attempt, MAX_RETRY_DELAY_MS);
-      retryTimer = window.setTimeout(fn, delay);
+      retryTimer = window.setTimeout(() => {
+        retryTimer = null;
+        fn();
+      }, delay);
     }
 
     function failWhep(offline: boolean) {
-      if (cancelled) return;
+      if (cancelled || retryTimer != null) return;
       teardownPlayback();
       whepFailures += 1;
+      onReconnect?.();
       setStatus(offline ? OFFLINE_MESSAGE : "Reconnecting stream...");
       if (mode === "preview" && whepFailures >= WHEP_FAILURES_BEFORE_HLS && sources?.hlsUrl) {
         scheduleRetry(() => void startHls(), 0);
@@ -207,6 +224,7 @@ export function StreamPlayer({
     async function startWhep() {
       const whepUrl = sources?.whepUrl;
       if (cancelled || !whepUrl) return;
+      const attempt = ++whepAttempt;
       setStatus("Connecting stream...");
       try {
         const connection = new RTCPeerConnection({
@@ -242,23 +260,42 @@ export function StreamPlayer({
         const offer = await connection.createOffer();
         await connection.setLocalDescription(offer);
         await waitForIceGathering(connection, 2000);
-        if (cancelled || pc !== connection) return;
+        if (cancelled || pc !== connection || attempt !== whepAttempt) {
+          connection.close();
+          return;
+        }
+        const controller = new AbortController();
+        whepFetchController = controller;
         const res = await fetch(whepUrl, {
           method: "POST",
           headers: { "content-type": "application/sdp" },
-          body: connection.localDescription?.sdp ?? offer.sdp ?? ""
+          body: connection.localDescription?.sdp ?? offer.sdp ?? "",
+          signal: controller.signal
         });
-        if (cancelled || pc !== connection) return;
+        const responseSessionUrl = whepResourceUrl(res.headers.get("location"), whepUrl);
+        if (cancelled || pc !== connection || attempt !== whepAttempt) {
+          connection.close();
+          if (responseSessionUrl) releaseWhepSession(responseSessionUrl);
+          return;
+        }
+        whepFetchController = null;
         if (res.status === 404) {
+          if (responseSessionUrl) releaseWhepSession(responseSessionUrl);
           failWhep(true);
           return;
         }
         if (res.status !== 201 && !res.ok) {
+          if (responseSessionUrl) releaseWhepSession(responseSessionUrl);
           failWhep(false);
           return;
         }
+        whepSessionUrl = responseSessionUrl;
         const answer = await res.text();
-        if (cancelled || pc !== connection) return;
+        if (cancelled || pc !== connection || attempt !== whepAttempt) {
+          connection.close();
+          if (responseSessionUrl) releaseWhepSession(responseSessionUrl);
+          return;
+        }
         await connection.setRemoteDescription({ type: "answer", sdp: answer });
       } catch {
         if (!cancelled) failWhep(false);
@@ -344,7 +381,7 @@ export function StreamPlayer({
       video.removeEventListener("playing", onPlaying);
       teardownPlayback();
     };
-  }, [enabled, loadRevision, mode, onConnectionHealth, onTimingSample, sources]);
+  }, [enabled, loadRevision, mode, onConnectionHealth, onReconnect, onTimingSample, sources]);
 
   if (!enabled) return null;
 
@@ -523,6 +560,21 @@ function normalizeConnectionState(value: RTCPeerConnectionState): StreamConnecti
   return ["new", "connecting", "connected", "disconnected", "failed", "closed"].includes(value)
     ? value as StreamConnectionHealth["connectionState"]
     : "unknown";
+}
+
+function whepResourceUrl(location: string | null, requestUrl: string): string | null {
+  if (!location) return null;
+  try {
+    return new URL(location, requestUrl).toString();
+  } catch {
+    return null;
+  }
+}
+
+function releaseWhepSession(url: string) {
+  void fetch(url, { method: "DELETE", keepalive: true }).catch(() => {
+    // Best effort. Closing the peer connection remains the primary teardown.
+  });
 }
 
 function waitForIceGathering(connection: RTCPeerConnection, timeoutMs: number): Promise<void> {
