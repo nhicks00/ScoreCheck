@@ -1,7 +1,7 @@
 # Camera 1 Media-Lifecycle Gate
 
 Date: 2026-07-14
-Status: media path, comparator, reader churn, loss detection, and operational recovery passed; recovery-notification causality failed and requires a monitoring fix plus bounded repeat
+Status: media path, comparator, reader churn, durable repeat detection, and feed-driven recovery paging passed; viewer-path continuity and subjective sync remain
 
 ## Baseline
 
@@ -93,6 +93,32 @@ alerts at `14:38:00.709Z`, and Pushover accepted a recovery notification at
 `14:38:11.401Z`, before monitor-confirmed raw health. The expectation expiry,
 not observed feed recovery, caused that notification.
 
+## Incident-Episode Repeat
+
+After deploying migration `022` and the matching incident-episode service, a
+fresh raw-only gate was armed from a healthy Camera 1 baseline at
+`21:04:34.862Z`. Camera 1 was stopped at `21:06:21.419Z`.
+
+- A new `REQUIRED_RAW_PATH_MISSING` episode opened at `21:06:30.709Z`, with a
+  durable `OPENED` event at `21:06:35.724Z`.
+- Exactly one opening Pushover was accepted at `21:06:36.115Z`.
+- The expected non-paging `RAW_BITRATE_LOW` episode opened separately.
+- Durable counts advanced by two incident episodes, two opening events, and one
+  notification. Cameras 2-8 remained expected off with no incident.
+
+Camera 1 republished with the same RTMP push, H264 Main 1920x1080, and AAC
+48 kHz stereo identity at 6.15-6.24 Mbps with zero frame errors. Both episodes
+resolved from observed feed recovery at `21:08:10.709Z`; their durable recovery
+events were recorded at `21:08:20.722Z` and `21:08:35.724Z`. Exactly one
+recovery Pushover was accepted at `21:08:36.201Z`.
+
+MediaMTX's raw-ready timestamp preceded the corrected physical restart
+acknowledgement by 8.752 seconds, so this run does not establish a meaningful
+physical restart-to-ready latency. It does establish feed-driven closure,
+per-occurrence durability, opening/recovery notification deduplication, and
+peer-court isolation. After explicit disarm, no additional closure notification
+appeared and Camera 1 remained healthy.
+
 ## Verdict And Required Follow-Up
 
 Accepted:
@@ -103,15 +129,15 @@ Accepted:
 - 50-cycle reader ownership and cleanup
 - physical raw-loss detection, one opening page, deduplication, and court isolation
 - physical publisher reconnection and profile continuity
+- repeat incident persistence and feed-driven recovery paging
 
 Not accepted:
 
-- feed-driven recovery paging
 - completed-test Egress reconciliation
+- active viewer/program continuity across publisher loss
+- subjective slate and audio/video sync
 
-Before the next capacity phase, monitoring must distinguish dependency recovery
-from expectation cessation. Incident closure caused by gate or event expiry
-must persist that closure reason and must not emit a normal recovery page. After
-deployment, repeat one short Camera 1 stop/restart inside an extended gate and
-prove the recovery page follows raw readiness. Event teardown must also verify
+Before the next capacity phase, run one short Camera 1 viewer/program recovery
+check and record slate continuity, browser reconnect or reload behavior, counter
+continuity, and subjective audio/video sync. Event teardown must also verify
 zero active Egress jobs before infrastructure is considered idle.

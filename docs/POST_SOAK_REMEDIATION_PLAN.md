@@ -195,14 +195,19 @@ known-bad path produces evidence volume, not confidence.
   cutover alerts all passed. The deferred vision schema was also removed from
   the executable migration queue so future database pushes cannot apply it
   accidentally.
+- The bounded repeat then passed. Camera 1 created two new durable episodes,
+  exactly one opening Pushover, two durable dependency-recovery events, and
+  exactly one recovery Pushover after observed raw readiness and positive
+  bitrate. Cameras 2-8 remained isolated, the service logged no persistence or
+  notification-maintenance errors, and explicit gate disarm produced no extra
+  closure page. The corrected physical restart acknowledgement occurred after
+  MediaMTX's ready timestamp, so restart-to-ready latency is not claimed.
 
-Phase 1 therefore remains open only at the physical acceptance boundary. When
-Camera 1 is available again, establish a fresh healthy baseline and repeat the
-disconnect/reconnect. The repeat must prove a new durable incident row, one
-opening page, feed-driven resolution, one recovery page after raw readiness and
-positive bitrate, and zero incidents on Cameras 2-8. Subjective slate/audio sync
-remains an independent human-observation requirement. Do not arm the gate while
-Camera 1 is physically off.
+The monitoring acceptance boundary is closed. Phase 1 remains open for one
+active viewer/program-path recovery check because the accepted repeat was
+raw-only: record slate continuity, browser reconnect or reload behavior,
+reset-safe counter continuity, and subjective audio/video sync while Camera 1
+is available. Do not start a long soak until that human-observed check passes.
 
 ### Phase 2: qualify the final resource topology
 
