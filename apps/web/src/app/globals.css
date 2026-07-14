@@ -4901,6 +4901,11 @@ body:has(.program-root) {
   font-size: 11px;
 }
 
+.monitor-mobile-camera-nav,
+.monitor-mobile-inspection-bar {
+  display: none;
+}
+
 .monitor-empty p {
   color: var(--muted);
   margin: 4px 0 0;
@@ -5734,29 +5739,190 @@ body:has(.program-root) {
 }
 
 @media (max-width: 860px) {
+  .monitor-mobile-camera-nav {
+    align-items: center;
+    background: color-mix(in srgb, var(--bg) 94%, transparent);
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    box-shadow: var(--shadow-md);
+    display: flex;
+    gap: 8px;
+    padding: 6px;
+    position: sticky;
+    top: max(0px, env(safe-area-inset-top));
+    z-index: 20;
+  }
+
+  .monitor-mobile-camera-nav > span {
+    color: var(--muted);
+    flex: 0 0 auto;
+    font-size: 10px;
+    font-weight: 750;
+    padding-left: 5px;
+    text-transform: uppercase;
+  }
+
+  .monitor-mobile-camera-nav > div {
+    display: flex;
+    flex: 1 1 auto;
+    gap: 6px;
+    min-width: 0;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  .monitor-mobile-camera-nav > div::-webkit-scrollbar {
+    display: none;
+  }
+
+  .monitor-mobile-camera-nav button {
+    background: var(--surface-2);
+    border-color: var(--line);
+    border-radius: 6px;
+    flex: 0 0 auto;
+    font-size: 11px;
+    gap: 7px;
+    min-height: 44px;
+    padding: 8px 10px;
+  }
+
+  .monitor-mobile-camera-nav button.is-selected {
+    background: var(--cyan-soft);
+    border-color: var(--cyan-line);
+    color: var(--text);
+  }
+
+  .monitor-court {
+    scroll-margin-top: 66px;
+  }
+
+  .monitor-court .monitor-trends,
+  .monitor-court .monitor-stage-grid,
+  .monitor-court .monitor-match,
+  .monitor-court .monitor-court-footer {
+    display: none;
+  }
+
+  .monitor-thumbnail {
+    aspect-ratio: 16 / 9;
+  }
+
+  .monitor-detail-band {
+    display: none;
+  }
+
+  .monitor-detail-band.is-mobile-open {
+    background: var(--bg);
+    border-top: 0;
+    display: block;
+    height: 100dvh;
+    inset: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: max(10px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+    position: fixed;
+    width: 100%;
+    z-index: 1200;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .monitor-mobile-inspection-bar {
+    align-items: center;
+    background: color-mix(in srgb, var(--bg) 96%, transparent);
+    border-bottom: 1px solid var(--line-strong);
+    display: flex;
+    gap: 10px;
+    justify-content: space-between;
+    margin: -2px 0 12px;
+    min-height: 50px;
+    padding: 4px 0 8px;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+  }
+
+  .monitor-mobile-inspection-bar button {
+    flex: 0 0 auto;
+    min-height: 44px;
+    padding: 9px 11px;
+  }
+
+  .monitor-mobile-inspection-bar strong {
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .monitor-inspection-grid { grid-template-columns: minmax(0, 1fr); }
   .monitor-incident { grid-template-columns: minmax(0, 1fr); }
   .monitor-pacing-live { grid-template-columns: minmax(0, 1fr); }
-  .monitor-stage-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .monitor-detail-band.is-mobile-open .monitor-stage-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 620px) {
-  .monitor-shell { padding: 10px; }
+  .monitor-shell {
+    padding: max(10px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+  }
+  .monitor-topbar { padding: 10px; }
+  .monitor-topbar .topbar-nav { gap: 4px; width: 100%; }
+  .monitor-topbar .topbar-nav .button { flex: 1 1 0; font-size: 12px; min-width: 0; padding-inline: 8px; }
+  .monitor-icon-button { min-height: 44px; width: 44px; }
   .monitor-heading { align-items: flex-start; }
   .monitor-section-heading { align-items: stretch; flex-direction: column; }
   .monitor-title-line { align-items: flex-start; flex-direction: column; }
   .monitor-global-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .monitor-court-matrix { grid-template-columns: minmax(0, 1fr); }
-  .monitor-thumbnail { aspect-ratio: 16 / 9; }
-  .monitor-stage-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .monitor-court-head { align-items: flex-start; flex-wrap: wrap; }
+  .monitor-court-statuses { align-items: center; flex-direction: row; padding-left: 42px; width: 100%; }
+  .monitor-court-statuses .monitor-state-badge.is-compact { font-size: 11px; min-height: 28px; }
+  .monitor-metric { min-height: 57px; padding: 8px; }
+  .monitor-metric span { font-size: 9px; }
+  .monitor-court-alert { min-height: 40px; padding: 9px 10px; }
   .monitor-ack-form { grid-template-columns: minmax(0, 1fr); }
   .monitor-detail-actions { align-items: center; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; justify-content: stretch; }
   .monitor-quality-control,
   .monitor-quality-control select { width: 100%; }
+  .monitor-quality-control select { min-height: 44px; }
   .monitor-quality-control { grid-column: 1 / -1; }
   .monitor-detail-actions > button { width: 100%; }
   .monitor-pacing-head { align-items: stretch; flex-direction: column; }
   .monitor-pacing-controls { align-items: stretch; }
   .monitor-pacing-controls label { flex: 1 1 auto; }
   .monitor-pacing-controls select { width: 100%; }
+}
+
+@media (max-width: 360px) {
+  .monitor-global-item {
+    gap: 6px;
+    min-height: 62px;
+    padding: 8px;
+  }
+
+  .monitor-global-item > svg {
+    display: none;
+  }
+
+  .monitor-global-item span {
+    font-size: 9px;
+  }
+
+  .monitor-global-item strong {
+    font-size: 12px;
+    line-height: 1.15;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+  }
+}
+
+@media (max-width: 860px) and (orientation: landscape) {
+  .monitor-detail-band.is-mobile-open .monitor-inspection-grid {
+    grid-template-columns: minmax(0, 1.4fr) minmax(250px, 0.6fr);
+  }
+
+  .monitor-detail-band.is-mobile-open .monitor-stage-detail {
+    max-height: none;
+  }
 }

@@ -18,6 +18,7 @@ import {
   Signal,
   VideoOff,
   WifiOff,
+  X,
   Youtube
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -34,6 +35,7 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
   const [refreshing, setRefreshing] = useState(false);
   const [selectedCourt, setSelectedCourt] = useState(() => firstAttentionCourt(initial) ?? 1);
   const [previewEnabled, setPreviewEnabled] = useState(false);
+  const [mobileInspectionOpen, setMobileInspectionOpen] = useState(false);
   const [inspectionQuality, setInspectionQuality] = useState<"data_saver" | "detail">("data_saver");
   const [pacingOpen, setPacingOpen] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(false);
@@ -49,6 +51,17 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
   const previousCriticalIds = useRef(new Set(initial?.snapshot.incidents.filter((incident) => incident.severity === "critical").map((incident) => incident.id) ?? []));
   const previewBeforePacing = useRef(false);
   const inspectionRef = useRef<HTMLElement | null>(null);
+  const inspectionCloseRef = useRef<HTMLButtonElement | null>(null);
+  const cameraNavScrollRef = useRef<HTMLDivElement | null>(null);
+
+  const closeMobileInspection = useCallback(() => {
+    setMobileInspectionOpen(false);
+    setPreviewEnabled(false);
+    setPacingOpen(false);
+    window.requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>(`[data-camera-inspect="${selectedCourt}"]`)?.focus();
+    });
+  }, [selectedCourt]);
 
   useEffect(() => {
     setSoundEnabled(window.localStorage.getItem("scorecheck-monitor-sound") === "on");
@@ -56,6 +69,59 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
     const timer = window.setInterval(() => setNowMs(Date.now()), 1_000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (!mobileInspectionOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.requestAnimationFrame(() => inspectionCloseRef.current?.focus());
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeMobileInspection();
+        return;
+      }
+      if (event.key !== "Tab" || !inspectionRef.current) return;
+      const focusable = Array.from(inspectionRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), select:not([disabled]), input:not([disabled]), a[href], video[controls], [tabindex]:not([tabindex="-1"])'
+      )).filter((element) => !element.hasAttribute("hidden"));
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [closeMobileInspection, mobileInspectionOpen]);
+
+  useEffect(() => {
+    const mobileQuery = window.matchMedia("(max-width: 860px)");
+    const onViewportChange = (event: MediaQueryListEvent) => {
+      if (event.matches && (previewEnabled || pacingOpen)) setMobileInspectionOpen(true);
+      if (!event.matches) setMobileInspectionOpen(false);
+    };
+    mobileQuery.addEventListener("change", onViewportChange);
+    return () => mobileQuery.removeEventListener("change", onViewportChange);
+  }, [pacingOpen, previewEnabled]);
+
+  useEffect(() => {
+    const scroller = cameraNavScrollRef.current;
+    const selectedButton = scroller?.querySelector<HTMLElement>(`[data-camera-jump="${selectedCourt}"]`);
+    if (!scroller || !selectedButton || !window.matchMedia("(max-width: 860px)").matches) return;
+    const left = selectedButton.offsetLeft - (scroller.clientWidth - selectedButton.offsetWidth) / 2;
+    scroller.scrollTo({ left: Math.max(0, left), behavior: "smooth" });
+  }, [selectedCourt]);
 
   const refresh = useCallback(async () => {
     if (!configured) return;
@@ -124,10 +190,25 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
   }
 
   function inspectCamera(courtNumber: number) {
+    const mobile = window.matchMedia("(max-width: 860px)").matches;
     setSelectedCourt(courtNumber);
     setPreviewEnabled(true);
     setPacingOpen(false);
-    window.requestAnimationFrame(() => inspectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    setMobileInspectionOpen(mobile);
+    window.requestAnimationFrame(() => {
+      if (mobile) inspectionRef.current?.scrollTo({ top: 0 });
+      else inspectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
+  function jumpToCamera(courtNumber: number) {
+    setSelectedCourt(courtNumber);
+    setMobileInspectionOpen(false);
+    setPreviewEnabled(false);
+    setPacingOpen(false);
+    window.requestAnimationFrame(() => {
+      document.getElementById(`monitor-camera-${courtNumber}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }
 
   async function acknowledge(incident: MonitorIncident) {
@@ -236,6 +317,29 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
         </div>
       </header>
 
+      <nav className="monitor-mobile-camera-nav" aria-label="Jump to camera">
+        <span>Cameras</span>
+        <div ref={cameraNavScrollRef}>
+          {snapshot.courts.map((court) => {
+            const state = effectiveCourtState(court);
+            return (
+              <button
+                key={court.courtNumber}
+                type="button"
+                className={court.courtNumber === selectedCourt ? "is-selected" : ""}
+                onClick={() => jumpToCamera(court.courtNumber)}
+                aria-current={court.courtNumber === selectedCourt ? "true" : undefined}
+                aria-label={`Jump to Camera ${court.courtNumber}, ${systemStateLabel(state)}`}
+                data-camera-jump={court.courtNumber}
+              >
+                <StateDot state={state} />
+                <strong>Camera {court.courtNumber}</strong>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
+
       <section className="monitor-global-strip" aria-label="Global health">
         <GlobalItem icon={<Activity size={17} />} label="Collector" value={`${snapshot.collector.agentsFresh}/${snapshot.collector.agentsExpected} agents`} state={snapshot.collector.state} />
         <GlobalItem icon={<Signal size={17} />} label="Control" value={snapshot.controlPlane.worker.state === "NOT_APPLICABLE" ? "Idle" : snapshot.controlPlane.worker.state} state={snapshot.controlPlane.state} />
@@ -265,7 +369,20 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
       </section>
 
       {selected && (
-        <section ref={inspectionRef} className="monitor-detail-band" aria-label={`Camera ${selected.courtNumber} live inspection`}>
+        <section
+          ref={inspectionRef}
+          className={`monitor-detail-band ${mobileInspectionOpen ? "is-mobile-open" : ""}`}
+          aria-label={`Camera ${selected.courtNumber} live inspection`}
+          role={mobileInspectionOpen ? "dialog" : undefined}
+          aria-modal={mobileInspectionOpen || undefined}
+        >
+          <div className="monitor-mobile-inspection-bar">
+            <button ref={inspectionCloseRef} type="button" onClick={closeMobileInspection} aria-label="Return to camera list">
+              <X size={19} aria-hidden="true" />
+              <span>Camera list</span>
+            </button>
+            <strong>Camera {selected.courtNumber} inspection</strong>
+          </div>
           <div className="monitor-section-heading">
             <div><p className="eyebrow">Live inspection</p><h2>Camera {selected.courtNumber}</h2><p className="monitor-detail-assignment">{assignedCourtLabel(selected)}</p></div>
             <div className="monitor-detail-actions">
@@ -396,7 +513,7 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
   const rawTrend = history?.rawBitrate ?? [];
   const fpsTrend = history?.programFps.length ? history.programFps : history?.previewFps ?? [];
   return (
-    <article className={`monitor-court ${selected ? "is-selected" : ""}`} data-state={effectiveState}>
+    <article id={`monitor-camera-${court.courtNumber}`} className={`monitor-court ${selected ? "is-selected" : ""}`} data-state={effectiveState}>
       <header className="monitor-court-head">
         <div><span className="monitor-court-number">{court.courtNumber}</span><div><h2>Camera {court.courtNumber}</h2><p>{assignedCourtLabel(court)} · {court.expectation.coveragePhase.replaceAll("_", " ")}</p></div></div>
         <div className="monitor-court-statuses">
@@ -404,7 +521,7 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
           <StateBadge state={productionState} compact label={pipelineStateLabel(productionState)} />
         </div>
       </header>
-      <button className="monitor-thumbnail" type="button" onClick={onSelect} aria-label={`Inspect Camera ${court.courtNumber}`}>
+      <button className="monitor-thumbnail" type="button" onClick={onSelect} aria-label={`Inspect Camera ${court.courtNumber}`} data-camera-inspect={court.courtNumber}>
         {thumbnailFresh ? <>
           {/* Authenticated no-store snapshots intentionally bypass the Next image optimizer. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
