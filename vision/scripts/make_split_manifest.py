@@ -27,8 +27,11 @@ REPO = Path(__file__).resolve().parents[2]
 CATALOG = REPO / "vision" / "data" / "provided-youtube-livestream-sources-v1.json"
 
 # Pinned Denver holdouts (stable regardless of corpus arrival order).
+# Four-way split per vision/FLYWHEEL.md: train / search (agent iterates) /
+# selection (locked harness picks checkpoints) / test (untouched).
 DENVER_TEST_IDS = {"bWK0AihsH5g", "GZe0KO_I0QU"}
-DENVER_VAL_IDS = {"BCg0RBo77ZI", "YWd0G4BcfZ0"}
+DENVER_SELECTION_IDS = {"BCg0RBo77ZI", "YWd0G4BcfZ0"}
+DENVER_SEARCH_IDS = {"IhcjpWIVSus", "JKJ02rMa16k"}
 
 
 def venue_of(title: str | None) -> str:
@@ -42,8 +45,10 @@ def venue_of(title: str | None) -> str:
 def assign(video_id: str, venue: str) -> str:
     if video_id in DENVER_TEST_IDS or venue not in ("DENVER",):
         return "test"
-    if video_id in DENVER_VAL_IDS:
-        return "val"
+    if video_id in DENVER_SELECTION_IDS:
+        return "selection"
+    if video_id in DENVER_SEARCH_IDS:
+        return "search"
     return "train"
 
 
@@ -55,8 +60,8 @@ def main() -> int:
 
     catalog = json.loads(CATALOG.read_text())
     entries = []
-    totals = {"train": 0, "val": 0, "test": 0}
-    rally_totals = {"train": 0, "val": 0, "test": 0}
+    totals = {"train": 0, "search": 0, "selection": 0, "test": 0}
+    rally_totals = {"train": 0, "search": 0, "selection": 0, "test": 0}
     for source in catalog["sources"]:
         if not source.get("primary_endline_candidate"):
             continue
@@ -85,7 +90,7 @@ def main() -> int:
             rally_totals[split] += rallies
 
     manifest = {
-        "policy": "split by source VOD (whole matches); non-Denver venues + 2 pinned Denver courts = test; 2 pinned Denver = val",
+        "policy": "four-way split by source VOD (whole matches): non-Denver venues + 2 pinned Denver = test (untouched); 2 pinned Denver = selection (locked harness); 2 pinned Denver = search (agent iterates); rest = train",
         "labeled_vods": totals,
         "labeled_rallies": rally_totals,
         "sources": entries,
