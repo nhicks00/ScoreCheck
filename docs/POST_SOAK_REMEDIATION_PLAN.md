@@ -165,6 +165,35 @@ history cleanup remains separate and has not been attempted.
 Do not start another long soak until these short tests pass. More duration on a
 known-bad path produces evidence volume, not confidence.
 
+#### Phase 1 status on 2026-07-14
+
+- The one-reader Preview A -> Program -> Preview B comparator passed on Camera
+  1. All three legs held 30 fps with zero measured frame drops, freezes, or RTP
+  loss; the program leg did not reproduce the prior soak pacing failure.
+- The reader lifecycle gate passed 25 preview plus 25 program cycles: all 50
+  readers connected and closed, maximum WHEP concurrency remained one, no
+  overlap occurred, and final WHEP-reader and zombie counts were zero.
+- The first physical Camera 1 disconnect proved raw-loss detection, court
+  isolation, one opening Pushover, and media recovery. It did not prove recovery
+  paging because the ten-minute test expectation expired before the feed was
+  monitor-confirmed healthy and generated a false recovery notification.
+- The closure-semantics hard cutover now permits a recovery notification only
+  for observed dependency recovery. A later expired gate with Camera 1 still
+  down closed silently and returned the court to `EXPECTED_OFF`, proving that
+  specific correction.
+- The repeat physical disconnect exposed a second blocker before paging: a
+  recurring alert fingerprint attempted to replace the primary key of its prior
+  resolved incident row, which is still referenced by event and notification
+  history. In-memory detection and isolation worked, but the new episode could
+  not be persisted and no opening notification was sent.
+
+Phase 1 therefore remains open. Deploy and verify true per-occurrence incident
+episodes, then repeat the physical disconnect/reconnect from a healthy Camera 1
+baseline. The repeat must prove a new durable incident row, one opening page,
+feed-driven resolution, one recovery page after raw readiness and positive
+bitrate, and zero incidents on Cameras 2-8. Subjective slate/audio sync remains
+an independent human-observation requirement.
+
 ### Phase 2: qualify the final resource topology
 
 1. Test each final camera model at its intended SRT/H.264 profile. Prefer
