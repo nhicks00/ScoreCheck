@@ -1,0 +1,216 @@
+<title>ScoreVision Architecture v1.0</title>
+<style>
+:root {
+  --ground: #f3efe6; --panel: #fbf9f3; --panel2: #efe9db; --line: #ddd4bf;
+  --ink: #23252a; --ink2: #5c5747; --gold: #a8871f; --gold-bright: #8a6d12;
+  --blue: #2e6da4; --ok: #3d7a4a; --chip-ok-bg: #e2ecdf; --chip-gold-bg: #f1e6c3;
+  --bug-dark: #1d2026; --bug-text: #f5f2ea; --bug-gold: #d4af37;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground: #14161b; --panel: #1e222a; --panel2: #262b35; --line: #343a46;
+    --ink: #ece7da; --ink2: #a49d8b; --gold: #d4af37; --gold-bright: #f9e29b;
+    --blue: #6aa5d8; --ok: #7fb389; --chip-ok-bg: #24322a; --chip-gold-bg: #363019;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #14161b; --panel: #1e222a; --panel2: #262b35; --line: #343a46;
+  --ink: #ece7da; --ink2: #a49d8b; --gold: #d4af37; --gold-bright: #f9e29b;
+  --blue: #6aa5d8; --ok: #7fb389; --chip-ok-bg: #24322a; --chip-gold-bg: #363019;
+}
+:root[data-theme="light"] {
+  --ground: #f3efe6; --panel: #fbf9f3; --panel2: #efe9db; --line: #ddd4bf;
+  --ink: #23252a; --ink2: #5c5747; --gold: #a8871f; --gold-bright: #8a6d12;
+  --blue: #2e6da4; --ok: #3d7a4a; --chip-ok-bg: #e2ecdf; --chip-gold-bg: #f1e6c3;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--ground); color: var(--ink);
+  font: 15px/1.55 -apple-system, "Segoe UI", system-ui, sans-serif;
+  margin: 0; padding: 40px 20px 80px;
+}
+.wrap { max-width: 980px; margin: 0 auto; }
+h1, h2, h3 { text-wrap: balance; }
+h2 {
+  font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--gold); margin: 48px 0 14px; font-weight: 700;
+}
+.eyebrow { font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink2); }
+header h1 { font-size: 34px; margin: 6px 0 8px; font-weight: 800; letter-spacing: -0.01em; }
+header p.thesis { max-width: 62ch; color: var(--ink2); margin: 0; font-size: 16px; }
+
+/* the scorebug motif — built like the real overlay */
+.bug { display: inline-block; margin: 22px 0 4px; border-radius: 8px; overflow: hidden;
+  background: var(--bug-dark); font-size: 13px; min-width: 300px;
+  box-shadow: 0 4px 18px rgba(0,0,0,0.25); }
+.bug .row { display: grid; grid-template-columns: 26px 1fr auto auto; align-items: center; height: 34px; padding-left: 8px; }
+.bug .seed { color: rgba(212,175,55,0.85); font-weight: 700; font-size: 11px; text-align: center; }
+.bug .name { color: var(--bug-text); font-weight: 800; text-transform: uppercase; letter-spacing: 0.02em; padding: 0 12px 0 2px; }
+.bug .cell { width: 40px; text-align: center; font-weight: 800; font-variant-numeric: tabular-nums;
+  color: rgba(245,242,234,0.45); border-left: 1px solid rgba(255,255,255,0.08); align-self: stretch; line-height: 34px; }
+.bug .cell.cur { color: var(--bug-gold); font-size: 15px; }
+.bug .meta { background: rgba(255,255,255,0.06); color: rgba(245,242,234,0.65);
+  font-size: 10px; letter-spacing: 0.12em; padding: 4px 10px; text-transform: uppercase; }
+
+/* stat strip */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 26px; }
+.stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.stat b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.stat span { font-size: 12px; color: var(--ink2); }
+
+/* layer cards */
+.layer { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 10px; }
+.layer .ltitle { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.layer .ltitle b { font-size: 16px; }
+.layer .ltitle .lnum { color: var(--gold); font-weight: 800; font-size: 12px; letter-spacing: 0.1em; }
+.layer p { margin: 0; color: var(--ink2); font-size: 14px; max-width: 75ch; }
+.models { display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 10px; margin-top: 12px; }
+.model { background: var(--panel2); border: 1px solid var(--line); border-radius: 9px; padding: 11px 13px; font-size: 13px; }
+.model b { display: block; margin-bottom: 3px; }
+.model small { color: var(--ink2); display: block; line-height: 1.45; }
+.chip { display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  border-radius: 99px; padding: 2px 9px; margin-top: 8px; }
+.chip.built { background: var(--chip-ok-bg); color: var(--ok); }
+.chip.next { background: var(--chip-gold-bg); color: var(--gold); }
+.chip.plan { border: 1px solid var(--line); color: var(--ink2); }
+.flow-arrow { text-align: center; color: var(--gold); font-size: 18px; margin: 2px 0; }
+
+/* loop diagram */
+.loop { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: stretch; }
+.loop .node { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; font-size: 13px; }
+.loop .node b { display: block; font-size: 13px; margin-bottom: 3px; }
+.loop .node small { color: var(--ink2); line-height: 1.4; display: block; }
+.loop .mid { display: flex; align-items: center; justify-content: center; color: var(--gold); font-size: 20px; padding: 0 4px; }
+.loopgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; counter-reset: step; }
+.loopgrid .node { position: relative; padding-top: 26px; }
+.loopgrid .node::before {
+  counter-increment: step; content: counter(step);
+  position: absolute; top: 8px; left: 13px; font-size: 11px; font-weight: 800; color: var(--gold);
+}
+.loop-note { margin-top: 12px; font-size: 13px; color: var(--ink2); max-width: 80ch; }
+.loop-note b { color: var(--ink); }
+
+/* stack table */
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+th { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink2); }
+td:first-child { font-weight: 600; white-space: nowrap; }
+td:nth-child(2) { white-space: nowrap; color: var(--gold); font-weight: 600; }
+td:last-child { color: var(--ink2); }
+
+/* waves */
+.waves { border-left: 2px solid var(--gold); padding-left: 18px; display: grid; gap: 14px; }
+.wave { position: relative; }
+.wave::before { content: ""; position: absolute; left: -23px; top: 6px; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--gold); }
+.wave b { font-size: 14px; }
+.wave .gate { font-size: 12.5px; color: var(--ink2); }
+.wave .gate code { background: var(--panel2); border-radius: 4px; padding: 1px 6px; font-size: 12px; }
+footer { margin-top: 54px; font-size: 12.5px; color: var(--ink2); border-top: 1px solid var(--line); padding-top: 14px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+<header>
+  <div class="eyebrow">ScoreVision · Architecture v1.0 · July 2026</div>
+  <h1>Small models, one state machine, a self-improving loop</h1>
+  <p class="thesis">Single-purpose perception models feed a deterministic volleyball
+  state machine that keeps score via the side-out rule — and everything improves
+  inside an agent-operated training flywheel judged against our own scorebug ground truth.</p>
+
+  <div class="bug" role="img" aria-label="ScoreCheck scorebug motif">
+    <div class="row"><span class="seed">7</span><span class="name">Perception proposes</span><span class="cell">21</span><span class="cell cur">14</span></div>
+    <div class="row"><span class="seed">18</span><span class="name">Humans stay in the loop</span><span class="cell">19</span><span class="cell cur">12</span></div>
+    <div class="meta">Court 14&ensp;·&ensp;Set 2&ensp;·&ensp;The reducer keeps score</div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><b>157 h</b><span>owned endline footage</span></div>
+    <div class="stat"><b>941</b><span>rallies auto-labeled so far</span></div>
+    <div class="stat"><b>74%</b><span>gold-tier labels (noise-graded)</span></div>
+    <div class="stat"><b>2,385</b><span>game-state segments ready</span></div>
+    <div class="stat"><b>$2–5</b><span>per training run (Modal)</span></div>
+  </div>
+</header>
+
+<h2>The live path — video in, score out</h2>
+
+<div class="layer">
+  <div class="ltitle"><span class="lnum">Layer 0</span><b>Data substrate</b><span class="chip built">Built</span></div>
+  <p>NAS corpus of owned VODs; scorebug OCR + template classifier turn every stream into
+  tiered rally labels (gold / silver / excluded by human-scoring noise fingerprints);
+  overlay-masked clips; match-level train / search / selection / test splits.</p>
+</div>
+<div class="flow-arrow">▼</div>
+<div class="layer">
+  <div class="ltitle"><span class="lnum">Layer 1</span><b>Perception — one job per model</b></div>
+  <div class="models">
+    <div class="model"><b>Game-state</b><small>SERVICE / PLAY / NO-PLAY · VideoMAE-small 22M · the rally segmenter</small><span class="chip next">Campaign 1</span></div>
+    <div class="model"><b>Ball tracker</b><small>WASB 1.5M, MIT volleyball weights · trajectories, contacts, rally-end</small><span class="chip next">Campaign 2</span></div>
+    <div class="model"><b>Players</b><small>RT-DETR/RF-DETR + ByteTrack · four athletes on sand</small><span class="chip plan">Wave 3</span></div>
+    <div class="model"><b>Serve side</b><small>heuristic on players + game-state · the score keystone + label de-noiser</small><span class="chip plan">Wave 3</span></div>
+    <div class="model"><b>Court keypoints</b><small>8-pt homography · pixel→meter for placement &amp; speed</small><span class="chip plan">Analytics</span></div>
+    <div class="model"><b>Poses</b><small>RTMPose on crops · attack / block / dig classification</small><span class="chip plan">Analytics</span></div>
+  </div>
+</div>
+<div class="flow-arrow">▼</div>
+<div class="layer">
+  <div class="ltitle"><span class="lnum">Layer 2</span><b>Event &amp; state inference — deterministic code, not ML</b></div>
+  <p>Rally state machine (SERVICE onset starts, ball-death + NO-PLAY ends) → side-out
+  attribution (<em>whoever serves next won the last rally</em>) → FIVB rules reducer
+  (26 behavioral tests) as the sole score authority, with side-switch checksums every
+  7/5 points. Every event carries confidence; low confidence goes to a one-tap human
+  confirm in ScoreCheck. <b>No model ever writes a score directly.</b></p>
+</div>
+<div class="flow-arrow">▼</div>
+<div class="layer">
+  <div class="ltitle"><span class="lnum">Layer 3</span><b>Products</b></div>
+  <p>Score keeping: offline replay → live shadow → assistive confirm → autonomous with
+  corrections. Analytics on the same event log: touch classification, rally lengths,
+  serve speed, placement maps, auto-cut highlights. Live path taps MediaMTX upstream of
+  the 720p normalization; CoreML/ONNX exports run real-time on Apple Silicon.</p>
+</div>
+
+<h2>The flywheel — how it gets better without a labeling team</h2>
+<div class="loopgrid">
+  <div class="node"><b>Campaign opens</b><small>Nathan approves goal metric, $ cap, stop rules. Baseline runs first; noise floor measured.</small></div>
+  <div class="node"><b>Train on Modal</b><small>One hypothesis per git branch, config-hashed, $2–5 per run.</small></div>
+  <div class="node"><b>Locked harness</b><small>Gold-tier winner accuracy + timing-immune sequence metric on splits the agent can't read or edit.</small></div>
+  <div class="node"><b>Ledger + verdict</b><small>Append-only JSONL in git. Keep only wins above baseline + noise.</small></div>
+  <div class="node"><b>Mine failures</b><small>Model-vs-scorebug disagreement pulls lookalike windows from 157 h of corpus.</small></div>
+  <div class="node"><b>Propose next</b><small>Agent writes the morning summary and the next experiment. Human steers at boundaries only.</small></div>
+</div>
+<p class="loop-note"><b>Why we can run this loop at all:</b> the scorebug gives a free,
+independent goal signal on real matches — graded for human-entry noise, cross-checked later
+by side-out physics, and anchored by a small human-verified kernel. NVIDIA's autoresearch
+pattern, our verifiable reward.</p>
+
+<h2>Technology stack — each choice and its reason</h2>
+<div class="tablewrap"><table>
+<tr><th>Concern</th><th>Choice</th><th>Why</th></tr>
+<tr><td>Training</td><td>PyTorch + HF Trainer</td><td>Plain supervised fine-tunes; NeMo RL/Gym rejected — generative-transformer-only, Linux-only</td></tr>
+<tr><td>Compute</td><td>Modal L40S/A100</td><td>Per-second billing, agent-friendly spawn/poll API, human-set budget kill-switch</td></tr>
+<tr><td>Registry</td><td>git JSONL ledger</td><td>NVIDIA autoresearch's own pattern; auditable, agent-writable</td></tr>
+<tr><td>Curves</td><td>Trackio</td><td>Free, local SQLite, wandb-compatible; W&amp;B free tier is non-commercial</td></tr>
+<tr><td>Corpus ops</td><td>FiftyOne + Cleanlab</td><td>Failure mining by similarity; label-error auditing — both Apache-2.0, run locally</td></tr>
+<tr><td>Ball labels</td><td>CVAT track mode</td><td>Keyframe interpolation — fastest solo point-labeling</td></tr>
+<tr><td>Detectors</td><td>WASB · VideoMAE · RT-DETR · RTMPose</td><td>Strongest open weights with commercial-safe licenses (AGPL avoided)</td></tr>
+<tr><td>Score authority</td><td>FIVB reducer + side-out</td><td>Deterministic, event-sourced, already tested</td></tr>
+<tr><td>Live inference</td><td>CoreML / ONNX on Apple Silicon</td><td>WASB-class nets are laptop-real-time; no GPU server needed</td></tr>
+<tr><td>Loop operator</td><td>Claude Code + campaign skill</td><td>Goal + budget prompts, locked harness, ledger, stop rules</td></tr>
+<tr><td>VLM adjudicator</td><td>Qwen3-VL-2B, SFT-first <em>(later)</em></td><td>Apache-2.0; NVIDIA's demo found SFT beat RL for perception; $5–20/run</td></tr>
+</table></div>
+
+<h2>Waves — the critical path to “keeps score”</h2>
+<div class="waves">
+  <div class="wave"><b>1 · Corpus + game-state model</b><div class="gate">gate: <code>rally-boundary F1</code> on the selection split — starts when the sweep finishes</div></div>
+  <div class="wave"><b>2 · Ball tracker fine-tune</b><div class="gate">gate: <code>ball F1@4px</code> + tighter rally-end timing</div></div>
+  <div class="wave"><b>3 · Players + serve side → end-to-end offline score replay</b><div class="gate">gate: <code>winner accuracy (gold)</code> · <code>sequence similarity</code> · <code>set-score exact match</code> — the product goal</div></div>
+  <div class="wave"><b>4 · Live shadow on MediaMTX + confirm UI</b><div class="gate">gate: shadow-vs-manual agreement across full events</div></div>
+  <div class="wave"><b>5 · Poses, homography, analytics products</b><div class="gate">gate: per-product metrics; highlights ship free from rally windows</div></div>
+</div>
+
+<footer>ScoreVision · repo: <code>vision/</code> on master · canonical docs: ARCHITECTURE.md, FLYWHEEL.md, README.md · corpus: NAS “CV TRAINING DATA”</footer>
+</div>

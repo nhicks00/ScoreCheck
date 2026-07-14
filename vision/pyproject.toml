@@ -13,6 +13,7 @@ dependencies = [
 scorevision-label = "scorevision.vod_labeler:main"
 scorevision-windows = "scorevision.activity:main"
 scorevision-clips = "scorevision.clips:main"
+scorevision-gamestate-dataset = "scorevision.gamestate_dataset:main"
 
 [build-system]
 requires = ["hatchling"]
