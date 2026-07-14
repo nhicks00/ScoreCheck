@@ -33,6 +33,11 @@ _MATCH_RE = re.compile(r"\bMATCH\s+(\d+)\b")
 _FINAL_RE = re.compile(r"\bFINAL\b")
 _SEED_NAME_RE = re.compile(r"^(\d{1,2})\s+(.+)$")
 _DIGITS_RE = re.compile(r"^\d{1,6}$")
+# SportCam theme (third-party production overlay, e.g. Colorado Cupcakes
+# streams): '1st 00:00' ordinal-clock meta and a 'SPORTCAM' badge.
+_ORDINAL_CLOCK_RE = re.compile(r"\b(\d+)(?:ST|ND|RD|TH)\s+\d{1,2}:\d{2}\b")
+_SPORTCAM_RE = re.compile(r"\bSPORT\s*CAM\b")
+_NAME_TRAILING_DIGITS_RE = re.compile(r"^(.+?)\s+(\d{1,2})$")
 
 # The overlay's gold spans a gradient (#f9e29b bright to #d4af37 base) and a
 # 0.8-alpha seed variant; a hue-style rule beats a single center+tolerance.
@@ -80,10 +85,11 @@ def locate_scorebug(
 ) -> BugRect | None:
     """Find the scorebug rect by OCRing full probe frames.
 
-    Anchors on the ``COURT n ... MATCH n`` meta strip, then unions the token
-    boxes of the two team rows directly above it. Returns the padded union
-    over all probe frames that contained the strip, or None when fewer than
-    ``min_hits`` frames matched.
+    Anchors on the ``COURT n ... MATCH n`` meta strip (ScoreCheck theme) or
+    the ``SPORTCAM`` / ``1st 00:00`` ordinal-clock strip (SportCam theme),
+    then unions the token boxes of the two team rows directly above it.
+    Returns the padded union over all probe frames that contained the strip,
+    or None when fewer than ``min_hits`` frames matched.
     """
 
     boxes: list[tuple[float, float, float, float]] = []
@@ -93,7 +99,10 @@ def locate_scorebug(
         meta = [
             t
             for t in tokens
-            if _COURT_RE.search(t.text.upper()) or _MATCH_RE.search(t.text.upper())
+            if _COURT_RE.search(t.text.upper())
+            or _MATCH_RE.search(t.text.upper())
+            or _SPORTCAM_RE.search(t.text.upper())
+            or _ORDINAL_CLOCK_RE.search(t.text.upper())
         ]
         if not meta:
             continue
@@ -316,13 +325,122 @@ def _parse_row(
     )
 
 
+def _cluster_rows(
+    tokens: list[OcrToken], meta_top: float
+) -> tuple[list[OcrToken], list[OcrToken]] | None:
+    row_candidates = [t for t in tokens if t.y + t.height <= meta_top + 0.02]
+    if not row_candidates:
+        return None
+    centers = sorted(t.center_y for t in row_candidates)
+    midpoint = (centers[0] + centers[-1]) / 2.0
+    row_one = [t for t in row_candidates if t.center_y < midpoint]
+    row_two = [t for t in row_candidates if t.center_y >= midpoint]
+    return row_one, row_two
+
+
+def _parse_sportcam_row(
+    row_tokens: list[OcrToken], set_number: int
+) -> RowReading | None:
+    """SportCam row: name, red per-set finals, white-on-black current score.
+
+    All cells are OCR-legible directly (high contrast); the only ambiguity is
+    a missed lone current digit, in which case the reading reports no score
+    rather than promoting a set final into the current slot.
+    """
+
+    if not row_tokens:
+        return None
+    name_tokens = [t for t in row_tokens if re.search(r"[A-Z]{2,}", t.text.upper())]
+    if not name_tokens:
+        return None
+    name_token = max(name_tokens, key=lambda t: t.width)
+    name = re.sub(r"^[^A-Z0-9]+", "", name_token.text.strip().upper()).strip()
+    if not name:
+        return None
+    digits: list[str] = []
+    trailing = _NAME_TRAILING_DIGITS_RE.match(name)
+    if trailing:
+        name = trailing.group(1).strip()
+        digits.append(trailing.group(2))
+    name_right = name_token.x + name_token.width
+    digit_tokens = sorted(
+        (
+            t
+            for t in row_tokens
+            if t is not name_token
+            and t.x >= name_token.x + name_token.width * 0.3
+            and _DIGITS_RE.match(t.text.strip())
+            and len(t.text.strip()) <= 2
+        ),
+        key=lambda t: t.x,
+    )
+    del name_right
+    digits.extend(t.text.strip() for t in digit_tokens)
+    expected_finals = max(0, set_number - 1)
+    current: int | None = None
+    finals: str | None = None
+    if len(digits) == expected_finals + 1:
+        current = int(digits[-1])
+        finals = "".join(digits[:-1]) or None
+    elif len(digits) == expected_finals:
+        finals = "".join(digits) or None  # current cell missed this frame
+    else:
+        return None
+    return RowReading(
+        seed=None,
+        name=name,
+        current_score=current,
+        finals_digits=finals,
+        serving=False,
+    )
+
+
+def _parse_sportcam(
+    crop: np.ndarray,
+    t_seconds: float,
+    tokens: list[OcrToken],
+    upper: list[tuple[OcrToken, str]],
+) -> ScorebugReading | None:
+    set_number: int | None = None
+    meta_tokens: list[OcrToken] = []
+    for token, text in upper:
+        ordinal = _ORDINAL_CLOCK_RE.search(text)
+        if ordinal:
+            set_number = int(ordinal.group(1))
+            meta_tokens.append(token)
+        elif _SPORTCAM_RE.search(text):
+            meta_tokens.append(token)
+    if set_number is None or not meta_tokens:
+        return None
+    meta_top = min(t.y for t in meta_tokens)
+    rows = _cluster_rows(tokens, meta_top)
+    if rows is None:
+        return None
+    parsed_one = _parse_sportcam_row(rows[0], set_number)
+    parsed_two = _parse_sportcam_row(rows[1], set_number)
+    if parsed_one is None or parsed_two is None:
+        return None
+    return ScorebugReading(
+        t_seconds=t_seconds,
+        court=None,
+        set_number=set_number,
+        match_number=None,
+        is_final=False,
+        row_a=parsed_one,
+        row_b=parsed_two,
+    )
+
+
 def parse_scorebug(
     crop: np.ndarray,
     t_seconds: float,
     *,
     tokens: list[OcrToken] | None = None,
 ) -> ScorebugReading | None:
-    """Parse one scorebug crop into a reading; None when no bug is legible."""
+    """Parse one scorebug crop into a reading; None when no bug is legible.
+
+    Dispatches on the overlay theme: ScoreCheck's own bug (COURT/SET/MATCH
+    meta strip) first, then the SportCam third-party bug (ordinal clock)."""
 
     if tokens is None:
         tokens = recognize_text(crop)
@@ -343,20 +461,14 @@ def parse_scorebug(
             match_number = int(m.group(1)) if m else match_number
             is_final = is_final or bool(f)
     if not meta_tokens:
-        return None
+        return _parse_sportcam(crop, t_seconds, tokens, upper)
     meta_top = min(t.y for t in meta_tokens)
 
-    row_candidates = [t for t, _ in upper if t.y + t.height <= meta_top + 0.02]
-    if not row_candidates:
+    rows = _cluster_rows(tokens, meta_top)
+    if rows is None:
         return None
-    # Cluster into two rows by center-y midpoint.
-    centers = sorted(t.center_y for t in row_candidates)
-    midpoint = (centers[0] + centers[-1]) / 2.0
-    row_one = [t for t in row_candidates if t.center_y < midpoint]
-    row_two = [t for t in row_candidates if t.center_y >= midpoint]
-
-    parsed_one = _parse_row(row_one, crop, serve_column_frac=0.055)
-    parsed_two = _parse_row(row_two, crop, serve_column_frac=0.055)
+    parsed_one = _parse_row(rows[0], crop, serve_column_frac=0.055)
+    parsed_two = _parse_row(rows[1], crop, serve_column_frac=0.055)
     if parsed_one is None or parsed_two is None:
         return None
     return ScorebugReading(

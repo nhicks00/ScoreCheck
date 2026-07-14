@@ -141,3 +141,64 @@ class ParseTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SportcamParseTest(unittest.TestCase):
+    """Fixtures captured from a real SportCam-overlay VOD (5oeyVLTdwUc)."""
+
+    def test_set1_current_only(self) -> None:
+        tokens = [
+            token("8", 0.718, 0.138, 0.046, 0.16),
+            token("HURST/BASEY", 0.111, 0.123, 0.454, 0.16),
+            token("PEREZ/HARTHALLER", 0.039, 0.415, 0.664, 0.16),
+            token("9", 0.711, 0.446, 0.054, 0.16),
+            token("1st 00:00", 0.543, 0.763, 0.226, 0.12),
+            token("SPORTCAM", 0.025, 0.815, 0.182, 0.12),
+        ]
+        reading = parse_scorebug(blank_crop(), 600.0, tokens=tokens)
+        assert reading is not None
+        self.assertIsNone(reading.court)
+        self.assertIsNone(reading.match_number)
+        self.assertEqual(reading.set_number, 1)
+        self.assertEqual(reading.row_a.name, "HURST/BASEY")
+        self.assertEqual(reading.row_a.current_score, 8)
+        self.assertIsNone(reading.row_a.finals_digits)
+        self.assertEqual(reading.row_b.current_score, 9)
+
+    def test_set2_finals_and_current(self) -> None:
+        tokens = [
+            token("HURST/BASEY", 0.111, 0.123, 0.454, 0.16),
+            token("14", 0.825, 0.123, 0.093, 0.16),
+            token("21", 0.729, 0.154, 0.071, 0.16),
+            token("|PEREZ/HARTHALLER 15", 0.011, 0.431, 0.789, 0.16),
+            token("14", 0.821, 0.415, 0.093, 0.16),
+            token("2nd 00:00", 0.682, 0.769, 0.250, 0.12),
+            token("SPORTCAM", 0.025, 0.800, 0.186, 0.12),
+        ]
+        reading = parse_scorebug(blank_crop(), 2400.0, tokens=tokens)
+        assert reading is not None
+        self.assertEqual(reading.set_number, 2)
+        self.assertEqual(reading.row_a.finals_digits, "21")
+        self.assertEqual(reading.row_a.current_score, 14)
+        self.assertEqual(reading.row_b.name, "PEREZ/HARTHALLER")
+        self.assertEqual(reading.row_b.finals_digits, "15")
+        self.assertEqual(reading.row_b.current_score, 14)
+
+    def test_missed_lone_current_reports_no_score(self) -> None:
+        # Real failure at t=1500: row A's lone '1' was not detected; the set
+        # final must not be promoted into the current slot.
+        tokens = [
+            token("HURST/BASEY", 0.111, 0.123, 0.454, 0.16),
+            token("21", 0.729, 0.154, 0.071, 0.16),
+            token("15", 0.725, 0.446, 0.071, 0.16),
+            token("1", 0.821, 0.415, 0.061, 0.16),
+            token("PEREZ/HARTHALLER", 0.032, 0.413, 0.673, 0.16),
+            token("2nd 00:00", 0.629, 0.769, 0.254, 0.12),
+            token("SPORTCAM", 0.025, 0.800, 0.186, 0.12),
+        ]
+        reading = parse_scorebug(blank_crop(), 1500.0, tokens=tokens)
+        assert reading is not None
+        self.assertIsNone(reading.row_a.current_score)
+        self.assertEqual(reading.row_a.finals_digits, "21")
+        self.assertEqual(reading.row_b.current_score, 1)
+        self.assertFalse(reading.has_scores)
