@@ -23,10 +23,25 @@ committed state's finals come from scores the tracker froze itself.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 
 from .scorebug import ScorebugReading
+
+_IDENTITY_JUNK_RE = re.compile(r"[^A-Z0-9]+")
+
+
+def normalize_team_identity(name: str) -> str:
+    """Collapse punctuation/whitespace jitter for match-identity comparison.
+
+    OCR reads the same overlay name with drifting spacing around slashes
+    ('JACKSON / WOOD' vs 'JACKSON/ WOOD'); comparing raw strings fabricates
+    dozens of phantom match restarts per stream.
+    """
+
+    return _IDENTITY_JUNK_RE.sub(" ", name.upper()).strip()
+
 
 REGULAR_SET_TARGET = 21
 DECIDING_SET_TARGET = 15
@@ -77,7 +92,11 @@ class MatchState:
     finished: bool = False
 
     def key(self) -> tuple:
-        return (self.match_number, self.name_a, self.name_b)
+        return (
+            self.match_number,
+            normalize_team_identity(self.name_a),
+            normalize_team_identity(self.name_b),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,7 +116,11 @@ class _Candidate:
     is_final: bool
 
     def key(self) -> tuple:
-        return (self.match_number, self.name_a, self.name_b)
+        return (
+            self.match_number,
+            normalize_team_identity(self.name_a),
+            normalize_team_identity(self.name_b),
+        )
 
 
 def _set_target(set_number: int) -> int:

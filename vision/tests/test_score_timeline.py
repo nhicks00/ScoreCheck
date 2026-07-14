@@ -326,3 +326,24 @@ class TimelineTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IdentityJitterTest(unittest.TestCase):
+    def test_whitespace_jitter_does_not_restart_match(self) -> None:
+        timeline = ScoreTimeline(vote_frames=2, anomaly_frames=4)
+        feed(
+            timeline,
+            [reading(float(i), 0, 0, name_b="AVERY JACKSON / SARAH WOOD") for i in range(4)],
+        )
+        self.assertEqual(timeline.summary()["matches"], 1)
+        feed(
+            timeline,
+            [
+                reading(10.0, 1, 0, name_b="AVERY JACKSON/ SARAH WOOD"),
+                reading(11.0, 1, 0, name_b="AVERY JACKSON /SARAH WOOD"),
+            ],
+        )
+        summary = timeline.summary()
+        self.assertEqual(summary["matches"], 1)
+        self.assertEqual(summary["points"], 1)
+        self.assertEqual(summary["anomalies"], 0)
