@@ -93,6 +93,14 @@ Items 1-6 were validated on sealed branches and merged locally. Items 7-11
 have focused regression coverage in this hardening branch. None is accepted as
 a runtime fix until the post-deployment gates below pass.
 
+The Phase 0 persistence gate passed on 2026-07-13 after exposing and correcting
+one additional defect: order-sensitive `JSON.stringify` comparison treated
+equivalent PostgreSQL `jsonb` set-score objects as changes. The accepted run
+completed 997 source polls over 30 minutes with zero poll errors, zero
+`score_states` or `overlay_states` update growth, and zero Realtime insertion or
+relation-size growth. See
+[`2026-07-13-supabase-cadence.md`](./monitoring-gates/2026-07-13-supabase-cadence.md).
+
 ## Architecture Correction
 
 The prior four-`c-4`, two-courts-per-compositor target is retired. The real
@@ -137,6 +145,10 @@ Capacity acceptance for every admitted host:
    unchanged score/overlay writes stay flat, and Realtime partition growth does
    not resume. Managed Realtime history cleanup is a separate Supabase-supported
    operation and must not precede this verification.
+
+Phase 0 is complete. The migration, dependency-ordered deployment, production
+dashboard smoke test, and 30-minute persistence gate passed. Managed Realtime
+history cleanup remains separate and has not been attempted.
 
 ### Phase 1: short causal diagnostics
 

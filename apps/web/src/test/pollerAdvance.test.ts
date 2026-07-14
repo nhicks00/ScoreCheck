@@ -241,4 +241,44 @@ describe("poller final-match advancement", () => {
     expect(scoreStatePatchMatches(current, { team_a_score: 5 })).toBe(false);
     expect(scoreStatePatchMatches(current, { stale: true, source_available: false })).toBe(false);
   });
+
+  it("treats JSONB object key reordering as equal without hiding score changes", () => {
+    const current = {
+      court_id: "court-1",
+      match_id: "match-1",
+      team_a_score: 21,
+      team_b_score: 14,
+      team_a_sets: 2,
+      team_b_sets: 0,
+      current_set: 2,
+      set_scores: [
+        { setNumber: 1, isComplete: true, teamAScore: 21, teamBScore: 11 },
+        { setNumber: 2, isComplete: true, teamAScore: 21, teamBScore: 14 }
+      ],
+      serving_team: null,
+      status: "Final",
+      source: "api" as const,
+      source_available: true,
+      source_priority: "primary" as const,
+      source_pending_scores: [],
+      stale: false,
+      message: null,
+      last_api_poll_at: "2026-07-13T15:00:00.000Z",
+      last_score_change_at: "2026-07-13T15:00:00.000Z",
+      updated_at: "2026-07-13T15:00:00.000Z"
+    };
+
+    expect(scoreStatePatchMatches(current, {
+      set_scores: [
+        { teamBScore: 11, teamAScore: 21, isComplete: true, setNumber: 1 },
+        { teamBScore: 14, teamAScore: 21, isComplete: true, setNumber: 2 }
+      ]
+    })).toBe(true);
+    expect(scoreStatePatchMatches(current, {
+      set_scores: [
+        { teamBScore: 11, teamAScore: 21, isComplete: true, setNumber: 1 },
+        { teamBScore: 15, teamAScore: 21, isComplete: true, setNumber: 2 }
+      ]
+    })).toBe(false);
+  });
 });

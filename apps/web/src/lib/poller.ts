@@ -1027,7 +1027,7 @@ function delayedScoreMatchesVisibleScore(delayed: DelayedVblScorePayload, visibl
     && delayed.current_set === visible.current_set
     && delayed.status === visible.status
     && delayed.serving_team === visible.serving_team
-    && JSON.stringify(delayed.set_scores) === JSON.stringify(visible.set_scores ?? []);
+    && valuesEqual(delayed.set_scores, visible.set_scores ?? []);
 }
 
 async function queueLiveVblScore(court: CourtRow, match: MatchRow, currentScore: ScoreRow | null, snapshot: ReturnType<typeof normalizeScorePayload>, now: string) {
@@ -1187,11 +1187,21 @@ export function scoreStatePatchMatches(score: ScoreRow | null, patch: Partial<Sc
   return Object.entries(patch).every(([key, expected]) => valuesEqual(score[key as keyof ScoreRow], expected));
 }
 
-function valuesEqual(left: unknown, right: unknown) {
+function valuesEqual(left: unknown, right: unknown): boolean {
   if (left === right) return true;
-  if ((left == null || right == null) && left !== right) return false;
+  if (left == null || right == null) return false;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every((value, index) => valuesEqual(value, right[index]));
+  }
   if (typeof left === "object" || typeof right === "object") {
-    return JSON.stringify(left) === JSON.stringify(right);
+    if (typeof left !== "object" || typeof right !== "object") return false;
+    const leftRecord = left as Record<string, unknown>;
+    const rightRecord = right as Record<string, unknown>;
+    const leftKeys = Object.keys(leftRecord);
+    const rightKeys = Object.keys(rightRecord);
+    if (leftKeys.length !== rightKeys.length) return false;
+    return leftKeys.every((key) => Object.hasOwn(rightRecord, key) && valuesEqual(leftRecord[key], rightRecord[key]));
   }
   return false;
 }
