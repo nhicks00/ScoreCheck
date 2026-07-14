@@ -176,8 +176,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--ocr-scale",
         type=int,
-        default=3,
-        help="integer upscale before OCR; small lone digits need >=3",
+        default=1,
+        help="whole-crop upscale before OCR. Leave at 1: the gold-cell "
+        "template classifier needs native pixels (nearest-neighbor upscale "
+        "phase-distorts glyph normalization into 6/9/8 confusions)",
     )
     parser.add_argument("--progress-every", type=float, default=600.0)
     args = parser.parse_args(argv)

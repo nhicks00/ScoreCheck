@@ -132,6 +132,36 @@ class TimelineTest(unittest.TestCase):
         self.assertIn(EventKind.SET_END, kinds)
         self.assertIn(EventKind.SET_START, kinds)
 
+    def test_set_transition_recovers_missed_closing_point(self) -> None:
+        # The 21st point rarely survives voting before the bug rolls to the
+        # next set; the tracker must synthesize it, not emit a SCORE_JUMP.
+        timeline = self._started()
+        m = timeline.match
+        assert m is not None
+        m.score_a, m.score_b = 20, 19
+        feed(
+            timeline,
+            [reading(900.0 + i, 0, 0, set_number=2) for i in range(2)],
+        )
+        self.assertEqual(m.finals_a, [21])
+        self.assertEqual(m.finals_b, [19])
+        points = [e for e in timeline.events if e.kind is EventKind.POINT]
+        self.assertEqual(points[-1].detail["score"], {"a": 21, "b": 19})
+        self.assertEqual(timeline.summary()["jumps"], 0)
+
+    def test_final_records_closing_score(self) -> None:
+        timeline = self._started()
+        m = timeline.match
+        assert m is not None
+        m.set_number, m.finals_a, m.finals_b = 2, [21], [19]
+        m.score_a, m.score_b = 20, 14
+        feed(
+            timeline,
+            [reading(300.0 + i, 21, 14, set_number=None, final=True) for i in range(2)],
+        )
+        self.assertEqual((m.score_a, m.score_b), (21, 14))
+        self.assertTrue(m.finished)
+
     def test_set_transition_rejected_for_implausible_final(self) -> None:
         timeline = self._started()
         m = timeline.match

@@ -336,11 +336,29 @@ class ScoreTimeline:
 
         # Set transition: committed scores freeze into finals; the next set
         # shows 0-0 (or 1-0/0-1 when sampling caught a quick first rally).
+        # The set-closing point routinely never survives voting — the bug
+        # rolls to the next set within a second or two of the final rally —
+        # so accept a committed score one point short of a plausible final
+        # and emit that POINT first.
         if cand_set == m.set_number + 1 and not c.is_final:
-            if not plausible_set_final(m.score_a, m.score_b, m.set_number):
-                return False
             if c.current_a + c.current_b > 1:
                 return False
+            closing_point: str | None = None
+            if not plausible_set_final(m.score_a, m.score_b, m.set_number):
+                closed_by_a = plausible_set_final(m.score_a + 1, m.score_b, m.set_number)
+                closed_by_b = plausible_set_final(m.score_a, m.score_b + 1, m.set_number)
+                if closed_by_a and not closed_by_b:
+                    closing_point = "A"
+                elif closed_by_b and not closed_by_a:
+                    closing_point = "B"
+                else:
+                    return False
+            if closing_point == "A":
+                m.score_a += 1
+                self._emit_point(m, t, "A")
+            elif closing_point == "B":
+                m.score_b += 1
+                self._emit_point(m, t, "B")
             self._emit(
                 EventKind.SET_END,
                 t,
@@ -359,21 +377,20 @@ class ScoreTimeline:
         # FINAL: the meta strip replaced SET n; the gold cell keeps the
         # final set's score (possibly one point ahead of the last commit).
         if c.is_final:
-            legal_last_point = False
+            last_point: str | None
             if c.current_a == m.score_a + 1 and c.current_b == m.score_b:
-                m.score_a = c.current_a
-                legal_last_point = True
-                self._emit_point(m, t, "A")
+                last_point = "A"
             elif c.current_b == m.score_b + 1 and c.current_a == m.score_a:
-                m.score_b = c.current_b
-                legal_last_point = True
-                self._emit_point(m, t, "B")
+                last_point = "B"
             elif c.current_a == m.score_a and c.current_b == m.score_b:
-                legal_last_point = True
-            if not legal_last_point:
+                last_point = ""
+            else:
                 return False
-            if not plausible_set_final(m.score_a, m.score_b, m.set_number):
+            if not plausible_set_final(c.current_a, c.current_b, m.set_number):
                 return False
+            m.score_a, m.score_b = c.current_a, c.current_b
+            if last_point:
+                self._emit_point(m, t, last_point)
             m.finished = True
             self._emit(EventKind.MATCH_FINAL, t, {"state": self._state_json()})
             return True

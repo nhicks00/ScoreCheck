@@ -143,12 +143,26 @@ vision/
   data/                     source catalog (copied from old branch)
 ```
 
-Run the labeler:
+Run the M1/M2 pipeline:
 
 ```bash
 cd vision && uv sync
-uv run scorevision-label /path/to/vod.mp4 --out out/bwk/
+# 1. score labels from the scorebug (events/states/rallies/summary)
+uv run scorevision-label /path/to/vod.mp4 --out out/vod1/
+# 2. rally windows from the 1Hz activity signal + score commits
+uv run scorevision-windows /path/to/vod.mp4 \
+  --rallies out/vod1/rallies.json --out out/vod1/windows.json
+# 3. overlay-masked training clips (mask rect from out/vod1/run.json)
+uv run scorevision-clips /path/to/vod.mp4 \
+  --windows out/vod1/windows.json --mask-rect 0,20,626,124 --out out/vod1/clips/
+# corpus archival (operator-run; ~100-200 GB):
+CORPUS_DIR=/path/to/corpus ./scripts/archive_corpus.sh
 ```
+
+For a new overlay theme, harvest a digit-template bank once
+(`scripts/harvest_digit_templates.py`) — Apple Vision cannot be trusted with
+isolated scorebug digits (a lone gold '0' returns nothing); template
+correlation against the known overlay font is deterministic.
 
 ## Research references
 

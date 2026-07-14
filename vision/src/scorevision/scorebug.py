@@ -251,6 +251,12 @@ def _parse_row(
     name_token = max(name_tokens, key=lambda t: t.width)
     seed: int | None = None
     name = name_token.text.strip().upper()
+    # The serve icon or cell borders occasionally OCR into the name as
+    # leading punctuation ('• THEO...', ': ALEXANDER...') — strip it, or
+    # match identity flaps and fabricates phantom new matches.
+    name = re.sub(r"^[^A-Z0-9]+", "", name).strip()
+    if not name:
+        return None
     matched = _SEED_NAME_RE.match(name)
     if matched:
         seed = int(matched.group(1))
