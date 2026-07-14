@@ -186,13 +186,23 @@ known-bad path produces evidence volume, not confidence.
   resolved incident row, which is still referenced by event and notification
   history. In-memory detection and isolation worked, but the new episode could
   not be persisted and no opening notification was sent.
+- The true per-occurrence incident model is now deployed. Migration `022`
+  permits only one active episode per fingerprint while preserving every
+  resolved occurrence under its own UUID and notification namespace. The
+  matching monitor service refuses to start without contract version `1`.
+  Transactional verification, service provenance, checkpoint advancement,
+  6/6 fresh agents, 8/8 Prometheus targets, 43/43 healthy rules, and zero
+  cutover alerts all passed. The deferred vision schema was also removed from
+  the executable migration queue so future database pushes cannot apply it
+  accidentally.
 
-Phase 1 therefore remains open. Deploy and verify true per-occurrence incident
-episodes, then repeat the physical disconnect/reconnect from a healthy Camera 1
-baseline. The repeat must prove a new durable incident row, one opening page,
-feed-driven resolution, one recovery page after raw readiness and positive
-bitrate, and zero incidents on Cameras 2-8. Subjective slate/audio sync remains
-an independent human-observation requirement.
+Phase 1 therefore remains open only at the physical acceptance boundary. When
+Camera 1 is available again, establish a fresh healthy baseline and repeat the
+disconnect/reconnect. The repeat must prove a new durable incident row, one
+opening page, feed-driven resolution, one recovery page after raw readiness and
+positive bitrate, and zero incidents on Cameras 2-8. Subjective slate/audio sync
+remains an independent human-observation requirement. Do not arm the gate while
+Camera 1 is physically off.
 
 ### Phase 2: qualify the final resource topology
 
