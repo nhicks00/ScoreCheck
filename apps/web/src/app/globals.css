@@ -3825,6 +3825,16 @@ body:has(.program-root) {
   font-size: 18px;
 }
 
+.program-signal-slate p {
+  color: #d9dde5;
+  font-family: var(--font-ui);
+  font-size: 16px;
+  line-height: 1.5;
+  margin: 8px 24px 0;
+  max-width: 640px;
+  text-align: center;
+}
+
 .commentary-live-meter {
   background: #202631;
   border: 1px solid var(--line);

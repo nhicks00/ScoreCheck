@@ -459,6 +459,10 @@ export function ProgramClient({
             <span>ScoreCheck</span>
             <strong>Court video signal interrupted</strong>
             <small>Stay tuned</small>
+            <p>
+              Nathan has been notified via an alert system he built. He&apos;s
+              working on getting the camera back up now.
+            </p>
           </div>
         )}
         <div className="program-overlay">
