@@ -271,12 +271,6 @@ class ScoreTimeline:
             # Team/match changes are big claims; require the longer vote.
             self.readings_rejected += 1
             return
-        if self.match is not None and not self.match.finished:
-            self._emit(
-                EventKind.ANOMALY,
-                t,
-                {"reason": "match replaced before FINAL", "state": self._state_json()},
-            )
         set_number = c.set_number or 1
         completed = max(0, set_number - 1)
         finals_a = split_finals_digits(c.finals_a, completed)
@@ -288,6 +282,16 @@ class ScoreTimeline:
             if not plausible_set_final(fa, fb, idx):
                 self.readings_rejected += 1
                 return
+        if self.match is not None and not self.match.finished:
+            self._emit(
+                EventKind.ANOMALY,
+                t,
+                {
+                    "reason": "match replaced before FINAL",
+                    "state": self._state_json(),
+                    "replacement": {"a": c.name_a, "b": c.name_b, "match": c.match_number},
+                },
+            )
         self.match = MatchState(
             match_number=c.match_number,
             name_a=c.name_a,

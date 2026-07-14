@@ -10,6 +10,7 @@ ball models.
 
 from __future__ import annotations
 
+import bisect
 import json
 import re
 import subprocess
@@ -107,8 +108,6 @@ def derive_rally_windows(
         backed = False
         if threshold is not None and times:
             # Find the last sustained active run before the commit.
-            import bisect
-
             hi = bisect.bisect_right(times, commit_t)
             lo = bisect.bisect_left(times, earliest)
             run_end = None
