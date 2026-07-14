@@ -11,6 +11,8 @@ dependencies = [
 
 [project.scripts]
 scorevision-label = "scorevision.vod_labeler:main"
+scorevision-windows = "scorevision.activity:main"
+scorevision-clips = "scorevision.clips:main"
 
 [build-system]
 requires = ["hatchling"]
