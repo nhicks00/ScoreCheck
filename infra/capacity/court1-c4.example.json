@@ -7,6 +7,17 @@
   "stepSeconds": 5,
   "requiredBranches": ["raw", "preview", "program"],
   "ffmpegBranches": ["preview", "program"],
+  "expectedSourceProfile": {
+    "protocol": "RTMP",
+    "mode": "PUSH",
+    "videoCodec": "H264",
+    "videoWidth": 1920,
+    "videoHeight": 1080,
+    "videoProfile": "Main",
+    "audioCodec": "AAC",
+    "audioSampleRateHz": 48000,
+    "audioChannelCount": 2
+  },
   "ingest": {
     "agent": "bvm-preview-01",
     "service": "mediamtx",

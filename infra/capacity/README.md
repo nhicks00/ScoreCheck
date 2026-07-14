@@ -5,9 +5,9 @@ operator attestations into a credential-free PASS/FAIL evidence file. It does
 not start readers, Egress jobs, cameras, or destinations.
 
 The evaluator deliberately refuses a telemetry-only pass. Prometheus does not
-currently prove source-profile identity, process reaping, `/dev/shm` headroom,
-or cross-court isolation, so those values must be captured and supplied in the
-attestation file. Missing values fail the gate.
+currently prove the complete source profile, whole-host CPU, process reaping,
+`/dev/shm` headroom, or cross-court isolation, so those values must be captured
+and supplied in the attestation file. Missing values fail the gate.
 
 ## Run
 
@@ -38,11 +38,13 @@ The checked-in c-4 profile requires:
 - positive raw bitrate and zero media frame-error growth;
 - FFmpeg p05 speed at least `0.98x`, p05 output at least 29 fps, and zero drop
   growth;
-- ingest and compositor CPU p95 no more than 75%, maximum below 80%, stable
-  post-warmup memory, no restart growth, and no OOM;
+- ingest and compositor service CPU plus separately observed whole-host CPU p95
+  no more than 75%, maximum below 80%, stable post-warmup memory, no restart
+  growth, and no OOM;
 - fresh browser heartbeats, at least 29 fps at p05, no warning-level frame-drop
   or freeze ratio, and a continuously active Egress job;
-- verified source profile and assignment, zero zombie growth, no Egress errors,
+- exact observed protocol/mode/codecs/dimensions/audio profile matching the
+  manifest, verified assignment, zero zombie growth, no Egress errors,
   `/dev/shm` below 80%, and no impact outside the assigned court.
 
 Use a normalizer-only manifest by omitting `compositor`, setting

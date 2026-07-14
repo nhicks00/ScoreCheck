@@ -1,9 +1,23 @@
 {
-  "sourceProfileVerified": false,
+  "observedSourceProfile": {
+    "protocol": null,
+    "mode": null,
+    "videoCodec": null,
+    "videoWidth": null,
+    "videoHeight": null,
+    "videoProfile": null,
+    "audioCodec": null,
+    "audioSampleRateHz": null,
+    "audioChannelCount": null
+  },
   "assignmentVerified": false,
   "unassignedCourtsUnaffected": false,
   "ingestZombieGrowth": null,
+  "ingestHostCpuP95Ratio": null,
+  "ingestHostCpuMaxRatio": null,
   "compositorZombieGrowth": null,
+  "compositorHostCpuP95Ratio": null,
+  "compositorHostCpuMaxRatio": null,
   "egressErrors": null,
   "egressShmMaxRatio": null
 }

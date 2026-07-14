@@ -49,13 +49,17 @@ test("fails on browser loss, CPU saturation, zombie growth, or missing attestati
   const evidence = healthyEvidence(gateConfig);
   evidence.series.browser_dropped = series([0, 100, 200, 300, 400]);
   evidence.series.ingest_cpu = series([3.3, 3.3, 3.3, 3.3, 3.3]);
-  const report = evaluateEvidence(gateConfig, evidence, { ...attestations(), ingestZombieGrowth: 2, sourceProfileVerified: false });
+  const report = evaluateEvidence(gateConfig, evidence, {
+    ...attestations(),
+    ingestZombieGrowth: 2,
+    observedSourceProfile: { ...attestations().observedSourceProfile, videoCodec: "H265" }
+  });
   assert.equal(report.verdict, "FAIL");
   const failed = new Set(report.checks.filter((check) => !check.pass).map((check) => check.id));
   assert(failed.has("browser_drop_ratio"));
   assert(failed.has("ingest_cpu_max"));
   assert(failed.has("ingest_zombie_growth"));
-  assert(failed.has("source_profile_verified"));
+  assert(failed.has("source_profile_videoCodec"));
 });
 
 test("CLI queries Prometheus and writes a protected credential-free report", async () => {
@@ -91,7 +95,7 @@ test("CLI queries Prometheus and writes a protected credential-free report", asy
     const reportText = await readFile(outputPath, "utf8");
     const report = JSON.parse(reportText);
     assert.equal(report.verdict, "PASS");
-    assert.equal(report.attestations.sourceProfileVerified, true);
+    assert.equal(report.attestations.observedSourceProfile.videoCodec, "H264");
     assert(!reportText.includes("test-only-token"));
     assert(!reportText.includes("must-not-survive"));
     assert.equal((await stat(outputPath)).mode & 0o777, 0o600);
@@ -111,6 +115,7 @@ function config() {
     stepSeconds: 5,
     requiredBranches: ["raw", "preview", "program"],
     ffmpegBranches: ["preview", "program"],
+    expectedSourceProfile: sourceProfile(),
     ingest: { agent: "ingest-a", service: "mediamtx", vcpus: 4 },
     compositor: { agent: "compositor-a", service: "bvm-egress", vcpus: 4 },
     requireBrowser: true,
@@ -133,13 +138,31 @@ function config() {
 
 function attestations() {
   return {
-    sourceProfileVerified: true,
+    observedSourceProfile: sourceProfile(),
     assignmentVerified: true,
     unassignedCourtsUnaffected: true,
     ingestZombieGrowth: 0,
+    ingestHostCpuP95Ratio: 0.6,
+    ingestHostCpuMaxRatio: 0.7,
     compositorZombieGrowth: 0,
+    compositorHostCpuP95Ratio: 0.55,
+    compositorHostCpuMaxRatio: 0.65,
     egressErrors: 0,
     egressShmMaxRatio: 0.4
+  };
+}
+
+function sourceProfile() {
+  return {
+    protocol: "RTMP",
+    mode: "PUSH",
+    videoCodec: "H264",
+    videoWidth: 1920,
+    videoHeight: 1080,
+    videoProfile: "Main",
+    audioCodec: "AAC",
+    audioSampleRateHz: 48000,
+    audioChannelCount: 2
   };
 }
 

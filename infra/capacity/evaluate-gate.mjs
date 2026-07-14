@@ -97,6 +97,7 @@ function assertConfig(config) {
   for (const branch of config.ffmpegBranches) label("FFmpeg branch", branch);
   assertHost("ingest", config.ingest);
   if (config.compositor) assertHost("compositor", config.compositor);
+  assertSourceProfile(config.expectedSourceProfile);
   if (config.requireBrowser && !config.compositor) throw new Error("requireBrowser requires a compositor");
   if (config.minimumDurationSeconds <= config.warmupSeconds) throw new Error("minimumDurationSeconds must exceed warmupSeconds");
   if (config.stepSeconds < 1 || config.stepSeconds > 60) throw new Error("stepSeconds must be from 1 through 60");
@@ -113,6 +114,15 @@ function assertConfig(config) {
   }
   if (config.thresholds.minimumSampleCoverageRatio > 1 || config.thresholds.minimumActiveRatio > 1) throw new Error("coverage ratios cannot exceed 1");
   if (config.thresholds.maximumCpuP95Ratio > config.thresholds.maximumCpuRatio) throw new Error("maximumCpuP95Ratio cannot exceed maximumCpuRatio");
+}
+
+function assertSourceProfile(profile) {
+  if (!profile || typeof profile !== "object") throw new Error("expectedSourceProfile is required");
+  for (const field of ["protocol", "mode", "videoCodec", "videoWidth", "videoHeight", "videoProfile", "audioCodec", "audioSampleRateHz", "audioChannelCount"]) {
+    const value = profile[field];
+    if (typeof value === "string") label(`source profile ${field}`, value);
+    else if (!Number.isInteger(value) || value <= 0) throw new Error(`expectedSourceProfile.${field} is invalid`);
+  }
 }
 
 function assertHost(name, host) {
@@ -253,12 +263,19 @@ function evaluateBrowser(checks, evidence, minimumSamples, thresholds, durationS
 }
 
 function evaluateAttestations(checks, config, attestations) {
-  addCheck(checks, "source_profile_verified", attestations.sourceProfileVerified === true, attestations.sourceProfileVerified ?? null, true);
+  for (const [field, expected] of Object.entries(config.expectedSourceProfile)) {
+    const observed = attestations.observedSourceProfile?.[field] ?? null;
+    addCheck(checks, `source_profile_${field}`, observed === expected, observed, expected);
+  }
   addCheck(checks, "assignment_verified", attestations.assignmentVerified === true, attestations.assignmentVerified ?? null, true);
   addCheck(checks, "unassigned_courts_unaffected", attestations.unassignedCourtsUnaffected === true, attestations.unassignedCourtsUnaffected ?? null, true);
   addCheck(checks, "ingest_zombie_growth", attestations.ingestZombieGrowth === 0, attestations.ingestZombieGrowth ?? null, 0);
+  addCheck(checks, "ingest_host_cpu_p95", Number.isFinite(attestations.ingestHostCpuP95Ratio) && attestations.ingestHostCpuP95Ratio <= config.thresholds.maximumCpuP95Ratio, attestations.ingestHostCpuP95Ratio ?? null, `<= ${config.thresholds.maximumCpuP95Ratio}`);
+  addCheck(checks, "ingest_host_cpu_max", Number.isFinite(attestations.ingestHostCpuMaxRatio) && attestations.ingestHostCpuMaxRatio < config.thresholds.maximumCpuRatio, attestations.ingestHostCpuMaxRatio ?? null, `< ${config.thresholds.maximumCpuRatio}`);
   if (config.compositor) {
     addCheck(checks, "compositor_zombie_growth", attestations.compositorZombieGrowth === 0, attestations.compositorZombieGrowth ?? null, 0);
+    addCheck(checks, "compositor_host_cpu_p95", Number.isFinite(attestations.compositorHostCpuP95Ratio) && attestations.compositorHostCpuP95Ratio <= config.thresholds.maximumCpuP95Ratio, attestations.compositorHostCpuP95Ratio ?? null, `<= ${config.thresholds.maximumCpuP95Ratio}`);
+    addCheck(checks, "compositor_host_cpu_max", Number.isFinite(attestations.compositorHostCpuMaxRatio) && attestations.compositorHostCpuMaxRatio < config.thresholds.maximumCpuRatio, attestations.compositorHostCpuMaxRatio ?? null, `< ${config.thresholds.maximumCpuRatio}`);
     addCheck(checks, "egress_errors", attestations.egressErrors === 0, attestations.egressErrors ?? null, 0);
     addCheck(checks, "egress_shm_max_ratio", Number.isFinite(attestations.egressShmMaxRatio) && attestations.egressShmMaxRatio < config.thresholds.maximumShmRatio, attestations.egressShmMaxRatio ?? null, `< ${config.thresholds.maximumShmRatio}`);
   }
@@ -266,14 +283,31 @@ function evaluateAttestations(checks, config, attestations) {
 
 function boundedAttestations(input) {
   return {
-    sourceProfileVerified: input.sourceProfileVerified === true,
+    observedSourceProfile: boundedSourceProfile(input.observedSourceProfile),
     assignmentVerified: input.assignmentVerified === true,
     unassignedCourtsUnaffected: input.unassignedCourtsUnaffected === true,
     ingestZombieGrowth: Number.isFinite(input.ingestZombieGrowth) ? input.ingestZombieGrowth : null,
+    ingestHostCpuP95Ratio: boundedNumber(input.ingestHostCpuP95Ratio),
+    ingestHostCpuMaxRatio: boundedNumber(input.ingestHostCpuMaxRatio),
     compositorZombieGrowth: Number.isFinite(input.compositorZombieGrowth) ? input.compositorZombieGrowth : null,
+    compositorHostCpuP95Ratio: boundedNumber(input.compositorHostCpuP95Ratio),
+    compositorHostCpuMaxRatio: boundedNumber(input.compositorHostCpuMaxRatio),
     egressErrors: Number.isFinite(input.egressErrors) ? input.egressErrors : null,
     egressShmMaxRatio: Number.isFinite(input.egressShmMaxRatio) ? input.egressShmMaxRatio : null
   };
+}
+
+function boundedSourceProfile(profile) {
+  const output = {};
+  for (const field of ["protocol", "mode", "videoCodec", "videoWidth", "videoHeight", "videoProfile", "audioCodec", "audioSampleRateHz", "audioChannelCount"]) {
+    const value = profile?.[field];
+    output[field] = typeof value === "string" || Number.isFinite(value) ? value : null;
+  }
+  return output;
+}
+
+function boundedNumber(value) {
+  return Number.isFinite(value) ? value : null;
 }
 
 async function queryRange(prometheusUrl, query, start, end, step, token) {
