@@ -24,6 +24,7 @@ export class DigitalOceanProvider {
   async getAccount() {
     const payload = await this.#request("GET", "/account");
     return {
+      uuid: payload.account?.uuid == null ? null : String(payload.account.uuid),
       status: String(payload.account?.status ?? "unknown"),
       dropletLimit: Number(payload.account?.droplet_limit)
     };

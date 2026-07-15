@@ -165,7 +165,7 @@ class FakeCloud {
   failResize = false;
   failReservedIpv4ResponseOnce = false;
 
-  async getAccount() { return { status: "active", dropletLimit: 10 }; }
+  async getAccount() { return { uuid: "account-uuid", status: "active", dropletLimit: 10 }; }
   async listAllDroplets() { return [...this.droplets.values()].map(clone); }
   async findDropletsByName(name) { return (await this.listAllDroplets()).filter((entry) => entry.name === name); }
   async listDropletsByTag(tag) { return (await this.listAllDroplets()).filter((entry) => entry.tags.includes(tag)); }

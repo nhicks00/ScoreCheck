@@ -9,10 +9,10 @@ import { DigitalOceanProvider, VercelDnsProvider } from "./providers.mjs";
 
 test("read-only DigitalOcean operations do not require a provisioning SSH key", async () => {
   const fetchImpl = queueFetch([
-    response(200, { account: { status: "active", droplet_limit: 12 } })
+    response(200, { account: { uuid: "account-uuid", status: "active", droplet_limit: 12 } })
   ]);
   const provider = new DigitalOceanProvider({ token: "token", sshKeys: [], cloudInitPaths: {}, fetchImpl });
-  assert.deepEqual(await provider.getAccount(), { status: "active", dropletLimit: 12 });
+  assert.deepEqual(await provider.getAccount(), { uuid: "account-uuid", status: "active", dropletLimit: 12 });
   await assert.rejects(() => provider.createDroplet({ userDataProfile: "canary" }), /SSH key/);
 });
 

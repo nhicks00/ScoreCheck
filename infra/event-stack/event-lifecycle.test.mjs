@@ -9,11 +9,12 @@ import {
   EventLifecycleController,
   FileStateStore,
   MemoryStateStore,
+  createInitialState,
   lifecycleTags,
   stateSummary,
   validateAnchorConfig
 } from "./event-lifecycle.mjs";
-import { FakeDigitalOceanProvider, FakeDnsProvider, FakeNotifier, FakeStackDeployer } from "./fake-providers.mjs";
+import { fakeProvisioningAttestation, FakeDigitalOceanProvider, FakeDnsProvider, FakeNotifier, FakeStackDeployer } from "./fake-providers.mjs";
 
 const inputs = await loadManifestInputs();
 
@@ -36,7 +37,8 @@ function fixture(overrides = {}) {
   const deployer = overrides.deployer ?? new FakeStackDeployer();
   const notifier = overrides.notifier ?? new FakeNotifier();
   const store = overrides.store ?? new MemoryStateStore();
-  const controller = new EventLifecycleController({ store, cloud, dns, deployer, notifier, now: () => new Date(now) });
+  const provisioningGuard = overrides.provisioningGuard ?? { async verify() { return fakeProvisioningAttestation(); } };
+  const controller = new EventLifecycleController({ store, cloud, dns, deployer, notifier, provisioningGuard, now: () => new Date(now) });
   return { controller, manifest, anchors, cloud, dns, deployer, notifier, store };
 }
 
@@ -47,6 +49,7 @@ test("runs the production-shaped 12-Droplet lifecycle without changing critical 
 
   const ready = await controller.up(manifest, anchors);
   assert.equal(ready.phase, "ready");
+  assert.equal(ready.provisioningAttestation.canaryRunId, "offlinecanary");
   assert.equal(Object.keys(ready.droplets).length, 12);
   assert.equal(new Set(Object.values(ready.droplets).map((entry) => entry.id)).size, 12);
   assert.equal(cloud.droplets.size, 12);
@@ -194,6 +197,34 @@ test("refuses before creating anything when existing account occupancy cannot fi
   await assert.rejects(() => setup.controller.up(setup.manifest, setup.anchors), /current plus 12 missing event resources requires 13/);
   assert.equal(cloud.createCalls, 0);
   assert.equal(cloud.droplets.size, 1);
+});
+
+test("refuses before state or provider mutation when lifecycle attestation verification fails", async () => {
+  const cloud = new FakeDigitalOceanProvider();
+  const store = new MemoryStateStore();
+  const setup = fixture({
+    cloud,
+    store,
+    provisioningGuard: { async verify() { throw new Error("lifecycle attestation token mismatch"); } }
+  });
+
+  await assert.rejects(() => setup.controller.up(setup.manifest, setup.anchors), /token mismatch/);
+  assert.equal(cloud.createCalls, 0);
+  assert.equal(cloud.droplets.size, 0);
+  assert.equal(await store.load(), null);
+});
+
+test("hard-cuts pre-attestation lifecycle state before provider mutation", async () => {
+  const initial = fixture();
+  const legacy = createInitialState(initial.manifest, new Date("2026-08-01T12:00:00.000Z"));
+  legacy.schemaVersion = 1;
+  delete legacy.provisioningAttestation;
+  const cloud = new FakeDigitalOceanProvider();
+  const setup = fixture({ cloud, store: new MemoryStateStore(legacy) });
+
+  await assert.rejects(() => setup.controller.up(setup.manifest, setup.anchors), /schemaVersion must be 2/);
+  assert.equal(cloud.createCalls, 0);
+  assert.equal(cloud.droplets.size, 0);
 });
 
 test("refuses a same-name provider replacement and an extra event-tagged Droplet", async () => {

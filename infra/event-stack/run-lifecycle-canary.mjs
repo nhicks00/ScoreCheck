@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { DigitalOceanProvider, VercelDnsProvider } from "./providers.mjs";
 import { loadProtectedEnv } from "./stack-deployer.mjs";
 import { buildCanaryConfig, CanarySshHost, CanaryStateStore, LifecycleCanary } from "./lifecycle-canary.mjs";
+import { issueLifecycleAttestation } from "./lifecycle-attestation.mjs";
 
 const DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const CLOUD_INIT_PATH = resolve(DIRECTORY, "canary-cloud-init.yaml");
@@ -23,14 +24,18 @@ async function main() {
   const environment = { ...process.env, ...credentials };
   const cloudInitSource = await readFile(CLOUD_INIT_PATH, "utf8");
   const config = buildCanaryConfig({ runId: options.runId, cloudInitSource });
+  const digitalOceanToken = required(environment, "DIGITALOCEAN_TOKEN");
+  const vercelToken = required(environment, "VERCEL_TOKEN");
+  const digitalOceanSshKeys = splitList(required(environment, "SCORECHECK_DO_SSH_KEYS"));
+  const vercelTeamId = environment.VERCEL_TEAM_ID?.trim() || null;
   const cloud = new DigitalOceanProvider({
-    token: required(environment, "DIGITALOCEAN_TOKEN"),
-    sshKeys: splitList(required(environment, "SCORECHECK_DO_SSH_KEYS")),
+    token: digitalOceanToken,
+    sshKeys: digitalOceanSshKeys,
     cloudInitPaths: { canary: CLOUD_INIT_PATH }
   });
   const dns = new VercelDnsProvider({
-    token: required(environment, "VERCEL_TOKEN"),
-    teamId: environment.VERCEL_TEAM_ID?.trim() || null
+    token: vercelToken,
+    teamId: vercelTeamId
   });
   const store = new CanaryStateStore(options.evidence);
   const host = new CanarySshHost({ privateKey: options.sshKey, knownHostsPath: options.knownHosts });
@@ -38,6 +43,17 @@ async function main() {
   const state = options.command === "cleanup"
     ? await canary.cleanup(config, options.confirm)
     : await canary.run(config, options.confirm);
+  const attestation = options.command === "run"
+    ? await issueLifecycleAttestation({
+        path: options.attestation,
+        evidencePath: options.evidence,
+        digitalOceanToken,
+        vercelToken,
+        vercelTeamId,
+        digitalOceanSshKeys,
+        sshPrivateKeyPath: options.sshKey
+      })
+    : null;
   process.stdout.write(`${JSON.stringify({
     runId: state.runId,
     phase: state.phase,
@@ -46,16 +62,17 @@ async function main() {
     replacementDropletId: state.replacement?.id ?? null,
     stableAddressProved: state.checks.some((entry) => entry.name === "replacement-created"),
     endpointChecks: state.checks.length,
-    completedAt: state.completedAt
+    completedAt: state.completedAt,
+    attestationExpiresAt: attestation?.expiresAt ?? null
   }, null, 2)}\n`);
 }
 
 function parseArgs(argv) {
   const command = argv[0];
   if (!["run", "cleanup"].includes(command)) throw new Error("first argument must be run or cleanup");
-  const options = { command, runId: null, evidence: null, credentialsEnv: null, sshKey: null, knownHosts: null, confirm: null };
+  const options = { command, runId: null, evidence: null, attestation: null, credentialsEnv: null, sshKey: null, knownHosts: null, confirm: null };
   const mapping = new Map([
-    ["--run-id", "runId"], ["--evidence", "evidence"], ["--credentials-env", "credentialsEnv"],
+    ["--run-id", "runId"], ["--evidence", "evidence"], ["--attestation", "attestation"], ["--credentials-env", "credentialsEnv"],
     ["--ssh-key", "sshKey"], ["--known-hosts", "knownHosts"], ["--confirm", "confirm"]
   ]);
   for (let index = 1; index < argv.length; index += 1) {
@@ -64,11 +81,12 @@ function parseArgs(argv) {
     if (!key) throw new Error(`unknown canary option ${flag}`);
     const value = argv[++index];
     if (!value || value.startsWith("--")) throw new Error(`${flag} requires a value`);
-    options[key] = ["evidence", "credentialsEnv", "sshKey", "knownHosts"].includes(key) ? absolute(value, flag) : value;
+    options[key] = ["evidence", "attestation", "credentialsEnv", "sshKey", "knownHosts"].includes(key) ? absolute(value, flag) : value;
   }
   for (const [key, flag] of [["runId", "--run-id"], ["evidence", "--evidence"], ["sshKey", "--ssh-key"], ["knownHosts", "--known-hosts"], ["confirm", "--confirm"]]) {
     if (!options[key]) throw new Error(`${flag} is required`);
   }
+  if (command === "run" && !options.attestation) throw new Error("--attestation is required for a canary run");
   return options;
 }
 

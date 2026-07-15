@@ -4,7 +4,7 @@ import test from "node:test";
 import { buildEventctlInvocation, validateProfile } from "./eventctl.mjs";
 
 const profile = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   manifest: "/protected/event/manifest.json",
   state: "/protected/event/state.json",
   anchors: "/protected/endpoint-anchors.json",
@@ -12,6 +12,7 @@ const profile = {
   sshKey: "/protected/scorecheck_do",
   knownHosts: "/protected/event/known_hosts",
   credentialsEnv: "/protected/provider.env",
+  lifecycleAttestation: "/protected/lifecycle-attestation.json",
   evidence: "/protected/event/evidence"
 };
 
@@ -20,7 +21,8 @@ test("expands one operator profile into exact non-shell lifecycle arguments", ()
     "up", "--manifest", profile.manifest, "--state", profile.state,
     "--anchors", profile.anchors, "--secrets", profile.secrets,
     "--ssh-key", profile.sshKey, "--known-hosts", profile.knownHosts,
-    "--credentials-env", profile.credentialsEnv
+    "--credentials-env", profile.credentialsEnv,
+    "--attestation", profile.lifecycleAttestation
   ]);
   assert.deepEqual(buildEventctlInvocation("destroy", profile, "DESTROY:event"), [
     "destroy", "--manifest", profile.manifest, "--state", profile.state,

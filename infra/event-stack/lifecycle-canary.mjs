@@ -76,6 +76,9 @@ export class LifecycleCanary {
   async #initialize(config) {
     const account = await this.cloud.getAccount();
     if (account.status !== "active") throw new Error(`DigitalOcean account is ${account.status}, not active`);
+    if (typeof account.uuid !== "string" || !account.uuid.trim()) {
+      throw new Error("DigitalOcean account response is missing its stable UUID");
+    }
     const droplets = await this.cloud.listAllDroplets();
     if (droplets.length + 1 > account.dropletLimit) {
       throw new Error(`DigitalOcean account limit ${account.dropletLimit} cannot fit one disposable canary above ${droplets.length} current Droplets`);
@@ -97,6 +100,7 @@ export class LifecycleCanary {
       identity: pickIdentity(config),
       baseline: {
         capturedAt: this.now().toISOString(),
+        accountUuid: account.uuid,
         accountDropletLimit: account.dropletLimit,
         dropletIds: droplets.map((entry) => entry.id).sort(),
         reservedIpv4s: reservedIpv4s.map((entry) => entry.ip).sort()

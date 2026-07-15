@@ -5,18 +5,19 @@ import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
-const STATE_SCHEMA_VERSION = 1;
+const STATE_SCHEMA_VERSION = 2;
 const ANCHOR_SCHEMA_VERSION = 1;
 const PHASES = new Set(["planned", "provisioning", "ready", "live", "closed", "destroying", "destroyed"]);
 const SHA256 = /^[a-f0-9]{64}$/;
 
 export class EventLifecycleController {
-  constructor({ store, cloud, dns, deployer, notifier = new NullNotifier(), now = () => new Date() }) {
+  constructor({ store, cloud, dns, deployer, notifier = new NullNotifier(), provisioningGuard = null, now = () => new Date() }) {
     this.store = store;
     this.cloud = cloud;
     this.dns = dns;
     this.deployer = deployer;
     this.notifier = notifier;
+    this.provisioningGuard = provisioningGuard;
     this.now = now;
   }
 
@@ -34,12 +35,18 @@ export class EventLifecycleController {
   }
 
   async up(manifest, anchors) {
+    if (!this.provisioningGuard || typeof this.provisioningGuard.verify !== "function") {
+      throw new Error("production provisioning requires a verified lifecycle canary attestation");
+    }
+    const provisioningAttestation = await this.provisioningGuard.verify();
+    validateProvisioningAttestationSummary(provisioningAttestation);
     validateAnchorConfig(anchors, manifest);
     return this.store.withLock(async () => {
       let state = await this.store.load();
       if (!state) state = createInitialState(manifest, this.now());
       assertStateMatchesManifest(state, manifest);
       assertPhase(state, ["planned", "provisioning"], "provision");
+      state.provisioningAttestation = structuredClone(provisioningAttestation);
       state.phase = "provisioning";
       state.lastError = null;
       await this.store.save(state);
@@ -484,6 +491,7 @@ export function createInitialState(manifest, now = new Date()) {
     coverage: null,
     destroyedAt: null,
     lastError: null,
+    provisioningAttestation: null,
     droplets: {},
     addressSlots: {},
     endpoints: {},
@@ -530,19 +538,35 @@ export function stateSummary(state) {
     endpoints: Object.values(state.endpoints).filter((entry) => entry.status === "configured").length,
     coverage: state.coverage,
     evidence: state.evidence,
-    lastError: state.lastError
+    lastError: state.lastError,
+    provisioningAttestation: state.provisioningAttestation
   };
 }
 
 function validateState(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("lifecycle state must be an object");
-  if (value.schemaVersion !== STATE_SCHEMA_VERSION) throw new Error("lifecycle state schemaVersion must be 1");
+  if (value.schemaVersion !== STATE_SCHEMA_VERSION) throw new Error(`lifecycle state schemaVersion must be ${STATE_SCHEMA_VERSION}`);
   if (typeof value.event !== "string" || typeof value.generationId !== "string") throw new Error("lifecycle state identity is invalid");
   if (!SHA256.test(value.manifestSha256 ?? "")) throw new Error("lifecycle state manifest digest is invalid");
   if (!PHASES.has(value.phase)) throw new Error("lifecycle state phase is invalid");
   for (const key of ["droplets", "addressSlots", "endpoints", "deployments", "notifications"]) {
     if (!value[key] || typeof value[key] !== "object" || Array.isArray(value[key])) throw new Error(`lifecycle state ${key} map is invalid`);
   }
+  if (value.phase !== "planned") validateProvisioningAttestationSummary(value.provisioningAttestation);
+}
+
+function validateProvisioningAttestationSummary(value) {
+  if (!value || value.schemaVersion !== 1 || value.provider !== "digitalocean+vercel") {
+    throw new Error("lifecycle provisioning attestation summary is invalid");
+  }
+  for (const key of ["accountUuid", "canaryRunId", "canaryRegion", "canaryDnsZone", "canaryCompletedAt", "issuedAt", "expiresAt"]) {
+    if (typeof value[key] !== "string" || !value[key]) throw new Error(`lifecycle provisioning attestation ${key} is invalid`);
+  }
+  if (!SHA256.test(value.canaryEvidenceSha256 ?? "")) throw new Error("lifecycle provisioning attestation evidence digest is invalid");
+  if (!Array.isArray(value.capabilities) || value.capabilities.length === 0 || !value.capabilities.every((entry) => typeof entry === "string" && entry)) {
+    throw new Error("lifecycle provisioning attestation capabilities are invalid");
+  }
+  return value;
 }
 
 function assertStateMatchesManifest(state, manifest) {

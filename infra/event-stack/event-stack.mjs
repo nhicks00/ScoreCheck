@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import { loadManifestInputs, validateEventManifest } from "./event-manifest.mjs";
 import { EventLifecycleController, FileStateStore, NullNotifier, stateSummary } from "./event-lifecycle.mjs";
+import { verifyLifecycleAttestation } from "./lifecycle-attestation.mjs";
 import { DigitalOceanProvider, PushoverNotifier, VercelDnsProvider } from "./providers.mjs";
 import { LocalStackDeployer, loadProtectedEnv } from "./stack-deployer.mjs";
 
@@ -40,14 +41,18 @@ async function main() {
   const needsCloud = ["up", "status", "evidence", "destroy"].includes(options.command);
   const needsDns = ["up", "destroy"].includes(options.command);
   const needsDeployment = ["up", "start", "evidence"].includes(options.command);
+  const digitalOceanToken = needsCloud ? requiredEnvironment(environment, "DIGITALOCEAN_TOKEN") : null;
+  const digitalOceanSshKeys = options.command === "up" ? splitList(environment.SCORECHECK_DO_SSH_KEYS) : [];
+  const vercelToken = needsDns ? requiredEnvironment(environment, "VERCEL_TOKEN") : null;
+  const vercelTeamId = environment.VERCEL_TEAM_ID?.trim() || null;
   const cloud = needsCloud ? new DigitalOceanProvider({
-    token: requiredEnvironment(environment, "DIGITALOCEAN_TOKEN"),
-    sshKeys: options.command === "up" ? splitList(environment.SCORECHECK_DO_SSH_KEYS) : [],
+    token: digitalOceanToken,
+    sshKeys: digitalOceanSshKeys,
     cloudInitPaths: CLOUD_INIT_PATHS
   }) : unavailable("cloud provider is unavailable for this command");
   const dns = needsDns ? new VercelDnsProvider({
-    token: requiredEnvironment(environment, "VERCEL_TOKEN"),
-    teamId: environment.VERCEL_TEAM_ID?.trim() || null
+    token: vercelToken,
+    teamId: vercelTeamId
   }) : unavailable("DNS provider is unavailable for this command");
   const deployer = needsDeployment ? new LocalStackDeployer({
     repoRoot: REPO_ROOT,
@@ -61,7 +66,20 @@ async function main() {
   if (options.command === "up" && notifier instanceof NullNotifier) {
     throw new Error("PUSHOVER_APP_TOKEN and PUSHOVER_USER_KEY are required for a production event setup");
   }
-  const controller = new EventLifecycleController({ store, cloud, dns, deployer, notifier });
+  const provisioningGuard = options.command === "up" ? {
+    verify: async () => verifyLifecycleAttestation({
+      path: requiredOption(options.attestation, "--attestation"),
+      account: await cloud.getAccount(),
+      digitalOceanToken,
+      vercelToken,
+      vercelTeamId,
+      digitalOceanSshKeys,
+      sshPrivateKeyPath: requiredOption(options.sshKey, "--ssh-key"),
+      expectedRegion: manifest.provider.region,
+      expectedDnsZone: manifest.dns.zone
+    })
+  } : null;
+  const controller = new EventLifecycleController({ store, cloud, dns, deployer, notifier, provisioningGuard });
 
   let result;
   if (options.command === "plan") result = await controller.plan(manifest);
@@ -82,7 +100,7 @@ function parseArgs(argv) {
   const command = argv[0];
   if ([undefined, "help", "-h", "--help"].includes(command)) return null;
   if (!new Set(["plan", "up", "status", "start", "close", "evidence", "destroy"]).has(command)) throw new Error(`unknown lifecycle command ${command}`);
-  const options = { command, manifest: null, state: null, anchors: null, secrets: null, sshKey: null, knownHosts: null, credentialsEnv: null, evidence: null, confirm: null };
+  const options = { command, manifest: null, state: null, anchors: null, secrets: null, sshKey: null, knownHosts: null, credentialsEnv: null, attestation: null, evidence: null, confirm: null };
   for (let index = 1; index < argv.length; index += 1) {
     const flag = argv[index];
     const value = argv[++index];
@@ -90,7 +108,7 @@ function parseArgs(argv) {
     const mapping = new Map([
       ["--manifest", "manifest"], ["--state", "state"], ["--anchors", "anchors"], ["--secrets", "secrets"],
       ["--ssh-key", "sshKey"], ["--known-hosts", "knownHosts"], ["--credentials-env", "credentialsEnv"],
-      ["--evidence", "evidence"], ["--confirm", "confirm"]
+      ["--attestation", "attestation"], ["--evidence", "evidence"], ["--confirm", "confirm"]
     ]);
     const key = mapping.get(flag);
     if (!key) throw new Error(`unknown option ${flag}`);
@@ -104,7 +122,7 @@ function parseArgs(argv) {
 function usage() {
   process.stdout.write(`Usage:
   node infra/event-stack/event-stack.mjs plan --manifest FILE --state FILE
-  node infra/event-stack/event-stack.mjs up --manifest FILE --state FILE --anchors FILE --secrets DIR --ssh-key FILE --known-hosts FILE --credentials-env FILE
+  node infra/event-stack/event-stack.mjs up --manifest FILE --state FILE --anchors FILE --secrets DIR --ssh-key FILE --known-hosts FILE --credentials-env FILE --attestation FILE
   node infra/event-stack/event-stack.mjs status --manifest FILE --state FILE --credentials-env FILE
   node infra/event-stack/event-stack.mjs start --manifest FILE --state FILE --secrets DIR --ssh-key FILE --known-hosts FILE --confirm START:EVENT
   node infra/event-stack/event-stack.mjs close --manifest FILE --state FILE --confirm CLOSE:EVENT

@@ -210,6 +210,22 @@ export class FakeNotifier {
   }
 }
 
+export function fakeProvisioningAttestation() {
+  return {
+    schemaVersion: 1,
+    provider: "digitalocean+vercel",
+    accountUuid: "fake-account-uuid",
+    canaryRunId: "offlinecanary",
+    canaryRegion: "sfo2",
+    canaryDnsZone: "beachvolleyballmedia.com",
+    canaryCompletedAt: "2026-07-15T00:00:00.000Z",
+    canaryEvidenceSha256: "a".repeat(64),
+    issuedAt: "2026-07-15T00:00:01.000Z",
+    expiresAt: "2026-08-14T00:00:01.000Z",
+    capabilities: ["offline-test-only"]
+  };
+}
+
 function clone(value) {
   return structuredClone(value);
 }

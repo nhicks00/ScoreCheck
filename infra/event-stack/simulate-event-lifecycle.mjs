@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 import { buildEventManifest, loadManifestInputs } from "./event-manifest.mjs";
 import { EventLifecycleController, MemoryStateStore } from "./event-lifecycle.mjs";
-import { FakeDigitalOceanProvider, FakeDnsProvider, FakeNotifier, FakeStackDeployer } from "./fake-providers.mjs";
+import { fakeProvisioningAttestation, FakeDigitalOceanProvider, FakeDnsProvider, FakeNotifier, FakeStackDeployer } from "./fake-providers.mjs";
 
 const inputs = await loadManifestInputs();
 const today = new Date().toISOString().slice(0, 10);
@@ -17,6 +17,7 @@ const anchors = {
   region: manifest.provider.region,
   reservedIpv4: { ingest: "192.0.2.10", commentary: "192.0.2.11" }
 };
+const PASSING_PROVISIONING_GUARD = { async verify() { return fakeProvisioningAttestation(); } };
 
 const scenarios = [];
 scenarios.push(await fullLifecycle());
@@ -39,7 +40,8 @@ async function fullLifecycle() {
   const dns = new FakeDnsProvider({ "monitor.beachvolleyballmedia.com": "203.0.113.25" });
   const notifier = new FakeNotifier();
   const controller = new EventLifecycleController({
-    store: new MemoryStateStore(), cloud, dns, deployer: new FakeStackDeployer(), notifier
+    store: new MemoryStateStore(), cloud, dns, deployer: new FakeStackDeployer(), notifier,
+    provisioningGuard: PASSING_PROVISIONING_GUARD
   });
   const root = await mkdtemp(join(tmpdir(), "scorecheck-offline-rehearsal-"));
   await chmod(root, 0o700);
@@ -78,7 +80,7 @@ async function partialCreateResume() {
   const cloud = new FakeDigitalOceanProvider();
   cloud.failCreateAt = 6;
   const store = new MemoryStateStore();
-  const controller = new EventLifecycleController({ store, cloud, dns: new FakeDnsProvider(), deployer: new FakeStackDeployer() });
+  const controller = new EventLifecycleController({ store, cloud, dns: new FakeDnsProvider(), deployer: new FakeStackDeployer(), provisioningGuard: PASSING_PROVISIONING_GUARD });
   try {
     try { await controller.up(manifest, anchors); } catch {}
     const partialCount = cloud.droplets.size;
@@ -98,7 +100,7 @@ async function partialCreateResume() {
 async function ambiguousCreateResume() {
   const cloud = new FakeDigitalOceanProvider();
   cloud.ambiguousCreateAt = 4;
-  const controller = new EventLifecycleController({ store: new MemoryStateStore(), cloud, dns: new FakeDnsProvider(), deployer: new FakeStackDeployer() });
+  const controller = new EventLifecycleController({ store: new MemoryStateStore(), cloud, dns: new FakeDnsProvider(), deployer: new FakeStackDeployer(), provisioningGuard: PASSING_PROVISIONING_GUARD });
   try {
     try { await controller.up(manifest, anchors); } catch {}
     const providerCount = cloud.droplets.size;
@@ -119,7 +121,7 @@ async function dnsFailureResume() {
   const cloud = new FakeDigitalOceanProvider();
   const dns = new FakeDnsProvider();
   dns.failHostname = "monitor.beachvolleyballmedia.com";
-  const controller = new EventLifecycleController({ store: new MemoryStateStore(), cloud, dns, deployer: new FakeStackDeployer() });
+  const controller = new EventLifecycleController({ store: new MemoryStateStore(), cloud, dns, deployer: new FakeStackDeployer(), provisioningGuard: PASSING_PROVISIONING_GUARD });
   try {
     try { await controller.up(manifest, anchors); } catch {}
     const createdBeforeRetry = cloud.createCalls;

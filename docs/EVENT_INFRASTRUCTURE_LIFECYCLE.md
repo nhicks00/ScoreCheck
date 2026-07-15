@@ -140,6 +140,14 @@ build can appear healthy while teardown is impossible. Do not begin an event
 or live canary with a read/create-only token. The isolated canary is the final
 proof that the configured credential can complete the entire delete path; its
 cleanup inventory must pass before that credential is approved for events.
+The passing canary writes a mode-`0600` lifecycle attestation valid for 30
+days. It is HMAC-bound to the exact DigitalOcean token, Vercel token/team,
+DigitalOcean account UUID, configured DigitalOcean SSH key IDs, and local SSH
+private key. Production `up` verifies that attestation before it writes event
+state or calls a mutating provider API. Replacing or narrowing any credential,
+changing SSH identity, changing the Vercel team, or letting the attestation
+expire requires another complete canary. Status, evidence, and teardown do not
+depend on the attestation, so the safety gate can never prevent recovery.
 
 The local deployment secrets directory is mode `0700`; every file in it is mode
 `0600`:
@@ -163,7 +171,7 @@ operator profile:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "manifest": "/absolute/protected/event/manifest.json",
   "state": "/absolute/protected/event/state.json",
   "anchors": "/absolute/protected/endpoint-anchors.json",
@@ -171,6 +179,7 @@ operator profile:
   "sshKey": "/absolute/protected/scorecheck_do",
   "knownHosts": "/absolute/protected/event/known_hosts",
   "credentialsEnv": "/absolute/protected/provider.env",
+  "lifecycleAttestation": "/absolute/protected/lifecycle-attestation.json",
   "evidence": "/absolute/protected/event/final-evidence"
 }
 ```
@@ -220,7 +229,8 @@ node infra/event-stack/event-stack.mjs up \
   --secrets /absolute/protected/event-secrets \
   --ssh-key /absolute/protected/scorecheck_do \
   --known-hosts /absolute/protected/next-event-slug/known_hosts \
-  --credentials-env /absolute/protected/provider.env
+  --credentials-env /absolute/protected/provider.env \
+  --attestation /absolute/protected/lifecycle-attestation.json
 ```
 
 `up` is resumable. It reconciles an ambiguous create only when exactly one
@@ -318,6 +328,7 @@ not use a production endpoint or select an existing Droplet. It performs:
 node infra/event-stack/run-lifecycle-canary.mjs run \
   --run-id 20260715a \
   --evidence /absolute/protected/canary-20260715a.json \
+  --attestation /absolute/protected/lifecycle-attestation.json \
   --credentials-env /absolute/protected/provider.env \
   --ssh-key /absolute/protected/scorecheck_do \
   --known-hosts /absolute/protected/canary-20260715a.known_hosts \
@@ -325,6 +336,10 @@ node infra/event-stack/run-lifecycle-canary.mjs run \
 ```
 
 A failed test must still complete exact cleanup and remains classified `FAIL`.
+Only a clean `PASS` with all four endpoint/resize checks and every exact cleanup
+check can issue the lifecycle attestation. The certificate contains only
+one-way credential/file digests and provider identity; it never contains a
+provider token or SSH private key.
 If the process is interrupted, rerun with the same run ID/evidence path or use
 the `cleanup` subcommand with the same arguments.
 

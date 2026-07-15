@@ -34,7 +34,8 @@ export function buildEventctlInvocation(command, profile, confirmation = null) {
     "--secrets", profile.secrets,
     "--ssh-key", profile.sshKey,
     "--known-hosts", profile.knownHosts,
-    "--credentials-env", profile.credentialsEnv
+    "--credentials-env", profile.credentialsEnv,
+    "--attestation", profile.lifecycleAttestation
   );
   if (command === "status") args.push("--credentials-env", profile.credentialsEnv);
   if (command === "start") args.push(
@@ -63,8 +64,8 @@ export function buildEventctlInvocation(command, profile, confirmation = null) {
 }
 
 export function validateProfile(value) {
-  if (!value || value.schemaVersion !== 1) throw new Error("event operator profile schemaVersion must be 1");
-  const expected = ["manifest", "state", "anchors", "secrets", "sshKey", "knownHosts", "credentialsEnv", "evidence"];
+  if (!value || value.schemaVersion !== 2) throw new Error("event operator profile schemaVersion must be 2");
+  const expected = ["manifest", "state", "anchors", "secrets", "sshKey", "knownHosts", "credentialsEnv", "lifecycleAttestation", "evidence"];
   if (JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(["schemaVersion", ...expected].sort())) {
     throw new Error("event operator profile must contain exactly the supported fields");
   }
