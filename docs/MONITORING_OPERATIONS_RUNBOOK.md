@@ -394,7 +394,9 @@ active commentary rooms. Acceptance requires:
 - score source and rendered scorebug remain aligned;
 - every injected single-court fault identifies that court without paging the other seven;
 - one compositor fault affects only its assigned pair;
-- acknowledgement, silence expiry, SMS escalation, and recovery each deduplicate;
+- Pushover acknowledgement, silence expiry, and recovery each deduplicate;
+- optional SMS escalation deduplicates only if Twilio is later enabled and
+  separately qualified;
 - no high-frequency telemetry growth appears in Supabase.
 
 ## Current acceptance status
@@ -420,28 +422,32 @@ active commentary rooms. Acceptance requires:
   real-feed gates.
 - Expanded WebRTC, visual-content, camera-audio, and commentary telemetry: passed
   type/schema/unit validation. A ten-hour one-court transport and sync soak
-  completed without restart, OOM, frame stall, MediaMTX path failure, or egress
-  error; the injected fault matrix and camera reconnect gate remain outstanding.
-- Durable incident, acknowledgement, checkpoint, and silence lifecycle: the
-  original episode passed, but the first post-restart recurrence gate exposed
-  global fingerprint uniqueness and failed durable opening/paging. Migration
-  022 plus the matching monitor-service implements true incident episodes; a
-  fresh physical recurrence gate is still required after deployment and after
-  Camera 1 has returned to a healthy baseline.
+  completed without restart, OOM, frame stall, MediaMTX path failure, or Egress
+  error. The later physical Camera 1 gate passed raw loss/recovery, same-page
+  interruption/recovery, sole-reader drainage, a 30.003 fps stable window with
+  no counter growth, and subjective A/V sync. The remaining real fault-table
+  rows are still outstanding.
+- Durable incident, acknowledgement, checkpoint, and silence lifecycle:
+  migration 022 and the matching incident-episode service are deployed. The
+  post-restart physical recurrence opened a new durable episode, delivered one
+  opening Pushover, resolved from observed feed recovery, delivered one recovery,
+  and left Cameras 2-8 isolated. The false expiry-recovery and reused-fingerprint
+  defects are closed.
 - Production web and monitor builds: passed.
-- Healthchecks baseline delivery and active idle-pause lifecycle: configured; the
-  Pushover channel is attached to both required checks. The deployed attachment
-  audit and controlled withheld-ping phone delivery gate remain outstanding.
+- Healthchecks baseline delivery and active idle-pause lifecycle: configured;
+  the deployed read-only audit confirms the Pushover channel is attached to both
+  required checks. Only the controlled withheld-ping phone delivery/recovery
+  gate remains outstanding.
 - Pushover delivery and one-time recovery: operational. A false Egress storm
   exposed an idle/busy semantic error and over-broad recovery fan-out; both are
   corrected in production. A controlled acknowledgement test is still required.
   Twilio SMS is optional and remains disabled until campaign/number association
   and real delivery are verified.
-- Authenticated production visual check: requires an existing admin login because
-  Vercel does not export the sensitive admin secret. The exact deployed build
-  passed local authenticated validation against the live read-only API at
-  1600x1000 and 390x844 with eight cards, a four-column wide layout, no
-  horizontal overflow, and no browser console warnings or errors.
+- Authenticated production visual check: passed against the live read-only API
+  at 1600x1000 and 390x844. The dashboard shows eight permanent Camera labels,
+  two cards per desktop row and one per narrow mobile row, low-data 256x144
+  snapshots, one operator-selected live reader, no horizontal overflow, and no
+  browser console warning or error.
 - First eight-feed load attempt: failed the shared-normalizer topology. One `c-4`
   normalizer reached about 394 percent CPU and sustained only 18-24 fps at
   0.59-0.81x realtime; Egress accepted all eight jobs and compositor capacity was
@@ -452,6 +458,10 @@ active commentary rooms. Acceptance requires:
   eight-simultaneous-output gate as configured. The new capacity rule fails this
   state closed; add qualified workers or explicitly requalify higher per-worker
   capacity before the real eight-court gate.
-- Remaining real one-court and eight-court fault injection requires the next
-  isolated test-feed session and explicit approval. Never simulate a pass by
-  stopping public production services.
+- The hardened 30-minute one-court `c-4` capacity gate passed 363/363 host
+  samples, media/browser quality, one-of-one admission, process lifecycle,
+  peer isolation, unlisted YouTube health, and ordered teardown. This qualifies
+  one output per current compositor, not two.
+- Approval for isolated test-feed faults is recorded. Each phone-visible or
+  physical fault still needs an explicit timing window and fresh healthy
+  baseline. Never simulate a pass by stopping public production services.

@@ -72,9 +72,9 @@ Supabase desired/observed state -> outbound controller reconciler
 - MediaMTX bitrate/path telemetry, FFmpeg `-progress`, program-browser frame and
   WebRTC stats, LiveKit commentary health, Egress capacity, score/render
   alignment, YouTube health, and host/container metrics.
-- Authenticated `/admin/monitor` 4x2 matrix with low-rate thumbnails, one selected
-  full WHEP preview, exact first actions, trends, shared-host capacity, and
-  durable checkpoint fallback.
+- Authenticated `/admin/monitor` two-column desktop/one-column mobile matrix with
+  low-rate 256x144 snapshots, one selected WHEP preview, exact first actions,
+  trends, shared-host capacity, and durable checkpoint fallback.
 - Durable deduplicated incidents, acknowledgement, audited timed silences,
   required Pushover emergency acknowledgement, provider-matched recovery, and
   optional Twilio SMS escalation when that provider is explicitly enabled.
@@ -90,11 +90,13 @@ Supabase desired/observed state -> outbound controller reconciler
   event settings cache for 30 seconds, active bracket-source URLs for 45
   seconds, and queued-match checks for ten seconds.
 
-Phone-provider and external dead-man delivery remain conditional on protected
-Pushover and Healthchecks credentials plus verified Pushover attachment on both
-external checks. Optional SMS additionally requires protected Twilio credentials
-and completed live-delivery acceptance. Real one-court and eight-court
-fault gates remain test-session work; monitoring must not prove itself by
+Pushover and external dead-man configuration are live: the baseline check runs,
+the active-coverage check pauses while idle, and one Pushover channel is attached
+to both. Physical Camera 1 episodes proved one opening and one recovery push;
+the operator acknowledgement tap and controlled withheld-ping delivery remain
+pending. Optional Twilio SMS is disabled because carrier campaign/sender
+approval still blocks real delivery. Remaining real one-court and eight-court
+fault rows must use isolated test feeds; monitoring must not prove itself by
 stopping public production services.
 
 ## Capacity topology
@@ -114,6 +116,23 @@ The old estimate that two jobs would leave about 35% headroom was disproved by
 the real admission result and is retired. The direct-eight operator decision
 still removes separate two- and four-court load ramps; it does not permit an
 unbenchmarked two-job host assignment.
+
+The hardened 2026-07-15 one-court run formally qualified one output on a `c-4`:
+363/363 host samples passed, compositor CPU reached 62.22% p95 / 67.92% maximum,
+media and browser quality remained clean, excess admission was rejected, and
+ordered teardown returned the worker to zero active requests. Two equivalent
+outputs on that shape would not retain the required CPU headroom, so the current
+four workers cannot cover eight live cameras despite their existing two-court
+monitoring assignments.
+
+DigitalOcean's live account inventory on 2026-07-15 exposes `c-4` as the largest
+non-GPU CPU-optimized Droplet available to this account. Seven event Droplets
+are active and the account Droplet limit is ten. The qualified direct-eight
+layout needs eight `c-4` compositors plus ingest, commentary, and observability:
+eleven total Droplets, or twelve with one warm spare. Do not provision only
+three additional workers and call the topology qualified. Request a limit of at
+least twelve (sixteen preferred for event headroom), or obtain and benchmark a
+larger CPU shape before provisioning the final pool.
 
 The first full-eight ingest candidate, one dedicated `c-4` with 8 GB RAM,
 failed on 2026-07-12. Eight 1080p inputs normalized to H.264/Opus at 720p30
@@ -203,8 +222,10 @@ tokens before cutover.
 
 ## Required gates
 
-1. **One court:** real camera, remote audible commentary, real YouTube RTMPS,
-   ten hours, sync checked at beginning/middle/end on a DigitalOcean c-4.
+1. **One court:** accepted. The real-camera/remote-commentary/YouTube path passed
+   its endurance run, physical loss/recovery, same-page viewer continuity,
+   subjective sync, and the formal 30-minute `c-4` capacity run. Remaining
+   single-fault rows are tracked separately in the monitoring runbook.
 2. **Eight courts:** capacity-qualified layout, eight real feeds and destinations,
    scoring on all, at least two commentary rooms, two hours minimum and twelve
    hours preferred. The direct-eight run replaces separate two- and four-court
@@ -218,14 +239,18 @@ tokens before cutover.
 
 1. Preserve the July 12 Gate 1 evidence and apply its lifecycle/logging fixes. Done.
 2. Deploy the independent unified monitoring foundation. Done.
-3. Activate and prove phone paging plus external dead-man delivery.
-4. Run the one-court monitoring fault gate using a test broadcast.
+3. Complete the Pushover acknowledgement and controlled Healthchecks
+   withheld-ping delivery/recovery gates.
+4. Run the remaining one-court monitoring fault rows using test feeds; Camera 1
+   raw loss/recovery is already accepted and must not be repeated solely for
+   evidence.
 5. Apply the Supabase cadence migration, deploy the post-soak lifecycle and
    monitoring fixes in dependency order, prove 30 minutes of flat timestamp-only
    write/Realtime growth, then run the one-reader preview/program/preview pacing
    comparator and branch-churn gate.
-6. Qualify camera-side normalization or an isolated normalization tier and a
-   compositor shape with measured headroom.
+6. Qualify camera-side normalization or an isolated normalization tier, obtain
+   DigitalOcean capacity for eight one-court compositors (or a larger proven
+   shape), and preserve one-output-per-`c-4` admission until requalified.
 7. Run the full-eight load, sync, recovery, and fault gate.
 8. Convert the controller to desired-state reconciliation.
 9. Move YouTube/program credentials to proper secret storage.
@@ -233,6 +258,7 @@ tokens before cutover.
 11. Run the two-court shadow event, then the full shadow event.
 
 The July 12 soak is an endurance pass for the final x86, audible-commentary,
-RTMPS pipeline. Gate 1 remains conditional because midpoint/final subjective
-sync checks were not recorded and camera reconnection was not tested. Those
-checks move into the direct-eight run rather than being waived.
+RTMPS pipeline. Later physical Camera 1 testing closed its reconnection,
+same-page viewer, final stable-quality, and subjective-sync gaps. Gate 1 is
+accepted; the direct-eight run must independently prove the same properties at
+full event scale rather than inheriting them from one court.
