@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ScoreVision Gold Annotator</title>
+<style>
+:root {
+  --bg:#14161b; --panel:#1e222a; --panel2:#262b35; --line:#343a46;
+  --ink:#ece7da; --ink2:#a49d8b; --gold:#d4af37; --near:#6aa5d8; --far:#e08a5a;
+  --ok:#7fb389; --warn:#d8b45a;
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--ink);
+  font:14px/1.45 -apple-system,"Segoe UI",system-ui,sans-serif; height:100vh;
+  display:grid; grid-template-columns:270px 1fr 320px; grid-template-rows:100vh; }
+h2 { font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--gold); margin:0 0 8px; }
+button { background:var(--panel2); color:var(--ink); border:1px solid var(--line);
+  border-radius:6px; padding:4px 10px; cursor:pointer; font-size:13px; }
+button:hover { border-color:var(--gold); }
+kbd { background:var(--panel2); border:1px solid var(--line); border-radius:4px;
+  padding:0 5px; font-size:11px; font-family:ui-monospace,monospace; }
+
+#sidebar { border-right:1px solid var(--line); padding:14px; overflow-y:auto; }
+.vod { padding:8px 10px; border:1px solid var(--line); border-radius:8px; margin-bottom:8px; cursor:pointer; }
+.vod:hover { border-color:var(--gold); }
+.vod.active { border-color:var(--gold); background:var(--panel); }
+.vod b { display:block; font-size:12px; word-break:break-all; }
+.vod small { color:var(--ink2); font-size:11px; }
+.badge { display:inline-block; border-radius:99px; padding:0 7px; font-size:10px; margin-right:4px; }
+.badge.gold { background:#363019; color:var(--gold); }
+.badge.prop { background:#22303f; color:var(--near); }
+
+#main { display:flex; flex-direction:column; min-width:0; padding:12px 16px; gap:8px; }
+#player-wrap { position:relative; background:#000; border-radius:10px; overflow:hidden; flex:1; min-height:0; }
+video { width:100%; height:100%; object-fit:contain; background:#000; }
+#flash { position:absolute; top:12px; left:50%; transform:translateX(-50%);
+  background:rgba(20,22,27,.92); border:1px solid var(--gold); color:var(--gold);
+  border-radius:8px; padding:6px 18px; font-weight:700; opacity:0; transition:opacity .15s; pointer-events:none; }
+
+#seekrow { display:flex; align-items:center; gap:10px; }
+#timeline { position:relative; flex:1; height:44px; background:var(--panel);
+  border:1px solid var(--line); border-radius:8px; cursor:pointer; }
+#tl-progress { position:absolute; top:0; bottom:0; left:0; width:0; background:rgba(212,175,55,.10); }
+.mark { position:absolute; width:2px; top:24px; bottom:3px; background:var(--ink2); opacity:.5; }
+.mark.prop { top:24px; }
+.gmark { position:absolute; width:3px; top:3px; height:18px; border-radius:1px; }
+#playhead { position:absolute; top:0; bottom:0; width:2px; background:var(--gold); }
+#clock { font-variant-numeric:tabular-nums; font-size:13px; color:var(--ink2); min-width:150px; text-align:right; }
+
+#controls { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+#controls .sep { color:var(--line); margin:0 4px; }
+#scorebar { display:flex; gap:18px; align-items:center; background:var(--panel);
+  border:1px solid var(--line); border-radius:10px; padding:8px 14px; }
+#scorebar .sc { font-size:22px; font-weight:800; font-variant-numeric:tabular-nums; }
+#scorebar .near { color:var(--near); } #scorebar .far { color:var(--far); }
+#scorebar small { color:var(--ink2); display:block; font-size:10px; letter-spacing:.08em; text-transform:uppercase; }
+#savestate { margin-left:auto; font-size:12px; color:var(--ink2); }
+#savestate.dirty { color:var(--warn); } #savestate.saved { color:var(--ok); }
+
+#events { border-left:1px solid var(--line); padding:14px; overflow-y:auto; display:flex; flex-direction:column; }
+#evlist { flex:1; overflow-y:auto; margin-top:6px; }
+.ev { display:flex; align-items:center; gap:8px; padding:4px 8px; border-radius:6px;
+  font-size:12.5px; cursor:pointer; font-variant-numeric:tabular-nums; }
+.ev:hover { background:var(--panel); }
+.ev.selected { background:var(--panel2); outline:1px solid var(--gold); }
+.ev .k { font-weight:700; min-width:86px; }
+.ev .t { color:var(--ink2); }
+.ev .del { margin-left:auto; color:var(--ink2); border:none; background:none; font-size:14px; }
+.ev .del:hover { color:#e07a7a; }
+.knear { color:var(--near); } .kfar { color:var(--far); } .kmeta { color:var(--gold); } .kother { color:var(--ink2); }
+#help { border-top:1px solid var(--line); margin-top:10px; padding-top:10px; font-size:11.5px; color:var(--ink2); line-height:1.9; }
+</style>
+</head>
+<body>
+<div id="sidebar">
+  <h2>Corpus VODs</h2>
+  <div id="vodlist">loading…</div>
+</div>
+
+<div id="main">
+  <div id="scorebar">
+    <div><small>Near</small><span class="sc near" id="score-near">0</span></div>
+    <div><small>Far</small><span class="sc far" id="score-far">0</span></div>
+    <div><small>Set</small><span class="sc" id="score-set">1</span></div>
+    <div><small>Match</small><span class="sc" id="score-match">–</span></div>
+    <div><small>Speed</small><span class="sc" id="speed">1×</span></div>
+    <div id="savestate">no VOD loaded</div>
+  </div>
+  <div id="player-wrap">
+    <video id="video" preload="auto"></video>
+    <div id="flash"></div>
+  </div>
+  <div id="seekrow">
+    <div id="timeline">
+      <div id="tl-progress"></div>
+      <div id="playhead"></div>
+    </div>
+    <div id="clock">0:00 / 0:00</div>
+  </div>
+  <div id="controls">
+    <button data-act="pp">⏯ <kbd>space</kbd></button>
+    <button data-act="back">−30s <kbd>⇧←</kbd></button>
+    <button data-act="fwd">+30s <kbd>⇧→</kbd></button>
+    <button data-act="nextprop">next proposal <kbd>tab</kbd></button>
+    <span class="sep">|</span>
+    <button data-act="near" style="color:var(--near)">NEAR point <kbd>N</kbd></button>
+    <button data-act="far" style="color:var(--far)">FAR point <kbd>F</kbd></button>
+    <button data-act="match" style="color:var(--gold)">match start <kbd>M</kbd></button>
+    <button data-act="setend" style="color:var(--gold)">set end <kbd>E</kbd></button>
+    <button data-act="switch">side switch <kbd>W</kbd></button>
+    <button data-act="replay">replay/no-pt <kbd>R</kbd></button>
+    <button data-act="timeout">timeout <kbd>T</kbd></button>
+    <button data-act="undo">undo <kbd>Z</kbd></button>
+  </div>
+</div>
+
+<div id="events">
+  <h2>Gold events <span id="evcount" style="color:var(--ink2)"></span></h2>
+  <div id="evlist"></div>
+  <div id="help">
+    <kbd>space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> ±5s · <kbd>⇧←</kbd>/<kbd>⇧→</kbd> ±30s ·
+    <kbd>,</kbd>/<kbd>.</kbd> ±1 frame · <kbd>1</kbd>–<kbd>6</kbd> speed 1/1.5/2/4/8/16× ·
+    <kbd>tab</kbd> next OCR proposal · <kbd>N</kbd> near pt · <kbd>F</kbd> far pt ·
+    <kbd>M</kbd> match start · <kbd>E</kbd> set end · <kbd>W</kbd> side switch ·
+    <kbd>R</kbd> replay · <kbd>T</kbd> timeout · <kbd>Z</kbd> undo ·
+    <kbd>X</kbd> delete selected · click event = seek. Autosaves 1s after changes.
+    Sanity: derived score should match the on-screen bug — if it drifts, you missed one.
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const video = $("#video");
+const KINDS = {
+  POINT_NEAR: { label: "NEAR point", cls: "knear", color: "var(--near)" },
+  POINT_FAR: { label: "FAR point", cls: "kfar", color: "var(--far)" },
+  MATCH_START: { label: "MATCH start", cls: "kmeta", color: "var(--gold)" },
+  SET_END: { label: "SET end", cls: "kmeta", color: "var(--gold)" },
+  SIDE_SWITCH: { label: "side switch", cls: "kother", color: "#9a8fc0" },
+  REPLAY_NO_POINT: { label: "replay/no-pt", cls: "kother", color: "#7fb389" },
+  TIMEOUT: { label: "timeout", cls: "kother", color: "#888" },
+};
+const SPEEDS = [1, 1.5, 2, 4, 8, 16];
+let state = {
+  vod: null, events: [], proposals: [], selected: null,
+  dirty: false, saveTimer: null, undoStack: [],
+};
+
+function fmt(t) {
+  t = Math.max(0, t | 0);
+  const h = (t / 3600) | 0, m = ((t % 3600) / 60) | 0, s = t % 60;
+  return (h ? h + ":" : "") + String(m).padStart(h ? 2 : 1, "0") + ":" + String(s).padStart(2, "0");
+}
+
+async function loadVods() {
+  const vods = await (await fetch("/api/vods")).json();
+  $("#vodlist").innerHTML = "";
+  for (const v of vods) {
+    const el = document.createElement("div");
+    el.className = "vod"; el.dataset.id = v.id;
+    el.innerHTML = `<b>${v.title}</b><small>${v.id} · ${v.size_gb} GB</small><br>
+      <span class="badge prop">${v.proposals} proposals</span>
+      <span class="badge gold">${v.gold_events} gold</span>`;
+    el.onclick = () => loadVod(v.id, el);
+    $("#vodlist").appendChild(el);
+  }
+}
+
+async function loadVod(id, el) {
+  if (state.dirty) await save();
+  document.querySelectorAll(".vod").forEach((e) => e.classList.remove("active"));
+  if (el) el.classList.add("active");
+  state.vod = id; state.selected = null; state.undoStack = [];
+  video.src = "/video/" + id;
+  const [gold, props] = await Promise.all([
+    (await fetch(`/api/vod/${id}/gold`)).json(),
+    (await fetch(`/api/vod/${id}/proposals`)).json(),
+  ]);
+  state.events = (gold.events || []).sort((a, b) => a.t - b.t);
+  state.proposals = (props.rallies || []).map((r) => r.rally_end_t);
+  setSaveState("loaded", "");
+  render();
+}
+
+function addEvent(kind) {
+  if (!state.vod) return;
+  const ev = { t: +video.currentTime.toFixed(2), kind, id: Date.now() + "-" + Math.random().toString(36).slice(2, 7) };
+  state.events.push(ev);
+  state.events.sort((a, b) => a.t - b.t);
+  state.undoStack.push(ev.id);
+  flash(KINDS[kind].label + " @ " + fmt(ev.t));
+  markDirty(); render();
+}
+function deleteEvent(id) {
+  state.events = state.events.filter((e) => e.id !== id);
+  if (state.selected === id) state.selected = null;
+  markDirty(); render();
+}
+function undo() {
+  const id = state.undoStack.pop();
+  if (id) { deleteEvent(id); flash("undone"); }
+}
+
+function markDirty() {
+  state.dirty = true;
+  setSaveState("dirty", "unsaved…");
+  clearTimeout(state.saveTimer);
+  state.saveTimer = setTimeout(save, 1000);
+}
+async function save() {
+  if (!state.vod || !state.dirty) return;
+  state.dirty = false;
+  try {
+    const res = await (await fetch(`/api/vod/${state.vod}/gold`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ events: state.events }),
+    })).json();
+    setSaveState("saved", `saved ${res.count} events`);
+  } catch (e) {
+    state.dirty = true;
+    setSaveState("dirty", "SAVE FAILED — retrying");
+    setTimeout(save, 3000);
+  }
+}
+function setSaveState(cls, text) {
+  const el = $("#savestate");
+  el.className = cls; el.textContent = text || cls;
+}
+
+function derivedScore() {
+  // Near/far tallies with match/set boundaries; side switches only affect
+  // team attribution downstream — near/far counts reset per set.
+  let near = 0, far = 0, set = 1, match = 0;
+  for (const e of state.events) {
+    if (e.t > video.currentTime) break;
+    if (e.kind === "MATCH_START") { match += 1; set = 1; near = far = 0; }
+    else if (e.kind === "SET_END") { set += 1; near = far = 0; }
+    else if (e.kind === "POINT_NEAR") near += 1;
+    else if (e.kind === "POINT_FAR") far += 1;
+  }
+  return { near, far, set, match: match || "–" };
+}
+
+function render() {
+  const d = derivedScore();
+  $("#score-near").textContent = d.near; $("#score-far").textContent = d.far;
+  $("#score-set").textContent = d.set; $("#score-match").textContent = d.match;
+  $("#evcount").textContent = `(${state.events.length})`;
+  // timeline markers
+  const tl = $("#timeline");
+  tl.querySelectorAll(".mark,.gmark").forEach((m) => m.remove());
+  const dur = video.duration || 1;
+  for (const t of state.proposals) {
+    const m = document.createElement("div");
+    m.className = "mark prop"; m.style.left = (t / dur) * 100 + "%";
+    tl.appendChild(m);
+  }
+  for (const e of state.events) {
+    const m = document.createElement("div");
+    m.className = "gmark"; m.style.left = (e.t / dur) * 100 + "%";
+    m.style.background = KINDS[e.kind]?.color || "#888";
+    tl.appendChild(m);
+  }
+  // event list
+  const list = $("#evlist");
+  list.innerHTML = "";
+  for (const e of [...state.events].reverse()) {
+    const k = KINDS[e.kind] || { label: e.kind, cls: "kother" };
+    const el = document.createElement("div");
+    el.className = "ev" + (state.selected === e.id ? " selected" : "");
+    el.innerHTML = `<span class="k ${k.cls}">${k.label}</span><span class="t">${fmt(e.t)}</span>
+      <button class="del" title="delete">✕</button>`;
+    el.onclick = (ev2) => {
+      if (ev2.target.classList.contains("del")) { deleteEvent(e.id); return; }
+      state.selected = e.id; video.currentTime = Math.max(0, e.t - 3); render();
+    };
+    list.appendChild(el);
+  }
+}
+
+function flash(text) {
+  const el = $("#flash");
+  el.textContent = text; el.style.opacity = 1;
+  clearTimeout(el._t); el._t = setTimeout(() => (el.style.opacity = 0), 900);
+}
+
+function nextProposal() {
+  const t = video.currentTime + 1;
+  const next = state.proposals.find((p) => p > t);
+  if (next !== undefined) { video.currentTime = Math.max(0, next - 12); flash("→ proposal @ " + fmt(next)); }
+  else flash("no more proposals");
+}
+
+const ACTIONS = {
+  pp: () => (video.paused ? video.play() : video.pause()),
+  back: () => (video.currentTime -= 30), fwd: () => (video.currentTime += 30),
+  nextprop: nextProposal,
+  near: () => addEvent("POINT_NEAR"), far: () => addEvent("POINT_FAR"),
+  match: () => addEvent("MATCH_START"), setend: () => addEvent("SET_END"),
+  switch: () => addEvent("SIDE_SWITCH"), replay: () => addEvent("REPLAY_NO_POINT"),
+  timeout: () => addEvent("TIMEOUT"), undo,
+};
+document.querySelectorAll("#controls button").forEach((b) => (b.onclick = () => ACTIONS[b.dataset.act]()));
+
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT") return;
+  const key = e.key.toLowerCase();
+  if (e.code === "Space") { e.preventDefault(); ACTIONS.pp(); }
+  else if (e.key === "ArrowLeft") { e.preventDefault(); video.currentTime -= e.shiftKey ? 30 : 5; }
+  else if (e.key === "ArrowRight") { e.preventDefault(); video.currentTime += e.shiftKey ? 30 : 5; }
+  else if (e.key === "Tab") { e.preventDefault(); nextProposal(); }
+  else if (key === ",") video.currentTime -= 1 / 30;
+  else if (key === ".") video.currentTime += 1 / 30;
+  else if ("123456".includes(e.key) && e.key !== "") {
+    const sp = SPEEDS[+e.key - 1]; if (sp) { video.playbackRate = sp; $("#speed").textContent = sp + "×"; }
+  }
+  else if (key === "n") ACTIONS.near(); else if (key === "f") ACTIONS.far();
+  else if (key === "m") ACTIONS.match(); else if (key === "e") ACTIONS.setend();
+  else if (key === "w") ACTIONS.switch(); else if (key === "r") ACTIONS.replay();
+  else if (key === "t") ACTIONS.timeout(); else if (key === "z") undo();
+  else if (key === "x" && state.selected) deleteEvent(state.selected);
+});
+
+$("#timeline").onclick = (e) => {
+  const rect = e.currentTarget.getBoundingClientRect();
+  video.currentTime = ((e.clientX - rect.left) / rect.width) * (video.duration || 0);
+};
+video.addEventListener("timeupdate", () => {
+  const dur = video.duration || 1;
+  $("#tl-progress").style.width = (video.currentTime / dur) * 100 + "%";
+  $("#playhead").style.left = (video.currentTime / dur) * 100 + "%";
+  $("#clock").textContent = fmt(video.currentTime) + " / " + fmt(dur);
+  const d = derivedScore();
+  $("#score-near").textContent = d.near; $("#score-far").textContent = d.far;
+  $("#score-set").textContent = d.set; $("#score-match").textContent = d.match;
+});
+video.addEventListener("loadedmetadata", render);
+window.addEventListener("beforeunload", (e) => { if (state.dirty) { save(); e.preventDefault(); } });
+
+loadVods();
+</script>
+</body>
+</html>

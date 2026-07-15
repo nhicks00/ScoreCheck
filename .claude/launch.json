@@ -2,10 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "scorecheck-web",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--prefix", "apps/web"],
-      "port": 3000
+      "name": "gold-annotator",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "--project", "vision", "scorevision-gold", "--corpus", "/Volumes/Nathan Footage/CV TRAINING DATA/corpus"],
+      "port": 8770
     }
   ]
 }
