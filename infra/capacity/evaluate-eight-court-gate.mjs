@@ -16,7 +16,9 @@ import {
 import { pairPoolHostSamples, parsePoolHostEventsNdjson, summarizePoolHost } from "./pool-host-evidence.mjs";
 
 const LABEL_VALUE = /^[a-zA-Z0-9_.:-]{1,80}$/;
+const SHA256 = /^[a-f0-9]{64}$/;
 const SOURCE_FIELDS = ["protocol", "mode", "videoCodec", "videoWidth", "videoHeight", "videoProfile", "audioCodec", "audioSampleRateHz", "audioChannelCount"];
+const CAMERA_MONITOR_FIELDS = ["sourceProtocol", "sourceMode", "videoCodec", "videoWidth", "videoHeight", "audioCodec", "audioSampleRateHz", "audioChannelCount"];
 const PROMETHEUS_QUERY_CONCURRENCY = 8;
 
 export function assertEightCourtConfig(config) {
@@ -34,6 +36,12 @@ export function assertEightCourtConfig(config) {
   if (!Number.isFinite(config.maximumVenueEvidenceAgeSeconds) || config.maximumVenueEvidenceAgeSeconds <= 0) throw new Error("maximumVenueEvidenceAgeSeconds is invalid");
   if (!Number.isFinite(config.minimumVenueMeasurementSpanSeconds) || config.minimumVenueMeasurementSpanSeconds < 60 || config.minimumVenueMeasurementSpanSeconds > config.maximumVenueEvidenceAgeSeconds) throw new Error("minimumVenueMeasurementSpanSeconds is invalid");
   if (!Number.isFinite(config.maximumPoolPreflightAgeSeconds) || config.maximumPoolPreflightAgeSeconds <= 0) throw new Error("maximumPoolPreflightAgeSeconds is invalid");
+  safeLabel("expectedCameraProfileGateId", config.expectedCameraProfileGateId);
+  if (!Number.isFinite(config.maximumCameraProfileEvidenceAgeSeconds)
+    || config.maximumCameraProfileEvidenceAgeSeconds <= 0
+    || config.maximumCameraProfileEvidenceAgeSeconds > 3_600) {
+    throw new Error("maximumCameraProfileEvidenceAgeSeconds must be greater than 0 and no more than 3600");
+  }
   if (!Number.isFinite(config.maximumAttestationLagSeconds) || config.maximumAttestationLagSeconds <= 0) throw new Error("maximumAttestationLagSeconds is invalid");
   assertHost(config.ingest, "ingest");
   assertHost(config.warmSpare, "warm spare");
@@ -231,7 +239,7 @@ export function createConcurrencyLimiter(maximum) {
   });
 }
 
-export function evaluateEightCourtEvidence({ config, evidence, attestations, hosts, poolPreflight, venueEvidence }) {
+export function evaluateEightCourtEvidence({ config, evidence, attestations, hosts, poolPreflight, venueEvidence, cameraProfileEvidence }) {
   assertEightCourtConfig(config);
   assertEightCourtAttestations(config, attestations);
   const startEpochSeconds = evidence.startEpochSeconds;
@@ -293,6 +301,7 @@ export function evaluateEightCourtEvidence({ config, evidence, attestations, hos
     && Math.max(...snapshotAges) <= config.thresholds.maximumSnapshotAgeSeconds, snapshotAges.length ? { minimum: Math.min(...snapshotAges), maximum: Math.max(...snapshotAges) } : null, `0..${config.thresholds.maximumSnapshotAgeSeconds} seconds`);
   evaluatePoolPreflight(checks, config, poolPreflight, startEpochSeconds);
   evaluateProviderBindings(checks, config, hosts, poolPreflight);
+  const qualifiedSourceProfiles = evaluateCameraProfileEvidence(checks, config, cameraProfileEvidence, startEpochSeconds);
   evaluateVenue(checks, config, venueEvidence, startEpochSeconds);
   check(checks, "cross_court_isolation_attested", attestations?.crossCourtIsolationVerified === true, attestations?.crossCourtIsolationVerified ?? null, true);
   check(checks, "youtube_test_privacy_attested", attestations?.youtubeBroadcastsUnlisted === true, attestations?.youtubeBroadcastsUnlisted ?? null, true);
@@ -321,7 +330,7 @@ export function evaluateEightCourtEvidence({ config, evidence, attestations, hos
       endEpochSeconds,
       series: evidence.courtSeries?.[court.court] ?? {}
     }, {
-      observedSourceProfile: boundedSourceProfile(courtAttestation.observedSourceProfile),
+      observedSourceProfile: boundedSourceProfile(qualifiedSourceProfiles.get(court.court)),
       assignmentVerified: courtAttestation.assignmentVerified === true,
       unassignedCourtsUnaffected: attestations?.crossCourtIsolationVerified === true,
       egressErrors: Number.isFinite(courtAttestation.egressErrors) ? courtAttestation.egressErrors : null,
@@ -453,6 +462,253 @@ function evaluateProviderBindings(checks, config, hosts, pool) {
   check(checks, "pool_host_provider_bindings", bindings.every((binding) => binding.pass) && unique, bindings, "each host bound to one unique active DigitalOcean preflight resource");
 }
 
+function evaluateCameraProfileEvidence(checks, config, artifact, startEpochSeconds) {
+  const report = artifact?.report;
+  const qualification = report?.qualification;
+  const expectedCourts = config.courts.map((court) => court.court).sort((left, right) => left - right);
+  const observedCourtNumbers = Object.keys(report?.observedCourts ?? {})
+    .map(Number)
+    .filter(Number.isInteger)
+    .sort((left, right) => left - right);
+  const qualifiedCourtNumbers = Array.isArray(qualification?.requiredCourts)
+    ? [...qualification.requiredCourts].sort((left, right) => left - right)
+    : [];
+  const reportChecks = Array.isArray(report?.checks) ? report.checks : [];
+  const reportCheckIds = reportChecks.map((entry) => entry?.id);
+  const requiredCheckIds = cameraProfileRequiredCheckIds(expectedCourts);
+  const dynamicProbeChecksComplete = expectedCourts.every((court) => cameraProfileProbeChecksComplete(
+    reportCheckIds,
+    court,
+    report?.observedCourts?.[court]?.probeSampledAt
+  ));
+  const reportChecksComplete = reportChecks.length > 0
+    && reportChecks.every((entry) => typeof entry?.id === "string" && entry.pass === true)
+    && new Set(reportCheckIds).size === reportCheckIds.length
+    && requiredCheckIds.every((id) => reportCheckIds.includes(id))
+    && dynamicProbeChecksComplete;
+  check(checks, "camera_profile_artifact_digest", typeof artifact?.sha256 === "string" && SHA256.test(artifact.sha256), artifact?.sha256 ?? null, "64 lowercase hexadecimal characters");
+  check(checks, "camera_profile_report_schema", report?.schemaVersion === 2 && qualification?.schemaVersion === 1, {
+    report: report?.schemaVersion ?? null,
+    qualification: qualification?.schemaVersion ?? null
+  }, { report: 2, qualification: 1 });
+  check(checks, "camera_profile_gate_identity", report?.gateId === config.expectedCameraProfileGateId, report?.gateId ?? null, config.expectedCameraProfileGateId);
+  check(checks, "camera_profile_source_digests", SHA256.test(report?.sourceEvidence?.samplesSha256 ?? "")
+    && SHA256.test(report?.sourceEvidence?.probesSha256 ?? ""), report?.sourceEvidence ?? null, "lowercase SHA-256 for sanitized sample and probe artifacts");
+  check(checks, "camera_profile_report_pass", report?.verdict === "PASS" && reportChecksComplete, {
+    verdict: report?.verdict ?? null,
+    checkCount: reportChecks.length,
+    failedChecks: reportChecks.filter((entry) => entry?.pass !== true).length,
+    missingRequiredChecks: requiredCheckIds.filter((id) => !reportCheckIds.includes(id)),
+    dynamicProbeChecksComplete
+  }, "PASS with unique all-passing checks and the complete fixed qualification check set");
+  const qualifiedProfileNumbers = Object.keys(qualification?.expectedProfiles ?? {})
+    .map(Number)
+    .filter(Number.isInteger)
+    .sort((left, right) => left - right);
+  check(checks, "camera_profile_exact_courts", arraysEqual(observedCourtNumbers, expectedCourts)
+    && arraysEqual(qualifiedCourtNumbers, expectedCourts)
+    && arraysEqual(qualifiedProfileNumbers, expectedCourts), {
+    observedCourts: observedCourtNumbers,
+    qualifiedCourts: qualification?.requiredCourts ?? null,
+    qualifiedProfiles: qualifiedProfileNumbers
+  }, expectedCourts);
+
+  const thresholds = qualification?.thresholds;
+  const contractPass = Number.isInteger(qualification?.minimumDurationSeconds) && qualification.minimumDurationSeconds >= 600
+    && Number.isInteger(qualification?.intervalSeconds) && qualification.intervalSeconds >= 1 && qualification.intervalSeconds <= 5
+    && Number.isFinite(thresholds?.minimumSampleCoverageRatio) && thresholds.minimumSampleCoverageRatio >= 0.99
+    && thresholds.minimumSampleCoverageRatio <= 1
+    && Number.isFinite(thresholds?.maximumSampleGapSeconds) && thresholds.maximumSampleGapSeconds >= qualification.intervalSeconds && thresholds.maximumSampleGapSeconds <= 7.5
+    && Number.isFinite(thresholds?.maximumEdgeGapSeconds) && thresholds.maximumEdgeGapSeconds >= 0 && thresholds.maximumEdgeGapSeconds <= 7.5
+    && Number.isFinite(thresholds?.maximumSampleLatenessMs) && thresholds.maximumSampleLatenessMs >= 0 && thresholds.maximumSampleLatenessMs <= 1_000
+    && Number.isFinite(thresholds?.maximumSnapshotAgeMs) && thresholds.maximumSnapshotAgeMs >= 0 && thresholds.maximumSnapshotAgeMs <= 10_000
+    && Number.isFinite(thresholds?.minimumRawBitrateBps) && thresholds.minimumRawBitrateBps >= Math.max(2_000_000, config.thresholds.minimumRawBitrateBps)
+    && Number.isFinite(thresholds?.maximumProbeOffsetSeconds) && thresholds.maximumProbeOffsetSeconds >= 0 && thresholds.maximumProbeOffsetSeconds <= 30;
+  check(checks, "camera_profile_qualification_contract", contractPass, qualification ? {
+    minimumDurationSeconds: qualification.minimumDurationSeconds,
+    intervalSeconds: qualification.intervalSeconds,
+    thresholds
+  } : null, "at least 600 seconds, at least 99% coverage, five-second-or-better cadence, bounded gaps/age/probe offset, and at least a 2 Mbps bitrate floor");
+
+  const profileStart = Date.parse(report?.window?.plannedStartAt) / 1_000;
+  const profileEnd = Date.parse(report?.window?.plannedEndAt) / 1_000;
+  const generatedAt = Date.parse(report?.generatedAt) / 1_000;
+  const ageSeconds = startEpochSeconds - profileEnd;
+  check(checks, "camera_profile_evidence_fresh", Number.isFinite(profileEnd) && Number.isFinite(generatedAt)
+    && profileEnd <= generatedAt && generatedAt <= startEpochSeconds
+    && ageSeconds >= 0 && ageSeconds <= config.maximumCameraProfileEvidenceAgeSeconds, {
+    plannedEndAt: report?.window?.plannedEndAt ?? null,
+    generatedAt: report?.generatedAt ?? null,
+    ageSeconds: Number.isFinite(ageSeconds) ? ageSeconds : null
+  }, `completed before workload start and no more than ${config.maximumCameraProfileEvidenceAgeSeconds} seconds old`);
+  const expectedProfileSamples = report?.window?.expectedSamples;
+  const observedProfileSamples = report?.window?.observedSamples;
+  const reportedCoverage = report?.window?.coverageRatio;
+  const computedDuration = Number.isFinite(profileStart) && Number.isFinite(profileEnd) ? profileEnd - profileStart : null;
+  const computedExpectedSamples = Number.isFinite(computedDuration) && Number.isInteger(qualification?.intervalSeconds)
+    ? Math.floor(computedDuration / qualification.intervalSeconds) + 1
+    : null;
+  const computedCoverage = Number.isInteger(expectedProfileSamples) && expectedProfileSamples > 0 && Number.isInteger(observedProfileSamples)
+    ? observedProfileSamples / expectedProfileSamples
+    : null;
+  check(checks, "camera_profile_window_contract", Number.isFinite(report?.window?.durationSeconds)
+    && report.window.durationSeconds >= 600
+    && report.window.durationSeconds >= qualification?.minimumDurationSeconds
+    && report.window.durationSeconds === computedDuration
+    && expectedProfileSamples === computedExpectedSamples
+    && observedProfileSamples > 0 && observedProfileSamples <= expectedProfileSamples
+    && Number.isFinite(reportedCoverage) && reportedCoverage >= 0.99
+    && reportedCoverage >= thresholds?.minimumSampleCoverageRatio && reportedCoverage <= 1
+    && Number.isFinite(report?.window?.maxGapSeconds) && report.window.maxGapSeconds <= thresholds?.maximumSampleGapSeconds
+    && Number.isFinite(report?.window?.startEdgeSeconds) && report.window.startEdgeSeconds <= thresholds?.maximumEdgeGapSeconds
+    && Number.isFinite(report?.window?.endEdgeSeconds) && report.window.endEdgeSeconds <= thresholds?.maximumEdgeGapSeconds
+    && Number.isFinite(report?.window?.maxLatenessMs) && report.window.maxLatenessMs <= thresholds?.maximumSampleLatenessMs
+    && Number.isFinite(report?.window?.maxSnapshotAgeMs) && report.window.maxSnapshotAgeMs <= thresholds?.maximumSnapshotAgeMs
+    && Number.isFinite(computedCoverage) && Math.abs(computedCoverage - reportedCoverage) <= 1e-12, {
+    durationSeconds: report?.window?.durationSeconds ?? null,
+    computedDuration,
+    expectedSamples: expectedProfileSamples ?? null,
+    computedExpectedSamples,
+    observedSamples: observedProfileSamples ?? null,
+    coverageRatio: reportedCoverage ?? null,
+    computedCoverage,
+    maxGapSeconds: report?.window?.maxGapSeconds ?? null,
+    startEdgeSeconds: report?.window?.startEdgeSeconds ?? null,
+    endEdgeSeconds: report?.window?.endEdgeSeconds ?? null,
+    maxLatenessMs: report?.window?.maxLatenessMs ?? null,
+    maxSnapshotAgeMs: report?.window?.maxSnapshotAgeMs ?? null
+  }, { minimumDurationSeconds: 600, minimumCoverageRatio: 0.99 });
+
+  const profiles = new Map();
+  let allProfilesMatch = true;
+  const observed = [];
+  for (const court of config.courts) {
+    const courtEvidence = report?.observedCourts?.[court.court];
+    const monitorProfile = courtEvidence?.monitorProfile;
+    const sourceProfile = cameraMonitorProfile(monitorProfile);
+    const expectedProfile = qualification?.expectedProfiles?.[court.court];
+    const probeFps = courtEvidence?.probeFps;
+    const probeSampledAt = courtEvidence?.probeSampledAt;
+    const probeProfile = courtEvidence?.probeProfile;
+    const probeEpochSeconds = Date.parse(probeSampledAt) / 1_000;
+    const maximumProbeOffsetSeconds = thresholds?.maximumProbeOffsetSeconds;
+    const probeInWindow = Number.isFinite(probeEpochSeconds) && Number.isFinite(maximumProbeOffsetSeconds)
+      && probeEpochSeconds >= profileStart - maximumProbeOffsetSeconds
+      && probeEpochSeconds <= profileEnd + maximumProbeOffsetSeconds;
+    const matches = sourceProfilesEqual(sourceProfile, court.expectedSourceProfile)
+      && cameraQualificationProfileMatches(expectedProfile, court.expectedSourceProfile)
+      && Array.isArray(probeFps) && probeFps.length === 1 && probeFps.every((fps) => Number.isFinite(fps) && fps >= 29 && fps <= 31)
+      && probeFps[0] === probeProfile?.videoFps
+      && probeInWindow
+      && Number.isFinite(courtEvidence?.bitrateP05) && courtEvidence.bitrateP05 >= thresholds?.minimumRawBitrateBps
+      && courtEvidence?.frameErrorGrowth === 0
+      && Number.isFinite(courtEvidence?.byteGrowth) && courtEvidence.byteGrowth > 0
+      && Number.isFinite(Date.parse(courtEvidence?.readySince)) && Date.parse(courtEvidence.readySince) / 1_000 <= profileStart
+      && cameraProbeProfileMatches(probeProfile, court.expectedSourceProfile);
+    allProfilesMatch &&= matches;
+    profiles.set(court.court, matches ? { ...court.expectedSourceProfile } : sourceProfile);
+    observed.push({
+      court: court.court,
+      bitrateP05: courtEvidence?.bitrateP05 ?? null,
+      frameErrorGrowth: courtEvidence?.frameErrorGrowth ?? null,
+      byteGrowth: courtEvidence?.byteGrowth ?? null,
+      readySince: courtEvidence?.readySince ?? null,
+      monitorProfile: sourceProfile,
+      probeSampledAt,
+      probeProfile,
+      matches
+    });
+  }
+  check(checks, "camera_profile_exact_profiles", allProfilesMatch, observed, "every qualified and observed profile matches the endurance manifest");
+  return profiles;
+}
+
+function cameraProfileRequiredCheckIds(courts) {
+  const ids = [
+    "duration", "source_evidence_digests", "sample_errors", "sample_coverage", "sample_schedule_unique",
+    "sample_schedule_aligned", "sample_times_bounded", "sample_max_gap",
+    "sample_start_edge", "sample_end_edge", "sample_lateness", "snapshot_age",
+    "collector_healthy", "collector_complete", "incidents_absent", "fault_gates_absent"
+  ];
+  for (const court of courts) {
+    const prefix = `court_${court}`;
+    ids.push(
+      `${prefix}_present`, `${prefix}_ready`, `${prefix}_bitrate_p05`,
+      `${prefix}_frame_error_growth`, `${prefix}_bytes_monotonic`,
+      `${prefix}_publisher_continuity`, ...CAMERA_MONITOR_FIELDS.map((field) => `${prefix}_monitor_${field}`),
+      `${prefix}_monitor_videoProfile`, `${prefix}_probe_count`, `${prefix}_probe_window`
+    );
+  }
+  return ids;
+}
+
+function cameraProfileProbeChecksComplete(checkIds, court, probeSampledAt) {
+  const prefix = `court_${court}_probe_`;
+  const fixed = new Set([`${prefix}count`, `${prefix}window`]);
+  const dynamic = checkIds.filter((id) => typeof id === "string" && id.startsWith(prefix) && !fixed.has(id));
+  const suffixes = [
+    "video_count", "audio_count", "video_codec", "video_profile", "dimensions",
+    "fps", "audio_codec", "audio_sample_rate", "audio_channels"
+  ];
+  if (dynamic.length !== suffixes.length) return false;
+  const stems = suffixes.map((suffix) => {
+    const matches = dynamic.filter((id) => id.endsWith(`_${suffix}`));
+    return matches.length === 1 ? matches[0].slice(0, -(`_${suffix}`.length)) : null;
+  });
+  const expectedStem = `${prefix}${probeSampledAt}`;
+  return Number.isFinite(Date.parse(probeSampledAt))
+    && stems.every((stem) => typeof stem === "string" && stem === expectedStem);
+}
+
+function cameraMonitorProfile(profile) {
+  return {
+    protocol: profile?.sourceProtocol ?? null,
+    mode: profile?.sourceMode ?? null,
+    videoCodec: profile?.videoCodec ?? null,
+    videoWidth: profile?.videoWidth ?? null,
+    videoHeight: profile?.videoHeight ?? null,
+    videoProfile: profile?.videoProfile ?? null,
+    audioCodec: profile?.audioCodec ?? null,
+    audioSampleRateHz: profile?.audioSampleRateHz ?? null,
+    audioChannelCount: profile?.audioChannelCount ?? null
+  };
+}
+
+function sourceProfilesEqual(observed, expected) {
+  return SOURCE_FIELDS.every((field) => sourceFieldEqual(observed?.[field], expected?.[field]));
+}
+
+function cameraQualificationProfileMatches(observed, expected) {
+  return sourceFieldEqual(observed?.sourceProtocol, expected?.protocol)
+    && sourceFieldEqual(observed?.sourceMode, expected?.mode)
+    && sourceFieldEqual(observed?.videoCodec, expected?.videoCodec)
+    && observed?.videoWidth === expected?.videoWidth
+    && observed?.videoHeight === expected?.videoHeight
+    && Array.isArray(observed?.videoProfilesAllowed) && observed.videoProfilesAllowed.some((profile) => sourceFieldEqual(profile, expected?.videoProfile))
+    && Number.isFinite(observed?.minimumFps) && observed.minimumFps >= 29
+    && Number.isFinite(observed?.maximumFps) && observed.maximumFps >= observed.minimumFps && observed.maximumFps <= 31
+    && sourceFieldEqual(observed?.audioCodec, expected?.audioCodec)
+    && observed?.audioSampleRateHz === expected?.audioSampleRateHz
+    && observed?.audioChannelCount === expected?.audioChannelCount;
+}
+
+function cameraProbeProfileMatches(observed, expected) {
+  return sourceFieldEqual(observed?.videoCodec, expected?.videoCodec)
+    && sourceFieldEqual(observed?.videoProfile, expected?.videoProfile)
+    && observed?.videoWidth === expected?.videoWidth
+    && observed?.videoHeight === expected?.videoHeight
+    && Number.isFinite(observed?.videoFps) && observed.videoFps >= 29 && observed.videoFps <= 31
+    && sourceFieldEqual(observed?.audioCodec, expected?.audioCodec)
+    && observed?.audioSampleRateHz === expected?.audioSampleRateHz
+    && observed?.audioChannelCount === expected?.audioChannelCount;
+}
+
+function sourceFieldEqual(left, right) {
+  return typeof left === "string" && typeof right === "string"
+    ? left.toLowerCase() === right.toLowerCase()
+    : left === right;
+}
+
 function evaluateVenue(checks, config, venue, startEpochSeconds) {
   const capturedAt = Date.parse(venue?.capturedAt) / 1_000;
   const age = startEpochSeconds - capturedAt;
@@ -554,9 +810,6 @@ function assertEightCourtAttestations(config, attestations) {
   if (numbers.some((court, index) => court !== index + 1)) throw new Error("attestations must assign each court 1 through 8 exactly once");
   for (const court of attestations.courts) {
     if (!config.courts.some((configured) => configured.court === court.court)) throw new Error(`attestation court ${court.court} is not configured`);
-    if (!court.observedSourceProfile || typeof court.observedSourceProfile !== "object" || Array.isArray(court.observedSourceProfile)) {
-      throw new Error(`attestation court ${court.court} observedSourceProfile is invalid`);
-    }
     if (court.egressErrors != null && (!Number.isInteger(court.egressErrors) || court.egressErrors < 0)) {
       throw new Error(`attestation court ${court.court} egressErrors is invalid`);
     }
@@ -672,7 +925,7 @@ function parseArgs(argv) {
     if (values[name] != null) throw new Error(`${key} may be provided only once`);
     values[name] = value;
   }
-  for (const required of ["config", "attestations", "host-events", "pool-preflight", "venue-evidence", "prometheus-url", "start", "end", "output"]) {
+  for (const required of ["config", "attestations", "host-events", "pool-preflight", "venue-evidence", "camera-profile-report", "prometheus-url", "start", "end", "output"]) {
     if (!values[required]) throw new Error(`--${required} is required`);
   }
   return values;
@@ -684,6 +937,11 @@ async function main() {
   const attestations = JSON.parse(await readFile(args.attestations, "utf8"));
   const poolPreflight = JSON.parse(await readFile(args["pool-preflight"], "utf8"));
   const venueEvidence = JSON.parse(await readFile(args["venue-evidence"], "utf8"));
+  const cameraProfileReportText = await readFile(args["camera-profile-report"], "utf8");
+  const cameraProfileEvidence = {
+    sha256: createHash("sha256").update(cameraProfileReportText).digest("hex"),
+    report: JSON.parse(cameraProfileReportText)
+  };
   assertEightCourtConfig(config);
   const startEpochSeconds = Date.parse(args.start) / 1_000;
   const endEpochSeconds = Date.parse(args.end) / 1_000;
@@ -717,8 +975,8 @@ async function main() {
   const globalSeries = Object.fromEntries(await Promise.all(Object.entries(queries.global).map(async ([name, query]) => [name, await runQuery(query)])));
   const courtSeries = Object.fromEntries(await Promise.all(Object.entries(queries.courts).map(async ([court, courtQueries]) => [court, Object.fromEntries(await Promise.all(Object.entries(courtQueries).map(async ([name, query]) => [name, await runQuery(query)]))) ])));
   const evidence = { startEpochSeconds, effectiveStartEpochSeconds, endEpochSeconds, globalSeries, courtSeries };
-  const report = evaluateEightCourtEvidence({ config, evidence, attestations, hosts, poolPreflight, venueEvidence });
-  await writeFile(args.output, `${JSON.stringify({ ...report, configuration: config, attestations, poolPreflight, venueEvidence, hostEventEvidence, hosts, evidence }, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+  const report = evaluateEightCourtEvidence({ config, evidence, attestations, hosts, poolPreflight, venueEvidence, cameraProfileEvidence });
+  await writeFile(args.output, `${JSON.stringify({ ...report, configuration: config, attestations, poolPreflight, venueEvidence, cameraProfileEvidence, hostEventEvidence, hosts, evidence }, null, 2)}\n`, { mode: 0o600, flag: "wx" });
   await chmod(args.output, 0o600);
   process.stdout.write(`${report.verdict}: ${report.gateId} (${report.checks.filter((entry) => !entry.pass).length} aggregate failures; ${report.courts.filter((court) => court.verdict !== "PASS").length} court failures)\n`);
   process.exitCode = report.verdict === "PASS" ? 0 : 2;

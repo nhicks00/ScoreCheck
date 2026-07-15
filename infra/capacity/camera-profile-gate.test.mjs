@@ -47,11 +47,28 @@ test("sanitizes monitor and ffprobe payloads", () => {
 test("passes bounded stable camera profile evidence", () => {
   const gateConfig = config();
   const evidence = healthyEvidence();
-  const report = evaluateCameraProfileGate(gateConfig, evidence, healthyProbes());
+  const report = evaluateCameraProfileGate(gateConfig, evidence, healthyProbes(), sourceEvidence());
   assert.equal(report.verdict, "PASS");
+  assert.equal(report.schemaVersion, 2);
+  assert.deepEqual(report.qualification.requiredCourts, [3]);
+  assert.equal(report.qualification.minimumDurationSeconds, 2);
+  assert.equal(report.qualification.thresholds.minimumSampleCoverageRatio, 0.9);
+  assert.deepEqual(report.sourceEvidence, sourceEvidence());
+  assert.deepEqual(report.qualification.expectedProfiles["3"], gateConfig.expectedProfiles["3"]);
   assert.equal(report.checks.filter((check) => !check.pass).length, 0);
   assert.equal(report.observedCourts[3].bitrateP05, 2_500_000);
   assert.equal(report.observedCourts[3].probeFps[0], 30);
+  assert.equal(report.observedCourts[3].probeSampledAt, "2026-01-01T00:00:01Z");
+  assert.deepEqual(report.observedCourts[3].probeProfile, {
+    videoCodec: "h264",
+    videoProfile: "Main",
+    videoWidth: 1280,
+    videoHeight: 720,
+    videoFps: 30,
+    audioCodec: "aac",
+    audioSampleRateHz: 48000,
+    audioChannelCount: 2
+  });
 });
 
 test("fails sparse, restarted, malformed, and degraded camera evidence", () => {
@@ -65,7 +82,7 @@ test("fails sparse, restarted, malformed, and degraded camera evidence", () => {
   evidence.samples[1].courts[0].raw.bytesReceived = 900;
   const probes = healthyProbes();
   probes.courts[0].streams[0].avgFrameRate = "25/1";
-  const report = evaluateCameraProfileGate(gateConfig, evidence, probes);
+  const report = evaluateCameraProfileGate(gateConfig, evidence, probes, sourceEvidence());
   assert.equal(report.verdict, "FAIL");
   const failed = new Set(report.checks.filter((check) => !check.pass).map((check) => check.id));
   assert(failed.has("sample_coverage"));
@@ -81,28 +98,34 @@ test("fails sparse, restarted, malformed, and degraded camera evidence", () => {
 test("fails duplicate or off-grid scheduled samples even when count coverage passes", () => {
   const evidence = healthyEvidence();
   evidence.samples[2].scheduledAt = evidence.samples[1].scheduledAt;
-  const report = evaluateCameraProfileGate(config(), evidence, healthyProbes());
+  const report = evaluateCameraProfileGate(config(), evidence, healthyProbes(), sourceEvidence());
   const failed = new Set(report.checks.filter((check) => !check.pass).map((check) => check.id));
   assert.equal(report.verdict, "FAIL");
   assert(failed.has("sample_schedule_unique"));
 
   const offGrid = healthyEvidence();
   offGrid.samples[1].scheduledAt = "2026-01-01T00:00:01.500Z";
-  const offGridReport = evaluateCameraProfileGate(config(), offGrid, healthyProbes());
+  const offGridReport = evaluateCameraProfileGate(config(), offGrid, healthyProbes(), sourceEvidence());
   assert(offGridReport.checks.some((check) => check.id === "sample_schedule_aligned" && !check.pass));
 
   const early = healthyEvidence();
   early.samples[1].sampledAt = "2026-01-01T00:00:00.999Z";
-  const earlyReport = evaluateCameraProfileGate(config(), early, healthyProbes());
+  const earlyReport = evaluateCameraProfileGate(config(), early, healthyProbes(), sourceEvidence());
   assert(earlyReport.checks.some((check) => check.id === "sample_times_bounded" && !check.pass));
 });
 
 test("requires exactly one bounded probe per court", () => {
   const probes = healthyProbes();
   probes.courts.push(structuredClone(probes.courts[0]));
-  const report = evaluateCameraProfileGate(config(), healthyEvidence(), probes);
+  const report = evaluateCameraProfileGate(config(), healthyEvidence(), probes, sourceEvidence());
   assert.equal(report.verdict, "FAIL");
   assert(report.checks.some((check) => check.id === "court_3_probe_count" && !check.pass));
+});
+
+test("requires sanitized source artifact digests", () => {
+  const report = evaluateCameraProfileGate(config(), healthyEvidence(), healthyProbes());
+  assert.equal(report.verdict, "FAIL");
+  assert(report.checks.some((check) => check.id === "source_evidence_digests" && !check.pass));
 });
 
 test("parses run, sample, and bounded error records", () => {
@@ -328,6 +351,10 @@ function rawPath(overrides = {}) {
     audioChannelCount: 2,
     ...overrides
   };
+}
+
+function sourceEvidence() {
+  return { samplesSha256: "a".repeat(64), probesSha256: "b".repeat(64) };
 }
 
 function run(command, args, env = {}) {

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmod, open, readFile, writeFile } from "node:fs/promises";
 import { createServer, connect } from "node:net";
 import { promisify } from "node:util";
@@ -9,6 +10,7 @@ import { pathToFileURL } from "node:url";
 const execFileAsync = promisify(execFile);
 const SAFE_ID = /^[a-zA-Z0-9_.:-]{1,80}$/;
 const SAFE_HOST = /^[a-zA-Z0-9_.:@-]{1,255}$/;
+const SHA256 = /^[a-f0-9]{64}$/;
 const PROFILE_FIELDS = [
   "sourceProtocol",
   "sourceMode",
@@ -161,7 +163,7 @@ function sameText(left, right) {
   return typeof left === "string" && typeof right === "string" && left.toLowerCase() === right.toLowerCase();
 }
 
-export function evaluateCameraProfileGate(configInput, evidenceInput, probes) {
+export function evaluateCameraProfileGate(configInput, evidenceInput, probes, sourceEvidence = {}) {
   const config = validateConfig(configInput);
   const checks = [];
   const run = evidenceInput.run;
@@ -179,6 +181,7 @@ export function evaluateCameraProfileGate(configInput, evidenceInput, probes) {
   const expectedSamples = Math.floor(durationSeconds / config.intervalSeconds) + 1;
   const coverageRatio = samples.length / expectedSamples;
   addCheck(checks, "duration", durationSeconds >= config.minimumDurationSeconds, durationSeconds, `>= ${config.minimumDurationSeconds} seconds`);
+  addCheck(checks, "source_evidence_digests", SHA256.test(sourceEvidence.samplesSha256 ?? "") && SHA256.test(sourceEvidence.probesSha256 ?? ""), sourceEvidence, "lowercase SHA-256 for the sanitized sample and probe artifacts");
   addCheck(checks, "sample_errors", errors.length === 0, errors.length, "0");
   addCheck(checks, "sample_coverage", coverageRatio >= config.thresholds.minimumSampleCoverageRatio, coverageRatio, `>= ${config.thresholds.minimumSampleCoverageRatio}`);
 
@@ -218,9 +221,14 @@ export function evaluateCameraProfileGate(configInput, evidenceInput, probes) {
   }
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     gateId: config.gateId,
     generatedAt: new Date().toISOString(),
+    qualification: qualificationContract(config),
+    sourceEvidence: {
+      samplesSha256: sourceEvidence.samplesSha256 ?? null,
+      probesSha256: sourceEvidence.probesSha256 ?? null
+    },
     verdict: checks.every((check) => check.pass) ? "PASS" : "FAIL",
     window: {
       plannedStartAt: run.plannedStartAt,
@@ -237,6 +245,23 @@ export function evaluateCameraProfileGate(configInput, evidenceInput, probes) {
     },
     observedCourts,
     checks
+  };
+}
+
+function qualificationContract(config) {
+  return {
+    schemaVersion: 1,
+    requiredCourts: [...config.requiredCourts],
+    minimumDurationSeconds: config.minimumDurationSeconds,
+    intervalSeconds: config.intervalSeconds,
+    thresholds: { ...config.thresholds },
+    expectedProfiles: Object.fromEntries(config.requiredCourts.map((court) => [
+      String(court),
+      {
+        ...config.expectedProfiles[String(court)],
+        videoProfilesAllowed: [...config.expectedProfiles[String(court)].videoProfilesAllowed]
+      }
+    ]))
   };
 }
 
@@ -281,6 +306,7 @@ function evaluateCourt(checks, config, samples, probes, courtNumber, startMs, en
   addCheck(checks, `${prefix}_probe_window`, courtProbes.length > 0 && probesInWindow, courtProbes.map((probe) => probe.sampledAt), `within ${config.thresholds.maximumProbeOffsetSeconds} seconds of the evidence window`);
 
   const probeFps = [];
+  let probeProfile = null;
   for (const probe of courtProbes) {
     const videos = probe.streams?.filter((stream) => stream.codecType === "video") ?? [];
     const audios = probe.streams?.filter((stream) => stream.codecType === "audio") ?? [];
@@ -301,6 +327,20 @@ function evaluateCourt(checks, config, samples, probes, courtNumber, startMs, en
       addCheck(checks, `${prefix}_probe_${probe.sampledAt}_audio_sample_rate`, Number(audio.sampleRateHz) === expected.audioSampleRateHz, Number(audio.sampleRateHz), expected.audioSampleRateHz);
       addCheck(checks, `${prefix}_probe_${probe.sampledAt}_audio_channels`, audio.channels === expected.audioChannelCount, audio.channels, expected.audioChannelCount);
     }
+    if (courtProbes.length === 1 && videos.length === 1 && audios.length === 1) {
+      const video = videos[0];
+      const audio = audios[0];
+      probeProfile = {
+        videoCodec: video.codecName,
+        videoProfile: video.profile,
+        videoWidth: video.width,
+        videoHeight: video.height,
+        videoFps: parseFrameRate(video.avgFrameRate) ?? parseFrameRate(video.realFrameRate),
+        audioCodec: audio.codecName,
+        audioSampleRateHz: Number(audio.sampleRateHz),
+        audioChannelCount: audio.channels
+      };
+    }
   }
 
   return {
@@ -309,7 +349,9 @@ function evaluateCourt(checks, config, samples, probes, courtNumber, startMs, en
     byteGrowth,
     readySince: readySinceValues.size === 1 ? [...readySinceValues][0] : null,
     monitorProfile: rawSamples.length > 0 ? pickProfile(rawSamples.at(-1)) : null,
-    probeFps
+    probeFps,
+    probeSampledAt: courtProbes.length === 1 ? courtProbes[0].sampledAt : null,
+    probeProfile
   };
 }
 
@@ -554,10 +596,15 @@ async function stopChild(child) {
 
 async function evaluateCommand(values) {
   const config = await loadConfig(required(values, "config"));
-  const evidence = parseEvidenceNdjson(await readFile(required(values, "evidence"), "utf8"));
-  const probes = JSON.parse(await readFile(required(values, "probes"), "utf8"));
+  const evidenceText = await readFile(required(values, "evidence"), "utf8");
+  const probesText = await readFile(required(values, "probes"), "utf8");
+  const evidence = parseEvidenceNdjson(evidenceText);
+  const probes = JSON.parse(probesText);
   if (probes.schemaVersion !== 1 || probes.gateId !== config.gateId || !Array.isArray(probes.courts)) throw new Error("probe evidence does not match the config");
-  const report = evaluateCameraProfileGate(config, evidence, probes);
+  const report = evaluateCameraProfileGate(config, evidence, probes, {
+    samplesSha256: createHash("sha256").update(evidenceText).digest("hex"),
+    probesSha256: createHash("sha256").update(probesText).digest("hex")
+  });
   await writeProtectedJson(required(values, "output"), report);
   process.exitCode = report.verdict === "PASS" ? 0 : 2;
 }

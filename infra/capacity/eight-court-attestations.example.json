@@ -5,13 +5,13 @@
   "youtubeBroadcastsUnlisted": false,
   "youtubeAutoLifecycleDisabled": false,
   "courts": [
-    { "court": 1, "observedSourceProfile": {}, "assignmentVerified": false, "egressErrors": null, "egressShmEnabled": false, "avSyncObserved": false, "avSyncObservedAt": null },
-    { "court": 2, "observedSourceProfile": {}, "assignmentVerified": false, "egressErrors": null, "egressShmEnabled": false, "avSyncObserved": false, "avSyncObservedAt": null },
-    { "court": 3, "observedSourceProfile": {}, "assignmentVerified": false, "egressErrors": null, "egressShmEnabled": false, "avSyncObserved": false },
-    { "court": 4, "observedSourceProfile": {}, "assignmentVerified": false, "egressErrors": null, "egressShmEnabled": false, "avSyncObserved": false },
-    { "court": 5, "observedSourceProfile": {}, "assignmentVerified": false, "egressErrors": null, "egressShmEnabled": false, "avSyncObserved": false },
-    { "court": 6, "observedSourceProfile": {}, "assignmentVerified": false, "egressErrors": null, "egressShmEnabled": false, "avSyncObserved": false },
-    { "court": 7, "observedSourceProfile": {}, "assignmentVerified": false, "egressErrors": null, "egressShmEnabled": false, "avSyncObserved": false },
-    { "court": 8, "observedSourceProfile": {}, "assignmentVerified": false, "egressErrors": null, "egressShmEnabled": false, "avSyncObserved": false }
+    { "court": 1, "assignmentVerified": false, "egressErrors": null, "egressShmEnabled": false, "avSyncObserved": false, "avSyncObservedAt": null },
+    { "court": 2, "assignmentVerified": false, "egressErrors": null, "egressShmEnabled": false, "avSyncObserved": false, "avSyncObservedAt": null },
+    { "court": 3, "assignmentVerified": false, "egressErrors": null, "egressShmEnabled": false, "avSyncObserved": false },
+    { "court": 4, "assignmentVerified": false, "egressErrors": null, "egressShmEnabled": false, "avSyncObserved": false },
+    { "court": 5, "assignmentVerified": false, "egressErrors": null, "egressShmEnabled": false, "avSyncObserved": false },
+    { "court": 6, "assignmentVerified": false, "egressErrors": null, "egressShmEnabled": false, "avSyncObserved": false },
+    { "court": 7, "assignmentVerified": false, "egressErrors": null, "egressShmEnabled": false, "avSyncObserved": false },
+    { "court": 8, "assignmentVerified": false, "egressErrors": null, "egressShmEnabled": false, "avSyncObserved": false }
   ]
 }

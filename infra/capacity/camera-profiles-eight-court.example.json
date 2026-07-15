@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "gateId": "eight-camera-profile-qualification",
+  "requiredCourts": [1, 2, 3, 4, 5, 6, 7, 8],
+  "minimumDurationSeconds": 600,
+  "intervalSeconds": 5,
+  "thresholds": {
+    "minimumSampleCoverageRatio": 0.99,
+    "maximumSampleGapSeconds": 7.5,
+    "maximumEdgeGapSeconds": 7.5,
+    "maximumSampleLatenessMs": 1000,
+    "maximumSnapshotAgeMs": 10000,
+    "minimumRawBitrateBps": 2000000,
+    "maximumProbeOffsetSeconds": 30
+  },
+  "expectedProfiles": {
+    "1": {
+      "sourceProtocol": "SRT",
+      "sourceMode": "PUSH",
+      "videoCodec": "H264",
+      "videoProfilesAllowed": ["Main"],
+      "videoWidth": 1280,
+      "videoHeight": 720,
+      "minimumFps": 29,
+      "maximumFps": 31,
+      "audioCodec": "AAC",
+      "audioSampleRateHz": 48000,
+      "audioChannelCount": 2
+    },
+    "2": {
+      "sourceProtocol": "SRT",
+      "sourceMode": "PUSH",
+      "videoCodec": "H264",
+      "videoProfilesAllowed": ["Main"],
+      "videoWidth": 1280,
+      "videoHeight": 720,
+      "minimumFps": 29,
+      "maximumFps": 31,
+      "audioCodec": "AAC",
+      "audioSampleRateHz": 48000,
+      "audioChannelCount": 2
+    },
+    "3": {
+      "sourceProtocol": "SRT",
+      "sourceMode": "PUSH",
+      "videoCodec": "H264",
+      "videoProfilesAllowed": ["Main"],
+      "videoWidth": 1280,
+      "videoHeight": 720,
+      "minimumFps": 29,
+      "maximumFps": 31,
+      "audioCodec": "AAC",
+      "audioSampleRateHz": 48000,
+      "audioChannelCount": 2
+    },
+    "4": {
+      "sourceProtocol": "SRT",
+      "sourceMode": "PUSH",
+      "videoCodec": "H264",
+      "videoProfilesAllowed": ["Main"],
+      "videoWidth": 1280,
+      "videoHeight": 720,
+      "minimumFps": 29,
+      "maximumFps": 31,
+      "audioCodec": "AAC",
+      "audioSampleRateHz": 48000,
+      "audioChannelCount": 2
+    },
+    "5": {
+      "sourceProtocol": "SRT",
+      "sourceMode": "PUSH",
+      "videoCodec": "H264",
+      "videoProfilesAllowed": ["Main"],
+      "videoWidth": 1280,
+      "videoHeight": 720,
+      "minimumFps": 29,
+      "maximumFps": 31,
+      "audioCodec": "AAC",
+      "audioSampleRateHz": 48000,
+      "audioChannelCount": 2
+    },
+    "6": {
+      "sourceProtocol": "SRT",
+      "sourceMode": "PUSH",
+      "videoCodec": "H264",
+      "videoProfilesAllowed": ["Main"],
+      "videoWidth": 1280,
+      "videoHeight": 720,
+      "minimumFps": 29,
+      "maximumFps": 31,
+      "audioCodec": "AAC",
+      "audioSampleRateHz": 48000,
+      "audioChannelCount": 2
+    },
+    "7": {
+      "sourceProtocol": "SRT",
+      "sourceMode": "PUSH",
+      "videoCodec": "H264",
+      "videoProfilesAllowed": ["Main"],
+      "videoWidth": 1280,
+      "videoHeight": 720,
+      "minimumFps": 29,
+      "maximumFps": 31,
+      "audioCodec": "AAC",
+      "audioSampleRateHz": 48000,
+      "audioChannelCount": 2
+    },
+    "8": {
+      "sourceProtocol": "SRT",
+      "sourceMode": "PUSH",
+      "videoCodec": "H264",
+      "videoProfilesAllowed": ["Main"],
+      "videoWidth": 1280,
+      "videoHeight": 720,
+      "minimumFps": 29,
+      "maximumFps": 31,
+      "audioCodec": "AAC",
+      "audioSampleRateHz": 48000,
+      "audioChannelCount": 2
+    }
+  }
+}

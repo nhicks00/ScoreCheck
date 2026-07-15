@@ -12,6 +12,8 @@
   "maximumVenueEvidenceAgeSeconds": 3600,
   "minimumVenueMeasurementSpanSeconds": 300,
   "maximumPoolPreflightAgeSeconds": 300,
+  "expectedCameraProfileGateId": "eight-camera-profile-qualification",
+  "maximumCameraProfileEvidenceAgeSeconds": 3600,
   "maximumAttestationLagSeconds": 900,
   "warmSpare": {
     "hostId": "bvm-compositor-spare",

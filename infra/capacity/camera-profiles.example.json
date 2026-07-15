@@ -5,7 +5,7 @@
   "minimumDurationSeconds": 600,
   "intervalSeconds": 5,
   "thresholds": {
-    "minimumSampleCoverageRatio": 0.9,
+    "minimumSampleCoverageRatio": 0.99,
     "maximumSampleGapSeconds": 7.5,
     "maximumEdgeGapSeconds": 7.5,
     "maximumSampleLatenessMs": 1000,

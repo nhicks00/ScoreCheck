@@ -7,7 +7,9 @@ readers, Egress jobs, cameras, or destinations.
 
 The evaluator deliberately refuses a telemetry-only pass. Prometheus does not
 currently prove the complete source profile, process launch flags, or
-cross-court isolation, so those values remain explicit attestations. Whole-host
+cross-court isolation. Source profiles come from the protected camera-profile
+qualification report; process flags and isolation remain explicit attestations.
+Whole-host
 CPU, sampler coverage/cadence/lag, and `/dev/shm` headroom are read directly
 from the host-sampler CSV. A single long-lived Python process on each host also
 scans `/proc` every 50 ms and records bounded PID, PPID, command, parent,
@@ -41,11 +43,19 @@ normalizers, program readers, Egress jobs, or destinations. The probe creates
 one short-lived raw RTSP reader per required court and closes its SSH tunnel on
 success or failure.
 
-The checked-in candidate targets the intended Camera 3-5 hard cutover: SRT
-push, H.264 Main 1280x720 at 29-31 fps, and AAC 48 kHz stereo for every logical
-stream. Change that manifest only to the intended camera configuration before
-the run. Do not weaken it after observing HEVC or another mismatch; a mismatch
-means that camera still requires an isolated normalization assignment.
+The checked-in `camera-profiles.example.json` candidate targets the intended
+Camera 3-5 hard cutover: SRT push, H.264 Main 1280x720 at 29-31 fps, and AAC 48
+kHz stereo for every logical stream. Change that manifest only to the intended
+camera configuration before the run. Do not weaken it after observing HEVC or
+another mismatch; a mismatch means that camera still requires an isolated
+normalization assignment.
+
+The separate `camera-profiles-eight-court.example.json` manifest is the required
+input for the final endurance qualification. Its output is report schema 2 and
+embeds the exact qualification contract, hashes of both protected source
+artifacts, and sanitized monitor and `ffprobe` profiles. Schema-1 reports and
+reports missing the complete generated check set are rejected; operator
+attestations cannot substitute for this artifact.
 
 Run the ten-minute sampler and take the bounded probe near the start of its
 window:
@@ -191,6 +201,14 @@ qualification gates before starting. Do not weaken a profile after seeing the
 result. The official window is at least 120 seconds of warmup plus 7,200
 post-warmup seconds.
 
+Immediately before the endurance window, run the same ten-minute sample,
+bounded `ffprobe`, and evaluate sequence documented above with
+`camera-profiles-eight-court.example.json`. Store the resulting mode-`0600`
+report beside the other protected gate evidence. The endurance manifest's
+`expectedCameraProfileGateId` must equal that report's gate ID, all eight source
+profiles must match exactly, and the report must finish before workload start
+within `maximumCameraProfileEvidenceAgeSeconds`.
+
 Start the pool sampler before the first Egress request. Provide exactly one
 ingest host and nine unique compositor hosts, including the warm spare:
 
@@ -241,6 +259,7 @@ node infra/capacity/evaluate-eight-court-gate.mjs \
   --host-events /protected/eight-court-host-events.ndjson \
   --pool-preflight /protected/compositor-pool-preflight.json \
   --venue-evidence /protected/venue-network.json \
+  --camera-profile-report /protected/eight-camera-profile-report.json \
   --prometheus-url http://127.0.0.1:9090 \
   --start 2026-07-15T12:00:00Z \
   --end 2026-07-15T14:02:00Z \
@@ -249,7 +268,8 @@ node infra/capacity/evaluate-eight-court-gate.mjs \
 
 Endpoint collection is capped at eight concurrent Prometheus requests. The
 evaluator caches identical queries and writes one protected local evidence
-artifact containing the source host-event SHA-256 and event count; it does not
+artifact containing the source host-event SHA-256/event count and the exact
+camera-profile report plus its SHA-256; it does not
 write high-frequency samples to Supabase.
 
 The aggregate report fails if any one court fails. Per-court checks include
@@ -271,7 +291,9 @@ floor.
 
 The attestation file is endpoint-stamped and expires after a bounded lag. Each
 required commentary court also records its clap/A/V-sync observation time; an
-old observation from a previous run cannot satisfy the gate.
+old observation from a previous run cannot satisfy the gate. Source profiles
+are intentionally absent from this file because only the bound camera-profile
+artifact can qualify them.
 
 ## Test
 

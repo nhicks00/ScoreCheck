@@ -31,6 +31,12 @@ test("requires an exact one-court-per-worker topology and two commentary rooms",
   const weakenedCoverage = structuredClone(config);
   weakenedCoverage.thresholds.minimumSampleCoverageRatio = 0.989;
   assert.throws(() => assertEightCourtConfig(weakenedCoverage), /at least 0.99/);
+  const missingCameraGateId = structuredClone(config);
+  delete missingCameraGateId.expectedCameraProfileGateId;
+  assert.throws(() => assertEightCourtConfig(missingCameraGateId), /expectedCameraProfileGateId/);
+  const staleCameraGate = structuredClone(config);
+  staleCameraGate.maximumCameraProfileEvidenceAgeSeconds = 3_601;
+  assert.throws(() => assertEightCourtConfig(staleCameraGate), /no more than 3600/);
 });
 
 test("builds lifecycle, score, provider, and exact-reader queries for every court", () => {
@@ -137,6 +143,101 @@ test("fails direct evaluator calls with missing or mismatched provider bindings"
   assert.equal(report.checks.find((check) => check.id === "pool_host_provider_bindings")?.pass, false);
 });
 
+test("requires a fresh hard-qualified camera profile artifact for all eight courts", () => {
+  const missing = passingInput();
+  delete missing.cameraProfileEvidence;
+  let report = evaluateEightCourtEvidence(missing);
+  assert.equal(report.verdict, "FAIL");
+  assert.equal(report.checks.find((check) => check.id === "camera_profile_report_schema")?.pass, false);
+
+  const weak = passingInput();
+  weak.cameraProfileEvidence.report.qualification.thresholds.minimumSampleCoverageRatio = 0.9;
+  report = evaluateEightCourtEvidence(weak);
+  assert.equal(report.verdict, "FAIL");
+  assert.equal(report.checks.find((check) => check.id === "camera_profile_qualification_contract")?.pass, false);
+
+  const weakBitrate = passingInput();
+  weakBitrate.cameraProfileEvidence.report.qualification.thresholds.minimumRawBitrateBps = 1_500_000;
+  report = evaluateEightCourtEvidence(weakBitrate);
+  assert.equal(report.verdict, "FAIL");
+  assert.equal(report.checks.find((check) => check.id === "camera_profile_qualification_contract")?.pass, false);
+
+  const wrongGate = passingInput();
+  wrongGate.cameraProfileEvidence.report.gateId = "unrelated-camera-gate";
+  report = evaluateEightCourtEvidence(wrongGate);
+  assert.equal(report.verdict, "FAIL");
+  assert.equal(report.checks.find((check) => check.id === "camera_profile_gate_identity")?.pass, false);
+
+  const missingSourceDigest = passingInput();
+  delete missingSourceDigest.cameraProfileEvidence.report.sourceEvidence.probesSha256;
+  report = evaluateEightCourtEvidence(missingSourceDigest);
+  assert.equal(report.verdict, "FAIL");
+  assert.equal(report.checks.find((check) => check.id === "camera_profile_source_digests")?.pass, false);
+
+  const mismatched = passingInput();
+  mismatched.cameraProfileEvidence.report.observedCourts[4].monitorProfile.videoCodec = "H265";
+  report = evaluateEightCourtEvidence(mismatched);
+  assert.equal(report.verdict, "FAIL");
+  assert.equal(report.checks.find((check) => check.id === "camera_profile_exact_profiles")?.pass, false);
+
+  const impossibleFps = passingInput();
+  impossibleFps.cameraProfileEvidence.report.qualification.expectedProfiles[4].minimumFps = 32;
+  report = evaluateEightCourtEvidence(impossibleFps);
+  assert.equal(report.verdict, "FAIL");
+  assert.equal(report.checks.find((check) => check.id === "camera_profile_exact_profiles")?.pass, false);
+
+  const mismatchedProbeTime = passingInput();
+  mismatchedProbeTime.cameraProfileEvidence.report.observedCourts[4].probeSampledAt = "1969-12-31T23:59:58.000Z";
+  report = evaluateEightCourtEvidence(mismatchedProbeTime);
+  assert.equal(report.verdict, "FAIL");
+  assert.equal(report.checks.find((check) => check.id === "camera_profile_report_pass")?.pass, false);
+
+  const stale = passingInput();
+  stale.cameraProfileEvidence.report.window.plannedEndAt = new Date(-3_700_000).toISOString();
+  stale.cameraProfileEvidence.report.generatedAt = new Date(-3_699_000).toISOString();
+  report = evaluateEightCourtEvidence(stale);
+  assert.equal(report.verdict, "FAIL");
+  assert.equal(report.checks.find((check) => check.id === "camera_profile_evidence_fresh")?.pass, false);
+
+  const incomplete = passingInput();
+  incomplete.cameraProfileEvidence.report.checks = [{ id: "duration", pass: true }];
+  report = evaluateEightCourtEvidence(incomplete);
+  assert.equal(report.verdict, "FAIL");
+  assert.equal(report.checks.find((check) => check.id === "camera_profile_report_pass")?.pass, false);
+
+  const invalidThreshold = passingInput();
+  invalidThreshold.cameraProfileEvidence.report.qualification.thresholds.maximumSampleGapSeconds = -1;
+  report = evaluateEightCourtEvidence(invalidThreshold);
+  assert.equal(report.verdict, "FAIL");
+  assert.equal(report.checks.find((check) => check.id === "camera_profile_qualification_contract")?.pass, false);
+
+  const invalidCourts = passingInput();
+  invalidCourts.cameraProfileEvidence.report.qualification.requiredCourts = "1,2,3,4,5,6,7,8";
+  assert.doesNotThrow(() => evaluateEightCourtEvidence(invalidCourts));
+  report = evaluateEightCourtEvidence(invalidCourts);
+  assert.equal(report.verdict, "FAIL");
+  assert.equal(report.checks.find((check) => check.id === "camera_profile_exact_courts")?.pass, false);
+
+  const inconsistentCoverage = passingInput();
+  inconsistentCoverage.cameraProfileEvidence.report.window.observedSamples = 120;
+  report = evaluateEightCourtEvidence(inconsistentCoverage);
+  assert.equal(report.verdict, "FAIL");
+  assert.equal(report.checks.find((check) => check.id === "camera_profile_window_contract")?.pass, false);
+
+  const inconsistentWindow = passingInput();
+  inconsistentWindow.cameraProfileEvidence.report.window.maxGapSeconds = 8;
+  report = evaluateEightCourtEvidence(inconsistentWindow);
+  assert.equal(report.verdict, "FAIL");
+  assert.equal(report.checks.find((check) => check.id === "camera_profile_window_contract")?.pass, false);
+
+  const lowerCase = passingInput();
+  lowerCase.cameraProfileEvidence.report.observedCourts[4].monitorProfile.videoCodec = "h264";
+  lowerCase.cameraProfileEvidence.report.observedCourts[4].probeProfile.videoCodec = "h264";
+  lowerCase.cameraProfileEvidence.report.qualification.expectedProfiles[4].videoCodec = "h264";
+  report = evaluateEightCourtEvidence(lowerCase);
+  assert.equal(report.verdict, "PASS", failures(report));
+});
+
 test("fails on browser session churn, a firing alert, an unavailable spare, or venue headroom below floor", () => {
   for (const mutate of [
     (input) => { input.evidence.courtSeries[4].browser_sessions = series([0, 0, 1, 1]); },
@@ -230,7 +331,6 @@ function passingInput() {
     ...hostEvidence(),
     providerIdentity: { provider: "digitalocean", resourceId: String(index + 1), hostname: host.hostId }
   }]));
-  const profiles = Object.fromEntries(config.courts.map((court) => [court.court, court.expectedSourceProfile]));
   return {
     config,
     evidence: { startEpochSeconds: 0, effectiveStartEpochSeconds: 120, endEpochSeconds: 7_320, globalSeries, courtSeries },
@@ -242,7 +342,6 @@ function passingInput() {
       youtubeAutoLifecycleDisabled: true,
       courts: config.courts.map((court) => ({
         court: court.court,
-        observedSourceProfile: profiles[court.court],
         assignmentVerified: true,
         egressErrors: 0,
         egressShmEnabled: true,
@@ -269,6 +368,7 @@ function passingInput() {
       },
       blockers: []
     },
+    cameraProfileEvidence: qualifiedCameraProfiles(config),
     venueEvidence: {
       schemaVersion: 1,
       capturedAt: new Date(-50_000).toISOString(),
@@ -302,6 +402,8 @@ function fixtureConfig() {
     maximumVenueEvidenceAgeSeconds: 3_600,
     minimumVenueMeasurementSpanSeconds: 300,
     maximumPoolPreflightAgeSeconds: 300,
+    expectedCameraProfileGateId: "eight-camera-profile-qualification",
+    maximumCameraProfileEvidenceAgeSeconds: 3_600,
     maximumAttestationLagSeconds: 900,
     warmSpare: { hostId: "bvm-compositor-spare", agent: "bvm-compositor-spare", service: "bvm-egress", vcpus: 4, allowedBaselineUnclassified: [] },
     ingest: { hostId: "bvm-preview-01", agent: "bvm-preview-01", service: "mediamtx", vcpus: 8, allowedBaselineUnclassified: [] },
@@ -359,6 +461,128 @@ function fixtureConfig() {
       maximumSnapshotAgeSeconds: 15
     }
   };
+}
+
+function qualifiedCameraProfiles(config) {
+  return {
+    sha256: "a".repeat(64),
+    report: {
+      schemaVersion: 2,
+      gateId: "eight-camera-profile-qualification",
+      generatedAt: new Date(-500).toISOString(),
+      qualification: {
+        schemaVersion: 1,
+        requiredCourts: config.courts.map((court) => court.court),
+        minimumDurationSeconds: 600,
+        intervalSeconds: 5,
+        thresholds: {
+          minimumSampleCoverageRatio: 0.99,
+          maximumSampleGapSeconds: 7.5,
+          maximumEdgeGapSeconds: 7.5,
+          maximumSampleLatenessMs: 1_000,
+          maximumSnapshotAgeMs: 10_000,
+          minimumRawBitrateBps: 2_000_000,
+          maximumProbeOffsetSeconds: 30
+        },
+        expectedProfiles: Object.fromEntries(config.courts.map((court) => [String(court.court), cameraQualificationProfile(court.expectedSourceProfile)]))
+      },
+      sourceEvidence: { samplesSha256: "b".repeat(64), probesSha256: "c".repeat(64) },
+      verdict: "PASS",
+      window: {
+        plannedStartAt: new Date(-601_000).toISOString(),
+        plannedEndAt: new Date(-1_000).toISOString(),
+        durationSeconds: 600,
+        expectedSamples: 121,
+        observedSamples: 121,
+        coverageRatio: 1,
+        maxGapSeconds: 5,
+        startEdgeSeconds: 0,
+        endEdgeSeconds: 0,
+        maxLatenessMs: 0,
+        maxSnapshotAgeMs: 0
+      },
+      observedCourts: Object.fromEntries(config.courts.map((court) => [String(court.court), {
+        bitrateP05: 2_500_000,
+        frameErrorGrowth: 0,
+        byteGrowth: 1_000,
+        readySince: "1969-12-31T23:49:59.000Z",
+        monitorProfile: cameraMonitorProfile(court.expectedSourceProfile),
+        probeFps: [30],
+        probeSampledAt: "1969-12-31T23:59:59.000Z",
+        probeProfile: cameraProbeProfile(court.expectedSourceProfile)
+      }])),
+      checks: cameraProfileReportCheckIds(config.courts.map((court) => court.court)).map((id) => ({ id, pass: true }))
+    }
+  };
+}
+
+function cameraQualificationProfile(profile) {
+  return {
+    sourceProtocol: profile.protocol,
+    sourceMode: profile.mode,
+    videoCodec: profile.videoCodec,
+    videoProfilesAllowed: [profile.videoProfile],
+    videoWidth: profile.videoWidth,
+    videoHeight: profile.videoHeight,
+    minimumFps: 29,
+    maximumFps: 31,
+    audioCodec: profile.audioCodec,
+    audioSampleRateHz: profile.audioSampleRateHz,
+    audioChannelCount: profile.audioChannelCount
+  };
+}
+
+function cameraMonitorProfile(profile) {
+  return {
+    sourceProtocol: profile.protocol,
+    sourceMode: profile.mode,
+    videoCodec: profile.videoCodec,
+    videoWidth: profile.videoWidth,
+    videoHeight: profile.videoHeight,
+    videoProfile: profile.videoProfile,
+    audioCodec: profile.audioCodec,
+    audioSampleRateHz: profile.audioSampleRateHz,
+    audioChannelCount: profile.audioChannelCount
+  };
+}
+
+function cameraProbeProfile(profile) {
+  return {
+    videoCodec: profile.videoCodec,
+    videoProfile: profile.videoProfile,
+    videoWidth: profile.videoWidth,
+    videoHeight: profile.videoHeight,
+    videoFps: 30,
+    audioCodec: profile.audioCodec,
+    audioSampleRateHz: profile.audioSampleRateHz,
+    audioChannelCount: profile.audioChannelCount
+  };
+}
+
+function cameraProfileReportCheckIds(courts) {
+  const ids = [
+    "duration", "source_evidence_digests", "sample_errors", "sample_coverage", "sample_schedule_unique",
+    "sample_schedule_aligned", "sample_times_bounded", "sample_max_gap",
+    "sample_start_edge", "sample_end_edge", "sample_lateness", "snapshot_age",
+    "collector_healthy", "collector_complete", "incidents_absent", "fault_gates_absent"
+  ];
+  const monitorFields = ["sourceProtocol", "sourceMode", "videoCodec", "videoWidth", "videoHeight", "audioCodec", "audioSampleRateHz", "audioChannelCount"];
+  const probeSuffixes = ["video_count", "audio_count", "video_codec", "video_profile", "dimensions", "fps", "audio_codec", "audio_sample_rate", "audio_channels"];
+  for (const court of courts) {
+    const prefix = `court_${court}`;
+    ids.push(
+      `${prefix}_present`, `${prefix}_ready`, `${prefix}_bitrate_p05`,
+      `${prefix}_frame_error_growth`, `${prefix}_bytes_monotonic`, `${prefix}_publisher_continuity`,
+      ...monitorFields.map((field) => `${prefix}_monitor_${field}`),
+      `${prefix}_monitor_videoProfile`, `${prefix}_probe_count`, `${prefix}_probe_window`,
+      ...probeSuffixes.map((suffix) => `${prefix}_probe_1969-12-31T23:59:59.000Z_${suffix}`)
+    );
+  }
+  return ids;
+}
+
+function sourceEvidence() {
+  return { samplesSha256: "a".repeat(64), probesSha256: "b".repeat(64) };
 }
 
 function providerResources(hosts) {

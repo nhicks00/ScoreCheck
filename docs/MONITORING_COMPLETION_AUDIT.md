@@ -27,7 +27,7 @@ capacity.
 | Phone paging | Required Pushover emergency acknowledgement and recovery; optional Twilio SMS escalation | Pushover opening/recovery delivery proven in physical Camera 1 episodes; controlled acknowledgement tap remains pending. Twilio is intentionally skipped while carrier registration blocks delivery |
 | Independent dead-man | Baseline and active Healthchecks senders with coverage-aware cadence plus read-only Pushover attachment audit | Audit deployed; baseline running, active idle-paused, and Pushover attached to both. Controlled withheld-ping gate remains pending |
 | One-court real fault gate | Camera, network, preview, browser, commentary, score, Egress, YouTube, agent, dead-man faults | Physical Camera 1 loss/recovery, durable paging, same-page viewer continuity, A/V sync, and one-court `c-4` capacity passed. Remaining real fault rows are pending |
-| Eight-court real load/fault gate | Four compositors, eight representative feeds, two commentary rooms, score on all courts | Fail-closed routing endurance passed under the temporary topology; ingest headroom and viewer quality failed; revised-topology gate pending |
+| Eight-court real load/fault gate | Independent compositor per court plus warm spare, eight qualified feeds, two commentary rooms, score on all courts | Final evaluator now binds a fresh schema-2 all-camera monitor/ffprobe qualification artifact to exact source profiles; revised-topology profile and endurance runs remain pending |
 
 ## Deterministic isolation gate
 
@@ -215,7 +215,9 @@ the phone-visible Camera 4 fault row remains pending.
    outputs, then run eight representative feeds for at least two hours with
    scoring on all cameras and at least two commentary rooms.
    The exact aggregate evaluator and one-watcher-per-host evidence sampler are
-   now implemented locally; the live nine-compositor pool, qualified profiles,
-   venue network evidence, and two-hour run remain pending.
+   implemented. The evaluator now rejects operator-supplied source profiles and
+   requires the complete, fresh, digest-bound schema-2 all-camera qualification
+   report. The live nine-compositor pool, actual qualification report, venue
+   network evidence, and two-hour run remain pending.
 5. Qualify the final camera profiles and the 75 Mbps bonded-upload venue floor.
 6. Only after these gates pass, accept monitoring as ready for the shadow event.
