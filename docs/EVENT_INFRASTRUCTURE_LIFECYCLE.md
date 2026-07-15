@@ -60,10 +60,13 @@ IDs and ordinary public/private addresses change. Reserved IPv4s can only move
 between Droplets in the same DigitalOcean region, so the manifest, anchors, and
 all event servers are pinned to `sfo2`.
 
-The retained records use a 60-second TTL. DNS verification requires both the
-authoritative Vercel record and a normal resolver to return the intended value.
-The lifecycle will not overwrite multiple records, a non-A record, or a record
-whose provider identity changed after the lifecycle first touched it.
+The retained records use a 60-second TTL. DNS readiness requires the exact
+Vercel control-plane record plus the system resolver, Cloudflare 1.1.1.1, and
+Google Public DNS to return the intended value. The lifecycle waits for up to
+40 minutes because a previously cached wildcard answer can legitimately
+outlive a newly created exact record by roughly 30 minutes. It will not
+overwrite multiple records, a non-A record, or a record whose provider
+identity changed after the lifecycle first touched it.
 
 While idle, `preview`, `rtc`, and `turn` may still resolve to their unassigned
 Reserved IPv4s. This is deliberate: they accept no event traffic but never drift
@@ -90,8 +93,10 @@ The lifecycle handles these explicitly:
 - **IP reuse is possible.** Provider Droplet ID, exact name, region, size,
   image, event tag, role tag, temporary tag, and destruction date must all
   match. An address or name alone never grants deletion authority.
-- **DNS can cache briefly.** The build waits for Vercel's record and a resolver;
-  event preflight still reserves at least the TTL before accepting traffic.
+- **DNS can retain an older wildcard answer.** The build records stale resolver
+  answers and waits for Vercel, the system resolver, Cloudflare, and Google to
+  agree. Run setup at least 45 minutes before cameras may connect; `start`
+  remains unavailable until DNS convergence is durably recorded.
 - **Reserved IPv4 assignment is asynchronous.** The build waits until the API
   reports the exact destination Droplet ID before accepting DNS.
 - **A create response can be lost.** Before each one-time production anchor
@@ -361,7 +366,8 @@ The stack is `ready` only after:
 2. Production has both Reserved IPv4s assigned to the intended exact Droplet
    IDs; rehearsal has no Reserved IP allocation and each scoped endpoint targets
    the exact event-owned Droplet public IPv4.
-3. All four public DNS records pass provider and resolver checks.
+3. All four public DNS records pass the Vercel, system, Cloudflare, and Google
+   resolver checks.
 4. Commentary, ingest, eight compositors, spare, and observability are deployed
    from the bound repository revision.
 5. All 12 read-only monitoring agents are reachable on generated private IPs.
@@ -484,7 +490,8 @@ not use a production endpoint or select an existing Droplet. It performs:
 
 1. Create one `c-4` from bound canary cloud-init.
 2. Create and assign one temporary Reserved IPv4.
-3. Create unique Vercel DNS and prove HTTP instance identity.
+3. Create unique Vercel DNS; wait for system, Cloudflare, and Google resolver
+   convergence; then prove HTTP instance identity.
 4. Flex-resize to `c-2`, then back to `c-4`, proving the endpoint each time.
 5. Sanitize and snapshot the server.
 6. Destroy the original exact provider ID.
@@ -516,7 +523,10 @@ the `cleanup` subcommand with the same arguments.
 DigitalOcean may return an attached Reserved IPv4 while its assignment or
 detachment is still locked. Both the assignment and deletion paths wait for the
 exact address to report `locked=false`; an unassigned-but-locked address is not
-considered safe to delete.
+considered safe to delete. Droplet deletion can also race the provider's
+asynchronous unassignment action. Exact Reserved-IP release therefore retries
+only the provider's transient HTTP 422 state and succeeds only after the same
+address returns HTTP 404.
 
 The one-Droplet canary proves provider permissions and replacement mechanics;
 it does **not** qualify the 12-server media system. After the account limit is

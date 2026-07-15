@@ -7,7 +7,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import { verifyRehearsalEvidence } from "./rehearsal/rehearsal-evidence.mjs";
 
-const STATE_SCHEMA_VERSION = 5;
+const STATE_SCHEMA_VERSION = 6;
 const ANCHOR_SCHEMA_VERSION = 2;
 const PHASES = new Set(["planned", "provisioning", "ready", "live", "closed", "destroying", "destroyed", "aborting", "aborted"]);
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -463,8 +463,14 @@ export class EventLifecycleController {
     if (!targetIpv4) throw new Error(`endpoint ${endpoint.hostname} target has no public IPv4`);
     const existing = state.endpoints[endpoint.hostname];
     if (existing?.status === "configured" && existing.targetIpv4 === targetIpv4) {
-      const verified = await this.dns.verifyARecord({ zone: manifest.dns.zone, hostname: endpoint.hostname, value: targetIpv4 });
-      if (verified) return state;
+      existing.dnsReadiness = await this.dns.waitARecordReady({
+        zone: manifest.dns.zone,
+        hostname: endpoint.hostname,
+        value: targetIpv4
+      });
+      existing.verifiedAt = this.now().toISOString();
+      await this.store.save(state);
+      return state;
     }
     let pending = existing;
     if (!pending) {
@@ -500,14 +506,19 @@ export class EventLifecycleController {
       ttl: endpoint.ttl,
       previousChange: pending.change
     });
-    const verified = await this.dns.verifyARecord({ zone: manifest.dns.zone, hostname: endpoint.hostname, value: targetIpv4 });
-    if (!verified) throw new Error(`DNS verification failed for ${endpoint.hostname}`);
+    const dnsReadiness = await this.dns.waitARecordReady({
+      zone: manifest.dns.zone,
+      hostname: endpoint.hostname,
+      value: targetIpv4
+    });
     state.endpoints[endpoint.hostname] = {
       status: "configured",
       role: endpoint.role,
       addressMode: endpoint.addressMode,
       targetIpv4,
       configuredAt: this.now().toISOString(),
+      verifiedAt: this.now().toISOString(),
+      dnsReadiness,
       change
     };
     await this.store.save(state);

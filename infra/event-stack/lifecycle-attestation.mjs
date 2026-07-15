@@ -17,6 +17,7 @@ export const LIFECYCLE_CANARY_CAPABILITIES = Object.freeze([
   "digitalocean.snapshot.create-read-delete",
   "digitalocean.tag.create-read-delete",
   "vercel.dns.create-read-delete",
+  "dns.system-cloudflare-google-convergence",
   "ssh.cloud-init-health-and-snapshot-recovery",
   "stable-ip-dns-reassignment-and-instance-identity"
 ]);
@@ -123,7 +124,7 @@ export async function verifyLifecycleAttestation({
 }
 
 function validatePassingEvidence(value) {
-  if (!value || value.schemaVersion !== 2) throw new Error("canary evidence schemaVersion must be 2");
+  if (!value || value.schemaVersion !== 3) throw new Error("canary evidence schemaVersion must be 3");
   if (value.phase !== "cleaned" || value.classification !== "PASS" || value.failure || value.cleanupFailure) {
     throw new Error("canary evidence is not a clean PASS");
   }
@@ -132,12 +133,19 @@ function validatePassingEvidence(value) {
   if (typeof value.baseline?.accountUuid !== "string" || !value.baseline.accountUuid) {
     throw new Error("canary evidence is missing the DigitalOcean account UUID");
   }
-  const identityKeys = ["name", "tag", "snapshotName", "hostname", "zone", "region", "size", "resizeDownSize", "baseImage", "cloudInitSha256"];
+  const identityKeys = ["name", "tag", "snapshotName", "hostname", "zone", "region", "size", "resizeDownSize", "baseImage", "ttl", "cloudInitSha256"];
   if (!value.identity || !deepEqual(Object.keys(value.identity).sort(), [...identityKeys].sort())) {
     throw new Error("canary evidence identity contract is invalid");
   }
   for (const key of identityKeys) {
-    if (typeof value.identity[key] !== "string" || !value.identity[key]) throw new Error(`canary evidence identity ${key} is invalid`);
+    if (key === "ttl") {
+      if (!Number.isInteger(value.identity[key]) || value.identity[key] < 60) throw new Error("canary evidence identity ttl is invalid");
+    } else if (typeof value.identity[key] !== "string" || !value.identity[key]) {
+      throw new Error(`canary evidence identity ${key} is invalid`);
+    }
+  }
+  if (value.dnsReadiness?.status !== "ready" || !Array.isArray(value.dnsReadiness.resolvers) || value.dnsReadiness.resolvers.length < 3) {
+    throw new Error("canary evidence is missing multi-resolver DNS readiness");
   }
   if (!value.original?.id || !value.replacement?.id || String(value.original.id) === String(value.replacement.id)) {
     throw new Error("canary evidence does not prove snapshot replacement with a new Droplet id");

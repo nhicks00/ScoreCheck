@@ -26,6 +26,7 @@ function interruptedState(config, overrides = {}) {
     "size",
     "resizeDownSize",
     "baseImage",
+    "ttl",
     "cloudInitSha256"
   ].map((key) => [key, config[key]]));
   return {
@@ -44,6 +45,7 @@ function interruptedState(config, overrides = {}) {
     replacement: null,
     reservedIpv4: null,
     dnsChange: null,
+    dnsReadiness: null,
     snapshot: null,
     checks: [],
     cleanup: {},
@@ -71,6 +73,9 @@ test("proves resize, snapshot replacement, stable endpoint, exact cleanup, and b
   const result = await canary.run(setup.config, CANARY_CONFIRMATION);
   assert.equal(result.phase, "cleaned");
   assert.equal(result.classification, "PASS");
+  assert.equal(result.dnsReadiness.status, "ready");
+  assert.deepEqual(result.dnsReadiness.resolvers.map((entry) => entry.name), ["fake"]);
+  assert.ok(result.timeline.findIndex((entry) => entry.event === "dns-ready") < result.timeline.findIndex((entry) => entry.event === "endpoint-check-passed"));
   assert.notEqual(result.original.id, result.replacement.id);
   assert.equal(result.checks.length, 4);
   assert.deepEqual(result.checks.map((entry) => entry.name), ["original-created", "resize-down", "resize-up", "replacement-created"]);
@@ -409,8 +414,17 @@ class FakeDns {
     return { action: "created", recordId: record.id, previous: null };
   }
 
-  async verifyARecord({ hostname, value }) {
-    return this.records.get(hostname)?.value === value;
+  async waitARecordReady({ hostname, value }) {
+    if (this.records.get(hostname)?.value !== value) throw new Error(`DNS ${hostname} did not converge`);
+    return {
+      status: "ready",
+      firstCheckedAt: "2026-07-15T00:00:00.000Z",
+      readyAt: "2026-07-15T00:00:00.000Z",
+      attempts: 1,
+      providerRecordId: this.records.get(hostname).id,
+      resolvers: [{ name: "fake", status: "ok", answers: [{ address: value, ttl: 60 }] }],
+      staleAnswers: []
+    };
   }
 
   async restoreRecord({ hostname, change }) {
@@ -515,6 +529,10 @@ class FakeCloud {
   async deleteReservedIpv4(ip) {
     if (this.failReservedIpv4Delete) throw new Error("injected Reserved IPv4 delete denial");
     this.addresses.delete(ip);
+  }
+  async waitReservedIpv4Absent(ip) {
+    if (this.addresses.has(ip)) throw new Error("address still exists");
+    return true;
   }
   async powerOffDroplet(id) { this.droplets.get(String(id)).status = "off"; }
   async powerOnDroplet(id) { this.droplets.get(String(id)).status = "active"; }

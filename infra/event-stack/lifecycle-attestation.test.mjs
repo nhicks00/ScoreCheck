@@ -116,7 +116,7 @@ function passingEvidence() {
   const cleanup = Object.fromEntries(["dns", "replacement", "original", "reservedIpv4", "snapshot", "tag", "inventory"]
     .map((name) => [name, { status: "done", at: "2026-07-15T00:59:00.000Z" }]));
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     runId: "20260715pass",
     phase: "cleaned",
     classification: "PASS",
@@ -133,7 +133,12 @@ function passingEvidence() {
       size: "c-4",
       resizeDownSize: "c-2",
       baseImage: "ubuntu-24-04-x64",
+      ttl: 60,
       cloudInitSha256: "a".repeat(64)
+    },
+    dnsReadiness: {
+      status: "ready",
+      resolvers: ["system", "cloudflare", "google"].map((name) => ({ name, status: "ok", answers: [{ address: "192.0.2.50", ttl: 60 }] }))
     },
     original: { id: "100" },
     replacement: { id: "101" },

@@ -129,6 +129,30 @@ test("DigitalOcean proves an exact Reserved IPv4 is absent after deletion", asyn
   assert.equal(await provider.waitReservedIpv4Absent("192.0.2.50"), true);
 });
 
+test("DigitalOcean retries Reserved IPv4 release across asynchronous unassignment races", async () => {
+  const requests = [];
+  const detached = { ip: "192.0.2.50", region: { slug: "sfo2" }, droplet: null, locked: false };
+  const provider = new DigitalOceanProvider({
+    token: "token",
+    sshKeys: [],
+    cloudInitPaths: {},
+    fetchImpl: queueFetch([
+      response(200, { reserved_ip: detached }),
+      response(204, null),
+      response(200, { reserved_ip: detached }),
+      response(422, { id: "unprocessable_entity" }),
+      response(200, { reserved_ip: detached }),
+      response(204, null),
+      response(404, {})
+    ], requests),
+    pollIntervalMs: 1,
+    timeoutMs: 100
+  });
+
+  assert.equal(await provider.deleteReservedIpv4("192.0.2.50"), true);
+  assert.deepEqual(requests.map((entry) => entry.options.method), ["GET", "DELETE", "GET", "DELETE", "GET", "DELETE", "GET"]);
+});
+
 test("DigitalOcean verifies the exact pinned VPC and tag-addressed firewall contract", async () => {
   const provider = new DigitalOceanProvider({
     token: "token",
@@ -204,17 +228,124 @@ test("Vercel DNS accepts create uid, verifies exact A record and resolver, then 
     token: "token",
     teamId: "team_123",
     fetchImpl,
-    resolver: async () => ["192.0.2.50"],
+    resolutionProbes: [{ name: "test", resolve: async () => [{ address: "192.0.2.50", ttl: 60 }] }],
     pollIntervalMs: 1,
     timeoutMs: 20
   });
   const change = await dns.upsertARecord({ zone: "example.com", hostname: "lifecycle-test.example.com", value: "192.0.2.50", ttl: 60 });
   assert.deepEqual(change, { action: "created", recordId: "rec-created", previous: null });
-  assert.equal(await dns.verifyARecord({ zone: "example.com", hostname: "lifecycle-test.example.com", value: "192.0.2.50" }), true);
+  assert.equal((await dns.waitARecordReady({ zone: "example.com", hostname: "lifecycle-test.example.com", value: "192.0.2.50" })).status, "ready");
   await dns.restoreRecord({ zone: "example.com", hostname: "lifecycle-test.example.com", change });
   assert.equal(await dns.waitHostnameAbsent({ zone: "example.com", hostname: "lifecycle-test.example.com" }), true);
   assert.match(requests[0].url, /teamId=team_123/);
   assert.match(requests[3].url, /\/v2\/domains\/example.com\/records\/rec-created\?teamId=team_123$/);
+});
+
+test("Vercel DNS waits until every resolver retires a cached wildcard answer", async () => {
+  const exact = { id: "rec-created", name: "lifecycle-test", type: "A", value: "192.0.2.50", ttl: 60 };
+  let systemAttempts = 0;
+  const dns = new VercelDnsProvider({
+    token: "token",
+    fetchImpl: queueFetch([
+      response(200, { records: [exact] }),
+      response(200, { records: [exact] })
+    ]),
+    resolutionProbes: [
+      {
+        name: "system",
+        resolve: async () => systemAttempts++ === 0
+          ? [{ address: "64.29.17.1", ttl: 1725 }]
+          : [{ address: "192.0.2.50", ttl: 60 }]
+      },
+      { name: "cloudflare", resolve: async () => [{ address: "192.0.2.50", ttl: 60 }] },
+      { name: "google", resolve: async () => [{ address: "192.0.2.50", ttl: 60 }] }
+    ],
+    pollIntervalMs: 1,
+    timeoutMs: 50
+  });
+
+  const readiness = await dns.waitARecordReady({ zone: "example.com", hostname: "lifecycle-test.example.com", value: "192.0.2.50" });
+  assert.equal(readiness.status, "ready");
+  assert.equal(readiness.attempts, 2);
+  assert.deepEqual(readiness.resolvers.map((entry) => entry.name), ["system", "cloudflare", "google"]);
+  assert.deepEqual(readiness.staleAnswers, [{ resolver: "system", address: "64.29.17.1", maxTtlSeconds: 1725 }]);
+});
+
+test("Vercel DNS fails closed while any required resolver remains stale", async () => {
+  const exact = { id: "rec-created", name: "lifecycle-test", type: "A", value: "192.0.2.50", ttl: 60 };
+  const dns = new VercelDnsProvider({
+    token: "token",
+    fetchImpl: async () => response(200, { records: [exact] }),
+    resolutionProbes: [
+      { name: "system", resolve: async () => [{ address: "192.0.2.50", ttl: 60 }] },
+      { name: "public", resolve: async () => [{ address: "64.29.17.1", ttl: 1700 }] }
+    ],
+    pollIntervalMs: 1,
+    timeoutMs: 5
+  });
+
+  await assert.rejects(
+    () => dns.waitARecordReady({ zone: "example.com", hostname: "lifecycle-test.example.com", value: "192.0.2.50" }),
+    /public:64\.29\.17\.1/u
+  );
+});
+
+test("Vercel DNS fails closed on mixed intended and stale resolver answers", async () => {
+  const exact = { id: "rec-created", name: "lifecycle-test", type: "A", value: "192.0.2.50", ttl: 60 };
+  const dns = new VercelDnsProvider({
+    token: "token",
+    fetchImpl: async () => response(200, { records: [exact] }),
+    resolutionProbes: [{
+      name: "mixed",
+      resolve: async () => [
+        { address: "192.0.2.50", ttl: 60 },
+        { address: "64.29.17.1", ttl: 1700 }
+      ]
+    }],
+    pollIntervalMs: 1,
+    timeoutMs: 5
+  });
+
+  await assert.rejects(
+    () => dns.waitARecordReady({ zone: "example.com", hostname: "lifecycle-test.example.com", value: "192.0.2.50" }),
+    /mixed:192\.0\.2\.50,64\.29\.17\.1/u
+  );
+});
+
+test("Vercel DNS rejects invalid IPv4 resolver answers", async () => {
+  const exact = { id: "rec-created", name: "lifecycle-test", type: "A", value: "192.0.2.50", ttl: 60 };
+  const dns = new VercelDnsProvider({
+    token: "token",
+    fetchImpl: async () => response(200, { records: [exact] }),
+    resolutionProbes: [{ name: "invalid", resolve: async () => [{ address: "999.0.2.50", ttl: 60 }] }],
+    pollIntervalMs: 1,
+    timeoutMs: 5
+  });
+
+  await assert.rejects(
+    () => dns.waitARecordReady({ zone: "example.com", hostname: "lifecycle-test.example.com", value: "192.0.2.50" }),
+    /invalid:error/u
+  );
+});
+
+test("Vercel DNS fails closed on conflicting control-plane records", async () => {
+  const dns = new VercelDnsProvider({
+    token: "token",
+    fetchImpl: async () => response(200, {
+      records: [
+        { id: "rec-target", name: "lifecycle-test", type: "A", value: "192.0.2.50", ttl: 60 },
+        { id: "rec-stale", name: "lifecycle-test", type: "A", value: "192.0.2.51", ttl: 60 }
+      ]
+    }),
+    resolutionProbes: [{ name: "test", resolve: async () => [{ address: "192.0.2.50", ttl: 60 }] }],
+    pollIntervalMs: 1,
+    timeoutMs: 5
+  });
+
+  await assert.rejects(
+    () => dns.waitARecordReady({ zone: "example.com", hostname: "lifecycle-test.example.com", value: "192.0.2.50" }),
+    /2 conflicting records/u
+  );
 });
 
 test("Vercel DNS updates and restores only the same record id", async () => {
@@ -225,7 +356,7 @@ test("Vercel DNS updates and restores only the same record id", async () => {
     response(200, { id: "rec-1", name: "monitor", recordType: "A", value: "192.0.2.2", ttl: 60 }),
     response(200, { id: "rec-1", name: "monitor", recordType: "A", value: "192.0.2.1", ttl: 300 })
   ], requests);
-  const dns = new VercelDnsProvider({ token: "token", fetchImpl, resolver: async () => [] });
+  const dns = new VercelDnsProvider({ token: "token", fetchImpl, resolutionProbes: [{ name: "test", resolve: async () => [] }] });
   const change = await dns.upsertARecord({ zone: "example.com", hostname: "monitor.example.com", value: "192.0.2.2", ttl: 60 });
   assert.deepEqual(change, { action: "updated", recordId: "rec-1", previous: original });
   await dns.restoreRecord({ zone: "example.com", hostname: "monitor.example.com", change });
@@ -239,7 +370,7 @@ test("Vercel DNS applies and reconciles a prepared create without losing ownersh
     response(200, { uid: "rec-new" }),
     response(200, { records: [{ id: "rec-new", name: "monitor", type: "A", value: "192.0.2.50", ttl: 60 }] })
   ], requests);
-  const dns = new VercelDnsProvider({ token: "token", fetchImpl, resolver: async () => [] });
+  const dns = new VercelDnsProvider({ token: "token", fetchImpl, resolutionProbes: [{ name: "test", resolve: async () => [] }] });
   const intent = { action: "created", recordId: null, previous: null };
 
   const applied = await dns.upsertARecord({
@@ -273,7 +404,7 @@ test("Vercel DNS traverses every v4 cursor page before matching a hostname", asy
       pagination: { next: null }
     })
   ], requests);
-  const dns = new VercelDnsProvider({ token: "token", teamId: "team_123", fetchImpl, resolver: async () => [] });
+  const dns = new VercelDnsProvider({ token: "token", teamId: "team_123", fetchImpl, resolutionProbes: [{ name: "test", resolve: async () => [] }] });
 
   assert.deepEqual(await dns.inspectHostname({ zone: "example.com", hostname: "lifecycle-test.example.com" }), [
     { id: "rec-target", name: "lifecycle-test", type: "A", value: "192.0.2.50", ttl: 60 }
@@ -289,7 +420,7 @@ test("Vercel DNS fails closed on repeated cursors or duplicate record identities
       response(200, { records: [], pagination: { next: 10 } }),
       response(200, { records: [], pagination: { next: 10 } })
     ]),
-    resolver: async () => []
+    resolutionProbes: [{ name: "test", resolve: async () => [] }]
   });
   await assert.rejects(
     () => repeatedCursor.inspectHostname({ zone: "example.com", hostname: "monitor.example.com" }),
@@ -308,7 +439,7 @@ test("Vercel DNS fails closed on repeated cursors or duplicate record identities
         pagination: { next: null }
       })
     ]),
-    resolver: async () => []
+    resolutionProbes: [{ name: "test", resolve: async () => [] }]
   });
   await assert.rejects(
     () => duplicateId.inspectHostname({ zone: "example.com", hostname: "monitor.example.com" }),

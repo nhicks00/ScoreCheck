@@ -6,7 +6,7 @@ import { dirname, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 
-const STATE_SCHEMA_VERSION = 2;
+const STATE_SCHEMA_VERSION = 3;
 const CONFIRMATION = "RUN:LIFECYCLE-CANARY";
 
 export class LifecycleCanary {
@@ -110,6 +110,7 @@ export class LifecycleCanary {
       replacement: null,
       reservedIpv4: null,
       dnsChange: null,
+      dnsReadiness: null,
       snapshot: null,
       checks: [],
       cleanup: {},
@@ -156,6 +157,7 @@ export class LifecycleCanary {
       await this.#ensureReservedIpv4(state, config);
       await this.#assignAddress(state.reservedIpv4.ip, state.original.id);
       await this.#ensureDnsChange(state, config);
+      await this.#ensureDnsReadiness(state, config);
       if (!state.checks.some((entry) => entry.name === "original-created")) {
         await this.#verifyEndpoint(state, config, state.original.id, "original-created");
       }
@@ -316,6 +318,23 @@ export class LifecycleCanary {
     return change;
   }
 
+  async #ensureDnsReadiness(state, config) {
+    const readiness = await this.dns.waitARecordReady({
+      zone: config.zone,
+      hostname: config.hostname,
+      value: state.reservedIpv4.ip
+    });
+    state.dnsReadiness = readiness;
+    await this.#record(state, "dns-ready", {
+      hostname: config.hostname,
+      readyAt: readiness.readyAt,
+      attempts: readiness.attempts,
+      resolvers: readiness.resolvers.map((entry) => entry.name),
+      staleAnswers: readiness.staleAnswers
+    });
+    return readiness;
+  }
+
   async #ensureDroplet(state, config, image, stage) {
     const existing = state[stage];
     if (existing?.id) {
@@ -402,9 +421,8 @@ export class LifecycleCanary {
   }
 
   async #verifyEndpoint(state, config, expectedId, name) {
-    if (!await this.dns.verifyARecord({ zone: config.zone, hostname: config.hostname, value: state.reservedIpv4.ip })) {
-      throw new Error(`canary DNS did not resolve ${config.hostname} to the Reserved IPv4`);
-    }
+    state.dnsReadiness = await this.dns.waitARecordReady({ zone: config.zone, hostname: config.hostname, value: state.reservedIpv4.ip });
+    await this.store.save(state);
     const deadline = Date.now() + this.healthTimeoutMs;
     let payload = null;
     while (Date.now() <= deadline) {
@@ -530,8 +548,7 @@ export class LifecycleCanary {
         await this.cloud.getReservedIpv4(state.reservedIpv4.ip);
         await this.cloud.waitReservedIpv4Unassigned(state.reservedIpv4.ip);
         await this.cloud.deleteReservedIpv4(state.reservedIpv4.ip);
-        await this.cloud.getReservedIpv4(state.reservedIpv4.ip);
-        throw new Error("Reserved IPv4 still exists after deletion");
+        await this.cloud.waitReservedIpv4Absent(state.reservedIpv4.ip);
       } catch (error) {
         if (error?.status !== 404) throw error;
       }
@@ -747,7 +764,7 @@ function assertStateMatchesConfig(state, config) {
 }
 
 function pickIdentity(config) {
-  return Object.fromEntries(["name", "tag", "snapshotName", "hostname", "zone", "region", "size", "resizeDownSize", "baseImage", "cloudInitSha256"].map((key) => [key, config[key]]));
+  return Object.fromEntries(["name", "tag", "snapshotName", "hostname", "zone", "region", "size", "resizeDownSize", "baseImage", "ttl", "cloudInitSha256"].map((key) => [key, config[key]]));
 }
 
 function assertCanaryDroplet(droplet, config) {

@@ -514,7 +514,7 @@ test("hard-cuts pre-attestation lifecycle state before provider mutation", async
   const cloud = new FakeDigitalOceanProvider();
   const setup = fixture({ cloud, store: new MemoryStateStore(legacy) });
 
-  await assert.rejects(() => setup.controller.up(setup.manifest, setup.anchors), /schemaVersion must be 5/);
+  await assert.rejects(() => setup.controller.up(setup.manifest, setup.anchors), /schemaVersion must be 6/);
   assert.equal(cloud.createCalls, 0);
   assert.equal(cloud.droplets.size, 0);
 });

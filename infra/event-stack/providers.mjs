@@ -3,12 +3,15 @@
 import { createHash } from "node:crypto";
 import { resolve4 } from "node:dns/promises";
 import { readFile } from "node:fs/promises";
+import { isIP } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { firewallPayload, networkContractProblems, validateNetworkContract } from "./network-contract.mjs";
 
 const DEFAULT_DO_API = "https://api.digitalocean.com/v2";
 const DEFAULT_VERCEL_API = "https://api.vercel.com";
+const DEFAULT_DNS_POLL_INTERVAL_MS = 15_000;
+const DEFAULT_DNS_TIMEOUT_MS = 40 * 60_000;
 
 export class DigitalOceanProvider {
   constructor({ token, sshKeys, cloudInitPaths, apiBase = DEFAULT_DO_API, fetchImpl = globalThis.fetch, pollIntervalMs = 5_000, timeoutMs = 15 * 60_000 }) {
@@ -171,7 +174,35 @@ export class DigitalOceanProvider {
   }
 
   async deleteReservedIpv4(ip) {
-    await this.#request("DELETE", `/reserved_ips/${encodeURIComponent(ip)}`, undefined, [204]);
+    const deadline = Date.now() + this.timeoutMs;
+    let lastStatus = "not attempted";
+    while (Date.now() <= deadline) {
+      let address;
+      try {
+        address = await this.getReservedIpv4(ip);
+      } catch (error) {
+        if (error?.status === 404) return true;
+        throw error;
+      }
+      if (address.dropletId !== null) {
+        throw new Error(`refusing to delete reserved IPv4 ${ip} while it is assigned to Droplet ${address.dropletId}`);
+      }
+      if (address.locked) {
+        lastStatus = "locked";
+        await delay(this.pollIntervalMs);
+        continue;
+      }
+      try {
+        await this.#request("DELETE", `/reserved_ips/${encodeURIComponent(ip)}`, undefined, [204]);
+        lastStatus = "DELETE accepted but the address remained visible";
+      } catch (error) {
+        if (error?.status === 404) return true;
+        if (error?.status !== 422) throw error;
+        lastStatus = "DigitalOcean reported a transient unprocessable release action";
+      }
+      await delay(this.pollIntervalMs);
+    }
+    throw new Error(`reserved IPv4 ${ip} was not released before timeout (${lastStatus})`);
   }
 
   async waitReservedIpv4Absent(ip) {
@@ -328,13 +359,23 @@ export class DigitalOceanProvider {
 }
 
 export class VercelDnsProvider {
-  constructor({ token, apiBase = DEFAULT_VERCEL_API, teamId = null, fetchImpl = globalThis.fetch, resolver = resolve4, pollIntervalMs = 2_000, timeoutMs = 120_000 }) {
+  constructor({
+    token,
+    apiBase = DEFAULT_VERCEL_API,
+    teamId = null,
+    fetchImpl = globalThis.fetch,
+    resolutionProbes = null,
+    pollIntervalMs = DEFAULT_DNS_POLL_INTERVAL_MS,
+    timeoutMs = DEFAULT_DNS_TIMEOUT_MS
+  }) {
     if (!token) throw new Error("VERCEL_TOKEN is required for event DNS changes");
+    resolutionProbes ??= defaultDnsResolutionProbes(fetchImpl);
+    validateResolutionProbes(resolutionProbes);
     this.token = token;
     this.apiBase = apiBase.replace(/\/$/, "");
     this.teamId = teamId;
     this.fetchImpl = fetchImpl;
-    this.resolver = resolver;
+    this.resolutionProbes = resolutionProbes;
     this.pollIntervalMs = pollIntervalMs;
     this.timeoutMs = timeoutMs;
   }
@@ -410,20 +451,61 @@ export class VercelDnsProvider {
     return false;
   }
 
-  async verifyARecord({ zone, hostname, value }) {
+  async waitARecordReady({ zone, hostname, value }) {
     const name = relativeRecordName(zone, hostname);
     const deadline = Date.now() + this.timeoutMs;
+    const firstCheckedAt = new Date().toISOString();
+    const staleAnswers = new Map();
+    let attempts = 0;
+    let lastProviderRecordId = null;
+    let lastResolvers = [];
     while (Date.now() <= deadline) {
+      attempts += 1;
       const records = (await this.#records(zone)).map(normalizeVercelRecord);
-      const exact = records.filter((entry) => (entry.name === name || entry.name === hostname) && entry.type === "A" && entry.value === value);
-      let resolved = [];
-      try {
-        resolved = await this.resolver(hostname);
-      } catch {}
-      if (exact.length === 1 && resolved.includes(value)) return true;
+      const hostnameRecords = records.filter((entry) => entry.name === name || entry.name === hostname);
+      if (hostnameRecords.length > 1) throw new Error(`DNS ${hostname} has ${hostnameRecords.length} conflicting records`);
+      const providerRecord = hostnameRecords[0] ?? null;
+      const providerReady = providerRecord?.type === "A" && providerRecord.value === value;
+      lastProviderRecordId = providerRecord?.id ?? null;
+      lastResolvers = await Promise.all(this.resolutionProbes.map(async (probe) => {
+        try {
+          const answers = normalizeResolutionAnswers(await probe.resolve(hostname));
+          for (const answer of answers) {
+            if (answer.address !== value) {
+              const key = `${probe.name}:${answer.address}`;
+              const previous = staleAnswers.get(key);
+              staleAnswers.set(key, {
+                resolver: probe.name,
+                address: answer.address,
+                maxTtlSeconds: Math.max(previous?.maxTtlSeconds ?? 0, answer.ttl ?? 0)
+              });
+            }
+          }
+          return { name: probe.name, status: "ok", answers };
+        } catch (error) {
+          return { name: probe.name, status: "error", answers: [], error: sanitizedResolverError(error) };
+        }
+      }));
+      const resolversReady = lastResolvers.every((probe) => (
+        probe.status === "ok"
+        && probe.answers.length > 0
+        && probe.answers.every((answer) => answer.address === value)
+      ));
+      if (providerReady && resolversReady) {
+        return {
+          status: "ready",
+          firstCheckedAt,
+          readyAt: new Date().toISOString(),
+          attempts,
+          providerRecordId: providerRecord.id,
+          resolvers: lastResolvers.map(publicResolverEvidence),
+          staleAnswers: [...staleAnswers.values()].sort(compareResolverEvidence)
+        };
+      }
       await delay(this.pollIntervalMs);
     }
-    return false;
+    const summary = lastResolvers.map((probe) => `${probe.name}:${probe.status === "ok" ? probe.answers.map((answer) => answer.address).join(",") || "none" : "error"}`).join("; ");
+    throw new Error(`DNS ${hostname} did not converge to ${value}; providerRecord=${lastProviderRecordId ?? "missing"}; resolvers=${summary || "none"}`);
   }
 
   async restoreRecord({ zone, hostname, change }) {
@@ -612,6 +694,89 @@ function normalizeVercelRecord(value) {
     value: String(record.value ?? ""),
     ttl: Number(record.ttl ?? 60)
   };
+}
+
+function defaultDnsResolutionProbes(fetchImpl) {
+  return [
+    {
+      name: "system",
+      resolve: async (hostname) => resolve4(hostname, { ttl: true })
+    },
+    {
+      name: "cloudflare",
+      resolve: (hostname) => resolveDohJson({
+        hostname,
+        url: "https://cloudflare-dns.com/dns-query",
+        headers: { Accept: "application/dns-json" },
+        fetchImpl
+      })
+    },
+    {
+      name: "google",
+      resolve: (hostname) => resolveDohJson({
+        hostname,
+        url: "https://dns.google/resolve",
+        headers: { Accept: "application/json" },
+        fetchImpl
+      })
+    }
+  ];
+}
+
+function validateResolutionProbes(value) {
+  if (!Array.isArray(value) || value.length === 0) throw new Error("at least one DNS resolution probe is required");
+  const names = new Set();
+  for (const probe of value) {
+    if (!probe || typeof probe.name !== "string" || !probe.name || typeof probe.resolve !== "function") {
+      throw new Error("DNS resolution probes must have a name and resolve function");
+    }
+    if (names.has(probe.name)) throw new Error(`DNS resolution probe ${probe.name} is duplicated`);
+    names.add(probe.name);
+  }
+}
+
+async function resolveDohJson({ hostname, url, headers, fetchImpl }) {
+  const query = new URLSearchParams({ name: hostname, type: "A" });
+  const response = await fetchImpl(`${url}?${query}`, {
+    headers,
+    signal: AbortSignal.timeout(5_000)
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const payload = await response.json();
+  if (payload?.Status !== 0) throw new Error(`DNS status ${payload?.Status ?? "missing"}`);
+  return (Array.isArray(payload.Answer) ? payload.Answer : [])
+    .filter((answer) => Number(answer.type) === 1)
+    .map((answer) => ({ address: String(answer.data), ttl: Number(answer.TTL) }));
+}
+
+function normalizeResolutionAnswers(value) {
+  if (!Array.isArray(value)) throw new Error("resolver response is not an array");
+  return value.map((answer) => {
+    const address = typeof answer === "string" ? answer : answer?.address;
+    const ttl = typeof answer === "string" || answer?.ttl == null ? null : Number(answer.ttl);
+    if (typeof address !== "string" || isIP(address) !== 4) {
+      throw new Error("resolver returned an invalid IPv4 answer");
+    }
+    if (ttl !== null && (!Number.isFinite(ttl) || ttl < 0)) throw new Error("resolver returned an invalid TTL");
+    return { address, ttl };
+  });
+}
+
+function publicResolverEvidence(value) {
+  return {
+    name: value.name,
+    status: value.status,
+    answers: value.answers.map((answer) => ({ address: answer.address, ttl: answer.ttl }))
+  };
+}
+
+function compareResolverEvidence(left, right) {
+  return left.resolver.localeCompare(right.resolver) || left.address.localeCompare(right.address);
+}
+
+function sanitizedResolverError(error) {
+  const value = error instanceof Error ? error.message : String(error);
+  return value.replace(/[\r\n\t]+/g, " ").slice(0, 160);
 }
 
 function firstIpv4(values, type) {

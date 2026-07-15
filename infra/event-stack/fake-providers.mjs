@@ -200,8 +200,17 @@ export class FakeDnsProvider {
     return clone(change);
   }
 
-  async verifyARecord({ hostname, value }) {
-    return this.records.get(hostname)?.value === value;
+  async waitARecordReady({ hostname, value }) {
+    if (this.records.get(hostname)?.value !== value) throw new Error(`DNS ${hostname} did not converge`);
+    return {
+      status: "ready",
+      firstCheckedAt: new Date(0).toISOString(),
+      readyAt: new Date(0).toISOString(),
+      attempts: 1,
+      providerRecordId: this.records.get(hostname).id,
+      resolvers: [{ name: "fake", status: "ok", answers: [{ address: value, ttl: 60 }] }],
+      staleAnswers: []
+    };
   }
 
   async restoreRecord({ hostname, change }) {
