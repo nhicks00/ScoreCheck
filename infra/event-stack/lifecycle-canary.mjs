@@ -83,14 +83,15 @@ export class LifecycleCanary {
     if (droplets.length + 1 > account.dropletLimit) {
       throw new Error(`DigitalOcean account limit ${account.dropletLimit} cannot fit one disposable canary above ${droplets.length} current Droplets`);
     }
-    const [sameName, sameTag, sameSnapshot, dnsRecords, reservedIpv4s] = await Promise.all([
+    const [sameName, sameTag, tagExists, sameSnapshot, dnsRecords, reservedIpv4s] = await Promise.all([
       this.cloud.findDropletsByName(config.name),
       this.cloud.listDropletsByTag(config.tag),
+      this.cloud.tagExists(config.tag),
       this.cloud.findSnapshotsByName(config.snapshotName),
       this.dns.inspectHostname({ zone: config.zone, hostname: config.hostname }),
       this.cloud.listReservedIpv4s()
     ]);
-    if (sameName.length || sameTag.length || sameSnapshot.length || dnsRecords.length) {
+    if (sameName.length || sameTag.length || tagExists || sameSnapshot.length || dnsRecords.length) {
       throw new Error("canary identity collides with an existing Droplet, tag, snapshot, or DNS record");
     }
     const state = {
@@ -112,6 +113,7 @@ export class LifecycleCanary {
       snapshot: null,
       checks: [],
       cleanup: {},
+      pending: {},
       startedAt: this.now().toISOString(),
       completedAt: null
     };
@@ -122,6 +124,13 @@ export class LifecycleCanary {
   async #execute(state, config) {
     if (state.phase === "verified") return state;
     if (!state.cleanup.tagCreated) {
+      const pending = state.pending?.tagCreate;
+      if (!pending) {
+        if (await this.cloud.tagExists(config.tag)) throw new Error("canary tag appeared without a prepared mutation");
+        await this.#prepareMutation(state, "tagCreate", "tag-create-prepared", { tag: config.tag });
+      } else if (pending.tag !== config.tag) {
+        throw new Error("prepared tag mutation does not match the exact canary tag");
+      }
       await this.cloud.ensureTag(config.tag);
       state.cleanup.tagCreated = true;
       await this.#record(state, "tag-created", { tag: config.tag });
@@ -161,9 +170,20 @@ export class LifecycleCanary {
       if (!state.snapshot) {
         state.phase = "snapshotting";
         await this.store.save(state);
+        const pending = state.pending?.snapshotCreate;
+        let snapshots = await this.cloud.findSnapshotsByName(config.snapshotName);
+        if (!pending) {
+          if (snapshots.length > 0) throw new Error("canary snapshot appeared without a prepared mutation");
+          await this.#prepareMutation(state, "snapshotCreate", "snapshot-create-prepared", {
+            name: config.snapshotName,
+            dropletId: String(state.original.id)
+          });
+        } else if (pending.name !== config.snapshotName || String(pending.dropletId) !== String(state.original.id)) {
+          throw new Error("prepared snapshot mutation does not match the exact canary Droplet and name");
+        }
         await this.host.prepareForSnapshot(state.original.publicIpv4);
         await this.cloud.waitDropletStatus(state.original.id, "off");
-        let snapshots = await this.cloud.findSnapshotsByName(config.snapshotName);
+        snapshots = await this.cloud.findSnapshotsByName(config.snapshotName);
         if (snapshots.length === 0) {
           const snapshot = await this.cloud.snapshotDroplet(state.original.id, config.snapshotName);
           snapshots = [snapshot];
@@ -204,6 +224,20 @@ export class LifecycleCanary {
 
   async #ensureReservedIpv4(state, config) {
     if (state.reservedIpv4) return state.reservedIpv4;
+    const pending = state.pending?.reservedIpv4Create;
+    if (!pending) {
+      const baseline = new Set(state.baseline.reservedIpv4s);
+      const unexpected = (await this.cloud.listReservedIpv4s()).filter((entry) => !baseline.has(entry.ip));
+      if (unexpected.length > 0) {
+        throw new Error("post-baseline Reserved IPv4 exists without a prepared canary mutation");
+      }
+      await this.#prepareMutation(state, "reservedIpv4Create", "reserved-ipv4-create-prepared", {
+        dropletId: String(state.original.id),
+        region: config.region
+      });
+    } else if (String(pending.dropletId) !== String(state.original.id) || pending.region !== config.region) {
+      throw new Error("prepared Reserved IPv4 mutation does not match the exact original canary Droplet");
+    }
     const reconcile = async () => {
       const baseline = new Set(state.baseline.reservedIpv4s);
       const candidates = (await this.cloud.listReservedIpv4s()).filter((entry) => !baseline.has(entry.ip));
@@ -241,6 +275,18 @@ export class LifecycleCanary {
 
   async #ensureDnsChange(state, config) {
     if (state.dnsChange) return state.dnsChange;
+    const pending = state.pending?.dnsCreate;
+    if (!pending) {
+      const existing = await this.dns.inspectHostname({ zone: config.zone, hostname: config.hostname });
+      if (existing.length > 0) throw new Error("canary DNS appeared without a prepared mutation");
+      await this.#prepareMutation(state, "dnsCreate", "dns-create-prepared", {
+        hostname: config.hostname,
+        value: state.reservedIpv4.ip,
+        ttl: config.ttl
+      });
+    } else if (pending.hostname !== config.hostname || pending.value !== state.reservedIpv4.ip || pending.ttl !== config.ttl) {
+      throw new Error("prepared DNS mutation does not match the exact canary endpoint");
+    }
     const adoptCreatedRecord = async () => {
       const records = await this.dns.inspectHostname({ zone: config.zone, hostname: config.hostname });
       if (records.length === 0) return null;
@@ -286,8 +332,19 @@ export class LifecycleCanary {
     const candidates = await this.cloud.findDropletsByName(config.name);
     const tagged = candidates.filter((entry) => entry.tags.includes(config.tag));
     if (candidates.length > 0 && tagged.length !== 1) throw new Error(`cannot reconcile ${stage} canary Droplet safely`);
+    const pendingKey = `${stage}DropletCreate`;
+    if (tagged.length > 0 && !state.pending?.[pendingKey]) {
+      throw new Error(`cannot reconcile ${stage} canary Droplet without a prepared mutation`);
+    }
     let droplet = tagged[0] ?? null;
     if (!droplet) {
+      await this.#prepareMutation(state, pendingKey, `${stage}-create-prepared`, {
+        name: config.name,
+        tag: config.tag,
+        region: config.region,
+        size: config.size,
+        image: String(image)
+      });
       try {
         droplet = await this.cloud.createDroplet({
           name: config.name,
@@ -401,14 +458,72 @@ export class LifecycleCanary {
     };
 
     await attempt("dns", async () => {
+      if (!state.dnsChange && state.pending?.dnsCreate) {
+        const records = await this.dns.inspectHostname({ zone: config.zone, hostname: config.hostname });
+        if (records.length > 1) throw new Error("multiple canary DNS records exist during cleanup reconciliation");
+        if (records.length === 1) {
+          const pending = state.pending.dnsCreate;
+          if (records[0].type !== "A" || records[0].value !== pending.value || pending.hostname !== config.hostname) {
+            throw new Error("prepared canary DNS record has unexpected cleanup identity");
+          }
+          state.dnsChange = { action: "created", recordId: records[0].id, previous: null };
+          await this.#record(state, "cleanup-dns-reconciled", { hostname: config.hostname, recordId: records[0].id });
+        }
+      }
       if (state.dnsChange) await this.dns.restoreRecord({ zone: config.zone, hostname: config.hostname, change: state.dnsChange });
       if (!await this.dns.waitHostnameAbsent({ zone: config.zone, hostname: config.hostname })) throw new Error("canary DNS record still exists");
+    });
+    await attempt("reservedIpv4Ownership", async () => {
+      if (state.reservedIpv4?.ip || !state.pending?.reservedIpv4Create) return;
+      const baseline = new Set(state.baseline.reservedIpv4s);
+      const candidates = (await this.cloud.listReservedIpv4s()).filter((entry) => !baseline.has(entry.ip));
+      if (candidates.length === 0) return;
+      if (candidates.length !== 1) throw new Error(`cannot reconcile cleanup Reserved IPv4 safely; found ${candidates.length} post-baseline addresses`);
+      const candidate = candidates[0];
+      const pending = state.pending.reservedIpv4Create;
+      if (candidate.region !== pending.region) throw new Error("cleanup Reserved IPv4 region differs from prepared mutation");
+      if (candidate.dropletId !== null && String(candidate.dropletId) !== String(pending.dropletId)) {
+        throw new Error("cleanup Reserved IPv4 is attached to an unexpected Droplet");
+      }
+      if (candidate.dropletId === null) {
+        try {
+          await this.cloud.getDroplet(pending.dropletId);
+          throw new Error("unassigned cleanup Reserved IPv4 cannot be attributed while its prepared Droplet still exists");
+        } catch (error) {
+          if (error?.status !== 404) throw error;
+        }
+        if (String(state.original?.id) !== String(pending.dropletId)) {
+          throw new Error("unassigned cleanup Reserved IPv4 lacks the recorded original Droplet identity");
+        }
+      }
+      state.reservedIpv4 = candidate;
+      await this.#record(state, "cleanup-reserved-ipv4-reconciled", { ip: candidate.ip, region: candidate.region });
     });
     for (const key of ["replacement", "original"]) {
       await attempt(key, async () => {
         if (state[key]?.id) await this.#deleteExactDroplet(state[key], config);
       });
     }
+    await attempt("unrecordedDroplet", async () => {
+      const [byName, byTag] = await Promise.all([
+        this.cloud.findDropletsByName(config.name),
+        this.cloud.listDropletsByTag(config.tag)
+      ]);
+      if (byName.length === 0 && byTag.length === 0) return;
+      if (byName.length !== 1 || byTag.length !== 1 || String(byName[0].id) !== String(byTag[0].id)) {
+        throw new Error("cannot reconcile unrecorded canary Droplet safely");
+      }
+      const candidate = byName[0];
+      const pending = [state.pending?.originalDropletCreate, state.pending?.replacementDropletCreate]
+        .filter(Boolean)
+        .find((entry) => entry.name === candidate.name && entry.tag === config.tag && entry.region === candidate.region);
+      if (!pending) throw new Error("unrecorded canary Droplet lacks a prepared mutation");
+      if (candidate.size !== pending.size || String(candidate.image) !== String(pending.image)) {
+        throw new Error("unrecorded canary Droplet differs from its prepared size or image");
+      }
+      assertCanaryDroplet(candidate, config);
+      await this.#deleteExactDroplet(candidate, config);
+    });
     await attempt("reservedIpv4", async () => {
       if (!state.reservedIpv4?.ip) return;
       try {
@@ -425,13 +540,23 @@ export class LifecycleCanary {
       const matches = await this.cloud.findSnapshotsByName(config.snapshotName);
       if (matches.length > 1) throw new Error("multiple canary snapshots exist");
       if (matches.length === 1) {
+        const pending = state.pending?.snapshotCreate;
+        if (!state.snapshot?.id && (!pending || pending.name !== config.snapshotName)) {
+          throw new Error("canary snapshot lacks a recorded or prepared mutation");
+        }
         if (state.snapshot?.id && matches[0].id !== state.snapshot.id) throw new Error("canary snapshot identity changed");
         await this.cloud.deleteImage(matches[0].id);
       }
       if ((await this.cloud.findSnapshotsByName(config.snapshotName)).length !== 0) throw new Error("canary snapshot still exists");
     });
     await attempt("tag", async () => {
-      if (await this.cloud.tagExists(config.tag)) await this.cloud.deleteTag(config.tag);
+      if (await this.cloud.tagExists(config.tag)) {
+        const pending = state.pending?.tagCreate;
+        if (!state.cleanup.tagCreated && (!pending || pending.tag !== config.tag)) {
+          throw new Error("canary tag lacks a recorded or prepared mutation");
+        }
+        await this.cloud.deleteTag(config.tag);
+      }
       if (await this.cloud.tagExists(config.tag)) throw new Error("canary tag still exists");
     });
     await attempt("inventory", async () => {
@@ -469,6 +594,14 @@ export class LifecycleCanary {
     state.timeline = Array.isArray(state.timeline) ? state.timeline : [];
     state.timeline.push({ at: state.updatedAt, event, details });
     await this.store.save(state);
+  }
+
+  async #prepareMutation(state, key, event, details) {
+    state.pending = state.pending ?? {};
+    if (state.pending[key]) return state.pending[key];
+    state.pending[key] = { preparedAt: this.now().toISOString(), ...details };
+    await this.#record(state, event, details);
+    return state.pending[key];
   }
 
   #isBaselineId(id, state) {

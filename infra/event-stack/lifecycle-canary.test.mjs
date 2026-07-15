@@ -15,6 +15,45 @@ function fixture(overrides = {}) {
   return { cloud, dns, host, config, source };
 }
 
+function interruptedState(config, overrides = {}) {
+  const identity = Object.fromEntries([
+    "name",
+    "tag",
+    "snapshotName",
+    "hostname",
+    "zone",
+    "region",
+    "size",
+    "resizeDownSize",
+    "baseImage",
+    "cloudInitSha256"
+  ].map((key) => [key, config[key]]));
+  return {
+    schemaVersion: config.schemaVersion,
+    runId: config.runId,
+    phase: "creating-original",
+    identity,
+    baseline: {
+      capturedAt: "2026-07-15T00:00:00.000Z",
+      accountUuid: "account-uuid",
+      accountDropletLimit: 10,
+      dropletIds: ["10", "11"],
+      reservedIpv4s: []
+    },
+    original: null,
+    replacement: null,
+    reservedIpv4: null,
+    dnsChange: null,
+    snapshot: null,
+    checks: [],
+    cleanup: {},
+    pending: {},
+    startedAt: "2026-07-15T00:00:00.000Z",
+    completedAt: null,
+    ...overrides
+  };
+}
+
 test("proves resize, snapshot replacement, stable endpoint, exact cleanup, and baseline preservation", async () => {
   const root = await mkdtemp(join(tmpdir(), "scorecheck-canary-"));
   const statePath = join(root, "evidence", "canary.json");
@@ -112,6 +151,177 @@ test("resumes exact orphan cleanup after delete permissions are repaired", async
   assert.deepEqual([...cloud.droplets.keys()].sort(), ["10", "11"]);
 });
 
+test("cleanup deletes an unrecorded exact Droplet only with durable prepared ownership", async () => {
+  const root = await mkdtemp(join(tmpdir(), "scorecheck-canary-unrecorded-droplet-"));
+  const setup = fixture();
+  const store = new CanaryStateStore(join(root, "state.json"));
+  const created = droplet("100", setup.config.name, setup.config.tag);
+  setup.cloud.droplets.set(created.id, created);
+  setup.cloud.tags.add(setup.config.tag);
+  await store.save(interruptedState(setup.config, {
+    cleanup: { tagCreated: true },
+    pending: {
+      originalDropletCreate: {
+        preparedAt: "2026-07-15T00:00:01.000Z",
+        name: setup.config.name,
+        tag: setup.config.tag,
+        region: setup.config.region,
+        size: setup.config.size,
+        image: setup.config.baseImage
+      }
+    }
+  }));
+  const canary = new LifecycleCanary({ cloud: setup.cloud, dns: setup.dns, host: setup.host, store, fetchImpl: healthFetch(setup.cloud) });
+
+  const result = await canary.cleanup(setup.config, CANARY_CONFIRMATION);
+  assert.equal(result.phase, "cleaned");
+  assert.deepEqual(setup.cloud.deletedIds, ["100"]);
+  assert.deepEqual([...setup.cloud.droplets.keys()].sort(), ["10", "11"]);
+});
+
+test("cleanup refuses an unrecorded Droplet without durable prepared ownership", async () => {
+  const root = await mkdtemp(join(tmpdir(), "scorecheck-canary-unowned-droplet-"));
+  const setup = fixture();
+  const store = new CanaryStateStore(join(root, "state.json"));
+  const created = droplet("100", setup.config.name, setup.config.tag);
+  setup.cloud.droplets.set(created.id, created);
+  await store.save(interruptedState(setup.config));
+  const canary = new LifecycleCanary({ cloud: setup.cloud, dns: setup.dns, host: setup.host, store, fetchImpl: healthFetch(setup.cloud) });
+
+  await assert.rejects(() => canary.cleanup(setup.config, CANARY_CONFIRMATION), /lacks a prepared mutation/u);
+  assert.equal(setup.cloud.droplets.has("100"), true);
+  assert.deepEqual(setup.cloud.deletedIds, []);
+});
+
+test("cleanup reconciles exact DNS and Reserved IPv4 mutations lost before state recording", async () => {
+  const root = await mkdtemp(join(tmpdir(), "scorecheck-canary-unrecorded-endpoint-"));
+  const setup = fixture();
+  const store = new CanaryStateStore(join(root, "state.json"));
+  const original = droplet("100", setup.config.name, setup.config.tag);
+  const address = { ip: "192.0.2.50", region: setup.config.region, dropletId: original.id, locked: false };
+  setup.cloud.droplets.set(original.id, original);
+  setup.cloud.addresses.set(address.ip, address);
+  setup.cloud.tags.add(setup.config.tag);
+  setup.dns.records.set(setup.config.hostname, {
+    id: "1",
+    name: setup.config.hostname,
+    type: "A",
+    value: address.ip,
+    ttl: setup.config.ttl
+  });
+  await store.save(interruptedState(setup.config, {
+    original: { ...original, stage: "original", deletedAt: null },
+    cleanup: { tagCreated: true },
+    pending: {
+      originalDropletCreate: {
+        preparedAt: "2026-07-15T00:00:01.000Z",
+        name: setup.config.name,
+        tag: setup.config.tag,
+        region: setup.config.region,
+        size: setup.config.size,
+        image: setup.config.baseImage
+      },
+      reservedIpv4Create: {
+        preparedAt: "2026-07-15T00:00:02.000Z",
+        dropletId: original.id,
+        region: setup.config.region
+      },
+      dnsCreate: {
+        preparedAt: "2026-07-15T00:00:03.000Z",
+        hostname: setup.config.hostname,
+        value: address.ip,
+        ttl: setup.config.ttl
+      }
+    }
+  }));
+  const canary = new LifecycleCanary({ cloud: setup.cloud, dns: setup.dns, host: setup.host, store, fetchImpl: healthFetch(setup.cloud) });
+
+  const result = await canary.cleanup(setup.config, CANARY_CONFIRMATION);
+  assert.equal(result.phase, "cleaned");
+  assert.ok(result.timeline.some((entry) => entry.event === "cleanup-dns-reconciled"));
+  assert.ok(result.timeline.some((entry) => entry.event === "cleanup-reserved-ipv4-reconciled"));
+  assert.equal(setup.dns.records.size, 0);
+  assert.equal(setup.cloud.addresses.size, 0);
+  assert.deepEqual([...setup.cloud.droplets.keys()].sort(), ["10", "11"]);
+});
+
+test("cleanup leaves a post-baseline Reserved IPv4 untouched without prepared ownership", async () => {
+  const root = await mkdtemp(join(tmpdir(), "scorecheck-canary-unowned-address-"));
+  const setup = fixture();
+  const store = new CanaryStateStore(join(root, "state.json"));
+  setup.cloud.addresses.set("192.0.2.50", { ip: "192.0.2.50", region: setup.config.region, dropletId: null, locked: false });
+  await store.save(interruptedState(setup.config));
+  const canary = new LifecycleCanary({ cloud: setup.cloud, dns: setup.dns, host: setup.host, store, fetchImpl: healthFetch(setup.cloud) });
+
+  await assert.rejects(() => canary.cleanup(setup.config, CANARY_CONFIRMATION), /Reserved IPv4 inventory differs/u);
+  assert.equal(setup.cloud.addresses.has("192.0.2.50"), true);
+});
+
+test("cleanup reconciles a tag created after durable preparation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "scorecheck-canary-unrecorded-tag-"));
+  const setup = fixture();
+  const store = new CanaryStateStore(join(root, "state.json"));
+  setup.cloud.tags.add(setup.config.tag);
+  await store.save(interruptedState(setup.config, {
+    pending: {
+      tagCreate: {
+        preparedAt: "2026-07-15T00:00:01.000Z",
+        tag: setup.config.tag
+      }
+    }
+  }));
+  const canary = new LifecycleCanary({ cloud: setup.cloud, dns: setup.dns, host: setup.host, store, fetchImpl: healthFetch(setup.cloud) });
+
+  const result = await canary.cleanup(setup.config, CANARY_CONFIRMATION);
+  assert.equal(result.phase, "cleaned");
+  assert.equal(setup.cloud.tags.has(setup.config.tag), false);
+});
+
+test("cleanup leaves an unowned tag untouched", async () => {
+  const root = await mkdtemp(join(tmpdir(), "scorecheck-canary-unowned-tag-"));
+  const setup = fixture();
+  const store = new CanaryStateStore(join(root, "state.json"));
+  setup.cloud.tags.add(setup.config.tag);
+  await store.save(interruptedState(setup.config));
+  const canary = new LifecycleCanary({ cloud: setup.cloud, dns: setup.dns, host: setup.host, store, fetchImpl: healthFetch(setup.cloud) });
+
+  await assert.rejects(() => canary.cleanup(setup.config, CANARY_CONFIRMATION), /tag lacks a recorded or prepared mutation/u);
+  assert.equal(setup.cloud.tags.has(setup.config.tag), true);
+});
+
+test("cleanup reconciles a snapshot created after durable preparation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "scorecheck-canary-unrecorded-snapshot-"));
+  const setup = fixture();
+  const store = new CanaryStateStore(join(root, "state.json"));
+  setup.cloud.snapshots.set("500", { id: "500", name: setup.config.snapshotName, regions: [setup.config.region] });
+  await store.save(interruptedState(setup.config, {
+    pending: {
+      snapshotCreate: {
+        preparedAt: "2026-07-15T00:00:01.000Z",
+        name: setup.config.snapshotName,
+        dropletId: "100"
+      }
+    }
+  }));
+  const canary = new LifecycleCanary({ cloud: setup.cloud, dns: setup.dns, host: setup.host, store, fetchImpl: healthFetch(setup.cloud) });
+
+  const result = await canary.cleanup(setup.config, CANARY_CONFIRMATION);
+  assert.equal(result.phase, "cleaned");
+  assert.equal(setup.cloud.snapshots.size, 0);
+});
+
+test("cleanup leaves an unowned snapshot untouched", async () => {
+  const root = await mkdtemp(join(tmpdir(), "scorecheck-canary-unowned-snapshot-"));
+  const setup = fixture();
+  const store = new CanaryStateStore(join(root, "state.json"));
+  setup.cloud.snapshots.set("500", { id: "500", name: setup.config.snapshotName, regions: [setup.config.region] });
+  await store.save(interruptedState(setup.config));
+  const canary = new LifecycleCanary({ cloud: setup.cloud, dns: setup.dns, host: setup.host, store, fetchImpl: healthFetch(setup.cloud) });
+
+  await assert.rejects(() => canary.cleanup(setup.config, CANARY_CONFIRMATION), /snapshot lacks a recorded or prepared mutation/u);
+  assert.equal(setup.cloud.snapshots.has("500"), true);
+});
+
 test("reconciles lost create responses for the canary Reserved IPv4 and DNS record", async () => {
   const root = await mkdtemp(join(tmpdir(), "scorecheck-canary-reconcile-"));
   const cloud = new FakeCloud();
@@ -145,6 +355,23 @@ test("requires exact destructive confirmation and rejects pre-existing identity"
   await assert.rejects(() => canary.run(setup.config, "yes"), /exact confirmation/);
   setup.cloud.droplets.set("99", droplet("99", setup.config.name, setup.config.tag));
   await assert.rejects(() => canary.run(setup.config, CANARY_CONFIRMATION), /identity collides/);
+  assert.equal(setup.cloud.deletedIds.length, 0);
+});
+
+test("rejects a pre-existing empty tag before making any provider mutation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "scorecheck-canary-empty-tag-"));
+  const setup = fixture();
+  setup.cloud.tags.add(setup.config.tag);
+  const canary = new LifecycleCanary({
+    cloud: setup.cloud,
+    dns: setup.dns,
+    host: setup.host,
+    store: new CanaryStateStore(join(root, "state.json")),
+    fetchImpl: healthFetch(setup.cloud)
+  });
+
+  await assert.rejects(() => canary.run(setup.config, CANARY_CONFIRMATION), /identity collides/u);
+  assert.deepEqual([...setup.cloud.droplets.keys()].sort(), ["10", "11"]);
   assert.equal(setup.cloud.deletedIds.length, 0);
 });
 
