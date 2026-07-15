@@ -556,3 +556,27 @@ groups:
         annotations:
           summary: "External dead-man {{ $labels.check }} delivery is failing."
           first_action: "Check outbound connectivity and Healthchecks status; verify the other dead-man check before changing its cadence."
+
+      - alert: ScoreCheckDeadManChannelAuditFailed
+        expr: scorecheck_external_dead_man_channel_audit_healthy == 0
+        for: 30s
+        labels:
+          severity: critical
+          stage: NOTIFICATION
+          issue_code: EXTERNAL_DEAD_MAN_CHANNEL_AUDIT_FAILED
+          root_dependency: healthchecks
+        annotations:
+          summary: "ScoreCheck cannot verify the external phone-alert attachment."
+          first_action: "Keep the monitor open and verify the Healthchecks API key and provider status."
+
+      - alert: ScoreCheckDeadManPhoneChannelMissing
+        expr: scorecheck_external_dead_man_phone_channel_ready == 0
+        for: 30s
+        labels:
+          severity: critical
+          stage: NOTIFICATION
+          issue_code: EXTERNAL_DEAD_MAN_PHONE_CHANNEL_MISSING
+          root_dependency: healthchecks
+        annotations:
+          summary: "External phone alerts are not attached to the {{ $labels.check }} watchdog."
+          first_action: "Attach the Healthchecks Pushover integration to this check and verify it on the ScoreCheck monitor."

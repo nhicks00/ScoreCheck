@@ -163,7 +163,12 @@ function snapshot(input: {
     event: null,
     youtube: { state: "NOT_APPLICABLE", observedAt: null, ageMs: null },
     notifications: { state: "HEALTHY", pushover: { configured: true, lastSuccessAt: null, lastFailureAt: null }, twilioSms: { configured: false, lastSuccessAt: null, lastFailureAt: null } },
-    deadMan: { state: "HEALTHY", baseline: { configured: true, mode: "RUNNING", lastSuccessAt: null, lastFailureAt: null }, active: { configured: true, mode: "PAUSED", lastSuccessAt: null, lastFailureAt: null } },
+    deadMan: {
+      state: "HEALTHY",
+      baseline: { configured: true, mode: "RUNNING", lastSuccessAt: null, lastFailureAt: null },
+      active: { configured: true, mode: "PAUSED", lastSuccessAt: null, lastFailureAt: null },
+      phoneChannel: { configured: true, state: "HEALTHY", baselineAttached: true, activeAttached: true, lastSuccessAt: null, lastFailureAt: null }
+    },
     courts: [court],
     agents: [],
     incidents: [],

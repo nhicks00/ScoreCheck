@@ -76,6 +76,8 @@ const youtubeDegraded = new Gauge({ name: "scorecheck_youtube_degraded", help: "
 const notificationProviderHealthy = new Gauge({ name: "scorecheck_notification_provider_healthy", help: "Notification provider state: 1 healthy, 0 failed, -1 not configured.", labelNames: ["provider"], registers: [registry] });
 const deadManCheckHealthy = new Gauge({ name: "scorecheck_external_dead_man_healthy", help: "External dead-man sender state: 1 verified, 0 failed, -1 not configured or unverified.", labelNames: ["check"], registers: [registry] });
 const deadManActiveRunning = new Gauge({ name: "scorecheck_external_dead_man_active_running", help: "Active-coverage dead-man mode: 1 running, 0 intentionally paused, -1 unknown or not configured.", registers: [registry] });
+const deadManChannelAuditHealthy = new Gauge({ name: "scorecheck_external_dead_man_channel_audit_healthy", help: "Healthchecks notification-channel audit: 1 verified, 0 failed, -1 not configured or unverified.", registers: [registry] });
+const deadManPhoneChannelReady = new Gauge({ name: "scorecheck_external_dead_man_phone_channel_ready", help: "Whether the required Healthchecks Pushover channel is attached: 1 attached, 0 missing, -1 unverified or not configured.", labelNames: ["check"], registers: [registry] });
 const runtimes = new Map<string, AgentRuntime>(config.targets.map((target) => [target.id, {
   target,
   snapshot: null,
@@ -506,6 +508,20 @@ function updateDeadManMetrics(): void {
   deadManCheckHealthy.set({ check: "baseline" }, providerMetric(health.baseline));
   deadManCheckHealthy.set({ check: "active" }, providerMetric(health.active));
   deadManActiveRunning.set(health.active.mode === "RUNNING" ? 1 : health.active.mode === "PAUSED" ? 0 : -1);
+  deadManChannelAuditHealthy.set(channelAuditMetric(health.phoneChannel));
+  deadManPhoneChannelReady.set({ check: "baseline" }, attachmentMetric(health.phoneChannel.configured, health.phoneChannel.baselineAttached));
+  deadManPhoneChannelReady.set({ check: "active" }, attachmentMetric(health.phoneChannel.configured, health.phoneChannel.activeAttached));
+}
+
+function channelAuditMetric(channel: MonitorSnapshot["deadMan"]["phoneChannel"]): number {
+  if (!channel.configured) return -1;
+  if (channel.lastFailureAt) return 0;
+  return channel.lastSuccessAt ? 1 : -1;
+}
+
+function attachmentMetric(configured: boolean, attached: boolean | null): number {
+  if (!configured || attached == null) return -1;
+  return attached ? 1 : 0;
 }
 
 async function pollAgent(target: AgentTarget) {

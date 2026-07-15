@@ -246,6 +246,14 @@ export type MonitorSnapshot = {
     state: "NOT_APPLICABLE" | "UNKNOWN" | "HEALTHY" | "DEGRADED";
     baseline: { configured: boolean; mode: "NOT_CONFIGURED" | "UNKNOWN" | "RUNNING" | "PAUSED"; lastSuccessAt: string | null; lastFailureAt: string | null };
     active: { configured: boolean; mode: "NOT_CONFIGURED" | "UNKNOWN" | "RUNNING" | "PAUSED"; lastSuccessAt: string | null; lastFailureAt: string | null };
+    phoneChannel: {
+      configured: boolean;
+      state: "NOT_APPLICABLE" | "UNKNOWN" | "HEALTHY" | "DEGRADED";
+      baselineAttached: boolean | null;
+      activeAttached: boolean | null;
+      lastSuccessAt: string | null;
+      lastFailureAt: string | null;
+    };
   };
   courts: MonitorCourt[];
   agents: MonitorAgent[];

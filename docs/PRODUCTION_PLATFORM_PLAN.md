@@ -76,7 +76,8 @@ Supabase desired/observed state -> outbound controller reconciler
   full WHEP preview, exact first actions, trends, shared-host capacity, and
   durable checkpoint fallback.
 - Durable deduplicated incidents, acknowledgement, audited timed silences,
-  Pushover emergency acknowledgement, Twilio SMS escalation, and recovery logic.
+  required Pushover emergency acknowledgement, provider-matched recovery, and
+  optional Twilio SMS escalation when that provider is explicitly enabled.
 - Expected-state lifecycle wired to event activation/completion and Production
   Console start/stop so idle courts do not poll or page as if live.
 - High-frequency telemetry retained in Prometheus; Supabase receives only
@@ -90,7 +91,9 @@ Supabase desired/observed state -> outbound controller reconciler
   seconds, and queued-match checks for ten seconds.
 
 Phone-provider and external dead-man delivery remain conditional on protected
-Pushover, Twilio, and Healthchecks credentials. Real one-court and eight-court
+Pushover and Healthchecks credentials plus verified Pushover attachment on both
+external checks. Optional SMS additionally requires protected Twilio credentials
+and completed live-delivery acceptance. Real one-court and eight-court
 fault gates remain test-session work; monitoring must not prove itself by
 stopping public production services.
 

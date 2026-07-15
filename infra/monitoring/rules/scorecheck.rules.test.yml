@@ -444,6 +444,55 @@ tests:
               summary: External dead-man baseline delivery is failing.
               first_action: Check outbound connectivity and Healthchecks status; verify the other dead-man check before changing its cadence.
 
+  - name: external dead-man phone attachment and audit failures are distinct
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_external_dead_man_channel_audit_healthy'
+        values: '0 0 0 0 0 0 0 0'
+      - series: 'scorecheck_external_dead_man_phone_channel_ready{check="baseline"}'
+        values: '0 0 0 0 0 0 0 0'
+      - series: 'scorecheck_external_dead_man_phone_channel_ready{check="active"}'
+        values: '1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 35s
+        alertname: ScoreCheckDeadManChannelAuditFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              stage: NOTIFICATION
+              issue_code: EXTERNAL_DEAD_MAN_CHANNEL_AUDIT_FAILED
+              root_dependency: healthchecks
+            exp_annotations:
+              summary: ScoreCheck cannot verify the external phone-alert attachment.
+              first_action: Keep the monitor open and verify the Healthchecks API key and provider status.
+      - eval_time: 35s
+        alertname: ScoreCheckDeadManPhoneChannelMissing
+        exp_alerts:
+          - exp_labels:
+              check: baseline
+              severity: critical
+              stage: NOTIFICATION
+              issue_code: EXTERNAL_DEAD_MAN_PHONE_CHANNEL_MISSING
+              root_dependency: healthchecks
+            exp_annotations:
+              summary: External phone alerts are not attached to the baseline watchdog.
+              first_action: Attach the Healthchecks Pushover integration to this check and verify it on the ScoreCheck monitor.
+
+  - name: unverified external channel telemetry does not fabricate failure
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_external_dead_man_channel_audit_healthy'
+        values: '-1 -1 -1 -1 -1 -1 -1 -1'
+      - series: 'scorecheck_external_dead_man_phone_channel_ready{check="baseline"}'
+        values: '-1 -1 -1 -1 -1 -1 -1 -1'
+    alert_rule_test:
+      - eval_time: 35s
+        alertname: ScoreCheckDeadManChannelAuditFailed
+        exp_alerts: []
+      - eval_time: 35s
+        alertname: ScoreCheckDeadManPhoneChannelMissing
+        exp_alerts: []
+
   - name: sustained browser decode loss is live-only and severity-banded
     interval: 5s
     input_series:

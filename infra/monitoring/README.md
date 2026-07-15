@@ -89,6 +89,18 @@ After DNS points `MONITOR_PUBLIC_HOST` at the new host and cloud-init finishes:
 MONITOR_SSH_HOST=root@HOST ./deploy.sh
 ```
 
+Routine deployments are deliberately service-first. The script validates all
+candidate rules and configuration, builds a revision-labeled image from a
+secret-free context, recreates only `monitor-service`, proves its private and
+public health, and only then reloads matching Prometheus rules. Prometheus,
+Alertmanager, Caddy, and node-exporter container identities must not change.
+Any failure restores the prior service image, protected environment, rules,
+scrape config, and source provenance automatically.
+
+The routine path rejects changes to Compose topology, Caddy, or Alertmanager.
+Those are infrastructure cutovers and require a separately reviewed procedure;
+they must not be smuggled into an ordinary monitor-service release.
+
 Prometheus and Alertmanager bind only to host loopback. Caddy exposes only
 `/healthz` and `/v1/*`; every non-health API requires its service credential.
 
@@ -113,8 +125,8 @@ admin dashboard requests a five-minute view every 30 seconds while visible.
 Acknowledgement stops repeated emergency delivery without hiding the incident.
 The admin dashboard can also create an exact, durable 15-120 minute maintenance
 silence. A silence suppresses paging only; health and incident evidence remain
-visible. If the fault survives expiry, primary paging is re-armed before the SMS
-escalation timer begins again.
+visible. If the fault survives expiry, primary paging is re-armed. When optional
+SMS escalation is enabled, its timer begins again from that new primary page.
 
 The full event-day workflow, credential checklist, and fault gates are in
 `docs/MONITORING_OPERATIONS_RUNBOOK.md`.
@@ -128,5 +140,10 @@ and the external dead-man continues with all browsers closed.
 
 The external dead-man has two independent checks. The ten-minute baseline is
 always running. The one-minute active check is resumed by a ping when coverage is
-expected and paused through the Healthchecks management API while idle; all three
-active-check values in `.env.example` must be configured together.
+expected and paused through the Healthchecks management API while idle. Both ping
+URLs, both check ids, and the write API key are one required configuration unit.
+Every five minutes the service makes three read-only Management API requests to
+verify that the Healthchecks Pushover channel is attached to both checks. Provider
+errors retry after thirty seconds. The snapshot and Prometheus expose only
+attachment booleans and timestamps; channel ids, names, URLs, and keys are never
+returned.

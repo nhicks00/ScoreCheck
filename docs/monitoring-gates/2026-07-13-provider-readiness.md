@@ -25,11 +25,22 @@ available to tap **Acknowledge**.
 - The restricted API key can create, read, and poll Message resources.
 - A single delivery test to the configured operator number reached terminal status `undelivered` with Twilio error `30034`.
 - Error `30034` confirms that the U.S. 10DLC sender is not yet associated with an approved A2P campaign. Buying another local number would not bypass that requirement.
+- A read-only recheck at `2026-07-15T02:40Z` found one SMS-capable sender and one
+  sole-proprietor brand in `APPROVED` state with no registration errors. The
+  brand step is no longer the blocker.
+- Campaign and sender association remain unverified. The current restricted API
+  key can read Message resources but receives `401` for Messaging Service list,
+  so campaign verification requires Twilio Console or the narrow service/campaign
+  read permissions.
 - Production SMS escalation remains disabled. The approved credential set is stored outside the repository in a protected pending file and is not sourced by deployment.
 
 ScoreCheck now uses the restricted API key for message creation and polls only nonterminal Twilio receipts. It no longer exposes a public Twilio status callback or requires the account auth token at runtime. With no pending SMS, this path makes no Twilio requests.
 
 Activation requires a successful live delivery test after A2P approval. Only then should the pending values be promoted into the protected monitoring deployment environment and the escalation/recovery gate be run.
+
+Twilio is not a blocker for the current monitoring release. Pushover is the
+required phone channel; SMS remains an optional future escalation path and must
+stay disabled until campaign association and actual delivery pass.
 
 ## Healthchecks
 
@@ -37,17 +48,54 @@ The Healthchecks Management API currently reports:
 
 | Check | State | Period | Grace | Phone channel |
 | --- | --- | --- | --- | --- |
-| ScoreCheck monitor baseline | Up | 10 minutes | 3 minutes | No |
-| ScoreCheck active coverage monitor | Paused while idle | 1 minute | 1 minute | No |
+| ScoreCheck monitor baseline | Up | 10 minutes | 3 minutes | Yes, Pushover |
+| ScoreCheck active coverage monitor | Paused while idle | 1 minute | 1 minute | Yes, Pushover |
 
-Both checks are assigned to the project's single email integration. The API can list and assign integrations but cannot create a Pushover subscription. Healthchecks requires an authenticated UI subscription, and the available automation browser is not signed in.
+The Healthchecks Pushover subscription is active with high-priority Down events
+and normal-priority recovery events. It is assigned to exactly the baseline and
+active-coverage checks; the unused legacy check remains email-only. The
+Management API independently confirms one `po` channel and both required check
+assignments. No test notification was sent during subscription.
 
-To unblock the independent phone dead-man gate, sign in to Healthchecks.io in the in-app browser, add the Pushover integration with Emergency priority, and leave that page open for Codex. Codex can then verify and assign the new channel to both checks through the API before running the controlled withheld-ping test.
+## Read-only release preflight: 2026-07-15 02:35Z
+
+The channel-readiness hard-cutover candidate is commit `36f86322`. Its monitoring
+suite passed 119 tests, strict typecheck, and build; the web suite passed 432
+tests, strict typecheck, lint, and production build; Prometheus 3.13.1 accepted
+all 46 rules and their fixtures. Desktop and 390-pixel mobile dashboard checks
+had no console errors or horizontal overflow.
+
+Production remained unchanged during this preflight. The observability health
+endpoint was healthy and monitor-service was still running revision `fe661e9b`
+with restart count zero. The protected environment has both ping URLs, the API
+key, and the active check id; the new explicit baseline check id is not present
+yet and must be added during the bounded service cutover.
+
+The candidate audit implementation was then executed locally against the real
+Healthchecks Management API using protected credentials and read-only `GET`
+requests. It returned a successful provider audit with both attachment booleans
+false. An independent sanitized API check agreed: one email channel, zero
+Pushover channels, and both check ids valid. No provider, monitoring, media,
+routing, browser, output, Supabase, or Vercel state was changed.
+
+After provider subscription, use this order:
+
+1. Add the explicit baseline check id to the protected observability environment
+   and back up the prior environment and container provenance.
+2. Recreate monitor-service only at the matching candidate revision. Verify
+   health, restart count, the new secret-free snapshot field, and both attachment
+   metrics before continuing.
+3. Deploy the matching Prometheus rules only after both attachment metrics are
+   `1`, then require 46/46 rules healthy and zero new alerts.
+4. Deploy the matching web build and verify desktop and mobile Watchdog labels
+   show `Idle protected` or `Coverage protected` as appropriate.
+5. Run the controlled withheld-ping delivery gate separately; do not combine it
+   with the configuration cutover.
 
 ## Current decision
 
 - Keep direct Pushover enabled.
-- Keep Twilio disabled until A2P delivery succeeds.
+- Keep Twilio disabled and optional until A2P delivery succeeds.
 - Keep baseline Healthchecks running and active-coverage Healthchecks paused while all courts are off.
-- Do not run the withheld-ping phone gate until Healthchecks has an independent phone channel.
+- Deploy and verify the attachment audit before running the withheld-ping phone gate.
 - Keep the Pushover acknowledgement gate open until a delivered emergency is acknowledged during the controlled window.

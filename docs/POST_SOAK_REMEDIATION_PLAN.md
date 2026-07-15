@@ -284,14 +284,14 @@ After Phases 1-4 pass:
 2. Move YouTube and program credentials to secret references resolved only by
    the controller.
 3. Add reusable YouTube stream and per-match broadcast orchestration.
-4. Complete Pushover-backed Healthchecks delivery and Twilio escalation after
-   A2P approval.
+4. Complete Pushover-backed Healthchecks delivery. Treat Twilio escalation as an
+   optional later enhancement after A2P approval and real delivery proof.
 5. Run the two-court and full shadow events before public cutover.
 
 ## Current Operator Dependencies
 
 - Final six AVKANS cameras for the representative direct-caller topology.
 - A venue/final-router test that sustains at least 75 Mbps through Speedify.
-- Healthchecks Pushover integration authorization.
-- Twilio A2P approval before SMS can qualify.
+- Controlled Healthchecks withheld-ping acceptance after the deployed audit.
+- Twilio A2P approval only if optional SMS escalation is pursued later.
 - Explicit confirmation before deleting the current event-tagged droplets.

@@ -628,7 +628,15 @@ const OFF_DEAD_MAN_CHECK = {
 const OFF_DEAD_MAN_HEALTH: DeadManHealth = {
   state: "NOT_APPLICABLE",
   baseline: { ...OFF_DEAD_MAN_CHECK },
-  active: { ...OFF_DEAD_MAN_CHECK }
+  active: { ...OFF_DEAD_MAN_CHECK },
+  phoneChannel: {
+    configured: false,
+    state: "NOT_APPLICABLE",
+    baselineAttached: null,
+    activeAttached: null,
+    lastSuccessAt: null,
+    lastFailureAt: null
+  }
 };
 
 

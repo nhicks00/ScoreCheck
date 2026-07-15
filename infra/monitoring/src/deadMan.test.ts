@@ -59,25 +59,55 @@ describe("external dead-man lifecycle", () => {
     expect(send).not.toHaveBeenCalled();
     expect(deadMan.health().state).toBe("NOT_APPLICABLE");
   });
+
+  it("degrades overall watchdog health when both checks are email-only", async () => {
+    const emailId = "00000000-0000-4000-8000-000000000005";
+    const send = vi.fn<typeof fetch>(async (url, init) => {
+      if (init?.method === "POST") return new Response(null, { status: 200 });
+      const pathname = new URL(String(url)).pathname;
+      if (pathname.endsWith("/channels/")) return Response.json({ channels: [{ id: emailId, kind: "email" }] });
+      return Response.json({ channels: emailId });
+    });
+    const deadMan = new ExternalDeadMan(config({
+      healthchecksBaselinePingUrl: "https://hc-ping.com/baseline",
+      healthchecksBaselineCheckId: "00000000-0000-4000-8000-000000000003",
+      healthchecksActivePingUrl: "https://hc-ping.com/active",
+      healthchecksActiveCheckId: "00000000-0000-4000-8000-000000000004",
+      healthchecksApiKey: "healthchecks-write-key"
+    }), send);
+
+    await deadMan.maintain(false, at(0));
+
+    expect(deadMan.health()).toMatchObject({
+      state: "DEGRADED",
+      baseline: { mode: "RUNNING" },
+      active: { mode: "PAUSED" },
+      phoneChannel: { state: "DEGRADED", baselineAttached: false, activeAttached: false }
+    });
+  });
 });
 
 type TestConfig = {
   healthchecksBaselinePingUrl: string | null;
+  healthchecksBaselineCheckId: string | null;
   healthchecksActivePingUrl: string | null;
   healthchecksApiKey: string | null;
   healthchecksActiveCheckId: string | null;
   healthchecksBaselineIntervalMs: number;
   healthchecksActiveIntervalMs: number;
+  healthchecksChannelAuditIntervalMs: number;
 };
 
 function config(patch: Partial<TestConfig> = {}): TestConfig {
   return {
     healthchecksBaselinePingUrl: null as string | null,
+    healthchecksBaselineCheckId: null as string | null,
     healthchecksActivePingUrl: null as string | null,
     healthchecksApiKey: null as string | null,
     healthchecksActiveCheckId: null as string | null,
     healthchecksBaselineIntervalMs: 600_000,
     healthchecksActiveIntervalMs: 60_000,
+    healthchecksChannelAuditIntervalMs: 300_000,
     ...patch
   };
 }

@@ -77,11 +77,13 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     MONITOR_SERVICE_INTERVAL_MS: interval.default(5_000),
     MONITOR_COURT_COUNT: z.coerce.number().int().min(1).max(8).default(8),
     HEALTHCHECKS_BASELINE_PING_URL: optionalHttpsUrl,
+    HEALTHCHECKS_BASELINE_CHECK_ID: z.preprocess(emptyStringToUndefined, z.string().uuid().optional()),
     HEALTHCHECKS_ACTIVE_PING_URL: optionalHttpsUrl,
     HEALTHCHECKS_API_KEY: z.string().default(""),
     HEALTHCHECKS_ACTIVE_CHECK_ID: z.preprocess(emptyStringToUndefined, z.string().uuid().optional()),
     HEALTHCHECKS_BASELINE_INTERVAL_MS: z.coerce.number().int().min(60_000).max(3_600_000).default(600_000),
     HEALTHCHECKS_ACTIVE_INTERVAL_MS: interval.default(60_000),
+    HEALTHCHECKS_CHANNEL_AUDIT_INTERVAL_MS: z.coerce.number().int().min(60_000).max(3_600_000).default(300_000),
     SUPABASE_URL: optionalHttpsUrl,
     SUPABASE_SERVICE_ROLE_KEY: z.preprocess(emptyStringToUndefined, z.string().min(20).optional()),
     MONITOR_PUBLIC_HOST: z.string().trim().min(1).max(253).regex(/^[a-zA-Z0-9.-]+$/),
@@ -109,10 +111,16 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
   if (oauthValues.length !== 0 && oauthValues.length !== 3) throw new Error("YouTube OAuth monitoring requires client id, client secret, and refresh token together.");
   const pushoverValues = [parsed.PUSHOVER_APP_TOKEN, parsed.PUSHOVER_USER_KEY].filter((value) => value.trim());
   if (pushoverValues.length !== 0 && pushoverValues.length !== 2) throw new Error("Pushover monitoring requires both app token and user key.");
-  const activeDeadManValues = [parsed.HEALTHCHECKS_ACTIVE_PING_URL, parsed.HEALTHCHECKS_API_KEY, parsed.HEALTHCHECKS_ACTIVE_CHECK_ID]
+  const deadManValues = [
+    parsed.HEALTHCHECKS_BASELINE_PING_URL,
+    parsed.HEALTHCHECKS_BASELINE_CHECK_ID,
+    parsed.HEALTHCHECKS_ACTIVE_PING_URL,
+    parsed.HEALTHCHECKS_ACTIVE_CHECK_ID,
+    parsed.HEALTHCHECKS_API_KEY
+  ]
     .filter((value) => String(value ?? "").trim());
-  if (activeDeadManValues.length !== 0 && activeDeadManValues.length !== 3) {
-    throw new Error("The active Healthchecks dead-man requires its ping URL, write API key, and check id together.");
+  if (deadManValues.length !== 0 && deadManValues.length !== 5) {
+    throw new Error("Healthchecks dead-man monitoring requires both ping URLs, both check ids, and the write API key together.");
   }
   const twilioValues = [
     parsed.TWILIO_ACCOUNT_SID,
@@ -137,11 +145,13 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     intervalMs: parsed.MONITOR_SERVICE_INTERVAL_MS,
     courtCount: parsed.MONITOR_COURT_COUNT,
     healthchecksBaselinePingUrl: parsed.HEALTHCHECKS_BASELINE_PING_URL ?? null,
+    healthchecksBaselineCheckId: parsed.HEALTHCHECKS_BASELINE_CHECK_ID ?? null,
     healthchecksActivePingUrl: parsed.HEALTHCHECKS_ACTIVE_PING_URL ?? null,
     healthchecksApiKey: parsed.HEALTHCHECKS_API_KEY.trim() || null,
     healthchecksActiveCheckId: parsed.HEALTHCHECKS_ACTIVE_CHECK_ID ?? null,
     healthchecksBaselineIntervalMs: parsed.HEALTHCHECKS_BASELINE_INTERVAL_MS,
     healthchecksActiveIntervalMs: parsed.HEALTHCHECKS_ACTIVE_INTERVAL_MS,
+    healthchecksChannelAuditIntervalMs: parsed.HEALTHCHECKS_CHANNEL_AUDIT_INTERVAL_MS,
     supabaseUrl: parsed.SUPABASE_URL ?? null,
     supabaseServiceRoleKey: parsed.SUPABASE_SERVICE_ROLE_KEY ?? null,
     monitorDashboardUrl: parsed.MONITOR_DASHBOARD_URL ?? "https://score.beachvolleyballmedia.com/admin/monitor",

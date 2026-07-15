@@ -3,117 +3,79 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
 SSH_HOST="${MONITOR_SSH_HOST:?MONITOR_SSH_HOST is required}"
 SSH_KEY="${MONITOR_SSH_KEY:-$HOME/.ssh/scorecheck_do}"
 REMOTE_DIR="${MONITOR_REMOTE_DIR:-/opt/scorecheck-monitoring}"
 
+for command in git node rsync ssh; do
+  if ! command -v "$command" >/dev/null 2>&1; then
+    echo "Required deployment command is missing: $command." >&2
+    exit 1
+  fi
+done
+
+if [[ ! -r "$SSH_KEY" ]]; then
+  echo "MONITOR_SSH_KEY is not readable." >&2
+  exit 1
+fi
+
+if [[ ! "$REMOTE_DIR" =~ ^/[A-Za-z0-9._/-]+$ ]] \
+  || [[ "$REMOTE_DIR" == "/" || "$REMOTE_DIR" == *".."* || "$REMOTE_DIR" == *"//"* \
+    || "$REMOTE_DIR" == *"/./"* || "$REMOTE_DIR" == *"/." || "$REMOTE_DIR" == */ ]]; then
+  echo "MONITOR_REMOTE_DIR must be a normalized absolute path." >&2
+  exit 1
+fi
+
+if [[ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]]; then
+  echo "Refusing to deploy from a dirty worktree." >&2
+  exit 1
+fi
+
+REVISION="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+if [[ ! "$REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "Unable to resolve an exact Git revision." >&2
+  exit 1
+fi
+
 node "$SCRIPT_DIR/render-config.mjs"
 node "$SCRIPT_DIR/render-service-env.mjs"
 
-ssh -i "$SSH_KEY" -o IdentitiesOnly=yes "$SSH_HOST" "mkdir -p '$REMOTE_DIR/.incoming'"
-rsync -a --delete -e "ssh -i $SSH_KEY -o IdentitiesOnly=yes" \
-  "$SCRIPT_DIR/src" \
-  "$SCRIPT_DIR/rules" \
+candidate_name="${REVISION:0:12}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+candidate_dir="$REMOTE_DIR/.incoming/$candidate_name"
+ssh_options=(-i "$SSH_KEY" -o IdentitiesOnly=yes -o BatchMode=yes)
+rsync_shell="ssh -i $SSH_KEY -o IdentitiesOnly=yes -o BatchMode=yes"
+
+cleanup_candidate() {
+  ssh "${ssh_options[@]}" "$SSH_HOST" "rm -rf '$candidate_dir'" >/dev/null 2>&1 || true
+}
+trap cleanup_candidate EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
+ssh "${ssh_options[@]}" "$SSH_HOST" "install -d -m 0700 '$candidate_dir/.generated'"
+rsync -a --delete -e "$rsync_shell" "$SCRIPT_DIR/src/" "$SSH_HOST:$candidate_dir/src/"
+rsync -a --delete -e "$rsync_shell" "$SCRIPT_DIR/rules/" "$SSH_HOST:$candidate_dir/rules/"
+rsync -a -e "$rsync_shell" \
   "$SCRIPT_DIR/package.json" \
   "$SCRIPT_DIR/package-lock.json" \
   "$SCRIPT_DIR/tsconfig.json" \
   "$SCRIPT_DIR/test-alertmanager-inhibition.mjs" \
+  "$SCRIPT_DIR/.dockerignore" \
   "$SCRIPT_DIR/Dockerfile" \
   "$SCRIPT_DIR/docker-compose.yml" \
   "$SCRIPT_DIR/Caddyfile" \
-  "$SSH_HOST:$REMOTE_DIR/.incoming/"
-rsync -a -e "ssh -i $SSH_KEY -o IdentitiesOnly=yes" \
+  "$SCRIPT_DIR/remote-deploy.sh" \
+  "$SSH_HOST:$candidate_dir/"
+rsync -a -e "$rsync_shell" "$SCRIPT_DIR/.generated/service.env" "$SSH_HOST:$candidate_dir/.env"
+rsync -a -e "$rsync_shell" \
   "$SCRIPT_DIR/.generated/prometheus.yml" \
   "$SCRIPT_DIR/.generated/alertmanager.yml" \
-  "$SCRIPT_DIR/.generated/service.env" \
-  "$SSH_HOST:$REMOTE_DIR/.incoming/"
+  "$SSH_HOST:$candidate_dir/.generated/"
 
-ssh -i "$SSH_KEY" -o IdentitiesOnly=yes "$SSH_HOST" "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE'
-set -euo pipefail
-cd "$REMOTE_DIR"
-if docker compose version >/dev/null 2>&1; then
-  compose() { docker compose "$@"; }
-elif command -v docker-compose >/dev/null 2>&1; then
-  compose() { docker-compose "$@"; }
-else
-  echo "Docker Compose is not installed." >&2
-  exit 1
-fi
-prometheus_image='prom/prometheus:v3.13.1@sha256:3c42b892cf723fa54d2f262c37a0e1f80aa8c8ddb1da7b9b0df9455a35a7f893'
-alertmanager_image='prom/alertmanager:v0.33.1@sha256:9e082985f56f4c8c9f724e18f2288c6708f472e56a5286b8863d080434ea065d'
-chown root:root "$REMOTE_DIR/.incoming/prometheus.yml" "$REMOTE_DIR/.incoming/alertmanager.yml"
-chmod 0400 "$REMOTE_DIR/.incoming/prometheus.yml" "$REMOTE_DIR/.incoming/alertmanager.yml"
-docker run --rm --network none --read-only --cap-drop ALL --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m --entrypoint promtool -w /rules \
-  -v "$REMOTE_DIR/.incoming/rules:/rules:ro" \
-  "$prometheus_image" check rules /rules/scorecheck.rules.yml
-docker run --rm --network none --read-only --cap-drop ALL --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m --entrypoint promtool -w /rules \
-  -v "$REMOTE_DIR/.incoming/rules:/rules:ro" \
-  "$prometheus_image" test rules /rules/scorecheck.rules.test.yml
-if ! docker run --rm --network none --read-only --cap-drop ALL --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m --user 0:0 --entrypoint promtool \
-  -v "$REMOTE_DIR/.incoming/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
-  -v "$REMOTE_DIR/.incoming/rules:/etc/prometheus/rules:ro" \
-  "$prometheus_image" check config /etc/prometheus/prometheus.yml >/dev/null 2>&1; then
-  echo "Candidate Prometheus configuration validation failed." >&2
-  exit 1
-fi
-if ! docker run --rm --network none --read-only --cap-drop ALL --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m --user 0:0 --entrypoint amtool \
-  -v "$REMOTE_DIR/.incoming/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro" \
-  "$alertmanager_image" check-config /etc/alertmanager/alertmanager.yml >/dev/null 2>&1; then
-  echo "Candidate Alertmanager configuration validation failed." >&2
-  exit 1
-fi
-inhibition_container="scorecheck-alertmanager-preflight-$$"
-cleanup_inhibition() { docker rm -f "$inhibition_container" >/dev/null 2>&1 || true; }
-trap cleanup_inhibition EXIT
-docker run -d --name "$inhibition_container" --network none --read-only --cap-drop ALL \
-  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
-  --tmpfs /alertmanager:rw,noexec,nosuid,nodev,size=32m \
-  --user 0:0 \
-  -v "$REMOTE_DIR/.incoming/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro" \
-  "$alertmanager_image" \
-  --config.file=/etc/alertmanager/alertmanager.yml \
-  --storage.path=/alertmanager \
-  --cluster.listen-address= >/dev/null
-docker run --rm --network "container:$inhibition_container" --read-only --cap-drop ALL \
-  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
-  -v "$REMOTE_DIR/.incoming/test-alertmanager-inhibition.mjs:/test-alertmanager-inhibition.mjs:ro" \
-  node:22.23.1-alpine3.24@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 \
-  node /test-alertmanager-inhibition.mjs
-cleanup_inhibition
-trap - EXIT
-timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-if [[ -f docker-compose.yml ]]; then
-  mkdir -p backups
-  tar -czf "backups/monitoring-$timestamp.tar.gz" docker-compose.yml Dockerfile package.json package-lock.json tsconfig.json Caddyfile src rules .generated .env 2>/dev/null || true
-fi
-rm -rf src rules .generated
-install -m 0644 .incoming/docker-compose.yml docker-compose.yml
-install -m 0644 .incoming/Dockerfile Dockerfile
-install -m 0644 .incoming/package.json package.json
-install -m 0644 .incoming/package-lock.json package-lock.json
-install -m 0644 .incoming/tsconfig.json tsconfig.json
-install -m 0644 .incoming/Caddyfile Caddyfile
-install -m 0644 .incoming/test-alertmanager-inhibition.mjs test-alertmanager-inhibition.mjs
-install -m 0600 .incoming/service.env .env
-mkdir -m 0700 .generated
-install -o 65534 -g 65534 -m 0400 .incoming/prometheus.yml .generated/prometheus.yml
-install -o 65534 -g 65534 -m 0400 .incoming/alertmanager.yml .generated/alertmanager.yml
-mv .incoming/src src
-mv .incoming/rules rules
-compose config -q
-compose up -d --build --force-recreate --remove-orphans
-for attempt in $(seq 1 90); do
-  monitor_container="$(compose ps -q monitor-service 2>/dev/null || true)"
-  if [[ -n "$monitor_container" ]] \
-    && docker inspect "$monitor_container" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null | grep -qx healthy \
-    && curl -fsS http://127.0.0.1:9090/-/ready >/dev/null \
-    && curl -fsS http://127.0.0.1:9093/-/ready >/dev/null; then
-    echo "ScoreCheck observability stack healthy."
-    exit 0
-  fi
-  sleep 2
-done
-compose ps >&2
-compose logs --tail=120 monitor-service prometheus alertmanager >&2 || true
-exit 1
-REMOTE
+ssh "${ssh_options[@]}" "$SSH_HOST" \
+  "REMOTE_DIR='$REMOTE_DIR' CANDIDATE_DIR='$candidate_dir' REVISION='$REVISION' bash '$candidate_dir/remote-deploy.sh'"
+
+trap - EXIT INT TERM HUP
+cleanup_candidate

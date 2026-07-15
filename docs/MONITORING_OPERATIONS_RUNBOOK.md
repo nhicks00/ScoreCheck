@@ -167,49 +167,58 @@ a static view was intentional.
 The dashboard can silence an exact incident for 15, 30, 60, or 120 minutes.
 Every silence requires a reason and records actor, scope, creation time, and
 expiry. Existing emergency pushes are cancelled. If the silence expires while
-the incident remains critical, primary paging is re-armed and the SMS escalation
-clock starts from that new primary delivery.
+the incident remains critical, primary paging is re-armed. When optional SMS
+escalation is enabled, its clock starts from that new primary delivery.
 
 Do not silence an unexplained failure. Do not use a silence as a substitute for
 setting a court `OFF` after coverage.
 
 ## Phone paging and dead-man activation
 
-The deployed service supports Pushover emergency priority with acknowledgement,
-followed by Twilio SMS after two minutes when a critical incident remains
-unacknowledged. Recovery notifications are deduplicated and are sent only
-through providers that delivered the opening incident. Twilio message creation
-and bounded receipt polling use a restricted API key; no public status callback
-or account auth token is required.
+The required phone path is Pushover emergency priority with acknowledgement.
+Recovery notifications are deduplicated and are sent only through providers
+that delivered the opening incident. The service can optionally add Twilio SMS
+after two minutes, but SMS is not required or enabled for the current release.
+When enabled later, Twilio message creation and bounded receipt polling use a
+restricted API key; no public status callback or account auth token is required.
 
-The complete provider configuration uses these protected values:
+The required provider configuration uses these protected values:
 
 ```text
 PUSHOVER_APP_TOKEN
 PUSHOVER_USER_KEY
-TWILIO_ACCOUNT_SID
-TWILIO_API_KEY_SID
-TWILIO_API_KEY_SECRET
-TWILIO_FROM_NUMBER
-TWILIO_TO_NUMBER
 HEALTHCHECKS_BASELINE_PING_URL
+HEALTHCHECKS_BASELINE_CHECK_ID
 HEALTHCHECKS_ACTIVE_PING_URL
 HEALTHCHECKS_API_KEY
 HEALTHCHECKS_ACTIVE_CHECK_ID
 ```
 
+Optional Twilio escalation additionally uses `TWILIO_ACCOUNT_SID`,
+`TWILIO_API_KEY_SID`, `TWILIO_API_KEY_SECRET`, `TWILIO_FROM_NUMBER`, and
+`TWILIO_TO_NUMBER`.
+
 Store them only in the protected monitoring environment on the observability
 host and in the protected local deployment file. Never commit them. Pushover
-and both Healthchecks checks are configured in production. Twilio API
-credentials and a sender are available, but escalation remains disabled until
-the sender's A2P registration is approved and an actual test message reaches the
-destination. A `30034` result means the sender is still unregistered and must
-remain disabled. The baseline
-dead-man pings every ten minutes at all times. The active check pings every minute
-while any court expects coverage and is explicitly paused through the Healthchecks
-management API while the system is idle. A live ping resumes it automatically.
-The dashboard must show `Coverage active` or `Idle protected`, and any ping/pause
-failure must degrade the Watchdog item. The external provider must notify a phone
+and both Healthchecks checks are configured in production. As of 2026-07-14,
+Twilio SMS remains disabled and optional. The purchased sender is SMS-capable and the live
+A2P API reports one approved sole-proprietor brand with no registration errors,
+but the campaign and phone-number association are not yet verified. The current
+restricted API key can read Message resources but cannot list Messaging Services,
+so verify the campaign in Twilio Console or grant only the required read
+permissions. Do not enable escalation until the campaign is verified, the sender
+is associated, and an actual test message reaches the destination. A `30034`
+result means the sender is still unregistered and must remain disabled. The
+baseline dead-man pings every ten minutes at all times. The active check pings
+every minute while any court expects coverage and is explicitly paused through
+the Healthchecks management API while the system is idle. A live ping resumes it
+automatically.
+The service audits the Healthchecks channel list and both check assignments every
+five minutes using three read-only API requests, with a thirty-second retry after
+provider failure. The dashboard may show `Coverage protected` or `Idle protected`
+only when the pings are healthy and the Healthchecks Pushover integration is
+attached to both checks. Missing attachment or failed audit degrades the Watchdog
+item and the overall system header. The external provider must notify a phone
 independently of DigitalOcean, Supabase, Vercel, and ScoreCheck.
 
 Phone notifications use operator language only. Every opening notification has
@@ -220,10 +229,23 @@ Recovery messages state what is working again and whether any action remains.
 Provider activation is not accepted until all of these pass:
 
 1. Pushover emergency arrives, repeats, deep-links to the monitor, and stops on acknowledgement.
-2. Unacknowledged Pushover escalates to one Twilio SMS after two minutes.
-3. Recovery sends once and cancels any active emergency receipt.
-4. Baseline and active dead-man checks both alert when their pings are withheld.
-5. The dashboard shows provider failure as degraded notification health.
+2. Recovery sends once and cancels any active emergency receipt.
+3. Baseline and active dead-man checks both alert when their pings are withheld.
+4. The dashboard shows Push independently and does not degrade merely because
+   the optional SMS path is disabled.
+5. The dashboard Watchdog shows both Healthchecks checks as phone protected, and
+   removing the Pushover channel from either check raises exactly one durable
+   plain-English configuration incident.
+
+If Twilio is enabled later, add a separate acceptance gate proving exactly one
+SMS escalation and one provider-matched recovery without changing the Pushover
+acceptance criteria above.
+
+The channel-readiness contract is a hard cutover. Configure
+`HEALTHCHECKS_BASELINE_CHECK_ID`, deploy the matching monitor service, verify the
+new snapshot field, then deploy the matching rules and web build. Do not deploy
+the new rules while either check still lacks Pushover, because the missing-channel
+alert is intentionally critical.
 
 ## Deployment and verification
 
@@ -271,6 +293,14 @@ npm test
 npm run build
 MONITOR_SSH_HOST=root@OBSERVABILITY_PUBLIC_IP ./deploy.sh
 ```
+
+This routine deployment recreates only `monitor-service`. It verifies the new
+revision and public health before synchronizing and reloading its matching
+Prometheus rules, and it fails if Prometheus, Alertmanager, Caddy, or
+node-exporter changes container identity. On failure it restores the prior
+service image, environment, rules, scrape config, and source provenance.
+Compose topology, Caddy, and Alertmanager changes are rejected here and require
+a separate, explicitly reviewed infrastructure cutover.
 
 Register or replace a compositor agent with:
 
@@ -388,13 +418,13 @@ active commentary rooms. Acceptance requires:
   Camera 1 has returned to a healthy baseline.
 - Production web and monitor builds: passed.
 - Healthchecks baseline delivery and active idle-pause lifecycle: configured; the
-  withheld-ping phone delivery gate remains outstanding because the project
-  currently has email as its Healthchecks notification channel.
+  Pushover channel is attached to both required checks. The deployed attachment
+  audit and controlled withheld-ping phone delivery gate remain outstanding.
 - Pushover delivery and one-time recovery: operational. A false Egress storm
   exposed an idle/busy semantic error and over-broad recovery fan-out; both are
-  corrected in production. Controlled acknowledgement and escalation tests are
-  still required. Twilio authentication is valid, but SMS remains disabled until
-  the account has an approved SMS-capable sender.
+  corrected in production. A controlled acknowledgement test is still required.
+  Twilio SMS is optional and remains disabled until campaign/number association
+  and real delivery are verified.
 - Authenticated production visual check: requires an existing admin login because
   Vercel does not export the sensitive admin secret. The exact deployed build
   passed local authenticated validation against the live read-only API at
