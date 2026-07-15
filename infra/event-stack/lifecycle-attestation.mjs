@@ -18,7 +18,7 @@ export const LIFECYCLE_CANARY_CAPABILITIES = Object.freeze([
   "digitalocean.snapshot.create-read-delete",
   "digitalocean.tag.create-read-delete",
   "vercel.dns.create-read-delete",
-  "dns.system-cloudflare-google-convergence",
+  "dns.authoritative-system-cloudflare-google-convergence",
   "ssh.cloud-init-health-and-snapshot-recovery",
   "stable-ip-dns-reassignment-and-instance-identity"
 ]);
@@ -146,7 +146,10 @@ function validatePassingEvidence(value) {
     }
   }
   validateResizeContractEvidence(value.baseline?.resizeContract, value.identity);
-  if (value.dnsReadiness?.status !== "ready" || !Array.isArray(value.dnsReadiness.resolvers) || value.dnsReadiness.resolvers.length < 3) {
+  const resolverNames = Array.isArray(value.dnsReadiness?.resolvers)
+    ? value.dnsReadiness.resolvers.map((entry) => entry?.name).sort()
+    : [];
+  if (value.dnsReadiness?.status !== "ready" || !deepEqual(resolverNames, ["authoritative", "cloudflare", "google", "system"])) {
     throw new Error("canary evidence is missing multi-resolver DNS readiness");
   }
   if (!value.original?.id || !value.replacement?.id || String(value.original.id) === String(value.replacement.id)) {

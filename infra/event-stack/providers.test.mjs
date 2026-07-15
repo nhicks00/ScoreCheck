@@ -310,6 +310,43 @@ test("Vercel DNS waits until every resolver retires a cached wildcard answer", a
   assert.deepEqual(readiness.staleAnswers, [{ resolver: "system", address: "64.29.17.1", maxTtlSeconds: 1725 }]);
 });
 
+test("Vercel DNS defers recursive queries until authoritative DNS is ready", async () => {
+  const exact = { id: "rec-created", name: "lifecycle-test", type: "A", value: "192.0.2.50", ttl: 60 };
+  let authoritativeCalls = 0;
+  let recursiveCalls = 0;
+  const dns = new VercelDnsProvider({
+    token: "token",
+    fetchImpl: queueFetch([
+      response(200, { records: [exact] }),
+      response(200, { records: [exact] })
+    ]),
+    resolutionProbes: [
+      {
+        name: "authoritative",
+        authoritative: true,
+        resolve: async () => authoritativeCalls++ === 0
+          ? [{ address: "64.29.17.1", ttl: 1800 }]
+          : [{ address: "192.0.2.50", ttl: 60 }]
+      },
+      {
+        name: "recursive",
+        resolve: async () => {
+          recursiveCalls += 1;
+          return [{ address: "192.0.2.50", ttl: 60 }];
+        }
+      }
+    ],
+    pollIntervalMs: 1,
+    timeoutMs: 50
+  });
+
+  const readiness = await dns.waitARecordReady({ zone: "example.com", hostname: "lifecycle-test.example.com", value: "192.0.2.50" });
+  assert.equal(readiness.attempts, 2);
+  assert.equal(authoritativeCalls, 2);
+  assert.equal(recursiveCalls, 1);
+  assert.deepEqual(readiness.staleAnswers, [{ resolver: "authoritative", address: "64.29.17.1", maxTtlSeconds: 1800 }]);
+});
+
 test("Vercel DNS fails closed while any required resolver remains stale", async () => {
   const exact = { id: "rec-created", name: "lifecycle-test", type: "A", value: "192.0.2.50", ttl: 60 };
   const dns = new VercelDnsProvider({

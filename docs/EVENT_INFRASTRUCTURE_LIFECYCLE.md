@@ -61,8 +61,11 @@ between Droplets in the same DigitalOcean region, so the manifest, anchors, and
 all event servers are pinned to `sfo2`.
 
 The retained records use a 60-second TTL. DNS readiness requires the exact
-Vercel control-plane record plus the system resolver, Cloudflare 1.1.1.1, and
-Google Public DNS to return the intended value. The lifecycle waits for up to
+Vercel control-plane record plus every authoritative Vercel nameserver, the
+system resolver, Cloudflare 1.1.1.1, and Google Public DNS to return the
+intended value. Recursive queries are deferred until the authoritative servers
+agree, preventing the lifecycle's own first query from caching a transient
+wildcard answer. The lifecycle waits for up to
 40 minutes because a previously cached wildcard answer can legitimately
 outlive a newly created exact record by roughly 30 minutes. It will not
 overwrite multiple records, a non-A record, or a record whose provider
@@ -94,8 +97,8 @@ The lifecycle handles these explicitly:
   image, event tag, role tag, temporary tag, and destruction date must all
   match. An address or name alone never grants deletion authority.
 - **DNS can retain an older wildcard answer.** The build records stale resolver
-  answers and waits for Vercel, the system resolver, Cloudflare, and Google to
-  agree. Run setup at least 45 minutes before cameras may connect; `start`
+   answers and waits for Vercel authoritative DNS, the system resolver,
+   Cloudflare, and Google to agree. Run setup at least 45 minutes before cameras may connect; `start`
   remains unavailable until DNS convergence is durably recorded.
 - **Reserved IPv4 assignment is asynchronous.** The build waits until the API
   reports the exact destination Droplet ID before accepting DNS.
@@ -366,8 +369,8 @@ The stack is `ready` only after:
 2. Production has both Reserved IPv4s assigned to the intended exact Droplet
    IDs; rehearsal has no Reserved IP allocation and each scoped endpoint targets
    the exact event-owned Droplet public IPv4.
-3. All four public DNS records pass the Vercel, system, Cloudflare, and Google
-   resolver checks.
+3. All four public DNS records pass Vercel control-plane and authoritative DNS,
+   system resolver, Cloudflare, and Google checks.
 4. Commentary, ingest, eight compositors, spare, and observability are deployed
    from the bound repository revision.
 5. All 12 read-only monitoring agents are reachable on generated private IPs.
@@ -490,8 +493,9 @@ not use a production endpoint or select an existing Droplet. It performs:
 
 1. Create one `c-4` from bound canary cloud-init.
 2. Create and assign one temporary Reserved IPv4.
-3. Create unique Vercel DNS; wait for system, Cloudflare, and Google resolver
-   convergence; then prove HTTP instance identity.
+3. Create unique Vercel DNS; prove authoritative Vercel DNS first, then wait for
+   system, Cloudflare, and Google resolver convergence; finally prove HTTP
+   instance identity.
 4. Prove from live size inventory that `c-4` and `s-1vcpu-2gb` have a
    reversible disk contract, flex-resize down and back, and prove the endpoint
    each time. The canary refuses to create a paid resource if the selected

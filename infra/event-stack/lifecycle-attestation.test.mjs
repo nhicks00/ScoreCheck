@@ -151,7 +151,7 @@ function passingEvidence() {
     },
     dnsReadiness: {
       status: "ready",
-      resolvers: ["system", "cloudflare", "google"].map((name) => ({ name, status: "ok", answers: [{ address: "192.0.2.50", ttl: 60 }] }))
+      resolvers: ["authoritative", "system", "cloudflare", "google"].map((name) => ({ name, status: "ok", answers: [{ address: "192.0.2.50", ttl: 60 }] }))
     },
     original: { id: "100" },
     replacement: { id: "101" },

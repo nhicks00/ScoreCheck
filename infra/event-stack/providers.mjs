@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
-import { resolve4 } from "node:dns/promises";
+import { Resolver, resolve4, resolveNs } from "node:dns/promises";
 import { readFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
@@ -481,30 +481,15 @@ export class VercelDnsProvider {
       const providerRecord = hostnameRecords[0] ?? null;
       const providerReady = providerRecord?.type === "A" && providerRecord.value === value;
       lastProviderRecordId = providerRecord?.id ?? null;
-      lastResolvers = await Promise.all(this.resolutionProbes.map(async (probe) => {
-        try {
-          const answers = normalizeResolutionAnswers(await probe.resolve(hostname));
-          for (const answer of answers) {
-            if (answer.address !== value) {
-              const key = `${probe.name}:${answer.address}`;
-              const previous = staleAnswers.get(key);
-              staleAnswers.set(key, {
-                resolver: probe.name,
-                address: answer.address,
-                maxTtlSeconds: Math.max(previous?.maxTtlSeconds ?? 0, answer.ttl ?? 0)
-              });
-            }
-          }
-          return { name: probe.name, status: "ok", answers };
-        } catch (error) {
-          return { name: probe.name, status: "error", answers: [], error: sanitizedResolverError(error) };
-        }
-      }));
-      const resolversReady = lastResolvers.every((probe) => (
-        probe.status === "ok"
-        && probe.answers.length > 0
-        && probe.answers.every((answer) => answer.address === value)
-      ));
+      const authoritativeProbes = this.resolutionProbes.filter((probe) => probe.authoritative === true);
+      const recursiveProbes = this.resolutionProbes.filter((probe) => probe.authoritative !== true);
+      const authoritativeResults = await runResolutionProbes({ probes: authoritativeProbes, hostname, zone, value, staleAnswers });
+      const authoritativeReady = resolutionResultsReady(authoritativeResults, value);
+      const recursiveResults = providerReady && authoritativeReady
+        ? await runResolutionProbes({ probes: recursiveProbes, hostname, zone, value, staleAnswers })
+        : recursiveProbes.map((probe) => ({ name: probe.name, status: "deferred", answers: [] }));
+      lastResolvers = [...authoritativeResults, ...recursiveResults];
+      const resolversReady = resolutionResultsReady(lastResolvers, value);
       if (providerReady && resolversReady) {
         return {
           status: "ready",
@@ -518,7 +503,7 @@ export class VercelDnsProvider {
       }
       await delay(this.pollIntervalMs);
     }
-    const summary = lastResolvers.map((probe) => `${probe.name}:${probe.status === "ok" ? probe.answers.map((answer) => answer.address).join(",") || "none" : "error"}`).join("; ");
+    const summary = lastResolvers.map((probe) => `${probe.name}:${probe.status === "ok" ? probe.answers.map((answer) => answer.address).join(",") || "none" : probe.status}`).join("; ");
     throw new Error(`DNS ${hostname} did not converge to ${value}; providerRecord=${lastProviderRecordId ?? "missing"}; resolvers=${summary || "none"}`);
   }
 
@@ -734,6 +719,11 @@ function normalizeVercelRecord(value) {
 function defaultDnsResolutionProbes(fetchImpl) {
   return [
     {
+      name: "authoritative",
+      authoritative: true,
+      resolve: (hostname, { zone }) => resolveAuthoritativeA({ hostname, zone })
+    },
+    {
       name: "system",
       resolve: async (hostname) => resolve4(hostname, { ttl: true })
     },
@@ -765,9 +755,58 @@ function validateResolutionProbes(value) {
     if (!probe || typeof probe.name !== "string" || !probe.name || typeof probe.resolve !== "function") {
       throw new Error("DNS resolution probes must have a name and resolve function");
     }
+    if (probe.authoritative != null && typeof probe.authoritative !== "boolean") {
+      throw new Error(`DNS resolution probe ${probe.name} has an invalid authoritative marker`);
+    }
     if (names.has(probe.name)) throw new Error(`DNS resolution probe ${probe.name} is duplicated`);
     names.add(probe.name);
   }
+}
+
+async function runResolutionProbes({ probes, hostname, zone, value, staleAnswers }) {
+  return Promise.all(probes.map(async (probe) => {
+    try {
+      const answers = normalizeResolutionAnswers(await probe.resolve(hostname, { zone }));
+      for (const answer of answers) {
+        if (answer.address !== value) {
+          const key = `${probe.name}:${answer.address}`;
+          const previous = staleAnswers.get(key);
+          staleAnswers.set(key, {
+            resolver: probe.name,
+            address: answer.address,
+            maxTtlSeconds: Math.max(previous?.maxTtlSeconds ?? 0, answer.ttl ?? 0)
+          });
+        }
+      }
+      return { name: probe.name, status: "ok", answers };
+    } catch (error) {
+      return { name: probe.name, status: "error", answers: [], error: sanitizedResolverError(error) };
+    }
+  }));
+}
+
+function resolutionResultsReady(results, value) {
+  return results.every((probe) => (
+    probe.status === "ok"
+    && probe.answers.length > 0
+    && probe.answers.every((answer) => answer.address === value)
+  ));
+}
+
+async function resolveAuthoritativeA({ hostname, zone }) {
+  const nameservers = [...new Set(await resolveNs(zone))].sort();
+  if (nameservers.length === 0) throw new Error(`zone ${zone} has no authoritative nameservers`);
+  const serverAddresses = [...new Set((await Promise.all(nameservers.map((nameserver) => resolve4(nameserver)))).flat())].sort();
+  if (serverAddresses.length === 0) throw new Error(`zone ${zone} nameservers have no IPv4 addresses`);
+  const answers = [];
+  for (const server of serverAddresses) {
+    const resolver = new Resolver();
+    resolver.setServers([server]);
+    const values = await resolver.resolve4(hostname, { ttl: true });
+    if (values.length === 0) throw new Error(`authoritative server ${server} returned no A answer`);
+    answers.push(...values);
+  }
+  return answers;
 }
 
 async function resolveDohJson({ hostname, url, headers, fetchImpl }) {
@@ -786,7 +825,7 @@ async function resolveDohJson({ hostname, url, headers, fetchImpl }) {
 
 function normalizeResolutionAnswers(value) {
   if (!Array.isArray(value)) throw new Error("resolver response is not an array");
-  return value.map((answer) => {
+  const normalized = value.map((answer) => {
     const address = typeof answer === "string" ? answer : answer?.address;
     const ttl = typeof answer === "string" || answer?.ttl == null ? null : Number(answer.ttl);
     if (typeof address !== "string" || isIP(address) !== 4) {
@@ -795,6 +834,19 @@ function normalizeResolutionAnswers(value) {
     if (ttl !== null && (!Number.isFinite(ttl) || ttl < 0)) throw new Error("resolver returned an invalid TTL");
     return { address, ttl };
   });
+  const byAddress = new Map();
+  for (const answer of normalized) {
+    const previous = byAddress.get(answer.address);
+    byAddress.set(answer.address, {
+      address: answer.address,
+      ttl: previous == null
+        ? answer.ttl
+        : previous.ttl === null || answer.ttl === null
+          ? null
+          : Math.min(previous.ttl, answer.ttl)
+    });
+  }
+  return [...byAddress.values()].sort((left, right) => left.address.localeCompare(right.address));
 }
 
 function publicResolverEvidence(value) {
