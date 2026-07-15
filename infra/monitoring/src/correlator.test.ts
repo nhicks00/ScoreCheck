@@ -249,7 +249,15 @@ describe("monitor correlator", () => {
         }
       };
       const runtimes = new Map<string, AgentRuntime>([[compositorTarget.id, { target: compositorTarget, snapshot: compositor, lastSeenAt: generatedAt, lastErrorAt: null }]]);
-      const result = buildMonitorSnapshot([compositorTarget], runtimes, 1, Date.parse(generatedAt) + 1_000, [], new Map(), liveControlPlane(generatedAt));
+      const result = buildMonitorSnapshot(
+        [compositorTarget],
+        runtimes,
+        1,
+        Date.parse(generatedAt) + 1_000,
+        [],
+        new Map([[1, browserHeartbeat(generatedAt)]]),
+        liveControlPlane(generatedAt)
+      );
       const egress = result.courts[0]?.stages.find((stage) => stage.stage === "EGRESS");
       expect(egress?.state, expected.name).toBe(expected.state);
       expect(egress?.issueCode, expected.name).toBe(expected.issueCode);

@@ -66,7 +66,7 @@ inhibit_rules:
   - source_matchers:
       - 'alertname="ScoreCheckAgentMissing"'
     target_matchers:
-      - 'alertname=~"ScoreCheckServiceNotRunning|ScoreCheckServiceUnhealthy|ScoreCheckNativeEndpointDown|ScoreCheckEgressWorkerUnavailable|ScoreCheckEgressAdmissionBlocked|ScoreCheckEgressRequestMultiplicity"'
+      - 'alertname=~"ScoreCheckServiceNotRunning|ScoreCheckServiceUnhealthy|ScoreCheckNativeEndpointDown|ScoreCheckEgressWorkerUnavailable|ScoreCheckEgressExpectationExceedsCapacity|ScoreCheckEgressOutputMissing|ScoreCheckEgressAdmissionBlocked|ScoreCheckEgressRequestMultiplicity"'
     equal: [agent]
   - source_matchers:
       - 'alertname="ScoreCheckServiceNotRunning"'
@@ -76,17 +76,32 @@ inhibit_rules:
   - source_matchers:
       - 'alertname="ScoreCheckRequiredRawPathMissing"'
     target_matchers:
-      - 'alertname=~"ScoreCheckProgramBranchProgressMissing|ScoreCheckPreviewBranchFpsLow|ScoreCheckProgramBrowserMissing|ScoreCheckProgramFpsLow|ScoreCheckYouTubeUnhealthy|ScoreCheckYouTubeDegraded"'
+      - 'alertname=~"ScoreCheckProgramBranchProgressMissing|ScoreCheckPreviewBranchFpsLow|ScoreCheckEgressOutputMissing|ScoreCheckProgramBrowserMissing|ScoreCheckProgramFpsLow|ScoreCheckYouTubeUnhealthy|ScoreCheckYouTubeDegraded"'
     equal: [court]
   - source_matchers:
       - 'alertname="ScoreCheckProgramBranchProgressMissing"'
     target_matchers:
-      - 'alertname=~"ScoreCheckProgramBrowserMissing|ScoreCheckProgramFpsLow|ScoreCheckRenderedScoreMismatch|ScoreCheckYouTubeUnhealthy|ScoreCheckYouTubeDegraded"'
+      - 'alertname=~"ScoreCheckEgressOutputMissing|ScoreCheckProgramBrowserMissing|ScoreCheckProgramFpsLow|ScoreCheckRenderedScoreMismatch|ScoreCheckYouTubeUnhealthy|ScoreCheckYouTubeDegraded"'
     equal: [court]
   - source_matchers:
       - 'alertname=~"ScoreCheckProgramBrowserMissing|ScoreCheckProgramFpsLow"'
     target_matchers:
       - 'alertname=~"ScoreCheckRenderedScoreMismatch|ScoreCheckYouTubeUnhealthy|ScoreCheckYouTubeDegraded"'
+    equal: [court]
+  - source_matchers:
+      - 'alertname="ScoreCheckEgressWorkerUnavailable"'
+    target_matchers:
+      - 'alertname=~"ScoreCheckEgressExpectationExceedsCapacity|ScoreCheckEgressOutputMissing"'
+    equal: [agent]
+  - source_matchers:
+      - 'alertname="ScoreCheckEgressExpectationExceedsCapacity"'
+    target_matchers:
+      - 'alertname="ScoreCheckEgressOutputMissing"'
+    equal: [agent]
+  - source_matchers:
+      - 'alertname="ScoreCheckEgressOutputMissing"'
+    target_matchers:
+      - 'alertname=~"ScoreCheckProgramBrowserMissing|ScoreCheckProgramFpsLow"'
     equal: [court]
   - source_matchers:
       - 'alertname="ScoreCheckCommentaryDisconnected"'

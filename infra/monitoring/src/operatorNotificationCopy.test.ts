@@ -20,6 +20,17 @@ describe("operator notification copy", () => {
     expect(JSON.stringify(copy)).not.toMatch(/egress|redis|worker|host capacity/i);
   });
 
+  it("turns an over-capacity assignment into a plain stop-before-starting action", () => {
+    const copy = operatorNotificationCopy(incident({
+      stage: "EGRESS",
+      issueCode: "EGRESS_EXPECTATION_EXCEEDS_CAPACITY",
+      courtNumber: null
+    }));
+    expect(copy.problem).toBe("ScoreCheck does not have room to start another broadcast.");
+    expect(copy.action).toBe("Do not start another broadcast until an unused output is stopped or more capacity is available.");
+    expect(JSON.stringify(copy)).not.toMatch(/egress|worker|web request|compositor/i);
+  });
+
   it("gives a commentator a concrete reconnect action", () => {
     const copy = operatorNotificationCopy(incident({ stage: "COMMENTARY", issueCode: "COMMENTARY_TRACK_MUTED" }));
     expect(copy.problem).toBe("Commentator sound is missing for Camera 4.");

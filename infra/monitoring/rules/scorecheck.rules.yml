@@ -411,6 +411,58 @@ groups:
           summary: "Native endpoint {{ $labels.service }} is down on {{ $labels.agent }}."
           first_action: "Inspect the bounded service health and container state on the affected host."
 
+      - record: scorecheck_egress_expected_web_requests
+        expr: |
+          sum by (agent) (
+            scorecheck_compositor_court_assignment
+            * on (court) group_left
+            scorecheck_court_broadcast_live
+          )
+
+      - alert: ScoreCheckEgressExpectationExceedsCapacity
+        expr: |
+          (
+            scorecheck_egress_expected_web_requests
+            > on (agent)
+            scorecheck_egress_maximum_web_requests
+          )
+          and on (agent) (scorecheck_egress_metrics_valid == 1)
+        for: 5s
+        labels:
+          severity: critical
+          stage: EGRESS
+          issue_code: EGRESS_EXPECTATION_EXCEEDS_CAPACITY
+          root_dependency: "{{ $labels.agent }}"
+        annotations:
+          summary: "Egress worker {{ $labels.agent }} has more expected court outputs than qualified capacity."
+          first_action: "Move an expected court to a qualified compositor or increase only proven Egress capacity before going live."
+
+      - alert: ScoreCheckEgressOutputMissing
+        expr: |
+          (
+            (scorecheck_compositor_court_assignment == 1)
+            and on (court) (scorecheck_court_broadcast_live == 1)
+            and on (court) (scorecheck_program_browser_heartbeat_fresh == 0)
+          )
+          and on (agent)
+          (
+            (
+              scorecheck_egress_active_web_requests
+              < on (agent)
+              scorecheck_egress_expected_web_requests
+            )
+            and on (agent) (scorecheck_egress_metrics_valid == 1)
+          )
+        for: 10s
+        labels:
+          severity: critical
+          stage: EGRESS
+          issue_code: EGRESS_OUTPUT_MISSING
+          root_dependency: "{{ $labels.agent }}"
+        annotations:
+          summary: "Court {{ $labels.court }} Egress output is missing on {{ $labels.agent }}."
+          first_action: "Restart this court's Egress output and confirm the program browser heartbeat returns."
+
       - alert: ScoreCheckEgressWorkerUnavailable
         expr: |
           (

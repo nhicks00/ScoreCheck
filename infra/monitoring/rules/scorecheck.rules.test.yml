@@ -373,6 +373,50 @@ tests:
         values: '1 1 1 1 1 1 1 1'
       - series: 'scorecheck_native_endpoint_up{agent="compositor-f",role="compositor",service="egress-health"}'
         values: '1 1 1 1 1 1 1 1'
+
+      - series: 'scorecheck_egress_metrics_valid{agent="compositor-g"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_egress_can_accept_request{agent="compositor-g"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_egress_active_web_requests{agent="compositor-g"}'
+        values: '0 0 0 0 0 0 0 0'
+      - series: 'scorecheck_egress_maximum_web_requests{agent="compositor-g"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_native_endpoint_up{agent="compositor-g",role="compositor",service="egress-metrics"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_native_endpoint_up{agent="compositor-g",role="compositor",service="egress-health"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_compositor_court_assignment{agent="compositor-g",court="7"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_court_broadcast_live{court="7"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_program_browser_heartbeat_fresh{court="7"}'
+        values: '0 0 0 0 0 0 0 0'
+
+      - series: 'scorecheck_egress_metrics_valid{agent="compositor-h"}'
+        values: '0 0 1 1 1 1 1 1'
+      - series: 'scorecheck_egress_can_accept_request{agent="compositor-h"}'
+        values: '0 0 0 0 0 0 0 0'
+      - series: 'scorecheck_egress_active_web_requests{agent="compositor-h"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_egress_maximum_web_requests{agent="compositor-h"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_native_endpoint_up{agent="compositor-h",role="compositor",service="egress-metrics"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_native_endpoint_up{agent="compositor-h",role="compositor",service="egress-health"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_compositor_court_assignment{agent="compositor-h",court="6"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_compositor_court_assignment{agent="compositor-h",court="8"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_court_broadcast_live{court="6"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_court_broadcast_live{court="8"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_program_browser_heartbeat_fresh{court="6"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_program_browser_heartbeat_fresh{court="8"}'
+        values: '1 1 1 1 1 1 1 1'
     alert_rule_test:
       - eval_time: 35s
         alertname: ScoreCheckEgressWorkerUnavailable
@@ -419,6 +463,37 @@ tests:
             exp_annotations:
               summary: Egress worker compositor-f has more active web requests than its configured maximum.
               first_action: Stop the unintended extra Egress request and verify the compositor admission lock.
+      - eval_time: 10s
+        alertname: ScoreCheckEgressExpectationExceedsCapacity
+        exp_alerts: []
+      - eval_time: 20s
+        alertname: ScoreCheckEgressExpectationExceedsCapacity
+        exp_alerts:
+          - exp_labels:
+              agent: compositor-h
+              severity: critical
+              stage: EGRESS
+              issue_code: EGRESS_EXPECTATION_EXCEEDS_CAPACITY
+              root_dependency: compositor-h
+            exp_annotations:
+              summary: Egress worker compositor-h has more expected court outputs than qualified capacity.
+              first_action: Move an expected court to a qualified compositor or increase only proven Egress capacity before going live.
+      - eval_time: 5s
+        alertname: ScoreCheckEgressOutputMissing
+        exp_alerts: []
+      - eval_time: 15s
+        alertname: ScoreCheckEgressOutputMissing
+        exp_alerts:
+          - exp_labels:
+              agent: compositor-g
+              court: '7'
+              severity: critical
+              stage: EGRESS
+              issue_code: EGRESS_OUTPUT_MISSING
+              root_dependency: compositor-g
+            exp_annotations:
+              summary: Court 7 Egress output is missing on compositor-g.
+              first_action: Restart this court's Egress output and confirm the program browser heartbeat returns.
       - eval_time: 35s
         alertname: ScoreCheckNativeEndpointDown
         exp_alerts: []

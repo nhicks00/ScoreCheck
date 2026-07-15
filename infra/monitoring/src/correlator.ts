@@ -52,6 +52,12 @@ export function buildMonitorSnapshot(
     const competition = controlPlane?.courts.find((court) => court.courtNumber === courtNumber) ?? null;
     const youtube = youtubeMonitor?.courts.find((court) => court.courtNumber === courtNumber) ?? null;
     const egressAgent = agents.find((agent) => agent.role === "compositor" && agent.assignedCourts.includes(courtNumber)) ?? null;
+    const expectedEgressRequests = egressAgent == null
+      ? 0
+      : controlPlane?.courts.filter((court) =>
+        egressAgent.assignedCourts.includes(court.courtNumber)
+        && court.expectation.broadcastExpectation !== "OFF"
+      ).length ?? 0;
     const faultGate = faultGates.find((gate) => gate.courtNumber === courtNumber) ?? null;
     const productionExpectation = competition?.expectation ?? OFF_EXPECTATION;
     const expectation = faultGate ? faultGateExpectation(faultGate) : productionExpectation;
@@ -63,7 +69,7 @@ export function buildMonitorSnapshot(
       commentaryStage(browser, nowMs, productionExpectation),
       scoreSourceStage(competition, controlPlane, nowMs, productionExpectation),
       scoreRenderStage(browser, nowMs, productionExpectation),
-      egressStage(egressAgent, productionExpectation),
+      egressStage(egressAgent, productionExpectation, expectedEgressRequests, browser, nowMs),
       youtubeStage(youtube, youtubeMonitor, nowMs, productionExpectation)
     ];
     const stages = applyCourtIncidents(observedStages, incidents, courtNumber, egressAgent?.agentId ?? null, nowMs);
@@ -145,7 +151,13 @@ function applyCourtIncidents(stages: StageHealth[], incidents: IncidentSnapshot[
   });
 }
 
-function egressStage(agent: MonitorSnapshot["agents"][number] | null, expectation: CourtExpectation): StageHealth {
+function egressStage(
+  agent: MonitorSnapshot["agents"][number] | null,
+  expectation: CourtExpectation,
+  expectedRequestCount: number,
+  browser: BrowserHeartbeatSnapshot | null,
+  nowMs: number
+): StageHealth {
   if (expectation.broadcastExpectation === "OFF") return expectedOffStage("EGRESS", "Egress output is not expected.");
   if (!agent) {
     return stage("EGRESS", "CRITICAL", "critical", "EGRESS_HOST_UNASSIGNED", "No compositor host is assigned to this court.", "Assign the court to an instrumented compositor before starting coverage.", null, null, {});
@@ -159,17 +171,30 @@ function egressStage(agent: MonitorSnapshot["agents"][number] | null, expectatio
     return stage("EGRESS", "CRITICAL", "critical", "EGRESS_WORKER_UNAVAILABLE", `Egress worker ${agent.agentId} is unavailable.`, "Inspect Egress health, Redis and LiveKit control connectivity on the assigned compositor.", agent.lastSeenAt, agent.ageMs, { host: agent.agentId, endpointDown });
   }
   const multiplicity = egress.activeWebRequests > egress.maximumWebRequests;
+  const expectationExceedsCapacity = expectedRequestCount > egress.maximumWebRequests;
+  const requestDeficit = Math.max(0, expectedRequestCount - egress.activeWebRequests);
+  const browserStale = browserTiming(browser, nowMs).stale;
+  const outputMissing = requestDeficit > 0 && browserStale;
   const idleAdmissionBlocked = egress.activeWebRequests === 0 && !egress.canAcceptRequest;
-  const egressState: HealthState = multiplicity ? "CRITICAL" : idleAdmissionBlocked ? "DEGRADED" : "HEALTHY";
-  const severity = multiplicity ? "critical" : idleAdmissionBlocked ? "warning" : "info";
-  const issueCode = multiplicity ? "EGRESS_REQUEST_MULTIPLICITY" : idleAdmissionBlocked ? "EGRESS_ADMISSION_BLOCKED" : null;
+  const critical = multiplicity || expectationExceedsCapacity || outputMissing;
+  const degraded = !critical && idleAdmissionBlocked;
+  const egressState: HealthState = critical ? "CRITICAL" : degraded ? "DEGRADED" : "HEALTHY";
+  const severity = critical ? "critical" : degraded ? "warning" : "info";
+  const issueCode = multiplicity ? "EGRESS_REQUEST_MULTIPLICITY"
+    : expectationExceedsCapacity ? "EGRESS_EXPECTATION_EXCEEDS_CAPACITY"
+      : outputMissing ? "EGRESS_OUTPUT_MISSING"
+        : idleAdmissionBlocked ? "EGRESS_ADMISSION_BLOCKED" : null;
   const summary = multiplicity
     ? `Egress worker ${agent.agentId} is running ${egress.activeWebRequests} web requests above its configured maximum of ${egress.maximumWebRequests}.`
-    : idleAdmissionBlocked
-      ? `Idle Egress worker ${agent.agentId} cannot admit a court.`
-      : egress.activeWebRequests >= egress.maximumWebRequests
-        ? `Egress worker ${agent.agentId} is processing output at its configured capacity.`
-        : `Egress worker ${agent.agentId} is healthy and ${egress.idle ? "idle" : "processing output"}.`;
+    : expectationExceedsCapacity
+      ? `Egress worker ${agent.agentId} has ${expectedRequestCount} expected court outputs but capacity for ${egress.maximumWebRequests}.`
+      : outputMissing
+        ? `This court's Egress output is missing while ${agent.agentId} has ${requestDeficit} fewer active requests than expected.`
+        : idleAdmissionBlocked
+          ? `Idle Egress worker ${agent.agentId} cannot admit a court.`
+          : egress.activeWebRequests >= egress.maximumWebRequests
+            ? `Egress worker ${agent.agentId} is processing output at its configured capacity.`
+            : `Egress worker ${agent.agentId} is healthy and ${egress.idle ? "idle" : "processing output"}.`;
   return stage(
     "EGRESS",
     egressState,
@@ -178,9 +203,13 @@ function egressStage(agent: MonitorSnapshot["agents"][number] | null, expectatio
     summary,
     multiplicity
       ? "Stop the unintended extra Egress request and verify the compositor admission lock."
-      : idleAdmissionBlocked
-        ? "Inspect Egress availability and resource admission before starting coverage."
-        : null,
+      : expectationExceedsCapacity
+        ? "Move an expected court to a qualified compositor or increase only proven Egress capacity before going live."
+        : outputMissing
+          ? "Restart this court's Egress output and confirm the program browser heartbeat returns."
+          : idleAdmissionBlocked
+            ? "Inspect Egress availability and resource admission before starting coverage."
+            : null,
     agent.lastSeenAt,
     agent.ageMs,
     {
@@ -190,6 +219,8 @@ function egressStage(agent: MonitorSnapshot["agents"][number] | null, expectatio
       nativeCanAcceptRequest: egress.nativeCanAcceptRequest,
       activeWebRequests: egress.activeWebRequests,
       maximumWebRequests: egress.maximumWebRequests,
+      expectedRequestCount,
+      requestDeficit,
       cpuLoadRatio: egress.cpuLoadRatio,
       memoryLoadRatio: egress.memoryLoadRatio,
       cgroupMemoryBytes: egress.cgroupMemoryBytes

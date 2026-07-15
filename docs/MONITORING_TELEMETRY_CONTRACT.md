@@ -163,6 +163,9 @@ scorecheck_compositor_court_assignment
 scorecheck_egress_idle
 scorecheck_egress_metrics_valid
 scorecheck_egress_can_accept_request
+scorecheck_egress_native_can_accept_request
+scorecheck_egress_active_web_requests
+scorecheck_egress_maximum_web_requests
 scorecheck_egress_cgroup_memory_bytes
 scorecheck_egress_cpu_load_ratio
 scorecheck_egress_memory_load_ratio
@@ -173,6 +176,14 @@ scorecheck_egress_memory_load_ratio
 is busy. It is not a health signal. Egress health is derived from endpoint
 reachability and required-metric validity; admission capacity is reported
 separately by `scorecheck_egress_can_accept_request`.
+
+The monitor joins the static compositor-to-court assignment with live broadcast
+expectations to derive `scorecheck_egress_expected_web_requests` per worker. A
+worker is a hard capacity failure when expected outputs exceed its qualified
+maximum. A specific court is classified `EGRESS_OUTPUT_MISSING` only when the
+worker has fewer active requests than expected and that court's program-browser
+heartbeat is stale. This paired evidence attributes a stopped output without
+guessing which court failed from a shared worker count alone.
 
 Counters remain cumulative. Prometheus recording rules derive rates.
 

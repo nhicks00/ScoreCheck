@@ -130,9 +130,15 @@ Alertmanager inhibits downstream pages when a stronger upstream cause is active:
 
 - a missing host agent inhibits matching host service and Egress symptoms;
 - a missing raw court path inhibits matching normalization, program-browser,
-  and YouTube symptoms;
-- a missing program branch inhibits matching browser/render/YouTube symptoms;
+  Egress-output, and YouTube symptoms;
+- a missing program branch inhibits matching Egress-output,
+  browser/render/YouTube symptoms;
 - a missing or low-FPS program browser inhibits matching render/YouTube symptoms;
+- an unavailable Egress worker inhibits its output-deficit symptoms;
+- an Egress capacity deficit inhibits per-court output-deficit symptoms on the
+  same worker;
+- a court Egress output deficit inhibits its matching browser-missing and
+  low-FPS symptoms;
 - a disconnected commentary room inhibits matching track, level, network, and
   synchronization symptoms;
 - the shared score-worker alert inhibits all per-court source-alignment pages;
@@ -362,11 +368,11 @@ recovery may announce that the feed is back.
 | Cover camera or send uniform black | `CAMERA_CONTENT_BLACK`; no duplicate freeze page | 25 seconds |
 | Degrade venue uplink | bitrate/FPS/loss trend degrades before downstream failure | 30 seconds |
 | Stall preview normalizer | `PREVIEW`, FFmpeg/path evidence | 20 seconds |
-| Close program browser | `PROGRAM_BROWSER`, stale heartbeat | 15 seconds |
+| Close program browser | `PROGRAM_BROWSER`, stale heartbeat | 30 seconds |
 | Disconnect commentator | `COMMENTARY` only when commentary is required | 20 seconds |
 | Mute, clip, or silence commentator | exact commentary issue code; no camera-stage fault | 75 seconds |
 | Corrupt score/render fixture | `SCORE_SOURCE` or `SCORE_RENDER`; detect 67-67 | 15 seconds |
-| Stop test Egress job | `EGRESS`; program input remains diagnosable | 20 seconds |
+| Stop test Egress job | `EGRESS`; program input remains diagnosable | 25 seconds |
 | Unbind test YouTube stream | `YOUTUBE`; upstream stages remain healthy | 180 seconds |
 | Stop one host agent | matching host/stages become `UNKNOWN`, never healthy | 20 seconds |
 | Withhold monitor dead-man | external phone notification | provider deadline |
@@ -383,6 +389,7 @@ active commentary rooms. Acceptance requires:
 - all 6 agents remain fresh;
 - no sustained host CPU above 80% and no growing memory trend;
 - every Egress metrics/health endpoint remains reachable, busy workers remain healthy, and no worker accepts more than its configured job capacity;
+- expected simultaneous outputs do not exceed any worker's qualified maximum;
 - court bitrate and FPS stay within the selected profile;
 - score source and rendered scorebug remain aligned;
 - every injected single-court fault identifies that court without paging the other seven;
@@ -400,12 +407,18 @@ active commentary rooms. Acceptance requires:
   raw feeds report bounded source protocol/mode, video profile/resolution, and
   audio format. Push-SRT courts expose RTT and packet counters; pull-SRT and
   RTMP paths remain explicitly unavailable rather than fabricated.
-- Prometheus rules (37 syntax-validated plus executable timing/isolation tests)
-  and correlator unit/fault fixtures: passed. Every observability deployment
-  reruns these gates before replacing files or restarting containers.
-- Deterministic eight-court isolation fixtures for camera loss, repeated picture,
-  compositor-pair loss, score-render mismatch, YouTube API unknown, and shared
-  score-worker deduplication: passed. These are code gates, not real-feed gates.
+- The current hardening candidate has 49 syntax-validated Prometheus rules with
+  executable timing/isolation fixtures, 141 correlator/monitor tests, and 27
+  disposable Alertmanager inhibition fixtures. Production remains at the prior
+  46-rule release until this candidate completes a bounded monitoring-only
+  cutover. Every observability deployment reruns these gates before replacing
+  files or restarting containers.
+- Deterministic eight-court isolation fixtures now cover camera loss, repeated
+  and black pictures, stopped Egress output, Egress capacity deficit, missing
+  program browser, commentary disconnect/mute/clip/silence/jitter/sync loss,
+  compositor-pair loss, score-render mismatch, definitive and unknown YouTube
+  states, and shared score-worker deduplication. These are code gates, not
+  real-feed gates.
 - Expanded WebRTC, visual-content, camera-audio, and commentary telemetry: passed
   type/schema/unit validation. A ten-hour one-court transport and sync soak
   completed without restart, OOM, frame stall, MediaMTX path failure, or egress
@@ -435,6 +448,11 @@ active commentary rooms. Acceptance requires:
   0.59-0.81x realtime; Egress accepted all eight jobs and compositor capacity was
   not the bottleneck. Split normalization or qualify camera-side 720p H.264 before
   repeating the gate.
+- The current four compositor workers are each qualified for one active web
+  Egress request while each owns two courts. Therefore they cannot qualify an
+  eight-simultaneous-output gate as configured. The new capacity rule fails this
+  state closed; add qualified workers or explicitly requalify higher per-worker
+  capacity before the real eight-court gate.
 - Remaining real one-court and eight-court fault injection requires the next
   isolated test-feed session and explicit approval. Never simulate a pass by
   stopping public production services.

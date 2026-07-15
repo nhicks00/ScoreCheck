@@ -22,6 +22,13 @@ const compositorTargets: AgentTarget[] = [
 const targets = [mediaTarget, ...compositorTargets];
 
 describe("deterministic eight-court fault gate", () => {
+  it("starts from eight healthy simultaneous court outputs within qualified capacity", () => {
+    const snapshot = build(mediaAgent(), healthyBrowsers());
+    expect(criticalCourts(snapshot)).toEqual([]);
+    expect(snapshot.courts.every((court) => court.overallState === "HEALTHY")).toBe(true);
+    expect(snapshot.courts.every((court) => stage(snapshot, court.courtNumber, "EGRESS")?.state === "HEALTHY")).toBe(true);
+  });
+
   it("keeps a stopped camera publisher isolated to its physical court", () => {
     const media = mediaAgent();
     media.mediaPaths = media.mediaPaths.filter((path) => !(path.courtNumber === 4 && path.branch === "raw"));
@@ -39,6 +46,122 @@ describe("deterministic eight-court fault gate", () => {
     expect(criticalCourts(snapshot)).toEqual([3]);
     expect(stage(snapshot, 3, "RAW_INGEST")?.issueCode).toBe("FULL_BITRATE_VISUAL_FREEZE");
     expect(stage(snapshot, 3, "PROGRAM_BROWSER")?.state).toBe("HEALTHY");
+  });
+
+  it("detects a persistently black picture without opening a duplicate freeze diagnosis", () => {
+    const browsers = healthyBrowsers();
+    browsers.set(2, browser(2, { blackDurationMs: 21_000, frozenDurationMs: 16_000 }));
+    const snapshot = build(mediaAgent(), browsers);
+    expect(criticalCourts(snapshot)).toEqual([2]);
+    expect(stage(snapshot, 2, "RAW_INGEST")?.issueCode).toBe("CAMERA_CONTENT_BLACK");
+    expect(stage(snapshot, 2, "PROGRAM_BROWSER")?.state).toBe("HEALTHY");
+  });
+
+  it("attributes a stopped Egress output to the stale court while its paired court remains healthy", () => {
+    const runtimes = healthyRuntimes(mediaAgent());
+    const compositor = runtimes.get("bvm-compositor-b")?.snapshot;
+    if (!compositor?.nativeServices.egress) throw new Error("Missing compositor fixture.");
+    compositor.nativeServices.egress.activeWebRequests = 1;
+    compositor.nativeServices.egress.idle = false;
+    compositor.nativeServices.egress.canAcceptRequest = true;
+    const browsers = healthyBrowsers();
+    browsers.delete(3);
+    const snapshot = buildMonitorSnapshot(targets, runtimes, 8, nowMs, [], browsers, controlPlane(), youtube());
+    expect(criticalCourts(snapshot)).toEqual([3]);
+    expect(stage(snapshot, 3, "EGRESS")?.issueCode).toBe("EGRESS_OUTPUT_MISSING");
+    expect(stage(snapshot, 4, "EGRESS")?.state).toBe("HEALTHY");
+    expect(stage(snapshot, 4, "PROGRAM_BROWSER")?.state).toBe("HEALTHY");
+  });
+
+  it("fails closed when two expected court outputs exceed a compositor's qualified capacity", () => {
+    const runtimes = healthyRuntimes(mediaAgent());
+    const compositor = runtimes.get("bvm-compositor-b")?.snapshot;
+    if (!compositor?.nativeServices.egress) throw new Error("Missing compositor fixture.");
+    compositor.nativeServices.egress.activeWebRequests = 1;
+    compositor.nativeServices.egress.maximumWebRequests = 1;
+    compositor.nativeServices.egress.idle = false;
+    compositor.nativeServices.egress.canAcceptRequest = false;
+    const snapshot = buildMonitorSnapshot(targets, runtimes, 8, nowMs, [], healthyBrowsers(), controlPlane(), youtube());
+    expect(criticalCourts(snapshot)).toEqual([3, 4]);
+    expect(stage(snapshot, 3, "EGRESS")?.issueCode).toBe("EGRESS_EXPECTATION_EXCEEDS_CAPACITY");
+    expect(stage(snapshot, 4, "EGRESS")?.issueCode).toBe("EGRESS_EXPECTATION_EXCEEDS_CAPACITY");
+    expect(stage(snapshot, 2, "EGRESS")?.state).toBe("HEALTHY");
+  });
+
+  it("keeps a missing program browser isolated when Egress request counts remain correct", () => {
+    const browsers = healthyBrowsers();
+    browsers.delete(6);
+    const snapshot = build(mediaAgent(), browsers);
+    expect(criticalCourts(snapshot)).toEqual([6]);
+    expect(stage(snapshot, 6, "PROGRAM_BROWSER")?.issueCode).toBe("BROWSER_HEARTBEAT_MISSING");
+    expect(stage(snapshot, 6, "EGRESS")?.state).toBe("HEALTHY");
+    expect(stage(snapshot, 5, "PROGRAM_BROWSER")?.state).toBe("HEALTHY");
+  });
+
+  it("keeps a required commentary disconnect isolated from camera and peer stages", () => {
+    const plane = controlPlane();
+    plane.courts[6]!.expectation.commentaryExpectation = "REQUIRED";
+    const browsers = healthyBrowsers();
+    const disconnected = browser(7);
+    disconnected.commentary.configured = true;
+    disconnected.commentary.roomConnected = false;
+    browsers.set(7, disconnected);
+    const snapshot = buildMonitorSnapshot(targets, healthyRuntimes(mediaAgent()), 8, nowMs, [], browsers, plane, youtube());
+    expect(criticalCourts(snapshot)).toEqual([7]);
+    expect(stage(snapshot, 7, "COMMENTARY")?.issueCode).toBe("COMMENTARY_ROOM_DISCONNECTED");
+    expect(stage(snapshot, 7, "RAW_INGEST")?.state).toBe("HEALTHY");
+    expect(stage(snapshot, 8, "COMMENTARY")?.state).toBe("NOT_APPLICABLE");
+  });
+
+  it.each([
+    ["muted", { mutedAudioTrackCount: 1 }, "COMMENTARY_TRACK_MUTED"],
+    ["clipping", { clippedSampleRatio: 0.1 }, "COMMENTARY_AUDIO_CLIPPING"],
+    ["silence", { secondsSinceAudio: 61 }, "COMMENTARY_AUDIO_SILENT"],
+    ["jitter", { jitterBufferMs: 301 }, "COMMENTARY_JITTER_HIGH"],
+    ["unlocked sync", { syncStatus: "calibrating" as const }, "COMMENTARY_SYNC_UNLOCKED"]
+  ])("classifies %s commentary without blaming the camera or peers", (_name, patch, issueCode) => {
+    const plane = controlPlane();
+    plane.courts[0]!.expectation.commentaryExpectation = "REQUIRED";
+    const browsers = healthyBrowsers();
+    const affected = browser(1);
+    Object.assign(affected.commentary, {
+      configured: true,
+      roomConnected: true,
+      participantCount: 1,
+      audioTrackCount: 1,
+      mutedAudioTrackCount: 0,
+      rmsDb: -24,
+      peakDb: -8,
+      clippedSampleRatio: 0,
+      secondsSinceAudio: 0,
+      packetsLost: 0,
+      packetsReceived: 1_000,
+      jitterBufferMs: 20,
+      syncStatus: "locked",
+      configuredDelayMs: 1_000,
+      targetDelayMs: 1_000,
+      appliedDelayMs: 1_000,
+      clockRttMs: 20,
+      syncSampleAgeMs: 100,
+      ...patch
+    });
+    browsers.set(1, affected);
+    const snapshot = buildMonitorSnapshot(targets, healthyRuntimes(mediaAgent()), 8, nowMs, [], browsers, plane, youtube());
+    expect(stage(snapshot, 1, "COMMENTARY")?.issueCode).toBe(issueCode);
+    expect(stage(snapshot, 1, "RAW_INGEST")?.state).toBe("HEALTHY");
+    expect(stage(snapshot, 2, "COMMENTARY")?.state).toBe("NOT_APPLICABLE");
+  });
+
+  it("keeps a definitive YouTube failure isolated from healthy upstream stages and peers", () => {
+    const provider = youtube();
+    provider.courts[3]!.state = "CRITICAL";
+    provider.courts[3]!.healthStatus = "bad";
+    provider.courts[3]!.configurationIssues = ["videoIngestionNotAvailable"];
+    const snapshot = buildMonitorSnapshot(targets, healthyRuntimes(mediaAgent()), 8, nowMs, [], healthyBrowsers(), controlPlane(), provider);
+    expect(criticalCourts(snapshot)).toEqual([4]);
+    expect(stage(snapshot, 4, "YOUTUBE")?.issueCode).toBe("YOUTUBE_STREAM_UNHEALTHY");
+    expect(stage(snapshot, 4, "PROGRAM_PATH")?.state).toBe("HEALTHY");
+    expect(stage(snapshot, 3, "YOUTUBE")?.state).toBe("HEALTHY");
   });
 
   it("limits a compositor failure to its assigned court pair", () => {
@@ -150,7 +273,7 @@ function compositorAgent(agentId: string, assignedCourts: number[]): AgentSnapsh
     nativeServices: {
       endpoints: [{ service: "egress-metrics", up: true }, { service: "egress-health", up: true }],
       livekit: null,
-      egress: { idle: true, canAcceptRequest: true, nativeCanAcceptRequest: true, activeWebRequests: 0, maximumWebRequests: 1, cgroupMemoryBytes: 750_000_000, cpuLoadRatio: 0.3, memoryLoadRatio: 0.2 }
+      egress: { idle: false, canAcceptRequest: false, nativeCanAcceptRequest: true, activeWebRequests: 2, maximumWebRequests: 2, cgroupMemoryBytes: 750_000_000, cpuLoadRatio: 0.3, memoryLoadRatio: 0.2 }
     }
   };
 }
