@@ -139,6 +139,20 @@ production.
 
 ## Remaining external blockers
 
+The disposable infrastructure control plane passed its one-Droplet lifecycle
+canary on 2026-07-15 at tested SHA `9998992c`: live resize down/up, snapshot,
+reconstruction on a different Droplet ID, stable endpoint reassignment,
+authoritative and recursive DNS convergence, and exact cleanup all passed. The
+dedicated token's snapshot read/delete scopes are therefore proven by provider
+behavior, not inferred from configuration. See
+`docs/monitoring-gates/2026-07-15-event-infrastructure-lifecycle.md`.
+
+That PASS does not close the eight-output gate. The immutable 12-Droplet
+rehearsal bundle is prepared, but the DigitalOcean limit remained 10 after a
+request for 19 was submitted. The full rehearsal must remain fail-closed until
+the live account limit can admit all 12 temporary resources beside the seven
+baseline Droplets.
+
 ScoreCheck Pushover and both Healthchecks checks are configured. Healthchecks
 has one Pushover integration attached exactly to the baseline and active checks,
 with the unused legacy check left email-only. The remaining provider and
