@@ -40,6 +40,12 @@ describe("native Prometheus metric parsing", () => {
     });
     expect(parseEgressMetrics(egressMetrics, 2).canAcceptRequest).toBe(true);
     expect(() => parseEgressMetrics(egressMetrics.replace(/\nlivekit_egress_requests[^\n]+/, ""), 1)).toThrow(/Required Egress state metrics/);
+    expect(parseEgressMetrics(
+      egressMetrics
+        .replace('livekit_egress_available{node_id="egress"} 0', 'livekit_egress_available{node_id="egress"} 1')
+        .replace(/\nlivekit_egress_requests[^\n]+/, ""),
+      1
+    )).toMatchObject({ idle: true, activeWebRequests: 0, maximumWebRequests: 1, canAcceptRequest: true });
     expect(() => parseEgressMetrics(egressMetrics.replace('type="web"} 1', 'type="web"} 1.5'), 1)).toThrow(/Required Egress state metrics/);
     expect(() => parseEgressMetrics(egressMetrics.replace('type="web"} 1', 'type="web"} -1'), 1)).toThrow(/Required Egress state metrics/);
   });

@@ -202,8 +202,10 @@ async function collectEgress(url: string | null, maximumWebRequests: number, err
 export function parseEgressMetrics(text: string, maximumWebRequests: number) {
   const idle = metricValue(text, "livekit_egress_available");
   const nativeCanAccept = metricValue(text, "livekit_egress_can_accept_request");
-  const activeWebRequests = metricValue(text, "livekit_egress_requests", { type: "web" });
-  if (idle == null || nativeCanAccept == null || activeWebRequests == null || !Number.isInteger(activeWebRequests) || activeWebRequests < 0) throw new Error("Required Egress state metrics are unavailable.");
+  if (idle == null || nativeCanAccept == null) throw new Error("Required Egress state metrics are unavailable.");
+  const reportedActiveWebRequests = metricValue(text, "livekit_egress_requests", { type: "web" });
+  const activeWebRequests = reportedActiveWebRequests ?? (idle > 0 ? 0 : null);
+  if (activeWebRequests == null || !Number.isInteger(activeWebRequests) || activeWebRequests < 0) throw new Error("Required Egress state metrics are unavailable.");
   return {
     idle: idle > 0,
     canAcceptRequest: nativeCanAccept > 0 && activeWebRequests < maximumWebRequests,
