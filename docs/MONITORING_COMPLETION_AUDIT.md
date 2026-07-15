@@ -194,6 +194,14 @@ the generated 1280x720/30 H.264 + AAC stream was locally probed at about 2.58
 Mbps. This is prepared test tooling, not evidence that any remaining real fault
 row has passed.
 
+The operator path now uses a pinned, source-hashed container after live baseline
+qualification exposed that the local macOS FFmpeg lacked SRT support. Capability
+preflight rejects that host before publication, and publisher containment is
+bounded to one restart with regression coverage. A subsequent Camera 4 SRT
+baseline published, remained healthy, and retired cleanly without arming a gate
+or creating an incident. That validates the runner baseline and cleanup only;
+the phone-visible Camera 4 fault row remains pending.
+
 1. Prove Pushover acknowledgement and Healthchecks withheld-ping recovery in a
    scheduled operator-visible window.
 2. Use test feeds to inject the remaining real rows: full-bitrate freeze,

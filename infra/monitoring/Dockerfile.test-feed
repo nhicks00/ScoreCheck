@@ -1,0 +1,21 @@
+FROM node:22.23.1-alpine3.24@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2
+
+ARG SCORECHECK_TEST_FEED_SOURCE_SHA=unknown
+ARG CA_CERTIFICATES_VERSION=20260611-r0
+ARG FFMPEG_VERSION=8.1.2-r0
+LABEL org.opencontainers.image.title="ScoreCheck test-feed publisher" \
+      org.opencontainers.image.source-sha="${SCORECHECK_TEST_FEED_SOURCE_SHA}"
+
+RUN apk add --no-cache \
+      "ca-certificates=${CA_CERTIFICATES_VERSION}" \
+      "ffmpeg=${FFMPEG_VERSION}" \
+  && ffmpeg -hide_banner -protocols 2>/dev/null | awk '$1 == "srt" { found=1 } END { exit(found ? 0 : 1) }' \
+  && ffmpeg -hide_banner -protocols 2>/dev/null | awk '$1 == "rtmp" { found=1 } END { exit(found ? 0 : 1) }' \
+  && ffmpeg -hide_banner -encoders 2>/dev/null | awk '$2 == "libx264" { found=1 } END { exit(found ? 0 : 1) }' \
+  && ffmpeg -hide_banner -encoders 2>/dev/null | awk '$2 == "aac" { found=1 } END { exit(found ? 0 : 1) }'
+
+WORKDIR /app
+COPY --chown=node:node run-test-feed-fault.mjs /app/run-test-feed-fault.mjs
+
+USER node
+ENTRYPOINT ["node", "/app/run-test-feed-fault.mjs"]

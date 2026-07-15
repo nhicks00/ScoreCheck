@@ -6,9 +6,13 @@ import { describe, expect, it } from "vitest";
 const deployPath = fileURLToPath(new URL("../deploy.sh", import.meta.url));
 const remoteDeployPath = fileURLToPath(new URL("../remote-deploy.sh", import.meta.url));
 const dockerignorePath = fileURLToPath(new URL("../.dockerignore", import.meta.url));
+const testFeedDockerfilePath = fileURLToPath(new URL("../Dockerfile.test-feed", import.meta.url));
+const testFeedRunnerPath = fileURLToPath(new URL("../run-test-feed-container.sh", import.meta.url));
 const deploy = readFileSync(deployPath, "utf8");
 const remoteDeploy = readFileSync(remoteDeployPath, "utf8");
 const dockerignore = readFileSync(dockerignorePath, "utf8");
+const testFeedDockerfile = readFileSync(testFeedDockerfilePath, "utf8");
+const testFeedRunner = readFileSync(testFeedRunnerPath, "utf8");
 
 describe("staged observability deployment", () => {
   it("keeps both shell entrypoints syntactically valid", () => {
@@ -27,12 +31,35 @@ describe("staged observability deployment", () => {
     expect(dockerignore.trim().split("\n")).toEqual([
       "**",
       "!Dockerfile",
+      "!Dockerfile.test-feed",
       "!package.json",
       "!package-lock.json",
       "!tsconfig.json",
+      "!run-test-feed-fault.mjs",
       "!src/",
       "!src/**"
     ]);
+  });
+
+  it("runs test feeds in a source-pinned least-privilege container", () => {
+    const syntax = spawnSync("bash", ["-n", testFeedRunnerPath], { encoding: "utf8" });
+    expect(syntax.status, syntax.stderr).toBe(0);
+    expect(testFeedDockerfile).toMatch(/^FROM node:[^\n]+@sha256:[a-f0-9]{64}$/m);
+    expect(testFeedDockerfile).toContain('ARG FFMPEG_VERSION=8.1.2-r0');
+    expect(testFeedDockerfile).toContain('"ffmpeg=${FFMPEG_VERSION}"');
+    expect(testFeedDockerfile).toContain('USER node');
+    expect(testFeedDockerfile).toContain('ENTRYPOINT ["node", "/app/run-test-feed-fault.mjs"]');
+    expect(testFeedRunner).toContain('--read-only');
+    expect(testFeedRunner).toContain('--cap-drop ALL');
+    expect(testFeedRunner).toContain('--security-opt no-new-privileges');
+    expect(testFeedRunner).toContain('--pids-limit 128');
+    expect(testFeedRunner).toContain('--memory 1536m');
+    expect(testFeedRunner).toContain('--cpus 2');
+    expect(testFeedRunner).toContain('mktemp -d "$output_dir/.scorecheck-test-feed.XXXXXX"');
+    expect(testFeedRunner).toContain('--mount "type=bind,src=$run_dir,dst=/evidence"');
+    expect(testFeedRunner).toContain('ln "$run_output" "$output"');
+    expect(testFeedRunner).toContain('docker_args+=(--env "$name")');
+    expect(testFeedRunner).not.toMatch(/--env-file|--privileged|--network host/);
   });
 
   it("rejects topology changes before any image build or runtime cutover", () => {

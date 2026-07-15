@@ -1,7 +1,9 @@
 **
 !Dockerfile
+!Dockerfile.test-feed
 !package.json
 !package-lock.json
 !tsconfig.json
+!run-test-feed-fault.mjs
 !src/
 !src/**

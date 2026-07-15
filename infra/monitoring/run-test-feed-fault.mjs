@@ -18,6 +18,8 @@ const MAX_SNAPSHOT_AGE_MS = 15_000;
 const MIN_GATE_REMAINING_MS = 120_000;
 const SNAPSHOT_INTERVAL_MS = 2_000;
 const AUDIT_SAMPLE_INTERVAL_MS = 10_000;
+const FFMPEG_CAPABILITY_TIMEOUT_MS = 10_000;
+const MAX_CAPABILITY_OUTPUT_BYTES = 1_000_000;
 
 export const TEST_FEED_SCENARIOS = Object.freeze({
   freeze: Object.freeze({ profile: "PROGRAM_CONTENT", expectedIssue: "FULL_BITRATE_VISUAL_FREEZE", mode: "freeze", requiresBrowser: true }),
@@ -189,7 +191,28 @@ export function publisherConfiguration({ courtNumber, host, user, password }) {
   return { protocol, args, outputUrl, secrets: [user, password, outputUrl] };
 }
 
-class SyntheticPublisher {
+export function ffmpegCapabilityProblems(protocolOutput, encoderOutput, protocol) {
+  const requiredProtocol = String(protocol ?? "").toLowerCase();
+  if (!new Set(["rtmp", "srt"]).has(requiredProtocol)) throw new Error(`Unsupported publisher protocol ${protocol}.`);
+  const protocols = capabilityNames(protocolOutput);
+  const encoders = capabilityNames(encoderOutput);
+  const problems = [];
+  if (!protocols.has(requiredProtocol)) problems.push(`FFmpeg does not support the required ${requiredProtocol.toUpperCase()} protocol`);
+  if (!encoders.has("libx264")) problems.push("FFmpeg does not provide the required libx264 encoder");
+  if (!encoders.has("aac")) problems.push("FFmpeg does not provide the required AAC encoder");
+  return problems;
+}
+
+export async function assertFfmpegCapabilities(ffmpegPath, protocol, spawnProcess = spawn) {
+  const [protocolOutput, encoderOutput] = await Promise.all([
+    captureProcessOutput(ffmpegPath, ["-hide_banner", "-protocols"], spawnProcess),
+    captureProcessOutput(ffmpegPath, ["-hide_banner", "-encoders"], spawnProcess)
+  ]);
+  const problems = ffmpegCapabilityProblems(protocolOutput, encoderOutput, protocol);
+  if (problems.length) throw new Error(`FFmpeg capability preflight failed: ${problems.join("; ")}. Use the pinned container runner.`);
+}
+
+export class SyntheticPublisher {
   constructor({ ffmpegPath, configuration, onUnexpectedExit }) {
     this.ffmpegPath = ffmpegPath;
     this.configuration = configuration;
@@ -200,6 +223,8 @@ class SyntheticPublisher {
     this.pumpPromise = null;
     this.expectedExit = false;
     this.stderr = "";
+    this.generation = 0;
+    this.failureReportedGeneration = null;
   }
 
   get running() {
@@ -213,8 +238,11 @@ class SyntheticPublisher {
 
   async start() {
     if (this.running) return;
+    if (this.child) await this.stop();
     this.expectedExit = false;
     this.stderr = "";
+    const generation = ++this.generation;
+    this.failureReportedGeneration = null;
     const child = spawn(this.ffmpegPath, this.configuration.args, { stdio: ["pipe", "ignore", "pipe", "pipe"] });
     this.child = child;
     child.stderr.setEncoding("utf8");
@@ -222,17 +250,17 @@ class SyntheticPublisher {
       this.stderr = `${this.stderr}${chunk}`.slice(-32_768);
     });
     child.once("error", (error) => {
-      if (!this.expectedExit) this.onUnexpectedExit?.(new Error(`FFmpeg could not start: ${error.code ?? "SPAWN_ERROR"}`));
+      this.reportFailure(generation, new Error(`FFmpeg could not start: ${error.code ?? "SPAWN_ERROR"}`));
     });
     child.once("exit", (code, signal) => {
-      if (!this.expectedExit) this.onUnexpectedExit?.(new Error(`FFmpeg exited unexpectedly (${signal ?? code ?? "unknown"}).`));
+      this.reportFailure(generation, new Error(`FFmpeg exited unexpectedly (${signal ?? code ?? "unknown"}).`));
     });
     const audio = child.stdio[3];
     if (!child.stdin || !audio || typeof audio.write !== "function") throw new Error("FFmpeg media pipes are unavailable.");
     this.pumpController = new AbortController();
     this.pumpPromise = pumpSyntheticMedia(child.stdin, audio, () => this.mode, this.pumpController.signal)
       .catch((error) => {
-        if (!this.expectedExit && error?.code !== "EPIPE" && error?.name !== "AbortError") this.onUnexpectedExit?.(error);
+        if (error?.code !== "EPIPE" && error?.name !== "AbortError") this.reportFailure(generation, error);
       });
     await once(child, "spawn");
   }
@@ -263,6 +291,48 @@ class SyntheticPublisher {
     let value = this.stderr;
     for (const secret of this.configuration.secrets) value = value.split(secret).join("[REDACTED]");
     return value.trim().slice(-2_000);
+  }
+
+  reportFailure(generation, error) {
+    if (this.expectedExit || generation !== this.generation || this.failureReportedGeneration === generation) return;
+    this.failureReportedGeneration = generation;
+    this.onUnexpectedExit?.(error);
+  }
+}
+
+function capabilityNames(output) {
+  return new Set(String(output ?? "")
+    .split(/\r?\n/)
+    .flatMap((line) => line.trim().split(/\s+/))
+    .filter((value) => /^[a-zA-Z0-9_.-]+$/.test(value)));
+}
+
+async function captureProcessOutput(command, args, spawnProcess) {
+  const child = spawnProcess(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+  let output = "";
+  let settled = false;
+  const append = (chunk) => {
+    if (output.length >= MAX_CAPABILITY_OUTPUT_BYTES) return;
+    output = `${output}${chunk}`.slice(0, MAX_CAPABILITY_OUTPUT_BYTES);
+  };
+  child.stdout?.setEncoding("utf8");
+  child.stderr?.setEncoding("utf8");
+  child.stdout?.on("data", append);
+  child.stderr?.on("data", append);
+  const timer = setTimeout(() => {
+    if (!settled) child.kill("SIGKILL");
+  }, FFMPEG_CAPABILITY_TIMEOUT_MS);
+  try {
+    const [code, signal] = await once(child, "exit");
+    settled = true;
+    if (code !== 0) throw new Error(`FFmpeg capability command failed (${signal ?? code ?? "unknown"}).`);
+    return output;
+  } catch (error) {
+    settled = true;
+    if (error?.code === "ENOENT") throw new Error("FFmpeg executable was not found.");
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -312,7 +382,7 @@ class ProtectedAuditLog {
   }
 }
 
-class TestFeedController {
+export class TestFeedController {
   constructor(options, dependencies) {
     this.options = options;
     this.scenario = TEST_FEED_SCENARIOS[options.scenario];
@@ -325,6 +395,9 @@ class TestFeedController {
     this.watchPromise = null;
     this.safetyReason = null;
     this.publisherRecoveryRunning = false;
+    this.publisherRestartAttempts = 0;
+    this.abortController = new AbortController();
+    this.sleep = dependencies.sleep ?? sleep;
   }
 
   async start() {
@@ -336,7 +409,7 @@ class TestFeedController {
     const baseline = await waitForSnapshot(this.fetchSnapshot, (snapshot, receivedAt) => {
       const result = publishingBaselineProblems(snapshot, this.options.courtNumber, this.publisher.configuration.protocol, receivedAt);
       return result.length === 0;
-    }, 45_000);
+    }, 45_000, this.abortController.signal);
     this.latestSnapshot = baseline.snapshot;
     this.phase = "BASELINE_READY";
     await this.audit.write({ kind: "transition", transition: "BASELINE_READY", at: new Date(baseline.receivedAt).toISOString(), snapshot: snapshotSummary(baseline.snapshot, this.options.courtNumber) }, true);
@@ -460,15 +533,33 @@ class TestFeedController {
   async publisherFailed(error) {
     if (this.stopRequested || this.phase === "STOPPED" || this.publisherRecoveryRunning) return;
     this.publisherRecoveryRunning = true;
+    const phaseAtFailure = this.phase;
     const reason = `the synthetic publisher exited unexpectedly (${safeErrorCode(error)})`;
     this.safetyReason = reason;
     this.phase = "SAFETY_HOLD";
     this.publisher.setMode("normal");
-    await this.audit.write({ kind: "transition", transition: "PUBLISHER_RESTART", at: nowIso(), reason }, true).catch(() => undefined);
+    if (this.publisherRestartAttempts >= 1) {
+      await this.audit.write({ kind: "transition", transition: "PUBLISHER_RESTART_LIMIT_REACHED", at: nowIso(), reason }, true).catch(() => undefined);
+      await this.publisher.stop().catch(() => undefined);
+      this.abortController.abort(new Error("The synthetic publisher exceeded its one-restart containment limit."));
+      process.stderr.write("SAFETY HOLD: the synthetic publisher failed again after its single containment restart; it was stopped.\n");
+      this.publisherRecoveryRunning = false;
+      return;
+    }
+    this.publisherRestartAttempts += 1;
+    await this.audit.write({ kind: "transition", transition: "PUBLISHER_RESTART", at: nowIso(), reason, attempt: this.publisherRestartAttempts }, true).catch(() => undefined);
     try {
       await this.publisher.start();
+      await this.sleep(750);
+      if (!this.publisher.running) throw new Error("The containment publisher did not remain running.");
       process.stderr.write("SAFETY HOLD: the synthetic publisher exited unexpectedly and was restarted in normal mode. Verify raw health, then disarm and STOP.\n");
-    } catch {
+      if (phaseAtFailure === "STARTING") {
+        this.abortController.abort(new Error("The synthetic publishing baseline was interrupted and is not admissible."));
+      }
+    } catch (restartError) {
+      await this.publisher.stop().catch(() => undefined);
+      await this.audit.write({ kind: "transition", transition: "PUBLISHER_RESTART_FAILED", at: nowIso(), reason, code: safeErrorCode(restartError) }, true).catch(() => undefined);
+      this.abortController.abort(new Error("The synthetic publisher containment restart failed."));
       process.stderr.write("SAFETY HOLD: the synthetic publisher exited unexpectedly and automatic normal-feed restart failed.\n");
     } finally {
       this.publisherRecoveryRunning = false;
@@ -634,10 +725,11 @@ function snapshotSummary(snapshot, courtNumber) {
   };
 }
 
-async function waitForSnapshot(fetchSnapshot, predicate, timeoutMs) {
+async function waitForSnapshot(fetchSnapshot, predicate, timeoutMs, signal = null) {
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
   while (Date.now() <= deadline) {
+    if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("Monitoring wait was aborted.");
     const receivedAt = Date.now();
     try {
       const snapshot = await fetchSnapshot();
@@ -734,6 +826,14 @@ async function main() {
     }
   });
   try {
+    await assertFfmpegCapabilities(options.ffmpegPath, configuration.protocol);
+    await audit.write({
+      kind: "preflight",
+      at: nowIso(),
+      ffmpegCapabilities: "VERIFIED",
+      protocol: configuration.protocol,
+      runner: runnerProvenance(process.env)
+    }, true);
     controller = new TestFeedController(options, {
       fetchSnapshot: () => loadSnapshot(options.apiBase, token),
       publisher,
@@ -765,6 +865,19 @@ async function main() {
       await audit.close();
     }
   }
+}
+
+function runnerProvenance(environment) {
+  const hash = (name) => {
+    const value = environment[name];
+    return typeof value === "string" && /^[a-f0-9]{64}$/.test(value) ? value : null;
+  };
+  const imageId = environment.SCORECHECK_TEST_FEED_IMAGE_ID;
+  return {
+    containerImageId: typeof imageId === "string" && /^sha256:[a-f0-9]{64}$/.test(imageId) ? imageId : null,
+    imageSourceSha256: hash("SCORECHECK_TEST_FEED_SOURCE_SHA"),
+    wrapperSha256: hash("SCORECHECK_TEST_FEED_WRAPPER_SHA")
+  };
 }
 
 const invokedPath = process.argv[1] ? resolve(process.argv[1]) : null;

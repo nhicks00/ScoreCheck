@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
+import { setTimeout as sleep } from "node:timers/promises";
 import {
+  SyntheticPublisher,
+  TestFeedController,
   createAudioChunk,
   createVideoFrame,
   faultReadyProblems,
+  ffmpegCapabilityProblems,
   parseTestFeedArgs,
   publisherConfiguration,
   publishingBaselineProblems,
@@ -97,6 +104,81 @@ describe("test-feed fault controller", () => {
     assert.match(srt.args.at(-1), /^srt:\/\//);
     assert.match(srt.args.at(-1), /streamid=publish:court4_raw/);
     assert.throws(() => publisherConfiguration({ courtNumber: 4, host: "media.example.test;rm", user: "publisher", password: "secret123" }), /host name/);
+  });
+
+  it("fails capability preflight when the selected FFmpeg cannot publish the required protocol", () => {
+    const encoders = " V..... libx264 H.264 encoder\n A..... aac AAC encoder\n";
+    assert.deepEqual(ffmpegCapabilityProblems("Input:\n rtmp\n srt\n", encoders, "SRT"), []);
+    assert.deepEqual(ffmpegCapabilityProblems("Input:\n rtmp\n", encoders, "SRT"), [
+      "FFmpeg does not support the required SRT protocol"
+    ]);
+    assert.deepEqual(ffmpegCapabilityProblems("Input:\n srt\n", " A..... aac AAC encoder\n", "SRT"), [
+      "FFmpeg does not provide the required libx264 encoder"
+    ]);
+  });
+
+  it("reports an exited publisher only once per child generation", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "scorecheck-test-feed-"));
+    const executable = join(directory, "fail-publisher");
+    await writeFile(executable, "#!/bin/sh\nexit 8\n");
+    await chmod(executable, 0o755);
+    const failures = [];
+    const publisher = new SyntheticPublisher({
+      ffmpegPath: executable,
+      configuration: { args: [], secrets: [] },
+      onUnexpectedExit: (error) => failures.push(error.message)
+    });
+    try {
+      await publisher.start();
+      await sleep(100);
+      assert.equal(failures.length, 1);
+      await publisher.start();
+      await sleep(100);
+      assert.equal(failures.length, 2);
+    } finally {
+      await publisher.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("permits only one containment restart across repeated publisher failures", async () => {
+    const rows = [];
+    const publisher = {
+      configuration: { protocol: "SRT" },
+      running: true,
+      startCount: 0,
+      stopCount: 0,
+      setMode() {},
+      async start() {
+        this.startCount += 1;
+        this.running = true;
+      },
+      async stop() {
+        this.stopCount += 1;
+        this.running = false;
+      }
+    };
+    const controller = new TestFeedController(
+      { courtNumber: 4, scenario: "publisher-loss" },
+      {
+        fetchSnapshot: async () => ({}),
+        publisher,
+        audit: { write: async (row) => rows.push(row) },
+        sleep: async () => undefined
+      }
+    );
+    controller.phase = "BASELINE_READY";
+
+    await controller.publisherFailed(new Error("first failure"));
+    assert.equal(publisher.startCount, 1);
+    assert.equal(controller.publisherRestartAttempts, 1);
+    assert.equal(rows.filter((row) => row.transition === "PUBLISHER_RESTART").length, 1);
+
+    await controller.publisherFailed(new Error("second failure"));
+    assert.equal(publisher.startCount, 1);
+    assert.equal(publisher.stopCount, 1);
+    assert.equal(rows.filter((row) => row.transition === "PUBLISHER_RESTART_LIMIT_REACHED").length, 1);
+    assert.equal(controller.abortController.signal.aborted, true);
   });
 });
 

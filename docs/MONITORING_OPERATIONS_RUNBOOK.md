@@ -407,11 +407,19 @@ For real camera-content faults on an otherwise unused direct-publisher Camera
 physical camera or MediaMTX configuration:
 
 ```bash
-./infra/monitoring/run-test-feed-fault.mjs \
+./infra/monitoring/run-test-feed-container.sh \
   --court 4 \
   --scenario freeze \
   --output "$HOME/.config/scorecheck/fault-evidence/camera4-feed-$(date -u +%Y%m%dT%H%M%SZ).jsonl"
 ```
+
+The container wrapper is the required operator path. It builds a source-hashed,
+read-only image from the pinned Node base, verifies SRT, RTMP, H.264, and AAC
+support at build time, drops Linux capabilities, applies CPU/memory/PID limits,
+and records the image, source, and wrapper hashes in the protected evidence.
+The underlying Node script also fails closed before publishing when a directly
+selected host FFmpeg lacks any required capability; direct execution is for
+development diagnostics, not a live fault gate.
 
 The controller loads publishing credentials only from protected
 `MEDIAMTX_PUBLIC_HOST`, `MEDIAMTX_COURT_N_PUBLISH_USER`, and
@@ -430,7 +438,10 @@ Available scenarios are `freeze`, `black`, `camera-silence`, and
 normal feed running through durable recovery, disarm the gate, and enter
 `STOP`. `STOP` is refused while a gate or incident remains active. Terminal
 input loss restores and holds the normal feed until the bounded gate has ended
-instead of creating another camera outage.
+instead of creating another camera outage. An unexpected publisher exit gets
+one normal-feed containment restart. A failed retry or any later exit stops the
+publisher and records the bounded safety failure instead of creating an
+unbounded restart loop.
 
 Every alert opened from this override carries `expectation_source=fault_gate`
 and a plain-English `TEST` notification title. Restore and verify the raw
