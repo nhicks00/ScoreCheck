@@ -99,7 +99,7 @@ read_json_env_value() {
   local encoded
   encoded="$(grep -m 1 -E "^${name}=" "$file" | cut -d= -f2-)" || return 1
   if [[ "${encoded:0:1}" == '"' ]]; then
-    printf '%s\n' "$encoded" | jq -er 'fromjson | select(type == "string" and length > 0)'
+    printf '%s\n' "$encoded" | jq -Rer 'fromjson | select(type == "string" and length > 0)'
     return
   fi
   # The first staged cutover may encounter the former raw hostname format.

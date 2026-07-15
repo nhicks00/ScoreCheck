@@ -71,11 +71,19 @@ describe("staged observability deployment", () => {
     expect(remoteDeploy).not.toMatch(/(^|\n)\s*\.\s+"?\$REMOTE_DIR\/\.env"?/);
     expect(remoteDeploy).not.toContain("source \"$REMOTE_DIR/.env\"");
     expect(remoteDeploy).toContain("read_json_env_value");
-    expect(remoteDeploy).toContain("jq -er 'fromjson");
+    expect(remoteDeploy).toContain("jq -Rer 'fromjson");
     expect(remoteDeploy).toContain('"$name" == "MONITOR_PUBLIC_HOST"');
     expect(remoteDeploy).toContain('"$encoded" =~ ^[A-Za-z0-9.-]+(:[0-9]+)?$');
     expect(remoteDeploy).toContain("assert_public_health");
     expect(remoteDeploy).toContain("assert_control_plane_ready");
+
+    const decoded = spawnSync(
+      "jq",
+      ["-Rer", 'fromjson | select(type == "string" and length > 0)'],
+      { input: '"monitor.beachvolleyballmedia.com"\n', encoding: "utf8" }
+    );
+    expect(decoded.status, decoded.stderr).toBe(0);
+    expect(decoded.stdout.trim()).toBe("monitor.beachvolleyballmedia.com");
   });
 
   it("restores runtime and source provenance when a staged cutover fails", () => {
