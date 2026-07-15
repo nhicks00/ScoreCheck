@@ -200,11 +200,12 @@ HEALTHCHECKS_ACTIVE_CHECK_ID
 
 Store them only in the protected monitoring environment on the observability
 host and in the protected local deployment file. Never commit them. Pushover
-and both Healthchecks checks are configured in production. Twilio API
-credentials and a sender are available, but escalation remains disabled until
-the sender's A2P registration is approved and an actual test message reaches the
-destination. A `30034` result means the sender is still unregistered and must
-remain disabled. The baseline
+and both Healthchecks checks are configured in production. As of 2026-07-14,
+Twilio SMS remains disabled: the purchased sender has messaging disabled, A2P
+brand registration has not been submitted, and campaign registration cannot
+start. Do not enable escalation until both registrations are approved and an
+actual test message reaches the destination. A `30034` result means the sender
+is still unregistered and must remain disabled. The baseline
 dead-man pings every ten minutes at all times. The active check pings every minute
 while any court expects coverage and is explicitly paused through the Healthchecks
 management API while the system is idle. A live ping resumes it automatically.
@@ -223,7 +224,8 @@ Provider activation is not accepted until all of these pass:
 2. Unacknowledged Pushover escalates to one Twilio SMS after two minutes.
 3. Recovery sends once and cancels any active emergency receipt.
 4. Baseline and active dead-man checks both alert when their pings are withheld.
-5. The dashboard shows provider failure as degraded notification health.
+5. The dashboard shows Push and SMS independently, and degrades phone-alert
+   readiness when either required provider is missing or failed.
 
 ## Deployment and verification
 
