@@ -1,5 +1,5 @@
 import { Counter, Gauge, Registry } from "prom-client";
-import type { AgentSnapshot } from "./contracts.js";
+import type { AgentSnapshot, FfmpegBranchSnapshot } from "./contracts.js";
 
 export class AgentMetrics {
   readonly registry = new Registry();
@@ -40,6 +40,7 @@ export class AgentMetrics {
   private readonly ffmpegDropped = new Gauge({ name: "scorecheck_ffmpeg_dropped_frames", help: "FFmpeg branch cumulative dropped frames for the current process.", labelNames: ["agent", "court", "branch"], registers: [this.registry] });
   private readonly ffmpegDuplicated = new Gauge({ name: "scorecheck_ffmpeg_duplicated_frames", help: "FFmpeg branch cumulative duplicated frames for the current process.", labelNames: ["agent", "court", "branch"], registers: [this.registry] });
   private readonly ffmpegSpeed = new Gauge({ name: "scorecheck_ffmpeg_speed_ratio", help: "FFmpeg processing speed where one equals real time.", labelNames: ["agent", "court", "branch"], registers: [this.registry] });
+  private readonly ffmpegSpeedAvailable = new Gauge({ name: "scorecheck_ffmpeg_speed_available", help: "Whether FFmpeg speed is reported or derived from consecutive output timestamps.", labelNames: ["agent", "court", "branch"], registers: [this.registry] });
   private readonly nativeEndpointUp = new Gauge({ name: "scorecheck_native_endpoint_up", help: "Whether an allowlisted local native metrics or health endpoint is reachable.", labelNames: ["agent", "role", "service"], registers: [this.registry] });
   private readonly livekitRooms = new Gauge({ name: "scorecheck_livekit_rooms", help: "Current LiveKit room count.", labelNames: ["agent"], registers: [this.registry] });
   private readonly livekitParticipants = new Gauge({ name: "scorecheck_livekit_participants", help: "Current LiveKit participant count.", labelNames: ["agent"], registers: [this.registry] });
@@ -49,10 +50,14 @@ export class AgentMetrics {
   private readonly egressIdle = new Gauge({ name: "scorecheck_egress_idle", help: "Whether the Egress worker currently has no active request.", labelNames: ["agent"], registers: [this.registry] });
   private readonly egressMetricsValid = new Gauge({ name: "scorecheck_egress_metrics_valid", help: "Whether required Egress state metrics were collected successfully.", labelNames: ["agent"], registers: [this.registry] });
   private readonly egressCanAccept = new Gauge({ name: "scorecheck_egress_can_accept_request", help: "Whether the Egress worker can admit another request.", labelNames: ["agent"], registers: [this.registry] });
+  private readonly egressNativeCanAccept = new Gauge({ name: "scorecheck_egress_native_can_accept_request", help: "Raw LiveKit admission signal before the configured active-request ceiling is enforced.", labelNames: ["agent"], registers: [this.registry] });
+  private readonly egressActiveWebRequests = new Gauge({ name: "scorecheck_egress_active_web_requests", help: "Current active LiveKit web Egress request count.", labelNames: ["agent"], registers: [this.registry] });
+  private readonly egressMaximumWebRequests = new Gauge({ name: "scorecheck_egress_maximum_web_requests", help: "Configured maximum active web Egress requests on the host.", labelNames: ["agent"], registers: [this.registry] });
   private readonly egressCgroupMemory = new Gauge({ name: "scorecheck_egress_cgroup_memory_bytes", help: "Egress worker cgroup memory usage.", labelNames: ["agent"], registers: [this.registry] });
   private readonly egressCpuLoad = new Gauge({ name: "scorecheck_egress_cpu_load_ratio", help: "Egress worker CPU admission load ratio.", labelNames: ["agent"], registers: [this.registry] });
   private readonly egressMemoryLoad = new Gauge({ name: "scorecheck_egress_memory_load_ratio", help: "Egress worker memory admission load ratio.", labelNames: ["agent"], registers: [this.registry] });
   private previousErrors = new Set<string>();
+  private readonly ffmpegSpeedSamples = new Map<string, { sampledAtMs: number; outputTimeMs: number; speedRatio: number | null }>();
 
   update(snapshot: AgentSnapshot) {
     const base = { agent: snapshot.agentId, role: snapshot.role };
@@ -120,7 +125,8 @@ export class AgentMetrics {
       }
     }
 
-    for (const metric of [this.ffmpegProgressFresh, this.ffmpegFps, this.ffmpegBitrate, this.ffmpegDropped, this.ffmpegDuplicated, this.ffmpegSpeed]) metric.reset();
+    this.pruneFfmpegSpeedSamples(snapshot);
+    for (const metric of [this.ffmpegProgressFresh, this.ffmpegFps, this.ffmpegBitrate, this.ffmpegDropped, this.ffmpegDuplicated, this.ffmpegSpeed, this.ffmpegSpeedAvailable]) metric.reset();
     if (snapshot.role === "mediamtx") {
       for (let court = 1; court <= 8; court += 1) {
         for (const branch of ["preview", "program", "calibration", "monitor"] as const) {
@@ -131,6 +137,7 @@ export class AgentMetrics {
           this.ffmpegDropped.set(labels, 0);
           this.ffmpegDuplicated.set(labels, 0);
           this.ffmpegSpeed.set(labels, 0);
+          this.ffmpegSpeedAvailable.set(labels, 0);
         }
       }
     }
@@ -141,7 +148,11 @@ export class AgentMetrics {
       if (branch.bitrateBps != null) this.ffmpegBitrate.set(labels, branch.bitrateBps);
       this.ffmpegDropped.set(labels, branch.droppedFrames);
       this.ffmpegDuplicated.set(labels, branch.duplicatedFrames);
-      if (branch.speedRatio != null) this.ffmpegSpeed.set(labels, branch.speedRatio);
+      const speedRatio = this.observeFfmpegSpeed(snapshot.agentId, branch);
+      if (speedRatio != null) {
+        this.ffmpegSpeed.set(labels, speedRatio);
+        this.ffmpegSpeedAvailable.set(labels, 1);
+      }
     }
 
     this.nativeEndpointUp.reset();
@@ -165,7 +176,7 @@ export class AgentMetrics {
       this.livekitPacketsOut.set(labels, snapshot.nativeServices.livekit.packetsOut);
       this.livekitPacketsDropped.set(labels, snapshot.nativeServices.livekit.packetsDropped);
     }
-    for (const metric of [this.egressIdle, this.egressMetricsValid, this.egressCanAccept, this.egressCgroupMemory, this.egressCpuLoad, this.egressMemoryLoad]) metric.reset();
+    for (const metric of [this.egressIdle, this.egressMetricsValid, this.egressCanAccept, this.egressNativeCanAccept, this.egressActiveWebRequests, this.egressMaximumWebRequests, this.egressCgroupMemory, this.egressCpuLoad, this.egressMemoryLoad]) metric.reset();
     if (snapshot.role === "compositor") {
       this.egressMetricsValid.set({ agent: snapshot.agentId }, snapshot.nativeServices.egress ? 1 : 0);
     }
@@ -173,9 +184,46 @@ export class AgentMetrics {
       const labels = { agent: snapshot.agentId };
       this.egressIdle.set(labels, snapshot.nativeServices.egress.idle ? 1 : 0);
       this.egressCanAccept.set(labels, snapshot.nativeServices.egress.canAcceptRequest ? 1 : 0);
+      this.egressNativeCanAccept.set(labels, snapshot.nativeServices.egress.nativeCanAcceptRequest ? 1 : 0);
+      this.egressActiveWebRequests.set(labels, snapshot.nativeServices.egress.activeWebRequests);
+      this.egressMaximumWebRequests.set(labels, snapshot.nativeServices.egress.maximumWebRequests);
       if (snapshot.nativeServices.egress.cgroupMemoryBytes != null) this.egressCgroupMemory.set(labels, snapshot.nativeServices.egress.cgroupMemoryBytes);
       if (snapshot.nativeServices.egress.cpuLoadRatio != null) this.egressCpuLoad.set(labels, snapshot.nativeServices.egress.cpuLoadRatio);
       if (snapshot.nativeServices.egress.memoryLoadRatio != null) this.egressMemoryLoad.set(labels, snapshot.nativeServices.egress.memoryLoadRatio);
     }
+  }
+
+  private pruneFfmpegSpeedSamples(snapshot: AgentSnapshot): void {
+    const prefix = `${snapshot.agentId}:`;
+    const active = new Set(snapshot.ffmpegBranches.map((branch) => `${prefix}${branch.name}`));
+    for (const key of this.ffmpegSpeedSamples.keys()) {
+      if (key.startsWith(prefix) && !active.has(key)) this.ffmpegSpeedSamples.delete(key);
+    }
+  }
+
+  private observeFfmpegSpeed(agentId: string, branch: FfmpegBranchSnapshot): number | null {
+    const key = `${agentId}:${branch.name}`;
+    const sampledAtMs = Date.parse(branch.sampledAt);
+    const outputTimeMs = branch.outputTimeMs;
+    if (!Number.isFinite(sampledAtMs) || outputTimeMs == null || !Number.isFinite(outputTimeMs)) {
+      this.ffmpegSpeedSamples.delete(key);
+      return branch.speedRatio;
+    }
+
+    const previous = this.ffmpegSpeedSamples.get(key);
+    let speedRatio = branch.speedRatio;
+    if (speedRatio == null && previous) {
+      const elapsedMs = sampledAtMs - previous.sampledAtMs;
+      const outputDeltaMs = outputTimeMs - previous.outputTimeMs;
+      if (elapsedMs === 0 && outputDeltaMs === 0) {
+        speedRatio = previous.speedRatio;
+      } else if (elapsedMs > 0 && outputDeltaMs >= 0) {
+        const derived = outputDeltaMs / elapsedMs;
+        speedRatio = Number.isFinite(derived) && derived >= 0 && derived <= 20 ? derived : null;
+      }
+    }
+
+    this.ffmpegSpeedSamples.set(key, { sampledAtMs, outputTimeMs, speedRatio });
+    return speedRatio;
   }
 }

@@ -22,7 +22,8 @@ const values = {
   MEDIAMTX_METRICS_URL: optionalHttpUrl("MEDIAMTX_METRICS_URL"),
   LIVEKIT_METRICS_URL: optionalHttpUrl("LIVEKIT_METRICS_URL"),
   EGRESS_METRICS_URL: optionalHttpUrl("EGRESS_METRICS_URL"),
-  EGRESS_HEALTH_URL: optionalHttpUrl("EGRESS_HEALTH_URL")
+  EGRESS_HEALTH_URL: optionalHttpUrl("EGRESS_HEALTH_URL"),
+  MONITOR_EGRESS_MAX_WEB_REQUESTS: integer(process.env.MONITOR_EGRESS_MAX_WEB_REQUESTS ?? "1", 1, 32)
 };
 
 await mkdir(outputDirectory, { recursive: true });

@@ -3,13 +3,11 @@
 # page (headless Chrome) and pushes it to YouTube RTMP.
 #
 # Usage:
-#   ./start-court.sh <court-number> [youtube-stream-key]
+#   ./start-court.sh <court-number>
 #
-#   court-number        1-8
-#   youtube-stream-key  optional; defaults to COURT_<N>_YOUTUBE_KEY from .env
+#   court-number  1-8; the stream key is read only from COURT_<N>_YOUTUBE_KEY
 # Examples:
-#   ./start-court.sh 1                          # key from COURT_1_YOUTUBE_KEY
-#   ./start-court.sh 3 abcd-efgh-ijkl-mnop      # explicit key
+#   ./start-court.sh 1
 #
 # Requires the LiveKit CLI (see lib.sh for install commands) and a filled-in
 # ./.env (see .env.example). Writes:
@@ -18,11 +16,16 @@
 #   requests/court-<N>.egress-id  the started egress id, consumed by stop-court.sh
 
 set -euo pipefail
+umask 077
 
 # shellcheck source=lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-COURT="${1:?usage: start-court.sh <court-number> [youtube-stream-key]}"
+COURT="${1:?usage: start-court.sh <court-number>}"
+if (( $# != 1 )); then
+  echo "error: stream keys must come from the protected .env, never command arguments." >&2
+  exit 1
+fi
 if ! [[ "$COURT" =~ ^[0-9]+$ ]]; then
   echo "error: court-number must be an integer, got '$COURT'" >&2
   exit 1
@@ -32,12 +35,51 @@ load_env
 require_livekit_env
 find_lk
 
-# --- resolve inputs: args win over .env -----------------------------------------
+# Serialize the active-list check and start request. This host is qualified for
+# exactly one web Egress; LiveKit's native can-accept metric has oscillated
+# under load, so operator starts also enforce the hard ceiling locally.
+REQ_DIR="$COMPOSITOR_DIR/requests"
+mkdir -p "$REQ_DIR"
+command -v flock >/dev/null 2>&1 || {
+  echo "error: flock is required for serialized Egress admission." >&2
+  exit 1
+}
+command -v jq >/dev/null 2>&1 || {
+  echo "error: jq is required for structured Egress admission checks." >&2
+  exit 1
+}
+exec 9>"$REQ_DIR/start.lock"
+flock -n 9 || {
+  echo "error: another Egress start is already in progress." >&2
+  exit 1
+}
+ACTIVE_FILE="$(mktemp "$REQ_DIR/.active-egress.XXXXXX")"
+ACTIVE_ERROR="$(mktemp "$REQ_DIR/.active-egress-error.XXXXXX")"
+trap 'rm -f "$ACTIVE_FILE" "$ACTIVE_ERROR"' EXIT
+if ! "$LK" egress list --active --json >"$ACTIVE_FILE" 2>"$ACTIVE_ERROR"; then
+  echo "error: could not verify the active Egress count; start rejected." >&2
+  exit 1
+fi
+if ! ACTIVE_COUNT="$(jq -er '
+  if . == null then 0
+  elif type == "array" and all(.[]; (.egress_id | type) == "string") then length
+  else error("unexpected Egress list JSON")
+  end
+' "$ACTIVE_FILE")"; then
+  echo "error: active Egress response was malformed; start rejected." >&2
+  exit 1
+fi
+if (( ACTIVE_COUNT != 0 )); then
+  echo "error: this compositor already has an active Egress; start rejected." >&2
+  exit 1
+fi
+
+# --- resolve protected inputs ---------------------------------------------------
 KEY_VAR="COURT_${COURT}_YOUTUBE_KEY"
-STREAM_KEY="${2:-${!KEY_VAR:-}}"
+STREAM_KEY="${!KEY_VAR:-}"
 if [[ -z "$STREAM_KEY" ]]; then
   echo "error: no YouTube stream key for court $COURT." >&2
-  echo "  pass it as arg 2, or set $KEY_VAR in $COMPOSITOR_DIR/.env" >&2
+  echo "  set $KEY_VAR in $COMPOSITOR_DIR/.env" >&2
   exit 1
 fi
 
@@ -61,8 +103,6 @@ RTMP_URL="${YOUTUBE_RTMPS_BASE}/${STREAM_KEY}"
 # which the program page emits only once its WHEP video + commentary audio are
 # actually up — so we never broadcast a half-loaded scene (plan §3.3).
 # The stream output's protocol is inferred from the rtmps:// URL.
-REQ_DIR="$COMPOSITOR_DIR/requests"
-mkdir -p "$REQ_DIR"
 REQ_FILE="$REQ_DIR/court-${COURT}.json"
 
 cat > "$REQ_FILE" <<EOF
@@ -96,16 +136,22 @@ echo "  page:   ${PROGRAM_PAGE_BASE_URL}/${COURT}?token=<redacted>"
 echo "  rtmps:  ${YOUTUBE_RTMPS_BASE}/<key-redacted>"
 echo "  encode: ${EGRESS_WIDTH}x${EGRESS_HEIGHT}@${EGRESS_FRAMERATE} ${EGRESS_VIDEO_BITRATE}kbps, keyframe ${EGRESS_KEYFRAME_INTERVAL}s"
 
-OUT="$("$LK" egress start --type web "$REQ_FILE")"
-echo "$OUT"
+START_LOG="$REQ_DIR/court-${COURT}.start.log"
+if ! "$LK" egress start --type web "$REQ_FILE" >"$START_LOG" 2>&1; then
+  chmod 600 "$START_LOG"
+  echo "error: Egress start failed; protected diagnostics are in requests/court-${COURT}.start.log." >&2
+  exit 1
+fi
+chmod 600 "$START_LOG"
 
 # lk prints "EgressID: EG_xxxx Status: EGRESS_STARTING" on success; persist the
 # id so stop-court.sh can end this broadcast without a lookup.
-EGRESS_ID="$(grep -oE 'EG_[A-Za-z0-9]+' <<<"$OUT" | head -n1 || true)"
+EGRESS_ID="$(grep -oE 'EG_[A-Za-z0-9]+' "$START_LOG" | head -n1 || true)"
 if [[ -n "$EGRESS_ID" ]]; then
   echo "$EGRESS_ID" > "$REQ_DIR/court-${COURT}.egress-id"
+  rm -f "$START_LOG"
   echo "saved egress id ${EGRESS_ID} -> requests/court-${COURT}.egress-id"
 else
-  echo "warning: could not parse an egress id from the CLI output above;" >&2
-  echo "         find it with ./list-egress.sh and stop with: ./stop-court.sh ${COURT} <EG_...>" >&2
+  echo "error: Egress started but its id could not be parsed; protected diagnostics remain in requests/court-${COURT}.start.log." >&2
+  exit 1
 fi

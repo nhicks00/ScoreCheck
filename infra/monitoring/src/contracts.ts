@@ -129,6 +129,9 @@ export const nativeServiceSnapshotSchema = z.object({
   egress: z.object({
     idle: z.boolean(),
     canAcceptRequest: z.boolean(),
+    nativeCanAcceptRequest: z.boolean(),
+    activeWebRequests: z.number().int().nonnegative(),
+    maximumWebRequests: z.number().int().positive(),
     cgroupMemoryBytes: z.number().nonnegative().nullable(),
     cpuLoadRatio: z.number().nonnegative().nullable(),
     memoryLoadRatio: z.number().nonnegative().nullable()

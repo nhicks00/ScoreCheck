@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "gateId": "court1-c4-end-to-end",
   "court": 1,
   "minimumDurationSeconds": 1800,
@@ -17,6 +17,16 @@
     "audioCodec": "AAC",
     "audioSampleRateHz": 48000,
     "audioChannelCount": 2
+  },
+  "allowedBaselineUnclassified": {
+    "ingest": [
+      {
+        "command": "timeout",
+        "parentCommand": "mediamtx",
+        "cgroupFingerprint": "480b4be510e9d52c"
+      }
+    ],
+    "compositor": []
   },
   "ingest": {
     "agent": "bvm-preview-01",
@@ -41,6 +51,18 @@
     "maximumCpuP95Ratio": 0.75,
     "maximumCpuRatio": 0.8,
     "maximumMemoryGrowthRatio": 0.1,
-    "maximumShmRatio": 0.8
+    "maximumHostSampleGapSeconds": 7.5,
+    "maximumHostSampleLagMs": 250,
+    "maximumShmRatio": 0.8,
+    "maximumZombieWatcherHeartbeatGapSeconds": 2,
+    "maximumZombieWatcherScanGapMs": 250,
+    "maximumZombiePollIntervalMs": 50,
+    "maximumObserverZombieDurationMs": 2000,
+    "maximumObserverZombieEvents": 480,
+    "maximumObserverZombieEventsPerMinute": 16,
+    "maximumWorkloadZombieDurationMs": 500,
+    "maximumWorkloadZombieEvents": 16,
+    "maximumWorkloadZombieEventsPerMinute": 8,
+    "maximumWorkloadConcurrentZombies": 1
   }
 }

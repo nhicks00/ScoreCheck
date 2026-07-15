@@ -33,6 +33,7 @@ describe("monitoring configuration", () => {
     });
     expect(agent.livekitMetricsUrl).toBeNull();
     expect(agent.egressMetricsUrl).toBeNull();
+    expect(agent.egressMaxWebRequests).toBe(1);
 
     const service = loadServiceConfig({
       MONITOR_API_TOKEN: "abcdefghijklmnopqrstuvwxyz",
@@ -120,5 +121,15 @@ describe("monitoring configuration", () => {
       MONITOR_AGENT_TOKEN: "abcdefghijklmnopqrstuvwxyz",
       MONITOR_AGENT_COURTS: "9"
     })).toThrow();
+  });
+
+  it("bounds the compositor web Egress ceiling", () => {
+    const base = {
+      MONITOR_AGENT_ID: "compositor-a",
+      MONITOR_AGENT_ROLE: "compositor",
+      MONITOR_AGENT_TOKEN: "abcdefghijklmnopqrstuvwxyz"
+    };
+    expect(loadAgentConfig({ ...base, MONITOR_EGRESS_MAX_WEB_REQUESTS: "2" }).egressMaxWebRequests).toBe(2);
+    expect(() => loadAgentConfig({ ...base, MONITOR_EGRESS_MAX_WEB_REQUESTS: "0" })).toThrow();
   });
 });

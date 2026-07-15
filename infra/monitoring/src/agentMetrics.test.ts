@@ -13,6 +13,9 @@ describe("agent metrics", () => {
     expect(output).toContain('scorecheck_egress_idle{agent="bvm-compositor-a"} 0');
     expect(output).toContain('scorecheck_egress_metrics_valid{agent="bvm-compositor-a"} 1');
     expect(output).toContain('scorecheck_egress_can_accept_request{agent="bvm-compositor-a"} 1');
+    expect(output).toContain('scorecheck_egress_native_can_accept_request{agent="bvm-compositor-a"} 1');
+    expect(output).toContain('scorecheck_egress_active_web_requests{agent="bvm-compositor-a"} 1');
+    expect(output).toContain('scorecheck_egress_maximum_web_requests{agent="bvm-compositor-a"} 2');
     expect(output).not.toContain("scorecheck_egress_available");
   });
 
@@ -72,7 +75,75 @@ describe("agent metrics", () => {
     expect(output).not.toContain("remoteAddr");
     expect(output).not.toContain("query=");
   });
+
+  it("derives FFmpeg speed from consecutive output timestamps when FFmpeg omits it", async () => {
+    const metrics = new AgentMetrics();
+    const snapshot = mediamtxSnapshot();
+
+    metrics.update(snapshot);
+    let output = await metrics.registry.metrics();
+    expect(output).toContain('scorecheck_ffmpeg_speed_available{agent="bvm-preview-01",court="1",branch="preview"} 0');
+
+    snapshot.ffmpegBranches[0] = {
+      ...snapshot.ffmpegBranches[0]!,
+      sampledAt: "2026-07-12T18:00:05.000Z",
+      frame: 450,
+      outputTimeMs: 15_000
+    };
+    metrics.update(snapshot);
+    output = await metrics.registry.metrics();
+    expect(output).toContain('scorecheck_ffmpeg_speed_ratio{agent="bvm-preview-01",court="1",branch="preview"} 1');
+    expect(output).toContain('scorecheck_ffmpeg_speed_available{agent="bvm-preview-01",court="1",branch="preview"} 1');
+
+    metrics.update(snapshot);
+    output = await metrics.registry.metrics();
+    expect(output).toContain('scorecheck_ffmpeg_speed_ratio{agent="bvm-preview-01",court="1",branch="preview"} 1');
+  });
+
+  it("rebases derived FFmpeg speed after a process timestamp reset", async () => {
+    const metrics = new AgentMetrics();
+    const snapshot = mediamtxSnapshot();
+    metrics.update(snapshot);
+    snapshot.ffmpegBranches[0] = {
+      ...snapshot.ffmpegBranches[0]!,
+      sampledAt: "2026-07-12T18:00:05.000Z",
+      outputTimeMs: 15_000
+    };
+    metrics.update(snapshot);
+    snapshot.ffmpegBranches[0] = {
+      ...snapshot.ffmpegBranches[0]!,
+      sampledAt: "2026-07-12T18:00:10.000Z",
+      outputTimeMs: 1_000
+    };
+
+    metrics.update(snapshot);
+    const output = await metrics.registry.metrics();
+    expect(output).toContain('scorecheck_ffmpeg_speed_available{agent="bvm-preview-01",court="1",branch="preview"} 0');
+    expect(output).toContain('scorecheck_ffmpeg_speed_ratio{agent="bvm-preview-01",court="1",branch="preview"} 0');
+  });
 });
+
+function mediamtxSnapshot(): AgentSnapshot {
+  const snapshot = compositorSnapshot({ idle: true, canAcceptRequest: true });
+  snapshot.agentId = "bvm-preview-01";
+  snapshot.role = "mediamtx";
+  snapshot.assignedCourts = [];
+  snapshot.nativeServices = { endpoints: [], livekit: null, egress: null };
+  snapshot.ffmpegBranches = [{
+    name: "court1_preview",
+    courtNumber: 1,
+    branch: "preview",
+    sampledAt: "2026-07-12T18:00:00.000Z",
+    frame: 300,
+    framesPerSecond: 30,
+    bitrateBps: 2_500_000,
+    outputTimeMs: 10_000,
+    duplicatedFrames: 0,
+    droppedFrames: 0,
+    speedRatio: null
+  }];
+  return snapshot;
+}
 
 function compositorSnapshot(egress: { idle: boolean; canAcceptRequest: boolean }): AgentSnapshot {
   return {
@@ -99,6 +170,9 @@ function compositorSnapshot(egress: { idle: boolean; canAcceptRequest: boolean }
       livekit: null,
       egress: {
         ...egress,
+        nativeCanAcceptRequest: egress.canAcceptRequest,
+        activeWebRequests: egress.idle ? 0 : 1,
+        maximumWebRequests: egress.canAcceptRequest && !egress.idle ? 2 : 1,
         cgroupMemoryBytes: 750_000_000,
         cpuLoadRatio: 0.3,
         memoryLoadRatio: 0.2

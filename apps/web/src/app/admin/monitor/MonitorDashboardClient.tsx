@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StreamPlayer } from "@/components/StreamPlayer";
+import { deriveMonitorBrowserLiveness, type MonitorBrowserLiveness } from "@/lib/monitorBrowserLiveness";
 import type { MonitorCourt, MonitorCourtPipelineRange, MonitorHealthState, MonitorIncident, MonitorMediaPath, MonitorSilence, MonitorSnapshotEnvelope, MonitorStage } from "@/lib/monitoringTypes";
 import { PacingComparator } from "./PacingComparator";
 
@@ -491,7 +492,14 @@ function formatTime(value: string): string {
 function CourtCard({ court, history, selected, nowMs, onSelect }: { court: MonitorCourt; history: MonitorCourtPipelineRange["courts"][number] | null; selected: boolean; nowMs: number; onSelect: () => void }) {
   const browser = court.browser;
   const raw = court.paths.raw;
+  const program = court.paths.program;
   const preview = court.ffmpeg.preview;
+  const browserLiveness = deriveMonitorBrowserLiveness({
+    receivedAt: browser?.receivedAt,
+    programReaderCount: program?.readerCount,
+    nowMs
+  });
+  const liveBrowser = browserLiveness.state === "LIVE" ? browser : null;
   const cameraStage = court.stages.find((stage) => stage.stage === "RAW_INGEST");
   const cameraState = cameraStage?.state ?? "UNKNOWN";
   const productionState = productionPipelineState(court);
@@ -504,12 +512,12 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
     || court.expectation.scoringExpectation !== "NONE");
   const issue = relevantStages.find((stage) => stage.state === "CRITICAL") ?? relevantStages.find((stage) => ["DEGRADED", "UNKNOWN"].includes(stage.state));
   const thumbnailFresh = court.thumbnail && nowMs - Date.parse(court.thumbnail.receivedAt) <= 45_000;
-  const browserLost = browser?.video.packetsLost;
-  const browserReceived = browser?.video.packetsReceived;
+  const browserLost = liveBrowser?.video.packetsLost;
+  const browserReceived = liveBrowser?.video.packetsReceived;
   const loss = browserLost != null && browserReceived != null
     ? percent(browserLost, browserLost + browserReceived)
     : transportLoss(raw);
-  const rttMs = browser?.video.rttMs ?? raw?.transport?.rttMs;
+  const rttMs = liveBrowser?.video.rttMs ?? raw?.transport?.rttMs;
   const rawTrend = history?.rawBitrate ?? [];
   const fpsTrend = history?.programFps.length ? history.programFps : history?.previewFps ?? [];
   return (
@@ -533,13 +541,13 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
       <div className="monitor-metrics">
         <Metric label="Camera bitrate" value={formatBitrate(raw?.inboundBitrateBps)} />
         <Metric label="Preview speed" value={formatFps(preview?.framesPerSecond)} />
-        <Metric label="Rendered speed" value={formatFps(browser?.video.framesPerSecond)} />
-        <Metric label="Picture size" value={browser?.video.width && browser.video.height ? `${browser.video.width}×${browser.video.height}` : "--"} />
+        <Metric label="Rendered speed" value={formatFps(liveBrowser?.video.framesPerSecond)} />
+        <Metric label="Picture size" value={liveBrowser?.video.width && liveBrowser.video.height ? `${liveBrowser.video.width}×${liveBrowser.video.height}` : "--"} />
         <Metric label="Network delay" value={formatMs(rttMs)} />
         <Metric label="Packet loss" value={loss} />
       </div>
       <div className="monitor-trends" aria-label="Five minute trends">
-        <div className="monitor-trends-heading"><strong>Last 5 minutes</strong><div className="monitor-trends-legend"><span className="is-bitrate">Camera bitrate · {formatBitrate(latestPoint(rawTrend))}</span><span className="is-fps">Rendered speed · {formatFps(latestPoint(fpsTrend))}</span></div></div>
+        <div className="monitor-trends-heading"><strong>Last 5 minutes</strong><div className="monitor-trends-legend"><span className="is-bitrate">Camera bitrate · {formatBitrate(latestPoint(rawTrend))}</span><span className="is-fps">{liveBrowser ? "Rendered speed" : "Last rendered speed"} · {formatFps(latestPoint(fpsTrend))}</span></div></div>
         <div className="monitor-trends-plots">
           <Sparkline values={rawTrend} label="Camera bitrate, five minutes" className="is-bitrate" />
           <Sparkline values={fpsTrend} label="Rendered frames per second, five minutes" className="is-fps" fixedMax={30} />
@@ -553,11 +561,11 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
       </div>
       <div className="monitor-court-footer">
         <span className="monitor-source-profile" title={sourceDetail(raw)}><Signal size={14} /> {sourceProfile(raw)}</span>
-        <span><Camera size={14} /> {visualLabel(browser)}</span>
-        <span><Headphones size={14} /> {commentaryLabel(browser)}</span>
+        <span><Camera size={14} /> {visualLabel(liveBrowser)}</span>
+        <span><Headphones size={14} /> {commentaryLabel(liveBrowser)}</span>
         <span><Youtube size={14} /> {friendlyState(court.youtube?.state ?? "NOT_APPLICABLE")}</span>
-        <span title={browserQualityDetail(browser)}><Activity size={14} /> {browserQualityLabel(browser, history)}</span>
-        <span><Gauge size={14} /> {browser ? `${browser.video.reconnectCount} reconnects` : "--"}</span>
+        <span title={browserQualityDetail(liveBrowser)}><Activity size={14} /> {browserQualityLabel(liveBrowser, liveBrowser ? history : null)}</span>
+        <span title={browserLivenessDetail(browserLiveness)}><Gauge size={14} /> {browserLivenessLabel(browserLiveness)}</span>
       </div>
       {issue?.issueCode && <div className="monitor-court-alert"><AlertTriangle size={14} /><span>{issue.summary}</span></div>}
     </article>
@@ -734,6 +742,20 @@ function browserQualityDetail(browser: MonitorCourt["browser"]): string {
   const video = browser.video;
   const freezeDuration = video.totalFreezesDurationMs == null ? "--" : formatDuration(video.totalFreezesDurationMs);
   return `Page session: ${video.framesReceived ?? "--"} received, ${video.framesDecoded ?? "--"} decoded, ${video.framesDropped ?? "--"} dropped, ${video.freezeCount ?? "--"} freezes totaling ${freezeDuration}.`;
+}
+
+function browserLivenessLabel(liveness: MonitorBrowserLiveness): string {
+  if (liveness.state === "LIVE") return "viewer live";
+  if (liveness.state === "STATUS_MISSING") return "viewer status missing";
+  if (liveness.state === "CLOSED") return `viewer closed ${formatDuration(liveness.heartbeatAgeMs ?? 0)} ago`;
+  return "viewer closed";
+}
+
+function browserLivenessDetail(liveness: MonitorBrowserLiveness): string {
+  if (liveness.state === "LIVE") return "A current program reader and fresh browser status are both present.";
+  if (liveness.state === "STATUS_MISSING") return "A program reader exists, but its browser status is no longer updating.";
+  if (liveness.state === "CLOSED") return `The last browser status was received ${formatDuration(liveness.heartbeatAgeMs ?? 0)} ago. Historical counters are not shown as current.`;
+  return "No program browser has reported yet.";
 }
 
 function latestPoint(points: Array<[number, number]> | undefined): number | null {

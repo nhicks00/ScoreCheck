@@ -24,7 +24,8 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv = process.env) {
     MEDIAMTX_METRICS_URL: optionalHttpUrl,
     LIVEKIT_METRICS_URL: optionalHttpUrl,
     EGRESS_METRICS_URL: optionalHttpUrl,
-    EGRESS_HEALTH_URL: optionalHttpUrl
+    EGRESS_HEALTH_URL: optionalHttpUrl,
+    MONITOR_EGRESS_MAX_WEB_REQUESTS: z.coerce.number().int().min(1).max(32).default(1)
   });
   const parsed = schema.parse(env);
   return {
@@ -43,7 +44,8 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv = process.env) {
     mediamtxMetricsUrl: parsed.MEDIAMTX_METRICS_URL ?? null,
     livekitMetricsUrl: parsed.LIVEKIT_METRICS_URL ?? null,
     egressMetricsUrl: parsed.EGRESS_METRICS_URL ?? null,
-    egressHealthUrl: parsed.EGRESS_HEALTH_URL ?? null
+    egressHealthUrl: parsed.EGRESS_HEALTH_URL ?? null,
+    egressMaxWebRequests: parsed.MONITOR_EGRESS_MAX_WEB_REQUESTS
   };
 }
 

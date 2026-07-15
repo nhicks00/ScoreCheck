@@ -205,7 +205,7 @@ describe("monitor correlator", () => {
       nativeServices: {
         endpoints: [{ service: "egress-metrics" as const, up: true }, { service: "egress-health" as const, up: true }],
         livekit: null,
-        egress: { idle: false, canAcceptRequest: true, cgroupMemoryBytes: 700_000_000, cpuLoadRatio: 0.4, memoryLoadRatio: 0.2 }
+        egress: { idle: false, canAcceptRequest: true, nativeCanAcceptRequest: true, activeWebRequests: 1, maximumWebRequests: 2, cgroupMemoryBytes: 700_000_000, cpuLoadRatio: 0.4, memoryLoadRatio: 0.2 }
       }
     };
     const runtimes = new Map<string, AgentRuntime>([[compositorTarget.id, { target: compositorTarget, snapshot: compositor, lastSeenAt: generatedAt, lastErrorAt: null }]]);
@@ -216,6 +216,44 @@ describe("monitor correlator", () => {
     expect(egress?.summary).toContain("processing output");
     expect(egress?.evidence.idle).toBe(false);
     expect(egress?.evidence.host).toBe(compositorTarget.id);
+  });
+
+  it("classifies configured Egress admission states without paging normal capacity", () => {
+    const generatedAt = "2026-07-12T12:00:00.000Z";
+    const cases = [
+      { name: "idle available", idle: true, canAcceptRequest: true, nativeCanAcceptRequest: true, activeWebRequests: 0, maximumWebRequests: 1, state: "HEALTHY", issueCode: null },
+      { name: "one active at maximum", idle: false, canAcceptRequest: false, nativeCanAcceptRequest: true, activeWebRequests: 1, maximumWebRequests: 1, state: "HEALTHY", issueCode: null },
+      { name: "excess multiplicity", idle: false, canAcceptRequest: false, nativeCanAcceptRequest: true, activeWebRequests: 2, maximumWebRequests: 1, state: "CRITICAL", issueCode: "EGRESS_REQUEST_MULTIPLICITY" },
+      { name: "idle native admission blocked", idle: true, canAcceptRequest: false, nativeCanAcceptRequest: false, activeWebRequests: 0, maximumWebRequests: 1, state: "DEGRADED", issueCode: "EGRESS_ADMISSION_BLOCKED" }
+    ] as const;
+
+    for (const expected of cases) {
+      const compositor = {
+        ...emptyAgentSnapshot(generatedAt),
+        agentId: compositorTarget.id,
+        role: "compositor" as const,
+        assignedCourts: [1, 2],
+        nativeServices: {
+          endpoints: [{ service: "egress-metrics" as const, up: true }, { service: "egress-health" as const, up: true }],
+          livekit: null,
+          egress: {
+            idle: expected.idle,
+            canAcceptRequest: expected.canAcceptRequest,
+            nativeCanAcceptRequest: expected.nativeCanAcceptRequest,
+            activeWebRequests: expected.activeWebRequests,
+            maximumWebRequests: expected.maximumWebRequests,
+            cgroupMemoryBytes: 700_000_000,
+            cpuLoadRatio: 0.4,
+            memoryLoadRatio: 0.2
+          }
+        }
+      };
+      const runtimes = new Map<string, AgentRuntime>([[compositorTarget.id, { target: compositorTarget, snapshot: compositor, lastSeenAt: generatedAt, lastErrorAt: null }]]);
+      const result = buildMonitorSnapshot([compositorTarget], runtimes, 1, Date.parse(generatedAt) + 1_000, [], new Map(), liveControlPlane(generatedAt));
+      const egress = result.courts[0]?.stages.find((stage) => stage.stage === "EGRESS");
+      expect(egress?.state, expected.name).toBe(expected.state);
+      expect(egress?.issueCode, expected.name).toBe(expected.issueCode);
+    }
   });
 
   it("detects a repeated full-bitrate picture while transport frames continue", () => {

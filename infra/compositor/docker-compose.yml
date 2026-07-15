@@ -70,9 +70,9 @@ services:
 
   egress:
     # The compositor itself: headless Chrome (+ Xvfb + PulseAudio) renders the
-    # program page; GStreamer encodes x264 and muxes/pushes RTMP. One container
-    # runs multiple web egresses, admission-controlled by cpu_cost
-    # (web_cpu_cost default = 4 vCPU budgeted per court; see egress.yaml).
+    # program page; GStreamer encodes x264 and muxes/pushes RTMP. This c-4 is
+    # hard-limited to one web Egress by cpu_cost and start-court.sh; larger
+    # concurrency requires its own qualified host profile.
     image: livekit/egress:v1.13.0@sha256:980ff439431df2c773573721ab6da19e15bdc1f049ab7cb80e87470bf174c12f
     container_name: bvm-egress
     restart: unless-stopped
@@ -86,11 +86,13 @@ services:
       LIVEKIT_API_SECRET: "${LIVEKIT_API_SECRET}"
     volumes:
       - ./egress.yaml:/etc/egress.yaml:ro
+      - ./headless_shell:/usr/local/bin/headless_shell:ro
     # Run Chrome's sandbox with LiveKit's version-matched seccomp profile rather
     # than giving every egress process broad SYS_ADMIN capability.
     security_opt:
       - seccomp=./chrome-sandboxing-seccomp-profile.json
-    # Chrome renders via /dev/shm; docker's 64 MB default causes tab crashes
+    # Chrome renders via /dev/shm; egress.yaml explicitly removes LiveKit's
+    # disable-dev-shm-usage default. Docker's 64 MB default causes tab crashes
     # mid-broadcast. The current c-4 baseline admits one 720p court; 3 GB keeps
     # generous browser headroom. Re-size only with a capacity-qualified host.
     shm_size: "3gb"
@@ -101,7 +103,7 @@ services:
       # source for the Phase 2 10-hour soak.
       - "127.0.0.1:9090:9090"
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9091/ >/dev/null"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9091/"]
       interval: 15s
       timeout: 5s
       retries: 4

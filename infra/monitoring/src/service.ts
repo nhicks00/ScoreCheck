@@ -19,6 +19,7 @@ import { activeSilences, incidentIsSilenced, silenceMatchesIncident } from "./si
 import { ExternalDeadMan } from "./deadMan.js";
 import { assertFaultGateCanArm, faultGateArmRequestSchema, FaultGateConflictError, FaultGateControl } from "./faultGateControl.js";
 import { BrowserCounterAccumulator } from "./browserCounterAccumulator.js";
+import { incrementCourtCounter } from "./prometheusCounter.js";
 
 const config = loadServiceConfig();
 const app = express();
@@ -416,11 +417,11 @@ async function pollAll() {
       freezeCount: browser.video.freezeCount,
       totalFreezesDurationMs: browser.video.totalFreezesDurationMs
     });
-    incrementCounter(browserFramesReceivedTotal, labels, browserDeltas.framesReceived);
-    incrementCounter(browserFramesDecodedTotal, labels, browserDeltas.framesDecoded);
-    incrementCounter(browserFramesDroppedTotal, labels, browserDeltas.framesDropped);
-    incrementCounter(browserFreezesTotal, labels, browserDeltas.freezeCount);
-    incrementCounter(browserFreezeDurationTotal, labels, browserDeltas.totalFreezesDurationMs / 1_000);
+    incrementCourtCounter(browserFramesReceivedTotal, labels, browserDeltas.framesReceived);
+    incrementCourtCounter(browserFramesDecodedTotal, labels, browserDeltas.framesDecoded);
+    incrementCourtCounter(browserFramesDroppedTotal, labels, browserDeltas.framesDropped);
+    incrementCourtCounter(browserFreezesTotal, labels, browserDeltas.freezeCount);
+    incrementCourtCounter(browserFreezeDurationTotal, labels, browserDeltas.totalFreezesDurationMs / 1_000);
     commentaryConnected.set(labels, browser.commentary.roomConnected ? 1 : 0);
     commentaryTracks.set(labels, browser.commentary.audioTrackCount);
     commentaryMutedTracks.set(labels, browser.commentary.mutedAudioTrackCount);
@@ -492,10 +493,6 @@ function bearerToken(header: string | undefined): string {
 
 function setOptionalGauge(gauge: Gauge, labels: { court: string }, value: number | null) {
   if (value != null && Number.isFinite(value)) gauge.set(labels, value);
-}
-
-function incrementCounter(counter: Counter, labels: { court: string }, value: number) {
-  if (Number.isFinite(value) && value > 0) counter.inc(labels, value);
 }
 
 function providerMetric(provider: { configured: boolean; lastSuccessAt: string | null; lastFailureAt: string | null }): number {

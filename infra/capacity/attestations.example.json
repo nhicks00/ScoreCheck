@@ -12,12 +12,6 @@
   },
   "assignmentVerified": false,
   "unassignedCourtsUnaffected": false,
-  "ingestZombieGrowth": null,
-  "ingestHostCpuP95Ratio": null,
-  "ingestHostCpuMaxRatio": null,
-  "compositorZombieGrowth": null,
-  "compositorHostCpuP95Ratio": null,
-  "compositorHostCpuMaxRatio": null,
   "egressErrors": null,
-  "egressShmMaxRatio": null
+  "egressShmEnabled": false
 }

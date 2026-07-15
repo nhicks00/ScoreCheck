@@ -66,7 +66,7 @@ inhibit_rules:
   - source_matchers:
       - 'alertname="ScoreCheckAgentMissing"'
     target_matchers:
-      - 'alertname=~"ScoreCheckServiceNotRunning|ScoreCheckServiceUnhealthy|ScoreCheckNativeEndpointDown|ScoreCheckEgressWorkerUnavailable|ScoreCheckEgressCapacityExhausted"'
+      - 'alertname=~"ScoreCheckServiceNotRunning|ScoreCheckServiceUnhealthy|ScoreCheckNativeEndpointDown|ScoreCheckEgressWorkerUnavailable|ScoreCheckEgressAdmissionBlocked|ScoreCheckEgressRequestMultiplicity"'
     equal: [agent]
   - source_matchers:
       - 'alertname="ScoreCheckServiceNotRunning"'
