@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -27,6 +28,7 @@ async function fixture(kind = "rehearsal") {
     protectedFiles[name] = join(parent, name);
     await writeFile(protectedFiles[name], "#!/bin/sh\n", { mode: 0o700 });
   }
+  const productionSource = kind === "production" ? await productionSourceFixture(parent) : null;
   return {
     command: "create",
     event: `bundle-${kind}`,
@@ -36,7 +38,7 @@ async function fixture(kind = "rehearsal") {
     credentialsEnv: protectedFiles["provider.env"],
     sshKey: protectedFiles["ssh-key"],
     lifecycleAttestation: protectedFiles["attestation.json"],
-    ...(kind === "production" ? { anchors: protectedFiles["anchors.json"] } : {
+    ...(kind === "production" ? { anchors: protectedFiles["anchors.json"], productionSource } : {
       gitRepoId: "123",
       gitRef: "codex/turnkey-event-lifecycle",
       gitSha: "a".repeat(40),
@@ -73,6 +75,8 @@ test("creates a production bundle bound to existing persistent anchors", async (
   assert.equal(result.rehearsalProfile, null);
   assert.equal(profile.anchors, options.anchors);
   assert.equal(profile.rehearsalEvidence, null);
+  assert.equal((await stat(profile.secrets)).mode & 0o077, 0);
+  assert.equal((await stat(join(profile.secrets, "RENDER_COMPLETE.json"))).mode & 0o077, 0);
 });
 
 test("rejects weak input permissions and incomplete mode-specific options", async () => {
@@ -81,7 +85,55 @@ test("rejects weak input permissions and incomplete mode-specific options", asyn
   await assert.rejects(() => createEventBundle(rehearsal), /protected file/);
   const production = await fixture("production");
   await assert.rejects(() => createEventBundle({ ...production, anchors: undefined }), /requires --anchors/);
+  await assert.rejects(() => createEventBundle({ ...production, productionSource: undefined }), /requires --production-source/);
   await writeFile(production.anchors, "{}\n", { mode: 0o600 });
   await assert.rejects(() => createEventBundle(production), /schemaVersion must be 2/);
   assert.throws(() => parseBundleArgs(["create", "--root", "relative"]), /absolute path/);
 });
+
+async function productionSourceFixture(parent) {
+  const root = join(parent, "production-source");
+  await mkdir(join(root, "wireguard"), { recursive: true, mode: 0o700 });
+  const encoding = { width: "1280", height: "720", framerate: "30", videoBitrate: "4000", audioBitrate: "128", audioFrequency: "48000", keyframeInterval: "2" };
+  const material = {
+    schemaVersion: 1,
+    programPageToken: "program-page-token-abcdefghijklmnopqrstuvwxyz",
+    commentary: { apiKey: "commentary-key-123", apiSecret: "commentary-secret-abcdefghijklmnopqrstuvwxyz" },
+    publishers: Object.fromEntries(Array.from({ length: 8 }, (_, index) => [index + 1, {
+      user: `camera-${index + 1}`,
+      password: `publisher-password-${index + 1}-abcdefghijklmnopqrstuvwxyz`,
+      source: index < 5 ? "publisher" : `srt://10.89.0.${index + 1}:10${index + 1}?mode=caller`
+    }])),
+    compositors: Object.fromEntries(Array.from({ length: 8 }, (_, index) => [index + 1, {
+      apiKey: `local-key-${index + 1}-1234567890`,
+      apiSecret: `local-secret-${index + 1}-abcdefghijklmnopqrstuvwxyz`,
+      rtmpsBase: "rtmps://a.rtmps.youtube.com/live2",
+      streamKey: `youtube-key-${index + 1}-abcdefghijk`,
+      encoding
+    }]))
+  };
+  const requiredMonitoring = [
+    "ALERTMANAGER_WEBHOOK_TOKEN", "HEALTHCHECKS_ACTIVE_CHECK_ID", "HEALTHCHECKS_ACTIVE_PING_URL", "HEALTHCHECKS_API_KEY",
+    "HEALTHCHECKS_BASELINE_CHECK_ID", "HEALTHCHECKS_BASELINE_PING_URL", "MONITOR_API_TOKEN", "MONITOR_BROWSER_ALLOWED_ORIGINS",
+    "MONITOR_BROWSER_HEARTBEAT_SECRET", "MONITOR_DASHBOARD_URL", "MONITOR_PUBLIC_HOST", "PUSHOVER_APP_TOKEN", "PUSHOVER_USER_KEY",
+    "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_URL", "YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_REFRESH_TOKEN"
+  ];
+  const monitoring = requiredMonitoring.map((name) => `${name}=${JSON.stringify(`${name.toLowerCase()}-abcdefghijklmnopqrstuvwxyz`)}`).join("\n") + "\n";
+  const files = {
+    "material.json": `${JSON.stringify(material, null, 2)}\n`,
+    "monitoring.env": monitoring,
+    "web-runtime.env": "PROGRAM_PAGE_TOKEN=\"program-page-token-abcdefghijklmnopqrstuvwxyz\"\n",
+    "wireguard/camera-lan.conf": "[Interface]\nAddress = 10.89.0.1/24\nListenPort = 51820\nPrivateKey = protected\n\n[Peer]\nPublicKey = protected\nAllowedIPs = 10.89.0.2/32, 192.168.8.0/24\n",
+    "wireguard/camera-lan.key": "protected-private-key\n",
+    "wireguard/camera-lan.pub": "protected-public-key\n"
+  };
+  for (const [name, body] of Object.entries(files)) await writeFile(join(root, name), body, { mode: 0o600 });
+  const marker = {
+    schemaVersion: 1,
+    createdAt: "2026-07-15T00:00:00Z",
+    captureSha256: "a".repeat(64),
+    files: Object.fromEntries(Object.entries(files).map(([name, body]) => [name, createHash("sha256").update(body).digest("hex")]))
+  };
+  await writeFile(join(root, "SOURCE_COMPLETE.json"), `${JSON.stringify(marker, null, 2)}\n`, { mode: 0o600 });
+  return root;
+}

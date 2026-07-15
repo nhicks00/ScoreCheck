@@ -7,6 +7,15 @@ import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { collectReconstructionProvenance, sha256 as provenanceSha256 } from "./reconstruction-provenance.mjs";
 
+const REQUIRED_DEPLOYMENT_SECRET_FILES = Object.freeze([
+  "agent-tokens.json",
+  "commentary.env",
+  "ingest.env",
+  "observability.env",
+  ...["a", "b", "c", "d", "e", "f", "g", "h"].map((suffix) => `compositors/bvm-compositor-${suffix}.env`),
+  "compositors/bvm-compositor-spare.env"
+]);
+
 export class LocalStackDeployer {
   constructor({ repoRoot, secretsDirectory, sshPrivateKey, knownHostsPath, runner = runCommand, fetchImpl = globalThis.fetch }) {
     this.repoRoot = resolve(repoRoot);
@@ -38,6 +47,16 @@ export class LocalStackDeployer {
       });
     } else if (spec.role === "ingest") {
       const env = await loadProtectedEnv(join(this.secretsDirectory, "ingest.env"));
+      const wireguardConfig = join(this.secretsDirectory, "wireguard/camera-lan.conf");
+      if (await exists(wireguardConfig)) {
+        await assertProtectedFile(wireguardConfig, "ingest WireGuard configuration");
+        await this.#script("infra/mediamtx/deploy-wireguard.sh", {
+          ...common,
+          MEDIAMTX_SSH_HOST: `root@${resource.publicIpv4}`,
+          MEDIAMTX_SSH_KEY: this.sshPrivateKey,
+          MEDIAMTX_WIREGUARD_CONFIG: wireguardConfig
+        });
+      }
       await this.#script("infra/mediamtx/deploy.sh", {
         ...env,
         ...common,
@@ -131,14 +150,17 @@ export class LocalStackDeployer {
 
   async #validateProtectedInputs() {
     await assertProtectedFile(this.sshPrivateKey, "SSH private key");
-    const directory = await stat(this.secretsDirectory);
-    if (!directory.isDirectory() || (directory.mode & 0o077) !== 0) throw new Error("secrets directory must be mode 0700 or stricter");
+    await verifyProtectedSecretDirectory(this.secretsDirectory);
     await mkdir(dirname(this.knownHostsPath), { recursive: true, mode: 0o700 });
     await chmod(dirname(this.knownHostsPath), 0o700);
   }
 
   async #expectedConfigHashes(spec, includeAgent) {
     const bindings = roleConfigBindings(this.repoRoot, this.secretsDirectory, spec);
+    const wireguardConfig = join(this.secretsDirectory, "wireguard/camera-lan.conf");
+    if (spec.role === "ingest" && await exists(wireguardConfig)) {
+      bindings.push([wireguardConfig, "/etc/wireguard/camera-lan.conf"]);
+    }
     if (includeAgent) bindings.push(
       [join(this.repoRoot, "infra/monitoring/agent-compose.yml"), "/opt/scorecheck-monitor-agent/agent-compose.yml"],
       [join(this.repoRoot, `infra/monitoring/.generated/agent-${spec.name}.env`), "/opt/scorecheck-monitor-agent/.env"]
@@ -254,6 +276,32 @@ export async function loadProtectedEnv(path) {
 async function assertProtectedFile(path, label) {
   const information = await stat(path);
   if (!information.isFile() || (information.mode & 0o077) !== 0) throw new Error(`${label} must be a protected regular file with mode 0600 or stricter`);
+}
+
+export async function verifyProtectedSecretDirectory(root) {
+  const directory = await stat(root);
+  if (!directory.isDirectory() || (directory.mode & 0o077) !== 0) throw new Error("secrets directory must be mode 0700 or stricter");
+  const markerPath = join(root, "RENDER_COMPLETE.json");
+  await assertProtectedFile(markerPath, "secret render marker");
+  let marker;
+  try { marker = JSON.parse(await readFile(markerPath, "utf8")); }
+  catch { throw new Error("secret render marker is not valid JSON"); }
+  if (marker.schemaVersion !== 1 || !marker.files || typeof marker.files !== "object" || Array.isArray(marker.files) || Object.keys(marker.files).length === 0) {
+    throw new Error("secret render marker is invalid");
+  }
+  const names = new Set(Object.keys(marker.files));
+  if (REQUIRED_DEPLOYMENT_SECRET_FILES.some((name) => !names.has(name))) {
+    throw new Error("secret render marker is missing a required deployment file");
+  }
+  for (const [name, expected] of Object.entries(marker.files)) {
+    if (!/^[A-Za-z0-9._/-]+$/.test(name) || name.startsWith("/") || name.includes("..") || name.includes("//") || !/^[a-f0-9]{64}$/.test(expected)) {
+      throw new Error("secret render marker contains an invalid file binding");
+    }
+    const path = join(root, name);
+    await assertProtectedFile(path, `rendered secret ${name}`);
+    if (sha256(await readFile(path)) !== expected) throw new Error(`rendered secret ${name} failed integrity verification`);
+  }
+  return marker;
 }
 
 function protectedAbsolute(value, label) {
@@ -374,7 +422,7 @@ export function roleConfigBindings(repoRoot, secretsDirectory, spec) {
 
 function verificationCommand(role) {
   const agent = "cd /opt/scorecheck-monitor-agent && cid=$(docker compose -f agent-compose.yml ps -q monitor-agent) && test -n \"$cid\" && test \"$(docker inspect \"$cid\" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')\" = healthy";
-  if (role === "ingest") return `${agent} && curl -fsS http://127.0.0.1:9997/v3/config/global/get >/dev/null`;
+  if (role === "ingest") return `${agent} && curl -fsS http://127.0.0.1:9997/v3/config/global/get >/dev/null && if test -f /etc/wireguard/camera-lan.conf; then wg show camera-lan >/dev/null && ip -4 address show dev camera-lan | grep -q '10\\.89\\.0\\.1/24' && ip route show 192.168.8.0/24 | grep -q 'dev camera-lan'; fi`;
   if (role === "commentary") return `${agent} && curl -fsS http://127.0.0.1:7880/ >/dev/null && curl -fsS http://127.0.0.1:6789/metrics >/dev/null`;
   if (["compositor", "compositor-spare"].includes(role)) {
     return `${agent} && test \"$(docker inspect bvm-egress --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')\" = healthy && curl -fsS http://127.0.0.1:9090/metrics >/dev/null`;
@@ -410,4 +458,9 @@ async function runCommand(command, args, options = {}) {
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
+}
+
+async function exists(path) {
+  try { await stat(path); return true; }
+  catch (error) { if (error?.code === "ENOENT") return false; throw error; }
 }

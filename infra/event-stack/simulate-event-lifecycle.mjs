@@ -54,6 +54,7 @@ async function fullLifecycle() {
   await chmod(root, 0o700);
   const evidence = join(root, "evidence");
   try {
+    const initialComputeInventoryEmpty = cloud.droplets.size === 0;
     await controller.plan(manifest);
     const ready = await controller.up(manifest, anchors);
     const isolatedIngestIpv4 = dns.records.get(ingestHostname)?.value === roleIpv4(ready, "ingest");
@@ -70,6 +71,7 @@ async function fullLifecycle() {
     await controller.captureEvidence(manifest, evidence, rehearsalEvidence);
     const destroyed = await controller.destroy(manifest, evidence, `DESTROY:${manifest.event}`);
     const checks = {
+      initialComputeInventoryEmpty,
       exactReadyDroplets: Object.keys(ready.droplets).length === 12,
       isolatedIngestIpv4,
       isolatedCommentaryIpv4,

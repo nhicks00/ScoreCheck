@@ -45,6 +45,7 @@ test("host firewalls mirror public role exposure and keep agent telemetry privat
   assert.doesNotMatch(compositor, /ufw allow (80|443|7880)\/tcp/);
 
   const ingest = await readFile(profiles.ingest, "utf8");
+  assert.match(ingest, /^  - wireguard-tools$/m);
   for (const command of ["22/tcp", "80/tcp", "443/tcp", "1935/tcp", "8189/udp", "8890/udp", "51820/udp"]) {
     assert.match(ingest, new RegExp(`ufw allow ${escapeRegexp(command)}`));
   }

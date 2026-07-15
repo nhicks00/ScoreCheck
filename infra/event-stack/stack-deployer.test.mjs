@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { buildEventManifest, loadManifestInputs } from "./event-manifest.mjs";
-import { buildAgentPlans, commentaryEndpointHosts, loadProtectedEnv, roleConfigBindings, serializeAgentTargets, servicePublicIpv4 } from "./stack-deployer.mjs";
+import { buildAgentPlans, commentaryEndpointHosts, loadProtectedEnv, roleConfigBindings, serializeAgentTargets, servicePublicIpv4, verifyProtectedSecretDirectory } from "./stack-deployer.mjs";
 
 const inputs = await loadManifestInputs();
 const manifest = buildEventManifest({ event: "deploy-test", kind: "production", destroyAfter: "2026-08-01", ...inputs });
@@ -87,6 +88,34 @@ test("loads only protected, bounded KEY=VALUE environment files", async () => {
   await chmod(path, 0o600);
   await writeFile(path, "DUP=one\nDUP=two\n", { mode: 0o600 });
   await assert.rejects(() => loadProtectedEnv(path), /invalid or duplicate/);
+});
+
+test("requires an intact protected secret render before deployment", async () => {
+  const root = await mkdtemp(join(tmpdir(), "scorecheck-secrets-test-"));
+  await chmod(root, 0o700);
+  await mkdir(join(root, "compositors"), { mode: 0o700 });
+  const names = [
+    "agent-tokens.json", "commentary.env", "ingest.env", "observability.env",
+    ...["a", "b", "c", "d", "e", "f", "g", "h"].map((suffix) => `compositors/bvm-compositor-${suffix}.env`),
+    "compositors/bvm-compositor-spare.env"
+  ];
+  const files = {};
+  for (const name of names) {
+    const body = `${name}\n`;
+    await writeFile(join(root, name), body, { mode: 0o600 });
+    files[name] = createHash("sha256").update(body).digest("hex");
+  }
+  await writeFile(join(root, "RENDER_COMPLETE.json"), `${JSON.stringify({ schemaVersion: 1, files }, null, 2)}\n`, { mode: 0o600 });
+
+  const marker = await verifyProtectedSecretDirectory(root);
+  assert.equal(Object.keys(marker.files).length, names.length);
+
+  await writeFile(join(root, names[0]), "tampered\n", { mode: 0o600 });
+  await assert.rejects(() => verifyProtectedSecretDirectory(root), /failed integrity verification/);
+
+  delete files[names.at(-1)];
+  await writeFile(join(root, "RENDER_COMPLETE.json"), `${JSON.stringify({ schemaVersion: 1, files }, null, 2)}\n`, { mode: 0o600 });
+  await assert.rejects(() => verifyProtectedSecretDirectory(root), /missing a required deployment file/);
 });
 
 test("binds each role to exact remote reconstruction config paths", () => {

@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { buildEventManifest, loadManifestInputs } from "./event-manifest.mjs";
 import { validateAnchorConfig } from "./event-lifecycle.mjs";
 import { validateProfile as validateEventProfile } from "./eventctl.mjs";
+import { renderProductionSecretDirectory } from "./production-recovery.mjs";
 import { validateRehearsalProfile } from "./rehearsal/rehearsal-stack.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -35,6 +36,7 @@ export async function createEventBundle(options) {
     assertProtectedFile(options.sshKey, "SSH private key"),
     assertProtectedFile(options.lifecycleAttestation, "lifecycle attestation"),
     ...(options.kind === "production" ? [assertProtectedFile(options.anchors, "production endpoint anchors")] : []),
+    ...(options.kind === "production" ? [assertProtectedDirectory(options.productionSource, "production recovery source")] : []),
     ...(options.kind === "rehearsal" ? [assertExecutable(options.ffmpegPath, "FFmpeg"), assertExecutable(options.liveKitCliPath, "LiveKit CLI")] : [])
   ]);
   const parent = dirname(options.root);
@@ -80,6 +82,12 @@ export async function createEventBundle(options) {
     const anchors = options.kind === "production" ? options.anchors : final.rehearsalBinding;
     if (options.kind === "rehearsal") {
       await writeProtectedJson(temporaryPaths.rehearsalBinding, anchorConfig);
+    } else {
+      await renderProductionSecretDirectory({
+        manifest,
+        sourceDirectory: options.productionSource,
+        directory: temporaryPaths.secrets
+      });
     }
     const eventProfile = {
       schemaVersion: 3,
@@ -169,7 +177,7 @@ export function parseBundleArgs(argv) {
   const mapping = new Map([
     ["--event", "event"], ["--kind", "kind"], ["--destroy-after", "destroyAfter"], ["--root", "root"],
     ["--credentials-env", "credentialsEnv"], ["--ssh-key", "sshKey"], ["--attestation", "lifecycleAttestation"],
-    ["--anchors", "anchors"], ["--git-repo-id", "gitRepoId"], ["--git-ref", "gitRef"], ["--git-sha", "gitSha"],
+    ["--anchors", "anchors"], ["--production-source", "productionSource"], ["--git-repo-id", "gitRepoId"], ["--git-ref", "gitRef"], ["--git-sha", "gitSha"],
     ["--ffmpeg", "ffmpegPath"], ["--livekit-cli", "liveKitCliPath"], ["--soak-seconds", "soakDurationSeconds"]
   ]);
   for (let index = 1; index < argv.length; index += 1) {
@@ -179,7 +187,7 @@ export function parseBundleArgs(argv) {
     if (!key || !value || value.startsWith("--")) throw new Error(`${flag} is unknown or missing a value`);
     values[key] = key === "soakDurationSeconds" ? Number(value) : value;
   }
-  for (const key of ["root", "credentialsEnv", "sshKey", "lifecycleAttestation", "anchors", "ffmpegPath", "liveKitCliPath"]) {
+  for (const key of ["root", "credentialsEnv", "sshKey", "lifecycleAttestation", "anchors", "productionSource", "ffmpegPath", "liveKitCliPath"]) {
     if (values[key] !== undefined) values[key] = normalizedAbsolute(values[key], `--${key}`);
   }
   return values;
@@ -194,10 +202,12 @@ function validateBundleOptions(value) {
   if (!new Set(["production", "rehearsal"]).has(value.kind)) throw new Error("kind must be production or rehearsal");
   if (value.kind === "production") {
     if (!value.anchors) throw new Error("production bundle requires --anchors");
+    if (!value.productionSource) throw new Error("production bundle requires --production-source");
     for (const key of ["gitRepoId", "gitRef", "gitSha", "ffmpegPath", "liveKitCliPath"]) {
       if (value[key] !== undefined) throw new Error(`production bundle does not accept ${key}`);
     }
   } else {
+    if (value.productionSource !== undefined) throw new Error("rehearsal bundle does not accept productionSource");
     for (const key of ["gitRepoId", "gitRef", "gitSha", "ffmpegPath", "liveKitCliPath"]) {
       if (typeof value[key] !== "string" || !value[key]) throw new Error(`rehearsal bundle requires ${key}`);
     }
@@ -234,6 +244,11 @@ async function assertProtectedFile(path, label) {
   if (!information.isFile() || (information.mode & 0o077) !== 0) throw new Error(`${label} must be a mode-0600 protected file`);
 }
 
+async function assertProtectedDirectory(path, label) {
+  const information = await stat(path);
+  if (!information.isDirectory() || (information.mode & 0o077) !== 0) throw new Error(`${label} must be a mode-0700 protected directory`);
+}
+
 async function assertExecutable(path, label) {
   const information = await stat(path);
   if (!information.isFile() || (information.mode & 0o111) === 0) throw new Error(`${label} must be an executable file`);
@@ -255,5 +270,5 @@ function normalizedAbsolute(value, label) {
 function sha256(value) { return createHash("sha256").update(value).digest("hex"); }
 
 function usage() {
-  process.stdout.write("Usage: node infra/event-stack/create-event-bundle.mjs create --event SLUG --kind production|rehearsal --destroy-after YYYY-MM-DD --root /PROTECTED/DIR --credentials-env FILE --ssh-key FILE --attestation FILE [production: --anchors FILE] [rehearsal: --git-repo-id ID --git-ref REF --git-sha SHA --ffmpeg FILE --livekit-cli FILE --soak-seconds 1800]\n");
+  process.stdout.write("Usage: node infra/event-stack/create-event-bundle.mjs create --event SLUG --kind production|rehearsal --destroy-after YYYY-MM-DD --root /PROTECTED/DIR --credentials-env FILE --ssh-key FILE --attestation FILE [production: --anchors FILE --production-source DIR] [rehearsal: --git-repo-id ID --git-ref REF --git-sha SHA --ffmpeg FILE --livekit-cli FILE --soak-seconds 1800]\n");
 }

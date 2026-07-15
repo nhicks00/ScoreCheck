@@ -149,9 +149,12 @@ behavior, not inferred from configuration. See
 
 That PASS does not close the eight-output gate. The immutable 12-Droplet
 rehearsal bundle is prepared, but the DigitalOcean limit remained 10 after a
-request for 19 was submitted. The full rehearsal must remain fail-closed until
-the live account limit can admit all 12 temporary resources beside the seven
-baseline Droplets.
+higher ceiling was requested. Only a limit of at least 12 is required. The
+recurring topology is zero event Droplets -> exactly 12 -> zero; the seven
+legacy/test Droplets are not a rollback tier and will not remain beside the
+rehearsal fleet. The full rehearsal remains fail-closed until the protected
+recovery source, persistent endpoint anchors, quota, off-device backup, and
+explicit destructive approval gates are complete.
 
 ScoreCheck Pushover and both Healthchecks checks are configured. Healthchecks
 has one Pushover integration attached exactly to the baseline and active checks,

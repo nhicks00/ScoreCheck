@@ -10,6 +10,7 @@ packages:
   - jq
   - rsync
   - ufw
+  - wireguard-tools
 
 write_files:
   - path: /etc/ssh/sshd_config.d/99-scorecheck.conf
