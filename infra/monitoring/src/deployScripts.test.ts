@@ -72,6 +72,8 @@ describe("staged observability deployment", () => {
     expect(remoteDeploy).not.toContain("source \"$REMOTE_DIR/.env\"");
     expect(remoteDeploy).toContain("read_json_env_value");
     expect(remoteDeploy).toContain("jq -er 'fromjson");
+    expect(remoteDeploy).toContain('"$name" == "MONITOR_PUBLIC_HOST"');
+    expect(remoteDeploy).toContain('"$encoded" =~ ^[A-Za-z0-9.-]+(:[0-9]+)?$');
     expect(remoteDeploy).toContain("assert_public_health");
     expect(remoteDeploy).toContain("assert_control_plane_ready");
   });

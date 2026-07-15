@@ -98,7 +98,17 @@ read_json_env_value() {
   local file="$2"
   local encoded
   encoded="$(grep -m 1 -E "^${name}=" "$file" | cut -d= -f2-)" || return 1
-  printf '%s\n' "$encoded" | jq -er 'fromjson | select(type == "string" and length > 0)'
+  if [[ "${encoded:0:1}" == '"' ]]; then
+    printf '%s\n' "$encoded" | jq -er 'fromjson | select(type == "string" and length > 0)'
+    return
+  fi
+  # The first staged cutover may encounter the former raw hostname format.
+  # Accept only that strict non-secret value; never evaluate arbitrary env text.
+  if [[ "$name" == "MONITOR_PUBLIC_HOST" && "$encoded" =~ ^[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+    printf '%s\n' "$encoded"
+    return
+  fi
+  return 1
 }
 
 assert_public_health() {
