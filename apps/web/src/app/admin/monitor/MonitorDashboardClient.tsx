@@ -23,6 +23,10 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StreamPlayer } from "@/components/StreamPlayer";
+import { deriveMonitorBrowserLiveness, type MonitorBrowserLiveness } from "@/lib/monitorBrowserLiveness";
+import { deriveMonitorDeadManReadiness } from "@/lib/monitorDeadManReadiness";
+import { deriveMonitorPagingReadiness } from "@/lib/monitorPagingReadiness";
+import { deriveMonitorSystemState } from "@/lib/monitorSystemState";
 import type { MonitorCourt, MonitorCourtPipelineRange, MonitorHealthState, MonitorIncident, MonitorMediaPath, MonitorSilence, MonitorSnapshotEnvelope, MonitorStage } from "@/lib/monitoringTypes";
 import { PacingComparator } from "./PacingComparator";
 
@@ -281,7 +285,14 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
   const snapshot = envelope.snapshot;
   const snapshotAgeMs = Math.max(0, nowMs - Date.parse(snapshot.generatedAt));
   const stale = envelope.source === "checkpoint" || snapshotAgeMs > 15_000;
-  const overall = systemState(snapshot.courts, snapshot.incidents);
+  const pagingReadiness = deriveMonitorPagingReadiness(snapshot.notifications);
+  const deadManReadiness = deriveMonitorDeadManReadiness(snapshot.deadMan);
+  const overall = deriveMonitorSystemState({
+    courtStates: snapshot.courts.map(effectiveCourtState),
+    globalStates: [snapshot.collector.state, snapshot.controlPlane.state, snapshot.youtube.state, pagingReadiness.state, deadManReadiness.state],
+    hasCriticalIncident: snapshot.incidents.some((incident) => incident.status !== "resolved" && incident.severity === "critical"),
+    stale
+  });
   const selected = snapshot.courts.find((court) => court.courtNumber === selectedCourt) ?? snapshot.courts[0] ?? null;
   const dataSaverAdmitted = selected?.expectation.broadcastExpectation !== "LIVE";
   const activeInspectionQuality = dataSaverAdmitted ? inspectionQuality : "detail";
@@ -344,8 +355,8 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
         <GlobalItem icon={<Activity size={17} />} label="Collector" value={`${snapshot.collector.agentsFresh}/${snapshot.collector.agentsExpected} agents`} state={snapshot.collector.state} />
         <GlobalItem icon={<Signal size={17} />} label="Control" value={snapshot.controlPlane.worker.state === "NOT_APPLICABLE" ? "Idle" : snapshot.controlPlane.worker.state} state={snapshot.controlPlane.state} />
         <GlobalItem icon={<Youtube size={17} />} label="YouTube" value={friendlyState(snapshot.youtube.state)} state={snapshot.youtube.state} />
-        <GlobalItem icon={<Bell size={17} />} label="Paging" value={pagingLabel(snapshot.notifications)} state={snapshot.notifications.state === "DEGRADED" ? "DEGRADED" : snapshot.notifications.state === "UNKNOWN" ? "UNKNOWN" : snapshot.notifications.state === "HEALTHY" ? "HEALTHY" : "NOT_APPLICABLE"} />
-        <GlobalItem icon={<Radio size={17} />} label="Watchdog" value={deadManLabel(snapshot.deadMan)} state={snapshot.deadMan.state === "DEGRADED" ? "DEGRADED" : snapshot.deadMan.state === "UNKNOWN" ? "UNKNOWN" : snapshot.deadMan.state === "HEALTHY" ? "HEALTHY" : "NOT_APPLICABLE"} />
+        <GlobalItem icon={<Bell size={17} />} label="Phone alerts" value={pagingReadiness.label} state={pagingReadiness.state} wrapValue />
+        <GlobalItem icon={<Radio size={17} />} label="Watchdog" value={deadManReadiness.label} state={deadManReadiness.state} wrapValue />
         <GlobalItem icon={<ShieldAlert size={17} />} label="Incidents" value={activeIncidents.length ? `${activeIncidents.length} active` : "Clear"} state={activeIncidents.some((incident) => incident.severity === "critical") ? "CRITICAL" : activeIncidents.length ? "DEGRADED" : "HEALTHY"} />
         <div className={`monitor-freshness ${stale ? "is-stale" : ""}`}>
           <Clock3 size={16} aria-hidden="true" />
@@ -491,7 +502,14 @@ function formatTime(value: string): string {
 function CourtCard({ court, history, selected, nowMs, onSelect }: { court: MonitorCourt; history: MonitorCourtPipelineRange["courts"][number] | null; selected: boolean; nowMs: number; onSelect: () => void }) {
   const browser = court.browser;
   const raw = court.paths.raw;
+  const program = court.paths.program;
   const preview = court.ffmpeg.preview;
+  const browserLiveness = deriveMonitorBrowserLiveness({
+    receivedAt: browser?.receivedAt,
+    programReaderCount: program?.readerCount,
+    nowMs
+  });
+  const liveBrowser = browserLiveness.state === "LIVE" ? browser : null;
   const cameraStage = court.stages.find((stage) => stage.stage === "RAW_INGEST");
   const cameraState = cameraStage?.state ?? "UNKNOWN";
   const productionState = productionPipelineState(court);
@@ -504,12 +522,12 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
     || court.expectation.scoringExpectation !== "NONE");
   const issue = relevantStages.find((stage) => stage.state === "CRITICAL") ?? relevantStages.find((stage) => ["DEGRADED", "UNKNOWN"].includes(stage.state));
   const thumbnailFresh = court.thumbnail && nowMs - Date.parse(court.thumbnail.receivedAt) <= 45_000;
-  const browserLost = browser?.video.packetsLost;
-  const browserReceived = browser?.video.packetsReceived;
+  const browserLost = liveBrowser?.video.packetsLost;
+  const browserReceived = liveBrowser?.video.packetsReceived;
   const loss = browserLost != null && browserReceived != null
     ? percent(browserLost, browserLost + browserReceived)
     : transportLoss(raw);
-  const rttMs = browser?.video.rttMs ?? raw?.transport?.rttMs;
+  const rttMs = liveBrowser?.video.rttMs ?? raw?.transport?.rttMs;
   const rawTrend = history?.rawBitrate ?? [];
   const fpsTrend = history?.programFps.length ? history.programFps : history?.previewFps ?? [];
   return (
@@ -533,13 +551,13 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
       <div className="monitor-metrics">
         <Metric label="Camera bitrate" value={formatBitrate(raw?.inboundBitrateBps)} />
         <Metric label="Preview speed" value={formatFps(preview?.framesPerSecond)} />
-        <Metric label="Rendered speed" value={formatFps(browser?.video.framesPerSecond)} />
-        <Metric label="Picture size" value={browser?.video.width && browser.video.height ? `${browser.video.width}×${browser.video.height}` : "--"} />
+        <Metric label="Rendered speed" value={formatFps(liveBrowser?.video.framesPerSecond)} />
+        <Metric label="Picture size" value={liveBrowser?.video.width && liveBrowser.video.height ? `${liveBrowser.video.width}×${liveBrowser.video.height}` : "--"} />
         <Metric label="Network delay" value={formatMs(rttMs)} />
         <Metric label="Packet loss" value={loss} />
       </div>
       <div className="monitor-trends" aria-label="Five minute trends">
-        <div className="monitor-trends-heading"><strong>Last 5 minutes</strong><div className="monitor-trends-legend"><span className="is-bitrate">Camera bitrate · {formatBitrate(latestPoint(rawTrend))}</span><span className="is-fps">Rendered speed · {formatFps(latestPoint(fpsTrend))}</span></div></div>
+        <div className="monitor-trends-heading"><strong>Last 5 minutes</strong><div className="monitor-trends-legend"><span className="is-bitrate">Camera bitrate · {formatBitrate(latestPoint(rawTrend))}</span><span className="is-fps">{liveBrowser ? "Rendered speed" : "Last rendered speed"} · {formatFps(latestPoint(fpsTrend))}</span></div></div>
         <div className="monitor-trends-plots">
           <Sparkline values={rawTrend} label="Camera bitrate, five minutes" className="is-bitrate" />
           <Sparkline values={fpsTrend} label="Rendered frames per second, five minutes" className="is-fps" fixedMax={30} />
@@ -553,11 +571,11 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
       </div>
       <div className="monitor-court-footer">
         <span className="monitor-source-profile" title={sourceDetail(raw)}><Signal size={14} /> {sourceProfile(raw)}</span>
-        <span><Camera size={14} /> {visualLabel(browser)}</span>
-        <span><Headphones size={14} /> {commentaryLabel(browser)}</span>
+        <span><Camera size={14} /> {visualLabel(liveBrowser)}</span>
+        <span><Headphones size={14} /> {commentaryLabel(liveBrowser)}</span>
         <span><Youtube size={14} /> {friendlyState(court.youtube?.state ?? "NOT_APPLICABLE")}</span>
-        <span title={browserQualityDetail(browser)}><Activity size={14} /> {browserQualityLabel(browser, history)}</span>
-        <span><Gauge size={14} /> {browser ? `${browser.video.reconnectCount} reconnects` : "--"}</span>
+        <span title={browserQualityDetail(liveBrowser)}><Activity size={14} /> {browserQualityLabel(liveBrowser, liveBrowser ? history : null)}</span>
+        <span title={browserLivenessDetail(browserLiveness)}><Gauge size={14} /> {browserLivenessLabel(browserLiveness)}</span>
       </div>
       {issue?.issueCode && <div className="monitor-court-alert"><AlertTriangle size={14} /><span>{issue.summary}</span></div>}
     </article>
@@ -572,8 +590,8 @@ function StageDetail({ stage }: { stage: MonitorStage }) {
   return <div className="monitor-stage-detail-row" data-state={stage.state}><div><StateDot state={stage.state} /><strong>{stageLabel(stage.stage)}</strong></div><p>{stage.summary}</p>{stage.firstAction && <small>{stage.firstAction}</small>}</div>;
 }
 
-function GlobalItem({ icon, label, value, state }: { icon: React.ReactNode; label: string; value: string; state: MonitorHealthState }) {
-  return <div className="monitor-global-item" data-state={state}>{icon}<div><span>{label}</span><strong>{value}</strong></div><StateDot state={state} /></div>;
+function GlobalItem({ icon, label, value, state, wrapValue = false }: { icon: React.ReactNode; label: string; value: string; state: MonitorHealthState; wrapValue?: boolean }) {
+  return <div className={`monitor-global-item ${wrapValue ? "has-wrapped-value" : ""}`} data-state={state}>{icon}<div><span>{label}</span><strong>{value}</strong></div><StateDot state={state} /></div>;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
@@ -595,14 +613,6 @@ function StateBadge({ state, compact = false, label }: { state: MonitorHealthSta
 
 function StateDot({ state }: { state: MonitorHealthState }) {
   return <span className="monitor-state-dot" data-state={state} aria-label={friendlyState(state)} />;
-}
-
-function systemState(courts: MonitorCourt[], incidents: MonitorIncident[]): MonitorHealthState {
-  if (incidents.some((incident) => incident.status !== "resolved" && incident.severity === "critical")) return "CRITICAL";
-  return courts.reduce((worst, court) => {
-    const state = effectiveCourtState(court);
-    return STATE_RANK[state] > STATE_RANK[worst] ? state : worst;
-  }, "NOT_APPLICABLE" as MonitorHealthState);
 }
 
 function firstAttentionCourt(envelope: MonitorSnapshotEnvelope | null): number | null {
@@ -736,6 +746,20 @@ function browserQualityDetail(browser: MonitorCourt["browser"]): string {
   return `Page session: ${video.framesReceived ?? "--"} received, ${video.framesDecoded ?? "--"} decoded, ${video.framesDropped ?? "--"} dropped, ${video.freezeCount ?? "--"} freezes totaling ${freezeDuration}.`;
 }
 
+function browserLivenessLabel(liveness: MonitorBrowserLiveness): string {
+  if (liveness.state === "LIVE") return "viewer live";
+  if (liveness.state === "STATUS_MISSING") return "viewer status missing";
+  if (liveness.state === "CLOSED") return `viewer closed ${formatDuration(liveness.heartbeatAgeMs ?? 0)} ago`;
+  return "viewer closed";
+}
+
+function browserLivenessDetail(liveness: MonitorBrowserLiveness): string {
+  if (liveness.state === "LIVE") return "A current program reader and fresh browser status are both present.";
+  if (liveness.state === "STATUS_MISSING") return "A program reader exists, but its browser status is no longer updating.";
+  if (liveness.state === "CLOSED") return `The last browser status was received ${formatDuration(liveness.heartbeatAgeMs ?? 0)} ago. Historical counters are not shown as current.`;
+  return "No program browser has reported yet.";
+}
+
 function latestPoint(points: Array<[number, number]> | undefined): number | null {
   const value = points?.at(-1)?.[1];
   return value != null && Number.isFinite(value) ? value : null;
@@ -773,19 +797,6 @@ function commentaryLabel(browser: MonitorCourt["browser"]): string {
   if ((commentary.clippedSampleRatio ?? 0) > 0.05) return "clipping";
   if ((commentary.secondsSinceAudio ?? 0) > 60) return "silent";
   return commentary.syncStatus;
-}
-
-function pagingLabel(notifications: MonitorSnapshotEnvelope["snapshot"]["notifications"]): string {
-  if (notifications.state === "NOT_APPLICABLE") return "Not configured";
-  if (notifications.state === "UNKNOWN") return "Not tested";
-  return notifications.state === "HEALTHY" ? "Verified" : "Degraded";
-}
-
-function deadManLabel(deadMan: MonitorSnapshotEnvelope["snapshot"]["deadMan"]): string {
-  if (deadMan.state === "NOT_APPLICABLE") return "Not configured";
-  if (deadMan.state === "DEGRADED") return "Delivery failed";
-  if (deadMan.state === "UNKNOWN") return "Verifying";
-  return deadMan.active.mode === "RUNNING" ? "Coverage active" : "Idle protected";
 }
 
 function playAlertTone() {

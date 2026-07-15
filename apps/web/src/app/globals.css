@@ -4849,6 +4849,13 @@ body:has(.program-root) {
   white-space: nowrap;
 }
 
+.monitor-global-item.has-wrapped-value strong {
+  line-height: 1.2;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
 .monitor-freshness {
   border-right: 0;
   color: var(--muted);

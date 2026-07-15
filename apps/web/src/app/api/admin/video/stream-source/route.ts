@@ -61,7 +61,8 @@ async function loadStreamConfiguration(courtNumber: number): Promise<{
 
   const db = supabaseAdmin();
   const event = await getActiveEvent(db);
-  if (!event) return { previewStreamPath: null, broadcastExpectation: null };
+  // getActiveEvent falls back to historical rows; only a manually active event can block monitor transcoding.
+  if (!event || event.is_active !== true) return { previewStreamPath: null, broadcastExpectation: "OFF" };
 
   const { data: court, error: courtError } = await db
     .from("courts")
