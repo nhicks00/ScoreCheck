@@ -600,7 +600,9 @@ function HealthItem({ label, chip, note }: { label: string; chip: ChipView; note
   return (
     <div className="production-health-item">
       <span>{label}</span>
-      <span className={chip.className}>{chip.label}</span>
+      <span className={`${chip.className} production-health-chip`}>
+        <span className="production-health-chip-label">{chip.label}</span>
+      </span>
       {note && <span className="production-health-note">{note}</span>}
     </div>
   );
