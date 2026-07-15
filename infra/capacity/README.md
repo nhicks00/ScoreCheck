@@ -14,9 +14,10 @@ scans `/proc` every 50 ms and records bounded PID, PPID, command, parent,
 fingerprint, lifecycle, and classification evidence. Any new unclassified
 zombie aborts sampling immediately. Exact sampler and configured container
 healthcheck signatures are bounded by duration, count, and rolling rate. The
-only workload lifecycle class is a Chrome child whose full ancestry and cgroup
-resolve to the Egress container; it has its own stricter duration, count, rate,
-concurrency, and closure gates. Missing or sparse evidence fails the gate.
+workload lifecycle classes are Chrome child waits and PulseAudio `pactl` waits
+whose exact parentage, full ancestry, and cgroup resolve to the Egress
+container; they share stricter duration, count, rate, concurrency, and closure
+gates. Missing or sparse evidence fails the gate.
 SSH exit-to-wait children are classified only when both process and parent are
 the host SSH service (`sshd` under `sshd` or `systemd`); they remain subject to
 the observer duration, count, rate, and closure gates.
@@ -87,10 +88,10 @@ The checked-in c-4 profile requires:
 - an exact allowlisted pre-run zombie baseline, zero new unclassified zombies,
   no exempt observer/healthcheck zombie lasting over two seconds, and bounded
   exempt churn (at most 16 per rolling minute and 480 total per host);
-- no Egress Chrome child wait over 500 ms, more than one concurrent Chrome
-  child wait, more than 16 total or eight per rolling minute, or any unclosed
-  Chrome child lifecycle; all other workload zombies remain unclassified and
-  fail immediately;
+- no exact Egress Chrome or `pactl` child wait over 500 ms, more than one
+  concurrent workload wait, more than 16 total or eight per rolling minute, or
+  any unclosed workload lifecycle; all other workload zombies remain
+  unclassified and fail immediately;
 - fresh browser heartbeats, at least 29 fps at p05, no warning-level frame-drop
   or freeze ratio, and a continuously active Egress job;
 - exact observed protocol/mode/codecs/dimensions/audio profile matching the

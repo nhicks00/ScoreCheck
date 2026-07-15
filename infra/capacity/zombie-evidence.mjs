@@ -8,7 +8,7 @@ const EVENTS = new Set([
   "zombie_observation_end",
   "watcher_stopped"
 ]);
-const CLASSIFICATION = /^(?:unclassified|observer\.capacity-ssh|healthcheck\.(?:monitor-agent|egress|mediamtx|redis)(?:\.runtime)?|workload\.egress-chrome)$/;
+const CLASSIFICATION = /^(?:unclassified|observer\.capacity-ssh|healthcheck\.(?:monitor-agent|egress|mediamtx|redis)(?:\.runtime)?|workload\.egress-(?:chrome|pactl))$/;
 const FINGERPRINT = /^[a-f0-9]{16}$/;
 const IDENTITY = /^\d+:\d+$/;
 

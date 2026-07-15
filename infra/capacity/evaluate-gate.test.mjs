@@ -247,12 +247,12 @@ test("fails uncovered host-sample window edges independently of count coverage",
   assert(!failed.has("host_sample_coverage"));
 });
 
-test("fails persistent or accumulating Egress Chrome child waits", () => {
+test("fails persistent or accumulating Egress workload child waits", () => {
   const gateConfig = config();
   const processEvidence = zombieEvidence();
   Object.assign(processEvidence.roles.compositor, {
     workloadEventCount: 17,
-    workloadClassifications: { "workload.egress-chrome": 17 },
+    workloadClassifications: { "workload.egress-chrome": 16, "workload.egress-pactl": 1 },
     workloadMaximumDurationMs: 501,
     workloadMaximumRollingMinuteCount: 9,
     workloadMaximumConcurrentCount: 2,

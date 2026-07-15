@@ -117,8 +117,9 @@ zombies without treating every bounded parent wait interval as a resource
 leak. The corrected contract recognizes only a `chrome` child of `chrome`
 whose ancestry and cgroup both resolve to the Egress container. That lifecycle
 must close within 500 ms, remain single-concurrent, and occur no more than 16
-times total or eight times per rolling minute. Every other new workload process remains
-unclassified and still aborts the sampler immediately.
+times total or eight times per rolling minute. Any workload process outside an
+exactly defined, bounded lifecycle remains unclassified and still aborts the
+sampler immediately.
 
 The first bounded lifecycle calibration also exposed a harness cleanup error:
 the fail-closed path used `SIGKILL` on its SSH transport, and a later watcher
@@ -173,6 +174,20 @@ The classifier is deliberately not widened to exempt arbitrary shells. The
 Egress healthcheck now uses exec-form `curl`, matching the already exact
 executable, shim, and cgroup healthcheck attribution. A shell-form regression
 test prevents reintroducing this ambiguous process lineage.
+
+The next run remained media-clean after warmup but failed closed at
+`04:04:26.302Z` when the 50 ms scanner observed `pactl` in `Z` state under the
+live Egress process. The exact event is preserved under
+`~/.config/scorecheck/capacity/court1-c4-qualified-20260715T035211Z-r3/`.
+Pinned Egress `v1.13.0` source shows that its periodic PulseAudio client metric
+uses Go `exec.Command(...).Run()`, which waits for the child. The scanner can
+therefore observe the bounded kernel interval between child exit and the
+parent's wait even when reaping is correct. The watcher recognizes this only
+for command `pactl`, parent `egress`, full ancestry under `/tini -- egress`, and
+the same Egress cgroup. It preserves every lifecycle and applies the shared
+500 ms duration, one-concurrent, 16-total, and eight-per-minute workload gates;
+wrong-parent, wrong-cgroup, persistent, overlapping, or accumulating processes
+still fail.
 
 ## Required rerun
 

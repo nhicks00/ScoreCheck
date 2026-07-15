@@ -43,20 +43,25 @@ test("reports every new non-observer zombie with bounded attribution", () => {
   });
 });
 
-test("separately bounds exact Egress Chrome child lifecycle", () => {
+test("separately bounds exact Egress workload child lifecycles", () => {
   const events = baseEvents();
   events.push(open("compositor", 12, "310:31", "chrome", "chrome", "workload.egress-chrome", false));
   events.push(close("compositor", 12.1, "310:31", "workload.egress-chrome", 100));
   events.push(open("compositor", 13, "320:32", "chrome", "chrome", "workload.egress-chrome", false));
   events.push(close("compositor", 13.2, "320:32", "workload.egress-chrome", 200));
+  events.push(open("compositor", 14, "330:33", "pactl", "egress", "workload.egress-pactl", false));
+  events.push(close("compositor", 14.05, "330:33", "workload.egress-pactl", 50));
   const summary = summarize(events);
 
   assert.equal(summary.roles.compositor.newUnclassifiedCount, 0);
   assert.equal(summary.roles.compositor.observerEventCount, 0);
-  assert.equal(summary.roles.compositor.workloadEventCount, 2);
-  assert.deepEqual(summary.roles.compositor.workloadClassifications, { "workload.egress-chrome": 2 });
+  assert.equal(summary.roles.compositor.workloadEventCount, 3);
+  assert.deepEqual(summary.roles.compositor.workloadClassifications, {
+    "workload.egress-chrome": 2,
+    "workload.egress-pactl": 1
+  });
   assert.equal(summary.roles.compositor.workloadMaximumDurationMs, 200);
-  assert.equal(summary.roles.compositor.workloadMaximumRollingMinuteCount, 2);
+  assert.equal(summary.roles.compositor.workloadMaximumRollingMinuteCount, 3);
   assert.equal(summary.roles.compositor.workloadMaximumConcurrentCount, 1);
   assert.equal(summary.roles.compositor.unclosedWorkloadCount, 0);
 });

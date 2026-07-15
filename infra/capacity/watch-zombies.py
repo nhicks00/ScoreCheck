@@ -173,13 +173,17 @@ def classification_map(processes):
             parent_pid = parent["ppid"]
 
     for process in processes.values():
-        if process["command"] != "chrome" or process.get("parentCommand") != "chrome":
+        workload_classification = {
+            ("chrome", "chrome"): "workload.egress-chrome",
+            ("pactl", "egress"): "workload.egress-pactl",
+        }.get((process["command"], process.get("parentCommand")))
+        if workload_classification is None:
             continue
         for egress_init in egress_inits:
             if process.get("cgroupFingerprint") != egress_init.get("cgroupFingerprint"):
                 continue
             if is_descendant(process, egress_init, processes):
-                classifications[process["identity"]] = "workload.egress-chrome"
+                classifications[process["identity"]] = workload_classification
                 break
 
     for _ in range(8):
@@ -428,6 +432,10 @@ def self_test():
         70: {"pid": 70, "ppid": 50, "identity": "70:7", "command": "redis-cli", "parentCommand": "containerd-shim", "commandLine": b"", "cgroupFingerprint": "redis"},
         80: {"pid": 80, "ppid": 50, "identity": "80:8", "command": "redis-cli", "parentCommand": "containerd-shim", "commandLine": b"", "cgroupFingerprint": "other"},
         90: {"pid": 90, "ppid": 50, "identity": "90:9", "command": "node", "parentCommand": "containerd-shim", "commandLine": b"", "cgroupFingerprint": "redis"},
+        100: {"pid": 100, "ppid": 10, "identity": "100:10", "command": "egress", "parentCommand": "tini", "commandLine": b"egress", "cgroupFingerprint": "egress"},
+        110: {"pid": 110, "ppid": 100, "identity": "110:11", "command": "pactl", "parentCommand": "egress", "commandLine": b"", "cgroupFingerprint": "egress"},
+        120: {"pid": 120, "ppid": 100, "identity": "120:12", "command": "pactl", "parentCommand": "egress", "commandLine": b"", "cgroupFingerprint": "other"},
+        130: {"pid": 130, "ppid": 20, "identity": "130:13", "command": "pactl", "parentCommand": "chrome", "commandLine": b"", "cgroupFingerprint": "egress"},
     }
     classifications = classification_map(processes)
     assert classifications["30:3"] == "workload.egress-chrome"
@@ -435,6 +443,9 @@ def self_test():
     assert classifications["70:7"] == "healthcheck.redis"
     assert "80:8" not in classifications
     assert "90:9" not in classifications
+    assert classifications["110:11"] == "workload.egress-pactl"
+    assert "120:12" not in classifications
+    assert "130:13" not in classifications
 
 
 def parse_args():
