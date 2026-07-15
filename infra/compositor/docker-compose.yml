@@ -103,7 +103,7 @@ services:
       # source for the Phase 2 10-hour soak.
       - "127.0.0.1:9090:9090"
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9091/ >/dev/null"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9091/"]
       interval: 15s
       timeout: 5s
       retries: 4

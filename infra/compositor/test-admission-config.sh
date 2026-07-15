@@ -67,6 +67,14 @@ grep -Fq './headless_shell:/usr/local/bin/headless_shell:ro' "$COMPOSE" || {
   printf 'FAIL: direct Chrome launcher must be mounted into the Egress container\n' >&2
   exit 1
 }
+grep -Fq 'test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9091/"]' "$COMPOSE" || {
+  printf 'FAIL: Egress healthcheck must use directly attributable exec form\n' >&2
+  exit 1
+}
+if grep -Fq 'test: ["CMD-SHELL"' "$COMPOSE"; then
+  printf 'FAIL: shell-form healthchecks are forbidden in the compositor stack\n' >&2
+  exit 1
+fi
 grep -Fq 'flock -n 9' "$START_SCRIPT" || {
   printf 'FAIL: court starts must use the serialized admission lock\n' >&2
   exit 1

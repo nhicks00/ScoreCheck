@@ -159,6 +159,21 @@ under
 completed with `8/8` valid host rows, maximum scan gap `52.235 ms`, the exact
 permitted ingest baseline, and no new unclassified process.
 
+A subsequent attempt started at `03:37:45.718Z` and kept media, browser,
+resource, admission, YouTube, and peer-isolation evidence healthy after warmup.
+It still failed closed at `03:44:34.594Z` on a short-lived `sh` zombie directly
+under the `bvm-egress` container shim. The event's parent PID and cgroup
+fingerprint exactly matched the Egress init, and its timestamp matched the
+configured 15-second healthcheck cadence. The remaining ambiguity came from
+Docker `CMD-SHELL`: after process exit, the observable command was only `sh`.
+The completed broadcast and sampler evidence are preserved under
+`~/.config/scorecheck/capacity/court1-c4-qualified-20260715T033646Z-r2/`.
+
+The classifier is deliberately not widened to exempt arbitrary shells. The
+Egress healthcheck now uses exec-form `curl`, matching the already exact
+executable, shim, and cgroup healthcheck attribution. A shell-form regression
+test prevents reintroducing this ambiguous process lineage.
+
 ## Required rerun
 
 This gate can pass only after deployment provenance is verified and a new full
