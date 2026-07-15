@@ -8,12 +8,17 @@ TEMPLATE="$SCRIPT_DIR/mediamtx.template.yml"
 TEST_ROOT="$(mktemp -d)"
 MOCK_BIN="$TEST_ROOT/bin"
 RUNNER_PID=""
+WAIT_GUARD_PID=""
 
 cleanup() {
   trap - EXIT HUP INT TERM
   if [ -n "$RUNNER_PID" ]; then
     kill "$RUNNER_PID" 2>/dev/null || true
     wait "$RUNNER_PID" 2>/dev/null || true
+  fi
+  if [ -n "$WAIT_GUARD_PID" ]; then
+    kill "$WAIT_GUARD_PID" 2>/dev/null || true
+    wait "$WAIT_GUARD_PID" 2>/dev/null || true
   fi
   rm -rf "$TEST_ROOT"
 }
@@ -22,6 +27,24 @@ trap cleanup EXIT HUP INT TERM
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
   exit 1
+}
+
+wait_runner_bounded() {
+  (
+    sleep 5
+    kill -KILL "$RUNNER_PID" 2>/dev/null || true
+  ) &
+  WAIT_GUARD_PID=$!
+
+  set +e
+  wait "$RUNNER_PID"
+  RUNNER_STATUS=$?
+  set -e
+
+  kill "$WAIT_GUARD_PID" 2>/dev/null || true
+  wait "$WAIT_GUARD_PID" 2>/dev/null || true
+  WAIT_GUARD_PID=""
+  [ "$RUNNER_STATUS" -ne 137 ] || fail "runner did not exit within five seconds"
 }
 
 mkdir -p "$MOCK_BIN" "$TEST_ROOT/progress"
@@ -40,18 +63,18 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -n "$progress" ] || exit 64
-printf '%s\n' "$$" >"$FAKE_FFMPEG_PID_FILE"
-
-if [ "${FAKE_FFMPEG_EXIT_EARLY:-0}" -eq 1 ]; then
-  exit 42
-fi
-
 on_signal() {
   printf 'stopping\n' >"$FAKE_FFMPEG_STOP_FILE"
   sleep 0.1
   exit 0
 }
 trap on_signal HUP INT TERM
+
+printf '%s\n' "$$" >"$FAKE_FFMPEG_PID_FILE"
+
+if [ "${FAKE_FFMPEG_EXIT_EARLY:-0}" -eq 1 ]; then
+  exit 42
+fi
 
 {
   printf 'frame=1\n'
@@ -102,13 +125,19 @@ run_shutdown_cycle() {
   [ -f "$FAKE_FFMPEG_PID_FILE" ] || fail "fake FFmpeg did not start"
 
   ffmpeg_pid="$(cat "$FAKE_FFMPEG_PID_FILE")"
+  attempt=0
+  while ! grep -q '^frame=1$' "$FFMPEG_PROGRESS_DIR/court1_preview.progress" 2>/dev/null \
+    && [ "$attempt" -lt 100 ]; do
+    attempt=$((attempt + 1))
+    sleep 0.02
+  done
+  grep -q '^frame=1$' "$FFMPEG_PROGRESS_DIR/court1_preview.progress" 2>/dev/null \
+    || fail "progress parser did not publish the FFmpeg sample"
   # MediaMTX terminates the external-command process group, so the runner and
   # FFmpeg receive the same signal. The runner must still wait for the child.
   kill "-$shutdown_signal" "$RUNNER_PID" "$ffmpeg_pid"
-  set +e
-  wait "$RUNNER_PID"
-  runner_status=$?
-  set -e
+  wait_runner_bounded
+  runner_status="$RUNNER_STATUS"
   RUNNER_PID=""
 
   [ "$runner_status" -eq "$expected_status" ] \
@@ -140,10 +169,8 @@ done
   || fail "runner bypassed the readiness gate"
 ffmpeg_pid="$(cat "$FAKE_FFMPEG_PID_FILE")"
 kill -TERM "$RUNNER_PID" "$ffmpeg_pid"
-set +e
-wait "$RUNNER_PID"
-ready_status=$?
-set -e
+wait_runner_bounded
+ready_status="$RUNNER_STATUS"
 RUNNER_PID=""
 [ "$ready_status" -eq 143 ] || fail "readiness-gated runner exited with $ready_status"
 [ ! -e "$FFMPEG_PROGRESS_DIR/court1_preview.progress" ] \
@@ -151,8 +178,13 @@ RUNNER_PID=""
 
 grep -Fq "trap 'exit_for_signal 130' INT" "$RUNNER" \
   || fail "runner does not install the MediaMTX SIGINT cleanup handler"
-grep -Fq "trap '' HUP INT TERM" "$RUNNER" \
-  || fail "progress parser can exit independently of the runner reap path"
+grep -Fq 'stop_parser' "$RUNNER" \
+  || fail "runner does not terminate and reap its progress parser"
+grep -Fq '/bin/sh "$0" --parse-progress "$progress_file" "$fifo" 2>/dev/null &' "$RUNNER" \
+  || fail "runner does not separately exec its owned progress parser"
+if grep -q 'exec 7<>"$fifo"' "$RUNNER"; then
+  fail "runner still gives the progress parser a self-held FIFO writer"
+fi
 
 rm -f "$FAKE_FFMPEG_PID_FILE" "$FAKE_FFMPEG_STOP_FILE"
 export FAKE_FFMPEG_EXIT_EARLY=1
