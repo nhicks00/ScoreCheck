@@ -5,14 +5,16 @@ import { buildMonitorSnapshot } from "./correlator.js";
 
 describe("monitoring fault-gate control", () => {
   it("accepts a bounded fifteen-minute operator window", () => {
-    expect(faultGateArmRequestSchema.safeParse({ actor: "codex", reason: "Camera 1 recovery gate", durationSeconds: 900 }).success).toBe(true);
-    expect(faultGateArmRequestSchema.safeParse({ actor: "codex", reason: "Camera 1 recovery gate", durationSeconds: 1_801 }).success).toBe(false);
+    expect(faultGateArmRequestSchema.safeParse({ profile: "RAW_ONLY", actor: "codex", reason: "Camera 1 recovery gate", durationSeconds: 900 }).success).toBe(true);
+    expect(faultGateArmRequestSchema.safeParse({ profile: "PROGRAM_CONTENT", actor: "codex", reason: "Camera 1 content gate", durationSeconds: 900 }).success).toBe(true);
+    expect(faultGateArmRequestSchema.safeParse({ profile: "RAW_ONLY", actor: "codex", reason: "Camera 1 recovery gate", durationSeconds: 1_801 }).success).toBe(false);
+    expect(faultGateArmRequestSchema.safeParse({ actor: "codex", reason: "ambiguous gate", durationSeconds: 900 }).success).toBe(false);
   });
 
   it("arms exactly one expiring in-memory court expectation", () => {
     const control = new FaultGateControl();
     const nowMs = Date.parse("2026-07-13T13:00:00.000Z");
-    const gate = control.arm({ courtNumber: 4, actor: "codex", reason: "Court 4 camera-loss gate", durationSeconds: 120 }, nowMs);
+    const gate = control.arm({ courtNumber: 4, profile: "RAW_ONLY", actor: "codex", reason: "Court 4 camera-loss gate", durationSeconds: 120 }, nowMs);
     expect(gate.expiresAt).toBe("2026-07-13T13:02:00.000Z");
     expect(faultGateExpectation(gate)).toEqual({
       coveragePhase: "WARMUP",
@@ -22,7 +24,7 @@ describe("monitoring fault-gate control", () => {
       scoringExpectation: "NONE",
       overrideExpiresAt: gate.expiresAt
     });
-    expect(() => control.arm({ courtNumber: 3, actor: "codex", reason: "second", durationSeconds: 120 }, nowMs + 1_000))
+    expect(() => control.arm({ courtNumber: 3, profile: "RAW_ONLY", actor: "codex", reason: "second", durationSeconds: 120 }, nowMs + 1_000))
       .toThrowError(FaultGateConflictError);
     expect(control.active(nowMs + 120_000)).toEqual([]);
   });
@@ -39,7 +41,26 @@ describe("monitoring fault-gate control", () => {
 
   it("requires only raw ingest and leaves derived branches expected off", () => {
     const nowMs = Date.parse("2026-07-13T13:00:00.000Z");
-    const gate = new FaultGateControl().arm({ courtNumber: 4, actor: "codex", reason: "raw gate", durationSeconds: 120 }, nowMs);
+    const gate = new FaultGateControl().arm({ courtNumber: 4, profile: "RAW_ONLY", actor: "codex", reason: "raw gate", durationSeconds: 120 }, nowMs);
+    const snapshot = buildMonitorSnapshot([], new Map(), 4, nowMs, [], new Map(), null, null, undefined, undefined, new Map(), [], [gate]);
+    const court = snapshot.courts[3]!;
+    expect(court.stages.find((stage) => stage.stage === "RAW_INGEST")?.state).toBe("CRITICAL");
+    expect(court.stages.find((stage) => stage.stage === "PREVIEW")?.state).toBe("EXPECTED_OFF");
+    expect(court.stages.find((stage) => stage.stage === "PROGRAM_PATH")?.state).toBe("EXPECTED_OFF");
+    expect(court.stages.find((stage) => stage.stage === "PROGRAM_BROWSER")?.state).toBe("EXPECTED_OFF");
+  });
+
+  it("enables camera-content analysis without enabling downstream production stages", () => {
+    const nowMs = Date.parse("2026-07-13T13:00:00.000Z");
+    const gate = new FaultGateControl().arm({ courtNumber: 4, profile: "PROGRAM_CONTENT", actor: "codex", reason: "content gate", durationSeconds: 120 }, nowMs);
+    expect(faultGateExpectation(gate)).toEqual({
+      coveragePhase: "LIVE_MATCH",
+      mediaExpectation: "REQUIRED",
+      broadcastExpectation: "OFF",
+      commentaryExpectation: "NONE",
+      scoringExpectation: "NONE",
+      overrideExpiresAt: gate.expiresAt
+    });
     const snapshot = buildMonitorSnapshot([], new Map(), 4, nowMs, [], new Map(), null, null, undefined, undefined, new Map(), [], [gate]);
     const court = snapshot.courts[3]!;
     expect(court.stages.find((stage) => stage.stage === "RAW_INGEST")?.state).toBe("CRITICAL");

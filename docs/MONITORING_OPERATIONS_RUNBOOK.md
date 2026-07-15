@@ -351,6 +351,23 @@ POST /v1/fault-gates/courts/{court}/arm
 DELETE /v1/fault-gates/courts/{court}
 ```
 
+Arming is a hard-cutover contract and requires an explicit `profile` in the
+JSON body. Use `RAW_ONLY` for publisher-loss or uplink tests. Use
+`PROGRAM_CONTENT` only when a protected Program viewer is planned for
+black-picture, repeated-picture, or camera-audio analysis. That profile enables
+camera content analysis for the test camera while scoring, commentary,
+YouTube, Egress, and production control remain off. Requests without a profile
+are rejected instead of guessing operator intent.
+
+```json
+{
+  "profile": "RAW_ONLY",
+  "actor": "operator-id",
+  "reason": "Isolated Camera 4 publisher-loss test",
+  "durationSeconds": 900
+}
+```
+
 Start the read-only evidence recorder before the operator introduces a fault.
 It samples only the sanitized monitor API, writes an exclusive mode-0600 JSONL
 artifact outside the repository, never arms a gate, and never changes media or
@@ -384,6 +401,36 @@ gap, an unhealthy collector, stale or malformed durable state, duplicate
 incident/notification episodes, a missing expected issue, missing recovery, or
 an unapproved peer impact makes the recorder exit nonzero. The artifact is gate
 evidence, not permission to modify the dependency under test.
+
+For real camera-content faults on an otherwise unused direct-publisher Camera
+2-5 path, use the bounded synthetic feed controller instead of changing a
+physical camera or MediaMTX configuration:
+
+```bash
+./infra/monitoring/run-test-feed-fault.mjs \
+  --court 4 \
+  --scenario freeze \
+  --output "$HOME/.config/scorecheck/fault-evidence/camera4-feed-$(date -u +%Y%m%dT%H%M%SZ).jsonl"
+```
+
+The controller loads publishing credentials only from protected
+`MEDIAMTX_PUBLIC_HOST`, `MEDIAMTX_COURT_N_PUBLISH_USER`, and
+`MEDIAMTX_COURT_N_PUBLISH_PASS` environment values. It never prints the output
+URL, never invokes a shell, and writes only sanitized mode-0600 evidence. It
+refuses Camera 1 and listener/pull Cameras 6-8, an occupied selected path, an
+active event, an existing gate or incident, stale agents, unhealthy Pushover or
+dead-man state, and any peer already needing attention.
+
+The controller first publishes a moving 1280x720/30 H.264 + AAC baseline. After
+it prints `TEST FEED READY`, the operator must arm the exact requested profile,
+start `capture-fault-evidence.mjs`, and, for `PROGRAM_CONTENT`, open exactly one
+protected Program viewer. Enter `FAULT` only after its second preflight passes.
+Available scenarios are `freeze`, `black`, `camera-silence`, and
+`publisher-loss`. Enter `RECOVER` after detection and phone evidence, leave the
+normal feed running through durable recovery, disarm the gate, and enter
+`STOP`. `STOP` is refused while a gate or incident remains active. Terminal
+input loss restores and holds the normal feed until the bounded gate has ended
+instead of creating another camera outage.
 
 Every alert opened from this override carries `expectation_source=fault_gate`
 and a plain-English `TEST` notification title. Restore and verify the raw
@@ -429,8 +476,8 @@ active commentary rooms. Acceptance requires:
 - every injected single-court fault identifies that court without paging the other seven;
 - one compositor fault affects only its assigned pair;
 - Pushover acknowledgement, silence expiry, and recovery each deduplicate;
-- optional SMS escalation deduplicates only if Twilio is later enabled and
-  separately qualified;
+- Twilio remains out of scope unless carrier registration completes and a real
+  SMS delivery is separately qualified;
 - no high-frequency telemetry growth appears in Supabase.
 
 ## Current acceptance status

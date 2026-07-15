@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { CourtExpectation, MonitoringFaultGate, MonitorSnapshot } from "./contracts.js";
 
 export const faultGateArmRequestSchema = z.object({
+  profile: z.enum(["RAW_ONLY", "PROGRAM_CONTENT"]),
   actor: z.string().trim().min(1).max(80).regex(/^[a-zA-Z0-9_.:@-]+$/),
   reason: z.string().trim().min(3).max(300).refine((value) => !/[\u0000-\u001f\u007f]/.test(value)),
   durationSeconds: z.number().int().min(60).max(1_800)
@@ -17,13 +18,14 @@ export class FaultGateConflictError extends Error {
 export class FaultGateControl {
   private gate: MonitoringFaultGate | null = null;
 
-  arm(input: { courtNumber: number; actor: string; reason: string; durationSeconds: number }, nowMs = Date.now()): MonitoringFaultGate {
+  arm(input: { courtNumber: number; profile: MonitoringFaultGate["profile"]; actor: string; reason: string; durationSeconds: number }, nowMs = Date.now()): MonitoringFaultGate {
     const current = this.active(nowMs)[0] ?? null;
     if (current) {
       throw new FaultGateConflictError("FAULT_GATE_ALREADY_ARMED", `Court ${current.courtNumber} already owns the monitoring fault gate.`);
     }
     this.gate = {
       courtNumber: input.courtNumber,
+      profile: input.profile,
       actor: input.actor,
       reason: input.reason,
       armedAt: new Date(nowMs).toISOString(),
@@ -67,7 +69,7 @@ export function assertFaultGateCanArm(snapshot: MonitorSnapshot, courtNumber: nu
 
 export function faultGateExpectation(gate: MonitoringFaultGate): CourtExpectation {
   return {
-    coveragePhase: "WARMUP",
+    coveragePhase: gate.profile === "PROGRAM_CONTENT" ? "LIVE_MATCH" : "WARMUP",
     mediaExpectation: "REQUIRED",
     broadcastExpectation: "OFF",
     commentaryExpectation: "NONE",

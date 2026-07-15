@@ -94,6 +94,7 @@ function resolvedIncident(patch: Partial<IncidentSnapshot> = {}) {
 function faultGate(expiresAt: string): MonitoringFaultGate {
   return {
     courtNumber: 1,
+    profile: "RAW_ONLY",
     actor: "codex",
     reason: "Camera 1 raw-loss gate",
     armedAt: "2026-07-13T13:00:00.000Z",

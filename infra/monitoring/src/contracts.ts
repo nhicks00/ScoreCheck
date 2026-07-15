@@ -467,6 +467,7 @@ export type MonitoringSilence = {
 
 export type MonitoringFaultGate = {
   courtNumber: number;
+  profile: "RAW_ONLY" | "PROGRAM_CONTENT";
   actor: string;
   reason: string;
   armedAt: string;

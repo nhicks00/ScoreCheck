@@ -182,6 +182,7 @@ export type MonitorCourt = {
 
 export type MonitorFaultGate = {
   courtNumber: number;
+  profile: "RAW_ONLY" | "PROGRAM_CONTENT";
   actor: string;
   reason: string;
   armedAt: string;

@@ -183,6 +183,17 @@ acknowledgement/recovery requirements. Provider receipt identifiers are omitted
 and Supabase is never polled. This makes future real-gate evidence repeatable;
 it does not convert any pending real fault into a pass.
 
+The isolated synthetic feed controller is also implemented and locally
+qualified for direct-publisher Camera 2-5 paths. It produces a moving baseline,
+full-bitrate repeated picture, uniform black picture, silent camera audio, or a
+bounded publisher loss without changing MediaMTX configuration. Its explicit
+`RAW_ONLY` versus `PROGRAM_CONTENT` gate contract closes the prior no-event
+content-analysis gap. Guardrails refuse occupied paths, active events, dirty
+monitoring state, wrong gate profiles, stale Program viewers, and unsafe stop;
+the generated 1280x720/30 H.264 + AAC stream was locally probed at about 2.58
+Mbps. This is prepared test tooling, not evidence that any remaining real fault
+row has passed.
+
 1. Prove Pushover acknowledgement and Healthchecks withheld-ping recovery in a
    scheduled operator-visible window.
 2. Use test feeds to inject the remaining real rows: full-bitrate freeze,
