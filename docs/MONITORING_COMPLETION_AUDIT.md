@@ -22,8 +22,8 @@ providers or real media feeds.
 | Durable incidents and operator actions | Fingerprints, open/ack/resolved transitions, checkpoints, acknowledgements, timed silences, expiry re-arm | Deployed and unit-tested |
 | Alert expression behavior | Promtool fixtures validate hold times, labels, annotations, court isolation, black/freeze exclusion, decode/freeze rate bands, live gating, shared-worker fan-out, and external phone-channel attachment | Candidate rule suite passing locally; deployment held until provider and workload gates permit a bounded cutover |
 | Page suppression behavior | Disposable network-isolated Alertmanager proves same-court and shared-dependency inhibition while peer alerts remain active | Enforced before deployment |
-| Phone paging | Pushover emergency acknowledgement plus Twilio SMS escalation and recovery logic | Pushover delivery/recovery proven; Twilio sender is SMS-capable and the sole-proprietor brand is approved, but campaign/number association and live delivery are not yet verified, so SMS remains disabled; controlled acknowledgement/escalation gate pending |
-| Independent dead-man | Baseline and active Healthchecks senders with coverage-aware cadence plus read-only Pushover attachment audit | Checks configured; baseline running and active idle-paused; both currently email-only, so phone attachment and withheld-ping gates remain pending |
+| Phone paging | Required Pushover emergency acknowledgement and recovery; optional Twilio SMS escalation | Pushover delivery/recovery proven; controlled acknowledgement gate pending. Twilio is optional and disabled because campaign/number association and live delivery are not verified |
+| Independent dead-man | Baseline and active Healthchecks senders with coverage-aware cadence plus read-only Pushover attachment audit | Checks configured; baseline running and active idle-paused; Pushover attached to both. Audit deployment and withheld-ping gate remain pending |
 | One-court real fault gate | Camera, network, preview, browser, commentary, score, Egress, YouTube, agent, dead-man faults | Ten-hour transport/sync soak passed; injected fault matrix pending |
 | Eight-court real load/fault gate | Four compositors, eight representative feeds, two commentary rooms, score on all courts | Fail-closed routing endurance passed under the temporary topology; ingest headroom and viewer quality failed; revised-topology gate pending |
 
@@ -111,20 +111,19 @@ floor was 31.8 Mbps and Cameras 6-8 were temporary WireGuard pulls.
 
 ## Remaining external blockers
 
-ScoreCheck Pushover and both Healthchecks checks are configured. The
-Healthchecks project still has only its email channel. The remaining provider
-and operator prerequisites are:
+ScoreCheck Pushover and both Healthchecks checks are configured. Healthchecks
+has one Pushover integration attached exactly to the baseline and active checks,
+with the unused legacy check left email-only. The remaining provider and
+operator prerequisites are:
 
-1. Complete the purchased SMS sender's A2P registration. The authenticated
-   Twilio console showed messaging disabled on 2026-07-14: brand registration
-   was not started and campaign registration could not start. A prior live test
-   returned `30034`; escalation stays disabled until registration is approved
-   and a delivery test passes.
-2. Confirm the staged Pushover subscription on the Healthchecks project and
-   prove a withheld baseline ping reaches the phone. The project currently has
-   only its email notification channel.
-3. An existing production admin session for a production-browser visual pass;
+1. Deploy the channel-readiness audit and prove a withheld baseline ping reaches
+   the phone without creating duplicate alerts.
+2. An existing production admin session for a production-browser visual pass;
    Vercel intentionally does not export the sensitive admin secret.
+
+Twilio is not required for this release. Its sender remains disabled as an
+optional future escalation path until A2P campaign association and a real
+delivery test pass.
 
 Operator approval for isolated monitoring fault gates is recorded, and Camera 4
 is available as a raw-only test feed. The user ended the active soak at 16:00
@@ -142,9 +141,8 @@ must not claim RF or camera-encoder certainty without those sources.
 
 ## Next gates
 
-1. Add an independent Healthchecks phone channel and an approved Twilio sender,
-   then prove acknowledgement, one SMS escalation, recovery, and withheld-ping
-   behavior in a scheduled test window.
+1. Deploy the independent Healthchecks phone-channel audit, then prove Pushover
+   acknowledgement, recovery, and withheld-ping behavior in a scheduled window.
 2. Repeat the one-court test broadcast and inject every remaining row in the
    runbook table, including camera reconnect and subjective sync checks.
 3. Replace the shared eight-feed normalizer topology, then run eight

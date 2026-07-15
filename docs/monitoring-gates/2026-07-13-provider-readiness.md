@@ -38,26 +38,24 @@ ScoreCheck now uses the restricted API key for message creation and polls only n
 
 Activation requires a successful live delivery test after A2P approval. Only then should the pending values be promoted into the protected monitoring deployment environment and the escalation/recovery gate be run.
 
+Twilio is not a blocker for the current monitoring release. Pushover is the
+required phone channel; SMS remains an optional future escalation path and must
+stay disabled until campaign association and actual delivery pass.
+
 ## Healthchecks
 
 The Healthchecks Management API currently reports:
 
 | Check | State | Period | Grace | Phone channel |
 | --- | --- | --- | --- | --- |
-| ScoreCheck monitor baseline | Up | 10 minutes | 3 minutes | No |
-| ScoreCheck active coverage monitor | Paused while idle | 1 minute | 1 minute | No |
+| ScoreCheck monitor baseline | Up | 10 minutes | 3 minutes | Yes, Pushover |
+| ScoreCheck active coverage monitor | Paused while idle | 1 minute | 1 minute | Yes, Pushover |
 
-Both checks are assigned to the project's single email integration. The API can
-list and assign integrations but cannot create a Pushover subscription.
-Healthchecks is authenticated in Safari and the final Pushover subscription page
-is staged with emergency down priority, five-minute repeats for up to one day,
-and normal recovery priority. The external subscription has not been confirmed,
-so no Pushover integration exists in the Healthchecks project yet.
-
-To unblock the independent phone dead-man gate, Nathan must explicitly confirm
-the staged Healthchecks-to-Pushover subscription. After it exists, attach that
-integration to both checks, verify the new channel-readiness snapshot and
-dashboard state, and only then run the controlled withheld-ping test.
+The Healthchecks Pushover subscription is active with high-priority Down events
+and normal-priority recovery events. It is assigned to exactly the baseline and
+active-coverage checks; the unused legacy check remains email-only. The
+Management API independently confirms one `po` channel and both required check
+assignments. No test notification was sent during subscription.
 
 ## Read-only release preflight: 2026-07-15 02:35Z
 
@@ -80,26 +78,24 @@ false. An independent sanitized API check agreed: one email channel, zero
 Pushover channels, and both check ids valid. No provider, monitoring, media,
 routing, browser, output, Supabase, or Vercel state was changed.
 
-After explicit subscription confirmation, use this order:
+After provider subscription, use this order:
 
-1. Confirm exactly one Healthchecks Pushover channel exists and attach it to
-   both the baseline and active checks.
-2. Add the explicit baseline check id to the protected observability environment
+1. Add the explicit baseline check id to the protected observability environment
    and back up the prior environment and container provenance.
-3. Recreate monitor-service only at the matching candidate revision. Verify
+2. Recreate monitor-service only at the matching candidate revision. Verify
    health, restart count, the new secret-free snapshot field, and both attachment
    metrics before continuing.
-4. Deploy the matching Prometheus rules only after both attachment metrics are
+3. Deploy the matching Prometheus rules only after both attachment metrics are
    `1`, then require 46/46 rules healthy and zero new alerts.
-5. Deploy the matching web build and verify desktop and mobile Watchdog labels
+4. Deploy the matching web build and verify desktop and mobile Watchdog labels
    show `Idle protected` or `Coverage protected` as appropriate.
-6. Run the controlled withheld-ping delivery gate separately; do not combine it
+5. Run the controlled withheld-ping delivery gate separately; do not combine it
    with the configuration cutover.
 
 ## Current decision
 
 - Keep direct Pushover enabled.
-- Keep Twilio disabled until A2P delivery succeeds.
+- Keep Twilio disabled and optional until A2P delivery succeeds.
 - Keep baseline Healthchecks running and active-coverage Healthchecks paused while all courts are off.
-- Do not run the withheld-ping phone gate until Healthchecks has an independent phone channel.
+- Deploy and verify the attachment audit before running the withheld-ping phone gate.
 - Keep the Pushover acknowledgement gate open until a delivered emergency is acknowledged during the controlled window.

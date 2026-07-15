@@ -4,6 +4,50 @@ import type { IncidentStore, StoredNotification } from "./incidentStore.js";
 import { NotificationDispatcher } from "./notifications.js";
 
 describe("notification provider validation", () => {
+  it("ignores historical failures from a disabled optional SMS provider", () => {
+    const config = {
+      ...notificationConfig(),
+      twilioAccountSid: null,
+      twilioApiKeySid: null,
+      twilioApiKeySecret: null,
+      twilioFromNumber: null,
+      twilioToNumber: null
+    };
+    const dispatcher = new NotificationDispatcher(config, {} as IncidentStore);
+    dispatcher.hydrate([
+      storedNotification({ status: "delivered", deliveredAt: "2026-07-12T18:00:30.000Z" }),
+      storedNotification({ provider: "twilio_sms", status: "failed", providerErrorCode: "30034" })
+    ]);
+
+    expect(dispatcher.health()).toEqual({
+      state: "HEALTHY",
+      pushover: {
+        configured: true,
+        lastSuccessAt: "2026-07-12T18:00:30.000Z",
+        lastFailureAt: null
+      },
+      twilioSms: {
+        configured: false,
+        lastSuccessAt: null,
+        lastFailureAt: null
+      }
+    });
+  });
+
+  it("keeps failures from an enabled optional SMS provider visible", () => {
+    const dispatcher = new NotificationDispatcher(notificationConfig(), {} as IncidentStore);
+    dispatcher.hydrate([
+      storedNotification({ status: "delivered", deliveredAt: "2026-07-12T18:00:30.000Z" }),
+      storedNotification({ provider: "twilio_sms", status: "failed", providerErrorCode: "30034" })
+    ]);
+
+    expect(dispatcher.health()).toMatchObject({
+      state: "DEGRADED",
+      pushover: { configured: true, lastFailureAt: null },
+      twilioSms: { configured: true, lastFailureAt: "2026-07-12T18:00:00.000Z" }
+    });
+  });
+
   it("does not page an incident while a matching silence is active", async () => {
     const send = vi.fn<typeof fetch>();
     const dispatcher = new NotificationDispatcher(notificationConfig(), {} as IncidentStore, send);

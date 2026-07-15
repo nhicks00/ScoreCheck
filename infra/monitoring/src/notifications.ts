@@ -39,12 +39,12 @@ export class NotificationDispatcher {
   }
 
   health(): NotificationHealth {
-    const configured = this.providerHealth.pushover.configured || this.providerHealth.twilioSms.configured;
-    const failed = Boolean(this.providerHealth.pushover.lastFailureAt || this.providerHealth.twilioSms.lastFailureAt);
-    const unverified = [this.providerHealth.pushover, this.providerHealth.twilioSms]
-      .some((provider) => provider.configured && !provider.lastSuccessAt);
+    const configuredProviders = [this.providerHealth.pushover, this.providerHealth.twilioSms]
+      .filter((provider) => provider.configured);
+    const failed = configuredProviders.some((provider) => provider.lastFailureAt != null);
+    const unverified = configuredProviders.some((provider) => !provider.lastSuccessAt);
     return {
-      state: !configured ? "NOT_APPLICABLE" : failed ? "DEGRADED" : unverified ? "UNKNOWN" : "HEALTHY",
+      state: configuredProviders.length === 0 ? "NOT_APPLICABLE" : failed ? "DEGRADED" : unverified ? "UNKNOWN" : "HEALTHY",
       pushover: { ...this.providerHealth.pushover },
       twilioSms: { ...this.providerHealth.twilioSms }
     };
@@ -53,6 +53,7 @@ export class NotificationDispatcher {
   hydrate(records: StoredNotification[]): void {
     for (const record of records) {
       const provider = record.provider === "pushover" ? "pushover" : "twilioSms";
+      if (!this.providerHealth[provider].configured) continue;
       const successAt = record.deliveredAt ?? record.acknowledgedAt ?? record.acceptedAt;
       if (record.status === "failed") this.providerHealth[provider].lastFailureAt = record.submittedAt;
       else if (successAt) {
