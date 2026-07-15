@@ -38,6 +38,11 @@ test("rejects missing hard acceptance thresholds", () => {
   assert.throws(() => evaluateEvidence(gateConfig, healthyEvidence(config()), attestations(), hostEvidence(), zombieEvidence()), /maximumShmRatio is required/);
 });
 
+test("checked-in c-4 profile requires a clean process baseline", async () => {
+  const profile = JSON.parse(await readFile(new URL("./court1-c4.example.json", import.meta.url), "utf8"));
+  assert.deepEqual(profile.allowedBaselineUnclassified, { ingest: [], compositor: [] });
+});
+
 test("passes complete healthy evidence", () => {
   const gateConfig = config();
   const evidence = healthyEvidence(gateConfig);

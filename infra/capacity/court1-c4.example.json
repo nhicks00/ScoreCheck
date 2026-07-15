@@ -19,13 +19,7 @@
     "audioChannelCount": 2
   },
   "allowedBaselineUnclassified": {
-    "ingest": [
-      {
-        "command": "timeout",
-        "parentCommand": "mediamtx",
-        "cgroupFingerprint": "480b4be510e9d52c"
-      }
-    ],
+    "ingest": [],
     "compositor": []
   },
   "ingest": {

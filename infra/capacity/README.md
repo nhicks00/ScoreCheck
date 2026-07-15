@@ -85,7 +85,8 @@ The checked-in c-4 profile requires:
   five-second sampler, plus no aligned sample more than 250 ms late;
 - continuous 50 ms process watchers spanning both window edges with no restart,
   stop, heartbeat gap over two seconds, or scan gap over 250 ms;
-- an exact allowlisted pre-run zombie baseline, zero new unclassified zombies,
+- an exact pre-run zombie baseline (empty for the checked-in c-4 profile), zero
+  new unclassified zombies,
   no exempt observer/healthcheck zombie lasting over two seconds, and bounded
   exempt churn (at most 16 per rolling minute and 480 total per host);
 - no exact Egress Chrome or `pactl` child wait over 500 ms, more than one

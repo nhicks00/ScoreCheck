@@ -212,6 +212,11 @@ container was discarded and the accepted calibration used an external
 ephemeral reader container instead. The final calibration had no observer or
 workload zombie and no runner/parser residue.
 
+That accepted recreation also removed the historical ingest `timeout` zombie.
+The checked-in c-4 profile now requires an empty unclassified baseline on both
+hosts; retaining the old fingerprint would reject the clean host and would no
+longer describe the system being qualified.
+
 ## Required rerun
 
 This gate can pass only after deployment provenance is verified and a new full
