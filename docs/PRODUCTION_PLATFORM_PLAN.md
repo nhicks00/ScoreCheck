@@ -134,6 +134,22 @@ three additional workers and call the topology qualified. Request a limit of at
 least twelve (sixteen preferred for event headroom), or obtain and benchmark a
 larger CPU shape before provisioning the final pool.
 
+Before creating any additional worker, run the credential-protected, read-only
+account gate. It verifies the complete provider collections, requested regional
+size, current compositor shapes, account limit, required additions, and
+incremental cost; it exits nonzero when the complete pool cannot fit:
+
+```bash
+node infra/event-stack/preflight-capacity.mjs \
+  --desired-compositors 8 \
+  --warm-spares 1 \
+  --size c-4 \
+  --region sfo2
+```
+
+Do not weaken the desired count or omit the spare merely to make this preflight
+green. Correct the account quota or qualify a different shape first.
+
 The first full-eight ingest candidate, one dedicated `c-4` with 8 GB RAM,
 failed on 2026-07-12. Eight 1080p inputs normalized to H.264/Opus at 720p30
 pinned all four CPUs at 393.88%; individual FFmpeg branches ran at only

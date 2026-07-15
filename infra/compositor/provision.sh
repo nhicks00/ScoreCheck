@@ -23,6 +23,10 @@
 #   -h, --help       this help
 #
 # Behavior:
+#   - for a multi-worker expansion, first run the read-only account gate:
+#       node ../event-stack/preflight-capacity.mjs \
+#         --desired-compositors 8 --warm-spares 1 --size c-4 --region sfo2
+#     Do not start a partial pool when that command reports BLOCKED.
 #   - tags the droplet `bvm-compositor` (teardown.sh destroys by this tag only,
 #     so it can never touch bvm-preview-01)
 #   - boots with ./cloud-init.yaml as user_data (docker + compositor.service)
@@ -30,7 +34,7 @@
 #     rsync/start next-steps
 #
 # Deliberately NOT run automatically anywhere — Phase 2 is a manual, gated
-# experiment (docs/PRODUCTION_PLATFORM_PLAN.md §6).
+# experiment (docs/PRODUCTION_PLATFORM_PLAN.md capacity topology).
 
 set -euo pipefail
 
