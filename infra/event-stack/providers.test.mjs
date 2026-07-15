@@ -47,7 +47,7 @@ test("DigitalOcean create binds exact cloud-init bytes, tags, SSH keys, and safe
   assert.equal(body.user_data, cloudInit);
   assert.equal(body.backups, false);
   assert.equal(body.ipv6, false);
-  assert.equal(body.monitoring, true);
+  assert.equal(body.monitoring, false);
 });
 
 test("DigitalOcean pagination, reserved-IP actions, and snapshot lookup preserve exact identities", async () => {

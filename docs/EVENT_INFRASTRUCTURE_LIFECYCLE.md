@@ -170,6 +170,44 @@ build can appear healthy while teardown is impossible. Do not begin an event
 or live canary with a read/create-only token. The isolated canary is the final
 proof that the configured credential can complete the entire delete path; its
 cleanup inventory must pass before that credential is approved for events.
+
+As verified against DigitalOcean's custom-scope documentation on 2026-07-15,
+select only these scopes for the dedicated lifecycle token:
+
+```text
+account:read
+actions:read
+droplet:read
+droplet:create
+droplet:update
+droplet:delete
+firewall:read
+firewall:create
+firewall:update
+image:read
+image:create
+image:delete
+project:read
+regions:read
+reserved_ip:read
+reserved_ip:create
+reserved_ip:update
+reserved_ip:delete
+sizes:read
+ssh_key:read
+tag:read
+tag:create
+tag:delete
+vpc:read
+```
+
+Do not select Full Access, `api:write`, `droplet:admin`, firewall deletion,
+DigitalOcean Monitoring, databases, volumes, domains, or Kubernetes. Event
+Droplets set DigitalOcean's optional monitoring-agent flag to false because
+ScoreCheck deploys its own browser-independent host agent and never reads the
+DigitalOcean Monitoring API. This removes an unused agent, permission, and
+provider dependency without reducing ScoreCheck telemetry.
+
 The passing canary writes a mode-`0600` lifecycle attestation valid for 30
 days. It is HMAC-bound to the exact DigitalOcean token, Vercel token/team,
 DigitalOcean account UUID, configured DigitalOcean SSH key IDs, and local SSH

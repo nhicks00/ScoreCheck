@@ -109,7 +109,7 @@ export class DigitalOceanProvider {
       ssh_keys: this.sshKeys.map(numericOrString),
       backups: false,
       ipv6: false,
-      monitoring: true,
+      monitoring: false,
       tags: request.tags,
       user_data: userData
     });
