@@ -201,6 +201,13 @@ for path in docker-compose.yml Caddyfile .generated/alertmanager.yml; do
   fi
 done
 
+# The incoming root is mode 0700, so these files remain host-private. Grant the
+# isolated validation containers read access without evaluating or copying any
+# protected value into a Docker build layer.
+chmod 0444 \
+  "$CANDIDATE_DIR/.generated/prometheus.yml" \
+  "$CANDIDATE_DIR/.generated/alertmanager.yml"
+
 prometheus_image='prom/prometheus:v3.13.1@sha256:3c42b892cf723fa54d2f262c37a0e1f80aa8c8ddb1da7b9b0df9455a35a7f893'
 alertmanager_image='prom/alertmanager:v0.33.1@sha256:9e082985f56f4c8c9f724e18f2288c6708f472e56a5286b8863d080434ea065d'
 

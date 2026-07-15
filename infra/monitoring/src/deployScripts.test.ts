@@ -44,6 +44,7 @@ describe("staged observability deployment", () => {
     expect(imageBuild).toBeGreaterThan(topologyGate);
     expect(cutover).toBeGreaterThan(imageBuild);
     expect(remoteDeploy).toContain("docker-compose.yml Caddyfile .generated/alertmanager.yml");
+    expect(remoteDeploy).toContain('chmod 0444 \\\n  "$CANDIDATE_DIR/.generated/prometheus.yml"');
   });
 
   it("recreates only monitor-service and preserves every unaffected container", () => {
