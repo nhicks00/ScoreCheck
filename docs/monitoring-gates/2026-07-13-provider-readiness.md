@@ -129,3 +129,13 @@ withheld-ping down/recovery gate remains a separate operator-visible test.
 - Keep baseline Healthchecks running and active-coverage Healthchecks paused while all courts are off.
 - Keep the deployed attachment audit healthy before running the withheld-ping phone gate.
 - Keep the Pushover acknowledgement gate open until a delivered emergency is acknowledged during the controlled window.
+
+## Monitoring hardening follow-up: 2026-07-15 05:06Z
+
+The Egress expectation/output hardening release is live at exact monitor-service
+revision `34739305cfc439123ec070e0231ce2bbe1853b84`, container
+`d758764d8c66`, healthy with restart count zero. Production Prometheus now has
+49 healthy rules and zero firing alerts; Alertmanager has zero alerts. Pushover,
+the baseline check, the idle-paused active check, and both channel attachments
+remain healthy. Twilio remains disabled, and the cutover sent no provider test
+or incident notification.

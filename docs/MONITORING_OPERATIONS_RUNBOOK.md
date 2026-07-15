@@ -407,12 +407,11 @@ active commentary rooms. Acceptance requires:
   raw feeds report bounded source protocol/mode, video profile/resolution, and
   audio format. Push-SRT courts expose RTT and packet counters; pull-SRT and
   RTMP paths remain explicitly unavailable rather than fabricated.
-- The current hardening candidate has 49 syntax-validated Prometheus rules with
-  executable timing/isolation fixtures, 141 correlator/monitor tests, and 27
-  disposable Alertmanager inhibition fixtures. Production remains at the prior
-  46-rule release until this candidate completes a bounded monitoring-only
-  cutover. Every observability deployment reruns these gates before replacing
-  files or restarting containers.
+- Production revision `34739305cfc439123ec070e0231ce2bbe1853b84` runs 49
+  syntax-validated Prometheus rules with executable timing/isolation fixtures.
+  Its release gate passed 141 correlator/monitor tests and 27 disposable
+  Alertmanager inhibition fixtures. Every observability deployment reruns these
+  gates before replacing files or restarting containers.
 - Deterministic eight-court isolation fixtures now cover camera loss, repeated
   and black pictures, stopped Egress output, Egress capacity deficit, missing
   program browser, commentary disconnect/mute/clip/silence/jitter/sync loss,

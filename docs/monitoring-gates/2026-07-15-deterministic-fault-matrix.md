@@ -41,5 +41,30 @@ remain independent.
 Production has four compositor workers, each currently qualified for one active
 web Egress request while assigned two courts. Eight simultaneous live outputs
 are therefore not qualified by the current topology. The new monitor exposes
-that blocker rather than treating it as healthy. A bounded monitoring-only
-deployment and real operator-visible fault gates remain pending.
+that blocker rather than treating it as healthy. Real operator-visible fault
+gates remain pending.
+
+## Production Cutover
+
+The monitoring-only release completed on exact revision
+`34739305cfc439123ec070e0231ce2bbe1853b84` at `2026-07-15T05:06Z`.
+
+- Alertmanager was recreated once, intentionally, because two failed-closed
+  in-place attempts proved that its single-file bind mount retained the old
+  inode. The clean recreate moved container `6dc2244a31bb` to `81474b4bc981`,
+  preserved its data volume, loaded all new inhibition rules, and retained
+  restart count zero. Backup:
+  `/opt/scorecheck-monitoring/backups/alertmanager-recreate-20260715T050538Z.yml`.
+- Monitor-service moved from `4c7b97603b81` to `d758764d8c66`, reports the exact
+  release revision, is healthy, and has restart count zero.
+- Prometheus `be82eb2dbda9`, Caddy `dc7439995fde`, and node-exporter
+  `badad55e5f05` retained their container identities.
+- Production reports 49 rules, zero unhealthy rules, zero firing rules, and zero
+  Alertmanager alerts. Six of six agents are fresh; event, incidents, and fault
+  gates are empty. A delayed `05:08Z` recheck retained the same state with both
+  changed containers at restart count zero.
+- Camera 1 continued publishing at positive bitrate with zero frame errors.
+  No media, routing, browser, YouTube, output, expectation, or StreamRun state
+  was changed.
+- Pushover and both Healthchecks channel assignments remained healthy. Twilio
+  remained disabled and no phone notification was sent.
