@@ -31,7 +31,6 @@ export default async function CommentaryCourtPage({ params }: { params: Promise<
     <CommentaryCourtClient
       courtNumber={courtNumber}
       courtName={court.displayName ?? `Court ${courtNumber}`}
-      eventSlug={event.slug ?? ""}
       eventName={event.name}
       sources={sources}
       commentaryConfigured={commentaryLiveKitConfigured()}

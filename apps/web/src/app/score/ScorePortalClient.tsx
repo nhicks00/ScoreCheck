@@ -169,7 +169,7 @@ export function ScorePortalClient() {
           <div>
             <p className="eyebrow">ScoreCheck</p>
             <h1>{eventName ?? "Live scoring"}</h1>
-            <p className="muted">Pick a court, enter your name, and keep the score up to date with big, simple tap controls.</p>
+            <p className="muted">Pick a court, enter your name, and help the community verify every rally with big, simple tap controls.</p>
           </div>
           <button type="button" onClick={() => void refresh()} disabled={loading}>
             <RefreshCw size={18} /> Refresh
@@ -280,16 +280,16 @@ export function ScorePortalClient() {
                   <small>Sets {sets.a}-{sets.b}</small>
                 </div>
                 {presence === "live" && court.scorerStatus.activeName && (
-                  <small className="court-scorer-note">Scored by {court.scorerStatus.activeName}</small>
+                  <small className="court-scorer-note">Designated scorer: {court.scorerStatus.activeName}</small>
                 )}
                 {presence === "needs-scorer" && (
                   <Link className="button primary fan-cta" href={`/score/court/${court.courtNumber}`}>
-                    Help score {courtName}
+                    Contribute on {courtName}
                   </Link>
                 )}
                 {presence === "live" && (
                   <Link className="button fan-cta" href={`/score/court/${court.courtNumber}`}>
-                    Join as backup scorer
+                    Join the scoring community
                   </Link>
                 )}
                 {presence === "final" && (

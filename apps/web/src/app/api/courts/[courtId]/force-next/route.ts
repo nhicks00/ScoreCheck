@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
-import { defaultManualState } from "@/lib/manualScoring";
-import { persistScoreAndOverlay } from "@/lib/scoreState";
+import { transitionCommunityMatch } from "@/lib/communityWitness";
+import { refreshCourtOverlay } from "@/lib/scoreState";
 import { normalizeVblBracketPayload } from "@/lib/scoring";
 import { supabaseAdmin } from "@/lib/supabase";
 import { buildActiveVblSourceSet, matchBelongsToActiveVblSource } from "@/lib/vblSources";
@@ -17,6 +18,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cou
   const unauthorized = await requireAdmin(req);
   if (unauthorized) return unauthorized;
   const { courtId } = await params;
+  const body = await req.json().catch(() => ({}));
+  const requestedActionId = z.string().uuid().safeParse(body.actionId);
+  if (!requestedActionId.success) return NextResponse.json({ error: "actionId must be a UUID" }, { status: 400 });
   const db = supabaseAdmin();
   const now = new Date().toISOString();
 
@@ -52,6 +56,23 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cou
   });
   if (!next) return NextResponse.json({ error: "No queued match is available" }, { status: 404 });
 
+  const match = Array.isArray(next.matches) ? next.matches[0] : next.matches;
+  if (!match) return NextResponse.json({ error: "Queued match details are unavailable" }, { status: 409 });
+  const transition = await transitionCommunityMatch({
+    eventId: court.event_id,
+    courtId,
+    fromMatchId: court.current_match_id,
+    toMatchId: next.match_id,
+    actionId: requestedActionId.data,
+    actorType: "ADMIN",
+    actorLabel: "Admin forced next match",
+    initialAuthorityMode: match.source_type === "manual" || !match.api_url ? "PAUSED_DISPUTE" : "PROVIDER_PRIMARY"
+  });
+  if (transition.duplicate && transition.newMatchId !== next.match_id) {
+    const projection = await refreshCourtOverlay(courtId);
+    return NextResponse.json({ ok: true, duplicate: true, score: projection.score, overlay: projection.overlay });
+  }
+
   if (active) {
     await db.from("court_match_queue").update({ is_active: false, status: "finished", updated_at: now }).eq("id", active.id);
   }
@@ -63,37 +84,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cou
 
   const { data: updatedCourt, error: updateError } = await db
     .from("courts")
-    .update({ current_match_id: next.match_id, status: "waiting", frozen: false, last_update_at: now, updated_at: now })
+    .update({ status: "waiting", frozen: false, last_update_at: now, updated_at: now })
     .eq("id", courtId)
     .select("*")
     .single();
   if (updateError) return NextResponse.json({ error: updateError.message }, { status: 500 });
 
-  const match = Array.isArray(next.matches) ? next.matches[0] : next.matches;
-  const state = defaultManualState();
-  const saved = await persistScoreAndOverlay(updatedCourt, match ?? null, {
-    court_id: updatedCourt.id,
-    match_id: next.match_id,
-    team_a_score: state.team_a_score,
-    team_b_score: state.team_b_score,
-    team_a_sets: state.team_a_sets,
-    team_b_sets: state.team_b_sets,
-    current_set: state.current_set,
-    set_scores: state.set_scores,
-    serving_team: null,
-    timeouts: {},
-    status: "Pre-Match",
-    source: scoreSourceForMatch(match ?? null),
-    stale: false,
-    message: null
-  });
+  const saved = await refreshCourtOverlay(updatedCourt.id);
 
-  return NextResponse.json({ ok: true, court: updatedCourt, match, score: saved.score, overlay: saved.overlay });
-}
-
-function scoreSourceForMatch(match: QueueMatch | null) {
-  if (!match) return "manual";
-  return match.source_type === "manual" || !match.api_url ? "manual" : "api";
+  return NextResponse.json({ ok: true, duplicate: transition.duplicate, court: updatedCourt, match, score: saved.score, overlay: saved.overlay });
 }
 
 function isFinalQueueMatch(match: (QueueMatch & { source_payload?: unknown; format?: Record<string, unknown> | null }) | null) {

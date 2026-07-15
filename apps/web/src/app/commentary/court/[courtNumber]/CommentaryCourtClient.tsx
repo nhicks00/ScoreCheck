@@ -1,9 +1,9 @@
 "use client";
 
-import { ArrowLeft, RotateCcw } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { ScorerSessionClient } from "@/app/score/session/[sessionToken]/ScorerSessionClient";
+import { CommunityWitnessSessionClient } from "@/app/score/session/CommunityWitnessSessionClient";
 import { StreamPlayer } from "@/components/StreamPlayer";
 import type { StreamTimingSample } from "@/lib/rtcTiming";
 import { CommentaryAudioClient } from "./CommentaryAudioClient";
@@ -11,7 +11,6 @@ import { CommentaryAudioClient } from "./CommentaryAudioClient";
 type CommentaryCourtClientProps = {
   courtNumber: number;
   courtName: string;
-  eventSlug: string;
   eventName: string;
   sources: { whepUrl: string | null; hlsUrl: string | null };
   commentaryConfigured: boolean;
@@ -20,14 +19,11 @@ type CommentaryCourtClientProps = {
 export function CommentaryCourtClient({
   courtNumber,
   courtName,
-  eventSlug,
   eventName,
   sources,
   commentaryConfigured
 }: CommentaryCourtClientProps) {
-  const storageKey = `commentary-session-court-${courtNumber}`;
-  // null = no session; undefined = not yet hydrated from localStorage.
-  const [token, setToken] = useState<string | null | undefined>(undefined);
+  const [hasScoringSession, setHasScoringSession] = useState<boolean | null>(null);
   const [displayName, setDisplayName] = useState("Commentator");
   const [busy, setBusy] = useState(false);
   const [claimError, setClaimError] = useState<string | null>(null);
@@ -37,48 +33,37 @@ export function CommentaryCourtClient({
   }, []);
 
   useEffect(() => {
-    try {
-      setToken(window.localStorage.getItem(storageKey) || null);
-    } catch {
-      setToken(null);
-    }
-  }, [storageKey]);
+    let cancelled = false;
+    void fetch("/api/community/session", { cache: "no-store" })
+      .then(async (response) => ({ response, json: await response.json().catch(() => ({})) }))
+      .then(({ response, json }) => {
+        if (cancelled) return;
+        setHasScoringSession(response.ok && json.ok === true && json.match?.courtNumber === courtNumber);
+      })
+      .catch(() => {
+        if (!cancelled) setHasScoringSession(false);
+      });
+    return () => { cancelled = true; };
+  }, [courtNumber]);
 
   async function startScoring(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
     setClaimError(null);
     try {
-      const res = await fetch("/api/scoring/claims/start", {
+      const res = await fetch("/api/commentary/scoring/join", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ eventSlug, courtNumber, displayName, watchMode: "courtside" })
+        body: JSON.stringify({ courtNumber, displayName })
       });
       const json = await res.json().catch(() => ({}));
-      if (!res.ok || !json.sessionUrl) throw new Error(json.error ?? "Could not start a scoring session");
-      const sessionToken = tokenFromSessionUrl(json.sessionUrl);
-      if (!sessionToken) throw new Error("Could not start a scoring session");
-      try {
-        window.localStorage.setItem(storageKey, sessionToken);
-      } catch {
-        // Private browsing: session still works for this page view.
-      }
-      setToken(sessionToken);
+      if (!res.ok || json.ok !== true) throw new Error(json.error ?? "Could not start a scoring session");
+      setHasScoringSession(true);
     } catch (err) {
       setClaimError(friendlyError(err instanceof Error ? err.message : null));
     } finally {
       setBusy(false);
     }
-  }
-
-  function resetSession() {
-    try {
-      window.localStorage.removeItem(storageKey);
-    } catch {
-      // Ignore storage failures; state reset below is what matters.
-    }
-    setToken(null);
-    setClaimError(null);
   }
 
   return (
@@ -108,18 +93,10 @@ export function CommentaryCourtClient({
           <div className="commentary-main">
             <StreamPlayer courtNumber={courtNumber} sources={sources} onTimingSample={updatePreviewTiming} />
 
-            {token === undefined ? null : token ? (
-              <>
-                <section className="commentary-scoring" aria-label="Scoring">
-                  <ScorerSessionClient sessionToken={token} />
-                </section>
-                <div className="commentary-reset-row">
-                  <span className="muted">Scoring link stuck or handed to someone else?</span>
-                  <button type="button" onClick={resetSession}>
-                    <RotateCcw size={16} /> Reset scoring session
-                  </button>
-                </div>
-              </>
+            {hasScoringSession == null ? null : hasScoringSession ? (
+              <section className="commentary-scoring" aria-label="Scoring">
+                <CommunityWitnessSessionClient exitHref={`/commentary/court/${courtNumber}`} videoMode="external" />
+              </section>
             ) : (
               <section className="panel stack commentary-claim" aria-label="Start scoring">
                 <h2>Score while you talk</h2>
@@ -167,16 +144,4 @@ function friendlyError(message: string | null): string {
     return "Scoring is not ready yet. Please try again in a moment.";
   }
   return message;
-}
-
-/** sessionUrl looks like `https://host/score/session/{token}` — the token is the last path segment. */
-function tokenFromSessionUrl(sessionUrl: string): string | null {
-  try {
-    const url = new URL(sessionUrl, window.location.origin);
-    const segments = url.pathname.split("/").filter(Boolean);
-    const token = segments[segments.length - 1] ?? "";
-    return token ? decodeURIComponent(token) : null;
-  } catch {
-    return null;
-  }
 }

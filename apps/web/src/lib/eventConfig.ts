@@ -1,6 +1,6 @@
 import { getEnv, publicOrigin } from "./env";
-import { defaultManualState } from "./manualScoring";
-import { persistScoreAndOverlay } from "./scoreState";
+import { transitionCommunityMatch } from "./communityWitness";
+import { refreshCourtOverlay, trustedScoreActionId } from "./scoreState";
 import { supabaseAdmin } from "./supabase";
 
 export const DEFAULT_FAN_SCORING_SETTINGS = {
@@ -170,6 +170,23 @@ function currentDateIso(now: Date = new Date()): string {
 export async function setActiveEvent(eventId: string, db = supabaseAdmin()): Promise<EventRow> {
   const now = new Date().toISOString();
 
+  const { data: previouslyActive, error: previousError } = await db
+    .from("events")
+    .select("id,status,is_active")
+    .neq("id", eventId);
+  if (previousError && !isMissingColumnError(previousError, "is_active")) throwSupabaseError(previousError);
+  let previousEvents = (previouslyActive ?? []) as Array<{ id: string; status: string; is_active?: boolean }>;
+  if (previousError) {
+    const fallback = await db.from("events").select("id,status").neq("id", eventId);
+    if (fallback.error) throwSupabaseError(fallback.error);
+    previousEvents = (fallback.data ?? []) as Array<{ id: string; status: string }>;
+  }
+  for (const previous of previousEvents) {
+    if (previous.status === "active" || previous.is_active === true) {
+      await endEventCourtMatches(previous.id, "Event switched inactive", "queued", db);
+    }
+  }
+
   const cleared = await db.from("events").update({ is_active: false, updated_at: now }).neq("id", eventId);
   const isActiveMissing = cleared.error ? isMissingColumnError(cleared.error, "is_active") : false;
   if (cleared.error && !isActiveMissing) throwSupabaseError(cleared.error);
@@ -188,6 +205,7 @@ export async function setActiveEvent(eventId: string, db = supabaseAdmin()): Pro
 /** Archive an event: mark it completed and ensure it is not the active one. */
 export async function setEventCompleted(eventId: string, db = supabaseAdmin()): Promise<EventRow> {
   const now = new Date().toISOString();
+  await endEventCourtMatches(eventId, "Event completed", "finished", db);
   const completion: Record<string, unknown> = { status: "completed", updated_at: now };
   let result = await db.from("events").update({ ...completion, is_active: false }).eq("id", eventId).select("*").single();
   if (result.error && isMissingColumnError(result.error, "is_active")) {
@@ -195,6 +213,44 @@ export async function setEventCompleted(eventId: string, db = supabaseAdmin()): 
   }
   if (result.error) throwSupabaseError(result.error);
   return result.data as EventRow;
+}
+
+async function endEventCourtMatches(
+  eventId: string,
+  actorLabel: string,
+  queueStatus: "queued" | "finished",
+  db: Db
+) {
+  const { data: courts, error } = await db
+    .from("courts")
+    .select("*")
+    .eq("event_id", eventId)
+    .not("current_match_id", "is", null);
+  if (error) throwSupabaseError(error);
+  for (const court of (courts ?? []) as CourtRow[]) {
+    if (!court.current_match_id) continue;
+    await transitionCommunityMatch({
+      eventId,
+      courtId: court.id,
+      fromMatchId: court.current_match_id,
+      toMatchId: null,
+      actionId: trustedScoreActionId({ type: "event-lifecycle-end-match", eventId, courtId: court.id, matchId: court.current_match_id, actorLabel }),
+      actorType: "ADMIN",
+      actorLabel,
+      initialAuthorityMode: "PAUSED_DISPUTE"
+    });
+    const now = new Date().toISOString();
+    const queueResult = await db.from("court_match_queue")
+      .update({ is_active: false, status: queueStatus, updated_at: now })
+      .eq("court_id", court.id)
+      .eq("is_active", true);
+    if (queueResult.error) throwSupabaseError(queueResult.error);
+    const courtResult = await db.from("courts")
+      .update({ status: "idle", last_update_at: now, updated_at: now })
+      .eq("id", court.id);
+    if (courtResult.error) throwSupabaseError(courtResult.error);
+    await refreshCourtOverlay(court.id);
+  }
 }
 
 export async function getEventBySlug(slug: string, db = supabaseAdmin()): Promise<EventRow | null> {
@@ -372,31 +428,21 @@ export async function ensureAvpDenverSeeded(input: {
     if (matchResult.error) throw matchResult.error;
 
     const match = matchResult.data;
+    await transitionCommunityMatch({
+      eventId: event.id,
+      courtId: court.id,
+      fromMatchId: court.current_match_id,
+      toMatchId: match.id,
+      actionId: trustedScoreActionId({ type: "seed-event-court", eventId: event.id, courtId: court.id, matchId: match.id }),
+      actorType: "SYSTEM",
+      actorLabel: "Event seed",
+      initialAuthorityMode: "PAUSED_DISPUTE"
+    });
     await db.from("courts").update({
-      current_match_id: match.id,
       status: "waiting",
       updated_at: now
     }).eq("id", court.id);
-
-    const initial = defaultManualState();
-    await persistScoreAndOverlay(court, match, {
-      court_id: court.id,
-      match_id: match.id,
-      team_a_score: initial.team_a_score,
-      team_b_score: initial.team_b_score,
-      team_a_sets: initial.team_a_sets,
-      team_b_sets: initial.team_b_sets,
-      current_set: initial.current_set,
-      set_scores: initial.set_scores,
-      serving_team: initial.serving_team,
-      timeouts: initial.timeouts,
-      status: "Pre-Match",
-      source: "manual",
-      source_available: false,
-      source_priority: "fallback",
-      stale: false,
-      message: null
-    });
+    await refreshCourtOverlay(court.id);
   }
 
   return event;

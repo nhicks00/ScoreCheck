@@ -10,6 +10,10 @@ import {
   scorebugDisplayScores,
   shouldApplyOverlayUpdate
 } from "@/lib/overlayState";
+import {
+  createOverlayInvalidationScheduler,
+  invalidationOnlyBroadcastHandler
+} from "@/lib/overlayInvalidation";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 
 // A browser-source overlay must NEVER black out the broadcast frame. If the
@@ -82,6 +86,7 @@ function OverlayClientInner({ courtNumber, eventId, buildVersion, reloadOnVersio
   const lastInvalidScorebugHealKey = useRef<string | null>(null);
   const lastDomHealKey = useRef<string | null>(null);
   const lastAppliedUpdateMs = useRef<number | null>(null);
+  const mounted = useRef(true);
   const stateUrl = useMemo(() => `/api/overlay/court/${courtNumber}/state${eventId ? `?eventId=${eventId}` : ""}`, [courtNumber, eventId]);
   const realtimeEventId = eventId || state.eventId;
   const realtimeTopic = useMemo(() => realtimeEventId ? `overlay:${realtimeEventId}:court:${courtNumber}` : null, [courtNumber, realtimeEventId]);
@@ -95,58 +100,60 @@ function OverlayClientInner({ courtNumber, eventId, buildVersion, reloadOnVersio
   }, [courtNumberValue]);
 
   useEffect(() => {
-    let cancelled = false;
-    async function tick() {
-      try {
-        const res = await fetch(stateUrl, { cache: "no-store" });
-        if (res.status === 204) {
-          if (!cancelled) {
-            lastAppliedUpdateMs.current = null;
-            setState(fallbackOverlayState(courtNumberValue));
-            setHasLoadedState(false);
-            setConnected(true);
-          }
-          return;
-        }
-        if (!res.ok) throw new Error(String(res.status));
-        const next = await res.json();
-        if (!cancelled) {
-          applyOverlayState(next);
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  const fetchAuthoritativeState = useCallback(async () => {
+    try {
+      const res = await fetch(stateUrl, { cache: "no-store" });
+      if (res.status === 204) {
+        if (mounted.current) {
+          lastAppliedUpdateMs.current = null;
+          setState(fallbackOverlayState(courtNumberValue));
+          setHasLoadedState(false);
           setConnected(true);
         }
-      } catch {
-        if (!cancelled) setConnected(false);
+        return;
       }
+      if (!res.ok) throw new Error(String(res.status));
+      const next = await res.json();
+      if (!mounted.current) return;
+      applyOverlayState(next);
+      setConnected(true);
+    } catch {
+      if (mounted.current) setConnected(false);
     }
-    void tick();
-    // Realtime broadcasts carry semantic score changes immediately. This poll
-    // repairs a missed broadcast without hammering Supabase on every program
-    // browser for timestamp-only state.
-    const id = window.setInterval(tick, 5000);
+  }, [stateUrl, applyOverlayState, courtNumberValue]);
+
+  useEffect(() => {
+    void fetchAuthoritativeState();
+    // Polling is the durable repair path if an invalidation is missed.
+    const id = window.setInterval(fetchAuthoritativeState, 5000);
     return () => {
-      cancelled = true;
       window.clearInterval(id);
     };
-  }, [stateUrl, applyOverlayState, courtNumberValue]);
+  }, [fetchAuthoritativeState]);
 
   useEffect(() => {
     if (!realtimeTopic) return;
     const supabase = createBrowserSupabase();
     if (!supabase) return;
+    const invalidations = createOverlayInvalidationScheduler(fetchAuthoritativeState);
     const channel = supabase
       .channel(realtimeTopic)
-      .on("broadcast", { event: "overlay_state" }, ({ payload }) => {
-        applyOverlayState(payload);
-        setConnected(true);
-      })
-      .subscribe((status) => {
-        if (status === "SUBSCRIBED") setConnected(true);
-      });
+      // Broadcast messages are unauthenticated invalidation hints. Their body
+      // is intentionally erased; only the sanitized HTTP response is applied.
+      .on("broadcast", { event: "overlay_state" }, invalidationOnlyBroadcastHandler(invalidations.invalidate))
+      .subscribe();
 
     return () => {
+      invalidations.dispose();
       void supabase.removeChannel(channel);
     };
-  }, [realtimeTopic, applyOverlayState]);
+  }, [realtimeTopic, fetchAuthoritativeState]);
 
   useEffect(() => {
     if (!reloadOnVersionChange || !buildVersion || buildVersion === "local") return;

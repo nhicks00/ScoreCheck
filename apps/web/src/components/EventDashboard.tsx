@@ -1,9 +1,11 @@
 "use client";
 
-import { Copy, HeartPulse, Link as LinkIcon, Minus, Pause, Pencil, Play, Plus, RefreshCw, RotateCcw, RotateCw, ShieldOff, Snowflake, StepForward, Trophy, Unlock } from "lucide-react";
+import { Copy, HeartPulse, Link as LinkIcon, Minus, Pause, Pencil, Play, Plus, RefreshCw, RotateCcw, Snowflake, StepForward, Trophy, Unlock } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { clientIntentKey, createClientActionIntentRegistry } from "@/lib/clientActionIntents";
+import { recordForCurrentMatch } from "@/lib/currentMatch";
 import { formatRelativeTime, isFreshTimestamp } from "@/lib/timeLabels";
 
 type DashboardEvent = {
@@ -48,7 +50,7 @@ type DashboardScore = {
   last_api_poll_at: string | null;
 };
 
-type DashboardCourt = {
+export type DashboardCourt = {
   id: string;
   event_id: string;
   court_number: number;
@@ -58,8 +60,6 @@ type DashboardCourt = {
   status: string;
   frozen: boolean;
   last_update_at: string | null;
-  scorer_token_hash?: string | null;
-  scorer_token_revoked_at?: string | null;
   vbl_court_number?: string | null;
   vbl_court_label?: string | null;
   matches?: DashboardMatch | DashboardMatch[] | null;
@@ -101,11 +101,6 @@ type PollerErrorRow = {
   created_at: string;
 };
 
-type LinkBundle = {
-  scorerUrl?: string;
-  overlayUrl?: string;
-};
-
 type EventDashboardProps = {
   event: DashboardEvent;
   sources: SourceRow[];
@@ -117,18 +112,21 @@ type EventDashboardProps = {
   schemaWarnings: string[];
   siteUrl: string;
   defaultTimezone: string;
+  initialTab?: TabKey;
 };
 
 type TabKey = "overview" | "automated" | "manual" | "queues" | "health";
+type DashboardCall = (label: string, url: string, body?: Record<string, unknown>, method?: string) => Promise<Record<string, unknown> | null>;
+type DashboardActionCall = (intentKey: string, label: string, url: string, body?: Record<string, unknown>, method?: string) => Promise<Record<string, unknown> | null>;
 
-export function EventDashboard({ event, sources, courts, matches, queues, heartbeats, pollerErrors, schemaWarnings, siteUrl, defaultTimezone }: EventDashboardProps) {
+export function EventDashboard({ event, sources, courts, matches, queues, heartbeats, pollerErrors, schemaWarnings, siteUrl, defaultTimezone, initialTab }: EventDashboardProps) {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<TabKey>("overview");
+  const [activeTab, setActiveTab] = useState<TabKey>(initialTab ?? "overview");
   const [busy, setBusy] = useState<string | null>(null);
   const [polling, setPolling] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [linksByCourt, setLinksByCourt] = useState<Record<string, LinkBundle>>({});
   const pollingRef = useRef(false);
+  const actionIntents = useRef(createClientActionIntentRegistry()).current;
 
   const matchOptions = useMemo(() => matches.map((match) => ({
     id: match.id,
@@ -163,36 +161,48 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
     ? event.settings.timezone
     : defaultTimezone;
 
-  useEffect(() => {
-    setLinksByCourt(loadStoredScorerLinks(event.id));
-  }, [event.id]);
-
-  async function call(label: string, url: string, body?: Record<string, unknown>, method = "POST") {
+  const call: DashboardCall = async (label, url, body, method = "POST") => {
     setBusy(label);
     setMessage(null);
-    const res = await fetch(url, {
-      method,
-      headers: { "content-type": "application/json" },
-      body: body ? JSON.stringify(body) : undefined
-    });
-    const json = await res.json().catch(() => ({}));
-    setBusy(null);
-    if (!res.ok) {
-      setMessage(json.error ?? "Request failed");
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: { "content-type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setMessage(json.error ?? "Request failed");
+        return null;
+      }
+      setMessage(json.discovered != null ? discoveryMessage(json) : "Saved");
+      router.refresh();
+      return json;
+    } catch {
+      setMessage("Request failed. Retry will reuse the same action ID.");
       return null;
+    } finally {
+      setBusy(null);
     }
-    setMessage(json.discovered != null ? discoveryMessage(json) : "Saved");
-    router.refresh();
-    return json;
-  }
+  };
+
+  const callWithAction: DashboardActionCall = async (intentKey, label, url, body = {}, method = "POST") => {
+    const actionId = actionIntents.actionIdFor(intentKey);
+    const result = await call(label, url, { ...body, actionId }, method);
+    if (result) actionIntents.complete(intentKey, actionId);
+    return result;
+  };
 
   async function createManualSession(eventSubmit: FormEvent<HTMLFormElement>) {
     eventSubmit.preventDefault();
     const form = new FormData(eventSubmit.currentTarget);
     const body = Object.fromEntries(form.entries());
-    const json = await call("manual-session", `/api/events/${event.id}/manual-sessions`, body);
-    if (!json?.court?.id) return;
-    rememberScorerLinks(json.court.id, { scorerUrl: json.scorerUrl, overlayUrl: json.overlayUrl });
+    await callWithAction(
+      clientIntentKey("manual-session", { eventId: event.id, ...body }),
+      "manual-session",
+      `/api/events/${event.id}/manual-sessions`,
+      body
+    );
   }
 
   async function saveVblMapping(eventSubmit: FormEvent<HTMLFormElement>, courtId: string) {
@@ -202,26 +212,6 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
       vblCourtNumber: form.get("vblCourtNumber"),
       vblCourtLabel: form.get("vblCourtLabel")
     }, "PATCH");
-  }
-
-  async function rotateScorer(courtId: string) {
-    const json = await call(`rotate-${courtId}`, `/api/courts/${courtId}/scorer-token/rotate`);
-    if (!json?.scorerUrl) return;
-    rememberScorerLinks(courtId, { scorerUrl: json.scorerUrl });
-  }
-
-  function rememberScorerLinks(courtId: string, links: LinkBundle) {
-    setLinksByCourt((current) => {
-      const next = {
-        ...current,
-        [courtId]: {
-          ...current[courtId],
-          ...links
-        }
-      };
-      storeScorerLinks(event.id, next);
-      return next;
-    });
   }
 
   async function startPolling() {
@@ -241,6 +231,10 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
 
   function eventOverlayUrl(court: DashboardCourt) {
     return `${browserOrigin(siteUrl)}/overlay/court/${court.court_number}?eventId=${event.id}`;
+  }
+
+  function communityScoreUrl(court: DashboardCourt) {
+    return `${browserOrigin(siteUrl)}/score/court/${court.id}`;
   }
 
   return (
@@ -417,21 +411,16 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
             <button className="primary" type="submit" disabled={busy === "manual-session"}>Create Session</button>
           </form>
           <div className="panel stack">
-            <h2>Scorer Links</h2>
-            <p className="muted">Scorer URLs generated in this browser session survive refreshes. If a scorer URL is missing, rotate the scorer link to generate a new one.</p>
+            <h2>Community Score Links</h2>
+            <p className="muted">Anyone at the court can open the public link, enter a display name, and contribute observations for the active match.</p>
             {manualCourts.length === 0 && <p className="muted">No manual sessions yet.</p>}
             {manualCourts.map((court) => {
-              const links = linksByCourt[court.id] ?? {};
-              const currentOverlayUrl = links.overlayUrl ?? overlayUrl(court);
-              const hasToken = Boolean(court.scorer_token_hash && !court.scorer_token_revoked_at);
               return (
                 <div className="link-card" key={court.id}>
                   <strong>{court.display_name}</strong>
-                  <span className={hasToken ? "status live" : "status stale"}>{hasToken ? "scorer link active" : "scorer link missing/revoked"}</span>
-                  <button onClick={() => links.scorerUrl && copyText(normalizeScorerUrl(links.scorerUrl, siteUrl, court.id))} disabled={!links.scorerUrl}><Copy size={16} /> Copy Scorer URL</button>
-                  <button onClick={() => rotateScorer(court.id)} disabled={busy != null}><RotateCw size={16} /> {links.scorerUrl ? "Rotate Scorer URL" : "Generate Scorer URL"}</button>
-                  <button onClick={() => copyText(currentOverlayUrl)}><Copy size={16} /> Copy Overlay URL</button>
-                  {!links.scorerUrl && <p className="muted">The original secret URL cannot be recovered after leaving this browser session. Generate a new scorer URL if you need to share it again.</p>}
+                  <span className="status live">public contribution link</span>
+                  <button onClick={() => copyText(communityScoreUrl(court))}><Copy size={16} /> Copy Score Link</button>
+                  <button onClick={() => copyText(overlayUrl(court))}><Copy size={16} /> Copy Overlay URL</button>
                 </div>
               );
             })}
@@ -443,11 +432,10 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
         <section className="grid courts">
           {courts.map((court) => {
             const active = firstRelation(court.matches);
-            const score = scoreForMatch(court.score_states, active?.id);
+            const score = recordForCurrentMatch(court.score_states, active?.id);
             const courtQueues = queueByCourt.get(court.id) ?? [];
-            const links = linksByCourt[court.id];
             return (
-              <article className="panel stack" key={court.id}>
+              <article className="panel stack" id={`court-${court.id}`} key={court.id}>
                 <div className="row">
                   <div>
                     <h3>{court.display_name}</h3>
@@ -465,7 +453,15 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
                   Assign active match
                   <select
                     value={active?.id ?? ""}
-                    onChange={(change) => call(`assign-${court.id}`, `/api/courts/${court.id}/assign-match`, { matchId: change.target.value })}
+                    onChange={(change) => {
+                      const matchId = change.target.value;
+                      void callWithAction(
+                        clientIntentKey("assign-match", { courtId: court.id, matchId }),
+                        `assign-${court.id}`,
+                        `/api/courts/${court.id}/assign-match`,
+                        { matchId }
+                      );
+                    }}
                   >
                     <option value="">No match</option>
                     {matchOptions.map((match) => <option key={match.id} value={match.id}>{match.label}</option>)}
@@ -481,10 +477,12 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
                 <div className="row wrap">
                   <button onClick={() => copyText(overlayUrl(court))}><Copy size={16} /> Overlay</button>
                   <button onClick={() => copyText(eventOverlayUrl(court))}><Copy size={16} /> Event Overlay</button>
-                  <button onClick={() => rotateScorer(court.id)}><RotateCw size={16} /> Rotate Scorer</button>
-                  <button onClick={() => links?.scorerUrl && copyText(normalizeScorerUrl(links.scorerUrl, siteUrl, court.id))} disabled={!links?.scorerUrl}><Copy size={16} /> Scorer</button>
-                  <button onClick={() => call(`revoke-${court.id}`, `/api/courts/${court.id}/scorer-token/revoke`)}><ShieldOff size={16} /> Revoke</button>
-                  <button onClick={() => call(`next-${court.id}`, `/api/courts/${court.id}/force-next`)}><StepForward size={16} /> Next</button>
+                  <button onClick={() => copyText(communityScoreUrl(court))}><Copy size={16} /> Score Link</button>
+                  <button onClick={() => void callWithAction(
+                    clientIntentKey("force-next", { courtId: court.id }),
+                    `next-${court.id}`,
+                    `/api/courts/${court.id}/force-next`
+                  )}><StepForward size={16} /> Next</button>
                   <button className={court.frozen ? "" : "warn"} onClick={() => call(`freeze-${court.id}`, `/api/courts/${court.id}/${court.frozen ? "unfreeze" : "freeze"}`)}>
                     {court.frozen ? <Unlock size={16} /> : <Snowflake size={16} />} {court.frozen ? "Unfreeze" : "Freeze"}
                   </button>
@@ -496,6 +494,7 @@ export function EventDashboard({ event, sources, courts, matches, queues, heartb
                     score={score}
                     busy={busy}
                     call={call}
+                    callWithAction={callWithAction}
                   />
                 )}
                 <p className="muted">Last update: {court.last_update_at ? formatRelativeTime(court.last_update_at) : "never"} · queue {courtQueues.length}</p>
@@ -541,22 +540,30 @@ function AdminTakeoverPanel({
   match,
   score,
   busy,
-  call
+  call,
+  callWithAction
 }: {
   court: DashboardCourt;
   match: DashboardMatch;
   score: DashboardScore | null;
   busy: string | null;
-  call: (label: string, url: string, body?: Record<string, unknown>, method?: string) => Promise<Record<string, unknown> | null>;
+  call: DashboardCall;
+  callWithAction: DashboardActionCall;
 }) {
   async function submitScore(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    await call(`admin-score-${court.id}`, `/api/courts/${court.id}/admin-score`, {
-      actionId: crypto.randomUUID(),
+    const body = {
       actorLabel: "admin dashboard",
       ...Object.fromEntries(form.entries())
-    }, "PATCH");
+    };
+    await callWithAction(
+      clientIntentKey("admin-score-edit", { courtId: court.id, ...body }),
+      `admin-score-${court.id}`,
+      `/api/courts/${court.id}/admin-score`,
+      body,
+      "PATCH"
+    );
   }
 
   async function submitMatch(event: FormEvent<HTMLFormElement>) {
@@ -566,11 +573,12 @@ function AdminTakeoverPanel({
   }
 
   async function adminAction(action: string) {
-    await call(`admin-${action}-${court.id}`, `/api/courts/${court.id}/admin-score`, {
-      action,
-      actionId: crypto.randomUUID(),
-      actorLabel: "admin dashboard"
-    });
+    await callWithAction(
+      clientIntentKey("admin-score-action", { courtId: court.id, action }),
+      `admin-${action}-${court.id}`,
+      `/api/courts/${court.id}/admin-score`,
+      { action, actorLabel: "admin dashboard" }
+    );
   }
 
   return (
@@ -634,7 +642,7 @@ function Metric({ label, value, icon }: { label: string; value: string; icon?: R
 
 function CourtSummary({ court, queueCount, overlayUrl, copy }: { court: DashboardCourt; queueCount: number; overlayUrl: string; copy: (value: string) => void }) {
   const active = firstRelation(court.matches);
-  const score = scoreForMatch(court.score_states, active?.id);
+  const score = recordForCurrentMatch(court.score_states, active?.id);
   return (
     <article className="court-summary">
       <div className="row">
@@ -653,12 +661,6 @@ function CourtSummary({ court, queueCount, overlayUrl, copy }: { court: Dashboar
 
 function firstRelation<T>(value: T | T[] | null | undefined): T | null {
   return Array.isArray(value) ? value[0] ?? null : value ?? null;
-}
-
-function scoreForMatch(value: DashboardScore | DashboardScore[] | null | undefined, matchId: string | null | undefined): DashboardScore | null {
-  const rows = Array.isArray(value) ? value : value ? [value] : [];
-  if (!matchId) return rows[0] ?? null;
-  return rows.find((row) => row.match_id === matchId) ?? null;
 }
 
 function copyText(value: string) {
@@ -687,55 +689,6 @@ function browserOrigin(configuredSiteUrl: string) {
     }
   }
   return typeof window === "undefined" ? "http://localhost:3000" : window.location.origin;
-}
-
-function normalizeCopiedUrl(value: string, configuredSiteUrl: string) {
-  try {
-    return new URL(value).toString();
-  } catch {
-    const origin = browserOrigin(configuredSiteUrl);
-    if (value.startsWith("/")) {
-      return new URL(value, origin).toString();
-    }
-    const scorePathIndex = value.indexOf("/score/court/");
-    if (scorePathIndex >= 0) {
-      return new URL(value.slice(scorePathIndex), origin).toString();
-    }
-    return new URL(value, origin).toString();
-  }
-}
-
-function normalizeScorerUrl(value: string, configuredSiteUrl: string, courtId: string) {
-  const normalized = normalizeCopiedUrl(value, configuredSiteUrl);
-  if (normalized.includes("/score/court/")) {
-    return normalized;
-  }
-  const lastSegment = value.split(/[/?#]/).filter(Boolean).pop();
-  if (lastSegment) {
-    return new URL(`/score/court/${courtId}?token=${encodeURIComponent(lastSegment)}`, browserOrigin(configuredSiteUrl)).toString();
-  }
-  return normalized;
-}
-
-function scorerLinksStorageKey(eventId: string) {
-  return `mcs:scorer-links:${eventId}`;
-}
-
-function loadStoredScorerLinks(eventId: string): Record<string, LinkBundle> {
-  if (typeof window === "undefined") return {};
-  const raw = window.sessionStorage.getItem(scorerLinksStorageKey(eventId));
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, LinkBundle> : {};
-  } catch {
-    return {};
-  }
-}
-
-function storeScorerLinks(eventId: string, links: Record<string, LinkBundle>) {
-  if (typeof window === "undefined") return;
-  window.sessionStorage.setItem(scorerLinksStorageKey(eventId), JSON.stringify(links));
 }
 
 function scoreSourceLabel(mode: DashboardCourt["mode"], score: DashboardScore | null) {

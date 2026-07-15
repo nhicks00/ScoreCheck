@@ -1,9 +1,9 @@
 import { isAuthoritativeScorePayload, normalizeScorePayload, normalizeVblBracketPayload } from "./scoring";
 import { refreshEventBracketSources } from "./bracketRefresh";
-import { defaultManualState } from "./manualScoring";
+import { CommunityWitnessError, resolveCommunityFallbackAuthority, transitionCommunityMatch } from "./communityWitness";
 import { getEnv } from "./env";
 import { eventTimeZone, scheduledTimestamp } from "./scheduleTime";
-import { buildOverlayStateWithEventSettings, persistScoreAndOverlay, scoreForCurrentMatch } from "./scoreState";
+import { buildOverlayStateWithEventSettings, drainCanonicalScoreOutbox, persistScoreAndOverlay, refreshCourtOverlay, scoreForCurrentMatch, trustedScoreActionId } from "./scoreState";
 import { recordSourceHeartbeat } from "./sourceHeartbeat";
 import { supabaseAdmin } from "./supabase";
 import type { ScoreSnapshot, SetScore } from "./types";
@@ -81,7 +81,7 @@ type QueueRow = {
 
 export type ScoreRow = {
   court_id: string;
-  match_id: string | null;
+  match_id: string;
   team_a_score: number;
   team_b_score: number;
   team_a_sets: number;
@@ -100,6 +100,10 @@ export type ScoreRow = {
   last_api_poll_at?: string | null;
   last_score_change_at?: string | null;
   updated_at?: string | null;
+  revision?: number | null;
+  authority_epoch?: number | null;
+  authority_mode?: "ADMIN_LOCKED" | "PROVIDER_PRIMARY" | "DESIGNATED_PRIMARY" | "VERIFIED_CONSENSUS" | "PAUSED_DISPUTE" | null;
+  current_rally_number?: number | null;
 };
 
 export async function runPollingWindow(eventId: string, courtId?: string) {
@@ -120,9 +124,22 @@ export async function runPollingWindow(eventId: string, courtId?: string) {
 
 export async function pollActiveCourtsOnce(options: { eventId?: string; eventIds?: string[]; courtId?: string; owner: string }) {
   const db = supabaseAdmin();
+  const outboxReplay = await drainCanonicalScoreOutbox({
+    workerId: `score-overlay:${options.owner}`,
+    limit: 12
+  }).catch((error) => ({
+    claimed: 0,
+    published: 0,
+    failed: 1,
+    failedIds: [],
+    error: error instanceof Error ? error.message : "Outbox replay failed"
+  }));
   const scopedEventIds = await eventIdsForPolling(options);
   if (!scopedEventIds.length) {
-    await recordHeartbeat(options.owner, "sleeping", undefined, { reason: "No covered active events are scheduled for polling." });
+    await recordHeartbeat(options.owner, "sleeping", undefined, {
+      reason: "No covered active events are scheduled for polling.",
+      outboxReplay
+    });
     return { polls: 0, errors: 0 };
   }
   const heartbeatEventId = options.eventId ?? (scopedEventIds.length === 1 ? scopedEventIds[0] : undefined);
@@ -163,7 +180,12 @@ export async function pollActiveCourtsOnce(options: { eventId?: string; eventIds
     }
   }));
 
-  await recordHeartbeat(options.owner, errors > 0 ? "degraded" : "running", heartbeatEventId, { polls, errors, eventIds: scopedEventIds });
+  await recordHeartbeat(options.owner, errors > 0 || outboxReplay.failed > 0 ? "degraded" : "running", heartbeatEventId, {
+    polls,
+    errors,
+    eventIds: scopedEventIds,
+    outboxReplay
+  });
   return { polls, errors };
 }
 
@@ -281,7 +303,7 @@ async function pollCourt(court: CourtRow, timeZone: string) {
   const match = firstRelation(court.matches);
   if (!match) return false;
   let currentScore = scoreForCurrentMatch(court.score_states, match.id);
-  if (currentScore?.source === "override") return false;
+  if (currentScore?.source === "override" || currentScore?.authority_mode === "ADMIN_LOCKED") return false;
 
   // Run this independently of the current feed so queue conflict detection
   // never delays a normal live-point write. The per-match scan throttle keeps
@@ -365,17 +387,17 @@ async function pollCourt(court: CourtRow, timeZone: string) {
   }
 
   if (hasFutureDelayedVblScore(currentScore, now)) {
-    await updateApiSourceHealthIfChanged(court.id, currentScore, now, true, "VolleyballLife live scoring active.");
+    await updateApiSourceHealthIfChanged(court, match, currentScore, now, true, "VolleyballLife live scoring active.");
     return true;
   }
 
   if (!sourceAvailable && currentScore?.source === "manual") {
-    await updateApiSourceHealthIfChanged(court.id, currentScore, now, false, "VolleyballLife feed connected; waiting for live score.");
+    await updateApiSourceHealthIfChanged(court, match, currentScore, now, false, "VolleyballLife feed connected; waiting for live score.");
     return true;
   }
 
   if (currentScore) {
-    await updateApiSourceHealthIfChanged(court.id, currentScore, now, false, "VolleyballLife feed connected; waiting for live score.");
+    await updateApiSourceHealthIfChanged(court, match, currentScore, now, false, "VolleyballLife feed connected; waiting for live score.");
     return true;
   }
 
@@ -451,10 +473,9 @@ async function resolveFinalHoldStart(court: CourtRow, match: MatchRow, currentSc
 
   if (!fallbackFinalHoldStartByMatch.has(match.id)) {
     fallbackFinalHoldStartByMatch.set(match.id, holdStart);
-    await supabaseAdmin().from("score_states").update({
-      last_score_change_at: holdStart,
-      updated_at: now
-    }).eq("court_id", court.id);
+    await persistCurrentProviderProjection(court, match, currentScore, {}, "VolleyballLife final hold", {
+      scoreChangeObservedAt: holdStart
+    });
   }
   return holdStart;
 }
@@ -510,7 +531,7 @@ async function persistVblBracketFinalIfAvailable(court: CourtRow, match: MatchRo
     && currentScore.team_b_score === snapshot.teamBScore
     && currentScore.team_a_sets === snapshot.teamASets
     && currentScore.team_b_sets === snapshot.teamBSets
-    && JSON.stringify(currentScore.set_scores ?? []) === JSON.stringify(snapshot.setScores);
+    && valuesEqual(currentScore.set_scores ?? [], snapshot.setScores);
   if (hasSameConfirmedFinal) return currentScore;
 
   const now = new Date().toISOString();
@@ -540,7 +561,7 @@ async function persistVblBracketFinalIfAvailable(court: CourtRow, match: MatchRo
     last_api_poll_at: now,
     last_score_change_at: finalVisibleAt,
     updated_at: now
-  });
+  }, providerWrite("VolleyballLife bracket final", { scoreChangeObservedAt: finalVisibleAt }));
   return score as ScoreRow;
 }
 
@@ -643,7 +664,7 @@ export async function persistVblBracketProgressIfAvailable(court: CourtRow, matc
     last_api_poll_at: now,
     last_score_change_at: now,
     updated_at: now
-  });
+  }, providerWrite("VolleyballLife bracket progress"));
   return score as ScoreRow;
 }
 
@@ -913,6 +934,26 @@ async function activateQueuedMatch(court: CourtRow, next: QueueRow) {
   const db = supabaseAdmin();
   invalidateNextQueuedMatchCache(court.id);
   const now = new Date().toISOString();
+  const match = firstRelation(next.matches);
+  if (!match) throw new Error("Queued match details are unavailable");
+
+  await transitionCommunityMatch({
+    eventId: court.event_id,
+    courtId: court.id,
+    fromMatchId: court.current_match_id,
+    toMatchId: next.match_id,
+    actionId: trustedScoreActionId({
+      type: "poller-match-transition",
+      courtId: court.id,
+      fromMatchId: court.current_match_id,
+      queueId: next.id,
+      toMatchId: next.match_id
+    }),
+    actorType: match.source_type === "manual" || !match.api_url ? "SYSTEM" : "PROVIDER",
+    actorLabel: "Automatic court queue advance",
+    initialAuthorityMode: match.source_type === "manual" || !match.api_url ? "PAUSED_DISPUTE" : "PROVIDER_PRIMARY"
+  });
+
   await db
     .from("court_match_queue")
     .update({ is_active: false, status: "finished", updated_at: now })
@@ -925,11 +966,9 @@ async function activateQueuedMatch(court: CourtRow, next: QueueRow) {
     .eq("id", next.id);
   if (queueError) throw queueError;
 
-  const match = firstRelation(next.matches);
   const { data: updatedCourt, error: courtError } = await db
     .from("courts")
     .update({
-      current_match_id: next.match_id,
       status: "waiting",
       frozen: false,
       last_update_at: now,
@@ -940,32 +979,8 @@ async function activateQueuedMatch(court: CourtRow, next: QueueRow) {
     .single();
   if (courtError) throw courtError;
 
-  const state = defaultManualState();
-  const { score: savedScore } = await persistScoreAndOverlay(updatedCourt, match ?? null, {
-    court_id: updatedCourt.id,
-    match_id: next.match_id,
-    team_a_score: state.team_a_score,
-    team_b_score: state.team_b_score,
-    team_a_sets: state.team_a_sets,
-    team_b_sets: state.team_b_sets,
-    current_set: state.current_set,
-    set_scores: state.set_scores,
-    serving_team: null,
-    timeouts: {},
-    status: "Pre-Match",
-    source: match?.source_type === "manual" || !match?.api_url ? "manual" : "api",
-    source_available: false,
-    source_priority: "fallback",
-    source_pending_scores: [],
-    stale: false,
-    message: match?.source_type === "manual" || !match?.api_url ? null : "VolleyballLife match assigned; waiting for live scoring.",
-    last_api_poll_at: now,
-    last_score_change_at: now,
-    updated_at: now
-  });
-  if (match) {
-    await persistVblBracketProgressIfAvailable(updatedCourt, match, savedScore as ScoreRow);
-  }
+  const { score: savedScore } = await refreshCourtOverlay(updatedCourt.id);
+  await persistVblBracketProgressIfAvailable(updatedCourt, match, savedScore as ScoreRow | null);
 }
 
 function invalidateNextQueuedMatchCache(courtId: string) {
@@ -994,13 +1009,12 @@ async function releaseDueDelayedVblScore(court: CourtRow, match: MatchRow, curre
 
   const isSameVisibleScore = delayedScoreMatchesVisibleScore(latestDue.score, currentScore);
   if (!isSameVisibleScore && isDelayedScoreBehindVisible(latestDue.score, currentScore)) {
-    await supabaseAdmin().from("score_states").update({
+    const { score } = await persistCurrentProviderProjection(court, match, currentScore, {
       source_pending_scores: remaining,
       stale: false,
-      last_api_poll_at: now,
-      updated_at: now
-    }).eq("court_id", court.id);
-    return currentScore;
+      last_api_poll_at: now
+    }, "VolleyballLife discarded stale delayed score");
+    return score;
   }
 
   const { score } = await persistScoreAndOverlay(court, match, {
@@ -1023,7 +1037,7 @@ async function releaseDueDelayedVblScore(court: CourtRow, match: MatchRow, curre
     last_api_poll_at: now,
     last_score_change_at: isSameVisibleScore ? currentScore.last_score_change_at ?? now : now,
     updated_at: now
-  });
+  }, providerWrite("VolleyballLife delayed score release"));
   return score as ScoreRow;
 }
 
@@ -1071,7 +1085,7 @@ async function queueLiveVblScore(court: CourtRow, match: MatchRow, currentScore:
       last_api_poll_at: now,
       last_score_change_at: now,
       updated_at: now
-    });
+    }, providerWrite("VolleyballLife delayed score queue"));
     return;
   }
 
@@ -1085,12 +1099,10 @@ async function queueLiveVblScore(court: CourtRow, match: MatchRow, currentScore:
     message: pending.length ? "VolleyballLife live scoring active." : null
   } as const;
   if (scoreStatePatchMatches(currentScore, patch)) return;
-
-  await supabaseAdmin().from("score_states").update({
+  await persistCurrentProviderProjection(court, match, currentScore, {
     ...patch,
-    last_api_poll_at: now,
-    updated_at: now
-  }).eq("court_id", court.id);
+    last_api_poll_at: now
+  }, "VolleyballLife delayed score queue");
 }
 
 async function persistImmediateVblScore(court: CourtRow, match: MatchRow, currentScore: ScoreRow | null, snapshot: ReturnType<typeof normalizeScorePayload>, now: string) {
@@ -1109,11 +1121,10 @@ async function persistImmediateVblScore(court: CourtRow, match: MatchRow, curren
 
   if (!isSameVisibleScore && currentScore && isDelayedScoreBehindVisible(immediate, currentScore)) {
     if (scoreStatePatchMatches(currentScore, healthPatch)) return;
-    await supabaseAdmin().from("score_states").update({
+    await persistCurrentProviderProjection(court, match, currentScore, {
       ...healthPatch,
-      last_api_poll_at: now,
-      updated_at: now
-    }).eq("court_id", court.id);
+      last_api_poll_at: now
+    }, "VolleyballLife ignored regressive score");
     return;
   }
 
@@ -1137,7 +1148,7 @@ async function persistImmediateVblScore(court: CourtRow, match: MatchRow, curren
     last_api_poll_at: now,
     last_score_change_at: isSameVisibleScore ? currentScore?.last_score_change_at ?? now : now,
     updated_at: now
-  });
+  }, providerWrite("VolleyballLife live score"));
 }
 
 async function persistFallbackSnapshot(court: CourtRow, match: MatchRow, snapshot: ReturnType<typeof normalizeScorePayload>, now: string) {
@@ -1161,7 +1172,7 @@ async function persistFallbackSnapshot(court: CourtRow, match: MatchRow, snapsho
     last_api_poll_at: now,
     last_score_change_at: now,
     updated_at: now
-  });
+  }, providerWrite("VolleyballLife fallback snapshot"));
 }
 
 function hasFutureDelayedVblScore(score: ScoreRow | null, now: string) {
@@ -1173,7 +1184,7 @@ function hasFutureDelayedVblScore(score: ScoreRow | null, now: string) {
     .some((item) => !delayedScoreMatchesVisibleScore(item.score, score));
 }
 
-async function updateApiSourceHealthIfChanged(courtId: string, currentScore: ScoreRow | null, now: string, sourceAvailable: boolean, message: string) {
+async function updateApiSourceHealthIfChanged(court: CourtRow, match: MatchRow, currentScore: ScoreRow | null, now: string, sourceAvailable: boolean, message: string) {
   if (!currentScore) return false;
   const patch = {
     source_available: sourceAvailable,
@@ -1181,14 +1192,81 @@ async function updateApiSourceHealthIfChanged(courtId: string, currentScore: Sco
     stale: false,
     message
   } as const;
-  if (scoreStatePatchMatches(currentScore, patch)) return false;
-  const { error } = await supabaseAdmin().from("score_states").update({
+  if (scoreStatePatchMatches(currentScore, patch)) {
+    if (!sourceAvailable) await resolveProviderFallback(match, currentScore, "VolleyballLife source unavailable");
+    return false;
+  }
+  const saved = await persistCurrentProviderProjection(court, match, currentScore, {
     ...patch,
-    last_api_poll_at: now,
-    updated_at: now
-  }).eq("court_id", courtId);
-  if (error) throw error;
+    last_api_poll_at: now
+  }, "VolleyballLife source health changed");
+  if (!sourceAvailable) await resolveProviderFallback(match, saved.score as ScoreRow, "VolleyballLife source unavailable");
   return true;
+}
+
+async function resolveProviderFallback(match: MatchRow, score: ScoreRow, actorLabel: string) {
+  const expectedAuthorityEpoch = Number(score.authority_epoch ?? 0);
+  if (!Number.isInteger(expectedAuthorityEpoch) || expectedAuthorityEpoch < 1) return false;
+  try {
+    await resolveCommunityFallbackAuthority({
+      matchId: match.id,
+      expectedAuthorityEpoch,
+      actionId: trustedScoreActionId({ type: "provider-fallback", matchId: match.id, expectedAuthorityEpoch }),
+      actorLabel
+    });
+    return true;
+  } catch (error) {
+    // Another trusted writer may have changed authority between the provider
+    // health commit and fallback resolution. The next poll reads the winner.
+    if (error instanceof CommunityWitnessError && error.code === "40001") return false;
+    throw error;
+  }
+}
+
+async function persistCurrentProviderProjection(
+  court: CourtRow,
+  match: MatchRow,
+  currentScore: ScoreRow,
+  patch: Partial<ScoreRow>,
+  actorLabel: string,
+  write: { scoreChangeObservedAt?: string } = {}
+) {
+  if (currentScore.authority_mode === "ADMIN_LOCKED"
+    || currentScore.authority_mode === "DESIGNATED_PRIMARY"
+    || currentScore.authority_mode === "VERIFIED_CONSENSUS") {
+    return { score: currentScore, overlay: null };
+  }
+  const source = patch.source ?? currentScore.source ?? "api";
+  return persistScoreAndOverlay(court, match, {
+    court_id: court.id,
+    match_id: match.id,
+    team_a_score: patch.team_a_score ?? currentScore.team_a_score,
+    team_b_score: patch.team_b_score ?? currentScore.team_b_score,
+    team_a_sets: patch.team_a_sets ?? currentScore.team_a_sets,
+    team_b_sets: patch.team_b_sets ?? currentScore.team_b_sets,
+    current_set: patch.current_set ?? currentScore.current_set,
+    set_scores: patch.set_scores ?? currentScore.set_scores,
+    serving_team: Object.hasOwn(patch, "serving_team") ? patch.serving_team ?? null : currentScore.serving_team,
+    timeouts: patch.timeouts ?? currentScore.timeouts ?? {},
+    status: patch.status ?? currentScore.status,
+    source,
+    source_available: patch.source_available ?? currentScore.source_available ?? source === "api",
+    source_priority: patch.source_priority ?? currentScore.source_priority ?? (source === "api" ? "primary" : "fallback"),
+    source_pending_scores: patch.source_pending_scores ?? currentScore.source_pending_scores ?? [],
+    stale: patch.stale ?? currentScore.stale ?? false,
+    message: Object.hasOwn(patch, "message") ? patch.message ?? null : currentScore.message ?? null,
+    last_api_poll_at: patch.last_api_poll_at ?? currentScore.last_api_poll_at ?? null,
+    last_score_change_at: currentScore.last_score_change_at ?? null
+  }, providerWrite(actorLabel, write));
+}
+
+function providerWrite(actorLabel: string, options: { scoreChangeObservedAt?: string } = {}) {
+  return {
+    actorType: "PROVIDER" as const,
+    actorLabel,
+    authorityMode: "PROVIDER_PRIMARY" as const,
+    scoreChangeObservedAt: options.scoreChangeObservedAt
+  };
 }
 
 export function scoreStatePatchMatches(score: ScoreRow | null, patch: Partial<ScoreRow>) {
@@ -1256,51 +1334,50 @@ async function markCourtStale(court: CourtRow, message: string) {
     observedAt: now
   });
 
-  if (currentScore?.source === "manual") {
-    const patch = {
-      source_available: false,
-      source_priority: "fallback",
-      stale: false,
-      message: "VolleyballLife unavailable; manual score active."
-    } as const;
-    if (scoreStatePatchMatches(currentScore, patch)) return;
-    const { error } = await db.from("score_states").update({
-      ...patch,
-      last_api_poll_at: now,
-      updated_at: now
-    }).eq("court_id", court.id);
-    if (error) throw error;
+  const protectedAuthority = currentScore?.source === "manual"
+    || currentScore?.source === "override"
+    || currentScore?.authority_mode === "ADMIN_LOCKED"
+    || currentScore?.authority_mode === "DESIGNATED_PRIMARY"
+    || currentScore?.authority_mode === "VERIFIED_CONSENSUS";
+  if (protectedAuthority) {
+    // Do not overwrite a community-owned projection with provider failure
+    // metadata, but still expire dead leases and recalculate fallback
+    // authority. Otherwise an expired designated scorer could strand a match
+    // in DESIGNATED_PRIMARY for the duration of a provider outage.
+    if (match && currentScore && (currentScore.authority_mode === "DESIGNATED_PRIMARY"
+      || currentScore.authority_mode === "VERIFIED_CONSENSUS")) {
+      await resolveProviderFallback(match, currentScore, "VolleyballLife poll failure");
+    }
     await db.from("poller_errors").insert({
       event_id: court.event_id,
       court_id: court.id,
       match_id: match?.id ?? null,
       source_url: match?.api_url ?? null,
       message,
-      payload: { courtNumber: court.court_number, fallback: "manual" }
+      payload: { courtNumber: court.court_number, protectedAuthority: currentScore?.authority_mode ?? currentScore?.source }
     });
     return;
   }
-  const { data: score } = await db
-    .from("score_states")
-    .select("*")
-    .eq("court_id", court.id)
-    .maybeSingle();
 
-  let staleScore = score;
-  const stalePatch = {
+  let staleScore = currentScore;
+  const scoreNeedsUpdate = Boolean(match && currentScore) && !scoreStatePatchMatches(currentScore, {
     stale: true,
     message,
     source_available: false,
     source_priority: "fallback"
-  } as const;
-  const scoreNeedsUpdate = Boolean(score) && !scoreStatePatchMatches(score as ScoreRow, stalePatch);
-  if (scoreNeedsUpdate) {
-    const { data: updatedScore } = await db.from("score_states").update({
-      ...stalePatch,
-      last_api_poll_at: now,
-      updated_at: now
-    }).eq("court_id", court.id).select("*").single();
-    staleScore = updatedScore;
+  });
+  if (match && currentScore && scoreNeedsUpdate) {
+    const saved = await persistCurrentProviderProjection(court, match, currentScore, {
+      stale: true,
+      message,
+      source_available: false,
+      source_priority: "fallback",
+      last_api_poll_at: now
+    }, "VolleyballLife source failure");
+    staleScore = saved.score as ScoreRow;
+    await resolveProviderFallback(match, staleScore, "VolleyballLife poll failure");
+  } else if (match && currentScore) {
+    await resolveProviderFallback(match, currentScore, "VolleyballLife poll failure");
   }
 
   const courtNeedsUpdate = court.status !== "error";
@@ -1313,8 +1390,6 @@ async function markCourtStale(court: CourtRow, message: string) {
       .single()).data
     : court;
 
-  if (!scoreNeedsUpdate && !courtNeedsUpdate) return;
-
   await db.from("poller_errors").insert({
     event_id: court.event_id,
     court_id: court.id,
@@ -1324,10 +1399,13 @@ async function markCourtStale(court: CourtRow, message: string) {
     payload: { courtNumber: court.court_number }
   });
 
+  if (match && staleScore) return;
+  if (!scoreNeedsUpdate && !courtNeedsUpdate) return;
+
   const overlay = await buildOverlayStateWithEventSettings(
     updatedCourt ?? { ...court, status: "error", last_update_at: now },
     match ?? null,
-    staleScore ?? null
+    null
   );
   await db.from("overlay_states").upsert({
     court_id: court.id,

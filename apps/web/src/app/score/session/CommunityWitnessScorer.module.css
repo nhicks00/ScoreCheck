@@ -1,0 +1,915 @@
+.scoreboard {
+  --witness-blue: #3195ff;
+  --witness-blue-deep: #0c4da8;
+  --witness-blue-soft: rgba(49, 149, 255, 0.16);
+  --witness-red: #ff463e;
+  --witness-red-deep: #bd201c;
+  --witness-red-soft: rgba(255, 70, 62, 0.15);
+  --witness-line: rgba(133, 155, 184, 0.32);
+  background: #030b15;
+  color: #f8f8f7;
+  display: grid;
+  font-family: var(--font-ui);
+  gap: 0;
+  margin: 0 auto;
+  max-width: 760px;
+  min-width: 0;
+  padding: 30px 22px 36px;
+  width: 100%;
+}
+
+/* Keeps the complete scorekeeper legible beside or directly below video.
+   Score-only mode retains the roomier reference composition. */
+.scoreboard.watchDensity {
+  max-width: 620px;
+  padding: 18px 18px 28px;
+}
+
+.watchDensity .setStage {
+  margin-top: 16px;
+}
+
+.watchDensity .setStage strong {
+  font-size: clamp(36px, 9vw, 50px);
+}
+
+.watchDensity .scoreContext {
+  margin-top: 12px;
+}
+
+.watchDensity .teamPanel {
+  grid-template-rows: minmax(30px, auto) auto 2px auto;
+  padding-top: 4px;
+}
+
+.watchDensity .teamScore {
+  font-size: clamp(62px, 18vw, 90px);
+  padding: 4px 0 12px;
+}
+
+.watchDensity .versus {
+  height: 32px;
+  top: 73px;
+  width: 32px;
+}
+
+.watchDensity .contributionControls {
+  gap: 9px;
+  padding-top: 18px;
+}
+
+.watchDensity .addPoint {
+  font-size: clamp(16px, 4vw, 20px);
+  min-height: 66px;
+}
+
+.watchDensity .removePoint {
+  font-size: clamp(13px, 3.4vw, 16px);
+  min-height: 46px;
+}
+
+.watchDensity .controlIcon {
+  height: 32px;
+  width: 32px;
+}
+
+.watchDensity .journey {
+  margin-top: 22px;
+}
+
+.watchDensity .rallyTrack {
+  margin-top: 14px;
+}
+
+.watchDensity .receipt {
+  margin-top: 18px;
+}
+
+.watchDensity .coverage {
+  margin-top: 20px;
+}
+
+.sessionShell {
+  --witness-blue: #3195ff;
+  --witness-red: #ff463e;
+  background: #030b15;
+  color: #f8f8f7;
+  min-height: 100svh;
+  padding: 0 0 28px;
+}
+
+.sessionAlert {
+  align-items: center;
+  background: #23130f;
+  border: 1px solid rgba(255, 126, 91, 0.52);
+  border-radius: 10px;
+  color: #ffd4c8;
+  display: flex;
+  gap: 9px;
+  margin: 12px auto;
+  max-width: 716px;
+  padding: 10px 12px;
+  width: calc(100% - 38px);
+}
+
+.sessionAlert span {
+  flex: 1 1 auto;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.sessionAlert button {
+  background: transparent;
+  border: 1px solid rgba(255, 212, 200, 0.34);
+  color: #ffd4c8;
+  flex: 0 0 auto;
+  min-height: 40px;
+  padding: 7px 10px;
+}
+
+.sessionFooter {
+  align-items: center;
+  background: #06101b;
+  border: 1px solid rgba(87, 116, 151, 0.38);
+  border-radius: 12px;
+  display: flex;
+  gap: 20px;
+  justify-content: space-between;
+  margin: 16px auto 0;
+  max-width: 716px;
+  padding: 15px 18px;
+  width: calc(100% - 38px);
+}
+
+.sessionFooter > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.sessionFooter strong {
+  color: #f4f4f2;
+  overflow-wrap: anywhere;
+}
+
+.sessionFooter p {
+  color: #9ea8b5;
+  font-size: 13px;
+  line-height: 1.4;
+  margin: 0;
+  max-width: 56ch;
+}
+
+.roleLabel {
+  color: var(--witness-blue);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.releaseButton {
+  background: transparent;
+  border: 1px solid rgba(133, 155, 184, 0.38);
+  color: #bdc5ce;
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 9px 12px;
+}
+
+.loadingState,
+.terminalState {
+  margin: 0 auto;
+  max-width: 760px;
+  width: 100%;
+}
+
+.loadingState {
+  display: grid;
+  gap: 16px;
+  padding: 30px 22px;
+}
+
+.loadingState span {
+  animation: witness-pulse 1.3s ease-in-out infinite alternate;
+  background: #0b1725;
+  border: 1px solid rgba(133, 155, 184, 0.18);
+  border-radius: 12px;
+  display: block;
+  height: 82px;
+}
+
+.loadingState span:nth-child(2) {
+  height: 280px;
+}
+
+.loadingState span:nth-child(3) {
+  height: 140px;
+}
+
+.terminalState {
+  align-items: center;
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+  padding: 72px 24px;
+  text-align: center;
+}
+
+.terminalState > svg {
+  color: var(--witness-red);
+}
+
+.terminalState h1 {
+  font-size: 26px;
+  margin: 0;
+}
+
+.terminalState p {
+  color: #a8b0ba;
+  line-height: 1.5;
+  margin: 0;
+  max-width: 42ch;
+}
+
+@keyframes witness-pulse {
+  from { opacity: 0.42; }
+  to { opacity: 0.9; }
+}
+
+.matchHeader {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.matchHeader h1 {
+  font-family: var(--font-ui);
+  font-size: clamp(16px, 4.6vw, 24px);
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.liveStatus {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: clamp(13px, 3.6vw, 18px);
+  font-weight: 750;
+  gap: 8px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.liveStatus.live {
+  color: #ff544a;
+}
+
+.liveStatus.complete {
+  color: #9ba9ba;
+}
+
+.setStage {
+  align-items: center;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(24px, 1fr) auto minmax(24px, 1fr);
+  margin-top: 31px;
+}
+
+.setStage span {
+  border-top: 1px solid rgba(133, 155, 184, 0.34);
+}
+
+.setStage strong {
+  font-family: var(--font-head);
+  font-size: clamp(44px, 13vw, 72px);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  letter-spacing: -0.045em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.scoreContext {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-top: 25px;
+}
+
+.contextLabel {
+  align-items: center;
+  color: #a9a9ad;
+  display: inline-flex;
+  font-size: clamp(14px, 4vw, 20px);
+  font-weight: 560;
+  gap: 12px;
+  min-width: 0;
+}
+
+.contextLabel svg {
+  color: var(--witness-blue);
+  flex: 0 0 auto;
+}
+
+.switchButton {
+  background: transparent;
+  border: 1px solid rgba(126, 151, 183, 0.38);
+  border-radius: 10px;
+  color: #bebdc1;
+  flex: 0 0 auto;
+  font-size: clamp(13px, 3.7vw, 18px);
+  font-weight: 560;
+  gap: 9px;
+  min-height: 44px;
+  padding: 9px 13px;
+}
+
+.switchButton:hover:not(:disabled) {
+  background: rgba(49, 149, 255, 0.08);
+  border-color: rgba(49, 149, 255, 0.62);
+  color: #f8f8f7;
+}
+
+.switchButton:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.teamGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 7px;
+  min-width: 0;
+  position: relative;
+}
+
+.teamPanel {
+  display: grid;
+  grid-template-rows: minmax(42px, auto) auto 2px auto;
+  min-width: 0;
+  padding: 10px 11px 0;
+  text-align: center;
+}
+
+.teamPanel + .teamPanel {
+  border-left: 1px solid rgba(133, 155, 184, 0.33);
+}
+
+.teamIdentity {
+  align-items: center;
+  display: grid;
+  min-width: 0;
+}
+
+.teamIdentity h2 {
+  color: currentColor;
+  font-family: var(--font-ui);
+  font-size: clamp(13px, 4vw, 21px);
+  font-weight: 750;
+  letter-spacing: 0.015em;
+  line-height: 1.1;
+  margin: 0;
+  overflow-wrap: anywhere;
+  text-transform: uppercase;
+}
+
+.blue {
+  color: var(--witness-blue);
+}
+
+.red {
+  color: var(--witness-red);
+}
+
+.teamScore {
+  color: #f7f7f5;
+  font-family: var(--font-head);
+  font-size: clamp(74px, 23vw, 126px);
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  letter-spacing: -0.07em;
+  line-height: 0.92;
+  padding: 8px 0 18px;
+}
+
+.teamRule {
+  background: currentColor;
+  border-radius: 99px;
+  display: block;
+  height: 2px;
+  margin: 0 7px;
+}
+
+.versus {
+  align-items: center;
+  background: #07111d;
+  border: 1px solid rgba(133, 155, 184, 0.29);
+  border-radius: 999px;
+  color: #aaa9ad;
+  display: flex;
+  font-family: var(--font-head);
+  font-size: 13px;
+  font-weight: 650;
+  height: 36px;
+  justify-content: center;
+  left: 50%;
+  position: absolute;
+  text-transform: uppercase;
+  top: 96px;
+  transform: translateX(-50%);
+  width: 36px;
+  z-index: 2;
+}
+
+.contributionControls {
+  display: grid;
+  gap: 12px;
+  padding-top: 30px;
+}
+
+.finalCorrectionControls {
+  padding-top: 22px;
+}
+
+.contributionControls button {
+  border-radius: 10px;
+  display: flex;
+  font-weight: 620;
+  justify-content: center;
+  min-width: 0;
+  width: 100%;
+}
+
+.controlIcon {
+  align-items: center;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 38px;
+  justify-content: center;
+  width: 38px;
+}
+
+.addPoint {
+  color: #fff;
+  font-size: clamp(17px, 5vw, 25px);
+  gap: 10px;
+  min-height: 86px;
+  padding: 12px 9px;
+}
+
+.blue .addPoint {
+  background: #0c4da8;
+  border: 1px solid var(--witness-blue);
+  box-shadow: 0 0 24px rgba(49, 149, 255, 0.22), inset 0 0 24px rgba(49, 149, 255, 0.14);
+}
+
+.red .addPoint {
+  background: #bd201c;
+  border: 1px solid var(--witness-red);
+  box-shadow: 0 0 24px rgba(255, 70, 62, 0.2), inset 0 0 24px rgba(255, 70, 62, 0.13);
+}
+
+.addPoint .controlIcon {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.34);
+}
+
+.removePoint {
+  background: transparent;
+  border: 1px solid currentColor;
+  color: currentColor;
+  font-size: clamp(14px, 4vw, 19px);
+  gap: 9px;
+  min-height: 52px;
+  padding: 8px 6px;
+}
+
+.removePoint .controlIcon {
+  height: 32px;
+  width: 32px;
+}
+
+.contributionControls button:hover:not(:disabled) {
+  filter: brightness(1.12);
+}
+
+.contributionControls button:active:not(:disabled) {
+  transform: scale(0.985);
+}
+
+.contributionControls button:disabled {
+  cursor: not-allowed;
+  filter: saturate(0.5);
+  opacity: 0.46;
+}
+
+.journey {
+  margin-top: 31px;
+}
+
+.finalRecap {
+  align-items: center;
+  background: #071525;
+  border: 1px solid rgba(49, 149, 255, 0.48);
+  border-radius: 10px;
+  display: flex;
+  gap: 13px;
+  margin-top: 24px;
+  padding: 14px 16px;
+}
+
+.recapIcon {
+  align-items: center;
+  background: rgba(49, 149, 255, 0.13);
+  border: 1px solid rgba(49, 149, 255, 0.4);
+  border-radius: 999px;
+  color: var(--witness-blue);
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 42px;
+  justify-content: center;
+  width: 42px;
+}
+
+.finalRecap h2 {
+  font-family: var(--font-ui);
+  font-size: 16px;
+  margin: 0 0 3px;
+}
+
+.finalRecap p {
+  color: #acb5c0;
+  font-size: 13px;
+  line-height: 1.4;
+  margin: 0;
+}
+
+.sectionLabel {
+  align-items: center;
+  color: #aaa9ad;
+  display: flex;
+  gap: 11px;
+}
+
+.sectionLabel h2 {
+  font-family: var(--font-ui);
+  font-size: clamp(15px, 4.4vw, 21px);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.sectionIcon,
+.receiptIcon {
+  align-items: center;
+  background: #0a1623;
+  border: 1px solid rgba(133, 155, 184, 0.3);
+  border-radius: 999px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+
+.rallyTrack {
+  display: flex;
+  list-style: none;
+  margin: 20px 0 0;
+  padding: 0 2px;
+}
+
+.rallyStep {
+  align-items: center;
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  position: relative;
+}
+
+.rallyStep:not(:last-child)::after {
+  border-top: 1px solid rgba(133, 155, 184, 0.38);
+  content: "";
+  left: calc(50% + 17px);
+  position: absolute;
+  right: calc(-50% + 17px);
+  top: 17px;
+}
+
+.rallyMarker {
+  align-items: center;
+  background: #0b1725;
+  border: 1px solid rgba(133, 155, 184, 0.34);
+  border-radius: 999px;
+  color: #f5f5f4;
+  display: flex;
+  height: 36px;
+  justify-content: center;
+  position: relative;
+  width: 36px;
+  z-index: 1;
+}
+
+.pending .rallyMarker {
+  background: rgba(49, 149, 255, 0.2);
+  border-color: var(--witness-blue);
+  box-shadow: 0 0 14px rgba(49, 149, 255, 0.65), inset 0 0 8px rgba(49, 149, 255, 0.28);
+  color: #62a9ff;
+}
+
+.review .rallyMarker {
+  border-color: #f0b83f;
+  color: #f0b83f;
+}
+
+.voided .rallyMarker {
+  color: #7f8a99;
+  opacity: 0.72;
+}
+
+.confirmed .rallyMarker {
+  border-color: rgba(49, 149, 255, 0.7);
+  color: #85bdff;
+}
+
+.corrected .rallyMarker {
+  background: rgba(49, 149, 255, 0.14);
+  border-color: rgba(49, 149, 255, 0.78);
+  color: #a9d2ff;
+}
+
+.rallyNumber {
+  color: #aaa9ad;
+  font-size: clamp(13px, 3.8vw, 18px);
+  font-variant-numeric: tabular-nums;
+}
+
+.rallyStateLabel {
+  color: #8792a1;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  position: absolute;
+  top: 62px;
+  text-transform: uppercase;
+}
+
+.pending .rallyNumber,
+.confirmed .rallyNumber,
+.corrected .rallyNumber {
+  color: var(--witness-blue);
+}
+
+.receipt,
+.coverage {
+  align-items: center;
+  background: #06101b;
+  border: 1px solid rgba(87, 116, 151, 0.48);
+  border-radius: 10px;
+  display: flex;
+  min-width: 0;
+}
+
+.receipt {
+  gap: 13px;
+  margin-top: 25px;
+  min-height: 64px;
+  padding: 13px 15px;
+  position: relative;
+}
+
+.receipt::after {
+  background: var(--witness-blue);
+  border-radius: 999px;
+  bottom: 8px;
+  box-shadow: 0 0 16px rgba(49, 149, 255, 0.8);
+  content: "";
+  position: absolute;
+  right: -1px;
+  top: 8px;
+  width: 1px;
+}
+
+.receiptIcon {
+  color: var(--witness-blue);
+}
+
+.receipt p,
+.coverage p {
+  color: #eeeeed;
+  font-size: clamp(13px, 3.8vw, 18px);
+  font-weight: 560;
+  line-height: 1.35;
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.receipt.sending,
+.receipt.retrying,
+.receipt.offline {
+  border-color: rgba(240, 184, 63, 0.55);
+}
+
+.receipt.sending .receiptIcon,
+.receipt.retrying .receiptIcon,
+.receipt.offline .receiptIcon {
+  color: #f0b83f;
+}
+
+.receipt.failed,
+.receipt.rejected {
+  border-color: rgba(255, 70, 62, 0.62);
+}
+
+.receipt.failed .receiptIcon,
+.receipt.rejected .receiptIcon {
+  color: var(--witness-red);
+}
+
+.coverage {
+  color: var(--witness-blue);
+  gap: 17px;
+  margin-top: 36px;
+  min-height: 54px;
+  padding: 12px 20px;
+}
+
+.coverage p {
+  color: #aaa9ad;
+}
+
+.visuallyHidden {
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+@media (max-width: 430px) {
+  .scoreboard {
+    padding-inline: 19px;
+  }
+
+  .scoreContext {
+    margin-top: 12px;
+  }
+
+  .contextLabel {
+    gap: 9px;
+  }
+
+  .switchButton {
+    gap: 7px;
+    padding-inline: 10px;
+  }
+
+  .teamPanel {
+    grid-template-rows: minmax(32px, auto) auto 2px auto;
+    padding-inline: 5px;
+    padding-top: 0;
+  }
+
+  .teamGrid {
+    margin-top: -4px;
+  }
+
+  .teamIdentity h2 {
+    font-size: clamp(11px, 3.1vw, 15px);
+  }
+
+  .teamScore {
+    font-size: clamp(78px, 25vw, 126px);
+    padding-bottom: 16px;
+  }
+
+  .contributionControls {
+    padding-top: 28px;
+  }
+
+  .addPoint {
+    gap: 8px;
+  }
+
+  .removePoint {
+    font-size: 14px;
+  }
+
+  .controlIcon {
+    height: 36px;
+    width: 36px;
+  }
+
+  .coverage {
+    margin-top: 35px;
+    padding-inline: 18px;
+  }
+
+  .journey {
+    margin-top: 24px;
+  }
+
+  .rallyStep {
+    gap: 6px;
+  }
+
+  .rallyMarker {
+    height: 34px;
+    width: 34px;
+  }
+
+  .rallyStep:not(:last-child)::after {
+    left: calc(50% + 16px);
+    right: calc(-50% + 16px);
+    top: 16px;
+  }
+
+  .rallyStateLabel {
+    top: 57px;
+  }
+
+  .sessionFooter {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .releaseButton {
+    width: 100%;
+  }
+}
+
+@media (max-width: 350px) {
+  .scoreboard {
+    padding-inline: 14px;
+  }
+
+  .matchHeader {
+    align-items: flex-start;
+  }
+
+  .setStage {
+    margin-top: 25px;
+  }
+
+  .scoreContext {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .switchButton {
+    align-self: flex-end;
+  }
+
+  .teamPanel {
+    padding-inline: 6px;
+  }
+
+  .addPoint,
+  .removePoint {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .addPoint {
+    min-height: 96px;
+  }
+}
+
+@media (min-width: 700px) {
+  .scoreboard {
+    border: 1px solid rgba(133, 155, 184, 0.18);
+    border-radius: 18px;
+    padding: 40px 36px 48px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .switchButton,
+  .contributionControls button {
+    transition: none;
+  }
+
+  .switchButton:active:not(:disabled),
+  .contributionControls button:active:not(:disabled) {
+    transform: none;
+  }
+
+  .loadingState span {
+    animation: none;
+  }
+}

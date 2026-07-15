@@ -1685,43 +1685,6 @@ label {
   gap: 16px;
 }
 
-.watch-toggle {
-  display: grid;
-  gap: 8px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.watch-toggle button {
-  min-height: 54px;
-}
-
-.mode-toggle button {
-  align-items: flex-start;
-  flex-direction: column;
-  justify-content: center;
-  min-height: 70px;
-  padding: 12px 14px;
-  text-align: left;
-}
-
-.mode-toggle button > span {
-  align-items: center;
-  display: flex;
-  gap: 8px;
-  min-width: 0;
-}
-
-.mode-toggle small {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.25;
-}
-
-.mode-toggle button.primary small {
-  color: rgba(36, 16, 10, 0.72);
-}
-
 /* Verification screen */
 .verification-card {
   align-items: center;
@@ -3390,7 +3353,6 @@ label.score-field {
     text-align: left;
   }
 
-  .watch-toggle,
   .score-control-grid,
   .session-actions,
   .set-flow-panel,

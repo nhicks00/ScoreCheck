@@ -1,0 +1,652 @@
+.watchShell {
+  --watch-blue: #3195ff;
+  --watch-red: #ff463e;
+  background: #030b15;
+  color: #f8f8f7;
+  display: grid;
+  grid-template-areas:
+    "toolbar"
+    "video"
+    "score";
+  isolation: isolate;
+  margin: 0 auto;
+  max-width: 1480px;
+  min-width: 0;
+  position: relative;
+  width: 100%;
+}
+
+.watchToolbar {
+  align-items: center;
+  background: #06101b;
+  border-bottom: 1px solid rgba(133, 155, 184, 0.25);
+  display: flex;
+  gap: 18px;
+  grid-area: toolbar;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 12px max(16px, env(safe-area-inset-right)) 12px max(16px, env(safe-area-inset-left));
+}
+
+.watchToolbar > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.watchToolbar > div:first-child > span {
+  align-items: center;
+  display: inline-flex;
+  font-size: 15px;
+  font-weight: 750;
+  gap: 8px;
+}
+
+.watchToolbar > div:first-child svg {
+  color: var(--watch-blue);
+}
+
+.watchToolbar small {
+  color: #a8b2be;
+  font-size: 12px;
+  line-height: 1.35;
+  max-width: 72ch;
+}
+
+.watchActions {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.watchActions button,
+.watchActions a,
+.focusHeader button,
+.focusTeam button {
+  align-items: center;
+  border-radius: 9px;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-weight: 650;
+  justify-content: center;
+}
+
+.watchActions button,
+.watchActions a {
+  background: #0a1827;
+  border: 1px solid rgba(133, 155, 184, 0.38);
+  color: #e5e9ed;
+  font-size: 13px;
+  gap: 7px;
+  min-height: 44px;
+  padding: 8px 11px;
+  text-decoration: none;
+}
+
+.watchActions button:hover:not(:disabled),
+.watchActions a:hover {
+  background: #102238;
+  border-color: rgba(49, 149, 255, 0.64);
+  color: #fff;
+}
+
+.videoPane {
+  align-items: center;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  display: flex;
+  grid-area: video;
+  justify-content: center;
+  min-height: 220px;
+  min-width: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.videoPane iframe {
+  border: 0;
+  height: 100%;
+  width: 100%;
+}
+
+.scorePane {
+  grid-area: score;
+  min-width: 0;
+  width: 100%;
+}
+
+.scoreOnly .scorePane {
+  margin: 0 auto;
+  max-width: 760px;
+}
+
+.preferenceLoading,
+.visuallyHidden,
+.focusSentinel {
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+.focusMode {
+  background: #000;
+  display: grid;
+  grid-template-rows: minmax(200px, 1fr) auto;
+  height: 100dvh;
+  inset: 0;
+  margin: 0;
+  max-width: none;
+  overflow: hidden;
+  position: fixed;
+  width: 100vw;
+  z-index: 2147483000;
+}
+
+.watchShell.withVideo.focusMode {
+  align-items: stretch;
+  column-gap: 0;
+  grid-template-areas: none;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(200px, 1fr) auto;
+  padding: 0;
+}
+
+.watchShell.focusMode .videoPane {
+  aspect-ratio: auto;
+  border: 0;
+  border-radius: 0;
+  grid-area: auto;
+  height: 100%;
+  min-height: 0;
+  position: relative;
+  top: auto;
+  width: 100%;
+  z-index: auto;
+}
+
+.focusPanel {
+  background: #030b15;
+  border-top: 1px solid rgba(133, 155, 184, 0.38);
+  color: #fff;
+  display: grid;
+  gap: 8px;
+  padding-bottom: max(10px, env(safe-area-inset-bottom));
+  position: relative;
+}
+
+.focusHeader {
+  align-items: center;
+  display: grid;
+  gap: clamp(8px, 2vw, 20px);
+  grid-template-columns: minmax(44px, auto) minmax(0, 1fr) minmax(44px, auto);
+  padding: 8px max(12px, env(safe-area-inset-right)) 0 max(12px, env(safe-area-inset-left));
+}
+
+.focusHeader button {
+  background: rgba(3, 11, 21, 0.84);
+  border: 1px solid rgba(255, 255, 255, 0.36);
+  color: #fff;
+  font-size: 13px;
+  gap: 7px;
+  min-height: 46px;
+  padding: 8px 11px;
+}
+
+.focusHeader button:last-child {
+  justify-self: end;
+}
+
+.focusHeader button:hover:not(:disabled) {
+  background: rgba(16, 38, 63, 0.96);
+  border-color: rgba(49, 149, 255, 0.8);
+}
+
+.focusMatch {
+  display: grid;
+  gap: 2px;
+  justify-items: center;
+  min-width: 0;
+  text-align: center;
+}
+
+.focusMatch > span {
+  font-size: clamp(11px, 1.6vw, 15px);
+  font-weight: 650;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.focusMatch strong {
+  font-family: var(--font-head);
+  font-size: clamp(26px, 4vw, 48px);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.04em;
+  line-height: 0.95;
+  text-transform: uppercase;
+}
+
+.focusMatch small {
+  color: #d0d7df;
+  font-size: clamp(9px, 1.1vw, 12px);
+}
+
+.focusReceipt {
+  background: #071525;
+  border: 1px solid rgba(133, 155, 184, 0.5);
+  border-radius: 999px;
+  color: #edf2f6;
+  font-size: clamp(11px, 2.6vw, 15px);
+  font-weight: 620;
+  line-height: 1.25;
+  margin: 0 auto;
+  max-width: min(84vw, 640px);
+  overflow-wrap: anywhere;
+  padding: 9px 16px;
+  text-align: center;
+}
+
+.focusTeams {
+  align-items: end;
+  display: grid;
+  gap: clamp(10px, 3vw, 36px);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding-left: max(10px, env(safe-area-inset-left));
+  padding-right: max(10px, env(safe-area-inset-right));
+}
+
+.focusTeam {
+  background: #06101b;
+  border: 1px solid currentColor;
+  border-radius: 14px;
+  display: grid;
+  gap: 8px;
+  max-width: 390px;
+  min-width: 0;
+  padding: 11px;
+  width: 100%;
+}
+
+.focusTeam:first-child {
+  justify-self: start;
+}
+
+.focusTeam:last-child {
+  justify-self: end;
+}
+
+.focusBlue {
+  color: var(--watch-blue);
+}
+
+.focusRed {
+  color: var(--watch-red);
+}
+
+.focusTeam > div {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.focusTeam h2 {
+  font-family: var(--font-ui);
+  font-size: clamp(11px, 3.3vw, 18px);
+  font-weight: 780;
+  line-height: 1.08;
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-transform: uppercase;
+}
+
+.focusTeam output {
+  color: #fff;
+  flex: 0 0 auto;
+  font-family: var(--font-head);
+  font-size: clamp(44px, 13vw, 74px);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  letter-spacing: -0.06em;
+  line-height: 0.8;
+}
+
+.focusTeam button {
+  color: #fff;
+  gap: 7px;
+  width: 100%;
+}
+
+.focusAdd {
+  font-size: clamp(15px, 3.7vw, 20px);
+  min-height: 62px;
+  padding: 10px;
+}
+
+.focusBlue .focusAdd {
+  background: #0c4da8;
+  border: 1px solid var(--watch-blue);
+  box-shadow: 0 0 22px rgba(49, 149, 255, 0.24);
+}
+
+.focusRed .focusAdd {
+  background: #bd201c;
+  border: 1px solid var(--watch-red);
+  box-shadow: 0 0 22px rgba(255, 70, 62, 0.22);
+}
+
+.focusRemove {
+  background: rgba(3, 11, 21, 0.76);
+  border: 1px solid currentColor;
+  color: currentColor !important;
+  font-size: clamp(12px, 3vw, 16px);
+  min-height: 46px;
+  padding: 8px;
+}
+
+.focusTeam button:hover:not(:disabled) {
+  filter: brightness(1.12);
+}
+
+.focusTeam button:active:not(:disabled) {
+  transform: scale(0.985);
+}
+
+.focusTeam button:disabled {
+  cursor: not-allowed;
+  filter: saturate(0.5);
+  opacity: 0.52;
+}
+
+.watchActions :focus-visible,
+.focusPanel :focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: 3px;
+}
+
+@media (max-width: 699px) {
+  .watchToolbar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .watchActions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    width: 100%;
+  }
+
+  .watchActions button,
+  .watchActions a {
+    width: 100%;
+  }
+
+  .withVideo .videoPane {
+    height: clamp(220px, 42svh, 380px);
+    position: sticky;
+    top: 0;
+    z-index: 3;
+  }
+
+  .focusControlLabel {
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    height: 1px;
+    overflow: hidden;
+    position: absolute;
+    white-space: nowrap;
+    width: 1px;
+  }
+
+  .focusHeader button {
+    padding: 8px;
+    width: 46px;
+  }
+}
+
+@media (max-width: 370px) {
+  .focusTeams {
+    gap: 7px;
+    padding-left: max(6px, env(safe-area-inset-left));
+    padding-right: max(6px, env(safe-area-inset-right));
+  }
+
+  .focusTeam {
+    border-radius: 11px;
+    padding: 8px;
+  }
+
+  .focusTeam > div {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .focusTeam output {
+    align-self: center;
+  }
+
+  .focusAdd {
+    min-height: 58px;
+  }
+
+}
+
+@media (orientation: portrait) {
+  .watchShell.withVideo.focusMode {
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+  }
+}
+
+@media (min-width: 900px) {
+  .watchShell.withVideo {
+    align-items: start;
+    column-gap: clamp(18px, 2.2vw, 34px);
+    grid-template-areas:
+      "toolbar toolbar"
+      "video score";
+    grid-template-columns: minmax(0, 1.55fr) minmax(390px, 0.85fr);
+    padding: 20px;
+  }
+
+  .withVideo .watchToolbar {
+    border: 1px solid rgba(133, 155, 184, 0.25);
+    border-radius: 12px;
+    margin-bottom: 20px;
+  }
+
+  .withVideo .videoPane {
+    border: 1px solid rgba(133, 155, 184, 0.25);
+    border-radius: 14px;
+    min-height: 0;
+    position: sticky;
+    top: 20px;
+  }
+
+  .focusTeams {
+    padding-left: max(24px, env(safe-area-inset-left));
+    padding-right: max(24px, env(safe-area-inset-right));
+  }
+}
+
+@media (orientation: landscape) and (max-height: 620px) {
+  .watchShell.withVideo.focusMode {
+    grid-template-columns: minmax(200px, 1fr) minmax(200px, 38vw);
+    grid-template-rows: minmax(200px, 1fr);
+  }
+
+  .focusPanel {
+    border-left: 1px solid rgba(133, 155, 184, 0.38);
+    border-top: 0;
+    max-height: 100dvh;
+    overflow-y: auto;
+  }
+
+  .focusHeader {
+    padding-block: max(6px, env(safe-area-inset-top)) 6px;
+  }
+
+  .focusMatch small {
+    display: none;
+  }
+
+  .focusTeams {
+    grid-template-columns: minmax(0, 1fr);
+    padding-bottom: 0;
+  }
+
+  .focusTeam {
+    gap: 6px 8px;
+    grid-template-areas:
+      "identity add"
+      "identity remove";
+    grid-template-columns: minmax(0, 1fr) minmax(112px, 0.9fr);
+    max-width: none;
+    padding: 8px;
+  }
+
+  .focusTeam:first-child,
+  .focusTeam:last-child {
+    justify-self: stretch;
+  }
+
+  .focusTeam > div {
+    align-content: center;
+    align-items: flex-start;
+    flex-direction: column;
+    grid-area: identity;
+    justify-content: center;
+  }
+
+  .focusTeam output {
+    align-self: center;
+    font-size: clamp(40px, 10vh, 64px);
+  }
+
+  .focusAdd {
+    grid-area: add;
+    min-height: 48px;
+  }
+
+  .focusRemove {
+    grid-area: remove;
+    min-height: 44px;
+  }
+
+  .focusReceipt {
+    padding-block: 7px;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 440px) {
+  .focusMatch > span,
+  .focusMatch small {
+    display: none;
+  }
+
+  .focusReceipt {
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    height: 1px;
+    overflow: hidden;
+    position: absolute;
+    white-space: nowrap;
+    width: 1px;
+  }
+
+  .focusPanel {
+    gap: 5px;
+    overflow: hidden;
+  }
+
+  .focusHeader {
+    padding-block: 4px 0;
+  }
+
+  .focusHeader button {
+    min-height: 44px;
+  }
+
+  .focusTeams {
+    gap: 6px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding-inline: 5px;
+  }
+
+  .focusTeam {
+    gap: 4px;
+    grid-template-areas:
+      "identity"
+      "add"
+      "remove";
+    grid-template-columns: minmax(0, 1fr);
+    padding: 5px;
+  }
+
+  .focusTeam > div {
+    align-items: center;
+    flex-direction: row;
+    gap: 4px;
+    justify-content: space-between;
+  }
+
+  .focusTeam h2 {
+    font-size: clamp(9px, 1.7vw, 11px);
+  }
+
+  .focusTeam output {
+    align-self: center;
+    font-size: clamp(34px, 10vh, 46px);
+  }
+
+  .focusAdd,
+  .focusRemove {
+    font-size: 12px;
+    gap: 3px;
+    min-height: 44px;
+    padding: 4px 2px;
+  }
+
+  .focusAdd svg,
+  .focusRemove svg {
+    height: 17px;
+    width: 17px;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 620px) and (max-width: 399px) {
+  .watchShell.withVideo.focusMode {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 200px auto;
+    overflow-y: auto;
+  }
+
+  .focusPanel {
+    border-left: 0;
+    border-top: 1px solid rgba(133, 155, 184, 0.38);
+    max-height: none;
+    overflow: visible;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .watchActions button,
+  .watchActions a,
+  .focusHeader button,
+  .focusTeam button {
+    transition: none;
+  }
+
+  .focusTeam button:active:not(:disabled) {
+    transform: none;
+  }
+}

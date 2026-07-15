@@ -68,7 +68,7 @@ export default async function EventsPage() {
               </div>
               <div className="score-line" style={{ flexWrap: "wrap" }}>
                 <Link className="button" href={`/admin/events/${activeEvent.id}`}>Open event</Link>
-                <Link className="button ghost" href={`/admin/events/${activeEvent.id}/fan-scoring`}>Fan scoring</Link>
+                <Link className="button ghost" href={`/admin/events/${activeEvent.id}/fan-scoring`}>Community scoring</Link>
               </div>
             </div>
           ) : (

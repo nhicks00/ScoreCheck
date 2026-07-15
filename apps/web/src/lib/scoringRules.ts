@@ -58,6 +58,15 @@ export function scorePoint(state: ScoreState, team: TeamSide, format = defaultBe
   return next;
 }
 
+export function removePoint(state: ScoreState, team: TeamSide, format = defaultBeachFormat()): ScoreState {
+  if (state.status === "Final") return clone(state);
+  const next = normalizeScoreState(state, format);
+  if (team === "A") next.teamAScore = Math.max(0, next.teamAScore - 1);
+  if (team === "B") next.teamBScore = Math.max(0, next.teamBScore - 1);
+  next.status = next.teamAScore === 0 && next.teamBScore === 0 ? "Prematch" : "In Progress";
+  return next;
+}
+
 export function canCompleteSet(state: ScoreState, format = defaultBeachFormat()): boolean {
   const target = setTargetForFormat(state.currentSet, format);
   const high = Math.max(state.teamAScore, state.teamBScore);
@@ -156,6 +165,10 @@ export function undoPoint(previousEventLog: Array<{ previousState?: unknown; nex
 }
 
 export function validateManualCorrection(input: Partial<ScoreState>, format = defaultBeachFormat()): ScoreState {
+  rejectNegativeField(input.teamAScore, "Scores cannot be negative");
+  rejectNegativeField(input.teamBScore, "Scores cannot be negative");
+  rejectNegativeField(input.teamASets, "Set counts cannot be negative");
+  rejectNegativeField(input.teamBSets, "Set counts cannot be negative");
   const next = normalizeScoreState(input, format);
   if (next.teamAScore < 0 || next.teamBScore < 0) throw new Error("Scores cannot be negative");
   if (next.teamASets < 0 || next.teamBSets < 0) throw new Error("Set counts cannot be negative");
@@ -167,6 +180,30 @@ export function validateManualCorrection(input: Partial<ScoreState>, format = de
   }
   if (next.teamASets >= format.setsToWin && next.teamBSets >= format.setsToWin) {
     throw new Error("Both teams cannot have won the match");
+  }
+
+  const setNumbers = new Set<number>();
+  let derivedTeamASets = 0;
+  let derivedTeamBSets = 0;
+  for (const set of next.setScores) {
+    if (!Number.isInteger(set.setNumber) || set.setNumber < 1 || set.setNumber > format.bestOf) {
+      throw new Error("Set history is outside the match format");
+    }
+    if (setNumbers.has(set.setNumber)) throw new Error("Set numbers must be unique");
+    setNumbers.add(set.setNumber);
+    if (!Number.isInteger(set.teamAScore) || !Number.isInteger(set.teamBScore) || set.teamAScore < 0 || set.teamBScore < 0) {
+      throw new Error("Set scores must be non-negative whole numbers");
+    }
+    if (!set.isComplete) continue;
+    if (set.teamAScore === set.teamBScore) throw new Error("Completed sets need a winner");
+    if (set.teamAScore > set.teamBScore) derivedTeamASets += 1;
+    if (set.teamBScore > set.teamAScore) derivedTeamBSets += 1;
+  }
+  if (next.teamASets !== derivedTeamASets || next.teamBSets !== derivedTeamBSets) {
+    throw new Error("Set counts must match completed set history");
+  }
+  if (next.status === "Final" && next.teamASets === next.teamBSets && next.teamAScore === next.teamBScore) {
+    throw new Error("Final score needs a match winner");
   }
   return next;
 }
@@ -202,13 +239,14 @@ export function normalizeScoreState(input: Partial<ScoreState> | Record<string, 
 export function formatFromUnknown(input: Record<string, unknown> | null | undefined): MatchFormat {
   const fallback = defaultBeachFormat();
   const bestOf = positiveInt(input?.bestOf) ?? fallback.bestOf;
+  const defaultPoints = Array.from({ length: bestOf }, (_, index) => index === bestOf - 1 ? 15 : 21);
   const pointsPerSet = Array.isArray(input?.pointsPerSet)
     ? input.pointsPerSet.map(positiveInt).filter((value): value is number => value != null)
-    : fallback.pointsPerSet;
+    : defaultPoints;
   return {
     bestOf,
     setsToWin: positiveInt(input?.setsToWin) ?? Math.ceil(bestOf / 2),
-    pointsPerSet: pointsPerSet.length ? pointsPerSet : fallback.pointsPerSet,
+    pointsPerSet: pointsPerSet.length ? pointsPerSet : defaultPoints,
     winByTwo: input?.winByTwo !== false,
     cap: positiveInt(input?.cap)
   };
@@ -240,6 +278,12 @@ function nonNegativeInt(value: unknown): number {
 function positiveInt(value: unknown): number | null {
   const numeric = Number(value);
   return Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : null;
+}
+
+function rejectNegativeField(value: unknown, message: string) {
+  if (value == null) return;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric < 0) throw new Error(message);
 }
 
 function clamp(value: number, min: number, max: number): number {

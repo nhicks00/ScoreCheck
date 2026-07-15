@@ -38,12 +38,12 @@ type MatchRow = {
 
 const adminActionSchema = z.object({
   action: z.enum(["point-a", "point-b", "toggle-serve", "timeout-a", "timeout-b", "side-switch", "set-complete", "match-complete", "undo"]),
-  actionId: z.string().min(8).max(128).optional(),
+  actionId: z.string().uuid(),
   actorLabel: z.string().max(80).optional()
 });
 
 const adminEditSchema = manualEditSchema.extend({
-  actionId: z.string().min(8).max(128).optional(),
+  actionId: z.string().uuid(),
   actorLabel: z.string().max(80).optional()
 });
 
@@ -75,16 +75,15 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ co
 
   const previous = normalizeManualState(context.currentScore);
   const next = applyManualEdit(previous, parsed.data, formatFromMatch(context.match));
-  const saved = await saveOverrideScore(context.court, context.match, next);
-  await logAdminAction(req, context.court, context.match, {
-    action: "admin-score-edit",
+  if (!context.match) return NextResponse.json({ error: "No active match on this court" }, { status: 409 });
+  const saved = await saveOverrideScore(req, context.court, context.match, next, {
+    action: "score-edit",
     actionId: parsed.data.actionId,
     actorLabel: parsed.data.actorLabel,
-    previousState: previous,
-    nextState: next,
-    payload: parsed.data
+    commandType: "CORRECT_SCORE",
+    currentScore: context.currentScore
   });
-  return NextResponse.json({ ok: true, score: saved.score, overlay: saved.overlay });
+  return NextResponse.json({ ok: true, duplicate: saved.duplicate, score: saved.score, overlay: saved.overlay });
 }
 
 async function loadContext(courtId: string): Promise<
@@ -112,25 +111,21 @@ async function persistAdminScoreMutation(
   match: MatchRow | null,
   currentScore: Record<string, unknown> | null,
   action: Exclude<z.infer<typeof adminActionSchema>["action"], "undo">,
-  actionId?: string,
+  actionId: string,
   actorLabel?: string
 ) {
   if (!match) return NextResponse.json({ error: "No active match on this court" }, { status: 409 });
-  const idempotent = await findExistingAction(actionId);
-  if (idempotent) return NextResponse.json({ ok: true, idempotent: true, score: idempotent.next_state });
-
   const previous = normalizeManualState(currentScore);
   const next = applyManualAction(previous, action, formatFromMatch(match));
-  const saved = await saveOverrideScore(court, match, next);
-  await logAdminAction(req, court, match, {
-    action: `admin-${action}`,
+  const semantic = adminCommandSemantics(action, next.serving_team);
+  const saved = await saveOverrideScore(req, court, match, next, {
+    action,
     actionId,
     actorLabel,
-    previousState: previous,
-    nextState: next,
-    payload: { action }
+    currentScore,
+    ...semantic
   });
-  return NextResponse.json({ ok: true, score: saved.score, overlay: saved.overlay });
+  return NextResponse.json({ ok: true, duplicate: saved.duplicate, score: saved.score, overlay: saved.overlay });
 }
 
 async function undoAdminAction(
@@ -138,48 +133,63 @@ async function undoAdminAction(
   court: CourtRow,
   match: MatchRow | null,
   currentScore: Record<string, unknown> | null,
-  actionId?: string,
+  actionId: string,
   actorLabel?: string
 ) {
   if (!match) return NextResponse.json({ error: "No active match on this court" }, { status: 409 });
-  const idempotent = await findExistingAction(actionId);
-  if (idempotent) return NextResponse.json({ ok: true, idempotent: true, score: idempotent.next_state });
-
-  const { data: previousAction, error } = await supabaseAdmin()
-    .from("score_actions")
-    .select("previous_state")
+  const { data: previousActions, error } = await supabaseAdmin()
+    .from("canonical_score_events")
+    .select("id,previous_state,metadata")
     .eq("court_id", court.id)
-    .neq("action", "admin-undo")
-    .not("previous_state", "is", null)
+    .eq("match_id", match.id)
+    .eq("actor_type", "ADMIN")
     .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(100);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  const restored = recordValue(previousAction?.previous_state);
+  const undoneEventIds = new Set((previousActions ?? [])
+    .filter((row) => recordValue(row.metadata)?.adminAction === "undo")
+    .map((row) => recordValue(row.metadata)?.undoneCanonicalEventId)
+    .filter((value): value is string => typeof value === "string"));
+  const previousAction = (previousActions ?? []).find((row) => {
+    const adminAction = recordValue(row.metadata)?.adminAction;
+    return typeof adminAction === "string" && adminAction !== "undo" && !undoneEventIds.has(row.id);
+  });
+  const restored = manualStateFromCanonical(previousAction?.previous_state);
   if (!restored) return NextResponse.json({ error: "Nothing to undo" }, { status: 409 });
 
-  const previous = normalizeManualState(currentScore);
-  const next = normalizeManualState(restored);
-  const saved = await saveOverrideScore(court, match, next);
-  await logAdminAction(req, court, match, {
-    action: "admin-undo",
+  const saved = await saveOverrideScore(req, court, match, restored, {
+    action: "undo",
     actionId,
     actorLabel,
-    previousState: previous,
-    nextState: next,
-    payload: { restoredFrom: previousAction }
+    commandType: "CORRECT_SCORE",
+    currentScore,
+    metadata: { undoneCanonicalEventId: previousAction?.id }
   });
-  return NextResponse.json({ ok: true, score: saved.score, overlay: saved.overlay });
+  return NextResponse.json({ ok: true, duplicate: saved.duplicate, score: saved.score, overlay: saved.overlay });
 }
 
-async function saveOverrideScore(court: CourtRow, match: MatchRow | null, state: ReturnType<typeof normalizeManualState>) {
+async function saveOverrideScore(
+  req: NextRequest,
+  court: CourtRow,
+  match: MatchRow,
+  state: ReturnType<typeof normalizeManualState>,
+  input: {
+    action: string;
+    actionId: string;
+    actorLabel?: string;
+    commandType: "ADD_POINT" | "REMOVE_POINT" | "CORRECT_SCORE" | "COMPLETE_SET" | "COMPLETE_MATCH" | "SET_SERVE";
+    teamSide?: "A" | "B" | null;
+    currentScore: Record<string, unknown> | null;
+    metadata?: Record<string, unknown>;
+  }
+) {
   const effectiveCourt = court.mode === "api" ? { ...court, mode: "hybrid" as const } : court;
   if (court.mode === "api") {
     await supabaseAdmin().from("courts").update({ mode: "hybrid", updated_at: new Date().toISOString() }).eq("id", court.id);
   }
   return persistScoreAndOverlay(effectiveCourt, match, {
     court_id: court.id,
-    match_id: match?.id ?? null,
+    match_id: match.id,
     team_a_score: state.team_a_score,
     team_b_score: state.team_b_score,
     team_a_sets: state.team_a_sets,
@@ -190,49 +200,52 @@ async function saveOverrideScore(court: CourtRow, match: MatchRow | null, state:
     timeouts: state.timeouts,
     status: state.status,
     source: "override",
+    source_available: false,
+    source_priority: "override",
+    source_pending_scores: [],
     stale: false,
     message: "Admin override"
+  }, {
+    actionId: input.actionId,
+    actorType: "ADMIN",
+    actorLabel: input.actorLabel ?? "admin",
+    authorityMode: "ADMIN_LOCKED",
+    commandType: input.commandType,
+    teamSide: input.teamSide,
+    expectedRevision: numberValue(input.currentScore?.revision) ?? undefined,
+    expectedAuthorityEpoch: numberValue(input.currentScore?.authority_epoch) ?? undefined,
+    metadata: {
+      adminAction: input.action,
+      ipHash: requestIpHash(req),
+      userAgent: userAgent(req),
+      ...input.metadata
+    }
   });
 }
 
-async function findExistingAction(actionId: string | undefined) {
-  if (!actionId) return null;
-  const { data } = await supabaseAdmin()
-    .from("score_actions")
-    .select("next_state")
-    .eq("action_id", actionId)
-    .maybeSingle();
-  return data;
+function adminCommandSemantics(action: string, servingTeam: "A" | "B" | null) {
+  if (action === "point-a") return { commandType: "ADD_POINT" as const, teamSide: "A" as const };
+  if (action === "point-b") return { commandType: "ADD_POINT" as const, teamSide: "B" as const };
+  if (action === "set-complete") return { commandType: "COMPLETE_SET" as const, teamSide: null };
+  if (action === "match-complete") return { commandType: "COMPLETE_MATCH" as const, teamSide: null };
+  if (action === "toggle-serve" && servingTeam) return { commandType: "SET_SERVE" as const, teamSide: servingTeam };
+  return { commandType: "CORRECT_SCORE" as const, teamSide: null };
 }
 
-async function logAdminAction(
-  req: NextRequest,
-  court: CourtRow,
-  match: MatchRow | null,
-  input: {
-    action: string;
-    actionId?: string;
-    actorLabel?: string;
-    previousState: unknown;
-    nextState: unknown;
-    payload: Record<string, unknown>;
-  }
-) {
-  const { error } = await supabaseAdmin().from("score_actions").insert({
-    court_id: court.id,
-    match_id: match?.id ?? null,
-    action: input.action,
-    action_id: input.actionId ?? crypto.randomUUID(),
-    payload: input.payload,
-    actor: "admin",
-    actor_type: "admin",
-    actor_label: input.actorLabel ?? "admin",
-    previous_state: input.previousState,
-    next_state: input.nextState,
-    ip_hash: requestIpHash(req),
-    user_agent: userAgent(req)
+function manualStateFromCanonical(value: unknown): ReturnType<typeof normalizeManualState> | null {
+  const state = recordValue(value);
+  if (!state) return null;
+  return normalizeManualState({
+    team_a_score: state.teamAScore,
+    team_b_score: state.teamBScore,
+    team_a_sets: state.teamASets,
+    team_b_sets: state.teamBSets,
+    current_set: state.currentSet,
+    set_scores: state.setScores,
+    serving_team: state.servingTeam,
+    timeouts: state.timeouts,
+    status: state.status
   });
-  if (error) throw error;
 }
 
 function firstRelation<T>(value: Relation<T>): T | null {
@@ -241,4 +254,10 @@ function firstRelation<T>(value: Relation<T>): T | null {
 
 function recordValue(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function numberValue(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
 }

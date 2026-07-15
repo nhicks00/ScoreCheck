@@ -1,11 +1,13 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { isAdminRequest } from "@/lib/auth";
+import { loadAdminCourtsWithCurrentScores } from "@/lib/adminCourtData";
 import { getEnv, missingEnvKeys } from "@/lib/env";
 import { getActiveEvent } from "@/lib/eventConfig";
 import { supabaseAdmin } from "@/lib/supabase";
 import { SetupNotice } from "@/components/SetupNotice";
-import { FanScoringDashboard } from "@/components/fan-scoring/FanScoringDashboard";
+import { FanScoringDashboard, type FanScoringCourt } from "@/components/fan-scoring/FanScoringDashboard";
+import { getCommunityAdminAssignmentSummary, listOpenCommunityDisputes } from "@/lib/communityWitness";
 
 export const dynamic = "force-dynamic";
 
@@ -32,10 +34,11 @@ export default async function AdminAvpDenverPage() {
   // Legacy bookmarked route: resolve the DB-active event, never the Denver slug.
   const event = await getActiveEvent(db);
   if (!event) redirect("/admin/events");
-  const [courtResult, sessionResult, flagResult] = await Promise.all([
-    db.from("courts").select("*, matches:current_match_id(*), score_states(*)").eq("event_id", event.id).order("court_number", { ascending: true }),
-    db.from("scorer_sessions").select("*").eq("event_id", event.id).order("joined_at", { ascending: true }),
-    db.from("court_flags").select("*").eq("event_id", event.id).order("created_at", { ascending: false }).limit(80)
+  const [courts, assignmentSummary, flagResult, disputeResult] = await Promise.all([
+    loadAdminCourtsWithCurrentScores<FanScoringCourt>(event.id, db),
+    getCommunityAdminAssignmentSummary({ eventId: event.id }),
+    db.from("court_flags").select("*").eq("event_id", event.id).order("created_at", { ascending: false }).limit(80),
+    listOpenCommunityDisputes({ eventId: event.id })
   ]);
   return (
     <main className="shell">
@@ -50,9 +53,13 @@ export default async function AdminAvpDenverPage() {
         </div>
         <FanScoringDashboard
           event={{ id: event.id, name: event.name, slug: event.slug ?? "event" }}
-          courts={courtResult.data ?? []}
-          sessions={sessionResult.data ?? []}
+          courts={courts}
+          assignments={assignmentSummary.assignments}
+          courtCounts={assignmentSummary.courtCounts}
           flags={flagResult.data ?? []}
+          disputes={disputeResult.disputes}
+          disputeTotalOpenCount={disputeResult.totalOpenCount}
+          disputesTruncated={disputeResult.truncated}
           siteUrl={env.publicSiteUrl}
         />
       </div>

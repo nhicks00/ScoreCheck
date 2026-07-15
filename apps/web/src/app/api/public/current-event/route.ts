@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getActiveEvent } from "@/lib/eventConfig";
 import { missingEnvKeys } from "@/lib/env";
+import { toPublicEventSummaryDto } from "@/lib/publicDtos";
 
 export async function GET() {
   try {
@@ -9,8 +10,12 @@ export async function GET() {
     }
     const event = await getActiveEvent();
     if (!event) return NextResponse.json({ error: "No active event" }, { status: 404 });
-    return NextResponse.json({ event }, { headers: { "cache-control": "no-store" } });
+    return NextResponse.json(
+      { event: toPublicEventSummaryDto(event) },
+      { headers: { "cache-control": "no-store" } }
+    );
   } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : "Could not load current event" }, { status: 500 });
+    console.error("Could not load the public current event", err);
+    return NextResponse.json({ error: "Could not load current event" }, { status: 500 });
   }
 }

@@ -1,21 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
+import { transitionCommunityMatch } from "@/lib/communityWitness";
 import { publicOrigin } from "@/lib/env";
-import { defaultManualState } from "@/lib/manualScoring";
-import { persistScoreAndOverlay } from "@/lib/scoreState";
-import { generateScorerToken, hashSecret } from "@/lib/security";
+import { manualSessionFormat } from "@/lib/manualSessionFormat";
+import { refreshCourtOverlay, trustedScoreActionId } from "@/lib/scoreState";
 import { supabaseAdmin } from "@/lib/supabase";
 
-const defaultFormat = {
-  bestOf: 3,
-  pointsPerSet: [21, 21, 15],
-  winByTwo: true,
-  cap: null,
-  setsToWin: 2
-};
-
 const manualSessionSchema = z.object({
+  actionId: z.string().uuid(),
   courtNumber: z.coerce.number().int().min(1).max(99),
   displayName: z.string().max(80).optional(),
   teamA: z.string().max(120).optional(),
@@ -40,8 +33,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ eve
   if (eventError || !event) return NextResponse.json({ error: eventError?.message ?? "Event not found" }, { status: 404 });
 
   const now = new Date().toISOString();
-  const token = generateScorerToken();
-  const format = formatFromBody(parsed.data);
+  const format = manualSessionFormat(parsed.data);
   const courtNumberText = String(parsed.data.courtNumber);
   const displayName = cleanText(parsed.data.displayName) ?? `Court ${parsed.data.courtNumber}`;
   const teamA = cleanText(parsed.data.teamA) ?? "Team A";
@@ -61,10 +53,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ eve
     mode: "manual",
     status: "waiting",
     frozen: false,
-    scorer_token_hash: hashSecret(token),
-    scorer_token_created_at: existingCourt?.scorer_token_created_at ?? now,
-    scorer_token_rotated_at: now,
-    scorer_token_revoked_at: null,
     updated_at: now
   };
 
@@ -74,9 +62,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ eve
   if (courtResult.error) return NextResponse.json({ error: courtResult.error.message }, { status: 500 });
   const court = courtResult.data;
 
-  const { data: match, error: matchError } = await db.from("matches").insert({
+  const { data: match, error: matchError } = await db.from("matches").upsert({
     event_id: eventId,
-    external_match_id: `manual-${crypto.randomUUID()}`,
+    external_match_id: `manual-${parsed.data.actionId}`,
     source_type: "manual",
     api_url: null,
     bracket_url: null,
@@ -90,86 +78,92 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ eve
     team_b_players: [],
     format,
     status: "scheduled",
-    source_payload: { createdBy: "admin", createdAt: now },
+    source_payload: { createdBy: "admin", createdAt: now, actionId: parsed.data.actionId },
     updated_at: now
-  }).select("*").single();
+  }, { onConflict: "event_id,external_match_id" }).select("*").single();
   if (matchError) return NextResponse.json({ error: matchError.message }, { status: 500 });
 
-  const { error: currentError } = await db
-    .from("courts")
-    .update({ current_match_id: match.id, status: "waiting", last_update_at: now, updated_at: now })
-    .eq("id", court.id);
-  if (currentError) return NextResponse.json({ error: currentError.message }, { status: 500 });
+  const transition = await transitionCommunityMatch({
+    eventId,
+    courtId: court.id,
+    fromMatchId: court.current_match_id ?? null,
+    toMatchId: match.id,
+    actionId: trustedScoreActionId({ type: "manual-session-transition", actionId: parsed.data.actionId, courtId: court.id, matchId: match.id }),
+    actorType: "ADMIN",
+    actorLabel: "Admin created manual session",
+    initialAuthorityMode: "PAUSED_DISPUTE"
+  });
+  if (transition.duplicate && transition.newMatchId !== match.id) {
+    const projection = await refreshCourtOverlay(court.id);
+    const origin = publicOrigin(new URL(req.url).origin);
+    return NextResponse.json({
+      ok: true,
+      duplicate: true,
+      event,
+      court,
+      match: transition.match,
+      score: projection.score,
+      overlay: projection.overlay,
+      scoreUrl: `${origin}/score/court/${court.id}`,
+      overlayUrl: `${origin}/overlay/stream/${parsed.data.courtNumber}`,
+      eventOverlayUrl: `${origin}/overlay/court/${parsed.data.courtNumber}?eventId=${eventId}`
+    });
+  }
 
   await db.from("court_match_queue").update({ is_active: false, status: "queued", updated_at: now }).eq("court_id", court.id).eq("is_active", true);
-  const { data: lastQueue } = await db
+  const { data: existingQueue } = await db
     .from("court_match_queue")
-    .select("queue_position")
+    .select("id")
     .eq("court_id", court.id)
-    .order("queue_position", { ascending: false })
-    .limit(1)
+    .eq("match_id", match.id)
     .maybeSingle();
-  const queuePosition = Number(lastQueue?.queue_position ?? 0) + 1;
-  const { error: queueError } = await db.from("court_match_queue").insert({
-    event_id: eventId,
-    court_id: court.id,
-    match_id: match.id,
-    queue_position: queuePosition,
-    is_active: true,
-    status: "active",
-    updated_at: now
-  });
+  let queueError: { message: string } | null = null;
+  if (existingQueue) {
+    ({ error: queueError } = await db.from("court_match_queue")
+      .update({ is_active: true, status: "active", updated_at: now })
+      .eq("id", existingQueue.id));
+  } else {
+    const { data: lastQueue } = await db
+      .from("court_match_queue")
+      .select("queue_position")
+      .eq("court_id", court.id)
+      .order("queue_position", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const queuePosition = Number(lastQueue?.queue_position ?? 0) + 1;
+    ({ error: queueError } = await db.from("court_match_queue").insert({
+      event_id: eventId,
+      court_id: court.id,
+      match_id: match.id,
+      queue_position: queuePosition,
+      is_active: true,
+      status: "active",
+      updated_at: now
+    }));
+  }
   if (queueError) return NextResponse.json({ error: queueError.message }, { status: 500 });
 
-  const initialState = defaultManualState();
-  const updatedCourt = { ...court, current_match_id: match.id, status: "waiting", last_update_at: now };
-  const saved = await persistScoreAndOverlay(updatedCourt, match, {
-    court_id: court.id,
-    match_id: match.id,
-    team_a_score: initialState.team_a_score,
-    team_b_score: initialState.team_b_score,
-    team_a_sets: initialState.team_a_sets,
-    team_b_sets: initialState.team_b_sets,
-    current_set: initialState.current_set,
-    set_scores: initialState.set_scores,
-    serving_team: initialState.serving_team,
-    timeouts: initialState.timeouts,
-    status: "Pre-Match",
-    source: "manual",
-    stale: false,
-    message: null
-  });
+  const { data: updatedCourt, error: courtUpdateError } = await db.from("courts")
+    .update({ status: "waiting", last_update_at: now, updated_at: now })
+    .eq("id", court.id)
+    .select("*")
+    .single();
+  if (courtUpdateError) return NextResponse.json({ error: courtUpdateError.message }, { status: 500 });
+  const saved = await refreshCourtOverlay(court.id);
 
   const origin = publicOrigin(new URL(req.url).origin);
   return NextResponse.json({
     ok: true,
+    duplicate: transition.duplicate,
     event,
     court: updatedCourt,
     match,
     score: saved.score,
     overlay: saved.overlay,
-    token,
-    scorerUrl: `${origin}/score/court/${court.id}?token=${encodeURIComponent(token)}`,
+    scoreUrl: `${origin}/score/court/${court.id}`,
     overlayUrl: `${origin}/overlay/stream/${parsed.data.courtNumber}`,
     eventOverlayUrl: `${origin}/overlay/court/${parsed.data.courtNumber}?eventId=${eventId}`
   });
-}
-
-function formatFromBody(body: z.infer<typeof manualSessionSchema>) {
-  const bestOf = body.bestOf ?? defaultFormat.bestOf;
-  const pointsPerSet = [
-    body.pointsSet1 ?? 21,
-    body.pointsSet2 ?? 21,
-    body.pointsSet3 ?? 15
-  ].slice(0, bestOf);
-  const cap = body.cap && body.cap !== "none" ? Number(body.cap) : null;
-  return {
-    ...defaultFormat,
-    bestOf,
-    pointsPerSet,
-    cap: Number.isFinite(cap) ? cap : null,
-    setsToWin: Math.ceil(bestOf / 2)
-  };
 }
 
 function cleanText(value: string | undefined) {

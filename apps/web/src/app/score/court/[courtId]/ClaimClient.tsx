@@ -1,21 +1,31 @@
 "use client";
 
-import { ArrowLeft, CheckCircle2, Clock, MonitorOff, MonitorPlay, RefreshCw, ShieldCheck } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Clock, RefreshCw, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { requestedCommunityRole } from "./communityJoinUi";
 
 type CourtPageData = {
   event: { id: string; slug: string; name: string };
   court: { id: string; court_number: number; display_name: string; scoring_open?: boolean | null };
   match: { team_a: string | null; team_b: string | null; round_name: string | null; match_number: string | null; status?: string | null } | null;
   score: { team_a_score: number; team_b_score: number; current_set: number; status: string } | null;
-  scorerStatus: { needsScorer: boolean; backupRequested: boolean; backups: unknown[]; active: { display_name: string } | null };
+  scorerStatus: { needsScorer: boolean; backupRequested: boolean; hasActive: boolean; backupCount: number; activeName: string | null };
 };
 
-export function ClaimClient({ courtParam, eventSlug }: { courtParam: string; eventSlug: string }) {
+export function ClaimClient({
+  courtParam,
+  eventSlug,
+  joinCode,
+  roleIntent
+}: {
+  courtParam: string;
+  eventSlug: string;
+  joinCode?: string;
+  roleIntent?: string;
+}) {
   const [data, setData] = useState<CourtPageData | null>(null);
   const [displayName, setDisplayName] = useState("");
-  const [watchMode, setWatchMode] = useState<"website" | "courtside">("courtside");
   const [busy, setBusy] = useState(false);
   const [redirecting, setRedirecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,24 +53,28 @@ export function ClaimClient({ courtParam, eventSlug }: { courtParam: string; eve
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch("/api/scoring/claims/start", {
+      const res = await fetch("/api/community/join", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           eventSlug,
           courtNumber: data.court.court_number,
           displayName,
-          watchMode
+          // Location is not a trustworthy authority signal. Ordinary joins are
+          // remote-tier witnesses until an organizer-issued grant verifies them.
+          participationMode: "REMOTE",
+          requestedRole: requestedCommunityRole(joinCode, roleIntent),
+          ...(joinCode ? { joinCode } : {})
         })
       });
       const json = await res.json().catch(() => ({}));
-      if (!res.ok || !json.sessionUrl) {
-        throw new Error(json.error ?? "Could not start scoring");
+      if (!res.ok || json.ok !== true) {
+        throw new Error(json.error ?? "Could not join this court");
       }
       setRedirecting(true);
-      window.location.assign(json.sessionUrl);
+      window.location.assign("/score/session");
     } catch (err) {
-      setError(friendlyError(err instanceof Error ? err.message : "Could not start scoring"));
+      setError(friendlyError(err instanceof Error ? err.message : "Could not join this court"));
       setBusy(false);
     }
   }
@@ -120,33 +134,23 @@ export function ClaimClient({ courtParam, eventSlug }: { courtParam: string; eve
               <ol className="claim-steps" aria-label="How to start scoring">
                 <li className="claim-step done"><span className="claim-step-num" aria-hidden="true">1</span> Pick a court</li>
                 <li className="claim-step current"><span className="claim-step-num" aria-hidden="true">2</span> Enter your name</li>
-                <li className="claim-step"><span className="claim-step-num" aria-hidden="true">3</span> Start scoring</li>
+                <li className="claim-step"><span className="claim-step-num" aria-hidden="true">3</span> Join coverage</li>
               </ol>
-              <h2>Thanks for helping keep score.</h2>
-              <p className="muted">Use the big score buttons to keep the match up to date — plus and minus for each team, with undo if you slip.</p>
-              <div className="watch-toggle mode-toggle" role="group" aria-label="Scoring view">
-                <button type="button" className={watchMode === "courtside" ? "primary" : ""} onClick={() => setWatchMode("courtside")}>
-                  <span><MonitorOff size={18} /> Score only</span>
-                  <small>Best when you are at the court</small>
-                </button>
-                <button type="button" className={watchMode === "website" ? "primary" : ""} onClick={() => setWatchMode("website")}>
-                  <span><MonitorPlay size={18} /> Watch stream + score</span>
-                  <small>Best when you are following online</small>
-                </button>
-              </div>
+              <h2>{requestedCommunityRole(joinCode, roleIntent) === "DESIGNATED_SCORER" ? "Take the designated scorer position." : "Join the community keeping this court covered."}</h2>
+              <p className="muted">Record each point you see. Your calls add independent evidence, help catch mistakes, and keep everyone involved without claiming they changed the broadcast before resolution.</p>
               <label>
-                What name should we show to the broadcast team?
+                Choose a public scorer nickname
                 <input
                   value={displayName}
                   onChange={(event) => setDisplayName(event.target.value)}
-                  placeholder="Mike - Ava's Dad"
-                  autoComplete="name"
+                  placeholder="Courtside scorer"
+                  autoComplete="nickname"
                   required
                   maxLength={80}
                 />
               </label>
               <button className="primary claim-submit" type="submit" disabled={busy || !data || data.court.scoring_open === false}>
-                <ShieldCheck size={20} /> Start scoring
+                <ShieldCheck size={20} /> Join this court
               </button>
             </div>
           </form>

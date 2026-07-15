@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { completeSet, defaultBeachFormat, emptyScoreState, forceCompleteMatch, forceCompleteSet, scorePoint, validateManualCorrection } from "../lib/scoringRules";
+import { completeSet, defaultBeachFormat, emptyScoreState, forceCompleteMatch, forceCompleteSet, formatFromUnknown, removePoint, scorePoint, setTargetForFormat, validateManualCorrection } from "../lib/scoringRules";
 
 describe("scoring rules explicit set controls", () => {
   it("scores points without auto-completing a set", () => {
@@ -70,5 +70,54 @@ describe("scoring rules explicit set controls", () => {
 
   it("rejects impossible manual corrections", () => {
     expect(() => validateManualCorrection({ teamASets: 2, teamBSets: 2 })).toThrow();
+  });
+
+  it("removes a point explicitly without crossing below zero", () => {
+    const live = { ...emptyScoreState(), status: "In Progress" as const, teamAScore: 3, teamBScore: 1 };
+
+    expect(removePoint(live, "A")).toMatchObject({ teamAScore: 2, teamBScore: 1, status: "In Progress" });
+    expect(removePoint({ ...live, teamBScore: 0 }, "B")).toMatchObject({ teamAScore: 3, teamBScore: 0 });
+  });
+
+  it("rejects corrections whose completed set history and aggregate wins disagree", () => {
+    expect(() => validateManualCorrection({
+      teamASets: 0,
+      teamBSets: 0,
+      currentSet: 2,
+      status: "In Progress",
+      setScores: [{ setNumber: 1, teamAScore: 21, teamBScore: 18, isComplete: true }]
+    })).toThrow("Set counts must match completed set history");
+  });
+
+  it("rejects tied completed sets and final states without a match winner", () => {
+    expect(() => validateManualCorrection({
+      currentSet: 1,
+      setScores: [{ setNumber: 1, teamAScore: 10, teamBScore: 10, isComplete: true }]
+    })).toThrow("Completed sets need a winner");
+
+    expect(() => validateManualCorrection({ status: "Final", teamAScore: 0, teamBScore: 0 })).toThrow("Final score needs a match winner");
+  });
+
+  it("rejects duplicate or out-of-format set history", () => {
+    expect(() => validateManualCorrection({
+      currentSet: 2,
+      setScores: [
+        { setNumber: 1, teamAScore: 21, teamBScore: 18, isComplete: true },
+        { setNumber: 1, teamAScore: 18, teamBScore: 21, isComplete: true }
+      ]
+    })).toThrow("Set numbers must be unique");
+
+    expect(() => validateManualCorrection({
+      currentSet: 1,
+      setScores: [{ setNumber: 4, teamAScore: 21, teamBScore: 18, isComplete: true }]
+    })).toThrow("Set history is outside the match format");
+  });
+
+  it("uses 21 through set four and 15 only for a best-of-five decider", () => {
+    const format = formatFromUnknown({ bestOf: 5 });
+
+    expect(format.pointsPerSet).toEqual([21, 21, 21, 21, 15]);
+    expect(setTargetForFormat(3, format)).toBe(21);
+    expect(setTargetForFormat(5, format)).toBe(15);
   });
 });

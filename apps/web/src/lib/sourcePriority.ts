@@ -8,6 +8,12 @@ type MatchSourceLike = {
 type ScoreSourceLike = Record<string, unknown> | null | undefined;
 
 export function apiScoreHasPriority(score: ScoreSourceLike, match: MatchSourceLike): boolean {
+  // An operator correction is an explicit source lock. It remains authoritative
+  // until another audited command clears the override; community and provider
+  // writers must never infer that the lock has expired from score shape alone.
+  if (score?.source === "override" || score?.source_priority === "override" || score?.sourcePriority === "override") {
+    return true;
+  }
   const apiUrl = match?.api_url ?? match?.apiUrl;
   const sourceType = match?.source_type ?? match?.sourceType;
   if (!apiUrl || sourceType === "manual") return false;

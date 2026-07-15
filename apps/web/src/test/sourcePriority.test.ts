@@ -19,6 +19,18 @@ describe("apiScoreHasPriority", () => {
     }, vblMatch)).toBe(true);
   });
 
+  it("keeps an admin override authoritative until explicitly cleared", () => {
+    expect(apiScoreHasPriority({
+      source: "override",
+      source_available: true,
+      source_priority: "override",
+      stale: false,
+      status: "In Progress",
+      team_a_score: 12,
+      team_b_score: 9
+    }, vblMatch)).toBe(true);
+  });
+
   it("allows human scoring when the API score is fallback, unavailable, or stale", () => {
     expect(apiScoreHasPriority({
       source: "api",

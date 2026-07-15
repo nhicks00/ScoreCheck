@@ -1,8 +1,8 @@
-import { defaultManualState } from "./manualScoring";
+import { transitionCommunityMatch } from "./communityWitness";
 import { getEnv } from "./env";
 import { persistVblBracketProgressIfAvailable } from "./poller";
 import { eventTimeZone, scheduledTimestamp } from "./scheduleTime";
-import { buildOverlayStateWithEventSettings, persistScoreAndOverlay, scoreForCurrentMatch } from "./scoreState";
+import { buildOverlayStateWithEventSettings, refreshCourtOverlay, scoreForCurrentMatch, trustedScoreActionId } from "./scoreState";
 import type { CourtRecord, MatchRecord, ScoreRecord } from "./scoreState";
 import { supabaseAdmin } from "./supabase";
 import { discoverMatchesFromUrl } from "./vbl";
@@ -194,6 +194,9 @@ async function autoQueueDiscoveredMatches(eventId: string, matches: Record<strin
       if (existingQueue && !isFinishedQueue(existingQueue)) {
         const previousCourtId = existingQueue.court_id;
         const vacatesCurrentMatch = await courtShowsMatch(previousCourtId, matchId);
+        if (vacatesCurrentMatch) {
+          await transitionCourtToNoMatch(previousCourtId, matchId, "Bracket match became unmapped");
+        }
         const { error: unmapError } = await db
           .from("court_match_queue")
           .update({ is_active: false, status: "unmapped", updated_at: now })
@@ -201,7 +204,7 @@ async function autoQueueDiscoveredMatches(eventId: string, matches: Record<strin
         if (unmapError) throw unmapError;
         if (existingQueue.is_active || vacatesCurrentMatch) {
           const activated = await activateBestMatchForCourt(previousCourtId);
-          if (!activated) await idleVacatedCourt(previousCourtId, [matchId]);
+          if (!activated && !vacatesCurrentMatch) await idleVacatedCourt(previousCourtId, [matchId]);
         }
         unmapped += 1;
       }
@@ -213,11 +216,14 @@ async function autoQueueDiscoveredMatches(eventId: string, matches: Record<strin
       if (!isFinishedQueue(existingQueue) && existingQueue.court_id !== court.id) {
         const previousCourtId = existingQueue.court_id;
         const vacatesCurrentMatch = await courtShowsMatch(previousCourtId, matchId);
+        if (vacatesCurrentMatch) {
+          await transitionCourtToNoMatch(previousCourtId, matchId, "Bracket match moved courts");
+        }
         await moveQueueToCourt(existingQueue, court.id, now);
         await activateBestMatchForCourt(court.id, { preserveValidActive: true });
         if (existingQueue.is_active || vacatesCurrentMatch) {
           const activated = await activateBestMatchForCourt(previousCourtId);
-          if (!activated) await idleVacatedCourt(previousCourtId, [matchId]);
+          if (!activated && !vacatesCurrentMatch) await idleVacatedCourt(previousCourtId, [matchId]);
         }
         moved += 1;
       } else if (existingQueue.status === "unmapped") {
@@ -246,9 +252,19 @@ async function autoQueueDiscoveredMatches(eventId: string, matches: Record<strin
       .maybeSingle();
     const activeMatch = firstRelation(active?.matches) as MatchRow | null;
     const shouldReplaceSeed = activeMatch?.source_type === "manual" && recordValue(activeMatch.source_payload)?.seededBy === "seed:avp-denver";
-    const shouldActivate = !active || !court.current_match_id || shouldReplaceSeed;
+    const shouldActivate = !active || !court.current_match_id || shouldReplaceSeed || court.current_match_id === matchId;
 
     if (shouldActivate) {
+      await transitionCommunityMatch({
+        eventId,
+        courtId: court.id,
+        fromMatchId: court.current_match_id,
+        toMatchId: matchId,
+        actionId: trustedScoreActionId({ type: "bracket-auto-activate", courtId: court.id, fromMatchId: court.current_match_id, matchId }),
+        actorType: "PROVIDER",
+        actorLabel: "VolleyballLife bracket discovery",
+        initialAuthorityMode: "PROVIDER_PRIMARY"
+      });
       await db
         .from("court_match_queue")
         .update({ is_active: false, status: "queued", updated_at: now })
@@ -271,32 +287,14 @@ async function autoQueueDiscoveredMatches(eventId: string, matches: Record<strin
     if (shouldActivate) {
       const { error: courtError } = await db
         .from("courts")
-        .update({ current_match_id: matchId, status: "waiting", mode: court.mode === "manual" ? "hybrid" : court.mode, updated_at: now })
+        .update({ status: "waiting", mode: court.mode === "manual" ? "hybrid" : court.mode, updated_at: now })
         .eq("id", court.id)
         .select("*")
         .single();
       if (courtError) throw courtError;
       const { data: updatedCourt } = await db.from("courts").select("*").eq("id", court.id).single();
       if (updatedCourt) {
-        const initial = defaultManualState();
-        const { score: savedScore } = await persistScoreAndOverlay(updatedCourt, match as Parameters<typeof persistScoreAndOverlay>[1], {
-          court_id: court.id,
-          match_id: matchId,
-          team_a_score: initial.team_a_score,
-          team_b_score: initial.team_b_score,
-          team_a_sets: initial.team_a_sets,
-          team_b_sets: initial.team_b_sets,
-          current_set: initial.current_set,
-          set_scores: initial.set_scores,
-          serving_team: initial.serving_team,
-          timeouts: initial.timeouts,
-          status: "Pre-Match",
-          source: "api",
-          source_available: false,
-          source_priority: "fallback",
-          stale: false,
-          message: "VolleyballLife match assigned; waiting for live scoring."
-        });
+        const { score: savedScore } = await refreshCourtOverlay(updatedCourt.id);
         await persistVblBracketProgressIfAvailable(
           updatedCourt as BracketProgressCourt,
           match as BracketProgressMatch,
@@ -367,6 +365,19 @@ async function activateBestMatchForCourt(courtId: string, options: { preserveVal
   }
 
   const now = new Date().toISOString();
+  const match = firstRelation(chosen.matches) as (MatchRecord & { source_type?: "vbl" | "manual" | null; api_url?: string | null }) | null;
+  if (!match) return false;
+  await transitionCommunityMatch({
+    eventId: court.event_id,
+    courtId: court.id,
+    fromMatchId: court.current_match_id,
+    toMatchId: match.id,
+    actionId: trustedScoreActionId({ type: "bracket-activate-best", courtId: court.id, fromMatchId: court.current_match_id, queueId: chosen.id, matchId: match.id }),
+    actorType: match.source_type === "manual" || !match.api_url ? "SYSTEM" : "PROVIDER",
+    actorLabel: "Bracket queue reconciliation",
+    initialAuthorityMode: match.source_type === "manual" || !match.api_url ? "PAUSED_DISPUTE" : "PROVIDER_PRIMARY"
+  });
+
   await db
     .from("court_match_queue")
     .update({ is_active: false, status: "queued", updated_at: now })
@@ -379,68 +390,21 @@ async function activateBestMatchForCourt(courtId: string, options: { preserveVal
     .eq("id", chosen.id);
   if (activeError) throw activeError;
 
-  const match = firstRelation(chosen.matches) as Parameters<typeof persistScoreAndOverlay>[1] | null;
-  if (!match) return false;
-
-  const { error: updateCourtError } = await db
+  const { data: updatedCourt, error: updateCourtError } = await db
     .from("courts")
     .update({
-      current_match_id: match.id,
       status: "waiting",
       mode: court.mode === "manual" ? "hybrid" : court.mode,
       updated_at: now
     })
-    .eq("id", court.id);
+    .eq("id", court.id)
+    .select("*")
+    .single();
   if (updateCourtError) throw updateCourtError;
 
-  const { data: score } = await db
-    .from("score_states")
-    .select("*")
-    .eq("match_id", match.id)
-    .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const initial = defaultManualState();
-  const { score: savedScore } = await persistScoreAndOverlay(court, match, score ? {
-    court_id: court.id,
-    match_id: match.id,
-    team_a_score: Number(score.team_a_score ?? 0),
-    team_b_score: Number(score.team_b_score ?? 0),
-    team_a_sets: Number(score.team_a_sets ?? 0),
-    team_b_sets: Number(score.team_b_sets ?? 0),
-    current_set: Number(score.current_set ?? 1),
-    set_scores: Array.isArray(score.set_scores) ? score.set_scores : [],
-    serving_team: score.serving_team ?? null,
-    timeouts: score.timeouts ?? {},
-    status: cleanText(score.status) ?? "Pre-Match",
-    source: score.source === "manual" || score.source === "override" ? score.source : "api",
-    source_available: Boolean(score.source_available),
-    source_priority: score.source_priority ?? "fallback",
-    source_pending_scores: score.source_pending_scores ?? [],
-    stale: Boolean(score.stale),
-    message: score.message ?? null,
-    last_api_poll_at: score.last_api_poll_at ?? null,
-    last_score_change_at: score.last_score_change_at ?? null
-  } : {
-    court_id: court.id,
-    match_id: match.id,
-    team_a_score: initial.team_a_score,
-    team_b_score: initial.team_b_score,
-    team_a_sets: initial.team_a_sets,
-    team_b_sets: initial.team_b_sets,
-    current_set: initial.current_set,
-    set_scores: initial.set_scores,
-    serving_team: initial.serving_team,
-    timeouts: initial.timeouts,
-    status: "Pre-Match",
-    source: "api",
-    source_available: false,
-    source_priority: "fallback",
-    stale: false,
-    message: "VolleyballLife match assigned; waiting for live scoring."
-  });
+  const { score: savedScore } = await refreshCourtOverlay(court.id);
   await persistVblBracketProgressIfAvailable(
-    court as BracketProgressCourt,
+    updatedCourt as BracketProgressCourt,
     match as BracketProgressMatch,
     savedScore as BracketProgressScore
   );
@@ -512,6 +476,14 @@ async function retireInactiveVblSourceQueues(eventId: string, activeSourceUrls: 
     .filter((value): value is string => Boolean(value));
   const activeCourtIds = [...new Set(inactiveQueues.filter((queue) => queue.is_active).map((queue) => queue.court_id))];
 
+  for (const courtId of activeCourtIds) {
+    const retiredActive = inactiveQueues.find((queue) => queue.court_id === courtId && queue.is_active);
+    const retiredMatchId = cleanText(retiredActive?.match_id);
+    if (retiredMatchId) {
+      await transitionCourtToNoMatch(courtId, retiredMatchId, "Inactive bracket source retired");
+    }
+  }
+
   const { error: retireError } = await db
     .from("court_match_queue")
     .update({ is_active: false, status: "finished", updated_at: now })
@@ -538,6 +510,30 @@ async function courtShowsMatch(courtId: string, matchId: string) {
   return data?.current_match_id === matchId;
 }
 
+async function transitionCourtToNoMatch(courtId: string, matchId: string, actorLabel: string) {
+  const db = supabaseAdmin();
+  const { data: court, error } = await db.from("courts").select("*").eq("id", courtId).maybeSingle();
+  if (error) throw error;
+  if (!court || court.current_match_id !== matchId) return false;
+  await transitionCommunityMatch({
+    eventId: court.event_id,
+    courtId,
+    fromMatchId: matchId,
+    toMatchId: null,
+    actionId: trustedScoreActionId({ type: "bracket-vacate-before-move", courtId, matchId, actorLabel }),
+    actorType: "SYSTEM",
+    actorLabel,
+    initialAuthorityMode: "PAUSED_DISPUTE"
+  });
+  const now = new Date().toISOString();
+  const { error: courtError } = await db.from("courts")
+    .update({ status: "waiting", last_update_at: now, updated_at: now })
+    .eq("id", courtId);
+  if (courtError) throw courtError;
+  await refreshCourtOverlay(courtId);
+  return true;
+}
+
 async function idleVacatedCourt(courtId: string, vacatedMatchIds: string[]) {
   if (!vacatedMatchIds.length) return false;
   const db = supabaseAdmin();
@@ -550,52 +546,43 @@ async function idleVacatedCourt(courtId: string, vacatedMatchIds: string[]) {
   if (!court?.current_match_id || !vacatedMatchIds.includes(String(court.current_match_id))) return false;
 
   const now = new Date().toISOString();
+  await transitionCommunityMatch({
+    eventId: court.event_id,
+    courtId,
+    fromMatchId: court.current_match_id,
+    toMatchId: null,
+    actionId: trustedScoreActionId({ type: "bracket-idle-vacated", courtId, matchId: court.current_match_id }),
+    actorType: "SYSTEM",
+    actorLabel: "Bracket source vacated court",
+    initialAuthorityMode: "PAUSED_DISPUTE"
+  });
   const { data: clearedCourt, error: clearError } = await db
     .from("courts")
-    .update({ current_match_id: null, status: "waiting", last_update_at: now, updated_at: now })
+    .update({ status: "waiting", last_update_at: now, updated_at: now })
     .eq("id", courtId)
     .select("*")
     .single();
   if (clearError) throw clearError;
-
-  const { error: scoreError } = await db.from("score_states").update({
-    match_id: null,
-    team_a_score: 0,
-    team_b_score: 0,
-    team_a_sets: 0,
-    team_b_sets: 0,
-    current_set: 1,
-    set_scores: [],
-    serving_team: null,
-    status: "Pre-Match",
-    source: "api",
-    source_available: false,
-    source_priority: "fallback",
-    source_pending_scores: [],
-    stale: false,
-    message: "Match reassigned to another court.",
-    last_api_poll_at: now,
-    last_score_change_at: now,
-    updated_at: now
-  }).eq("court_id", courtId);
-  if (scoreError) throw scoreError;
-
-  const overlay = await buildOverlayStateWithEventSettings(clearedCourt, null, null);
-  const { error: overlayError } = await db.from("overlay_states").upsert({
-    court_id: courtId,
-    event_id: clearedCourt.event_id,
-    court_number: clearedCourt.court_number,
-    payload: overlay,
-    stale: false,
-    updated_at: now
-  });
-  if (overlayError) throw overlayError;
+  await refreshCourtOverlay(clearedCourt.id);
   return true;
 }
 
 async function activateQueueForCourt(court: CourtRow, queue: QueueRow) {
   const db = supabaseAdmin();
   const now = new Date().toISOString();
+  const match = firstRelation(queue.matches) as (MatchRecord & { source_type?: "vbl" | "manual" | null; api_url?: string | null }) | null;
+  if (!match) return;
+  await transitionCommunityMatch({
+    eventId: court.event_id,
+    courtId: court.id,
+    fromMatchId: court.current_match_id,
+    toMatchId: queue.match_id ?? match.id,
+    actionId: trustedScoreActionId({ type: "bracket-activate-queue", courtId: court.id, fromMatchId: court.current_match_id, queueId: queue.id, matchId: match.id }),
+    actorType: match.source_type === "manual" || !match.api_url ? "SYSTEM" : "PROVIDER",
+    actorLabel: "Bracket queue order",
+    initialAuthorityMode: match.source_type === "manual" || !match.api_url ? "PAUSED_DISPUTE" : "PROVIDER_PRIMARY"
+  });
+
   await db
     .from("court_match_queue")
     .update({ is_active: false, status: "queued", updated_at: now })
@@ -608,11 +595,9 @@ async function activateQueueForCourt(court: CourtRow, queue: QueueRow) {
     .eq("id", queue.id);
   if (activeError) throw activeError;
 
-  const match = firstRelation(queue.matches) as (Parameters<typeof persistScoreAndOverlay>[1] & { source_type?: "vbl" | "manual" | null; api_url?: string | null }) | null;
   const { data: updatedCourt, error: courtError } = await db
     .from("courts")
     .update({
-      current_match_id: queue.match_id,
       status: "waiting",
       mode: court.mode === "manual" ? "hybrid" : court.mode,
       updated_at: now
@@ -622,53 +607,7 @@ async function activateQueueForCourt(court: CourtRow, queue: QueueRow) {
     .single();
   if (courtError) throw courtError;
 
-  if (!match) return;
-  const { data: score } = await db
-    .from("score_states")
-    .select("*")
-    .eq("match_id", match.id)
-    .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const initial = defaultManualState();
-  const { score: savedScore } = await persistScoreAndOverlay(updatedCourt, match, score ? {
-    court_id: court.id,
-    match_id: match.id,
-    team_a_score: Number(score.team_a_score ?? 0),
-    team_b_score: Number(score.team_b_score ?? 0),
-    team_a_sets: Number(score.team_a_sets ?? 0),
-    team_b_sets: Number(score.team_b_sets ?? 0),
-    current_set: Number(score.current_set ?? 1),
-    set_scores: Array.isArray(score.set_scores) ? score.set_scores : [],
-    serving_team: score.serving_team ?? null,
-    timeouts: score.timeouts ?? {},
-    status: cleanText(score.status) ?? "Pre-Match",
-    source: score.source === "manual" || score.source === "override" ? score.source : "api",
-    source_available: Boolean(score.source_available),
-    source_priority: score.source_priority ?? "fallback",
-    source_pending_scores: score.source_pending_scores ?? [],
-    stale: Boolean(score.stale),
-    message: score.message ?? null,
-    last_api_poll_at: score.last_api_poll_at ?? null,
-    last_score_change_at: score.last_score_change_at ?? null
-  } : {
-    court_id: court.id,
-    match_id: match.id,
-    team_a_score: initial.team_a_score,
-    team_b_score: initial.team_b_score,
-    team_a_sets: initial.team_a_sets,
-    team_b_sets: initial.team_b_sets,
-    current_set: initial.current_set,
-    set_scores: initial.set_scores,
-    serving_team: initial.serving_team,
-    timeouts: initial.timeouts,
-    status: "Pre-Match",
-    source: match.source_type === "manual" || !match.api_url ? "manual" : "api",
-    source_available: false,
-    source_priority: "fallback",
-    stale: false,
-    message: match.source_type === "manual" || !match.api_url ? null : "VolleyballLife match assigned; waiting for live scoring."
-  });
+  const { score: savedScore } = await refreshCourtOverlay(updatedCourt.id);
   await persistVblBracketProgressIfAvailable(
     updatedCourt as BracketProgressCourt,
     match as BracketProgressMatch,
@@ -711,7 +650,7 @@ async function refreshActiveOverlaysForMatches(eventId: string, matches: Record<
 
   let refreshed = 0;
   for (const court of (courts ?? []) as CourtRow[]) {
-    const match = firstRelation(court.matches) as Parameters<typeof persistScoreAndOverlay>[1] | null;
+    const match = firstRelation(court.matches) as MatchRecord | null;
     const score = scoreForCurrentMatch(court.score_states, match?.id) as ScoreRow | null;
     if (!match || !score) continue;
     const overlay = await buildOverlayStateWithEventSettings(court, match, score);

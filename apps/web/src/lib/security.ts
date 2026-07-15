@@ -3,6 +3,16 @@ import { NextRequest } from "next/server";
 
 const TOKEN_BYTES = 24;
 const SESSION_TOKEN_BYTES = 32;
+const DEVICE_ID_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
+
+export const communityDeviceCookie = "mcs_device_id";
+export const communityDeviceCookieOptions = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: "lax" as const,
+  path: "/",
+  maxAge: 365 * 24 * 60 * 60
+};
 
 export function generateScorerToken(): string {
   return crypto.randomBytes(TOKEN_BYTES).toString("base64url");
@@ -54,7 +64,11 @@ export function safeDisplayName(input: string): string {
 }
 
 export function deviceIdFromCookieOrCreate(req: NextRequest): { raw: string; hash: string; created: boolean } {
-  const existing = req.cookies.get("mcs_device_id")?.value;
-  const raw = existing && existing.length >= 16 ? existing : crypto.randomBytes(18).toString("base64url");
+  const existing = req.cookies.get(communityDeviceCookie)?.value;
+  const raw = isValidDeviceId(existing) ? existing : crypto.randomBytes(18).toString("base64url");
   return { raw, hash: hashSecret(raw), created: raw !== existing };
+}
+
+export function isValidDeviceId(value: string | null | undefined): value is string {
+  return typeof value === "string" && DEVICE_ID_PATTERN.test(value);
 }

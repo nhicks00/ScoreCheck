@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
+import { transitionCommunityMatch } from "@/lib/communityWitness";
 import { readFormOrJson } from "@/lib/http";
-import { defaultManualState } from "@/lib/manualScoring";
-import { persistScoreAndOverlay } from "@/lib/scoreState";
+import { refreshCourtOverlay } from "@/lib/scoreState";
 import { supabaseAdmin } from "@/lib/supabase";
 
 type AssignableMatch = {
@@ -28,8 +29,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cou
     .single();
   if (courtLoadError) return NextResponse.json({ error: courtLoadError.message }, { status: 500 });
 
-  await db.from("court_match_queue").update({ is_active: false, status: "queued", updated_at: now }).eq("court_id", courtId).eq("is_active", true);
-
   if (matchId) {
     const { data: match, error: matchError } = await db
       .from("matches")
@@ -39,6 +38,31 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cou
       .single();
     if (matchError || !match) return NextResponse.json({ error: matchError?.message ?? "Match not found for this event" }, { status: 404 });
     selectedMatch = match;
+
+  }
+
+  const requestedActionId = z.string().uuid().safeParse(body.actionId);
+  if (!requestedActionId.success) return NextResponse.json({ error: "actionId must be a UUID" }, { status: 400 });
+  const transition = await transitionCommunityMatch({
+    eventId: existingCourt.event_id,
+    courtId,
+    fromMatchId: existingCourt.current_match_id,
+    toMatchId: matchId,
+    actionId: requestedActionId.data,
+    actorType: "ADMIN",
+    actorLabel: "Admin court assignment",
+    initialAuthorityMode: selectedMatch && selectedMatch.source_type !== "manual" && selectedMatch.api_url
+      ? "PROVIDER_PRIMARY"
+      : "PAUSED_DISPUTE"
+  });
+  if (transition.duplicate && transition.newMatchId !== matchId) {
+    const projection = await refreshCourtOverlay(courtId);
+    return NextResponse.json({ ok: true, duplicate: true, eventId: existingCourt.event_id, score: projection.score, overlay: projection.overlay });
+  }
+
+  await db.from("court_match_queue").update({ is_active: false, status: "queued", updated_at: now }).eq("court_id", courtId).eq("is_active", true);
+
+  if (matchId) {
 
     const { data: existingQueue } = await db
       .from("court_match_queue")
@@ -76,7 +100,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cou
   const { data: court, error } = await db
     .from("courts")
     .update({
-      current_match_id: matchId,
       status: matchId ? "waiting" : "idle",
       mode: matchId ? modeForAssignedMatch(selectedMatch, existingCourt.mode) : "hybrid",
       last_update_at: now,
@@ -86,39 +109,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cou
     .select("*")
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  if (matchId) {
-    const { data: match, error: matchLoadError } = await db
-      .from("matches")
-      .select("*")
-      .eq("id", matchId)
-      .single();
-    if (matchLoadError) return NextResponse.json({ error: matchLoadError.message }, { status: 500 });
-    const state = defaultManualState();
-    await persistScoreAndOverlay(court, match, {
-      court_id: court.id,
-      match_id: match.id,
-      team_a_score: state.team_a_score,
-      team_b_score: state.team_b_score,
-      team_a_sets: state.team_a_sets,
-      team_b_sets: state.team_b_sets,
-      current_set: state.current_set,
-      set_scores: state.set_scores,
-      serving_team: null,
-      timeouts: {},
-      status: "Pre-Match",
-      source: scoreSourceForMatch(match),
-      source_available: false,
-      source_priority: "fallback",
-      stale: false,
-      message: null
-    });
-  }
-  return NextResponse.json({ ok: true, eventId: court.event_id });
-}
-
-function scoreSourceForMatch(match: AssignableMatch | null) {
-  if (!match) return "manual";
-  return match.source_type === "manual" || !match.api_url ? "manual" : "api";
+  const projection = await refreshCourtOverlay(court.id);
+  return NextResponse.json({ ok: true, duplicate: transition.duplicate, eventId: court.event_id, score: projection.score, overlay: projection.overlay });
 }
 
 function modeForAssignedMatch(match: AssignableMatch | null, currentMode: "api" | "manual" | "hybrid") {
