@@ -98,15 +98,20 @@
   display: flex;
   grid-area: video;
   justify-content: center;
-  min-height: 220px;
+  min-height: 0;
   min-width: 0;
   overflow: hidden;
   position: relative;
+  width: 100%;
 }
 
 .videoPane iframe {
+  aspect-ratio: 16 / 9;
   border: 0;
+  display: block;
   height: 100%;
+  max-height: 100%;
+  max-width: 100%;
   width: 100%;
 }
 
@@ -133,6 +138,10 @@
   width: 1px;
 }
 
+.focusScoreCue {
+  display: none;
+}
+
 .focusMode {
   background: #000;
   display: grid;
@@ -157,15 +166,19 @@
 }
 
 .watchShell.focusMode .videoPane {
-  aspect-ratio: auto;
+  align-self: center;
+  aspect-ratio: 16 / 9;
   border: 0;
   border-radius: 0;
   grid-area: auto;
   height: 100%;
+  justify-self: center;
   min-height: 0;
+  max-height: 100%;
+  max-width: 100%;
   position: relative;
   top: auto;
-  width: 100%;
+  width: auto;
   z-index: auto;
 }
 
@@ -388,13 +401,6 @@
     width: 100%;
   }
 
-  .withVideo .videoPane {
-    height: clamp(220px, 42svh, 380px);
-    position: sticky;
-    top: 0;
-    z-index: 3;
-  }
-
   .focusControlLabel {
     clip: rect(0 0 0 0);
     clip-path: inset(50%);
@@ -439,11 +445,65 @@
 
 }
 
-@media (orientation: portrait) {
+@media (max-width: 899px) {
+  .withVideo .videoPane {
+    height: auto;
+    justify-self: center;
+    max-height: 100svh;
+    position: relative;
+    top: auto;
+    width: min(100%, calc(100svh * 16 / 9));
+    z-index: auto;
+  }
+
   .watchShell.withVideo.focusMode {
+    align-content: start;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: max-content max-content;
     overflow-x: hidden;
     overflow-y: auto;
     overscroll-behavior-y: contain;
+  }
+
+  .watchShell.focusMode .videoPane {
+    aspect-ratio: 16 / 9;
+    height: auto;
+    max-height: 100svh;
+    width: min(
+      calc(100% - env(safe-area-inset-left) - env(safe-area-inset-right)),
+      calc(100svh * 16 / 9)
+    );
+  }
+
+  .focusPanel {
+    border-left: 0;
+    border-top: 1px solid rgba(133, 155, 184, 0.38);
+    max-height: none;
+    overflow: visible;
+  }
+}
+
+@media (max-width: 899px) and (orientation: landscape) {
+  .focusScoreCue {
+    align-items: center;
+    background: rgba(3, 11, 21, 0.88);
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    border-radius: 999px;
+    color: #fff;
+    display: inline-flex;
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 700;
+    gap: 6px;
+    justify-content: center;
+    left: 50%;
+    min-height: 44px;
+    padding: 8px 14px;
+    position: absolute;
+    top: calc(100svh - 50px - env(safe-area-inset-bottom));
+    touch-action: pan-y;
+    transform: translateX(-50%);
+    z-index: 2;
   }
 }
 
@@ -478,7 +538,7 @@
   }
 }
 
-@media (orientation: landscape) and (max-height: 620px) {
+@media (orientation: landscape) and (max-height: 620px) and (min-width: 900px) {
   .watchShell.withVideo.focusMode {
     grid-template-columns: minmax(200px, 1fr) minmax(200px, 38vw);
     grid-template-rows: minmax(200px, 1fr);
@@ -547,7 +607,7 @@
   }
 }
 
-@media (orientation: landscape) and (max-height: 440px) {
+@media (orientation: landscape) and (max-height: 440px) and (min-width: 900px) {
   .focusMatch > span,
   .focusMatch small {
     display: none;
@@ -620,21 +680,6 @@
   .focusRemove svg {
     height: 17px;
     width: 17px;
-  }
-}
-
-@media (orientation: landscape) and (max-height: 620px) and (max-width: 399px) {
-  .watchShell.withVideo.focusMode {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: 200px auto;
-    overflow-y: auto;
-  }
-
-  .focusPanel {
-    border-left: 0;
-    border-top: 1px solid rgba(133, 155, 184, 0.38);
-    max-height: none;
-    overflow: visible;
   }
 }
 

@@ -2,6 +2,7 @@
 
 import {
   ArrowLeftRight,
+  ChevronDown,
   ExternalLink,
   Maximize2,
   Minimize2,
@@ -114,7 +115,7 @@ export function CommunityWatchAndScore(props: CommunityWatchAndScoreProps) {
       if (parent === document.body) break;
       allowedElement = parent;
     }
-    window.setTimeout(() => exitButtonRef.current?.focus(), 0);
+    window.setTimeout(() => exitButtonRef.current?.focus({ preventScroll: true }), 0);
     return () => {
       document.body.style.overflow = previousOverflow;
       for (const observer of observers) observer.disconnect();
@@ -141,6 +142,17 @@ export function CommunityWatchAndScore(props: CommunityWatchAndScoreProps) {
     writeStorage(COMMUNITY_WATCH_PREFERENCE_KEY, next ? "watch" : "score-only");
     setModeAnnouncement(next ? "Broadcast video shown." : "Score-only view shown. Video playback stopped.");
     if (!next && focusMode) void exitFocusMode();
+  }
+
+  function revealScoreControls() {
+    const shell = shellRef.current;
+    const controls = shell?.querySelector<HTMLElement>('[aria-label="Full screen score controls"]');
+    if (!shell || !controls) return;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    shell.scrollTo({
+      behavior: reducedMotion ? "auto" : "smooth",
+      top: controls.offsetTop
+    });
   }
 
   async function enterFocusMode() {
@@ -275,6 +287,12 @@ export function CommunityWatchAndScore(props: CommunityWatchAndScoreProps) {
             tabIndex={0}
           />
         </section>
+      )}
+
+      {focusMode && embedUrl && (
+        <button className={styles.focusScoreCue} type="button" onClick={revealScoreControls}>
+          Score controls <ChevronDown size={18} aria-hidden="true" />
+        </button>
       )}
 
       {!focusMode && (
