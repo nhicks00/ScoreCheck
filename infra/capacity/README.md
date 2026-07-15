@@ -22,6 +22,64 @@ SSH exit-to-wait children are classified only when both process and parent are
 the host SSH service (`sshd` under `sshd` or `systemd`); they remain subject to
 the observer duration, count, rate, and closure gates.
 
+## Final-camera profile gate
+
+`camera-profile-gate.mjs` qualifies the source profile before normalization.
+It deliberately separates three evidence sources:
+
+- fixed-deadline, sanitized monitor snapshots prove publisher continuity,
+  bitrate, frame-error growth, source identity, collector freshness, and the
+  absence of incidents or fault gates;
+- a bounded local `ffprobe` reached through an SSH RTSP tunnel proves the
+  actual video frame rate, codec/profile, dimensions, and audio profile;
+- the evaluator combines both artifacts into a credential-free mode-`0600`
+  PASS/FAIL report.
+
+The sampler skips a missed slot instead of issuing catch-up requests, so
+clustered samples cannot inflate coverage. It never starts camera publishers,
+normalizers, program readers, Egress jobs, or destinations. The probe creates
+one short-lived raw RTSP reader per required court and closes its SSH tunnel on
+success or failure.
+
+The checked-in candidate targets the intended Camera 3-5 hard cutover: SRT
+push, H.264 Main 1280x720 at 29-31 fps, and AAC 48 kHz stereo for every logical
+stream. Change that manifest only to the intended camera configuration before
+the run. Do not weaken it after observing HEVC or another mismatch; a mismatch
+means that camera still requires an isolated normalization assignment.
+
+Run the ten-minute sampler and take the bounded probe near the start of its
+window:
+
+```bash
+mkdir -p "$HOME/.config/scorecheck/camera-profiles/restored-3-5"
+chmod 700 "$HOME/.config/scorecheck/camera-profiles/restored-3-5"
+
+export SCORECHECK_MONITOR_API_TOKEN='protected-value'
+node infra/capacity/camera-profile-gate.mjs sample \
+  --config infra/capacity/camera-profiles.example.json \
+  --monitor-url https://monitor.beachvolleyballmedia.com \
+  --duration-seconds 600 \
+  --output "$HOME/.config/scorecheck/camera-profiles/restored-3-5/samples.ndjson" &
+sampler_pid=$!
+
+node infra/capacity/camera-profile-gate.mjs probe \
+  --config infra/capacity/camera-profiles.example.json \
+  --ingest-host root@INGEST_HOST \
+  --ssh-key "$HOME/.ssh/scorecheck_do" \
+  --output "$HOME/.config/scorecheck/camera-profiles/restored-3-5/probes.json"
+
+wait "$sampler_pid"
+node infra/capacity/camera-profile-gate.mjs evaluate \
+  --config infra/capacity/camera-profiles.example.json \
+  --evidence "$HOME/.config/scorecheck/camera-profiles/restored-3-5/samples.ndjson" \
+  --probes "$HOME/.config/scorecheck/camera-profiles/restored-3-5/probes.json" \
+  --output "$HOME/.config/scorecheck/camera-profiles/restored-3-5/report.json"
+```
+
+A profile PASS does not prove the separate fail-closed Speedify route, final
+75 Mbps bonded-upload floor, derived-path normalization capacity, or eight
+simultaneous outputs. Those remain later gates.
+
 ## Run
 
 Start the protected host sampler before the workload. It launches one
@@ -110,6 +168,7 @@ admit two courts on another host.
 
 ```bash
 node --test infra/capacity/evaluate-gate.test.mjs
+node --test infra/capacity/camera-profile-gate.test.mjs
 node --test infra/capacity/host-samples.test.mjs
 node --test infra/capacity/sample-hosts.test.mjs
 node --test infra/capacity/zombie-evidence.test.mjs

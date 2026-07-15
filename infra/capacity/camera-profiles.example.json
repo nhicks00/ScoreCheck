@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "gateId": "restored-avkans-courts-3-5",
+  "requiredCourts": [3, 4, 5],
+  "minimumDurationSeconds": 600,
+  "intervalSeconds": 5,
+  "thresholds": {
+    "minimumSampleCoverageRatio": 0.9,
+    "maximumSampleGapSeconds": 7.5,
+    "maximumEdgeGapSeconds": 7.5,
+    "maximumSampleLatenessMs": 1000,
+    "maximumSnapshotAgeMs": 10000,
+    "minimumRawBitrateBps": 2000000,
+    "maximumProbeOffsetSeconds": 30
+  },
+  "expectedProfiles": {
+    "3": {
+      "sourceProtocol": "SRT",
+      "sourceMode": "PUSH",
+      "videoCodec": "H264",
+      "videoProfilesAllowed": ["Main"],
+      "videoWidth": 1280,
+      "videoHeight": 720,
+      "minimumFps": 29,
+      "maximumFps": 31,
+      "audioCodec": "AAC",
+      "audioSampleRateHz": 48000,
+      "audioChannelCount": 2
+    },
+    "4": {
+      "sourceProtocol": "SRT",
+      "sourceMode": "PUSH",
+      "videoCodec": "H264",
+      "videoProfilesAllowed": ["Main"],
+      "videoWidth": 1280,
+      "videoHeight": 720,
+      "minimumFps": 29,
+      "maximumFps": 31,
+      "audioCodec": "AAC",
+      "audioSampleRateHz": 48000,
+      "audioChannelCount": 2
+    },
+    "5": {
+      "sourceProtocol": "SRT",
+      "sourceMode": "PUSH",
+      "videoCodec": "H264",
+      "videoProfilesAllowed": ["Main"],
+      "videoWidth": 1280,
+      "videoHeight": 720,
+      "minimumFps": 29,
+      "maximumFps": 31,
+      "audioCodec": "AAC",
+      "audioSampleRateHz": 48000,
+      "audioChannelCount": 2
+    }
+  }
+}
