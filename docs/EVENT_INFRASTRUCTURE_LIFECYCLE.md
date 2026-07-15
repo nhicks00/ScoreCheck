@@ -194,12 +194,19 @@ reserved_ip:create
 reserved_ip:update
 reserved_ip:delete
 sizes:read
+snapshot:read
+snapshot:delete
 ssh_key:read
 tag:read
 tag:create
 tag:delete
 vpc:read
 ```
+
+DigitalOcean's token form requires `snapshot:read` and `snapshot:delete` as
+dependent scopes when `image:read` and `image:delete` are selected. Keep all
+four: the canary lists the created Droplet snapshot through the image API and
+must prove that the exact snapshot is absent after teardown.
 
 Do not select Full Access, `api:write`, `droplet:admin`, firewall deletion,
 DigitalOcean Monitoring, databases, volumes, domains, or Kubernetes. Event
