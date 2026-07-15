@@ -92,10 +92,40 @@ After provider subscription, use this order:
 5. Run the controlled withheld-ping delivery gate separately; do not combine it
    with the configuration cutover.
 
+## Bounded release evidence: 2026-07-15
+
+The attachment audit and Pushover-only phone-readiness cutover are live.
+Monitor-service started at `2026-07-15T03:35:05Z` on exact revision
+`ce73f7d520f013fb3506691887bd3881179a36d1`; container
+`4c7b97603b81` is healthy with restart count zero. Prometheus, Alertmanager,
+Caddy, and node-exporter retained their pre-cutover container ids and restart
+count zero. Production Prometheus reports 46 rules, zero unhealthy rules, and
+zero active alerts; Alertmanager has zero alerts.
+
+The secret-free live snapshot confirms six of six agents fresh, notifications
+healthy, direct Pushover configured with no recorded failure, Twilio disabled,
+the baseline Healthchecks check running, the active-coverage check idle-paused,
+and the Pushover channel attached to both checks. There are no active incidents
+or fault gates. Camera 1 is publishing raw video with positive bitrate and zero
+frame errors; all overview reader counts are zero.
+
+The operator dashboard release is production Vercel deployment
+`dpl_4D91tZi4ThRWCU8xbjJ4H5Cu1zwD`, created at
+`2026-07-15T04:16:44Z` from sealed source commit
+`ed239f527e3c48da8aeb8d43a555a0bc5643ca9e`. The deployment is `READY` and
+serves both production aliases. Its local authenticated desktop/mobile smoke
+used the live read-only monitor API and showed no horizontal overflow, console
+error, or idle stream reader. A fresh authenticated production visual pass is
+still pending because the current local admin artifact is stale and Vercel does
+not export the encrypted production credential.
+
+No test Pushover page was sent during this release. The controlled
+withheld-ping down/recovery gate remains a separate operator-visible test.
+
 ## Current decision
 
 - Keep direct Pushover enabled.
 - Keep Twilio disabled and optional until A2P delivery succeeds.
 - Keep baseline Healthchecks running and active-coverage Healthchecks paused while all courts are off.
-- Deploy and verify the attachment audit before running the withheld-ping phone gate.
+- Keep the deployed attachment audit healthy before running the withheld-ping phone gate.
 - Keep the Pushover acknowledgement gate open until a delivered emergency is acknowledged during the controlled window.

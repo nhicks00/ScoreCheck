@@ -20,10 +20,10 @@ providers or real media feeds.
 | Infrastructure and Egress attribution | Host/container health, idle/busy state, capacity, assigned court pair, mapping mismatch rejection | Deployed; false busy-state paging corrected and restart-during-outage fixture passing |
 | YouTube health | Exact configured video IDs, lifecycle, ingestion health when OAuth is available, API failure remains unknown | Deployed; provider fault gate pending |
 | Durable incidents and operator actions | Fingerprints, open/ack/resolved transitions, checkpoints, acknowledgements, timed silences, expiry re-arm | Deployed and unit-tested |
-| Alert expression behavior | Promtool fixtures validate hold times, labels, annotations, court isolation, black/freeze exclusion, decode/freeze rate bands, live gating, shared-worker fan-out, and external phone-channel attachment | Candidate rule suite passing locally; deployment held until provider and workload gates permit a bounded cutover |
+| Alert expression behavior | Promtool fixtures validate hold times, labels, annotations, court isolation, black/freeze exclusion, decode/freeze rate bands, live gating, shared-worker fan-out, and external phone-channel attachment | Deployed; 46/46 production rules healthy with zero active alerts |
 | Page suppression behavior | Disposable network-isolated Alertmanager proves same-court and shared-dependency inhibition while peer alerts remain active | Enforced before deployment |
 | Phone paging | Required Pushover emergency acknowledgement and recovery; optional Twilio SMS escalation | Pushover delivery/recovery proven; controlled acknowledgement gate pending. Twilio is optional and disabled because campaign/number association and live delivery are not verified |
-| Independent dead-man | Baseline and active Healthchecks senders with coverage-aware cadence plus read-only Pushover attachment audit | Checks configured; baseline running and active idle-paused; Pushover attached to both. Audit deployment and withheld-ping gate remain pending |
+| Independent dead-man | Baseline and active Healthchecks senders with coverage-aware cadence plus read-only Pushover attachment audit | Audit deployed; baseline running, active idle-paused, and Pushover attached to both. Controlled withheld-ping gate remains pending |
 | One-court real fault gate | Camera, network, preview, browser, commentary, score, Egress, YouTube, agent, dead-man faults | Ten-hour transport/sync soak passed; injected fault matrix pending |
 | Eight-court real load/fault gate | Four compositors, eight representative feeds, two commentary rooms, score on all courts | Fail-closed routing endurance passed under the temporary topology; ingest headroom and viewer quality failed; revised-topology gate pending |
 
@@ -116,8 +116,8 @@ has one Pushover integration attached exactly to the baseline and active checks,
 with the unused legacy check left email-only. The remaining provider and
 operator prerequisites are:
 
-1. Deploy the channel-readiness audit and prove a withheld baseline ping reaches
-   the phone without creating duplicate alerts.
+1. Prove a withheld baseline ping reaches the phone and recovers without
+   creating duplicate alerts.
 2. An existing production admin session for a production-browser visual pass;
    Vercel intentionally does not export the sensitive admin secret.
 
@@ -141,8 +141,8 @@ must not claim RF or camera-encoder certainty without those sources.
 
 ## Next gates
 
-1. Deploy the independent Healthchecks phone-channel audit, then prove Pushover
-   acknowledgement, recovery, and withheld-ping behavior in a scheduled window.
+1. Prove Pushover acknowledgement, recovery, and withheld-ping behavior in a
+   scheduled operator-visible window.
 2. Repeat the one-court test broadcast and inject every remaining row in the
    runbook table, including camera reconnect and subjective sync checks.
 3. Replace the shared eight-feed normalizer topology, then run eight
