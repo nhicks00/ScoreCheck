@@ -8,7 +8,7 @@ const EVENTS = new Set([
   "zombie_observation_end",
   "watcher_stopped"
 ]);
-const CLASSIFICATION = /^(?:unclassified|observer\.capacity-ssh|healthcheck\.(?:monitor-agent|egress|mediamtx|redis)(?:\.runtime)?)$/;
+const CLASSIFICATION = /^(?:unclassified|observer\.capacity-ssh|healthcheck\.(?:monitor-agent|egress|mediamtx|redis)(?:\.runtime)?|workload\.egress-chrome)$/;
 const FINGERPRINT = /^[a-f0-9]{16}$/;
 const IDENTITY = /^\d+:\d+$/;
 
@@ -139,6 +139,7 @@ function summarizeRole(events, startMs, endMs) {
   let concurrent = active.size;
   let maximumConcurrent = concurrent;
   const observerOpens = [];
+  const workloadOpens = [];
   const newUnclassified = [];
   const openByIdentity = new Map(events.filter((event) => event.event === "zombie_open").map((event) => [event.identity, event]));
   const closeByIdentity = new Map(events.filter((event) => event.event === "zombie_close").map((event) => [event.identity, event]));
@@ -153,6 +154,8 @@ function summarizeRole(events, startMs, endMs) {
       maximumConcurrent = Math.max(maximumConcurrent, concurrent);
       if (event.classification === "unclassified") {
         newUnclassified.push(event);
+      } else if (event.classification.startsWith("workload.")) {
+        workloadOpens.push(event);
       } else {
         observerOpens.push(event);
       }
@@ -162,11 +165,21 @@ function summarizeRole(events, startMs, endMs) {
   }
 
   const observerEpisodes = [...openByIdentity.values()].filter((event) => {
-    if (event.classification === "unclassified" || event.observedAtMs > endMs) return false;
+    if (event.classification === "unclassified" || event.classification.startsWith("workload.") || event.observedAtMs > endMs) return false;
+    const ended = endByIdentity.get(event.identity);
+    return ended == null || ended.observedAtMs >= startMs;
+  });
+  const workloadEpisodes = [...openByIdentity.values()].filter((event) => {
+    if (!event.classification.startsWith("workload.") || event.observedAtMs > endMs) return false;
     const ended = endByIdentity.get(event.identity);
     return ended == null || ended.observedAtMs >= startMs;
   });
   const observerDurations = observerEpisodes.map((event) => {
+    const ended = endByIdentity.get(event.identity);
+    if (ended?.durationMs != null) return ended.durationMs;
+    return Math.max(0, endMs - event.observedAtMs);
+  });
+  const workloadDurations = workloadEpisodes.map((event) => {
     const ended = endByIdentity.get(event.identity);
     if (ended?.durationMs != null) return ended.durationMs;
     return Math.max(0, endMs - event.observedAtMs);
@@ -193,8 +206,14 @@ function summarizeRole(events, startMs, endMs) {
     observerClassifications: classifications,
     observerMaximumDurationMs: maximum(observerDurations),
     observerMaximumRollingMinuteCount: rollingMinuteMaximum(observerOpens.map((event) => event.observedAtMs)),
+    workloadEventCount: workloadOpens.length,
+    workloadClassifications: classificationCounts(workloadOpens),
+    workloadMaximumDurationMs: maximum(workloadDurations),
+    workloadMaximumRollingMinuteCount: rollingMinuteMaximum(workloadOpens.map((event) => event.observedAtMs)),
+    workloadMaximumConcurrentCount: maximumConcurrentFor(workloadEpisodes, endByIdentity, startMs, endMs),
     maximumConcurrentZombies: Math.max(maximumConcurrent, maximum(inWindowHeartbeats.map((event) => event.activeZombieCount)) ?? 0),
     unclosedObserverCount: observerEpisodes.filter((event) => !closeByIdentity.has(event.identity)).length,
+    unclosedWorkloadCount: workloadEpisodes.filter((event) => !closeByIdentity.has(event.identity)).length,
     orphanCloseCount: events.filter((event) =>
       event.observedAtMs > startMs
       && event.observedAtMs <= endMs
@@ -202,6 +221,29 @@ function summarizeRole(events, startMs, endMs) {
       && !openByIdentity.has(event.identity)
     ).length
   };
+}
+
+function classificationCounts(events) {
+  const counts = {};
+  for (const event of events) counts[event.classification] = (counts[event.classification] ?? 0) + 1;
+  return counts;
+}
+
+function maximumConcurrentFor(events, endByIdentity, startMs, endMs) {
+  const boundaries = [];
+  for (const event of events) {
+    boundaries.push({ at: Math.max(startMs, event.observedAtMs), delta: 1 });
+    const ended = endByIdentity.get(event.identity);
+    if (ended) boundaries.push({ at: Math.min(endMs, ended.observedAtMs), delta: -1 });
+  }
+  boundaries.sort((left, right) => left.at - right.at || left.delta - right.delta);
+  let active = 0;
+  let maximumValue = 0;
+  for (const boundary of boundaries) {
+    active = Math.max(0, active + boundary.delta);
+    maximumValue = Math.max(maximumValue, active);
+  }
+  return maximumValue;
 }
 
 function boundedOpenEvent(event) {

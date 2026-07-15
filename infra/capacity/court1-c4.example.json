@@ -59,6 +59,10 @@
     "maximumZombiePollIntervalMs": 50,
     "maximumObserverZombieDurationMs": 2000,
     "maximumObserverZombieEvents": 480,
-    "maximumObserverZombieEventsPerMinute": 16
+    "maximumObserverZombieEventsPerMinute": 16,
+    "maximumWorkloadZombieDurationMs": 500,
+    "maximumWorkloadZombieEvents": 16,
+    "maximumWorkloadZombieEventsPerMinute": 8,
+    "maximumWorkloadConcurrentZombies": 1
   }
 }

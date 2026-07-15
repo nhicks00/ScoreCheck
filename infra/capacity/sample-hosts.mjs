@@ -101,7 +101,11 @@ async function main() {
   };
 
   let stopping = false;
-  const stop = () => { stopping = true; };
+  const watchers = [];
+  const stop = () => {
+    stopping = true;
+    for (const watcher of watchers) watcher.stop();
+  };
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
 
@@ -113,10 +117,10 @@ async function main() {
     watcherFailureResolved = true;
     resolveWatcherFailure(error);
   };
-  const watchers = [
+  watchers.push(
     startZombieWatcher(args.ingestHost, "ingest", args, watcherScript, writeProcessEvent, reportWatcherFailure),
     startZombieWatcher(args.compositorHost, "compositor", args, watcherScript, writeProcessEvent, reportWatcherFailure)
-  ];
+  );
 
   const startedAt = Date.now();
   let nextProgressAt = startedAt + 60_000;
@@ -170,6 +174,7 @@ function startZombieWatcher(host, role, args, script, onEvent, onFailure) {
   let failure = null;
   let intentionalStop = false;
   let sawStarted = false;
+  let forceKillTimer = null;
   let resolveStarted;
   let rejectStarted;
   let resolveClosed;
@@ -184,7 +189,11 @@ function startZombieWatcher(host, role, args, script, onEvent, onFailure) {
     failure = error;
     onFailure(error);
     rejectStarted(error);
-    child.kill("SIGKILL");
+    child.kill("SIGTERM");
+    forceKillTimer = setTimeout(() => {
+      if (child.exitCode == null && child.signalCode == null) child.kill("SIGKILL");
+    }, 1_000);
+    forceKillTimer.unref();
   };
   const consumeLine = (line) => {
     if (line.trim() === "") return;
@@ -216,6 +225,7 @@ function startZombieWatcher(host, role, args, script, onEvent, onFailure) {
   child.stderr.on("data", (chunk) => { stderr = `${stderr}${chunk}`.slice(-2_000); });
   child.once("error", (error) => fail(error));
   child.once("close", (code) => {
+    if (forceKillTimer) clearTimeout(forceKillTimer);
     if (stdout.trim()) consumeLine(stdout);
     if (!sawStarted && !failure) fail(new Error(`${role} host watcher exited before startup`));
     if (!intentionalStop && !failure) fail(new Error(`${role} host watcher exited unexpectedly with ${code}: ${stderr.trim().slice(0, 160)}`));

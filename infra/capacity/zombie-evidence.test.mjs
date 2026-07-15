@@ -43,6 +43,24 @@ test("reports every new non-observer zombie with bounded attribution", () => {
   });
 });
 
+test("separately bounds exact Egress Chrome child lifecycle", () => {
+  const events = baseEvents();
+  events.push(open("compositor", 12, "310:31", "chrome", "chrome", "workload.egress-chrome", false));
+  events.push(close("compositor", 12.1, "310:31", "workload.egress-chrome", 100));
+  events.push(open("compositor", 13, "320:32", "chrome", "chrome", "workload.egress-chrome", false));
+  events.push(close("compositor", 13.2, "320:32", "workload.egress-chrome", 200));
+  const summary = summarize(events);
+
+  assert.equal(summary.roles.compositor.newUnclassifiedCount, 0);
+  assert.equal(summary.roles.compositor.observerEventCount, 0);
+  assert.equal(summary.roles.compositor.workloadEventCount, 2);
+  assert.deepEqual(summary.roles.compositor.workloadClassifications, { "workload.egress-chrome": 2 });
+  assert.equal(summary.roles.compositor.workloadMaximumDurationMs, 200);
+  assert.equal(summary.roles.compositor.workloadMaximumRollingMinuteCount, 2);
+  assert.equal(summary.roles.compositor.workloadMaximumConcurrentCount, 1);
+  assert.equal(summary.roles.compositor.unclosedWorkloadCount, 0);
+});
+
 test("includes observer zombies already active at the formal start", () => {
   const events = baseEvents();
   events.push(open("ingest", 8, "400:40", "sshd", "sshd", "observer.capacity-ssh", false));

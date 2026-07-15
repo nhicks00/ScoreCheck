@@ -119,7 +119,9 @@ function assertConfig(config) {
     "maximumHostSampleGapSeconds", "maximumHostSampleLagMs", "maximumZombieWatcherHeartbeatGapSeconds",
     "maximumZombieWatcherScanGapMs", "maximumZombiePollIntervalMs",
     "maximumObserverZombieDurationMs", "maximumObserverZombieEvents",
-    "maximumObserverZombieEventsPerMinute"
+    "maximumObserverZombieEventsPerMinute", "maximumWorkloadZombieDurationMs",
+    "maximumWorkloadZombieEvents", "maximumWorkloadZombieEventsPerMinute",
+    "maximumWorkloadConcurrentZombies"
   ]) {
     if (!Number.isFinite(config.thresholds?.[required])) throw new Error(`threshold ${required} is required`);
   }
@@ -127,7 +129,13 @@ function assertConfig(config) {
   if (config.thresholds.maximumCpuP95Ratio > config.thresholds.maximumCpuRatio) throw new Error("maximumCpuP95Ratio cannot exceed maximumCpuRatio");
   if (config.thresholds.maximumHostSampleGapSeconds < config.stepSeconds) throw new Error("maximumHostSampleGapSeconds cannot be less than stepSeconds");
   if (config.thresholds.maximumZombiePollIntervalMs < 25 || config.thresholds.maximumZombiePollIntervalMs > 250) throw new Error("maximumZombiePollIntervalMs must be from 25 through 250");
-  if (!Number.isInteger(config.thresholds.maximumObserverZombieEvents) || !Number.isInteger(config.thresholds.maximumObserverZombieEventsPerMinute)) throw new Error("observer zombie thresholds must be integers");
+  for (const name of [
+    "maximumObserverZombieEvents", "maximumObserverZombieEventsPerMinute",
+    "maximumWorkloadZombieEvents", "maximumWorkloadZombieEventsPerMinute",
+    "maximumWorkloadConcurrentZombies"
+  ]) {
+    if (!Number.isInteger(config.thresholds[name])) throw new Error(`${name} must be an integer`);
+  }
 }
 
 function assertBaselineAllowlist(allowlist) {
@@ -312,6 +320,14 @@ function evaluateZombieEvidence(checks, config, zombieEvidence) {
     addCheck(checks, `${role}_observer_zombie_count`, Number.isFinite(evidence?.observerEventCount) && evidence.observerEventCount <= thresholds.maximumObserverZombieEvents, evidence?.observerEventCount ?? null, `<= ${thresholds.maximumObserverZombieEvents}`);
     addCheck(checks, `${role}_observer_zombie_rate`, Number.isFinite(evidence?.observerMaximumRollingMinuteCount) && evidence.observerMaximumRollingMinuteCount <= thresholds.maximumObserverZombieEventsPerMinute, evidence?.observerMaximumRollingMinuteCount ?? null, `<= ${thresholds.maximumObserverZombieEventsPerMinute} per rolling minute`);
     addCheck(checks, `${role}_observer_zombie_closure`, evidence?.unclosedObserverCount === 0, evidence?.unclosedObserverCount ?? null, 0);
+    addCheck(checks, `${role}_workload_zombie_duration`, (evidence?.workloadMaximumDurationMs ?? 0) <= thresholds.maximumWorkloadZombieDurationMs, evidence?.workloadMaximumDurationMs ?? 0, `<= ${thresholds.maximumWorkloadZombieDurationMs} ms`);
+    addCheck(checks, `${role}_workload_zombie_count`, Number.isFinite(evidence?.workloadEventCount) && evidence.workloadEventCount <= thresholds.maximumWorkloadZombieEvents, {
+      count: evidence?.workloadEventCount ?? null,
+      classifications: evidence?.workloadClassifications ?? {}
+    }, `<= ${thresholds.maximumWorkloadZombieEvents}`);
+    addCheck(checks, `${role}_workload_zombie_rate`, Number.isFinite(evidence?.workloadMaximumRollingMinuteCount) && evidence.workloadMaximumRollingMinuteCount <= thresholds.maximumWorkloadZombieEventsPerMinute, evidence?.workloadMaximumRollingMinuteCount ?? null, `<= ${thresholds.maximumWorkloadZombieEventsPerMinute} per rolling minute`);
+    addCheck(checks, `${role}_workload_zombie_concurrency`, Number.isFinite(evidence?.workloadMaximumConcurrentCount) && evidence.workloadMaximumConcurrentCount <= thresholds.maximumWorkloadConcurrentZombies, evidence?.workloadMaximumConcurrentCount ?? null, `<= ${thresholds.maximumWorkloadConcurrentZombies}`);
+    addCheck(checks, `${role}_workload_zombie_closure`, evidence?.unclosedWorkloadCount === 0, evidence?.unclosedWorkloadCount ?? null, 0);
     addCheck(checks, `${role}_zombie_event_integrity`, evidence?.orphanCloseCount === 0, evidence?.orphanCloseCount ?? null, 0);
   }
 }

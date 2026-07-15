@@ -12,9 +12,14 @@ CPU, sampler coverage/cadence/lag, and `/dev/shm` headroom are read directly
 from the host-sampler CSV. A single long-lived Python process on each host also
 scans `/proc` every 50 ms and records bounded PID, PPID, command, parent,
 fingerprint, lifecycle, and classification evidence. Any new unclassified
-zombie aborts sampling immediately. Only exact sampler or configured container
-healthcheck signatures are exempt, and their duration, total count, and rolling
-rate remain gated. Missing or sparse evidence fails the gate.
+zombie aborts sampling immediately. Exact sampler and configured container
+healthcheck signatures are bounded by duration, count, and rolling rate. The
+only workload lifecycle class is a Chrome child whose full ancestry and cgroup
+resolve to the Egress container; it has its own stricter duration, count, rate,
+concurrency, and closure gates. Missing or sparse evidence fails the gate.
+SSH exit-to-wait children are classified only when both process and parent are
+the host SSH service (`sshd` under `sshd` or `systemd`); they remain subject to
+the observer duration, count, rate, and closure gates.
 
 ## Run
 
@@ -29,6 +34,7 @@ node infra/capacity/sample-hosts.mjs \
   --compositor-host root@COMPOSITOR_HOST \
   --ssh-key ~/.ssh/scorecheck_do \
   --interval-seconds 5 \
+  --duration-seconds 2100 \
   --process-poll-ms 50 \
   --output /protected/court1-host-samples.csv \
   --process-output /protected/court1-zombie-events.ndjson
@@ -55,6 +61,12 @@ node infra/capacity/evaluate-gate.mjs \
 The bearer token is read only from the environment and is never written to the
 report. The output file is created mode `0600`. Exit status is `0` for PASS,
 `2` for a completed FAIL, and `1` for invalid configuration or query failure.
+For a 30-minute gate, the example uses a bounded 35-minute sampler so normal
+completion does not depend on a terminal signal. On a fail-closed process
+event, the local sampler first terminates both remote
+watchers gracefully and only force-kills a transport that does not exit within
+one second. This prevents the measurement harness from stranding its own SSH
+session child under host init.
 
 ## Acceptance boundaries
 
@@ -75,6 +87,10 @@ The checked-in c-4 profile requires:
 - an exact allowlisted pre-run zombie baseline, zero new unclassified zombies,
   no exempt observer/healthcheck zombie lasting over two seconds, and bounded
   exempt churn (at most 16 per rolling minute and 480 total per host);
+- no Egress Chrome child wait over 500 ms, more than one concurrent Chrome
+  child wait, more than 16 total or eight per rolling minute, or any unclosed
+  Chrome child lifecycle; all other workload zombies remain unclassified and
+  fail immediately;
 - fresh browser heartbeats, at least 29 fps at p05, no warning-level frame-drop
   or freeze ratio, and a continuously active Egress job;
 - exact observed protocol/mode/codecs/dimensions/audio profile matching the

@@ -107,6 +107,8 @@ def direct_classification(process):
         return "healthcheck.mediamtx"
     if command == "redis-cli" and cmdline.rstrip().endswith(b" ping"):
         return "healthcheck.redis"
+    if command == "sshd" and parent_command in {"sshd", "systemd"}:
+        return "observer.capacity-ssh"
     return None
 
 
@@ -126,7 +128,10 @@ def container_healthcheck_classification(process):
 def classification_map(processes):
     classifications = {}
     healthcheck_shims = {}
+    egress_inits = []
     for process in processes.values():
+        if (process.get("commandLine") or b"").strip() == b"/tini -- egress":
+            egress_inits.append(process)
         parent = processes.get(process["ppid"])
         if parent is None or parent["command"] != "containerd-shim":
             continue
@@ -150,6 +155,17 @@ def classification_map(processes):
             if parent["command"] in {"runc", "sh", "bash"}:
                 classifications[parent["identity"]] = f"{classification}.runtime"
             parent_pid = parent["ppid"]
+
+    for process in processes.values():
+        if process["command"] != "chrome" or process.get("parentCommand") != "chrome":
+            continue
+        for egress_init in egress_inits:
+            if process.get("cgroupFingerprint") != egress_init.get("cgroupFingerprint"):
+                continue
+            if is_descendant(process, egress_init, processes):
+                classifications[process["identity"]] = "workload.egress-chrome"
+                break
+
     for _ in range(8):
         changed = False
         for process in processes.values():
@@ -164,6 +180,17 @@ def classification_map(processes):
         if not changed:
             break
     return classifications
+
+
+def is_descendant(process, ancestor, processes):
+    current = process
+    for _ in range(64):
+        if current["identity"] == ancestor["identity"]:
+            return True
+        current = processes.get(current["ppid"])
+        if current is None:
+            return False
+    return False
 
 
 def safe_process(process, classification, initial_observation):
@@ -366,12 +393,24 @@ def self_test():
     assert direct_classification({**base, "commandLine": b"node worker.js"}) is None
     assert direct_classification({"command": "pactl", "parentCommand": "chrome", "commandLine": b"pactl info"}) is None
     assert direct_classification({"command": "runc", "parentCommand": "dockerd", "commandLine": b"runc exec"}) is None
-    assert direct_classification({"command": "sshd", "parentCommand": "sshd", "commandLine": b"sshd: root@notty"}) is None
+    assert direct_classification({"command": "sshd", "parentCommand": "sshd", "commandLine": b"sshd: root@notty"}) == "observer.capacity-ssh"
+    assert direct_classification({"command": "sshd", "parentCommand": "systemd", "commandLine": b""}) == "observer.capacity-ssh"
+    assert direct_classification({"command": "sshd", "parentCommand": "bash", "commandLine": b"sshd"}) is None
     assert container_healthcheck_classification({"commandLine": b"npm run start:agent"}) == "healthcheck.monitor-agent"
     assert container_healthcheck_classification({"commandLine": b"/mediamtx"}) == "healthcheck.mediamtx"
     assert container_healthcheck_classification({"commandLine": b"/tini -- egress"}) == "healthcheck.egress"
     assert container_healthcheck_classification({"commandLine": b"redis-server *:6379"}) == "healthcheck.redis"
     assert container_healthcheck_classification({"commandLine": b"npm run dev"}) is None
+
+    processes = {
+        10: {"pid": 10, "ppid": 1, "identity": "10:1", "command": "tini", "parentCommand": "containerd-shim", "commandLine": b"/tini -- egress", "cgroupFingerprint": "egress"},
+        20: {"pid": 20, "ppid": 10, "identity": "20:2", "command": "chrome", "parentCommand": "tini", "commandLine": b"/opt/google/chrome/chrome", "cgroupFingerprint": "egress"},
+        30: {"pid": 30, "ppid": 20, "identity": "30:3", "command": "chrome", "parentCommand": "chrome", "commandLine": b"", "cgroupFingerprint": "egress"},
+        40: {"pid": 40, "ppid": 20, "identity": "40:4", "command": "chrome", "parentCommand": "chrome", "commandLine": b"", "cgroupFingerprint": "other"},
+    }
+    classifications = classification_map(processes)
+    assert classifications["30:3"] == "workload.egress-chrome"
+    assert "40:4" not in classifications
 
 
 def parse_args():

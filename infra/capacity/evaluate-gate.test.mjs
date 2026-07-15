@@ -162,7 +162,11 @@ function config() {
       maximumZombiePollIntervalMs: 50,
       maximumObserverZombieDurationMs: 2_000,
       maximumObserverZombieEvents: 100,
-      maximumObserverZombieEventsPerMinute: 20
+      maximumObserverZombieEventsPerMinute: 20,
+      maximumWorkloadZombieDurationMs: 500,
+      maximumWorkloadZombieEvents: 16,
+      maximumWorkloadZombieEventsPerMinute: 8,
+      maximumWorkloadConcurrentZombies: 1
     }
   };
 }
@@ -243,6 +247,25 @@ test("fails uncovered host-sample window edges independently of count coverage",
   assert(!failed.has("host_sample_coverage"));
 });
 
+test("fails persistent or accumulating Egress Chrome child waits", () => {
+  const gateConfig = config();
+  const processEvidence = zombieEvidence();
+  Object.assign(processEvidence.roles.compositor, {
+    workloadEventCount: 17,
+    workloadClassifications: { "workload.egress-chrome": 17 },
+    workloadMaximumDurationMs: 501,
+    workloadMaximumRollingMinuteCount: 9,
+    workloadMaximumConcurrentCount: 2,
+    unclosedWorkloadCount: 1
+  });
+  const report = evaluateEvidence(gateConfig, healthyEvidence(gateConfig), attestations(), hostEvidence(), processEvidence);
+  const failed = new Set(report.checks.filter((check) => !check.pass).map((check) => check.id));
+  for (const suffix of ["duration", "count", "rate", "concurrency", "closure"]) {
+    assert(failed.has(`compositor_workload_zombie_${suffix}`));
+  }
+  assert(!failed.has("compositor_new_unclassified_zombies"));
+});
+
 function healthyHostSamplesCsv() {
   const rows = [];
   for (let second = -5; second <= 25; second += 5) {
@@ -274,8 +297,14 @@ function zombieEvidence() {
     observerClassifications: {},
     observerMaximumDurationMs: null,
     observerMaximumRollingMinuteCount: 0,
+    workloadEventCount: 0,
+    workloadClassifications: {},
+    workloadMaximumDurationMs: null,
+    workloadMaximumRollingMinuteCount: 0,
+    workloadMaximumConcurrentCount: 0,
     maximumConcurrentZombies: 0,
     unclosedObserverCount: 0,
+    unclosedWorkloadCount: 0,
     orphanCloseCount: 0
   };
   return { schemaVersion: 1, roles: { ingest: { ...role }, compositor: { ...role } } };
