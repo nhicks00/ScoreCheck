@@ -73,6 +73,11 @@ test("proves resize, snapshot replacement, stable endpoint, exact cleanup, and b
   const result = await canary.run(setup.config, CANARY_CONFIRMATION);
   assert.equal(result.phase, "cleaned");
   assert.equal(result.classification, "PASS");
+  assert.deepEqual(result.baseline.resizeContract, {
+    diskResize: false,
+    original: { slug: "c-4", vcpus: 4, memoryMiB: 8192, diskGiB: 50 },
+    target: { slug: "s-1vcpu-2gb", vcpus: 1, memoryMiB: 2048, diskGiB: 50 }
+  });
   assert.equal(result.dnsReadiness.status, "ready");
   assert.deepEqual(result.dnsReadiness.resolvers.map((entry) => entry.name), ["fake"]);
   assert.ok(result.timeline.findIndex((entry) => entry.event === "dns-ready") < result.timeline.findIndex((entry) => entry.event === "endpoint-check-passed"));
@@ -88,6 +93,28 @@ test("proves resize, snapshot replacement, stable endpoint, exact cleanup, and b
   assert.deepEqual(setup.cloud.assignCalls, [{ ip: "192.0.2.50", dropletId: result.replacement.id }]);
   assert.equal((await stat(statePath)).mode & 0o777, 0o600);
   assert.equal(JSON.parse(await readFile(statePath, "utf8")).classification, "PASS");
+});
+
+test("refuses an irreversible resize target before creating paid resources", async () => {
+  const root = await mkdtemp(join(tmpdir(), "scorecheck-canary-resize-contract-"));
+  const cloud = new FakeCloud();
+  const setup = fixture({ cloud });
+  const config = buildCanaryConfig({ runId: "20260715b", cloudInitSource: setup.source, resizeDownSize: "c-2" });
+  const canary = new LifecycleCanary({
+    cloud,
+    dns: setup.dns,
+    host: setup.host,
+    store: new CanaryStateStore(join(root, "state.json")),
+    fetchImpl: healthFetch(cloud)
+  });
+
+  await assert.rejects(
+    () => canary.run(config, CANARY_CONFIRMATION),
+    /c-2 disk 25 GB is smaller than c-4 disk 50 GB/u
+  );
+  assert.deepEqual([...cloud.droplets.keys()].sort(), ["10", "11"]);
+  assert.equal(cloud.tags.size, 0);
+  assert.equal(cloud.addresses.size, 0);
 });
 
 test("failure remains classified FAIL while exact cleanup still restores the baseline", async () => {
@@ -449,8 +476,18 @@ class FakeCloud {
   failReservedIpv4Delete = false;
   failTagDelete = false;
   assignCalls = [];
+  sizes = new Map([
+    ["c-4", { slug: "c-4", vcpus: 4, memory: 8192, disk: 50, available: true, regions: ["sfo2"] }],
+    ["s-1vcpu-2gb", { slug: "s-1vcpu-2gb", vcpus: 1, memory: 2048, disk: 50, available: true, regions: ["sfo2"] }],
+    ["c-2", { slug: "c-2", vcpus: 2, memory: 4096, disk: 25, available: true, regions: ["sfo2"] }]
+  ]);
 
   async getAccount() { return { uuid: "account-uuid", status: "active", dropletLimit: 10 }; }
+  async getSize(slug) {
+    const value = this.sizes.get(slug);
+    if (!value) throw new Error(`size ${slug} missing`);
+    return clone(value);
+  }
   async listAllDroplets() { return [...this.droplets.values()].map(clone); }
   async findDropletsByName(name) { return (await this.listAllDroplets()).filter((entry) => entry.name === name); }
   async listDropletsByTag(tag) { return (await this.listAllDroplets()).filter((entry) => entry.tags.includes(tag)); }

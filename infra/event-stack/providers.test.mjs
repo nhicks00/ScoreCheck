@@ -19,6 +19,45 @@ test("read-only DigitalOcean operations do not require a provisioning SSH key", 
   await assert.rejects(() => provider.createDroplet({ userDataProfile: "canary" }), /SSH key/);
 });
 
+test("DigitalOcean returns an exact normalized size contract", async () => {
+  const provider = new DigitalOceanProvider({
+    token: "token",
+    sshKeys: [],
+    cloudInitPaths: {},
+    fetchImpl: queueFetch([
+      response(200, {
+        sizes: [{ slug: "c-4", vcpus: 4, memory: 8192, disk: 50, available: true, regions: ["sfo2", "nyc3", "sfo2"] }],
+        meta: { total: 1 }
+      })
+    ])
+  });
+
+  assert.deepEqual(await provider.getSize("c-4"), {
+    slug: "c-4",
+    vcpus: 4,
+    memory: 8192,
+    disk: 50,
+    available: true,
+    regions: ["nyc3", "sfo2"]
+  });
+});
+
+test("DigitalOcean includes a sanitized provider reason for rejected actions", async () => {
+  const provider = new DigitalOceanProvider({
+    token: "token",
+    sshKeys: [],
+    cloudInitPaths: {},
+    fetchImpl: queueFetch([
+      response(422, { id: "unprocessable_entity", message: "target disk is too small\nretry with another size" })
+    ])
+  });
+
+  await assert.rejects(
+    () => provider.resizeDroplet("123", "c-2"),
+    /HTTP 422: target disk is too small retry with another size/u
+  );
+});
+
 test("DigitalOcean create binds exact cloud-init bytes, tags, SSH keys, and safe defaults", async () => {
   const root = await mkdtemp(join(tmpdir(), "scorecheck-do-provider-"));
   const cloudInit = "#cloud-config\nruncmd: []\n";

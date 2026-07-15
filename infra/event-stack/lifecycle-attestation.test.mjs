@@ -76,6 +76,19 @@ test("does not attest failed, incomplete, or pre-account-identity evidence", asy
   await assert.rejects(() => setup.issue(), /missing the DigitalOcean account UUID/);
 });
 
+test("does not attest missing or irreversible resize-plan evidence", async () => {
+  const setup = await fixture();
+  const evidence = JSON.parse(await readFile(setup.evidencePath, "utf8"));
+  delete evidence.baseline.resizeContract;
+  await writeFile(setup.evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 });
+  await assert.rejects(() => setup.issue(), /resize contract is invalid/u);
+
+  evidence.baseline.resizeContract = resizeContractEvidence();
+  evidence.baseline.resizeContract.target.diskGiB = 25;
+  await writeFile(setup.evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 });
+  await assert.rejects(() => setup.issue(), /target disk is smaller/u);
+});
+
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "scorecheck-lifecycle-attestation-"));
   await chmod(root, 0o700);
@@ -122,7 +135,7 @@ function passingEvidence() {
     classification: "PASS",
     failure: null,
     cleanupFailure: null,
-    baseline: { accountUuid: "account-uuid", dropletIds: ["10", "11"] },
+    baseline: { accountUuid: "account-uuid", dropletIds: ["10", "11"], resizeContract: resizeContractEvidence() },
     identity: {
       name: "scorecheck-lifecycle-canary-20260715pass",
       tag: "scorecheck-lifecycle-canary:20260715pass",
@@ -131,7 +144,7 @@ function passingEvidence() {
       zone: "beachvolleyballmedia.com",
       region: "sfo2",
       size: "c-4",
-      resizeDownSize: "c-2",
+      resizeDownSize: "s-1vcpu-2gb",
       baseImage: "ubuntu-24-04-x64",
       ttl: 60,
       cloudInitSha256: "a".repeat(64)
@@ -146,5 +159,13 @@ function passingEvidence() {
     cleanup,
     timeline: [{ at: "2026-07-15T00:59:00.000Z", event: "cleanup-proved", details: {} }],
     completedAt: "2026-07-15T00:59:00.000Z"
+  };
+}
+
+function resizeContractEvidence() {
+  return {
+    diskResize: false,
+    original: { slug: "c-4", vcpus: 4, memoryMiB: 8192, diskGiB: 50 },
+    target: { slug: "s-1vcpu-2gb", vcpus: 1, memoryMiB: 2048, diskGiB: 50 }
   };
 }

@@ -79,7 +79,12 @@ export class LifecycleCanary {
     if (typeof account.uuid !== "string" || !account.uuid.trim()) {
       throw new Error("DigitalOcean account response is missing its stable UUID");
     }
-    const droplets = await this.cloud.listAllDroplets();
+    const [droplets, originalSize, resizeSize] = await Promise.all([
+      this.cloud.listAllDroplets(),
+      this.cloud.getSize(config.size),
+      this.cloud.getSize(config.resizeDownSize)
+    ]);
+    const resizeContract = validateResizeContract(config, originalSize, resizeSize);
     if (droplets.length + 1 > account.dropletLimit) {
       throw new Error(`DigitalOcean account limit ${account.dropletLimit} cannot fit one disposable canary above ${droplets.length} current Droplets`);
     }
@@ -104,7 +109,8 @@ export class LifecycleCanary {
         accountUuid: account.uuid,
         accountDropletLimit: account.dropletLimit,
         dropletIds: droplets.map((entry) => entry.id).sort(),
-        reservedIpv4s: reservedIpv4s.map((entry) => entry.ip).sort()
+        reservedIpv4s: reservedIpv4s.map((entry) => entry.ip).sort(),
+        resizeContract
       },
       original: null,
       replacement: null,
@@ -118,7 +124,11 @@ export class LifecycleCanary {
       startedAt: this.now().toISOString(),
       completedAt: null
     };
-    await this.#record(state, "preflight-passed", { currentDroplets: droplets.length, dropletLimit: account.dropletLimit });
+    await this.#record(state, "preflight-passed", {
+      currentDroplets: droplets.length,
+      dropletLimit: account.dropletLimit,
+      resizeContract
+    });
     return state;
   }
 
@@ -723,7 +733,7 @@ export class CanarySshHost {
   }
 }
 
-export function buildCanaryConfig({ runId, cloudInitSource, zone = "beachvolleyballmedia.com", region = "sfo2", size = "c-4", resizeDownSize = "c-2", baseImage = "ubuntu-24-04-x64", ttl = 60 }) {
+export function buildCanaryConfig({ runId, cloudInitSource, zone = "beachvolleyballmedia.com", region = "sfo2", size = "c-4", resizeDownSize = "s-1vcpu-2gb", baseImage = "ubuntu-24-04-x64", ttl = 60 }) {
   if (typeof runId !== "string" || !/^[a-z0-9]{8,24}$/.test(runId)) throw new Error("canary run id must be 8-24 lowercase letters or digits");
   return {
     schemaVersion: STATE_SCHEMA_VERSION,
@@ -756,6 +766,37 @@ function validateCanaryConfig(config) {
     if (typeof config[key] !== "string" || !config[key]) throw new Error(`canary config ${key} is invalid`);
   }
   if (!Number.isInteger(config.ttl) || config.ttl < 60 || config.ttl > 86_400) throw new Error("canary TTL is invalid");
+}
+
+function validateResizeContract(config, original, target) {
+  for (const [label, size] of [["original", original], ["target", target]]) {
+    if (size.available !== true || !size.regions.includes(config.region)) {
+      throw new Error(`canary ${label} size ${size.slug} is unavailable in ${config.region}`);
+    }
+  }
+  if (original.slug !== config.size || target.slug !== config.resizeDownSize) {
+    throw new Error("canary resize size identity differs from provider inventory");
+  }
+  if (target.slug === original.slug || (target.vcpus >= original.vcpus && target.memory >= original.memory)) {
+    throw new Error(`canary resize target ${target.slug} does not reduce CPU or memory from ${original.slug}`);
+  }
+  if (target.disk < original.disk) {
+    throw new Error(`canary resize target ${target.slug} disk ${target.disk} GB is smaller than ${original.slug} disk ${original.disk} GB`);
+  }
+  return {
+    diskResize: false,
+    original: pickSizeEvidence(original),
+    target: pickSizeEvidence(target)
+  };
+}
+
+function pickSizeEvidence(value) {
+  return {
+    slug: value.slug,
+    vcpus: value.vcpus,
+    memoryMiB: value.memory,
+    diskGiB: value.disk
+  };
 }
 
 function assertStateMatchesConfig(state, config) {

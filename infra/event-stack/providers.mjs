@@ -43,6 +43,14 @@ export class DigitalOceanProvider {
     return (await this.#listCollection("/droplets", "droplets")).map(normalizeDroplet);
   }
 
+  async getSize(slug) {
+    const matches = (await this.#listCollection("/sizes", "sizes"))
+      .map(normalizeSize)
+      .filter((entry) => entry.slug === slug);
+    if (matches.length !== 1) throw new Error(`DigitalOcean size ${slug} was not returned exactly once`);
+    return matches[0];
+  }
+
   async listDropletsByTag(tag) {
     return (await this.#listCollection(`/droplets?tag_name=${encodeURIComponent(tag)}`, "droplets")).map(normalizeDroplet);
   }
@@ -349,7 +357,13 @@ export class DigitalOceanProvider {
       ...(body === undefined ? {} : { body: JSON.stringify(body) })
     });
     if (!expected.includes(response.status)) {
-      const error = new Error(`DigitalOcean ${method} ${path.split("?")[0]} failed with HTTP ${response.status}`);
+      const providerMessage = await response.json()
+        .then((payload) => payload?.message ?? payload?.id ?? null)
+        .catch(() => null);
+      const detail = typeof providerMessage === "string" && providerMessage
+        ? `: ${providerMessage.replace(/[\r\n\t]+/g, " ").slice(0, 200)}`
+        : "";
+      const error = new Error(`DigitalOcean ${method} ${path.split("?")[0]} failed with HTTP ${response.status}${detail}`);
       error.status = response.status;
       throw error;
     }
@@ -595,6 +609,27 @@ function normalizeVpc(value) {
     name: String(value.name ?? ""),
     region: String(value.region?.slug ?? value.region ?? ""),
     ipRange: String(value.ip_range ?? value.ipRange ?? "")
+  };
+}
+
+function normalizeSize(value) {
+  if (typeof value?.slug !== "string" || !value.slug) throw new Error("DigitalOcean size response has no slug");
+  const vcpus = Number(value.vcpus);
+  const memory = Number(value.memory);
+  const disk = Number(value.disk);
+  if (![vcpus, memory, disk].every((entry) => Number.isInteger(entry) && entry > 0)) {
+    throw new Error(`DigitalOcean size ${value.slug} has invalid resources`);
+  }
+  if (!Array.isArray(value.regions) || value.regions.some((entry) => typeof entry !== "string" || !entry)) {
+    throw new Error(`DigitalOcean size ${value.slug} has invalid regions`);
+  }
+  return {
+    slug: value.slug,
+    vcpus,
+    memory,
+    disk,
+    available: value.available === true,
+    regions: [...new Set(value.regions)].sort()
   };
 }
 

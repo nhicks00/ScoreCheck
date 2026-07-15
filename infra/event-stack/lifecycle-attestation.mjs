@@ -13,6 +13,7 @@ const REQUIRED_CLEANUP = ["dns", "replacement", "original", "reservedIpv4", "sna
 export const LIFECYCLE_CANARY_CAPABILITIES = Object.freeze([
   "digitalocean.account.read",
   "digitalocean.droplet.create-read-power-resize-delete",
+  "digitalocean.resize-plan-live-preflight",
   "digitalocean.reserved-ipv4.create-read-assign-delete",
   "digitalocean.snapshot.create-read-delete",
   "digitalocean.tag.create-read-delete",
@@ -144,6 +145,7 @@ function validatePassingEvidence(value) {
       throw new Error(`canary evidence identity ${key} is invalid`);
     }
   }
+  validateResizeContractEvidence(value.baseline?.resizeContract, value.identity);
   if (value.dnsReadiness?.status !== "ready" || !Array.isArray(value.dnsReadiness.resolvers) || value.dnsReadiness.resolvers.length < 3) {
     throw new Error("canary evidence is missing multi-resolver DNS readiness");
   }
@@ -159,6 +161,30 @@ function validatePassingEvidence(value) {
   }
   if (!Array.isArray(value.timeline) || !value.timeline.some((entry) => entry?.event === "cleanup-proved")) {
     throw new Error("canary evidence does not contain final cleanup proof");
+  }
+}
+
+function validateResizeContractEvidence(value, identity) {
+  if (!value || !deepEqual(Object.keys(value).sort(), ["diskResize", "original", "target"])) {
+    throw new Error("canary evidence resize contract is invalid");
+  }
+  if (value.diskResize !== false) throw new Error("canary evidence resize contract must preserve disk size");
+  for (const [label, size] of [["original", value.original], ["target", value.target]]) {
+    if (!size || !deepEqual(Object.keys(size).sort(), ["diskGiB", "memoryMiB", "slug", "vcpus"])) {
+      throw new Error(`canary evidence resize ${label} plan is invalid`);
+    }
+    if (typeof size.slug !== "string" || !size.slug || ![size.diskGiB, size.memoryMiB, size.vcpus].every((entry) => Number.isInteger(entry) && entry > 0)) {
+      throw new Error(`canary evidence resize ${label} plan is invalid`);
+    }
+  }
+  if (value.original.slug !== identity.size || value.target.slug !== identity.resizeDownSize) {
+    throw new Error("canary evidence resize plan identity is invalid");
+  }
+  if (value.target.diskGiB < value.original.diskGiB) {
+    throw new Error("canary evidence resize target disk is smaller than the original disk");
+  }
+  if (value.target.vcpus >= value.original.vcpus && value.target.memoryMiB >= value.original.memoryMiB) {
+    throw new Error("canary evidence resize target does not reduce CPU or memory");
   }
 }
 

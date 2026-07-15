@@ -492,7 +492,12 @@ not use a production endpoint or select an existing Droplet. It performs:
 2. Create and assign one temporary Reserved IPv4.
 3. Create unique Vercel DNS; wait for system, Cloudflare, and Google resolver
    convergence; then prove HTTP instance identity.
-4. Flex-resize to `c-2`, then back to `c-4`, proving the endpoint each time.
+4. Prove from live size inventory that `c-4` and `s-1vcpu-2gb` have a
+   reversible disk contract, flex-resize down and back, and prove the endpoint
+   each time. The canary refuses to create a paid resource if the selected
+   target has a smaller disk or is unavailable in `sfo2`. The former `c-2`
+   target is intentionally invalid because its 25 GB disk is smaller than the
+   `c-4` plan's 50 GB disk.
 5. Sanitize and snapshot the server.
 6. Destroy the original exact provider ID.
 7. Recreate from the snapshot with a new provider ID.
