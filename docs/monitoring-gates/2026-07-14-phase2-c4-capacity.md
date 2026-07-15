@@ -56,11 +56,14 @@ zero browser-drop samples, and observed compositor zombie growth of two.
   Chrome uses the configured tmpfs.
 - Export native-or-derived FFmpeg speed plus an explicit availability metric.
 - Initialize labeled browser quality counters even when their delta is zero.
-- Replace manual host CPU/shm calculations with a protected CSV sampler that
-  probes both hosts concurrently against fixed deadlines.
+- Replace manual host CPU/shm calculations with one protected long-lived
+  Python sampler/watcher per host, aligned to fixed UTC deadlines without
+  repeated SSH or container-exec probes.
 - Gate host evidence on count coverage, p95 gap, maximum gap, both window-edge
-  gaps, nearest pre-start baseline, CPU, shared memory, and sampled zombie
-  growth. Retain independent zombie-growth attestation for sub-interval events.
+  gaps, sample lag, nearest pre-start baseline, CPU, and shared memory.
+- Scan `/proc` every 50 ms, preserve bounded PID/PPID/command/fingerprint
+  lifecycle evidence, abort immediately on a new unclassified zombie, and gate
+  exact observer/healthcheck exemptions by duration, count, and rolling rate.
 - Derive admission from the native health signal plus active web-request count,
   export the active/maximum counts, and serialize/reject a second operator start
   locally.
@@ -76,10 +79,70 @@ count was zero, the saved id was absent, WHEP and on-demand branches had drained
 Camera 1 raw remained healthy, compositor zombies were zero, and Courts 2-8
 remained isolated. No StreamRun change was made.
 
+## Rerun measurement correction
+
+The second formal attempt, scheduled for `01:49:23Z` through `02:19:23Z`, was
+aborted as **INADMISSIBLE** at `01:59:27Z`. The five-second host row at
+`01:58:05.249Z` reported three ingest zombies while a separate dwell watcher
+showed only the known baseline `timeout` child. A 100 ms attribution trace then
+proved that repeated SSH and container healthcheck probes were themselves
+creating sub-second exit-to-wait children. The output and unlisted destination
+were stopped in order and idle teardown was verified before further work.
+
+This is a measurement correction, not a relaxed zombie threshold. The revised
+harness removes repeated SSH/PAM and `docker exec` sampling entirely. Each host
+uses one long-lived Python process for aligned CPU/shared-memory samples and
+continuous 50 ms `/proc` evidence. New unclassified processes still fail
+immediately. Exact healthcheck runtime children remain bounded by a two-second
+duration limit, a 16-per-minute rate, and a 480-event 30-minute ceiling.
+
+Idle calibration under
+`~/.config/scorecheck/capacity/zombie-calibration-20260715T024229Z/` passed a
+130-second interior window with `27/27` valid rows, exact five-second cadence,
+maximum sample lag below 50 ms, maximum scan gap below 53 ms, no new
+unclassified process, and two exact approximately 50 ms healthcheck runtime
+events. The one permitted ingest baseline is locked to `timeout` under
+`mediamtx` plus its current cgroup fingerprint; any baseline drift fails.
+
+The first launch under that corrected observer produced a distinct process
+event at `02:57:50.511Z`: direct Chrome briefly left a `chrome` child in `Z`
+state under another Chrome process. The sampler durably recorded the lineage
+and aborted immediately, before YouTube transitioned live. The exact Egress
+was stopped and the attempt was discarded. A sandbox-preserving
+`single-process` calibration repeated the same event because sandboxed Chrome
+still requires its zygote; the candidate was reverted. Disabling the browser
+sandbox solely to avoid a transient process state is rejected. The gate must
+retain raw lifecycle evidence and fail persistent or accumulating workload
+zombies without treating every bounded parent wait interval as a resource
+leak. The corrected contract recognizes only a `chrome` child of `chrome`
+whose ancestry and cgroup both resolve to the Egress container. That lifecycle
+must close within 500 ms, remain single-concurrent, and occur no more than 16
+times total or eight times per rolling minute. Every other new workload process remains
+unclassified and still aborts the sampler immediately.
+
+The first bounded lifecycle calibration also exposed a harness cleanup error:
+the fail-closed path used `SIGKILL` on its SSH transport, and a later watcher
+observed an `sshd` child under `systemd`. Failure shutdown now requests a
+graceful remote watcher exit and reserves `SIGKILL` for a one-second timeout.
+That observer artifact remains preserved in the rejected calibration evidence;
+it is not reclassified as workload behavior. The existing observer contract now
+recognizes only `sshd` children under `sshd` or `systemd`; their lifecycle is
+still bounded by the observer duration, total-count, rolling-rate, and closure
+checks.
+
+The five-minute rate calibration then found seven Egress Chrome waits: one at
+launch and a six-event program-startup burst, all closed within 103 ms and with
+no further event after `03:15:30Z`. Media remained healthy after warmup. The
+calibration's terminal Ctrl-C reached an SSH child before the parent marked it
+intentional, so signal handling now marks and stops both watchers synchronously.
+Formal 30-minute runs use a bounded 35-minute sampler and do not rely on
+terminal interruption.
+
 ## Required rerun
 
 This gate can pass only after deployment provenance is verified and a new full
 30-minute run proves all evaluator checks, including at least 80% host-sample
-coverage, bounded gaps, zero sampled and independently observed zombie growth,
-real shared-memory use, continuously available speed telemetry, a present
-all-zero browser-drop series, and deterministic single-job admission.
+coverage, bounded gaps and lag, the exact process baseline, zero new
+unclassified zombies, bounded/reaped healthcheck children, real shared-memory
+use, continuously available speed telemetry, a present all-zero browser-drop
+series, and deterministic single-job admission.

@@ -1,0 +1,442 @@
+#!/usr/bin/env python3
+
+import argparse
+import hashlib
+import json
+import math
+import os
+import signal
+import sys
+import time
+from datetime import datetime, timezone
+
+
+SCHEMA_VERSION = 1
+ALLOWED_ROLES = {"ingest", "compositor"}
+HEARTBEAT_SECONDS = 1.0
+CACHE_RETENTION_SECONDS = 5.0
+
+
+def utc_now():
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def utc_from_epoch(epoch_seconds):
+    return datetime.fromtimestamp(epoch_seconds, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def fingerprint(value):
+    return hashlib.sha256(value).hexdigest()[:16] if value else None
+
+
+def read_bytes(path):
+    try:
+        with open(path, "rb") as handle:
+            return handle.read()
+    except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
+        return b""
+
+
+def read_text(path):
+    return read_bytes(path).decode("utf-8", "replace")
+
+
+def process_from_proc(pid):
+    raw_stat = read_text(f"/proc/{pid}/stat")
+    closing = raw_stat.rfind(")")
+    opening = raw_stat.find("(")
+    if opening < 0 or closing < opening:
+        return None
+    fields = raw_stat[closing + 2 :].split()
+    if len(fields) < 20:
+        return None
+    try:
+        ppid = int(fields[1])
+        start_ticks = int(fields[19])
+    except ValueError:
+        return None
+    command = raw_stat[opening + 1 : closing][:64]
+    cmdline = read_bytes(f"/proc/{pid}/cmdline").replace(b"\0", b" ").strip()
+    cgroup = read_bytes(f"/proc/{pid}/cgroup")
+    try:
+        executable = os.path.basename(os.readlink(f"/proc/{pid}/exe"))[:64]
+    except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
+        executable = None
+    return {
+        "pid": pid,
+        "ppid": ppid,
+        "state": fields[0],
+        "startTicks": start_ticks,
+        "identity": f"{pid}:{start_ticks}",
+        "command": command,
+        "executable": executable,
+        "commandLine": cmdline,
+        "commandFingerprint": fingerprint(cmdline),
+        "cgroupFingerprint": fingerprint(cgroup),
+    }
+
+
+def scan_processes():
+    processes = {}
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return processes
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        process = process_from_proc(int(entry))
+        if process is not None:
+            processes[process["pid"]] = process
+    for process in processes.values():
+        parent = processes.get(process["ppid"])
+        process["parentCommand"] = parent["command"] if parent else None
+    return processes
+
+
+def direct_classification(process):
+    command = process["command"]
+    parent_command = process.get("parentCommand")
+    cmdline = process.get("commandLine") or b""
+
+    if b"MONITOR_AGENT_BIND" in cmdline and b"/healthz" in cmdline and b"fetch(" in cmdline:
+        return "healthcheck.monitor-agent"
+    if b"curl -fsS http://127.0.0.1:9091/" in cmdline:
+        return "healthcheck.egress"
+    if b"wget -qO- http://127.0.0.1:9997/v3/config/global/get" in cmdline:
+        return "healthcheck.mediamtx"
+    if command == "redis-cli" and cmdline.rstrip().endswith(b" ping"):
+        return "healthcheck.redis"
+    if command == "sshd" and parent_command in {"sshd", "systemd"}:
+        return "observer.capacity-ssh"
+    return None
+
+
+def container_healthcheck_classification(process):
+    cmdline = (process.get("commandLine") or b"").strip()
+    if cmdline == b"npm run start:agent":
+        return "healthcheck.monitor-agent"
+    if cmdline == b"/mediamtx":
+        return "healthcheck.mediamtx"
+    if cmdline == b"/tini -- egress":
+        return "healthcheck.egress"
+    if cmdline == b"redis-server *:6379":
+        return "healthcheck.redis"
+    return None
+
+
+def classification_map(processes):
+    classifications = {}
+    healthcheck_shims = {}
+    egress_inits = []
+    for process in processes.values():
+        if (process.get("commandLine") or b"").strip() == b"/tini -- egress":
+            egress_inits.append(process)
+        parent = processes.get(process["ppid"])
+        if parent is None or parent["command"] != "containerd-shim":
+            continue
+        classification = container_healthcheck_classification(process)
+        if classification is not None:
+            healthcheck_shims[parent["pid"]] = classification
+
+    for process in processes.values():
+        classification = direct_classification(process)
+        if process["command"] == "runc" and process["ppid"] in healthcheck_shims:
+            classification = f"{healthcheck_shims[process['ppid']]}.runtime"
+        if classification is None:
+            continue
+        identity = process["identity"]
+        classifications[identity] = classification
+        parent_pid = process["ppid"]
+        for _ in range(6):
+            parent = processes.get(parent_pid)
+            if parent is None:
+                break
+            if parent["command"] in {"runc", "sh", "bash"}:
+                classifications[parent["identity"]] = f"{classification}.runtime"
+            parent_pid = parent["ppid"]
+
+    for process in processes.values():
+        if process["command"] != "chrome" or process.get("parentCommand") != "chrome":
+            continue
+        for egress_init in egress_inits:
+            if process.get("cgroupFingerprint") != egress_init.get("cgroupFingerprint"):
+                continue
+            if is_descendant(process, egress_init, processes):
+                classifications[process["identity"]] = "workload.egress-chrome"
+                break
+
+    for _ in range(8):
+        changed = False
+        for process in processes.values():
+            if process["identity"] in classifications:
+                continue
+            parent = processes.get(process["ppid"])
+            parent_classification = classifications.get(parent["identity"]) if parent else None
+            if parent_classification is None:
+                continue
+            classifications[process["identity"]] = parent_classification
+            changed = True
+        if not changed:
+            break
+    return classifications
+
+
+def is_descendant(process, ancestor, processes):
+    current = process
+    for _ in range(64):
+        if current["identity"] == ancestor["identity"]:
+            return True
+        current = processes.get(current["ppid"])
+        if current is None:
+            return False
+    return False
+
+
+def safe_process(process, classification, initial_observation):
+    return {
+        "identity": process["identity"],
+        "pid": process["pid"],
+        "ppid": process["ppid"],
+        "state": "Z",
+        "command": process["command"],
+        "parentCommand": process.get("parentCommand"),
+        "executable": process.get("executable"),
+        "commandFingerprint": process.get("commandFingerprint"),
+        "cgroupFingerprint": process.get("cgroupFingerprint"),
+        "classification": classification or "unclassified",
+        "initialObservation": initial_observation,
+    }
+
+
+def emit(role, event, **values):
+    payload = {
+        "schemaVersion": SCHEMA_VERSION,
+        "role": role,
+        "event": event,
+        "observedAt": utc_now(),
+        **values,
+    }
+    sys.stdout.write(json.dumps(payload, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+
+
+def read_cpu_times():
+    lines = read_text("/proc/stat").splitlines()
+    if not lines:
+        return None
+    fields = lines[0].split()
+    if not fields or fields[0] != "cpu" or len(fields) < 6:
+        return None
+    try:
+        values = [int(value) for value in fields[1:]]
+    except ValueError:
+        return None
+    return sum(values), values[3] + values[4]
+
+
+def host_sample(processes, role, previous_cpu, sample_slot_epoch, observed_epoch):
+    current_cpu = read_cpu_times()
+    cpu_ratio = None
+    if current_cpu is not None and previous_cpu is not None:
+        total_delta = current_cpu[0] - previous_cpu[0]
+        idle_delta = current_cpu[1] - previous_cpu[1]
+        if total_delta > 0 and 0 <= idle_delta <= total_delta:
+            cpu_ratio = 1 - (idle_delta / total_delta)
+
+    shm_ratio = 0.0 if role == "ingest" else None
+    if role == "compositor":
+        egress = next(
+            (process for process in processes.values() if (process.get("commandLine") or b"").strip() == b"/tini -- egress"),
+            None,
+        )
+        if egress is not None:
+            try:
+                stats = os.statvfs(f"/proc/{egress['pid']}/root/dev/shm")
+                total = stats.f_blocks * stats.f_frsize
+                available = stats.f_bavail * stats.f_frsize
+                if total > 0 and 0 <= available <= total:
+                    shm_ratio = (total - available) / total
+            except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
+                shm_ratio = None
+
+    sample_ok = cpu_ratio is not None and shm_ratio is not None
+    emit(
+        role,
+        "host_sample",
+        sampleSlotAt=utc_from_epoch(sample_slot_epoch),
+        sampleLagMs=round(max(0, observed_epoch - sample_slot_epoch) * 1000, 3),
+        sampleOk=sample_ok,
+        cpuRatio=round(cpu_ratio, 6) if cpu_ratio is not None else None,
+        shmRatio=round(shm_ratio, 6) if shm_ratio is not None else None,
+    )
+    return current_cpu
+
+
+def run(role, poll_interval_ms, sample_interval_seconds, duration_seconds):
+    stopping = False
+
+    def stop(_signum, _frame):
+        nonlocal stopping
+        stopping = True
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    signal.signal(signal.SIGHUP, stop)
+
+    poll_seconds = poll_interval_ms / 1000
+    started = time.monotonic()
+    last_scan = started
+    next_heartbeat = started + HEARTBEAT_SECONDS
+    maximum_scan_gap_ms = 0.0
+    scan_count = 0
+    process_cache = {}
+    classification_cache = {}
+    active_zombies = {}
+    initial_scan = True
+    previous_cpu = read_cpu_times()
+    next_sample_epoch = (
+        math.floor(time.time() / sample_interval_seconds) + 1
+    ) * sample_interval_seconds if sample_interval_seconds else None
+
+    emit(role, "watcher_started", pollIntervalMs=poll_interval_ms, watcherPid=os.getpid())
+    while not stopping and (duration_seconds == 0 or time.monotonic() - started < duration_seconds):
+        scan_started = time.monotonic()
+        maximum_scan_gap_ms = max(maximum_scan_gap_ms, (scan_started - last_scan) * 1000)
+        last_scan = scan_started
+        processes = scan_processes()
+        scan_count += 1
+        current_classifications = classification_map(processes)
+
+        for process in processes.values():
+            identity = process["identity"]
+            cached = process_cache.get(identity, {})
+            merged = {**cached, **{key: value for key, value in process.items() if value not in (None, b"")}}
+            merged["lastSeenMonotonic"] = scan_started
+            process_cache[identity] = merged
+            if identity in current_classifications:
+                classification_cache[identity] = current_classifications[identity]
+
+        zombies = {
+            process["identity"]: process
+            for process in processes.values()
+            if process["state"] == "Z"
+        }
+        for identity, process in zombies.items():
+            if identity in active_zombies:
+                continue
+            merged = {**process_cache.get(identity, {}), **process}
+            classification = current_classifications.get(identity) or classification_cache.get(identity)
+            active_zombies[identity] = {
+                "openedMonotonic": scan_started,
+                "process": safe_process(merged, classification, initial_scan),
+            }
+            emit(role, "zombie_open", **active_zombies[identity]["process"])
+
+        for identity in list(active_zombies):
+            if identity in zombies:
+                continue
+            opened = active_zombies.pop(identity)
+            emit(
+                role,
+                "zombie_close",
+                identity=identity,
+                durationMs=round((scan_started - opened["openedMonotonic"]) * 1000, 3),
+                classification=opened["process"]["classification"],
+            )
+
+        for identity, process in list(process_cache.items()):
+            if identity not in active_zombies and scan_started - process["lastSeenMonotonic"] > CACHE_RETENTION_SECONDS:
+                process_cache.pop(identity, None)
+                classification_cache.pop(identity, None)
+
+        if scan_started >= next_heartbeat:
+            emit(
+                role,
+                "heartbeat",
+                scanCount=scan_count,
+                activeZombieCount=len(active_zombies),
+                maximumScanGapMs=round(maximum_scan_gap_ms, 3),
+            )
+            maximum_scan_gap_ms = 0.0
+            while next_heartbeat <= scan_started:
+                next_heartbeat += HEARTBEAT_SECONDS
+
+        observed_epoch = time.time()
+        if next_sample_epoch is not None and observed_epoch >= next_sample_epoch:
+            previous_cpu = host_sample(processes, role, previous_cpu, next_sample_epoch, observed_epoch)
+            next_sample_epoch = (math.floor(observed_epoch / sample_interval_seconds) + 1) * sample_interval_seconds
+
+        initial_scan = False
+        elapsed = time.monotonic() - scan_started
+        time.sleep(max(0, poll_seconds - elapsed))
+
+    ended = time.monotonic()
+    for identity, opened in active_zombies.items():
+        emit(
+            role,
+            "zombie_observation_end",
+            identity=identity,
+            durationMs=round((ended - opened["openedMonotonic"]) * 1000, 3),
+            classification=opened["process"]["classification"],
+        )
+    emit(role, "watcher_stopped", scanCount=scan_count, activeZombieCount=len(active_zombies))
+
+
+def self_test():
+    base = {
+        "command": "node",
+        "parentCommand": "runc",
+        "commandLine": b"node -e fetch('http://'+(process.env.MONITOR_AGENT_BIND||'127.0.0.1')+':9108/healthz')",
+    }
+    assert direct_classification(base) == "healthcheck.monitor-agent"
+    assert direct_classification({**base, "commandLine": b"node worker.js"}) is None
+    assert direct_classification({"command": "pactl", "parentCommand": "chrome", "commandLine": b"pactl info"}) is None
+    assert direct_classification({"command": "runc", "parentCommand": "dockerd", "commandLine": b"runc exec"}) is None
+    assert direct_classification({"command": "sshd", "parentCommand": "sshd", "commandLine": b"sshd: root@notty"}) == "observer.capacity-ssh"
+    assert direct_classification({"command": "sshd", "parentCommand": "systemd", "commandLine": b""}) == "observer.capacity-ssh"
+    assert direct_classification({"command": "sshd", "parentCommand": "bash", "commandLine": b"sshd"}) is None
+    assert container_healthcheck_classification({"commandLine": b"npm run start:agent"}) == "healthcheck.monitor-agent"
+    assert container_healthcheck_classification({"commandLine": b"/mediamtx"}) == "healthcheck.mediamtx"
+    assert container_healthcheck_classification({"commandLine": b"/tini -- egress"}) == "healthcheck.egress"
+    assert container_healthcheck_classification({"commandLine": b"redis-server *:6379"}) == "healthcheck.redis"
+    assert container_healthcheck_classification({"commandLine": b"npm run dev"}) is None
+
+    processes = {
+        10: {"pid": 10, "ppid": 1, "identity": "10:1", "command": "tini", "parentCommand": "containerd-shim", "commandLine": b"/tini -- egress", "cgroupFingerprint": "egress"},
+        20: {"pid": 20, "ppid": 10, "identity": "20:2", "command": "chrome", "parentCommand": "tini", "commandLine": b"/opt/google/chrome/chrome", "cgroupFingerprint": "egress"},
+        30: {"pid": 30, "ppid": 20, "identity": "30:3", "command": "chrome", "parentCommand": "chrome", "commandLine": b"", "cgroupFingerprint": "egress"},
+        40: {"pid": 40, "ppid": 20, "identity": "40:4", "command": "chrome", "parentCommand": "chrome", "commandLine": b"", "cgroupFingerprint": "other"},
+    }
+    classifications = classification_map(processes)
+    assert classifications["30:3"] == "workload.egress-chrome"
+    assert "40:4" not in classifications
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--role", choices=sorted(ALLOWED_ROLES))
+    parser.add_argument("--poll-ms", type=int, default=50)
+    parser.add_argument("--sample-interval-seconds", type=int, default=0)
+    parser.add_argument("--duration-seconds", type=float, default=0)
+    parser.add_argument("--self-test", action="store_true")
+    args = parser.parse_args()
+    if args.self_test:
+        return args
+    if args.role is None:
+        parser.error("--role is required")
+    if args.poll_ms < 25 or args.poll_ms > 250:
+        parser.error("--poll-ms must be from 25 through 250")
+    if args.sample_interval_seconds != 0 and not 5 <= args.sample_interval_seconds <= 60:
+        parser.error("--sample-interval-seconds must be zero or from 5 through 60")
+    if args.duration_seconds < 0:
+        parser.error("--duration-seconds must be non-negative")
+    return args
+
+
+if __name__ == "__main__":
+    arguments = parse_args()
+    if arguments.self_test:
+        self_test()
+    else:
+        run(arguments.role, arguments.poll_ms, arguments.sample_interval_seconds, arguments.duration_seconds)

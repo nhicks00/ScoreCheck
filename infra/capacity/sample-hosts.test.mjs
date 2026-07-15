@@ -1,19 +1,27 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { parseRemoteSample } from "./sample-hosts.mjs";
+test("continuous host watcher self-test accepts only exact process signatures", async () => {
+  const result = await run("python3", [fileURLToPath(new URL("./watch-zombies.py", import.meta.url)), "--self-test"]);
+  assert.equal(result.code, 0, result.stderr);
+});
 
-test("parses bounded credential-free remote samples", () => {
-  assert.deepEqual(parseRemoteSample("0.251000,1,0.125000\n"), {
-    cpuRatio: 0.251,
-    zombies: 1,
-    shmRatio: 0.125
+test("host sampler fails closed when required protected outputs are absent", async () => {
+  const result = await run(process.execPath, [fileURLToPath(new URL("./sample-hosts.mjs", import.meta.url))]);
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /--ingest-host is required/);
+});
+
+function run(command, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.once("error", reject);
+    child.once("close", (code) => resolve({ code, stdout, stderr }));
   });
-});
-
-test("rejects malformed remote samples", () => {
-  assert.throws(() => parseRemoteSample("secret=value"), /three fields/);
-  assert.throws(() => parseRemoteSample("2,0,0"), /CPU ratio/);
-  assert.throws(() => parseRemoteSample("0.2,1.5,0"), /zombie count/);
-  assert.throws(() => parseRemoteSample("0.2,0,2"), /shared-memory ratio/);
-});
+}

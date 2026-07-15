@@ -12,8 +12,6 @@
   },
   "assignmentVerified": false,
   "unassignedCourtsUnaffected": false,
-  "ingestZombieGrowth": null,
-  "compositorZombieGrowth": null,
   "egressErrors": null,
   "egressShmEnabled": false
 }
