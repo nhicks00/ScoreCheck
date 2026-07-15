@@ -141,14 +141,14 @@ export class DigitalOceanProvider {
   async waitReservedIpv4Assignment(ip, dropletId) {
     return this.#wait(async () => {
       const address = await this.getReservedIpv4(ip);
-      return String(address.dropletId) === String(dropletId) ? address : null;
+      return String(address.dropletId) === String(dropletId) && !address.locked ? address : null;
     }, `reserved IPv4 ${ip} was not assigned to Droplet ${dropletId}`);
   }
 
   async waitReservedIpv4Unassigned(ip) {
     return this.#wait(async () => {
       const address = await this.getReservedIpv4(ip);
-      return address.dropletId === null ? address : null;
+      return address.dropletId === null && !address.locked ? address : null;
     }, `reserved IPv4 ${ip} was not unassigned`);
   }
 

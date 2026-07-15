@@ -225,6 +225,7 @@ export class LifecycleCanary {
     if (address.region !== config.region || String(address.dropletId) !== String(state.original.id)) {
       throw new Error("new canary Reserved IPv4 has an unexpected region or assignment");
     }
+    address = await this.cloud.waitReservedIpv4Assignment(address.ip, state.original.id);
     state.reservedIpv4 = address;
     await this.#record(state, reconciled ? "reserved-ipv4-reconciled" : "reserved-ipv4-created", {
       ip: address.ip,

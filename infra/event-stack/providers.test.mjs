@@ -86,6 +86,31 @@ test("DigitalOcean creates an attached Reserved IPv4 and polls until a completed
   assert.equal(requests.filter((entry) => entry.url.includes("/images?")).length, 2);
 });
 
+test("DigitalOcean waits for Reserved IPv4 assignment and detachment locks to clear", async () => {
+  const requests = [];
+  const attachedLocked = { ip: "192.0.2.50", region: { slug: "sfo2" }, droplet: { id: 123 }, locked: true };
+  const attachedReady = { ...attachedLocked, locked: false };
+  const detachedLocked = { ...attachedLocked, droplet: null, locked: true };
+  const detachedReady = { ...detachedLocked, locked: false };
+  const provider = new DigitalOceanProvider({
+    token: "token",
+    sshKeys: [],
+    cloudInitPaths: {},
+    fetchImpl: queueFetch([
+      response(200, { reserved_ip: attachedLocked }),
+      response(200, { reserved_ip: attachedReady }),
+      response(200, { reserved_ip: detachedLocked }),
+      response(200, { reserved_ip: detachedReady })
+    ], requests),
+    pollIntervalMs: 1,
+    timeoutMs: 50
+  });
+
+  assert.equal((await provider.waitReservedIpv4Assignment("192.0.2.50", "123")).locked, false);
+  assert.equal((await provider.waitReservedIpv4Unassigned("192.0.2.50")).locked, false);
+  assert.equal(requests.length, 4);
+});
+
 test("Vercel DNS accepts create uid, verifies exact A record and resolver, then deletes by owned id", async () => {
   const requests = [];
   const fetchImpl = queueFetch([

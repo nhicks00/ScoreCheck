@@ -133,6 +133,14 @@ PUSHOVER_APP_TOKEN
 PUSHOVER_USER_KEY
 ```
 
+`DIGITALOCEAN_TOKEN` must be a dedicated lifecycle credential with create,
+read, update, and delete access for Droplets and actions, Reserved IPv4s, tags,
+and images/snapshots. A token that can create but cannot delete is unsafe: the
+build can appear healthy while teardown is impossible. Do not begin an event
+or live canary with a read/create-only token. The isolated canary is the final
+proof that the configured credential can complete the entire delete path; its
+cleanup inventory must pass before that credential is approved for events.
+
 The local deployment secrets directory is mode `0700`; every file in it is mode
 `0600`:
 
@@ -319,6 +327,11 @@ node infra/event-stack/run-lifecycle-canary.mjs run \
 A failed test must still complete exact cleanup and remains classified `FAIL`.
 If the process is interrupted, rerun with the same run ID/evidence path or use
 the `cleanup` subcommand with the same arguments.
+
+DigitalOcean may return an attached Reserved IPv4 while its assignment or
+detachment is still locked. Both the assignment and deletion paths wait for the
+exact address to report `locked=false`; an unassigned-but-locked address is not
+considered safe to delete.
 
 ## Cost model
 
