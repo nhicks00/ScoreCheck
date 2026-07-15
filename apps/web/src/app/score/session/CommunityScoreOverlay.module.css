@@ -298,26 +298,34 @@
     backdrop-filter: blur(12px);
     background: rgba(3, 11, 21, 0.82);
     border: 1px solid rgba(255, 255, 255, 0.3);
-    border-radius: 12px;
+    border-radius: 10px;
     left: 50%;
-    max-width: min(32vw, 240px);
-    padding: 6px 12px;
+    max-width: clamp(84px, 10vw, 116px);
+    padding: 3px;
     pointer-events: auto;
     top: max(8px, env(safe-area-inset-top));
     transform: translateX(-50%);
+    width: 100%;
+  }
+
+  .matchSummary > span,
+  .matchSummary small {
+    display: none;
   }
 
   .matchSummary strong {
-    font-size: clamp(28px, 6.5vh, 48px);
+    font-size: clamp(20px, 5vh, 30px);
+    line-height: 1;
   }
 
   .setSelector {
-    font-size: clamp(26px, 5.8vh, 44px);
+    background: transparent;
+    border: 0;
+    border-radius: 7px;
+    font-size: clamp(18px, 4.6vh, 28px);
     min-height: 44px;
-  }
-
-  .matchSummary small {
-    font-size: clamp(9px, 2vh, 12px);
+    padding: 0 4px;
+    width: 100%;
   }
 
   .teamDocks {
@@ -339,17 +347,27 @@
   }
 
   .teamDock {
-    max-width: clamp(168px, 23vw, 240px);
+    gap: 7px;
+    max-width: clamp(142px, 17vw, 220px);
+    padding: 10px;
     pointer-events: auto;
     width: 100%;
   }
 
+  .teamIdentity {
+    flex-direction: column;
+    gap: 2px;
+    justify-content: center;
+  }
+
   .teamActions {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .teamActions svg {
-    display: none;
+    display: block;
+    flex: 0 0 auto;
   }
 
   .teamDock:first-child {
@@ -361,20 +379,23 @@
   }
 
   .teamIdentity h2 {
-    font-size: clamp(10px, 2.3vw, 17px);
+    font-size: clamp(10px, 1.3vw, 15px);
+    text-align: center;
+    width: 100%;
   }
 
   .teamIdentity output {
-    font-size: clamp(38px, 11vh, 68px);
+    font-size: clamp(40px, 9vh, 58px);
+    line-height: 0.82;
   }
 
   .addPoint {
-    font-size: clamp(12px, 2.1vw, 15px);
-    min-height: 44px;
+    font-size: clamp(13px, 1.4vw, 15px);
+    min-height: 48px;
   }
 
   .removePoint {
-    font-size: clamp(11px, 1.8vw, 13px);
+    font-size: clamp(12px, 1.2vw, 13px);
     min-height: 44px;
   }
 
@@ -391,7 +412,7 @@
   }
 
   .controlsBottom .utilityCluster {
-    top: max(100px, calc(env(safe-area-inset-top) + 100px));
+    top: max(68px, calc(env(safe-area-inset-top) + 68px));
   }
 }
 
@@ -408,8 +429,23 @@
     padding: 6px;
   }
 
+  .teamIdentity {
+    flex-direction: row;
+    gap: 5px;
+    justify-content: space-between;
+  }
+
+  .teamIdentity h2 {
+    font-size: clamp(10px, 1.9vw, 12px);
+    text-align: left;
+  }
+
   .teamIdentity output {
-    font-size: clamp(34px, 10vh, 48px);
+    font-size: clamp(34px, 9vh, 42px);
+  }
+
+  .teamActions {
+    gap: 5px;
   }
 
   .addPoint {
@@ -439,6 +475,18 @@
 }
 
 @media (orientation: landscape) and (max-height: 430px) and (max-width: 640px) {
+  .teamDock {
+    max-width: clamp(168px, 23vw, 194px);
+  }
+
+  .teamActions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .teamActions svg {
+    display: none;
+  }
+
   .utilityLabel {
     clip: rect(0 0 0 0);
     clip-path: inset(50%);

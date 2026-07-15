@@ -91,6 +91,8 @@ describe("community watch focus layout", () => {
     expect(compactRules).toContain("min-height: 44px");
     expect(compactRules).not.toContain(".utilityLabel");
     expect(narrowRules).toContain(".utilityLabel");
+    expect(narrowRules).toContain("grid-template-columns: repeat(2, minmax(0, 1fr))");
+    expect(narrowRules).toContain("max-width: clamp(168px, 23vw, 194px)");
     const videoControlsStart = globalStylesheet.indexOf(
       ".scoring-stream-preview .scoring-video-controls button {"
     );
@@ -106,7 +108,7 @@ describe("community watch focus layout", () => {
     expect(scorerStylesheet.slice(recoveryStart, recoveryEnd)).toContain("min-height: 44px");
   });
 
-  it("compacts score actions without reducing their 44px minimum hit area", () => {
+  it("matches the reference-sized landscape docks and keeps a compact 44px set selector", () => {
     const watchControlsStart = scorerStylesheet.indexOf(".watchDensity .contributionControls {");
     const watchAddStart = scorerStylesheet.indexOf(".watchDensity .addPoint {");
     const watchRemoveStart = scorerStylesheet.indexOf(".watchDensity .removePoint {");
@@ -121,9 +123,12 @@ describe("community watch focus layout", () => {
     expect(scorerStylesheet.slice(watchAddStart, watchRemoveStart)).toContain("min-height: 52px");
     expect(scorerStylesheet.slice(watchRemoveStart, scorerStylesheet.indexOf("}", watchRemoveStart) + 1))
       .toContain("min-height: 44px");
-    expect(overlayLandscapeRules).toContain("grid-template-columns: repeat(2, minmax(0, 1fr))");
-    expect(overlayLandscapeRules).toContain("max-width: clamp(168px, 23vw, 240px)");
-    expect(overlayLandscapeRules).toContain("top: max(100px, calc(env(safe-area-inset-top) + 100px))");
+    expect(overlayLandscapeRules).toContain("grid-template-columns: minmax(0, 1fr)");
+    expect(overlayLandscapeRules).toContain("max-width: clamp(142px, 17vw, 220px)");
+    expect(overlayLandscapeRules).toContain("max-width: clamp(84px, 10vw, 116px)");
+    expect(overlayLandscapeRules).toContain("top: max(68px, calc(env(safe-area-inset-top) + 68px))");
+    expect(overlayLandscapeRules).toContain(".matchSummary > span,");
+    expect(overlayLandscapeRules).toContain("display: none");
     expect(overlayLandscapeRules).toContain("min-height: 44px");
     expect(overlayStylesheet).toContain("overflow-wrap: anywhere");
   });

@@ -2,44 +2,45 @@
 
 ## Evidence
 
-- Source visual truth: `docs/design/community-overlay-selected-top.png`
-- Final compact implementation screenshot: `docs/design/community-overlay-qa/23-compact-landscape-top-844x390.png`
-- Pre-compaction source/implementation comparison: `docs/design/community-overlay-qa/18-final-landscape-comparison.png`
-- Pre-compaction focused-controls comparison: `docs/design/community-overlay-qa/19-final-controls-comparison.png`
-- Compact responsive evidence: `docs/design/community-overlay-qa/20-compact-landscape-top-568x320.png`, `21-compact-focus-320x480.png`, `22-compact-windowed-phone-390x844.png`, and `24-compact-landscape-bottom-568x320.png`
+- Source visual truth: `docs/design/community-overlay-qa/25-corner-controls-reference.jpg`
+- Final reference-sized implementation screenshot: `docs/design/community-overlay-qa/26-reference-sized-corners-1280x592.png`
+- Final same-viewport comparison: `docs/design/community-overlay-qa/27-corner-controls-reference-comparison.png`
+- Final focused-controls comparison: `docs/design/community-overlay-qa/28-corner-controls-focused-comparison.png`
+- Final responsive evidence: `docs/design/community-overlay-qa/29-reference-corners-844x390.png`, `30-reference-corners-568x320.png`, `31-reference-corners-bottom-568x320.png`, and `32-reference-corners-320x480.png`
 - Required responsive states: `docs/design/community-overlay-qa/10-focus-narrow-video-rail-320x480.png`, `11-focus-landscape-top-568x320.png`, `12-focus-landscape-bottom-568x320.png`, `13-focus-tablet-768x1024.png`, `14-focus-desktop-top-1440x900.png`, `15-windowed-desktop-1440x900.png`, and `16-windowed-phone-390x844.png`
 - Route under test: a temporary local fixture around the shipping `CommunityWatchAndScore` component. The fixture route was removed after QA.
 - Primary state: Court 4 / Match 12, Set 2, Basey / Hurst 18, Caldwell / Labouliere 16, Rally 38 awaiting resolution.
 
 ## Final comparison findings
 
-- Typography: prominent tabular scores, the current set, real team names, explicit Add point and Remove point labels, and compact utility labels preserve the selected direction's hierarchy. Long names wrap without separating identity from the score controls.
-- Spacing and layout: the complete 16:9 match image remains contained at every checked size. Portrait uses video above scoring; landscape focus places paired team docks over opposite video corners; desktop windowed mode uses a stable video/scorer split.
+- Typography: prominent tabular scores, real team names, explicit Add point and Remove point labels, and compact utility labels preserve the selected direction's hierarchy. Landscape reduces the center copy to a single `Set 2` selector; its accessible name remains `Official current set`.
+- Spacing and layout: at 1280 x 592, each corner dock is 217.6 x 188.9 px, nearly matching the reference's approximately 208–222 x 195–200 px footprint. Add point is 195.6 x 48 px and Remove point is 195.6 x 44 px. The center surface is only 116 x 52 px, about 69 percent less area than the reference's 244 x 80 px information card. The complete 16:9 match image remains contained at every checked size.
 - Colors: the blue/red action identity, dark translucent surfaces, white totals, and high-contrast correction outlines match the source direction and existing ScoreCheck palette.
 - Image quality: the source frame uses `object-fit: contain`, so neither left nor right court edges are cropped. Black gutters are intentional whenever device and source aspect ratios differ.
 - Copy: all score inputs describe the resulting action. There is no Unsure, No point, or latency identifier. The latest contribution receipt is factual and collective rather than competitive.
-- The selected source's `Live · low latency` bubble was intentionally omitted at the user's direction. Latency remains an operational qualification signal, not information a scorekeeper must interpret.
+- The reference's visible `Current set`, court/match detail, and latency bubble are intentionally omitted from landscape focus. The set remains visible and configurable; portrait retains the richer set context below the video because it does not obstruct the match.
 - The live match image itself is dynamic and is not a fidelity target; containment, placement, contrast, control hierarchy, and responsive geometry are the fidelity surfaces.
 
 No P0, P1, or P2 visual mismatch remains.
 
 ## Responsive measurements
 
-- 320 x 480 narrow portrait: video is 320 x 180, horizontal overflow is hidden, and each 149.5 px team dock is about 97 px tall. Add point and Remove point share one row at 44 px high with a 6 px separation; explicit labels remain visible and remaining utilities stay reachable in the bounded vertical scroll.
+- 1280 x 592 desktop landscape: each team dock is 217.6 x 188.9 px; Add point is 48 px high, Remove point is 44 px high, and the selectable center set surface is 116 x 52 px. The document is exactly viewport-sized with no overflow.
+- 320 x 480 narrow portrait: video is exactly 320 x 180 with the whole frame visible, all four scoring actions are 44 px high, the receipt ends at 472.7 px, and the document remains exactly 320 x 480 without horizontal or vertical overflow.
 - 390 x 844 phone portrait: video is 390 x 219.375 with the scorer below it; Add point is 52 px high and Remove point is 44 px high, reducing the two-action block by roughly 24 px. The landscape-only position control is hidden because top/bottom corners have no meaning in this presentation.
-- 568 x 320 phone landscape: video is 568 x 319.5. Both action buttons are 44 px high in approximately 90 px team docks. Top placement leaves 45 px between each dock and the set summary; bottom placement leaves 10 px between the set summary and utility cluster and more than 34 px before the team docks.
-- 844 x 390 wide-phone landscape: video is 693.328 x 389.984, centered with black gutters. Both score actions are 44 px high in 194 px-wide docks measuring about 93–99 px tall, and full utility labels remain visible.
+- 568 x 320 phone landscape: team docks are 168 x 89.9 px. Add point and Remove point share a row at 74.5 x 44 px with a 5 px gap. Top and bottom positions both avoid the compact 84 x 52 px set surface and utility cluster; the document remains exactly viewport-sized.
+- 844 x 390 wide-phone landscape: team docks are approximately 143.5 x 139.8 px with stacked 44 px actions, leaving substantially more match visible than the reference-sized desktop arrangement. The set surface is approximately 84.4 x 52 px.
 - 768 x 1024 tablet portrait: video is 768 x 432 above the full-width scorer without horizontal overflow.
 - 1440 x 900 desktop focus: video is 1440 x 810, centered vertically with the entire 16:9 frame visible. Windowed desktop uses the video/scorer split; windowed phone stacks them.
 
 ## Interaction and accessibility verification
 
-- Selecting Set 3 changed the fixture's canonical set while retaining court, match, teams, and scores. In the shipping flow this command is revisioned and restricted to the active designated primary scorer or an admin; remote designation also requires the qualified owned court feed.
+- Selecting Set 3 changed the compact selector to `Set 3`; selecting Set 2 restored it. In the shipping flow this command is revisioned and restricted to the active designated primary scorer or an admin; remote designation also requires the qualified owned court feed.
 - Switch sides exchanged the complete visual team panels while preserving canonical A/B action identity. Adding a point after the switch changed only the selected real team from 18 to 19.
 - Moving controls relocated both team docks together. The top preference persisted through reload at 1440 x 900.
 - Escape closed focus mode and restored keyboard focus to Full screen scoring. The focus query includes enabled selects and filters out controls that have no rendered client rectangles.
 - Native buttons, a named set selector, headings, score outputs, status/live regions, safe-area padding, reduced-motion handling, and at least 44 px compact scoring targets are present.
-- Final in-app browser warning/error log after responsive and Escape testing: empty. The local Next development server emitted only its known cross-origin development warning because the temporary fixture was opened through `127.0.0.1`; no fixture code ships.
+- Final in-app browser warning/error log after responsive and selector testing: empty. Only React development and hot-refresh informational messages were present; no fixture code ships.
 
 ## Comparison history
 
@@ -48,5 +49,6 @@ No P0, P1, or P2 visual mismatch remains.
 3. Responsive adversarial pass: `07-focus-portrait-390x844.png` through `16-windowed-phone-390x844.png`. The player rail became orientation- and team-position-aware, the 320 px scroll path was verified, and top/bottom persistence plus desktop/windowed composition were exercised.
 4. Final same-state comparison: `17-final-landscape-top-844x390.png`, `18-final-landscape-comparison.png`, and `19-final-controls-comparison.png`. No P0, P1, or P2 issue remained.
 5. Compact controls pass: `20-compact-landscape-top-568x320.png` through `24-compact-landscape-bottom-568x320.png`. Windowed action stacks became 52/44 px, landscape actions moved into one 44 px row, and 320 px portrait docks became about 97 px tall without horizontal overflow or sub-44 px targets. Saving-state labels were shortened to Adding… and Removing… so they remain legible inside the compact controls.
+6. Reference-geometry pass: `25-corner-controls-reference.jpg` through `32-reference-corners-320x480.png`. Taller landscape team docks now match the supplied corner-control footprint, while the center landscape card became a 116 x 52 px set-only selector. Short landscape adapts to smaller docks, and 568 x 320 uses side-by-side 44 px actions to prevent the controls from consuming excessive video height.
 
 final result: passed
