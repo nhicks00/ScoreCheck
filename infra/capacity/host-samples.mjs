@@ -1,9 +1,9 @@
 const HEADER = [
   "sampled_at",
   "ingest_cpu_ratio",
-  "ingest_zombies",
+  "ingest_sample_lag_ms",
   "compositor_cpu_ratio",
-  "compositor_zombies",
+  "compositor_sample_lag_ms",
   "egress_shm_ratio",
   "sample_ok"
 ];
@@ -28,9 +28,9 @@ export function parseHostSamplesCsv(text) {
       sampledAt: new Date(sampledAtMs).toISOString(),
       sampledAtMs,
       ingestCpuRatio: finiteNumber(fields[1]),
-      ingestZombies: nonnegativeInteger(fields[2]),
+      ingestSampleLagMs: finiteNumber(fields[2]),
       compositorCpuRatio: finiteNumber(fields[3]),
-      compositorZombies: nonnegativeInteger(fields[4]),
+      compositorSampleLagMs: finiteNumber(fields[4]),
       egressShmRatio: finiteNumber(fields[5]),
       sampleOk: fields[6] === "1"
     };
@@ -73,14 +73,12 @@ export function summarizeHostSamples(rows, { startEpochSeconds, endEpochSeconds,
     baselineAgeSeconds: baseline ? (startMs - baseline.sampledAtMs) / 1_000 : null,
     ingestHostCpuP95Ratio: percentile(validRows.map((row) => row.ingestCpuRatio), 0.95),
     ingestHostCpuMaxRatio: maximum(validRows.map((row) => row.ingestCpuRatio)),
-    ingestZombieBaseline: baseline?.ingestZombies ?? null,
-    ingestZombieMaximum: maximum(validRows.map((row) => row.ingestZombies)),
-    ingestZombieGrowth: zombieGrowth(baseline?.ingestZombies, validRows.map((row) => row.ingestZombies)),
+    ingestSampleLagP95Ms: percentile(validRows.map((row) => row.ingestSampleLagMs), 0.95),
+    ingestSampleLagMaxMs: maximum(validRows.map((row) => row.ingestSampleLagMs)),
     compositorHostCpuP95Ratio: percentile(validRows.map((row) => row.compositorCpuRatio), 0.95),
     compositorHostCpuMaxRatio: maximum(validRows.map((row) => row.compositorCpuRatio)),
-    compositorZombieBaseline: baseline?.compositorZombies ?? null,
-    compositorZombieMaximum: maximum(validRows.map((row) => row.compositorZombies)),
-    compositorZombieGrowth: zombieGrowth(baseline?.compositorZombies, validRows.map((row) => row.compositorZombies)),
+    compositorSampleLagP95Ms: percentile(validRows.map((row) => row.compositorSampleLagMs), 0.95),
+    compositorSampleLagMaxMs: maximum(validRows.map((row) => row.compositorSampleLagMs)),
     egressShmMaxRatio: maximum(validRows.map((row) => row.egressShmRatio))
   };
 }
@@ -88,12 +86,14 @@ export function summarizeHostSamples(rows, { startEpochSeconds, endEpochSeconds,
 function validRow(row) {
   return row.sampleOk
     && Number.isFinite(row.ingestCpuRatio)
-    && Number.isInteger(row.ingestZombies)
+    && Number.isFinite(row.ingestSampleLagMs)
     && Number.isFinite(row.compositorCpuRatio)
-    && Number.isInteger(row.compositorZombies)
+    && Number.isFinite(row.compositorSampleLagMs)
     && Number.isFinite(row.egressShmRatio)
     && row.ingestCpuRatio >= 0
+    && row.ingestSampleLagMs >= 0
     && row.compositorCpuRatio >= 0
+    && row.compositorSampleLagMs >= 0
     && row.egressShmRatio >= 0;
 }
 
@@ -101,11 +101,6 @@ function finiteNumber(value) {
   if (value.trim() === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
-}
-
-function nonnegativeInteger(value) {
-  const parsed = finiteNumber(value);
-  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function percentile(values, fraction) {
@@ -116,10 +111,4 @@ function percentile(values, fraction) {
 
 function maximum(values) {
   return values.length > 0 ? Math.max(...values) : null;
-}
-
-function zombieGrowth(baseline, values) {
-  const maximumValue = maximum(values);
-  if (!Number.isInteger(baseline) || maximumValue == null) return null;
-  return Math.max(0, maximumValue - baseline);
 }

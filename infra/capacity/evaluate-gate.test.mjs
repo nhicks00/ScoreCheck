@@ -35,13 +35,13 @@ test("builds bounded allowlisted queries", () => {
 test("rejects missing hard acceptance thresholds", () => {
   const gateConfig = config();
   delete gateConfig.thresholds.maximumShmRatio;
-  assert.throws(() => evaluateEvidence(gateConfig, healthyEvidence(config()), attestations(), hostEvidence()), /maximumShmRatio is required/);
+  assert.throws(() => evaluateEvidence(gateConfig, healthyEvidence(config()), attestations(), hostEvidence(), zombieEvidence()), /maximumShmRatio is required/);
 });
 
 test("passes complete healthy evidence", () => {
   const gateConfig = config();
   const evidence = healthyEvidence(gateConfig);
-  const report = evaluateEvidence(gateConfig, evidence, attestations(), hostEvidence());
+  const report = evaluateEvidence(gateConfig, evidence, attestations(), hostEvidence(), zombieEvidence());
   assert.equal(report.verdict, "PASS");
   assert.equal(report.checks.filter((check) => !check.pass).length, 0);
 });
@@ -53,16 +53,24 @@ test("fails on browser loss, CPU saturation, zombie growth, or missing attestati
   evidence.series.ingest_cpu = series([3.3, 3.3, 3.3, 3.3, 3.3]);
   const report = evaluateEvidence(gateConfig, evidence, {
     ...attestations(),
-    ingestZombieGrowth: 2,
     egressShmEnabled: false,
     observedSourceProfile: { ...attestations().observedSourceProfile, videoCodec: "H265" }
-  }, { ...hostEvidence(), ingestZombieGrowth: 2, coverageRatio: 0.6 });
+  }, { ...hostEvidence(), coverageRatio: 0.6 }, {
+    ...zombieEvidence(),
+    roles: {
+      ...zombieEvidence().roles,
+      ingest: {
+        ...zombieEvidence().roles.ingest,
+        newUnclassifiedCount: 1,
+        newUnclassifiedEvents: [{ identity: "123:456", command: "pactl", classification: "unclassified" }]
+      }
+    }
+  });
   assert.equal(report.verdict, "FAIL");
   const failed = new Set(report.checks.filter((check) => !check.pass).map((check) => check.id));
   assert(failed.has("browser_drop_ratio"));
   assert(failed.has("ingest_cpu_max"));
-  assert(failed.has("ingest_observed_zombie_growth"));
-  assert(failed.has("ingest_sampled_zombie_growth"));
+  assert(failed.has("ingest_new_unclassified_zombies"));
   assert(failed.has("host_sample_coverage"));
   assert(failed.has("egress_shm_enabled"));
   assert(failed.has("source_profile_videoCodec"));
@@ -73,10 +81,12 @@ test("CLI queries Prometheus and writes a protected credential-free report", asy
   const configPath = join(directory, "config.json");
   const attestationPath = join(directory, "attestations.json");
   const hostSamplesPath = join(directory, "host-samples.csv");
+  const zombieEventsPath = join(directory, "zombie-events.ndjson");
   const outputPath = join(directory, "report.json");
   await writeFile(configPath, JSON.stringify(config()));
   await writeFile(attestationPath, JSON.stringify({ ...attestations(), ignoredSecret: "must-not-survive" }));
   await writeFile(hostSamplesPath, healthyHostSamplesCsv());
+  await writeFile(zombieEventsPath, healthyZombieEventsNdjson());
 
   const server = createServer((request, response) => {
     assert.equal(request.headers.authorization, "Bearer test-only-token");
@@ -95,6 +105,7 @@ test("CLI queries Prometheus and writes a protected credential-free report", asy
       "--config", configPath,
       "--attestations", attestationPath,
       "--host-samples", hostSamplesPath,
+      "--zombie-events", zombieEventsPath,
       "--prometheus-url", `http://127.0.0.1:${address.port}`,
       "--start", "1970-01-01T00:00:00Z",
       "--end", "1970-01-01T00:00:25Z",
@@ -118,7 +129,7 @@ test("CLI queries Prometheus and writes a protected credential-free report", asy
 
 function config() {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     gateId: "court1-c4",
     court: 1,
     minimumDurationSeconds: 20,
@@ -127,6 +138,7 @@ function config() {
     requiredBranches: ["raw", "preview", "program"],
     ffmpegBranches: ["preview", "program"],
     expectedSourceProfile: sourceProfile(),
+    allowedBaselineUnclassified: { ingest: [], compositor: [] },
     ingest: { agent: "ingest-a", service: "mediamtx", vcpus: 4 },
     compositor: { agent: "compositor-a", service: "bvm-egress", vcpus: 4 },
     requireBrowser: true,
@@ -143,7 +155,14 @@ function config() {
       maximumCpuRatio: 0.8,
       maximumMemoryGrowthRatio: 0.1,
       maximumHostSampleGapSeconds: 7.5,
-      maximumShmRatio: 0.8
+      maximumHostSampleLagMs: 500,
+      maximumShmRatio: 0.8,
+      maximumZombieWatcherHeartbeatGapSeconds: 2,
+      maximumZombieWatcherScanGapMs: 250,
+      maximumZombiePollIntervalMs: 50,
+      maximumObserverZombieDurationMs: 2_000,
+      maximumObserverZombieEvents: 100,
+      maximumObserverZombieEventsPerMinute: 20
     }
   };
 }
@@ -153,8 +172,6 @@ function attestations() {
     observedSourceProfile: sourceProfile(),
     assignmentVerified: true,
     unassignedCourtsUnaffected: true,
-    ingestZombieGrowth: 0,
-    compositorZombieGrowth: 0,
     egressErrors: 0,
     egressShmEnabled: true
   };
@@ -168,12 +185,14 @@ function hostEvidence() {
     startEdgeGapSeconds: 0,
     endEdgeGapSeconds: 0,
     baselineAgeSeconds: 5,
-    ingestZombieGrowth: 0,
+    ingestSampleLagP95Ms: 20,
+    ingestSampleLagMaxMs: 25,
     ingestHostCpuP95Ratio: 0.6,
     ingestHostCpuMaxRatio: 0.7,
-    compositorZombieGrowth: 0,
     compositorHostCpuP95Ratio: 0.55,
     compositorHostCpuMaxRatio: 0.65,
+    compositorSampleLagP95Ms: 22,
+    compositorSampleLagMaxMs: 30,
     egressShmMaxRatio: 0.4
   };
 }
@@ -185,11 +204,29 @@ test("fails clustered host samples that conceal a long blind spot", () => {
     coverageRatio: 1,
     p95GapSeconds: 5,
     maxGapSeconds: 30
-  });
+  }, zombieEvidence());
   const failed = new Set(report.checks.filter((check) => !check.pass).map((check) => check.id));
   assert(failed.has("host_sample_gap_max"));
   assert(!failed.has("host_sample_coverage"));
   assert(!failed.has("host_sample_gap_p95"));
+});
+
+test("fails when a pre-existing zombie does not match the exact baseline allowlist", () => {
+  const gateConfig = config();
+  const baseline = {
+    command: "timeout",
+    parentCommand: "mediamtx",
+    cgroupFingerprint: "480b4be510e9d52c"
+  };
+  const processEvidence = zombieEvidence();
+  processEvidence.roles.ingest.baselineUnclassifiedCount = 1;
+  processEvidence.roles.ingest.baselineUnclassifiedEvents = [baseline];
+  const report = evaluateEvidence(gateConfig, healthyEvidence(gateConfig), attestations(), hostEvidence(), processEvidence);
+  const failed = new Set(report.checks.filter((check) => !check.pass).map((check) => check.id));
+  assert(failed.has("ingest_baseline_unclassified_zombies"));
+
+  gateConfig.allowedBaselineUnclassified.ingest = [baseline];
+  assert.equal(evaluateEvidence(gateConfig, healthyEvidence(gateConfig), attestations(), hostEvidence(), processEvidence).verdict, "PASS");
 });
 
 test("fails uncovered host-sample window edges independently of count coverage", () => {
@@ -199,7 +236,7 @@ test("fails uncovered host-sample window edges independently of count coverage",
     coverageRatio: 1,
     startEdgeGapSeconds: 8,
     endEdgeGapSeconds: 9
-  });
+  }, zombieEvidence());
   const failed = new Set(report.checks.filter((check) => !check.pass).map((check) => check.id));
   assert(failed.has("host_sample_start_edge_gap"));
   assert(failed.has("host_sample_end_edge_gap"));
@@ -209,12 +246,53 @@ test("fails uncovered host-sample window edges independently of count coverage",
 function healthyHostSamplesCsv() {
   const rows = [];
   for (let second = -5; second <= 25; second += 5) {
-    rows.push(`${new Date(second * 1_000).toISOString()},0.4,1,0.5,0,0.4,1`);
+    rows.push(`${new Date(second * 1_000).toISOString()},0.4,20,0.5,25,0.4,1`);
   }
   return [
-    "sampled_at,ingest_cpu_ratio,ingest_zombies,compositor_cpu_ratio,compositor_zombies,egress_shm_ratio,sample_ok",
+    "sampled_at,ingest_cpu_ratio,ingest_sample_lag_ms,compositor_cpu_ratio,compositor_sample_lag_ms,egress_shm_ratio,sample_ok",
     ...rows
   ].join("\n");
+}
+
+function zombieEvidence() {
+  const role = {
+    watcherStartedAt: "1969-12-31T23:59:58.000Z",
+    pollIntervalMs: 50,
+    watcherRestarts: 0,
+    watcherStops: 0,
+    heartbeatSamples: 26,
+    startEdgeGapSeconds: 1,
+    endEdgeGapSeconds: 0,
+    maximumHeartbeatGapSeconds: 1,
+    maximumScanGapMs: 55,
+    baselineUnclassifiedCount: 0,
+    baselineUnclassifiedIdentities: [],
+    baselineUnclassifiedEvents: [],
+    newUnclassifiedCount: 0,
+    newUnclassifiedEvents: [],
+    observerEventCount: 0,
+    observerClassifications: {},
+    observerMaximumDurationMs: null,
+    observerMaximumRollingMinuteCount: 0,
+    maximumConcurrentZombies: 0,
+    unclosedObserverCount: 0,
+    orphanCloseCount: 0
+  };
+  return { schemaVersion: 1, roles: { ingest: { ...role }, compositor: { ...role } } };
+}
+
+function healthyZombieEventsNdjson() {
+  const events = [];
+  for (const [index, role] of ["ingest", "compositor"].entries()) {
+    events.push({ schemaVersion: 1, role, event: "watcher_started", observedAt: new Date(-2_000).toISOString(), pollIntervalMs: 50, watcherPid: 900 + index });
+    for (let second = -1; second <= 26; second += 1) {
+      events.push({ schemaVersion: 1, role, event: "heartbeat", observedAt: new Date(second * 1_000).toISOString(), scanCount: second + 2, activeZombieCount: 0, maximumScanGapMs: 55 });
+    }
+  }
+  return events
+    .sort((left, right) => Date.parse(left.observedAt) - Date.parse(right.observedAt))
+    .map((event) => JSON.stringify(event))
+    .join("\n");
 }
 
 function sourceProfile() {

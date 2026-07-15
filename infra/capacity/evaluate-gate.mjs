@@ -3,6 +3,7 @@
 import { chmod, readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { parseHostSamplesCsv, summarizeHostSamples } from "./host-samples.mjs";
+import { parseZombieEventsNdjson, summarizeZombieEvents } from "./zombie-evidence.mjs";
 
 const LABEL_VALUE = /^[a-zA-Z0-9_.:-]{1,80}$/;
 
@@ -93,7 +94,7 @@ function addServiceQueries(queries, prefix, host) {
 }
 
 function assertConfig(config) {
-  if (config.schemaVersion !== 1) throw new Error("capacity gate config schemaVersion must be 1");
+  if (config.schemaVersion !== 2) throw new Error("capacity gate config schemaVersion must be 2");
   label("gateId", config.gateId);
   if (!Number.isInteger(config.court) || config.court < 1 || config.court > 8) throw new Error("court must be an integer from 1 through 8");
   if (!Array.isArray(config.requiredBranches) || !config.requiredBranches.includes("raw")) throw new Error("requiredBranches must include raw");
@@ -103,6 +104,7 @@ function assertConfig(config) {
   assertHost("ingest", config.ingest);
   if (config.compositor) assertHost("compositor", config.compositor);
   assertSourceProfile(config.expectedSourceProfile);
+  assertBaselineAllowlist(config.allowedBaselineUnclassified);
   if (config.requireBrowser && !config.compositor) throw new Error("requireBrowser requires a compositor");
   if (config.minimumDurationSeconds <= config.warmupSeconds) throw new Error("minimumDurationSeconds must exceed warmupSeconds");
   if (config.stepSeconds < 1 || config.stepSeconds > 60) throw new Error("stepSeconds must be from 1 through 60");
@@ -114,13 +116,38 @@ function assertConfig(config) {
     "minimumFfmpegFps", "minimumFfmpegSpeed", "minimumBrowserFps",
     "maximumBrowserDropRatio", "maximumBrowserFreezeRatio", "maximumCpuP95Ratio",
     "maximumCpuRatio", "maximumMemoryGrowthRatio", "maximumShmRatio",
-    "maximumHostSampleGapSeconds"
+    "maximumHostSampleGapSeconds", "maximumHostSampleLagMs", "maximumZombieWatcherHeartbeatGapSeconds",
+    "maximumZombieWatcherScanGapMs", "maximumZombiePollIntervalMs",
+    "maximumObserverZombieDurationMs", "maximumObserverZombieEvents",
+    "maximumObserverZombieEventsPerMinute"
   ]) {
     if (!Number.isFinite(config.thresholds?.[required])) throw new Error(`threshold ${required} is required`);
   }
   if (config.thresholds.minimumSampleCoverageRatio > 1 || config.thresholds.minimumActiveRatio > 1) throw new Error("coverage ratios cannot exceed 1");
   if (config.thresholds.maximumCpuP95Ratio > config.thresholds.maximumCpuRatio) throw new Error("maximumCpuP95Ratio cannot exceed maximumCpuRatio");
   if (config.thresholds.maximumHostSampleGapSeconds < config.stepSeconds) throw new Error("maximumHostSampleGapSeconds cannot be less than stepSeconds");
+  if (config.thresholds.maximumZombiePollIntervalMs < 25 || config.thresholds.maximumZombiePollIntervalMs > 250) throw new Error("maximumZombiePollIntervalMs must be from 25 through 250");
+  if (!Number.isInteger(config.thresholds.maximumObserverZombieEvents) || !Number.isInteger(config.thresholds.maximumObserverZombieEventsPerMinute)) throw new Error("observer zombie thresholds must be integers");
+}
+
+function assertBaselineAllowlist(allowlist) {
+  if (!allowlist || typeof allowlist !== "object") throw new Error("allowedBaselineUnclassified is required");
+  for (const role of ["ingest", "compositor"]) {
+    if (!Array.isArray(allowlist[role])) throw new Error(`allowedBaselineUnclassified.${role} must be an array`);
+    const signatures = new Set();
+    for (const entry of allowlist[role]) {
+      if (!entry || typeof entry !== "object") throw new Error(`allowedBaselineUnclassified.${role} entry is invalid`);
+      for (const field of ["command", "parentCommand", "cgroupFingerprint"]) {
+        if (typeof entry[field] !== "string" || entry[field].length < 1 || entry[field].length > 64) {
+          throw new Error(`allowedBaselineUnclassified.${role}.${field} is invalid`);
+        }
+      }
+      if (!/^[a-f0-9]{16}$/.test(entry.cgroupFingerprint)) throw new Error(`allowedBaselineUnclassified.${role}.cgroupFingerprint is invalid`);
+      const signature = baselineSignature(entry);
+      if (signatures.has(signature)) throw new Error(`allowedBaselineUnclassified.${role} contains a duplicate entry`);
+      signatures.add(signature);
+    }
+  }
 }
 
 function assertSourceProfile(profile) {
@@ -157,7 +184,7 @@ function requireSamples(checks, evidence, name, minimumCount) {
   return samples.length >= minimumCount;
 }
 
-export function evaluateEvidence(config, evidence, attestations, hostEvidence) {
+export function evaluateEvidence(config, evidence, attestations, hostEvidence, zombieEvidence) {
   assertConfig(config);
   const checks = [];
   const durationSeconds = evidence.endEpochSeconds - evidence.startEpochSeconds;
@@ -214,10 +241,11 @@ export function evaluateEvidence(config, evidence, attestations, hostEvidence) {
 
   if (config.requireBrowser) evaluateBrowser(checks, evidence, minimumSamples, config.thresholds, evaluatedDurationSeconds);
   evaluateHostSamples(checks, config, hostEvidence);
+  evaluateZombieEvidence(checks, config, zombieEvidence);
   evaluateAttestations(checks, config, attestations);
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     gateId: config.gateId,
     court: config.court,
     startAt: new Date(evidence.startEpochSeconds * 1000).toISOString(),
@@ -236,15 +264,64 @@ function evaluateHostSamples(checks, config, hostEvidence) {
   addCheck(checks, "host_sample_start_edge_gap", Number.isFinite(hostEvidence?.startEdgeGapSeconds) && hostEvidence.startEdgeGapSeconds <= thresholds.maximumHostSampleGapSeconds, hostEvidence?.startEdgeGapSeconds ?? null, `<= ${thresholds.maximumHostSampleGapSeconds} seconds`);
   addCheck(checks, "host_sample_end_edge_gap", Number.isFinite(hostEvidence?.endEdgeGapSeconds) && hostEvidence.endEdgeGapSeconds <= thresholds.maximumHostSampleGapSeconds, hostEvidence?.endEdgeGapSeconds ?? null, `<= ${thresholds.maximumHostSampleGapSeconds} seconds`);
   addCheck(checks, "host_sample_baseline_age", Number.isFinite(hostEvidence?.baselineAgeSeconds) && hostEvidence.baselineAgeSeconds <= config.stepSeconds * 2, hostEvidence?.baselineAgeSeconds ?? null, `<= ${config.stepSeconds * 2} seconds`);
-  addCheck(checks, "ingest_sampled_zombie_growth", hostEvidence?.ingestZombieGrowth === 0, hostEvidence?.ingestZombieGrowth ?? null, 0);
+  addCheck(checks, "ingest_host_sample_lag", Number.isFinite(hostEvidence?.ingestSampleLagMaxMs) && hostEvidence.ingestSampleLagMaxMs <= thresholds.maximumHostSampleLagMs, {
+    p95Ms: hostEvidence?.ingestSampleLagP95Ms ?? null,
+    maximumMs: hostEvidence?.ingestSampleLagMaxMs ?? null
+  }, `maximum <= ${thresholds.maximumHostSampleLagMs} ms`);
   addCheck(checks, "ingest_host_cpu_p95", Number.isFinite(hostEvidence?.ingestHostCpuP95Ratio) && hostEvidence.ingestHostCpuP95Ratio <= thresholds.maximumCpuP95Ratio, hostEvidence?.ingestHostCpuP95Ratio ?? null, `<= ${thresholds.maximumCpuP95Ratio}`);
   addCheck(checks, "ingest_host_cpu_max", Number.isFinite(hostEvidence?.ingestHostCpuMaxRatio) && hostEvidence.ingestHostCpuMaxRatio < thresholds.maximumCpuRatio, hostEvidence?.ingestHostCpuMaxRatio ?? null, `< ${thresholds.maximumCpuRatio}`);
   if (config.compositor) {
-    addCheck(checks, "compositor_sampled_zombie_growth", hostEvidence?.compositorZombieGrowth === 0, hostEvidence?.compositorZombieGrowth ?? null, 0);
+    addCheck(checks, "compositor_host_sample_lag", Number.isFinite(hostEvidence?.compositorSampleLagMaxMs) && hostEvidence.compositorSampleLagMaxMs <= thresholds.maximumHostSampleLagMs, {
+      p95Ms: hostEvidence?.compositorSampleLagP95Ms ?? null,
+      maximumMs: hostEvidence?.compositorSampleLagMaxMs ?? null
+    }, `maximum <= ${thresholds.maximumHostSampleLagMs} ms`);
     addCheck(checks, "compositor_host_cpu_p95", Number.isFinite(hostEvidence?.compositorHostCpuP95Ratio) && hostEvidence.compositorHostCpuP95Ratio <= thresholds.maximumCpuP95Ratio, hostEvidence?.compositorHostCpuP95Ratio ?? null, `<= ${thresholds.maximumCpuP95Ratio}`);
     addCheck(checks, "compositor_host_cpu_max", Number.isFinite(hostEvidence?.compositorHostCpuMaxRatio) && hostEvidence.compositorHostCpuMaxRatio < thresholds.maximumCpuRatio, hostEvidence?.compositorHostCpuMaxRatio ?? null, `< ${thresholds.maximumCpuRatio}`);
     addCheck(checks, "egress_shm_max_ratio", Number.isFinite(hostEvidence?.egressShmMaxRatio) && hostEvidence.egressShmMaxRatio < thresholds.maximumShmRatio, hostEvidence?.egressShmMaxRatio ?? null, `< ${thresholds.maximumShmRatio}`);
   }
+}
+
+function evaluateZombieEvidence(checks, config, zombieEvidence) {
+  const roles = config.compositor ? ["ingest", "compositor"] : ["ingest"];
+  const thresholds = config.thresholds;
+  for (const role of roles) {
+    const evidence = zombieEvidence?.roles?.[role];
+    const prefix = `${role}_zombie_watcher`;
+    addCheck(checks, `${prefix}_started`, typeof evidence?.watcherStartedAt === "string", evidence?.watcherStartedAt ?? null, "started before the official window");
+    addCheck(checks, `${prefix}_poll_interval`, Number.isFinite(evidence?.pollIntervalMs) && evidence.pollIntervalMs <= thresholds.maximumZombiePollIntervalMs, evidence?.pollIntervalMs ?? null, `<= ${thresholds.maximumZombiePollIntervalMs} ms`);
+    addCheck(checks, `${prefix}_restarts`, evidence?.watcherRestarts === 0, evidence?.watcherRestarts ?? null, 0);
+    addCheck(checks, `${prefix}_stops`, evidence?.watcherStops === 0, evidence?.watcherStops ?? null, 0);
+    addCheck(checks, `${prefix}_start_edge`, Number.isFinite(evidence?.startEdgeGapSeconds) && evidence.startEdgeGapSeconds <= thresholds.maximumZombieWatcherHeartbeatGapSeconds, evidence?.startEdgeGapSeconds ?? null, `<= ${thresholds.maximumZombieWatcherHeartbeatGapSeconds} seconds`);
+    addCheck(checks, `${prefix}_end_edge`, Number.isFinite(evidence?.endEdgeGapSeconds) && evidence.endEdgeGapSeconds <= thresholds.maximumZombieWatcherHeartbeatGapSeconds, evidence?.endEdgeGapSeconds ?? null, `<= ${thresholds.maximumZombieWatcherHeartbeatGapSeconds} seconds`);
+    addCheck(checks, `${prefix}_heartbeat_gap`, Number.isFinite(evidence?.maximumHeartbeatGapSeconds) && evidence.maximumHeartbeatGapSeconds <= thresholds.maximumZombieWatcherHeartbeatGapSeconds, evidence?.maximumHeartbeatGapSeconds ?? null, `<= ${thresholds.maximumZombieWatcherHeartbeatGapSeconds} seconds`);
+    addCheck(checks, `${prefix}_scan_gap`, Number.isFinite(evidence?.maximumScanGapMs) && evidence.maximumScanGapMs <= thresholds.maximumZombieWatcherScanGapMs, evidence?.maximumScanGapMs ?? null, `<= ${thresholds.maximumZombieWatcherScanGapMs} ms`);
+    const expectedBaseline = config.allowedBaselineUnclassified[role];
+    const observedBaseline = (evidence?.baselineUnclassifiedEvents ?? []).map((event) => ({
+      command: event.command,
+      parentCommand: event.parentCommand,
+      cgroupFingerprint: event.cgroupFingerprint
+    }));
+    const expectedSignatures = expectedBaseline.map(baselineSignature).sort();
+    const observedSignatures = observedBaseline.map(baselineSignature).sort();
+    addCheck(checks, `${role}_baseline_unclassified_zombies`, arraysEqual(observedSignatures, expectedSignatures), observedBaseline, expectedBaseline);
+    addCheck(checks, `${role}_new_unclassified_zombies`, evidence?.newUnclassifiedCount === 0, {
+      count: evidence?.newUnclassifiedCount ?? null,
+      events: evidence?.newUnclassifiedEvents ?? []
+    }, "0 new non-observer zombie processes");
+    addCheck(checks, `${role}_observer_zombie_duration`, (evidence?.observerMaximumDurationMs ?? 0) <= thresholds.maximumObserverZombieDurationMs, evidence?.observerMaximumDurationMs ?? 0, `<= ${thresholds.maximumObserverZombieDurationMs} ms`);
+    addCheck(checks, `${role}_observer_zombie_count`, Number.isFinite(evidence?.observerEventCount) && evidence.observerEventCount <= thresholds.maximumObserverZombieEvents, evidence?.observerEventCount ?? null, `<= ${thresholds.maximumObserverZombieEvents}`);
+    addCheck(checks, `${role}_observer_zombie_rate`, Number.isFinite(evidence?.observerMaximumRollingMinuteCount) && evidence.observerMaximumRollingMinuteCount <= thresholds.maximumObserverZombieEventsPerMinute, evidence?.observerMaximumRollingMinuteCount ?? null, `<= ${thresholds.maximumObserverZombieEventsPerMinute} per rolling minute`);
+    addCheck(checks, `${role}_observer_zombie_closure`, evidence?.unclosedObserverCount === 0, evidence?.unclosedObserverCount ?? null, 0);
+    addCheck(checks, `${role}_zombie_event_integrity`, evidence?.orphanCloseCount === 0, evidence?.orphanCloseCount ?? null, 0);
+  }
+}
+
+function baselineSignature(entry) {
+  return `${entry.command}\u0000${entry.parentCommand}\u0000${entry.cgroupFingerprint}`;
+}
+
+function arraysEqual(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function evaluateFfmpeg(checks, evidence, branch, minimumSamples, thresholds) {
@@ -309,9 +386,7 @@ function evaluateAttestations(checks, config, attestations) {
   }
   addCheck(checks, "assignment_verified", attestations.assignmentVerified === true, attestations.assignmentVerified ?? null, true);
   addCheck(checks, "unassigned_courts_unaffected", attestations.unassignedCourtsUnaffected === true, attestations.unassignedCourtsUnaffected ?? null, true);
-  addCheck(checks, "ingest_observed_zombie_growth", attestations.ingestZombieGrowth === 0, attestations.ingestZombieGrowth ?? null, 0);
   if (config.compositor) {
-    addCheck(checks, "compositor_observed_zombie_growth", attestations.compositorZombieGrowth === 0, attestations.compositorZombieGrowth ?? null, 0);
     addCheck(checks, "egress_errors", attestations.egressErrors === 0, attestations.egressErrors ?? null, 0);
     addCheck(checks, "egress_shm_enabled", attestations.egressShmEnabled === true, attestations.egressShmEnabled ?? null, true);
   }
@@ -322,8 +397,6 @@ function boundedAttestations(input) {
     observedSourceProfile: boundedSourceProfile(input.observedSourceProfile),
     assignmentVerified: input.assignmentVerified === true,
     unassignedCourtsUnaffected: input.unassignedCourtsUnaffected === true,
-    ingestZombieGrowth: Number.isFinite(input.ingestZombieGrowth) ? input.ingestZombieGrowth : null,
-    compositorZombieGrowth: Number.isFinite(input.compositorZombieGrowth) ? input.compositorZombieGrowth : null,
     egressErrors: Number.isFinite(input.egressErrors) ? input.egressErrors : null,
     egressShmEnabled: input.egressShmEnabled === true
   };
@@ -362,7 +435,7 @@ function parseArgs(argv) {
     if (!key?.startsWith("--") || value == null) throw new Error(`invalid argument near ${key ?? "end of command"}`);
     values[key.slice(2)] = value;
   }
-  for (const required of ["config", "attestations", "host-samples", "prometheus-url", "start", "end", "output"]) {
+  for (const required of ["config", "attestations", "host-samples", "zombie-events", "prometheus-url", "start", "end", "output"]) {
     if (!values[required]) throw new Error(`--${required} is required`);
   }
   return values;
@@ -382,6 +455,10 @@ async function main() {
     endEpochSeconds,
     stepSeconds: config.stepSeconds
   });
+  const zombieEvidence = summarizeZombieEvents(parseZombieEventsNdjson(await readFile(args["zombie-events"], "utf8")), {
+    startEpochSeconds,
+    endEpochSeconds
+  });
   const queries = buildQueries(config);
   const token = process.env.SCORECHECK_PROMETHEUS_BEARER_TOKEN ?? "";
   const entries = await Promise.all(Object.entries(queries).map(async ([name, query]) => [
@@ -389,8 +466,8 @@ async function main() {
     (await queryRange(args["prometheus-url"], query, effectiveStartEpochSeconds, endEpochSeconds, config.stepSeconds, token))
   ]));
   const evidence = { startEpochSeconds, effectiveStartEpochSeconds, endEpochSeconds, series: Object.fromEntries(entries) };
-  const report = evaluateEvidence(config, evidence, attestations, hostEvidence);
-  await writeFile(args.output, `${JSON.stringify({ ...report, configuration: config, attestations, hostEvidence, evidence }, null, 2)}\n`, { mode: 0o600 });
+  const report = evaluateEvidence(config, evidence, attestations, hostEvidence, zombieEvidence);
+  await writeFile(args.output, `${JSON.stringify({ ...report, configuration: config, attestations, hostEvidence, zombieEvidence, evidence }, null, 2)}\n`, { mode: 0o600 });
   await chmod(args.output, 0o600);
   process.stdout.write(`${report.verdict}: ${report.gateId} (${report.checks.filter((check) => !check.pass).length} failed checks)\n`);
   process.exitCode = report.verdict === "PASS" ? 0 : 2;
