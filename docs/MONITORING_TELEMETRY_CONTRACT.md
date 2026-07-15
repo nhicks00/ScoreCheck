@@ -423,7 +423,7 @@ program-page tokens
 LiveKit tokens or API credentials
 Supabase service credentials
 camera credentials
-Pushover/Twilio credentials
+Pushover credentials
 Healthchecks ping URLs
 full private ingest URLs
 query strings from browser exceptions

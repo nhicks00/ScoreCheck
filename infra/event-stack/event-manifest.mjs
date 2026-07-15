@@ -9,92 +9,225 @@ import { fileURLToPath } from "node:url";
 import { validateFleetSpec } from "./preflight-capacity.mjs";
 
 const DEFAULT_POOL_SPEC = fileURLToPath(new URL("./compositor-pool.json", import.meta.url));
+const DEFAULT_SERVICE_SPEC = fileURLToPath(new URL("./service-pool.json", import.meta.url));
+const CLOUD_INIT_PATHS = Object.freeze({
+  commentary: fileURLToPath(new URL("../commentary/cloud-init.yaml", import.meta.url)),
+  observability: fileURLToPath(new URL("../monitoring/cloud-init.yaml", import.meta.url)),
+  ingest: fileURLToPath(new URL("../mediamtx/cloud-init.yaml", import.meta.url)),
+  compositor: fileURLToPath(new URL("../compositor/cloud-init.yaml", import.meta.url))
+});
 const EVENT_SLUG = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const RESOURCE_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const PROVIDER_VALUE = /^[A-Za-z0-9._-]{1,100}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
+const REQUIRED_FIXED_ROLES = Object.freeze(["commentary", "observability", "ingest"]);
 
-export const FIXED_EVENT_RESOURCES = Object.freeze([
-  Object.freeze({ name: "bvm-commentary-01", role: "commentary" }),
-  Object.freeze({ name: "bvm-observability-01", role: "observability" }),
-  Object.freeze({ name: "bvm-preview-01", role: "ingest" })
-]);
-
-export function buildEventManifest({ event, destroyAfter, poolSpec, poolSpecSource }) {
+export function buildEventManifest({
+  event,
+  destroyAfter,
+  poolSpec,
+  poolSpecSource,
+  serviceSpec,
+  serviceSpecSource,
+  cloudInitSources
+}) {
   assertEvent(event);
   assertDate(destroyAfter);
-  if (typeof poolSpecSource !== "string" || poolSpecSource.length === 0) {
-    throw new Error("pool spec source is required");
-  }
-  let parsedPoolSpec;
-  try {
-    parsedPoolSpec = JSON.parse(poolSpecSource);
-  } catch {
-    throw new Error("pool spec source is not valid JSON");
-  }
-  if (!isDeepStrictEqual(poolSpec, parsedPoolSpec)) {
-    throw new Error("pool spec object does not match the bound source bytes");
-  }
+  assertBoundSource(poolSpec, poolSpecSource, "pool spec");
+  assertBoundSource(serviceSpec, serviceSpecSource, "service spec");
   const pool = validateFleetSpec(poolSpec, { desiredCompositors: 8, warmSpares: 1 });
-  const poolSpecSha256 = sha256(poolSpecSource);
-  const fixedNames = new Set(FIXED_EVENT_RESOURCES.map((resource) => resource.name));
+  const services = validateServiceSpec(serviceSpec);
+  if (pool.region !== services.region) throw new Error("service and compositor regions must match");
+  const cloudInitBindings = validateCloudInitSources(cloudInitSources);
+
+  const fixedNames = new Set(services.fixedServices.map((resource) => resource.name));
   const collision = pool.workers.find((worker) => fixedNames.has(worker.name));
   if (collision) throw new Error(`fleet worker ${collision.name} collides with a fixed event resource`);
-  const workers = pool.workers.map((worker) => (
-    worker.warmSpare
-      ? { name: worker.name, role: "compositor-spare", warmSpare: true }
-      : { name: worker.name, role: "compositor", court: worker.court }
-  ));
+
+  const fixed = services.fixedServices.map((resource) => ({
+    ...resource,
+    region: services.region,
+    image: services.image,
+    cloudInitSha256: cloudInitBindings[resource.cloudInitProfile]
+  }));
+  const workers = pool.workers.map((worker) => ({
+    name: worker.name,
+    role: worker.warmSpare ? "compositor-spare" : "compositor",
+    ...(worker.warmSpare ? { warmSpare: true } : { court: worker.court }),
+    region: pool.region,
+    size: pool.size,
+    image: pool.image,
+    tag: "bvm-compositor",
+    cloudInitProfile: "compositor",
+    cloudInitSha256: cloudInitBindings.compositor
+  }));
+  const droplets = [...fixed, ...workers];
+  if (droplets.length > services.minimumAccountDropletLimit) {
+    throw new Error("minimum account Droplet limit cannot fit the declared stack");
+  }
+
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     event,
     destroyAfter,
+    provider: {
+      name: "digitalocean",
+      region: services.region,
+      minimumAccountDropletLimit: services.minimumAccountDropletLimit
+    },
+    dns: {
+      provider: "vercel",
+      zone: services.dnsZone
+    },
+    sourceBindings: {
+      serviceSpecSha256: sha256(serviceSpecSource),
+      compositorPoolSpecSha256: sha256(poolSpecSource),
+      cloudInitSha256: cloudInitBindings
+    },
     compositorPool: {
-      specSha256: poolSpecSha256,
       region: pool.region,
       size: pool.size,
       image: pool.image,
       desiredCompositors: pool.desiredCompositors,
       warmSpares: pool.warmSpares
     },
-    droplets: [...FIXED_EVENT_RESOURCES.map((resource) => ({ ...resource })), ...workers]
+    endpoints: services.endpoints,
+    droplets
   };
 }
 
-export function validateEventManifest(manifest, { poolSpec, poolSpecSource }) {
+export function validateEventManifest(manifest, inputs) {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
     throw new Error("event manifest must be an object");
   }
-  if (manifest.schemaVersion !== 1) throw new Error("event manifest schemaVersion must be 1");
-  if (!manifest.compositorPool || typeof manifest.compositorPool !== "object" || Array.isArray(manifest.compositorPool)) {
-    throw new Error("event manifest compositorPool binding is required");
+  if (manifest.schemaVersion !== 2) throw new Error("event manifest schemaVersion must be 2");
+  const bindings = manifest.sourceBindings;
+  if (!bindings || typeof bindings !== "object" || Array.isArray(bindings)) {
+    throw new Error("event manifest source bindings are required");
   }
-  if (!SHA256.test(manifest.compositorPool.specSha256 ?? "")) {
-    throw new Error("event manifest compositor pool digest is invalid");
+  for (const digest of [bindings.serviceSpecSha256, bindings.compositorPoolSpecSha256]) {
+    if (!SHA256.test(digest ?? "")) throw new Error("event manifest source digest is invalid");
   }
   const expected = buildEventManifest({
     event: manifest.event,
     destroyAfter: manifest.destroyAfter,
-    poolSpec,
-    poolSpecSource
+    ...inputs
   });
   if (!isDeepStrictEqual(manifest, expected)) {
-    throw new Error("event manifest does not exactly match the bound compositor pool and fixed service inventory");
+    throw new Error("event manifest does not exactly match the bound service, compositor, endpoint, and bootstrap specifications");
   }
   return expected;
+}
+
+export function validateServiceSpec(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("service spec must be an object");
+  if (value.schemaVersion !== 1) throw new Error("service spec schemaVersion must be 1");
+  if (typeof value.region !== "string" || !/^[a-z0-9-]{1,20}$/.test(value.region)) {
+    throw new Error("service spec region is invalid");
+  }
+  if (typeof value.image !== "string" || !PROVIDER_VALUE.test(value.image)) throw new Error("service spec image is invalid");
+  if (!Number.isInteger(value.minimumAccountDropletLimit) || value.minimumAccountDropletLimit < 1) {
+    throw new Error("service spec minimum account Droplet limit is invalid");
+  }
+  if (typeof value.dnsZone !== "string" || !isDnsName(value.dnsZone)) throw new Error("service spec DNS zone is invalid");
+  if (!Array.isArray(value.fixedServices) || value.fixedServices.length !== REQUIRED_FIXED_ROLES.length) {
+    throw new Error("service spec must contain exactly three fixed services");
+  }
+
+  const names = new Set();
+  const roles = new Set();
+  const fixedServices = value.fixedServices.map((service, index) => {
+    if (!service || typeof service !== "object" || Array.isArray(service)) {
+      throw new Error(`fixed service ${index + 1} must be an object`);
+    }
+    if (typeof service.name !== "string" || !RESOURCE_NAME.test(service.name)) {
+      throw new Error(`fixed service ${index + 1} has an invalid name`);
+    }
+    if (names.has(service.name)) throw new Error(`fixed service name ${service.name} is duplicated`);
+    names.add(service.name);
+    if (!REQUIRED_FIXED_ROLES.includes(service.role)) throw new Error(`fixed service ${service.name} has an invalid role`);
+    if (roles.has(service.role)) throw new Error(`fixed service role ${service.role} is duplicated`);
+    roles.add(service.role);
+    for (const [key, raw] of [["size", service.size], ["tag", service.tag], ["cloudInitProfile", service.cloudInitProfile]]) {
+      if (typeof raw !== "string" || !PROVIDER_VALUE.test(raw)) throw new Error(`fixed service ${service.name} has an invalid ${key}`);
+    }
+    if (service.cloudInitProfile !== service.role) {
+      throw new Error(`fixed service ${service.name} must use its role bootstrap profile`);
+    }
+    return {
+      name: service.name,
+      role: service.role,
+      size: service.size,
+      tag: service.tag,
+      cloudInitProfile: service.cloudInitProfile
+    };
+  });
+  if (!REQUIRED_FIXED_ROLES.every((role) => roles.has(role))) throw new Error("service spec fixed roles are incomplete");
+
+  if (!Array.isArray(value.endpoints) || value.endpoints.length === 0) throw new Error("service spec endpoints are required");
+  const hostnames = new Set();
+  const endpoints = value.endpoints.map((endpoint, index) => {
+    if (!endpoint || typeof endpoint !== "object" || Array.isArray(endpoint)) {
+      throw new Error(`endpoint ${index + 1} must be an object`);
+    }
+    const hostname = endpoint.hostname;
+    if (typeof hostname !== "string" || !isDnsName(hostname) || !hostname.endsWith(`.${value.dnsZone}`)) {
+      throw new Error(`endpoint ${index + 1} has an invalid hostname`);
+    }
+    if (hostnames.has(hostname)) throw new Error(`endpoint hostname ${hostname} is duplicated`);
+    hostnames.add(hostname);
+    if (!roles.has(endpoint.role)) throw new Error(`endpoint ${hostname} references an unknown role`);
+    if (!new Set(["reserved-ipv4", "dynamic-ipv4"]).has(endpoint.addressMode)) {
+      throw new Error(`endpoint ${hostname} has an invalid address mode`);
+    }
+    if (!Number.isInteger(endpoint.ttl) || endpoint.ttl < 60 || endpoint.ttl > 300) {
+      throw new Error(`endpoint ${hostname} TTL must be from 60 through 300 seconds`);
+    }
+    if (endpoint.addressMode === "reserved-ipv4") {
+      if (typeof endpoint.addressSlot !== "string" || !/^[a-z][a-z0-9-]{0,30}$/.test(endpoint.addressSlot)) {
+        throw new Error(`endpoint ${hostname} requires a valid reserved address slot`);
+      }
+    } else if (endpoint.addressSlot !== undefined) {
+      throw new Error(`dynamic endpoint ${hostname} cannot declare an address slot`);
+    }
+    return {
+      hostname,
+      role: endpoint.role,
+      addressMode: endpoint.addressMode,
+      ...(endpoint.addressMode === "reserved-ipv4" ? { addressSlot: endpoint.addressSlot } : {}),
+      ttl: endpoint.ttl
+    };
+  });
+  const reservedRoles = new Map();
+  for (const endpoint of endpoints.filter((entry) => entry.addressMode === "reserved-ipv4")) {
+    const previous = reservedRoles.get(endpoint.addressSlot);
+    if (previous && previous !== endpoint.role) throw new Error(`reserved address slot ${endpoint.addressSlot} spans multiple roles`);
+    reservedRoles.set(endpoint.addressSlot, endpoint.role);
+  }
+
+  return {
+    schemaVersion: 1,
+    region: value.region,
+    image: value.image,
+    minimumAccountDropletLimit: value.minimumAccountDropletLimit,
+    dnsZone: value.dnsZone,
+    fixedServices,
+    endpoints
+  };
 }
 
 export function parseArgs(argv) {
   const command = argv[0];
   if (["-h", "--help", "help"].includes(command)) return null;
-  if (!new Set(["generate", "validate"]).has(command)) {
-    throw new Error("command must be generate or validate");
-  }
+  if (!new Set(["generate", "validate"]).has(command)) throw new Error("command must be generate or validate");
   const options = {
     command,
     event: null,
     destroyAfter: null,
     output: null,
     manifest: null,
-    poolSpec: DEFAULT_POOL_SPEC
+    poolSpec: DEFAULT_POOL_SPEC,
+    serviceSpec: DEFAULT_SERVICE_SPEC
   };
   for (let index = 1; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -104,9 +237,9 @@ export function parseArgs(argv) {
       const output = requiredValue(argv, ++index, argument);
       if (!isAbsolute(output)) throw new Error("--output must be an absolute path");
       options.output = resolve(output);
-    }
-    else if (argument === "--manifest") options.manifest = resolve(requiredValue(argv, ++index, argument));
+    } else if (argument === "--manifest") options.manifest = resolve(requiredValue(argv, ++index, argument));
     else if (argument === "--pool-spec") options.poolSpec = resolve(requiredValue(argv, ++index, argument));
+    else if (argument === "--service-spec") options.serviceSpec = resolve(requiredValue(argv, ++index, argument));
     else throw new Error(`Unknown argument: ${argument}`);
   }
   if (command === "generate") {
@@ -123,31 +256,40 @@ export function parseArgs(argv) {
   return options;
 }
 
+export async function loadManifestInputs({ poolSpec: poolPath = DEFAULT_POOL_SPEC, serviceSpec: servicePath = DEFAULT_SERVICE_SPEC } = {}) {
+  const [poolSpecSource, serviceSpecSource, entries] = await Promise.all([
+    readFile(poolPath, "utf8"),
+    readFile(servicePath, "utf8"),
+    Promise.all(Object.entries(CLOUD_INIT_PATHS).map(async ([profile, path]) => [profile, await readFile(path, "utf8")]))
+  ]);
+  return {
+    poolSpec: JSON.parse(poolSpecSource),
+    poolSpecSource,
+    serviceSpec: JSON.parse(serviceSpecSource),
+    serviceSpecSource,
+    cloudInitSources: Object.fromEntries(entries)
+  };
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (!options) {
     process.stdout.write(
       "Usage:\n"
-      + "  node infra/event-stack/event-manifest.mjs generate --event SLUG --destroy-after YYYY-MM-DD --output /ABSOLUTE/PATH [--pool-spec FILE]\n"
-      + "  node infra/event-stack/event-manifest.mjs validate --manifest FILE [--pool-spec FILE]\n"
+      + "  node infra/event-stack/event-manifest.mjs generate --event SLUG --destroy-after YYYY-MM-DD --output /ABSOLUTE/PATH [--pool-spec FILE] [--service-spec FILE]\n"
+      + "  node infra/event-stack/event-manifest.mjs validate --manifest FILE [--pool-spec FILE] [--service-spec FILE]\n"
     );
     return;
   }
-  const poolSpecSource = await readFile(options.poolSpec, "utf8");
-  const poolSpec = JSON.parse(poolSpecSource);
+  const inputs = await loadManifestInputs(options);
   if (options.command === "generate") {
-    const manifest = buildEventManifest({
-      event: options.event,
-      destroyAfter: options.destroyAfter,
-      poolSpec,
-      poolSpecSource
-    });
+    const manifest = buildEventManifest({ event: options.event, destroyAfter: options.destroyAfter, ...inputs });
     await writeFile(options.output, `${JSON.stringify(manifest, null, 2)}\n`, { flag: "wx", mode: 0o600 });
     process.stdout.write(`${JSON.stringify(summary(manifest))}\n`);
     return;
   }
   const manifest = JSON.parse(await readFile(options.manifest, "utf8"));
-  const validated = validateEventManifest(manifest, { poolSpec, poolSpecSource });
+  const validated = validateEventManifest(manifest, inputs);
   process.stdout.write(`${JSON.stringify(summary(validated))}\n`);
 }
 
@@ -156,10 +298,39 @@ function summary(manifest) {
     event: manifest.event,
     destroyAfter: manifest.destroyAfter,
     dropletCount: manifest.droplets.length,
+    reservedIpv4Slots: [...new Set(manifest.endpoints.filter((endpoint) => endpoint.addressMode === "reserved-ipv4").map((endpoint) => endpoint.addressSlot))].length,
+    dynamicDnsRecords: manifest.endpoints.filter((endpoint) => endpoint.addressMode === "dynamic-ipv4").length,
     assignedCompositors: manifest.compositorPool.desiredCompositors,
     warmSpares: manifest.compositorPool.warmSpares,
-    poolSpecSha256: manifest.compositorPool.specSha256
+    serviceSpecSha256: manifest.sourceBindings.serviceSpecSha256,
+    compositorPoolSpecSha256: manifest.sourceBindings.compositorPoolSpecSha256
   };
+}
+
+function validateCloudInitSources(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("cloud-init sources are required");
+  const expectedProfiles = Object.keys(CLOUD_INIT_PATHS);
+  if (!isDeepStrictEqual(Object.keys(value).sort(), [...expectedProfiles].sort())) {
+    throw new Error("cloud-init source profiles are incomplete or unexpected");
+  }
+  return Object.fromEntries(expectedProfiles.map((profile) => {
+    const source = value[profile];
+    if (typeof source !== "string" || !source.startsWith("#cloud-config\n")) {
+      throw new Error(`cloud-init profile ${profile} is invalid`);
+    }
+    return [profile, sha256(source)];
+  }));
+}
+
+function assertBoundSource(value, source, label) {
+  if (typeof source !== "string" || source.length === 0) throw new Error(`${label} source is required`);
+  let parsed;
+  try {
+    parsed = JSON.parse(source);
+  } catch {
+    throw new Error(`${label} source is not valid JSON`);
+  }
+  if (!isDeepStrictEqual(value, parsed)) throw new Error(`${label} object does not match the bound source bytes`);
 }
 
 function assertEvent(value) {
@@ -174,6 +345,10 @@ function assertDate(value) {
   if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
     throw new Error("destroy-after date is not a real calendar date");
   }
+}
+
+function isDnsName(value) {
+  return value.length <= 253 && value.split(".").length >= 2 && value.split(".").every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label));
 }
 
 function requiredValue(argv, index, flag) {

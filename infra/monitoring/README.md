@@ -139,8 +139,8 @@ admin dashboard requests a five-minute view every 30 seconds while visible.
 Acknowledgement stops repeated emergency delivery without hiding the incident.
 The admin dashboard can also create an exact, durable 15-120 minute maintenance
 silence. A silence suppresses paging only; health and incident evidence remain
-visible. If the fault survives expiry, primary paging is re-armed. When optional
-SMS escalation is enabled, its timer begins again from that new primary page.
+visible. If the fault survives expiry, Pushover emergency paging is re-armed
+from that new primary page.
 
 The full event-day workflow, credential checklist, and fault gates are in
 `docs/MONITORING_OPERATIONS_RUNBOOK.md`.

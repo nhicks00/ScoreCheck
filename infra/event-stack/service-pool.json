@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "region": "sfo2",
+  "image": "ubuntu-24-04-x64",
+  "minimumAccountDropletLimit": 12,
+  "dnsZone": "beachvolleyballmedia.com",
+  "fixedServices": [
+    {
+      "name": "bvm-commentary-01",
+      "role": "commentary",
+      "size": "s-2vcpu-2gb",
+      "tag": "bvm-commentary",
+      "cloudInitProfile": "commentary"
+    },
+    {
+      "name": "bvm-observability-01",
+      "role": "observability",
+      "size": "s-2vcpu-4gb",
+      "tag": "bvm-observability",
+      "cloudInitProfile": "observability"
+    },
+    {
+      "name": "bvm-preview-01",
+      "role": "ingest",
+      "size": "c-4",
+      "tag": "bvm-mediamtx",
+      "cloudInitProfile": "ingest"
+    }
+  ],
+  "endpoints": [
+    {
+      "hostname": "preview.beachvolleyballmedia.com",
+      "role": "ingest",
+      "addressMode": "reserved-ipv4",
+      "addressSlot": "ingest",
+      "ttl": 60
+    },
+    {
+      "hostname": "rtc.beachvolleyballmedia.com",
+      "role": "commentary",
+      "addressMode": "reserved-ipv4",
+      "addressSlot": "commentary",
+      "ttl": 60
+    },
+    {
+      "hostname": "turn.beachvolleyballmedia.com",
+      "role": "commentary",
+      "addressMode": "reserved-ipv4",
+      "addressSlot": "commentary",
+      "ttl": 60
+    },
+    {
+      "hostname": "monitor.beachvolleyballmedia.com",
+      "role": "observability",
+      "addressMode": "dynamic-ipv4",
+      "ttl": 60
+    }
+  ]
+}

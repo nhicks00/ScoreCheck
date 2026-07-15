@@ -5,29 +5,37 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { buildEventManifest, parseArgs, validateEventManifest } from "./event-manifest.mjs";
+import {
+  buildEventManifest,
+  loadManifestInputs,
+  parseArgs,
+  validateEventManifest,
+  validateServiceSpec
+} from "./event-manifest.mjs";
 
-const poolPath = fileURLToPath(new URL("./compositor-pool.json", import.meta.url));
-const poolSpecSource = await readFile(poolPath, "utf8");
-const poolSpec = JSON.parse(poolSpecSource);
+const inputs = await loadManifestInputs();
 
 function manifest() {
   return buildEventManifest({
     event: "next-shadow-event",
     destroyAfter: "2026-07-20",
-    poolSpec,
-    poolSpecSource
+    ...inputs
   });
 }
 
-test("generates the exact fixed services, eight assigned workers, and warm spare", () => {
+test("generates exact services, endpoints, eight assigned workers, and warm spare", () => {
   const value = manifest();
-  assert.equal(value.schemaVersion, 1);
+  assert.equal(value.schemaVersion, 2);
   assert.equal(value.droplets.length, 12);
   assert.deepEqual(value.droplets.slice(0, 3).map((entry) => entry.name), [
     "bvm-commentary-01",
     "bvm-observability-01",
     "bvm-preview-01"
+  ]);
+  assert.deepEqual(value.droplets.slice(0, 3).map((entry) => entry.size), [
+    "s-2vcpu-2gb",
+    "s-2vcpu-4gb",
+    "c-4"
   ]);
   assert.deepEqual(
     value.droplets.filter((entry) => entry.role === "compositor").map((entry) => entry.court),
@@ -36,10 +44,20 @@ test("generates the exact fixed services, eight assigned workers, and warm spare
   assert.deepEqual(value.droplets.at(-1), {
     name: "bvm-compositor-spare",
     role: "compositor-spare",
-    warmSpare: true
+    warmSpare: true,
+    region: "sfo2",
+    size: "c-4",
+    image: "ubuntu-24-04-x64",
+    tag: "bvm-compositor",
+    cloudInitProfile: "compositor",
+    cloudInitSha256: value.sourceBindings.cloudInitSha256.compositor
   });
-  assert.match(value.compositorPool.specSha256, /^[a-f0-9]{64}$/);
-  assert.deepEqual(validateEventManifest(value, { poolSpec, poolSpecSource }), value);
+  assert.equal(value.provider.minimumAccountDropletLimit, 12);
+  assert.equal(value.endpoints.filter((entry) => entry.addressMode === "reserved-ipv4").length, 3);
+  assert.equal(value.endpoints.filter((entry) => entry.addressMode === "dynamic-ipv4").length, 1);
+  assert.match(value.sourceBindings.compositorPoolSpecSha256, /^[a-f0-9]{64}$/);
+  assert.match(value.sourceBindings.serviceSpecSha256, /^[a-f0-9]{64}$/);
+  assert.deepEqual(validateEventManifest(value, inputs), value);
 });
 
 for (const [name, mutate] of [
@@ -47,14 +65,16 @@ for (const [name, mutate] of [
   ["extra worker", (value) => value.droplets.push({ name: "rogue", role: "compositor", court: 8 })],
   ["changed court", (value) => { value.droplets.find((entry) => entry.name === "bvm-compositor-h").court = 7; }],
   ["changed fixed role", (value) => { value.droplets[0].role = "ingest"; }],
-  ["changed pool digest", (value) => { value.compositorPool.specSha256 = "0".repeat(64); }],
+  ["changed fixed size", (value) => { value.droplets[0].size = "c-4"; }],
+  ["changed pool digest", (value) => { value.sourceBindings.compositorPoolSpecSha256 = "0".repeat(64); }],
+  ["changed endpoint mode", (value) => { value.endpoints[0].addressMode = "dynamic-ipv4"; delete value.endpoints[0].addressSlot; }],
   ["extra property", (value) => { value.untracked = true; }]
 ]) {
   test(`rejects an event manifest with ${name}`, () => {
     const value = structuredClone(manifest());
     mutate(value);
     assert.throws(
-      () => validateEventManifest(value, { poolSpec, poolSpecSource }),
+      () => validateEventManifest(value, inputs),
       /does not exactly match/
     );
   });
@@ -62,62 +82,94 @@ for (const [name, mutate] of [
 
 test("rejects invalid event and calendar values", () => {
   assert.throws(
-    () => buildEventManifest({ event: "NOT VALID", destroyAfter: "2026-07-20", poolSpec, poolSpecSource }),
+    () => buildEventManifest({ event: "NOT VALID", destroyAfter: "2026-07-20", ...inputs }),
     /event slug/
   );
   assert.throws(
-    () => buildEventManifest({ event: "valid", destroyAfter: "2026-02-30", poolSpec, poolSpecSource }),
+    () => buildEventManifest({ event: "valid", destroyAfter: "2026-02-30", ...inputs }),
     /real calendar date/
   );
 });
 
-test("binds the manifest to the exact pool file bytes", () => {
+test("binds the manifest to exact service and pool file bytes", () => {
   const value = manifest();
   assert.throws(
-    () => validateEventManifest(value, { poolSpec, poolSpecSource: `${poolSpecSource}\n` }),
+    () => validateEventManifest(value, { ...inputs, poolSpecSource: `${inputs.poolSpecSource}\n` }),
+    /does not exactly match/
+  );
+  assert.throws(
+    () => validateEventManifest(value, { ...inputs, serviceSpecSource: `${inputs.serviceSpecSource}\n` }),
     /does not exactly match/
   );
 });
 
-test("rejects a pool object that is not derived from the bound source", () => {
-  const changedPool = structuredClone(poolSpec);
+test("rejects source objects not derived from bound bytes", () => {
+  const changedPool = structuredClone(inputs.poolSpec);
   changedPool.region = "nyc3";
   assert.throws(
     () => buildEventManifest({
       event: "valid",
       destroyAfter: "2026-07-20",
-      poolSpec: changedPool,
-      poolSpecSource
+      ...inputs,
+      poolSpec: changedPool
+    }),
+    /does not match the bound source bytes/
+  );
+
+  const changedServices = structuredClone(inputs.serviceSpec);
+  changedServices.region = "nyc3";
+  assert.throws(
+    () => buildEventManifest({
+      event: "valid",
+      destroyAfter: "2026-07-20",
+      ...inputs,
+      serviceSpec: changedServices
     }),
     /does not match the bound source bytes/
   );
 });
 
 test("rejects a weakened pool and fixed-resource name collision", () => {
-  const weakenedPool = structuredClone(poolSpec);
+  const weakenedPool = structuredClone(inputs.poolSpec);
   weakenedPool.desiredCompositors = 7;
   weakenedPool.workers = weakenedPool.workers.filter((worker) => worker.court !== 8);
   assert.throws(
     () => buildEventManifest({
       event: "valid",
       destroyAfter: "2026-07-20",
+      ...inputs,
       poolSpec: weakenedPool,
       poolSpecSource: JSON.stringify(weakenedPool)
     }),
     /desired compositor count/
   );
 
-  const collidingPool = structuredClone(poolSpec);
+  const collidingPool = structuredClone(inputs.poolSpec);
   collidingPool.workers[0].name = "bvm-preview-01";
   assert.throws(
     () => buildEventManifest({
       event: "valid",
       destroyAfter: "2026-07-20",
+      ...inputs,
       poolSpec: collidingPool,
       poolSpecSource: JSON.stringify(collidingPool)
     }),
     /collides with a fixed event resource/
   );
+});
+
+test("rejects endpoint and fixed-service drift in the service pool", () => {
+  const duplicateEndpoint = structuredClone(inputs.serviceSpec);
+  duplicateEndpoint.endpoints.push(structuredClone(duplicateEndpoint.endpoints[0]));
+  assert.throws(() => validateServiceSpec(duplicateEndpoint), /duplicated/);
+
+  const wrongProfile = structuredClone(inputs.serviceSpec);
+  wrongProfile.fixedServices[0].cloudInitProfile = "ingest";
+  assert.throws(() => validateServiceSpec(wrongProfile), /role bootstrap profile/);
+
+  const crossRoleSlot = structuredClone(inputs.serviceSpec);
+  crossRoleSlot.endpoints.find((entry) => entry.role === "commentary").addressSlot = "ingest";
+  assert.throws(() => validateServiceSpec(crossRoleSlot), /spans multiple roles/);
 });
 
 test("requires an absolute protected output path", () => {

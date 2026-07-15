@@ -242,7 +242,7 @@ export type MonitorSnapshot = {
   controlPlane: { state: MonitorHealthState; observedAt: string | null; ageMs: number | null; worker: { state: MonitorHealthState; status: string | null; lastSeenAt: string | null; ageMs: number | null } };
   event: { id: string; name: string; status: string; eventDate: string | null } | null;
   youtube: { state: MonitorHealthState; observedAt: string | null; ageMs: number | null };
-  notifications: { state: "NOT_APPLICABLE" | "UNKNOWN" | "HEALTHY" | "DEGRADED"; pushover: { configured: boolean; lastSuccessAt: string | null; lastFailureAt: string | null }; twilioSms: { configured: boolean; lastSuccessAt: string | null; lastFailureAt: string | null } };
+  notifications: { state: "NOT_APPLICABLE" | "UNKNOWN" | "HEALTHY" | "DEGRADED"; pushover: { configured: boolean; lastSuccessAt: string | null; lastFailureAt: string | null } };
   deadMan: {
     state: "NOT_APPLICABLE" | "UNKNOWN" | "HEALTHY" | "DEGRADED";
     baseline: { configured: boolean; mode: "NOT_CONFIGURED" | "UNKNOWN" | "RUNNING" | "PAUSED"; lastSuccessAt: string | null; lastFailureAt: string | null };

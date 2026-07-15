@@ -336,7 +336,6 @@ export type YouTubeMonitorSnapshot = {
 export type NotificationHealth = {
   state: "NOT_APPLICABLE" | "UNKNOWN" | "HEALTHY" | "DEGRADED";
   pushover: { configured: boolean; lastSuccessAt: string | null; lastFailureAt: string | null };
-  twilioSms: { configured: boolean; lastSuccessAt: string | null; lastFailureAt: string | null };
 };
 
 export type DeadManCheckHealth = {

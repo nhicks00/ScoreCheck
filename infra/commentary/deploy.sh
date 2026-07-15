@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SSH_HOST="${LIVEKIT_COMMENTARY_SSH_HOST:-root@138.197.194.146}"
 SSH_KEY="${LIVEKIT_COMMENTARY_SSH_KEY:-$HOME/.ssh/scorecheck_do}"
 REMOTE_DIR="${LIVEKIT_COMMENTARY_REMOTE_DIR:-/opt/livekit}"
+KNOWN_HOSTS="${SCORECHECK_SSH_KNOWN_HOSTS:?SCORECHECK_SSH_KNOWN_HOSTS is required}"
 
 : "${LIVEKIT_COMMENTARY_API_KEY:?LIVEKIT_COMMENTARY_API_KEY is required}"
 : "${LIVEKIT_COMMENTARY_API_SECRET:?LIVEKIT_COMMENTARY_API_SECRET is required}"
@@ -13,30 +14,35 @@ export LIVEKIT_COMMENTARY_PUBLIC_IP="${LIVEKIT_COMMENTARY_PUBLIC_IP:-${SSH_HOST#
 
 node "$SCRIPT_DIR/render-config.mjs"
 
-ssh -i "$SSH_KEY" "$SSH_HOST" "mkdir -p '$REMOTE_DIR/.incoming' '$REMOTE_DIR/caddy_data'"
-rsync -a -e "ssh -i $SSH_KEY" \
+ssh_options=(-i "$SSH_KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS")
+rsync_shell="ssh -i $SSH_KEY -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS"
+
+ssh "${ssh_options[@]}" "$SSH_HOST" "mkdir -p '$REMOTE_DIR/.incoming' '$REMOTE_DIR/caddy_data'"
+rsync -a -e "$rsync_shell" \
   "$SCRIPT_DIR/docker-compose.yml" \
   "$SCRIPT_DIR/redis.conf" \
   "$SCRIPT_DIR/.generated/livekit.yaml" \
   "$SCRIPT_DIR/.generated/caddy.yaml" \
   "$SSH_HOST:$REMOTE_DIR/.incoming/"
 
-ssh -i "$SSH_KEY" "$SSH_HOST" "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE'
+ssh "${ssh_options[@]}" "$SSH_HOST" "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE'
 set -euo pipefail
 cd "$REMOTE_DIR"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p backups
+had_previous=0
 for file in docker-compose.yaml livekit.yaml caddy.yaml redis.conf; do
   if [[ -f "$file" ]]; then cp "$file" "backups/$file.$timestamp"; fi
+  [[ -f "$file" ]] && had_previous=1
 done
 
 install -m 0644 .incoming/docker-compose.yml docker-compose.yaml
 install -m 0600 .incoming/livekit.yaml livekit.yaml
 install -m 0644 .incoming/caddy.yaml caddy.yaml
 install -m 0644 .incoming/redis.conf redis.conf
-/usr/local/bin/docker-compose -f docker-compose.yaml config -q
-/usr/local/bin/docker-compose -f docker-compose.yaml pull --quiet
-systemctl restart livekit-docker
+docker compose -f docker-compose.yaml config -q
+docker compose -f docker-compose.yaml pull --quiet
+docker compose -f docker-compose.yaml up -d --remove-orphans
 
 for attempt in $(seq 1 60); do
   if curl -fsS http://127.0.0.1:7880 >/dev/null \
@@ -47,13 +53,18 @@ for attempt in $(seq 1 60); do
   sleep 1
 done
 
-journalctl -u livekit-docker --no-pager -n 120 >&2 || true
-for file in docker-compose.yaml livekit.yaml caddy.yaml redis.conf; do
-  backup="backups/$file.$timestamp"
-  if [[ -f "$backup" ]]; then cp "$backup" "$file"; fi
-done
-systemctl restart livekit-docker || true
-echo "LiveKit commentary health check failed; previous config restored." >&2
+docker compose -f docker-compose.yaml logs --tail=120 >&2 || true
+if [[ "$had_previous" -eq 1 ]]; then
+  for file in docker-compose.yaml livekit.yaml caddy.yaml redis.conf; do
+    backup="backups/$file.$timestamp"
+    if [[ -f "$backup" ]]; then cp "$backup" "$file"; fi
+  done
+  docker compose -f docker-compose.yaml up -d --remove-orphans || true
+  echo "LiveKit commentary health check failed; previous config restored." >&2
+else
+  docker compose -f docker-compose.yaml down --remove-orphans || true
+  echo "LiveKit commentary first deployment failed and was stopped." >&2
+fi
 exit 1
 REMOTE
 

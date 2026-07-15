@@ -266,7 +266,7 @@ duplicate notifications, and unaffected-court evidence:
 8. Controller restart with desired-state reconstruction.
 9. Temporary Supabase/origin failure.
 10. YouTube API and destination lifecycle faults.
-11. Monitoring agent, observability service, Pushover, SMS, and dead-man faults.
+11. Monitoring agent, observability service, Pushover, and dead-man faults.
 
 ### Phase 5: shadow operations
 
@@ -284,8 +284,8 @@ After Phases 1-4 pass:
 2. Move YouTube and program credentials to secret references resolved only by
    the controller.
 3. Add reusable YouTube stream and per-match broadcast orchestration.
-4. Complete Pushover-backed Healthchecks delivery. Treat Twilio escalation as an
-   optional later enhancement after A2P approval and real delivery proof.
+4. Complete Pushover-backed Healthchecks delivery. SMS is not part of the
+   monitoring contract.
 5. Run the two-court and full shadow events before public cutover.
 
 ## Current Operator Dependencies
@@ -293,5 +293,4 @@ After Phases 1-4 pass:
 - Final six AVKANS cameras for the representative direct-caller topology.
 - A venue/final-router test that sustains at least 75 Mbps through Speedify.
 - Controlled Healthchecks withheld-ping acceptance after the deployed audit.
-- Twilio A2P approval only if optional SMS escalation is pursued later.
 - Explicit confirmation before deleting the current event-tagged droplets.

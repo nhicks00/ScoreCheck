@@ -81,29 +81,6 @@ describe("monitoring configuration", () => {
     expect(parsed.healthchecksChannelAuditIntervalMs).toBe(300_000);
   });
 
-  it("requires the complete Twilio API and callback credential set", () => {
-    const base = {
-      MONITOR_API_TOKEN: "abcdefghijklmnopqrstuvwxyz",
-      ALERTMANAGER_WEBHOOK_TOKEN: "zyxwvutsrqponmlkjihgfedcba",
-      MONITOR_BROWSER_HEARTBEAT_SECRET: "browser-heartbeat-secret-that-is-long-enough",
-      MONITOR_PUBLIC_HOST: "monitor.example.test"
-    };
-    expect(() => loadServiceConfig({
-      ...base,
-      TWILIO_ACCOUNT_SID: "AC123"
-    })).toThrow(/API key SID\/secret/);
-    const config = loadServiceConfig({
-      ...base,
-      TWILIO_ACCOUNT_SID: "AC123",
-      TWILIO_API_KEY_SID: "SK123",
-      TWILIO_API_KEY_SECRET: "api-secret",
-      TWILIO_FROM_NUMBER: "+15555550100",
-      TWILIO_TO_NUMBER: "+15555550200"
-    });
-    expect(config.twilioApiKeySid).toBe("SK123");
-    expect(config.twilioApiKeySecret).toBe("api-secret");
-  });
-
   it("normalizes API base URLs without a trailing slash", () => {
     const agent = loadAgentConfig({
       MONITOR_AGENT_ID: "agent",

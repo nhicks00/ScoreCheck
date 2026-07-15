@@ -438,7 +438,6 @@ async function pollAll() {
   youtubeApiUp.set(snapshot.youtube.state === "NOT_APPLICABLE" ? -1 : snapshot.youtube.state === "HEALTHY" ? 1 : 0);
   const notificationHealth = snapshot.notifications;
   notificationProviderHealthy.set({ provider: "pushover" }, providerMetric(notificationHealth.pushover));
-  notificationProviderHealthy.set({ provider: "twilio_sms" }, providerMetric(notificationHealth.twilioSms));
   activeIncidents.set(snapshot.incidents.length);
   activeFaultGates.set(faultGateControl.active().length);
   for (const court of snapshot.courts) {

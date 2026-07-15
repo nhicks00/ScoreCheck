@@ -7,6 +7,7 @@ REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
 SSH_HOST="${MONITOR_SSH_HOST:?MONITOR_SSH_HOST is required}"
 SSH_KEY="${MONITOR_SSH_KEY:-$HOME/.ssh/scorecheck_do}"
 REMOTE_DIR="${MONITOR_REMOTE_DIR:-/opt/scorecheck-monitoring}"
+KNOWN_HOSTS="${SCORECHECK_SSH_KNOWN_HOSTS:?SCORECHECK_SSH_KNOWN_HOSTS is required}"
 
 for command in git node rsync ssh; do
   if ! command -v "$command" >/dev/null 2>&1; then
@@ -43,8 +44,8 @@ node "$SCRIPT_DIR/render-service-env.mjs"
 
 candidate_name="${REVISION:0:12}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 candidate_dir="$REMOTE_DIR/.incoming/$candidate_name"
-ssh_options=(-i "$SSH_KEY" -o IdentitiesOnly=yes -o BatchMode=yes)
-rsync_shell="ssh -i $SSH_KEY -o IdentitiesOnly=yes -o BatchMode=yes"
+ssh_options=(-i "$SSH_KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS")
+rsync_shell="ssh -i $SSH_KEY -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS"
 
 cleanup_candidate() {
   ssh "${ssh_options[@]}" "$SSH_HOST" "rm -rf '$candidate_dir'" >/dev/null 2>&1 || true

@@ -7,6 +7,7 @@ SSH_HOST="${MEDIAMTX_SSH_HOST:-root@206.189.169.162}"
 SSH_KEY="${MEDIAMTX_SSH_KEY:-$HOME/.ssh/scorecheck_do}"
 REMOTE_DIR="${MEDIAMTX_REMOTE_DIR:-/opt/mediamtx}"
 GENERATED="$SCRIPT_DIR/.generated/mediamtx.yml"
+KNOWN_HOSTS="${SCORECHECK_SSH_KNOWN_HOSTS:?SCORECHECK_SSH_KNOWN_HOSTS is required}"
 
 for court in $(seq 1 8); do
   user_var="MEDIAMTX_COURT_${court}_PUBLISH_USER"
@@ -18,18 +19,25 @@ export MEDIAMTX_PUBLIC_IP="${MEDIAMTX_PUBLIC_IP:-${SSH_HOST#*@}}"
 
 node "$SCRIPT_DIR/render-config.mjs"
 
-ssh -i "$SSH_KEY" "$SSH_HOST" "mkdir -p '$REMOTE_DIR/.incoming' '$REMOTE_DIR/fonts' /var/lib/scorecheck-monitoring/ffmpeg"
-rsync -a -e "ssh -i $SSH_KEY" \
+ssh_options=(-i "$SSH_KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS")
+rsync_shell="ssh -i $SSH_KEY -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS"
+
+ssh "${ssh_options[@]}" "$SSH_HOST" "mkdir -p '$REMOTE_DIR/.incoming' '$REMOTE_DIR/fonts' /var/lib/scorecheck-monitoring/ffmpeg"
+rsync -a -e "$rsync_shell" \
   "$SCRIPT_DIR/docker-compose.yml" "$SCRIPT_DIR/scorecheck-ffmpeg-runner.sh" "$GENERATED" \
   "$SSH_HOST:$REMOTE_DIR/.incoming/"
 
-ssh -i "$SSH_KEY" "$SSH_HOST" "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE'
+ssh "${ssh_options[@]}" "$SSH_HOST" "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE'
 set -euo pipefail
 cd "$REMOTE_DIR"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p backups
-cp docker-compose.yml "backups/docker-compose.$timestamp.yml"
-cp mediamtx.yml "backups/mediamtx.$timestamp.yml"
+had_previous=0
+if [[ -f docker-compose.yml && -f mediamtx.yml ]]; then
+  cp docker-compose.yml "backups/docker-compose.$timestamp.yml"
+  cp mediamtx.yml "backups/mediamtx.$timestamp.yml"
+  had_previous=1
+fi
 
 install -m 0644 .incoming/docker-compose.yml docker-compose.yml
 install -m 0600 .incoming/mediamtx.yml mediamtx.yml
@@ -37,9 +45,13 @@ install -m 0755 .incoming/scorecheck-ffmpeg-runner.sh scorecheck-ffmpeg-runner.s
 docker compose config -q
 
 if ! docker compose up -d --force-recreate; then
-  cp "backups/docker-compose.$timestamp.yml" docker-compose.yml
-  cp "backups/mediamtx.$timestamp.yml" mediamtx.yml
-  docker compose up -d --force-recreate
+  if [[ "$had_previous" -eq 1 ]]; then
+    cp "backups/docker-compose.$timestamp.yml" docker-compose.yml
+    cp "backups/mediamtx.$timestamp.yml" mediamtx.yml
+    docker compose up -d --force-recreate
+  else
+    docker compose down --remove-orphans || true
+  fi
   exit 1
 fi
 
@@ -53,9 +65,14 @@ for attempt in $(seq 1 30); do
 done
 
 docker logs --tail=100 mediamtx >&2 || true
-cp "backups/docker-compose.$timestamp.yml" docker-compose.yml
-cp "backups/mediamtx.$timestamp.yml" mediamtx.yml
-docker compose up -d --force-recreate
-echo "MediaMTX health check failed; previous config restored." >&2
+if [[ "$had_previous" -eq 1 ]]; then
+  cp "backups/docker-compose.$timestamp.yml" docker-compose.yml
+  cp "backups/mediamtx.$timestamp.yml" mediamtx.yml
+  docker compose up -d --force-recreate
+  echo "MediaMTX health check failed; previous config restored." >&2
+else
+  docker compose down --remove-orphans || true
+  echo "MediaMTX first deployment failed and was stopped." >&2
+fi
 exit 1
 REMOTE

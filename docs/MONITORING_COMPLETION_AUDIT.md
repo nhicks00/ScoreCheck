@@ -24,7 +24,7 @@ capacity.
 | Durable incidents and operator actions | Fingerprints, open/ack/resolved transitions, checkpoints, acknowledgements, timed silences, expiry re-arm | Deployed and unit-tested |
 | Alert expression behavior | Promtool fixtures validate hold times, labels, annotations, court isolation, black/freeze exclusion, decode/freeze rate bands, live gating, shared-worker fan-out, Egress output deficits, capacity, and external phone-channel attachment | Deployed; 49/49 production rules healthy with zero active alerts |
 | Page suppression behavior | Disposable network-isolated Alertmanager proves same-court and shared-dependency inhibition while peer alerts remain active | Enforced before deployment |
-| Phone paging | Required Pushover emergency acknowledgement and recovery; optional Twilio SMS escalation | Pushover opening/recovery delivery proven in physical Camera 1 episodes; controlled acknowledgement tap remains pending. Twilio is intentionally skipped while carrier registration blocks delivery |
+| Phone paging | Pushover emergency acknowledgement and recovery | Pushover opening/recovery delivery proven in physical Camera 1 episodes; controlled acknowledgement tap remains pending |
 | Independent dead-man | Baseline and active Healthchecks senders with coverage-aware cadence plus read-only Pushover attachment audit | Audit deployed; baseline running, active idle-paused, and Pushover attached to both. Controlled withheld-ping gate remains pending |
 | One-court real fault gate | Camera, network, preview, browser, commentary, score, Egress, YouTube, agent, dead-man faults | Physical Camera 1 loss/recovery, durable paging, same-page viewer continuity, A/V sync, and one-court `c-4` capacity passed. Remaining real fault rows are pending |
 | Eight-court real load/fault gate | Independent compositor per court plus warm spare, eight qualified feeds, two commentary rooms, score on all courts | Final evaluator now binds a fresh schema-2 all-camera monitor/ffprobe qualification artifact to exact source profiles; revised-topology profile and endurance runs remain pending |
@@ -152,10 +152,9 @@ operator prerequisites are:
 4. Qualify a final normalization/Egress layout that can admit eight concurrent
    outputs and verify the required 75 Mbps bonded-upload floor at the venue.
 
-Twilio is not required for this release. The attempted SMS path is blocked by
-carrier registration/sender approval, so all Twilio deployment variables remain
-unset. Pushover is the required phone-alert channel; Twilio should be revisited
-only after registration completes and a real delivery succeeds.
+Pushover is the sole phone-alert provider. SMS credentials, fallback behavior,
+carrier registration, and SMS acceptance work are outside the monitoring
+contract.
 
 Operator approval for isolated monitoring fault gates is recorded. The user
 ended the active soak at 16:00 CDT on 2026-07-13 after the final recheck. The

@@ -1,5 +1,9 @@
 # ScoreCheck Unified Monitoring Dashboard Research Brief
 
+> Historical research input. The implemented hard-cutover notification contract
+> uses Pushover only; SMS/Twilio options discussed below are superseded and are
+> not current requirements.
+
 Status: architecture and research handoff only. No implementation is approved by this document.
 
 Prepared for: external architecture review and research before build approval

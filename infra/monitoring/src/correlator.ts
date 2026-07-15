@@ -645,8 +645,7 @@ const OFF_EXPECTATION: CourtExpectation = {
 
 const OFF_NOTIFICATION_HEALTH: NotificationHealth = {
   state: "NOT_APPLICABLE",
-  pushover: { configured: false, lastSuccessAt: null, lastFailureAt: null },
-  twilioSms: { configured: false, lastSuccessAt: null, lastFailureAt: null }
+  pushover: { configured: false, lastSuccessAt: null, lastFailureAt: null }
 };
 
 const OFF_DEAD_MAN_CHECK = {

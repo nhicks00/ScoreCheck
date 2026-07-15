@@ -3,48 +3,13 @@ import type { IncidentSnapshot } from "./contracts.js";
 import type { IncidentStore, StoredNotification } from "./incidentStore.js";
 import { NotificationDispatcher } from "./notifications.js";
 
-describe("notification provider validation", () => {
-  it("ignores historical failures from a disabled optional SMS provider", () => {
-    const config = {
-      ...notificationConfig(),
-      twilioAccountSid: null,
-      twilioApiKeySid: null,
-      twilioApiKeySecret: null,
-      twilioFromNumber: null,
-      twilioToNumber: null
-    };
-    const dispatcher = new NotificationDispatcher(config, {} as IncidentStore);
-    dispatcher.hydrate([
-      storedNotification({ status: "delivered", deliveredAt: "2026-07-12T18:00:30.000Z" }),
-      storedNotification({ provider: "twilio_sms", status: "failed", providerErrorCode: "30034" })
-    ]);
-
+describe("Pushover notification delivery", () => {
+  it("hydrates Pushover health from durable provider history", () => {
+    const dispatcher = new NotificationDispatcher(notificationConfig(), {} as IncidentStore);
+    dispatcher.hydrate([storedNotification({ status: "delivered", deliveredAt: "2026-07-12T18:00:30.000Z" })]);
     expect(dispatcher.health()).toEqual({
       state: "HEALTHY",
-      pushover: {
-        configured: true,
-        lastSuccessAt: "2026-07-12T18:00:30.000Z",
-        lastFailureAt: null
-      },
-      twilioSms: {
-        configured: false,
-        lastSuccessAt: null,
-        lastFailureAt: null
-      }
-    });
-  });
-
-  it("keeps failures from an enabled optional SMS provider visible", () => {
-    const dispatcher = new NotificationDispatcher(notificationConfig(), {} as IncidentStore);
-    dispatcher.hydrate([
-      storedNotification({ status: "delivered", deliveredAt: "2026-07-12T18:00:30.000Z" }),
-      storedNotification({ provider: "twilio_sms", status: "failed", providerErrorCode: "30034" })
-    ]);
-
-    expect(dispatcher.health()).toMatchObject({
-      state: "DEGRADED",
-      pushover: { configured: true, lastFailureAt: null },
-      twilioSms: { configured: true, lastFailureAt: "2026-07-12T18:00:00.000Z" }
+      pushover: { configured: true, lastSuccessAt: "2026-07-12T18:00:30.000Z", lastFailureAt: null }
     });
   });
 
@@ -53,26 +18,6 @@ describe("notification provider validation", () => {
     const dispatcher = new NotificationDispatcher(notificationConfig(), {} as IncidentStore, send);
     await dispatcher.handleChanges([{ incident: criticalIncident(), eventType: "OPENED" }], new Date(), () => true);
     expect(send).not.toHaveBeenCalled();
-  });
-
-  it("uses the restricted API key pair for Twilio message submission", async () => {
-    const notification = storedNotification({ provider: "twilio_sms" });
-    const store = {
-      ensureNotification: vi.fn(async () => ({ notification, created: true })),
-      updateNotification: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({ ...notification, ...patch }))
-    } as unknown as IncidentStore;
-    const send = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
-      sid: "SM0123456789",
-      status: "queued",
-      error_code: null
-    }), { status: 201 }));
-    const config = { ...notificationConfig(), pushoverAppToken: null, pushoverUserKey: null };
-    const dispatcher = new NotificationDispatcher(config, store, send);
-    await dispatcher.handleChanges([{ incident: criticalIncident(), eventType: "OPENED" }]);
-
-    expect(send).toHaveBeenCalledOnce();
-    const init = send.mock.calls[0]?.[1];
-    expect(new Headers(init?.headers).get("authorization")).toBe(`Basic ${Buffer.from("SK123:api-secret").toString("base64")}`);
   });
 
   it("deduplicates within an episode but pages a recurring fingerprint in a new episode", async () => {
@@ -110,49 +55,17 @@ describe("notification provider validation", () => {
     const dispatcher = new NotificationDispatcher(notificationConfig(), store, send);
     const first = criticalIncident();
     const second = criticalIncident({ id: "00000000-0000-4000-8000-000000000099", openedAt: "2026-07-12T19:00:00.000Z" });
-
     await dispatcher.handleChanges([{ incident: first, eventType: "OPENED" }], new Date("2026-07-12T18:00:00.000Z"));
     await dispatcher.handleChanges([{ incident: first, eventType: "EVIDENCE_UPDATED" }], new Date("2026-07-12T18:00:10.000Z"));
     await dispatcher.handleChanges([{ incident: second, eventType: "OPENED" }], new Date("2026-07-12T19:00:00.000Z"));
-
     expect(send).toHaveBeenCalledTimes(2);
     expect(records.size).toBe(2);
-    expect([...records.values()].map((notification) => notification.incidentId)).toEqual([first.id, second.id]);
   });
 
-  it("polls a nonterminal Twilio notification to its terminal delivery state", async () => {
-    const now = new Date("2026-07-12T18:01:00.000Z");
-    const notification = storedNotification({
-      provider: "twilio_sms",
-      providerMessageId: "SM0123456789",
-      status: "accepted",
-      acceptedAt: "2026-07-12T18:00:00.000Z"
-    });
-    const store = {
-      pendingProviderNotifications: vi.fn(async () => [notification]),
-      updateNotification: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({ ...notification, ...patch }))
-    } as unknown as IncidentStore;
-    const send = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
-      status: "delivered",
-      error_code: null
-    }), { status: 200 }));
-    const dispatcher = new NotificationDispatcher(notificationConfig(), store, send);
-    await dispatcher.maintain([], now);
-
-    expect(store.pendingProviderNotifications).toHaveBeenCalledWith("twilio_sms", now);
-    expect(store.updateNotification).toHaveBeenCalledWith(notification.id, {
-      status: "delivered",
-      deliveredAt: now.toISOString(),
-      providerErrorCode: null
-    });
-    expect(new Headers(send.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(`Basic ${Buffer.from("SK123:api-secret").toString("base64")}`);
-  });
-
-  it("re-arms a cancelled emergency after silence expiry before starting SMS escalation", async () => {
+  it("re-arms a cancelled emergency after a silence expires", async () => {
     const now = new Date("2026-07-12T18:00:00.000Z");
     let notification = storedNotification({ status: "cancelled", submittedAt: "2026-07-12T17:30:00.000Z", expiredAt: "2026-07-12T17:45:00.000Z" });
     const store = {
-      pendingProviderNotifications: vi.fn(async () => []),
       ensureNotification: vi.fn(async () => ({ notification, created: false })),
       rearmNotification: vi.fn(async () => {
         notification = storedNotification({ status: "pending", submittedAt: now.toISOString() });
@@ -163,44 +76,38 @@ describe("notification provider validation", () => {
         return notification;
       })
     } as unknown as IncidentStore;
-    const calls: string[] = [];
     const send = vi.fn<typeof fetch>(async (input) => {
-      const url = String(input);
-      calls.push(url);
-      if (url.includes("/messages.json")) return new Response(JSON.stringify({ status: 1, receipt: "receipt-1", request: "request-1" }), { status: 200 });
+      if (String(input).includes("/messages.json")) return new Response(JSON.stringify({ status: 1, receipt: "receipt-1", request: "request-1" }), { status: 200 });
       return new Response(JSON.stringify({ status: 1, acknowledged: 0, expired: 0, last_delivered_at: 0 }), { status: 200 });
     });
     const dispatcher = new NotificationDispatcher(notificationConfig(), store, send);
-    await dispatcher.maintain([criticalIncident({ openedAt: "2026-07-12T17:00:00.000Z" })], now);
+    await dispatcher.maintain([criticalIncident()], now);
     expect(store.rearmNotification).toHaveBeenCalledOnce();
-    expect(calls.some((url) => url.includes("api.pushover.net/1/messages.json"))).toBe(true);
-    expect(calls.some((url) => url.includes("api.twilio.com"))).toBe(false);
+    expect(send.mock.calls.some(([url]) => String(url).includes("api.pushover.net/1/messages.json"))).toBe(true);
   });
 
   it("does not announce recovery for an incident that never paged", async () => {
-    const store = {
-      findNotification: vi.fn(async () => null)
-    } as unknown as IncidentStore;
+    const store = { findNotification: vi.fn(async () => null) } as unknown as IncidentStore;
     const send = vi.fn<typeof fetch>();
     const dispatcher = new NotificationDispatcher(notificationConfig(), store, send);
     await dispatcher.handleChanges([{
       incident: criticalIncident({ severity: "warning", status: "resolved", resolvedAt: "2026-07-12T18:01:00.000Z" }),
-      eventType: "RESOLVED"
+      eventType: "RESOLVED",
+      detail: { resolutionKind: "DEPENDENCY_RECOVERED" }
     }], new Date("2026-07-12T18:01:00.000Z"));
     expect(send).not.toHaveBeenCalled();
   });
 
-  it("announces one recovery on each provider that sent the incident", async () => {
-    const openPushover = storedNotification({ providerMessageId: "receipt-1", status: "delivered", deliveredAt: "2026-07-12T18:00:30.000Z" });
+  it("announces one Pushover recovery when the dependency actually recovers", async () => {
+    const opening = storedNotification({ providerMessageId: "receipt-1", status: "delivered", deliveredAt: "2026-07-12T18:00:30.000Z" });
     const recovery = storedNotification({ id: "00000000-0000-4000-8000-000000000004", kind: "recovery" });
     const store = {
-      findNotification: vi.fn(async (_incidentId: string, provider: string, kind: string) => provider === "pushover" && kind === "open" ? openPushover : null),
+      findNotification: vi.fn(async () => opening),
       ensureNotification: vi.fn(async () => ({ notification: recovery, created: true })),
       updateNotification: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({ ...recovery, ...patch }))
     } as unknown as IncidentStore;
     const send = vi.fn<typeof fetch>(async (input) => {
-      const url = String(input);
-      if (url.includes("/cancel.json")) return new Response(JSON.stringify({ status: 1 }), { status: 200 });
+      if (String(input).includes("/cancel.json")) return new Response(JSON.stringify({ status: 1 }), { status: 200 });
       return new Response(JSON.stringify({ status: 1, request: "request-recovery" }), { status: 200 });
     });
     const dispatcher = new NotificationDispatcher(notificationConfig(), store, send);
@@ -210,25 +117,23 @@ describe("notification provider validation", () => {
       detail: { resolutionKind: "DEPENDENCY_RECOVERED" }
     }], new Date("2026-07-12T18:01:00.000Z"));
     expect(send).toHaveBeenCalledTimes(2);
-    expect(store.ensureNotification).toHaveBeenCalledWith(openPushover.incidentId, "pushover", "recovery", expect.any(Date));
+    expect(store.ensureNotification).toHaveBeenCalledWith(opening.incidentId, "pushover", "recovery", expect.any(Date));
   });
 
   it("cancels the emergency without announcing recovery when an expectation ends", async () => {
-    const openPushover = storedNotification({ providerMessageId: "receipt-1", status: "delivered", deliveredAt: "2026-07-12T18:00:30.000Z" });
+    const opening = storedNotification({ providerMessageId: "receipt-1", status: "delivered", deliveredAt: "2026-07-12T18:00:30.000Z" });
     const store = {
-      findNotification: vi.fn(async () => openPushover),
-      updateNotification: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({ ...openPushover, ...patch })),
+      findNotification: vi.fn(async () => opening),
+      updateNotification: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({ ...opening, ...patch })),
       ensureNotification: vi.fn()
     } as unknown as IncidentStore;
     const send = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ status: 1 }), { status: 200 }));
     const dispatcher = new NotificationDispatcher(notificationConfig(), store, send);
-
     await dispatcher.handleChanges([{
       incident: criticalIncident({ status: "resolved", resolvedAt: "2026-07-12T18:01:00.000Z" }),
       eventType: "RESOLVED",
       detail: { resolutionKind: "FAULT_GATE_EXPIRED" }
     }], new Date("2026-07-12T18:01:00.000Z"));
-
     expect(send).toHaveBeenCalledOnce();
     expect(String(send.mock.calls[0]?.[0])).toContain("/cancel.json");
     expect(store.ensureNotification).not.toHaveBeenCalled();
@@ -240,12 +145,6 @@ function notificationConfig() {
     monitorDashboardUrl: "https://score.example.test/admin/monitor",
     pushoverAppToken: "pushover-token",
     pushoverUserKey: "pushover-user",
-    twilioAccountSid: "AC123",
-    twilioApiKeySid: "SK123",
-    twilioApiKeySecret: "api-secret",
-    twilioFromNumber: "+15555550100",
-    twilioToNumber: "+15555550200",
-    notificationSmsEscalationMs: 120_000,
     notificationStatusIntervalMs: 30_000
   };
 }

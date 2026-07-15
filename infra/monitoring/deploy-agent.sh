@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SSH_HOST="${MONITOR_AGENT_SSH_HOST:?MONITOR_AGENT_SSH_HOST is required}"
 SSH_KEY="${MONITOR_AGENT_SSH_KEY:-$HOME/.ssh/scorecheck_do}"
 REMOTE_DIR="${MONITOR_AGENT_REMOTE_DIR:-/opt/scorecheck-monitor-agent}"
+KNOWN_HOSTS="${SCORECHECK_SSH_KNOWN_HOSTS:?SCORECHECK_SSH_KNOWN_HOSTS is required}"
 
 : "${MONITOR_AGENT_ID:?MONITOR_AGENT_ID is required}"
 : "${MONITOR_AGENT_ROLE:?MONITOR_AGENT_ROLE is required}"
@@ -14,9 +15,11 @@ REMOTE_DIR="${MONITOR_AGENT_REMOTE_DIR:-/opt/scorecheck-monitor-agent}"
 
 node "$SCRIPT_DIR/render-agent-env.mjs"
 GENERATED_ENV="$SCRIPT_DIR/.generated/agent-$MONITOR_AGENT_ID.env"
+ssh_options=(-i "$SSH_KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS")
+rsync_shell="ssh -i $SSH_KEY -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS"
 
-ssh -i "$SSH_KEY" -o IdentitiesOnly=yes "$SSH_HOST" "mkdir -p '$REMOTE_DIR/.incoming'"
-rsync -a --delete -e "ssh -i $SSH_KEY -o IdentitiesOnly=yes" \
+ssh "${ssh_options[@]}" "$SSH_HOST" "mkdir -p '$REMOTE_DIR/.incoming'"
+rsync -a --delete -e "$rsync_shell" \
   "$SCRIPT_DIR/src" \
   "$SCRIPT_DIR/package.json" \
   "$SCRIPT_DIR/package-lock.json" \
@@ -24,9 +27,9 @@ rsync -a --delete -e "ssh -i $SSH_KEY -o IdentitiesOnly=yes" \
   "$SCRIPT_DIR/Dockerfile" \
   "$SCRIPT_DIR/agent-compose.yml" \
   "$SSH_HOST:$REMOTE_DIR/.incoming/"
-rsync -a -e "ssh -i $SSH_KEY -o IdentitiesOnly=yes" "$GENERATED_ENV" "$SSH_HOST:$REMOTE_DIR/.incoming/.env"
+rsync -a -e "$rsync_shell" "$GENERATED_ENV" "$SSH_HOST:$REMOTE_DIR/.incoming/.env"
 
-ssh -i "$SSH_KEY" -o IdentitiesOnly=yes "$SSH_HOST" "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE'
+ssh "${ssh_options[@]}" "$SSH_HOST" "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE'
 set -euo pipefail
 cd "$REMOTE_DIR"
 mkdir -p /var/lib/scorecheck-monitoring/ffmpeg

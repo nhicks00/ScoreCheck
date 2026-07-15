@@ -1,0 +1,307 @@
+#!/usr/bin/env node
+
+import { createHash } from "node:crypto";
+import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { spawn } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
+
+export class LocalStackDeployer {
+  constructor({ repoRoot, secretsDirectory, sshPrivateKey, knownHostsPath, runner = runCommand, fetchImpl = globalThis.fetch }) {
+    this.repoRoot = resolve(repoRoot);
+    this.secretsDirectory = protectedAbsolute(secretsDirectory, "secrets directory");
+    this.sshPrivateKey = protectedAbsolute(sshPrivateKey, "SSH private key");
+    this.knownHostsPath = protectedAbsolute(knownHostsPath, "event known_hosts path");
+    this.runner = runner;
+    this.fetchImpl = fetchImpl;
+    this.agentConfig = null;
+  }
+
+  async deploy({ manifest, spec, resource, state }) {
+    await this.#validateProtectedInputs();
+    const hostKeySha256 = await this.#ensureSsh(resource.publicIpv4);
+    const common = {
+      SCORECHECK_SSH_KNOWN_HOSTS: this.knownHostsPath
+    };
+    if (spec.role === "commentary") {
+      const env = await loadProtectedEnv(join(this.secretsDirectory, "commentary.env"));
+      await this.#script("infra/commentary/deploy.sh", {
+        ...env,
+        ...common,
+        LIVEKIT_COMMENTARY_SSH_HOST: `root@${resource.publicIpv4}`,
+        LIVEKIT_COMMENTARY_SSH_KEY: this.sshPrivateKey,
+        LIVEKIT_COMMENTARY_PUBLIC_IP: requiredAddressSlot(state, "commentary")
+      });
+    } else if (spec.role === "ingest") {
+      const env = await loadProtectedEnv(join(this.secretsDirectory, "ingest.env"));
+      await this.#script("infra/mediamtx/deploy.sh", {
+        ...env,
+        ...common,
+        MEDIAMTX_SSH_HOST: `root@${resource.publicIpv4}`,
+        MEDIAMTX_SSH_KEY: this.sshPrivateKey,
+        MEDIAMTX_PUBLIC_IP: requiredAddressSlot(state, "ingest"),
+        MEDIAMTX_PUBLIC_HOST: endpointForRole(manifest, "ingest")
+      });
+    } else if (["compositor", "compositor-spare"].includes(spec.role)) {
+      const environmentPath = join(this.secretsDirectory, "compositors", `${spec.name}.env`);
+      await assertProtectedFile(environmentPath, `${spec.name} environment`);
+      await this.#script("infra/compositor/deploy.sh", {
+        ...common,
+        COMPOSITOR_SSH_HOST: `root@${resource.publicIpv4}`,
+        COMPOSITOR_SSH_KEY: this.sshPrivateKey,
+        COMPOSITOR_ENV_FILE: environmentPath
+      });
+    } else if (spec.role === "observability") {
+      const env = await loadProtectedEnv(join(this.secretsDirectory, "observability.env"));
+      const plans = await this.#agentPlans(manifest, state);
+      await this.#script("infra/monitoring/deploy.sh", {
+        ...env,
+        ...common,
+        MONITOR_SSH_HOST: `root@${resource.publicIpv4}`,
+        MONITOR_SSH_KEY: this.sshPrivateKey,
+        MONITOR_PUBLIC_HOST: endpointForRole(manifest, "observability"),
+        MONITOR_AGENT_TARGETS: serializeAgentTargets(plans)
+      });
+    } else {
+      throw new Error(`unsupported deployment role ${spec.role}`);
+    }
+    return { healthy: true, revision: await gitRevision(this.repoRoot, this.runner), evidence: { hostKeySha256 } };
+  }
+
+  async finalizeStack({ manifest, state }) {
+    const plans = await this.#agentPlans(manifest, state);
+    for (const plan of plans) {
+      await this.#ensureSsh(plan.publicIpv4);
+      await this.#script("infra/monitoring/deploy-agent.sh", {
+        SCORECHECK_SSH_KNOWN_HOSTS: this.knownHostsPath,
+        MONITOR_AGENT_SSH_HOST: `root@${plan.publicIpv4}`,
+        MONITOR_AGENT_SSH_KEY: this.sshPrivateKey,
+        ...plan.environment
+      });
+    }
+    return { healthy: true, evidence: { deployedAgents: plans.map((entry) => entry.id) } };
+  }
+
+  async verifyStack({ manifest, state }) {
+    const checks = [];
+    for (const spec of manifest.droplets) {
+      const resource = state.droplets[spec.name];
+      await this.#ensureSsh(resource.publicIpv4);
+      const command = verificationCommand(spec.role);
+      await this.#ssh(resource.publicIpv4, command);
+      checks.push({ name: spec.name, role: spec.role, status: "healthy" });
+    }
+    for (const endpoint of manifest.endpoints.filter((entry) => ["commentary", "observability"].includes(entry.role))) {
+      const response = await this.fetchImpl(`https://${endpoint.hostname}${endpoint.role === "observability" ? "/healthz" : ""}`, {
+        signal: AbortSignal.timeout(10_000),
+        redirect: "manual"
+      });
+      if (response.status < 200 || response.status >= 400) throw new Error(`${endpoint.hostname} public TLS health returned HTTP ${response.status}`);
+    }
+    return { healthy: true, evidence: { resources: checks, verifiedAt: new Date().toISOString() } };
+  }
+
+  async #agentPlans(manifest, state) {
+    if (!this.agentConfig) {
+      const path = join(this.secretsDirectory, "agent-tokens.json");
+      await assertProtectedFile(path, "agent token configuration");
+      this.agentConfig = JSON.parse(await readFile(path, "utf8"));
+    }
+    return buildAgentPlans({ manifest, state, tokenConfig: this.agentConfig });
+  }
+
+  async #validateProtectedInputs() {
+    await assertProtectedFile(this.sshPrivateKey, "SSH private key");
+    const directory = await stat(this.secretsDirectory);
+    if (!directory.isDirectory() || (directory.mode & 0o077) !== 0) throw new Error("secrets directory must be mode 0700 or stricter");
+    await mkdir(dirname(this.knownHostsPath), { recursive: true, mode: 0o700 });
+    await chmod(dirname(this.knownHostsPath), 0o700);
+  }
+
+  async #ensureSsh(ip) {
+    if (!ip) throw new Error("Droplet has no public IPv4 for SSH bootstrap");
+    await mkdir(dirname(this.knownHostsPath), { recursive: true, mode: 0o700 });
+    let known = false;
+    try {
+      await this.runner("ssh-keygen", ["-F", ip, "-f", this.knownHostsPath], { allowFailure: false });
+      known = true;
+    } catch {}
+    if (!known) {
+      const scan = await this.runner("ssh-keyscan", ["-T", "10", "-H", ip], { capture: true });
+      if (!scan.stdout.trim()) throw new Error(`could not capture SSH host key for ${ip}`);
+      await writeFile(this.knownHostsPath, scan.stdout, { flag: "a", mode: 0o600 });
+      await chmod(this.knownHostsPath, 0o600);
+    }
+    let lastError;
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      try {
+        await this.#ssh(ip, "cloud-init status --wait >/dev/null && test -S /var/run/docker.sock");
+        const keyLines = await this.runner("ssh-keygen", ["-F", ip, "-f", this.knownHostsPath], { capture: true });
+        return sha256(keyLines.stdout);
+      } catch (error) {
+        lastError = error;
+        await delay(5_000);
+      }
+    }
+    throw new Error(`SSH/cloud-init did not become ready for ${ip}: ${lastError?.message ?? "unknown error"}`);
+  }
+
+  async #ssh(ip, remoteCommand) {
+    return this.runner("ssh", [
+      "-i", this.sshPrivateKey,
+      "-o", "IdentitiesOnly=yes",
+      "-o", "BatchMode=yes",
+      "-o", "StrictHostKeyChecking=yes",
+      "-o", `UserKnownHostsFile=${this.knownHostsPath}`,
+      "-o", "ConnectTimeout=10",
+      `root@${ip}`,
+      remoteCommand
+    ], { capture: true });
+  }
+
+  async #script(relativePath, environment) {
+    return this.runner(join(this.repoRoot, relativePath), [], { env: { ...process.env, ...environment }, capture: true });
+  }
+}
+
+export function buildAgentPlans({ manifest, state, tokenConfig }) {
+  if (!tokenConfig || tokenConfig.schemaVersion !== 1 || !tokenConfig.tokens || typeof tokenConfig.tokens !== "object" || Array.isArray(tokenConfig.tokens)) {
+    throw new Error("agent token configuration is invalid");
+  }
+  const expectedNames = manifest.droplets.map((entry) => entry.name).sort();
+  if (JSON.stringify(Object.keys(tokenConfig.tokens).sort()) !== JSON.stringify(expectedNames)) {
+    throw new Error("agent token configuration must contain exactly one token per event Droplet");
+  }
+  return manifest.droplets.map((spec) => {
+    const resource = state.droplets[spec.name];
+    if (!resource?.publicIpv4 || !resource?.privateIpv4) throw new Error(`${spec.name} is missing public/private IPv4 state`);
+    const token = tokenConfig.tokens[spec.name];
+    if (typeof token !== "string" || token.length < 24 || token.length > 256) throw new Error(`${spec.name} agent token is invalid`);
+    const id = spec.name;
+    const role = agentRole(spec.role);
+    const courts = Number.isInteger(spec.court) ? String(spec.court) : "";
+    const environment = {
+      MONITOR_AGENT_ID: id,
+      MONITOR_AGENT_ROLE: role,
+      MONITOR_AGENT_TOKEN: token,
+      MONITOR_AGENT_BIND: resource.privateIpv4,
+      MONITOR_AGENT_COURTS: courts,
+      ...agentRoleEnvironment(spec.role)
+    };
+    return { id, role, token, courts, publicIpv4: resource.publicIpv4, privateIpv4: resource.privateIpv4, environment };
+  });
+}
+
+export function serializeAgentTargets(plans) {
+  return plans.map((plan) => `${plan.id}|${plan.role}|http://${plan.privateIpv4}:9108|${plan.token}|${plan.courts}`).join(",");
+}
+
+export async function loadProtectedEnv(path) {
+  await assertProtectedFile(path, basename(path));
+  const output = {};
+  for (const [index, rawLine] of (await readFile(path, "utf8")).split(/\r?\n/).entries()) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const separator = line.indexOf("=");
+    if (separator < 1) throw new Error(`${basename(path)} line ${index + 1} is not KEY=VALUE`);
+    const key = line.slice(0, separator);
+    if (!/^[A-Z][A-Z0-9_]*$/.test(key) || Object.hasOwn(output, key)) throw new Error(`${basename(path)} line ${index + 1} has an invalid or duplicate key`);
+    const rawValue = line.slice(separator + 1);
+    let value = rawValue;
+    if (rawValue.startsWith('"')) {
+      try { value = JSON.parse(rawValue); } catch { throw new Error(`${basename(path)} line ${index + 1} has invalid quoted text`); }
+    } else if (/\s/.test(rawValue)) {
+      throw new Error(`${basename(path)} line ${index + 1} must quote whitespace`);
+    }
+    output[key] = String(value);
+  }
+  return output;
+}
+
+async function assertProtectedFile(path, label) {
+  const information = await stat(path);
+  if (!information.isFile() || (information.mode & 0o077) !== 0) throw new Error(`${label} must be a protected regular file with mode 0600 or stricter`);
+}
+
+function protectedAbsolute(value, label) {
+  if (typeof value !== "string" || !isAbsolute(value)) throw new Error(`${label} must be an absolute path`);
+  return resolve(value);
+}
+
+function requiredAddressSlot(state, slot) {
+  const value = state.addressSlots[slot]?.ip;
+  if (!value) throw new Error(`lifecycle state has no ${slot} reserved IPv4`);
+  return value;
+}
+
+function endpointForRole(manifest, role) {
+  const values = manifest.endpoints.filter((entry) => entry.role === role);
+  if (values.length === 0) throw new Error(`manifest has no endpoint for ${role}`);
+  return values[0].hostname;
+}
+
+function agentRole(role) {
+  if (role === "ingest") return "mediamtx";
+  if (role === "compositor") return "compositor";
+  if (role === "compositor-spare") return "worker";
+  return role;
+}
+
+function agentRoleEnvironment(role) {
+  if (role === "ingest") return {
+    MONITOR_AGENT_CONTAINERS: "mediamtx",
+    FFMPEG_PROGRESS_DIR: "/monitoring/ffmpeg",
+    MEDIAMTX_API_URL: "http://127.0.0.1:9997",
+    MEDIAMTX_METRICS_URL: "http://127.0.0.1:9998/metrics"
+  };
+  if (["compositor", "compositor-spare"].includes(role)) return {
+    MONITOR_AGENT_CONTAINERS: "bvm-redis,bvm-livekit,bvm-egress",
+    EGRESS_METRICS_URL: "http://127.0.0.1:9090/metrics",
+    EGRESS_HEALTH_URL: "http://127.0.0.1:9091/",
+    MONITOR_EGRESS_MAX_WEB_REQUESTS: "1"
+  };
+  if (role === "commentary") return {
+    LIVEKIT_METRICS_URL: "http://127.0.0.1:6789/metrics"
+  };
+  return {};
+}
+
+function verificationCommand(role) {
+  const agent = "cd /opt/scorecheck-monitor-agent && cid=$(docker compose -f agent-compose.yml ps -q monitor-agent) && test -n \"$cid\" && test \"$(docker inspect \"$cid\" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')\" = healthy";
+  if (role === "ingest") return `${agent} && curl -fsS http://127.0.0.1:9997/v3/config/global/get >/dev/null`;
+  if (role === "commentary") return `${agent} && curl -fsS http://127.0.0.1:7880/ >/dev/null && curl -fsS http://127.0.0.1:6789/metrics >/dev/null`;
+  if (["compositor", "compositor-spare"].includes(role)) {
+    return `${agent} && test \"$(docker inspect bvm-egress --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')\" = healthy && curl -fsS http://127.0.0.1:9090/metrics >/dev/null`;
+  }
+  if (role === "observability") return `${agent} && cd /opt/scorecheck-monitoring && docker compose ps --status running --quiet | grep -q .`;
+  throw new Error(`unsupported verification role ${role}`);
+}
+
+async function gitRevision(repoRoot, runner) {
+  const result = await runner("git", ["-C", repoRoot, "rev-parse", "HEAD"], { capture: true });
+  const revision = result.stdout.trim();
+  if (!/^[a-f0-9]{40}$/.test(revision)) throw new Error("could not resolve deployment Git revision");
+  return revision;
+}
+
+async function runCommand(command, args, options = {}) {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(command, args, {
+      env: options.env ?? process.env,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0 || options.allowFailure) resolvePromise({ code, stdout, stderr });
+      else reject(new Error(`${basename(command)} failed with exit ${code}: ${stderr.trim().slice(0, 500)}`));
+    });
+  });
+}
+
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
+}

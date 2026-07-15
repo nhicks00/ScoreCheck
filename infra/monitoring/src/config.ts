@@ -90,12 +90,6 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     MONITOR_DASHBOARD_URL: optionalHttpsUrl,
     PUSHOVER_APP_TOKEN: z.string().default(""),
     PUSHOVER_USER_KEY: z.string().default(""),
-    TWILIO_ACCOUNT_SID: z.string().default(""),
-    TWILIO_API_KEY_SID: z.string().default(""),
-    TWILIO_API_KEY_SECRET: z.string().default(""),
-    TWILIO_FROM_NUMBER: z.string().default(""),
-    TWILIO_TO_NUMBER: z.string().default(""),
-    NOTIFICATION_SMS_ESCALATION_MS: z.coerce.number().int().min(30_000).max(900_000).default(120_000),
     NOTIFICATION_STATUS_INTERVAL_MS: z.coerce.number().int().min(5_000).max(300_000).default(30_000),
     YOUTUBE_API_KEY: z.string().default(""),
     YOUTUBE_CLIENT_ID: z.string().default(""),
@@ -122,16 +116,6 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
   if (deadManValues.length !== 0 && deadManValues.length !== 5) {
     throw new Error("Healthchecks dead-man monitoring requires both ping URLs, both check ids, and the write API key together.");
   }
-  const twilioValues = [
-    parsed.TWILIO_ACCOUNT_SID,
-    parsed.TWILIO_API_KEY_SID,
-    parsed.TWILIO_API_KEY_SECRET,
-    parsed.TWILIO_FROM_NUMBER,
-    parsed.TWILIO_TO_NUMBER
-  ].filter((value) => value.trim());
-  if (twilioValues.length !== 0 && twilioValues.length !== 5) {
-    throw new Error("Twilio monitoring requires account SID, API key SID/secret, from number, and to number.");
-  }
   return {
     token: parsed.MONITOR_API_TOKEN,
     alertmanagerWebhookToken: parsed.ALERTMANAGER_WEBHOOK_TOKEN,
@@ -157,12 +141,6 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     monitorDashboardUrl: parsed.MONITOR_DASHBOARD_URL ?? "https://score.beachvolleyballmedia.com/admin/monitor",
     pushoverAppToken: parsed.PUSHOVER_APP_TOKEN.trim() || null,
     pushoverUserKey: parsed.PUSHOVER_USER_KEY.trim() || null,
-    twilioAccountSid: parsed.TWILIO_ACCOUNT_SID.trim() || null,
-    twilioApiKeySid: parsed.TWILIO_API_KEY_SID.trim() || null,
-    twilioApiKeySecret: parsed.TWILIO_API_KEY_SECRET.trim() || null,
-    twilioFromNumber: parsed.TWILIO_FROM_NUMBER.trim() || null,
-    twilioToNumber: parsed.TWILIO_TO_NUMBER.trim() || null,
-    notificationSmsEscalationMs: parsed.NOTIFICATION_SMS_ESCALATION_MS,
     notificationStatusIntervalMs: parsed.NOTIFICATION_STATUS_INTERVAL_MS,
     youtubeApiKey: parsed.YOUTUBE_API_KEY.trim() || null,
     youtubeClientId: parsed.YOUTUBE_CLIENT_ID.trim() || null,

@@ -78,7 +78,7 @@ function idleSnapshot(): MonitorSnapshot {
     controlPlane: { state: "HEALTHY", observedAt: "2026-07-13T13:00:00.000Z", ageMs: 0, worker: { state: "NOT_APPLICABLE", status: null, lastSeenAt: null, ageMs: null } },
     event: null,
     youtube: { state: "NOT_APPLICABLE", observedAt: null, ageMs: null },
-    notifications: { state: "HEALTHY", pushover: { configured: true, lastSuccessAt: null, lastFailureAt: null }, twilioSms: { configured: false, lastSuccessAt: null, lastFailureAt: null } },
+    notifications: { state: "HEALTHY", pushover: { configured: true, lastSuccessAt: null, lastFailureAt: null } },
     deadMan: {
       state: "HEALTHY",
       baseline: { configured: true, mode: "RUNNING", lastSuccessAt: null, lastFailureAt: null },

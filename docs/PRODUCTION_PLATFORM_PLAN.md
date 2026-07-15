@@ -76,8 +76,7 @@ Supabase desired/observed state -> outbound controller reconciler
   low-rate 256x144 snapshots, one selected WHEP preview, exact first actions,
   trends, shared-host capacity, and durable checkpoint fallback.
 - Durable deduplicated incidents, acknowledgement, audited timed silences,
-  required Pushover emergency acknowledgement, provider-matched recovery, and
-  optional Twilio SMS escalation when that provider is explicitly enabled.
+  Pushover emergency acknowledgement, and provider-matched recovery.
 - Expected-state lifecycle wired to event activation/completion and Production
   Console start/stop so idle courts do not poll or page as if live.
 - High-frequency telemetry retained in Prometheus; Supabase receives only
@@ -94,8 +93,8 @@ Pushover and external dead-man configuration are live: the baseline check runs,
 the active-coverage check pauses while idle, and one Pushover channel is attached
 to both. Physical Camera 1 episodes proved one opening and one recovery push;
 the operator acknowledgement tap and controlled withheld-ping delivery remain
-pending. Optional Twilio SMS is disabled because carrier campaign/sender
-approval still blocks real delivery. Remaining real one-court and eight-court
+pending. SMS is not part of the monitoring architecture. Remaining real
+one-court and eight-court
 fault rows must use isolated test feeds; monitoring must not prove itself by
 stopping public production services.
 

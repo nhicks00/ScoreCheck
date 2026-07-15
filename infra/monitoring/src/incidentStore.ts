@@ -2,8 +2,8 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { IncidentSnapshot, MonitoringSilence, MonitoringStage, MonitorSnapshot } from "./contracts.js";
 import type { IncidentChange } from "./incidents.js";
 
-export type NotificationProvider = "pushover" | "twilio_sms";
-export type NotificationKind = "open" | "recovery" | "escalation" | "test";
+export type NotificationProvider = "pushover";
+export type NotificationKind = "open" | "recovery" | "test";
 export type NotificationStatus = "pending" | "accepted" | "delivered" | "failed" | "acknowledged" | "expired" | "cancelled";
 export type StoredNotification = {
   id: string;
@@ -237,24 +237,10 @@ export class IncidentStore {
     return data ? notificationFromRow(data) : null;
   }
 
-  async pendingProviderNotifications(provider: NotificationProvider, now = new Date()): Promise<StoredNotification[]> {
-    const cutoff = new Date(now.getTime() - 24 * 60 * 60 * 1_000).toISOString();
-    const { data, error } = await this.db.from("incident_notifications")
-      .select(NOTIFICATION_COLUMNS)
-      .eq("provider", provider)
-      .in("status", ["pending", "accepted"])
-      .not("provider_message_id", "is", null)
-      .gte("submitted_at", cutoff)
-      .order("submitted_at", { ascending: true })
-      .limit(50);
-    if (error) throw error;
-    return (data ?? []).map((row) => notificationFromRow(row));
-  }
-
   async latestProviderNotifications(): Promise<StoredNotification[]> {
     const { data, error } = await this.db.from("incident_notifications")
       .select(NOTIFICATION_COLUMNS)
-      .in("provider", ["pushover", "twilio_sms"])
+      .eq("provider", "pushover")
       .order("updated_at", { ascending: false })
       .limit(100);
     if (error) throw error;
@@ -268,17 +254,6 @@ export class IncidentStore {
 
   async findNotification(incidentId: string, provider: NotificationProvider, kind: NotificationKind): Promise<StoredNotification | null> {
     return this.notificationByKey(incidentId, provider, kind);
-  }
-
-  async appendIncidentEvent(incidentId: string, eventType: "ESCALATED", detail: Record<string, unknown>): Promise<void> {
-    const { error } = await this.db.from("monitoring_incident_events").insert({
-      incident_id: incidentId,
-      event_type: eventType,
-      actor: "monitor-service",
-      detail,
-      occurred_at: new Date().toISOString()
-    });
-    if (error) throw error;
   }
 
   async appendSilencedEvent(incidentId: string, silence: MonitoringSilence): Promise<void> {

@@ -173,21 +173,18 @@ a static view was intentional.
 The dashboard can silence an exact incident for 15, 30, 60, or 120 minutes.
 Every silence requires a reason and records actor, scope, creation time, and
 expiry. Existing emergency pushes are cancelled. If the silence expires while
-the incident remains critical, primary paging is re-armed. When optional SMS
-escalation is enabled, its clock starts from that new primary delivery.
+the incident remains critical, Pushover emergency paging is re-armed from that
+new primary delivery.
 
 Do not silence an unexplained failure. Do not use a silence as a substitute for
 setting a court `OFF` after coverage.
 
 ## Phone paging and dead-man activation
 
-The required phone path is Pushover emergency priority with acknowledgement.
-Recovery notifications are deduplicated and are sent only through providers
-that delivered the opening incident. Twilio SMS is intentionally disabled and
-is not part of the current release or acceptance gate. Do not delay Pushover
-readiness for A2P registration. If SMS is reconsidered later, it must first prove
-real delivery with a restricted API key; no public status callback or account
-auth token is required.
+The phone path is Pushover emergency priority with acknowledgement. Recovery
+notifications are deduplicated and are sent only when Pushover delivered the
+opening incident. There is no SMS provider, fallback timer, carrier
+registration, or SMS acceptance gate in the ScoreCheck monitoring contract.
 
 The required provider configuration uses these protected values:
 
@@ -201,16 +198,10 @@ HEALTHCHECKS_API_KEY
 HEALTHCHECKS_ACTIVE_CHECK_ID
 ```
 
-Optional Twilio escalation additionally uses `TWILIO_ACCOUNT_SID`,
-`TWILIO_API_KEY_SID`, `TWILIO_API_KEY_SECRET`, `TWILIO_FROM_NUMBER`, and
-`TWILIO_TO_NUMBER`.
-
 Store them only in the protected monitoring environment on the observability
 host and in the protected local deployment file. Never commit them. Pushover
-and both Healthchecks checks are configured in production. Twilio is
-unconfigured in the live monitoring service and must remain skipped unless a
-future operator explicitly reopens it after a real SMS delivery pass. The
-baseline dead-man pings every ten minutes at all times. The active check pings
+and both Healthchecks checks are configured in production. The baseline dead-man
+pings every ten minutes at all times. The active check pings
 every minute while any court expects coverage and is explicitly paused through
 the Healthchecks management API while the system is idle. A live ping resumes it
 automatically.
@@ -232,15 +223,11 @@ Provider activation is not accepted until all of these pass:
 1. Pushover emergency arrives, repeats, deep-links to the monitor, and stops on acknowledgement.
 2. Recovery sends once and cancels any active emergency receipt.
 3. Baseline and active dead-man checks both alert when their pings are withheld.
-4. The dashboard shows Push independently and does not degrade merely because
-   the optional SMS path is disabled.
+4. The dashboard shows Pushover readiness without an unused secondary-provider
+   state.
 5. The dashboard Watchdog shows both Healthchecks checks as phone protected, and
    removing the Pushover channel from either check raises exactly one durable
    plain-English configuration incident.
-
-If Twilio is enabled later, add a separate acceptance gate proving exactly one
-SMS escalation and one provider-matched recovery without changing the Pushover
-acceptance criteria above.
 
 ### Controlled Healthchecks withheld-ping gate
 
@@ -526,8 +513,7 @@ active commentary rooms. Acceptance requires:
 - every injected single-court fault identifies that court without paging the other seven;
 - one compositor fault affects only its assigned pair;
 - Pushover acknowledgement, silence expiry, and recovery each deduplicate;
-- Twilio remains out of scope unless carrier registration completes and a real
-  SMS delivery is separately qualified;
+- Pushover remains the only phone-alert provider;
 - no high-frequency telemetry growth appears in Supabase.
 
 ## Current acceptance status
@@ -572,8 +558,7 @@ active commentary rooms. Acceptance requires:
 - Pushover delivery and one-time recovery: operational. A false Egress storm
   exposed an idle/busy semantic error and over-broad recovery fan-out; both are
   corrected in production. A controlled acknowledgement test is still required.
-  Twilio SMS is optional and remains disabled until campaign/number association
-  and real delivery are verified.
+  SMS is not part of the monitoring contract.
 - Authenticated production visual check: passed against the live read-only API
   at 1600x1000 and 390x844. The dashboard shows eight permanent Camera labels,
   two cards per desktop row and one per narrow mobile row, low-data 256x144
