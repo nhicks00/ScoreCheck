@@ -70,10 +70,15 @@ describe("community watch focus layout", () => {
     expect(overlayStylesheet).toContain("pointer-events: none");
     expect(overlayStylesheet).toContain("pointer-events: auto");
     expect(stylesheet).toContain(".scoreControlsTop.focusMode .videoPane :global(.scoring-video-controls)");
+    expect(stylesheet).toContain(".scoreControlsBottom.focusMode .videoPane :global(.scoring-video-controls)");
     expect(stylesheet).toContain("left: max(8px, env(safe-area-inset-left))");
+    expect(stylesheet).toContain("max-width: calc(50% - 16px)");
+    expect(stylesheet).toContain("max-width: calc(50% - 72px)");
+    expect(stylesheet).toContain("flex-wrap: nowrap");
+    expect(stylesheet).toContain("text-overflow: ellipsis");
   });
 
-  it("preserves compact landscape touch targets and only collapses utility labels on narrow phones", () => {
+  it("preserves compact landscape touch targets and collapses utility labels before they crowd the player", () => {
     const compactStart = overlayStylesheet.indexOf(
       "@media (orientation: landscape) and (max-height: 430px)"
     );
@@ -91,8 +96,13 @@ describe("community watch focus layout", () => {
     expect(compactRules).toContain("min-height: 44px");
     expect(compactRules).not.toContain(".utilityLabel");
     expect(narrowRules).toContain(".utilityLabel");
+    expect(overlayStylesheet).toContain("@media (orientation: landscape) and (max-width: 1100px)");
     expect(narrowRules).toContain("grid-template-columns: repeat(2, minmax(0, 1fr))");
     expect(narrowRules).toContain("max-width: clamp(168px, 23vw, 194px)");
+    expect(narrowRules).toContain("max-width: 150px");
+    expect(narrowRules).toContain("width: 150px");
+    expect(narrowRules).toContain("gap: 3px");
+    expect(narrowRules).toContain("padding: 3px");
     const videoControlsStart = globalStylesheet.indexOf(
       ".scoring-stream-preview .scoring-video-controls button {"
     );
@@ -131,6 +141,23 @@ describe("community watch focus layout", () => {
     expect(overlayLandscapeRules).toContain("display: none");
     expect(overlayLandscapeRules).toContain("min-height: 44px");
     expect(overlayStylesheet).toContain("overflow-wrap: anywhere");
+  });
+
+  it("reserves the bottom-center transport zone for video controls", () => {
+    const overlayLandscapeStart = overlayStylesheet.indexOf("@media (orientation: landscape)");
+    const overlayPortraitStart = overlayStylesheet.indexOf(
+      "@media (orientation: portrait)",
+      overlayLandscapeStart
+    );
+    const overlayLandscapeRules = overlayStylesheet.slice(overlayLandscapeStart, overlayPortraitStart);
+
+    expect(overlayLandscapeRules).toContain("right: max(8px, env(safe-area-inset-right))");
+    expect(overlayLandscapeRules).toContain("left: auto");
+    expect(overlayLandscapeRules).toContain("transform: none");
+    expect(overlayLandscapeRules).toContain(".controlsTop .utilityBar");
+    expect(overlayLandscapeRules).toContain("order: 2");
+    expect(overlayLandscapeRules).toContain(".controlsTop .receipt,");
+    expect(overlayLandscapeRules).toContain("order: 1");
   });
 
   it("keeps the player provider-neutral and opens focus without scrolling", () => {

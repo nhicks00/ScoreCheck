@@ -400,15 +400,28 @@
   }
 
   .utilityCluster {
-    left: 50%;
+    justify-items: end;
+    left: auto;
     max-width: min(48vw, 680px);
     pointer-events: auto;
-    transform: translateX(-50%);
+    right: max(8px, env(safe-area-inset-right));
+    transform: none;
     width: max-content;
   }
 
   .controlsTop .utilityCluster {
     bottom: max(8px, env(safe-area-inset-bottom));
+  }
+
+  /* Keep the bottom-center transport zone clear. The utility rail shares the
+     bottom edge on the right while its receipt sits above it. */
+  .controlsTop .utilityBar {
+    order: 2;
+  }
+
+  .controlsTop .receipt,
+  .controlsTop .recovery {
+    order: 1;
   }
 
   .controlsBottom .utilityCluster {
@@ -487,6 +500,20 @@
     display: none;
   }
 
+  .utilityCluster {
+    gap: 3px;
+    max-width: 150px;
+    width: 150px;
+  }
+
+  .receipt,
+  .recovery {
+    max-width: 100%;
+    padding: 3px;
+  }
+}
+
+@media (orientation: landscape) and (max-width: 1100px) {
   .utilityLabel {
     clip: rect(0 0 0 0);
     clip-path: inset(50%);
