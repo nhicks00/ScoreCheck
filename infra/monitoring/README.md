@@ -147,3 +147,13 @@ verify that the Healthchecks Pushover channel is attached to both checks. Provid
 errors retry after thirty seconds. The snapshot and Prometheus expose only
 attachment booleans and timestamps; channel ids, names, URLs, and keys are never
 returned.
+
+An authenticated, bounded withheld-ping test control can prove either external
+check without stopping the monitor service or changing media. It reads the
+selected check's current timeout and grace from Healthchecks before arming,
+requires thirty seconds of alert headroom, permits only one test at a time, and
+automatically recovers. The control refuses to arm unless the system is healthy
+and idle with Pushover attached to both checks. Starting coverage aborts the test
+immediately. A monitor-service restart also aborts safely: baseline sending
+resumes, while the active check receives a live recovery ping before returning
+to its normal idle pause.

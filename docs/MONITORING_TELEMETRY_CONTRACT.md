@@ -334,13 +334,16 @@ GET  /v1/incidents/:id
 GET  /v1/range/court-pipeline
 GET  /v1/courts/:courtNumber/thumbnail
 GET  /v1/fault-gates
+GET  /v1/dead-man-test-gate
 POST /v1/browser-heartbeats
 POST /v1/browser-thumbnails
 POST /v1/alertmanager
 POST /v1/incidents/:id/acknowledge
 POST /v1/silences
 POST /v1/fault-gates/courts/:courtNumber/arm
+POST /v1/dead-man-test-gate/arm
 DELETE /v1/fault-gates/courts/:courtNumber
+DELETE /v1/dead-man-test-gate
 ```
 
 Range queries use allowlisted names, bounded time windows, and bounded resolution. Arbitrary PromQL is forbidden.
@@ -357,6 +360,20 @@ every five minutes and retries provider failures after thirty seconds. It makes
 one channel-list request and one check request per configured check; it never
 writes provider configuration or Supabase telemetry. Ping URLs, check ids,
 integration ids and names, and API keys are never returned.
+
+The dead-man test-gate API is bearer-authenticated and permits exactly one
+in-memory withheld-ping test. Arming requires a healthy, fresh, event-idle
+control plane, no expected coverage, no active incident or court fault gate,
+healthy baseline and active checks, and the audited Pushover channel attached
+to both. The service reads the selected provider check's live `timeout` and
+`grace`, rejects a duration shorter than their sum plus thirty seconds, sends a
+fresh selected-check ping, and then withholds only that check. Expiry sends a recovery
+ping automatically; an active-check test waits thirty seconds after recovery
+before restoring the normal idle pause. Starting coverage requests immediate
+recovery. Process restart intentionally clears the test gate and restores normal
+pinging, so this control cannot suppress a dead-man indefinitely. The gate emits
+bounded Prometheus active/expiry gauges and never returns ping URLs, API keys, or
+provider identifiers.
 
 Silences require at least one bounded event, court, stage, or issue-code scope,
 an operator, a reason, and an expiry no more than 24 hours away. They suppress

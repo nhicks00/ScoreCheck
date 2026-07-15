@@ -183,10 +183,11 @@ setting a court `OFF` after coverage.
 
 The required phone path is Pushover emergency priority with acknowledgement.
 Recovery notifications are deduplicated and are sent only through providers
-that delivered the opening incident. The service can optionally add Twilio SMS
-after two minutes, but SMS is not required or enabled for the current release.
-When enabled later, Twilio message creation and bounded receipt polling use a
-restricted API key; no public status callback or account auth token is required.
+that delivered the opening incident. Twilio SMS is intentionally disabled and
+is not part of the current release or acceptance gate. Do not delay Pushover
+readiness for A2P registration. If SMS is reconsidered later, it must first prove
+real delivery with a restricted API key; no public status callback or account
+auth token is required.
 
 The required provider configuration uses these protected values:
 
@@ -206,15 +207,9 @@ Optional Twilio escalation additionally uses `TWILIO_ACCOUNT_SID`,
 
 Store them only in the protected monitoring environment on the observability
 host and in the protected local deployment file. Never commit them. Pushover
-and both Healthchecks checks are configured in production. As of 2026-07-14,
-Twilio SMS remains disabled and optional. The purchased sender is SMS-capable and the live
-A2P API reports one approved sole-proprietor brand with no registration errors,
-but the campaign and phone-number association are not yet verified. The current
-restricted API key can read Message resources but cannot list Messaging Services,
-so verify the campaign in Twilio Console or grant only the required read
-permissions. Do not enable escalation until the campaign is verified, the sender
-is associated, and an actual test message reaches the destination. A `30034`
-result means the sender is still unregistered and must remain disabled. The
+and both Healthchecks checks are configured in production. Twilio is
+unconfigured in the live monitoring service and must remain skipped unless a
+future operator explicitly reopens it after a real SMS delivery pass. The
 baseline dead-man pings every ten minutes at all times. The active check pings
 every minute while any court expects coverage and is explicitly paused through
 the Healthchecks management API while the system is idle. A live ping resumes it
@@ -246,6 +241,50 @@ Provider activation is not accepted until all of these pass:
 If Twilio is enabled later, add a separate acceptance gate proving exactly one
 SMS escalation and one provider-matched recovery without changing the Pushover
 acceptance criteria above.
+
+### Controlled Healthchecks withheld-ping gate
+
+Do not run this gate during an event, soak, camera fault, media test, or active
+incident. Do not arm it merely because the API exists. Nathan must first send the
+exact approval `READY FOR PUSHOVER GATE` in the operating task so the expected
+phone alert is not mistaken for a real outage.
+
+The monitor API provides:
+
+```text
+GET    /v1/dead-man-test-gate
+POST   /v1/dead-man-test-gate/arm
+DELETE /v1/dead-man-test-gate
+```
+
+The arm body is strict JSON:
+
+```json
+{
+  "check": "baseline",
+  "durationSeconds": 900,
+  "actor": "nathan",
+  "reason": "Prove external baseline Pushover delivery."
+}
+```
+
+Use `active` with a 180-second duration for the active check under the current
+provider settings. These durations are examples, not assumptions: the service
+reads the provider's live timeout and grace and rejects any duration that does
+not cross the alert deadline by at least thirty seconds. It sends a fresh ping
+at arm time and returns `withholdFrom`, `expectedAlertAt`, and `expiresAt` for the
+evidence record. Exactly one gate can exist. Preconditions require a fresh
+healthy idle snapshot, no event, no expected coverage, no incidents, no court
+fault gates, healthy checks, and Pushover attached to both checks.
+
+Run baseline and active as two separate gates. Capture the API response and
+Healthchecks status transitions in a protected evidence file, record Nathan's
+phone receipt time explicitly, and verify `GET /v1/dead-man-test-gate` returns
+`null` after automatic recovery. The active gate sends recovery, waits thirty
+seconds, and then returns the check to `paused`. `DELETE` requests immediate
+recovery if an operator must cancel. Starting coverage or restarting the service
+also aborts safely and restores provider pings. Neither path touches cameras,
+MediaMTX, routing, browsers, Egress, YouTube, Supabase expectations, or StreamRun.
 
 The channel-readiness contract is a hard cutover. Configure
 `HEALTHCHECKS_BASELINE_CHECK_ID`, deploy the matching monitor service, verify the

@@ -16,7 +16,7 @@ import { operationalErrorCode } from "./operationalError.js";
 import { loadCourtPipelineRange, parseRangeInput } from "./rangeQueries.js";
 import { BrowserThumbnailManager } from "./browserThumbnails.js";
 import { activeSilences, incidentIsSilenced, silenceMatchesIncident } from "./silences.js";
-import { ExternalDeadMan } from "./deadMan.js";
+import { deadManTestGateArmSchema, DeadManTestGateError, ExternalDeadMan, type DeadManTestGateArmRequest } from "./deadMan.js";
 import { assertFaultGateCanArm, faultGateArmRequestSchema, FaultGateConflictError, FaultGateControl } from "./faultGateControl.js";
 import { BrowserCounterAccumulator } from "./browserCounterAccumulator.js";
 import { incrementCourtCounter } from "./prometheusCounter.js";
@@ -78,6 +78,8 @@ const deadManCheckHealthy = new Gauge({ name: "scorecheck_external_dead_man_heal
 const deadManActiveRunning = new Gauge({ name: "scorecheck_external_dead_man_active_running", help: "Active-coverage dead-man mode: 1 running, 0 intentionally paused, -1 unknown or not configured.", registers: [registry] });
 const deadManChannelAuditHealthy = new Gauge({ name: "scorecheck_external_dead_man_channel_audit_healthy", help: "Healthchecks notification-channel audit: 1 verified, 0 failed, -1 not configured or unverified.", registers: [registry] });
 const deadManPhoneChannelReady = new Gauge({ name: "scorecheck_external_dead_man_phone_channel_ready", help: "Whether the required Healthchecks Pushover channel is attached: 1 attached, 0 missing, -1 unverified or not configured.", labelNames: ["check"], registers: [registry] });
+const deadManTestGateActive = new Gauge({ name: "scorecheck_external_dead_man_test_gate_active", help: "Whether a bounded external dead-man withheld-ping test gate is active.", labelNames: ["check"], registers: [registry] });
+const deadManTestGateExpires = new Gauge({ name: "scorecheck_external_dead_man_test_gate_expires_timestamp_seconds", help: "Expiry time of the bounded external dead-man test gate, or zero when inactive.", labelNames: ["check"], registers: [registry] });
 const runtimes = new Map<string, AgentRuntime>(config.targets.map((target) => [target.id, {
   target,
   snapshot: null,
@@ -126,6 +128,50 @@ app.get("/metrics", bearerAuth(config.token), async (_req, res) => {
   res.type(registry.contentType).send(await registry.metrics());
 });
 app.get("/v1/snapshot", bearerAuth(config.token), (_req, res) => res.json(snapshot));
+app.get("/v1/dead-man-test-gate", bearerAuth(config.token), (_req, res) => {
+  res.setHeader("cache-control", "private, no-store");
+  res.json({ testGate: externalDeadMan.testGate() });
+});
+app.post("/v1/dead-man-test-gate/arm", bearerAuth(config.token), async (req, res) => {
+  const parsed = deadManTestGateArmSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid dead-man test-gate request." });
+    return;
+  }
+  try {
+    assertDeadManTestGateCanArm(parsed.data);
+    const testGate = await externalDeadMan.armTestGate(parsed.data);
+    try {
+      assertDeadManTestGateCanArm(parsed.data);
+    } catch (error) {
+      await externalDeadMan.cancelTestGate();
+      throw error;
+    }
+    updateDeadManMetrics();
+    res.setHeader("cache-control", "private, no-store");
+    res.status(201).json({ testGate });
+  } catch (error) {
+    if (error instanceof DeadManTestGateError) {
+      res.status(error.status).json({ error: error.message, code: error.code });
+      return;
+    }
+    res.status(503).json({ error: "Dead-man test gate could not be armed." });
+  }
+});
+app.delete("/v1/dead-man-test-gate", bearerAuth(config.token), async (_req, res) => {
+  try {
+    const testGate = await externalDeadMan.cancelTestGate();
+    updateDeadManMetrics();
+    res.setHeader("cache-control", "private, no-store");
+    res.status(testGate ? 202 : 200).json({ testGate });
+  } catch (error) {
+    if (error instanceof DeadManTestGateError) {
+      res.status(error.status).json({ error: error.message, code: error.code });
+      return;
+    }
+    res.status(503).json({ error: "Dead-man test gate could not be recovered." });
+  }
+});
 app.get("/v1/fault-gates", bearerAuth(config.token), (_req, res) => res.json({ faultGates: faultGateControl.active() }));
 app.post("/v1/fault-gates/courts/:courtNumber/arm", bearerAuth(config.token), (req, res) => {
   const courtNumber = Number(Array.isArray(req.params.courtNumber) ? req.params.courtNumber[0] : req.params.courtNumber);
@@ -505,12 +551,47 @@ function providerMetric(provider: { configured: boolean; lastSuccessAt: string |
 
 function updateDeadManMetrics(): void {
   const health = externalDeadMan.health();
+  const testGate = externalDeadMan.testGate();
   deadManCheckHealthy.set({ check: "baseline" }, providerMetric(health.baseline));
   deadManCheckHealthy.set({ check: "active" }, providerMetric(health.active));
   deadManActiveRunning.set(health.active.mode === "RUNNING" ? 1 : health.active.mode === "PAUSED" ? 0 : -1);
   deadManChannelAuditHealthy.set(channelAuditMetric(health.phoneChannel));
   deadManPhoneChannelReady.set({ check: "baseline" }, attachmentMetric(health.phoneChannel.configured, health.phoneChannel.baselineAttached));
   deadManPhoneChannelReady.set({ check: "active" }, attachmentMetric(health.phoneChannel.configured, health.phoneChannel.activeAttached));
+  for (const check of ["baseline", "active"] as const) {
+    deadManTestGateActive.set({ check }, testGate?.check === check ? 1 : 0);
+    deadManTestGateExpires.set({ check }, testGate?.check === check ? Date.parse(testGate.expiresAt) / 1_000 : 0);
+  }
+}
+
+function assertDeadManTestGateCanArm(request: DeadManTestGateArmRequest): void {
+  const health = externalDeadMan.health();
+  const checkHealth = health[request.check];
+  const unsafe = snapshot.controlPlane.state !== "HEALTHY"
+    || snapshot.event != null
+    || activeCoverageExpected()
+    || snapshot.incidents.some((incident) => incident.status !== "resolved")
+    || faultGateControl.active().length > 0;
+  if (unsafe) {
+    throw new DeadManTestGateError(
+      "TEST_GATE_ENVIRONMENT_UNSAFE",
+      409,
+      "Dead-man testing requires a healthy idle system with no event, incident, or other fault gate."
+    );
+  }
+  if (health.state !== "HEALTHY"
+    || health.phoneChannel.state !== "HEALTHY"
+    || health.phoneChannel.baselineAttached !== true
+    || health.phoneChannel.activeAttached !== true
+    || !checkHealth.configured
+    || checkHealth.lastSuccessAt == null
+    || checkHealth.lastFailureAt != null) {
+    throw new DeadManTestGateError(
+      "DEAD_MAN_PROVIDER_UNAVAILABLE",
+      503,
+      "Dead-man testing requires both healthy checks and Pushover attached to each check."
+    );
+  }
 }
 
 function channelAuditMetric(channel: MonitorSnapshot["deadMan"]["phoneChannel"]): number {
