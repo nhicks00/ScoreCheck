@@ -202,14 +202,18 @@ HEALTHCHECKS_ACTIVE_CHECK_ID
 Store them only in the protected monitoring environment on the observability
 host and in the protected local deployment file. Never commit them. Pushover
 and both Healthchecks checks are configured in production. As of 2026-07-14,
-Twilio SMS remains disabled: the purchased sender has messaging disabled, A2P
-brand registration has not been submitted, and campaign registration cannot
-start. Do not enable escalation until both registrations are approved and an
-actual test message reaches the destination. A `30034` result means the sender
-is still unregistered and must remain disabled. The baseline
-dead-man pings every ten minutes at all times. The active check pings every minute
-while any court expects coverage and is explicitly paused through the Healthchecks
-management API while the system is idle. A live ping resumes it automatically.
+Twilio SMS remains disabled. The purchased sender is SMS-capable and the live
+A2P API reports one approved sole-proprietor brand with no registration errors,
+but the campaign and phone-number association are not yet verified. The current
+restricted API key can read Message resources but cannot list Messaging Services,
+so verify the campaign in Twilio Console or grant only the required read
+permissions. Do not enable escalation until the campaign is verified, the sender
+is associated, and an actual test message reaches the destination. A `30034`
+result means the sender is still unregistered and must remain disabled. The
+baseline dead-man pings every ten minutes at all times. The active check pings
+every minute while any court expects coverage and is explicitly paused through
+the Healthchecks management API while the system is idle. A live ping resumes it
+automatically.
 The service audits the Healthchecks channel list and both check assignments every
 five minutes using three read-only API requests, with a thirty-second retry after
 provider failure. The dashboard may show `Coverage protected` or `Idle protected`

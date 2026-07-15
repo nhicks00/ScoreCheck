@@ -25,6 +25,13 @@ available to tap **Acknowledge**.
 - The restricted API key can create, read, and poll Message resources.
 - A single delivery test to the configured operator number reached terminal status `undelivered` with Twilio error `30034`.
 - Error `30034` confirms that the U.S. 10DLC sender is not yet associated with an approved A2P campaign. Buying another local number would not bypass that requirement.
+- A read-only recheck at `2026-07-15T02:40Z` found one SMS-capable sender and one
+  sole-proprietor brand in `APPROVED` state with no registration errors. The
+  brand step is no longer the blocker.
+- Campaign and sender association remain unverified. The current restricted API
+  key can read Message resources but receives `401` for Messaging Service list,
+  so campaign verification requires Twilio Console or the narrow service/campaign
+  read permissions.
 - Production SMS escalation remains disabled. The approved credential set is stored outside the repository in a protected pending file and is not sourced by deployment.
 
 ScoreCheck now uses the restricted API key for message creation and polls only nonterminal Twilio receipts. It no longer exposes a public Twilio status callback or requires the account auth token at runtime. With no pending SMS, this path makes no Twilio requests.
