@@ -196,6 +196,23 @@ compositors/bvm-compositor-spare.env
 `agent-tokens.json` contains exactly one bounded token for every resource in the
 manifest. Missing, extra, short, or ambiguous token ownership fails preflight.
 
+Do not copy provider values into chat or hand-merge the event credential file.
+Build its exact allowlisted Pushover-only contract from existing protected
+sources. When DigitalOcean issues a replacement lifecycle token, place only
+that token in a mode-`0600` file and use the override form:
+
+```bash
+node infra/event-stack/create-lifecycle-credentials.mjs create \
+  --provider-env /absolute/protected/existing-provider.env \
+  --monitoring-env /absolute/protected/monitoring.env \
+  --digitalocean-token-file /absolute/protected/digitalocean-lifecycle.token \
+  --output /absolute/protected/provider.env
+```
+
+The output contains exactly DigitalOcean, Vercel, YouTube, and Pushover values.
+It intentionally excludes Twilio, Supabase, dashboard passwords, and unrelated
+runtime configuration. Existing output is never overwritten.
+
 For routine operation, place the repeated absolute paths in one mode-`0600`
 operator profile:
 
