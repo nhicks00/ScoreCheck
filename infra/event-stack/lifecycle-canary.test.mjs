@@ -41,6 +41,7 @@ test("proves resize, snapshot replacement, stable endpoint, exact cleanup, and b
   assert.equal(setup.cloud.tags.size, 0);
   assert.equal(setup.dns.records.size, 0);
   assert.deepEqual(setup.cloud.deletedIds.sort(), [result.original.id, result.replacement.id].sort());
+  assert.deepEqual(setup.cloud.assignCalls, [{ ip: "192.0.2.50", dropletId: result.replacement.id }]);
   assert.equal((await stat(statePath)).mode & 0o777, 0o600);
   assert.equal(JSON.parse(await readFile(statePath, "utf8")).classification, "PASS");
 });
@@ -69,6 +70,46 @@ test("failure remains classified FAIL while exact cleanup still restores the bas
   assert.deepEqual([...cloud.droplets.keys()].sort(), ["10", "11"]);
   assert.equal(cloud.addresses.size, 0);
   assert.equal(setup.dns.records.size, 0);
+});
+
+test("resumes exact orphan cleanup after delete permissions are repaired", async () => {
+  const root = await mkdtemp(join(tmpdir(), "scorecheck-canary-cleanup-resume-"));
+  const statePath = join(root, "canary.json");
+  const cloud = new FakeCloud();
+  cloud.failResize = true;
+  cloud.failReservedIpv4Delete = true;
+  cloud.failTagDelete = true;
+  const setup = fixture({ cloud });
+  const canary = new LifecycleCanary({
+    cloud,
+    dns: setup.dns,
+    host: setup.host,
+    store: new CanaryStateStore(statePath),
+    fetchImpl: healthFetch(cloud),
+    pollIntervalMs: 1,
+    healthTimeoutMs: 100
+  });
+
+  await assert.rejects(
+    () => canary.run(setup.config, CANARY_CONFIRMATION),
+    /cleanup: reservedIpv4: injected Reserved IPv4 delete denial; tag: injected tag delete denial/u
+  );
+  const failed = JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(failed.phase, "cleanup-failed");
+  assert.equal(failed.reservedIpv4.dropletId, "100");
+  assert.equal(cloud.addresses.get(failed.reservedIpv4.ip).dropletId, null);
+  assert.equal(cloud.tags.has(setup.config.tag), true);
+  assert.deepEqual([...cloud.droplets.keys()].sort(), ["10", "11"]);
+
+  cloud.failReservedIpv4Delete = false;
+  cloud.failTagDelete = false;
+  const recovered = await canary.cleanup(setup.config, CANARY_CONFIRMATION);
+  assert.equal(recovered.phase, "cleaned-after-failure");
+  assert.equal(recovered.classification, "FAIL");
+  assert.match(recovered.failure, /injected resize failure/u);
+  assert.equal(cloud.addresses.size, 0);
+  assert.equal(cloud.tags.size, 0);
+  assert.deepEqual([...cloud.droplets.keys()].sort(), ["10", "11"]);
 });
 
 test("reconciles lost create responses for the canary Reserved IPv4 and DNS record", async () => {
@@ -164,6 +205,9 @@ class FakeCloud {
   nextId = 100;
   failResize = false;
   failReservedIpv4ResponseOnce = false;
+  failReservedIpv4Delete = false;
+  failTagDelete = false;
+  assignCalls = [];
 
   async getAccount() { return { uuid: "account-uuid", status: "active", dropletLimit: 10 }; }
   async listAllDroplets() { return [...this.droplets.values()].map(clone); }
@@ -172,7 +216,10 @@ class FakeCloud {
   async listReservedIpv4s() { return [...this.addresses.values()].map(clone); }
   async findSnapshotsByName(name) { return [...this.snapshots.values()].filter((entry) => entry.name === name).map(clone); }
   async ensureTag(name) { this.tags.add(name); }
-  async deleteTag(name) { this.tags.delete(name); }
+  async deleteTag(name) {
+    if (this.failTagDelete) throw new Error("injected tag delete denial");
+    this.tags.delete(name);
+  }
   async tagExists(name) { return this.tags.has(name); }
 
   async createDroplet(request) {
@@ -223,7 +270,10 @@ class FakeCloud {
     if (!value) throw notFound();
     return clone(value);
   }
-  async assignReservedIpv4(ip, dropletId) { this.addresses.get(ip).dropletId = String(dropletId); }
+  async assignReservedIpv4(ip, dropletId) {
+    this.assignCalls.push({ ip, dropletId: String(dropletId) });
+    this.addresses.get(ip).dropletId = String(dropletId);
+  }
   async waitReservedIpv4Assignment(ip, dropletId) {
     const value = this.addresses.get(ip);
     if (value.dropletId !== String(dropletId)) throw new Error("assignment mismatch");
@@ -235,7 +285,10 @@ class FakeCloud {
     if (value.dropletId !== null) throw new Error("address still assigned");
     return clone(value);
   }
-  async deleteReservedIpv4(ip) { this.addresses.delete(ip); }
+  async deleteReservedIpv4(ip) {
+    if (this.failReservedIpv4Delete) throw new Error("injected Reserved IPv4 delete denial");
+    this.addresses.delete(ip);
+  }
   async powerOffDroplet(id) { this.droplets.get(String(id)).status = "off"; }
   async powerOnDroplet(id) { this.droplets.get(String(id)).status = "active"; }
   async resizeDroplet(id, size) {
