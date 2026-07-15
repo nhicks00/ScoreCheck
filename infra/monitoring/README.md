@@ -16,6 +16,18 @@ The production controller is not in this collection path.
 
 ## Local verification
 
+Run the full cross-layer release gate from the repository root. It installs
+exact dependencies from both lockfiles, checks every infrastructure shell
+script, fails closed if the reviewed shell-test inventory changes, and validates
+capacity, lifecycle, media runner, venue routing, monitoring service, and the
+admin dashboard:
+
+```bash
+./infra/validate-monitoring-release.sh
+```
+
+For a monitoring-service-only development loop:
+
 ```bash
 npm ci
 npm run typecheck
