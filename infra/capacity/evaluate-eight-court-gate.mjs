@@ -77,6 +77,9 @@ export function assertEightCourtConfig(config) {
   if (config.thresholds.maximumMetricSampleGapSeconds < config.stepSeconds || config.thresholds.maximumMetricSampleGapSeconds > 120) {
     throw new Error("maximumMetricSampleGapSeconds must be between stepSeconds and 120 seconds");
   }
+  if (config.thresholds.minimumSampleCoverageRatio < 0.99) {
+    throw new Error("minimumSampleCoverageRatio must be at least 0.99 for the eight-court endurance gate");
+  }
   for (const ratio of [
     "maximumRawLowBitrateRatio", "maximumFfmpegLowFpsRatio",
     "maximumBrowserLowFpsRatio", "maximumCommentaryPacketLossRatio",
@@ -153,7 +156,7 @@ export function buildEightCourtQueries(config) {
   };
 }
 
-export function assertExactPoolHostSet(config, hostEvents) {
+export function assertExactPoolHostSet(config, hostEvents, poolPreflight) {
   assertEightCourtConfig(config);
   if (!Array.isArray(hostEvents)) throw new Error("pool host events must be an array");
   const expected = [config.ingest, ...config.courts.map((court) => court.compositor), config.warmSpare]
@@ -162,15 +165,43 @@ export function assertExactPoolHostSet(config, hostEvents) {
   const observed = [...new Set(hostEvents.map((event) => event?.hostId).filter((hostId) => typeof hostId === "string"))].sort();
   if (!arraysEqual(observed, expected)) throw new Error(`pool host evidence identities do not match the exact topology: expected ${expected.join(",")}; observed ${observed.join(",")}`);
   const machineFingerprints = [];
+  const providerResourceIds = [];
+  const providerResources = Array.isArray(poolPreflight?.providerResources) ? poolPreflight.providerResources : null;
+  if (!providerResources) throw new Error("pool preflight provider resources are missing");
   for (const hostId of expected) {
-    const fingerprints = [...new Set(hostEvents
-      .filter((event) => event?.hostId === hostId && event.event === "watcher_started")
+    const starts = hostEvents.filter((event) => event?.hostId === hostId && event.event === "watcher_started");
+    if (starts.length === 0 || starts.some((event) => typeof event.machineFingerprint !== "string")) {
+      throw new Error(`pool host ${hostId} must report a remote machine fingerprint at every watcher start`);
+    }
+    const fingerprints = [...new Set(starts
       .map((event) => event.machineFingerprint)
       .filter((value) => typeof value === "string"))];
     if (fingerprints.length !== 1) throw new Error(`pool host ${hostId} must have one stable remote machine fingerprint`);
     machineFingerprints.push(fingerprints[0]);
+    if (starts.some((event) => event.provider !== "digitalocean"
+      || typeof event.providerResourceId !== "string" || typeof event.providerHostname !== "string")) {
+      throw new Error(`pool host ${hostId} must report its DigitalOcean identity at every watcher start`);
+    }
+    const providerIdentities = [...new Map(starts
+      .filter((event) => event.provider != null || event.providerResourceId != null || event.providerHostname != null)
+      .map((event) => [`${event.provider}\u0000${event.providerResourceId}\u0000${event.providerHostname}`, event])).values()];
+    if (providerIdentities.length !== 1) throw new Error(`pool host ${hostId} must have one stable provider identity`);
+    const providerIdentity = providerIdentities[0];
+    if (providerIdentity.provider !== "digitalocean" || providerIdentity.providerHostname !== hostId || typeof providerIdentity.providerResourceId !== "string") {
+      throw new Error(`pool host ${hostId} provider identity does not match its configured host`);
+    }
+    const providerMatches = providerResources.filter((resource) => resource?.provider === "digitalocean"
+      && resource?.resourceType === "droplet" && resource?.name === hostId);
+    if (providerMatches.length !== 1) throw new Error(`pool preflight must contain one DigitalOcean resource for ${hostId}`);
+    const providerResource = providerMatches[0];
+    if (providerResource.status !== "active" || providerResource.region !== config.expectedPoolRegion
+      || providerResource.resourceId !== providerIdentity.providerResourceId) {
+      throw new Error(`pool host ${hostId} does not match the active DigitalOcean resource captured by preflight`);
+    }
+    providerResourceIds.push(providerIdentity.providerResourceId);
   }
   if (new Set(machineFingerprints).size !== expected.length) throw new Error("pool host evidence maps multiple configured hosts to the same physical machine");
+  if (new Set(providerResourceIds).size !== expected.length) throw new Error("pool host evidence maps multiple configured hosts to the same provider resource");
 }
 
 export function createConcurrencyLimiter(maximum) {
@@ -212,7 +243,7 @@ export function evaluateEightCourtEvidence({ config, evidence, attestations, hos
     throw new Error("evidence window is invalid");
   }
   const expectedSamples = Math.floor((endEpochSeconds - effectiveStartEpochSeconds) / config.stepSeconds) + 1;
-  const minimumSamples = Math.max(2, Math.floor(expectedSamples * config.thresholds.minimumSampleCoverageRatio));
+  const minimumSamples = Math.max(2, Math.ceil(expectedSamples * config.thresholds.minimumSampleCoverageRatio));
   const checks = [];
   const attestationCapturedAt = Date.parse(attestations.capturedAt) / 1_000;
   const attestationLagSeconds = attestationCapturedAt - endEpochSeconds;
@@ -261,6 +292,7 @@ export function evaluateEightCourtEvidence({ config, evidence, attestations, hos
     && Math.min(...snapshotAges) >= 0
     && Math.max(...snapshotAges) <= config.thresholds.maximumSnapshotAgeSeconds, snapshotAges.length ? { minimum: Math.min(...snapshotAges), maximum: Math.max(...snapshotAges) } : null, `0..${config.thresholds.maximumSnapshotAgeSeconds} seconds`);
   evaluatePoolPreflight(checks, config, poolPreflight, startEpochSeconds);
+  evaluateProviderBindings(checks, config, hosts, poolPreflight);
   evaluateVenue(checks, config, venueEvidence, startEpochSeconds);
   check(checks, "cross_court_isolation_attested", attestations?.crossCourtIsolationVerified === true, attestations?.crossCourtIsolationVerified ?? null, true);
   check(checks, "youtube_test_privacy_attested", attestations?.youtubeBroadcastsUnlisted === true, attestations?.youtubeBroadcastsUnlisted ?? null, true);
@@ -391,6 +423,34 @@ function evaluatePoolPreflight(checks, config, pool, startEpochSeconds) {
   }, { matchingActive: 9, target: 9, additionsRequired: 0 });
   check(checks, "pool_exact_names", arraysEqual(observedNames, expectedNames), observedNames, expectedNames);
   check(checks, "pool_no_blockers", Array.isArray(pool?.blockers) && pool.blockers.length === 0, pool?.blockers ?? null, []);
+}
+
+function evaluateProviderBindings(checks, config, hosts, pool) {
+  const expectedHosts = [config.ingest, ...config.courts.map((court) => court.compositor), config.warmSpare];
+  const resources = Array.isArray(pool?.providerResources) ? pool.providerResources : [];
+  const bindings = expectedHosts.map((host) => {
+    const identity = hosts?.[host.hostId]?.providerIdentity ?? null;
+    const matches = resources.filter((resource) => resource?.provider === "digitalocean"
+      && resource?.resourceType === "droplet" && resource?.name === host.hostId);
+    const resource = matches.length === 1 ? matches[0] : null;
+    const pass = identity?.provider === "digitalocean"
+      && identity?.hostname === host.hostId
+      && typeof identity?.resourceId === "string"
+      && resource?.resourceId === identity.resourceId
+      && resource?.status === "active"
+      && resource?.region === config.expectedPoolRegion;
+    return {
+      hostId: host.hostId,
+      provider: identity?.provider ?? null,
+      resourceId: identity?.resourceId ?? null,
+      hostname: identity?.hostname ?? null,
+      providerMatchCount: matches.length,
+      pass
+    };
+  });
+  const resourceIds = bindings.map((binding) => binding.resourceId).filter((value) => typeof value === "string");
+  const unique = resourceIds.length === expectedHosts.length && new Set(resourceIds).size === expectedHosts.length;
+  check(checks, "pool_host_provider_bindings", bindings.every((binding) => binding.pass) && unique, bindings, "each host bound to one unique active DigitalOcean preflight resource");
 }
 
 function evaluateVenue(checks, config, venue, startEpochSeconds) {
@@ -636,7 +696,7 @@ async function main() {
     eventCount: hostEvents.length
   };
   const hostDefinitions = [config.ingest, ...config.courts.map((court) => court.compositor), config.warmSpare];
-  assertExactPoolHostSet(config, hostEvents);
+  assertExactPoolHostSet(config, hostEvents, poolPreflight);
   const hosts = Object.fromEntries(hostDefinitions.map((host, index) => [host.hostId, summarizePoolHost(hostEvents, {
     hostId: host.hostId,
     role: index === 0 ? "ingest" : "compositor",

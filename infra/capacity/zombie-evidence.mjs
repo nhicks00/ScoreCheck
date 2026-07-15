@@ -11,6 +11,8 @@ const EVENTS = new Set([
 const CLASSIFICATION = /^(?:unclassified|observer\.capacity-ssh|healthcheck\.(?:monitor-agent|egress|mediamtx|redis)(?:\.runtime)?|workload\.egress-(?:chrome|pactl))$/;
 const FINGERPRINT = /^[a-f0-9]{16}$/;
 const IDENTITY = /^\d+:\d+$/;
+const PROVIDER_RESOURCE_ID = /^[1-9]\d{0,19}$/;
+const PROVIDER_HOSTNAME = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,252}$/;
 
 export function parseZombieEventLine(line) {
   let event;
@@ -36,6 +38,9 @@ export function parseZombieEventLine(line) {
     output.pollIntervalMs = boundedInteger(event.pollIntervalMs, 25, 250, "pollIntervalMs");
     output.watcherPid = positiveInteger(event.watcherPid, "watcherPid");
     output.machineFingerprint = optionalFingerprint(event.machineFingerprint, "machineFingerprint");
+    output.provider = optionalProvider(event.provider);
+    output.providerResourceId = optionalProviderResourceId(event.providerResourceId);
+    output.providerHostname = optionalProviderHostname(event.providerHostname);
   } else if (event.event === "heartbeat") {
     output.scanCount = nonnegativeInteger(event.scanCount, "scanCount");
     output.activeZombieCount = nonnegativeInteger(event.activeZombieCount, "activeZombieCount");
@@ -296,6 +301,24 @@ function safeText(value, name, nullable) {
 function optionalFingerprint(value, name) {
   if (value == null) return null;
   if (typeof value !== "string" || !FINGERPRINT.test(value)) throw new Error(`zombie event ${name} is invalid`);
+  return value;
+}
+
+function optionalProvider(value) {
+  if (value == null) return null;
+  if (value !== "digitalocean") throw new Error("zombie event provider is invalid");
+  return value;
+}
+
+function optionalProviderResourceId(value) {
+  if (value == null) return null;
+  if (typeof value !== "string" || !PROVIDER_RESOURCE_ID.test(value)) throw new Error("zombie event providerResourceId is invalid");
+  return value;
+}
+
+function optionalProviderHostname(value) {
+  if (value == null) return null;
+  if (typeof value !== "string" || !PROVIDER_HOSTNAME.test(value)) throw new Error("zombie event providerHostname is invalid");
   return value;
 }
 

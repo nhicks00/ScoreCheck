@@ -28,6 +28,9 @@ test("requires an exact one-court-per-worker topology and two commentary rooms",
   const invalidLastWorkerBaseline = structuredClone(config);
   invalidLastWorkerBaseline.courts[7].compositor.allowedBaselineUnclassified = [{ command: "bad" }];
   assert.throws(() => assertEightCourtConfig(invalidLastWorkerBaseline), /parentCommand/);
+  const weakenedCoverage = structuredClone(config);
+  weakenedCoverage.thresholds.minimumSampleCoverageRatio = 0.989;
+  assert.throws(() => assertEightCourtConfig(weakenedCoverage), /at least 0.99/);
 });
 
 test("builds lifecycle, score, provider, and exact-reader queries for every court", () => {
@@ -53,17 +56,36 @@ test("builds lifecycle, score, provider, and exact-reader queries for every cour
 
 test("rejects missing and extra host identities in the protected pool evidence", () => {
   const config = fixtureConfig();
-  const expected = [config.ingest, ...config.courts.map((court) => court.compositor), config.warmSpare]
-    .map((host, index) => ({ hostId: host.hostId, event: "watcher_started", machineFingerprint: index.toString(16).padStart(16, "0") }));
-  assert.doesNotThrow(() => assertExactPoolHostSet(config, expected));
-  assert.throws(() => assertExactPoolHostSet(config, expected.slice(0, -1)), /do not match/);
-  assert.throws(() => assertExactPoolHostSet(config, [...expected, { hostId: "unexpected-host" }]), /do not match/);
+  const hosts = [config.ingest, ...config.courts.map((court) => court.compositor), config.warmSpare];
+  const expected = hosts.map((host, index) => ({
+    hostId: host.hostId,
+    event: "watcher_started",
+    machineFingerprint: index.toString(16).padStart(16, "0"),
+    provider: "digitalocean",
+    providerResourceId: String(index + 1),
+    providerHostname: host.hostId
+  }));
+  const preflight = { providerResources: providerResources(hosts) };
+  assert.doesNotThrow(() => assertExactPoolHostSet(config, expected, preflight));
+  assert.throws(() => assertExactPoolHostSet(config, expected.slice(0, -1), preflight), /do not match/);
+  assert.throws(() => assertExactPoolHostSet(config, [...expected, { hostId: "unexpected-host" }], preflight), /do not match/);
   const duplicateMachine = structuredClone(expected);
   duplicateMachine[9].machineFingerprint = duplicateMachine[1].machineFingerprint;
-  assert.throws(() => assertExactPoolHostSet(config, duplicateMachine), /same physical machine/);
+  assert.throws(() => assertExactPoolHostSet(config, duplicateMachine, preflight), /same physical machine/);
   const missingMachine = structuredClone(expected);
   delete missingMachine[4].machineFingerprint;
-  assert.throws(() => assertExactPoolHostSet(config, missingMachine), /stable remote machine fingerprint/);
+  assert.throws(() => assertExactPoolHostSet(config, missingMachine, preflight), /remote machine fingerprint/);
+  const mismatchedProvider = structuredClone(expected);
+  mismatchedProvider[4].providerResourceId = "999";
+  assert.throws(() => assertExactPoolHostSet(config, mismatchedProvider, preflight), /does not match the active DigitalOcean resource/);
+  const missingProvider = structuredClone(expected);
+  delete missingProvider[4].providerResourceId;
+  assert.throws(() => assertExactPoolHostSet(config, missingProvider, preflight), /DigitalOcean identity at every watcher start/);
+  const duplicateProvider = structuredClone(expected);
+  duplicateProvider[9].providerResourceId = duplicateProvider[1].providerResourceId;
+  const duplicatePreflight = structuredClone(preflight);
+  duplicatePreflight.providerResources[9].resourceId = duplicatePreflight.providerResources[1].resourceId;
+  assert.throws(() => assertExactPoolHostSet(config, duplicateProvider, duplicatePreflight), /same provider resource/);
 });
 
 test("bounds endpoint Prometheus collection concurrency", async () => {
@@ -88,6 +110,31 @@ test("passes only complete eight-court evidence", () => {
   assert.equal(report.verdict, "PASS", failures(report));
   assert.equal(report.courts.length, 8);
   assert.ok(report.courts.every((court) => court.verdict === "PASS"));
+});
+
+test("rounds the final gate's 99 percent sample requirement upward", () => {
+  const input = passingInput();
+  input.evidence.globalSeries.control_plane_fresh = Array.from({ length: 119 }, (_, index) => ({
+    timestamp: 120 + (index * (7_200 / 118)),
+    value: 1
+  }));
+  const report = evaluateEightCourtEvidence(input);
+  assert.equal(report.verdict, "FAIL");
+  assert.equal(report.checks.find((check) => check.id === "global_control_plane_fresh_series_coverage")?.pass, false);
+});
+
+test("fails direct evaluator calls with missing or mismatched provider bindings", () => {
+  const missing = passingInput();
+  delete missing.hosts[missing.config.courts[3].compositor.hostId].providerIdentity;
+  let report = evaluateEightCourtEvidence(missing);
+  assert.equal(report.verdict, "FAIL");
+  assert.equal(report.checks.find((check) => check.id === "pool_host_provider_bindings")?.pass, false);
+
+  const mismatched = passingInput();
+  mismatched.hosts[mismatched.config.courts[3].compositor.hostId].providerIdentity.resourceId = "999";
+  report = evaluateEightCourtEvidence(mismatched);
+  assert.equal(report.verdict, "FAIL");
+  assert.equal(report.checks.find((check) => check.id === "pool_host_provider_bindings")?.pass, false);
 });
 
 test("fails on browser session churn, a firing alert, an unavailable spare, or venue headroom below floor", () => {
@@ -178,7 +225,11 @@ function passingInput() {
     if (court.commentaryRequired) values.commentary_packets_received = series([0, 100, 200, 300]);
     courtSeries[court.court] = values;
   }
-  const hosts = Object.fromEntries([config.ingest, ...config.courts.map((court) => court.compositor), config.warmSpare].map((host) => [host.hostId, hostEvidence()]));
+  const hostDefinitions = [config.ingest, ...config.courts.map((court) => court.compositor), config.warmSpare];
+  const hosts = Object.fromEntries(hostDefinitions.map((host, index) => [host.hostId, {
+    ...hostEvidence(),
+    providerIdentity: { provider: "digitalocean", resourceId: String(index + 1), hostname: host.hostId }
+  }]));
   const profiles = Object.fromEntries(config.courts.map((court) => [court.court, court.expectedSourceProfile]));
   return {
     config,
@@ -205,6 +256,7 @@ function passingInput() {
       status: "PASS",
       region: "sfo2",
       size: { slug: "c-4", vcpus: 4 },
+      providerResources: providerResources(hostDefinitions),
       compositors: {
         matchingActive: 9,
         target: 9,
@@ -307,6 +359,18 @@ function fixtureConfig() {
       maximumSnapshotAgeSeconds: 15
     }
   };
+}
+
+function providerResources(hosts) {
+  return hosts.map((host, index) => ({
+    provider: "digitalocean",
+    resourceType: "droplet",
+    resourceId: String(index + 1),
+    name: host.hostId,
+    status: "active",
+    region: "sfo2",
+    size: host.hostId === "bvm-preview-01" ? "c-8" : "c-4"
+  }));
 }
 
 function hostEvidence() {

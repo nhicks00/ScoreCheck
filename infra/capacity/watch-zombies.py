@@ -8,6 +8,7 @@ import os
 import signal
 import sys
 import time
+import urllib.request
 from datetime import datetime, timezone
 
 
@@ -40,6 +41,31 @@ def machine_fingerprint():
     if not machine_id and not product_uuid:
         return None
     return fingerprint(machine_id + b"\0" + product_uuid)
+
+
+def digitalocean_identity():
+    try:
+        with urllib.request.urlopen(
+            "http://169.254.169.254/metadata/v1.json", timeout=2.0
+        ) as response:
+            payload = json.load(response)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    return digitalocean_identity_from_payload(payload)
+
+
+def digitalocean_identity_from_payload(payload):
+    if not isinstance(payload, dict):
+        return None
+    resource_id = str(payload.get("droplet_id", ""))
+    hostname = payload.get("hostname")
+    if not resource_id.isdigit() or resource_id.startswith("0"):
+        return None
+    if not isinstance(hostname, str) or not hostname or len(hostname) > 253:
+        return None
+    if not all(character.isalnum() or character in "_.-" for character in hostname):
+        return None
+    return {"provider": "digitalocean", "resourceId": resource_id, "hostname": hostname}
 
 
 def read_bytes(path):
@@ -330,12 +356,16 @@ def run(role, poll_interval_ms, sample_interval_seconds, duration_seconds):
         math.floor(time.time() / sample_interval_seconds) + 1
     ) * sample_interval_seconds if sample_interval_seconds else None
 
+    provider_identity = digitalocean_identity()
     emit(
         role,
         "watcher_started",
         pollIntervalMs=poll_interval_ms,
         watcherPid=os.getpid(),
         machineFingerprint=machine_fingerprint(),
+        provider=provider_identity["provider"] if provider_identity else None,
+        providerResourceId=provider_identity["resourceId"] if provider_identity else None,
+        providerHostname=provider_identity["hostname"] if provider_identity else None,
     )
     while not stopping and (duration_seconds == 0 or time.monotonic() - started < duration_seconds):
         scan_started = time.monotonic()
@@ -421,6 +451,12 @@ def run(role, poll_interval_ms, sample_interval_seconds, duration_seconds):
 
 
 def self_test():
+    assert digitalocean_identity_from_payload({"droplet_id": 123, "hostname": "bvm-compositor-a"}) == {
+        "provider": "digitalocean", "resourceId": "123", "hostname": "bvm-compositor-a"
+    }
+    assert digitalocean_identity_from_payload({"droplet_id": 0, "hostname": "bvm-compositor-a"}) is None
+    assert digitalocean_identity_from_payload({"droplet_id": 123, "hostname": "bad hostname"}) is None
+    assert digitalocean_identity_from_payload([]) is None
     base = {
         "command": "node",
         "parentCommand": "runc",

@@ -51,6 +51,16 @@ test("passes complete healthy evidence", () => {
   assert.equal(report.checks.filter((check) => !check.pass).length, 0);
 });
 
+test("rounds required Prometheus sample coverage upward", () => {
+  const gateConfig = config();
+  gateConfig.thresholds.minimumSampleCoverageRatio = 0.81;
+  const evidence = healthyEvidence(gateConfig);
+  evidence.series.raw_bitrate.pop();
+  const report = evaluateEvidence(gateConfig, evidence, attestations(), hostEvidence(), zombieEvidence());
+  assert.equal(report.verdict, "FAIL");
+  assert.equal(report.checks.find((check) => check.id === "raw_bitrate_samples")?.pass, false);
+});
+
 test("fails on browser loss, CPU saturation, zombie growth, or missing attestation", () => {
   const gateConfig = config();
   const evidence = healthyEvidence(gateConfig);

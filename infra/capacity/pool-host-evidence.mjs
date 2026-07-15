@@ -47,10 +47,18 @@ export function summarizePoolHost(events, { hostId, role, startEpochSeconds, end
     .filter((event) => event.event === "watcher_started")
     .map((event) => event.machineFingerprint)
     .filter((value) => typeof value === "string"))];
+  const providerIdentities = [...new Map(selected
+    .filter((event) => event.event === "watcher_started" && event.provider != null)
+    .map((event) => [`${event.provider}\u0000${event.providerResourceId}\u0000${event.providerHostname}`, {
+      provider: event.provider,
+      resourceId: event.providerResourceId,
+      hostname: event.providerHostname
+    }])).values()];
   return {
     hostId,
     role,
     machineFingerprint: machineFingerprints.length === 1 ? machineFingerprints[0] : null,
+    providerIdentity: providerIdentities.length === 1 ? providerIdentities[0] : null,
     samples: summarizeSamples(selected, { startEpochSeconds, endEpochSeconds, stepSeconds }),
     zombies: summarizeZombieRoleEvents(selected, { startEpochSeconds, endEpochSeconds })
   };

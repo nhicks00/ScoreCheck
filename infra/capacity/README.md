@@ -177,6 +177,13 @@ physical identities fail even when different SSH aliases were supplied, and
 the spare is proven ready throughout the window instead of only appearing in a
 preflight snapshot.
 
+Each watcher also records its host-local DigitalOcean droplet ID and hostname.
+The evaluator requires those values to match the exact active droplet resources
+captured by the fresh provider preflight, and rejects missing, changed, or
+duplicated provider identities. The final gate fixes metric coverage at 99% or
+higher and rounds the required sample count upward, so a fractional threshold
+cannot silently pass with less than the configured coverage.
+
 The checked-in `eight-court-endurance.example.json` is a candidate manifest,
 not a claim about the final camera or ingest profiles. Replace every source
 profile and host vCPU value with evidence from the camera-profile and host

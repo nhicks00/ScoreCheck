@@ -89,9 +89,16 @@ test("does not misclassify observation end as process reaping", () => {
 
 test("rejects malformed, unsafe, or over-broad event data", () => {
   const valid = open("ingest", 12, "600:60", "node", "runc", "healthcheck.monitor-agent", false);
-  const started = event("ingest", "watcher_started", 0, { pollIntervalMs: 50, watcherPid: 900, machineFingerprint: "0123456789abcdef" });
+  const started = event("ingest", "watcher_started", 0, {
+    pollIntervalMs: 50, watcherPid: 900, machineFingerprint: "0123456789abcdef",
+    provider: "digitalocean", providerResourceId: "123", providerHostname: "bvm-preview-01"
+  });
   assert.equal(parseZombieEventLine(JSON.stringify(started)).machineFingerprint, "0123456789abcdef");
+  assert.equal(parseZombieEventLine(JSON.stringify(started)).providerResourceId, "123");
   assert.throws(() => parseZombieEventLine(JSON.stringify({ ...started, machineFingerprint: "not-a-fingerprint" })), /machineFingerprint/);
+  assert.throws(() => parseZombieEventLine(JSON.stringify({ ...started, provider: "other" })), /provider/);
+  assert.throws(() => parseZombieEventLine(JSON.stringify({ ...started, providerResourceId: "0" })), /providerResourceId/);
+  assert.throws(() => parseZombieEventLine(JSON.stringify({ ...started, providerHostname: "bad hostname" })), /providerHostname/);
   assert.equal(parseZombieEventLine(JSON.stringify(valid)).initialObservation, false);
   assert.throws(() => parseZombieEventLine(JSON.stringify({ ...valid, initialObservation: undefined })), /initialObservation/);
   assert.throws(() => parseZombieEventLine(JSON.stringify({ ...valid, classification: "healthcheck.generic" })), /classification/);

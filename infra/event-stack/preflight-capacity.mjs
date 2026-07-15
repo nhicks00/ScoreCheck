@@ -16,6 +16,7 @@ export function evaluateCapacity(input) {
   const warmSpares = boundedInteger(input.warmSpares, "warm spare count", 0, 16);
   const droplets = completeCollection(input.dropletsPayload, "droplets");
   const sizes = completeCollection(input.sizesPayload, "sizes");
+  const providerResources = droplets.map(providerResource).sort((left, right) => left.name.localeCompare(right.name) || left.resourceId.localeCompare(right.resourceId));
   const fleetSpec = input.fleetSpec === undefined
     ? null
     : validateFleetSpec(input.fleetSpec, {
@@ -76,6 +77,7 @@ export function evaluateCapacity(input) {
       priceHourly,
       priceMonthly
     } : { slug: input.sizeSlug, vcpus: null, memoryMiB: null, priceHourly: null, priceMonthly: null },
+    providerResources,
     account: {
       status: accountStatus,
       currentDroplets: droplets.length,
@@ -233,6 +235,22 @@ export function completeCollection(payload, name) {
   if (!Number.isInteger(total) || total < 0) throw new Error(`${name} response is missing a valid total.`);
   if (values.length !== total) throw new Error(`${name} response is incomplete (${values.length}/${total}).`);
   return values;
+}
+
+function providerResource(droplet) {
+  const rawId = droplet?.id;
+  if (!Number.isSafeInteger(rawId) || rawId < 1) throw new Error("droplet inventory contains an invalid provider resource id.");
+  const name = String(droplet?.name ?? "");
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,252}$/.test(name)) throw new Error("droplet inventory contains an invalid name.");
+  return {
+    provider: "digitalocean",
+    resourceType: "droplet",
+    resourceId: String(rawId),
+    name,
+    status: String(droplet?.status ?? "unknown"),
+    region: String(droplet?.region?.slug ?? "unknown"),
+    size: String(droplet?.size_slug ?? "unknown")
+  };
 }
 
 function parseArgs(argv) {

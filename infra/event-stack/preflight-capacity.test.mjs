@@ -33,6 +33,20 @@ test("stamps a deterministic capture time on persisted preflight evidence", () =
   assert.throws(() => timestampCapacityResult({}, new Date("invalid")), /timestamp is invalid/);
 });
 
+test("preserves stable provider resource identities for later host-evidence binding", () => {
+  const result = evaluateCapacity(fixture({ dropletCount: 2, compositorCount: 1 }));
+  assert.deepEqual(result.providerResources, [
+    { provider: "digitalocean", resourceType: "droplet", resourceId: "1", name: "bvm-compositor-1", status: "active", region: "sfo2", size: "c-4" },
+    { provider: "digitalocean", resourceType: "droplet", resourceId: "2", name: "bvm-service-2", status: "active", region: "sfo2", size: "s-2vcpu-4gb" }
+  ]);
+  const invalid = fixture({ dropletCount: 1, compositorCount: 1 });
+  invalid.dropletsPayload.droplets[0].id = Number.MAX_SAFE_INTEGER + 1;
+  assert.throws(() => evaluateCapacity(invalid), /invalid provider resource id/);
+  const invalidName = fixture({ dropletCount: 1, compositorCount: 1 });
+  invalidName.dropletsPayload.droplets[0].name = "bad name";
+  assert.throws(() => evaluateCapacity(invalidName), /invalid name/);
+});
+
 test("does not count inactive or incompatible tagged workers as qualified capacity", () => {
   const input = fixture({ dropletLimit: 15, dropletCount: 7, compositorCount: 4 });
   input.dropletsPayload.droplets[0].status = "off";

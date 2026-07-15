@@ -46,6 +46,8 @@ test("CLI starts one watcher per host and writes protected identity-preserving e
     assert.equal(events.length, 10);
     assert.equal(new Set(events.map((event) => event.hostId)).size, 10);
     assert.equal(new Set(events.map((event) => event.machineFingerprint)).size, 10);
+    assert.equal(new Set(events.map((event) => event.providerResourceId)).size, 10);
+    assert.ok(events.every((event) => event.provider === "digitalocean"));
     assert.ok(events.every((event) => event.event === "watcher_started"));
     assert.equal((await stat(output)).mode & 0o777, 0o600);
   } finally {
@@ -78,7 +80,8 @@ process.stdin.resume();
 process.stdin.once("end", () => {
   const observedAt = new Date().toISOString();
   const machineFingerprint = host.split(".").at(-1).padStart(16, "0");
-  process.stdout.write(JSON.stringify({ schemaVersion: 1, role, event: "watcher_started", observedAt, pollIntervalMs: 50, watcherPid: process.pid, machineFingerprint }) + "\\n");
+  const providerResourceId = String(Number(host.split(".").at(-1)));
+  process.stdout.write(JSON.stringify({ schemaVersion: 1, role, event: "watcher_started", observedAt, pollIntervalMs: 50, watcherPid: process.pid, machineFingerprint, provider: "digitalocean", providerResourceId, providerHostname: \`host-\${providerResourceId}\` }) + "\\n");
   if (host === process.env.FAKE_FAIL_HOST) {
     process.stdout.write(JSON.stringify({
       schemaVersion: 1, role, event: "zombie_open", observedAt: new Date().toISOString(),

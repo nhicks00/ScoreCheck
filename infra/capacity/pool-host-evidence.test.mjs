@@ -36,6 +36,7 @@ test("separates same-role compositor events by stable host identity", () => {
   });
   assert.equal(summary.samples.validSamples, 3);
   assert.equal(summary.machineFingerprint, "aaaaaaaaaaaaaaaa");
+  assert.deepEqual(summary.providerIdentity, { provider: "digitalocean", resourceId: "1", hostname: "compositor-a" });
   assert.equal(summary.samples.coverageRatio, 1);
   assert.equal(summary.samples.baselineAgeSeconds, 5);
   assert.equal(summary.samples.cpuMaxRatio, 0.4);
@@ -76,7 +77,11 @@ test("pairs ingest and compositor evidence using the weakest coverage and worst 
 
 function started(hostId, role, offsetSeconds) {
   const machineFingerprint = hostId.endsWith("a") ? "aaaaaaaaaaaaaaaa" : "bbbbbbbbbbbbbbbb";
-  return row(hostId, role, "watcher_started", offsetSeconds, { pollIntervalMs: 50, watcherPid: 100, machineFingerprint });
+  const providerResourceId = hostId.endsWith("a") ? "1" : "2";
+  return row(hostId, role, "watcher_started", offsetSeconds, {
+    pollIntervalMs: 50, watcherPid: 100, machineFingerprint,
+    provider: "digitalocean", providerResourceId, providerHostname: hostId
+  });
 }
 
 function heartbeat(hostId, role, offsetSeconds) {

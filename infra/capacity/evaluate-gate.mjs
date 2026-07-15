@@ -198,7 +198,7 @@ export function evaluateEvidence(config, evidence, attestations, hostEvidence, z
   const durationSeconds = evidence.endEpochSeconds - evidence.startEpochSeconds;
   const evaluatedDurationSeconds = evidence.endEpochSeconds - evidence.effectiveStartEpochSeconds;
   const expectedSamples = Math.floor(evaluatedDurationSeconds / config.stepSeconds) + 1;
-  const minimumSamples = Math.max(2, Math.floor(expectedSamples * config.thresholds.minimumSampleCoverageRatio));
+  const minimumSamples = Math.max(2, Math.ceil(expectedSamples * config.thresholds.minimumSampleCoverageRatio));
 
   addCheck(checks, "duration", durationSeconds >= config.minimumDurationSeconds, durationSeconds, `>= ${config.minimumDurationSeconds} seconds`);
 
