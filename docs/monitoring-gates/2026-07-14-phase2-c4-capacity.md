@@ -189,6 +189,29 @@ the same Egress cgroup. It preserves every lifecycle and applies the shared
 wrong-parent, wrong-cgroup, persistent, overlapping, or accumulating processes
 still fail.
 
+The post-abort idle audit then found a separate process-lifecycle defect that
+the zombie gate could not detect: 170 sleeping `scorecheck-ffmpeg-runner`
+shells remained parented to MediaMTX after earlier on-demand paths retired.
+Half were owners waiting for their progress parser and half were parsers blocked
+on the progress FIFO. BusyBox `ash` had duplicated the runner's read/write FIFO
+guard into each background parser, so each parser retained its own writer and
+could never observe EOF. The hard cutover now starts a separately exec'd parser
+without a read/write guard, then explicitly terminates and reaps that parser
+after FFmpeg exits. The regression requires a real parsed progress sample and
+eight bounded signal cycles; it passes both on the development host and inside
+the exact pinned MediaMTX image.
+
+The runner-only production cutover backed up the prior script as
+`backups/scorecheck-ffmpeg-runner.20260715T042426Z.sh` and recreated only
+MediaMTX. The sleeping runner count fell from 170 to zero. A bounded production
+preview cycle then held one runner plus one parser while active and returned to
+raw-only with runner, parser, and zombie counts all zero after the configured
+90-second close delay. An initial in-container reader probe created an
+observer-owned `timeout` zombie under MediaMTX PID 1; that contaminated
+container was discarded and the accepted calibration used an external
+ephemeral reader container instead. The final calibration had no observer or
+workload zombie and no runner/parser residue.
+
 ## Required rerun
 
 This gate can pass only after deployment provenance is verified and a new full
