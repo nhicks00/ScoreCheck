@@ -339,7 +339,13 @@ program FPS for courts 1–8, with a maximum of 240 samples per series.
 The snapshot includes separate paging-provider and external dead-man health.
 Dead-man check mode is bounded to `NOT_CONFIGURED`, `UNKNOWN`, `RUNNING`, or
 `PAUSED`; an intentional idle pause is healthy, while a failed ping or pause is
-degraded. Ping URLs, check ids, and API keys are never returned.
+degraded. `deadMan.phoneChannel` separately reports whether the required
+Healthchecks Pushover integration is attached to the baseline and active checks,
+the last successful read-only audit, and the last audit failure. The audit runs
+every five minutes and retries provider failures after thirty seconds. It makes
+one channel-list request and one check request per configured check; it never
+writes provider configuration or Supabase telemetry. Ping URLs, check ids,
+integration ids and names, and API keys are never returned.
 
 Silences require at least one bounded event, court, stage, or issue-code scope,
 an operator, a reason, and an expiry no more than 24 hours away. They suppress

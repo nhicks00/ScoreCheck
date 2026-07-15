@@ -24,6 +24,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StreamPlayer } from "@/components/StreamPlayer";
 import { deriveMonitorBrowserLiveness, type MonitorBrowserLiveness } from "@/lib/monitorBrowserLiveness";
+import { deriveMonitorDeadManReadiness } from "@/lib/monitorDeadManReadiness";
 import { deriveMonitorPagingReadiness } from "@/lib/monitorPagingReadiness";
 import { deriveMonitorSystemState } from "@/lib/monitorSystemState";
 import type { MonitorCourt, MonitorCourtPipelineRange, MonitorHealthState, MonitorIncident, MonitorMediaPath, MonitorSilence, MonitorSnapshotEnvelope, MonitorStage } from "@/lib/monitoringTypes";
@@ -285,9 +286,10 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
   const snapshotAgeMs = Math.max(0, nowMs - Date.parse(snapshot.generatedAt));
   const stale = envelope.source === "checkpoint" || snapshotAgeMs > 15_000;
   const pagingReadiness = deriveMonitorPagingReadiness(snapshot.notifications);
+  const deadManReadiness = deriveMonitorDeadManReadiness(snapshot.deadMan);
   const overall = deriveMonitorSystemState({
     courtStates: snapshot.courts.map(effectiveCourtState),
-    globalStates: [snapshot.collector.state, snapshot.controlPlane.state, snapshot.youtube.state, pagingReadiness.state, snapshot.deadMan.state],
+    globalStates: [snapshot.collector.state, snapshot.controlPlane.state, snapshot.youtube.state, pagingReadiness.state, deadManReadiness.state],
     hasCriticalIncident: snapshot.incidents.some((incident) => incident.status !== "resolved" && incident.severity === "critical"),
     stale
   });
@@ -354,7 +356,7 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
         <GlobalItem icon={<Signal size={17} />} label="Control" value={snapshot.controlPlane.worker.state === "NOT_APPLICABLE" ? "Idle" : snapshot.controlPlane.worker.state} state={snapshot.controlPlane.state} />
         <GlobalItem icon={<Youtube size={17} />} label="YouTube" value={friendlyState(snapshot.youtube.state)} state={snapshot.youtube.state} />
         <GlobalItem icon={<Bell size={17} />} label="Phone alerts" value={pagingReadiness.label} state={pagingReadiness.state} wrapValue />
-        <GlobalItem icon={<Radio size={17} />} label="Watchdog" value={deadManLabel(snapshot.deadMan)} state={snapshot.deadMan.state === "DEGRADED" ? "DEGRADED" : snapshot.deadMan.state === "UNKNOWN" ? "UNKNOWN" : snapshot.deadMan.state === "HEALTHY" ? "HEALTHY" : "NOT_APPLICABLE"} />
+        <GlobalItem icon={<Radio size={17} />} label="Watchdog" value={deadManReadiness.label} state={deadManReadiness.state} wrapValue />
         <GlobalItem icon={<ShieldAlert size={17} />} label="Incidents" value={activeIncidents.length ? `${activeIncidents.length} active` : "Clear"} state={activeIncidents.some((incident) => incident.severity === "critical") ? "CRITICAL" : activeIncidents.length ? "DEGRADED" : "HEALTHY"} />
         <div className={`monitor-freshness ${stale ? "is-stale" : ""}`}>
           <Clock3 size={16} aria-hidden="true" />
@@ -795,13 +797,6 @@ function commentaryLabel(browser: MonitorCourt["browser"]): string {
   if ((commentary.clippedSampleRatio ?? 0) > 0.05) return "clipping";
   if ((commentary.secondsSinceAudio ?? 0) > 60) return "silent";
   return commentary.syncStatus;
-}
-
-function deadManLabel(deadMan: MonitorSnapshotEnvelope["snapshot"]["deadMan"]): string {
-  if (deadMan.state === "NOT_APPLICABLE") return "Not configured";
-  if (deadMan.state === "DEGRADED") return "Delivery failed";
-  if (deadMan.state === "UNKNOWN") return "Verifying";
-  return deadMan.active.mode === "RUNNING" ? "Coverage active" : "Idle protected";
 }
 
 function playAlertTone() {

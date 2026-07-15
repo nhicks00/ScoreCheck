@@ -33,6 +33,19 @@ describe("operator notification copy", () => {
     expect(JSON.stringify(copy)).not.toContain("UNRECOGNIZED_FAILURE");
   });
 
+  it("keeps an external phone-channel configuration alert in plain English", () => {
+    const copy = operatorNotificationCopy(incident({
+      stage: "NOTIFICATION",
+      issueCode: "EXTERNAL_DEAD_MAN_PHONE_CHANNEL_MISSING",
+      courtNumber: null
+    }));
+    expect(copy).toMatchObject({
+      problem: "Phone alerts may not be delivered.",
+      action: "Keep the ScoreCheck monitor open until phone alerts are working again."
+    });
+    expect(JSON.stringify(copy)).not.toMatch(/dead.?man|channel|healthchecks/i);
+  });
+
   it("labels an intentional camera-loss gate and tells the operator to wait", () => {
     const copy = operatorNotificationCopy(incident({
       summary: "[INTENTIONAL FAULT GATE] Required camera ingest is missing on court 4.",

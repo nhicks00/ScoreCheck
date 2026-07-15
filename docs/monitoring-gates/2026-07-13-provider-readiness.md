@@ -40,9 +40,17 @@ The Healthchecks Management API currently reports:
 | ScoreCheck monitor baseline | Up | 10 minutes | 3 minutes | No |
 | ScoreCheck active coverage monitor | Paused while idle | 1 minute | 1 minute | No |
 
-Both checks are assigned to the project's single email integration. The API can list and assign integrations but cannot create a Pushover subscription. Healthchecks requires an authenticated UI subscription, and the available automation browser is not signed in.
+Both checks are assigned to the project's single email integration. The API can
+list and assign integrations but cannot create a Pushover subscription.
+Healthchecks is authenticated in Safari and the final Pushover subscription page
+is staged with emergency down priority, five-minute repeats for up to one day,
+and normal recovery priority. The external subscription has not been confirmed,
+so no Pushover integration exists in the Healthchecks project yet.
 
-To unblock the independent phone dead-man gate, sign in to Healthchecks.io in the in-app browser, add the Pushover integration with Emergency priority, and leave that page open for Codex. Codex can then verify and assign the new channel to both checks through the API before running the controlled withheld-ping test.
+To unblock the independent phone dead-man gate, Nathan must explicitly confirm
+the staged Healthchecks-to-Pushover subscription. After it exists, attach that
+integration to both checks, verify the new channel-readiness snapshot and
+dashboard state, and only then run the controlled withheld-ping test.
 
 ## Current decision
 

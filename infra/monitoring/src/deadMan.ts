@@ -1,13 +1,16 @@
 import type { ServiceConfig } from "./config.js";
 import type { DeadManHealth } from "./contracts.js";
+import { HealthchecksChannelAudit } from "./healthchecksChannelAudit.js";
 
 type DeadManConfig = Pick<ServiceConfig,
   | "healthchecksBaselinePingUrl"
+  | "healthchecksBaselineCheckId"
   | "healthchecksActivePingUrl"
   | "healthchecksApiKey"
   | "healthchecksActiveCheckId"
   | "healthchecksBaselineIntervalMs"
   | "healthchecksActiveIntervalMs"
+  | "healthchecksChannelAuditIntervalMs"
 >;
 
 type CheckRuntime = DeadManHealth["baseline"] & {
@@ -19,6 +22,7 @@ const RETRY_INTERVAL_MS = 30_000;
 export class ExternalDeadMan {
   private readonly baseline: CheckRuntime;
   private readonly active: CheckRuntime;
+  private readonly channelAudit: HealthchecksChannelAudit;
 
   constructor(
     private readonly config: DeadManConfig,
@@ -26,23 +30,28 @@ export class ExternalDeadMan {
   ) {
     this.baseline = checkRuntime(Boolean(config.healthchecksBaselinePingUrl));
     this.active = checkRuntime(Boolean(config.healthchecksActivePingUrl));
+    this.channelAudit = new HealthchecksChannelAudit(config, send);
   }
 
   health(): DeadManHealth {
     const checks = [this.baseline, this.active].filter((check) => check.configured);
     const failed = checks.some((check) => check.lastFailureAt != null);
     const unverified = checks.some((check) => check.lastSuccessAt == null);
+    const checkState = checks.length === 0 ? "NOT_APPLICABLE" : failed ? "DEGRADED" : unverified ? "UNKNOWN" : "HEALTHY";
+    const phoneChannel = this.channelAudit.health();
     return {
-      state: checks.length === 0 ? "NOT_APPLICABLE" : failed ? "DEGRADED" : unverified ? "UNKNOWN" : "HEALTHY",
+      state: combinedState(checkState, phoneChannel.state),
       baseline: publicCheck(this.baseline),
-      active: publicCheck(this.active)
+      active: publicCheck(this.active),
+      phoneChannel
     };
   }
 
   async maintain(coverageExpected: boolean, now = new Date()): Promise<void> {
     await Promise.all([
       this.maintainBaseline(now),
-      this.maintainActive(coverageExpected, now)
+      this.maintainActive(coverageExpected, now),
+      this.channelAudit.maintain(now)
     ]);
   }
 
@@ -96,6 +105,15 @@ export class ExternalDeadMan {
     });
     if (!response.ok) throw new Error(`Healthchecks request failed with HTTP ${response.status}.`);
   }
+}
+
+function combinedState(
+  checkState: DeadManHealth["state"],
+  phoneState: DeadManHealth["phoneChannel"]["state"]
+): DeadManHealth["state"] {
+  if (checkState === "DEGRADED" || phoneState === "DEGRADED") return "DEGRADED";
+  if (checkState === "UNKNOWN" || phoneState === "UNKNOWN") return "UNKNOWN";
+  return checkState;
 }
 
 function checkRuntime(configured: boolean): CheckRuntime {

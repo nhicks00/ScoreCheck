@@ -61,7 +61,8 @@ function idleSnapshot(): MonitorSnapshot {
     deadMan: {
       state: "HEALTHY",
       baseline: { configured: true, mode: "RUNNING", lastSuccessAt: null, lastFailureAt: null },
-      active: { configured: true, mode: "PAUSED", lastSuccessAt: null, lastFailureAt: null }
+      active: { configured: true, mode: "PAUSED", lastSuccessAt: null, lastFailureAt: null },
+      phoneChannel: { configured: true, state: "HEALTHY", baselineAttached: true, activeAttached: true, lastSuccessAt: null, lastFailureAt: null }
     },
     courts: [{
       courtNumber: 4,

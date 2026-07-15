@@ -128,5 +128,10 @@ and the external dead-man continues with all browsers closed.
 
 The external dead-man has two independent checks. The ten-minute baseline is
 always running. The one-minute active check is resumed by a ping when coverage is
-expected and paused through the Healthchecks management API while idle; all three
-active-check values in `.env.example` must be configured together.
+expected and paused through the Healthchecks management API while idle. Both ping
+URLs, both check ids, and the write API key are one required configuration unit.
+Every five minutes the service makes three read-only Management API requests to
+verify that the Healthchecks Pushover channel is attached to both checks. Provider
+errors retry after thirty seconds. The snapshot and Prometheus expose only
+attachment booleans and timestamps; channel ids, names, URLs, and keys are never
+returned.

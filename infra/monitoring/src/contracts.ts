@@ -346,10 +346,20 @@ export type DeadManCheckHealth = {
   lastFailureAt: string | null;
 };
 
+export type DeadManPhoneChannelHealth = {
+  configured: boolean;
+  state: "NOT_APPLICABLE" | "UNKNOWN" | "HEALTHY" | "DEGRADED";
+  baselineAttached: boolean | null;
+  activeAttached: boolean | null;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+};
+
 export type DeadManHealth = {
   state: "NOT_APPLICABLE" | "UNKNOWN" | "HEALTHY" | "DEGRADED";
   baseline: DeadManCheckHealth;
   active: DeadManCheckHealth;
+  phoneChannel: DeadManPhoneChannelHealth;
 };
 
 export type BrowserThumbnailMetadata = {

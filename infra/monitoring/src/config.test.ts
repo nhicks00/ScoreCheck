@@ -41,6 +41,7 @@ describe("monitoring configuration", () => {
       MONITOR_BROWSER_HEARTBEAT_SECRET: "browser-heartbeat-secret-that-is-long-enough",
       MONITOR_PUBLIC_HOST: "monitor.example.test",
       HEALTHCHECKS_BASELINE_PING_URL: "",
+      HEALTHCHECKS_BASELINE_CHECK_ID: "",
       HEALTHCHECKS_ACTIVE_PING_URL: "",
       HEALTHCHECKS_API_KEY: "",
       HEALTHCHECKS_ACTIVE_CHECK_ID: "",
@@ -48,6 +49,7 @@ describe("monitoring configuration", () => {
       SUPABASE_SERVICE_ROLE_KEY: ""
     });
     expect(service.healthchecksBaselinePingUrl).toBeNull();
+    expect(service.healthchecksBaselineCheckId).toBeNull();
     expect(service.healthchecksActivePingUrl).toBeNull();
     expect(service.healthchecksApiKey).toBeNull();
     expect(service.healthchecksActiveCheckId).toBeNull();
@@ -55,7 +57,7 @@ describe("monitoring configuration", () => {
     expect(service.browserAllowedOrigins).toEqual(["https://score.beachvolleyballmedia.com"]);
   });
 
-  it("requires active Healthchecks lifecycle credentials as one unit", () => {
+  it("requires the complete Healthchecks lifecycle and channel-audit configuration as one unit", () => {
     const base = {
       MONITOR_API_TOKEN: "abcdefghijklmnopqrstuvwxyz",
       ALERTMANAGER_WEBHOOK_TOKEN: "zyxwvutsrqponmlkjihgfedcba",
@@ -65,13 +67,18 @@ describe("monitoring configuration", () => {
     expect(() => loadServiceConfig({
       ...base,
       HEALTHCHECKS_ACTIVE_PING_URL: "https://hc-ping.com/active"
-    })).toThrow(/ping URL, write API key, and check id/);
-    expect(loadServiceConfig({
+    })).toThrow(/both ping URLs, both check ids, and the write API key/);
+    const parsed = loadServiceConfig({
       ...base,
+      HEALTHCHECKS_BASELINE_PING_URL: "https://hc-ping.com/baseline",
+      HEALTHCHECKS_BASELINE_CHECK_ID: "120650f2-ed19-479c-933e-b0df1246ba81",
       HEALTHCHECKS_ACTIVE_PING_URL: "https://hc-ping.com/active",
       HEALTHCHECKS_API_KEY: "healthchecks-write-key",
       HEALTHCHECKS_ACTIVE_CHECK_ID: "220650f2-ed19-479c-933e-b0df1246ba81"
-    }).healthchecksActiveCheckId).toBe("220650f2-ed19-479c-933e-b0df1246ba81");
+    });
+    expect(parsed.healthchecksBaselineCheckId).toBe("120650f2-ed19-479c-933e-b0df1246ba81");
+    expect(parsed.healthchecksActiveCheckId).toBe("220650f2-ed19-479c-933e-b0df1246ba81");
+    expect(parsed.healthchecksChannelAuditIntervalMs).toBe(300_000);
   });
 
   it("requires the complete Twilio API and callback credential set", () => {

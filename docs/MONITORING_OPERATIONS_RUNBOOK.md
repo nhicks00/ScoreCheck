@@ -193,6 +193,7 @@ TWILIO_API_KEY_SECRET
 TWILIO_FROM_NUMBER
 TWILIO_TO_NUMBER
 HEALTHCHECKS_BASELINE_PING_URL
+HEALTHCHECKS_BASELINE_CHECK_ID
 HEALTHCHECKS_ACTIVE_PING_URL
 HEALTHCHECKS_API_KEY
 HEALTHCHECKS_ACTIVE_CHECK_ID
@@ -209,8 +210,12 @@ is still unregistered and must remain disabled. The baseline
 dead-man pings every ten minutes at all times. The active check pings every minute
 while any court expects coverage and is explicitly paused through the Healthchecks
 management API while the system is idle. A live ping resumes it automatically.
-The dashboard must show `Coverage active` or `Idle protected`, and any ping/pause
-failure must degrade the Watchdog item. The external provider must notify a phone
+The service audits the Healthchecks channel list and both check assignments every
+five minutes using three read-only API requests, with a thirty-second retry after
+provider failure. The dashboard may show `Coverage protected` or `Idle protected`
+only when the pings are healthy and the Healthchecks Pushover integration is
+attached to both checks. Missing attachment or failed audit degrades the Watchdog
+item and the overall system header. The external provider must notify a phone
 independently of DigitalOcean, Supabase, Vercel, and ScoreCheck.
 
 Phone notifications use operator language only. Every opening notification has
@@ -226,6 +231,15 @@ Provider activation is not accepted until all of these pass:
 4. Baseline and active dead-man checks both alert when their pings are withheld.
 5. The dashboard shows Push and SMS independently, and degrades phone-alert
    readiness when either required provider is missing or failed.
+6. The dashboard Watchdog shows both Healthchecks checks as phone protected, and
+   removing the Pushover channel from either check raises exactly one durable
+   plain-English configuration incident.
+
+The channel-readiness contract is a hard cutover. Configure
+`HEALTHCHECKS_BASELINE_CHECK_ID`, deploy the matching monitor service, verify the
+new snapshot field, then deploy the matching rules and web build. Do not deploy
+the new rules while either check still lacks Pushover, because the missing-channel
+alert is intentionally critical.
 
 ## Deployment and verification
 

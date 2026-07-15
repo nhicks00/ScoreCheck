@@ -90,7 +90,8 @@ Supabase desired/observed state -> outbound controller reconciler
   seconds, and queued-match checks for ten seconds.
 
 Phone-provider and external dead-man delivery remain conditional on protected
-Pushover, Twilio, and Healthchecks credentials. Real one-court and eight-court
+Pushover, Twilio, and Healthchecks credentials plus verified phone-channel
+attachment on both external checks. Real one-court and eight-court
 fault gates remain test-session work; monitoring must not prove itself by
 stopping public production services.
 
