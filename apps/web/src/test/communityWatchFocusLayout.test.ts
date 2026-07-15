@@ -86,7 +86,7 @@ describe("community watch focus layout", () => {
 
     expect(compactStart).toBeGreaterThan(-1);
     expect(compactRules).toContain(".addPoint");
-    expect(compactRules).toContain("min-height: 48px");
+    expect(compactRules).toContain("min-height: 44px");
     expect(compactRules).toContain(".removePoint");
     expect(compactRules).toContain("min-height: 44px");
     expect(compactRules).not.toContain(".utilityLabel");
@@ -104,6 +104,28 @@ describe("community watch focus layout", () => {
     const recoveryStart = scorerStylesheet.indexOf(".sessionAlert button {");
     const recoveryEnd = scorerStylesheet.indexOf("}", recoveryStart);
     expect(scorerStylesheet.slice(recoveryStart, recoveryEnd)).toContain("min-height: 44px");
+  });
+
+  it("compacts score actions without reducing their 44px minimum hit area", () => {
+    const watchControlsStart = scorerStylesheet.indexOf(".watchDensity .contributionControls {");
+    const watchAddStart = scorerStylesheet.indexOf(".watchDensity .addPoint {");
+    const watchRemoveStart = scorerStylesheet.indexOf(".watchDensity .removePoint {");
+    const overlayLandscapeStart = overlayStylesheet.indexOf("@media (orientation: landscape)");
+    const overlayPortraitStart = overlayStylesheet.indexOf(
+      "@media (orientation: portrait)",
+      overlayLandscapeStart
+    );
+    const overlayLandscapeRules = overlayStylesheet.slice(overlayLandscapeStart, overlayPortraitStart);
+
+    expect(scorerStylesheet.slice(watchControlsStart, watchAddStart)).toContain("padding-top: 12px");
+    expect(scorerStylesheet.slice(watchAddStart, watchRemoveStart)).toContain("min-height: 52px");
+    expect(scorerStylesheet.slice(watchRemoveStart, scorerStylesheet.indexOf("}", watchRemoveStart) + 1))
+      .toContain("min-height: 44px");
+    expect(overlayLandscapeRules).toContain("grid-template-columns: repeat(2, minmax(0, 1fr))");
+    expect(overlayLandscapeRules).toContain("max-width: clamp(168px, 23vw, 240px)");
+    expect(overlayLandscapeRules).toContain("top: max(100px, calc(env(safe-area-inset-top) + 100px))");
+    expect(overlayLandscapeRules).toContain("min-height: 44px");
+    expect(overlayStylesheet).toContain("overflow-wrap: anywhere");
   });
 
   it("keeps the player provider-neutral and opens focus without scrolling", () => {
@@ -133,6 +155,8 @@ describe("community watch focus layout", () => {
     expect(overlay).toContain("Set {view.currentSet}");
     expect(overlay).toContain("Add point");
     expect(overlay).toContain("Remove point");
+    expect(overlay).toContain("Adding…");
+    expect(overlay).toContain("Removing…");
     expect(overlay).toContain("onAddPoint(side)");
     expect(overlay).toContain("onRemovePoint(side)");
     expect(overlay).not.toMatch(/unsure/i);

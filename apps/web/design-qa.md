@@ -3,9 +3,10 @@
 ## Evidence
 
 - Source visual truth: `docs/design/community-overlay-selected-top.png`
-- Final implementation screenshot: `docs/design/community-overlay-qa/17-final-landscape-top-844x390.png`
-- Full source/implementation comparison: `docs/design/community-overlay-qa/18-final-landscape-comparison.png`
-- Focused controls comparison: `docs/design/community-overlay-qa/19-final-controls-comparison.png`
+- Final compact implementation screenshot: `docs/design/community-overlay-qa/23-compact-landscape-top-844x390.png`
+- Pre-compaction source/implementation comparison: `docs/design/community-overlay-qa/18-final-landscape-comparison.png`
+- Pre-compaction focused-controls comparison: `docs/design/community-overlay-qa/19-final-controls-comparison.png`
+- Compact responsive evidence: `docs/design/community-overlay-qa/20-compact-landscape-top-568x320.png`, `21-compact-focus-320x480.png`, `22-compact-windowed-phone-390x844.png`, and `24-compact-landscape-bottom-568x320.png`
 - Required responsive states: `docs/design/community-overlay-qa/10-focus-narrow-video-rail-320x480.png`, `11-focus-landscape-top-568x320.png`, `12-focus-landscape-bottom-568x320.png`, `13-focus-tablet-768x1024.png`, `14-focus-desktop-top-1440x900.png`, `15-windowed-desktop-1440x900.png`, and `16-windowed-phone-390x844.png`
 - Route under test: a temporary local fixture around the shipping `CommunityWatchAndScore` component. The fixture route was removed after QA.
 - Primary state: Court 4 / Match 12, Set 2, Basey / Hurst 18, Caldwell / Labouliere 16, Rally 38 awaiting resolution.
@@ -24,10 +25,10 @@ No P0, P1, or P2 visual mismatch remains.
 
 ## Responsive measurements
 
-- 320 x 480 narrow portrait: video is 320 x 180, horizontal overflow is hidden, both teams' score actions appear in the initial viewport, and remaining utilities are reachable in the bounded vertical scroll. The player rail sits 9 px from the video bottom instead of covering the court center.
-- 390 x 844 phone portrait: video is 390 x 219.375 with the scorer below it; Add point is 56 px high and Remove point is 46 px high. The landscape-only position control is hidden because top/bottom corners have no meaning in this presentation.
-- 568 x 320 phone landscape: video is 568 x 319.5. With team docks at the top, player controls move to bottom-left; with docks at the bottom, player controls move to top-left. The utility cluster remains centered on the opposite edge without overlap.
-- 844 x 390 wide-phone landscape: video is 693.328 x 389.984, centered with black gutters. Add point is 48 px, Remove point is 44 px, and full utility labels remain visible.
+- 320 x 480 narrow portrait: video is 320 x 180, horizontal overflow is hidden, and each 149.5 px team dock is about 97 px tall. Add point and Remove point share one row at 44 px high with a 6 px separation; explicit labels remain visible and remaining utilities stay reachable in the bounded vertical scroll.
+- 390 x 844 phone portrait: video is 390 x 219.375 with the scorer below it; Add point is 52 px high and Remove point is 44 px high, reducing the two-action block by roughly 24 px. The landscape-only position control is hidden because top/bottom corners have no meaning in this presentation.
+- 568 x 320 phone landscape: video is 568 x 319.5. Both action buttons are 44 px high in approximately 90 px team docks. Top placement leaves 45 px between each dock and the set summary; bottom placement leaves 10 px between the set summary and utility cluster and more than 34 px before the team docks.
+- 844 x 390 wide-phone landscape: video is 693.328 x 389.984, centered with black gutters. Both score actions are 44 px high in 194 px-wide docks measuring about 93–99 px tall, and full utility labels remain visible.
 - 768 x 1024 tablet portrait: video is 768 x 432 above the full-width scorer without horizontal overflow.
 - 1440 x 900 desktop focus: video is 1440 x 810, centered vertically with the entire 16:9 frame visible. Windowed desktop uses the video/scorer split; windowed phone stacks them.
 
@@ -46,5 +47,6 @@ No P0, P1, or P2 visual mismatch remains.
 2. First correction: `04-landscape-top-after-844x390.png`, `05-landscape-top-after-comparison.png`, and `06-landscape-top-after-controls-comparison.png`. Add point became 48 px and Remove point 44 px in short landscape; labels stayed visible above 640 px; the no-op portrait toggle was removed.
 3. Responsive adversarial pass: `07-focus-portrait-390x844.png` through `16-windowed-phone-390x844.png`. The player rail became orientation- and team-position-aware, the 320 px scroll path was verified, and top/bottom persistence plus desktop/windowed composition were exercised.
 4. Final same-state comparison: `17-final-landscape-top-844x390.png`, `18-final-landscape-comparison.png`, and `19-final-controls-comparison.png`. No P0, P1, or P2 issue remained.
+5. Compact controls pass: `20-compact-landscape-top-568x320.png` through `24-compact-landscape-bottom-568x320.png`. Windowed action stacks became 52/44 px, landscape actions moved into one 44 px row, and 320 px portrait docks became about 97 px tall without horizontal overflow or sub-44 px targets. Saving-state labels were shortened to Adding… and Removing… so they remain legible inside the compact controls.
 
 final result: passed
