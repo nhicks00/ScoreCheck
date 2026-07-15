@@ -15,6 +15,11 @@ SCHEMA_VERSION = 1
 ALLOWED_ROLES = {"ingest", "compositor"}
 HEARTBEAT_SECONDS = 1.0
 CACHE_RETENTION_SECONDS = 5.0
+ORPHANED_HEALTHCHECK_COMMANDS = {
+    "healthcheck.egress": "curl",
+    "healthcheck.mediamtx": "wget",
+    "healthcheck.redis": "redis-cli",
+}
 
 
 def utc_now():
@@ -137,12 +142,23 @@ def classification_map(processes):
             continue
         classification = container_healthcheck_classification(process)
         if classification is not None:
-            healthcheck_shims[parent["pid"]] = classification
+            healthcheck_shims[parent["pid"]] = {
+                "classification": classification,
+                "cgroupFingerprint": process.get("cgroupFingerprint"),
+            }
 
     for process in processes.values():
         classification = direct_classification(process)
-        if process["command"] == "runc" and process["ppid"] in healthcheck_shims:
-            classification = f"{healthcheck_shims[process['ppid']]}.runtime"
+        healthcheck = healthcheck_shims.get(process["ppid"])
+        if process["command"] == "runc" and healthcheck is not None:
+            classification = f"{healthcheck['classification']}.runtime"
+        elif (
+            classification is None
+            and healthcheck is not None
+            and process.get("cgroupFingerprint") == healthcheck["cgroupFingerprint"]
+            and process["command"] == ORPHANED_HEALTHCHECK_COMMANDS.get(healthcheck["classification"])
+        ):
+            classification = healthcheck["classification"]
         if classification is None:
             continue
         identity = process["identity"]
@@ -407,10 +423,18 @@ def self_test():
         20: {"pid": 20, "ppid": 10, "identity": "20:2", "command": "chrome", "parentCommand": "tini", "commandLine": b"/opt/google/chrome/chrome", "cgroupFingerprint": "egress"},
         30: {"pid": 30, "ppid": 20, "identity": "30:3", "command": "chrome", "parentCommand": "chrome", "commandLine": b"", "cgroupFingerprint": "egress"},
         40: {"pid": 40, "ppid": 20, "identity": "40:4", "command": "chrome", "parentCommand": "chrome", "commandLine": b"", "cgroupFingerprint": "other"},
+        50: {"pid": 50, "ppid": 1, "identity": "50:5", "command": "containerd-shim", "parentCommand": "systemd", "commandLine": b"containerd-shim-runc-v2", "cgroupFingerprint": "host"},
+        60: {"pid": 60, "ppid": 50, "identity": "60:6", "command": "redis-server", "parentCommand": "containerd-shim", "commandLine": b"redis-server *:6379", "cgroupFingerprint": "redis"},
+        70: {"pid": 70, "ppid": 50, "identity": "70:7", "command": "redis-cli", "parentCommand": "containerd-shim", "commandLine": b"", "cgroupFingerprint": "redis"},
+        80: {"pid": 80, "ppid": 50, "identity": "80:8", "command": "redis-cli", "parentCommand": "containerd-shim", "commandLine": b"", "cgroupFingerprint": "other"},
+        90: {"pid": 90, "ppid": 50, "identity": "90:9", "command": "node", "parentCommand": "containerd-shim", "commandLine": b"", "cgroupFingerprint": "redis"},
     }
     classifications = classification_map(processes)
     assert classifications["30:3"] == "workload.egress-chrome"
     assert "40:4" not in classifications
+    assert classifications["70:7"] == "healthcheck.redis"
+    assert "80:8" not in classifications
+    assert "90:9" not in classifications
 
 
 def parse_args():

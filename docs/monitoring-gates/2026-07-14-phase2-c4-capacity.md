@@ -138,6 +138,27 @@ intentional, so signal handling now marks and stops both watchers synchronously.
 Formal 30-minute runs use a bounded 35-minute sampler and do not rely on
 terminal interruption.
 
+The next formal attempt began at `03:24:45.287Z` and failed closed at
+`03:24:59.040Z` when the watcher observed a newly orphaned `redis-cli` process
+under `containerd-shim`. The captured cgroup fingerprint exactly matched the
+long-lived `bvm-redis` init process, whose configured five-second healthcheck is
+the exact `redis-cli ping` command. The process had already entered `Z` state,
+so `/proc/<pid>/cmdline` was empty and the earlier classifier could not recover
+the direct signature. The unlisted YouTube broadcast was transitioned to
+`complete/recorded` before the exact Egress id was stopped. The attempt remains
+rejected and preserved under
+`~/.config/scorecheck/capacity/court1-c4-qualified-20260715T032355Z/`.
+
+The watcher now recognizes that orphaned healthcheck only when all three facts
+agree: the executable is the container's exact healthcheck executable, its
+parent shim is mapped from the known container init, and its cgroup fingerprint
+matches that init. Wrong-cgroup `redis-cli` and unrelated same-cgroup processes
+remain unclassified and still abort immediately. A 40-second idle calibration
+under
+`~/.config/scorecheck/capacity/zombie-redis-healthcheck-20260715T033322Z/`
+completed with `8/8` valid host rows, maximum scan gap `52.235 ms`, the exact
+permitted ingest baseline, and no new unclassified process.
+
 ## Required rerun
 
 This gate can pass only after deployment provenance is verified and a new full
