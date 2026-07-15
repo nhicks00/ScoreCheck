@@ -57,7 +57,7 @@ describe("staged observability deployment", () => {
 
   it("publishes rules only after candidate service and public health succeed", () => {
     const candidateWait = remoteDeploy.indexOf('if ! wait_for_monitor "$REVISION"');
-    const publicHealth = remoteDeploy.indexOf("assert_public_health", candidateWait);
+    const publicHealth = remoteDeploy.indexOf("wait_for_public_health", candidateWait);
     const rulesCutover = remoteDeploy.indexOf("# Only after the new service is healthy", publicHealth);
     const prometheusReload = remoteDeploy.indexOf("http://127.0.0.1:9090/-/reload", rulesCutover);
 
@@ -75,6 +75,8 @@ describe("staged observability deployment", () => {
     expect(remoteDeploy).toContain('"$name" == "MONITOR_PUBLIC_HOST"');
     expect(remoteDeploy).toContain('"$encoded" =~ ^[A-Za-z0-9.-]+(:[0-9]+)?$');
     expect(remoteDeploy).toContain("assert_public_health");
+    expect(remoteDeploy).toContain("wait_for_public_health");
+    expect(remoteDeploy).toContain("Public monitor health did not become ready within 60 seconds.");
     expect(remoteDeploy).toContain("assert_control_plane_ready");
 
     const decoded = spawnSync(

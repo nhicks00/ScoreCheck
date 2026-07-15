@@ -123,6 +123,17 @@ assert_public_health() {
     | jq -e '.status == "ok" and .version == 2' >/dev/null
 }
 
+wait_for_public_health() {
+  for _attempt in $(seq 1 30); do
+    if assert_public_health >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  echo "Public monitor health did not become ready within 60 seconds." >&2
+  return 1
+}
+
 assert_control_plane_ready() {
   curl --fail --silent --show-error --max-time 10 \
     http://127.0.0.1:9090/-/ready >/dev/null
@@ -158,7 +169,7 @@ restore_previous() {
   curl --fail --silent --show-error --max-time 10 \
     -X POST http://127.0.0.1:9090/-/reload >/dev/null || failed=1
   assert_control_plane_ready || failed=1
-  assert_public_health || failed=1
+  wait_for_public_health || failed=1
   return "$failed"
 }
 
@@ -282,7 +293,7 @@ if [[ ! "$old_revision" =~ ^[0-9a-f]{40}$ || "$old_revision" != "$old_image_revi
 fi
 assert_static_container_ids
 
-assert_public_health
+wait_for_public_health
 assert_control_plane_ready
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)-$$"
@@ -315,7 +326,7 @@ if ! wait_for_monitor "$REVISION"; then
   exit 1
 fi
 
-assert_public_health
+wait_for_public_health
 
 # Only after the new service is healthy may matching rules and scrape config go live.
 rsync -a --delete "$CANDIDATE_DIR/rules/" "$REMOTE_DIR/rules/"
