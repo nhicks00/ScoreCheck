@@ -52,6 +52,43 @@ the staged Healthchecks-to-Pushover subscription. After it exists, attach that
 integration to both checks, verify the new channel-readiness snapshot and
 dashboard state, and only then run the controlled withheld-ping test.
 
+## Read-only release preflight: 2026-07-15 02:35Z
+
+The channel-readiness hard-cutover candidate is commit `36f86322`. Its monitoring
+suite passed 119 tests, strict typecheck, and build; the web suite passed 432
+tests, strict typecheck, lint, and production build; Prometheus 3.13.1 accepted
+all 46 rules and their fixtures. Desktop and 390-pixel mobile dashboard checks
+had no console errors or horizontal overflow.
+
+Production remained unchanged during this preflight. The observability health
+endpoint was healthy and monitor-service was still running revision `fe661e9b`
+with restart count zero. The protected environment has both ping URLs, the API
+key, and the active check id; the new explicit baseline check id is not present
+yet and must be added during the bounded service cutover.
+
+The candidate audit implementation was then executed locally against the real
+Healthchecks Management API using protected credentials and read-only `GET`
+requests. It returned a successful provider audit with both attachment booleans
+false. An independent sanitized API check agreed: one email channel, zero
+Pushover channels, and both check ids valid. No provider, monitoring, media,
+routing, browser, output, Supabase, or Vercel state was changed.
+
+After explicit subscription confirmation, use this order:
+
+1. Confirm exactly one Healthchecks Pushover channel exists and attach it to
+   both the baseline and active checks.
+2. Add the explicit baseline check id to the protected observability environment
+   and back up the prior environment and container provenance.
+3. Recreate monitor-service only at the matching candidate revision. Verify
+   health, restart count, the new secret-free snapshot field, and both attachment
+   metrics before continuing.
+4. Deploy the matching Prometheus rules only after both attachment metrics are
+   `1`, then require 46/46 rules healthy and zero new alerts.
+5. Deploy the matching web build and verify desktop and mobile Watchdog labels
+   show `Idle protected` or `Coverage protected` as appropriate.
+6. Run the controlled withheld-ping delivery gate separately; do not combine it
+   with the configuration cutover.
+
 ## Current decision
 
 - Keep direct Pushover enabled.
