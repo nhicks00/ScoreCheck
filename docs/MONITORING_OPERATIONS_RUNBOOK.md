@@ -355,7 +355,7 @@ MONITOR_SSH_HOST=root@OBSERVABILITY_PUBLIC_IP \
   --name HOST_NAME \
   --ssh-host root@COMPOSITOR_PUBLIC_IP \
   --private-ip COMPOSITOR_VPC_IP \
-  --courts COURT_PAIR \
+  --courts COURT_NUMBER_OR_CURRENT_PAIR \
   --observability-private-ip OBSERVABILITY_VPC_IP \
   --refresh
 ```

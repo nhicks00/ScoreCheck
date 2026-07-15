@@ -58,10 +58,12 @@ MONITOR_AGENT_SSH_HOST=root@HOST ./deploy-agent.sh
 The agent accesses Docker through a GET-only socket proxy. It never receives
 the Docker socket directly and has no mutation endpoints.
 
-Compositor agents must include `MONITOR_AGENT_COURTS`, for example `1,2`, and
-the local Egress metrics/health URLs. The reusable registration flow deploys
-the agent, updates the protected target set atomically, and can refresh the
-central collector:
+Compositor agents must include `MONITOR_AGENT_COURTS`. The current four-worker
+deployment retains its paired assignments until the complete pool is available;
+new workers created by the exact pool provisioner receive one court each. Each
+also needs the local Egress metrics/health URLs. The reusable registration flow
+deploys the agent, updates the protected target set atomically, and can refresh
+the central collector:
 
 ```bash
 MONITOR_SSH_HOST=root@OBSERVABILITY_PUBLIC_IP \

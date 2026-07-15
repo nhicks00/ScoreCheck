@@ -79,14 +79,32 @@ finished and the operator explicitly confirms teardown.
 
 ## Provisioning hard cutover
 
-The eventual `provision` command must build the entire corrected stack from a
-single versioned manifest. It is intentionally not bound to the July seven-host
-layout. The next capacity gate must first choose and validate:
+The compositor portion of the corrected stack now has an exact versioned pool
+specification at `infra/event-stack/compositor-pool.json`: one named `c-4` for
+each Camera 1-8 assignment and one unassigned warm spare. The read-only capacity
+preflight reconciles that specification against complete DigitalOcean inventory.
+The compositor provisioner refuses to create an arbitrary name, a duplicate or
+conflicting slot, a mismatched shape/court, an assigned warm spare, or any worker
+while the account cannot fit the entire pool. A partially affordable pool is not
+admitted as ready. The pool pins the base image and an account-level provisioning
+lock serializes slot creation. A definite provider rejection releases the lock;
+an ambiguous or incompletely verified create retains it so a retry cannot create
+a same-name duplicate.
+
+This does not make an event-specific manifest optional. New workers must still
+be adopted into the exact event manifest and receive the event, temporary, and
+destroy-after tags before event use. Other service roles remain bound to that
+event manifest rather than the compositor pool specification.
+
+The selected layout follows the capacity evidence:
 
 - camera-side H.264 over SRT, which can avoid cloud video normalization, or
 - a split normalization tier sized for the intended HEVC feeds; and
 - compositor sizes that retain at least 20 percent sustained CPU headroom for
   two outputs, or one isolated compositor per output.
 
-Once that decision passes eight simultaneous outputs, all provisioning scripts
-and consumers move to the selected manifest in one hard cutover.
+The one-output `c-4` decision has passed its isolated capacity gate. The full
+pool still requires the DigitalOcean account limit to increase from ten to at
+least twelve, followed by deployment and the direct-eight endurance gate; the
+pool specification is readiness planning, not evidence that those workers exist
+or that eight outputs have passed.

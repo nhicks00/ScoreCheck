@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "region": "sfo2",
+  "size": "c-4",
+  "image": "ubuntu-24-04-x64",
+  "desiredCompositors": 8,
+  "warmSpares": 1,
+  "workers": [
+    { "name": "bvm-compositor-a", "court": 1 },
+    { "name": "bvm-compositor-b", "court": 2 },
+    { "name": "bvm-compositor-c", "court": 3 },
+    { "name": "bvm-compositor-d", "court": 4 },
+    { "name": "bvm-compositor-e", "court": 5 },
+    { "name": "bvm-compositor-f", "court": 6 },
+    { "name": "bvm-compositor-g", "court": 7 },
+    { "name": "bvm-compositor-h", "court": 8 },
+    { "name": "bvm-compositor-spare", "warmSpare": true }
+  ]
+}

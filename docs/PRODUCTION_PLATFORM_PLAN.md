@@ -136,8 +136,11 @@ larger CPU shape before provisioning the final pool.
 
 Before creating any additional worker, run the credential-protected, read-only
 account gate. It verifies the complete provider collections, requested regional
-size, current compositor shapes, account limit, required additions, and
-incremental cost; it exits nonzero when the complete pool cannot fit:
+size, current compositor shapes, account limit, required additions, incremental
+cost, and the exact names and assignments in
+`infra/event-stack/compositor-pool.json`. It rejects duplicate or conflicting
+names and tagged workers outside that approved pool; it exits nonzero when the
+complete pool cannot fit:
 
 ```bash
 node infra/event-stack/preflight-capacity.mjs \
@@ -148,7 +151,13 @@ node infra/event-stack/preflight-capacity.mjs \
 ```
 
 Do not weaken the desired count or omit the spare merely to make this preflight
-green. Correct the account quota or qualify a different shape first.
+green. Correct the account quota or qualify a different shape first. The real
+`infra/compositor/provision.sh` path runs this same gate before every create and
+will only create an exact missing slot. Court registration is one court per
+worker and must match the pool assignment; the warm spare remains unassigned.
+The pool also pins the image. A remote account-level provisioning lock
+serializes creates because DigitalOcean Droplet names are not unique; incomplete
+or ambiguous post-create verification leaves that lock in place for inspection.
 
 The first full-eight ingest candidate, one dedicated `c-4` with 8 GB RAM,
 failed on 2026-07-12. Eight 1080p inputs normalized to H.264/Opus at 720p30
