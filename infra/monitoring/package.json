@@ -9,7 +9,7 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run src",
+    "test": "vitest run src && node --test capture-fault-evidence.test.mjs",
     "dev:agent": "tsx src/agent.ts",
     "dev:service": "tsx src/service.ts",
     "start:agent": "node dist/agent.js",

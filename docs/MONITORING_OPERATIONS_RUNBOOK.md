@@ -351,6 +351,27 @@ POST /v1/fault-gates/courts/{court}/arm
 DELETE /v1/fault-gates/courts/{court}
 ```
 
+Start the read-only evidence recorder before the operator introduces a fault.
+It samples only the sanitized monitor API, writes an exclusive mode-0600 JSONL
+artifact outside the repository, never arms a gate, and never changes media or
+Supabase. The first fault-ready sample prints `BASELINE READY`; do not trigger
+the physical/provider fault before that line appears.
+
+```bash
+./infra/monitoring/capture-fault-evidence.mjs \
+  --court 1 \
+  --duration-seconds 300 \
+  --expected-issue REQUIRED_RAW_PATH_MISSING \
+  --require-recovery \
+  --output "$HOME/.config/scorecheck/fault-evidence/camera1-$(date -u +%Y%m%dT%H%M%SZ).jsonl"
+```
+
+Use `--allowed-peer-courts` only for a deliberately shared-host fault whose
+approved blast radius includes that exact pair. A dirty first sample, any API
+gap, an unhealthy collector, a missing expected issue, missing recovery, or an
+unapproved peer impact makes the recorder exit nonzero. The artifact is gate
+evidence, not permission to modify the dependency under test.
+
 Every alert opened from this override carries `expectation_source=fault_gate`
 and a plain-English `TEST` notification title. Restore and verify the raw
 feed before disarming; disarming an unrestored feed can only stop test paging,
