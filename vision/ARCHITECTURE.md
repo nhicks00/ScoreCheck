@@ -1,142 +1,146 @@
-# ScoreVision Architecture v1.0 — the full stack and the loop
+# ScoreVision Architecture v2.0 — zero-touch autonomous scoring
 
-**The one-sentence architecture:** small, single-purpose perception models
-feed a deterministic volleyball state machine that keeps score via side-out
-logic, and everything improves inside an agent-operated training flywheel
-whose goal signal is our own (tiered) scorebug ground truth.
+**Supersedes v1.0 (2026-07-14).** Incorporates the external v2 review and the
+zero-touch autonomy directive (`docs/external/`), adjudicated in
+[docs/V2_ADJUDICATION.md](docs/V2_ADJUDICATION.md). Companions:
+[README.md](README.md) (data reality, milestones), [FLYWHEEL.md](FLYWHEEL.md)
+(training loop), [READINESS.md](READINESS.md) (Campaign 0 status).
 
-Companion docs: [README.md](README.md) (M1-M6 milestones, data reality),
-[FLYWHEEL.md](FLYWHEEL.md) (loop rules, label-noise policy). This doc unifies
-them into the end-state system.
+## Product contract (non-negotiable)
 
----
+ScoreVision is a **zero-touch autonomous runtime**: start the engine on a
+supported stream and, with no operator action, it discovers the court,
+identifies the four active athletes, assigns persistent team/slots
+(A1/A2/B1/B2), selects the active ball, detects rallies and outcomes,
+maintains legal score/server/order/side/set/match state, recovers from
+occlusion and track loss, and corrects its own earlier conclusions when later
+evidence contradicts them. There is no runtime human confirmation, review
+queue, clicked athlete, manual calibration, or manual correction. Offline
+human work (annotation, gold ledgers, campaign approval) is a development
+process, not a runtime dependency. Diagnostic/override interfaces may observe
+the system; they are never required for it to proceed.
 
-## Layer 0 — Data substrate (BUILT, growing)
+**Engine states:** BOOTSTRAPPING · LIVE · PROVISIONAL · WAITING_FOR_EVIDENCE ·
+AUTO_FINALIZED · AUTO_CORRECTED · UNSYNCHRONIZED · DEGRADED · LOST · ENDED.
 
-| Component | Tech | Status |
-|---|---|---|
-| Corpus | NAS `CV TRAINING DATA/corpus/<id>/` — VOD + audio + auto-labels | 6/33 VODs, sweep resumable |
-| Auto-labels | `scorevision-label`: Apple Vision OCR + fixed-font template classifier + volleyball-legal state machine | built, verified |
-| Label quality | gold/silver/excluded tiers from human-scoring noise fingerprints | built (74/13/12%) |
-| Rally windows | 1 Hz activity signal ⋈ score commits | built |
-| Leakage control | scorebug region black-filled in every training clip; match-level splits | built |
-| Splits | train / search / selection / test, pinned by VOD, cross-venue test | built |
-| Corpus hub (next) | FiftyOne (Apache-2.0, local, video-native): clip samples, embeddings, slice tags, failure mining | planned, campaign 1 |
+**Startup modes (all autonomous):** COLD_START_PREMATCH (detect new match,
+init 0-0) · RESUME_PERSISTED · REWIND_RECONSTRUCT · VISUAL_SCORE_SYNC (read a
+visible score display) · UNSYNCHRONIZED_MIDMATCH (track future rallies; never
+fabricate an unobserved past score). The one hard information boundary: a
+mid-match start with no prior state, no rewind, and no readable score source
+cannot know the absolute score — it says so honestly and keeps tracking.
 
-## Layer 1 — Perception models (small, fast, one job each)
-
-Ordered by criticality to score-keeping; each is a flywheel campaign.
-
-1. **Game-state classifier** — SERVICE / PLAY / NO-PLAY over 16-frame
-   windows. VideoMAE-small (22M) from `MCG-NJU/videomae-small-finetuned-kinetics`.
-   *The rally segmenter* — rally start = SERVICE onset, rally end = sustained
-   NO-PLAY. Auto-labeled from rally windows (PLAY), inter-rally gaps
-   (NO-PLAY), window heads (SERVICE). Cost/run ~$2-5 on Modal L40S.
-2. **Ball tracker** — WASB (1.5M params, MIT, pretrained *volleyball*
-   weights), 3-frame 512×288 heatmaps + temporal smoothing. Trajectories,
-   contact points, rally-end confirmation, ball speed. Needs ~3-5k CVAT
-   point-labels on beach frames (track-mode interpolation, ~days of solo work
-   — or bootstrap-then-correct).
-3. **Player detection + tracking** — RT-DETR/RF-DETR (Apache-2.0; avoid AGPL
-   Ultralytics in product code) + ByteTrack. Four players, sand dives,
-   endline occlusions. Feeds serve-side attribution and all player analytics.
-4. **Serve-side detector** — the score-attribution keystone: which side
-   serves next ⇒ who won the previous rally (side-out rule). v1 is a
-   HEURISTIC on top of 1+3 (player behind which endline at SERVICE onset),
-   not a new model. Also the corpus-wide label de-noiser (scorebug vs
-   side-out disagreement flags bad labels automatically).
-5. **Court keypoints/homography** — 8-keypoint fit (endline-camera-tolerant,
-   asigatchov-style). Pixel→meter mapping for placement maps and speeds.
-   Analytics tier, not needed for scoring v1.
-6. **Pose estimation** — RTMPose on player crops, only where actions need it
-   (attack/block/dig/set classification via pose + ball proximity). Analytics
-   tier.
-7. **VLM rally adjudicator (optional, later)** — Qwen3-VL-2B (Apache-2.0),
-   SFT-first on scorebug-derived QA ("which side serves next?"), GRPO only if
-   SFT plateaus (NVIDIA's own autoresearch found SFT beat GRPO on a
-   perception task). Used as a tie-breaker/auditor, never the primary path.
-
-## Layer 2 — Event & state inference (deterministic code, NOT ML)
+## Three planes
 
 ```
-game-state stream ─┐
-ball track ────────┼─► RALLY STATE MACHINE ─► rally events (start/end, conf.)
-player tracks ─────┘          │
-                              ▼
-                    SIDE-OUT ATTRIBUTION (next serve side = last winner)
-                              │            + side-switch checksums (7/5 pts)
-                              ▼
-                    FIVB RULES REDUCER (salvaged, 26 tests) = score authority
-                              │
-                              ▼
-              confidence + abstention → HUMAN CONFIRM for low-confidence
-              (ScoreCheck scorer UI, EventAnchor/Balltime pattern)
+SCORING CONTROL PLANE
+  autonomous policy authorizer ─► append-only event store ─► deterministic
+  (sole issuer of authorized        (versioned, evidence-     FIVB reducer
+   domain events; models never       linked, corrections       (sole legal
+   mutate score)                     are compensating events)   transition fn)
+
+PERCEPTION / EVIDENCE PLANE
+  capture health ─► autonomous court/scene lock ─► four-slot player discovery
+  ─► active-ball lifecycle (top-K) ─► causal observation streams (phase, ball,
+  players/server, referee, audio, score display) ─► constrained temporal
+  fusion (TCN/GRU emissions + HSMM/factor graph) ─► N-BEST legal match-state
+  hypotheses with likelihoods
+
+RESEARCH / TRAINING PLANE  (see FLYWHEEL.md)
+  rights-tracked corpus ─► weak labels (OCR tiers) + human gold ledgers ─►
+  campaigns ─► sealed evaluator ─► ledger ─► failure mining ─► annotation queue
 ```
 
-Rules: CV proposes, the reducer keeps score, a human backstops. No model ever
-writes a score directly; every event carries confidence and evidence refs.
+## Scoring inference (how a point actually happens)
 
-## Layer 3 — Products
+A point is a **legal state transition inferred from a sequence of evidence**,
+not one frame. The rally-winner posterior fuses, in rough order of value:
 
-1. **Score keeping** (the goal): offline replay → live shadow vs manual
-   scorer → assistive with one-tap confirm → autonomous with correction UI.
-2. **Analytics** (the expansion): touches (serve/receive/set/attack/block/dig),
-   rally length distributions, serve speed, placement heat maps, player
-   movement — all anchored to rally events; the same event log auto-cuts
-   highlight reels (rally windows already exist).
-3. **Live integration**: tap MediaMTX upstream of the 720p normalization;
-   per-court worker at 1080p30/60; CoreML/ONNX exports run real-time on
-   Apple Silicon (WASB-class nets are laptop-real-time per benchmarks).
+1. ball outcome evidence (landing side, trajectory termination, net);
+2. last-contact / team-side evidence;
+3. referee point-direction and replay gestures (FIVB defines an official
+   team-to-serve signal);
+4. score-display transitions when present (ScoreCheck-scored events also have
+   the `score_actions` e-score feed — timing-superior but same-provenance as
+   the scorebug, so it is a duplicate channel, not independent);
+5. whistle/audio timing;
+6. player reconfiguration into serve/receive formations;
+7. **next serving team/player — a delayed checksum and service-order
+   validator, NOT the sole attribution mechanism** (replays, penalties,
+   service faults, corrections, terminal points, and lost intervals all
+   break the naive side-out reading);
+8. deterministic legal-score and side-switch constraints (7/5-point
+   checksums, set targets).
 
-## Layer 4 — The improvement loop (FLYWHEEL.md, built)
+The fusion layer maintains an **N-best beam of legal match-state hypotheses**;
+later evidence eliminates inconsistent branches. The externally visible score
+is the highest-posterior legal state, marked provisional or final. When later
+evidence contradicts a finalized event, the authorizer appends a compensating
+correction event (reducer gains a correction-event type — known gap) and
+recomputes deterministically. Capture failure yields DEGRADED/UNSYNCHRONIZED/
+LOST — never a fabricated confident score.
 
-```
-     ┌── CAMPAIGN: goal metric + $ cap + stop rules (Nathan approves) ──┐
-     │                                                                   │
- corpus ─► dataset build ─► Modal train ($2-5) ─► LOCKED HARNESS ─► ledger
-     ▲         (splits,        (config-hashed)      (gold-tier,      (git)
-     │          masked)                              seq metrics)      │
-     │                                                                 ▼
- failure mining ◄─ slice analysis ◄─ keep/discard vs baseline+noise floor
- (model-vs-OCR                                                         │
-  disagreement,                                                        ▼
-  FiftyOne similarity)                          champion promotion gates
-                                                (no slice regression)
-```
+## Perception stack (baselines + challengers)
 
-Operator: Claude Code running the `scorevision-campaign` skill — baseline
-first, one hypothesis per git branch, append-only ledger, budgets declared
-up front, human steering at campaign boundaries only. Anti-reward-hacking:
-harness is stdlib-only and unwritable during campaigns, held-out labels
-unreadable, disqualification language in every campaign prompt.
+| Subsystem | Production baseline | Challengers | Notes |
+|---|---|---|---|
+| Court/scene | two-stage: learned court/net keypoint proposal + geometric fit (lines, net, posts, distortion, RANSAC), drift-monitored, camera-fingerprint auto-profiles | distortion-aware sports registration (CVPRW'26); segmentation-assisted | autonomous; no operator court selection; part of the scoring critical path |
+| Active people | D-FINE-S fine-tuned on owned footage (Apache-2.0) | RT-DETRv4-S, RF-DETR-S | detect ALL people; court polygon is a prior, never a track-killer |
+| Roster/slots | temporal participation model → constrained assignment to A1/A2/B1/B2 | graph/association learning | zero-touch roster; auto reacquisition; names optional |
+| Tracking | ByteTrack (MIT) + team/court/service-order constraints | OC-SORT, TrackTrack, BoT-SORT±ReID | no generic ReID until it beats constraints on beach footage |
+| Ball | custom causal blur-aware multi-frame heatmap model trained on OUR footage; court crops/tiles/ROIs, not blind 512×288 downsampling | WASB-style (architecture reference only — weights not rights-cleared), BlurBall-style, TrackNetV4/causal TOTNet | explicit visibility states; predicted-through-occlusion ≠ observation |
+| Active-ball identity | top-K hypotheses, serve-cycle reinitialization around the server's toss | learned association; physics-constrained filtering | reject spare/adjacent/retriever balls; abstain on high entropy |
+| Rally phase | causal TCN/GRU over specialist features + HSMM/factor graph with legal durations/transitions | compact video encoder trained on owned data; V-JEPA 2.1 frozen features (license diligence) | `MCG-NJU/videomae-small-finetuned-kinetics` checkpoint REMOVED (CC BY-NC); HF *code* Apache-2.0 so scratch-training the arch remains legal |
+| Referee/score/audio | small owned-data classifiers (gesture, whistle, contact transient, score-display transition) | dedicated referee/score camera; Qwen3-VL offline QA | cheap evidence beats a second 4K court camera for scoring |
+| Pose | RTMPose on event-window crops — analytics tier, later | RTMW, ViTPose, RTMO | not on the scoring critical path |
+| VLM | frozen Qwen3-VL-2B on sealed coarse-semantic clips, offline only | SFT only if frozen shows value; no GRPO against noisy rewards | never the ball tracker, score authority, or live-path component |
+| Legal state | existing FIVB reducer (event-sourced, 26 tests) + correction events | none — no ML replacement | |
 
-## The technology stack (one table)
+## Data & evaluation (deltas from v1)
 
-| Concern | Choice | Why |
-|---|---|---|
-| Language/env | Python 3.11+, uv | already standard here |
-| Training | PyTorch + HF `transformers`/`Trainer` | VideoMAE + WASB are plain supervised fine-tunes; NeMo RL/Gym rejected (generative-only, Linux-only) |
-| Compute | Modal (L40S/A100, per-second) | $2-5/run, spawn/poll API for agents, human-set workspace budget = hard kill-switch; RunPod fallback for long runs |
-| Curves | Trackio (free, SQLite, wandb-compatible) | agent-friendly; W&B rejected (free tier non-commercial) |
-| Registry | git: `experiments/ledger.jsonl` + config/data hashes | NVIDIA autoresearch's own pattern; auditable |
-| Corpus ops | FiftyOne + Cleanlab | failure mining, label hygiene; both Apache-2.0, local |
-| Ball labels | CVAT track mode | keyframe interpolation, fastest solo labeling |
-| OCR/labels | Apple Vision + template bank (built) | deterministic on own overlay fonts |
-| Eval | locked stdlib harness (built) | agent can run, never edit |
-| Detection models | RT-DETR/RF-DETR, WASB, VideoMAE-small, RTMPose | strongest open weights, commercial-safe licenses |
-| Live inference | CoreML/ONNX export on Apple Silicon | M4-class hardware is sufficient for 1-2 streams |
-| Rules/score | salvaged FIVB reducer + side-out logic | deterministic, 26 behavioral tests |
-| Loop operator | Claude Code + `scorevision-campaign` skill | goal/budget prompts, ledger, stop rules |
+- Four label tiers: unlabeled corpus → weak (OCR tiers: clean/suspect/
+  excluded — all silver-grade) → curated (model-assisted, human-corrected) →
+  **gold = human-reconciled full-match event ledgers** (staged: 5-8 matches
+  first, target 20-30). "Gold" never refers to OCR output.
+- The zero-touch eval harness starts from RAW VIDEO: no injected court
+  points, player IDs, team labels, server, phase, or score (except modes
+  that explicitly permit persisted state/score feeds). Runs requiring any
+  manual seed are disqualified.
+- Cold-start episodes (warmup / pre-serve / mid-rally / timeout / between
+  sets / arbitrary timestamp / post-interruption / ± scorebug) join the
+  eval suite; metrics add court-lock time, exact-four-player accuracy,
+  active-ball identity, sync success by startup mode, full-match exact-path
+  rate, correction correctness, and selective risk + coverage (never bare
+  accuracy).
+- Splits gain a **prospective shadow** partition (captured after freeze).
 
-## Sequencing — critical path to "keeps score"
+## Training/MLOps stack (staged adoption)
 
-| Wave | Deliverable | Gate metric (locked harness) |
-|---|---|---|
-| 1 (now) | corpus complete + game-state model | rally-boundary F1 on selection split |
-| 2 | ball tracker fine-tune | ball F1@4px + rally-end delta reduction |
-| 3 | players + serve-side heuristic → **end-to-end offline score replay** | winner accuracy (gold), sequence similarity, set-score exact match |
-| 4 | live shadow on MediaMTX + confirm UI | shadow-vs-manual agreement over full events |
-| 5 | poses, court homography, analytics products | per-product metrics |
+Now: PyTorch + Lightning Fabric/custom loops (specialists), hashed configs,
+Optuna for numeric HPO, git JSONL ledger + Trackio, FiftyOne/CVAT/Cleanlab,
+Modal executor with human-set budget cap. Next (campaigns multiply): MLflow
+tracking/registry on local SQLite. Before unattended multi-day loops:
+Temporal (or DB-backed controller) as the durable campaign state machine —
+the agent is a replaceable research activity inside it, never the scheduler,
+evaluator, or release authority.
 
-Waves 3's metric is the product goal — from there, every campaign moves the
-number Nathan actually cares about: *does the system keep the right score?*
+## Campaign order (replaces v1 waves)
+
+0. **Readiness & observability** — rights, splits, label-noise, reducer
+   replay of gold ledgers, ball-pixel/blur census, no-ML baselines
+   ([READINESS.md](READINESS.md)).
+1. Autonomous scene/court/calibration lock.
+2. Autonomous four-player role + team discovery.
+3. Autonomous server + active-ball lifecycle.
+4. Causal rally phase + direct outcome evidence (rally/direct-evidence
+   baseline first: how far do scorebug/referee/audio/reset signals get
+   WITHOUT ball tracking?).
+5. N-best legal score-state inference, autonomous finalization, corrections.
+6. End-to-end zero-touch offline match replay from raw streams.
+7. Live shadow with no control input.
+8. Production hardening: restart recovery, persistence, rollback, failure
+   injection, latency/thermal on target hardware.
+
+Stop-and-redesign triggers (camera/optics before endless model search; no
+operator requirement as a workaround — ever) are listed in the external
+directive and adopted verbatim.

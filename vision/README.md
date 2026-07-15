@@ -67,8 +67,9 @@ rally END    = ball-track death + sustained NO-PLAY
 point WINNER = side of the NEXT serve (side-out rule — no in/out call needed)
 checksums    = side switches at 7/5 cumulative points; set ends 21/15 win-by-2
 score state  = salvaged FIVB rules reducer (event-sourced, replayable)
-human backstop = ScoreCheck scorer UI confirms low-confidence rallies
-                 (EventAnchor / Balltime pattern — market leader does the same)
+autonomy       = zero-touch runtime (ARCHITECTURE.md v2): no runtime human
+                 confirmation; N-best legal hypotheses + auto-correction;
+                 diagnostic/override surfaces observe, never gate
 ```
 
 Key design choices, each validated against prior art:
@@ -76,8 +77,9 @@ Key design choices, each validated against prior art:
 1. **Score inference rides on serve detection + side-out logic, not ball
    landing.** Rally scoring means next-server side ⇔ previous rally winner.
    This converts the hardest CV problem (in/out, touches) into left/right
-   classification of the next serve. Cost: one rally of latency — acceptable
-   for assistive scoring with a human backstop.
+   classification of the next serve. v2 correction: next-server is a delayed
+   checksum and one evidence channel in a fused posterior — not the sole
+   attribution mechanism (replays, penalties, terminal points break it).
 2. **The scorebug is the label factory** (ASAP/cricket/SmartTennisTV
    precedent). Our own overlay ⇒ known layout ⇒ near-perfect OCR; a
    volleyball-legal successor state machine rejects illegal readings

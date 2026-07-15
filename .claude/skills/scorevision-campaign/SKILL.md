@@ -46,6 +46,12 @@ steers at campaign boundaries only.
    (goal, decisions, surprises, handoff notes) so the campaign survives
    context compaction; update it after every experiment.
 
+9. Zero-touch eval (ARCHITECTURE.md v2): end-to-end evaluations start from
+   raw video and may not inject court points, player identities, team
+   labels, server, match phase, or score (outside explicitly permitted
+   startup modes). Any run that needed a manual seed, clicked athlete, or
+   human confirmation is disqualified.
+
 ## Loop
 
 baseline → hypothesis → branch + minimal diff → launch Modal run → harness

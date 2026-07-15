@@ -115,6 +115,9 @@ never corrected. Measured on the first 941 labeled rallies: 3.2 corrections
 per 100 points, 6.7% of commits landed <12s after the previous one (batch
 entry), ~6% of points per VOD arrived as multi-point jumps. Policy:
 
+0. **Terminology (v2):** OCR-derived tiers are all *silver-grade weak
+   supervision*; the word **gold** is reserved for human-reconciled match
+   event ledgers. The code keys below keep their names for stability.
 1. **Tier every rally label** from the tracker's own noise fingerprints
    (`events_to_rallies`): *gold* = clean isolated commit; *silver* = winner
    probably right, timing suspect (batch entry, synthesized set-closers);
