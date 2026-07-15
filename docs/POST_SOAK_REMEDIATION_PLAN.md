@@ -203,11 +203,24 @@ known-bad path produces evidence volume, not confidence.
   closure page. The corrected physical restart acknowledgement occurred after
   MediaMTX's ready timestamp, so restart-to-ready latency is not claimed.
 
-The monitoring acceptance boundary is closed. Phase 1 remains open for one
-active viewer/program-path recovery check because the accepted repeat was
-raw-only: record slate continuity, browser reconnect or reload behavior,
-reset-safe counter continuity, and subjective audio/video sync while Camera 1
-is available. Do not start a long soak until that human-observed check passes.
+The monitoring acceptance boundary is closed. Phase 1 is complete as of
+2026-07-14. The deployed Program viewer hard cutover preserved one Safari page
+and production build through a physical Camera 1 stop and restart. The updated
+interruption slate remained visible with a fresh heartbeat, reload count stayed
+fixed, WHEP retries remained sequential, and recovery drained to one reader.
+The reset-safe post-recovery window rendered 6,606 frames over 220.177 seconds
+(30.003 fps aggregate) with zero dropped-frame or RTP-loss growth. Two brief
+recovery-transition freezes totaling 895 ms occurred before the formal stable
+window and did not grow afterward. Raw, preview, and program each finished with
+one reader, frame errors remained zero, and Cameras 2-8 remained isolated.
+Nathan accepted the foreground clap test as subjectively synchronized. See
+[`2026-07-14-camera1-media-lifecycle.md`](./monitoring-gates/2026-07-14-camera1-media-lifecycle.md).
+
+Do not start another long soak until Phase 2 establishes the final resource
+topology. The next executable gate is the checked-in 30-minute one-court `c-4`
+end-to-end capacity benchmark; final multi-court normalization and venue
+qualification still require the six final AVKANS cameras and a bonded upload
+of at least 75 Mbps.
 
 ### Phase 2: qualify the final resource topology
 

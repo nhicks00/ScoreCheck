@@ -1,7 +1,7 @@
 # Camera 1 Media-Lifecycle Gate
 
 Date: 2026-07-14
-Status: media path, comparator, reader churn, durable repeat detection, feed-driven recovery paging, visible slate, and ordered viewer recovery passed; same-page continuity failed and subjective sync remains
+Status: passed; comparator, reader churn, durable repeat detection, feed-driven recovery paging, same-page viewer continuity, ordered recovery, and subjective sync accepted
 
 ## Baseline
 
@@ -154,14 +154,66 @@ freezes, RTP loss, or frame errors through `22:42:40Z`. Raw, preview, and progra
 each held exactly one reader; Cameras 2-8 remained isolated and monitoring opened
 no incident or fault gate.
 
-A hard-cutover candidate removes the Program page's full-reload escalation,
-limits remounts to foreground connected presentation stalls, preserves tab-lineage
-reconnect/reload counters, and serializes WHEP teardown and retry ownership. Its
-local production build and forced-WHEP-unavailable browser simulation passed:
-the same page/time origin held, the slate appeared, reload count remained fixed,
-reconnect count advanced, recovery returned to one connected WHEP session, and
-the temporary test reader retired. This candidate is not production-accepted
-until deployed and the physical cycle is repeated.
+The hard cutover removed the Program page's full-reload escalation, limited
+remounts to foreground connected presentation stalls, preserved tab-lineage
+reconnect/reload counters, and serialized WHEP teardown and retry ownership.
+Its local production build and forced-WHEP-unavailable browser simulation
+passed: the same page/time origin held, the slate appeared, reload count
+remained fixed, reconnect count advanced, recovery returned to one connected
+WHEP session, and the temporary test reader retired. The production physical
+acceptance below closes the remaining deployment gate.
+
+## Deployed Same-Page Acceptance
+
+The Program viewer hard cutover was deployed in production build
+`d6d324eefe6e0712b03d6ed22cacc39b49d42232`. A follow-up copy-only deployment,
+`5e6fc1c42b2cfe4450dbdbd283add260dd93fa1f`, added the viewer-facing notice
+that Nathan had been alerted and was working on camera recovery. The final
+physical cycle used that exact build on one foreground Safari page loaded at
+`23:04:54.741Z`.
+
+The accepted pre-stop window rendered 3,886 frames over 130.104 seconds
+(29.868 fps aggregate). The page was playing and connected, reload count held
+at 2, reconnect count held at 9, browser drop/freeze/RTP-loss counters stayed
+zero, and raw, preview, and program each had exactly one reader. Isolated
+integer samples at 28 and 31 fps were cadence quantization; neither coincided
+with a counter or rendered-frame defect.
+
+MediaMTX recorded the physical-loss sequence before the delayed operator
+acknowledgement, so no stop-to-detection latency is claimed:
+
+- Camera 1 RTMP publisher EOF at `23:48:47.407Z`
+- preview path destroyed at `23:48:47.433Z`
+- program path destroyed at `23:48:47.434Z`
+- operator acknowledgement received at `23:48:59.543Z`
+
+The same Safari page and build survived the full outage. It displayed the exact
+updated interruption slate with a fresh heartbeat, frozen rendered frame count,
+and reload count fixed at 2. Reconnect count advanced on a bounded cadence.
+Direct MediaMTX samples showed at most one zero-byte WHEP retry session at a
+time, with complete drainage between cycles. Cameras 2-8 had no readers and no
+monitoring fault gate or incident was created.
+
+Recovery was ordered by server timestamps:
+
+- RTMP connection opened at `23:53:31.039Z`
+- raw ready at `23:53:35.188Z`
+- preview ready at `23:53:39.301Z`
+- final Safari WHEP session created at `23:54:00.454Z`
+- program ready at `23:54:09.097Z`
+
+Raw and preview were already ready before the `23:53:42.865Z` restart
+acknowledgement, so no receipt-based latency is inferred for them. Program was
+ready 26.232 seconds after that receipt. The original page returned to playing
+without reloading; reload count remained 2 and reconnect count stabilized at
+18. The final WHEP session was the sole positive-byte program reader.
+
+The reset-safe stable window rendered 6,606 frames over 220.177 seconds
+(30.003 fps aggregate). Drops and RTP loss stayed zero. Initial WHEP recovery
+produced exactly two brief freezes totaling 895 ms before the formal baseline;
+those counters did not grow during the stable window. Raw, preview, and program
+finished ready with positive bitrate, reader counts 1/1/1, and frame errors
+zero. Nathan accepted a foreground clap test as subjectively synchronized.
 
 ## Verdict And Required Follow-Up
 
@@ -176,16 +228,17 @@ Accepted:
 - repeat incident persistence and feed-driven recovery paging
 - visible interruption slate, ordered media recovery, post-recovery endurance,
   and peer isolation
+- same-page/no-reload continuity through physical source loss and recovery
+- sequential WHEP retry ownership and final sole-reader drainage
+- reset-safe post-recovery quality and subjective audio/video sync
 
 Not accepted:
 
 - completed-test Egress reconciliation
-- original-page/no-reload viewer continuity across publisher loss
-- authoritative reconnect/reload counters across page descendants
-- subjective audio/video sync
+- final camera-side normalization and multi-court resource capacity
+- venue qualification at the required 75 Mbps bonded-upload floor
 
-Before the next capacity phase, deploy the hard-cutover viewer repair and repeat
-the foreground Camera 1 loss/recovery cycle, proving unchanged page identity,
-serialized reader ownership, and cumulative counters. Complete the subjective
-audio/video sync check. Event teardown must also verify zero active Egress jobs
-before infrastructure is considered idle.
+Phase 1 is complete. Proceed to the checked-in 30-minute one-court `c-4`
+capacity gate, then qualify the final camera-side or isolated-normalizer topology
+before any direct-eight soak. Event teardown must also verify zero active Egress
+jobs before infrastructure is considered idle.
