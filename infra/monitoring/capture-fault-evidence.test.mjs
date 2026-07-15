@@ -170,6 +170,118 @@ test("rejects malformed snapshot timestamps", () => {
   }), /timestamps are invalid/);
 });
 
+test("passes durable episode, acknowledgement, recovery, and notification evidence", () => {
+  const result = evaluateEvidence([
+    durableBaseline(),
+    sample({ at: 0 }),
+    sample({ at: 1_000, issueCode: "CAMERA_CONTENT_BLACK", incident: true }),
+    sample({ at: 3_000 }),
+    durableFinal()
+  ], options({
+    expectedIssue: "CAMERA_CONTENT_BLACK",
+    requireRecovery: true,
+    durableEvidence: true,
+    requirePushoverOpen: true,
+    requirePushoverRecovery: true,
+    requirePushoverAcknowledgement: true
+  }));
+  assert.equal(result.status, "PASS");
+  assert.equal(result.durableEvidence.episodeId, "episode-1");
+  assert.equal(result.durableEvidence.checkpointAdvanced, true);
+  assert.equal(result.durableEvidence.countDeltas.incident_notifications, 2);
+});
+
+test("fails closed when durable evidence is missing or the baseline is dirty", () => {
+  const missingFinal = evaluateEvidence([
+    durableBaseline(),
+    sample({ at: 0 })
+  ], options({ durableEvidence: true }));
+  assert.equal(missingFinal.status, "INVALID");
+  assert.match(missingFinal.reason, /durable final evidence is missing/);
+
+  const dirty = durableBaseline();
+  dirty.activeIncidents.push(durableEpisode());
+  const dirtyResult = evaluateEvidence([dirty, sample({ at: 0 }), durableFinal({ episodes: [] })], options({ durableEvidence: true }));
+  assert.equal(dirtyResult.status, "INVALID");
+  assert.match(dirtyResult.reason, /durable baseline has active incidents/);
+});
+
+test("invalidates malformed or incomplete durable final data", () => {
+  const malformed = durableFinal({ events: null });
+  delete malformed.counts.monitoring_checkpoints;
+  const result = evaluateEvidence([
+    durableBaseline(),
+    sample({ at: 0 }),
+    malformed
+  ], options({ durableEvidence: true }));
+  assert.equal(result.status, "INVALID");
+  assert.match(result.reason, /table counts are invalid/);
+  assert.match(result.reason, /episode data is malformed/);
+});
+
+test("fails duplicate durable episodes or notification rows", () => {
+  const duplicateEpisode = durableEpisode({ id: "episode-2" });
+  const duplicated = durableFinal({
+    episodes: [durableEpisode(), duplicateEpisode],
+    events: [
+      ...durableFinal().events,
+      { incidentId: "episode-2", eventType: "OPENED", occurredAt: iso(1_100), resolutionKind: null }
+    ]
+  });
+  const duplicateResult = evaluateEvidence([
+    durableBaseline(),
+    sample({ at: 0 }),
+    sample({ at: 1_000, issueCode: "CAMERA_CONTENT_BLACK", incident: true }),
+    duplicated
+  ], options({ expectedIssue: "CAMERA_CONTENT_BLACK", durableEvidence: true }));
+  assert.equal(duplicateResult.status, "FAIL");
+  assert.match(duplicateResult.reason, /observed 2/);
+
+  const final = durableFinal();
+  final.notifications.push({ ...final.notifications[0], submittedAt: iso(1_100) });
+  const notificationResult = evaluateEvidence([
+    durableBaseline(),
+    sample({ at: 0 }),
+    sample({ at: 1_000, issueCode: "CAMERA_CONTENT_BLACK", incident: true }),
+    final
+  ], options({ expectedIssue: "CAMERA_CONTENT_BLACK", durableEvidence: true, requirePushoverOpen: true }));
+  assert.equal(notificationResult.status, "FAIL");
+  assert.match(notificationResult.reason, /exactly one successful Pushover opening/);
+});
+
+test("fails an episode whose durable table counts did not grow", () => {
+  const final = durableFinal({ counts: durableCounts() });
+  const result = evaluateEvidence([
+    durableBaseline(),
+    sample({ at: 0 }),
+    sample({ at: 1_000, issueCode: "CAMERA_CONTENT_BLACK", incident: true }),
+    final
+  ], options({ expectedIssue: "CAMERA_CONTENT_BLACK", durableEvidence: true }));
+  assert.equal(result.status, "FAIL");
+  assert.match(result.reason, /incident table did not grow/);
+});
+
+test("fails a claimed Pushover acknowledgement that lacks durable proof", () => {
+  const final = durableFinal();
+  final.episodes[0].acknowledgedAt = null;
+  final.events = final.events.filter((event) => event.eventType !== "ACKNOWLEDGED");
+  final.notifications[0].status = "delivered";
+  final.notifications[0].acknowledgedAt = null;
+  const result = evaluateEvidence([
+    durableBaseline(),
+    sample({ at: 0 }),
+    sample({ at: 1_000, issueCode: "CAMERA_CONTENT_BLACK", incident: true }),
+    final
+  ], options({
+    expectedIssue: "CAMERA_CONTENT_BLACK",
+    durableEvidence: true,
+    requirePushoverOpen: true,
+    requirePushoverAcknowledgement: true
+  }));
+  assert.equal(result.status, "FAIL");
+  assert.match(result.reason, /acknowledgement/);
+});
+
 function options(patch = {}) {
   return {
     courtNumber: 1,
@@ -177,6 +289,88 @@ function options(patch = {}) {
     requireRecovery: false,
     allowedPeerCourts: [],
     maxSnapshotAgeMs: 15_000,
+    maxCheckpointAgeMs: 120_000,
+    durableEvidence: false,
+    requirePushoverOpen: false,
+    requirePushoverRecovery: false,
+    requirePushoverAcknowledgement: false,
+    ...patch
+  };
+}
+
+function durableBaseline() {
+  return {
+    kind: "durable_baseline",
+    capturedAt: iso(0),
+    contractVersion: 1,
+    checkpoint: { scope: "global", observedAt: iso(0), updatedAt: iso(0) },
+    activeIncidents: [],
+    counts: durableCounts()
+  };
+}
+
+function durableFinal(patch = {}) {
+  const episode = durableEpisode();
+  return {
+    kind: "durable_final",
+    capturedAt: iso(4_000),
+    contractVersion: 1,
+    checkpoint: { scope: "global", observedAt: iso(3_000), updatedAt: iso(3_000) },
+    activeIncidents: [],
+    counts: durableCounts({ monitoring_incidents: 1, monitoring_incident_events: 3, incident_notifications: 2 }),
+    episodes: [episode],
+    events: [
+      { incidentId: episode.id, eventType: "OPENED", occurredAt: iso(1_000), resolutionKind: null },
+      { incidentId: episode.id, eventType: "ACKNOWLEDGED", occurredAt: iso(2_000), resolutionKind: null },
+      { incidentId: episode.id, eventType: "RESOLVED", occurredAt: iso(3_000), resolutionKind: "DEPENDENCY_RECOVERED" }
+    ],
+    notifications: [
+      durableNotification({ kind: "open", status: "acknowledged", acknowledgedAt: iso(2_000) }),
+      durableNotification({ kind: "recovery", status: "accepted", submittedAt: iso(3_000), acceptedAt: iso(3_000) })
+    ],
+    truncated: false,
+    ...patch
+  };
+}
+
+function durableEpisode(patch = {}) {
+  return {
+    id: "episode-1",
+    courtNumber: 1,
+    issueCode: "CAMERA_CONTENT_BLACK",
+    severity: "critical",
+    status: "resolved",
+    openedAt: iso(1_000),
+    lastObservedAt: iso(3_000),
+    acknowledgedAt: iso(2_000),
+    resolvedAt: iso(3_000),
+    ...patch
+  };
+}
+
+function durableNotification(patch = {}) {
+  return {
+    incidentId: "episode-1",
+    provider: "pushover",
+    kind: "open",
+    status: "accepted",
+    submittedAt: iso(1_000),
+    acceptedAt: iso(1_000),
+    deliveredAt: null,
+    acknowledgedAt: null,
+    expiredAt: null,
+    escalatedAt: null,
+    providerErrorCode: null,
+    ...patch
+  };
+}
+
+function durableCounts(patch = {}) {
+  return {
+    monitoring_incidents: 0,
+    monitoring_incident_events: 0,
+    incident_notifications: 0,
+    monitoring_checkpoints: 1,
     ...patch
   };
 }

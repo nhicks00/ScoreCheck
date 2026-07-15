@@ -175,6 +175,14 @@ must not claim RF or camera-encoder certainty without those sources.
 
 ## Next gates
 
+The protected fault-evidence recorder now combines one-second sanitized monitor
+API sampling with one bounded Supabase evidence phase before and after a gate.
+It fails closed on stale checkpoints, dirty baselines, duplicate episodes or
+notifications, missing dependency-recovery closure, and optional Pushover
+acknowledgement/recovery requirements. Provider receipt identifiers are omitted
+and Supabase is never polled. This makes future real-gate evidence repeatable;
+it does not convert any pending real fault into a pass.
+
 1. Prove Pushover acknowledgement and Healthchecks withheld-ping recovery in a
    scheduled operator-visible window.
 2. Use test feeds to inject the remaining real rows: full-bitrate freeze,

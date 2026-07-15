@@ -363,13 +363,26 @@ the physical/provider fault before that line appears.
   --duration-seconds 300 \
   --expected-issue REQUIRED_RAW_PATH_MISSING \
   --require-recovery \
+  --durable-evidence \
+  --require-pushover-open \
+  --require-pushover-recovery \
   --output "$HOME/.config/scorecheck/fault-evidence/camera1-$(date -u +%Y%m%dT%H%M%SZ).jsonl"
 ```
 
+`--durable-evidence` requires protected `SUPABASE_URL` and
+`SUPABASE_SERVICE_ROLE_KEY` environment values. It performs one bounded
+read-only evidence phase before sampling and one after sampling; it does not
+poll Supabase. The artifact omits provider receipt identifiers and credentials,
+but records the incident episode, sanitized transition types, notification
+statuses, checkpoint movement, and table-count deltas. When an operator will
+acknowledge the emergency in Pushover during the window, also add
+`--require-pushover-acknowledgement`.
+
 Use `--allowed-peer-courts` only for a deliberately shared-host fault whose
 approved blast radius includes that exact pair. A dirty first sample, any API
-gap, an unhealthy collector, a missing expected issue, missing recovery, or an
-unapproved peer impact makes the recorder exit nonzero. The artifact is gate
+gap, an unhealthy collector, stale or malformed durable state, duplicate
+incident/notification episodes, a missing expected issue, missing recovery, or
+an unapproved peer impact makes the recorder exit nonzero. The artifact is gate
 evidence, not permission to modify the dependency under test.
 
 Every alert opened from this override carries `expectation_source=fault_gate`
