@@ -436,9 +436,11 @@ groups:
           summary: "Egress worker {{ $labels.agent }} is unavailable."
           first_action: "Inspect Egress health, Redis and LiveKit control connectivity, then check host capacity."
 
-      - alert: ScoreCheckEgressCapacityExhausted
+      - alert: ScoreCheckEgressAdmissionBlocked
         expr: |
           (scorecheck_egress_can_accept_request == 0)
+          and on (agent)
+          (scorecheck_egress_active_web_requests == 0)
           and on (agent)
           (
             max by (agent) (
@@ -450,11 +452,26 @@ groups:
         labels:
           severity: warning
           stage: EGRESS
-          issue_code: EGRESS_CAPACITY_EXHAUSTED
+          issue_code: EGRESS_ADMISSION_BLOCKED
           root_dependency: "{{ $labels.agent }}"
         annotations:
-          summary: "Egress worker {{ $labels.agent }} cannot admit another court."
-          first_action: "Inspect Egress CPU and memory admission load before starting another court on this host."
+          summary: "Idle Egress worker {{ $labels.agent }} cannot admit a court."
+          first_action: "Inspect Egress availability and resource admission before starting coverage."
+
+      - alert: ScoreCheckEgressRequestMultiplicity
+        expr: |
+          scorecheck_egress_active_web_requests
+          > on (agent)
+          scorecheck_egress_maximum_web_requests
+        for: 5s
+        labels:
+          severity: critical
+          stage: EGRESS
+          issue_code: EGRESS_REQUEST_MULTIPLICITY
+          root_dependency: "{{ $labels.agent }}"
+        annotations:
+          summary: "Egress worker {{ $labels.agent }} has more active web requests than its configured maximum."
+          first_action: "Stop the unintended extra Egress request and verify the compositor admission lock."
 
       - alert: ScoreCheckLiveKitPacketDrops
         expr: increase(scorecheck_livekit_packets_dropped[1m]) > 10

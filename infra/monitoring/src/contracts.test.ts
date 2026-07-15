@@ -47,7 +47,7 @@ describe("monitoring contract", () => {
       nativeServices: {
         endpoints: [{ service: "egress-metrics", up: true }, { service: "egress-health", up: true }],
         livekit: null,
-        egress: { idle: false, canAcceptRequest: true, cgroupMemoryBytes: 1, cpuLoadRatio: 0.1, memoryLoadRatio: 0.1 }
+        egress: { idle: false, canAcceptRequest: true, nativeCanAcceptRequest: true, activeWebRequests: 1, maximumWebRequests: 2, cgroupMemoryBytes: 1, cpuLoadRatio: 0.1, memoryLoadRatio: 0.1 }
       }
     };
     expect(agentSnapshotSchema.parse(snapshot).nativeServices.egress?.idle).toBe(false);
@@ -56,7 +56,7 @@ describe("monitoring contract", () => {
       ...snapshot,
       nativeServices: {
         ...snapshot.nativeServices,
-        egress: { available: false, canAcceptRequest: true, cgroupMemoryBytes: 1, cpuLoadRatio: 0.1, memoryLoadRatio: 0.1 }
+        egress: { available: false, canAcceptRequest: true, nativeCanAcceptRequest: true, activeWebRequests: 1, maximumWebRequests: 2, cgroupMemoryBytes: 1, cpuLoadRatio: 0.1, memoryLoadRatio: 0.1 }
       }
     })).toThrow();
   });

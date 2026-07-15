@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+# Bypass Google's desktop wrapper. Its process-substitution `cat` children are
+# inherited by Chrome and one becomes unreapable while the browser stays alive.
+export CHROME_WRAPPER="/usr/local/bin/headless_shell"
+export CHROME_VERSION_EXTRA="stable"
+export GNOME_DISABLE_CRASH_DIALOG="SET_BY_SCORECHECK"
+exec /opt/google/chrome/chrome "$@"

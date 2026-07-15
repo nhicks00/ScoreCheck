@@ -291,6 +291,10 @@ tests:
       - series: 'scorecheck_egress_metrics_valid{agent="compositor-a"}'
         values: '1 1 1 1 1 1 1 1'
       - series: 'scorecheck_egress_can_accept_request{agent="compositor-a"}'
+        values: '0 0 0 0 0 0 0 0'
+      - series: 'scorecheck_egress_active_web_requests{agent="compositor-a"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_egress_maximum_web_requests{agent="compositor-a"}'
         values: '1 1 1 1 1 1 1 1'
       - series: 'scorecheck_native_endpoint_up{agent="compositor-a",role="compositor",service="egress-metrics"}'
         values: '1 1 1 1 1 1 1 1'
@@ -344,6 +348,10 @@ tests:
         values: '1 1 1 1 1 1 1 1'
       - series: 'scorecheck_egress_can_accept_request{agent="compositor-e"}'
         values: '0 0 0 0 0 0 0 0'
+      - series: 'scorecheck_egress_active_web_requests{agent="compositor-e"}'
+        values: '0 0 0 0 0 0 0 0'
+      - series: 'scorecheck_egress_maximum_web_requests{agent="compositor-e"}'
+        values: '1 1 1 1 1 1 1 1'
       - series: 'scorecheck_native_endpoint_up{agent="compositor-e",role="compositor",service="egress-metrics"}'
         values: '1 1 1 1 1 1 1 1'
       - series: 'scorecheck_native_endpoint_up{agent="compositor-e",role="compositor",service="egress-health"}'
@@ -351,6 +359,19 @@ tests:
       - series: 'scorecheck_compositor_court_assignment{agent="compositor-e",court="5"}'
         values: '1 1 1 1 1 1 1 1'
       - series: 'scorecheck_court_broadcast_live{court="5"}'
+        values: '1 1 1 1 1 1 1 1'
+
+      - series: 'scorecheck_egress_metrics_valid{agent="compositor-f"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_egress_can_accept_request{agent="compositor-f"}'
+        values: '0 0 0 0 0 0 0 0'
+      - series: 'scorecheck_egress_active_web_requests{agent="compositor-f"}'
+        values: '2 2 2 2 2 2 2 2'
+      - series: 'scorecheck_egress_maximum_web_requests{agent="compositor-f"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_native_endpoint_up{agent="compositor-f",role="compositor",service="egress-metrics"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_native_endpoint_up{agent="compositor-f",role="compositor",service="egress-health"}'
         values: '1 1 1 1 1 1 1 1'
     alert_rule_test:
       - eval_time: 35s
@@ -375,17 +396,29 @@ tests:
               summary: Egress worker compositor-d is unavailable.
               first_action: Inspect Egress health, Redis and LiveKit control connectivity, then check host capacity.
       - eval_time: 35s
-        alertname: ScoreCheckEgressCapacityExhausted
+        alertname: ScoreCheckEgressAdmissionBlocked
         exp_alerts:
           - exp_labels:
               agent: compositor-e
               severity: warning
               stage: EGRESS
-              issue_code: EGRESS_CAPACITY_EXHAUSTED
+              issue_code: EGRESS_ADMISSION_BLOCKED
               root_dependency: compositor-e
             exp_annotations:
-              summary: Egress worker compositor-e cannot admit another court.
-              first_action: Inspect Egress CPU and memory admission load before starting another court on this host.
+              summary: Idle Egress worker compositor-e cannot admit a court.
+              first_action: Inspect Egress availability and resource admission before starting coverage.
+      - eval_time: 10s
+        alertname: ScoreCheckEgressRequestMultiplicity
+        exp_alerts:
+          - exp_labels:
+              agent: compositor-f
+              severity: critical
+              stage: EGRESS
+              issue_code: EGRESS_REQUEST_MULTIPLICITY
+              root_dependency: compositor-f
+            exp_annotations:
+              summary: Egress worker compositor-f has more active web requests than its configured maximum.
+              first_action: Stop the unintended extra Egress request and verify the compositor admission lock.
       - eval_time: 35s
         alertname: ScoreCheckNativeEndpointDown
         exp_alerts: []

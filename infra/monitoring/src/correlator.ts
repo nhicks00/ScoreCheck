@@ -158,17 +158,42 @@ function egressStage(agent: MonitorSnapshot["agents"][number] | null, expectatio
   if (!egress || endpointDown) {
     return stage("EGRESS", "CRITICAL", "critical", "EGRESS_WORKER_UNAVAILABLE", `Egress worker ${agent.agentId} is unavailable.`, "Inspect Egress health, Redis and LiveKit control connectivity on the assigned compositor.", agent.lastSeenAt, agent.ageMs, { host: agent.agentId, endpointDown });
   }
-  const atCapacity = !egress.canAcceptRequest;
+  const multiplicity = egress.activeWebRequests > egress.maximumWebRequests;
+  const idleAdmissionBlocked = egress.activeWebRequests === 0 && !egress.canAcceptRequest;
+  const egressState: HealthState = multiplicity ? "CRITICAL" : idleAdmissionBlocked ? "DEGRADED" : "HEALTHY";
+  const severity = multiplicity ? "critical" : idleAdmissionBlocked ? "warning" : "info";
+  const issueCode = multiplicity ? "EGRESS_REQUEST_MULTIPLICITY" : idleAdmissionBlocked ? "EGRESS_ADMISSION_BLOCKED" : null;
+  const summary = multiplicity
+    ? `Egress worker ${agent.agentId} is running ${egress.activeWebRequests} web requests above its configured maximum of ${egress.maximumWebRequests}.`
+    : idleAdmissionBlocked
+      ? `Idle Egress worker ${agent.agentId} cannot admit a court.`
+      : egress.activeWebRequests >= egress.maximumWebRequests
+        ? `Egress worker ${agent.agentId} is processing output at its configured capacity.`
+        : `Egress worker ${agent.agentId} is healthy and ${egress.idle ? "idle" : "processing output"}.`;
   return stage(
     "EGRESS",
-    atCapacity ? "DEGRADED" : "HEALTHY",
-    atCapacity ? "warning" : "info",
-    atCapacity ? "EGRESS_CAPACITY_EXHAUSTED" : null,
-    atCapacity ? `Egress worker ${agent.agentId} cannot admit another court.` : `Egress worker ${agent.agentId} is healthy and ${egress.idle ? "idle" : "processing output"}.`,
-    atCapacity ? "Do not start another court on this host until capacity is restored." : null,
+    egressState,
+    severity,
+    issueCode,
+    summary,
+    multiplicity
+      ? "Stop the unintended extra Egress request and verify the compositor admission lock."
+      : idleAdmissionBlocked
+        ? "Inspect Egress availability and resource admission before starting coverage."
+        : null,
     agent.lastSeenAt,
     agent.ageMs,
-    { host: agent.agentId, idle: egress.idle, canAcceptRequest: egress.canAcceptRequest, cpuLoadRatio: egress.cpuLoadRatio, memoryLoadRatio: egress.memoryLoadRatio, cgroupMemoryBytes: egress.cgroupMemoryBytes }
+    {
+      host: agent.agentId,
+      idle: egress.idle,
+      canAcceptRequest: egress.canAcceptRequest,
+      nativeCanAcceptRequest: egress.nativeCanAcceptRequest,
+      activeWebRequests: egress.activeWebRequests,
+      maximumWebRequests: egress.maximumWebRequests,
+      cpuLoadRatio: egress.cpuLoadRatio,
+      memoryLoadRatio: egress.memoryLoadRatio,
+      cgroupMemoryBytes: egress.cgroupMemoryBytes
+    }
   );
 }
 

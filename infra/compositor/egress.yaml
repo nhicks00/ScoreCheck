@@ -25,6 +25,11 @@ insecure: true
 # Requires the version-matched seccomp profile mounted through Compose.
 enable_chrome_sandbox: true
 
+# LiveKit defaults this flag on, which bypasses the 3 GB tmpfs configured in
+# Compose. The custom value is applied after the default and removes the flag.
+chrome_flags:
+  disable-dev-shm-usage: false
+
 # --- service ports (published to 127.0.0.1 by docker-compose.yml) -------------
 
 # HTTP health check endpoint; 200 = worker alive and connected.

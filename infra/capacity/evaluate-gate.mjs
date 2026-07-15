@@ -2,6 +2,7 @@
 
 import { chmod, readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import { parseHostSamplesCsv, summarizeHostSamples } from "./host-samples.mjs";
 
 const LABEL_VALUE = /^[a-zA-Z0-9_.:-]{1,80}$/;
 
@@ -57,6 +58,7 @@ export function buildQueries(config) {
     queries[`ffmpeg_fresh_${branch}`] = selector("scorecheck_ffmpeg_progress_fresh", { agent: ingest.agent, court, branch });
     queries[`ffmpeg_fps_${branch}`] = selector("scorecheck_ffmpeg_frames_per_second", { agent: ingest.agent, court, branch });
     queries[`ffmpeg_speed_${branch}`] = selector("scorecheck_ffmpeg_speed_ratio", { agent: ingest.agent, court, branch });
+    queries[`ffmpeg_speed_available_${branch}`] = selector("scorecheck_ffmpeg_speed_available", { agent: ingest.agent, court, branch });
     queries[`ffmpeg_dropped_${branch}`] = selector("scorecheck_ffmpeg_dropped_frames", { agent: ingest.agent, court, branch });
   }
 
@@ -66,6 +68,9 @@ export function buildQueries(config) {
     addServiceQueries(queries, "compositor", config.compositor);
     queries.egress_idle = selector("scorecheck_egress_idle", { agent: config.compositor.agent });
     queries.egress_metrics_valid = selector("scorecheck_egress_metrics_valid", { agent: config.compositor.agent });
+    queries.egress_can_accept = selector("scorecheck_egress_can_accept_request", { agent: config.compositor.agent });
+    queries.egress_active_web_requests = selector("scorecheck_egress_active_web_requests", { agent: config.compositor.agent });
+    queries.egress_maximum_web_requests = selector("scorecheck_egress_maximum_web_requests", { agent: config.compositor.agent });
   }
 
   if (config.requireBrowser) {
@@ -108,12 +113,14 @@ function assertConfig(config) {
     "minimumSampleCoverageRatio", "minimumActiveRatio", "minimumRawBitrateBps",
     "minimumFfmpegFps", "minimumFfmpegSpeed", "minimumBrowserFps",
     "maximumBrowserDropRatio", "maximumBrowserFreezeRatio", "maximumCpuP95Ratio",
-    "maximumCpuRatio", "maximumMemoryGrowthRatio", "maximumShmRatio"
+    "maximumCpuRatio", "maximumMemoryGrowthRatio", "maximumShmRatio",
+    "maximumHostSampleGapSeconds"
   ]) {
     if (!Number.isFinite(config.thresholds?.[required])) throw new Error(`threshold ${required} is required`);
   }
   if (config.thresholds.minimumSampleCoverageRatio > 1 || config.thresholds.minimumActiveRatio > 1) throw new Error("coverage ratios cannot exceed 1");
   if (config.thresholds.maximumCpuP95Ratio > config.thresholds.maximumCpuRatio) throw new Error("maximumCpuP95Ratio cannot exceed maximumCpuRatio");
+  if (config.thresholds.maximumHostSampleGapSeconds < config.stepSeconds) throw new Error("maximumHostSampleGapSeconds cannot be less than stepSeconds");
 }
 
 function assertSourceProfile(profile) {
@@ -150,7 +157,7 @@ function requireSamples(checks, evidence, name, minimumCount) {
   return samples.length >= minimumCount;
 }
 
-export function evaluateEvidence(config, evidence, attestations) {
+export function evaluateEvidence(config, evidence, attestations, hostEvidence) {
   assertConfig(config);
   const checks = [];
   const durationSeconds = evidence.endEpochSeconds - evidence.startEpochSeconds;
@@ -192,9 +199,21 @@ export function evaluateEvidence(config, evidence, attestations) {
     if (requireSamples(checks, evidence, "egress_metrics_valid", minimumSamples)) {
       addCheck(checks, "egress_metrics_continuous", Math.min(...valuesFor(evidence, "egress_metrics_valid")) >= 1, Math.min(...valuesFor(evidence, "egress_metrics_valid")), "1 for every sample");
     }
+    if (requireSamples(checks, evidence, "egress_can_accept", minimumSamples)) {
+      addCheck(checks, "egress_admission_closed_while_active", Math.max(...valuesFor(evidence, "egress_can_accept")) === 0, Math.max(...valuesFor(evidence, "egress_can_accept")), "0 for every sample");
+    }
+    if (requireSamples(checks, evidence, "egress_active_web_requests", minimumSamples)) {
+      const activeRequests = valuesFor(evidence, "egress_active_web_requests");
+      addCheck(checks, "egress_active_web_requests_exact", Math.min(...activeRequests) === 1 && Math.max(...activeRequests) === 1, { minimum: Math.min(...activeRequests), maximum: Math.max(...activeRequests) }, "exactly 1 for every sample");
+    }
+    if (requireSamples(checks, evidence, "egress_maximum_web_requests", minimumSamples)) {
+      const maximumRequests = valuesFor(evidence, "egress_maximum_web_requests");
+      addCheck(checks, "egress_maximum_web_requests_exact", Math.min(...maximumRequests) === 1 && Math.max(...maximumRequests) === 1, { minimum: Math.min(...maximumRequests), maximum: Math.max(...maximumRequests) }, "exactly 1 for every sample");
+    }
   }
 
   if (config.requireBrowser) evaluateBrowser(checks, evidence, minimumSamples, config.thresholds, evaluatedDurationSeconds);
+  evaluateHostSamples(checks, config, hostEvidence);
   evaluateAttestations(checks, config, attestations);
 
   return {
@@ -209,14 +228,35 @@ export function evaluateEvidence(config, evidence, attestations) {
   };
 }
 
+function evaluateHostSamples(checks, config, hostEvidence) {
+  const thresholds = config.thresholds;
+  addCheck(checks, "host_sample_coverage", hostEvidence?.coverageRatio >= thresholds.minimumSampleCoverageRatio, hostEvidence?.coverageRatio ?? null, `>= ${thresholds.minimumSampleCoverageRatio}`);
+  addCheck(checks, "host_sample_gap_p95", Number.isFinite(hostEvidence?.p95GapSeconds) && hostEvidence.p95GapSeconds <= thresholds.maximumHostSampleGapSeconds, hostEvidence?.p95GapSeconds ?? null, `<= ${thresholds.maximumHostSampleGapSeconds} seconds`);
+  addCheck(checks, "host_sample_gap_max", Number.isFinite(hostEvidence?.maxGapSeconds) && hostEvidence.maxGapSeconds <= thresholds.maximumHostSampleGapSeconds, hostEvidence?.maxGapSeconds ?? null, `<= ${thresholds.maximumHostSampleGapSeconds} seconds`);
+  addCheck(checks, "host_sample_start_edge_gap", Number.isFinite(hostEvidence?.startEdgeGapSeconds) && hostEvidence.startEdgeGapSeconds <= thresholds.maximumHostSampleGapSeconds, hostEvidence?.startEdgeGapSeconds ?? null, `<= ${thresholds.maximumHostSampleGapSeconds} seconds`);
+  addCheck(checks, "host_sample_end_edge_gap", Number.isFinite(hostEvidence?.endEdgeGapSeconds) && hostEvidence.endEdgeGapSeconds <= thresholds.maximumHostSampleGapSeconds, hostEvidence?.endEdgeGapSeconds ?? null, `<= ${thresholds.maximumHostSampleGapSeconds} seconds`);
+  addCheck(checks, "host_sample_baseline_age", Number.isFinite(hostEvidence?.baselineAgeSeconds) && hostEvidence.baselineAgeSeconds <= config.stepSeconds * 2, hostEvidence?.baselineAgeSeconds ?? null, `<= ${config.stepSeconds * 2} seconds`);
+  addCheck(checks, "ingest_sampled_zombie_growth", hostEvidence?.ingestZombieGrowth === 0, hostEvidence?.ingestZombieGrowth ?? null, 0);
+  addCheck(checks, "ingest_host_cpu_p95", Number.isFinite(hostEvidence?.ingestHostCpuP95Ratio) && hostEvidence.ingestHostCpuP95Ratio <= thresholds.maximumCpuP95Ratio, hostEvidence?.ingestHostCpuP95Ratio ?? null, `<= ${thresholds.maximumCpuP95Ratio}`);
+  addCheck(checks, "ingest_host_cpu_max", Number.isFinite(hostEvidence?.ingestHostCpuMaxRatio) && hostEvidence.ingestHostCpuMaxRatio < thresholds.maximumCpuRatio, hostEvidence?.ingestHostCpuMaxRatio ?? null, `< ${thresholds.maximumCpuRatio}`);
+  if (config.compositor) {
+    addCheck(checks, "compositor_sampled_zombie_growth", hostEvidence?.compositorZombieGrowth === 0, hostEvidence?.compositorZombieGrowth ?? null, 0);
+    addCheck(checks, "compositor_host_cpu_p95", Number.isFinite(hostEvidence?.compositorHostCpuP95Ratio) && hostEvidence.compositorHostCpuP95Ratio <= thresholds.maximumCpuP95Ratio, hostEvidence?.compositorHostCpuP95Ratio ?? null, `<= ${thresholds.maximumCpuP95Ratio}`);
+    addCheck(checks, "compositor_host_cpu_max", Number.isFinite(hostEvidence?.compositorHostCpuMaxRatio) && hostEvidence.compositorHostCpuMaxRatio < thresholds.maximumCpuRatio, hostEvidence?.compositorHostCpuMaxRatio ?? null, `< ${thresholds.maximumCpuRatio}`);
+    addCheck(checks, "egress_shm_max_ratio", Number.isFinite(hostEvidence?.egressShmMaxRatio) && hostEvidence.egressShmMaxRatio < thresholds.maximumShmRatio, hostEvidence?.egressShmMaxRatio ?? null, `< ${thresholds.maximumShmRatio}`);
+  }
+}
+
 function evaluateFfmpeg(checks, evidence, branch, minimumSamples, thresholds) {
-  for (const metric of ["fresh", "fps", "speed", "dropped"]) requireSamples(checks, evidence, `ffmpeg_${metric}_${branch}`, minimumSamples);
+  for (const metric of ["fresh", "fps", "speed", "speed_available", "dropped"]) requireSamples(checks, evidence, `ffmpeg_${metric}_${branch}`, minimumSamples);
   const fresh = valuesFor(evidence, `ffmpeg_fresh_${branch}`);
   const fps = valuesFor(evidence, `ffmpeg_fps_${branch}`);
   const speed = valuesFor(evidence, `ffmpeg_speed_${branch}`);
+  const speedAvailable = valuesFor(evidence, `ffmpeg_speed_available_${branch}`);
   const dropped = valuesFor(evidence, `ffmpeg_dropped_${branch}`);
   if (fresh.length >= minimumSamples) addCheck(checks, `ffmpeg_fresh_${branch}_continuous`, Math.min(...fresh) >= 1, Math.min(...fresh), "1 for every sample");
   if (fps.length >= minimumSamples) addCheck(checks, `ffmpeg_fps_${branch}_p05`, percentile(fps, 0.05) >= thresholds.minimumFfmpegFps, percentile(fps, 0.05), `>= ${thresholds.minimumFfmpegFps}`);
+  if (speedAvailable.length >= minimumSamples) addCheck(checks, `ffmpeg_speed_available_${branch}_continuous`, Math.min(...speedAvailable) >= 1, Math.min(...speedAvailable), "1 for every sample");
   if (speed.length >= minimumSamples) addCheck(checks, `ffmpeg_speed_${branch}_p05`, percentile(speed, 0.05) >= thresholds.minimumFfmpegSpeed, percentile(speed, 0.05), `>= ${thresholds.minimumFfmpegSpeed}`);
   if (dropped.length >= minimumSamples) addCheck(checks, `ffmpeg_dropped_${branch}_growth`, resetAwareIncrease(dropped) === 0, resetAwareIncrease(dropped), "0");
 }
@@ -269,15 +309,11 @@ function evaluateAttestations(checks, config, attestations) {
   }
   addCheck(checks, "assignment_verified", attestations.assignmentVerified === true, attestations.assignmentVerified ?? null, true);
   addCheck(checks, "unassigned_courts_unaffected", attestations.unassignedCourtsUnaffected === true, attestations.unassignedCourtsUnaffected ?? null, true);
-  addCheck(checks, "ingest_zombie_growth", attestations.ingestZombieGrowth === 0, attestations.ingestZombieGrowth ?? null, 0);
-  addCheck(checks, "ingest_host_cpu_p95", Number.isFinite(attestations.ingestHostCpuP95Ratio) && attestations.ingestHostCpuP95Ratio <= config.thresholds.maximumCpuP95Ratio, attestations.ingestHostCpuP95Ratio ?? null, `<= ${config.thresholds.maximumCpuP95Ratio}`);
-  addCheck(checks, "ingest_host_cpu_max", Number.isFinite(attestations.ingestHostCpuMaxRatio) && attestations.ingestHostCpuMaxRatio < config.thresholds.maximumCpuRatio, attestations.ingestHostCpuMaxRatio ?? null, `< ${config.thresholds.maximumCpuRatio}`);
+  addCheck(checks, "ingest_observed_zombie_growth", attestations.ingestZombieGrowth === 0, attestations.ingestZombieGrowth ?? null, 0);
   if (config.compositor) {
-    addCheck(checks, "compositor_zombie_growth", attestations.compositorZombieGrowth === 0, attestations.compositorZombieGrowth ?? null, 0);
-    addCheck(checks, "compositor_host_cpu_p95", Number.isFinite(attestations.compositorHostCpuP95Ratio) && attestations.compositorHostCpuP95Ratio <= config.thresholds.maximumCpuP95Ratio, attestations.compositorHostCpuP95Ratio ?? null, `<= ${config.thresholds.maximumCpuP95Ratio}`);
-    addCheck(checks, "compositor_host_cpu_max", Number.isFinite(attestations.compositorHostCpuMaxRatio) && attestations.compositorHostCpuMaxRatio < config.thresholds.maximumCpuRatio, attestations.compositorHostCpuMaxRatio ?? null, `< ${config.thresholds.maximumCpuRatio}`);
+    addCheck(checks, "compositor_observed_zombie_growth", attestations.compositorZombieGrowth === 0, attestations.compositorZombieGrowth ?? null, 0);
     addCheck(checks, "egress_errors", attestations.egressErrors === 0, attestations.egressErrors ?? null, 0);
-    addCheck(checks, "egress_shm_max_ratio", Number.isFinite(attestations.egressShmMaxRatio) && attestations.egressShmMaxRatio < config.thresholds.maximumShmRatio, attestations.egressShmMaxRatio ?? null, `< ${config.thresholds.maximumShmRatio}`);
+    addCheck(checks, "egress_shm_enabled", attestations.egressShmEnabled === true, attestations.egressShmEnabled ?? null, true);
   }
 }
 
@@ -287,13 +323,9 @@ function boundedAttestations(input) {
     assignmentVerified: input.assignmentVerified === true,
     unassignedCourtsUnaffected: input.unassignedCourtsUnaffected === true,
     ingestZombieGrowth: Number.isFinite(input.ingestZombieGrowth) ? input.ingestZombieGrowth : null,
-    ingestHostCpuP95Ratio: boundedNumber(input.ingestHostCpuP95Ratio),
-    ingestHostCpuMaxRatio: boundedNumber(input.ingestHostCpuMaxRatio),
     compositorZombieGrowth: Number.isFinite(input.compositorZombieGrowth) ? input.compositorZombieGrowth : null,
-    compositorHostCpuP95Ratio: boundedNumber(input.compositorHostCpuP95Ratio),
-    compositorHostCpuMaxRatio: boundedNumber(input.compositorHostCpuMaxRatio),
     egressErrors: Number.isFinite(input.egressErrors) ? input.egressErrors : null,
-    egressShmMaxRatio: Number.isFinite(input.egressShmMaxRatio) ? input.egressShmMaxRatio : null
+    egressShmEnabled: input.egressShmEnabled === true
   };
 }
 
@@ -304,10 +336,6 @@ function boundedSourceProfile(profile) {
     output[field] = typeof value === "string" || Number.isFinite(value) ? value : null;
   }
   return output;
-}
-
-function boundedNumber(value) {
-  return Number.isFinite(value) ? value : null;
 }
 
 async function queryRange(prometheusUrl, query, start, end, step, token) {
@@ -334,7 +362,7 @@ function parseArgs(argv) {
     if (!key?.startsWith("--") || value == null) throw new Error(`invalid argument near ${key ?? "end of command"}`);
     values[key.slice(2)] = value;
   }
-  for (const required of ["config", "attestations", "prometheus-url", "start", "end", "output"]) {
+  for (const required of ["config", "attestations", "host-samples", "prometheus-url", "start", "end", "output"]) {
     if (!values[required]) throw new Error(`--${required} is required`);
   }
   return values;
@@ -349,6 +377,11 @@ async function main() {
   const endEpochSeconds = Date.parse(args.end) / 1000;
   if (!Number.isFinite(startEpochSeconds) || !Number.isFinite(endEpochSeconds) || endEpochSeconds <= startEpochSeconds) throw new Error("--start and --end must define a valid increasing ISO-8601 window");
   const effectiveStartEpochSeconds = startEpochSeconds + config.warmupSeconds;
+  const hostEvidence = summarizeHostSamples(parseHostSamplesCsv(await readFile(args["host-samples"], "utf8")), {
+    startEpochSeconds,
+    endEpochSeconds,
+    stepSeconds: config.stepSeconds
+  });
   const queries = buildQueries(config);
   const token = process.env.SCORECHECK_PROMETHEUS_BEARER_TOKEN ?? "";
   const entries = await Promise.all(Object.entries(queries).map(async ([name, query]) => [
@@ -356,8 +389,8 @@ async function main() {
     (await queryRange(args["prometheus-url"], query, effectiveStartEpochSeconds, endEpochSeconds, config.stepSeconds, token))
   ]));
   const evidence = { startEpochSeconds, effectiveStartEpochSeconds, endEpochSeconds, series: Object.fromEntries(entries) };
-  const report = evaluateEvidence(config, evidence, attestations);
-  await writeFile(args.output, `${JSON.stringify({ ...report, configuration: config, attestations, evidence }, null, 2)}\n`, { mode: 0o600 });
+  const report = evaluateEvidence(config, evidence, attestations, hostEvidence);
+  await writeFile(args.output, `${JSON.stringify({ ...report, configuration: config, attestations, hostEvidence, evidence }, null, 2)}\n`, { mode: 0o600 });
   await chmod(args.output, 0o600);
   process.stdout.write(`${report.verdict}: ${report.gateId} (${report.checks.filter((check) => !check.pass).length} failed checks)\n`);
   process.exitCode = report.verdict === "PASS" ? 0 : 2;

@@ -36,7 +36,7 @@ export class AgentCollector {
 
     const [livekit, egress, egressHealthUp] = await Promise.all([
       collectLiveKit(this.config.livekitMetricsUrl, errors),
-      collectEgress(this.config.egressMetricsUrl, errors),
+      collectEgress(this.config.egressMetricsUrl, this.config.egressMaxWebRequests, errors),
       probeEndpoint(this.config.egressHealthUrl, "EGRESS_METRICS_UNAVAILABLE", errors, false)
     ]);
     const endpoints = [
@@ -188,24 +188,32 @@ async function collectLiveKit(url: string | null, errors: Set<CollectionError>) 
   }
 }
 
-async function collectEgress(url: string | null, errors: Set<CollectionError>) {
+async function collectEgress(url: string | null, maximumWebRequests: number, errors: Set<CollectionError>) {
   if (!url) return null;
   try {
     const text = await fetchText(url);
-    const idle = metricValue(text, "livekit_egress_available");
-    const canAccept = metricValue(text, "livekit_egress_can_accept_request");
-    if (idle == null || canAccept == null) throw new Error("Required Egress state metrics are unavailable.");
-    return {
-      idle: idle > 0,
-      canAcceptRequest: canAccept > 0,
-      cgroupMemoryBytes: metricValue(text, "livekit_egress_cgroup_memory_bytes"),
-      cpuLoadRatio: metricValue(text, "livekit_load_ratio", { type: "cpu" }),
-      memoryLoadRatio: metricValue(text, "livekit_load_ratio", { type: "memory" })
-    };
+    return parseEgressMetrics(text, maximumWebRequests);
   } catch {
     errors.add("EGRESS_METRICS_UNAVAILABLE");
     return null;
   }
+}
+
+export function parseEgressMetrics(text: string, maximumWebRequests: number) {
+  const idle = metricValue(text, "livekit_egress_available");
+  const nativeCanAccept = metricValue(text, "livekit_egress_can_accept_request");
+  const activeWebRequests = metricValue(text, "livekit_egress_requests", { type: "web" });
+  if (idle == null || nativeCanAccept == null || activeWebRequests == null || !Number.isInteger(activeWebRequests) || activeWebRequests < 0) throw new Error("Required Egress state metrics are unavailable.");
+  return {
+    idle: idle > 0,
+    canAcceptRequest: nativeCanAccept > 0 && activeWebRequests < maximumWebRequests,
+    nativeCanAcceptRequest: nativeCanAccept > 0,
+    activeWebRequests,
+    maximumWebRequests,
+    cgroupMemoryBytes: metricValue(text, "livekit_egress_cgroup_memory_bytes"),
+    cpuLoadRatio: metricValue(text, "livekit_load_ratio", { type: "cpu" }),
+    memoryLoadRatio: metricValue(text, "livekit_load_ratio", { type: "memory" })
+  };
 }
 
 export function metricSum(text: string, metricName: string, requiredLabels: Record<string, string> = {}): number {

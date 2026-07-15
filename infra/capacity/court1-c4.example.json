@@ -41,6 +41,7 @@
     "maximumCpuP95Ratio": 0.75,
     "maximumCpuRatio": 0.8,
     "maximumMemoryGrowthRatio": 0.1,
+    "maximumHostSampleGapSeconds": 7.5,
     "maximumShmRatio": 0.8
   }
 }
