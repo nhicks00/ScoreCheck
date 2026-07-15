@@ -97,6 +97,13 @@ video { width:100%; height:100%; object-fit:contain; background:#000; }
     </div>
     <div id="clock">0:00 / 0:00</div>
   </div>
+  <div id="legend" style="font-size:11.5px;color:var(--ink2);display:flex;gap:16px;align-items:center;">
+    <span><span style="display:inline-block;width:2px;height:10px;background:var(--ink2);opacity:.6;vertical-align:middle;margin-right:5px"></span>OCR proposal — where the scorebug changed (<kbd>tab</kbd> hops to the next one)</span>
+    <span><span style="display:inline-block;width:3px;height:10px;background:var(--near);vertical-align:middle;margin-right:5px"></span>near pt</span>
+    <span><span style="display:inline-block;width:3px;height:10px;background:var(--far);vertical-align:middle;margin-right:5px"></span>far pt</span>
+    <span><span style="display:inline-block;width:3px;height:10px;background:var(--gold);vertical-align:middle;margin-right:5px"></span>match/set</span>
+    <span><span style="display:inline-block;width:3px;height:10px;background:#9a8fc0;vertical-align:middle;margin-right:5px"></span>side switch</span>
+  </div>
   <div id="controls">
     <button data-act="pp">⏯ <kbd>space</kbd></button>
     <button data-act="back">−30s <kbd>⇧←</kbd></button>
@@ -293,7 +300,7 @@ function nextProposal() {
 }
 
 const ACTIONS = {
-  pp: () => (video.paused ? video.play() : video.pause()),
+  pp: () => { if (video.paused) { const p = video.play(); if (p) p.catch(() => {}); } else video.pause(); },
   back: () => (video.currentTime -= 30), fwd: () => (video.currentTime += 30),
   nextprop: nextProposal,
   near: () => addEvent("POINT_NEAR"), far: () => addEvent("POINT_FAR"),
@@ -301,10 +308,17 @@ const ACTIONS = {
   switch: () => addEvent("SIDE_SWITCH"), replay: () => addEvent("REPLAY_NO_POINT"),
   timeout: () => addEvent("TIMEOUT"), undo,
 };
-document.querySelectorAll("#controls button").forEach((b) => (b.onclick = () => ACTIONS[b.dataset.act]()));
+document.querySelectorAll("#controls button").forEach((b) => (b.onclick = () => {
+  ACTIONS[b.dataset.act]();
+  b.blur();
+}));
 
+video.addEventListener("click", () => ACTIONS.pp());
 document.addEventListener("keydown", (e) => {
   if (e.target.tagName === "INPUT") return;
+  if (document.activeElement && document.activeElement.tagName === "BUTTON") {
+    document.activeElement.blur();
+  }
   const key = e.key.toLowerCase();
   if (e.code === "Space") { e.preventDefault(); ACTIONS.pp(); }
   else if (e.key === "ArrowLeft") { e.preventDefault(); video.currentTime -= e.shiftKey ? 30 : 5; }
