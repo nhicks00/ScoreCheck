@@ -37,6 +37,12 @@ stack while old test servers still exist. The controller rejects partial
 affordability instead of creating the first few servers and then discovering the
 account cannot fit the complete stack.
 
+The first isolated full rehearsal is deliberately side by side with the seven
+current servers, so it requires a temporary account limit of **19**. The quota
+itself is free; only created resources are billed. Once the seven legacy
+servers are retired, a limit of 12 fits the normal stack. Do not destroy those
+legacy servers merely to make a rehearsal fit.
+
 ## Stable public endpoints
 
 Two retained DigitalOcean Reserved IPv4s are the endpoint anchors:
@@ -64,6 +70,14 @@ Reserved IPv4s. This is deliberate: they accept no event traffic but never drift
 to an unrelated new Droplet. The monitoring record is restored to its exact
 pre-event record.
 
+A rehearsal never uses those production names or permanent anchors. It gets a
+deterministic event namespace, unique Droplet provider names, and four
+event-scoped DNS names that point directly to the rehearsal Droplets. Teardown
+removes every rehearsal DNS record and proves it is absent. It allocates no
+Reserved IPv4, so an interrupted test cannot leak an unnamed address. A
+pre-existing rehearsal hostname is treated as an ownership collision rather
+than adopted.
+
 ## Address and identity complications
 
 The lifecycle handles these explicitly:
@@ -80,6 +94,11 @@ The lifecycle handles these explicitly:
   event preflight still reserves at least the TTL before accepting traffic.
 - **Reserved IPv4 assignment is asynchronous.** The build waits until the API
   reports the exact destination Droplet ID before accepting DNS.
+- **A create response can be lost.** Before each one-time production anchor
+  allocation, the manager durably records the complete Reserved-IP inventory.
+  On restart it adopts only one unassigned, same-region inventory delta and
+  fails closed when the delta is ambiguous. Do not create or delete another
+  Reserved IP during this short bootstrap operation.
 - **Private addresses are not durable.** Prometheus and agent targets are
   generated only after all 12 exact resources exist.
 - **Certificates bind to names, not servers.** No certificate or camera setting
@@ -98,26 +117,34 @@ DigitalOcean charge. At the current published rate this is approximately
 `$5/month` per unassigned address, or approximately `$10/month` total while the
 event stack is absent. Recheck live billing before relying on that estimate.
 
-Use the resumable manager once. It writes each successful allocation immediately
-to a mode-`0600` file, so failure during the second allocation cannot orphan the
-first:
+Use the resumable manager once. It writes a protected inventory checkpoint
+before each allocation and writes each resolved address immediately afterward.
+A lost API response or local interruption is reconciled from that checkpoint;
+multiple inventory deltas fail closed:
 
 ```bash
 node infra/event-stack/manage-endpoint-anchors.mjs create \
   --anchors /absolute/protected/endpoint-anchors.json \
   --credentials-env /absolute/protected/provider.env \
   --region sfo2 \
-  --confirm CREATE:ENDPOINT-ANCHORS
+  --retention persistent \
+  --confirm CREATE:PERSISTENT-ENDPOINT-ANCHORS
 
 node infra/event-stack/manage-endpoint-anchors.mjs verify \
   --anchors /absolute/protected/endpoint-anchors.json \
   --credentials-env /absolute/protected/provider.env \
-  --region sfo2
+  --region sfo2 \
+  --retention persistent
 ```
 
 There is intentionally no routine delete-anchors command. The anchors are the
 stable endpoint contract. Removing them is a separate architecture change, not
 ordinary post-event teardown.
+
+The bundle generator writes an empty, protected rehearsal endpoint binding.
+That binding proves the rehearsal manifest has no Reserved-IP slots; it does
+not call the Reserved-IP API. Rehearsal DNS is disposable and bound to exact
+Droplet IDs/public addresses in lifecycle state.
 
 ## Protected inputs
 
@@ -129,6 +156,9 @@ DIGITALOCEAN_TOKEN
 SCORECHECK_DO_SSH_KEYS
 VERCEL_TOKEN
 VERCEL_TEAM_ID              # only for a team-owned DNS zone
+YOUTUBE_CLIENT_ID           # full rehearsal only
+YOUTUBE_CLIENT_SECRET       # full rehearsal only
+YOUTUBE_REFRESH_TOKEN       # full rehearsal only
 PUSHOVER_APP_TOKEN
 PUSHOVER_USER_KEY
 ```
@@ -171,7 +201,7 @@ operator profile:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "manifest": "/absolute/protected/event/manifest.json",
   "state": "/absolute/protected/event/state.json",
   "anchors": "/absolute/protected/endpoint-anchors.json",
@@ -180,7 +210,8 @@ operator profile:
   "knownHosts": "/absolute/protected/event/known_hosts",
   "credentialsEnv": "/absolute/protected/provider.env",
   "lifecycleAttestation": "/absolute/protected/lifecycle-attestation.json",
-  "evidence": "/absolute/protected/event/final-evidence"
+  "evidence": "/absolute/protected/event/final-evidence",
+  "rehearsalEvidence": null
 }
 ```
 
@@ -193,21 +224,46 @@ node infra/event-stack/eventctl.mjs start --profile /absolute/protected/event/pr
 node infra/event-stack/eventctl.mjs close --profile /absolute/protected/event/profile.json --confirm CLOSE:event-slug
 node infra/event-stack/eventctl.mjs evidence --profile /absolute/protected/event/profile.json
 node infra/event-stack/eventctl.mjs destroy --profile /absolute/protected/event/profile.json --confirm DESTROY:event-slug
+node infra/event-stack/eventctl.mjs abort --profile /absolute/protected/event/profile.json --confirm ABORT:event-slug
 ```
 
 The wrapper invokes Node directly without a shell and never invents a start,
-close, or destroy confirmation.
+close, destroy, or abort confirmation.
+
+## Protected bundle
+
+Do not hand-author the manifest and operator profiles. Create one immutable,
+mode-`0700` event bundle. Existing credentials, SSH identity, canary attestation,
+and production anchors remain outside the event directory and are referenced by
+absolute path:
+
+```bash
+node infra/event-stack/create-event-bundle.mjs create \
+  --event next-event-slug \
+  --kind production \
+  --destroy-after YYYY-MM-DD \
+  --root /absolute/protected/events/next-event-slug \
+  --credentials-env /absolute/protected/provider.env \
+  --ssh-key /absolute/protected/scorecheck_do \
+  --attestation /absolute/protected/lifecycle-attestation.json \
+  --anchors /absolute/protected/endpoint-anchors.json
+```
+
+The generator refuses an existing destination, weak input permissions, relative
+paths, an incomplete mode-specific configuration, or an unbound manifest. It
+writes the exact next command but does not execute it.
 
 ## Event build
 
-Generate a new immutable manifest for every event. The generator binds the
-exact service spec, compositor pool, and all role-specific cloud-init bytes. It
-writes mode `0600`, refuses to overwrite, and rejects additions, omissions,
-court reassignment, size drift, or hand-edited digests.
+The bundle contains a new immutable manifest for every event. The manifest
+binds the exact service spec, compositor pool, network contract, and all
+role-specific cloud-init bytes. Validation rejects additions, omissions, court
+reassignment, size drift, network drift, or hand-edited digests.
 
 ```bash
 node infra/event-stack/event-manifest.mjs generate \
   --event next-event-slug \
+  --kind production \
   --destroy-after YYYY-MM-DD \
   --output /absolute/protected/next-event-slug/manifest.json
 
@@ -240,7 +296,9 @@ same-name duplicate merely because a previous API response was lost.
 The stack is `ready` only after:
 
 1. The exact 12-resource inventory exists with no extra event-tagged resource.
-2. Both Reserved IPv4s target the intended exact Droplet IDs.
+2. Production has both Reserved IPv4s assigned to the intended exact Droplet
+   IDs; rehearsal has no Reserved IP allocation and each scoped endpoint targets
+   the exact event-owned Droplet public IPv4.
 3. All four public DNS records pass provider and resolver checks.
 4. Commentary, ingest, eight compositors, spare, and observability are deployed
    from the bound repository revision.
@@ -261,6 +319,7 @@ node infra/event-stack/event-stack.mjs start \
   --secrets /absolute/protected/event-secrets \
   --ssh-key /absolute/protected/scorecheck_do \
   --known-hosts /absolute/protected/next-event-slug/known_hosts \
+  --credentials-env /absolute/protected/provider.env \
   --confirm START:next-event-slug
 ```
 
@@ -292,22 +351,71 @@ node infra/event-stack/event-stack.mjs destroy \
 Destroy is blocked while coverage is live, before the manifest review date,
 without protected evidence, or when provider inventory differs from state. It
 deletes 12 verified Droplet IDs one by one; it never issues a tag-wide bulk
-delete. It then proves both anchors are unassigned, restores dynamic DNS, and
-sends one Pushover completion message.
+delete. It is resumable after a lost delete response or local interruption. It
+then proves production anchors are unassigned, restores dynamic DNS, and sends
+one Pushover completion message before declaring the lifecycle destroyed.
+Rehearsal teardown instead removes all event DNS and proves that no rehearsal
+Reserved IP exists. The ordinary public IPv4s disappear with their exact
+Droplets. A failed completion notification leaves teardown in a retryable
+`destroying` phase rather than falsely reporting success.
+
+If setup fails or is intentionally cancelled before coverage starts, use the
+separate abort action. It inventories only exact event-tagged identities,
+captures protected pre-cleanup state, reconciles an ambiguous create, restores
+owned DNS, removes exact Droplet IDs, proves the rehearsal namespace and
+provider inventory are empty, and records durable completion evidence:
+
+```bash
+node infra/event-stack/eventctl.mjs abort \
+  --profile /absolute/protected/event/profile.json \
+  --confirm ABORT:next-event-slug
+```
+
+Abort is unavailable after `start`; live coverage must follow close, evidence,
+and destroy. There is no tag-wide deletion command in the repository.
 
 There is no timer deletion. Tournament schedules and post-event soaks move, so
 a timer is not authorized to decide that coverage is over.
 
 ## Dry run and live canary
 
-The provider-free rehearsal exercises the exact 12-server workflow, stable
-critical addresses, live teardown rejection, partial and ambiguous create
-resumption, DNS failure recovery, evidence, and exact teardown:
+The provider-free rehearsal exercises the exact isolated 12-server workflow,
+dynamic event-scoped endpoints, live teardown rejection, partial and ambiguous
+create resumption, DNS failure recovery, failed-build abort, protected
+evidence, exact teardown, and event DNS removal:
 
 ```bash
 node infra/event-stack/simulate-event-lifecycle.mjs
 node --test infra/event-stack/*.test.mjs
 ```
+
+The live 12-server rehearsal bundle is generated once and contains the exact
+one-command runner invocation. It points to the numeric GitHub repository ID,
+the exact tested Git ref and 40-character commit SHA, and the local executables
+used for the eight synthetic publishers and LiveKit verification:
+
+```bash
+node infra/event-stack/create-event-bundle.mjs create \
+  --event next-event-full-rehearsal \
+  --kind rehearsal \
+  --destroy-after YYYY-MM-DD \
+  --root /absolute/protected/events/next-event-full-rehearsal \
+  --credentials-env /absolute/protected/provider.env \
+  --ssh-key /absolute/protected/scorecheck_do \
+  --attestation /absolute/protected/lifecycle-attestation.json \
+  --git-repo-id NUMERIC_GITHUB_REPOSITORY_ID \
+  --git-ref codex/turnkey-event-lifecycle \
+  --git-sha 40_CHARACTER_TESTED_COMMIT_SHA \
+  --ffmpeg /absolute/path/to/ffmpeg \
+  --livekit-cli /absolute/path/to/lk \
+  --soak-seconds 1800
+```
+
+Run the exact `nextCommand` written to the protected bundle's `BUNDLE.json`.
+That runner owns plan, prepare, provision, explicit start, 30-minute soak,
+ordered output cleanup, evidence sealing, and exact infrastructure teardown. A
+failure enters the bounded recovery plan and leaves a protected report; it does
+not silently skip cleanup.
 
 The isolated live canary uses one unique nonproduction hostname and tag. It does
 not use a production endpoint or select an existing Droplet. It performs:
@@ -348,6 +456,16 @@ detachment is still locked. Both the assignment and deletion paths wait for the
 exact address to report `locked=false`; an unassigned-but-locked address is not
 considered safe to delete.
 
+The one-Droplet canary proves provider permissions and replacement mechanics;
+it does **not** qualify the 12-server media system. After the account limit is
+19, the final dry run is a full isolated rehearsal: 12 unique rehearsal
+Droplets, eight synthetic moving camera publishers, eight preview/program
+chains, eight one-per-host Egress jobs, an isolated program-page deployment,
+eight fresh unlisted YouTube broadcasts, monitoring, commentary connectivity,
+resource and zombie gates, exact evidence, ordered output cleanup, and complete
+infrastructure teardown. The seven pre-existing server IDs must be identical
+before and after. Production is not approved until this run passes.
+
 ## Cost model
 
 As captured on 2026-07-15, the full 12-Droplet shape is approximately `$1.3125`
@@ -374,3 +492,8 @@ The expected between-event DigitalOcean state is:
 
 Savings come from deleting replaceable event compute, not from reducing
 headroom during coverage.
+
+The full 12-server test costs approximately `$1.3125` for each running hour at
+the captured rate. Rehearsal endpoints use the ordinary public IPv4 addresses
+included with their Droplets and add no Reserved-IP charge. Event-scoped DNS is
+deleted during teardown.

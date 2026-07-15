@@ -1,7 +1,6 @@
 #cloud-config
-# Burst compositor droplet bootstrap (Ubuntu 24.04) - passed as user_data by
-# provision.sh, or already baked in when creating from the bvm-compositor
-# snapshot (in which case it simply re-runs idempotently on first boot).
+# Replaceable compositor bootstrap passed as manifest-bound user_data by the
+# event lifecycle controller.
 #
 # What it does:
 #   1. installs Docker Engine + the compose plugin (get.docker.com script)
@@ -28,13 +27,22 @@
 
 package_update: true
 package_upgrade: false
+ssh_pwauth: false
 
 packages:
   - ca-certificates
   - curl
   - rsync
+  - ufw
 
 write_files:
+  - path: /etc/ssh/sshd_config.d/99-scorecheck.conf
+    permissions: "0644"
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin prohibit-password
+      X11Forwarding no
   - path: /etc/systemd/system/compositor.service
     permissions: "0644"
     content: |
@@ -73,3 +81,9 @@ runcmd:
   # Starts the stack only when the bundle is already present (snapshot boots);
   # on a fresh image the Condition turns this into a successful no-op.
   - systemctl start compositor.service
+  - systemctl reload ssh
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 22/tcp
+  - ufw allow from 10.120.0.0/20 to any port 9108 proto tcp
+  - ufw --force enable

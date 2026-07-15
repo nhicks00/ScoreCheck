@@ -42,9 +42,7 @@ bash -n "${shell_scripts[@]}"
 
 reviewed_shell_tests=(
   infra/compositor/test-admission-config.sh
-  infra/compositor/test-provision.sh
   infra/compositor/test-start-court.sh
-  infra/event-stack/test-lifecycle.sh
   infra/mediamtx/test-scorecheck-ffmpeg-runner.sh
   infra/venue-router/test-scorecheck-speedify-routing.sh
 )
@@ -54,7 +52,8 @@ expected_shell_tests="$(printf '%s\n' "${reviewed_shell_tests[@]}" | sort)"
   || die "infrastructure shell-test inventory changed; review it and update this validator"
 
 section "Capacity and lifecycle contracts"
-node --test infra/event-stack/*.test.mjs infra/capacity/*.test.mjs
+node --test infra/event-stack/*.test.mjs infra/event-stack/rehearsal/*.test.mjs infra/capacity/*.test.mjs infra/commentary/*.test.mjs infra/mediamtx/*.test.mjs
+node infra/event-stack/simulate-event-lifecycle.mjs
 for test_script in "${reviewed_shell_tests[@]}"; do
   "$test_script"
 done

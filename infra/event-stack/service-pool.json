@@ -1,6 +1,8 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "region": "sfo2",
+  "vpcUuid": "6ece4819-6f6a-4ab9-934c-f6a92660aab2",
+  "vpcCidr": "10.120.0.0/20",
   "image": "ubuntu-24-04-x64",
   "minimumAccountDropletLimit": 12,
   "dnsZone": "beachvolleyballmedia.com",
@@ -23,7 +25,7 @@
       "name": "bvm-preview-01",
       "role": "ingest",
       "size": "c-4",
-      "tag": "bvm-mediamtx",
+      "tag": "bvm-preview-01",
       "cloudInitProfile": "ingest"
     }
   ],

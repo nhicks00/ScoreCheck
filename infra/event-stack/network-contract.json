@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "region": "sfo2",
+  "vpcUuid": "6ece4819-6f6a-4ab9-934c-f6a92660aab2",
+  "vpcCidr": "10.120.0.0/20",
+  "firewalls": [
+    {
+      "name": "bvm-preview-firewall",
+      "targetTag": "bvm-preview-01",
+      "inboundRules": [
+        { "protocol": "tcp", "ports": "22", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "tcp", "ports": "80", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "tcp", "ports": "443", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "tcp", "ports": "1935", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "tcp", "ports": "9108", "sources": { "tags": ["bvm-observability"] } },
+        { "protocol": "udp", "ports": "8189", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "udp", "ports": "8890", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "udp", "ports": "51820", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } }
+      ],
+      "outboundRules": [
+        { "protocol": "icmp", "ports": "0", "destinations": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "tcp", "ports": "0", "destinations": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "udp", "ports": "0", "destinations": { "addresses": ["0.0.0.0/0", "::/0"] } }
+      ]
+    },
+    {
+      "name": "bvm-commentary-firewall",
+      "targetTag": "bvm-commentary",
+      "inboundRules": [
+        { "protocol": "tcp", "ports": "22", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "tcp", "ports": "80", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "tcp", "ports": "443", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "tcp", "ports": "7881", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "tcp", "ports": "9108", "sources": { "tags": ["bvm-observability"] } },
+        { "protocol": "udp", "ports": "3478", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "udp", "ports": "50000-60000", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } }
+      ],
+      "outboundRules": [
+        { "protocol": "icmp", "ports": "0", "destinations": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "tcp", "ports": "0", "destinations": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "udp", "ports": "0", "destinations": { "addresses": ["0.0.0.0/0", "::/0"] } }
+      ]
+    },
+    {
+      "name": "bvm-compositor-firewall",
+      "targetTag": "bvm-compositor",
+      "inboundRules": [
+        { "protocol": "tcp", "ports": "22", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "tcp", "ports": "9108", "sources": { "tags": ["bvm-observability"] } }
+      ],
+      "outboundRules": [
+        { "protocol": "icmp", "ports": "0", "destinations": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "tcp", "ports": "0", "destinations": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "udp", "ports": "0", "destinations": { "addresses": ["0.0.0.0/0", "::/0"] } }
+      ]
+    },
+    {
+      "name": "bvm-observability-firewall",
+      "targetTag": "bvm-observability",
+      "inboundRules": [
+        { "protocol": "tcp", "ports": "22", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "tcp", "ports": "80", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "tcp", "ports": "443", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } }
+      ],
+      "outboundRules": [
+        { "protocol": "icmp", "ports": "0", "destinations": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "tcp", "ports": "0", "destinations": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "udp", "ports": "0", "destinations": { "addresses": ["0.0.0.0/0", "::/0"] } }
+      ]
+    }
+  ]
+}

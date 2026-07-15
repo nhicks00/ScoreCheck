@@ -19,7 +19,10 @@ Deployment requires the API keypair and public IP in the environment:
 ```bash
 LIVEKIT_COMMENTARY_API_KEY=... \
 LIVEKIT_COMMENTARY_API_SECRET=... \
-LIVEKIT_COMMENTARY_PUBLIC_IP=138.197.194.146 \
+LIVEKIT_COMMENTARY_SSH_HOST=root@SERVER_IPV4 \
+LIVEKIT_COMMENTARY_PUBLIC_IP=RESERVED_IPV4 \
+LIVEKIT_COMMENTARY_RTC_HOST=rtc.beachvolleyballmedia.com \
+LIVEKIT_COMMENTARY_TURN_HOST=turn.beachvolleyballmedia.com \
 ./deploy.sh
 ```
 

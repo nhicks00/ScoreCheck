@@ -23,7 +23,7 @@ export function parsePoolSamplerArgs(argv) {
       values[key] = value;
     }
   }
-  for (const required of ["--ssh-key", "--interval-seconds", "--output"]) {
+  for (const required of ["--ssh-key", "--known-hosts", "--interval-seconds", "--output"]) {
     if (!values[required]) throw new Error(`${required} is required`);
   }
   if (hosts.length !== 10) throw new Error("--host must be provided exactly ten times: one ingest and nine compositors, including the warm spare");
@@ -41,6 +41,7 @@ export function parsePoolSamplerArgs(argv) {
   return {
     hosts,
     sshKey: expandHome(values["--ssh-key"]),
+    knownHosts: expandHome(values["--known-hosts"]),
     intervalSeconds,
     durationSeconds,
     processPollMs,

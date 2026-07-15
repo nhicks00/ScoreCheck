@@ -3,13 +3,15 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SSH_HOST="${LIVEKIT_COMMENTARY_SSH_HOST:-root@138.197.194.146}"
+SSH_HOST="${LIVEKIT_COMMENTARY_SSH_HOST:?LIVEKIT_COMMENTARY_SSH_HOST is required}"
 SSH_KEY="${LIVEKIT_COMMENTARY_SSH_KEY:-$HOME/.ssh/scorecheck_do}"
 REMOTE_DIR="${LIVEKIT_COMMENTARY_REMOTE_DIR:-/opt/livekit}"
 KNOWN_HOSTS="${SCORECHECK_SSH_KNOWN_HOSTS:?SCORECHECK_SSH_KNOWN_HOSTS is required}"
 
 : "${LIVEKIT_COMMENTARY_API_KEY:?LIVEKIT_COMMENTARY_API_KEY is required}"
 : "${LIVEKIT_COMMENTARY_API_SECRET:?LIVEKIT_COMMENTARY_API_SECRET is required}"
+: "${LIVEKIT_COMMENTARY_RTC_HOST:?LIVEKIT_COMMENTARY_RTC_HOST is required}"
+: "${LIVEKIT_COMMENTARY_TURN_HOST:?LIVEKIT_COMMENTARY_TURN_HOST is required}"
 export LIVEKIT_COMMENTARY_PUBLIC_IP="${LIVEKIT_COMMENTARY_PUBLIC_IP:-${SSH_HOST#*@}}"
 
 node "$SCRIPT_DIR/render-config.mjs"
@@ -69,5 +71,5 @@ exit 1
 REMOTE
 
 curl -fsS --retry 12 --retry-delay 2 --max-time 5 \
-  https://rtc.beachvolleyballmedia.com >/dev/null
+  "https://$LIVEKIT_COMMENTARY_RTC_HOST" >/dev/null
 echo "LiveKit commentary TLS endpoint healthy."

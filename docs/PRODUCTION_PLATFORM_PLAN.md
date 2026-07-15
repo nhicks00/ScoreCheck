@@ -150,13 +150,12 @@ node infra/event-stack/preflight-capacity.mjs \
 ```
 
 Do not weaken the desired count or omit the spare merely to make this preflight
-green. Correct the account quota or qualify a different shape first. The real
-`infra/compositor/provision.sh` path runs this same gate before every create and
-will only create an exact missing slot. Court registration is one court per
-worker and must match the pool assignment; the warm spare remains unassigned.
-The pool also pins the image. A remote account-level provisioning lock
-serializes creates because DigitalOcean Droplet names are not unique; incomplete
-or ambiguous post-create verification leaves that lock in place for inspection.
+green. Correct the account quota or qualify a different shape first. The only
+supported mutation path is the manifest-bound event lifecycle. It creates or
+reconciles the complete stack by exact provider ID, uses a protected local lock,
+and aborts partial pre-live builds without tag-wide deletion. Court registration
+is one court per worker and must match the pool assignment; the warm spare
+remains unassigned. The pool also pins the image.
 
 Generate the event-specific lifecycle manifest before the first create. The
 manifest is derived from and digest-bound to the pool specification, contains
@@ -167,17 +166,12 @@ is released:
 ```bash
 node infra/event-stack/event-manifest.mjs generate \
   --event next-event-slug \
+  --kind production \
   --destroy-after YYYY-MM-DD \
   --output /absolute/protected/next-event-slug.json
 
-infra/compositor/provision.sh \
-  --name bvm-compositor-e \
-  --courts 5 \
-  --event-manifest /absolute/protected/next-event-slug.json \
-  --ssh-key REGISTERED_KEY_ID \
-  --ssh-private-key ~/.ssh/scorecheck_do \
-  --register-monitoring \
-  --observability-private-ip MONITOR_PRIVATE_IP
+node infra/event-stack/eventctl.mjs up \
+  --profile /absolute/protected/next-event/profile.json
 ```
 
 The first full-eight ingest candidate, one dedicated `c-4` with 8 GB RAM,

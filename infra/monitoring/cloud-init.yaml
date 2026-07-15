@@ -1,6 +1,8 @@
 #cloud-config
 
 package_update: true
+package_upgrade: false
+ssh_pwauth: false
 packages:
   - ca-certificates
   - curl
@@ -9,6 +11,13 @@ packages:
   - ufw
 
 write_files:
+  - path: /etc/ssh/sshd_config.d/99-scorecheck.conf
+    permissions: "0644"
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin prohibit-password
+      X11Forwarding no
   - path: /etc/sysctl.d/99-scorecheck-monitoring.conf
     permissions: "0644"
     content: |
@@ -26,6 +35,7 @@ runcmd:
   - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   - systemctl enable --now docker
   - install -d -m 0750 /opt/scorecheck-monitoring
+  - systemctl reload ssh
   - ufw default deny incoming
   - ufw default allow outgoing
   - ufw allow 22/tcp

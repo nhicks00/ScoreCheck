@@ -4,7 +4,7 @@ import test from "node:test";
 import { buildEventctlInvocation, validateProfile } from "./eventctl.mjs";
 
 const profile = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   manifest: "/protected/event/manifest.json",
   state: "/protected/event/state.json",
   anchors: "/protected/endpoint-anchors.json",
@@ -13,7 +13,8 @@ const profile = {
   knownHosts: "/protected/event/known_hosts",
   credentialsEnv: "/protected/provider.env",
   lifecycleAttestation: "/protected/lifecycle-attestation.json",
-  evidence: "/protected/event/evidence"
+  evidence: "/protected/event/evidence",
+  rehearsalEvidence: null
 };
 
 test("expands one operator profile into exact non-shell lifecycle arguments", () => {
@@ -29,10 +30,15 @@ test("expands one operator profile into exact non-shell lifecycle arguments", ()
     "--credentials-env", profile.credentialsEnv, "--evidence", profile.evidence,
     "--confirm", "DESTROY:event"
   ]);
+  assert.deepEqual(buildEventctlInvocation("abort", profile, "ABORT:event"), [
+    "abort", "--manifest", profile.manifest, "--state", profile.state,
+    "--credentials-env", profile.credentialsEnv, "--evidence", profile.evidence,
+    "--confirm", "ABORT:event"
+  ]);
 });
 
 test("never invents destructive confirmations", () => {
-  for (const command of ["start", "close", "destroy"]) {
+  for (const command of ["start", "close", "destroy", "abort"]) {
     assert.throws(() => buildEventctlInvocation(command, profile), /explicit --confirm/);
   }
   assert.throws(() => buildEventctlInvocation("up", profile, "yes"), /does not accept/);

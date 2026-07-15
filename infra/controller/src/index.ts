@@ -208,10 +208,8 @@ courts.post('/:n/stop', async (req: Request, res: Response) => {
 
 app.use('/courts', courts);
 
-// TODO(phase-3): DigitalOcean fleet control (plan §3.5 "event-day infra panel", §6 phase 5):
-//   POST /fleet/provision + POST /fleet/teardown — DO REST calls mirroring
-//   infra/compositor/provision.sh / teardown.sh (create from snapshot, cloud-init,
-//   tag bvm-compositor, reserved-IP reassignment), with boot-progress reporting.
+// TODO(phase-3): expose the manifest-bound eventctl lifecycle through authenticated
+//   fleet endpoints. Never reproduce provider mutations or tag-wide teardown here.
 // TODO(phase-3): health relay — poll egress Prometheus (:9090), MediaMTX path stats
 //   (127.0.0.1:9997) and program-page heartbeats into Supabase for the health board.
 // TODO(phase-3): YouTube key storage moves from env to Supabase (encrypted); this

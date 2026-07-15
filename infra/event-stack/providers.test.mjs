@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { firewallPayload } from "./network-contract.mjs";
 import { DigitalOceanProvider, VercelDnsProvider } from "./providers.mjs";
+
+const networkContract = JSON.parse(await readFile(new URL("./network-contract.json", import.meta.url), "utf8"));
 
 test("read-only DigitalOcean operations do not require a provisioning SSH key", async () => {
   const fetchImpl = queueFetch([
@@ -29,6 +32,7 @@ test("DigitalOcean create binds exact cloud-init bytes, tags, SSH keys, and safe
   const result = await provider.createDroplet({
     name: "canary",
     region: "sfo2",
+    vpcUuid: "6ece4819-6f6a-4ab9-934c-f6a92660aab2",
     size: "c-4",
     image: "ubuntu-24-04-x64",
     tags: ["canary:test"],
@@ -39,6 +43,7 @@ test("DigitalOcean create binds exact cloud-init bytes, tags, SSH keys, and safe
   const body = JSON.parse(requests[0].options.body);
   assert.deepEqual(body.ssh_keys, [42, "fingerprint"]);
   assert.deepEqual(body.tags, ["canary:test"]);
+  assert.equal(body.vpc_uuid, "6ece4819-6f6a-4ab9-934c-f6a92660aab2");
   assert.equal(body.user_data, cloudInit);
   assert.equal(body.backups, false);
   assert.equal(body.ipv6, false);
@@ -109,6 +114,81 @@ test("DigitalOcean waits for Reserved IPv4 assignment and detachment locks to cl
   assert.equal((await provider.waitReservedIpv4Assignment("192.0.2.50", "123")).locked, false);
   assert.equal((await provider.waitReservedIpv4Unassigned("192.0.2.50")).locked, false);
   assert.equal(requests.length, 4);
+});
+
+test("DigitalOcean proves an exact Reserved IPv4 is absent after deletion", async () => {
+  const provider = new DigitalOceanProvider({
+    token: "token",
+    sshKeys: [],
+    cloudInitPaths: {},
+    fetchImpl: queueFetch([response(404, {})]),
+    pollIntervalMs: 1,
+    timeoutMs: 50
+  });
+
+  assert.equal(await provider.waitReservedIpv4Absent("192.0.2.50"), true);
+});
+
+test("DigitalOcean verifies the exact pinned VPC and tag-addressed firewall contract", async () => {
+  const provider = new DigitalOceanProvider({
+    token: "token",
+    sshKeys: [],
+    cloudInitPaths: {},
+    fetchImpl: queueFetch([
+      response(200, { vpcs: [apiVpc()], meta: { total: 1 } }),
+      response(200, { firewalls: networkContract.firewalls.map(apiFirewall), meta: { total: 4 } })
+    ])
+  });
+
+  const result = await provider.verifyNetworkContract(networkContract);
+  assert.equal(result.healthy, true);
+  assert.deepEqual(result.problems, []);
+  assert.equal(result.inventory.firewalls.length, 4);
+});
+
+test("DigitalOcean network apply updates drift, creates missing rules, and proves convergence", async () => {
+  const requests = [];
+  const initial = networkContract.firewalls.slice(0, 3).map(apiFirewall);
+  initial[0].inbound_rules = [];
+  const provider = new DigitalOceanProvider({
+    token: "token",
+    sshKeys: [],
+    cloudInitPaths: {},
+    pollIntervalMs: 1,
+    timeoutMs: 50,
+    fetchImpl: queueFetch([
+      response(200, { vpcs: [apiVpc()], meta: { total: 1 } }),
+      response(200, { firewalls: initial, meta: { total: 3 } }),
+      response(200, { firewall: apiFirewall(networkContract.firewalls[0], 1) }),
+      response(202, { firewall: apiFirewall(networkContract.firewalls[3], 4) }),
+      response(200, { vpcs: [apiVpc()], meta: { total: 1 } }),
+      response(200, { firewalls: networkContract.firewalls.map(apiFirewall), meta: { total: 4 } })
+    ], requests)
+  });
+
+  const result = await provider.applyNetworkContract(networkContract);
+  assert.equal(result.healthy, true);
+  assert.deepEqual(requests.map((entry) => entry.options.method), ["GET", "GET", "PUT", "POST", "GET", "GET"]);
+  const update = JSON.parse(requests[2].options.body);
+  const create = JSON.parse(requests[3].options.body);
+  assert.deepEqual(update, firewallPayload(networkContract.firewalls[0]));
+  assert.deepEqual(create, firewallPayload(networkContract.firewalls[3]));
+  assert.deepEqual(update.droplet_ids, []);
+  assert.deepEqual(update.tags, ["bvm-preview-01"]);
+});
+
+test("DigitalOcean network apply refuses firewall mutation when the pinned VPC drifted", async () => {
+  const requests = [];
+  const provider = new DigitalOceanProvider({
+    token: "token",
+    sshKeys: [],
+    cloudInitPaths: {},
+    fetchImpl: queueFetch([
+      response(200, { vpcs: [{ ...apiVpc(), ip_range: "10.121.0.0/20" }], meta: { total: 1 } })
+    ], requests)
+  });
+  await assert.rejects(() => provider.applyNetworkContract(networkContract), /VPC identity drifted/u);
+  assert.deepEqual(requests.map((entry) => entry.options.method), ["GET"]);
 });
 
 test("Vercel DNS accepts create uid, verifies exact A record and resolver, then deletes by owned id", async () => {
@@ -261,10 +341,33 @@ function apiDroplet(id, name) {
     name,
     status: "active",
     region: { slug: "sfo2" },
+    vpc_uuid: "6ece4819-6f6a-4ab9-934c-f6a92660aab2",
     size_slug: "c-4",
     image: { slug: "ubuntu-24-04-x64" },
     networks: { v4: [{ type: "public", ip_address: `198.51.100.${id}` }, { type: "private", ip_address: `10.20.0.${id}` }] },
     tags: ["canary:test"],
     created_at: "2026-07-15T00:00:00Z"
+  };
+}
+
+function apiVpc() {
+  return {
+    id: networkContract.vpcUuid,
+    name: "default-sfo2",
+    region: { slug: networkContract.region },
+    ip_range: networkContract.vpcCidr
+  };
+}
+
+function apiFirewall(value, index = networkContract.firewalls.indexOf(value)) {
+  const payload = firewallPayload(value);
+  return {
+    id: `firewall-${index + 1}`,
+    name: payload.name,
+    status: "succeeded",
+    inbound_rules: payload.inbound_rules,
+    outbound_rules: payload.outbound_rules,
+    tags: payload.tags,
+    droplet_ids: payload.droplet_ids
   };
 }

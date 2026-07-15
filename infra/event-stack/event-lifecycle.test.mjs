@@ -15,19 +15,32 @@ import {
   validateAnchorConfig
 } from "./event-lifecycle.mjs";
 import { fakeProvisioningAttestation, FakeDigitalOceanProvider, FakeDnsProvider, FakeNotifier, FakeStackDeployer } from "./fake-providers.mjs";
+import { sealRehearsalEvidence } from "./rehearsal/rehearsal-evidence.mjs";
 
 const inputs = await loadManifestInputs();
 
 function fixture(overrides = {}) {
   const now = overrides.now ?? new Date("2026-08-01T12:00:00.000Z");
-  const manifest = buildEventManifest({ event: "turnkey-test", destroyAfter: "2026-08-01", ...inputs });
+  const manifest = buildEventManifest({
+    event: "turnkey-test",
+    kind: overrides.kind ?? "production",
+    destroyAfter: "2026-08-01",
+    ...inputs
+  });
   const anchors = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     provider: "digitalocean",
     region: "sfo2",
-    reservedIpv4: { ingest: "192.0.2.10", commentary: "192.0.2.11" }
+    retention: (overrides.kind ?? "production") === "rehearsal" ? "ephemeral" : "persistent",
+    reservedIpv4: (overrides.kind ?? "production") === "rehearsal"
+      ? {}
+      : { ingest: "192.0.2.10", commentary: "192.0.2.11" }
   };
-  const cloud = overrides.cloud ?? new FakeDigitalOceanProvider();
+  const cloud = overrides.cloud ?? new FakeDigitalOceanProvider({
+    reservedIpv4: (overrides.kind ?? "production") === "rehearsal"
+      ? {}
+      : { ingest: "192.0.2.10", commentary: "192.0.2.11" }
+  });
   const dns = overrides.dns ?? new FakeDnsProvider({
     "preview.beachvolleyballmedia.com": "203.0.113.10",
     "rtc.beachvolleyballmedia.com": "203.0.113.11",
@@ -40,6 +53,58 @@ function fixture(overrides = {}) {
   const provisioningGuard = overrides.provisioningGuard ?? { async verify() { return fakeProvisioningAttestation(); } };
   const controller = new EventLifecycleController({ store, cloud, dns, deployer, notifier, provisioningGuard, now: () => new Date(now) });
   return { controller, manifest, anchors, cloud, dns, deployer, notifier, store };
+}
+
+async function prepareDestroyableLifecycle(setup, label) {
+  await setup.controller.up(setup.manifest, setup.anchors);
+  await setup.controller.beginCoverage(setup.manifest, `START:${setup.manifest.event}`);
+  await setup.controller.closeCoverage(setup.manifest, `CLOSE:${setup.manifest.event}`);
+  const root = await mkdtemp(join(tmpdir(), `scorecheck-${label}-`));
+  await chmod(root, 0o700);
+  const evidence = join(root, "evidence");
+  const rehearsalEvidence = setup.manifest.kind === "rehearsal" ? await fakeCleanedRehearsalEvidence(setup, root) : null;
+  await setup.controller.captureEvidence(setup.manifest, evidence, rehearsalEvidence);
+  return evidence;
+}
+
+async function fakeCleanedRehearsalEvidence(setup, root) {
+  const lifecycle = await setup.store.load();
+  const directory = join(root, "rehearsal-evidence");
+  await mkdir(directory, { mode: 0o700 });
+  const state = {
+    phase: "cleaned",
+    event: lifecycle.event,
+    generationId: lifecycle.generationId,
+    manifestSha256: lifecycle.manifestSha256,
+    createdAt: lifecycle.createdAt,
+    preparedAt: null,
+    startedAt: null,
+    stoppedAt: null,
+    cleanedAt: "2026-08-01T12:00:00.000Z",
+    program: { project: { id: "project-test", status: "deleted" } },
+    courts: Object.fromEntries(Array.from({ length: 8 }, (_, index) => [index + 1, {
+      stream: { id: `stream-${index + 1}`, status: "deleted" },
+      broadcast: { id: `broadcast-${index + 1}`, status: "deleted" }
+    }])),
+    startEvidence: null,
+    soakEvidence: null,
+    endpointEvidence: null,
+    stopEvidence: null
+  };
+  await sealRehearsalEvidence({ state, manifest: setup.manifest, evidenceDirectory: directory, now: new Date("2026-08-01T12:00:00.000Z") });
+  return directory;
+}
+
+async function protectedEvidencePath(label) {
+  const root = await mkdtemp(join(tmpdir(), `scorecheck-${label}-`));
+  await chmod(root, 0o700);
+  return join(root, "evidence");
+}
+
+async function protectedRehearsalEvidencePath(setup, label) {
+  const root = await mkdtemp(join(tmpdir(), `scorecheck-${label}-`));
+  await chmod(root, 0o700);
+  return fakeCleanedRehearsalEvidence(setup, root);
 }
 
 test("runs the production-shaped 12-Droplet lifecycle without changing critical IPs", async () => {
@@ -163,6 +228,179 @@ test("reconciles an ambiguous DNS response from protected pre-change evidence an
   assert.equal(dns.records.get("monitor.beachvolleyballmedia.com").value, "203.0.113.12");
 });
 
+test("rehearsal teardown removes every event DNS record without allocating Reserved IPv4s", async () => {
+  const setup = fixture({ kind: "rehearsal" });
+  const evidence = await prepareDestroyableLifecycle(setup, "rehearsal-cleanup");
+  const eventHostnames = setup.manifest.endpoints.map((entry) => entry.hostname);
+  assert.ok(eventHostnames.every((hostname) => setup.dns.records.has(hostname)));
+
+  const destroyed = await setup.controller.destroy(setup.manifest, evidence, "DESTROY:turnkey-test");
+
+  assert.equal(destroyed.phase, "destroyed");
+  assert.ok(eventHostnames.every((hostname) => !setup.dns.records.has(hostname)));
+  assert.deepEqual([...setup.dns.restores].sort(), [...eventHostnames].sort());
+  assert.equal(setup.cloud.reserved.size, 0);
+  assert.deepEqual(setup.cloud.reservedDeleteCalls, []);
+  assert.deepEqual(destroyed.addressSlots, {});
+});
+
+test("destroy resumes after an ambiguous Droplet deletion without duplicates or broad deletion", async () => {
+  const setup = fixture();
+  const evidence = await prepareDestroyableLifecycle(setup, "ambiguous-droplet-delete");
+  setup.cloud.ambiguousDeleteAt = 3;
+
+  await assert.rejects(
+    () => setup.controller.destroy(setup.manifest, evidence, "DESTROY:turnkey-test"),
+    /ambiguous delete result/
+  );
+  assert.equal((await setup.store.load()).phase, "destroying");
+  assert.equal(setup.cloud.droplets.size, 9);
+
+  setup.cloud.ambiguousDeleteAt = null;
+  const destroyed = await setup.controller.destroy(setup.manifest, evidence, "DESTROY:turnkey-test");
+  assert.equal(destroyed.phase, "destroyed");
+  assert.equal(setup.cloud.droplets.size, 0);
+  assert.equal(new Set(setup.cloud.deleteCalls).size, 12);
+  assert.equal(setup.cloud.deleteCalls.length, 12);
+});
+
+test("rehearsal destroy resumes after an ambiguous DNS cleanup result", async () => {
+  const setup = fixture({ kind: "rehearsal" });
+  const evidence = await prepareDestroyableLifecycle(setup, "ambiguous-rehearsal-cleanup");
+  const firstHostname = setup.manifest.endpoints[0].hostname;
+  setup.dns.ambiguousRestoreHostname = firstHostname;
+
+  await assert.rejects(
+    () => setup.controller.destroy(setup.manifest, evidence, "DESTROY:turnkey-test"),
+    /ambiguous DNS restoration/
+  );
+  assert.equal(setup.cloud.droplets.size, 0);
+  assert.equal(setup.dns.records.has(firstHostname), false);
+
+  const destroyed = await setup.controller.destroy(setup.manifest, evidence, "DESTROY:turnkey-test");
+  assert.equal(destroyed.phase, "destroyed");
+  assert.equal(setup.cloud.reserved.size, 0);
+  assert.ok(setup.manifest.endpoints.every((entry) => !setup.dns.records.has(entry.hostname)));
+});
+
+test("teardown remains retryable until Pushover accepts exactly one completion message", async () => {
+  const setup = fixture({ kind: "rehearsal" });
+  const evidence = await prepareDestroyableLifecycle(setup, "teardown-notification");
+  setup.notifier.failNext = 1;
+
+  await assert.rejects(
+    () => setup.controller.destroy(setup.manifest, evidence, "DESTROY:turnkey-test"),
+    /Pushover did not accept/
+  );
+  assert.equal((await setup.store.load()).phase, "destroying");
+  assert.equal(setup.cloud.droplets.size, 0);
+  assert.equal(setup.cloud.reserved.size, 0);
+
+  const destroyed = await setup.controller.destroy(setup.manifest, evidence, "DESTROY:turnkey-test");
+  assert.equal(destroyed.phase, "destroyed");
+  assert.equal(setup.notifier.messages.filter((entry) => /removed/.test(entry.title)).length, 1);
+  assert.equal(setup.cloud.deleteCalls.length, 12);
+});
+
+test("rehearsal setup refuses to adopt any pre-existing event-scoped DNS record", async () => {
+  const seed = fixture({ kind: "rehearsal" });
+  const hostname = seed.manifest.endpoints[0].hostname;
+  const dns = new FakeDnsProvider({ [hostname]: "203.0.113.99" });
+  const setup = fixture({ kind: "rehearsal", dns });
+
+  await assert.rejects(() => setup.controller.up(setup.manifest, setup.anchors), /refusing ambiguous ownership/);
+  assert.equal(dns.records.get(hostname).value, "203.0.113.99");
+});
+
+test("abort removes a partial dynamic-address rehearsal before the first endpoint", async () => {
+  const cloud = new FakeDigitalOceanProvider({ reservedIpv4: {} });
+  cloud.failCreateAt = 5;
+  const setup = fixture({ kind: "rehearsal", cloud });
+  await assert.rejects(() => setup.controller.up(setup.manifest, setup.anchors), /definite create failure/);
+  assert.equal(cloud.droplets.size, 4);
+  assert.equal((await setup.store.load()).addressSlots && Object.keys((await setup.store.load()).addressSlots).length, 0);
+  const evidence = await protectedEvidencePath("partial-abort");
+  const rehearsalEvidence = await protectedRehearsalEvidencePath(setup, "partial-abort-provider-cleanup");
+
+  const aborted = await setup.controller.abort(setup.manifest, evidence, "ABORT:turnkey-test", rehearsalEvidence);
+
+  assert.equal(aborted.phase, "aborted");
+  assert.equal(cloud.droplets.size, 0);
+  assert.equal(cloud.reserved.size, 0);
+  assert.deepEqual(aborted.addressSlots, {});
+  assert.equal(JSON.parse(await readFile(join(evidence, "ABORT_COMPLETE.json"), "utf8")).event, "turnkey-test");
+  assert.equal((await stat(evidence)).mode & 0o777, 0o700);
+});
+
+test("abort adopts only an exact event-tagged ambiguous create before deleting it", async () => {
+  const cloud = new FakeDigitalOceanProvider();
+  cloud.ambiguousCreateAt = 3;
+  const setup = fixture({ kind: "rehearsal", cloud });
+  await assert.rejects(() => setup.controller.up(setup.manifest, setup.anchors), /ambiguous create result/);
+  assert.equal(cloud.droplets.size, 3);
+  assert.equal(Object.keys((await setup.store.load()).droplets).length, 2);
+
+  const aborted = await setup.controller.abort(
+    setup.manifest,
+    await protectedEvidencePath("ambiguous-create-abort"),
+    "ABORT:turnkey-test",
+    await protectedRehearsalEvidencePath(setup, "ambiguous-create-provider-cleanup")
+  );
+
+  assert.equal(aborted.phase, "aborted");
+  assert.equal(cloud.droplets.size, 0);
+  assert.equal(cloud.deleteCalls.length, 3);
+  assert.ok(Object.values(aborted.droplets).some((entry) => entry.adoptedForAbort === true));
+});
+
+test("ready production abort restores every changed DNS record and retains stable Reserved IPv4s", async () => {
+  const initialDns = {
+    "preview.beachvolleyballmedia.com": "203.0.113.10",
+    "rtc.beachvolleyballmedia.com": "203.0.113.11",
+    "turn.beachvolleyballmedia.com": "203.0.113.11",
+    "monitor.beachvolleyballmedia.com": "203.0.113.12"
+  };
+  const setup = fixture({ dns: new FakeDnsProvider(initialDns) });
+  await setup.controller.up(setup.manifest, setup.anchors);
+
+  const aborted = await setup.controller.abort(
+    setup.manifest,
+    await protectedEvidencePath("ready-production-abort"),
+    "ABORT:turnkey-test"
+  );
+
+  assert.equal(aborted.phase, "aborted");
+  assert.equal(setup.cloud.reserved.size, 2);
+  assert.ok(Object.values(aborted.addressSlots).every((entry) => entry.status === "retained"));
+  assert.deepEqual(
+    Object.fromEntries([...setup.dns.records].map(([hostname, record]) => [hostname, record.value])),
+    initialDns
+  );
+});
+
+test("abort is resumable after an ambiguous deletion and is permanently unavailable after coverage starts", async () => {
+  const setup = fixture({ kind: "rehearsal" });
+  await setup.controller.up(setup.manifest, setup.anchors);
+  const evidence = await protectedEvidencePath("resumable-abort");
+  const rehearsalEvidence = await protectedRehearsalEvidencePath(setup, "resumable-abort-provider-cleanup");
+  setup.cloud.ambiguousDeleteAt = 2;
+  await assert.rejects(() => setup.controller.abort(setup.manifest, evidence, "ABORT:turnkey-test", rehearsalEvidence), /ambiguous delete result/);
+  assert.equal((await setup.store.load()).phase, "aborting");
+  setup.cloud.ambiguousDeleteAt = null;
+  assert.equal((await setup.controller.abort(setup.manifest, evidence, "ABORT:turnkey-test", rehearsalEvidence)).phase, "aborted");
+  assert.equal(setup.cloud.deleteCalls.length, 12);
+
+  const live = fixture();
+  await live.controller.up(live.manifest, live.anchors);
+  await live.controller.beginCoverage(live.manifest, "START:turnkey-test");
+  const forbiddenEvidence = await protectedEvidencePath("forbidden-live-abort");
+  await assert.rejects(
+    () => live.controller.abort(live.manifest, forbiddenEvidence, "ABORT:turnkey-test"),
+    /phase is live/
+  );
+  assert.equal(live.cloud.droplets.size, 12);
+});
+
 test("does not become ready until Pushover accepts the readiness notification", async () => {
   const notifier = new FakeNotifier();
   notifier.failNext = 2;
@@ -199,6 +437,60 @@ test("refuses before creating anything when existing account occupancy cannot fi
   assert.equal(cloud.droplets.size, 1);
 });
 
+test("refuses before creating anything when the persistent network contract drifted", async () => {
+  const cloud = new FakeDigitalOceanProvider({ dropletLimit: 19 });
+  cloud.networkHealthy = false;
+  cloud.networkProblems = ["firewall bvm-preview-firewall inbound rules drifted"];
+  const setup = fixture({ cloud, kind: "rehearsal" });
+
+  await assert.rejects(
+    () => setup.controller.up(setup.manifest, setup.anchors),
+    /network contract is unhealthy.*preview-firewall/u
+  );
+  assert.equal(cloud.networkVerifyCalls, 1);
+  assert.equal(cloud.createCalls, 0);
+  assert.equal(cloud.droplets.size, 0);
+  assert.equal((await setup.store.load()).networkContract.status, "unhealthy");
+});
+
+test("creates a 12-Droplet rehearsal beside seven legacy servers without adopting or renaming them", async () => {
+  const cloud = new FakeDigitalOceanProvider({ dropletLimit: 19 });
+  const legacyNames = [
+    "bvm-commentary-01",
+    "bvm-observability-01",
+    "bvm-preview-01",
+    "bvm-compositor-a",
+    "bvm-compositor-b",
+    "bvm-compositor-c",
+    "bvm-compositor-d"
+  ];
+  for (const name of legacyNames) {
+    await cloud.createDroplet({
+      name,
+      region: "sfo2",
+      size: "c-4",
+      image: "ubuntu-24-04-x64",
+      tags: ["legacy-production"],
+      userDataProfile: "none",
+      userDataSha256: "0".repeat(64)
+    });
+  }
+  const legacyBefore = [...cloud.droplets.values()].map((entry) => structuredClone(entry));
+  cloud.createCalls = 0;
+  const setup = fixture({ cloud, kind: "rehearsal" });
+  const ready = await setup.controller.up(setup.manifest, setup.anchors);
+
+  assert.equal(ready.phase, "ready");
+  assert.equal(cloud.droplets.size, 19);
+  assert.equal(cloud.createCalls, 12);
+  assert.deepEqual(
+    [...cloud.droplets.values()].filter((entry) => entry.tags.includes("legacy-production")),
+    legacyBefore
+  );
+  assert.ok(setup.manifest.endpoints.every((entry) => entry.hostname.includes(setup.manifest.namespace)));
+  assert.match(setup.notifier.messages[0].title, /TEST rehearsal/);
+});
+
 test("refuses before state or provider mutation when lifecycle attestation verification fails", async () => {
   const cloud = new FakeDigitalOceanProvider();
   const store = new MemoryStateStore();
@@ -222,7 +514,7 @@ test("hard-cuts pre-attestation lifecycle state before provider mutation", async
   const cloud = new FakeDigitalOceanProvider();
   const setup = fixture({ cloud, store: new MemoryStateStore(legacy) });
 
-  await assert.rejects(() => setup.controller.up(setup.manifest, setup.anchors), /schemaVersion must be 2/);
+  await assert.rejects(() => setup.controller.up(setup.manifest, setup.anchors), /schemaVersion must be 5/);
   assert.equal(cloud.createCalls, 0);
   assert.equal(cloud.droplets.size, 0);
 });
@@ -230,7 +522,8 @@ test("hard-cuts pre-attestation lifecycle state before provider mutation", async
 test("refuses a same-name provider replacement and an extra event-tagged Droplet", async () => {
   const setup = fixture();
   const ready = await setup.controller.up(setup.manifest, setup.anchors);
-  setup.cloud.replaceDropletId("bvm-compositor-a");
+  const compositor = setup.manifest.droplets.find((entry) => entry.name === "bvm-compositor-a");
+  setup.cloud.replaceDropletId(compositor.providerName);
   await assert.rejects(() => setup.controller.status(setup.manifest), /provider ID changed/);
 
   const extra = await setup.cloud.createDroplet({
@@ -251,8 +544,18 @@ test("requires exact anchor slots, region, and unique IPv4 values", () => {
   const { manifest, anchors } = fixture();
   assert.equal(validateAnchorConfig(anchors, manifest), anchors);
   assert.throws(() => validateAnchorConfig({ ...anchors, region: "nyc3" }, manifest), /region/);
+  assert.throws(() => validateAnchorConfig({ ...anchors, retention: "ephemeral" }, manifest), /retention/);
   assert.throws(() => validateAnchorConfig({ ...anchors, reservedIpv4: { ingest: "192.0.2.10" } }, manifest), /slots/);
   assert.throws(() => validateAnchorConfig({ ...anchors, reservedIpv4: { ingest: "192.0.2.10", commentary: "192.0.2.10" } }, manifest), /duplicated/);
+});
+
+test("requires an empty rehearsal anchor binding because every rehearsal endpoint is dynamic", () => {
+  const { manifest, anchors } = fixture({ kind: "rehearsal" });
+  assert.equal(validateAnchorConfig(anchors, manifest), anchors);
+  assert.throws(
+    () => validateAnchorConfig({ ...anchors, reservedIpv4: { ingest: "192.0.2.10" } }, manifest),
+    /slots/
+  );
 });
 
 test("FileStateStore writes protected atomic state and rejects concurrent lock", async () => {

@@ -13,6 +13,7 @@ test("requires one ingest, eight active compositors, and one warm-spare SSH watc
     "--host", "ingest,ingest,root@10.0.0.1",
     ...Array.from({ length: 9 }, (_, index) => ["--host", `compositor-${index + 1},compositor,root@10.0.0.${index + 2}`]).flat(),
     "--ssh-key", "~/.ssh/scorecheck_do",
+    "--known-hosts", "~/.ssh/scorecheck-known-hosts",
     "--interval-seconds", "5",
     "--duration-seconds", "7500",
     "--process-poll-ms", "50",
@@ -27,9 +28,12 @@ test("rejects partial pools and duplicate physical hosts", () => {
   const base = [
     "--host", "ingest,ingest,root@10.0.0.1",
     ...Array.from({ length: 9 }, (_, index) => ["--host", `compositor-${index + 1},compositor,root@10.0.0.${index + 2}`]).flat(),
-    "--ssh-key", "/tmp/key", "--interval-seconds", "5", "--output", "/tmp/pool.ndjson"
+    "--ssh-key", "/tmp/key", "--known-hosts", "/tmp/known", "--interval-seconds", "5", "--output", "/tmp/pool.ndjson"
   ];
-  assert.throws(() => parsePoolSamplerArgs(base.slice(0, -8).concat(base.slice(-6))), /exactly ten/);
+  const partial = [...base];
+  const removedHost = partial.lastIndexOf("--host");
+  partial.splice(removedHost, 2);
+  assert.throws(() => parsePoolSamplerArgs(partial), /exactly ten/);
   const duplicate = [...base];
   const lastHost = duplicate.lastIndexOf("--host");
   duplicate[lastHost + 1] = "compositor-9,compositor,root@10.0.0.2";
@@ -106,6 +110,7 @@ function runPoolCli(fakePath, output, options = {}) {
     "--host", "ingest,ingest,root@10.0.0.1",
     ...Array.from({ length: 9 }, (_, index) => ["--host", `compositor-${index + 1},compositor,root@10.0.0.${index + 2}`]).flat(),
     "--ssh-key", "/tmp/test-key",
+    "--known-hosts", "/tmp/test-known-hosts",
     "--interval-seconds", "5",
     "--duration-seconds", options.duration ?? "0.15",
     "--process-poll-ms", "50",

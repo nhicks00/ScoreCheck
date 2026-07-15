@@ -8,7 +8,7 @@ import { spawn } from "node:child_process";
 
 const DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const LIFECYCLE = resolve(DIRECTORY, "event-stack.mjs");
-const COMMANDS = new Set(["plan", "up", "status", "start", "close", "evidence", "destroy"]);
+const COMMANDS = new Set(["plan", "up", "status", "start", "close", "evidence", "destroy", "abort"]);
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
@@ -41,7 +41,8 @@ export function buildEventctlInvocation(command, profile, confirmation = null) {
   if (command === "start") args.push(
     "--secrets", profile.secrets,
     "--ssh-key", profile.sshKey,
-    "--known-hosts", profile.knownHosts
+    "--known-hosts", profile.knownHosts,
+    "--credentials-env", profile.credentialsEnv
   );
   if (command === "evidence") args.push(
     "--secrets", profile.secrets,
@@ -50,11 +51,13 @@ export function buildEventctlInvocation(command, profile, confirmation = null) {
     "--credentials-env", profile.credentialsEnv,
     "--evidence", profile.evidence
   );
-  if (command === "destroy") args.push(
+  if (command === "evidence" && profile.rehearsalEvidence !== null) args.push("--rehearsal-evidence", profile.rehearsalEvidence);
+  if (["destroy", "abort"].includes(command)) args.push(
     "--credentials-env", profile.credentialsEnv,
     "--evidence", profile.evidence
   );
-  if (["start", "close", "destroy"].includes(command)) {
+  if (command === "abort" && profile.rehearsalEvidence !== null) args.push("--rehearsal-evidence", profile.rehearsalEvidence);
+  if (["start", "close", "destroy", "abort"].includes(command)) {
     if (!confirmation) throw new Error(`${command} requires an explicit --confirm value`);
     args.push("--confirm", confirmation);
   } else if (confirmation) {
@@ -64,16 +67,17 @@ export function buildEventctlInvocation(command, profile, confirmation = null) {
 }
 
 export function validateProfile(value) {
-  if (!value || value.schemaVersion !== 2) throw new Error("event operator profile schemaVersion must be 2");
-  const expected = ["manifest", "state", "anchors", "secrets", "sshKey", "knownHosts", "credentialsEnv", "lifecycleAttestation", "evidence"];
+  if (!value || value.schemaVersion !== 3) throw new Error("event operator profile schemaVersion must be 3");
+  const expected = ["manifest", "state", "anchors", "secrets", "sshKey", "knownHosts", "credentialsEnv", "lifecycleAttestation", "evidence", "rehearsalEvidence"];
   if (JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(["schemaVersion", ...expected].sort())) {
     throw new Error("event operator profile must contain exactly the supported fields");
   }
-  for (const key of expected) {
+  for (const key of expected.filter((key) => key !== "rehearsalEvidence")) {
     if (typeof value[key] !== "string" || !isAbsolute(value[key]) || resolve(value[key]) !== value[key]) {
       throw new Error(`event operator profile ${key} must be a normalized absolute path`);
     }
   }
+  if (value.rehearsalEvidence !== null && (typeof value.rehearsalEvidence !== "string" || !isAbsolute(value.rehearsalEvidence) || resolve(value.rehearsalEvidence) !== value.rehearsalEvidence)) throw new Error("event operator profile rehearsalEvidence must be null or a normalized absolute path");
   return value;
 }
 
@@ -85,7 +89,7 @@ async function readProfile(path) {
 
 function parseArgs(argv) {
   const command = argv[0];
-  if (!COMMANDS.has(command)) throw new Error("first argument must be plan, up, status, start, close, evidence, or destroy");
+  if (!COMMANDS.has(command)) throw new Error("first argument must be plan, up, status, start, close, evidence, destroy, or abort");
   const options = { command, profile: null, confirm: null };
   for (let index = 1; index < argv.length; index += 1) {
     const flag = argv[index];

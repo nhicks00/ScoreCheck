@@ -38,8 +38,8 @@ async function main() {
   validateEventManifest(manifest, await loadManifestInputs());
   const store = new FileStateStore(options.state);
 
-  const needsCloud = ["up", "status", "evidence", "destroy"].includes(options.command);
-  const needsDns = ["up", "destroy"].includes(options.command);
+  const needsCloud = ["up", "status", "start", "evidence", "destroy", "abort"].includes(options.command);
+  const needsDns = ["up", "destroy", "abort"].includes(options.command);
   const needsDeployment = ["up", "start", "evidence"].includes(options.command);
   const digitalOceanToken = needsCloud ? requiredEnvironment(environment, "DIGITALOCEAN_TOKEN") : null;
   const digitalOceanSshKeys = options.command === "up" ? splitList(environment.SCORECHECK_DO_SSH_KEYS) : [];
@@ -63,8 +63,8 @@ async function main() {
   const notifier = environment.PUSHOVER_APP_TOKEN?.trim() && environment.PUSHOVER_USER_KEY?.trim()
     ? new PushoverNotifier({ appToken: environment.PUSHOVER_APP_TOKEN.trim(), userKey: environment.PUSHOVER_USER_KEY.trim() })
     : new NullNotifier();
-  if (options.command === "up" && notifier instanceof NullNotifier) {
-    throw new Error("PUSHOVER_APP_TOKEN and PUSHOVER_USER_KEY are required for a production event setup");
+  if (["up", "destroy", "abort"].includes(options.command) && notifier instanceof NullNotifier) {
+    throw new Error("PUSHOVER_APP_TOKEN and PUSHOVER_USER_KEY are required for event setup and cleanup");
   }
   const provisioningGuard = options.command === "up" ? {
     verify: async () => verifyLifecycleAttestation({
@@ -89,9 +89,11 @@ async function main() {
   } else if (options.command === "status") result = (await controller.status(manifest)).state;
   else if (options.command === "start") result = await controller.beginCoverage(manifest, requiredOption(options.confirm, "--confirm"));
   else if (options.command === "close") result = await controller.closeCoverage(manifest, requiredOption(options.confirm, "--confirm"));
-  else if (options.command === "evidence") result = await controller.captureEvidence(manifest, requiredOption(options.evidence, "--evidence"));
+  else if (options.command === "evidence") result = await controller.captureEvidence(manifest, requiredOption(options.evidence, "--evidence"), options.rehearsalEvidence);
   else if (options.command === "destroy") {
     result = await controller.destroy(manifest, requiredOption(options.evidence, "--evidence"), requiredOption(options.confirm, "--confirm"));
+  } else if (options.command === "abort") {
+    result = await controller.abort(manifest, requiredOption(options.evidence, "--evidence"), requiredOption(options.confirm, "--confirm"), options.rehearsalEvidence);
   } else throw new Error(`unsupported command ${options.command}`);
   process.stdout.write(`${JSON.stringify(stateSummary(result), null, 2)}\n`);
 }
@@ -99,8 +101,8 @@ async function main() {
 function parseArgs(argv) {
   const command = argv[0];
   if ([undefined, "help", "-h", "--help"].includes(command)) return null;
-  if (!new Set(["plan", "up", "status", "start", "close", "evidence", "destroy"]).has(command)) throw new Error(`unknown lifecycle command ${command}`);
-  const options = { command, manifest: null, state: null, anchors: null, secrets: null, sshKey: null, knownHosts: null, credentialsEnv: null, attestation: null, evidence: null, confirm: null };
+  if (!new Set(["plan", "up", "status", "start", "close", "evidence", "destroy", "abort"]).has(command)) throw new Error(`unknown lifecycle command ${command}`);
+  const options = { command, manifest: null, state: null, anchors: null, secrets: null, sshKey: null, knownHosts: null, credentialsEnv: null, attestation: null, evidence: null, rehearsalEvidence: null, confirm: null };
   for (let index = 1; index < argv.length; index += 1) {
     const flag = argv[index];
     const value = argv[++index];
@@ -108,7 +110,7 @@ function parseArgs(argv) {
     const mapping = new Map([
       ["--manifest", "manifest"], ["--state", "state"], ["--anchors", "anchors"], ["--secrets", "secrets"],
       ["--ssh-key", "sshKey"], ["--known-hosts", "knownHosts"], ["--credentials-env", "credentialsEnv"],
-      ["--attestation", "attestation"], ["--evidence", "evidence"], ["--confirm", "confirm"]
+      ["--attestation", "attestation"], ["--evidence", "evidence"], ["--rehearsal-evidence", "rehearsalEvidence"], ["--confirm", "confirm"]
     ]);
     const key = mapping.get(flag);
     if (!key) throw new Error(`unknown option ${flag}`);
@@ -124,11 +126,12 @@ function usage() {
   node infra/event-stack/event-stack.mjs plan --manifest FILE --state FILE
   node infra/event-stack/event-stack.mjs up --manifest FILE --state FILE --anchors FILE --secrets DIR --ssh-key FILE --known-hosts FILE --credentials-env FILE --attestation FILE
   node infra/event-stack/event-stack.mjs status --manifest FILE --state FILE --credentials-env FILE
-  node infra/event-stack/event-stack.mjs start --manifest FILE --state FILE --secrets DIR --ssh-key FILE --known-hosts FILE --confirm START:EVENT
+  node infra/event-stack/event-stack.mjs start --manifest FILE --state FILE --secrets DIR --ssh-key FILE --known-hosts FILE --credentials-env FILE --confirm START:EVENT
   node infra/event-stack/event-stack.mjs close --manifest FILE --state FILE --confirm CLOSE:EVENT
-  node infra/event-stack/event-stack.mjs evidence --manifest FILE --state FILE --secrets DIR --ssh-key FILE --known-hosts FILE --credentials-env FILE --evidence DIR
+  node infra/event-stack/event-stack.mjs evidence --manifest FILE --state FILE --secrets DIR --ssh-key FILE --known-hosts FILE --credentials-env FILE --evidence DIR [--rehearsal-evidence DIR]
   node infra/event-stack/event-stack.mjs destroy --manifest FILE --state FILE --credentials-env FILE --evidence DIR --confirm DESTROY:EVENT
-\nNo command prints secrets. Destroy is ID-scoped, requires closed coverage, protected evidence, the review date, and exact confirmation.\n`);
+  node infra/event-stack/event-stack.mjs abort --manifest FILE --state FILE --credentials-env FILE --evidence DIR --confirm ABORT:EVENT
+\nNo command prints secrets. Destroy is ID-scoped, requires closed coverage, protected evidence, the review date, and exact confirmation. Abort is ID-scoped and is unavailable after coverage starts.\n`);
 }
 
 async function readProtectedJson(path, label) {

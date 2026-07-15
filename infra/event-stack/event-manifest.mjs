@@ -6,10 +6,12 @@ import { isAbsolute, resolve } from "node:path";
 import process from "node:process";
 import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
+import { isPrivateIpv4Cidr, validateNetworkContract } from "./network-contract.mjs";
 import { validateFleetSpec } from "./preflight-capacity.mjs";
 
 const DEFAULT_POOL_SPEC = fileURLToPath(new URL("./compositor-pool.json", import.meta.url));
 const DEFAULT_SERVICE_SPEC = fileURLToPath(new URL("./service-pool.json", import.meta.url));
+const DEFAULT_NETWORK_SPEC = fileURLToPath(new URL("./network-contract.json", import.meta.url));
 const CLOUD_INIT_PATHS = Object.freeze({
   commentary: fileURLToPath(new URL("../commentary/cloud-init.yaml", import.meta.url)),
   observability: fileURLToPath(new URL("../monitoring/cloud-init.yaml", import.meta.url)),
@@ -21,37 +23,59 @@ const RESOURCE_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const PROVIDER_VALUE = /^[A-Za-z0-9._-]{1,100}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const REQUIRED_FIXED_ROLES = Object.freeze(["commentary", "observability", "ingest"]);
+const MANIFEST_KINDS = new Set(["production", "rehearsal"]);
+const EVENT_NAMESPACE_PREFIX_LENGTH = 15;
 
 export function buildEventManifest({
   event,
   destroyAfter,
+  kind,
   poolSpec,
   poolSpecSource,
   serviceSpec,
   serviceSpecSource,
+  networkSpec,
+  networkSpecSource,
   cloudInitSources
 }) {
   assertEvent(event);
   assertDate(destroyAfter);
+  assertKind(kind);
   assertBoundSource(poolSpec, poolSpecSource, "pool spec");
   assertBoundSource(serviceSpec, serviceSpecSource, "service spec");
+  assertBoundSource(networkSpec, networkSpecSource, "network spec");
   const pool = validateFleetSpec(poolSpec, { desiredCompositors: 8, warmSpares: 1 });
   const services = validateServiceSpec(serviceSpec);
+  const network = validateNetworkContract(networkSpec);
   if (pool.region !== services.region) throw new Error("service and compositor regions must match");
+  if (network.region !== services.region || network.vpcUuid !== services.vpcUuid || network.vpcCidr !== services.vpcCidr) {
+    throw new Error("service and network VPC identity must match exactly");
+  }
+  const desiredTargetTags = [...services.fixedServices.map((resource) => resource.tag), "bvm-compositor"].sort();
+  const networkTargetTags = network.firewalls.map((firewall) => firewall.targetTag).sort();
+  if (!isDeepStrictEqual(networkTargetTags, desiredTargetTags)) {
+    throw new Error("network firewall target tags must exactly match the event service tags");
+  }
   const cloudInitBindings = validateCloudInitSources(cloudInitSources);
+  if (!cloudInitSources.ingest.includes(network.vpcCidr)) {
+    throw new Error("ingest cloud-init does not allow the bound event VPC CIDR");
+  }
 
   const fixedNames = new Set(services.fixedServices.map((resource) => resource.name));
   const collision = pool.workers.find((worker) => fixedNames.has(worker.name));
   if (collision) throw new Error(`fleet worker ${collision.name} collides with a fixed event resource`);
 
+  const namespace = eventNamespace({ event, destroyAfter, kind });
   const fixed = services.fixedServices.map((resource) => ({
     ...resource,
+    providerName: providerResourceName(namespace, resource.name),
     region: services.region,
     image: services.image,
     cloudInitSha256: cloudInitBindings[resource.cloudInitProfile]
   }));
   const workers = pool.workers.map((worker) => ({
     name: worker.name,
+    providerName: providerResourceName(namespace, worker.name),
     role: worker.warmSpare ? "compositor-spare" : "compositor",
     ...(worker.warmSpare ? { warmSpare: true } : { court: worker.court }),
     region: pool.region,
@@ -67,21 +91,27 @@ export function buildEventManifest({
   }
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 4,
     event,
+    kind,
+    namespace,
     destroyAfter,
     provider: {
       name: "digitalocean",
       region: services.region,
+      vpcUuid: services.vpcUuid,
+      vpcCidr: services.vpcCidr,
       minimumAccountDropletLimit: services.minimumAccountDropletLimit
     },
     dns: {
       provider: "vercel",
       zone: services.dnsZone
     },
+    network,
     sourceBindings: {
       serviceSpecSha256: sha256(serviceSpecSource),
       compositorPoolSpecSha256: sha256(poolSpecSource),
+      networkSpecSha256: sha256(networkSpecSource),
       cloudInitSha256: cloudInitBindings
     },
     compositorPool: {
@@ -91,7 +121,7 @@ export function buildEventManifest({
       desiredCompositors: pool.desiredCompositors,
       warmSpares: pool.warmSpares
     },
-    endpoints: services.endpoints,
+    endpoints: scopedEndpoints(services.endpoints, services.dnsZone, kind, namespace),
     droplets
   };
 }
@@ -100,17 +130,18 @@ export function validateEventManifest(manifest, inputs) {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
     throw new Error("event manifest must be an object");
   }
-  if (manifest.schemaVersion !== 2) throw new Error("event manifest schemaVersion must be 2");
+  if (manifest.schemaVersion !== 4) throw new Error("event manifest schemaVersion must be 4");
   const bindings = manifest.sourceBindings;
   if (!bindings || typeof bindings !== "object" || Array.isArray(bindings)) {
     throw new Error("event manifest source bindings are required");
   }
-  for (const digest of [bindings.serviceSpecSha256, bindings.compositorPoolSpecSha256]) {
+  for (const digest of [bindings.serviceSpecSha256, bindings.compositorPoolSpecSha256, bindings.networkSpecSha256]) {
     if (!SHA256.test(digest ?? "")) throw new Error("event manifest source digest is invalid");
   }
   const expected = buildEventManifest({
     event: manifest.event,
     destroyAfter: manifest.destroyAfter,
+    kind: manifest.kind,
     ...inputs
   });
   if (!isDeepStrictEqual(manifest, expected)) {
@@ -121,11 +152,17 @@ export function validateEventManifest(manifest, inputs) {
 
 export function validateServiceSpec(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("service spec must be an object");
-  if (value.schemaVersion !== 1) throw new Error("service spec schemaVersion must be 1");
+  if (value.schemaVersion !== 2) throw new Error("service spec schemaVersion must be 2");
   if (typeof value.region !== "string" || !/^[a-z0-9-]{1,20}$/.test(value.region)) {
     throw new Error("service spec region is invalid");
   }
   if (typeof value.image !== "string" || !PROVIDER_VALUE.test(value.image)) throw new Error("service spec image is invalid");
+  if (typeof value.vpcUuid !== "string" || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(value.vpcUuid)) {
+    throw new Error("service spec VPC UUID is invalid");
+  }
+  if (!isPrivateIpv4Cidr(value.vpcCidr)) {
+    throw new Error("service spec VPC CIDR is invalid");
+  }
   if (!Number.isInteger(value.minimumAccountDropletLimit) || value.minimumAccountDropletLimit < 1) {
     throw new Error("service spec minimum account Droplet limit is invalid");
   }
@@ -206,8 +243,10 @@ export function validateServiceSpec(value) {
   }
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     region: value.region,
+    vpcUuid: value.vpcUuid,
+    vpcCidr: value.vpcCidr,
     image: value.image,
     minimumAccountDropletLimit: value.minimumAccountDropletLimit,
     dnsZone: value.dnsZone,
@@ -223,15 +262,18 @@ export function parseArgs(argv) {
   const options = {
     command,
     event: null,
+    kind: null,
     destroyAfter: null,
     output: null,
     manifest: null,
     poolSpec: DEFAULT_POOL_SPEC,
-    serviceSpec: DEFAULT_SERVICE_SPEC
+    serviceSpec: DEFAULT_SERVICE_SPEC,
+    networkSpec: DEFAULT_NETWORK_SPEC
   };
   for (let index = 1; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--event") options.event = requiredValue(argv, ++index, argument);
+    else if (argument === "--kind") options.kind = requiredValue(argv, ++index, argument);
     else if (argument === "--destroy-after") options.destroyAfter = requiredValue(argv, ++index, argument);
     else if (argument === "--output") {
       const output = requiredValue(argv, ++index, argument);
@@ -240,26 +282,33 @@ export function parseArgs(argv) {
     } else if (argument === "--manifest") options.manifest = resolve(requiredValue(argv, ++index, argument));
     else if (argument === "--pool-spec") options.poolSpec = resolve(requiredValue(argv, ++index, argument));
     else if (argument === "--service-spec") options.serviceSpec = resolve(requiredValue(argv, ++index, argument));
+    else if (argument === "--network-spec") options.networkSpec = resolve(requiredValue(argv, ++index, argument));
     else throw new Error(`Unknown argument: ${argument}`);
   }
   if (command === "generate") {
     assertEvent(options.event);
     assertDate(options.destroyAfter);
+    assertKind(options.kind);
     if (!options.output) throw new Error("--output must be an absolute path");
     if (options.manifest) throw new Error("--manifest is not valid for generate");
   } else {
     if (!options.manifest) throw new Error("--manifest is required for validate");
-    if (options.event || options.destroyAfter || options.output) {
-      throw new Error("--event, --destroy-after, and --output are not valid for validate");
+    if (options.event || options.kind || options.destroyAfter || options.output) {
+      throw new Error("--event, --kind, --destroy-after, and --output are not valid for validate");
     }
   }
   return options;
 }
 
-export async function loadManifestInputs({ poolSpec: poolPath = DEFAULT_POOL_SPEC, serviceSpec: servicePath = DEFAULT_SERVICE_SPEC } = {}) {
-  const [poolSpecSource, serviceSpecSource, entries] = await Promise.all([
+export async function loadManifestInputs({
+  poolSpec: poolPath = DEFAULT_POOL_SPEC,
+  serviceSpec: servicePath = DEFAULT_SERVICE_SPEC,
+  networkSpec: networkPath = DEFAULT_NETWORK_SPEC
+} = {}) {
+  const [poolSpecSource, serviceSpecSource, networkSpecSource, entries] = await Promise.all([
     readFile(poolPath, "utf8"),
     readFile(servicePath, "utf8"),
+    readFile(networkPath, "utf8"),
     Promise.all(Object.entries(CLOUD_INIT_PATHS).map(async ([profile, path]) => [profile, await readFile(path, "utf8")]))
   ]);
   return {
@@ -267,6 +316,8 @@ export async function loadManifestInputs({ poolSpec: poolPath = DEFAULT_POOL_SPE
     poolSpecSource,
     serviceSpec: JSON.parse(serviceSpecSource),
     serviceSpecSource,
+    networkSpec: JSON.parse(networkSpecSource),
+    networkSpecSource,
     cloudInitSources: Object.fromEntries(entries)
   };
 }
@@ -276,14 +327,14 @@ async function main() {
   if (!options) {
     process.stdout.write(
       "Usage:\n"
-      + "  node infra/event-stack/event-manifest.mjs generate --event SLUG --destroy-after YYYY-MM-DD --output /ABSOLUTE/PATH [--pool-spec FILE] [--service-spec FILE]\n"
-      + "  node infra/event-stack/event-manifest.mjs validate --manifest FILE [--pool-spec FILE] [--service-spec FILE]\n"
+      + "  node infra/event-stack/event-manifest.mjs generate --event SLUG --kind production|rehearsal --destroy-after YYYY-MM-DD --output /ABSOLUTE/PATH [--pool-spec FILE] [--service-spec FILE] [--network-spec FILE]\n"
+      + "  node infra/event-stack/event-manifest.mjs validate --manifest FILE [--pool-spec FILE] [--service-spec FILE] [--network-spec FILE]\n"
     );
     return;
   }
   const inputs = await loadManifestInputs(options);
   if (options.command === "generate") {
-    const manifest = buildEventManifest({ event: options.event, destroyAfter: options.destroyAfter, ...inputs });
+    const manifest = buildEventManifest({ event: options.event, kind: options.kind, destroyAfter: options.destroyAfter, ...inputs });
     await writeFile(options.output, `${JSON.stringify(manifest, null, 2)}\n`, { flag: "wx", mode: 0o600 });
     process.stdout.write(`${JSON.stringify(summary(manifest))}\n`);
     return;
@@ -296,6 +347,8 @@ async function main() {
 function summary(manifest) {
   return {
     event: manifest.event,
+    kind: manifest.kind,
+    namespace: manifest.namespace,
     destroyAfter: manifest.destroyAfter,
     dropletCount: manifest.droplets.length,
     reservedIpv4Slots: [...new Set(manifest.endpoints.filter((endpoint) => endpoint.addressMode === "reserved-ipv4").map((endpoint) => endpoint.addressSlot))].length,
@@ -303,7 +356,8 @@ function summary(manifest) {
     assignedCompositors: manifest.compositorPool.desiredCompositors,
     warmSpares: manifest.compositorPool.warmSpares,
     serviceSpecSha256: manifest.sourceBindings.serviceSpecSha256,
-    compositorPoolSpecSha256: manifest.sourceBindings.compositorPoolSpecSha256
+    compositorPoolSpecSha256: manifest.sourceBindings.compositorPoolSpecSha256,
+    networkSpecSha256: manifest.sourceBindings.networkSpecSha256
   };
 }
 
@@ -335,6 +389,40 @@ function assertBoundSource(value, source, label) {
 
 function assertEvent(value) {
   if (typeof value !== "string" || !EVENT_SLUG.test(value)) throw new Error("event slug is invalid");
+}
+
+function assertKind(value) {
+  if (!MANIFEST_KINDS.has(value)) throw new Error("event kind must be production or rehearsal");
+}
+
+export function eventNamespace({ event, destroyAfter, kind }) {
+  assertEvent(event);
+  assertDate(destroyAfter);
+  assertKind(kind);
+  const prefix = event.slice(0, EVENT_NAMESPACE_PREFIX_LENGTH).replace(/-+$/u, "") || "event";
+  return `${prefix}-${sha256(`${kind}:${event}:${destroyAfter}`).slice(0, 8)}`;
+}
+
+function providerResourceName(namespace, logicalName) {
+  const name = `${namespace}-${logicalName}`;
+  if (!RESOURCE_NAME.test(name)) throw new Error(`provider resource name for ${logicalName} is invalid`);
+  return name;
+}
+
+function scopedEndpoints(endpoints, dnsZone, kind, namespace) {
+  if (kind === "production") return endpoints;
+  return endpoints.map((endpoint) => {
+    const suffix = `.${dnsZone}`;
+    const relative = endpoint.hostname.slice(0, -suffix.length).replaceAll(".", "-");
+    const label = `${relative}-${namespace}`;
+    if (label.length > 63) throw new Error(`rehearsal endpoint label for ${endpoint.hostname} is too long`);
+    return {
+      hostname: `${label}.${dnsZone}`,
+      role: endpoint.role,
+      addressMode: "dynamic-ipv4",
+      ttl: endpoint.ttl
+    };
+  });
 }
 
 function assertDate(value) {

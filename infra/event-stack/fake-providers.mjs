@@ -7,13 +7,33 @@ export class FakeDigitalOceanProvider {
     this.nextId = 1000;
     this.createCalls = 0;
     this.deleteCalls = [];
+    this.deleteAttempts = 0;
+    this.ambiguousDeleteAt = null;
+    this.reservedDeleteCalls = [];
+    this.reservedDeleteAttempts = 0;
+    this.ambiguousReservedDeleteAt = null;
     this.assignCalls = [];
     this.failCreateAt = null;
     this.ambiguousCreateAt = null;
+    this.networkHealthy = true;
+    this.networkProblems = [];
+    this.networkVerifyCalls = 0;
   }
 
   async getAccount() {
     return structuredClone(this.account);
+  }
+
+  async verifyNetworkContract(contract) {
+    this.networkVerifyCalls += 1;
+    return {
+      healthy: this.networkHealthy,
+      problems: this.networkHealthy ? [] : [...this.networkProblems],
+      inventory: {
+        vpcs: [{ uuid: contract.vpcUuid, region: contract.region, ipRange: contract.vpcCidr }],
+        firewalls: []
+      }
+    };
   }
 
   async findDropletsByName(name) {
@@ -39,6 +59,7 @@ export class FakeDigitalOceanProvider {
       name: request.name,
       status: "active",
       region: request.region,
+      vpcUuid: request.vpcUuid ?? "6ece4819-6f6a-4ab9-934c-f6a92660aab2",
       size: request.size,
       image: request.image,
       publicIpv4: `198.51.100.${index}`,
@@ -68,11 +89,13 @@ export class FakeDigitalOceanProvider {
   async deleteDroplet(id) {
     const key = String(id);
     if (!this.droplets.has(key)) throw new Error(`Droplet ${id} not found`);
+    this.deleteAttempts += 1;
     for (const address of this.reserved.values()) {
       if (address.dropletId === key) address.dropletId = null;
     }
     this.droplets.delete(key);
     this.deleteCalls.push(key);
+    if (this.ambiguousDeleteAt === this.deleteAttempts) throw new Error("injected ambiguous delete result");
   }
 
   async waitDropletAbsent(id) {
@@ -82,7 +105,11 @@ export class FakeDigitalOceanProvider {
 
   async getReservedIpv4(ip) {
     const address = this.reserved.get(ip);
-    if (!address) throw new Error(`reserved IPv4 ${ip} not found`);
+    if (!address) {
+      const error = new Error(`reserved IPv4 ${ip} not found`);
+      error.status = 404;
+      throw error;
+    }
     return clone(address);
   }
 
@@ -95,9 +122,21 @@ export class FakeDigitalOceanProvider {
 
   async deleteReservedIpv4(ip) {
     const address = this.reserved.get(ip);
-    if (!address) throw new Error(`reserved IPv4 ${ip} not found`);
+    if (!address) {
+      const error = new Error(`reserved IPv4 ${ip} not found`);
+      error.status = 404;
+      throw error;
+    }
     if (address.dropletId !== null) throw new Error(`reserved IPv4 ${ip} is assigned`);
+    this.reservedDeleteAttempts += 1;
     this.reserved.delete(ip);
+    this.reservedDeleteCalls.push(ip);
+    if (this.ambiguousReservedDeleteAt === this.reservedDeleteAttempts) throw new Error("injected ambiguous reserved IPv4 delete result");
+  }
+
+  async waitReservedIpv4Absent(ip) {
+    if (this.reserved.has(ip)) throw new Error(`reserved IPv4 ${ip} still exists`);
+    return true;
   }
 
   async assignReservedIpv4(ip, dropletId) {
@@ -133,6 +172,7 @@ export class FakeDnsProvider {
     this.ambiguousHostname = null;
     this.upserts = [];
     this.restores = [];
+    this.ambiguousRestoreHostname = null;
   }
 
   async inspectHostname({ hostname }) {
@@ -168,6 +208,10 @@ export class FakeDnsProvider {
     if (change.action === "created") this.records.delete(hostname);
     else if (change.action === "updated") this.records.set(hostname, clone(change.previous));
     this.restores.push(hostname);
+    if (hostname === this.ambiguousRestoreHostname) {
+      this.ambiguousRestoreHostname = null;
+      throw new Error(`injected ambiguous DNS restoration for ${hostname}`);
+    }
   }
 }
 

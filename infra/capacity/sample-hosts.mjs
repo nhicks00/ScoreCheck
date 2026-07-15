@@ -18,7 +18,7 @@ function parseArgs(argv) {
     if (!key?.startsWith("--") || value == null) throw new Error(`invalid argument near ${key ?? "end of command"}`);
     values[key.slice(2)] = value;
   }
-  for (const required of ["ingest-host", "compositor-host", "ssh-key", "interval-seconds", "output", "process-output"]) {
+  for (const required of ["ingest-host", "compositor-host", "ssh-key", "known-hosts", "interval-seconds", "output", "process-output"]) {
     if (!values[required]) throw new Error(`--${required} is required`);
   }
   for (const name of ["ingest-host", "compositor-host"]) {
@@ -37,6 +37,7 @@ function parseArgs(argv) {
     ingestHost: values["ingest-host"],
     compositorHost: values["compositor-host"],
     sshKey: expandHome(values["ssh-key"]),
+    knownHosts: expandHome(values["known-hosts"]),
     intervalSeconds,
     durationSeconds,
     processPollMs,
@@ -160,7 +161,10 @@ async function main() {
 export function startZombieWatcher(host, role, args, script, onEvent, onFailure) {
   const child = spawn("ssh", [
     "-i", args.sshKey,
+    "-o", "IdentitiesOnly=yes",
     "-o", "BatchMode=yes",
+    "-o", "StrictHostKeyChecking=yes",
+    "-o", `UserKnownHostsFile=${args.knownHosts}`,
     "-o", "ConnectTimeout=3",
     "-o", "ServerAliveInterval=2",
     "-o", "ServerAliveCountMax=1",

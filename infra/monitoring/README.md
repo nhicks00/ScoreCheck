@@ -91,13 +91,12 @@ MONITOR_SSH_HOST=root@OBSERVABILITY_PUBLIC_IP \
 `update-agent-target.mjs` never prints target credentials and atomically keeps
 `~/.config/scorecheck/monitoring.env` mode `0600`.
 
-## Provision and deploy observability
+## Deploy observability
 
-```bash
-DIGITALOCEAN_TOKEN=... ./provision.sh --ssh-key REGISTERED_KEY_ID
-```
-
-After DNS points `MONITOR_PUBLIC_HOST` at the new host and cloud-init finishes:
+The event lifecycle controller creates the observability host with its exact
+manifest identity, VPC, firewall tag, and cloud-init digest. Standalone
+provisioning is intentionally unsupported. After lifecycle DNS and cloud-init
+finish:
 
 ```bash
 MONITOR_SSH_HOST=root@HOST ./deploy.sh

@@ -1,0 +1,96 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { rehearsalMarker, YouTubeRehearsalProvider } from "./youtube-provider.mjs";
+
+function response(status, body = null) {
+  return { status, ok: status >= 200 && status < 300, json: async () => body };
+}
+
+function stream(marker, id = "stream1") {
+  return {
+    id,
+    snippet: { description: marker },
+    cdn: { ingestionType: "rtmp", resolution: "720p", frameRate: "30fps", ingestionInfo: { streamName: "do-not-print", rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2" } },
+    contentDetails: { isReusable: false },
+    status: { streamStatus: "ready", healthStatus: { status: "good", configurationIssues: [] } }
+  };
+}
+
+function broadcast(marker, id = "broadcast1", boundStreamId = null) {
+  return {
+    id,
+    snippet: { description: marker },
+    status: { privacyStatus: "unlisted", lifeCycleStatus: "ready", recordingStatus: "notRecording" },
+    contentDetails: { enableAutoStart: false, enableAutoStop: false, monitorStream: { enableMonitorStream: false }, boundStreamId }
+  };
+}
+
+function provider(fetchImpl) {
+  return new YouTubeRehearsalProvider({ clientId: "client", clientSecret: "secret", refreshToken: "refresh", fetchImpl, sleep: async () => {} });
+}
+
+test("creates a disposable 720p30 stream and adopts it by exact marker on retry", async () => {
+  const marker = rehearsalMarker("generation-1234", 1);
+  const requests = [];
+  const fetchImpl = async (url, init) => {
+    requests.push({ url, init });
+    if (url.includes("oauth2")) return response(200, { access_token: "access" });
+    if (init.method === "GET") return response(200, { items: requests.filter((entry) => entry.init.method === "POST" && entry.url.includes("liveStreams")).length ? [stream(marker)] : [] });
+    return response(200, stream(marker));
+  };
+  const client = provider(fetchImpl);
+  const first = await client.ensureStream({ court: 1, marker });
+  const second = await client.ensureStream({ court: 1, marker });
+  assert.equal(first.id, "stream1");
+  assert.equal(second.id, "stream1");
+  const create = requests.find((entry) => entry.init.method === "POST" && entry.url.includes("liveStreams"));
+  const body = JSON.parse(create.init.body);
+  assert.equal(body.contentDetails.isReusable, false);
+  assert.equal(body.cdn.resolution, "720p");
+  assert.equal(requests.filter((entry) => entry.init.method === "POST" && entry.url.includes("liveStreams")).length, 1);
+});
+
+test("creates unlisted manual broadcasts and verifies exact binding", async () => {
+  const marker = rehearsalMarker("generation-1234", 2);
+  let bound = false;
+  const fetchImpl = async (url, init) => {
+    if (url.includes("oauth2")) return response(200, { access_token: "access" });
+    if (url.includes("liveBroadcasts/bind")) { bound = true; return response(200, broadcast(marker, "broadcast2", "stream2")); }
+    if (url.includes("liveBroadcasts?") && init.method === "GET" && url.includes("&id=")) return response(200, { items: [broadcast(marker, "broadcast2", bound ? "stream2" : null)] });
+    if (url.includes("liveBroadcasts?") && init.method === "GET") return response(200, { items: [] });
+    return response(200, broadcast(marker, "broadcast2"));
+  };
+  const client = provider(fetchImpl);
+  const created = await client.ensureBroadcast({ court: 2, marker });
+  assert.equal(created.privacyStatus, "unlisted");
+  const result = await client.bind({ broadcastId: "broadcast2", streamId: "stream2" });
+  assert.equal(result.boundStreamId, "stream2");
+});
+
+test("fails closed on duplicate markers and unsafe broadcast settings", async () => {
+  const marker = rehearsalMarker("generation-1234", 3);
+  const duplicate = provider(async (url) => url.includes("oauth2")
+    ? response(200, { access_token: "access" })
+    : response(200, { items: [stream(marker, "one"), stream(marker, "two")] }));
+  await assert.rejects(() => duplicate.ensureStream({ court: 3, marker }), /multiple rehearsal streams/);
+  const unsafe = broadcast(marker);
+  unsafe.status.privacyStatus = "public";
+  const client = provider(async (url, init) => {
+    if (url.includes("oauth2")) return response(200, { access_token: "access" });
+    if (init.method === "GET") return response(200, { items: [] });
+    return response(200, unsafe);
+  });
+  await assert.rejects(() => client.ensureBroadcast({ court: 3, marker }), /safety settings/);
+});
+
+test("deletes only exact ids and treats confirmed absence as success", async () => {
+  const urls = [];
+  const client = provider(async (url, init) => {
+    urls.push(`${init.method} ${url}`);
+    if (url.includes("oauth2")) return response(200, { access_token: "access" });
+    return response(404, { error: { status: "NOT_FOUND" } });
+  });
+  assert.deepEqual(await client.deleteStream("stream-123"), { absent: true });
+  assert.match(urls.at(-1), /DELETE .*liveStreams\?id=stream-123$/);
+});

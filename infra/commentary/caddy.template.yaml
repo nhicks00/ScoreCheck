@@ -9,8 +9,8 @@ apps:
   tls:
     certificates:
       automate:
-        - rtc.beachvolleyballmedia.com
-        - turn.beachvolleyballmedia.com
+        - __RTC_HOST__
+        - __TURN_HOST__
   layer4:
     servers:
       main:
@@ -19,7 +19,7 @@ apps:
           - match:
               - tls:
                   sni:
-                    - turn.beachvolleyballmedia.com
+                    - __TURN_HOST__
             handle:
               - handler: tls
               - handler: proxy
@@ -28,7 +28,7 @@ apps:
           - match:
               - tls:
                   sni:
-                    - rtc.beachvolleyballmedia.com
+                    - __RTC_HOST__
             handle:
               - handler: tls
                 connection_policies:

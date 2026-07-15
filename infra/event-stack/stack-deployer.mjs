@@ -5,6 +5,7 @@ import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
+import { collectReconstructionProvenance, sha256 as provenanceSha256 } from "./reconstruction-provenance.mjs";
 
 export class LocalStackDeployer {
   constructor({ repoRoot, secretsDirectory, sshPrivateKey, knownHostsPath, runner = runCommand, fetchImpl = globalThis.fetch }) {
@@ -25,12 +26,15 @@ export class LocalStackDeployer {
     };
     if (spec.role === "commentary") {
       const env = await loadProtectedEnv(join(this.secretsDirectory, "commentary.env"));
+      const commentaryHosts = commentaryEndpointHosts(manifest);
       await this.#script("infra/commentary/deploy.sh", {
         ...env,
         ...common,
         LIVEKIT_COMMENTARY_SSH_HOST: `root@${resource.publicIpv4}`,
         LIVEKIT_COMMENTARY_SSH_KEY: this.sshPrivateKey,
-        LIVEKIT_COMMENTARY_PUBLIC_IP: requiredAddressSlot(state, "commentary")
+        LIVEKIT_COMMENTARY_PUBLIC_IP: servicePublicIpv4({ manifest, state, spec, resource }),
+        LIVEKIT_COMMENTARY_RTC_HOST: commentaryHosts.rtc,
+        LIVEKIT_COMMENTARY_TURN_HOST: commentaryHosts.turn
       });
     } else if (spec.role === "ingest") {
       const env = await loadProtectedEnv(join(this.secretsDirectory, "ingest.env"));
@@ -39,7 +43,7 @@ export class LocalStackDeployer {
         ...common,
         MEDIAMTX_SSH_HOST: `root@${resource.publicIpv4}`,
         MEDIAMTX_SSH_KEY: this.sshPrivateKey,
-        MEDIAMTX_PUBLIC_IP: requiredAddressSlot(state, "ingest"),
+        MEDIAMTX_PUBLIC_IP: servicePublicIpv4({ manifest, state, spec, resource }),
         MEDIAMTX_PUBLIC_HOST: endpointForRole(manifest, "ingest")
       });
     } else if (["compositor", "compositor-spare"].includes(spec.role)) {
@@ -65,7 +69,15 @@ export class LocalStackDeployer {
     } else {
       throw new Error(`unsupported deployment role ${spec.role}`);
     }
-    return { healthy: true, revision: await gitRevision(this.repoRoot, this.runner), evidence: { hostKeySha256 } };
+    const revision = await gitRevision(this.repoRoot, this.runner);
+    const expectedConfigHashes = await this.#expectedConfigHashes(spec, false);
+    const reconstruction = await collectReconstructionProvenance({
+      spec,
+      resource,
+      expectedConfigHashes,
+      runRemote: (command) => this.#ssh(resource.publicIpv4, command)
+    });
+    return { healthy: true, revision, evidence: { hostKeySha256, reconstruction } };
   }
 
   async finalizeStack({ manifest, state }) {
@@ -89,10 +101,17 @@ export class LocalStackDeployer {
       await this.#ensureSsh(resource.publicIpv4);
       const command = verificationCommand(spec.role);
       await this.#ssh(resource.publicIpv4, command);
-      checks.push({ name: spec.name, role: spec.role, status: "healthy" });
+      const reconstruction = await collectReconstructionProvenance({
+        spec,
+        resource,
+        expectedConfigHashes: await this.#expectedConfigHashes(spec, true),
+        runRemote: (remoteCommand) => this.#ssh(resource.publicIpv4, remoteCommand)
+      });
+      checks.push({ name: spec.name, role: spec.role, status: "healthy", reconstruction });
     }
-    for (const endpoint of manifest.endpoints.filter((entry) => ["commentary", "observability"].includes(entry.role))) {
-      const response = await this.fetchImpl(`https://${endpoint.hostname}${endpoint.role === "observability" ? "/healthz" : ""}`, {
+    for (const endpoint of manifest.endpoints.filter(publicHttpHealthEndpoint)) {
+      const healthPath = ["ingest", "observability"].includes(endpoint.role) ? "/healthz" : "";
+      const response = await this.fetchImpl(`https://${endpoint.hostname}${healthPath}`, {
         signal: AbortSignal.timeout(10_000),
         redirect: "manual"
       });
@@ -116,6 +135,20 @@ export class LocalStackDeployer {
     if (!directory.isDirectory() || (directory.mode & 0o077) !== 0) throw new Error("secrets directory must be mode 0700 or stricter");
     await mkdir(dirname(this.knownHostsPath), { recursive: true, mode: 0o700 });
     await chmod(dirname(this.knownHostsPath), 0o700);
+  }
+
+  async #expectedConfigHashes(spec, includeAgent) {
+    const bindings = roleConfigBindings(this.repoRoot, this.secretsDirectory, spec);
+    if (includeAgent) bindings.push(
+      [join(this.repoRoot, "infra/monitoring/agent-compose.yml"), "/opt/scorecheck-monitor-agent/agent-compose.yml"],
+      [join(this.repoRoot, `infra/monitoring/.generated/agent-${spec.name}.env`), "/opt/scorecheck-monitor-agent/.env"]
+    );
+    const output = {};
+    for (const [localPath, remotePath] of bindings) {
+      const body = await readFile(localPath);
+      output[remotePath] = provenanceSha256(body);
+    }
+    return output;
   }
 
   async #ensureSsh(ip) {
@@ -234,9 +267,50 @@ function requiredAddressSlot(state, slot) {
   return value;
 }
 
+export function servicePublicIpv4({ manifest, state, spec, resource }) {
+  const endpoints = manifest.endpoints.filter((entry) => entry.role === spec.role);
+  if (endpoints.length === 0) throw new Error(`manifest has no public endpoint for ${spec.role}`);
+  const modes = [...new Set(endpoints.map((entry) => entry.addressMode))];
+  if (modes.length !== 1) throw new Error(`manifest mixes public address modes for ${spec.role}`);
+  if (modes[0] === "dynamic-ipv4") {
+    if (!resource?.publicIpv4) throw new Error(`${spec.name} has no dynamic public IPv4`);
+    return resource.publicIpv4;
+  }
+  if (modes[0] === "reserved-ipv4") {
+    const slots = [...new Set(endpoints.map((entry) => entry.addressSlot))];
+    if (slots.length !== 1) throw new Error(`manifest has ambiguous reserved IPv4 slots for ${spec.role}`);
+    return requiredAddressSlot(state, slots[0]);
+  }
+  throw new Error(`manifest has unsupported public address mode for ${spec.role}`);
+}
+
 function endpointForRole(manifest, role) {
   const values = manifest.endpoints.filter((entry) => entry.role === role);
   if (values.length === 0) throw new Error(`manifest has no endpoint for ${role}`);
+  return values[0].hostname;
+}
+
+function publicHttpHealthEndpoint(endpoint) {
+  if (["ingest", "observability"].includes(endpoint.role)) return true;
+  if (endpoint.role !== "commentary") return false;
+  const firstLabel = endpoint.hostname.split(".", 1)[0];
+  return firstLabel === "rtc" || firstLabel.startsWith("rtc-");
+}
+
+export function commentaryEndpointHosts(manifest) {
+  return {
+    rtc: endpointForPrefix(manifest, "commentary", "rtc"),
+    turn: endpointForPrefix(manifest, "commentary", "turn")
+  };
+}
+
+function endpointForPrefix(manifest, role, prefix) {
+  const values = manifest.endpoints.filter((entry) => {
+    if (entry.role !== role) return false;
+    const firstLabel = entry.hostname.split(".", 1)[0];
+    return firstLabel === prefix || firstLabel.startsWith(`${prefix}-`);
+  });
+  if (values.length !== 1) throw new Error(`manifest must have exactly one ${prefix} endpoint for ${role}`);
   return values[0].hostname;
 }
 
@@ -264,6 +338,38 @@ function agentRoleEnvironment(role) {
     LIVEKIT_METRICS_URL: "http://127.0.0.1:6789/metrics"
   };
   return {};
+}
+
+export function roleConfigBindings(repoRoot, secretsDirectory, spec) {
+  if (spec.role === "commentary") return [
+    [join(repoRoot, "infra/commentary/docker-compose.yml"), "/opt/livekit/docker-compose.yaml"],
+    [join(repoRoot, "infra/commentary/.generated/livekit.yaml"), "/opt/livekit/livekit.yaml"],
+    [join(repoRoot, "infra/commentary/.generated/caddy.yaml"), "/opt/livekit/caddy.yaml"],
+    [join(repoRoot, "infra/commentary/redis.conf"), "/opt/livekit/redis.conf"]
+  ];
+  if (spec.role === "ingest") return [
+    [join(repoRoot, "infra/mediamtx/docker-compose.yml"), "/opt/mediamtx/docker-compose.yml"],
+    [join(repoRoot, "infra/mediamtx/.generated/mediamtx.yml"), "/opt/mediamtx/mediamtx.yml"],
+    [join(repoRoot, "infra/mediamtx/.generated/Caddyfile"), "/opt/mediamtx/Caddyfile"],
+    [join(repoRoot, "infra/mediamtx/scorecheck-ffmpeg-runner.sh"), "/opt/mediamtx/scorecheck-ffmpeg-runner.sh"]
+  ];
+  if (["compositor", "compositor-spare"].includes(spec.role)) return [
+    [join(repoRoot, "infra/compositor/docker-compose.yml"), "/opt/compositor/docker-compose.yml"],
+    [join(repoRoot, "infra/compositor/livekit.yaml"), "/opt/compositor/livekit.yaml"],
+    [join(repoRoot, "infra/compositor/egress.yaml"), "/opt/compositor/egress.yaml"],
+    [join(secretsDirectory, "compositors", `${spec.name}.env`), "/opt/compositor/.env"],
+    [join(repoRoot, "infra/compositor/start-court.sh"), "/opt/compositor/start-court.sh"],
+    [join(repoRoot, "infra/compositor/stop-court.sh"), "/opt/compositor/stop-court.sh"]
+  ];
+  if (spec.role === "observability") return [
+    [join(repoRoot, "infra/monitoring/docker-compose.yml"), "/opt/scorecheck-monitoring/docker-compose.yml"],
+    [join(repoRoot, "infra/monitoring/Caddyfile"), "/opt/scorecheck-monitoring/Caddyfile"],
+    [join(repoRoot, "infra/monitoring/.generated/service.env"), "/opt/scorecheck-monitoring/.env"],
+    [join(repoRoot, "infra/monitoring/.generated/prometheus.yml"), "/opt/scorecheck-monitoring/.generated/prometheus.yml"],
+    [join(repoRoot, "infra/monitoring/.generated/alertmanager.yml"), "/opt/scorecheck-monitoring/.generated/alertmanager.yml"],
+    [join(repoRoot, "infra/monitoring/rules/scorecheck.rules.yml"), "/opt/scorecheck-monitoring/rules/scorecheck.rules.yml"]
+  ];
+  throw new Error(`unsupported deployment role ${spec.role}`);
 }
 
 function verificationCommand(role) {

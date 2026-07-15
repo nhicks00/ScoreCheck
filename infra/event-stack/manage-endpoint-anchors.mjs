@@ -22,11 +22,12 @@ async function main() {
   const cloud = new DigitalOceanProvider({ token, sshKeys: [], cloudInitPaths: {} });
   const manager = new EndpointAnchorManager({ cloud, store: new CanaryStateStore(options.anchors) });
   const result = options.command === "create"
-    ? await manager.create({ region: options.region }, options.confirm)
-    : await manager.verify({ region: options.region });
+    ? await manager.create({ region: options.region, retention: options.retention }, options.confirm)
+    : await manager.verify({ region: options.region, retention: options.retention });
   process.stdout.write(`${JSON.stringify(options.command === "create" ? {
     status: result.status,
     region: result.region,
+    retention: result.retention,
     slots: Object.keys(result.reservedIpv4).sort(),
     readyAt: result.readyAt
   } : result, null, 2)}\n`);
@@ -35,8 +36,8 @@ async function main() {
 function parseArgs(argv) {
   const command = argv[0];
   if (!["create", "verify"].includes(command)) throw new Error("first argument must be create or verify");
-  const options = { command, anchors: null, credentialsEnv: null, region: "sfo2", confirm: null };
-  const mapping = new Map([["--anchors", "anchors"], ["--credentials-env", "credentialsEnv"], ["--region", "region"], ["--confirm", "confirm"]]);
+  const options = { command, anchors: null, credentialsEnv: null, region: "sfo2", retention: null, confirm: null };
+  const mapping = new Map([["--anchors", "anchors"], ["--credentials-env", "credentialsEnv"], ["--region", "region"], ["--retention", "retention"], ["--confirm", "confirm"]]);
   for (let index = 1; index < argv.length; index += 1) {
     const flag = argv[index];
     const key = mapping.get(flag);
@@ -46,6 +47,7 @@ function parseArgs(argv) {
     options[key] = ["anchors", "credentialsEnv"].includes(key) ? absolute(value, flag) : value;
   }
   if (!options.anchors) throw new Error("--anchors is required");
+  if (!new Set(["persistent", "ephemeral"]).has(options.retention)) throw new Error("--retention must be persistent or ephemeral");
   if (command === "create" && !options.confirm) throw new Error("--confirm is required for anchor creation");
   return options;
 }

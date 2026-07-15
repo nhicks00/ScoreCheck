@@ -102,6 +102,7 @@ node infra/capacity/sample-hosts.mjs \
   --ingest-host root@INGEST_HOST \
   --compositor-host root@COMPOSITOR_HOST \
   --ssh-key ~/.ssh/scorecheck_do \
+  --known-hosts /protected/event-known-hosts \
   --interval-seconds 5 \
   --duration-seconds 2100 \
   --process-poll-ms 50 \
@@ -225,6 +226,7 @@ node infra/capacity/sample-host-pool.mjs \
   --host bvm-compositor-h,compositor,root@COMPOSITOR_H \
   --host bvm-compositor-spare,compositor,root@COMPOSITOR_SPARE \
   --ssh-key ~/.ssh/scorecheck_do \
+  --known-hosts /protected/event-known-hosts \
   --interval-seconds 5 \
   --duration-seconds 7500 \
   --process-poll-ms 50 \

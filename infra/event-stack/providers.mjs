@@ -4,6 +4,8 @@ import { createHash } from "node:crypto";
 import { resolve4 } from "node:dns/promises";
 import { readFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
+import { isDeepStrictEqual } from "node:util";
+import { firewallPayload, networkContractProblems, validateNetworkContract } from "./network-contract.mjs";
 
 const DEFAULT_DO_API = "https://api.digitalocean.com/v2";
 const DEFAULT_VERCEL_API = "https://api.vercel.com";
@@ -47,6 +49,51 @@ export class DigitalOceanProvider {
     return (await this.#listCollection(`/droplets?tag_name=${tag}`, "droplets")).map(normalizeDroplet);
   }
 
+  async listVpcs() {
+    return (await this.#listCollection("/vpcs", "vpcs")).map(normalizeVpc);
+  }
+
+  async listFirewalls() {
+    return (await this.#listCollection("/firewalls", "firewalls")).map(normalizeFirewall);
+  }
+
+  async verifyNetworkContract(contractInput) {
+    const contract = validateNetworkContract(contractInput);
+    const [vpcs, firewalls] = await Promise.all([this.listVpcs(), this.listFirewalls()]);
+    const inventory = { vpcs, firewalls };
+    const problems = networkContractProblems(contract, inventory);
+    return { healthy: problems.length === 0, problems, inventory };
+  }
+
+  async applyNetworkContract(contractInput) {
+    const contract = validateNetworkContract(contractInput);
+    const vpcs = await this.listVpcs();
+    const vpc = vpcs.find((entry) => entry.uuid === contract.vpcUuid);
+    if (!vpc) throw new Error("the pinned DigitalOcean VPC is missing; refusing firewall changes");
+    if (vpc.region !== contract.region || vpc.ipRange !== contract.vpcCidr) {
+      throw new Error("the pinned DigitalOcean VPC identity drifted; refusing firewall changes");
+    }
+
+    const firewalls = await this.listFirewalls();
+    for (const desired of contract.firewalls) {
+      const matches = firewalls.filter((entry) => entry.name === desired.name);
+      if (matches.length > 1) throw new Error(`firewall ${desired.name} is duplicated; refusing changes`);
+      const payload = firewallPayload(desired);
+      if (matches.length === 0) {
+        await this.#request("POST", "/firewalls", payload, [200, 201, 202]);
+        continue;
+      }
+      if (!firewallMatchesPayload(matches[0], payload)) {
+        await this.#request("PUT", `/firewalls/${encodeURIComponent(matches[0].id)}`, payload, [200, 202]);
+      }
+    }
+
+    return this.#wait(async () => {
+      const verification = await this.verifyNetworkContract(contract);
+      return verification.healthy ? verification : null;
+    }, "DigitalOcean network contract did not converge after apply");
+  }
+
   async createDroplet(request) {
     if (this.sshKeys.length === 0) throw new Error("at least one DigitalOcean SSH key id or fingerprint is required to create a Droplet");
     const path = this.cloudInitPaths[request.userDataProfile];
@@ -56,6 +103,7 @@ export class DigitalOceanProvider {
     const payload = await this.#request("POST", "/droplets", {
       name: request.name,
       region: request.region,
+      ...(request.vpcUuid ? { vpc_uuid: request.vpcUuid } : {}),
       size: request.size,
       image: numericOrString(request.image),
       ssh_keys: this.sshKeys.map(numericOrString),
@@ -124,6 +172,17 @@ export class DigitalOceanProvider {
 
   async deleteReservedIpv4(ip) {
     await this.#request("DELETE", `/reserved_ips/${encodeURIComponent(ip)}`, undefined, [204]);
+  }
+
+  async waitReservedIpv4Absent(ip) {
+    return this.#wait(async () => {
+      try {
+        await this.getReservedIpv4(ip);
+        return null;
+      } catch (error) {
+        return error?.status === 404 ? true : Promise.reject(error);
+      }
+    }, `reserved IPv4 ${ip} still exists after deletion`);
   }
 
   async assignReservedIpv4(ip, dropletId) {
@@ -447,6 +506,74 @@ export class PushoverNotifier {
   }
 }
 
+function normalizeVpc(value) {
+  if (!value?.id && !value?.uuid) throw new Error("DigitalOcean VPC response has no UUID");
+  return {
+    uuid: String(value.id ?? value.uuid),
+    name: String(value.name ?? ""),
+    region: String(value.region?.slug ?? value.region ?? ""),
+    ipRange: String(value.ip_range ?? value.ipRange ?? "")
+  };
+}
+
+function normalizeFirewall(value) {
+  if (!value?.id) throw new Error("DigitalOcean firewall response has no id");
+  return {
+    id: String(value.id),
+    name: String(value.name ?? ""),
+    status: String(value.status ?? "unknown"),
+    tags: Array.isArray(value.tags) ? value.tags.map(String) : [],
+    dropletIds: Array.isArray(value.droplet_ids ?? value.dropletIds)
+      ? (value.droplet_ids ?? value.dropletIds).map(String)
+      : [],
+    inboundRules: normalizeFirewallRules(value.inbound_rules ?? value.inboundRules, "sources"),
+    outboundRules: normalizeFirewallRules(value.outbound_rules ?? value.outboundRules, "destinations")
+  };
+}
+
+function normalizeFirewallRules(value, peerKey) {
+  if (!Array.isArray(value)) return [];
+  return value.map((rule) => ({
+    protocol: String(rule.protocol ?? ""),
+    ports: String(rule.ports ?? ""),
+    [peerKey]: normalizeFirewallPeers(rule[peerKey])
+  }));
+}
+
+function normalizeFirewallPeers(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).map(([key, entries]) => [
+    key,
+    Array.isArray(entries) ? [...new Set(entries.map(String))].sort() : []
+  ]));
+}
+
+function firewallMatchesPayload(actual, desired) {
+  const candidate = {
+    name: actual.name,
+    inbound_rules: canonicalFirewallRules(actual.inboundRules, "sources"),
+    outbound_rules: canonicalFirewallRules(actual.outboundRules, "destinations"),
+    tags: [...actual.tags].sort(),
+    droplet_ids: [...actual.dropletIds].sort()
+  };
+  const expected = {
+    ...desired,
+    inbound_rules: canonicalFirewallRules(desired.inbound_rules, "sources"),
+    outbound_rules: canonicalFirewallRules(desired.outbound_rules, "destinations"),
+    tags: [...desired.tags].sort(),
+    droplet_ids: [...desired.droplet_ids].map(String).sort()
+  };
+  return isDeepStrictEqual(candidate, expected);
+}
+
+function canonicalFirewallRules(value, peerKey) {
+  return (value ?? []).map((rule) => ({
+    protocol: String(rule.protocol),
+    ports: String(rule.ports),
+    [peerKey]: normalizeFirewallPeers(rule[peerKey])
+  })).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+}
+
 function normalizeDroplet(value) {
   if (!value || !Number.isSafeInteger(value.id)) throw new Error("DigitalOcean Droplet response has no valid id");
   return {
@@ -454,6 +581,7 @@ function normalizeDroplet(value) {
     name: String(value.name ?? ""),
     status: String(value.status ?? "unknown"),
     region: String(value.region?.slug ?? value.region ?? ""),
+    vpcUuid: value.vpc_uuid == null ? null : String(value.vpc_uuid),
     size: String(value.size_slug ?? value.size?.slug ?? value.size ?? ""),
     image: String(value.image?.slug ?? value.image?.id ?? value.image ?? ""),
     publicIpv4: value.publicIpv4 ?? firstIpv4(value.networks?.v4, "public"),

@@ -18,20 +18,24 @@ const inputs = await loadManifestInputs();
 function manifest() {
   return buildEventManifest({
     event: "next-shadow-event",
+    kind: "rehearsal",
     destroyAfter: "2026-07-20",
     ...inputs
   });
 }
 
-test("generates exact services, endpoints, eight assigned workers, and warm spare", () => {
+test("generates isolated provider services, endpoints, eight assigned workers, and warm spare", () => {
   const value = manifest();
-  assert.equal(value.schemaVersion, 2);
+  assert.equal(value.schemaVersion, 4);
+  assert.equal(value.kind, "rehearsal");
   assert.equal(value.droplets.length, 12);
   assert.deepEqual(value.droplets.slice(0, 3).map((entry) => entry.name), [
     "bvm-commentary-01",
     "bvm-observability-01",
     "bvm-preview-01"
   ]);
+  assert.equal(new Set(value.droplets.map((entry) => entry.providerName)).size, 12);
+  assert.ok(value.droplets.every((entry) => entry.providerName.startsWith(`${value.namespace}-`)));
   assert.deepEqual(value.droplets.slice(0, 3).map((entry) => entry.size), [
     "s-2vcpu-2gb",
     "s-2vcpu-4gb",
@@ -43,6 +47,7 @@ test("generates exact services, endpoints, eight assigned workers, and warm spar
   );
   assert.deepEqual(value.droplets.at(-1), {
     name: "bvm-compositor-spare",
+    providerName: `${value.namespace}-bvm-compositor-spare`,
     role: "compositor-spare",
     warmSpare: true,
     region: "sfo2",
@@ -53,10 +58,15 @@ test("generates exact services, endpoints, eight assigned workers, and warm spar
     cloudInitSha256: value.sourceBindings.cloudInitSha256.compositor
   });
   assert.equal(value.provider.minimumAccountDropletLimit, 12);
-  assert.equal(value.endpoints.filter((entry) => entry.addressMode === "reserved-ipv4").length, 3);
-  assert.equal(value.endpoints.filter((entry) => entry.addressMode === "dynamic-ipv4").length, 1);
+  assert.equal(value.endpoints.filter((entry) => entry.addressMode === "reserved-ipv4").length, 0);
+  assert.equal(value.endpoints.filter((entry) => entry.addressMode === "dynamic-ipv4").length, 4);
+  assert.ok(value.endpoints.every((entry) => entry.addressSlot === undefined));
+  assert.ok(value.endpoints.every((entry) => entry.hostname.includes(value.namespace)));
   assert.match(value.sourceBindings.compositorPoolSpecSha256, /^[a-f0-9]{64}$/);
   assert.match(value.sourceBindings.serviceSpecSha256, /^[a-f0-9]{64}$/);
+  assert.match(value.sourceBindings.networkSpecSha256, /^[a-f0-9]{64}$/);
+  assert.equal(value.network.vpcUuid, value.provider.vpcUuid);
+  assert.equal(value.network.vpcCidr, value.provider.vpcCidr);
   assert.deepEqual(validateEventManifest(value, inputs), value);
 });
 
@@ -67,7 +77,9 @@ for (const [name, mutate] of [
   ["changed fixed role", (value) => { value.droplets[0].role = "ingest"; }],
   ["changed fixed size", (value) => { value.droplets[0].size = "c-4"; }],
   ["changed pool digest", (value) => { value.sourceBindings.compositorPoolSpecSha256 = "0".repeat(64); }],
-  ["changed endpoint mode", (value) => { value.endpoints[0].addressMode = "dynamic-ipv4"; delete value.endpoints[0].addressSlot; }],
+  ["changed network digest", (value) => { value.sourceBindings.networkSpecSha256 = "0".repeat(64); }],
+  ["changed firewall target", (value) => { value.network.firewalls[0].targetTag = "wrong"; }],
+  ["changed endpoint mode", (value) => { value.endpoints[0].addressMode = "reserved-ipv4"; value.endpoints[0].addressSlot = "ingest"; }],
   ["extra property", (value) => { value.untracked = true; }]
 ]) {
   test(`rejects an event manifest with ${name}`, () => {
@@ -82,13 +94,49 @@ for (const [name, mutate] of [
 
 test("rejects invalid event and calendar values", () => {
   assert.throws(
-    () => buildEventManifest({ event: "NOT VALID", destroyAfter: "2026-07-20", ...inputs }),
+    () => buildEventManifest({ event: "NOT VALID", kind: "rehearsal", destroyAfter: "2026-07-20", ...inputs }),
     /event slug/
   );
   assert.throws(
-    () => buildEventManifest({ event: "valid", destroyAfter: "2026-02-30", ...inputs }),
+    () => buildEventManifest({ event: "valid", kind: "rehearsal", destroyAfter: "2026-02-30", ...inputs }),
     /real calendar date/
   );
+  assert.throws(
+    () => buildEventManifest({ event: "valid", destroyAfter: "2026-07-20", ...inputs }),
+    /event kind/
+  );
+});
+
+test("production keeps canonical endpoints while rehearsal is isolated by deterministic bounded identity", () => {
+  const production = buildEventManifest({
+    event: "same-event",
+    kind: "production",
+    destroyAfter: "2026-07-20",
+    ...inputs
+  });
+  const rehearsal = buildEventManifest({
+    event: "same-event",
+    kind: "rehearsal",
+    destroyAfter: "2026-07-20",
+    ...inputs
+  });
+  assert.deepEqual(production.endpoints.map((entry) => entry.hostname), inputs.serviceSpec.endpoints.map((entry) => entry.hostname));
+  assert.equal(production.endpoints.filter((entry) => entry.addressMode === "reserved-ipv4").length, 3);
+  assert.ok(rehearsal.endpoints.every((entry) => !production.endpoints.some((candidate) => candidate.hostname === entry.hostname)));
+  assert.ok(rehearsal.endpoints.every((entry) => entry.addressMode === "dynamic-ipv4" && entry.addressSlot === undefined));
+  assert.deepEqual(production.droplets.map((entry) => entry.name), rehearsal.droplets.map((entry) => entry.name));
+  assert.notDeepEqual(production.droplets.map((entry) => entry.providerName), rehearsal.droplets.map((entry) => entry.providerName));
+
+  const longest = buildEventManifest({
+    event: `a${"b".repeat(61)}c`,
+    kind: "rehearsal",
+    destroyAfter: "2026-07-20",
+    ...inputs
+  });
+  assert.ok(longest.namespace.length <= 24);
+  assert.ok(longest.droplets.every((entry) => entry.providerName.length <= 63));
+  assert.ok(longest.endpoints.every((entry) => entry.hostname.split(".")[0].length <= 63));
+  assert.deepEqual(validateEventManifest(longest, inputs), longest);
 });
 
 test("binds the manifest to exact service and pool file bytes", () => {
@@ -101,6 +149,10 @@ test("binds the manifest to exact service and pool file bytes", () => {
     () => validateEventManifest(value, { ...inputs, serviceSpecSource: `${inputs.serviceSpecSource}\n` }),
     /does not exactly match/
   );
+  assert.throws(
+    () => validateEventManifest(value, { ...inputs, networkSpecSource: `${inputs.networkSpecSource}\n` }),
+    /does not exactly match/
+  );
 });
 
 test("rejects source objects not derived from bound bytes", () => {
@@ -109,6 +161,7 @@ test("rejects source objects not derived from bound bytes", () => {
   assert.throws(
     () => buildEventManifest({
       event: "valid",
+      kind: "rehearsal",
       destroyAfter: "2026-07-20",
       ...inputs,
       poolSpec: changedPool
@@ -121,11 +174,55 @@ test("rejects source objects not derived from bound bytes", () => {
   assert.throws(
     () => buildEventManifest({
       event: "valid",
+      kind: "rehearsal",
       destroyAfter: "2026-07-20",
       ...inputs,
       serviceSpec: changedServices
     }),
     /does not match the bound source bytes/
+  );
+
+  const changedNetwork = structuredClone(inputs.networkSpec);
+  changedNetwork.region = "nyc3";
+  assert.throws(
+    () => buildEventManifest({
+      event: "valid",
+      kind: "rehearsal",
+      destroyAfter: "2026-07-20",
+      ...inputs,
+      networkSpec: changedNetwork
+    }),
+    /does not match the bound source bytes/
+  );
+});
+
+test("rejects service-to-network VPC and target-tag drift", () => {
+  const changedVpcs = structuredClone(inputs.networkSpec);
+  changedVpcs.vpcCidr = "10.121.0.0/20";
+  assert.throws(
+    () => buildEventManifest({
+      event: "valid",
+      kind: "rehearsal",
+      destroyAfter: "2026-07-20",
+      ...inputs,
+      networkSpec: changedVpcs,
+      networkSpecSource: JSON.stringify(changedVpcs)
+    }),
+    /VPC identity must match exactly/u
+  );
+
+  const changedTags = structuredClone(inputs.networkSpec);
+  changedTags.firewalls[0].targetTag = "bvm-preview-wrong";
+  assert.throws(
+    () => buildEventManifest({
+      event: "valid",
+      kind: "rehearsal",
+      destroyAfter: "2026-07-20",
+      ...inputs,
+      networkSpec: changedTags,
+      networkSpecSource: JSON.stringify(changedTags)
+    }),
+    /target tags must exactly match/u
   );
 });
 
@@ -136,6 +233,7 @@ test("rejects a weakened pool and fixed-resource name collision", () => {
   assert.throws(
     () => buildEventManifest({
       event: "valid",
+      kind: "rehearsal",
       destroyAfter: "2026-07-20",
       ...inputs,
       poolSpec: weakenedPool,
@@ -149,6 +247,7 @@ test("rejects a weakened pool and fixed-resource name collision", () => {
   assert.throws(
     () => buildEventManifest({
       event: "valid",
+      kind: "rehearsal",
       destroyAfter: "2026-07-20",
       ...inputs,
       poolSpec: collidingPool,
@@ -177,6 +276,7 @@ test("requires an absolute protected output path", () => {
     () => parseArgs([
       "generate",
       "--event", "valid",
+      "--kind", "rehearsal",
       "--destroy-after", "2026-07-20",
       "--output", "relative.json"
     ]),
@@ -193,6 +293,7 @@ test("CLI writes mode 0600 and refuses to overwrite", async (t) => {
     tool,
     "generate",
     "--event", "valid",
+    "--kind", "rehearsal",
     "--destroy-after", "2026-07-20",
     "--output", output
   ];
