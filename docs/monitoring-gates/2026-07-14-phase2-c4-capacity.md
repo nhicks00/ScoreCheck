@@ -2,7 +2,7 @@
 
 Date: 2026-07-14 CDT / 2026-07-15 UTC
 
-## Sealed result
+## Initial sealed result
 
 The first 30-minute end-to-end run is **INCONCLUSIVE/FAIL**, not a capacity
 qualification.
@@ -32,6 +32,41 @@ The protected local artifacts are under
 `~/.config/scorecheck/capacity/court1-c4-20260715T001521Z/`. The canonical
 pre-hardening report is a four-check `FAIL`: two missing speed checks, missing
 zero browser-drop samples, and observed compositor zombie growth of two.
+
+## Qualified rerun
+
+The hardened run from `04:33:49.978Z` through the frozen `05:04:00.000Z`
+endpoint is **PASS**. Its protected credential-free evidence is under
+`~/.config/scorecheck/capacity/court1-c4-qualified-20260715T043304Z-r4/`, and
+`final-report.json` contains zero failed checks.
+
+- Host evidence is `363 / 363` valid samples at exact five-second cadence,
+  with zero failed probes, five-second p95/maximum gaps, a 22 ms start-edge
+  gap, and zero end-edge gap.
+- Ingest host CPU was 32.98% p95 / 34.53% maximum. Compositor host CPU was
+  62.22% p95 / 67.92% maximum. Egress shared-memory use peaked at 17.30%.
+- Service CPU, restart, OOM, and memory checks passed. Post-warmup memory growth
+  was 0.41% for MediaMTX and 3.21% for Egress.
+- Raw bitrate p05 was 6.09 Mbps. Preview/program FFmpeg stayed at or above
+  30.01/30.09 fps p05, speed stayed above 0.992x p05, and drop growth was zero.
+- The browser stayed fresh with 29 fps p05, zero reset-safe drop/freeze growth,
+  no RTP-loss/reconnect/reload growth, and exactly one active Egress throughout.
+- Admission was closed for every active sample at exactly one of one web
+  request. Courts 2-8 had zero readers and no incident or fault-gate impact.
+- Both process baselines were empty. There were zero new unclassified processes
+  in the formal window. Six bounded Chrome waits and one 51.1 ms `pactl` wait
+  were reaped, with 151.6 ms maximum workload duration, one maximum concurrent
+  wait, no unclosed lifecycle, and no watcher restart or gap violation.
+- The unlisted YouTube destination remained `live/recording`, `active/good`,
+  correctly bound, and issue-free through the endpoint.
+
+Teardown preserved ordering: YouTube reached `complete/recorded` at
+`05:05:14Z` before exact Egress `EG_3TyasLJjXdSJ` stopped. The stream then
+became `inactive/noData`; active Egress count and its saved id became zero.
+After the configured branch close delays, MediaMTX contained only healthy
+`court1_raw` with zero readers, and runner, parser, Chrome, and zombie counts
+were all zero. Services retained zero restarts/OOMs, Prometheus had 8/8 targets
+up, and there were no firing alerts.
 
 ## Root causes
 
@@ -217,11 +252,23 @@ The checked-in c-4 profile now requires an empty unclassified baseline on both
 hosts; retaining the old fingerprint would reject the clean host and would no
 longer describe the system being qualified.
 
-## Required rerun
+The accepted formal window ended at `05:04:00Z` with every evaluator check
+passing. During the ordered post-window Egress stop, the watcher then captured
+the long-lived Chrome root as a direct `egress` child in `Z` state before the
+parent reaped it. LiveKit Egress v1.13.0 creates Chrome through chromedp and
+cancels that allocator during `WebSource.Close`; the direct child therefore has
+the same bounded parent-wait semantics as the already admitted Chrome children
+and `pactl` calls. Classification now requires command `chrome`, parent
+`egress`, ancestry under `/tini -- egress`, and the exact Egress cgroup, while
+retaining the same 500 ms duration, concurrency, count, rate, and closure gates.
+The observed PID was absent on immediate recheck and the compositor had zero
+zombies; the event occurred after, and does not alter, the frozen formal window.
 
-This gate can pass only after deployment provenance is verified and a new full
-30-minute run proves all evaluator checks, including at least 80% host-sample
-coverage, bounded gaps and lag, the exact process baseline, zero new
-unclassified zombies, bounded/reaped healthcheck children, real shared-memory
-use, continuously available speed telemetry, a present all-zero browser-drop
-series, and deterministic single-job admission.
+## Final classification
+
+The one-court `c-4` compositor gate is qualified. Another 30-minute one-court
+rerun is not required unless the Egress image, Chrome launch contract, capacity
+shape, or evaluator thresholds change. This does not qualify multi-court
+normalization or venue upload capacity; Phase 2 still requires final-camera
+profile checks and a measured normalization layout before the direct-eight
+gate.

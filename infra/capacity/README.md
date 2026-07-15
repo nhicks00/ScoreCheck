@@ -89,9 +89,9 @@ The checked-in c-4 profile requires:
   new unclassified zombies,
   no exempt observer/healthcheck zombie lasting over two seconds, and bounded
   exempt churn (at most 16 per rolling minute and 480 total per host);
-- no exact Egress Chrome or `pactl` child wait over 500 ms, more than one
-  concurrent workload wait, more than 16 total or eight per rolling minute, or
-  any unclosed workload lifecycle; all other workload zombies remain
+- no exact Egress Chrome root/child or `pactl` child wait over 500 ms, more than
+  one concurrent workload wait, more than 16 total or eight per rolling minute,
+  or any unclosed workload lifecycle; all other workload zombies remain
   unclassified and fail immediately;
 - fresh browser heartbeats, at least 29 fps at p05, no warning-level frame-drop
   or freeze ratio, and a continuously active Egress job;
