@@ -123,7 +123,7 @@
   border: 1px solid rgba(255, 212, 200, 0.34);
   color: #ffd4c8;
   flex: 0 0 auto;
-  min-height: 40px;
+  min-height: 44px;
   padding: 7px 10px;
 }
 
@@ -295,6 +295,42 @@
   letter-spacing: -0.045em;
   line-height: 1;
   text-transform: uppercase;
+}
+
+.setSelector {
+  align-items: center;
+  display: grid;
+  gap: 5px;
+  justify-items: center;
+}
+
+.setSelector > span {
+  border: 0;
+  color: #aeb8c5;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.setSelector select {
+  appearance: auto;
+  background: #0a1827;
+  border: 1px solid rgba(126, 151, 183, 0.56);
+  border-radius: 10px;
+  color: #fff;
+  font-family: var(--font-head);
+  font-size: clamp(34px, 10vw, 58px);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  min-height: 54px;
+  padding: 3px 10px;
+  text-transform: uppercase;
+}
+
+.setSelector select:focus-visible {
+  outline: 3px solid #7bbcff;
+  outline-offset: 3px;
 }
 
 .scoreContext {

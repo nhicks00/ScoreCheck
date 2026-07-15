@@ -7,6 +7,7 @@ import {
 import { communityApiError, communityToken } from "@/lib/communityHttp";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { hashToken, requestIpHash } from "@/lib/security";
+import { touchCommunityMediaSessions } from "@/lib/communityMedia";
 
 export async function POST(req: NextRequest) {
   const token = communityToken(req);
@@ -19,7 +20,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Too many heartbeat requests" }, { status: 429 });
   }
   try {
-    const response = NextResponse.json(await heartbeatCommunitySession(token));
+    const snapshot = await heartbeatCommunitySession(token);
+    await touchCommunityMediaSessions(token).catch((error) => {
+      console.error("Community media lease touch failed", {
+        code: error instanceof Error ? error.name : "UNEXPECTED"
+      });
+    });
+    const response = NextResponse.json(snapshot);
     response.cookies.set(communitySessionCookie, token, communitySessionCookieOptions);
     return response;
   } catch (error) {

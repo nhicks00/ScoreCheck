@@ -204,5 +204,71 @@ begin
     or result->'setScores'->0->>'teamAScore' <> '22' then
     raise exception 'still-valid final correction should remain Final: %', result;
   end if;
+
+  -- Official set selection changes only the canonical set number. It must not
+  -- invent prior-set winners or discard the live point score when joining late.
+  result := public.community_select_current_set(
+    base_state || jsonb_build_object(
+      'teamAScore', 8,
+      'teamBScore', 7,
+      'status', 'In Progress',
+      'currentRallyNumber', 15
+    ),
+    '{"type":"SET_CURRENT_SET","set":2}'::jsonb,
+    standard_format
+  );
+  if (result->>'currentSet')::integer <> 2
+    or (result->>'teamAScore')::integer <> 8
+    or (result->>'teamBScore')::integer <> 7
+    or (result->>'teamASets')::integer <> 0
+    or (result->>'teamBSets')::integer <> 0
+    or (result->>'currentRallyNumber')::integer <> 15
+    or result->>'status' <> 'In Progress' then
+    raise exception 'current-set selection inferred or lost another score fact: %', result;
+  end if;
+
+  begin
+    perform public.community_select_current_set(
+      base_state,
+      '{"type":"SET_CURRENT_SET","set":4}'::jsonb,
+      standard_format
+    );
+    raise exception 'set selection exceeded match bestOf';
+  exception when sqlstate '23514' then null;
+  end;
+
+  begin
+    perform public.community_select_current_set(
+      base_state || jsonb_build_object(
+        'setScores', '[{"setNumber":1,"teamAScore":21,"teamBScore":19,"isComplete":true}]'::jsonb,
+        'currentSet', 2,
+        'status', 'In Progress'
+      ),
+      '{"type":"SET_CURRENT_SET","set":1}'::jsonb,
+      standard_format
+    );
+    raise exception 'set selection reopened a completed set';
+  exception when sqlstate '23514' then null;
+  end;
+
+  begin
+    perform public.community_select_current_set(
+      base_state || jsonb_build_object('status', 'Final'),
+      '{"type":"SET_CURRENT_SET","set":2}'::jsonb,
+      standard_format
+    );
+    raise exception 'set selection changed a final match';
+  exception when sqlstate '23514' then null;
+  end;
+
+  begin
+    perform public.community_select_current_set(
+      base_state,
+      '{"type":"SET_CURRENT_SET","set":2,"team":"A"}'::jsonb,
+      standard_format
+    );
+    raise exception 'set selection accepted unsupported payload fields';
+  exception when sqlstate '22023' then null;
+  end;
 end;
 $$;

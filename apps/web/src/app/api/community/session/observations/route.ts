@@ -15,7 +15,8 @@ export async function POST(req: NextRequest) {
   try {
     const parsed = submitObservationSchema.safeParse(await req.json().catch(() => null));
     if (!parsed.success) return NextResponse.json({ error: "Invalid rally observation" }, { status: 400 });
-    return communityMutationResponse(await submitCommunityObservation({ sessionToken: token, ...parsed.data }));
+    const result = await submitCommunityObservation({ sessionToken: token, ...parsed.data });
+    return communityMutationResponse(result);
   } catch (error) {
     return communityApiError(error);
   }

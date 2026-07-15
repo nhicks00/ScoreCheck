@@ -1,7 +1,18 @@
 "use client";
 
 import { Play, RefreshCw, VideoOff, Volume2, VolumeX } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import {
+  brokeredScoringSessionId,
+  buildPlaybackEvidence,
+  initialPlaybackEvidenceState,
+  playbackModeAllowsHls,
+  type PlaybackConnectionState,
+  type PlaybackEvidenceSnapshot,
+  type PlaybackEvidenceState,
+  type PlaybackMode,
+  type PlaybackTransport
+} from "@/lib/communityPlaybackTiming";
 import {
   intervalJitterSample,
   monotonicEpochMs,
@@ -19,8 +30,8 @@ type StreamPlayerProps = {
   sources?: { whepUrl: string | null; hlsUrl: string | null };
   /** Hides all player chrome (status chip, buttons, error fallback, native controls) for capture surfaces like /program. */
   chromeless?: boolean;
-  /** Program capture must never change latency classes by falling back to HLS. */
-  mode?: "preview" | "program";
+  /** Program capture and scoring must never change latency classes by falling back to HLS. */
+  mode?: PlaybackMode;
   /** Gives the program mixer access to the camera media element. */
   onVideoElement?: (element: HTMLVideoElement | null) => void;
   /** WHEP transport timing used by the commentary/program synchronization controller. */
@@ -29,11 +40,20 @@ type StreamPlayerProps = {
   onConnectionHealth?: (health: StreamConnectionHealth | null) => void;
   /** Reports each transport retry so program diagnostics survive player remounts. */
   onReconnect?: () => void;
+  /** Reports only changes to the scoring safety decision; it never exposes a
+   * media URL, edge credential, or source-clock claim. */
+  onScoringQualification?: (qualification: PlaybackEvidenceSnapshot["qualification"]) => void;
+};
+
+export type StreamPlayerHandle = {
+  /** Captures browser-local, diagnostic playback evidence at the exact action time. */
+  capturePlaybackEvidence: (options?: { baseRevision?: number }) => PlaybackEvidenceSnapshot;
+  retryPlayback: () => void;
 };
 
 export type StreamConnectionHealth = {
-  transport: "whep" | "hls" | "none";
-  connectionState: "new" | "connecting" | "connected" | "disconnected" | "failed" | "closed" | "unknown";
+  transport: PlaybackTransport;
+  connectionState: PlaybackConnectionState;
   framesPerSecond: number | null;
   width: number | null;
   height: number | null;
@@ -71,7 +91,7 @@ const WHEP_FAILURES_BEFORE_HLS = 3;
 const MAX_RETRY_DELAY_MS = 15_000;
 const OFFLINE_MESSAGE = "Stream offline — retrying";
 
-export function StreamPlayer({
+export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(function StreamPlayer({
   courtNumber,
   adminQuality,
   enabled = true,
@@ -81,24 +101,105 @@ export function StreamPlayer({
   onVideoElement,
   onTimingSample,
   onConnectionHealth,
-  onReconnect
-}: StreamPlayerProps) {
+  onReconnect,
+  onScoringQualification
+}: StreamPlayerProps, ref) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const playbackEvidenceStateRef = useRef<PlaybackEvidenceState>(initialPlaybackEvidenceState());
   const [sources, setSources] = useState<StreamSources | null>(null);
   const [loadRevision, setLoadRevision] = useState(0);
   const [status, setStatus] = useState("Loading stream...");
   const [error, setError] = useState<string | null>(null);
   const [muted, setMuted] = useState(mode !== "program");
+  const qualificationKeyRef = useRef("");
   // Depend on the primitive URLs so a parent re-render with an identical
   // sources object never tears down a healthy connection.
   const hasProvidedSources = providedSources != null;
   const providedWhepUrl = providedSources?.whepUrl ?? null;
   const providedHlsUrl = providedSources?.hlsUrl ?? null;
 
+  const reportScoringQualification = useCallback((state: PlaybackEvidenceState) => {
+    if (!onScoringQualification) return;
+    const video = videoRef.current;
+    const qualification = buildPlaybackEvidence(state, {
+      currentTimeSeconds: video?.currentTime ?? null,
+      readyState: video?.readyState ?? 0,
+      videoWidth: video?.videoWidth ?? 0,
+      videoHeight: video?.videoHeight ?? 0,
+      paused: video?.paused ?? true
+    }).qualification;
+    const key = `${qualification.liveActionEligible}:${qualification.blockedReason ?? "ready"}`;
+    if (qualificationKeyRef.current === key) return;
+    qualificationKeyRef.current = key;
+    onScoringQualification(qualification);
+  }, [onScoringQualification]);
+
+  const updatePlaybackEvidenceState = useCallback((patch: Partial<PlaybackEvidenceState>) => {
+    const next = { ...playbackEvidenceStateRef.current, ...patch };
+    playbackEvidenceStateRef.current = next;
+    reportScoringQualification(next);
+  }, [reportScoringQualification]);
+
+  useImperativeHandle(ref, () => ({
+    capturePlaybackEvidence: ({ baseRevision } = {}) => {
+      const video = videoRef.current;
+      return buildPlaybackEvidence(playbackEvidenceStateRef.current, {
+        baseRevision,
+        currentTimeSeconds: video?.currentTime ?? null,
+        readyState: video?.readyState ?? 0,
+        videoWidth: video?.videoWidth ?? 0,
+        videoHeight: video?.videoHeight ?? 0,
+        paused: video?.paused ?? true
+      });
+    },
+    retryPlayback: () => setLoadRevision((current) => current + 1)
+  }), []);
+
+  useEffect(() => {
+    reportScoringQualification(playbackEvidenceStateRef.current);
+  }, [reportScoringQualification]);
+
   useEffect(() => {
     onVideoElement?.(videoRef.current);
     return () => onVideoElement?.(null);
   }, [onVideoElement]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (mode !== "scoring" || !enabled || !video || typeof video.requestVideoFrameCallback !== "function") return;
+    let cancelled = false;
+    let callbackId = 0;
+    const sample = (_now: number, metadata: VideoFrameCallbackMetadata) => {
+      if (cancelled) return;
+      const state = playbackEvidenceStateRef.current;
+      if (state.transport === "whep"
+        && state.connectionState === "connected"
+        && state.sessionId) {
+        const mediaTimeSeconds = Number.isFinite(metadata.mediaTime)
+          ? Math.max(0, metadata.mediaTime)
+          : Math.max(0, video.currentTime);
+        updatePlaybackEvidenceState({
+          paused: video.paused,
+          stalled: false,
+          frame: {
+            source: "video-frame-callback",
+            sessionId: state.sessionId,
+            presentedFrames: Math.max(0, Math.trunc(metadata.presentedFrames)),
+            mediaTimeSeconds,
+            observedAtMs: monotonicEpochMs()
+          }
+        });
+      }
+      callbackId = video.requestVideoFrameCallback(sample);
+    };
+    callbackId = video.requestVideoFrameCallback(sample);
+    return () => {
+      cancelled = true;
+      if (typeof video.cancelVideoFrameCallback === "function") {
+        video.cancelVideoFrameCallback(callbackId);
+      }
+    };
+  }, [enabled, mode, updatePlaybackEvidenceState]);
 
   const loadSources = useCallback(async () => {
     if (!enabled) return;
@@ -127,6 +228,7 @@ export function StreamPlayer({
   useEffect(() => {
     if (!enabled) {
       setSources(null);
+      playbackEvidenceStateRef.current = initialPlaybackEvidenceState();
       return;
     }
     void loadSources();
@@ -137,6 +239,7 @@ export function StreamPlayer({
     if (!sources.whepUrl && !sources.hlsUrl) {
       setStatus("Stream video is not available yet.");
       setError("Stream video is not available yet.");
+      updatePlaybackEvidenceState(initialPlaybackEvidenceState());
       onConnectionHealth?.(emptyConnectionHealth());
       return;
     }
@@ -157,9 +260,30 @@ export function StreamPlayer({
       if (cancelled) return;
       setError(null);
       setStatus(pc ? "Live — low latency" : "Live — HLS");
-      if (!pc) onConnectionHealth?.({ ...emptyConnectionHealth(), transport: "hls", connectionState: "connected" });
+      const state = playbackEvidenceStateRef.current;
+      updatePlaybackEvidenceState({
+        paused: false,
+        stalled: false,
+        reconnecting: state.transport === "whep" && state.connectionState !== "connected"
+      });
+      if (!pc) {
+        updatePlaybackEvidenceState({ connectionState: "connected", reconnecting: false });
+        onConnectionHealth?.({ ...emptyConnectionHealth(), transport: "hls", connectionState: "connected" });
+      }
     };
+    const onPause = () => updatePlaybackEvidenceState({ paused: true });
+    const onWaiting = () => updatePlaybackEvidenceState({ stalled: true });
+    const onStalled = () => updatePlaybackEvidenceState({ stalled: true });
+    const onEmptied = () => updatePlaybackEvidenceState({
+      paused: true,
+      stalled: false,
+      frame: null
+    });
     video.addEventListener("playing", onPlaying);
+    video.addEventListener("pause", onPause);
+    video.addEventListener("waiting", onWaiting);
+    video.addEventListener("stalled", onStalled);
+    video.addEventListener("emptied", onEmptied);
 
     function teardownPlayback() {
       whepAttempt += 1;
@@ -179,6 +303,7 @@ export function StreamPlayer({
       hls = null;
       video.srcObject = null;
       video.removeAttribute("src");
+      updatePlaybackEvidenceState(initialPlaybackEvidenceState());
     }
 
     function scheduleRetry(fn: () => void, attempt: number) {
@@ -194,9 +319,14 @@ export function StreamPlayer({
       if (cancelled || retryTimer != null) return;
       teardownPlayback();
       whepFailures += 1;
+      updatePlaybackEvidenceState({
+        transport: "whep",
+        connectionState: "disconnected",
+        reconnecting: true
+      });
       onReconnect?.();
       setStatus(offline ? OFFLINE_MESSAGE : "Reconnecting stream...");
-      if (mode === "preview" && whepFailures >= WHEP_FAILURES_BEFORE_HLS && sources?.hlsUrl) {
+      if (playbackModeAllowsHls(mode) && whepFailures >= WHEP_FAILURES_BEFORE_HLS && sources?.hlsUrl) {
         scheduleRetry(() => void startHls(), 0);
         return;
       }
@@ -208,6 +338,11 @@ export function StreamPlayer({
       teardownPlayback();
       hlsFailures += 1;
       whepFailures = 0;
+      updatePlaybackEvidenceState({
+        transport: "hls",
+        connectionState: "failed",
+        reconnecting: true
+      });
       setStatus(OFFLINE_MESSAGE);
       scheduleRetry(() => void start(), hlsFailures);
     }
@@ -216,6 +351,16 @@ export function StreamPlayer({
       const whepUrl = sources?.whepUrl;
       if (cancelled || !whepUrl) return;
       const attempt = ++whepAttempt;
+      const sessionId = createPlaybackSessionId("whep");
+      updatePlaybackEvidenceState({
+        transport: "whep",
+        sessionId,
+        connectionState: "connecting",
+        frame: null,
+        paused: video.paused,
+        stalled: false,
+        reconnecting: whepFailures > 0
+      });
       setStatus("Connecting stream...");
       try {
         const connection = new RTCPeerConnection({
@@ -237,12 +382,21 @@ export function StreamPlayer({
             whepFailures = 0;
             setError(null);
             setStatus("Live — low latency");
+            updatePlaybackEvidenceState({
+              connectionState: "connected",
+              reconnecting: false
+            });
             startTimingSampling(connection);
           }
+          const connectionState = normalizeConnectionState(connection.connectionState);
+          updatePlaybackEvidenceState({
+            connectionState,
+            reconnecting: connectionState === "connected" ? false : whepFailures > 0
+          });
           onConnectionHealth?.({
             ...emptyConnectionHealth(),
             transport: "whep",
-            connectionState: normalizeConnectionState(connection.connectionState)
+            connectionState
           });
           if (["failed", "disconnected", "closed"].includes(connection.connectionState)) {
             failWhep(false);
@@ -280,7 +434,17 @@ export function StreamPlayer({
           failWhep(false);
           return;
         }
+        const authoritativeSessionId = mode === "scoring"
+          ? brokeredScoringSessionId(responseSessionUrl, window.location.href)
+          : null;
+        if (mode === "scoring" && !authoritativeSessionId) {
+          failWhep(false);
+          return;
+        }
         whepSessionUrl = responseSessionUrl;
+        if (authoritativeSessionId) {
+          updatePlaybackEvidenceState({ sessionId: authoritativeSessionId });
+        }
         const answer = await res.text();
         if (cancelled || pc !== connection || attempt !== whepAttempt) {
           connection.close();
@@ -321,6 +485,15 @@ export function StreamPlayer({
         if (!cancelled) failHls();
         return;
       }
+      updatePlaybackEvidenceState({
+        transport: "hls",
+        sessionId: createPlaybackSessionId("hls"),
+        connectionState: "connecting",
+        frame: null,
+        paused: video.paused,
+        stalled: false,
+        reconnecting: hlsFailures > 0
+      });
       setStatus("Connecting stream...");
       try {
         if (video.canPlayType("application/vnd.apple.mpegurl")) {
@@ -360,8 +533,13 @@ export function StreamPlayer({
         await startWhep();
         return;
       }
-      if (mode === "preview") await startHls();
-      else failWhep(true);
+      if (playbackModeAllowsHls(mode) && sources?.hlsUrl) {
+        await startHls();
+        return;
+      }
+      updatePlaybackEvidenceState(initialPlaybackEvidenceState());
+      setStatus("Live stream is not available yet.");
+      setError("Live stream is not available yet.");
     }
 
     void start();
@@ -370,16 +548,22 @@ export function StreamPlayer({
       cancelled = true;
       if (retryTimer != null) window.clearTimeout(retryTimer);
       video.removeEventListener("playing", onPlaying);
+      video.removeEventListener("pause", onPause);
+      video.removeEventListener("waiting", onWaiting);
+      video.removeEventListener("stalled", onStalled);
+      video.removeEventListener("emptied", onEmptied);
       teardownPlayback();
     };
-  }, [enabled, loadRevision, mode, onConnectionHealth, onReconnect, onTimingSample, sources]);
+  }, [enabled, loadRevision, mode, onConnectionHealth, onReconnect, onTimingSample, sources, updatePlaybackEvidenceState]);
 
   if (!enabled) return null;
 
+  const scoringStatusVisible = mode === "scoring" && !status.startsWith("Live");
+
   return (
-    <section className="stream-preview">
-      <video ref={videoRef} playsInline muted={muted} controls={!chromeless} />
-      {!chromeless && (
+    <section className={`stream-preview ${mode === "scoring" ? "scoring-stream-preview" : ""}`}>
+      <video ref={videoRef} playsInline muted={muted} controls={!chromeless && mode !== "scoring"} />
+      {!chromeless && mode !== "scoring" && (
         <div className="video-controls">
           <span>{error ? "Stream unavailable" : status}</span>
           <button type="button" onClick={() => setMuted((current) => !current)}>
@@ -393,7 +577,22 @@ export function StreamPlayer({
           </button>
         </div>
       )}
-      {!chromeless && error && (
+      {!chromeless && mode === "scoring" && (
+        <div className="video-controls scoring-video-controls">
+          {scoringStatusVisible && <span role="status">{error ? "Video unavailable" : status}</span>}
+          <button type="button" onClick={() => setMuted((current) => !current)} aria-label={muted ? "Unmute court video" : "Mute court video"}>
+            {muted ? <VolumeX size={17} aria-hidden="true" /> : <Volume2 size={17} aria-hidden="true" />}
+            <span>{muted ? "Unmute" : "Mute"}</span>
+          </button>
+          <button type="button" onClick={() => videoRef.current?.play()} aria-label="Play court video">
+            <Play size={17} aria-hidden="true" /><span>Play</span>
+          </button>
+          <button type="button" onClick={() => setLoadRevision((current) => current + 1)} aria-label="Reconnect court video">
+            <RefreshCw size={17} aria-hidden="true" /><span>Reconnect</span>
+          </button>
+        </div>
+      )}
+      {!chromeless && mode !== "scoring" && error && (
         <div className="video-fallback">
           <VideoOff size={18} />
           <span>{error}</span>
@@ -401,7 +600,7 @@ export function StreamPlayer({
       )}
     </section>
   );
-}
+});
 
 function extractTimingSample(
   reports: RTCStatsReport,
@@ -556,7 +755,8 @@ function normalizeConnectionState(value: RTCPeerConnectionState): StreamConnecti
 function whepResourceUrl(location: string | null, requestUrl: string): string | null {
   if (!location) return null;
   try {
-    return new URL(location, requestUrl).toString();
+    const pageUrl = typeof window === "undefined" ? "http://localhost/" : window.location.href;
+    return new URL(location, new URL(requestUrl, pageUrl)).toString();
   } catch {
     return null;
   }
@@ -566,6 +766,16 @@ function releaseWhepSession(url: string) {
   void fetch(url, { method: "DELETE", keepalive: true }).catch(() => {
     // Best effort. Closing the peer connection remains the primary teardown.
   });
+}
+
+let playbackSessionSequence = 0;
+
+function createPlaybackSessionId(transport: Exclude<PlaybackTransport, "none">): string {
+  playbackSessionSequence += 1;
+  const randomId = globalThis.crypto?.randomUUID?.();
+  return randomId
+    ? `${transport}-${randomId}`
+    : `${transport}-${Date.now().toString(36)}-${playbackSessionSequence.toString(36)}`;
 }
 
 function waitForIceGathering(connection: RTCPeerConnection, timeoutMs: number): Promise<void> {

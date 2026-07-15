@@ -1,6 +1,7 @@
 const workerId = process.env.WORKER_ID ?? `render-${crypto.randomUUID()}`;
 const activeIntervalMs = numberEnv("WORKER_ACTIVE_INTERVAL_MS", 1_800);
 const idleIntervalMs = numberEnv("WORKER_IDLE_INTERVAL_MS", 8_000);
+const mediaCleanupIntervalMs = 30_000;
 
 async function main() {
   await loadLocalEnv();
@@ -8,6 +9,10 @@ async function main() {
   const { getCachedWorkerCoverageStatus } = await import("../lib/workerSchedule");
   console.log(`[worker] starting ${workerId}`);
   await recordHeartbeat(workerId, "starting");
+  // The reaper has its own cadence so off-event score-poll sleeps (up to six
+  // hours) cannot strand expired resources or 60-second cleanup retries.
+  void maybeRunCommunityMediaCleanup();
+  setInterval(() => void maybeRunCommunityMediaCleanup(), mediaCleanupIntervalMs);
   while (true) {
     const started = Date.now();
     try {
@@ -37,6 +42,34 @@ async function main() {
       await recordHeartbeat(workerId, "error", undefined, { message });
       await sleep(idleIntervalMs);
     }
+  }
+}
+
+// Media cleanup remains independent from score polling.
+let mediaCleanupInFlight = false;
+
+async function maybeRunCommunityMediaCleanup() {
+  if (mediaCleanupInFlight) return;
+  mediaCleanupInFlight = true;
+  try {
+    const { drainCommunityMediaSessions } = await import("../lib/communityMediaCleanup");
+    const result = await drainCommunityMediaSessions({ workerId, limit: 20 });
+    if (result.claimed > 0) {
+      console.log(`[worker] community media cleanup: ${result.closed} closed, ${result.retrying} retrying`);
+    }
+    if (result.playbackEvidenceDeleted > 0 || result.mediaSessionsDeleted > 0) {
+      console.log(
+        `[worker] community media retention: ${result.playbackEvidenceDeleted} playback evidence and `
+        + `${result.mediaSessionsDeleted} media sessions pruned`
+      );
+    }
+    if (!result.pruningSucceeded) {
+      console.error("[worker] community media retention pruning failed");
+    }
+  } catch (error) {
+    console.error(`[worker] community media cleanup failed: ${error instanceof Error ? error.name : "unknown error"}`);
+  } finally {
+    mediaCleanupInFlight = false;
   }
 }
 

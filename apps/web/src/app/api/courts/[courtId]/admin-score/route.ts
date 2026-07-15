@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
+import { CommunityWitnessError } from "@/lib/communityWitness";
 import { applyManualAction, applyManualEdit, formatFromMatch, manualEditSchema, normalizeManualState } from "@/lib/manualScoring";
 import { persistScoreAndOverlay, scoreForCurrentMatch } from "@/lib/scoreState";
 import { requestIpHash, userAgent } from "@/lib/security";
@@ -15,6 +16,7 @@ type CourtRow = {
   display_name: string;
   mode: "api" | "manual" | "hybrid";
   frozen: boolean;
+  scoring_open: boolean;
   status: string;
   last_update_at: string | null;
   matches?: Relation<MatchRow>;
@@ -24,6 +26,7 @@ type CourtRow = {
 type MatchRow = {
   id: string;
   event_id: string;
+  status: string;
   match_number: string | null;
   round_name: string | null;
   scheduled_time: string | null;
@@ -37,9 +40,19 @@ type MatchRow = {
 };
 
 const adminActionSchema = z.object({
-  action: z.enum(["point-a", "point-b", "toggle-serve", "timeout-a", "timeout-b", "side-switch", "set-complete", "match-complete", "undo"]),
+  action: z.enum(["point-a", "point-b", "toggle-serve", "timeout-a", "timeout-b", "side-switch", "set-complete", "match-complete", "undo", "set-current-set"]),
   actionId: z.string().uuid(),
-  actorLabel: z.string().max(80).optional()
+  actorLabel: z.string().max(80).optional(),
+  setNumber: z.number().int().min(1).max(99).optional(),
+  expectedRevision: z.number().int().min(0).optional()
+}).strict().superRefine((input, context) => {
+  const isSetCorrection = input.action === "set-current-set";
+  if (isSetCorrection && (input.setNumber == null || input.expectedRevision == null)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Set correction requires a set number and expected revision" });
+  }
+  if (!isSetCorrection && (input.setNumber != null || input.expectedRevision != null)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Set correction fields are not valid for this action" });
+  }
 });
 
 const adminEditSchema = manualEditSchema.extend({
@@ -57,6 +70,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cou
 
   const context = await loadContext(courtId);
   if (!context.ok) return context.response;
+  if (parsed.data.action === "set-current-set") {
+    return setAdminCurrentSet(
+      req,
+      context.court,
+      context.match,
+      context.currentScore,
+      parsed.data.setNumber!,
+      parsed.data.expectedRevision!,
+      parsed.data.actionId,
+      parsed.data.actorLabel
+    );
+  }
   if (parsed.data.action === "undo") {
     return undoAdminAction(req, context.court, context.match, context.currentScore, parsed.data.actionId, parsed.data.actorLabel);
   }
@@ -86,6 +111,58 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ co
   return NextResponse.json({ ok: true, duplicate: saved.duplicate, score: saved.score, overlay: saved.overlay });
 }
 
+async function setAdminCurrentSet(
+  req: NextRequest,
+  court: CourtRow,
+  match: MatchRow | null,
+  currentScore: Record<string, unknown> | null,
+  setNumber: number,
+  expectedRevision: number,
+  actionId: string,
+  actorLabel?: string
+) {
+  if (!match) return NextResponse.json({ error: "No active match on this court" }, { status: 409 });
+  if (!court.scoring_open || court.frozen) {
+    return NextResponse.json({ error: "Scoring is closed or frozen on this court" }, { status: 409 });
+  }
+  if (isTerminalMatchStatus(match.status)) {
+    return NextResponse.json({ error: "A completed or closed match cannot change its current set" }, { status: 409 });
+  }
+  const format = formatFromMatch(match);
+  if (setNumber > format.bestOf) {
+    return NextResponse.json({ error: `Set ${setNumber} is outside this best-of-${format.bestOf} match` }, { status: 400 });
+  }
+  const previous = normalizeManualState(currentScore);
+  if (previous.status.trim().toLowerCase() === "final") {
+    return NextResponse.json({ error: "A completed match cannot change its current set" }, { status: 409 });
+  }
+  if (previous.set_scores.some((set) => set.setNumber === setNumber && set.isComplete)) {
+    return NextResponse.json({ error: `Set ${setNumber} is already complete` }, { status: 409 });
+  }
+
+  try {
+    const saved = await saveOverrideScore(req, court, match, { ...previous, current_set: setNumber }, {
+      action: "set-current-set",
+      actionId,
+      actorLabel,
+      commandType: "SET_CURRENT_SET",
+      expectedRevision,
+      currentScore
+    });
+    return NextResponse.json({ ok: true, duplicate: saved.duplicate, score: saved.score, overlay: saved.overlay });
+  } catch (error) {
+    if (error instanceof CommunityWitnessError) {
+      const status = error.status >= 400 && error.status < 500 ? error.status : 500;
+      return NextResponse.json({
+        error: status === 409
+          ? "The score or court changed first. Refresh and try again."
+          : status === 400 ? "This set selection is not valid." : "Could not update the current set."
+      }, { status });
+    }
+    throw error;
+  }
+}
+
 async function loadContext(courtId: string): Promise<
   | { ok: true; court: CourtRow; match: MatchRow | null; currentScore: Record<string, unknown> | null }
   | { ok: false; response: NextResponse }
@@ -110,7 +187,7 @@ async function persistAdminScoreMutation(
   court: CourtRow,
   match: MatchRow | null,
   currentScore: Record<string, unknown> | null,
-  action: Exclude<z.infer<typeof adminActionSchema>["action"], "undo">,
+  action: Exclude<z.infer<typeof adminActionSchema>["action"], "undo" | "set-current-set">,
   actionId: string,
   actorLabel?: string
 ) {
@@ -177,16 +254,14 @@ async function saveOverrideScore(
     action: string;
     actionId: string;
     actorLabel?: string;
-    commandType: "ADD_POINT" | "REMOVE_POINT" | "CORRECT_SCORE" | "COMPLETE_SET" | "COMPLETE_MATCH" | "SET_SERVE";
+    commandType: "ADD_POINT" | "REMOVE_POINT" | "CORRECT_SCORE" | "COMPLETE_SET" | "COMPLETE_MATCH" | "SET_SERVE" | "SET_CURRENT_SET";
     teamSide?: "A" | "B" | null;
+    expectedRevision?: number;
     currentScore: Record<string, unknown> | null;
     metadata?: Record<string, unknown>;
   }
 ) {
   const effectiveCourt = court.mode === "api" ? { ...court, mode: "hybrid" as const } : court;
-  if (court.mode === "api") {
-    await supabaseAdmin().from("courts").update({ mode: "hybrid", updated_at: new Date().toISOString() }).eq("id", court.id);
-  }
   return persistScoreAndOverlay(effectiveCourt, match, {
     court_id: court.id,
     match_id: match.id,
@@ -212,7 +287,7 @@ async function saveOverrideScore(
     authorityMode: "ADMIN_LOCKED",
     commandType: input.commandType,
     teamSide: input.teamSide,
-    expectedRevision: numberValue(input.currentScore?.revision) ?? undefined,
+    expectedRevision: input.expectedRevision ?? numberValue(input.currentScore?.revision) ?? undefined,
     expectedAuthorityEpoch: numberValue(input.currentScore?.authority_epoch) ?? undefined,
     metadata: {
       adminAction: input.action,
@@ -260,4 +335,9 @@ function numberValue(value: unknown): number | null {
   if (value == null || value === "") return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+function isTerminalMatchStatus(value: string | null | undefined): boolean {
+  return ["final", "finished", "completed", "complete", "closed", "ended", "cancelled", "canceled"]
+    .includes((value ?? "").trim().toLowerCase());
 }

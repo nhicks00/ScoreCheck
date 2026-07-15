@@ -25,6 +25,14 @@ pushIfPresent(vercelLines, "MEDIAMTX_HLS_BASE_URL", env.mediamtxHlsBaseUrl);
 pushIfPresent(vercelLines, "MEDIAMTX_READ_USER", env.mediamtxReadUser);
 pushIfPresent(vercelLines, "MEDIAMTX_READ_PASS", env.mediamtxReadPass);
 pushIfPresent(vercelLines, "MEDIAMTX_RTMP_INGEST_BASE", env.mediamtxRtmpIngestBase);
+pushIfPresent(vercelLines, "COMMUNITY_MEDIA_WHEP_BASE_URL", env.communityMediaWhepBaseUrl);
+pushIfPresent(vercelLines, "COMMUNITY_MEDIA_READ_USER", env.communityMediaReadUser);
+pushIfPresent(vercelLines, "COMMUNITY_MEDIA_READ_PASS", env.communityMediaReadPass);
+// Capacity zero is an intentional fail-closed deployment state. Always export
+// it so a previous positive Vercel value cannot remain active by omission.
+vercelLines.push(["COMMUNITY_MEDIA_MAX_PER_COURT", String(env.communityMediaMaxPerCourt)]);
+vercelLines.push(["COMMUNITY_MEDIA_MAX_TOTAL", String(env.communityMediaMaxTotal)]);
+pushIfPresent(vercelLines, "COMMUNITY_MEDIA_SESSION_SECONDS", String(env.communityMediaSessionSeconds));
 pushIfPresent(vercelLines, "NEXT_PUBLIC_LIVEKIT_COMMENTARY_URL", process.env.NEXT_PUBLIC_LIVEKIT_COMMENTARY_URL ?? "");
 pushIfPresent(vercelLines, "LIVEKIT_COMMENTARY_API_KEY", process.env.LIVEKIT_COMMENTARY_API_KEY ?? "");
 pushIfPresent(vercelLines, "LIVEKIT_COMMENTARY_API_SECRET", process.env.LIVEKIT_COMMENTARY_API_SECRET ?? "");
@@ -47,6 +55,9 @@ const workerLines = [
   ["WORKER_IDLE_INTERVAL_MS", process.env.WORKER_IDLE_INTERVAL_MS || "8000"],
   ["WORKER_OFF_EVENT_INTERVAL_MS", process.env.WORKER_OFF_EVENT_INTERVAL_MS || "900000"]
 ];
+pushIfPresent(workerLines, "COMMUNITY_MEDIA_WHEP_BASE_URL", env.communityMediaWhepBaseUrl);
+pushIfPresent(workerLines, "COMMUNITY_MEDIA_READ_USER", env.communityMediaReadUser);
+pushIfPresent(workerLines, "COMMUNITY_MEDIA_READ_PASS", env.communityMediaReadPass);
 
 for (let court = 1; court <= env.courtCount; court += 1) {
   pushIfPresent(vercelLines, `COURT_${court}_PREVIEW_STREAM_PATH`, process.env[`COURT_${court}_PREVIEW_STREAM_PATH`] ?? "");

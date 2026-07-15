@@ -39,7 +39,6 @@ const response = {
     teamBName: "Jones / Lee",
     matchNumber: "M12",
     roundName: "Final",
-    youtubeVideoId: "abc123_PUBLIC",
     format: { bestOf: 3 }
   },
   score: {

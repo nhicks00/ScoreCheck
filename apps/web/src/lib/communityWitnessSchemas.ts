@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { AUTHORITATIVE_FRAME_MAX_AGE_MS } from "./communityPlaybackTiming";
+
+const BROKERED_SCORING_SESSION_ID_PATTERN = /^whep-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export const authorityModeSchema = z.enum([
   "ADMIN_LOCKED",
@@ -10,6 +13,50 @@ export const authorityModeSchema = z.enum([
 
 export const teamSideSchema = z.enum(["A", "B"]);
 export const clientActionIdSchema = z.string().uuid();
+
+const playbackBlockReasonSchema = z.enum([
+  "transport_not_whep",
+  "session_missing",
+  "broker_session_missing",
+  "connection_not_connected",
+  "reconnecting",
+  "playback_paused",
+  "playback_stalled",
+  "media_not_ready",
+  "rendered_frame_missing",
+  "rendered_frame_session_mismatch",
+  "rendered_frame_stale"
+]);
+
+export const playbackEvidenceSchema = z.object({
+  version: z.literal(1),
+  sessionId: z.string().min(8).max(100).regex(/^(whep|hls)-[A-Za-z0-9-]+$/).nullable(),
+  transport: z.enum(["whep", "hls", "none"]),
+  connectionState: z.enum(["new", "connecting", "connected", "disconnected", "failed", "closed", "unknown"]),
+  sampledAtMs: z.number().finite().min(0),
+  baseRevision: z.number().int().min(0).nullable(),
+  currentTimeSeconds: z.number().finite().min(0).nullable(),
+  readyState: z.number().int().min(0).max(4),
+  videoWidth: z.number().int().min(0).max(16_384),
+  videoHeight: z.number().int().min(0).max(16_384),
+  paused: z.boolean(),
+  stalled: z.boolean(),
+  reconnecting: z.boolean(),
+  frame: z.object({
+    source: z.literal("video-frame-callback"),
+    sessionId: z.string().min(8).max(100).regex(/^(whep|hls)-[A-Za-z0-9-]+$/),
+    presentedFrames: z.number().int().min(0),
+    mediaTimeSeconds: z.number().finite().min(0),
+    observedAtMs: z.number().finite().min(0)
+  }).strict().nullable(),
+  qualification: z.object({
+    liveActionEligible: z.boolean(),
+    blockedReason: playbackBlockReasonSchema.nullable(),
+    frameAgeMs: z.number().finite().min(0).nullable(),
+    maxFrameAgeMs: z.number().int().positive().max(10_000)
+  }).strict(),
+  correlation: z.literal("uncorrelated_client_diagnostic")
+}).strict();
 
 export const setScoreSchema = z.object({
   setNumber: z.number().int().min(1).max(99),
@@ -34,6 +81,7 @@ export const canonicalScoreInputSchema = z.object({
 export const scoreCommandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ADD_POINT"), team: teamSideSchema }).strict(),
   z.object({ type: z.literal("REMOVE_POINT"), team: teamSideSchema }).strict(),
+  z.object({ type: z.literal("SET_CURRENT_SET"), set: z.number().int().min(1).max(99) }).strict(),
   z.object({ type: z.literal("CORRECT_SCORE"), score: canonicalScoreInputSchema }).strict(),
   z.object({ type: z.literal("COMPLETE_SET") }).strict(),
   z.object({ type: z.literal("COMPLETE_MATCH") }).strict(),
@@ -65,7 +113,61 @@ export const submitObservationSchema = z.object({
 export const submitCommandSchema = z.object({
   clientActionId: clientActionIdSchema,
   expectedRevision: z.number().int().min(0),
-  action: scoreCommandSchema
+  action: scoreCommandSchema,
+  playbackEvidence: playbackEvidenceSchema.optional()
+}).strict().superRefine((input, context) => {
+  const pointAction = input.action.type === "ADD_POINT" || input.action.type === "REMOVE_POINT";
+  const remoteMediaAction = pointAction || input.action.type === "SET_CURRENT_SET";
+  if (!remoteMediaAction) {
+    if (input.playbackEvidence != null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["playbackEvidence"],
+        message: "Playback evidence is valid only for live-authoritative actions"
+      });
+    }
+    return;
+  }
+
+  const evidence = input.playbackEvidence;
+  // Whether evidence is mandatory depends on the server-held trust tier:
+  // remote designated scorers require it, while organizer-verified courtside
+  // scorers may use direct sight of the physical court. The atomic RPC makes
+  // that authorization decision; supplied evidence must still be coherent.
+  if (evidence == null) return;
+  const frame = evidence?.frame;
+  const frameAge = evidence && frame ? Math.max(0, evidence.sampledAtMs - frame.observedAtMs) : null;
+  const qualified = evidence != null
+    && evidence.baseRevision === input.expectedRevision
+    && evidence.transport === "whep"
+    && evidence.connectionState === "connected"
+    && evidence.sessionId != null
+    && BROKERED_SCORING_SESSION_ID_PATTERN.test(evidence.sessionId)
+    && evidence.paused === false
+    && evidence.stalled === false
+    && evidence.reconnecting === false
+    && evidence.readyState >= 2
+    && evidence.videoWidth > 0
+    && evidence.videoHeight > 0
+    && frame != null
+    && frame.sessionId === evidence.sessionId
+    && frameAge != null
+    && frameAge <= AUTHORITATIVE_FRAME_MAX_AGE_MS
+    && evidence.qualification.liveActionEligible === true
+    && evidence.qualification.blockedReason == null
+    && evidence.qualification.frameAgeMs === frameAge
+    && evidence.qualification.maxFrameAgeMs === AUTHORITATIVE_FRAME_MAX_AGE_MS;
+  if (!qualified) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["playbackEvidence"],
+      message: "A fresh brokered WHEP frame is required for live-authoritative actions"
+    });
+  }
+});
+
+export const commandStatusSchema = z.object({
+  clientActionId: clientActionIdSchema
 }).strict();
 
 export const releaseCommunitySchema = z.object({
@@ -111,7 +213,6 @@ export const matchSchema = z.object({
   teamBName: z.string(),
   matchNumber: z.string().nullable(),
   roundName: z.string().nullable(),
-  youtubeVideoId: z.string().nullable(),
   format: z.record(z.unknown())
 }).strict();
 

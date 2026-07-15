@@ -3,15 +3,25 @@
 import { AlertTriangle, CheckCircle2, LogOut, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { StreamPlayer, type StreamPlayerHandle } from "@/components/StreamPlayer";
+import type { PlaybackEvidenceSnapshot } from "@/lib/communityPlaybackTiming";
+import {
+  createOverlayInvalidationScheduler,
+  invalidationOnlyBroadcastHandler
+} from "@/lib/overlayInvalidation";
+import type { StreamTimingSample } from "@/lib/rtcTiming";
+import { createBrowserSupabase } from "@/lib/supabase-browser";
 import { CommunityWatchAndScore } from "./CommunityWatchAndScore";
-import { CommunityWitnessScorer, type CommunityWitnessScorerProps } from "./CommunityWitnessScorer";
+import type { CommunityWitnessScorerProps } from "./CommunityWitnessScorer";
 import styles from "./CommunityWitnessScorer.module.css";
 import {
   CommunityApiError,
   getCommunitySession,
+  isPendingCommandRecorded,
   parsePendingContribution,
   releaseCommunitySession,
   renewCommunityLease,
+  setCanonicalCurrentSet,
   submitPendingContribution,
   type PendingContribution
 } from "./communityWitnessApi";
@@ -43,7 +53,8 @@ import {
 
 type CommunityWitnessSessionClientProps = {
   exitHref?: string;
-  videoMode?: "embedded" | "external";
+  /** Shares timing from the exact WHEP player used to qualify score actions. */
+  onPreviewTiming?: (sample: StreamTimingSample | null) => void;
 };
 
 type CommunityRefreshOptions = {
@@ -53,7 +64,7 @@ type CommunityRefreshOptions = {
 
 export function CommunityWitnessSessionClient({
   exitHref = "/score",
-  videoMode = "embedded"
+  onPreviewTiming
 }: CommunityWitnessSessionClientProps = {}) {
   const [snapshot, setSnapshot] = useState<CommunitySessionSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
@@ -64,6 +75,9 @@ export function CommunityWitnessSessionClient({
   const [sideOrder, setSideOrder] = useState<[TeamSide, TeamSide]>([...DEFAULT_SIDE_ORDER]);
   const [sideAnnouncement, setSideAnnouncement] = useState("");
   const [releasing, setReleasing] = useState(false);
+  const [setSelectionBusy, setSetSelectionBusy] = useState(false);
+  const [mediaQualification, setMediaQualification] = useState<PlaybackEvidenceSnapshot["qualification"] | null>(null);
+  const [mediaActionError, setMediaActionError] = useState<string | null>(null);
   const [retrySignal, setRetrySignal] = useState(0);
   const [lastObservedRevision, setLastObservedRevision] = useState<number | null>(null);
   const [syncCadenceSignal, setSyncCadenceSignal] = useState(0);
@@ -77,7 +91,18 @@ export function CommunityWitnessSessionClient({
   const preserveActionFeedbackRef = useRef(false);
   const hydratedAssignmentRef = useRef<string | null>(null);
   const previousMatchRef = useRef<string | null>(null);
+  const streamPlayerRef = useRef<StreamPlayerHandle | null>(null);
+  const mediaGateRequiredRef = useRef(false);
+  const setSelectionActionRef = useRef<{ setNumber: number; revision: number; actionId: string } | null>(null);
   const activeMatchId = snapshot?.match.id ?? null;
+
+  const handleScoringQualification = useCallback((qualification: PlaybackEvidenceSnapshot["qualification"]) => {
+    setMediaQualification(qualification);
+    if (!mediaGateRequiredRef.current) return;
+    setMediaActionError(qualification.liveActionEligible
+      ? null
+      : "Video reconnecting — authoritative scoring is paused.");
+  }, []);
 
   const acceptSnapshot = useCallback((
     incoming: CommunitySessionSnapshot,
@@ -124,6 +149,25 @@ export function CommunityWitnessSessionClient({
   useEffect(() => {
     void refresh({ quiet: true });
   }, [refresh]);
+
+  useEffect(() => {
+    const eventId = snapshot?.match.eventId;
+    const courtNumber = snapshot?.match.courtNumber;
+    if (!eventId || !courtNumber) return;
+    const supabase = createBrowserSupabase();
+    if (!supabase) return;
+    const invalidations = createOverlayInvalidationScheduler(() => refresh({ quiet: true }));
+    const channel = supabase
+      .channel(`overlay:${eventId}:court:${courtNumber}`)
+      // Broadcast bodies are untrusted hints. Only the authenticated snapshot
+      // response may update scorekeeping state.
+      .on("broadcast", { event: "overlay_state" }, invalidationOnlyBroadcastHandler(invalidations.invalidate))
+      .subscribe();
+    return () => {
+      invalidations.dispose();
+      void supabase.removeChannel(channel);
+    };
+  }, [refresh, snapshot?.match.courtNumber, snapshot?.match.eventId]);
 
   const renew = useCallback(async () => {
     if (renewingRef.current) return;
@@ -197,11 +241,20 @@ export function CommunityWitnessSessionClient({
   useEffect(() => {
     if (!snapshot || hydratedAssignmentRef.current === snapshot.assignment.id) return;
     hydratedAssignmentRef.current = snapshot.assignment.id;
-    const recovered = parsePendingContribution(readDeviceStorage(contributionOutboxStorageKey(snapshot.assignment.id)));
+    const stored = parsePendingContribution(readDeviceStorage(contributionOutboxStorageKey(snapshot.assignment.id)));
+    // A browser reload destroys proof that a remote point submission was still
+    // in flight. Probe the durable command id; never turn that old tap into a
+    // newly submitted point after reconnecting.
+    const recovered = stored?.requiresLiveMedia
+      ? { ...stored, deliveryUncertain: true }
+      : stored;
     if (recovered) {
+      writeDeviceStorage(contributionOutboxStorageKey(snapshot.assignment.id), JSON.stringify(recovered));
       pendingRef.current = recovered;
       setPending(recovered);
-      setReceipt(failedReceipt(recovered.rallyNumber, recovered.type === "REMOVE_POINT", true));
+      setReceipt(recovered.deliveryUncertain
+        ? uncertainCommandReceipt(recovered, !navigator.onLine)
+        : failedReceipt(recovered.rallyNumber, recovered.type === "REMOVE_POINT", true));
     }
   }, [snapshot]);
 
@@ -219,6 +272,9 @@ export function CommunityWitnessSessionClient({
     setSideOrder(nextOrder);
     setSideAnnouncement("");
     setLastObservedRevision(null);
+    setMediaQualification(null);
+    setMediaActionError(null);
+    setSelectionActionRef.current = null;
   }, [activeMatchId]);
 
   const sendPending = useCallback(async (item: PendingContribution) => {
@@ -245,6 +301,18 @@ export function CommunityWitnessSessionClient({
       setError(null);
     } catch (caught) {
       const retryable = caught instanceof CommunityApiError && caught.retryable;
+      if (retryable && item.requiresLiveMedia) {
+        clearRetryTimer();
+        const uncertain = { ...item, deliveryUncertain: true };
+        pendingRef.current = uncertain;
+        setPending(uncertain);
+        writeDeviceStorage(contributionOutboxStorageKey(activeSnapshot.assignment.id), JSON.stringify(uncertain));
+        setReceipt(uncertainCommandReceipt(uncertain, !navigator.onLine));
+        setError(navigator.onLine
+          ? "The scoring service did not answer. Checking whether it recorded this point; it will not be submitted later."
+          : "Connection lost. When you reconnect, we’ll check whether this point was recorded; it will not be submitted later.");
+        return;
+      }
       if (!retryable) {
         clearRetryTimer();
         retryFailuresRef.current = 0;
@@ -279,16 +347,84 @@ export function CommunityWitnessSessionClient({
     }
   }, [acceptSnapshot, refresh]);
 
+  const resolveUncertainCommand = useCallback(async (item: PendingContribution) => {
+    const activeSnapshot = snapshotRef.current;
+    if (sendingRef.current || !activeSnapshot) return;
+    sendingRef.current = true;
+    try {
+      const recorded = await isPendingCommandRecorded(item.clientActionId);
+      clearRetryTimer();
+      retryFailuresRef.current = 0;
+      pendingRef.current = null;
+      setPending(null);
+      removeDeviceStorage(contributionOutboxStorageKey(activeSnapshot.assignment.id));
+      if (recorded) {
+        const next = await getCommunitySession().catch(() => null);
+        if (next) acceptSnapshot(next);
+        preserveActionFeedbackRef.current = false;
+        setReceipt({
+          rallyNumber: item.type === "REMOVE_POINT" ? null : item.rallyNumber,
+          status: "recorded",
+          message: item.type === "REMOVE_POINT"
+            ? "Your correction was already recorded."
+            : `Your call for Rally ${item.rallyNumber} was already recorded.`
+        });
+        setError(null);
+      } else {
+        preserveActionFeedbackRef.current = true;
+        setReceipt(failedReceipt(item.rallyNumber, item.type === "REMOVE_POINT", false));
+        setError("The interrupted point was not recorded. Confirm the live score, then enter it again while the video is connected.");
+        void refresh({ quiet: true, preserveActionFeedback: true });
+      }
+    } catch (caught) {
+      const retryable = caught instanceof CommunityApiError && caught.retryable;
+      if (retryable) {
+        retryFailuresRef.current += 1;
+        const plan = communityRetryPlan(retryFailuresRef.current, navigator.onLine);
+        setReceipt(uncertainCommandReceipt(item, plan.mode === "offline"));
+        setError(plan.mode === "offline"
+          ? "Reconnect to check whether the server already recorded this point. It will not be submitted later."
+          : "Could not check the score receipt yet. Only the existing receipt will be checked; the point will not be submitted later.");
+        if (plan.retryAfterMs != null) {
+          clearRetryTimer();
+          retryTimerRef.current = window.setTimeout(() => {
+            retryTimerRef.current = null;
+            setRetrySignal((value) => value + 1);
+          }, plan.retryAfterMs);
+        }
+      } else {
+        clearRetryTimer();
+        pendingRef.current = null;
+        setPending(null);
+        removeDeviceStorage(contributionOutboxStorageKey(activeSnapshot.assignment.id));
+        preserveActionFeedbackRef.current = true;
+        setReceipt(failedReceipt(item.rallyNumber, item.type === "REMOVE_POINT", false));
+        setError(caught instanceof Error ? caught.message : "The score receipt could not be checked. Confirm the live score before entering another point.");
+      }
+    } finally {
+      sendingRef.current = false;
+    }
+  }, [acceptSnapshot, refresh]);
+
   useEffect(() => {
     if (!pending || sendingRef.current) return;
     if (!navigator.onLine) {
-      setReceipt(retryableContributionReceipt(pending.rallyNumber, pending.type === "REMOVE_POINT", "offline"));
-      setError((current) => current ?? "Your contribution is saved on this screen. Reconnect before retrying.");
+      setReceipt(pending.deliveryUncertain
+        ? uncertainCommandReceipt(pending, true)
+        : retryableContributionReceipt(pending.rallyNumber, pending.type === "REMOVE_POINT", "offline"));
+      setError((current) => current ?? (pending.deliveryUncertain
+        ? "Reconnect to check whether the server already recorded this point. It will not be submitted later."
+        : "Your contribution is saved on this screen. Reconnect before retrying."));
+      return;
+    }
+    if (pending.deliveryUncertain) {
+      setReceipt(uncertainCommandReceipt(pending, false));
+      void resolveUncertainCommand(pending);
       return;
     }
     setReceipt(sendingReceipt(pending.rallyNumber, pending.type === "REMOVE_POINT"));
     void sendPending(pending);
-  }, [pending, retrySignal, sendPending]);
+  }, [pending, resolveUncertainCommand, retrySignal, sendPending]);
 
   const view = useMemo(() => snapshot ? adaptCommunityWitnessState(snapshot) : null, [snapshot]);
   const waitingForNextRally = snapshot != null
@@ -307,6 +443,18 @@ export function CommunityWitnessSessionClient({
 
   function recordContribution(type: ContributionActionType, team: TeamSide) {
     if (!snapshot || !view || pending || sendingRef.current || !canSubmitContribution(snapshot, type)) return;
+    const requiresLiveMedia = requiresQualifiedMedia(snapshot);
+    const playbackEvidence = requiresLiveMedia
+      ? streamPlayerRef.current?.capturePlaybackEvidence({ baseRevision: snapshot.score.revision })
+      : undefined;
+    if (requiresLiveMedia && !playbackEvidence?.qualification.liveActionEligible) {
+      setMediaActionError("Video reconnecting — authoritative scoring is paused.");
+      streamPlayerRef.current?.retryPlayback();
+      return;
+    }
+    const acceptedPlaybackEvidence = requiresLiveMedia && playbackEvidence?.qualification.liveActionEligible
+      ? playbackEvidence
+      : undefined;
     preserveActionFeedbackRef.current = false;
     const correction = type === "REMOVE_POINT";
     const rallyNumber = contributionRallyNumber(view.currentRallyNumber, type);
@@ -318,7 +466,10 @@ export function CommunityWitnessSessionClient({
       baseRevision: snapshot.score.revision,
       rallyNumber,
       deviceSequence: nextDeviceSequence(snapshot.assignment.id),
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      requiresLiveMedia,
+      deliveryUncertain: false,
+      ...(acceptedPlaybackEvidence ? { playbackEvidence: acceptedPlaybackEvidence } : {})
     };
 
     writeDeviceStorage(contributionOutboxStorageKey(snapshot.assignment.id), JSON.stringify(nextPending));
@@ -328,7 +479,61 @@ export function CommunityWitnessSessionClient({
     setPending(nextPending);
     setReceipt(sendingReceipt(rallyNumber, correction));
     setError(null);
+    setMediaActionError(null);
     navigator.vibrate?.(12);
+  }
+
+  async function selectCanonicalSet(setNumber: number) {
+    if (!snapshot || setSelectionBusy || pending || releasing || !canSelectCanonicalSet(snapshot)) return;
+    if (setNumber === snapshot.score.currentSet) return;
+    const bestOf = matchBestOf(snapshot.match.format);
+    if (!Number.isInteger(setNumber) || setNumber < 1 || setNumber > bestOf) return;
+    const confirmed = window.confirm(
+      `Change the official current set from Set ${snapshot.score.currentSet} to Set ${setNumber}? This updates every scorekeeper.`
+    );
+    if (!confirmed) return;
+
+    const requiresLiveMedia = requiresQualifiedMedia(snapshot);
+    const playbackEvidence = requiresLiveMedia
+      ? streamPlayerRef.current?.capturePlaybackEvidence({ baseRevision: snapshot.score.revision })
+      : undefined;
+    if (requiresLiveMedia && !playbackEvidence?.qualification.liveActionEligible) {
+      setMediaActionError("Video reconnecting — authoritative scoring is paused.");
+      streamPlayerRef.current?.retryPlayback();
+      return;
+    }
+
+    const revision = snapshot.score.revision;
+    const previousAction = setSelectionActionRef.current;
+    const action = previousAction?.setNumber === setNumber && previousAction.revision === revision
+      ? previousAction
+      : { setNumber, revision, actionId: crypto.randomUUID() };
+    setSelectionActionRef.current = action;
+    setSetSelectionBusy(true);
+    setError(null);
+    try {
+      const next = await setCanonicalCurrentSet({
+        clientActionId: action.actionId,
+        expectedRevision: action.revision,
+        setNumber: action.setNumber,
+        ...(playbackEvidence ? { playbackEvidence } : {})
+      });
+      acceptSnapshot(next);
+      setReceipt({
+        rallyNumber: null,
+        status: "corrected",
+        message: `Official current set changed to Set ${setNumber}.`
+      });
+      setSelectionActionRef.current = null;
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The official set could not be changed.");
+      if (caught instanceof CommunityApiError && caught.status === 409) {
+        setSelectionActionRef.current = null;
+        void refresh({ quiet: true });
+      }
+    } finally {
+      setSetSelectionBusy(false);
+    }
   }
 
   function retrySavedContribution() {
@@ -337,8 +542,12 @@ export function CommunityWitnessSessionClient({
     clearRetryTimer();
     retryFailuresRef.current = 0;
     if (!navigator.onLine) {
-      setReceipt(retryableContributionReceipt(pending.rallyNumber, pending.type === "REMOVE_POINT", "offline"));
-      setError("Your contribution is saved on this screen. Reconnect before retrying.");
+      setReceipt(pending.deliveryUncertain
+        ? uncertainCommandReceipt(pending, true)
+        : retryableContributionReceipt(pending.rallyNumber, pending.type === "REMOVE_POINT", "offline"));
+      setError(pending.deliveryUncertain
+        ? "Reconnect to check whether the server already recorded this point. It will not be submitted later."
+        : "Your contribution is saved on this screen. Reconnect before retrying.");
       return;
     }
     setError(null);
@@ -397,8 +606,14 @@ export function CommunityWitnessSessionClient({
     );
   }
 
-  const addEnabled = canSubmitContribution(snapshot, "ADD_POINT") && !waitingForNextRally && !pending && !releasing;
-  const removeEnabled = canSubmitContribution(snapshot, "REMOVE_POINT") && !waitingForNextRally && !pending && !releasing;
+  const mediaGateRequired = requiresQualifiedMedia(snapshot);
+  mediaGateRequiredRef.current = mediaGateRequired;
+  const mediaEligible = !mediaGateRequired || mediaQualification?.liveActionEligible === true;
+  const addEnabled = canSubmitContribution(snapshot, "ADD_POINT") && mediaEligible && !waitingForNextRally && !pending && !releasing && !setSelectionBusy;
+  const removeEnabled = canSubmitContribution(snapshot, "REMOVE_POINT") && mediaEligible && !waitingForNextRally && !pending && !releasing && !setSelectionBusy;
+  const setSelectionAuthority = canSelectCanonicalSet(snapshot);
+  const setSelectionEnabled = setSelectionAuthority && !pending && !releasing;
+  const availableSets = setNumbersForMatch(snapshot.match.format, snapshot.score);
   const activeScore = snapshot.score;
   const authorityMessage = assignmentMessage(snapshot, waitingForNextRally);
   const scorerProps: CommunityWitnessScorerProps = {
@@ -415,36 +630,66 @@ export function CommunityWitnessSessionClient({
     },
     onAddPoint: (side) => recordContribution("ADD_POINT", side),
     onRemovePoint: (side) => recordContribution("REMOVE_POINT", side),
-    onSwitchSides: switchSides
+    onSwitchSides: switchSides,
+    availableSets,
+    setSelectionBusy: setSelectionBusy || pending != null || releasing || (setSelectionAuthority && !mediaEligible),
+    onSelectSet: setSelectionEnabled ? (setNumber) => void selectCanonicalSet(setNumber) : undefined
+  };
+  const visibleError = mediaActionError ?? error;
+  const recoveryAction = mediaActionError ? {
+    label: "Reconnect video",
+    disabled: false,
+    run: () => {
+      setMediaActionError(null);
+      streamPlayerRef.current?.retryPlayback();
+    }
+  } : {
+    label: pending
+      ? receipt?.status === "sending"
+        ? "Submitting…"
+        : pending.deliveryUncertain ? "Check score receipt" : "Retry saved contribution"
+      : refreshing ? "Checking…" : "Check again",
+    disabled: pending ? receipt?.status === "sending" : refreshing,
+    run: () => pending ? retrySavedContribution() : checkAgain()
   };
 
   return (
     <main className={styles.sessionShell}>
-      {error && (
+      {visibleError && (
         <div className={styles.sessionAlert} role="alert">
           <AlertTriangle size={19} aria-hidden="true" />
-          <span>{error}</span>
+          <span>{visibleError}</span>
           <button
             type="button"
-            onClick={() => pending ? retrySavedContribution() : checkAgain()}
-            disabled={pending ? receipt?.status === "sending" : refreshing}
+            onClick={recoveryAction.run}
+            disabled={recoveryAction.disabled}
           >
-            <RefreshCw size={17} aria-hidden="true" /> {pending
-              ? receipt?.status === "sending" ? "Submitting…" : "Retry saved contribution"
-              : refreshing ? "Checking…" : "Check again"}
+            <RefreshCw size={17} aria-hidden="true" /> {recoveryAction.label}
           </button>
         </div>
       )}
 
-      {videoMode === "embedded" ? (
-        <CommunityWatchAndScore
-          {...scorerProps}
-          youtubeVideoId={snapshot.match.youtubeVideoId}
-          videoGuidance={videoGuidance(snapshot.assignment.role)}
-        />
-      ) : (
-        <CommunityWitnessScorer {...scorerProps} />
-      )}
+      <CommunityWatchAndScore
+        {...scorerProps}
+        media={(
+          <StreamPlayer
+            ref={streamPlayerRef}
+            courtNumber={snapshot.match.courtNumber}
+            sources={{ whepUrl: "/api/community/session/media/whep", hlsUrl: null }}
+            mode="scoring"
+            onTimingSample={onPreviewTiming}
+            onScoringQualification={handleScoringQualification}
+          />
+        )}
+        videoGuidance={videoGuidance(snapshot.assignment.role)}
+        videoRequiredForScoring={mediaGateRequired}
+        focusRecovery={visibleError ? {
+          message: visibleError,
+          actionLabel: recoveryAction.label,
+          actionDisabled: recoveryAction.disabled,
+          onAction: recoveryAction.run
+        } : null}
+      />
 
       <section className={styles.sessionFooter} aria-label="Your community session">
         <div>
@@ -462,6 +707,15 @@ export function CommunityWitnessSessionClient({
       </section>
     </main>
   );
+}
+
+function uncertainCommandReceipt(item: PendingContribution, offline: boolean): CommunityReceipt {
+  const subject = item.type === "REMOVE_POINT" ? "Correction" : `Rally ${item.rallyNumber}`;
+  return {
+    rallyNumber: item.type === "REMOVE_POINT" ? null : item.rallyNumber,
+    status: offline ? "offline" : "retrying",
+    message: `${subject} receipt pending · ${offline ? "reconnect to check" : "checking recorded status"}`
+  };
 }
 
 function nextDeviceSequence(assignmentId: string): number {
@@ -523,7 +777,35 @@ function assignmentMessage(snapshot: CommunitySessionSnapshot, waitingForNextRal
 
 function videoGuidance(role: CommunitySessionSnapshot["assignment"]["role"]): string {
   if (role === "OBSERVER") {
-    return "The public broadcast may be delayed. Your call is evidence until the rally is resolved.";
+    return "Watch the court and record only what you see. Your call remains evidence until the rally is resolved.";
   }
-  return "Use the live court for authoritative calls; the public broadcast may be delayed.";
+  return "Keep the court in view while scoring. A reconnect pauses authoritative actions.";
+}
+
+function canSelectCanonicalSet(snapshot: CommunitySessionSnapshot): boolean {
+  return snapshot.assignment.status === "ACTIVE"
+    && snapshot.assignment.role === "DESIGNATED_SCORER"
+    && snapshot.score.authorityMode === "DESIGNATED_PRIMARY"
+    && snapshot.score.status !== "Final";
+}
+
+function matchBestOf(format: Record<string, unknown>): number {
+  const value = Number(format.bestOf);
+  return Number.isInteger(value) && value >= 1 && value <= 99 ? value : 3;
+}
+
+function setNumbersForMatch(
+  format: Record<string, unknown>,
+  score: CommunitySessionSnapshot["score"]
+): number[] {
+  const completed = new Set(score.setScores
+    .filter((set) => set.isComplete)
+    .map((set) => set.setNumber));
+  return Array.from({ length: matchBestOf(format) }, (_, index) => index + 1)
+    .filter((setNumber) => setNumber === score.currentSet || !completed.has(setNumber));
+}
+
+function requiresQualifiedMedia(snapshot: CommunitySessionSnapshot): boolean {
+  return snapshot.assignment.role === "DESIGNATED_SCORER"
+    && snapshot.assignment.trustTier !== "VERIFIED_COURTSIDE";
 }

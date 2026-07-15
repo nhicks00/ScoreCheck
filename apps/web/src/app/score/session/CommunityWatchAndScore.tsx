@@ -1,31 +1,32 @@
 "use client";
 
 import {
-  ArrowLeftRight,
-  ChevronDown,
-  ExternalLink,
   Maximize2,
-  Minimize2,
-  Minus,
-  Plus,
   Radio,
   Video,
   VideoOff
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { CommunityScoreOverlay, type CommunityScoreOverlayRecovery } from "./CommunityScoreOverlay";
 import { CommunityWitnessScorer, type CommunityWitnessScorerProps } from "./CommunityWitnessScorer";
-import { contributionRallyNumber } from "./communityWitnessUi";
+import {
+  COMMUNITY_SCORE_CONTROLS_POSITION_KEY,
+  DEFAULT_COMMUNITY_SCORE_CONTROLS_POSITION,
+  oppositeCommunityScoreControlsPosition,
+  parseCommunityScoreControlsPosition,
+  type CommunityScoreControlsPosition
+} from "./communityScoreOverlayPreference";
 import {
   COMMUNITY_WATCH_PREFERENCE_KEY,
-  storedVideoPreference,
-  youtubeEmbedUrl,
-  youtubeWatchUrl
+  storedVideoPreference
 } from "./communityWatchMode";
 import styles from "./CommunityWatchAndScore.module.css";
 
 type CommunityWatchAndScoreProps = CommunityWitnessScorerProps & {
-  youtubeVideoId: string | null;
+  media: ReactNode | null;
   videoGuidance: string;
+  videoRequiredForScoring: boolean;
+  focusRecovery?: CommunityScoreOverlayRecovery | null;
 };
 
 type WebkitFullscreenElement = HTMLElement & {
@@ -38,13 +39,16 @@ type WebkitFullscreenDocument = Document & {
 };
 
 export function CommunityWatchAndScore(props: CommunityWatchAndScoreProps) {
-  const embedUrl = useMemo(() => youtubeEmbedUrl(props.youtubeVideoId), [props.youtubeVideoId]);
-  const watchUrl = useMemo(() => youtubeWatchUrl(props.youtubeVideoId), [props.youtubeVideoId]);
+  const mediaAvailable = props.media != null;
   const [preferenceReady, setPreferenceReady] = useState(false);
   const [videoVisible, setVideoVisible] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [nativeFullscreen, setNativeFullscreen] = useState(false);
+  const [controlsPosition, setControlsPosition] = useState<CommunityScoreControlsPosition>(
+    DEFAULT_COMMUNITY_SCORE_CONTROLS_POSITION
+  );
   const [modeAnnouncement, setModeAnnouncement] = useState("");
+  const [positionAnnouncement, setPositionAnnouncement] = useState("");
   const shellRef = useRef<HTMLDivElement | null>(null);
   const enterButtonRef = useRef<HTMLButtonElement | null>(null);
   const exitButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -53,17 +57,20 @@ export function CommunityWatchAndScore(props: CommunityWatchAndScoreProps) {
   const restoreFocusAfterExitRef = useRef(false);
 
   useEffect(() => {
-    const visible = storedVideoPreference(readStorage(COMMUNITY_WATCH_PREFERENCE_KEY), embedUrl != null);
+    const visible = props.videoRequiredForScoring
+      ? mediaAvailable
+      : storedVideoPreference(readStorage(COMMUNITY_WATCH_PREFERENCE_KEY), mediaAvailable);
     setVideoVisible(visible);
+    setControlsPosition(parseCommunityScoreControlsPosition(readStorage(COMMUNITY_SCORE_CONTROLS_POSITION_KEY)));
     setPreferenceReady(true);
-  }, [embedUrl]);
+  }, [mediaAvailable, props.videoRequiredForScoring]);
 
   useEffect(() => {
-    if (embedUrl) return;
+    if (mediaAvailable) return;
     setFocusMode(false);
     setNativeFullscreen(false);
     nativeFullscreenRef.current = false;
-  }, [embedUrl]);
+  }, [mediaAvailable]);
 
   useEffect(() => {
     const onFullscreenChange = () => {
@@ -137,26 +144,16 @@ export function CommunityWatchAndScore(props: CommunityWatchAndScoreProps) {
   }, [focusMode]);
 
   function setWatching(next: boolean) {
-    if (!embedUrl) return;
+    if (!mediaAvailable) return;
+    if (!next && props.videoRequiredForScoring) return;
     setVideoVisible(next);
     writeStorage(COMMUNITY_WATCH_PREFERENCE_KEY, next ? "watch" : "score-only");
     setModeAnnouncement(next ? "Broadcast video shown." : "Score-only view shown. Video playback stopped.");
     if (!next && focusMode) void exitFocusMode();
   }
 
-  function revealScoreControls() {
-    const shell = shellRef.current;
-    const controls = shell?.querySelector<HTMLElement>('[aria-label="Full screen score controls"]');
-    if (!shell || !controls) return;
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    shell.scrollTo({
-      behavior: reducedMotion ? "auto" : "smooth",
-      top: controls.offsetTop
-    });
-  }
-
   async function enterFocusMode() {
-    if (!embedUrl || !shellRef.current) return;
+    if (!mediaAvailable || !shellRef.current) return;
     returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setVideoVisible(true);
     writeStorage(COMMUNITY_WATCH_PREFERENCE_KEY, "watch");
@@ -200,6 +197,13 @@ export function CommunityWatchAndScore(props: CommunityWatchAndScoreProps) {
     setModeAnnouncement("Focus view closed.");
   }
 
+  function moveScoreControls() {
+    const next = oppositeCommunityScoreControlsPosition(controlsPosition);
+    setControlsPosition(next);
+    writeStorage(COMMUNITY_SCORE_CONTROLS_POSITION_KEY, next);
+    setPositionAnnouncement(`Both team score controls moved to the ${next} corners.`);
+  }
+
   function trapFocus(event: KeyboardEvent<HTMLDivElement>) {
     if (!focusMode) return;
     if (event.key === "Escape") {
@@ -209,8 +213,8 @@ export function CommunityWatchAndScore(props: CommunityWatchAndScoreProps) {
     }
     if (event.key !== "Tab" || !shellRef.current) return;
     const focusable = [...shellRef.current.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), a[href], iframe, [tabindex]:not([tabindex="-1"]):not([data-focus-sentinel])'
-    )].filter((element) => element.getAttribute("aria-hidden") !== "true");
+      'button:not([disabled]), select:not([disabled]), a[href], iframe, [tabindex]:not([tabindex="-1"]):not([data-focus-sentinel])'
+    )].filter((element) => element.getAttribute("aria-hidden") !== "true" && element.getClientRects().length > 0);
     if (focusable.length === 0) return;
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
@@ -226,8 +230,8 @@ export function CommunityWatchAndScore(props: CommunityWatchAndScoreProps) {
   function wrapFocus(edge: "start" | "end") {
     if (!shellRef.current) return;
     const focusable = [...shellRef.current.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), a[href], iframe, [tabindex]:not([tabindex="-1"]):not([data-focus-sentinel])'
-    )].filter((element) => element.getAttribute("aria-hidden") !== "true");
+      'button:not([disabled]), select:not([disabled]), a[href], iframe, [tabindex]:not([tabindex="-1"]):not([data-focus-sentinel])'
+    )].filter((element) => element.getAttribute("aria-hidden") !== "true" && element.getClientRects().length > 0);
     const target = edge === "start" ? focusable[0] : focusable[focusable.length - 1];
     target?.focus();
   }
@@ -235,7 +239,7 @@ export function CommunityWatchAndScore(props: CommunityWatchAndScoreProps) {
   return (
     <div
       ref={shellRef}
-      className={`${styles.watchShell} ${videoVisible ? styles.withVideo : styles.scoreOnly} ${focusMode ? styles.focusMode : ""}`}
+      className={`${styles.watchShell} ${videoVisible ? styles.withVideo : styles.scoreOnly} ${focusMode ? styles.focusMode : ""} ${controlsPosition === "top" ? styles.scoreControlsTop : styles.scoreControlsBottom}`}
       role={focusMode ? "dialog" : undefined}
       aria-modal={focusMode ? true : undefined}
       aria-label={focusMode ? "Full screen watch and score" : undefined}
@@ -253,46 +257,32 @@ export function CommunityWatchAndScore(props: CommunityWatchAndScoreProps) {
         <header className={styles.watchToolbar}>
           <div>
             <span><Radio size={18} aria-hidden="true" /> Watch &amp; score</span>
-            <small>{embedUrl ? props.videoGuidance : "A public broadcast is not available for this court. Scoring remains active."}</small>
+            <small>{mediaAvailable
+              ? props.videoGuidance
+              : props.videoRequiredForScoring
+                ? "Court video is unavailable. Remote authoritative scoring is paused."
+                : "Court video is unavailable. You can still record what you see."}</small>
           </div>
           <div className={styles.watchActions}>
-            {embedUrl && (
+            {mediaAvailable && !props.videoRequiredForScoring && (
               <button type="button" onClick={() => setWatching(!videoVisible)} aria-pressed={videoVisible}>
                 {videoVisible ? <VideoOff size={18} aria-hidden="true" /> : <Video size={18} aria-hidden="true" />}
                 {videoVisible ? "Score only" : "Show video"}
               </button>
             )}
-            {videoVisible && embedUrl && (
+            {videoVisible && mediaAvailable && (
               <button ref={enterButtonRef} type="button" onClick={() => void enterFocusMode()}>
                 <Maximize2 size={18} aria-hidden="true" /> Full screen scoring
               </button>
-            )}
-            {watchUrl && (
-              <a href={watchUrl} target="_blank" rel="noopener" aria-label="Open this court broadcast on YouTube in a new tab">
-                <ExternalLink size={18} aria-hidden="true" /> YouTube
-              </a>
             )}
           </div>
         </header>
       )}
 
-      {videoVisible && embedUrl && (
+      {videoVisible && mediaAvailable && (
         <section className={styles.videoPane} aria-label="Court broadcast video">
-          <iframe
-            src={embedUrl}
-            title={`${props.view.courtLabel} public broadcast`}
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-            loading="eager"
-            referrerPolicy="strict-origin-when-cross-origin"
-            tabIndex={0}
-          />
+          {props.media}
         </section>
-      )}
-
-      {focusMode && embedUrl && (
-        <button className={styles.focusScoreCue} type="button" onClick={revealScoreControls}>
-          Score controls <ChevronDown size={18} aria-hidden="true" />
-        </button>
       )}
 
       {!focusMode && (
@@ -301,16 +291,20 @@ export function CommunityWatchAndScore(props: CommunityWatchAndScoreProps) {
         </div>
       )}
 
-      {focusMode && embedUrl && (
-        <CommunityScorePanel
+      {focusMode && mediaAvailable && (
+        <CommunityScoreOverlay
           {...props}
+          controlsPosition={controlsPosition}
+          positionAnnouncement={positionAnnouncement}
           nativeFullscreen={nativeFullscreen}
           exitButtonRef={exitButtonRef}
+          recovery={props.focusRecovery ?? null}
           onExit={() => void exitFocusMode()}
+          onMoveControls={moveScoreControls}
         />
       )}
 
-      {!preferenceReady && embedUrl && <span className={styles.preferenceLoading}>Preparing your saved watch view…</span>}
+      {!preferenceReady && mediaAvailable && <span className={styles.preferenceLoading}>Preparing your saved watch view…</span>}
       <p className={styles.visuallyHidden} aria-live="polite">{modeAnnouncement}</p>
       {focusMode && (
         <span
@@ -321,92 +315,6 @@ export function CommunityWatchAndScore(props: CommunityWatchAndScoreProps) {
         />
       )}
     </div>
-  );
-}
-
-function CommunityScorePanel({
-  view,
-  sideOrder,
-  receipt,
-  sideAnnouncement,
-  addDisabled,
-  busyTeam,
-  correctionBusyTeam,
-  removeDisabled,
-  onAddPoint,
-  onRemovePoint,
-  onSwitchSides,
-  nativeFullscreen,
-  exitButtonRef,
-  onExit
-}: CommunityWitnessScorerProps & {
-  nativeFullscreen: boolean;
-  exitButtonRef: RefObject<HTMLButtonElement | null>;
-  onExit: () => void;
-}) {
-  const visibleReceipt = receipt ?? view.latestReceipt ?? {
-    rallyNumber: contributionRallyNumber(view.currentRallyNumber, "ADD_POINT"),
-    status: "recorded" as const,
-    message: `Ready for Rally ${contributionRallyNumber(view.currentRallyNumber, "ADD_POINT")}`
-  };
-
-  return (
-    <section className={styles.focusPanel} aria-label="Full screen score controls">
-      <header className={styles.focusHeader}>
-        <button ref={exitButtonRef} type="button" onClick={onExit} aria-label={`Exit ${nativeFullscreen ? "full screen" : "focus view"}`}>
-          <Minimize2 size={19} aria-hidden="true" /> <span className={styles.focusControlLabel}>Exit {nativeFullscreen ? "full screen" : "focus view"}</span>
-        </button>
-        <div className={styles.focusMatch}>
-          <span>{view.courtLabel} · {view.matchLabel}</span>
-          <strong>Set {view.currentSet}</strong>
-          <small>Official score · video may be delayed</small>
-        </div>
-        <button type="button" onClick={onSwitchSides} aria-label="Switch team sides visually">
-          <ArrowLeftRight size={19} aria-hidden="true" /> <span className={styles.focusControlLabel}>Switch sides</span>
-        </button>
-      </header>
-
-      <div className={styles.focusReceipt} role="status" aria-live="polite">
-        {visibleReceipt.message}
-      </div>
-
-      <div className={styles.focusTeams}>
-        {sideOrder.map((side) => {
-          const team = view.teams[side];
-          const savingPoint = busyTeam === side;
-          const savingCorrection = correctionBusyTeam === side;
-          return (
-            <article className={`${styles.focusTeam} ${team.tone === "blue" ? styles.focusBlue : styles.focusRed}`} key={side}>
-              <div>
-                <h2>{team.name}</h2>
-                <output aria-label={`${team.name} official score`}>{team.score}</output>
-              </div>
-              {!view.isFinal && (
-                <button
-                  className={styles.focusAdd}
-                  type="button"
-                  aria-label={`Add one point for ${team.name}`}
-                  onClick={() => onAddPoint(side)}
-                  disabled={addDisabled}
-                >
-                  <Plus size={25} aria-hidden="true" /> {savingPoint ? "Recording…" : "Add point"}
-                </button>
-              )}
-              <button
-                className={styles.focusRemove}
-                type="button"
-                aria-label={`Remove one point from ${team.name}`}
-                onClick={() => onRemovePoint(side)}
-                disabled={removeDisabled[side]}
-              >
-                <Minus size={20} aria-hidden="true" /> {savingCorrection ? "Correcting…" : "Remove point"}
-              </button>
-            </article>
-          );
-        })}
-      </div>
-      <p className={styles.visuallyHidden} aria-live="polite">{sideAnnouncement}</p>
-    </section>
   );
 }
 

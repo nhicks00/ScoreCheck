@@ -468,7 +468,7 @@ button.danger:hover:not(:disabled) {
   align-self: center;
   flex: 0 0 auto;
   font-size: 14px;
-  min-height: 42px;
+  min-height: 44px;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1896,6 +1896,67 @@ label {
   background: #04060a;
   border-radius: var(--r-sm);
   width: 100%;
+}
+
+.scoring-stream-preview {
+  height: 100%;
+  overflow: hidden;
+  padding: 0;
+  position: relative;
+}
+
+.scoring-stream-preview .scoring-video-controls {
+  align-items: center;
+  background: rgba(3, 11, 21, 0.84);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  bottom: max(8px, env(safe-area-inset-bottom));
+  display: flex;
+  gap: 6px;
+  left: 50%;
+  max-width: calc(100% - 16px);
+  padding: 5px;
+  position: absolute;
+  transform: translateX(-50%);
+  width: max-content;
+  z-index: 4;
+}
+
+.scoring-stream-preview .scoring-video-controls > span {
+  color: #fff;
+  flex: 0 1 auto;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 6px;
+}
+
+.scoring-stream-preview .scoring-video-controls button {
+  align-items: center;
+  background: rgba(9, 24, 39, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 8px;
+  color: #fff;
+  display: inline-flex;
+  gap: 5px;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 7px 9px;
+}
+
+.scoring-stream-preview .scoring-video-controls button span {
+  font-size: 12px;
+}
+
+@media (max-width: 560px), (max-height: 420px) {
+  .scoring-stream-preview .scoring-video-controls button span {
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    height: 1px;
+    overflow: hidden;
+    position: absolute;
+    white-space: nowrap;
+    width: 1px;
+  }
 }
 
 /* Video-first mode: keep the stream in view while the scorer scrolls the

@@ -17,6 +17,15 @@ export type AppEnv = {
   mediamtxReadUser: string;
   mediamtxReadPass: string;
   mediamtxRtmpIngestBase: string;
+  /** Capacity-qualified read edge used only by the same-origin community
+   * signaling broker. It must never point at the MediaMTX origin. */
+  communityMediaWhepBaseUrl: string;
+  communityMediaReadUser: string;
+  communityMediaReadPass: string;
+  /** Explicit measured admission ceilings. Zero keeps playback fail-closed. */
+  communityMediaMaxPerCourt: number;
+  communityMediaMaxTotal: number;
+  communityMediaSessionSeconds: number;
   /** YouTube Data API v3 key — used for the live-chat monitor reader when
    * OAuth is not configured. Works for reading PUBLIC live chats. */
   youtubeApiKey: string;
@@ -49,6 +58,12 @@ export function getEnv(): AppEnv {
     mediamtxReadUser: process.env.MEDIAMTX_READ_USER ?? "",
     mediamtxReadPass: process.env.MEDIAMTX_READ_PASS ?? "",
     mediamtxRtmpIngestBase: process.env.MEDIAMTX_RTMP_INGEST_BASE ?? "",
+    communityMediaWhepBaseUrl: process.env.COMMUNITY_MEDIA_WHEP_BASE_URL ?? "",
+    communityMediaReadUser: process.env.COMMUNITY_MEDIA_READ_USER ?? "",
+    communityMediaReadPass: process.env.COMMUNITY_MEDIA_READ_PASS ?? "",
+    communityMediaMaxPerCourt: boundedIntegerEnv("COMMUNITY_MEDIA_MAX_PER_COURT", 0, 0, 5_000),
+    communityMediaMaxTotal: boundedIntegerEnv("COMMUNITY_MEDIA_MAX_TOTAL", 0, 0, 20_000),
+    communityMediaSessionSeconds: boundedIntegerEnv("COMMUNITY_MEDIA_SESSION_SECONDS", 120, 30, 600),
     youtubeApiKey: process.env.YOUTUBE_API_KEY ?? "",
     youtubeClientId: process.env.YOUTUBE_CLIENT_ID ?? "",
     youtubeClientSecret: process.env.YOUTUBE_CLIENT_SECRET ?? "",
@@ -134,6 +149,27 @@ function numberEnv(key: string, fallback: number): number {
   const value = Number(raw);
   if (Number.isFinite(value) && value > 0) return value;
   console.warn(`Invalid numeric value for ${key}: ${JSON.stringify(raw)}; using ${fallback}`);
+  return fallback;
+}
+
+/**
+ * Reads an integer-valued deployment setting without letting malformed or
+ * unbounded input silently expand an operational limit. Callers should choose
+ * a fail-closed fallback for capacity controls.
+ */
+export function boundedIntegerEnv(
+  key: string,
+  fallback: number,
+  minimum: number,
+  maximum: number
+): number {
+  const raw = process.env[key];
+  if (raw == null || raw.trim() === "") return fallback;
+  const value = Number(raw);
+  if (Number.isInteger(value) && value >= minimum && value <= maximum) return value;
+  console.warn(
+    `Invalid integer value for ${key}: ${JSON.stringify(raw)}; expected ${minimum}..${maximum}, using ${fallback}`
+  );
   return fallback;
 }
 

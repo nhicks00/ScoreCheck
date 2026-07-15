@@ -6,6 +6,7 @@ import {
 } from "@/lib/communityWitness";
 import { communityApiError, communityToken } from "@/lib/communityHttp";
 import { releaseCommunitySchema } from "@/lib/communityWitnessSchemas";
+import { requestCommunityMediaSessionClose } from "@/lib/communityMedia";
 
 export async function POST(req: NextRequest) {
   const token = communityToken(req);
@@ -13,7 +14,13 @@ export async function POST(req: NextRequest) {
   try {
     const parsed = releaseCommunitySchema.safeParse(await req.json().catch(() => null));
     if (!parsed.success) return NextResponse.json({ error: "Invalid release request" }, { status: 400 });
-    const response = NextResponse.json(await releaseCommunitySession({ sessionToken: token, ...parsed.data }));
+    const snapshot = await releaseCommunitySession({ sessionToken: token, ...parsed.data });
+    await requestCommunityMediaSessionClose(token).catch((error) => {
+      console.error("Community media release scheduling failed", {
+        code: error instanceof Error ? error.name : "UNEXPECTED"
+      });
+    });
+    const response = NextResponse.json(snapshot);
     response.cookies.set(communitySessionCookie, "", { ...communitySessionCookieOptions, maxAge: 0 });
     return response;
   } catch (error) {

@@ -3,6 +3,9 @@ import type {
   ContributionActionType,
   TeamSide
 } from "./communityWitnessUi";
+import type { PlaybackEvidenceSnapshot } from "@/lib/communityPlaybackTiming";
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export type PendingContribution = {
   clientActionId: string;
@@ -13,6 +16,9 @@ export type PendingContribution = {
   rallyNumber: number;
   deviceSequence: number;
   createdAt: string;
+  requiresLiveMedia: boolean;
+  deliveryUncertain: boolean;
+  playbackEvidence?: PlaybackEvidenceSnapshot;
 };
 
 export class CommunityApiError extends Error {
@@ -59,7 +65,45 @@ export async function submitPendingContribution(pending: PendingContribution): P
     body: JSON.stringify({
       clientActionId: pending.clientActionId,
       expectedRevision: pending.baseRevision,
-      action: { type: pending.type, team: pending.team }
+      action: { type: pending.type, team: pending.team },
+      ...(pending.playbackEvidence ? { playbackEvidence: pending.playbackEvidence } : {})
+    })
+  });
+}
+
+export async function isPendingCommandRecorded(clientActionId: string): Promise<boolean> {
+  let response: Response;
+  try {
+    response = await fetch("/api/community/session/commands/status", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ clientActionId })
+    });
+  } catch {
+    throw new CommunityApiError("Could not check the score receipt.", 0, true);
+  }
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok || json.ok !== true || typeof json.recorded !== "boolean") {
+    const message = friendlyApiError(typeof json.error === "string" ? json.error : null, response.status);
+    throw new CommunityApiError(message, response.status, response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500);
+  }
+  return json.recorded;
+}
+
+export async function setCanonicalCurrentSet(input: {
+  clientActionId: string;
+  expectedRevision: number;
+  setNumber: number;
+  playbackEvidence?: PlaybackEvidenceSnapshot;
+}): Promise<CommunitySessionSnapshot> {
+  return requestSnapshot("/api/community/session/commands", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      clientActionId: input.clientActionId,
+      expectedRevision: input.expectedRevision,
+      action: { type: "SET_CURRENT_SET", set: input.setNumber },
+      ...(input.playbackEvidence ? { playbackEvidence: input.playbackEvidence } : {})
     })
   });
 }
@@ -78,6 +122,7 @@ export function parsePendingContribution(raw: string | null): PendingContributio
     const input = JSON.parse(raw) as Partial<PendingContribution>;
     if (
       typeof input.clientActionId === "string"
+      && UUID_PATTERN.test(input.clientActionId)
       && (input.kind === "observation" || input.kind === "command")
       && (input.type === "ADD_POINT" || input.type === "REMOVE_POINT")
       && (input.team === "A" || input.team === "B")
@@ -88,6 +133,11 @@ export function parsePendingContribution(raw: string | null): PendingContributio
       && Number.isInteger(input.deviceSequence)
       && Number(input.deviceSequence) >= 0
       && typeof input.createdAt === "string"
+      && typeof input.requiresLiveMedia === "boolean"
+      && typeof input.deliveryUncertain === "boolean"
+      && (input.kind === "command" || input.requiresLiveMedia === false)
+      && (input.requiresLiveMedia === false || input.playbackEvidence != null)
+      && (input.playbackEvidence == null || isPlaybackEvidenceSnapshot(input.playbackEvidence))
     ) {
       return input as PendingContribution;
     }
@@ -95,6 +145,17 @@ export function parsePendingContribution(raw: string | null): PendingContributio
     // Ignore corrupt device-local retry state.
   }
   return null;
+}
+
+function isPlaybackEvidenceSnapshot(value: unknown): value is PlaybackEvidenceSnapshot {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Partial<PlaybackEvidenceSnapshot>;
+  return record.version === 1
+    && record.correlation === "uncorrelated_client_diagnostic"
+    && (record.transport === "whep" || record.transport === "hls" || record.transport === "none")
+    && typeof record.qualification === "object"
+    && record.qualification != null
+    && typeof record.qualification.liveActionEligible === "boolean";
 }
 
 async function requestSnapshot(url: string, init: RequestInit): Promise<CommunitySessionSnapshot> {

@@ -26,7 +26,6 @@ export type CommunityMatch = {
   teamBName: string;
   matchNumber: string | null;
   roundName: string | null;
-  youtubeVideoId: string | null;
   format: Record<string, unknown>;
 };
 

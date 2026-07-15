@@ -5,6 +5,7 @@ import { getActiveEvent } from "../../lib/eventConfig";
 import { supabaseAdmin } from "../../lib/supabase";
 import { courtPreviewStreamPath, courtProgramStreamPath, videoConfigured } from "../../lib/video";
 import { loadLocalEnv } from "../envLoader";
+import { communityMediaReadiness } from "./communityMediaReadiness";
 
 type Status = "ok" | "warning" | "blocked";
 
@@ -31,6 +32,7 @@ async function main() {
   const sections = {
     supabase: await supabaseSection(),
     mediaMtx: mediaMtxSection(),
+    communityMedia: communityMediaSection(),
     streamRun: streamRunSection(),
     vercel: await vercelSection(),
     generatedArtifacts: generatedArtifactsSection()
@@ -39,6 +41,7 @@ async function main() {
   const blockers = [
     ...sectionIssues(sections.supabase, "Supabase"),
     ...sectionIssues(sections.mediaMtx, "MediaMTX"),
+    ...sectionIssues(sections.communityMedia, "Community media"),
     ...sectionIssues(sections.vercel, "Vercel")
   ];
   const manualFollowUps = [
@@ -142,6 +145,22 @@ function mediaMtxSection() {
         rtmpIngestBaseSet: Boolean(env.mediamtxRtmpIngestBase)
       }
     };
+  } catch (err) {
+    return { status: "blocked" as Status, issues: [safeError(err)] };
+  }
+}
+
+function communityMediaSection() {
+  try {
+    const workerEnvPath = path.join(process.cwd(), ".local", "worker-env.generated.env");
+    const workerEnvKeys = fs.existsSync(workerEnvPath)
+      ? new Set(parseEnvKeys(workerEnvPath))
+      : new Set<string>();
+    return communityMediaReadiness({
+      env: getEnv(),
+      rawEnv: process.env,
+      workerEnvKeys
+    });
   } catch (err) {
     return { status: "blocked" as Status, issues: [safeError(err)] };
   }

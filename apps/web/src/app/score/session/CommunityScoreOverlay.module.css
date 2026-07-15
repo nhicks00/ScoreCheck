@@ -1,0 +1,493 @@
+.scoreOverlay {
+  --overlay-blue: #3195ff;
+  --overlay-red: #ff5149;
+  --overlay-surface: rgba(3, 11, 21, 0.9);
+  --overlay-line: rgba(255, 255, 255, 0.32);
+  background: #030b15;
+  color: #fff;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px max(12px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  position: relative;
+  width: 100%;
+  z-index: 3;
+}
+
+.matchSummary {
+  align-items: center;
+  display: grid;
+  justify-items: center;
+  line-height: 1;
+  min-width: 0;
+  order: 1;
+  text-align: center;
+}
+
+.matchSummary > span {
+  color: #b9c4d1;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.matchSummary strong {
+  font-family: var(--font-head);
+  font-size: clamp(38px, 12vw, 56px);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.045em;
+  line-height: 0.95;
+  text-transform: uppercase;
+}
+
+.setSelector {
+  appearance: auto;
+  background: rgba(8, 21, 35, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  border-radius: 8px;
+  color: #fff;
+  font-family: var(--font-head);
+  font-size: clamp(30px, 9vw, 50px);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 1px 7px;
+  text-transform: uppercase;
+}
+
+.setSelector:focus-visible {
+  outline: 3px solid #7bbcff;
+  outline-offset: 3px;
+}
+
+.matchSummary small {
+  color: #d0d8e1;
+  font-size: 12px;
+  font-weight: 650;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.teamDocks {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-width: 0;
+  order: 2;
+}
+
+.teamDock {
+  backdrop-filter: blur(14px);
+  background: var(--overlay-surface);
+  border: 1px solid currentColor;
+  border-radius: 14px;
+  box-shadow: 0 12px 38px rgba(0, 0, 0, 0.42);
+  color: var(--overlay-blue);
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+}
+
+.teamDock.red {
+  color: var(--overlay-red);
+}
+
+.teamIdentity {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.teamIdentity h2 {
+  color: currentColor;
+  font-family: var(--font-ui);
+  font-size: clamp(11px, 3.4vw, 17px);
+  font-weight: 800;
+  line-height: 1.08;
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-transform: uppercase;
+}
+
+.teamIdentity output {
+  color: #fff;
+  flex: 0 0 auto;
+  font-family: var(--font-head);
+  font-size: clamp(42px, 14vw, 68px);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  letter-spacing: -0.06em;
+  line-height: 0.8;
+}
+
+.teamActions {
+  display: grid;
+  gap: 7px;
+}
+
+.teamActions button,
+.utilityBar button,
+.recovery button {
+  align-items: center;
+  border-radius: 9px;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-weight: 750;
+  gap: 7px;
+  justify-content: center;
+  touch-action: manipulation;
+}
+
+.teamActions button {
+  color: #fff;
+  width: 100%;
+}
+
+.addPoint {
+  background: #0c4da8;
+  border: 1px solid var(--overlay-blue);
+  box-shadow: 0 0 20px rgba(49, 149, 255, 0.22);
+  font-size: clamp(14px, 3.7vw, 18px);
+  min-height: 56px;
+  padding: 8px;
+}
+
+.red .addPoint {
+  background: #b82620;
+  border-color: var(--overlay-red);
+  box-shadow: 0 0 20px rgba(255, 81, 73, 0.2);
+}
+
+.removePoint {
+  background: rgba(3, 11, 21, 0.78);
+  border: 1px solid currentColor;
+  color: currentColor !important;
+  font-size: clamp(12px, 3.1vw, 15px);
+  min-height: 46px;
+  padding: 7px;
+}
+
+.utilityCluster {
+  display: grid;
+  gap: 7px;
+  justify-items: center;
+  min-width: 0;
+  order: 3;
+}
+
+.utilityBar {
+  align-items: center;
+  background: rgba(3, 11, 21, 0.92);
+  border: 1px solid var(--overlay-line);
+  border-radius: 999px;
+  display: flex;
+  gap: 4px;
+  max-width: 100%;
+  padding: 4px;
+}
+
+.utilityBar button,
+.recovery button {
+  background: transparent;
+  border: 1px solid transparent;
+  color: #edf2f7;
+  font-size: 12px;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 7px 10px;
+}
+
+.utilityBar button:hover:not(:disabled),
+.recovery button:hover:not(:disabled) {
+  background: rgba(49, 149, 255, 0.13);
+  border-color: rgba(49, 149, 255, 0.58);
+}
+
+.receipt,
+.recovery {
+  backdrop-filter: blur(12px);
+  background: rgba(3, 11, 21, 0.9);
+  border: 1px solid rgba(133, 155, 184, 0.48);
+  border-radius: 999px;
+  color: #edf2f7;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.25;
+  max-width: min(100%, 620px);
+  overflow-wrap: anywhere;
+  padding: 8px 13px;
+  text-align: center;
+}
+
+.recovery {
+  align-items: center;
+  background: rgba(41, 21, 14, 0.94);
+  border-color: rgba(255, 144, 103, 0.62);
+  border-radius: 13px;
+  color: #ffd9cc;
+  display: flex;
+  gap: 9px;
+}
+
+.recovery button {
+  border-color: rgba(255, 217, 204, 0.36);
+  color: #ffd9cc;
+  flex: 0 0 auto;
+}
+
+.teamActions button:hover:not(:disabled) {
+  filter: brightness(1.13);
+}
+
+.teamActions button:active:not(:disabled),
+.utilityBar button:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.teamActions button:disabled,
+.utilityBar button:disabled,
+.recovery button:disabled {
+  cursor: not-allowed;
+  filter: saturate(0.45);
+  opacity: 0.54;
+}
+
+.scoreOverlay :focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: 3px;
+}
+
+.visuallyHidden {
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+@media (orientation: landscape) {
+  .scoreOverlay {
+    background: transparent;
+    inset: 0;
+    padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+    pointer-events: none;
+    position: absolute;
+  }
+
+  .matchSummary,
+  .teamDocks,
+  .utilityCluster {
+    position: absolute;
+  }
+
+  .matchSummary {
+    backdrop-filter: blur(12px);
+    background: rgba(3, 11, 21, 0.82);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 12px;
+    left: 50%;
+    max-width: min(32vw, 240px);
+    padding: 6px 12px;
+    pointer-events: auto;
+    top: max(8px, env(safe-area-inset-top));
+    transform: translateX(-50%);
+  }
+
+  .matchSummary strong {
+    font-size: clamp(28px, 6.5vh, 48px);
+  }
+
+  .setSelector {
+    font-size: clamp(26px, 5.8vh, 44px);
+    min-height: 44px;
+  }
+
+  .matchSummary small {
+    font-size: clamp(9px, 2vh, 12px);
+  }
+
+  .teamDocks {
+    align-items: end;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    left: max(8px, env(safe-area-inset-left));
+    pointer-events: none;
+    right: max(8px, env(safe-area-inset-right));
+  }
+
+  .controlsTop .teamDocks {
+    align-items: start;
+    top: max(8px, env(safe-area-inset-top));
+  }
+
+  .controlsBottom .teamDocks {
+    bottom: max(8px, env(safe-area-inset-bottom));
+  }
+
+  .teamDock {
+    max-width: clamp(148px, 26vw, 300px);
+    pointer-events: auto;
+    width: 100%;
+  }
+
+  .teamDock:first-child {
+    justify-self: start;
+  }
+
+  .teamDock:last-child {
+    justify-self: end;
+  }
+
+  .teamIdentity h2 {
+    font-size: clamp(10px, 2.3vw, 17px);
+  }
+
+  .teamIdentity output {
+    font-size: clamp(38px, 11vh, 68px);
+  }
+
+  .addPoint {
+    font-size: clamp(13px, 2.4vw, 17px);
+    min-height: 50px;
+  }
+
+  .removePoint {
+    font-size: clamp(11px, 2vw, 14px);
+    min-height: 44px;
+  }
+
+  .utilityCluster {
+    left: 50%;
+    max-width: min(48vw, 680px);
+    pointer-events: auto;
+    transform: translateX(-50%);
+    width: max-content;
+  }
+
+  .controlsTop .utilityCluster {
+    bottom: max(8px, env(safe-area-inset-bottom));
+  }
+
+  .controlsBottom .utilityCluster {
+    top: max(76px, calc(env(safe-area-inset-top) + 76px));
+  }
+}
+
+@media (orientation: portrait) {
+  .utilityBar .moveControlsButton {
+    display: none;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 430px) {
+  .teamDock {
+    border-radius: 11px;
+    gap: 5px;
+    padding: 7px;
+  }
+
+  .teamIdentity output {
+    font-size: clamp(34px, 10vh, 48px);
+  }
+
+  .addPoint {
+    min-height: 48px;
+  }
+
+  .removePoint {
+    min-height: 44px;
+  }
+
+  .utilityCluster {
+    max-width: min(42vw, 360px);
+  }
+
+  .receipt {
+    font-size: 10px;
+    padding: 6px 10px;
+  }
+
+  .recovery {
+    align-items: stretch;
+    flex-direction: column;
+    font-size: 10px;
+    gap: 4px;
+    padding: 6px;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 430px) and (max-width: 640px) {
+  .utilityLabel {
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    height: 1px;
+    overflow: hidden;
+    position: absolute;
+    white-space: nowrap;
+    width: 1px;
+  }
+}
+
+@media (max-width: 370px) and (orientation: portrait) {
+  .scoreOverlay {
+    gap: 9px;
+    padding-inline: 7px;
+  }
+
+  .teamDocks {
+    gap: 7px;
+  }
+
+  .teamDock {
+    border-radius: 10px;
+    padding: 7px;
+  }
+
+  .teamIdentity {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .teamIdentity output {
+    align-self: center;
+  }
+
+  .utilityLabel {
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    height: 1px;
+    overflow: hidden;
+    position: absolute;
+    white-space: nowrap;
+    width: 1px;
+  }
+
+  .recovery {
+    align-items: stretch;
+    border-radius: 12px;
+    flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .teamActions button,
+  .utilityBar button,
+  .recovery button {
+    transition: none;
+  }
+
+  .teamActions button:active:not(:disabled),
+  .utilityBar button:active:not(:disabled) {
+    transform: none;
+  }
+}

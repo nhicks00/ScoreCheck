@@ -4,7 +4,6 @@ import { isCommentaryRequest } from "@/lib/commentaryAuth";
 import { getEnv } from "@/lib/env";
 import { getActiveEvent } from "@/lib/eventConfig";
 import { supabaseAdmin } from "@/lib/supabase";
-import { courtPreviewStreamPath, courtStreamSources, videoConfigured } from "@/lib/video";
 import { CommentaryCourtClient } from "./CommentaryCourtClient";
 
 export const dynamic = "force-dynamic";
@@ -23,16 +22,12 @@ export default async function CommentaryCourtPage({ params }: { params: Promise<
   if (!event) return <NoActiveEvent />;
 
   const court = await loadCourt(event.id, courtNumber);
-  const sources = videoConfigured()
-    ? courtStreamSources(courtPreviewStreamPath(courtNumber, court.previewStreamPath))
-    : { whepUrl: null, hlsUrl: null };
 
   return (
     <CommentaryCourtClient
       courtNumber={courtNumber}
       courtName={court.displayName ?? `Court ${courtNumber}`}
       eventName={event.name}
-      sources={sources}
       commentaryConfigured={commentaryLiveKitConfigured()}
     />
   );
@@ -55,17 +50,16 @@ function NoActiveEvent() {
   );
 }
 
-async function loadCourt(eventId: string, courtNumber: number): Promise<{ previewStreamPath: string | null; displayName: string | null }> {
+async function loadCourt(eventId: string, courtNumber: number): Promise<{ displayName: string | null }> {
   const db = supabaseAdmin();
   const { data: court } = await db
     .from("courts")
-    .select("preview_stream_path, display_name")
+    .select("display_name")
     .eq("event_id", eventId)
     .eq("court_number", courtNumber)
     .maybeSingle();
 
   return {
-    previewStreamPath: court?.preview_stream_path ?? null,
     displayName: court?.display_name ?? null
   };
 }

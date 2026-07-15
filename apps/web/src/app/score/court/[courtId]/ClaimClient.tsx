@@ -60,8 +60,9 @@ export function ClaimClient({
           eventSlug,
           courtNumber: data.court.court_number,
           displayName,
-          // Location is not a trustworthy authority signal. Ordinary joins are
-          // remote-tier witnesses until an organizer-issued grant verifies them.
+          // Location is not a trustworthy authority signal. A grant may
+          // authorize a role, but physical-courtside trust still requires an
+          // authenticated organizer verification.
           participationMode: "REMOTE",
           requestedRole: requestedCommunityRole(joinCode, roleIntent),
           ...(joinCode ? { joinCode } : {})

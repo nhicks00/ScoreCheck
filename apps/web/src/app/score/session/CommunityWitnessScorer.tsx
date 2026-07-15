@@ -30,6 +30,9 @@ export type CommunityWitnessScorerProps = {
   onAddPoint: (side: TeamSide) => void;
   onRemovePoint: (side: TeamSide) => void;
   onSwitchSides: () => void;
+  availableSets?: readonly number[];
+  setSelectionBusy?: boolean;
+  onSelectSet?: (setNumber: number) => void;
 };
 
 export function CommunityWitnessScorer({
@@ -44,7 +47,10 @@ export function CommunityWitnessScorer({
   removeDisabled,
   onAddPoint,
   onRemovePoint,
-  onSwitchSides
+  onSwitchSides,
+  availableSets = [],
+  setSelectionBusy = false,
+  onSelectSet
 }: CommunityWitnessScorerProps) {
   const visibleReceipt = receipt ?? view.latestReceipt ?? {
     rallyNumber: null,
@@ -65,7 +71,21 @@ export function CommunityWitnessScorer({
 
       <div className={styles.setStage} aria-label={`Set ${view.currentSet}`}>
         <span aria-hidden="true" />
-        <strong>Set {view.currentSet}</strong>
+        {onSelectSet && availableSets.length > 0 ? (
+          <label className={styles.setSelector}>
+            <span>Current set</span>
+            <select
+              aria-label="Official current set"
+              value={view.currentSet}
+              disabled={setSelectionBusy}
+              onChange={(event) => onSelectSet(Number(event.target.value))}
+            >
+              {availableSets.map((setNumber) => (
+                <option value={setNumber} key={setNumber}>Set {setNumber}</option>
+              ))}
+            </select>
+          </label>
+        ) : <strong>Set {view.currentSet}</strong>}
         <span aria-hidden="true" />
       </div>
 

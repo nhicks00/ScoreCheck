@@ -318,14 +318,16 @@ describe("community witness scorer UI adapter", () => {
 
   it("restores only structurally valid stable outbox actions", () => {
     const pending = {
-      clientActionId: "action-12345678",
+      clientActionId: "550e8400-e29b-41d4-a716-446655440000",
       kind: "observation",
       type: "ADD_POINT",
       team: "B",
       baseRevision: 22,
       rallyNumber: 39,
       deviceSequence: 7,
-      createdAt: "2026-07-14T12:00:00.000Z"
+      createdAt: "2026-07-14T12:00:00.000Z",
+      requiresLiveMedia: false,
+      deliveryUncertain: false
     };
 
     expect(parsePendingContribution(JSON.stringify(pending))).toEqual(pending);
@@ -365,7 +367,6 @@ function snapshot(): CommunitySessionSnapshot {
       teamBName: "Caldwell / Labouliere",
       matchNumber: "12",
       roundName: "Quarterfinal",
-      youtubeVideoId: "abc123_PUBLIC",
       format: { bestOf: 3 }
     },
     score: {

@@ -76,7 +76,7 @@ export type TrustedScoreWrite = {
   actorType: "ADMIN" | "PROVIDER" | "SYSTEM";
   actorLabel?: string;
   authorityMode: AuthorityMode;
-  commandType?: "ADD_POINT" | "REMOVE_POINT" | "CORRECT_SCORE" | "COMPLETE_SET" | "COMPLETE_MATCH" | "SET_SERVE";
+  commandType?: "ADD_POINT" | "REMOVE_POINT" | "CORRECT_SCORE" | "COMPLETE_SET" | "COMPLETE_MATCH" | "SET_SERVE" | "SET_CURRENT_SET";
   teamSide?: "A" | "B" | null;
   expectedRevision?: number;
   expectedAuthorityEpoch?: number;

@@ -664,10 +664,10 @@ begin
     'OBSERVER', 'REMOTE', null, 120
   );
   observer_assignment_id := (result->'assignment'->>'id')::uuid;
-  if result->'match'->>'youtubeVideoId' <> 'admissionPublicVideo'
+  if result->'match' ? 'youtubeVideoId'
     or result->'match' ? 'previewStreamPath'
     or result->'match' ? 'programStreamPath' then
-    raise exception 'community match DTO did not enforce the public-video allowlist: %', result->'match';
+    raise exception 'community match DTO leaked a provider or media source: %', result->'match';
   end if;
   retry_result := public.community_join_assignment(
     event_slug, 1, 'Observer renamed', observer_session_two, observer_device_hash,
@@ -748,6 +748,9 @@ begin
     event_slug, 1, 'Designated scorer', designated_session_one, designated_device_hash,
     'DESIGNATED_SCORER', 'COURTSIDE', designated_token_hash, 120
   );
+  if result->'assignment'->>'trustTier' <> 'REMOTE' then
+    raise exception 'bearer designated grant incorrectly created physical-courtside trust: %', result;
+  end if;
   designated_assignment_id := (result->'assignment'->>'id')::uuid;
   update public.community_assignments set lease_expires_at = clock_timestamp() - interval '1 second'
   where id = designated_assignment_id;
@@ -768,6 +771,7 @@ begin
   select * into score_row from public.score_states where match_id = test_match_id;
   if result->'assignment'->>'id' <> designated_assignment_id::text
     or result->'assignment'->>'role' <> 'DESIGNATED_SCORER'
+    or result->'assignment'->>'trustTier' <> 'REMOTE'
     or score_row.authority_mode <> 'DESIGNATED_PRIMARY'
     or (select use_count from public.community_join_grants where id = (designated_grant->>'id')::uuid) <> 1 then
     raise exception 'valid current grant did not safely restore designated authority: result=%, score=%', result, score_row;

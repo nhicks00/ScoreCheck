@@ -1,69 +1,50 @@
-# Community Witness scorekeeper design QA
+# Community scorekeeper design QA
 
-## Source and implementation
+## Evidence
 
-- Source visual truth: `docs/design/community-witness-mobile-selected.png`
-- Browser-rendered score-only implementation: `docs/design/community-witness-mobile-implementation.png`
-- Full source/implementation comparison: `docs/design/community-witness-mobile-comparison.png`
-- Focused source/implementation comparison: `docs/design/community-witness-mobile-comparison-focus.png`
-- Phone watch-and-score: `docs/design/community-witness-watch-mobile.png`
-- Phone focus mode: `docs/design/community-witness-focus-mobile.png`
-- Phone landscape focus mode: `docs/design/community-witness-focus-landscape.png`
-- Desktop watch-and-score: `docs/design/community-witness-watch-desktop.png`
-- Desktop focus mode: `docs/design/community-witness-focus-desktop.png`
-- Current-run before/after responsive audit: `docs/design/community-video-audit/`
-- Current-run portrait comparison: `docs/design/community-video-audit/13-phone-portrait-before-after.png`
-- Current-run landscape comparison: `docs/design/community-video-audit/14-phone-landscape-before-after.png`
-- Route under test: `/score/session`, exercised through a temporary local fixture route that is removed from the shipping tree
-- Primary state: active community witness, Court 4 / Match 12, Set 2, Basey / Hurst vs Caldwell / Labouliere, official score 18–16, Rally 38 awaiting resolution
+- Source visual truth: `docs/design/community-overlay-selected-top.png`
+- Final implementation screenshot: `docs/design/community-overlay-qa/17-final-landscape-top-844x390.png`
+- Full source/implementation comparison: `docs/design/community-overlay-qa/18-final-landscape-comparison.png`
+- Focused controls comparison: `docs/design/community-overlay-qa/19-final-controls-comparison.png`
+- Required responsive states: `docs/design/community-overlay-qa/10-focus-narrow-video-rail-320x480.png`, `11-focus-landscape-top-568x320.png`, `12-focus-landscape-bottom-568x320.png`, `13-focus-tablet-768x1024.png`, `14-focus-desktop-top-1440x900.png`, `15-windowed-desktop-1440x900.png`, and `16-windowed-phone-390x844.png`
+- Route under test: a temporary local fixture around the shipping `CommunityWatchAndScore` component. The fixture route was removed after QA.
+- Primary state: Court 4 / Match 12, Set 2, Basey / Hurst 18, Caldwell / Labouliere 16, Rally 38 awaiting resolution.
 
-The selected source and the score-only implementation were placed side by side at the same 390 x 844 viewport. The source's `Broadcast score` label was intentionally changed to `Official score`: a committed canonical snapshot can briefly lead a retrying overlay projection, so the UI must not claim the broadcast is already current.
+## Final comparison findings
 
-## Final visual comparison
+- Typography: prominent tabular scores, the current set, real team names, explicit Add point and Remove point labels, and compact utility labels preserve the selected direction's hierarchy. Long names wrap without separating identity from the score controls.
+- Spacing and layout: the complete 16:9 match image remains contained at every checked size. Portrait uses video above scoring; landscape focus places paired team docks over opposite video corners; desktop windowed mode uses a stable video/scorer split.
+- Colors: the blue/red action identity, dark translucent surfaces, white totals, and high-contrast correction outlines match the source direction and existing ScoreCheck palette.
+- Image quality: the source frame uses `object-fit: contain`, so neither left nor right court edges are cropped. Black gutters are intentional whenever device and source aspect ratios differ.
+- Copy: all score inputs describe the resulting action. There is no Unsure, No point, or latency identifier. The latest contribution receipt is factual and collective rather than competitive.
+- The selected source's `Live · low latency` bubble was intentionally omitted at the user's direction. Latency remains an operational qualification signal, not information a scorekeeper must interpret.
+- The live match image itself is dynamic and is not a fidelity target; containment, placement, contrast, control hierarchy, and responsive geometry are the fidelity surfaces.
 
-- Hierarchy matches the selected direction: match context, prominent Set 2 marker, official-score label and local Switch sides control, two complete team panels, rally journey, truthful receipt, and collective coverage.
-- The implementation preserves the blue/red team identity, high-contrast score typography, solid primary actions, outlined correction actions, dark scorekeeper canvas, and compact mobile rhythm.
-- Real team names wrap without truncation. Long names stay attached to the complete team panel when sides switch.
-- The phone watch view gives the upper region to an exact 16:9 video and begins the scoring surface directly below it. Desktop uses a stable video/score split instead of duplicating or remounting the player.
-- Focus mode preserves the complete 16:9 source frame. Phone and tablet layouts place scoring below the video in both orientations; landscape opens video-first and exposes scoring through a thumb-scroll path plus a `Score controls` handle. Short desktop layouts alone retain a side dock.
-- Repository-native typography and Lucide icons are used; there are no placeholder or fabricated graphic assets.
+No P0, P1, or P2 visual mismatch remains.
 
-No known P0, P1, or P2 visual mismatch remains.
+## Responsive measurements
 
-## Interaction verification
+- 320 x 480 narrow portrait: video is 320 x 180, horizontal overflow is hidden, both teams' score actions appear in the initial viewport, and remaining utilities are reachable in the bounded vertical scroll. The player rail sits 9 px from the video bottom instead of covering the court center.
+- 390 x 844 phone portrait: video is 390 x 219.375 with the scorer below it; Add point is 56 px high and Remove point is 46 px high. The landscape-only position control is hidden because top/bottom corners have no meaning in this presentation.
+- 568 x 320 phone landscape: video is 568 x 319.5. With team docks at the top, player controls move to bottom-left; with docks at the bottom, player controls move to top-left. The utility cluster remains centered on the opposite edge without overlap.
+- 844 x 390 wide-phone landscape: video is 693.328 x 389.984, centered with black gutters. Add point is 48 px, Remove point is 44 px, and full utility labels remain visible.
+- 768 x 1024 tablet portrait: video is 768 x 432 above the full-width scorer without horizontal overflow.
+- 1440 x 900 desktop focus: video is 1440 x 810, centered vertically with the entire 16:9 frame visible. Windowed desktop uses the video/scorer split; windowed phone stacks them.
 
-- `Switch sides` moved the complete Caldwell / Labouliere panel from right to left and Basey / Hurst from left to right while preserving their scores and canonical A/B request identity.
-- In focus mode, `Add one point for Basey / Hurst` changed only Basey / Hurst from 18 to 19 and advanced the receipt to Rally 39.
-- Add point and Remove point remained explicit in windowed phone, tablet, desktop, portrait focus, landscape focus, and 200%-zoom fallback states.
-- Exiting focus mode restored keyboard focus to `Full screen scoring`.
-- The video preference survived reload, and `Score only` stopped/unmounted playback without affecting the scoring session.
-- Commentary is configured with `videoMode="external"`; its existing low-latency player is the only player mounted there.
-- The implementation contains no Unsure or No point action.
+## Interaction and accessibility verification
 
-## Responsive and accessibility verification
-
-- 390 x 844 phone portrait: the normal and focus players measure 390 x 219.375, exactly 16:9, with no horizontal overflow; both teams' Add/Remove controls remain visible.
-- 320 x 480 narrow portrait / 200% zoom reflow: focus video measures 320 x 180, the dialog has a bounded 503 px scroll path, and the final 46 px Remove point controls remain reachable without horizontal clipping.
-- 568 x 320 phone landscape: focus video measures 568 x 319.5, the largest complete 16:9 frame possible. Scoring begins directly below at y=319.5 and the visible `Score controls` handle scrolls both teams' actions into view.
-- 844 x 390 wide-phone landscape: focus video measures 693.328 x 389.984 and is centered with black gutters. The score panel follows below; no source edge is cropped.
-- 768 x 1024 tablet portrait: focus video measures 768 x 432 above a full-width, equal-column scorer.
-- 1440 x 900 desktop: video/score split and focus-mode video/action dock render without overflow; the contained 16:9 video is centered in its available track.
-- The real public YouTube test embed loaded without error 153 using `strict-origin-when-cross-origin`; the checked-in video id comes from the court DTO, not this local fixture.
-- The iframe remains keyboard reachable. Focus sentinels wrap navigation across the cross-origin frame, Escape/Exit closes the dialog, and dynamic siblings outside the dialog are made inert and `aria-hidden` until exit.
-- Native buttons, headings, articles, status regions, list semantics, live regions, named official-score outputs, and assistive side-switch announcements are present in the browser accessibility snapshot.
-- Reduced-motion CSS removes press transforms. Every primary/correction action is at least 44 px in compact modes.
-- Production-build browser console warnings/errors after final reload: none.
-
-## Policy-driven trade-off
-
-The current public YouTube embed is an advisory transition path, not the desired scoring transport. It can remain several seconds behind the court and a cross-origin iframe can consume touch gestures. The delivered layout therefore preserves the full frame, keeps score controls in a sibling region, and adds a small landscape navigation handle. The target scoring player is authenticated `courtN_preview` WHEP through capacity-qualified read replicas; the existing single origin Droplet and reusable MediaMTX credentials are not a safe public distribution tier. See `docs/community-low-latency-playback-plan.md`.
+- Selecting Set 3 changed the fixture's canonical set while retaining court, match, teams, and scores. In the shipping flow this command is revisioned and restricted to the active designated primary scorer or an admin; remote designation also requires the qualified owned court feed.
+- Switch sides exchanged the complete visual team panels while preserving canonical A/B action identity. Adding a point after the switch changed only the selected real team from 18 to 19.
+- Moving controls relocated both team docks together. The top preference persisted through reload at 1440 x 900.
+- Escape closed focus mode and restored keyboard focus to Full screen scoring. The focus query includes enabled selects and filters out controls that have no rendered client rectangles.
+- Native buttons, a named set selector, headings, score outputs, status/live regions, safe-area padding, reduced-motion handling, and at least 44 px compact scoring targets are present.
+- Final in-app browser warning/error log after responsive and Escape testing: empty. The local Next development server emitted only its known cross-origin development warning because the temporary fixture was opened through `127.0.0.1`; no fixture code ships.
 
 ## Comparison history
 
-1. The initial scorekeeper direction established explicit actions, real names, total score, Set 2, rally journey, personal receipt, and community coverage.
-2. The implementation was tightened at 390 px so long names, correction labels, rally geometry, and coverage fit without horizontal overflow.
-3. Watch-and-score added responsive video composition, persistent player state, container fullscreen with full-window fallback, and local-only side switching in every presentation.
-4. Adversarial review removed a credential-bearing media design, fixed YouTube referrer identity, replaced a prohibited player overlay with sibling controls, added compact/zoom fallbacks, and closed focus containment/restore gaps.
-5. Current-run browser audit found and fixed three deterministic geometry failures: the 42svh mobile height overrode 16:9, focus mode stretched the iframe, and phone landscape forced a narrow side split. A fourth focus-management bug was fixed by preventing the Exit control from auto-scrolling the video offscreen.
+1. Initial evidence: `01-landscape-top-844x390.png`, `02-landscape-top-comparison.png`, and `03-landscape-top-controls-comparison.png`. P1: the position toggle appeared in portrait despite having no effect. P1: the player rail could obstruct a narrow portrait match or collide with landscape utilities. P2: compact Add point targets were 42 px and 844 px utility labels were unnecessarily hidden.
+2. First correction: `04-landscape-top-after-844x390.png`, `05-landscape-top-after-comparison.png`, and `06-landscape-top-after-controls-comparison.png`. Add point became 48 px and Remove point 44 px in short landscape; labels stayed visible above 640 px; the no-op portrait toggle was removed.
+3. Responsive adversarial pass: `07-focus-portrait-390x844.png` through `16-windowed-phone-390x844.png`. The player rail became orientation- and team-position-aware, the 320 px scroll path was verified, and top/bottom persistence plus desktop/windowed composition were exercised.
+4. Final same-state comparison: `17-final-landscape-top-844x390.png`, `18-final-landscape-comparison.png`, and `19-final-controls-comparison.png`. No P0, P1, or P2 issue remained.
 
-final result: responsive layout passed; owned low-latency community playback remains a separately gated hard cut
+final result: passed

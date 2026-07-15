@@ -28,6 +28,7 @@ export function communityApiError(error: unknown): NextResponse {
 function communityPublicErrorMessage(error: CommunityWitnessError, status: number): string {
   if (error.code === "P0003" || status === 410) return "This scoring session has ended.";
   if (error.code === "P0004" || status === 429) return "This court has reached its active contributor limit. Try again shortly.";
+  if (error.code === "P0005") return "That point was not recorded because the live video evidence expired. Reconnect, confirm the current score, and enter the point again.";
   if (error.code === "28000" || status === 403) return "This invitation or scoring permission is invalid, expired, or no longer available.";
   if (status === 404) return "The event, court, or scoring session was not found.";
   if (status === 409) return "The score or court changed first. Refresh and try again.";

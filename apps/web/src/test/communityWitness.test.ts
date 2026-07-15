@@ -37,7 +37,6 @@ const validResponse = {
     teamBName: "Jones / Lee",
     matchNumber: "M12",
     roundName: "Final",
-    youtubeVideoId: "abc123_PUBLIC",
     format: { bestOf: 3 }
   },
   score: {
@@ -93,6 +92,9 @@ describe("community witness public contracts", () => {
   it("requires strict command payloads", () => {
     expect(scoreCommandSchema.safeParse({ type: "ADD_POINT", team: "A", hidden: true }).success).toBe(false);
     expect(scoreCommandSchema.safeParse({ type: "REMOVE_POINT", team: "A" }).success).toBe(true);
+    expect(scoreCommandSchema.safeParse({ type: "SET_CURRENT_SET", set: 2 }).success).toBe(true);
+    expect(scoreCommandSchema.safeParse({ type: "SET_CURRENT_SET", set: 0 }).success).toBe(false);
+    expect(scoreCommandSchema.safeParse({ type: "SET_CURRENT_SET", set: 2, team: "A" }).success).toBe(false);
   });
 
   it("parses the complete safe DTO but rejects a leaked session token", () => {
@@ -100,11 +102,14 @@ describe("community witness public contracts", () => {
     expect(communitySessionResponseSchema.safeParse({ ...validResponse, sessionToken: "secret" }).success).toBe(false);
   });
 
-  it("allows only the public YouTube broadcast identifier in the match DTO", () => {
-    expect(communitySessionResponseSchema.parse(validResponse).match.youtubeVideoId).toBe("abc123_PUBLIC");
+  it("keeps every media path, credential, and provider identifier out of the match DTO", () => {
     expect(communitySessionResponseSchema.safeParse({
       ...validResponse,
       match: { ...validResponse.match, previewStreamPath: "court1_preview" }
+    }).success).toBe(false);
+    expect(communitySessionResponseSchema.safeParse({
+      ...validResponse,
+      match: { ...validResponse.match, youtubeVideoId: "abc123_PUBLIC" }
     }).success).toBe(false);
   });
 

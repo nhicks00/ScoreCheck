@@ -7,6 +7,7 @@ import {
   communitySessionResponseSchema,
   joinCommunitySchema,
   observationSchema,
+  playbackEvidenceSchema,
   scoreCommandSchema,
   trustedCommitResponseSchema,
   type AuthorityMode,
@@ -44,7 +45,7 @@ const projectionMetadataSchema = z.object({
 
 const canonicalCommandTypeSchema = z.enum([
   "ADD_POINT", "REMOVE_POINT", "CORRECT_SCORE",
-  "COMPLETE_SET", "COMPLETE_MATCH", "SET_SERVE"
+  "COMPLETE_SET", "COMPLETE_MATCH", "SET_SERVE", "SET_CURRENT_SET"
 ]);
 const secretHashSchema = z.string().regex(/^[a-f0-9]{64}$/);
 
@@ -67,6 +68,7 @@ export function communityErrorStatus(code?: string): number {
   return code === "P0002" ? 404
     : code === "P0003" ? 410
       : code === "P0004" ? 429
+      : code === "P0005" ? 409
       : code === "28000" ? 403
       : ["23505", "40001", "40P01", "55000"].includes(code ?? "") ? 409
         : ["22023", "23514"].includes(code ?? "") ? 400
@@ -160,13 +162,27 @@ export function submitCommunityCommand(input: {
   clientActionId: string;
   expectedRevision: number;
   action: ScoreCommand;
+  playbackEvidence?: unknown;
 }) {
-  return rpc("community_submit_scorer_command", {
+  return rpc("community_submit_scorer_command_with_evidence", {
     p_session_token_hash: hashToken(input.sessionToken),
     p_client_action_id: z.string().uuid().parse(input.clientActionId),
     p_expected_revision: z.number().int().min(0).parse(input.expectedRevision),
-    p_action: scoreCommandSchema.parse(input.action)
+    p_action: scoreCommandSchema.parse(input.action),
+    p_playback_evidence: input.playbackEvidence == null
+      ? null
+      : playbackEvidenceSchema.parse(input.playbackEvidence)
   }, communitySessionResponseSchema);
+}
+
+export function isCommunityCommandRecorded(input: {
+  sessionToken: string;
+  clientActionId: string;
+}) {
+  return rpc("community_scorer_command_recorded", {
+    p_session_token_hash: hashToken(input.sessionToken),
+    p_client_action_id: z.string().uuid().parse(input.clientActionId)
+  }, z.boolean());
 }
 
 export function releaseCommunitySession(input: { sessionToken: string; clientActionId: string }) {
@@ -203,6 +219,29 @@ export async function createTrustedCommunityAssignment(input: {
   return { sessionToken, response };
 }
 
+export async function claimTrustedCommunityDesignatedAssignment(input: {
+  eventId: string;
+  courtId: string;
+  matchId: string;
+  sessionToken: string;
+  displayName: string;
+  leaseSeconds?: number;
+  actionId: string;
+  actorLabel?: string;
+}) {
+  const response = await rpc("community_claim_trusted_designated_assignment", {
+    p_event_id: z.string().uuid().parse(input.eventId),
+    p_court_id: z.string().uuid().parse(input.courtId),
+    p_match_id: z.string().uuid().parse(input.matchId),
+    p_session_token_hash: hashToken(input.sessionToken),
+    p_display_name: safeDisplayName(input.displayName),
+    p_lease_seconds: input.leaseSeconds ?? 120,
+    p_action_id: z.string().uuid().parse(input.actionId),
+    p_actor_label: input.actorLabel ?? "Trusted designated assignment claim"
+  }, communitySessionResponseSchema);
+  return { sessionToken: input.sessionToken, response };
+}
+
 export async function commitTrustedCanonicalScore(input: {
   eventId: string;
   courtId: string;
@@ -214,7 +253,7 @@ export async function commitTrustedCanonicalScore(input: {
   expectedRevision?: number;
   expectedAuthorityEpoch?: number;
   state: unknown;
-  commandType?: "ADD_POINT" | "REMOVE_POINT" | "CORRECT_SCORE" | "COMPLETE_SET" | "COMPLETE_MATCH" | "SET_SERVE";
+  commandType?: "ADD_POINT" | "REMOVE_POINT" | "CORRECT_SCORE" | "COMPLETE_SET" | "COMPLETE_MATCH" | "SET_SERVE" | "SET_CURRENT_SET";
   teamSide?: "A" | "B" | null;
   projectionMetadata: z.infer<typeof projectionMetadataSchema>;
   metadata?: Record<string, unknown>;

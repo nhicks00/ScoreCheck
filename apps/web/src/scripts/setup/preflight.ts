@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { getEnv } from "../../lib/env";
 import { loadLocalEnv } from "../envLoader";
+import { communityMediaReadiness } from "./communityMediaReadiness";
 
 type CheckStatus = "ok" | "missing" | "failing";
 
@@ -18,6 +19,7 @@ main().catch((err) => {
 async function main() {
   loadLocalEnv();
   const env = getEnv();
+  const communityMedia = communityMediaReadiness({ env, rawEnv: process.env });
 
   const checks: Array<readonly [string, CheckStatus]> = [
     ["Supabase URL", env.supabaseUrl ? "ok" : "missing"],
@@ -29,6 +31,7 @@ async function main() {
     ["StreamRun configuration ID", process.env.STREAMRUN_CONFIGURATION_ID ? "ok" : "missing"],
     ["MediaMTX WHEP/HLS base URL", env.mediamtxWhepBaseUrl || env.mediamtxHlsBaseUrl ? "ok" : "missing"],
     ["MediaMTX RTMP ingest base", env.mediamtxRtmpIngestBase ? "ok" : "missing"],
+    ["Community media broker and cleanup worker", communityMedia.status === "ok" ? "ok" : "failing"],
     ["Supabase CLI", cliChecks.supabase ? "ok" : "missing"],
     ["Vercel CLI", cliChecks.vercel ? "ok" : "missing"],
     ["Local setup env", fs.existsSync(".env.setup.local") || fs.existsSync(".env.local") ? "ok" : "missing"]
@@ -36,6 +39,9 @@ async function main() {
 
   for (const [label, status] of checks) {
     console.log(`${status} - ${label}`);
+  }
+  for (const issue of communityMedia.issues) {
+    console.log(`failing - Community media: ${issue}`);
   }
 
   if (checks.some(([, status]) => status !== "ok")) {
