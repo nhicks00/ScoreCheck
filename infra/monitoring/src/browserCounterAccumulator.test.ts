@@ -32,6 +32,7 @@ describe("browser counter accumulator", () => {
       freezeCount: 3,
       totalFreezesDurationMs: 750
     }))).toEqual({
+      sessionStarts: 0,
       framesReceived: 150,
       framesDecoded: 145,
       framesDropped: 5,
@@ -50,7 +51,7 @@ describe("browser counter accumulator", () => {
       framesDropped: 0,
       freezeCount: 0,
       totalFreezesDurationMs: 0
-    }))).toEqual(zeroDelta());
+    }))).toEqual({ ...zeroDelta(), sessionStarts: 1 });
     expect(accumulator.observe(1, sample({
       pageLoadedAt: "2026-07-13T12:05:00.000Z",
       framesReceived: 5,
@@ -79,6 +80,7 @@ describe("browser counter accumulator", () => {
 
 function zeroDelta() {
   return {
+    sessionStarts: 0,
     framesReceived: 0,
     framesDecoded: 0,
     framesDropped: 0,

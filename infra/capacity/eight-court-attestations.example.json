@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "1970-01-01T00:00:00.000Z",
+  "crossCourtIsolationVerified": false,
+  "youtubeBroadcastsUnlisted": false,
+  "youtubeAutoLifecycleDisabled": false,
+  "courts": [
+    { "court": 1, "observedSourceProfile": {}, "assignmentVerified": false, "egressErrors": null, "egressShmEnabled": false, "avSyncObserved": false, "avSyncObservedAt": null },
+    { "court": 2, "observedSourceProfile": {}, "assignmentVerified": false, "egressErrors": null, "egressShmEnabled": false, "avSyncObserved": false, "avSyncObservedAt": null },
+    { "court": 3, "observedSourceProfile": {}, "assignmentVerified": false, "egressErrors": null, "egressShmEnabled": false, "avSyncObserved": false },
+    { "court": 4, "observedSourceProfile": {}, "assignmentVerified": false, "egressErrors": null, "egressShmEnabled": false, "avSyncObserved": false },
+    { "court": 5, "observedSourceProfile": {}, "assignmentVerified": false, "egressErrors": null, "egressShmEnabled": false, "avSyncObserved": false },
+    { "court": 6, "observedSourceProfile": {}, "assignmentVerified": false, "egressErrors": null, "egressShmEnabled": false, "avSyncObserved": false },
+    { "court": 7, "observedSourceProfile": {}, "assignmentVerified": false, "egressErrors": null, "egressShmEnabled": false, "avSyncObserved": false },
+    { "court": 8, "observedSourceProfile": {}, "assignmentVerified": false, "egressErrors": null, "egressShmEnabled": false, "avSyncObserved": false }
+  ]
+}

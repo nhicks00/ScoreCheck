@@ -8,6 +8,7 @@ export type BrowserCounterSample = {
 };
 
 export type BrowserCounterDelta = {
+  sessionStarts: number;
   framesReceived: number;
   framesDecoded: number;
   framesDropped: number;
@@ -26,6 +27,7 @@ const COUNTER_FIELDS: CounterField[] = [
 ];
 
 const ZERO_DELTA: BrowserCounterDelta = {
+  sessionStarts: 0,
   framesReceived: 0,
   framesDecoded: 0,
   framesDropped: 0,
@@ -38,9 +40,13 @@ export class BrowserCounterAccumulator {
 
   observe(courtNumber: number, current: BrowserCounterSample): BrowserCounterDelta {
     const previous = this.baselines.get(courtNumber);
-    if (!previous || previous.pageLoadedAt !== current.pageLoadedAt) {
+    if (!previous) {
       this.baselines.set(courtNumber, { ...current });
       return { ...ZERO_DELTA };
+    }
+    if (previous.pageLoadedAt !== current.pageLoadedAt) {
+      this.baselines.set(courtNumber, { ...current });
+      return { ...ZERO_DELTA, sessionStarts: 1 };
     }
 
     const next = { ...previous, pageLoadedAt: current.pageLoadedAt };

@@ -1,0 +1,135 @@
+{
+  "schemaVersion": 1,
+  "gateId": "eight-court-endurance-candidate",
+  "minimumDurationSeconds": 7320,
+  "warmupSeconds": 120,
+  "stepSeconds": 5,
+  "expectedAgentCount": 11,
+  "expectedPoolRegion": "sfo2",
+  "expectedPoolSizeSlug": "c-4",
+  "expectedPoolSizeVcpus": 4,
+  "minimumVenueUploadBps": 75000000,
+  "maximumVenueEvidenceAgeSeconds": 3600,
+  "minimumVenueMeasurementSpanSeconds": 300,
+  "maximumPoolPreflightAgeSeconds": 300,
+  "maximumAttestationLagSeconds": 900,
+  "warmSpare": {
+    "hostId": "bvm-compositor-spare",
+    "agent": "bvm-compositor-spare",
+    "service": "bvm-egress",
+    "vcpus": 4,
+    "allowedBaselineUnclassified": []
+  },
+  "ingest": {
+    "hostId": "bvm-preview-01",
+    "agent": "bvm-preview-01",
+    "service": "mediamtx",
+    "vcpus": 8,
+    "allowedBaselineUnclassified": []
+  },
+  "courts": [
+    {
+      "court": 1,
+      "requiredBranches": ["raw", "preview", "program"],
+      "ffmpegBranches": ["preview", "program"],
+      "expectedSourceProfile": { "protocol": "SRT", "mode": "PUSH", "videoCodec": "H264", "videoWidth": 1280, "videoHeight": 720, "videoProfile": "Main", "audioCodec": "AAC", "audioSampleRateHz": 48000, "audioChannelCount": 2 },
+      "commentaryRequired": true,
+      "compositor": { "hostId": "bvm-compositor-a", "agent": "bvm-compositor-a", "service": "bvm-egress", "vcpus": 4, "allowedBaselineUnclassified": [] }
+    },
+    {
+      "court": 2,
+      "requiredBranches": ["raw", "preview", "program"],
+      "ffmpegBranches": ["preview", "program"],
+      "expectedSourceProfile": { "protocol": "SRT", "mode": "PUSH", "videoCodec": "H264", "videoWidth": 1280, "videoHeight": 720, "videoProfile": "Main", "audioCodec": "AAC", "audioSampleRateHz": 48000, "audioChannelCount": 2 },
+      "commentaryRequired": true,
+      "compositor": { "hostId": "bvm-compositor-b", "agent": "bvm-compositor-b", "service": "bvm-egress", "vcpus": 4, "allowedBaselineUnclassified": [] }
+    },
+    {
+      "court": 3,
+      "requiredBranches": ["raw", "preview", "program"],
+      "ffmpegBranches": ["preview", "program"],
+      "expectedSourceProfile": { "protocol": "SRT", "mode": "PUSH", "videoCodec": "H264", "videoWidth": 1280, "videoHeight": 720, "videoProfile": "Main", "audioCodec": "AAC", "audioSampleRateHz": 48000, "audioChannelCount": 2 },
+      "commentaryRequired": false,
+      "compositor": { "hostId": "bvm-compositor-c", "agent": "bvm-compositor-c", "service": "bvm-egress", "vcpus": 4, "allowedBaselineUnclassified": [] }
+    },
+    {
+      "court": 4,
+      "requiredBranches": ["raw", "preview", "program"],
+      "ffmpegBranches": ["preview", "program"],
+      "expectedSourceProfile": { "protocol": "SRT", "mode": "PUSH", "videoCodec": "H264", "videoWidth": 1280, "videoHeight": 720, "videoProfile": "Main", "audioCodec": "AAC", "audioSampleRateHz": 48000, "audioChannelCount": 2 },
+      "commentaryRequired": false,
+      "compositor": { "hostId": "bvm-compositor-d", "agent": "bvm-compositor-d", "service": "bvm-egress", "vcpus": 4, "allowedBaselineUnclassified": [] }
+    },
+    {
+      "court": 5,
+      "requiredBranches": ["raw", "preview", "program"],
+      "ffmpegBranches": ["preview", "program"],
+      "expectedSourceProfile": { "protocol": "SRT", "mode": "PUSH", "videoCodec": "H264", "videoWidth": 1280, "videoHeight": 720, "videoProfile": "Main", "audioCodec": "AAC", "audioSampleRateHz": 48000, "audioChannelCount": 2 },
+      "commentaryRequired": false,
+      "compositor": { "hostId": "bvm-compositor-e", "agent": "bvm-compositor-e", "service": "bvm-egress", "vcpus": 4, "allowedBaselineUnclassified": [] }
+    },
+    {
+      "court": 6,
+      "requiredBranches": ["raw", "preview", "program"],
+      "ffmpegBranches": ["preview", "program"],
+      "expectedSourceProfile": { "protocol": "SRT", "mode": "PUSH", "videoCodec": "H264", "videoWidth": 1280, "videoHeight": 720, "videoProfile": "Main", "audioCodec": "AAC", "audioSampleRateHz": 48000, "audioChannelCount": 2 },
+      "commentaryRequired": false,
+      "compositor": { "hostId": "bvm-compositor-f", "agent": "bvm-compositor-f", "service": "bvm-egress", "vcpus": 4, "allowedBaselineUnclassified": [] }
+    },
+    {
+      "court": 7,
+      "requiredBranches": ["raw", "preview", "program"],
+      "ffmpegBranches": ["preview", "program"],
+      "expectedSourceProfile": { "protocol": "SRT", "mode": "PUSH", "videoCodec": "H264", "videoWidth": 1280, "videoHeight": 720, "videoProfile": "Main", "audioCodec": "AAC", "audioSampleRateHz": 48000, "audioChannelCount": 2 },
+      "commentaryRequired": false,
+      "compositor": { "hostId": "bvm-compositor-g", "agent": "bvm-compositor-g", "service": "bvm-egress", "vcpus": 4, "allowedBaselineUnclassified": [] }
+    },
+    {
+      "court": 8,
+      "requiredBranches": ["raw", "preview", "program"],
+      "ffmpegBranches": ["preview", "program"],
+      "expectedSourceProfile": { "protocol": "SRT", "mode": "PUSH", "videoCodec": "H264", "videoWidth": 1280, "videoHeight": 720, "videoProfile": "Main", "audioCodec": "AAC", "audioSampleRateHz": 48000, "audioChannelCount": 2 },
+      "commentaryRequired": false,
+      "compositor": { "hostId": "bvm-compositor-h", "agent": "bvm-compositor-h", "service": "bvm-egress", "vcpus": 4, "allowedBaselineUnclassified": [] }
+    }
+  ],
+  "thresholds": {
+    "minimumSampleCoverageRatio": 0.99,
+    "minimumActiveRatio": 0.995,
+    "minimumRawBitrateBps": 1000000,
+    "maximumRawLowBitrateRatio": 0.005,
+    "minimumFfmpegFps": 29,
+    "maximumFfmpegLowFpsRatio": 0.005,
+    "minimumFfmpegSpeed": 0.98,
+    "minimumBrowserFps": 29,
+    "maximumBrowserLowFpsRatio": 0.005,
+    "maximumBrowserDropRatio": 0.001,
+    "maximumBrowserFreezeRatio": 0.001,
+    "maximumCpuP95Ratio": 0.75,
+    "maximumCpuRatio": 0.8,
+    "maximumMemoryGrowthRatio": 0.1,
+    "maximumHostSampleGapSeconds": 7.5,
+    "maximumHostSampleLagMs": 250,
+    "maximumShmRatio": 0.8,
+    "maximumZombieWatcherHeartbeatGapSeconds": 2,
+    "maximumZombieWatcherScanGapMs": 250,
+    "maximumZombiePollIntervalMs": 50,
+    "maximumObserverZombieDurationMs": 2000,
+    "maximumObserverZombieEvents": 1920,
+    "maximumObserverZombieEventsPerMinute": 16,
+    "maximumWorkloadZombieDurationMs": 500,
+    "maximumWorkloadZombieEvents": 64,
+    "maximumWorkloadZombieEventsPerMinute": 8,
+    "maximumWorkloadConcurrentZombies": 1,
+    "maximumCameraAudioSilenceSeconds": 60,
+    "maximumCameraAudioClippedSampleRatio": 0.05,
+    "maximumCommentaryClippedSampleRatio": 0.05,
+    "maximumCommentarySilenceSeconds": 60,
+    "maximumCommentaryJitterMs": 300,
+    "maximumCommentarySyncGapMs": 250,
+    "maximumCommentaryPacketLossRatio": 0.1,
+    "maximumVenuePacketLossRatio": 0.01,
+    "maximumMetricSampleGapSeconds": 7.5,
+    "maximumSnapshotAgeSeconds": 15
+  }
+}

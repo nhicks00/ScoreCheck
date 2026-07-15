@@ -89,6 +89,9 @@ test("does not misclassify observation end as process reaping", () => {
 
 test("rejects malformed, unsafe, or over-broad event data", () => {
   const valid = open("ingest", 12, "600:60", "node", "runc", "healthcheck.monitor-agent", false);
+  const started = event("ingest", "watcher_started", 0, { pollIntervalMs: 50, watcherPid: 900, machineFingerprint: "0123456789abcdef" });
+  assert.equal(parseZombieEventLine(JSON.stringify(started)).machineFingerprint, "0123456789abcdef");
+  assert.throws(() => parseZombieEventLine(JSON.stringify({ ...started, machineFingerprint: "not-a-fingerprint" })), /machineFingerprint/);
   assert.equal(parseZombieEventLine(JSON.stringify(valid)).initialObservation, false);
   assert.throws(() => parseZombieEventLine(JSON.stringify({ ...valid, initialObservation: undefined })), /initialObservation/);
   assert.throws(() => parseZombieEventLine(JSON.stringify({ ...valid, classification: "healthcheck.generic" })), /classification/);

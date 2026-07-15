@@ -214,5 +214,8 @@ the phone-visible Camera 4 fault row remains pending.
 4. Expand or reshape capacity so every compositor can admit its assigned live
    outputs, then run eight representative feeds for at least two hours with
    scoring on all cameras and at least two commentary rooms.
+   The exact aggregate evaluator and one-watcher-per-host evidence sampler are
+   now implemented locally; the live nine-compositor pool, qualified profiles,
+   venue network evidence, and two-hour run remain pending.
 5. Qualify the final camera profiles and the 75 Mbps bonded-upload venue floor.
 6. Only after these gates pass, accept monitoring as ready for the shadow event.

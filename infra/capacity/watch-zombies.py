@@ -34,6 +34,14 @@ def fingerprint(value):
     return hashlib.sha256(value).hexdigest()[:16] if value else None
 
 
+def machine_fingerprint():
+    machine_id = read_bytes("/etc/machine-id").strip()
+    product_uuid = read_bytes("/sys/class/dmi/id/product_uuid").strip()
+    if not machine_id and not product_uuid:
+        return None
+    return fingerprint(machine_id + b"\0" + product_uuid)
+
+
 def read_bytes(path):
     try:
         with open(path, "rb") as handle:
@@ -322,7 +330,13 @@ def run(role, poll_interval_ms, sample_interval_seconds, duration_seconds):
         math.floor(time.time() / sample_interval_seconds) + 1
     ) * sample_interval_seconds if sample_interval_seconds else None
 
-    emit(role, "watcher_started", pollIntervalMs=poll_interval_ms, watcherPid=os.getpid())
+    emit(
+        role,
+        "watcher_started",
+        pollIntervalMs=poll_interval_ms,
+        watcherPid=os.getpid(),
+        machineFingerprint=machine_fingerprint(),
+    )
     while not stopping and (duration_seconds == 0 or time.monotonic() - started < duration_seconds):
         scan_started = time.monotonic()
         maximum_scan_gap_ms = max(maximum_scan_gap_ms, (scan_started - last_scan) * 1000)

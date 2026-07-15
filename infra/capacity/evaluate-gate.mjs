@@ -93,7 +93,7 @@ function addServiceQueries(queries, prefix, host) {
   queries[`${prefix}_oom`] = selector("scorecheck_service_oom_killed", labels);
 }
 
-function assertConfig(config) {
+export function assertCapacityConfig(config) {
   if (config.schemaVersion !== 2) throw new Error("capacity gate config schemaVersion must be 2");
   label("gateId", config.gateId);
   if (!Number.isInteger(config.court) || config.court < 1 || config.court > 8) throw new Error("court must be an integer from 1 through 8");
@@ -193,7 +193,7 @@ function requireSamples(checks, evidence, name, minimumCount) {
 }
 
 export function evaluateEvidence(config, evidence, attestations, hostEvidence, zombieEvidence) {
-  assertConfig(config);
+  assertCapacityConfig(config);
   const checks = [];
   const durationSeconds = evidence.endEpochSeconds - evidence.startEpochSeconds;
   const evaluatedDurationSeconds = evidence.endEpochSeconds - evidence.effectiveStartEpochSeconds;
@@ -264,7 +264,7 @@ export function evaluateEvidence(config, evidence, attestations, hostEvidence, z
   };
 }
 
-function evaluateHostSamples(checks, config, hostEvidence) {
+export function evaluateHostSamples(checks, config, hostEvidence) {
   const thresholds = config.thresholds;
   addCheck(checks, "host_sample_coverage", hostEvidence?.coverageRatio >= thresholds.minimumSampleCoverageRatio, hostEvidence?.coverageRatio ?? null, `>= ${thresholds.minimumSampleCoverageRatio}`);
   addCheck(checks, "host_sample_gap_p95", Number.isFinite(hostEvidence?.p95GapSeconds) && hostEvidence.p95GapSeconds <= thresholds.maximumHostSampleGapSeconds, hostEvidence?.p95GapSeconds ?? null, `<= ${thresholds.maximumHostSampleGapSeconds} seconds`);
@@ -289,7 +289,7 @@ function evaluateHostSamples(checks, config, hostEvidence) {
   }
 }
 
-function evaluateZombieEvidence(checks, config, zombieEvidence) {
+export function evaluateZombieEvidence(checks, config, zombieEvidence) {
   const roles = config.compositor ? ["ingest", "compositor"] : ["ingest"];
   const thresholds = config.thresholds;
   for (const role of roles) {
@@ -427,7 +427,7 @@ function boundedSourceProfile(profile) {
   return output;
 }
 
-async function queryRange(prometheusUrl, query, start, end, step, token) {
+export async function queryRange(prometheusUrl, query, start, end, step, token) {
   const url = new URL("api/v1/query_range", `${prometheusUrl.replace(/\/+$/, "")}/`);
   url.searchParams.set("query", query);
   url.searchParams.set("start", String(start));
@@ -461,7 +461,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const config = JSON.parse(await readFile(args.config, "utf8"));
   const attestations = boundedAttestations(JSON.parse(await readFile(args.attestations, "utf8")));
-  assertConfig(config);
+  assertCapacityConfig(config);
   const startEpochSeconds = Date.parse(args.start) / 1000;
   const endEpochSeconds = Date.parse(args.end) / 1000;
   if (!Number.isFinite(startEpochSeconds) || !Number.isFinite(endEpochSeconds) || endEpochSeconds <= startEpochSeconds) throw new Error("--start and --end must define a valid increasing ISO-8601 window");

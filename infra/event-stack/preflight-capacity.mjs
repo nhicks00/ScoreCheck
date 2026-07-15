@@ -115,6 +115,11 @@ export function evaluateCapacity(input) {
   };
 }
 
+export function timestampCapacityResult(result, now = new Date()) {
+  if (!(now instanceof Date) || !Number.isFinite(now.getTime())) throw new Error("capacity preflight timestamp is invalid.");
+  return { ...result, checkedAt: now.toISOString() };
+}
+
 export function validateFleetSpec(value, expected = {}) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("fleet spec must be an object.");
   if (value.schemaVersion !== 1) throw new Error("fleet spec schemaVersion must be 1.");
@@ -290,7 +295,7 @@ async function main() {
     dropletsPayload,
     sizesPayload
   });
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify(timestampCapacityResult(result), null, 2)}\n`);
   if (result.status !== "PASS") process.exitCode = 2;
 }
 

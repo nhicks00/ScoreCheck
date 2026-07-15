@@ -157,7 +157,7 @@ async function main() {
   if (caughtError) throw caughtError;
 }
 
-function startZombieWatcher(host, role, args, script, onEvent, onFailure) {
+export function startZombieWatcher(host, role, args, script, onEvent, onFailure) {
   const child = spawn("ssh", [
     "-i", args.sshKey,
     "-o", "BatchMode=yes",

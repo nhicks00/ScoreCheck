@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { completeCollection, evaluateCapacity, validateFleetSpec } from "./preflight-capacity.mjs";
+import { completeCollection, evaluateCapacity, timestampCapacityResult, validateFleetSpec } from "./preflight-capacity.mjs";
 
 test("blocks an eight-compositor pool before partial provisioning exceeds quota", () => {
   const result = evaluateCapacity(fixture({ dropletLimit: 10, dropletCount: 7, compositorCount: 4 }));
@@ -25,6 +25,12 @@ test("includes a warm spare in quota and cost calculations", () => {
   assert.equal(result.compositors.target, 9);
   assert.equal(result.compositors.additionsRequired, 5);
   assert.equal(result.compositors.totalDropletsAfterProvisioning, 12);
+});
+
+test("stamps a deterministic capture time on persisted preflight evidence", () => {
+  const result = timestampCapacityResult({ status: "PASS" }, new Date("2026-07-15T12:00:00.000Z"));
+  assert.deepEqual(result, { status: "PASS", checkedAt: "2026-07-15T12:00:00.000Z" });
+  assert.throws(() => timestampCapacityResult({}, new Date("invalid")), /timestamp is invalid/);
 });
 
 test("does not count inactive or incompatible tagged workers as qualified capacity", () => {

@@ -38,11 +38,14 @@ const browserFramesReceived = new Gauge({ name: "scorecheck_program_browser_fram
 const browserFramesDecoded = new Gauge({ name: "scorecheck_program_browser_frames_decoded", help: "Program browser cumulative video frames decoded for the current page connection.", labelNames: ["court"], registers: [registry] });
 const browserFramesDropped = new Gauge({ name: "scorecheck_program_browser_frames_dropped", help: "Program browser cumulative video frames dropped for the current page connection.", labelNames: ["court"], registers: [registry] });
 const browserFreezeDuration = new Gauge({ name: "scorecheck_program_browser_freeze_duration_seconds", help: "Program browser cumulative WebRTC freeze duration for the current page connection.", labelNames: ["court"], registers: [registry] });
+const browserReconnects = new Gauge({ name: "scorecheck_program_browser_reconnects", help: "Program browser reconnect count for the current tab lineage.", labelNames: ["court"], registers: [registry] });
+const browserReloads = new Gauge({ name: "scorecheck_program_browser_reloads", help: "Program browser reload count for the current tab lineage.", labelNames: ["court"], registers: [registry] });
 const browserFramesReceivedTotal = new Counter({ name: "scorecheck_program_browser_frames_received_total", help: "Reset-safe program browser video frames received.", labelNames: ["court"], registers: [registry] });
 const browserFramesDecodedTotal = new Counter({ name: "scorecheck_program_browser_frames_decoded_total", help: "Reset-safe program browser video frames decoded.", labelNames: ["court"], registers: [registry] });
 const browserFramesDroppedTotal = new Counter({ name: "scorecheck_program_browser_frames_dropped_total", help: "Reset-safe program browser video frames dropped before presentation.", labelNames: ["court"], registers: [registry] });
 const browserFreezesTotal = new Counter({ name: "scorecheck_program_browser_freezes_total", help: "Reset-safe program browser WebRTC freeze events.", labelNames: ["court"], registers: [registry] });
 const browserFreezeDurationTotal = new Counter({ name: "scorecheck_program_browser_freeze_duration_seconds_total", help: "Reset-safe program browser WebRTC freeze duration in seconds.", labelNames: ["court"], registers: [registry] });
+const browserSessionsTotal = new Counter({ name: "scorecheck_program_browser_sessions_total", help: "Reset-safe Program page session transitions after the first observed page.", labelNames: ["court"], registers: [registry] });
 const commentaryConnected = new Gauge({ name: "scorecheck_program_commentary_room_connected", help: "Whether the program browser is connected to its commentary room.", labelNames: ["court"], registers: [registry] });
 const commentaryTracks = new Gauge({ name: "scorecheck_program_commentary_audio_tracks", help: "Subscribed commentary audio tracks in the program browser.", labelNames: ["court"], registers: [registry] });
 const commentaryMutedTracks = new Gauge({ name: "scorecheck_program_commentary_muted_tracks", help: "Muted subscribed commentary tracks.", labelNames: ["court"], registers: [registry] });
@@ -80,6 +83,8 @@ const deadManChannelAuditHealthy = new Gauge({ name: "scorecheck_external_dead_m
 const deadManPhoneChannelReady = new Gauge({ name: "scorecheck_external_dead_man_phone_channel_ready", help: "Whether the required Healthchecks Pushover channel is attached: 1 attached, 0 missing, -1 unverified or not configured.", labelNames: ["check"], registers: [registry] });
 const deadManTestGateActive = new Gauge({ name: "scorecheck_external_dead_man_test_gate_active", help: "Whether a bounded external dead-man withheld-ping test gate is active.", labelNames: ["check"], registers: [registry] });
 const deadManTestGateExpires = new Gauge({ name: "scorecheck_external_dead_man_test_gate_expires_timestamp_seconds", help: "Expiry time of the bounded external dead-man test gate, or zero when inactive.", labelNames: ["check"], registers: [registry] });
+const activeIncidents = new Gauge({ name: "scorecheck_active_incidents", help: "Current unresolved monitoring incident count, including acknowledged incidents.", registers: [registry] });
+const activeFaultGates = new Gauge({ name: "scorecheck_active_fault_gates", help: "Current bounded monitoring fault-gate count.", registers: [registry] });
 const runtimes = new Map<string, AgentRuntime>(config.targets.map((target) => [target.id, {
   target,
   snapshot: null,
@@ -399,6 +404,8 @@ async function pollAll() {
   browserFramesDecoded.reset();
   browserFramesDropped.reset();
   browserFreezeDuration.reset();
+  browserReconnects.reset();
+  browserReloads.reset();
   commentaryConnected.reset();
   commentaryTracks.reset();
   commentaryMutedTracks.reset();
@@ -432,6 +439,8 @@ async function pollAll() {
   const notificationHealth = snapshot.notifications;
   notificationProviderHealthy.set({ provider: "pushover" }, providerMetric(notificationHealth.pushover));
   notificationProviderHealthy.set({ provider: "twilio_sms" }, providerMetric(notificationHealth.twilioSms));
+  activeIncidents.set(snapshot.incidents.length);
+  activeFaultGates.set(faultGateControl.active().length);
   for (const court of snapshot.courts) {
     const labels = { court: String(court.courtNumber) };
     const browser = court.browser;
@@ -457,6 +466,8 @@ async function pollAll() {
     setOptionalGauge(browserFramesDecoded, labels, browser.video.framesDecoded);
     setOptionalGauge(browserFramesDropped, labels, browser.video.framesDropped);
     setOptionalGauge(browserFreezeDuration, labels, browser.video.totalFreezesDurationMs == null ? null : browser.video.totalFreezesDurationMs / 1_000);
+    browserReconnects.set(labels, browser.video.reconnectCount);
+    browserReloads.set(labels, browser.video.reloadCount);
     const browserDeltas = browserCounterAccumulator.observe(court.courtNumber, {
       pageLoadedAt: browser.pageLoadedAt,
       framesReceived: browser.video.framesReceived,
@@ -470,6 +481,7 @@ async function pollAll() {
     incrementCourtCounter(browserFramesDroppedTotal, labels, browserDeltas.framesDropped);
     incrementCourtCounter(browserFreezesTotal, labels, browserDeltas.freezeCount);
     incrementCourtCounter(browserFreezeDurationTotal, labels, browserDeltas.totalFreezesDurationMs / 1_000);
+    incrementCourtCounter(browserSessionsTotal, labels, browserDeltas.sessionStarts);
     commentaryConnected.set(labels, browser.commentary.roomConnected ? 1 : 0);
     commentaryTracks.set(labels, browser.commentary.audioTrackCount);
     commentaryMutedTracks.set(labels, browser.commentary.mutedAudioTrackCount);

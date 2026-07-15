@@ -1,0 +1,672 @@
+#!/usr/bin/env node
+
+import { createHash } from "node:crypto";
+import { chmod, readFile, writeFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+import {
+  assertCapacityConfig,
+  buildQueries,
+  evaluateEvidence,
+  evaluateHostSamples,
+  evaluateZombieEvidence,
+  percentile,
+  queryRange,
+  resetAwareIncrease
+} from "./evaluate-gate.mjs";
+import { pairPoolHostSamples, parsePoolHostEventsNdjson, summarizePoolHost } from "./pool-host-evidence.mjs";
+
+const LABEL_VALUE = /^[a-zA-Z0-9_.:-]{1,80}$/;
+const SOURCE_FIELDS = ["protocol", "mode", "videoCodec", "videoWidth", "videoHeight", "videoProfile", "audioCodec", "audioSampleRateHz", "audioChannelCount"];
+const PROMETHEUS_QUERY_CONCURRENCY = 8;
+
+export function assertEightCourtConfig(config) {
+  if (config?.schemaVersion !== 1) throw new Error("eight-court config schemaVersion must be 1");
+  safeLabel("gateId", config.gateId);
+  if (!Number.isFinite(config.minimumDurationSeconds) || config.minimumDurationSeconds < 7_200) throw new Error("minimumDurationSeconds must be at least 7200");
+  if (!Number.isFinite(config.warmupSeconds) || config.warmupSeconds < 0 || config.warmupSeconds >= config.minimumDurationSeconds) throw new Error("warmupSeconds is invalid");
+  if (config.minimumDurationSeconds - config.warmupSeconds < 7_200) throw new Error("the post-warmup evaluated window must be at least 7200 seconds");
+  if (!Number.isInteger(config.stepSeconds) || config.stepSeconds < 5 || config.stepSeconds > 60) throw new Error("stepSeconds must be from 5 through 60");
+  if (config.expectedAgentCount !== 11) throw new Error("expectedAgentCount must be exactly 11 for ingest, commentary, eight active compositors, and the warm spare");
+  safeLabel("expectedPoolRegion", config.expectedPoolRegion);
+  safeLabel("expectedPoolSizeSlug", config.expectedPoolSizeSlug);
+  if (!Number.isInteger(config.expectedPoolSizeVcpus) || config.expectedPoolSizeVcpus < 1) throw new Error("expectedPoolSizeVcpus is invalid");
+  if (!Number.isFinite(config.minimumVenueUploadBps) || config.minimumVenueUploadBps < 75_000_000) throw new Error("minimumVenueUploadBps must be at least 75000000");
+  if (!Number.isFinite(config.maximumVenueEvidenceAgeSeconds) || config.maximumVenueEvidenceAgeSeconds <= 0) throw new Error("maximumVenueEvidenceAgeSeconds is invalid");
+  if (!Number.isFinite(config.minimumVenueMeasurementSpanSeconds) || config.minimumVenueMeasurementSpanSeconds < 60 || config.minimumVenueMeasurementSpanSeconds > config.maximumVenueEvidenceAgeSeconds) throw new Error("minimumVenueMeasurementSpanSeconds is invalid");
+  if (!Number.isFinite(config.maximumPoolPreflightAgeSeconds) || config.maximumPoolPreflightAgeSeconds <= 0) throw new Error("maximumPoolPreflightAgeSeconds is invalid");
+  if (!Number.isFinite(config.maximumAttestationLagSeconds) || config.maximumAttestationLagSeconds <= 0) throw new Error("maximumAttestationLagSeconds is invalid");
+  assertHost(config.ingest, "ingest");
+  assertHost(config.warmSpare, "warm spare");
+  if (config.warmSpare.vcpus !== config.expectedPoolSizeVcpus) throw new Error("warm-spare vcpus must match expectedPoolSizeVcpus");
+  if (!Array.isArray(config.courts) || config.courts.length !== 8) throw new Error("eight-court config must contain exactly eight courts");
+  const courtNumbers = config.courts.map((court) => court.court).sort((left, right) => left - right);
+  if (courtNumbers.some((court, index) => court !== index + 1)) throw new Error("courts must assign each number 1 through 8 exactly once");
+  const compositorHosts = new Set();
+  const compositorAgents = new Set();
+  let commentaryCourts = 0;
+  for (const court of config.courts) {
+    assertHost(court.compositor, `court ${court.court} compositor`);
+    if (court.compositor.vcpus !== config.expectedPoolSizeVcpus) throw new Error(`court ${court.court} compositor vcpus must match expectedPoolSizeVcpus`);
+    if (compositorHosts.has(court.compositor.hostId)) throw new Error("each court must use a unique compositor host");
+    if (compositorAgents.has(court.compositor.agent)) throw new Error("each court must use a unique compositor agent");
+    compositorHosts.add(court.compositor.hostId);
+    compositorAgents.add(court.compositor.agent);
+    if (court.commentaryRequired === true) commentaryCourts += 1;
+    if (!Array.isArray(court.requiredBranches) || !["raw", "preview", "program"].every((branch) => court.requiredBranches.includes(branch))) {
+      throw new Error(`court ${court.court} must require raw, preview, and program branches`);
+    }
+    if (!Array.isArray(court.ffmpegBranches)) throw new Error(`court ${court.court} ffmpegBranches must be an array`);
+    assertSourceProfile(court.expectedSourceProfile, court.court);
+  }
+  if (commentaryCourts < 2) throw new Error("at least two courts must require commentary");
+  if (compositorHosts.has(config.ingest.hostId) || config.ingest.hostId === config.warmSpare.hostId) throw new Error("ingest and warm-spare identities must be distinct from active compositors");
+  if (compositorAgents.has(config.ingest.agent)) throw new Error("ingest agent must be distinct from active compositors");
+  if (compositorHosts.has(config.warmSpare.hostId)) throw new Error("warm spare cannot own an active court");
+  if (compositorAgents.has(config.warmSpare.agent) || config.ingest.agent === config.warmSpare.agent) throw new Error("warm-spare agent must be distinct from ingest and active compositors");
+  for (const required of [
+    "maximumCameraAudioSilenceSeconds", "maximumCameraAudioClippedSampleRatio",
+    "maximumCommentaryClippedSampleRatio", "maximumCommentarySilenceSeconds",
+    "maximumCommentaryJitterMs", "maximumCommentarySyncGapMs",
+    "maximumCommentaryPacketLossRatio", "maximumVenuePacketLossRatio",
+    "maximumBrowserLowFpsRatio", "maximumMetricSampleGapSeconds",
+    "maximumSnapshotAgeSeconds", "maximumRawLowBitrateRatio",
+    "maximumFfmpegLowFpsRatio"
+  ]) {
+    if (!Number.isFinite(config.thresholds?.[required]) || config.thresholds[required] < 0) throw new Error(`threshold ${required} is required`);
+  }
+  if (config.thresholds.maximumMetricSampleGapSeconds < config.stepSeconds || config.thresholds.maximumMetricSampleGapSeconds > 120) {
+    throw new Error("maximumMetricSampleGapSeconds must be between stepSeconds and 120 seconds");
+  }
+  for (const ratio of [
+    "maximumRawLowBitrateRatio", "maximumFfmpegLowFpsRatio",
+    "maximumBrowserLowFpsRatio", "maximumCommentaryPacketLossRatio",
+    "maximumVenuePacketLossRatio"
+  ]) {
+    if (config.thresholds[ratio] > 1) throw new Error(`${ratio} cannot exceed 1`);
+  }
+  for (const court of config.courts) assertCapacityConfig(toSingleCourtConfig(config, court));
+  assertCapacityConfig(toWarmSpareValidationConfig(config));
+}
+
+export function buildEightCourtQueries(config) {
+  assertEightCourtConfig(config);
+  const courts = {};
+  for (const court of config.courts) {
+    const number = String(court.court);
+    const base = buildQueries(toSingleCourtConfig(config, court));
+    const extra = {
+      expectation_media: selector("scorecheck_court_media_required", { court: number }),
+      expectation_broadcast: selector("scorecheck_court_broadcast_live", { court: number }),
+      expectation_match: selector("scorecheck_court_live_match", { court: number }),
+      expectation_scoring: selector("scorecheck_court_scoring_live", { court: number }),
+      compositor_assignment: selector("scorecheck_compositor_court_assignment", { agent: court.compositor.agent, court: number }),
+      compositor_assignment_count: `sum(${selector("scorecheck_compositor_court_assignment", { agent: court.compositor.agent })}) or vector(0)`,
+      browser_packets_lost: selector("scorecheck_program_browser_packets_lost", { court: number }),
+      browser_reconnects: selector("scorecheck_program_browser_reconnects", { court: number }),
+      browser_reloads: selector("scorecheck_program_browser_reloads", { court: number }),
+      browser_sessions: selector("scorecheck_program_browser_sessions_total", { court: number }),
+      visual_frozen: selector("scorecheck_program_visual_frozen_duration_seconds", { court: number }),
+      visual_black: selector("scorecheck_program_visual_black_duration_seconds", { court: number }),
+      camera_audio_track: selector("scorecheck_program_camera_audio_track_present", { court: number }),
+      camera_audio_silence: selector("scorecheck_program_camera_audio_silence_age_seconds", { court: number }),
+      camera_audio_clipping: selector("scorecheck_program_camera_audio_clipped_sample_ratio", { court: number }),
+      score_source_aligned: selector("scorecheck_score_source_aligned", { court: number }),
+      score_render_aligned: selector("scorecheck_program_score_render_aligned", { court: number }),
+      youtube_healthy: selector("scorecheck_youtube_healthy", { court: number }),
+      youtube_degraded: selector("scorecheck_youtube_degraded", { court: number })
+    };
+    for (const branch of court.requiredBranches) extra[`path_readers_${branch}`] = selector("scorecheck_media_path_readers", { agent: config.ingest.agent, court: number, branch });
+    for (const branch of court.ffmpegBranches) extra[`ffmpeg_duplicated_${branch}`] = selector("scorecheck_ffmpeg_duplicated_frames", { agent: config.ingest.agent, court: number, branch });
+    if (court.commentaryRequired) Object.assign(extra, commentaryQueries(number));
+    courts[court.court] = { ...base, ...extra };
+  }
+  return {
+    global: {
+      control_plane_fresh: "scorecheck_control_plane_fresh",
+      snapshot_generated: "scorecheck_monitor_snapshot_generated_timestamp_seconds",
+      monitor_process_start_time: selector("process_start_time_seconds", { job: "monitor-service" }),
+      score_worker_healthy: "scorecheck_score_worker_healthy",
+      youtube_api_up: "scorecheck_youtube_api_up",
+      dead_man_healthy: "min(scorecheck_external_dead_man_healthy)",
+      dead_man_active_running: "scorecheck_external_dead_man_active_running",
+      dead_man_channel_audit: "scorecheck_external_dead_man_channel_audit_healthy",
+      dead_man_test_gate_active: "max(scorecheck_external_dead_man_test_gate_active)",
+      phone_channel_ready: "min(scorecheck_external_dead_man_phone_channel_ready)",
+      pushover_healthy: selector("scorecheck_notification_provider_healthy", { provider: "pushover" }),
+      agents_fresh_min: "min(scorecheck_monitor_agent_fresh)",
+      agent_count: "count(scorecheck_monitor_agent_fresh)",
+      active_alerts: "sum(ALERTS{alertstate=\"firing\",severity=~\"warning|critical\"}) or vector(0)",
+      active_incidents: "scorecheck_active_incidents",
+      active_fault_gates: "scorecheck_active_fault_gates",
+      warm_spare_fresh: selector("scorecheck_monitor_agent_fresh", { agent: config.warmSpare.agent, role: "compositor" }),
+      warm_spare_egress_idle: selector("scorecheck_egress_idle", { agent: config.warmSpare.agent }),
+      warm_spare_metrics_valid: selector("scorecheck_egress_metrics_valid", { agent: config.warmSpare.agent }),
+      warm_spare_can_accept: selector("scorecheck_egress_can_accept_request", { agent: config.warmSpare.agent }),
+      warm_spare_active_requests: selector("scorecheck_egress_active_web_requests", { agent: config.warmSpare.agent }),
+      warm_spare_maximum_requests: selector("scorecheck_egress_maximum_web_requests", { agent: config.warmSpare.agent }),
+      warm_spare_assignments: `sum(${selector("scorecheck_compositor_court_assignment", { agent: config.warmSpare.agent })}) or vector(0)`,
+      warm_spare_restarts: selector("scorecheck_service_restart_total", { agent: config.warmSpare.agent, service: config.warmSpare.service }),
+      warm_spare_oom: selector("scorecheck_service_oom_killed", { agent: config.warmSpare.agent, service: config.warmSpare.service }),
+      total_compositor_assignments: "sum(scorecheck_compositor_court_assignment) or vector(0)"
+    },
+    courts
+  };
+}
+
+export function assertExactPoolHostSet(config, hostEvents) {
+  assertEightCourtConfig(config);
+  if (!Array.isArray(hostEvents)) throw new Error("pool host events must be an array");
+  const expected = [config.ingest, ...config.courts.map((court) => court.compositor), config.warmSpare]
+    .map((host) => host.hostId)
+    .sort();
+  const observed = [...new Set(hostEvents.map((event) => event?.hostId).filter((hostId) => typeof hostId === "string"))].sort();
+  if (!arraysEqual(observed, expected)) throw new Error(`pool host evidence identities do not match the exact topology: expected ${expected.join(",")}; observed ${observed.join(",")}`);
+  const machineFingerprints = [];
+  for (const hostId of expected) {
+    const fingerprints = [...new Set(hostEvents
+      .filter((event) => event?.hostId === hostId && event.event === "watcher_started")
+      .map((event) => event.machineFingerprint)
+      .filter((value) => typeof value === "string"))];
+    if (fingerprints.length !== 1) throw new Error(`pool host ${hostId} must have one stable remote machine fingerprint`);
+    machineFingerprints.push(fingerprints[0]);
+  }
+  if (new Set(machineFingerprints).size !== expected.length) throw new Error("pool host evidence maps multiple configured hosts to the same physical machine");
+}
+
+export function createConcurrencyLimiter(maximum) {
+  if (!Number.isInteger(maximum) || maximum < 1 || maximum > 64) throw new Error("concurrency limit must be an integer from 1 through 64");
+  let active = 0;
+  const queue = [];
+  const drain = () => {
+    while (active < maximum && queue.length > 0) {
+      const entry = queue.shift();
+      active += 1;
+      Promise.resolve()
+        .then(entry.task)
+        .then(entry.resolve, entry.reject)
+        .finally(() => {
+          active -= 1;
+          drain();
+        });
+    }
+  };
+  return (task) => new Promise((resolve, reject) => {
+    if (typeof task !== "function") {
+      reject(new Error("concurrency-limited task must be a function"));
+      return;
+    }
+    queue.push({ task, resolve, reject });
+    drain();
+  });
+}
+
+export function evaluateEightCourtEvidence({ config, evidence, attestations, hosts, poolPreflight, venueEvidence }) {
+  assertEightCourtConfig(config);
+  assertEightCourtAttestations(config, attestations);
+  const startEpochSeconds = evidence.startEpochSeconds;
+  const effectiveStartEpochSeconds = evidence.effectiveStartEpochSeconds;
+  const endEpochSeconds = evidence.endEpochSeconds;
+  if (![startEpochSeconds, effectiveStartEpochSeconds, endEpochSeconds].every(Number.isFinite)
+      || startEpochSeconds >= effectiveStartEpochSeconds
+      || effectiveStartEpochSeconds >= endEpochSeconds) {
+    throw new Error("evidence window is invalid");
+  }
+  const expectedSamples = Math.floor((endEpochSeconds - effectiveStartEpochSeconds) / config.stepSeconds) + 1;
+  const minimumSamples = Math.max(2, Math.floor(expectedSamples * config.thresholds.minimumSampleCoverageRatio));
+  const checks = [];
+  const attestationCapturedAt = Date.parse(attestations.capturedAt) / 1_000;
+  const attestationLagSeconds = attestationCapturedAt - endEpochSeconds;
+  check(checks, "attestation_capture_fresh", Number.isFinite(attestationLagSeconds) && attestationLagSeconds >= 0 && attestationLagSeconds <= config.maximumAttestationLagSeconds, Number.isFinite(attestationLagSeconds) ? attestationLagSeconds : null, `0..${config.maximumAttestationLagSeconds} seconds after endpoint`);
+  const expectedQueries = buildEightCourtQueries(config);
+  for (const name of Object.keys(expectedQueries.global)) {
+    metricSeriesCoverage(checks, `global_${name}`, evidence.globalSeries?.[name], {
+      startEpochSeconds: effectiveStartEpochSeconds,
+      endEpochSeconds,
+      minimumSamples,
+      maximumGapSeconds: config.thresholds.maximumMetricSampleGapSeconds
+    });
+  }
+  for (const court of config.courts) {
+    for (const name of Object.keys(expectedQueries.courts[court.court])) {
+      metricSeriesCoverage(checks, `court${court.court}_${name}`, evidence.courtSeries?.[court.court]?.[name], {
+        startEpochSeconds: effectiveStartEpochSeconds,
+        endEpochSeconds,
+        minimumSamples,
+        maximumGapSeconds: config.thresholds.maximumMetricSampleGapSeconds
+      });
+    }
+  }
+  const globalSeries = evidence.globalSeries ?? {};
+  for (const metric of [
+    "control_plane_fresh", "score_worker_healthy", "youtube_api_up", "dead_man_healthy",
+    "dead_man_active_running", "dead_man_channel_audit", "phone_channel_ready",
+    "pushover_healthy", "agents_fresh_min", "warm_spare_fresh",
+    "warm_spare_egress_idle", "warm_spare_metrics_valid", "warm_spare_can_accept"
+  ]) {
+    continuous(checks, globalSeries, metric, minimumSamples, (values) => Math.min(...values) >= 1, "1 for every sample");
+  }
+  for (const metric of ["active_incidents", "active_fault_gates", "dead_man_test_gate_active", "warm_spare_active_requests", "warm_spare_oom"]) {
+    continuous(checks, globalSeries, metric, minimumSamples, (values) => Math.max(...values) === 0, "0 for every sample");
+  }
+  continuous(checks, globalSeries, "warm_spare_assignments", minimumSamples, (values) => Math.max(...values) === 0, "0 for every sample");
+  continuous(checks, globalSeries, "warm_spare_maximum_requests", minimumSamples, (values) => Math.min(...values) === 1 && Math.max(...values) === 1, "exactly 1 for every sample");
+  continuous(checks, globalSeries, "total_compositor_assignments", minimumSamples, (values) => Math.min(...values) === 8 && Math.max(...values) === 8, "exactly 8 for every sample");
+  growth(checks, globalSeries, "warm_spare_restarts", minimumSamples, 0);
+  continuous(checks, globalSeries, "agent_count", minimumSamples, (values) => Math.min(...values) === config.expectedAgentCount && Math.max(...values) === config.expectedAgentCount, `exactly ${config.expectedAgentCount}`);
+  continuous(checks, globalSeries, "active_alerts", minimumSamples, (values) => Math.max(...values) === 0, "0 for every sample");
+  continuous(checks, globalSeries, "monitor_process_start_time", minimumSamples, (values) => Math.min(...values) === Math.max(...values), "one unchanged process start time");
+  const snapshotSamples = globalSeries.snapshot_generated ?? [];
+  const snapshotAges = snapshotSamples.map((sample) => sample.timestamp - sample.value).filter(Number.isFinite);
+  check(checks, "snapshot_generated_fresh", snapshotAges.length >= minimumSamples
+    && Math.min(...snapshotAges) >= 0
+    && Math.max(...snapshotAges) <= config.thresholds.maximumSnapshotAgeSeconds, snapshotAges.length ? { minimum: Math.min(...snapshotAges), maximum: Math.max(...snapshotAges) } : null, `0..${config.thresholds.maximumSnapshotAgeSeconds} seconds`);
+  evaluatePoolPreflight(checks, config, poolPreflight, startEpochSeconds);
+  evaluateVenue(checks, config, venueEvidence, startEpochSeconds);
+  check(checks, "cross_court_isolation_attested", attestations?.crossCourtIsolationVerified === true, attestations?.crossCourtIsolationVerified ?? null, true);
+  check(checks, "youtube_test_privacy_attested", attestations?.youtubeBroadcastsUnlisted === true, attestations?.youtubeBroadcastsUnlisted ?? null, true);
+  check(checks, "youtube_manual_lifecycle_attested", attestations?.youtubeAutoLifecycleDisabled === true, attestations?.youtubeAutoLifecycleDisabled ?? null, true);
+
+  const ingestHost = hosts?.[config.ingest.hostId];
+  const warmSpareHost = hosts?.[config.warmSpare.hostId];
+  if (!ingestHost || !warmSpareHost) throw new Error("host evidence is missing for the ingest host or warm spare");
+  const warmSpareChecks = [];
+  const warmSpareHostConfig = hostPairConfig(config, config.warmSpare);
+  evaluateHostSamples(warmSpareChecks, warmSpareHostConfig, pairPoolHostSamples(ingestHost.samples, warmSpareHost.samples));
+  evaluateZombieEvidence(warmSpareChecks, warmSpareHostConfig, { roles: { ingest: ingestHost.zombies, compositor: warmSpareHost.zombies } });
+  checks.push(...warmSpareChecks.map((entry) => ({ ...entry, id: `warm_spare_${entry.id}` })));
+
+  const courtAttestations = new Map((attestations?.courts ?? []).map((court) => [court.court, court]));
+  const courtReports = [];
+  for (const court of config.courts) {
+    const ingest = hosts?.[config.ingest.hostId];
+    const compositor = hosts?.[court.compositor.hostId];
+    if (!ingest || !compositor) throw new Error(`host evidence is missing for court ${court.court}`);
+    const singleConfig = toSingleCourtConfig(config, court);
+    const courtAttestation = courtAttestations.get(court.court) ?? {};
+    const singleReport = evaluateEvidence(singleConfig, {
+      startEpochSeconds,
+      effectiveStartEpochSeconds,
+      endEpochSeconds,
+      series: evidence.courtSeries?.[court.court] ?? {}
+    }, {
+      observedSourceProfile: boundedSourceProfile(courtAttestation.observedSourceProfile),
+      assignmentVerified: courtAttestation.assignmentVerified === true,
+      unassignedCourtsUnaffected: attestations?.crossCourtIsolationVerified === true,
+      egressErrors: Number.isFinite(courtAttestation.egressErrors) ? courtAttestation.egressErrors : null,
+      egressShmEnabled: courtAttestation.egressShmEnabled === true
+    }, pairPoolHostSamples(ingest.samples, compositor.samples), {
+      roles: { ingest: ingest.zombies, compositor: compositor.zombies }
+    });
+    const extraChecks = evaluateCourtExtras(config, court, evidence.courtSeries?.[court.court] ?? {}, minimumSamples, courtAttestation, {
+      effectiveStartEpochSeconds,
+      endEpochSeconds
+    });
+    singleReport.checks.push(...extraChecks);
+    singleReport.verdict = singleReport.checks.every((entry) => entry.pass) ? "PASS" : "FAIL";
+    courtReports.push(singleReport);
+  }
+  check(checks, "all_eight_courts_pass", courtReports.length === 8 && courtReports.every((report) => report.verdict === "PASS"), courtReports.map((report) => ({ court: report.court, verdict: report.verdict })), "8 PASS reports");
+  return {
+    schemaVersion: 1,
+    gateId: config.gateId,
+    startAt: new Date(startEpochSeconds * 1_000).toISOString(),
+    effectiveStartAt: new Date(effectiveStartEpochSeconds * 1_000).toISOString(),
+    endAt: new Date(endEpochSeconds * 1_000).toISOString(),
+    verdict: checks.every((entry) => entry.pass) && courtReports.every((report) => report.verdict === "PASS") ? "PASS" : "FAIL",
+    checks,
+    courts: courtReports
+  };
+}
+
+function evaluateCourtExtras(config, court, series, minimumSamples, attestation, window) {
+  const checks = [];
+  for (const metric of ["expectation_media", "expectation_broadcast", "expectation_match", "expectation_scoring", "compositor_assignment", "browser_fresh", "camera_audio_track", "score_source_aligned", "score_render_aligned", "youtube_healthy"]) {
+    continuous(checks, series, metric, minimumSamples, (values) => Math.min(...values) >= 1, "1 for every sample");
+  }
+  continuous(checks, series, "compositor_assignment_count", minimumSamples, (values) => Math.min(...values) === 1 && Math.max(...values) === 1, "exactly 1 for every sample");
+  for (const metric of ["youtube_degraded", "visual_frozen", "visual_black"]) continuous(checks, series, metric, minimumSamples, (values) => Math.max(...values) === 0, "0 for every sample");
+  for (const branch of court.requiredBranches) continuous(checks, series, `path_readers_${branch}`, minimumSamples, (values) => Math.min(...values) === 1 && Math.max(...values) === 1, "exactly 1 for every sample");
+  const rawBitrate = values(series, "raw_bitrate");
+  if (rawBitrate.length >= minimumSamples) {
+    const lowRatio = rawBitrate.filter((value) => value < config.thresholds.minimumRawBitrateBps).length / rawBitrate.length;
+    check(checks, "raw_bitrate_positive", Math.min(...rawBitrate) > 0, Math.min(...rawBitrate), "> 0 for every sample");
+    check(checks, "raw_low_bitrate_ratio", lowRatio <= config.thresholds.maximumRawLowBitrateRatio, lowRatio, `<= ${config.thresholds.maximumRawLowBitrateRatio}`);
+  }
+  for (const branch of court.ffmpegBranches) {
+    growth(checks, series, `ffmpeg_duplicated_${branch}`, minimumSamples, 0);
+    const fps = values(series, `ffmpeg_fps_${branch}`);
+    if (fps.length >= minimumSamples) {
+      const lowRatio = fps.filter((value) => value < config.thresholds.minimumFfmpegFps).length / fps.length;
+      check(checks, `ffmpeg_${branch}_low_fps_ratio`, lowRatio <= config.thresholds.maximumFfmpegLowFpsRatio, lowRatio, `<= ${config.thresholds.maximumFfmpegLowFpsRatio}`);
+      check(checks, `ffmpeg_${branch}_fps_never_critical`, Math.min(...fps) >= 20, Math.min(...fps), ">= 20");
+    }
+  }
+  for (const metric of ["browser_packets_lost", "browser_reconnects", "browser_reloads", "browser_sessions"]) growth(checks, series, metric, minimumSamples, 0);
+  const browserFps = values(series, "browser_fps");
+  if (browserFps.length >= minimumSamples) {
+    const lowRatio = browserFps.filter((value) => value < config.thresholds.minimumBrowserFps).length / browserFps.length;
+    check(checks, "browser_low_fps_ratio", lowRatio <= config.thresholds.maximumBrowserLowFpsRatio, lowRatio, `<= ${config.thresholds.maximumBrowserLowFpsRatio}`);
+    check(checks, "browser_fps_never_critical", Math.min(...browserFps) >= 20, Math.min(...browserFps), ">= 20");
+  }
+  boundedMaximum(checks, series, "camera_audio_silence", minimumSamples, config.thresholds.maximumCameraAudioSilenceSeconds);
+  boundedMaximum(checks, series, "camera_audio_clipping", minimumSamples, config.thresholds.maximumCameraAudioClippedSampleRatio);
+  if (court.commentaryRequired) {
+    for (const metric of ["commentary_connected", "commentary_sync_locked"]) continuous(checks, series, metric, minimumSamples, (values) => Math.min(...values) >= 1, "1 for every sample");
+    continuous(checks, series, "commentary_tracks", minimumSamples, (values) => Math.min(...values) >= 1, ">= 1 for every sample");
+    continuous(checks, series, "commentary_muted", minimumSamples, (values) => Math.max(...values) === 0, "0 for every sample");
+    boundedMaximum(checks, series, "commentary_clipping", minimumSamples, config.thresholds.maximumCommentaryClippedSampleRatio);
+    boundedMaximum(checks, series, "commentary_silence", minimumSamples, config.thresholds.maximumCommentarySilenceSeconds);
+    boundedMaximum(checks, series, "commentary_jitter", minimumSamples, config.thresholds.maximumCommentaryJitterMs);
+    boundedMaximum(checks, series, "commentary_sync_gap", minimumSamples, config.thresholds.maximumCommentarySyncGapMs);
+    const lost = values(series, "commentary_packets_lost");
+    const received = values(series, "commentary_packets_received");
+    requireSamples(checks, "commentary_packets_lost", lost, minimumSamples);
+    requireSamples(checks, "commentary_packets_received", received, minimumSamples);
+    if (lost.length >= minimumSamples && received.length >= minimumSamples) {
+      const ratio = resetAwareIncrease(lost) / Math.max(1, resetAwareIncrease(lost) + resetAwareIncrease(received));
+      check(checks, "commentary_packet_loss_ratio", ratio <= config.thresholds.maximumCommentaryPacketLossRatio, ratio, `<= ${config.thresholds.maximumCommentaryPacketLossRatio}`);
+    }
+    check(checks, "commentary_av_sync_attested", attestation.avSyncObserved === true, attestation.avSyncObserved ?? null, true);
+    const observedAt = Date.parse(attestation.avSyncObservedAt) / 1_000;
+    check(checks, "commentary_av_sync_in_window", Number.isFinite(observedAt) && observedAt >= window.effectiveStartEpochSeconds && observedAt <= window.endEpochSeconds, Number.isFinite(observedAt) ? new Date(observedAt * 1_000).toISOString() : null, `${new Date(window.effectiveStartEpochSeconds * 1_000).toISOString()}..${new Date(window.endEpochSeconds * 1_000).toISOString()}`);
+  }
+  return checks;
+}
+
+function evaluatePoolPreflight(checks, config, pool, startEpochSeconds) {
+  const expectedNames = [...config.courts.map((court) => court.compositor.hostId), config.warmSpare.hostId].sort();
+  const observedNames = [...(pool?.compositors?.exactPlan?.matchedNames ?? [])].sort();
+  const checkedAt = Date.parse(pool?.checkedAt) / 1_000;
+  const age = startEpochSeconds - checkedAt;
+  check(checks, "pool_preflight_fresh", Number.isFinite(age) && age >= 0 && age <= config.maximumPoolPreflightAgeSeconds, Number.isFinite(age) ? age : null, `0..${config.maximumPoolPreflightAgeSeconds} seconds`);
+  check(checks, "pool_preflight_status", pool?.status === "PASS", pool?.status ?? null, "PASS");
+  check(checks, "pool_region", pool?.region === config.expectedPoolRegion, pool?.region ?? null, config.expectedPoolRegion);
+  check(checks, "pool_size_slug", pool?.size?.slug === config.expectedPoolSizeSlug, pool?.size?.slug ?? null, config.expectedPoolSizeSlug);
+  check(checks, "pool_size_vcpus", pool?.size?.vcpus === config.expectedPoolSizeVcpus, pool?.size?.vcpus ?? null, config.expectedPoolSizeVcpus);
+  check(checks, "pool_exact_plan_complete", pool?.compositors?.exactPlan?.complete === true, pool?.compositors?.exactPlan?.complete ?? null, true);
+  check(checks, "pool_nine_workers_active", pool?.compositors?.matchingActive === 9 && pool?.compositors?.target === 9 && pool?.compositors?.additionsRequired === 0, {
+    matchingActive: pool?.compositors?.matchingActive ?? null,
+    target: pool?.compositors?.target ?? null,
+    additionsRequired: pool?.compositors?.additionsRequired ?? null
+  }, { matchingActive: 9, target: 9, additionsRequired: 0 });
+  check(checks, "pool_exact_names", arraysEqual(observedNames, expectedNames), observedNames, expectedNames);
+  check(checks, "pool_no_blockers", Array.isArray(pool?.blockers) && pool.blockers.length === 0, pool?.blockers ?? null, []);
+}
+
+function evaluateVenue(checks, config, venue, startEpochSeconds) {
+  const capturedAt = Date.parse(venue?.capturedAt) / 1_000;
+  const age = startEpochSeconds - capturedAt;
+  const samples = Array.isArray(venue?.samples) ? venue.samples : [];
+  const parsedSamples = samples.map((sample) => ({
+    measuredAt: Date.parse(sample?.measuredAt) / 1_000,
+    uploadBps: sample?.uploadBps,
+    packetLossRatio: sample?.packetLossRatio
+  }));
+  const samplesValid = parsedSamples.every((sample) => Number.isFinite(sample.measuredAt)
+    && Number.isFinite(sample.uploadBps) && sample.uploadBps > 0
+    && Number.isFinite(sample.packetLossRatio) && sample.packetLossRatio >= 0 && sample.packetLossRatio <= 1);
+  const timestamps = parsedSamples.map((sample) => sample.measuredAt);
+  const ordered = samplesValid && timestamps.every((timestamp, index) => index === 0 || timestamp > timestamps[index - 1]);
+  const allPreRunAndFresh = ordered && timestamps.every((timestamp) => timestamp <= capturedAt
+    && timestamp <= startEpochSeconds
+    && startEpochSeconds - timestamp <= config.maximumVenueEvidenceAgeSeconds);
+  const spanSeconds = ordered && timestamps.length > 1 ? timestamps.at(-1) - timestamps[0] : null;
+  const uploadP05 = samplesValid && samples.length ? percentile(parsedSamples.map((sample) => sample.uploadBps), 0.05) : null;
+  const maximumPacketLoss = samplesValid && samples.length ? Math.max(...parsedSamples.map((sample) => sample.packetLossRatio)) : null;
+  check(checks, "venue_evidence_schema", venue?.schemaVersion === 1, venue?.schemaVersion ?? null, 1);
+  check(checks, "venue_evidence_fresh", Number.isFinite(age) && age >= 0 && age <= config.maximumVenueEvidenceAgeSeconds, Number.isFinite(age) ? age : null, `0..${config.maximumVenueEvidenceAgeSeconds} seconds`);
+  check(checks, "venue_samples_valid", samplesValid, samplesValid ? "valid" : "missing or malformed", "timestamped upload and packet-loss samples");
+  check(checks, "venue_samples_ordered", ordered, ordered, true);
+  check(checks, "venue_samples_pre_run_and_fresh", allPreRunAndFresh, allPreRunAndFresh, true);
+  check(checks, "venue_upload_samples", samples.length >= 3, samples.length, ">= 3");
+  check(checks, "venue_measurement_span", Number.isFinite(spanSeconds) && spanSeconds >= config.minimumVenueMeasurementSpanSeconds, spanSeconds, `>= ${config.minimumVenueMeasurementSpanSeconds} seconds`);
+  check(checks, "venue_upload_p05", Number.isFinite(uploadP05) && uploadP05 >= config.minimumVenueUploadBps, uploadP05, `>= ${config.minimumVenueUploadBps}`);
+  check(checks, "venue_packet_loss", Number.isFinite(maximumPacketLoss) && maximumPacketLoss <= config.thresholds.maximumVenuePacketLossRatio, maximumPacketLoss, `<= ${config.thresholds.maximumVenuePacketLossRatio} for every sample`);
+  check(checks, "venue_fail_closed_routing", venue?.failClosedRoutingVerified === true, venue?.failClosedRoutingVerified ?? null, true);
+  check(checks, "venue_speedify_exit", venue?.speedifyExitVerified === true, venue?.speedifyExitVerified ?? null, true);
+}
+
+function toSingleCourtConfig(config, court) {
+  return {
+    schemaVersion: 2,
+    gateId: `${config.gateId}-court${court.court}`,
+    court: court.court,
+    minimumDurationSeconds: config.minimumDurationSeconds,
+    warmupSeconds: config.warmupSeconds,
+    stepSeconds: config.stepSeconds,
+    requiredBranches: court.requiredBranches,
+    ffmpegBranches: court.ffmpegBranches,
+    expectedSourceProfile: court.expectedSourceProfile,
+    allowedBaselineUnclassified: {
+      ingest: config.ingest.allowedBaselineUnclassified,
+      compositor: court.compositor.allowedBaselineUnclassified
+    },
+    ingest: hostForSingle(config.ingest),
+    compositor: hostForSingle(court.compositor),
+    requireBrowser: true,
+    thresholds: config.thresholds
+  };
+}
+
+function hostPairConfig(config, compositor) {
+  return {
+    stepSeconds: config.stepSeconds,
+    compositor,
+    thresholds: config.thresholds,
+    allowedBaselineUnclassified: {
+      ingest: config.ingest.allowedBaselineUnclassified,
+      compositor: compositor.allowedBaselineUnclassified
+    }
+  };
+}
+
+function toWarmSpareValidationConfig(config) {
+  const validation = toSingleCourtConfig(config, config.courts[0]);
+  return {
+    ...validation,
+    gateId: `${config.gateId}-warm-spare`,
+    compositor: hostForSingle(config.warmSpare),
+    allowedBaselineUnclassified: {
+      ingest: config.ingest.allowedBaselineUnclassified,
+      compositor: config.warmSpare.allowedBaselineUnclassified
+    }
+  };
+}
+
+function hostForSingle(host) {
+  return { agent: host.agent, service: host.service, vcpus: host.vcpus };
+}
+
+function assertHost(host, name) {
+  if (!host || typeof host !== "object") throw new Error(`${name} host is required`);
+  safeLabel(`${name} hostId`, host.hostId);
+  safeLabel(`${name} agent`, host.agent);
+  safeLabel(`${name} service`, host.service);
+  if (!Number.isInteger(host.vcpus) || host.vcpus < 1 || host.vcpus > 256) throw new Error(`${name} vcpus is invalid`);
+  if (!Array.isArray(host.allowedBaselineUnclassified)) throw new Error(`${name} allowedBaselineUnclassified must be an array`);
+}
+
+function assertEightCourtAttestations(config, attestations) {
+  if (attestations?.schemaVersion !== 1) throw new Error("eight-court attestations schemaVersion must be 1");
+  if (!Number.isFinite(Date.parse(attestations.capturedAt))) throw new Error("attestations capturedAt is invalid");
+  if (!Array.isArray(attestations.courts) || attestations.courts.length !== 8) throw new Error("attestations must contain exactly eight courts");
+  const numbers = attestations.courts.map((court) => court?.court).sort((left, right) => left - right);
+  if (numbers.some((court, index) => court !== index + 1)) throw new Error("attestations must assign each court 1 through 8 exactly once");
+  for (const court of attestations.courts) {
+    if (!config.courts.some((configured) => configured.court === court.court)) throw new Error(`attestation court ${court.court} is not configured`);
+    if (!court.observedSourceProfile || typeof court.observedSourceProfile !== "object" || Array.isArray(court.observedSourceProfile)) {
+      throw new Error(`attestation court ${court.court} observedSourceProfile is invalid`);
+    }
+    if (court.egressErrors != null && (!Number.isInteger(court.egressErrors) || court.egressErrors < 0)) {
+      throw new Error(`attestation court ${court.court} egressErrors is invalid`);
+    }
+    const configured = config.courts.find((entry) => entry.court === court.court);
+    if (configured.commentaryRequired && court.avSyncObservedAt != null && !Number.isFinite(Date.parse(court.avSyncObservedAt))) {
+      throw new Error(`attestation court ${court.court} avSyncObservedAt is invalid`);
+    }
+  }
+}
+
+function assertSourceProfile(profile, court) {
+  if (!profile || typeof profile !== "object") throw new Error(`court ${court} source profile is required`);
+  for (const field of SOURCE_FIELDS) {
+    const value = profile[field];
+    if (typeof value === "string") safeLabel(`court ${court} source ${field}`, value);
+    else if (!Number.isInteger(value) || value <= 0) throw new Error(`court ${court} source ${field} is invalid`);
+  }
+}
+
+function commentaryQueries(court) {
+  return {
+    commentary_connected: selector("scorecheck_program_commentary_room_connected", { court }),
+    commentary_tracks: selector("scorecheck_program_commentary_audio_tracks", { court }),
+    commentary_muted: selector("scorecheck_program_commentary_muted_tracks", { court }),
+    commentary_clipping: selector("scorecheck_program_commentary_clipped_sample_ratio", { court }),
+    commentary_silence: selector("scorecheck_program_commentary_silence_age_seconds", { court }),
+    commentary_packets_lost: selector("scorecheck_program_commentary_packets_lost", { court }),
+    commentary_packets_received: selector("scorecheck_program_commentary_packets_received", { court }),
+    commentary_jitter: selector("scorecheck_program_commentary_jitter_buffer_ms", { court }),
+    commentary_sync_locked: selector("scorecheck_program_commentary_sync_locked", { court }),
+    commentary_sync_gap: selector("scorecheck_program_commentary_sync_gap_ms", { court })
+  };
+}
+
+function selector(metric, labels) {
+  return `${metric}{${Object.entries(labels).map(([name, value]) => `${name}=\"${safeLabel(name, String(value))}\"`).join(",")}}`;
+}
+
+function safeLabel(name, value) {
+  if (typeof value !== "string" || !LABEL_VALUE.test(value)) throw new Error(`invalid ${name}: ${value}`);
+  return value;
+}
+
+function metricSeriesCoverage(checks, name, rawSamples, options) {
+  const samples = Array.isArray(rawSamples) ? rawSamples : [];
+  const valid = samples.every((sample) => Number.isFinite(sample?.timestamp) && Number.isFinite(sample?.value));
+  check(checks, `${name}_series_valid`, valid, valid ? "valid" : "missing or malformed", "finite timestamp/value samples");
+  if (!valid) return;
+  const timestamps = samples.map((sample) => sample.timestamp);
+  const ordered = timestamps.every((timestamp, index) => index === 0 || timestamp > timestamps[index - 1]);
+  check(checks, `${name}_series_ordered`, ordered, ordered, true);
+  const inWindow = timestamps.every((timestamp) => timestamp >= options.startEpochSeconds && timestamp <= options.endEpochSeconds);
+  check(checks, `${name}_series_window`, inWindow, inWindow, true);
+  check(checks, `${name}_series_coverage`, samples.length >= options.minimumSamples, samples.length, `>= ${options.minimumSamples}`);
+  if (samples.length === 0) return;
+  const startGap = timestamps[0] - options.startEpochSeconds;
+  const endGap = options.endEpochSeconds - timestamps.at(-1);
+  let maximumGap = 0;
+  for (let index = 1; index < timestamps.length; index += 1) maximumGap = Math.max(maximumGap, timestamps[index] - timestamps[index - 1]);
+  check(checks, `${name}_series_start_edge`, startGap >= 0 && startGap <= options.maximumGapSeconds, startGap, `0..${options.maximumGapSeconds} seconds`);
+  check(checks, `${name}_series_end_edge`, endGap >= 0 && endGap <= options.maximumGapSeconds, endGap, `0..${options.maximumGapSeconds} seconds`);
+  check(checks, `${name}_series_maximum_gap`, ordered && maximumGap <= options.maximumGapSeconds, maximumGap, `<= ${options.maximumGapSeconds} seconds`);
+}
+
+function continuous(checks, series, name, minimumSamples, predicate, expected) {
+  const observed = values(series, name);
+  requireSamples(checks, name, observed, minimumSamples);
+  if (observed.length >= minimumSamples) check(checks, `${name}_continuous`, predicate(observed), { minimum: Math.min(...observed), maximum: Math.max(...observed) }, expected);
+}
+
+function growth(checks, series, name, minimumSamples, maximumGrowth) {
+  const observed = values(series, name);
+  requireSamples(checks, name, observed, minimumSamples);
+  if (observed.length >= minimumSamples) {
+    const increase = resetAwareIncrease(observed);
+    check(checks, `${name}_growth`, increase <= maximumGrowth, increase, `<= ${maximumGrowth}`);
+  }
+}
+
+function boundedMaximum(checks, series, name, minimumSamples, maximum) {
+  const observed = values(series, name);
+  requireSamples(checks, name, observed, minimumSamples);
+  if (observed.length >= minimumSamples) check(checks, `${name}_maximum`, Math.max(...observed) <= maximum, Math.max(...observed), `<= ${maximum}`);
+}
+
+function requireSamples(checks, name, observed, minimumSamples) {
+  check(checks, `${name}_samples`, observed.length >= minimumSamples, observed.length, `>= ${minimumSamples}`);
+}
+
+function values(series, name) {
+  return (series?.[name] ?? []).map((sample) => sample.value).filter(Number.isFinite);
+}
+
+function check(checks, id, pass, observed, expected) {
+  checks.push({ id, pass: Boolean(pass), observed, expected });
+}
+
+function boundedSourceProfile(profile) {
+  return Object.fromEntries(SOURCE_FIELDS.map((field) => [field, typeof profile?.[field] === "string" || Number.isFinite(profile?.[field]) ? profile[field] : null]));
+}
+
+function arraysEqual(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function parseArgs(argv) {
+  const values = {};
+  for (let index = 0; index < argv.length; index += 2) {
+    const key = argv[index];
+    const value = argv[index + 1];
+    if (!key?.startsWith("--") || value == null) throw new Error(`invalid argument near ${key ?? "end of command"}`);
+    const name = key.slice(2);
+    if (values[name] != null) throw new Error(`${key} may be provided only once`);
+    values[name] = value;
+  }
+  for (const required of ["config", "attestations", "host-events", "pool-preflight", "venue-evidence", "prometheus-url", "start", "end", "output"]) {
+    if (!values[required]) throw new Error(`--${required} is required`);
+  }
+  return values;
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const config = JSON.parse(await readFile(args.config, "utf8"));
+  const attestations = JSON.parse(await readFile(args.attestations, "utf8"));
+  const poolPreflight = JSON.parse(await readFile(args["pool-preflight"], "utf8"));
+  const venueEvidence = JSON.parse(await readFile(args["venue-evidence"], "utf8"));
+  assertEightCourtConfig(config);
+  const startEpochSeconds = Date.parse(args.start) / 1_000;
+  const endEpochSeconds = Date.parse(args.end) / 1_000;
+  if (!Number.isFinite(startEpochSeconds) || !Number.isFinite(endEpochSeconds) || endEpochSeconds <= startEpochSeconds) throw new Error("--start and --end must define an increasing ISO-8601 window");
+  const effectiveStartEpochSeconds = startEpochSeconds + config.warmupSeconds;
+  const hostEventsText = await readFile(args["host-events"], "utf8");
+  const hostEvents = parsePoolHostEventsNdjson(hostEventsText);
+  const hostEventEvidence = {
+    sha256: createHash("sha256").update(hostEventsText).digest("hex"),
+    eventCount: hostEvents.length
+  };
+  const hostDefinitions = [config.ingest, ...config.courts.map((court) => court.compositor), config.warmSpare];
+  assertExactPoolHostSet(config, hostEvents);
+  const hosts = Object.fromEntries(hostDefinitions.map((host, index) => [host.hostId, summarizePoolHost(hostEvents, {
+    hostId: host.hostId,
+    role: index === 0 ? "ingest" : "compositor",
+    startEpochSeconds,
+    endEpochSeconds,
+    stepSeconds: config.stepSeconds
+  })]));
+  const queries = buildEightCourtQueries(config);
+  const token = process.env.SCORECHECK_PROMETHEUS_BEARER_TOKEN ?? "";
+  const cache = new Map();
+  const limitQuery = createConcurrencyLimiter(PROMETHEUS_QUERY_CONCURRENCY);
+  const runQuery = async (query) => {
+    if (!cache.has(query)) {
+      cache.set(query, limitQuery(() => queryRange(args["prometheus-url"], query, effectiveStartEpochSeconds, endEpochSeconds, config.stepSeconds, token)));
+    }
+    return cache.get(query);
+  };
+  const globalSeries = Object.fromEntries(await Promise.all(Object.entries(queries.global).map(async ([name, query]) => [name, await runQuery(query)])));
+  const courtSeries = Object.fromEntries(await Promise.all(Object.entries(queries.courts).map(async ([court, courtQueries]) => [court, Object.fromEntries(await Promise.all(Object.entries(courtQueries).map(async ([name, query]) => [name, await runQuery(query)]))) ])));
+  const evidence = { startEpochSeconds, effectiveStartEpochSeconds, endEpochSeconds, globalSeries, courtSeries };
+  const report = evaluateEightCourtEvidence({ config, evidence, attestations, hosts, poolPreflight, venueEvidence });
+  await writeFile(args.output, `${JSON.stringify({ ...report, configuration: config, attestations, poolPreflight, venueEvidence, hostEventEvidence, hosts, evidence }, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+  await chmod(args.output, 0o600);
+  process.stdout.write(`${report.verdict}: ${report.gateId} (${report.checks.filter((entry) => !entry.pass).length} aggregate failures; ${report.courts.filter((court) => court.verdict !== "PASS").length} court failures)\n`);
+  process.exitCode = report.verdict === "PASS" ? 0 : 2;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    process.stderr.write(`eight-court gate error: ${error.message}\n`);
+    process.exitCode = 1;
+  });
+}

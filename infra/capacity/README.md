@@ -164,6 +164,108 @@ branches exercised by that benchmark. A larger compositor candidate requires a
 separate manifest with its actual vCPU count; passing a c-4 report does not
 admit two courts on another host.
 
+## Eight-court endurance gate
+
+The final endurance gate uses `sample-host-pool.mjs` and
+`evaluate-eight-court-gate.mjs`. It does not run the one-court sampler eight
+times: that would create eight SSH observers on the ingest host and contaminate
+the capacity evidence. The pool sampler starts exactly one long-lived watcher
+on the ingest host, one on each of eight independently assigned compositor
+hosts, and one on the unassigned warm spare. It writes a single protected
+NDJSON artifact with stable host IDs and remote machine fingerprints. Duplicate
+physical identities fail even when different SSH aliases were supplied, and
+the spare is proven ready throughout the window instead of only appearing in a
+preflight snapshot.
+
+The checked-in `eight-court-endurance.example.json` is a candidate manifest,
+not a claim about the final camera or ingest profiles. Replace every source
+profile and host vCPU value with evidence from the camera-profile and host
+qualification gates before starting. Do not weaken a profile after seeing the
+result. The official window is at least 120 seconds of warmup plus 7,200
+post-warmup seconds.
+
+Start the pool sampler before the first Egress request. Provide exactly one
+ingest host and nine unique compositor hosts, including the warm spare:
+
+```bash
+node infra/capacity/sample-host-pool.mjs \
+  --host bvm-preview-01,ingest,root@INGEST_HOST \
+  --host bvm-compositor-a,compositor,root@COMPOSITOR_A \
+  --host bvm-compositor-b,compositor,root@COMPOSITOR_B \
+  --host bvm-compositor-c,compositor,root@COMPOSITOR_C \
+  --host bvm-compositor-d,compositor,root@COMPOSITOR_D \
+  --host bvm-compositor-e,compositor,root@COMPOSITOR_E \
+  --host bvm-compositor-f,compositor,root@COMPOSITOR_F \
+  --host bvm-compositor-g,compositor,root@COMPOSITOR_G \
+  --host bvm-compositor-h,compositor,root@COMPOSITOR_H \
+  --host bvm-compositor-spare,compositor,root@COMPOSITOR_SPARE \
+  --ssh-key ~/.ssh/scorecheck_do \
+  --interval-seconds 5 \
+  --duration-seconds 7500 \
+  --process-poll-ms 50 \
+  --output /protected/eight-court-host-events.ndjson
+```
+
+Capture the exact nine-compositor `preflight-capacity.mjs` JSON immediately
+before the run. The evaluator requires all eight assigned worker names plus the
+warm spare, the manifest's exact region/size/vCPU shape, no missing or extra
+tagged worker, and no provider blocker. The
+spare must remain fresh, idle, valid, admission-ready, restart-free, OOM-free,
+and process-clean for the full window. It also requires separate venue evidence
+with at least three timestamped upload measurements spanning five minutes. The
+evaluator derives p05 and worst packet loss from those raw samples; it requires
+p05 of at least 75 Mbps, bounded packet loss, the Speedify exit, and fail-closed
+routing. The example venue and operator-attestation files deliberately fail
+until real observations replace their defaults.
+
+The preflight CLI stamps `checkedAt`; the evaluator rejects an artifact older
+than the manifest's bounded preflight age or dated after workload start. Venue
+evidence has the same pre-run boundary so a concurrent speed test cannot
+retroactively qualify or disturb the endurance window.
+
+After the endpoint is sealed, evaluate the full Prometheus window:
+
+```bash
+export SCORECHECK_PROMETHEUS_BEARER_TOKEN='protected-value'
+
+node infra/capacity/evaluate-eight-court-gate.mjs \
+  --config /protected/eight-court-config.json \
+  --attestations /protected/eight-court-attestations.json \
+  --host-events /protected/eight-court-host-events.ndjson \
+  --pool-preflight /protected/compositor-pool-preflight.json \
+  --venue-evidence /protected/venue-network.json \
+  --prometheus-url http://127.0.0.1:9090 \
+  --start 2026-07-15T12:00:00Z \
+  --end 2026-07-15T14:02:00Z \
+  --output /protected/eight-court-endurance-report.json
+```
+
+Endpoint collection is capped at eight concurrent Prometheus requests. The
+evaluator caches identical queries and writes one protected local evidence
+artifact containing the source host-event SHA-256 and event count; it does not
+write high-frequency samples to Supabase.
+
+The aggregate report fails if any one court fails. Per-court checks include
+raw/preview/program readiness and exact reader counts, FFmpeg cadence and
+drop/duplicate growth with a hard critical floor, continuously positive raw
+traffic, one active Egress request on the assigned worker,
+browser FPS/drop/freeze/packet-loss/session/reconnect/reload behavior, camera
+audio, score source/render alignment, and YouTube health. At least two courts
+must additionally pass commentary connection, track, mute, clipping, silence,
+loss, jitter, sync-lock, delay-gap, and human A/V-sync evidence. Global checks
+require all eleven agents fresh, healthy control/score/YouTube/dead-man/Pushover
+dependencies, active dead-man sender mode with no test gate, no warning or
+critical alert, cross-court isolation, unlisted
+manual-lifecycle test broadcasts, zero active incidents or fault gates, exact
+pool inventory, one continuous monitor-service process, fresh monitor snapshots,
+bounded Prometheus
+series gaps and edge coverage, continuous warm-spare readiness, and the venue
+floor.
+
+The attestation file is endpoint-stamped and expires after a bounded lag. Each
+required commentary court also records its clap/A/V-sync observation time; an
+old observation from a previous run cannot satisfy the gate.
+
 ## Test
 
 ```bash
@@ -172,6 +274,9 @@ node --test infra/capacity/camera-profile-gate.test.mjs
 node --test infra/capacity/host-samples.test.mjs
 node --test infra/capacity/sample-hosts.test.mjs
 node --test infra/capacity/zombie-evidence.test.mjs
+node --test infra/capacity/pool-host-evidence.test.mjs
+node --test infra/capacity/sample-host-pool.test.mjs
+node --test infra/capacity/evaluate-eight-court-gate.test.mjs
 infra/compositor/test-admission-config.sh
 infra/compositor/test-start-court.sh
 ```

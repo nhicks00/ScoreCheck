@@ -35,6 +35,7 @@ export function parseZombieEventLine(line) {
   if (event.event === "watcher_started") {
     output.pollIntervalMs = boundedInteger(event.pollIntervalMs, 25, 250, "pollIntervalMs");
     output.watcherPid = positiveInteger(event.watcherPid, "watcherPid");
+    output.machineFingerprint = optionalFingerprint(event.machineFingerprint, "machineFingerprint");
   } else if (event.event === "heartbeat") {
     output.scanCount = nonnegativeInteger(event.scanCount, "scanCount");
     output.activeZombieCount = nonnegativeInteger(event.activeZombieCount, "activeZombieCount");
@@ -111,6 +112,15 @@ export function summarizeZombieEvents(events, { startEpochSeconds, endEpochSecon
     endAt: new Date(endMs).toISOString(),
     roles: Object.fromEntries(ROLES.map((role) => [role, summarizeRole(events.filter((event) => event.role === role), startMs, endMs)]))
   };
+}
+
+export function summarizeZombieRoleEvents(events, { startEpochSeconds, endEpochSeconds }) {
+  const startMs = startEpochSeconds * 1_000;
+  const endMs = endEpochSeconds * 1_000;
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+    throw new Error("zombie evidence window is invalid");
+  }
+  return summarizeRole(events, startMs, endMs);
 }
 
 function summarizeRole(events, startMs, endMs) {

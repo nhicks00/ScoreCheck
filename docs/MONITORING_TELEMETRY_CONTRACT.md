@@ -218,15 +218,24 @@ camera audio track, level, peak, clipping, and silence evidence
 ```
 
 Current-page WebRTC counters are exposed as gauges for direct forensic
-inspection. The monitor also converts received frames, decoded frames, dropped
-frames, freeze count, and freeze duration into reset-safe Prometheus counters.
-Baselines are isolated by court and page-load identity; page reloads and
-peer-connection counter decreases re-baseline instead of creating false
-increments. Two-minute recording rules derive decode-drop and frozen-time
-ratios. Live-court alert rules require at least twelve source samples and
-meaningful frame volume before warning at 0.5 percent decode loss or 1 percent
-frozen time, and before paging at 5 percent decode loss or 10 percent frozen
-time.
+inspection, including tab-lineage reconnect and reload counts. The monitor also
+converts received frames, decoded frames, dropped frames, freeze count, freeze
+duration, and page-session transitions into reset-safe Prometheus counters.
+The first observed page establishes a baseline; every later `pageLoadedAt`
+change increments `scorecheck_program_browser_sessions_total`. Counter
+decreases within one page re-baseline without fabricating media loss. This lets
+an endurance gate reject an unexplained page replacement even when a new tab
+starts its reconnect and reload gauges at zero. Two-minute recording rules
+derive decode-drop and frozen-time ratios. Live-court alert rules require at
+least twelve source samples and meaningful frame volume before warning at 0.5
+percent decode loss or 1 percent frozen time, and before paging at 5 percent
+decode loss or 10 percent frozen time.
+
+`scorecheck_active_incidents` counts every unresolved incident, including an
+acknowledged incident that may no longer have a firing Alertmanager
+notification. `scorecheck_active_fault_gates` counts bounded test gates that
+can override normal expectations. Endurance qualification requires both to
+remain zero.
 
 Visual analysis samples the already-decoded camera element once per second at
 160x90. It does not create another media connection or decoder. A frame is a
