@@ -6,16 +6,45 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEST_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
+event_manifest="$TEST_ROOT/event-manifest.json"
+node "$SCRIPT_DIR/../event-stack/event-manifest.mjs" generate \
+  --event test-shadow-event \
+  --destroy-after 2026-07-20 \
+  --output "$event_manifest" >/dev/null
+EVENT_ARGS=(--event-manifest "$event_manifest")
+
+help_output="$TEST_ROOT/help.txt"
+"$SCRIPT_DIR/provision.sh" --help >"$help_output"
+grep -Fq -- '--event-manifest PATH' "$help_output"
+grep -Fq 'conflicting name/shape' "$help_output"
+
+if "$SCRIPT_DIR/provision.sh" --name bvm-compositor-e --dry-run >/dev/null 2>&1; then
+  echo "FAIL: compositor create without an event manifest was accepted" >&2
+  exit 1
+fi
+
+tampered_manifest="$TEST_ROOT/tampered-event-manifest.json"
+jq 'del(.droplets[-1])' "$event_manifest" >"$tampered_manifest"
+if "$SCRIPT_DIR/provision.sh" --name bvm-compositor-e --event-manifest "$tampered_manifest" --dry-run >/dev/null 2>&1; then
+  echo "FAIL: compositor create accepted an incomplete event manifest" >&2
+  exit 1
+fi
+
 request="$TEST_ROOT/request.json"
-"$SCRIPT_DIR/provision.sh" --name bvm-compositor-e --dry-run >"$request" 2>"$TEST_ROOT/dry-run.err"
+"$SCRIPT_DIR/provision.sh" --name bvm-compositor-e "${EVENT_ARGS[@]}" --dry-run >"$request" 2>"$TEST_ROOT/dry-run.err"
 jq -e '
   .name == "bvm-compositor-e" and
   .region == "sfo2" and
   .size == "c-4" and
-  .tags == ["bvm-compositor"]
+  .tags == [
+    "bvm-compositor",
+    "scorecheck-event:test-shadow-event",
+    "scorecheck-temporary",
+    "scorecheck-destroy-after:2026-07-20"
+  ]
 ' "$request" >/dev/null
 
-if "$SCRIPT_DIR/provision.sh" --name bvm-compositor-unknown --dry-run >/dev/null 2>&1; then
+if "$SCRIPT_DIR/provision.sh" --name bvm-compositor-unknown "${EVENT_ARGS[@]}" --dry-run >/dev/null 2>&1; then
   echo "FAIL: unknown compositor pool slot was accepted" >&2
   exit 1
 fi
@@ -27,6 +56,7 @@ if "$SCRIPT_DIR/provision.sh" \
   --courts 6 \
   --observability-private-ip 10.0.0.10 \
   --register-monitoring \
+  "${EVENT_ARGS[@]}" \
   --dry-run >/dev/null 2>&1; then
   echo "FAIL: mismatched court assignment was accepted" >&2
   exit 1
@@ -39,12 +69,13 @@ if "$SCRIPT_DIR/provision.sh" \
   --courts 1 \
   --observability-private-ip 10.0.0.10 \
   --register-monitoring \
+  "${EVENT_ARGS[@]}" \
   --dry-run >/dev/null 2>&1; then
   echo "FAIL: unassigned warm spare was registered to a court" >&2
   exit 1
 fi
 
-if "$SCRIPT_DIR/provision.sh" --name bvm-compositor-e --size c-8 --dry-run >/dev/null 2>&1; then
+if "$SCRIPT_DIR/provision.sh" --name bvm-compositor-e --size c-8 "${EVENT_ARGS[@]}" --dry-run >/dev/null 2>&1; then
   echo "FAIL: pool slot accepted a nonqualified worker shape" >&2
   exit 1
 fi
@@ -53,6 +84,10 @@ stub_bin="$TEST_ROOT/stub-bin"
 mkdir -p "$stub_bin"
 cat >"$stub_bin/node" <<'NODE'
 #!/usr/bin/env bash
+if [[ "$*" == *event-manifest.mjs* ]]; then
+  printf '%s\n' '{"event":"test-shadow-event","destroyAfter":"2026-07-20","dropletCount":12,"assignedCompositors":8,"warmSpares":1,"poolSpecSha256":"test"}'
+  exit 0
+fi
 post_create=0
 if [[ -n "${MOCK_NODE_STATE:-}" ]]; then
   calls=0
@@ -115,17 +150,23 @@ cat >"$stub_bin/curl" <<'CURL'
 method=GET
 output=""
 url=""
+data=""
 previous=""
 for argument in "$@"; do
   if [[ "$previous" == "-X" ]]; then method="$argument"; fi
   if [[ "$previous" == "-o" ]]; then output="$argument"; fi
+  if [[ "$previous" == "-d" ]]; then data="$argument"; fi
   if [[ "$argument" == http://* || "$argument" == https://* ]]; then url="$argument"; fi
   previous="$argument"
 done
 printf '%s %s\n' "$method" "$url" >>"$MOCK_CURL_LOG"
 if [[ "$method" == "POST" && "$url" == */tags ]]; then
   [[ -z "$output" ]] || printf '{}\n' >"$output"
-  printf '%s' "${MOCK_LOCK_STATUS:-201}"
+  if [[ "$data" == *scorecheck-lock:compositor-pool* ]]; then
+    printf '%s' "${MOCK_LOCK_STATUS:-201}"
+  else
+    printf '%s' "${MOCK_LIFECYCLE_TAG_STATUS:-201}"
+  fi
 elif [[ "$method" == "GET" && "$url" == */tags/* ]]; then
   printf '200'
 elif [[ "$method" == "DELETE" && "$url" == */tags/* ]]; then
@@ -138,12 +179,20 @@ elif [[ "$method" == "POST" && "$url" == */droplets ]]; then
   fi
   printf '%s' "${MOCK_CREATE_STATUS:-400}"
 elif [[ "$method" == "GET" && "$url" == */droplets/55 ]]; then
-  printf '%s\n' '{"droplet":{"id":55,"name":"bvm-compositor-e","status":"active","networks":{"v4":[{"type":"public","ip_address":"192.0.2.10"},{"type":"private","ip_address":"10.0.0.55"}]}}}'
+  if [[ "${MOCK_MISSING_LIFECYCLE_TAG:-0}" == "1" ]]; then
+    printf '%s\n' '{"droplet":{"id":55,"name":"bvm-compositor-e","status":"active","tags":["bvm-compositor"],"networks":{"v4":[{"type":"public","ip_address":"192.0.2.10"},{"type":"private","ip_address":"10.0.0.55"}]}}}'
+  else
+    printf '%s\n' '{"droplet":{"id":55,"name":"bvm-compositor-e","status":"active","tags":["bvm-compositor","scorecheck-event:test-shadow-event","scorecheck-temporary","scorecheck-destroy-after:2026-07-20"],"networks":{"v4":[{"type":"public","ip_address":"192.0.2.10"},{"type":"private","ip_address":"10.0.0.55"}]}}}'
+  fi
 else
   printf '500'
 fi
 CURL
-chmod +x "$stub_bin/node" "$stub_bin/curl"
+cat >"$stub_bin/sleep" <<'SLEEP'
+#!/usr/bin/env bash
+exit 0
+SLEEP
+chmod +x "$stub_bin/node" "$stub_bin/curl" "$stub_bin/sleep"
 
 curl_log="$TEST_ROOT/curl.log"
 : >"$curl_log"
@@ -151,7 +200,7 @@ if DIGITALOCEAN_TOKEN=test-token \
   SCORECHECK_DO_API_BASE=https://mock.invalid/v2 \
   MOCK_CURL_LOG="$curl_log" \
   PATH="$stub_bin:$PATH" \
-  "$SCRIPT_DIR/provision.sh" --name bvm-compositor-e >/dev/null 2>&1; then
+  "$SCRIPT_DIR/provision.sh" --name bvm-compositor-e "${EVENT_ARGS[@]}" >/dev/null 2>&1; then
   echo "FAIL: real create without a registered SSH key was accepted" >&2
   exit 1
 fi
@@ -164,8 +213,24 @@ fi
 if DIGITALOCEAN_TOKEN=test-token \
   SCORECHECK_DO_API_BASE=https://mock.invalid/v2 \
   MOCK_CURL_LOG="$curl_log" \
+  MOCK_LIFECYCLE_TAG_STATUS=500 \
   PATH="$stub_bin:$PATH" \
-  "$SCRIPT_DIR/provision.sh" --name bvm-compositor-e --ssh-key 123 >/dev/null 2>&1; then
+  "$SCRIPT_DIR/provision.sh" --name bvm-compositor-e --ssh-key 123 "${EVENT_ARGS[@]}" >/dev/null 2>&1; then
+  echo "FAIL: compositor create continued after lifecycle-tag preparation failed" >&2
+  exit 1
+fi
+[[ "$(grep -Fc 'POST https://mock.invalid/v2/tags' "$curl_log")" == "1" ]]
+if grep -Fq 'POST https://mock.invalid/v2/droplets' "$curl_log"; then
+  echo "FAIL: droplet create was attempted without prepared lifecycle tags" >&2
+  exit 1
+fi
+
+: >"$curl_log"
+if DIGITALOCEAN_TOKEN=test-token \
+  SCORECHECK_DO_API_BASE=https://mock.invalid/v2 \
+  MOCK_CURL_LOG="$curl_log" \
+  PATH="$stub_bin:$PATH" \
+  "$SCRIPT_DIR/provision.sh" --name bvm-compositor-e --ssh-key 123 "${EVENT_ARGS[@]}" >/dev/null 2>&1; then
   echo "FAIL: mocked failed create unexpectedly succeeded" >&2
   exit 1
 fi
@@ -179,7 +244,7 @@ if DIGITALOCEAN_TOKEN=test-token \
   MOCK_CURL_LOG="$curl_log" \
   MOCK_CREATE_STATUS=500 \
   PATH="$stub_bin:$PATH" \
-  "$SCRIPT_DIR/provision.sh" --name bvm-compositor-e --ssh-key 123 >/dev/null 2>&1; then
+  "$SCRIPT_DIR/provision.sh" --name bvm-compositor-e --ssh-key 123 "${EVENT_ARGS[@]}" >/dev/null 2>&1; then
   echo "FAIL: ambiguous create outcome unexpectedly succeeded" >&2
   exit 1
 fi
@@ -195,13 +260,33 @@ if DIGITALOCEAN_TOKEN=test-token \
   MOCK_CURL_LOG="$curl_log" \
   MOCK_LOCK_STATUS=422 \
   PATH="$stub_bin:$PATH" \
-  "$SCRIPT_DIR/provision.sh" --name bvm-compositor-e --ssh-key 123 >/dev/null 2>&1; then
+  "$SCRIPT_DIR/provision.sh" --name bvm-compositor-e --ssh-key 123 "${EVENT_ARGS[@]}" >/dev/null 2>&1; then
   echo "FAIL: an existing remote provisioning lock was ignored" >&2
   exit 1
 fi
 grep -Fq 'GET https://mock.invalid/v2/tags/scorecheck-lock%3Acompositor-pool' "$curl_log"
 if grep -Fq 'POST https://mock.invalid/v2/droplets' "$curl_log"; then
   echo "FAIL: droplet create was attempted while the remote lock was held" >&2
+  exit 1
+fi
+
+: >"$curl_log"
+missing_tag_node_state="$TEST_ROOT/missing-tag-node-state"
+if DIGITALOCEAN_TOKEN=test-token \
+  SCORECHECK_DO_API_BASE=https://mock.invalid/v2 \
+  MOCK_CURL_LOG="$curl_log" \
+  MOCK_CREATE_STATUS=202 \
+  MOCK_NODE_STATE="$missing_tag_node_state" \
+  MOCK_POST_SUCCESS=1 \
+  MOCK_MISSING_LIFECYCLE_TAG=1 \
+  PATH="$stub_bin:$PATH" \
+  "$SCRIPT_DIR/provision.sh" --name bvm-compositor-e --ssh-key 123 "${EVENT_ARGS[@]}" >/dev/null 2>&1; then
+  echo "FAIL: create with missing lifecycle tags unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -Fq 'GET https://mock.invalid/v2/droplets/55' "$curl_log"
+if grep -Fq 'DELETE https://mock.invalid/v2/tags/scorecheck-lock%3Acompositor-pool' "$curl_log"; then
+  echo "FAIL: provisioning lock was released after lifecycle-tag verification failed" >&2
   exit 1
 fi
 
@@ -215,12 +300,13 @@ if ! DIGITALOCEAN_TOKEN=test-token \
   MOCK_NODE_STATE="$node_state" \
   MOCK_POST_SUCCESS=1 \
   PATH="$stub_bin:$PATH" \
-  "$SCRIPT_DIR/provision.sh" --name bvm-compositor-e --ssh-key 123 >"$success_output" 2>&1; then
+  "$SCRIPT_DIR/provision.sh" --name bvm-compositor-e --ssh-key 123 "${EVENT_ARGS[@]}" >"$success_output" 2>&1; then
   echo "FAIL: mocked exact-slot create and post-verification failed" >&2
   cat "$success_output" >&2
   exit 1
 fi
 grep -Fq 'GET https://mock.invalid/v2/droplets/55' "$curl_log"
+[[ "$(grep -Fc 'POST https://mock.invalid/v2/tags' "$curl_log")" -ge 4 ]]
 grep -Fq 'DELETE https://mock.invalid/v2/tags/scorecheck-lock%3Acompositor-pool' "$curl_log"
 grep -Fq 'pool remains INCOMPLETE with 4 approved slot(s) missing' "$success_output"
 

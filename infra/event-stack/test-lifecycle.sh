@@ -26,6 +26,17 @@ missing='{"droplets":[{"id":10,"name":"ingest-1"}]}'
 duplicate_id='{"droplets":[{"id":10,"name":"compositor-1"},{"id":10,"name":"ingest-1"}]}'
 replacement_id='{"droplets":[{"id":11,"name":"compositor-1"},{"id":99,"name":"ingest-1"}]}'
 
+prepared_tags="$TEST_ROOT/prepared-tags"
+: >"$prepared_tags"
+ensure_tag() {
+  printf '%s\n' "$1" >>"$prepared_tags"
+}
+prepare_tags "$manifest" >/dev/null
+[[ "$(sort "$prepared_tags" | tr '\n' ' ')" == "scorecheck-destroy-after:2026-07-13 scorecheck-event:test-event scorecheck-temporary " ]] || {
+  echo "FAIL: lifecycle tag preparation did not create the exact event safety tags" >&2
+  exit 1
+}
+
 assert_exact_manifest_inventory "$manifest" "$exact" "test"
 if (assert_exact_manifest_inventory "$manifest" "$extra" "test") >/dev/null 2>&1; then
   echo "FAIL: extra tagged droplet was admitted" >&2

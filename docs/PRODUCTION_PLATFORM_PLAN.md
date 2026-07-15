@@ -159,6 +159,28 @@ The pool also pins the image. A remote account-level provisioning lock
 serializes creates because DigitalOcean Droplet names are not unique; incomplete
 or ambiguous post-create verification leaves that lock in place for inspection.
 
+Generate the event-specific lifecycle manifest before the first create. The
+manifest is derived from and digest-bound to the pool specification, contains
+all 12 final event resources, and is required by the provisioner. Its lifecycle
+tags are present in the initial create request and verified before the pool lock
+is released:
+
+```bash
+node infra/event-stack/event-manifest.mjs generate \
+  --event next-event-slug \
+  --destroy-after YYYY-MM-DD \
+  --output /absolute/protected/next-event-slug.json
+
+infra/compositor/provision.sh \
+  --name bvm-compositor-e \
+  --courts 5 \
+  --event-manifest /absolute/protected/next-event-slug.json \
+  --ssh-key REGISTERED_KEY_ID \
+  --ssh-private-key ~/.ssh/scorecheck_do \
+  --register-monitoring \
+  --observability-private-ip MONITOR_PRIVATE_IP
+```
+
 The first full-eight ingest candidate, one dedicated `c-4` with 8 GB RAM,
 failed on 2026-07-12. Eight 1080p inputs normalized to H.264/Opus at 720p30
 pinned all four CPUs at 393.88%; individual FFmpeg branches ran at only

@@ -8,6 +8,7 @@ SSH_KEY="${SCORECHECK_EVENT_SSH_KEY:-$HOME/.ssh/scorecheck_do}"
 usage() {
   cat <<'USAGE'
 Usage:
+  DIGITALOCEAN_TOKEN=... ./lifecycle.sh prepare-tags --manifest EVENT.json
   DIGITALOCEAN_TOKEN=... ./lifecycle.sh inventory --manifest EVENT.json
   DIGITALOCEAN_TOKEN=... ./lifecycle.sh adopt --manifest EVENT.json [--dry-run]
   DIGITALOCEAN_TOKEN=... ./lifecycle.sh evidence --manifest EVENT.json --output DIRECTORY
@@ -151,6 +152,17 @@ tag_droplet() {
     -H "Content-Type: application/json" \
     -d "$(jq -cn --arg id "$droplet_id" '{resources:[{resource_id:$id,resource_type:"droplet"}]}')")"
   [[ "$status" == "204" ]] || die "could not tag droplet $droplet_id with $tag (HTTP $status)"
+}
+
+prepare_tags() {
+  local manifest="$1"
+  local event destroy_after
+  event="$(jq -r '.event' "$manifest")"
+  destroy_after="$(jq -r '.destroyAfter' "$manifest")"
+  ensure_tag "$(event_tag "$event")"
+  ensure_tag "scorecheck-temporary"
+  ensure_tag "$(destroy_tag "$destroy_after")"
+  printf 'prepared lifecycle tags for %s\n' "$event"
 }
 
 inventory() {
@@ -347,6 +359,12 @@ main() {
 
   case "$command_name" in
     help|-h|--help) usage ;;
+    prepare-tags)
+      [[ -n "$manifest" ]] || die "--manifest is required"
+      validate_manifest "$manifest"
+      auth_headers
+      prepare_tags "$manifest"
+      ;;
     inventory)
       [[ -n "$manifest" ]] || die "--manifest is required"
       validate_manifest "$manifest"

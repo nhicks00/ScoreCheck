@@ -16,6 +16,8 @@
 #                    DO account (required for real creates)
 #   --ssh-private-key PATH  local private key used for post-create SSH
 #                           (required with monitoring registration)
+#   --event-manifest PATH  exact generated event manifest (required; lifecycle
+#                          tags are attached in the original create request)
 #   --name NAME      exact missing worker name from compositor-pool.json (required)
 #   --courts COURT   assigned court; must match the worker's one-court pool slot
 #   --register-monitoring  deploy/register the read-only agent after cloud-init
@@ -29,7 +31,7 @@
 #     conflicting name/shape, or compositor outside the approved pool aborts
 #     before the DigitalOcean create request
 #   - tags the droplet `bvm-compositor`; event-specific lifecycle tags are added
-#     only through the exact-manifest event lifecycle command
+#     in the original create request from the exact generated event manifest
 #   - boots with ./cloud-init.yaml as user_data (docker + compositor.service)
 #   - polls the API until status=active, then prints the public IPv4 and the
 #     rsync/start next-steps
@@ -45,6 +47,8 @@ TAG="bvm-compositor"
 LOCK_TAG="scorecheck-lock:compositor-pool"
 POOL_SPEC="$SCRIPT_DIR/../event-stack/compositor-pool.json"
 CAPACITY_PREFLIGHT="$SCRIPT_DIR/../event-stack/preflight-capacity.mjs"
+EVENT_MANIFEST_TOOL="$SCRIPT_DIR/../event-stack/event-manifest.mjs"
+EVENT_LIFECYCLE="$SCRIPT_DIR/../event-stack/lifecycle.sh"
 
 SIZE="c-4"
 IMAGE="ubuntu-24-04-x64"
@@ -56,8 +60,9 @@ DRY_RUN=0
 COURTS=""
 REGISTER_MONITORING=0
 OBSERVABILITY_PRIVATE_IP=""
+EVENT_MANIFEST=""
 
-usage() { sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -66,6 +71,7 @@ while [[ $# -gt 0 ]]; do
     --region)  REGION="$2"; shift 2 ;;
     --ssh-key) SSH_KEY="$2"; shift 2 ;;
     --ssh-private-key) SSH_PRIVATE_KEY="$2"; shift 2 ;;
+    --event-manifest) EVENT_MANIFEST="$2"; shift 2 ;;
     --name)    NAME="$2"; shift 2 ;;
     --courts)  COURTS="$2"; shift 2 ;;
     --register-monitoring) REGISTER_MONITORING=1; shift ;;
@@ -77,8 +83,16 @@ while [[ $# -gt 0 ]]; do
 done
 
 command -v jq >/dev/null 2>&1 || { echo "error: jq is required (brew install jq / apt install jq)" >&2; exit 1; }
+command -v node >/dev/null 2>&1 || { echo "error: node is required" >&2; exit 1; }
 [[ -n "$NAME" ]] || { echo "error: --name is required" >&2; exit 1; }
 [[ -f "$POOL_SPEC" ]] || { echo "error: compositor pool spec not found: $POOL_SPEC" >&2; exit 1; }
+[[ -n "$EVENT_MANIFEST" && -f "$EVENT_MANIFEST" ]] || { echo "error: --event-manifest must name the generated event manifest" >&2; exit 1; }
+EVENT_MANIFEST_SUMMARY="$(node "$EVENT_MANIFEST_TOOL" validate --manifest "$EVENT_MANIFEST" --pool-spec "$POOL_SPEC")"
+EVENT_SLUG="$(jq -er '.event | select(type == "string" and length > 0)' <<<"$EVENT_MANIFEST_SUMMARY")"
+DESTROY_AFTER="$(jq -er '.destroyAfter | select(type == "string" and length > 0)' <<<"$EVENT_MANIFEST_SUMMARY")"
+EVENT_TAG="scorecheck-event:$EVENT_SLUG"
+TEMPORARY_TAG="scorecheck-temporary"
+DESTROY_TAG="scorecheck-destroy-after:$DESTROY_AFTER"
 SLOT_COUNT="$(jq -r --arg name "$NAME" '[.workers[] | select(.name == $name)] | length' "$POOL_SPEC")"
 [[ "$SLOT_COUNT" == "1" ]] || { echo "error: --name must identify exactly one worker in compositor-pool.json" >&2; exit 1; }
 EXPECTED_COURT="$(jq -r --arg name "$NAME" '.workers[] | select(.name == $name) | .court // empty' "$POOL_SPEC")"
@@ -113,13 +127,16 @@ REQUEST="$(jq -n \
   --arg image "$IMAGE" \
   --arg sshkey "$SSH_KEY" \
   --arg tag "$TAG" \
+  --arg eventTag "$EVENT_TAG" \
+  --arg temporaryTag "$TEMPORARY_TAG" \
+  --arg destroyTag "$DESTROY_TAG" \
   --rawfile userdata "$SCRIPT_DIR/cloud-init.yaml" \
   '{
      name: $name,
      region: $region,
      size: $size,
      image: (if ($image | test("^[0-9]+$")) then ($image | tonumber) else $image end),
-     tags: [$tag],
+     tags: [$tag, $eventTag, $temporaryTag, $destroyTag],
      user_data: $userdata,
      monitoring: true,
      backups: false,
@@ -136,7 +153,6 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
 fi
 
 : "${DIGITALOCEAN_TOKEN:?set DIGITALOCEAN_TOKEN (or use --dry-run)}"
-command -v node >/dev/null 2>&1 || { echo "error: node is required for the capacity preflight" >&2; exit 1; }
 command -v curl >/dev/null 2>&1 || { echo "error: curl is required for DigitalOcean provisioning" >&2; exit 1; }
 AUTH=(-H "Authorization: Bearer $DIGITALOCEAN_TOKEN" -H "Content-Type: application/json")
 
@@ -188,6 +204,8 @@ if ! jq -e --arg name "$NAME" '.compositors.exactPlan.missingSlots | any(.name =
 fi
 MISSING_BEFORE="$(jq -r '.compositors.additionsRequired' "$CAPACITY_OUTPUT")"
 echo "capacity preflight PASS: $MISSING_BEFORE approved compositor slot(s) missing before create"
+
+"$EVENT_LIFECYCLE" prepare-tags --manifest "$EVENT_MANIFEST" >/dev/null
 
 LOCK_STATUS="$(curl -sS -o "$LOCK_RESPONSE" -w '%{http_code}' -X POST "$API/tags" \
   "${AUTH[@]}" \
@@ -257,6 +275,16 @@ fi
 
 IP="$(jq -r '[.droplet.networks.v4[] | select(.type == "public")][0].ip_address // empty' <<<"$STATUS_RESP")"
 PRIVATE_IP="$(jq -r '[.droplet.networks.v4[] | select(.type == "private")][0].ip_address // empty' <<<"$STATUS_RESP")"
+if ! jq -e \
+  --arg base "$TAG" \
+  --arg event "$EVENT_TAG" \
+  --arg temporary "$TEMPORARY_TAG" \
+  --arg destroy "$DESTROY_TAG" \
+  '(.droplet.tags | index($base)) and (.droplet.tags | index($event)) and (.droplet.tags | index($temporary)) and (.droplet.tags | index($destroy))' \
+  <<<"$STATUS_RESP" >/dev/null; then
+  echo "error: droplet $DROPLET_ID is active but its create-time lifecycle tags are incomplete; provisioning remains locked" >&2
+  exit 1
+fi
 echo
 echo "droplet active: $NAME  id=$DROPLET_ID  public=${IP:-<none>} private=${PRIVATE_IP:-<none>}"
 
@@ -307,7 +335,6 @@ check with: ssh root@$IP cloud-init status --wait):
   5. start the assigned court only after event admission passes:
        ${EXPECTED_COURT:+cd /opt/compositor && ./start-court.sh $EXPECTED_COURT}${EXPECTED_COURT:-warm spare: no court is assigned}
 
-Before event use, include this exact worker in the versioned event manifest and
-apply the event/temporary/destroy-after tags through infra/event-stack/lifecycle.sh.
-Never use the legacy global-tag teardown for an event pool.
+The exact generated event manifest was bound before create and all lifecycle
+tags were verified on the active Droplet. Never use a tag-wide teardown.
 NEXT

@@ -219,5 +219,9 @@ the phone-visible Camera 4 fault row remains pending.
    requires the complete, fresh, digest-bound schema-2 all-camera qualification
    report. The live nine-compositor pool, actual qualification report, venue
    network evidence, and two-hour run remain pending.
+   Future workers are bound before create to a generated exact 12-resource
+   event manifest; create-time event/temporary/destroy-date tags and post-create
+   verification prevent a missing worker from becoming an untracked cost
+   orphan while the final pool is assembled.
 5. Qualify the final camera profiles and the 75 Mbps bonded-upload venue floor.
 6. Only after these gates pass, accept monitoring as ready for the shadow event.

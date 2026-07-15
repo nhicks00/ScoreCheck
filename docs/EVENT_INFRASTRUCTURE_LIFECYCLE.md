@@ -44,6 +44,28 @@ match, protected local evidence with integrity hashes, a destruction review
 date, and a typed confirmation. After those checks it deletes the verified
 droplet IDs individually; it never sends a tag-wide bulk deletion request.
 
+For every new event, generate the manifest from the versioned compositor pool.
+The generator binds the exact pool-file digest, all eight one-camera workers,
+the unassigned warm spare, ingest, commentary, and observability into one
+12-resource manifest. It writes mode `0600`, refuses to overwrite an existing
+file, and rejects hand-edited omissions, additions, assignments, or pool drift:
+
+```bash
+node infra/event-stack/event-manifest.mjs generate \
+  --event next-event-slug \
+  --destroy-after YYYY-MM-DD \
+  --output /absolute/protected/next-event-slug.json
+
+node infra/event-stack/event-manifest.mjs validate \
+  --manifest /absolute/protected/next-event-slug.json
+```
+
+Every future compositor create requires that generated manifest. The
+provisioner prepares the three lifecycle tags before creation, includes them in
+the original DigitalOcean request, and verifies them on the active Droplet
+before releasing its provisioning lock. This closes the prior orphan window in
+which a worker could be created with only the generic compositor tag.
+
 ```bash
 cd infra/event-stack
 source ../compositor/.env
@@ -61,6 +83,10 @@ source ../compositor/.env
   --evidence ../../.local/event-evidence/gate8-2026-07-13 \
   --confirm DESTROY:gate8-2026-07-13
 ```
+
+`gate8-2026-07-13.json` is historical inventory for the seven-server Gate 8
+run. Do not copy or extend it for a future event; it intentionally does not
+describe the corrected nine-compositor pool.
 
 The current Gate 8 stack must not be destroyed until the overnight soak is
 finished and the operator explicitly confirms teardown.
@@ -91,10 +117,10 @@ lock serializes slot creation. A definite provider rejection releases the lock;
 an ambiguous or incompletely verified create retains it so a retry cannot create
 a same-name duplicate.
 
-This does not make an event-specific manifest optional. New workers must still
-be adopted into the exact event manifest and receive the event, temporary, and
-destroy-after tags before event use. Other service roles remain bound to that
-event manifest rather than the compositor pool specification.
+This does not make an event-specific manifest optional. The generated manifest
+is now required before a compositor create, and the event, temporary, and
+destroy-after tags are part of the original create request. Existing service
+roles are adopted against the same exact manifest before event use.
 
 The selected layout follows the capacity evidence:
 
