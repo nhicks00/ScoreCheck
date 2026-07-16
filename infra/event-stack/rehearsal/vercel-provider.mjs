@@ -2,6 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 const API = "https://api.vercel.com";
 export const DEPLOYMENT_CREATE_TIMEOUT_MS = 120_000;
+export const PROJECT_CREATE_TIMEOUT_MS = 120_000;
 const PROJECT_NAME = /^scorecheck-rehearsal-[a-z0-9-]{8,40}$/;
 const SHA = /^[a-f0-9]{40}$/;
 
@@ -21,13 +22,27 @@ export class VercelRehearsalProvider {
     const existing = await this.findProject(name, normalizedRepository);
     if (existing) return existing;
     const team = await this.#team();
-    const created = await this.#request("POST", "/v11/projects", {
+    const origin = projectOrigin(name, team.slug);
+    const body = {
       name,
       framework: "nextjs",
       rootDirectory: "apps/web",
       gitRepository: { type: "github", repo: normalizedRepository.slug }
-    });
-    return normalizeProject(created, name, projectOrigin(name, team.slug), normalizedRepository);
+    };
+    let lastError = null;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        return normalizeProject(await this.#request("POST", "/v11/projects", body, { timeoutMs: PROJECT_CREATE_TIMEOUT_MS }), name, origin, normalizedRepository);
+      } catch (error) {
+        const conflict = error instanceof VercelRequestError && error.status === 409;
+        if (!conflict && !retryableCreateError(error)) throw error;
+        lastError = error;
+        const reconciled = await this.#waitForProject(name, origin, normalizedRepository);
+        if (reconciled) return reconciled;
+        if (conflict) throw error;
+      }
+    }
+    throw new VercelRequestError("Vercel project creation could not be reconciled after transient provider failures", lastError?.status ?? 500);
   }
 
   async findProject(name, repository = null) {
@@ -170,6 +185,21 @@ export class VercelRehearsalProvider {
       seen.add(until);
     }
     throw new Error("Vercel deployment pagination exceeded the safety limit");
+  }
+
+  async #waitForProject(name, origin, repository, polls = 24, intervalMs = 5_000) {
+    for (let poll = 0; poll < polls; poll += 1) {
+      const value = await this.#projectOrNull(name);
+      if (value) {
+        try {
+          return normalizeProject(value, name, origin, repository);
+        } catch (error) {
+          if (!String(error?.message ?? "").includes("Git repository contract")) throw error;
+        }
+      }
+      if (poll + 1 < polls) await this.sleep(intervalMs);
+    }
+    return null;
   }
 
   async #upsertEnvironment(project, environment) {

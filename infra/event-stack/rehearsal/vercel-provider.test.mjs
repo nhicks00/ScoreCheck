@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { DEPLOYMENT_CREATE_TIMEOUT_MS, rehearsalProjectName, VercelRehearsalProvider } from "./vercel-provider.mjs";
+import { DEPLOYMENT_CREATE_TIMEOUT_MS, PROJECT_CREATE_TIMEOUT_MS, rehearsalProjectName, VercelRehearsalProvider } from "./vercel-provider.mjs";
 
 function response(status, body = null, contentType = "application/json") {
   return {
@@ -40,6 +40,32 @@ test("creates an isolated Next.js project and adopts it by deterministic name", 
   assert.equal((await client.ensureProject({ name, repository })).id, "prj_test123");
   assert.equal(requests.filter((entry) => entry.init.method === "POST").length, 1);
   assert.deepEqual(JSON.parse(requests.find((entry) => entry.init.method === "POST").init.body).gitRepository, { type: "github", repo: "nhicks00/ScoreCheck" });
+});
+
+test("gives linked project creation a longer bounded window", async () => {
+  assert.equal(PROJECT_CREATE_TIMEOUT_MS, 120_000);
+  let createSignal;
+  const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, fetchImpl: async (url, init) => {
+    if (init.method === "GET") return response(404, { error: { code: "not_found" } });
+    createSignal = init.signal;
+    return response(200, projectResponse);
+  }});
+  assert.equal((await client.ensureProject({ name, repository })).id, project.id);
+  assert.ok(createSignal instanceof AbortSignal);
+  assert.equal(createSignal.aborted, false);
+});
+
+test("adopts a linked project whose create response timed out", async () => {
+  let created = false;
+  let postCount = 0;
+  const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, sleep: async () => {}, fetchImpl: async (url, init) => {
+    if (init.method === "GET") return created ? response(200, projectResponse) : response(404, { error: { code: "not_found" } });
+    postCount += 1;
+    created = true;
+    throw new DOMException("request timed out", "TimeoutError");
+  }});
+  assert.equal((await client.ensureProject({ name, repository })).id, project.id);
+  assert.equal(postCount, 1);
 });
 
 test("creates exactly one marked deployment from an exact Git SHA", async () => {
