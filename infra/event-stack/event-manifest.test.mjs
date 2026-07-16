@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -26,7 +26,7 @@ function manifest() {
 
 test("generates isolated provider services, endpoints, eight assigned workers, and warm spare", () => {
   const value = manifest();
-  assert.equal(value.schemaVersion, 4);
+  assert.equal(value.schemaVersion, 5);
   assert.equal(value.kind, "rehearsal");
   assert.equal(value.droplets.length, 12);
   assert.deepEqual(value.droplets.slice(0, 3).map((entry) => entry.name), [
@@ -107,6 +107,12 @@ test("rejects invalid event and calendar values", () => {
   );
 });
 
+test("hard-cuts schema-v4 event bundles", () => {
+  const value = manifest();
+  value.schemaVersion = 4;
+  assert.throws(() => validateEventManifest(value, inputs), /schemaVersion must be 5/u);
+});
+
 test("production keeps canonical endpoints while rehearsal is isolated by deterministic bounded identity", () => {
   const production = buildEventManifest({
     event: "same-event",
@@ -139,7 +145,7 @@ test("production keeps canonical endpoints while rehearsal is isolated by determ
   assert.deepEqual(validateEventManifest(longest, inputs), longest);
 });
 
-test("binds the manifest to exact service and pool file bytes", () => {
+test("binds service and pool bytes while canonicalizing the embedded network", () => {
   const value = manifest();
   assert.throws(
     () => validateEventManifest(value, { ...inputs, poolSpecSource: `${inputs.poolSpecSource}\n` }),
@@ -149,10 +155,19 @@ test("binds the manifest to exact service and pool file bytes", () => {
     () => validateEventManifest(value, { ...inputs, serviceSpecSource: `${inputs.serviceSpecSource}\n` }),
     /does not exactly match/
   );
-  assert.throws(
-    () => validateEventManifest(value, { ...inputs, networkSpecSource: `${inputs.networkSpecSource}\n` }),
-    /does not exactly match/
-  );
+  assert.deepEqual(validateEventManifest(value, { ...inputs, networkSpecSource: `${inputs.networkSpecSource}\n` }), value);
+});
+
+test("validates a rendered manifest from its canonical embedded network", async () => {
+  const effectiveNetwork = structuredClone(inputs.networkSpec);
+  for (const firewall of effectiveNetwork.firewalls) {
+    firewall.inboundRules.find((rule) => rule.protocol === "tcp" && rule.ports === "22" && rule.sources.addresses).sources.addresses = ["1.1.1.1/32"];
+  }
+  const effectiveInputs = { ...inputs, networkSpec: effectiveNetwork, networkSpecSource: JSON.stringify(effectiveNetwork) };
+  const value = buildEventManifest({ event: "embedded-network", kind: "production", destroyAfter: "2026-07-20", ...effectiveInputs });
+  const embeddedInputs = await loadManifestInputs({ networkFromManifest: value.network });
+  assert.deepEqual(validateEventManifest(value, embeddedInputs), value);
+  await assert.rejects(() => loadManifestInputs({ networkSpec: "/tmp/network.json", networkFromManifest: value.network }), /mutually exclusive/u);
 });
 
 test("rejects source objects not derived from bound bytes", () => {
@@ -288,6 +303,13 @@ test("CLI writes mode 0600 and refuses to overwrite", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "scorecheck-event-manifest-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const output = join(directory, "event.json");
+  const network = structuredClone(inputs.networkSpec);
+  for (const firewall of network.firewalls) {
+    firewall.inboundRules.find((rule) => rule.protocol === "tcp" && rule.ports === "22" && rule.sources.addresses).sources.addresses = ["1.1.1.1/32"];
+  }
+  const networkPath = join(directory, "network.json");
+  await writeFile(networkPath, `${JSON.stringify(network, null, 2)}\n`, { mode: 0o600 });
+  await chmod(networkPath, 0o600);
   const tool = fileURLToPath(new URL("./event-manifest.mjs", import.meta.url));
   const args = [
     tool,
@@ -295,7 +317,8 @@ test("CLI writes mode 0600 and refuses to overwrite", async (t) => {
     "--event", "valid",
     "--kind", "rehearsal",
     "--destroy-after", "2026-07-20",
-    "--output", output
+    "--output", output,
+    "--network-spec", networkPath
   ];
   const first = spawnSync(process.execPath, args, { encoding: "utf8" });
   assert.equal(first.status, 0, first.stderr);

@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { buildEventManifest, loadManifestInputs } from "./event-manifest.mjs";
 import { validateAnchorConfig } from "./event-lifecycle.mjs";
 import { validateProfile as validateEventProfile } from "./eventctl.mjs";
+import { assertNetworkContractDeployable } from "./network-contract.mjs";
 import { renderProductionSecretDirectory } from "./production-recovery.mjs";
 import { validateRehearsalProfile } from "./rehearsal/rehearsal-stack.mjs";
 
@@ -35,6 +36,7 @@ export async function createEventBundle(options) {
     assertProtectedFile(options.credentialsEnv, "provider credentials"),
     assertProtectedFile(options.sshKey, "SSH private key"),
     assertProtectedFile(options.lifecycleAttestation, "lifecycle attestation"),
+    assertProtectedFile(options.networkSpec, "rendered network contract"),
     ...(options.kind === "production" ? [assertProtectedFile(options.anchors, "production endpoint anchors")] : []),
     ...(options.kind === "production" ? [assertProtectedDirectory(options.productionSource, "production recovery source")] : []),
     ...(options.kind === "rehearsal" ? [assertExecutable(options.ffmpegPath, "FFmpeg"), assertExecutable(options.liveKitCliPath, "LiveKit CLI")] : [])
@@ -49,11 +51,13 @@ export async function createEventBundle(options) {
     if (error?.code !== "ENOENT") throw error;
   }
 
+  const manifestInputs = await loadManifestInputs({ networkSpec: options.networkSpec });
+  assertNetworkContractDeployable(manifestInputs.networkSpec);
   const manifest = buildEventManifest({
     event: options.event,
     kind: options.kind,
     destroyAfter: options.destroyAfter,
-    ...await loadManifestInputs()
+    ...manifestInputs
   });
   const createdAt = new Date().toISOString();
   const anchorConfig = options.kind === "production"
@@ -177,6 +181,7 @@ export function parseBundleArgs(argv) {
   const mapping = new Map([
     ["--event", "event"], ["--kind", "kind"], ["--destroy-after", "destroyAfter"], ["--root", "root"],
     ["--credentials-env", "credentialsEnv"], ["--ssh-key", "sshKey"], ["--attestation", "lifecycleAttestation"],
+    ["--network-spec", "networkSpec"],
     ["--anchors", "anchors"], ["--production-source", "productionSource"], ["--git-repo-id", "gitRepoId"], ["--git-ref", "gitRef"], ["--git-sha", "gitSha"],
     ["--ffmpeg", "ffmpegPath"], ["--livekit-cli", "liveKitCliPath"], ["--soak-seconds", "soakDurationSeconds"]
   ]);
@@ -187,7 +192,7 @@ export function parseBundleArgs(argv) {
     if (!key || !value || value.startsWith("--")) throw new Error(`${flag} is unknown or missing a value`);
     values[key] = key === "soakDurationSeconds" ? Number(value) : value;
   }
-  for (const key of ["root", "credentialsEnv", "sshKey", "lifecycleAttestation", "anchors", "productionSource", "ffmpegPath", "liveKitCliPath"]) {
+  for (const key of ["root", "credentialsEnv", "sshKey", "lifecycleAttestation", "networkSpec", "anchors", "productionSource", "ffmpegPath", "liveKitCliPath"]) {
     if (values[key] !== undefined) values[key] = normalizedAbsolute(values[key], `--${key}`);
   }
   return values;
@@ -195,10 +200,11 @@ export function parseBundleArgs(argv) {
 
 function validateBundleOptions(value) {
   if (!value || value.command !== "create") throw new Error("bundle create options are required");
-  for (const key of ["event", "kind", "destroyAfter", "root", "credentialsEnv", "sshKey", "lifecycleAttestation"]) {
+  for (const key of ["event", "kind", "destroyAfter", "root", "credentialsEnv", "sshKey", "lifecycleAttestation", "networkSpec"]) {
     if (typeof value[key] !== "string" || !value[key]) throw new Error(`${key} is required`);
   }
   normalizedAbsolute(value.root, "bundle root");
+  normalizedAbsolute(value.networkSpec, "rendered network contract");
   if (!new Set(["production", "rehearsal"]).has(value.kind)) throw new Error("kind must be production or rehearsal");
   if (value.kind === "production") {
     if (!value.anchors) throw new Error("production bundle requires --anchors");
@@ -270,5 +276,5 @@ function normalizedAbsolute(value, label) {
 function sha256(value) { return createHash("sha256").update(value).digest("hex"); }
 
 function usage() {
-  process.stdout.write("Usage: node infra/event-stack/create-event-bundle.mjs create --event SLUG --kind production|rehearsal --destroy-after YYYY-MM-DD --root /PROTECTED/DIR --credentials-env FILE --ssh-key FILE --attestation FILE [production: --anchors FILE --production-source DIR] [rehearsal: --git-repo-id ID --git-ref REF --git-sha SHA --ffmpeg FILE --livekit-cli FILE --soak-seconds 1800]\n");
+  process.stdout.write("Usage: node infra/event-stack/create-event-bundle.mjs create --event SLUG --kind production|rehearsal --destroy-after YYYY-MM-DD --root /PROTECTED/DIR --credentials-env FILE --ssh-key FILE --attestation FILE --network-spec /PROTECTED/RENDERED-NETWORK.json [production: --anchors FILE --production-source DIR] [rehearsal: --git-repo-id ID --git-ref REF --git-sha SHA --ffmpeg FILE --livekit-cli FILE --soak-seconds 1800]\n");
 }

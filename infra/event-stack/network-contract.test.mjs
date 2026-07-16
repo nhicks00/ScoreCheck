@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { firewallPayload, networkContractProblems, validateNetworkContract } from "./network-contract.mjs";
+import { assertNetworkContractDeployable, firewallPayload, networkContractProblems, validateNetworkContract } from "./network-contract.mjs";
 
 const source = JSON.parse(await readFile(new URL("./network-contract.json", import.meta.url), "utf8"));
 
@@ -17,10 +17,16 @@ test("validates the exact persistent VPC and four tag-addressed firewalls", () =
     "bvm-observability"
   ]);
   assert.deepEqual(firewallPayload(contract.firewalls[0]).droplet_ids, []);
+  assert.equal(contract.firewalls.some((firewall) => firewall.inboundRules.some((rule) =>
+    rule.protocol === "tcp" && rule.ports === "22" && rule.sources.addresses?.some((address) => address.endsWith("/0")))), false);
   assert.deepEqual(
     contract.firewalls[0].inboundRules.find((rule) => rule.ports === "8554"),
     { protocol: "tcp", ports: "8554", sources: { tags: ["bvm-compositor"] } }
   );
+});
+
+test("keeps the checked-in admin address nondeployable", () => {
+  assert.throws(() => assertNetworkContractDeployable(source), /public operator host address/u);
 });
 
 test("rejects duplicate target tags and non-private VPC ranges", () => {

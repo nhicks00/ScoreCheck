@@ -324,6 +324,46 @@ node infra/event-stack/eventctl.mjs abort --profile /absolute/protected/event/pr
 The wrapper invokes Node directly without a shell and never invents a start,
 close, destroy, or abort confirmation.
 
+## Protected SSH network contract
+
+The checked-in `network-contract.json` is a template, not a deployable firewall
+specification. Its documentation-only admin address is deliberately rejected by
+every provider-facing command. Before creating an event bundle, place the
+current operator public host CIDR in a mode-`0600` JSON file inside a mode-`0700`
+directory:
+
+```json
+{
+  "schemaVersion": 1,
+  "addresses": ["CURRENT_OPERATOR_PUBLIC_IPV4/32"]
+}
+```
+
+Render a new immutable effective contract without placing the address in Git:
+
+```bash
+node infra/event-stack/render-admin-ssh-network.mjs render \
+  --admin-cidrs /absolute/protected/network/admin-cidrs.json \
+  --output /absolute/protected/network/network-contract.json
+```
+
+The renderer accepts only public `/32` or `/128` host CIDRs. SSH reaches the
+observability host only from those operator addresses. Ingest, commentary, and
+compositor hosts additionally accept SSH from the `bvm-observability` tag so
+the observability host is the event bastion. No SSH rule permits a global
+source. Provider verification and the separately confirmed apply action both
+require this protected rendered file explicitly:
+
+```bash
+node infra/event-stack/manage-event-network.mjs verify \
+  --credentials-env /absolute/protected/provider.env \
+  --network-spec /absolute/protected/network/network-contract.json
+```
+
+If the operator address changes, render a new protected output path and verify
+it before an apply. Existing event manifests remain immutable evidence of the
+contract used for that event.
+
 ## Protected bundle
 
 Do not hand-author the manifest and operator profiles. Create one immutable,
@@ -340,12 +380,20 @@ node infra/event-stack/create-event-bundle.mjs create \
   --credentials-env /absolute/protected/provider.env \
   --ssh-key /absolute/protected/scorecheck_do \
   --attestation /absolute/protected/lifecycle-attestation.json \
-  --anchors /absolute/protected/endpoint-anchors.json
+  --network-spec /absolute/protected/network/network-contract.json \
+  --anchors /absolute/protected/endpoint-anchors.json \
+  --production-source /absolute/protected/production-recovery-source
 ```
 
 The generator refuses an existing destination, weak input permissions, relative
-paths, an incomplete mode-specific configuration, or an unbound manifest. It
-writes the exact next command but does not execute it.
+paths, a nondeployable network template, an incomplete mode-specific
+configuration, or an unbound manifest. It embeds the normalized effective
+network contract in the immutable manifest, writes the exact next command, and
+does not execute it.
+
+This is a hard cutover to event manifest schema v5. Any earlier schema-v4 event
+bundle must be regenerated from the protected recovery source and rendered
+network contract; lifecycle commands reject it before provider access.
 
 ## Event build
 
@@ -359,7 +407,8 @@ node infra/event-stack/event-manifest.mjs generate \
   --event next-event-slug \
   --kind production \
   --destroy-after YYYY-MM-DD \
-  --output /absolute/protected/next-event-slug/manifest.json
+  --output /absolute/protected/next-event-slug/manifest.json \
+  --network-spec /absolute/protected/network/network-contract.json
 
 node infra/event-stack/event-manifest.mjs validate \
   --manifest /absolute/protected/next-event-slug/manifest.json
@@ -498,6 +547,7 @@ node infra/event-stack/create-event-bundle.mjs create \
   --credentials-env /absolute/protected/provider.env \
   --ssh-key /absolute/protected/scorecheck_do \
   --attestation /absolute/protected/lifecycle-attestation.json \
+  --network-spec /absolute/protected/network/network-contract.json \
   --git-repo-id NUMERIC_GITHUB_REPOSITORY_ID \
   --git-ref codex/turnkey-event-lifecycle \
   --git-sha 40_CHARACTER_TESTED_COMMIT_SHA \

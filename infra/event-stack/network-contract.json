@@ -8,7 +8,8 @@
       "name": "bvm-preview-firewall",
       "targetTag": "bvm-preview-01",
       "inboundRules": [
-        { "protocol": "tcp", "ports": "22", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "tcp", "ports": "22", "sources": { "addresses": ["203.0.113.42/32"] } },
+        { "protocol": "tcp", "ports": "22", "sources": { "tags": ["bvm-observability"] } },
         { "protocol": "tcp", "ports": "80", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
         { "protocol": "tcp", "ports": "443", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
         { "protocol": "tcp", "ports": "1935", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
@@ -28,7 +29,8 @@
       "name": "bvm-commentary-firewall",
       "targetTag": "bvm-commentary",
       "inboundRules": [
-        { "protocol": "tcp", "ports": "22", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "tcp", "ports": "22", "sources": { "addresses": ["203.0.113.42/32"] } },
+        { "protocol": "tcp", "ports": "22", "sources": { "tags": ["bvm-observability"] } },
         { "protocol": "tcp", "ports": "80", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
         { "protocol": "tcp", "ports": "443", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
         { "protocol": "tcp", "ports": "7881", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
@@ -46,7 +48,8 @@
       "name": "bvm-compositor-firewall",
       "targetTag": "bvm-compositor",
       "inboundRules": [
-        { "protocol": "tcp", "ports": "22", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "tcp", "ports": "22", "sources": { "addresses": ["203.0.113.42/32"] } },
+        { "protocol": "tcp", "ports": "22", "sources": { "tags": ["bvm-observability"] } },
         { "protocol": "tcp", "ports": "9108", "sources": { "tags": ["bvm-observability"] } }
       ],
       "outboundRules": [
@@ -59,7 +62,7 @@
       "name": "bvm-observability-firewall",
       "targetTag": "bvm-observability",
       "inboundRules": [
-        { "protocol": "tcp", "ports": "22", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "tcp", "ports": "22", "sources": { "addresses": ["203.0.113.42/32"] } },
         { "protocol": "tcp", "ports": "80", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
         { "protocol": "tcp", "ports": "443", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } }
       ],

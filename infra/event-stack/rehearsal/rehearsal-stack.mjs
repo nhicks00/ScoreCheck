@@ -6,6 +6,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { loadManifestInputs, validateEventManifest } from "../event-manifest.mjs";
+import { assertNetworkContractDeployable } from "../network-contract.mjs";
 import { loadProtectedEnv } from "../stack-deployer.mjs";
 import { CommentaryClientManager, buildCommentaryClientConfig } from "./commentary-runtime.mjs";
 import { EgressRuntime } from "./egress-runtime.mjs";
@@ -34,7 +35,8 @@ async function main() {
   if (!options) return usage();
   const profile = await loadProfile(options.profile);
   const manifest = JSON.parse(await readFile(profile.manifest, "utf8"));
-  validateEventManifest(manifest, await loadManifestInputs());
+  validateEventManifest(manifest, await loadManifestInputs({ networkFromManifest: manifest.network }));
+  assertNetworkContractDeployable(manifest.network);
   if (manifest.kind !== "rehearsal") throw new Error("rehearsal operator requires a rehearsal manifest");
   validateConfirmation(options.command, options.confirm, manifest.event);
   const lifecycleState = await readProtectedJson(profile.lifecycleState, "lifecycle state");

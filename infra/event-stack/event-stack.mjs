@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { loadManifestInputs, validateEventManifest } from "./event-manifest.mjs";
 import { EventLifecycleController, FileStateStore, NullNotifier, stateSummary } from "./event-lifecycle.mjs";
 import { verifyLifecycleAttestation } from "./lifecycle-attestation.mjs";
+import { assertNetworkContractDeployable } from "./network-contract.mjs";
 import { DigitalOceanProvider, PushoverNotifier, VercelDnsProvider } from "./providers.mjs";
 import { LocalStackDeployer, loadProtectedEnv } from "./stack-deployer.mjs";
 
@@ -35,7 +36,8 @@ async function main() {
   const environment = { ...process.env, ...credentialEnv };
   const manifestSource = await readFile(options.manifest, "utf8");
   const manifest = JSON.parse(manifestSource);
-  validateEventManifest(manifest, await loadManifestInputs());
+  validateEventManifest(manifest, await loadManifestInputs({ networkFromManifest: manifest.network }));
+  assertNetworkContractDeployable(manifest.network);
   const store = new FileStateStore(options.state);
 
   const needsCloud = ["up", "status", "start", "evidence", "destroy", "abort"].includes(options.command);

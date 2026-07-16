@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { isIP } from "node:net";
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u;
 const TAG = /^[A-Za-z0-9._:-]{1,100}$/u;
@@ -14,7 +15,42 @@ export function validateNetworkContract(value) {
   const names = new Set();
   const tags = new Set();
   const firewalls = value.firewalls.map((firewall, index) => normalizeFirewall(firewall, index, names, tags));
+  assertHardenedSshContract(firewalls);
   return { schemaVersion: 1, region: value.region, vpcUuid: value.vpcUuid, vpcCidr: value.vpcCidr, firewalls };
+}
+
+export function assertNetworkContractDeployable(value) {
+  const contract = validateNetworkContract(value);
+  const addresses = sshAddressSources(contract.firewalls[0]);
+  for (const address of addresses) assertPublicAdminHostCidr(address);
+  return contract;
+}
+
+export function renderAdminSshNetworkContract(templateInput, adminSshInput) {
+  const template = validateNetworkContract(templateInput);
+  const addresses = validateAdminSshCidrs(adminSshInput);
+  const rendered = structuredClone(template);
+  for (const firewall of rendered.firewalls) {
+    const addressRule = firewall.inboundRules.find((rule) => isSshRule(rule) && rule.sources.addresses);
+    addressRule.sources.addresses = [...addresses];
+  }
+  return assertNetworkContractDeployable(rendered);
+}
+
+export function validateAdminSshCidrs(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || value.schemaVersion !== 1) {
+    throw new Error("admin SSH CIDR document schemaVersion must be 1");
+  }
+  if (JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(["addresses", "schemaVersion"])) {
+    throw new Error("admin SSH CIDR document must contain exactly schemaVersion and addresses");
+  }
+  if (!Array.isArray(value.addresses) || value.addresses.length < 1 || value.addresses.length > 8) {
+    throw new Error("admin SSH CIDR document must contain 1-8 host CIDRs");
+  }
+  const addresses = [...new Set(value.addresses)].sort();
+  if (addresses.length !== value.addresses.length) throw new Error("admin SSH CIDRs must be unique");
+  for (const address of addresses) assertPublicAdminHostCidr(address);
+  return addresses;
 }
 
 export function networkContractProblems(contractInput, inventory) {
@@ -84,6 +120,70 @@ function normalizeFirewall(firewall, index, names, tags) {
     inboundRules: normalizeRules(firewall.inboundRules, "sources", firewall.name),
     outboundRules: normalizeRules(firewall.outboundRules, "destinations", firewall.name)
   };
+}
+
+function assertHardenedSshContract(firewalls) {
+  let expectedAddresses = null;
+  for (const firewall of firewalls) {
+    const sshRules = firewall.inboundRules.filter(isSshRule);
+    const addressRules = sshRules.filter((rule) => rule.sources.addresses);
+    const tagRules = sshRules.filter((rule) => rule.sources.tags);
+    if (addressRules.length !== 1) throw new Error(`firewall ${firewall.name} must have exactly one admin-address SSH rule`);
+    const addresses = addressRules[0].sources.addresses;
+    if (!addresses.every(isHostCidr)) throw new Error(`firewall ${firewall.name} SSH addresses must be /32 or /128 host CIDRs`);
+    if (addresses.some((address) => address === "0.0.0.0/0" || address === "::/0")) {
+      throw new Error(`firewall ${firewall.name} cannot expose SSH globally`);
+    }
+    if (expectedAddresses && !isDeepStrictEqual(addresses, expectedAddresses)) {
+      throw new Error("all firewalls must use the same admin SSH CIDRs");
+    }
+    expectedAddresses = addresses;
+    if (firewall.targetTag === "bvm-observability") {
+      if (tagRules.length !== 0 || sshRules.length !== 1) throw new Error("observability SSH must use only protected admin CIDRs");
+    } else if (tagRules.length !== 1
+      || !isDeepStrictEqual(tagRules[0].sources.tags, ["bvm-observability"])
+      || sshRules.length !== 2) {
+      throw new Error(`firewall ${firewall.name} must allow SSH only from protected admin CIDRs and the observability bastion`);
+    }
+  }
+}
+
+function sshAddressSources(firewall) {
+  return firewall.inboundRules.find((rule) => isSshRule(rule) && rule.sources.addresses)?.sources.addresses ?? [];
+}
+
+function isSshRule(rule) {
+  return rule.protocol === "tcp" && rule.ports === "22";
+}
+
+function isHostCidr(value) {
+  if (typeof value !== "string") return false;
+  const separator = value.lastIndexOf("/");
+  if (separator < 1) return false;
+  const address = value.slice(0, separator);
+  const prefix = value.slice(separator + 1);
+  const family = isIP(address);
+  return (family === 4 && prefix === "32") || (family === 6 && prefix === "128");
+}
+
+function assertPublicAdminHostCidr(value) {
+  if (!isHostCidr(value)) throw new Error(`admin SSH source ${value} must be an IPv4 /32 or IPv6 /128 host CIDR`);
+  const address = value.slice(0, value.lastIndexOf("/")).toLowerCase();
+  const family = isIP(address);
+  if (family === 4) {
+    const [a, b, c] = address.split(".").map(Number);
+    const forbidden = a === 0 || a === 10 || a === 127 || a >= 224
+      || (a === 100 && b >= 64 && b <= 127)
+      || (a === 169 && b === 254)
+      || (a === 172 && b >= 16 && b <= 31)
+      || (a === 192 && b === 168)
+      || (a === 192 && b === 0 && c === 2)
+      || (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100)))
+      || (a === 203 && b === 0 && c === 113);
+    if (forbidden) throw new Error(`admin SSH source ${value} must be a public operator host address`);
+  } else if (!/^[23]/u.test(address) || address.startsWith("2001:db8")) {
+    throw new Error(`admin SSH source ${value} must be a public operator host address`);
+  }
 }
 
 function providerRule(rule, direction) {

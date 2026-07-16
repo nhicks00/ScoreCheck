@@ -1,21 +1,20 @@
 #!/usr/bin/env node
 
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { validateNetworkContract } from "./network-contract.mjs";
+import { assertNetworkContractDeployable } from "./network-contract.mjs";
 import { DigitalOceanProvider } from "./providers.mjs";
 import { loadProtectedEnv } from "./stack-deployer.mjs";
 
-const DEFAULT_NETWORK_SPEC = fileURLToPath(new URL("./network-contract.json", import.meta.url));
 const APPLY_CONFIRMATION = "APPLY:EVENT-NETWORK";
 
 export function parseNetworkManagerArgs(argv) {
   const command = argv[0];
   if (!new Set(["verify", "apply"]).has(command)) throw new Error("first argument must be verify or apply");
-  const options = { command, credentialsEnv: null, networkSpec: DEFAULT_NETWORK_SPEC, confirm: null };
+  const options = { command, credentialsEnv: null, networkSpec: null, confirm: null };
   for (let index = 1; index < argv.length; index += 1) {
     const flag = argv[index];
     const value = argv[++index];
@@ -26,6 +25,7 @@ export function parseNetworkManagerArgs(argv) {
     else throw new Error(`unknown network option ${flag}`);
   }
   if (!options.credentialsEnv) throw new Error("--credentials-env is required");
+  if (!options.networkSpec) throw new Error("--network-spec is required");
   if (command === "apply" && options.confirm !== APPLY_CONFIRMATION) {
     throw new Error(`confirmation must be exactly ${APPLY_CONFIRMATION}`);
   }
@@ -38,7 +38,8 @@ async function main() {
   const credentials = await loadProtectedEnv(options.credentialsEnv);
   const token = credentials.DIGITALOCEAN_TOKEN?.trim();
   if (!token) throw new Error("DIGITALOCEAN_TOKEN is required");
-  const contract = validateNetworkContract(JSON.parse(await readFile(options.networkSpec, "utf8")));
+  await assertProtectedFile(options.networkSpec, "rendered network contract");
+  const contract = assertNetworkContractDeployable(JSON.parse(await readFile(options.networkSpec, "utf8")));
   const cloud = new DigitalOceanProvider({ token, sshKeys: [], cloudInitPaths: {} });
   const result = options.command === "apply"
     ? await cloud.applyNetworkContract(contract)
@@ -55,8 +56,15 @@ async function main() {
 }
 
 function absolute(value, flag) {
-  if (!isAbsolute(value)) throw new Error(`${flag} must be an absolute path`);
-  return resolve(value);
+  if (!isAbsolute(value) || resolve(value) !== value || value.includes("..") || /[\r\n\0]/u.test(value)) {
+    throw new Error(`${flag} must be a normalized absolute path`);
+  }
+  return value;
+}
+
+async function assertProtectedFile(path, label) {
+  const information = await stat(path);
+  if (!information.isFile() || (information.mode & 0o077) !== 0) throw new Error(`${label} must be a mode-0600 protected file`);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

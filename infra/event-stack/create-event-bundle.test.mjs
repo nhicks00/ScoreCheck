@@ -28,6 +28,13 @@ async function fixture(kind = "rehearsal") {
     protectedFiles[name] = join(parent, name);
     await writeFile(protectedFiles[name], "#!/bin/sh\n", { mode: 0o700 });
   }
+  const network = JSON.parse(await readFile(new URL("./network-contract.json", import.meta.url), "utf8"));
+  for (const firewall of network.firewalls) {
+    const ssh = firewall.inboundRules.find((rule) => rule.protocol === "tcp" && rule.ports === "22" && rule.sources.addresses);
+    ssh.sources.addresses = ["1.1.1.1/32"];
+  }
+  protectedFiles["network.json"] = join(parent, "network.json");
+  await writeFile(protectedFiles["network.json"], `${JSON.stringify(network, null, 2)}\n`, { mode: 0o600 });
   const productionSource = kind === "production" ? await productionSourceFixture(parent) : null;
   return {
     command: "create",
@@ -38,6 +45,7 @@ async function fixture(kind = "rehearsal") {
     credentialsEnv: protectedFiles["provider.env"],
     sshKey: protectedFiles["ssh-key"],
     lifecycleAttestation: protectedFiles["attestation.json"],
+    networkSpec: protectedFiles["network.json"],
     ...(kind === "production" ? { anchors: protectedFiles["anchors.json"], productionSource } : {
       gitRepoId: "123",
       gitRef: "codex/turnkey-event-lifecycle",
@@ -57,6 +65,8 @@ test("creates a complete protected rehearsal bundle and exact one-command invoca
   const manifest = JSON.parse(await readFile(result.manifest, "utf8"));
   const binding = JSON.parse(await readFile(eventProfile.anchors, "utf8"));
   assert.equal(manifest.kind, "rehearsal");
+  assert.ok(manifest.network.firewalls.every((firewall) => firewall.inboundRules
+    .some((rule) => rule.protocol === "tcp" && rule.ports === "22" && rule.sources.addresses?.includes("1.1.1.1/32"))));
   assert.ok(manifest.endpoints.every((entry) => entry.addressMode === "dynamic-ipv4"));
   assert.deepEqual(binding.reservedIpv4, {});
   assert.equal(eventProfile.rehearsalEvidence, rehearsalProfile.rehearsalEvidence);
@@ -86,9 +96,17 @@ test("rejects weak input permissions and incomplete mode-specific options", asyn
   const production = await fixture("production");
   await assert.rejects(() => createEventBundle({ ...production, anchors: undefined }), /requires --anchors/);
   await assert.rejects(() => createEventBundle({ ...production, productionSource: undefined }), /requires --production-source/);
+  await assert.rejects(() => createEventBundle({ ...production, networkSpec: undefined }), /networkSpec is required/);
   await writeFile(production.anchors, "{}\n", { mode: 0o600 });
   await assert.rejects(() => createEventBundle(production), /schemaVersion must be 2/);
   assert.throws(() => parseBundleArgs(["create", "--root", "relative"]), /absolute path/);
+});
+
+test("rejects a protected but nondeployable template network", async () => {
+  const options = await fixture();
+  const template = await readFile(new URL("./network-contract.json", import.meta.url), "utf8");
+  await writeFile(options.networkSpec, template, { mode: 0o600 });
+  await assert.rejects(() => createEventBundle(options), /public operator host address/u);
 });
 
 async function productionSourceFixture(parent) {

@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import process from "node:process";
 import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
-import { isPrivateIpv4Cidr, validateNetworkContract } from "./network-contract.mjs";
+import { assertNetworkContractDeployable, isPrivateIpv4Cidr, validateNetworkContract } from "./network-contract.mjs";
 import { validateFleetSpec } from "./preflight-capacity.mjs";
 
 const DEFAULT_POOL_SPEC = fileURLToPath(new URL("./compositor-pool.json", import.meta.url));
@@ -47,6 +47,7 @@ export function buildEventManifest({
   const pool = validateFleetSpec(poolSpec, { desiredCompositors: 8, warmSpares: 1 });
   const services = validateServiceSpec(serviceSpec);
   const network = validateNetworkContract(networkSpec);
+  const canonicalNetworkSource = `${JSON.stringify(network, null, 2)}\n`;
   if (pool.region !== services.region) throw new Error("service and compositor regions must match");
   if (network.region !== services.region || network.vpcUuid !== services.vpcUuid || network.vpcCidr !== services.vpcCidr) {
     throw new Error("service and network VPC identity must match exactly");
@@ -91,7 +92,7 @@ export function buildEventManifest({
   }
 
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     event,
     kind,
     namespace,
@@ -111,7 +112,7 @@ export function buildEventManifest({
     sourceBindings: {
       serviceSpecSha256: sha256(serviceSpecSource),
       compositorPoolSpecSha256: sha256(poolSpecSource),
-      networkSpecSha256: sha256(networkSpecSource),
+      networkSpecSha256: sha256(canonicalNetworkSource),
       cloudInitSha256: cloudInitBindings
     },
     compositorPool: {
@@ -130,7 +131,7 @@ export function validateEventManifest(manifest, inputs) {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
     throw new Error("event manifest must be an object");
   }
-  if (manifest.schemaVersion !== 4) throw new Error("event manifest schemaVersion must be 4");
+  if (manifest.schemaVersion !== 5) throw new Error("event manifest schemaVersion must be 5");
   const bindings = manifest.sourceBindings;
   if (!bindings || typeof bindings !== "object" || Array.isArray(bindings)) {
     throw new Error("event manifest source bindings are required");
@@ -268,7 +269,7 @@ export function parseArgs(argv) {
     manifest: null,
     poolSpec: DEFAULT_POOL_SPEC,
     serviceSpec: DEFAULT_SERVICE_SPEC,
-    networkSpec: DEFAULT_NETWORK_SPEC
+    networkSpec: null
   };
   for (let index = 1; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -282,7 +283,11 @@ export function parseArgs(argv) {
     } else if (argument === "--manifest") options.manifest = resolve(requiredValue(argv, ++index, argument));
     else if (argument === "--pool-spec") options.poolSpec = resolve(requiredValue(argv, ++index, argument));
     else if (argument === "--service-spec") options.serviceSpec = resolve(requiredValue(argv, ++index, argument));
-    else if (argument === "--network-spec") options.networkSpec = resolve(requiredValue(argv, ++index, argument));
+    else if (argument === "--network-spec") {
+      const networkSpec = requiredValue(argv, ++index, argument);
+      if (!isAbsolute(networkSpec) || resolve(networkSpec) !== networkSpec) throw new Error("--network-spec must be a normalized absolute path");
+      options.networkSpec = networkSpec;
+    }
     else throw new Error(`Unknown argument: ${argument}`);
   }
   if (command === "generate") {
@@ -290,6 +295,7 @@ export function parseArgs(argv) {
     assertDate(options.destroyAfter);
     assertKind(options.kind);
     if (!options.output) throw new Error("--output must be an absolute path");
+    if (!options.networkSpec) throw new Error("--network-spec is required for generate");
     if (options.manifest) throw new Error("--manifest is not valid for generate");
   } else {
     if (!options.manifest) throw new Error("--manifest is required for validate");
@@ -300,15 +306,20 @@ export function parseArgs(argv) {
   return options;
 }
 
-export async function loadManifestInputs({
-  poolSpec: poolPath = DEFAULT_POOL_SPEC,
-  serviceSpec: servicePath = DEFAULT_SERVICE_SPEC,
-  networkSpec: networkPath = DEFAULT_NETWORK_SPEC
-} = {}) {
+export async function loadManifestInputs(options = {}) {
+  const poolPath = options.poolSpec ?? DEFAULT_POOL_SPEC;
+  const servicePath = options.serviceSpec ?? DEFAULT_SERVICE_SPEC;
+  const embeddedNetwork = Object.hasOwn(options, "networkFromManifest");
+  if (embeddedNetwork && options.networkSpec !== undefined) {
+    throw new Error("networkFromManifest and networkSpec are mutually exclusive");
+  }
+  const networkSource = embeddedNetwork
+    ? Promise.resolve(`${JSON.stringify(validateNetworkContract(options.networkFromManifest), null, 2)}\n`)
+    : readFile(options.networkSpec ?? DEFAULT_NETWORK_SPEC, "utf8");
   const [poolSpecSource, serviceSpecSource, networkSpecSource, entries] = await Promise.all([
     readFile(poolPath, "utf8"),
     readFile(servicePath, "utf8"),
-    readFile(networkPath, "utf8"),
+    networkSource,
     Promise.all(Object.entries(CLOUD_INIT_PATHS).map(async ([profile, path]) => [profile, await readFile(path, "utf8")]))
   ]);
   return {
@@ -327,20 +338,27 @@ async function main() {
   if (!options) {
     process.stdout.write(
       "Usage:\n"
-      + "  node infra/event-stack/event-manifest.mjs generate --event SLUG --kind production|rehearsal --destroy-after YYYY-MM-DD --output /ABSOLUTE/PATH [--pool-spec FILE] [--service-spec FILE] [--network-spec FILE]\n"
+      + "  node infra/event-stack/event-manifest.mjs generate --event SLUG --kind production|rehearsal --destroy-after YYYY-MM-DD --output /ABSOLUTE/PATH --network-spec /PROTECTED/RENDERED-NETWORK.json [--pool-spec FILE] [--service-spec FILE]\n"
       + "  node infra/event-stack/event-manifest.mjs validate --manifest FILE [--pool-spec FILE] [--service-spec FILE] [--network-spec FILE]\n"
     );
     return;
   }
-  const inputs = await loadManifestInputs(options);
   if (options.command === "generate") {
+    await assertProtectedFile(options.networkSpec, "rendered network contract");
+    const inputs = await loadManifestInputs(options);
+    assertNetworkContractDeployable(inputs.networkSpec);
     const manifest = buildEventManifest({ event: options.event, kind: options.kind, destroyAfter: options.destroyAfter, ...inputs });
     await writeFile(options.output, `${JSON.stringify(manifest, null, 2)}\n`, { flag: "wx", mode: 0o600 });
     process.stdout.write(`${JSON.stringify(summary(manifest))}\n`);
     return;
   }
   const manifest = JSON.parse(await readFile(options.manifest, "utf8"));
+  if (options.networkSpec) await assertProtectedFile(options.networkSpec, "rendered network contract");
+  const inputs = await loadManifestInputs(options.networkSpec
+    ? options
+    : { poolSpec: options.poolSpec, serviceSpec: options.serviceSpec, networkFromManifest: manifest.network });
   const validated = validateEventManifest(manifest, inputs);
+  assertNetworkContractDeployable(validated.network);
   process.stdout.write(`${JSON.stringify(summary(validated))}\n`);
 }
 
@@ -385,6 +403,11 @@ function assertBoundSource(value, source, label) {
     throw new Error(`${label} source is not valid JSON`);
   }
   if (!isDeepStrictEqual(value, parsed)) throw new Error(`${label} object does not match the bound source bytes`);
+}
+
+async function assertProtectedFile(path, label) {
+  const information = await stat(path);
+  if (!information.isFile() || (information.mode & 0o077) !== 0) throw new Error(`${label} must be a mode-0600 protected file`);
 }
 
 function assertEvent(value) {
