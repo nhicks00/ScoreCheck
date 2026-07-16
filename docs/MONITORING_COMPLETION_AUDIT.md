@@ -25,7 +25,7 @@ capacity.
 | Durable incidents and operator actions | Fingerprints, open/ack/resolved transitions, checkpoints, acknowledgements, timed silences, expiry re-arm | Deployed and unit-tested |
 | Alert expression behavior | Promtool fixtures validate hold times, labels, annotations, court isolation, black/freeze exclusion, decode/freeze rate bands, live gating, shared-worker fan-out, Egress output deficits, capacity, and external phone-channel attachment | Deployed; 49/49 production rules healthy with zero active alerts |
 | Page suppression behavior | Disposable network-isolated Alertmanager proves same-court and shared-dependency inhibition while peer alerts remain active | Enforced before deployment |
-| Phone paging | Pushover emergency acknowledgement and recovery | Operator-visible emergency acknowledgement and one recovery passed on 2026-07-16; Pushover is the sole phone provider |
+| Phone paging | Pushover emergency acknowledgement and recovery | Operator-visible emergency acknowledgement and one recovery passed on 2026-07-16; the runtime and production database constraint are Pushover-only |
 | Independent dead-man | Baseline and active Healthchecks senders with coverage-aware cadence plus read-only Pushover attachment audit | Baseline and active withheld-ping gates passed; final state baseline running, active idle-paused, Pushover attached to both, and no duplicate recovery |
 | One-court real fault gate | Camera, network, preview, browser, commentary, score, Egress, YouTube, agent, dead-man faults | Physical Camera 1 lifecycle, one-court `c-4` capacity, Camera 4 freeze/black/camera-silence functional gates, and both dead-man gates passed. Freeze and black latency repeats plus the remaining dependency rows are pending; see `2026-07-16-one-court-real-fault-inventory.md` |
 | Eight-court real load/fault gate | Independent compositor per court plus warm spare, eight qualified feeds, two commentary rooms, score on all courts | Final evaluator now binds a fresh schema-2 all-camera monitor/ffprobe qualification artifact to exact source profiles; revised-topology profile and endurance runs remain pending |
@@ -200,6 +200,14 @@ operator work is:
 Pushover is the sole phone-alert provider. SMS credentials, fallback behavior,
 carrier registration, and SMS acceptance work are outside the monitoring
 contract.
+
+The database hard cutover completed at `2026-07-16T17:16:07Z`. Migration
+`029_monitoring_pushover_only.sql` replaced the obsolete multi-provider check
+constraint without modifying any of the 31 existing Pushover notification
+rows. The before/after canonical history hashes match, the transactional
+provider probes passed, version `029` is the sole new remote-ledger row, and all
+observability container identities and restart counts remained unchanged. See
+`docs/monitoring-gates/2026-07-16-pushover-only-schema-cutover.md`.
 
 Operator approval for isolated monitoring fault gates is recorded. The user
 ended the active soak at 16:00 CDT on 2026-07-13 after the final recheck. The
