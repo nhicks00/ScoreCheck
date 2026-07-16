@@ -54,7 +54,7 @@ export class VercelRehearsalProvider {
       try {
         return normalizeDeployment(await this.#request("POST", "/v13/deployments", body), normalizedProject, generationId);
       } catch (error) {
-        if (!(error instanceof VercelRequestError) || error.status < 500) throw error;
+        if (!retryableCreateError(error)) throw error;
         lastError = error;
       }
       const reconciled = await this.#waitForMarkedDeployment(normalizedProject, generationId);
@@ -86,7 +86,7 @@ export class VercelRehearsalProvider {
     throw new Error(`Vercel rehearsal deployment did not become ready (last state ${current?.state ?? "unknown"})`);
   }
 
-  async verifyProgramPage({ project, token }) {
+  async verifyProgramPage({ project, token, timeoutMs = 5 * 60_000, intervalMs = 5_000 }) {
     const normalized = normalizeProject(project, project.name, project.origin);
     if (typeof token !== "string" || token.length < 24 || /[\r\n\0]/u.test(token)) throw new Error("Vercel rehearsal Program token is invalid");
     const pageUrl = `${normalized.origin}/program/court/1?token=${encodeURIComponent(token)}&scene=0`;
@@ -98,12 +98,29 @@ export class VercelRehearsalProvider {
       signal: AbortSignal.timeout(30_000),
       cache: "no-store"
     });
-    const [accepted, rejected] = await Promise.all([request(pageUrl), request(invalidUrl)]);
+    const deadline = Date.now() + timeoutMs;
+    let accepted;
+    while (Date.now() <= deadline) {
+      try {
+        accepted = await request(pageUrl);
+      } catch (error) {
+        if (!retryableFetchError(error)) throw error;
+        accepted = null;
+      }
+      if (accepted?.status === 200) break;
+      if (accepted && ![404, 408, 425, 429, 500, 502, 503, 504].includes(accepted.status)) {
+        throw new Error(`Vercel rehearsal Program page preflight returned HTTP ${accepted.status}`);
+      }
+      if (Date.now() > deadline) break;
+      await this.sleep(intervalMs);
+    }
+    if (!accepted) throw new Error("Vercel rehearsal Program page preflight timed out");
     if (accepted.status !== 200 || !accepted.headers.get("content-type")?.toLowerCase().includes("text/html")) {
       throw new Error(`Vercel rehearsal Program page preflight returned HTTP ${accepted.status}`);
     }
     const body = await accepted.text();
     if (!body.includes("program-root")) throw new Error("Vercel rehearsal Program page preflight returned the wrong document");
+    const rejected = await request(invalidUrl);
     if (rejected.status !== 404) throw new Error(`Vercel rehearsal Program token rejection returned HTTP ${rejected.status}`);
     return { status: "healthy", origin: normalized.origin, acceptedStatus: 200, rejectedStatus: 404 };
   }
@@ -280,6 +297,14 @@ function validateProviderId(value, label) {
 function required(value, label) {
   if (typeof value !== "string" || !value.trim() || /[\r\n\0]/.test(value)) throw new Error(`${label} is required`);
   return value.trim();
+}
+
+function retryableCreateError(error) {
+  return error instanceof VercelRequestError ? error.status >= 500 : retryableFetchError(error);
+}
+
+function retryableFetchError(error) {
+  return error instanceof TypeError || ["AbortError", "TimeoutError"].includes(error?.name);
 }
 
 export class VercelNotFoundError extends Error {

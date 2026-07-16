@@ -72,6 +72,23 @@ test("adopts an ambiguously created deployment after a transient provider failur
   assert.equal(postCount, 1);
 });
 
+test("reconciles an ambiguously created deployment after a provider request timeout", async () => {
+  let deployment = null;
+  let postCount = 0;
+  const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, sleep: async () => {}, fetchImpl: async (url, init) => {
+    if (url.includes("/v6/deployments")) return response(200, { deployments: deployment ? [deployment] : [], pagination: {} });
+    if (url.includes("/v13/deployments") && init.method === "POST") {
+      postCount += 1;
+      deployment = { id: "dpl_timeout", projectId: project.id, name, target: "production", readyState: "BUILDING", meta: { scorecheckRehearsalGeneration: generationId }, alias: [] };
+      throw new DOMException("request timed out", "TimeoutError");
+    }
+    throw new Error(`unexpected ${init.method} ${url}`);
+  }});
+  const result = await client.ensureDeployment({ project, generationId, repoId: 123, ref: "master", sha: "a".repeat(40), environment });
+  assert.equal(result.id, "dpl_timeout");
+  assert.equal(postCount, 1);
+});
+
 test("retries a definite transient deployment failure only after bounded absence proof", async () => {
   let postCount = 0;
   const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, sleep: async () => {}, fetchImpl: async (url, init) => {
@@ -117,6 +134,25 @@ test("probes the token-gated Program document before event resources are created
   assert.equal(requests.length, 2);
   assert.ok(requests.every((entry) => entry.init.redirect === "error"));
   assert.ok(requests.every((entry) => !entry.init.headers.authorization));
+});
+
+test("retries a cold Program document until the isolated route is ready", async () => {
+  let acceptedAttempts = 0;
+  const client = new VercelRehearsalProvider({
+    token: "token",
+    teamId: "team",
+    teamSlug,
+    sleep: async () => {},
+    publicFetchImpl: async (url) => {
+      if (url.includes("invalid-rehearsal-token")) return response(404, "not found", "text/plain");
+      acceptedAttempts += 1;
+      if (acceptedAttempts === 1) throw new DOMException("cold request timed out", "TimeoutError");
+      if (acceptedAttempts === 2) return response(503, "warming", "text/plain");
+      return response(200, '<div class="program-root"></div>', "text/html");
+    }
+  });
+  assert.equal((await client.verifyProgramPage({ project, token: "x".repeat(32) })).status, "healthy");
+  assert.equal(acceptedAttempts, 3);
 });
 
 test("fails Program preflight on deployment protection, wrong content, or a weak token gate", async () => {
