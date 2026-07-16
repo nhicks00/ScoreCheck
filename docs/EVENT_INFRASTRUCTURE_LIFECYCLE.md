@@ -37,11 +37,18 @@ stack while old test servers still exist. The controller rejects partial
 affordability instead of creating the first few servers and then discovering the
 account cannot fit the complete stack.
 
-The first isolated full rehearsal is deliberately side by side with the seven
-current servers, so it requires a temporary account limit of **19**. The quota
-itself is free; only created resources are billed. Once the seven legacy
-servers are retired, a limit of 12 fits the normal stack. Do not destroy those
-legacy servers merely to make a rehearsal fit.
+The full rehearsal uses the real recurring lifecycle: retire the seven legacy
+test servers only after the protected recovery and endpoint prerequisites pass,
+then prove zero event Droplets -> exactly 12 rehearsal Droplets -> zero event
+Droplets. It does not build 12 servers beside the legacy seven and therefore
+does not require a limit of 19. The account limit was verified as **15** on
+2026-07-15, which fits the exact 12-host manifest and leaves three unused slots.
+The manifest, not the account ceiling, controls what is created.
+
+Do not delete a legacy server merely to free quota. The destructive boundary
+still requires no active event, coverage, soak, output, or camera publisher;
+complete protected recovery material and endpoint anchors; sealed pre-cutover
+evidence; and explicit operator confirmation.
 
 ## Stable public endpoints
 
@@ -538,14 +545,16 @@ only the provider's transient HTTP 422 state and succeeds only after the same
 address returns HTTP 404.
 
 The one-Droplet canary proves provider permissions and replacement mechanics;
-it does **not** qualify the 12-server media system. After the account limit is
-19, the final dry run is a full isolated rehearsal: 12 unique rehearsal
-Droplets, eight synthetic moving camera publishers, eight preview/program
-chains, eight one-per-host Egress jobs, an isolated program-page deployment,
-eight fresh unlisted YouTube broadcasts, monitoring, commentary connectivity,
-resource and zombie gates, exact evidence, ordered output cleanup, and complete
-infrastructure teardown. The seven pre-existing server IDs must be identical
-before and after. Production is not approved until this run passes.
+it does **not** qualify the 12-server media system. With the verified account
+limit of 15, the final dry run is a full isolated rehearsal from a proved zero
+event-Droplet baseline: 12 unique rehearsal Droplets, eight synthetic moving
+camera publishers, eight preview/program chains, eight one-per-host Egress
+jobs, an isolated program-page deployment, eight fresh unlisted YouTube
+broadcasts, monitoring, commentary connectivity, resource and zombie gates,
+exact evidence, ordered output cleanup, and complete infrastructure teardown.
+No legacy Droplet is retained as an undocumented rollback dependency.
+Production is not approved until this run passes and provider inventory returns
+to the exact persistent non-Droplet baseline.
 
 ## Cost model
 

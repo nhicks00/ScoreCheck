@@ -365,11 +365,16 @@ export class EventLifecycleController {
       const state = await this.#requiredState(manifest);
       const terminalOrCleanup = new Set(["destroyed", "aborted", "aborting"]);
       const networkContract = terminalOrCleanup.has(state.phase) ? null : await this.#inspectNetworkContract(state, manifest);
-      const inventory = new Set(["destroyed", "aborted"]).has(state.phase)
-        ? []
-        : new Set(["destroying", "aborting"]).has(state.phase)
-          ? await this.#assertDestroyingInventory(state, manifest)
-          : await this.#assertExactEventInventory(state, manifest);
+      let inventory;
+      if (new Set(["planned", "provisioning"]).has(state.phase)) {
+        inventory = await this.#inspectProvisioningInventory(state, manifest);
+      } else if (new Set(["destroying", "aborting"]).has(state.phase)) {
+        inventory = await this.#assertDestroyingInventory(state, manifest);
+      } else if (new Set(["destroyed", "aborted"]).has(state.phase)) {
+        inventory = await this.#assertEmptyEventInventory(manifest);
+      } else {
+        inventory = await this.#assertExactEventInventory(state, manifest);
+      }
       return { state, inventory, networkContract };
     });
   }
@@ -644,6 +649,39 @@ export class EventLifecycleController {
       ids.add(droplet.id);
     }
     return inventory.map((entry) => sanitizedDroplet(entry));
+  }
+
+  async #inspectProvisioningInventory(state, manifest) {
+    const inventory = await this.cloud.listDropletsByEvent(manifest.event);
+    const specByProviderName = new Map(manifest.droplets.map((entry) => [entry.providerName, entry]));
+    const names = inventory.map((entry) => entry.name);
+    if (new Set(names).size !== names.length) throw new Error("provisioning inventory contains duplicate provider names");
+    const ids = new Set();
+    for (const droplet of inventory) {
+      const spec = specByProviderName.get(droplet.name);
+      if (!spec) throw new Error(`provisioning inventory contains unexpected resource ${droplet.name}`);
+      const resource = state.droplets[spec.name] ?? null;
+      assertDropletIdentity(droplet, spec, manifest, resource?.id);
+      if (resource?.status === "destroyed") throw new Error(`${spec.name} exists after its recorded deletion`);
+      if (ids.has(droplet.id)) throw new Error("provisioning inventory contains duplicate provider IDs");
+      ids.add(droplet.id);
+    }
+    for (const spec of manifest.droplets) {
+      const resource = state.droplets[spec.name];
+      if (!resource || resource.status === "destroyed") continue;
+      if (!inventory.some((entry) => entry.name === spec.providerName)) {
+        throw new Error(`${spec.name} recorded provider resource is missing during provisioning`);
+      }
+    }
+    return inventory.map((entry) => sanitizedDroplet(entry));
+  }
+
+  async #assertEmptyEventInventory(manifest) {
+    const inventory = await this.cloud.listDropletsByEvent(manifest.event);
+    if (inventory.length !== 0) {
+      throw new Error(`terminal event inventory is not empty: ${inventory.map((entry) => entry.name).sort().join(",")}`);
+    }
+    return [];
   }
 
   async #assertDestroyingInventory(state, manifest) {

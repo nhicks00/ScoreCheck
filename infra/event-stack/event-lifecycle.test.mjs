@@ -418,6 +418,74 @@ test("does not become ready until Pushover accepts the readiness notification", 
   assert.equal(notifier.messages.length, 1);
 });
 
+test("status accepts an exact empty plan and exact partial provisioning inventory", async () => {
+  const setup = fixture();
+  await setup.controller.plan(setup.manifest);
+
+  const planned = await setup.controller.status(setup.manifest);
+  assert.equal(planned.state.phase, "planned");
+  assert.deepEqual(planned.inventory, []);
+  assert.equal(planned.networkContract.healthy, true);
+
+  const spec = setup.manifest.droplets[0];
+  const created = await setup.cloud.createDroplet({
+    name: spec.providerName,
+    region: spec.region,
+    vpcUuid: setup.manifest.provider.vpcUuid,
+    size: spec.size,
+    image: spec.image,
+    tags: lifecycleTags(setup.manifest, spec),
+    userDataProfile: spec.cloudInitProfile,
+    userDataSha256: spec.cloudInitSha256
+  });
+  const state = await setup.store.load();
+  state.phase = "provisioning";
+  state.provisioningAttestation = fakeProvisioningAttestation();
+  await setup.store.save(state);
+
+  const provisioning = await setup.controller.status(setup.manifest);
+  assert.equal(provisioning.state.phase, "provisioning");
+  assert.deepEqual(provisioning.inventory.map((entry) => entry.id), [created.id]);
+});
+
+test("status rejects unexpected event resources before provisioning", async () => {
+  const setup = fixture();
+  await setup.controller.plan(setup.manifest);
+  const spec = setup.manifest.droplets[0];
+  await setup.cloud.createDroplet({
+    name: "unexpected-planned-resource",
+    region: spec.region,
+    vpcUuid: setup.manifest.provider.vpcUuid,
+    size: spec.size,
+    image: spec.image,
+    tags: lifecycleTags(setup.manifest, spec),
+    userDataProfile: spec.cloudInitProfile,
+    userDataSha256: spec.cloudInitSha256
+  });
+
+  await assert.rejects(() => setup.controller.status(setup.manifest), /unexpected resource/);
+});
+
+test("status rejects a provider survivor after terminal teardown", async () => {
+  const setup = fixture();
+  const evidence = await prepareDestroyableLifecycle(setup, "terminal-inventory");
+  await setup.controller.destroy(setup.manifest, evidence, "DESTROY:turnkey-test");
+
+  const spec = setup.manifest.droplets[0];
+  await setup.cloud.createDroplet({
+    name: spec.providerName,
+    region: spec.region,
+    vpcUuid: setup.manifest.provider.vpcUuid,
+    size: spec.size,
+    image: spec.image,
+    tags: lifecycleTags(setup.manifest, spec),
+    userDataProfile: spec.cloudInitProfile,
+    userDataSha256: spec.cloudInitSha256
+  });
+
+  await assert.rejects(() => setup.controller.status(setup.manifest), /terminal event inventory is not empty/);
+});
+
 test("refuses before creating anything when existing account occupancy cannot fit the complete stack", async () => {
   const cloud = new FakeDigitalOceanProvider({ dropletLimit: 12 });
   await cloud.createDroplet({

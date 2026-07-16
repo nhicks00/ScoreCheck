@@ -113,11 +113,47 @@ intentionally persistent:
 - the protected production recovery source and provider credentials; and
 - the venue router, Speedify account, camera settings, and WireGuard peer.
 
-The Reserved IPv4 anchors do not exist yet. They must be allocated and the
-venue-router peer must be rebound to the stable ingest address before the seven
-legacy/test Droplets can be treated as safely disposable. The router-side
+The two SFO2 Reserved IPv4 anchors were allocated and independently verified as
+unassigned on 2026-07-15. Their protected binding is stored outside Git. The
+venue-router peer must still be rebound to the stable ingest address before the
+seven legacy/test Droplets can be treated as safely disposable. The router-side
 WireGuard private configuration must also be captured during the next on-site
 router access window. The server-side configuration is already sealed.
+
+The DigitalOcean API independently reported an active account, a Droplet limit
+of 15, seven active Droplets, and eight free slots at
+2026-07-16T00:23:41.529Z. The exact 12-host manifest passed capacity preflight:
+the five missing compositor slots fit without changing any current server.
+Increasing the ceiling did not create a Droplet or start billing for unused
+slots.
+
+An encrypted off-device recovery archive was created and restore-tested at
+2026-07-16T00:34:23Z. It contains the complete protected event-stack directory
+and lifecycle SSH identity: 113 files, 122,999 encrypted bytes, SHA-256
+`8f235f6f991952f6dd797c5af0b792b77d598b268d97d25ef6712986b7c2f43e`.
+The Google Drive copy was downloaded independently and matched the local byte
+count and digest. A decrypted temporary restore passed the production-source
+integrity verifier and contained the provider credential, endpoint binding, and
+SSH identity. The recovery key is held separately in iCloud Drive and the local
+login Keychain; it is not stored with the encrypted Google Drive archive.
+
+The persistent DigitalOcean network contract was reconciled at
+2026-07-16T00:45Z. The three existing service firewalls were changed from the
+legacy observability private-IP source to the stable `bvm-observability` tag,
+and the missing observability firewall was created. A protected copy of the
+three pre-cutover provider firewall objects was captured first. Post-cutover
+verification found all four contracts healthy, all seven existing servers
+reachable on SSH, the monitor collector healthy with six of six agents fresh,
+Camera 1 raw ready with zero frame errors, and no active event, incident, fault
+gate, or Egress.
+
+The generated production drill bundle is durably planned with zero event
+Droplets. Its real provider-backed `status` command now passes and reports a
+healthy network contract. A discovered status defect was hard-cut over so the
+planned and provisioning phases validate exact partial inventory, ready/live/
+closed require all 12 resources, cleanup permits only recorded survivors, and
+terminal phases prove provider inventory is empty. The complete 188-test event
+lifecycle suite and all five provider-free failure simulations pass.
 
 ## Remaining live gate
 
@@ -129,12 +165,17 @@ eight-output media system.
 
 Before destructive rehearsal:
 
-1. push the reconstruction hardening commit;
-2. allocate and record the two endpoint anchors;
-3. create an encrypted off-device copy of the protected recovery source;
-4. confirm the account limit is at least 12;
-5. confirm no event, coverage, or soak is active; and
-6. obtain explicit operator approval to remove the seven legacy/test Droplets.
+1. capture and rebind the venue-router WireGuard peer to the retained ingest
+   anchor;
+2. confirm no event, coverage, soak, output, or camera publisher is active; and
+3. obtain explicit operator approval to remove the seven legacy/test Droplets.
+
+The reconstruction commit, protected backup, endpoint anchors, and account
+quota prerequisites are complete. At the latest read-only monitoring sample
+there was no event, incident, fault gate, or Egress, but Camera 1 was still
+publishing raw video. That publisher must be stopped and verified absent before
+the destructive boundary. The venue router was unreachable from the operator
+network, so its client-side configuration was not guessed or changed.
 
 The full rehearsal must then start with zero event Droplets, create exactly 12,
 run eight synthetic camera publishers and eight program outputs through the
