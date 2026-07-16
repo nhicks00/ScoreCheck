@@ -39,6 +39,7 @@ export class VercelRehearsalProvider {
     validateGeneration(generationId);
     validateGitSource({ repoId, ref, sha });
     validateEnvironment(environment, normalizedProject.origin);
+    await this.#upsertEnvironment(normalizedProject, environment);
     const existing = await this.#markedDeployment(normalizedProject, generationId);
     if (existing) return existing;
     const body = {
@@ -47,7 +48,6 @@ export class VercelRehearsalProvider {
       target: "production",
       gitSource: { type: "github", repoId, ref, sha },
       projectSettings: { framework: "nextjs", rootDirectory: "apps/web" },
-      env: environment,
       meta: { scorecheckRehearsalGeneration: generationId }
     };
     let lastError = null;
@@ -168,6 +168,25 @@ export class VercelRehearsalProvider {
       seen.add(until);
     }
     throw new Error("Vercel deployment pagination exceeded the safety limit");
+  }
+
+  async #upsertEnvironment(project, environment) {
+    const variables = Object.entries(environment)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => ({ key, value, type: "encrypted", target: ["production"] }));
+    const result = await this.#request(
+      "POST",
+      `/v10/projects/${encodeURIComponent(project.id)}/env?upsert=true`,
+      variables
+    );
+    const failed = Array.isArray(result?.failed) ? result.failed : [];
+    if (failed.length > 0) throw new Error("Vercel rehearsal project environment upsert failed");
+    const created = Array.isArray(result?.created) ? result.created : result?.created ? [result.created] : [];
+    const expectedKeys = variables.map(({ key }) => key);
+    const actualKeys = created.map((entry) => entry?.key).sort();
+    if (JSON.stringify(actualKeys) !== JSON.stringify(expectedKeys)) {
+      throw new Error("Vercel rehearsal project environment upsert returned an incomplete key set");
+    }
   }
 
   async #markedDeployment(project, generationId) {

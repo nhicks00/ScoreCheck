@@ -20,6 +20,11 @@ const project = { id: "prj_test123", name, origin, framework: "nextjs", rootDire
 const generationId = "generation-1234";
 const environment = { NEXT_PUBLIC_SCORECHECK_REHEARSAL: "true", SCORECHECK_REHEARSAL_ORIGIN: origin, PROGRAM_PAGE_TOKEN: "secret" };
 
+function environmentResponse(init) {
+  const variables = JSON.parse(init.body);
+  return response(201, { created: variables.map(({ key }) => ({ key })), failed: [] });
+}
+
 test("creates an isolated Next.js project and adopts it by deterministic name", async () => {
   let created = false;
   const requests = [];
@@ -39,6 +44,7 @@ test("creates exactly one marked deployment from an exact Git SHA", async () => 
   const requests = [];
   const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, fetchImpl: async (url, init) => {
     requests.push({ url, init });
+    if (url.includes("/v10/projects/") && url.includes("/env")) return environmentResponse(init);
     if (url.includes("/v6/deployments")) return response(200, { deployments: deployment ? [deployment] : [], pagination: {} });
     if (url.includes("/v13/deployments") && init.method === "POST") {
       deployment = { id: "dpl_test123", projectId: project.id, name, target: "production", readyState: "BUILDING", meta: { scorecheckRehearsalGeneration: generationId }, alias: [] };
@@ -49,16 +55,25 @@ test("creates exactly one marked deployment from an exact Git SHA", async () => 
   const input = { project, generationId, repoId: 123, ref: "codex/turnkey-event-lifecycle", sha: "a".repeat(40), environment };
   assert.equal((await client.ensureDeployment(input)).id, "dpl_test123");
   assert.equal((await client.ensureDeployment(input)).id, "dpl_test123");
-  const body = JSON.parse(requests.find((entry) => entry.init.method === "POST").init.body);
+  const body = JSON.parse(requests.find((entry) => entry.url.includes("/v13/deployments") && entry.init.method === "POST").init.body);
   assert.equal(body.target, "production");
   assert.equal(body.gitSource.sha, "a".repeat(40));
-  assert.equal(requests.filter((entry) => entry.init.method === "POST").length, 1);
+  assert.equal(body.env, undefined);
+  const envRequest = requests.find((entry) => entry.url.includes("/env"));
+  assert.equal(new URL(envRequest.url).searchParams.get("upsert"), "true");
+  assert.deepEqual(JSON.parse(envRequest.init.body).map(({ key, type, target }) => ({ key, type, target })), [
+    { key: "NEXT_PUBLIC_SCORECHECK_REHEARSAL", type: "encrypted", target: ["production"] },
+    { key: "PROGRAM_PAGE_TOKEN", type: "encrypted", target: ["production"] },
+    { key: "SCORECHECK_REHEARSAL_ORIGIN", type: "encrypted", target: ["production"] }
+  ]);
+  assert.equal(requests.filter((entry) => entry.url.includes("/v13/deployments") && entry.init.method === "POST").length, 1);
 });
 
 test("adopts an ambiguously created deployment after a transient provider failure", async () => {
   let deployment = null;
   let postCount = 0;
   const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, sleep: async () => {}, fetchImpl: async (url, init) => {
+    if (url.includes("/v10/projects/") && url.includes("/env")) return environmentResponse(init);
     if (url.includes("/v6/deployments")) return response(200, { deployments: deployment ? [deployment] : [], pagination: {} });
     if (url.includes("/v13/deployments") && init.method === "POST") {
       postCount += 1;
@@ -76,6 +91,7 @@ test("reconciles an ambiguously created deployment after a provider request time
   let deployment = null;
   let postCount = 0;
   const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, sleep: async () => {}, fetchImpl: async (url, init) => {
+    if (url.includes("/v10/projects/") && url.includes("/env")) return environmentResponse(init);
     if (url.includes("/v6/deployments")) return response(200, { deployments: deployment ? [deployment] : [], pagination: {} });
     if (url.includes("/v13/deployments") && init.method === "POST") {
       postCount += 1;
@@ -94,6 +110,7 @@ test("gives deployment creation a longer bounded response window", async () => {
   let deploymentSignal;
   let deploymentUrl;
   const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, fetchImpl: async (url, init) => {
+    if (url.includes("/v10/projects/") && url.includes("/env")) return environmentResponse(init);
     if (url.includes("/v6/deployments")) return response(200, { deployments: [], pagination: {} });
     if (url.includes("/v13/deployments") && init.method === "POST") {
       deploymentSignal = init.signal;
@@ -114,6 +131,7 @@ test("gives deployment creation a longer bounded response window", async () => {
 test("retries a definite transient deployment failure only after bounded absence proof", async () => {
   let postCount = 0;
   const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, sleep: async () => {}, fetchImpl: async (url, init) => {
+    if (url.includes("/v10/projects/") && url.includes("/env")) return environmentResponse(init);
     if (url.includes("/v6/deployments")) return response(200, { deployments: [], pagination: {} });
     if (url.includes("/v13/deployments") && init.method === "POST") {
       postCount += 1;
@@ -135,6 +153,21 @@ test("requires the isolated alias before accepting READY", async () => {
   await assert.rejects(() => client.waitReady({ deploymentId: "dpl_test123", project, generationId }), /without its isolated project alias/);
   includeAlias = true;
   assert.equal((await client.waitReady({ deploymentId: "dpl_test123", project, generationId })).state, "READY");
+});
+
+test("fails closed when Vercel does not confirm the complete project environment", async () => {
+  const client = new VercelRehearsalProvider({
+    token: "token",
+    teamId: "team",
+    teamSlug,
+    fetchImpl: async (url) => url.includes("/env")
+      ? response(201, { created: [{ key: "PROGRAM_PAGE_TOKEN" }], failed: [] })
+      : response(200, { deployments: [], pagination: {} })
+  });
+  await assert.rejects(
+    () => client.ensureDeployment({ project, generationId, repoId: 123, ref: "master", sha: "a".repeat(40), environment }),
+    /incomplete key set/
+  );
 });
 
 test("probes the token-gated Program document before event resources are created", async () => {
@@ -203,7 +236,7 @@ test("derives the isolated production origin from the authenticated Vercel team"
 });
 
 test("rejects production web origins and Supabase environment", async () => {
-  const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, fetchImpl: async () => response(200, { deployments: [], pagination: {} }) });
+  const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, fetchImpl: async (url, init) => url.includes("/env") ? environmentResponse(init) : response(200, { deployments: [], pagination: {} }) });
   for (const changed of [
     { ...environment, SUPABASE_URL: "https://example.supabase.co" },
     { ...environment, SCORECHECK_REHEARSAL_ORIGIN: "https://score.beachvolleyballmedia.com" }
