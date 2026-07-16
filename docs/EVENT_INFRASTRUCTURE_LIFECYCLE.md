@@ -76,6 +76,14 @@ IDs and ordinary public/private addresses change. Reserved IPv4s can only move
 between Droplets in the same DigitalOcean region, so the manifest, anchors, and
 all event servers are pinned to `sfo2`.
 
+The initial hard cutover completed on 2026-07-16 while all camera publishers
+were stopped. Both anchors are attached to the exact existing ingest and
+commentary Droplets, the three public records have converged, and the venue
+router WireGuard peer now targets the retained ingest anchor. The protected
+provider/DNS transaction and router backup remain the rollback evidence. A
+future rebuild reassigns those same anchors; it does not introduce a new camera
+or commentator endpoint.
+
 The retained records use a 60-second TTL. DNS readiness requires the exact
 Vercel control-plane record plus every authoritative Vercel nameserver, the
 system resolver, Cloudflare 1.1.1.1, and Google Public DNS to return the

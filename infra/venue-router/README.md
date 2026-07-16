@@ -44,6 +44,29 @@ disable camera routing. `enable` installs both guards before connecting or
 migrating active publishers. A failed enable leaves camera traffic blocked and
 the watchdog retrying; it never rolls back to direct WAN.
 
+## Rebind the persistent ingest anchor
+
+Production cameras publish to `preview.beachvolleyballmedia.com`, and the venue
+WireGuard peer targets the same retained ingest Reserved IPv4. Rebind the
+provider and DNS first, wait for authoritative plus recursive DNS convergence,
+and stop every camera publisher before changing the router endpoint. Then run:
+
+```sh
+./rebind-ingest-anchor.sh root@192.168.8.1 EXPECTED_OLD_IPV4 NEW_RESERVED_IPV4
+```
+
+The command refuses an unexpected current endpoint or any RTMP/SRT flow to the
+old or new address. It creates a mode-`0700` router backup, updates the peer and
+both checked-in routing tools, restarts only `camera_lan` and the routing
+watchdog, and runs fail-closed reconciliation. Success requires matching source
+hashes, a fresh WireGuard handshake, four policy rules, two firewall guards,
+both protocol routes through `connectify0` table `900`, and exactly one live
+watchdog. Any failed postcondition restores the prior network and tool files.
+
+The provider/DNS transaction has its own rollback record. Do not remove that
+record or the router backup until the post-cutover monitor snapshot is healthy
+and both public endpoints have been verified.
+
 At an event end, stop every camera first, verify coverage is over, then run:
 
 ```sh

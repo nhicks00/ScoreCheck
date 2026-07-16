@@ -24,8 +24,8 @@ capacity.
 | Durable incidents and operator actions | Fingerprints, open/ack/resolved transitions, checkpoints, acknowledgements, timed silences, expiry re-arm | Deployed and unit-tested |
 | Alert expression behavior | Promtool fixtures validate hold times, labels, annotations, court isolation, black/freeze exclusion, decode/freeze rate bands, live gating, shared-worker fan-out, Egress output deficits, capacity, and external phone-channel attachment | Deployed; 49/49 production rules healthy with zero active alerts |
 | Page suppression behavior | Disposable network-isolated Alertmanager proves same-court and shared-dependency inhibition while peer alerts remain active | Enforced before deployment |
-| Phone paging | Pushover emergency acknowledgement and recovery | Pushover opening/recovery delivery proven in physical Camera 1 episodes; controlled acknowledgement tap remains pending |
-| Independent dead-man | Baseline and active Healthchecks senders with coverage-aware cadence plus read-only Pushover attachment audit | Audit deployed; baseline running, active idle-paused, and Pushover attached to both. Controlled withheld-ping gate remains pending |
+| Phone paging | Pushover emergency acknowledgement and recovery | Operator-visible emergency acknowledgement and one recovery passed on 2026-07-16; Pushover is the sole phone provider |
+| Independent dead-man | Baseline and active Healthchecks senders with coverage-aware cadence plus read-only Pushover attachment audit | Baseline and active withheld-ping gates passed; final state baseline running, active idle-paused, Pushover attached to both, and no duplicate recovery |
 | One-court real fault gate | Camera, network, preview, browser, commentary, score, Egress, YouTube, agent, dead-man faults | Physical Camera 1 loss/recovery, durable paging, same-page viewer continuity, A/V sync, and one-court `c-4` capacity passed. Remaining real fault rows are pending |
 | Eight-court real load/fault gate | Independent compositor per court plus warm spare, eight qualified feeds, two commentary rooms, score on all courts | Final evaluator now binds a fresh schema-2 all-camera monitor/ffprobe qualification artifact to exact source profiles; revised-topology profile and endurance runs remain pending |
 
@@ -156,10 +156,10 @@ the quota gate is closed without creating or billing an extra server. The
 recurring topology is zero event Droplets -> exactly 12 -> zero; the seven
 legacy/test Droplets are not a rollback tier and will not remain beside the
 rehearsal fleet. The protected recovery source, persistent endpoint anchors,
-off-device backup, and firewall contract are also complete. The remaining
-destructive-rehearsal prerequisites are the venue-router endpoint rebind,
-stopping the active Camera 1 publisher, and explicit operator approval to
-remove the seven legacy/test Droplets.
+off-device backup, firewall contract, provider/DNS anchor assignment, and venue
+router rebind are complete. All cameras are expected off. The remaining
+destructive-rehearsal prerequisite is explicit operator approval to remove the
+seven legacy/test Droplets and execute the zero-to-12-to-zero drill.
 
 The Pushover-only monitoring contract was hard-cut over in production after a
 bounded staged release at `2026-07-16T01:11:25Z`. The first attempt exposed a
@@ -175,15 +175,13 @@ incident or fault gate. The production web dashboard remains exact build
 
 ScoreCheck Pushover and both Healthchecks checks are configured. Healthchecks
 has one Pushover integration attached exactly to the baseline and active checks,
-with the unused legacy check left email-only. The remaining provider and
-operator prerequisites are:
+with the unused legacy check left email-only. The baseline and active
+withheld-ping gates, direct emergency acknowledgement, and recovery all passed
+in the operator-visible window on 2026-07-16. The remaining provider and
+operator work is:
 
-1. Prove a withheld baseline ping reaches the phone and recovers without
-   creating duplicate alerts.
-2. Prove the Pushover emergency acknowledgement interaction in an
-   operator-visible window.
-3. Execute the remaining real-feed fault rows without disturbing public output.
-4. Qualify a final normalization/Egress layout that can admit eight concurrent
+1. Execute the remaining real-feed fault rows without disturbing public output.
+2. Qualify a final normalization/Egress layout that can admit eight concurrent
    outputs and verify the required 75 Mbps bonded-upload floor at the venue.
 
 Pushover is the sole phone-alert provider. SMS credentials, fallback behavior,
@@ -235,16 +233,14 @@ baseline published, remained healthy, and retired cleanly without arming a gate
 or creating an incident. That validates the runner baseline and cleanup only;
 the phone-visible Camera 4 fault row remains pending.
 
-1. Prove Pushover acknowledgement and Healthchecks withheld-ping recovery in a
-   scheduled operator-visible window.
-2. Use test feeds to inject the remaining real rows: full-bitrate freeze,
+1. Use test feeds to inject the remaining real rows: full-bitrate freeze,
    black/covered picture, venue/uplink loss, preview normalizer failure, Program
    browser failure, commentary loss/silence/clipping/sync, score corruption,
    Egress stop, YouTube unbind/degradation, agent loss, and dead-man loss.
-3. Preserve detection latency, affected component and camera, unaffected-camera
+2. Preserve detection latency, affected component and camera, unaffected-camera
    evidence, notification deduplication, recovery time, CPU/memory trends, and
    Supabase growth for every real fault.
-4. Expand or reshape capacity so every compositor can admit its assigned live
+3. Expand or reshape capacity so every compositor can admit its assigned live
    outputs, then run eight representative feeds for at least two hours with
    scoring on all cameras and at least two commentary rooms.
    The exact aggregate evaluator and one-watcher-per-host evidence sampler are
@@ -256,5 +252,5 @@ the phone-visible Camera 4 fault row remains pending.
    event manifest; create-time event/temporary/destroy-date tags and post-create
    verification prevent a missing worker from becoming an untracked cost
    orphan while the final pool is assembled.
-5. Qualify the final camera profiles and the 75 Mbps bonded-upload venue floor.
-6. Only after these gates pass, accept monitoring as ready for the shadow event.
+4. Qualify the final camera profiles and the 75 Mbps bonded-upload venue floor.
+5. Only after these gates pass, accept monitoring as ready for the shadow event.

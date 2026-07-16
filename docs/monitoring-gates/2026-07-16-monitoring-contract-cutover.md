@@ -2,9 +2,9 @@
 
 Date: 2026-07-16
 
-Classification: **PASS for the Pushover-only production contract and staged
-deployment path. Operator-visible Pushover acknowledgement and Healthchecks
-withheld-ping gates remain pending.**
+Classification: **PASS for the Pushover-only production contract, staged
+deployment path, operator acknowledgement, and both external Healthchecks
+withheld-ping gates.**
 
 ## Bound revisions
 
@@ -70,14 +70,46 @@ The production dashboard continued serving exact web build `39a6c0ff`. The
 validator fix is deployment-only, so another Vercel rollout was neither needed
 nor performed.
 
-## Remaining gates
+## Operator-visible phone gates
 
-No phone-visible test was sent during this cutover. The runbook still requires
-the exact operator timing approval `READY FOR PUSHOVER GATE` before:
+Nathan supplied the exact `READY FOR PUSHOVER GATE` approval before any
+provider-visible test. Three bounded checks then passed without changing media,
+event state, or output:
 
-1. acknowledging an emergency Pushover notification from the phone; and
-2. withholding one Healthchecks ping long enough to prove one phone alert and
-   one recovery without duplicates.
+1. The baseline Healthchecks sender was withheld at
+   `2026-07-16T01:32:52.750Z`. The provider entered grace, became down after the
+   expected alert boundary, returned up after pings resumed, and produced one
+   phone alert plus one recovery.
+2. A direct emergency Pushover was submitted at `01:48:54Z` and acknowledged
+   from the phone at `01:48:57Z`. The recovery message was accepted once.
+3. The coverage-aware Healthchecks sender was withheld at
+   `01:49:34.100Z`, became down at `01:51:37Z`, recovered after pings resumed,
+   and returned to its correct idle-paused state by `01:53:13Z`.
 
-Those operator interactions and the remaining real fault matrix are not
-converted into passes by this release evidence.
+The final monitor snapshot had no event, incident, or fault gate; baseline was
+running, active was paused, and the single Healthchecks Pushover integration
+was attached to both checks. Protected evidence is stored under the three
+timestamped `~/.config/scorecheck/fault-evidence` directories. Provider receipt
+identifiers and credentials are intentionally omitted from this report.
+
+## Stable endpoint cutover
+
+After every camera publisher was confirmed off and Nathan reported
+`ROUTER ONLINE`, the retained ingest and commentary Reserved IPv4s were attached
+to the exact existing Droplet IDs. `preview`, `rtc`, and `turn` were updated and
+both Cloudflare and Google resolvers converged. The venue router was then
+rebound from the ordinary ingest address to the retained ingest anchor through
+the protected `rebind-ingest-anchor.sh` transaction.
+
+Final verification at `2026-07-16T02:13:11.696Z` proved a fresh WireGuard
+handshake, four new and zero old policy rules, two new and zero old firewall
+rules, both RTMP and SRT route lookups through `connectify0` table `900`, zero
+camera flows, Speedify `CONNECTED`, runtime `CONNECTED_ROUTED`, and exactly one
+watchdog process. Public ingest health, RTMP, LiveKit HTTPS, and TURN/TLS passed;
+the monitor remained healthy with 6/6 fresh agents and all eight cameras
+expected off. The protected router backup and provider/DNS rollback record are
+retained with the completed cutover evidence.
+
+These gates close the phone-provider and persistent-endpoint prerequisites.
+They do not convert the remaining real fault matrix or eight-output endurance
+gate into passes.

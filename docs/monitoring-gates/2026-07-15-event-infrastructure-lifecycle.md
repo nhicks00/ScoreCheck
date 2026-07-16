@@ -113,12 +113,15 @@ intentionally persistent:
 - the protected production recovery source and provider credentials; and
 - the venue router, Speedify account, camera settings, and WireGuard peer.
 
-The two SFO2 Reserved IPv4 anchors were allocated and independently verified as
-unassigned on 2026-07-15. Their protected binding is stored outside Git. The
-venue-router peer must still be rebound to the stable ingest address before the
-seven legacy/test Droplets can be treated as safely disposable. The router-side
-WireGuard private configuration must also be captured during the next on-site
-router access window. The server-side configuration is already sealed.
+The two SFO2 Reserved IPv4 anchors were allocated on 2026-07-15. On 2026-07-16
+they were attached to the exact existing ingest and commentary Droplet IDs,
+`preview`, `rtc`, and `turn` converged through authoritative and recursive DNS,
+and the venue-router peer was rebound to the stable ingest address. A protected
+router sysupgrade backup and transaction-specific router rollback directory are
+retained. The fail-closed rules, Speedify route, fresh WireGuard handshake, and
+singleton watchdog all passed after cutover. The seven legacy/test Droplets can
+now be treated as disposable only at the separately approved destructive drill
+boundary.
 
 The DigitalOcean API independently reported an active account, a Droplet limit
 of 15, seven active Droplets, and eight free slots at
