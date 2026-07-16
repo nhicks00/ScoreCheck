@@ -94,6 +94,9 @@ remaining black-picture and camera-silence gates are run.
 The host-local analyzer hard-cutover was implemented and its one- and two-stream
 c-4 capacity gates passed on 2026-07-16. This does not revise the result above:
 the browser-authoritative gate still failed the 20-second SLA. Production
-contract-v3 cutover and repeat Pushover freeze/black/audio gates remain required.
-See `2026-07-16-host-local-content-analyzer.md` for the new authority contract,
-private-network boundary, capacity evidence, and remaining acceptance.
+contract-v3 and the repeat host-local Pushover gates are now complete. The
+host-local repeated-picture result improved slightly to 27.110 seconds but
+still failed the 20-second target; black also missed its target, while camera
+silence passed. See `2026-07-16-host-local-content-analyzer.md` for the authority
+contract and capacity evidence, and
+`2026-07-16-host-local-content-fault-gates.md` for the final phone-gate record.

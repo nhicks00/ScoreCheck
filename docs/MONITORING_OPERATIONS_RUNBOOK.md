@@ -584,10 +584,11 @@ active commentary rooms. Acceptance requires:
 - Eight-court mapping and Egress capacity visibility: passed while idle. Egress
   busy workers are now classified as healthy, not unavailable, and paging is
   gated to assigned live work.
-- Monitoring contract v2 media profiles: deployed to all six agents. All eight
-  raw feeds report bounded source protocol/mode, video profile/resolution, and
-  audio format. Push-SRT courts expose RTT and packet counters; pull-SRT and
-  RTMP paths remain explicitly unavailable rather than fabricated.
+- Monitoring contract v3 media and host-local content profiles: deployed to all
+  six agents. All eight raw feeds report bounded source protocol/mode, video
+  profile/resolution, and audio format. Push-SRT courts expose RTT and packet
+  counters; pull-SRT and RTMP paths remain explicitly unavailable rather than
+  fabricated.
 - Production revision `34739305cfc439123ec070e0231ce2bbe1853b84` runs 49
   syntax-validated Prometheus rules with executable timing/isolation fixtures.
   Its release gate passed 141 correlator/monitor tests and 27 disposable
@@ -613,14 +614,20 @@ active commentary rooms. Acceptance requires:
   and left Cameras 2-8 isolated. The false expiry-recovery and reused-fingerprint
   defects are closed.
 - Production web and monitor builds: passed.
-- Healthchecks baseline delivery and active idle-pause lifecycle: configured;
-  the deployed read-only audit confirms the Pushover channel is attached to both
-  required checks. Only the controlled withheld-ping phone delivery/recovery
-  gate remains outstanding.
+- Healthchecks baseline delivery and active idle-pause lifecycle: passed. The
+  deployed read-only audit confirms the Pushover channel is attached to both
+  required checks, and both controlled withheld-ping delivery/recovery gates
+  passed with protected evidence.
 - Pushover delivery and one-time recovery: operational. A false Egress storm
   exposed an idle/busy semantic error and over-broad recovery fan-out; both are
-  corrected in production. A controlled acknowledgement test is still required.
-  SMS is not part of the monitoring contract.
+  corrected in production. The controlled emergency acknowledgement test
+  passed. SMS is not part of the monitoring contract.
+- Host-local Camera 4 content gates: durable opening, one Pushover opening,
+  recovery, one recovery delivery, and peer isolation passed for repeated
+  picture, uniform black, and camera silence. Silence met its 75-second monitor
+  target. Repeated picture took 27.110 seconds against a 20-second target, and
+  black took 33.230 seconds against a 25-second target; those latency gates
+  remain failed without lowering detector thresholds.
 - Authenticated production visual check: passed against the live read-only API
   at 1600x1000 and 390x844. The dashboard shows eight permanent Camera labels,
   two cards per desktop row and one per narrow mobile row, low-data 256x144

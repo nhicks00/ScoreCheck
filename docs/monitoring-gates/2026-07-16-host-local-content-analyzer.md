@@ -1,8 +1,8 @@
 # Host-Local Camera Content Analyzer Gate
 
 Date: 2026-07-16
-Result: implementation and c-4 capacity gate passed; production cutover and
-phone fault gates pending
+Result: implementation, c-4 capacity, and production hard cutover passed;
+functional phone gates passed with two monitor-latency SLA misses
 
 ## Decision
 
@@ -96,13 +96,17 @@ Protected evidence:
 - summary SHA-256
   `d70ffb143c956954cbe3cd93ff300ac54c07055a5f305d4d0e3687bf5a3b1c53`
 
-## Remaining acceptance
+## Production and phone-gate result
 
-The analyzer may be deployed only in an idle same-revision contract-v3
-cutover. After live configuration and freshness verification, repeat the
-isolated Camera 4 synthetic freeze, black-picture, and camera-audio-silence
-gates with Pushover evidence. Missing camera audio and prolonged camera silence
-are critical after their bounded holds; clipping remains warning-only. The
-previous browser-based freeze gate remains a
-functional pass but a 20-second SLA failure; this work is not accepted until
-the host-local gate proves the required opening latency and clean recovery.
+The idle same-revision contract-v3 cutover and live freshness verification are
+complete. Isolated Camera 4 repeated-picture, black-picture, and camera-silence
+gates each passed durable incident creation, one Pushover opening, clean
+recovery, one recovery delivery, and peer-court isolation. Silence met its
+75-second monitor-classification SLA. Repeated picture was classified in
+27.110 seconds against a 20-second target, and black was classified in 33.230
+seconds against a 25-second target, so those two latency gates remain failed.
+
+See `2026-07-16-host-local-content-fault-gates.md` for the exact timeline,
+protected evidence checksums, and remaining acceptance. Missing camera audio
+and prolonged camera silence remain critical after their bounded holds;
+clipping remains warning-only.
