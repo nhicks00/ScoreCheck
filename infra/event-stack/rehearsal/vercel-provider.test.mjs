@@ -92,10 +92,12 @@ test("reconciles an ambiguously created deployment after a provider request time
 test("gives deployment creation a longer bounded response window", async () => {
   assert.equal(DEPLOYMENT_CREATE_TIMEOUT_MS, 120_000);
   let deploymentSignal;
+  let deploymentUrl;
   const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, fetchImpl: async (url, init) => {
     if (url.includes("/v6/deployments")) return response(200, { deployments: [], pagination: {} });
     if (url.includes("/v13/deployments") && init.method === "POST") {
       deploymentSignal = init.signal;
+      deploymentUrl = new URL(url);
       return response(200, { id: "dpl_slow", projectId: project.id, name, target: "production", readyState: "BUILDING", meta: { scorecheckRehearsalGeneration: generationId }, alias: [] });
     }
     throw new Error(`unexpected ${init.method} ${url}`);
@@ -104,6 +106,9 @@ test("gives deployment creation a longer bounded response window", async () => {
   assert.equal(result.id, "dpl_slow");
   assert.equal(deploymentSignal.aborted, false);
   assert.ok(deploymentSignal instanceof AbortSignal);
+  assert.equal(deploymentUrl.searchParams.get("forceNew"), "1");
+  assert.equal(deploymentUrl.searchParams.get("skipAutoDetectionConfirmation"), "1");
+  assert.equal(deploymentUrl.searchParams.get("teamId"), "team");
 });
 
 test("retries a definite transient deployment failure only after bounded absence proof", async () => {

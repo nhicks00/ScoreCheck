@@ -53,7 +53,12 @@ export class VercelRehearsalProvider {
     let lastError = null;
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
-        return normalizeDeployment(await this.#request("POST", "/v13/deployments", body, { timeoutMs: DEPLOYMENT_CREATE_TIMEOUT_MS }), normalizedProject, generationId);
+        return normalizeDeployment(await this.#request(
+          "POST",
+          "/v13/deployments?forceNew=1&skipAutoDetectionConfirmation=1",
+          body,
+          { timeoutMs: DEPLOYMENT_CREATE_TIMEOUT_MS }
+        ), normalizedProject, generationId);
       } catch (error) {
         if (!retryableCreateError(error)) throw error;
         lastError = error;
