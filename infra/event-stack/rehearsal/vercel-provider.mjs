@@ -5,9 +5,10 @@ const PROJECT_NAME = /^scorecheck-rehearsal-[a-z0-9-]{8,40}$/;
 const SHA = /^[a-f0-9]{40}$/;
 
 export class VercelRehearsalProvider {
-  constructor({ token, teamId, fetchImpl = globalThis.fetch, sleep = delay }) {
+  constructor({ token, teamId, teamSlug = null, fetchImpl = globalThis.fetch, sleep = delay }) {
     this.token = required(token, "Vercel token");
     this.teamId = required(teamId, "Vercel team id");
+    this.team = teamSlug === null ? null : normalizeTeam({ id: this.teamId, slug: teamSlug }, this.teamId);
     this.fetchImpl = fetchImpl;
     this.sleep = sleep;
   }
@@ -16,25 +17,26 @@ export class VercelRehearsalProvider {
     validateProjectName(name);
     const existing = await this.findProject(name);
     if (existing) return existing;
+    const team = await this.#team();
     const created = await this.#request("POST", "/v11/projects", {
       name,
       framework: "nextjs",
       rootDirectory: "apps/web"
     });
-    return normalizeProject(created, name);
+    return normalizeProject(created, name, projectOrigin(name, team.slug));
   }
 
   async findProject(name) {
     validateProjectName(name);
-    const existing = await this.#projectOrNull(name);
-    return existing ? normalizeProject(existing, name) : null;
+    const [existing, team] = await Promise.all([this.#projectOrNull(name), this.#team()]);
+    return existing ? normalizeProject(existing, name, projectOrigin(name, team.slug)) : null;
   }
 
   async ensureDeployment({ project, generationId, repoId, ref, sha, environment }) {
-    const normalizedProject = normalizeProject(project, project.name);
+    const normalizedProject = normalizeProject(project, project.name, project.origin);
     validateGeneration(generationId);
     validateGitSource({ repoId, ref, sha });
-    validateEnvironment(environment, normalizedProject.name);
+    validateEnvironment(environment, normalizedProject.origin);
     const matches = (await this.#listDeployments(normalizedProject.id))
       .filter((entry) => entry.meta?.scorecheckRehearsalGeneration === generationId);
     if (matches.length > 1) throw new Error("Vercel returned multiple deployments for the rehearsal generation");
@@ -54,7 +56,7 @@ export class VercelRehearsalProvider {
   async getDeployment(deploymentId, project, generationId) {
     validateProviderId(deploymentId, "deployment id");
     const value = await this.#request("GET", `/v13/deployments/${encodeURIComponent(deploymentId)}`);
-    return normalizeDeployment(value, normalizeProject(project, project.name), generationId);
+    return normalizeDeployment(value, normalizeProject(project, project.name, project.origin), generationId);
   }
 
   async waitReady({ deploymentId, project, generationId, timeoutMs = 15 * 60_000, intervalMs = 5_000 }) {
@@ -113,6 +115,12 @@ export class VercelRehearsalProvider {
     throw new Error("Vercel deployment pagination exceeded the safety limit");
   }
 
+  async #team() {
+    if (this.team) return this.team;
+    this.team = normalizeTeam(await this.#request("GET", `/v2/teams/${encodeURIComponent(this.teamId)}`), this.teamId);
+    return this.team;
+  }
+
   async #request(method, path, body = undefined) {
     const separator = path.includes("?") ? "&" : "?";
     const response = await this.fetchImpl(`${API}${path}${separator}teamId=${encodeURIComponent(this.teamId)}`, {
@@ -139,13 +147,34 @@ export function rehearsalProjectName(namespace) {
   return name;
 }
 
-function normalizeProject(value, expectedName) {
+function normalizeProject(value, expectedName, expectedOrigin) {
   if (!value || typeof value !== "object" || String(value.name) !== expectedName || value.framework !== "nextjs" || value.rootDirectory !== "apps/web") {
     throw new Error("Vercel rehearsal project contract is invalid");
   }
   validateProviderId(String(value.id), "project id");
   validateProjectName(value.name);
-  return { id: String(value.id), name: value.name, origin: `https://${value.name}.vercel.app`, framework: value.framework, rootDirectory: value.rootDirectory };
+  validateProjectOrigin(expectedOrigin, value.name);
+  if (value.origin !== undefined && value.origin !== expectedOrigin) throw new Error("Vercel rehearsal project origin changed");
+  return { id: String(value.id), name: value.name, origin: expectedOrigin, framework: value.framework, rootDirectory: value.rootDirectory };
+}
+
+function normalizeTeam(value, expectedId) {
+  if (!value || String(value.id) !== expectedId || typeof value.slug !== "string" || !/^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/.test(value.slug)) {
+    throw new Error("Vercel rehearsal team contract is invalid");
+  }
+  return { id: expectedId, slug: value.slug };
+}
+
+function projectOrigin(name, teamSlug) {
+  const origin = `https://${name}-${teamSlug}.vercel.app`;
+  validateProjectOrigin(origin, name);
+  return origin;
+}
+
+function validateProjectOrigin(value, name) {
+  if (typeof value !== "string" || !value.startsWith(`https://${name}-`) || !/^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(value) || new URL(value).hostname.length > 253) {
+    throw new Error("Vercel rehearsal project origin is invalid");
+  }
 }
 
 function normalizeDeployment(value, project, generationId) {
@@ -170,13 +199,13 @@ function normalizeDeployment(value, project, generationId) {
   };
 }
 
-function validateEnvironment(value, projectName) {
+function validateEnvironment(value, expectedOrigin) {
   if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length === 0) throw new Error("Vercel rehearsal environment is required");
   if (value.NEXT_PUBLIC_SCORECHECK_REHEARSAL !== "true") throw new Error("Vercel rehearsal environment marker is missing");
   if (Object.keys(value).some((key) => key.startsWith("SUPABASE_"))) throw new Error("Vercel rehearsal must not use production Supabase configuration");
   const serialized = JSON.stringify(value);
   if (serialized.includes("score.beachvolleyballmedia.com") || serialized.includes("www.beachvolleyballmedia.com")) throw new Error("Vercel rehearsal environment references a production web origin");
-  if (value.SCORECHECK_REHEARSAL_ORIGIN !== `https://${projectName}.vercel.app`) throw new Error("Vercel rehearsal origin does not match the isolated project");
+  if (value.SCORECHECK_REHEARSAL_ORIGIN !== expectedOrigin) throw new Error("Vercel rehearsal origin does not match the isolated project");
   for (const [key, raw] of Object.entries(value)) {
     if (!/^[A-Z][A-Z0-9_]*$/.test(key) || typeof raw !== "string" || /[\r\n\0]/.test(raw)) throw new Error("Vercel rehearsal environment is invalid");
   }
