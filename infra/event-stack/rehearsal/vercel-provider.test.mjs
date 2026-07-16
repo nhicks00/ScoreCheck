@@ -18,7 +18,7 @@ const teamSlug = "test-team";
 const origin = `https://${name}-${teamSlug}.vercel.app`;
 const repository = { slug: "nhicks00/ScoreCheck", repoId: "123" };
 const project = { id: "prj_test123", name, origin, framework: "nextjs", rootDirectory: "apps/web", repository };
-const projectResponse = { id: project.id, name, framework: "nextjs", rootDirectory: "apps/web", link: { type: "github", org: "nhicks00", repo: "ScoreCheck", repoId: 123 } };
+const projectResponse = { id: project.id, name, framework: "nextjs", rootDirectory: "apps/web", link: { type: "github", org: "nhicks00", repo: "ScoreCheck", repoId: 123 }, ssoProtection: null };
 const generationId = "generation-1234";
 const environment = { NEXT_PUBLIC_SCORECHECK_REHEARSAL: "true", SCORECHECK_REHEARSAL_ORIGIN: origin, PROGRAM_PAGE_TOKEN: "secret" };
 
@@ -39,6 +39,8 @@ test("creates an isolated Next.js project and adopts it by deterministic name", 
   assert.equal((await client.ensureProject({ name, repository })).id, "prj_test123");
   assert.equal((await client.ensureProject({ name, repository })).id, "prj_test123");
   assert.equal(requests.filter((entry) => entry.init.method === "POST").length, 1);
+  assert.equal(requests.filter((entry) => entry.init.method === "PATCH").length, 2);
+  assert.deepEqual(JSON.parse(requests.find((entry) => entry.init.method === "PATCH").init.body), { ssoProtection: null });
   assert.deepEqual(JSON.parse(requests.find((entry) => entry.init.method === "POST").init.body).gitRepository, { type: "github", repo: "nhicks00/ScoreCheck" });
 });
 
@@ -47,6 +49,7 @@ test("gives linked project creation a longer bounded window", async () => {
   let createSignal;
   const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, fetchImpl: async (url, init) => {
     if (init.method === "GET") return response(404, { error: { code: "not_found" } });
+    if (init.method === "PATCH") return response(200, projectResponse);
     createSignal = init.signal;
     return response(200, projectResponse);
   }});
@@ -60,6 +63,7 @@ test("adopts a linked project whose create response timed out", async () => {
   let postCount = 0;
   const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, sleep: async () => {}, fetchImpl: async (url, init) => {
     if (init.method === "GET") return created ? response(200, projectResponse) : response(404, { error: { code: "not_found" } });
+    if (init.method === "PATCH") return response(200, projectResponse);
     postCount += 1;
     created = true;
     throw new DOMException("request timed out", "TimeoutError");
@@ -254,9 +258,9 @@ test("derives the isolated production origin from the authenticated Vercel team"
   const requests = [];
   const client = new VercelRehearsalProvider({ token: "token", teamId: "team_123", fetchImpl: async (url, init) => {
     requests.push({ url, init });
-    if (url.includes("/v9/projects/")) return response(404, { error: { code: "not_found" } });
+    if (url.includes("/v9/projects/") && init.method === "GET") return response(404, { error: { code: "not_found" } });
     if (url.includes("/v2/teams/team_123")) return response(200, { id: "team_123", slug: "volleyfest" });
-    if (init.method === "POST") return response(200, { ...projectResponse, origin: undefined });
+    if (init.method === "POST" || init.method === "PATCH") return response(200, { ...projectResponse, origin: undefined });
     throw new Error(`unexpected ${init.method} ${url}`);
   }});
   const created = await client.ensureProject({ name, repository });
@@ -272,6 +276,18 @@ test("rejects an existing isolated project that is not linked to the exact repos
     fetchImpl: async () => response(200, { ...projectResponse, link: null })
   });
   await assert.rejects(() => client.ensureProject({ name, repository }), /Git repository contract/);
+});
+
+test("fails closed when Vercel Authentication remains enabled", async () => {
+  const client = new VercelRehearsalProvider({
+    token: "token",
+    teamId: "team",
+    teamSlug,
+    fetchImpl: async (url, init) => init.method === "PATCH"
+      ? response(200, { ...projectResponse, ssoProtection: { deploymentType: "all_except_custom_domains" } })
+      : response(200, projectResponse)
+  });
+  await assert.rejects(() => client.ensureProject({ name, repository }), /retained Vercel Authentication/);
 });
 
 test("rejects production web origins and Supabase environment", async () => {

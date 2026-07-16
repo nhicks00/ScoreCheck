@@ -20,7 +20,7 @@ export class VercelRehearsalProvider {
     validateProjectName(name);
     const normalizedRepository = normalizeRepository(repository);
     const existing = await this.findProject(name, normalizedRepository);
-    if (existing) return existing;
+    if (existing) return this.#ensureUnprotectedProject(existing);
     const team = await this.#team();
     const origin = projectOrigin(name, team.slug);
     const body = {
@@ -32,13 +32,14 @@ export class VercelRehearsalProvider {
     let lastError = null;
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
-        return normalizeProject(await this.#request("POST", "/v11/projects", body, { timeoutMs: PROJECT_CREATE_TIMEOUT_MS }), name, origin, normalizedRepository);
+        const project = normalizeProject(await this.#request("POST", "/v11/projects", body, { timeoutMs: PROJECT_CREATE_TIMEOUT_MS }), name, origin, normalizedRepository);
+        return this.#ensureUnprotectedProject(project);
       } catch (error) {
         const conflict = error instanceof VercelRequestError && error.status === 409;
         if (!conflict && !retryableCreateError(error)) throw error;
         lastError = error;
         const reconciled = await this.#waitForProject(name, origin, normalizedRepository);
-        if (reconciled) return reconciled;
+        if (reconciled) return this.#ensureUnprotectedProject(reconciled);
         if (conflict) throw error;
       }
     }
@@ -185,6 +186,12 @@ export class VercelRehearsalProvider {
       seen.add(until);
     }
     throw new Error("Vercel deployment pagination exceeded the safety limit");
+  }
+
+  async #ensureUnprotectedProject(project) {
+    const updated = await this.#request("PATCH", `/v9/projects/${encodeURIComponent(project.id)}`, { ssoProtection: null });
+    if (updated?.ssoProtection !== null) throw new Error("Vercel rehearsal project retained Vercel Authentication");
+    return normalizeProject(updated, project.name, project.origin, project.repository);
   }
 
   async #waitForProject(name, origin, repository, polls = 24, intervalMs = 5_000) {
