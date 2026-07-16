@@ -1,8 +1,9 @@
 # Host-Local Camera Content Fault Gates
 
 Date: 2026-07-16
-Result: functional gates passed; freeze and black monitor-latency SLAs failed
-again in the phone-visible full-frame repeat; silence monitor-latency SLA passed
+Result: functional gates passed; the one-second private polling/evaluation
+cutover reduced freeze and black latency but both monitor SLAs remain narrowly
+failed; silence monitor-latency SLA passed
 
 ## Scope
 
@@ -38,6 +39,37 @@ recovery, and peer-isolation checks. Neither timing target passed.
 | Repeated picture repeat | `17:33:01.934Z` | `17:33:28.825Z` | `26.891s` | `17:33:26.085Z` | `17:33:31.494Z` | `29.560s` | `20s` | Functional pass; monitor SLA fail; phone latency observed |
 | Uniform black repeat | `17:38:43.788Z` | `17:39:13.272Z` | `29.484s` | `17:39:11.085Z` | `17:39:12.683Z` | `28.895s` | `25s` | Functional pass; monitor SLA fail; phone latency observed |
 
+## One-second private-loop hard cutover and repeat
+
+Production revision `239f019ec87a136bd9b277f1f0f40a87c518044e`
+changed only the monitor service's six private-agent poll loop and Prometheus
+rule evaluation from five seconds to one second. A single-flight guard prevents
+overlapping agent polls and exposes skipped cycles. Supabase control-plane
+refresh, the 60-second durable checkpoint, YouTube, Healthchecks, notification
+status, and provider polling cadences were not increased. Prometheus,
+Alertmanager, Caddy, and node-exporter retained their exact container
+identities. A 120-second post-cutover hold passed 13/13 samples with zero
+health failures, alerts, incidents, gates, restarts, or skipped polls; maximum
+snapshot age was `1.257s`.
+
+The first deployment attempt made no runtime change because the staged guard
+still required obsolete monitoring contract version 2 while production
+correctly returned version 3. Revision `239f019e` includes a regression-tested
+contract-v3 guard, after which the bounded service-only deployment passed.
+
+| Scenario | Fault injected | First monitor issue | Monitor latency | Durable incident | Pushover submitted | Pushover latency | Target | Classification |
+| --- | --- | --- | ---: | --- | --- | ---: | ---: | --- |
+| Repeated picture optimized repeat | `18:02:52.415Z` | `18:03:14.874Z` | `22.459s` | `18:03:15.085Z` | `18:03:20.635Z` | `28.220s` | `20s` | Functional pass; latency improved `4.432s`; monitor SLA still fails by `2.459s` |
+| Uniform black optimized repeat | `18:07:21.225Z` | `18:07:47.535Z` | `26.310s` | `18:07:48.085Z` | `18:07:53.990Z` | `32.765s` | `25s` | Functional pass; latency improved `3.174s`; monitor SLA still fails by `1.310s` |
+
+The optimized freeze recorder passed 181 samples and the black recorder 180.
+Both had zero sampling errors, stale snapshots, collector failures,
+notification/dead-man failures, unexpected incidents, or peer-state changes.
+Each recurrence created one new durable episode, one opening Pushover, and one
+recovery Pushover. Both viewers recovered at 30 fps with zero RTP loss, dropped
+frames, WebRTC freezes, reconnects, or reloads. Final cleanup again left no
+event, gate, active incident, alert, live synthetic path, or viewer.
+
 The repeated-picture recorder captured 180 samples and the black recorder 181.
 Both had zero sampling errors, stale snapshots, collector failures,
 notification/dead-man failures, unexpected incidents, or peer-state changes.
@@ -61,12 +93,13 @@ incident semantics, or notification behavior.
 
 The production thresholds remain unchanged: repeated picture becomes critical
 after 15 seconds, uniform black after 20 seconds, and camera silence after 60
-seconds. The analyzer requests one video sample per second but currently
-decodes keyframes only; this test source produced effective visual updates
-about five seconds apart. The monitor service polls the private agent snapshots
-every five seconds. Raw media arrival precedes the persistence window. Those
-stages account for the additional observed delay, but they do not convert a
-missed runbook SLA into a pass.
+seconds. The analyzer decodes the complete stream and downsamples to 160x90 at
+one sample per second. The optimized repeat removes most avoidable private poll
+and rule-evaluation delay, but the test feed's production-like 2.5-second SRT
+latency plus decoding, normalization, and analyzer propagation still consumed
+roughly six to seven seconds before persistence could begin. The remaining
+`1.310-2.459s` misses are therefore a pipeline/SLA boundary, not evidence that
+Supabase or provider polling should increase. They remain failures.
 
 This gate produced no evidence that Supabase polling must increase. Analyzer
 samples are held in agent memory, private snapshot polling is independent of
@@ -99,6 +132,19 @@ Phone-visible repeat evidence directory:
 - `black-evidence.jsonl` SHA-256
   `92010ab0ae1a9420592f2fe85671359d991ae9233cae34666539a6e0452e139b`
 
+Optimized private-loop repeat evidence directory:
+
+`~/.config/scorecheck/cutovers/pushover-timing-optimized-20260716T180119Z/`
+
+- `freeze-controller.jsonl` SHA-256
+  `fd805b0d95c2820dc6211dbb6a126ef1a3b647613f98bf23f56743d636471fd5`
+- `freeze-evidence.jsonl` SHA-256
+  `232bfd4cdba2a6d0975fd5ddd276e51125bc5392f1865cc7f27dd941031222d0`
+- `black-controller.jsonl` SHA-256
+  `fa827498899d580a538879a75be2479b07bd9604758b01f36b9cda08e639656c`
+- `black-evidence.jsonl` SHA-256
+  `315afb68ba43a7d4b9ba56c853c57c38a464a373fd490baa002b727bc598fd9d`
+
 ## Remaining acceptance
 
 Do not lower the content-persistence thresholds to manufacture a latency pass.
@@ -106,9 +152,11 @@ The full-frame, one-frame-per-second cadence hard cutover passed local
 functional validation, the one- and two-analyzer production-class `c-4`
 capacity gates, and an idle all-compositor production deployment. See
 `2026-07-16-content-analyzer-cadence-candidate.md`. The explicit phone-visible
-repeat is now complete and confirms the remaining delay is systematic rather
-than an operator-window artifact. Before acceptance, either reduce the
-collection/evaluation latency and repeat both gates, or explicitly revise the
-operator SLA with the persistence thresholds unchanged. The remaining real
-one-court fault rows and the full eight-court endurance and isolation gate are
-still required.
+repeat and the one-second private-loop optimization are complete. The safe
+central scheduling improvement is deployed and verified, but the physical
+media/persistence floor still exceeds both original targets. Before timing
+acceptance, choose either host-local alert evaluation ahead of the central SRT
+path or revise the operator targets to at least 25 seconds for repeated picture
+and 30 seconds for uniform black. Do not lower persistence thresholds or media
+latency solely to manufacture a pass. The remaining real one-court rows and the
+full eight-court endurance and isolation gate are still required.
