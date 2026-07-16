@@ -22,6 +22,7 @@ test("starts, adopts, and stops the exact commentary participant", async () => {
   const config = buildCommentaryClientConfig({ court: 1, generationId: "generation-1234", material, rtcHost: "rtc-test.example.com", evidenceDirectory: directory });
   let processLines = "800 unrelated";
   const signals = [];
+  let unrefCount = 0;
   const manager = new CommentaryClientManager({
     sleep: async () => {},
     runner: async (command, args) => {
@@ -35,12 +36,13 @@ test("starts, adopts, and stops the exact commentary participant", async () => {
       assert.equal(args.includes(material.commentary.apiSecret), false);
       assert.equal(options.env.LIVEKIT_API_SECRET, material.commentary.apiSecret);
       processLines += `\n500 lk ${args.join(" ")}`;
-      return { pid: 500 };
+      return { pid: 500, unref: () => { unrefCount += 1; } };
     },
     killImpl: (pid, signal) => { signals.push({ pid, signal }); processLines = processLines.split("\n").filter((line) => !line.startsWith("500 ")).join("\n"); }
   });
   await manager.preflight(config);
   assert.equal((await manager.ensure(config)).pid, 500);
+  assert.equal(unrefCount, 1);
   assert.equal((await manager.ensure(config)).adopted, true);
   await manager.stop({ marker: config.marker });
   assert.deepEqual(signals, [{ pid: -500, signal: "SIGTERM" }]);

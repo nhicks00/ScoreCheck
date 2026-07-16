@@ -36,6 +36,8 @@ export class PoolSamplerRuntime {
     try {
       child = this.spawnImpl(this.nodePath, args, { detached: true, stdio: ["ignore", log.fd, log.fd] });
       if (!Number.isInteger(child.pid) || child.pid < 2) throw new Error("pool host sampler did not return a process id");
+      if (typeof child.unref !== "function") throw new Error("pool host sampler cannot be detached from the operator");
+      child.unref();
     } finally {
       await log.close();
     }

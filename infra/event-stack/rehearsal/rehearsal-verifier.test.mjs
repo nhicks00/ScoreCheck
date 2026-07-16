@@ -28,7 +28,7 @@ function snapshot(mode) {
     agents,
     courts: Array.from({ length: 8 }, (_, index) => {
       const court = index + 1;
-      const path = (branch) => ({ ready: branch === "raw" ? raw : active, readerCount: active ? 1 : 0, inboundBitrateBps: branch === "raw" && raw ? 2_500_000 : active ? 2_000_000 : 0, frameErrors: 0, sourceMode: branch === "raw" && raw ? "PUSH" : null, sourceProtocol: branch === "raw" && raw ? (court <= 2 ? "RTMP" : "SRT") : null, videoCodec: branch === "raw" && raw ? "H264" : "H264", audioCodec: branch === "raw" && raw ? "MPEG4Audio" : "Opus", videoWidth: 1280, videoHeight: 720 });
+      const path = (branch) => ({ ready: branch === "raw" ? raw : active, readerCount: active ? 1 : 0, inboundBitrateBps: branch === "raw" && raw ? 2_500_000 : active ? 2_000_000 : 0, frameErrors: 0, sourceMode: branch === "raw" && raw ? "PUSH" : null, sourceProtocol: branch === "raw" && raw ? (court <= 2 ? "RTMP" : "SRT") : null, videoCodec: branch === "raw" && raw ? "H264" : "H264", audioCodec: branch === "raw" && raw ? "AAC" : "Opus", videoWidth: 1280, videoHeight: 720 });
       return {
         courtNumber: court,
         paths: { raw: path("raw"), preview: path("preview"), program: path("program") },
@@ -84,6 +84,12 @@ test("reports a missing agent host snapshot without throwing", () => {
 
 test("accepts all eight protocol-correct raw camera feeds", () => {
   assert.deepEqual(rawProblems(snapshot("raw"), now), []);
+});
+
+test("hard-cuts raw audio telemetry to the monitor AAC label", () => {
+  const value = snapshot("raw");
+  value.courts[0].paths.raw.audioCodec = "MPEG4Audio";
+  assert.match(rawProblems(value, now).join("; "), /raw codec\/profile/);
 });
 
 test("accepts exact one-reader program chains, clean browser quality, commentary, Egress, and spare", () => {

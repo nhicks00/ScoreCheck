@@ -37,11 +37,12 @@ test("starts and stops an exact detached publisher without killing peers", async
   const config = buildSyntheticPublisherConfig({ court: 1, generationId: "generation-1234", host: "preview-test.example.com", user: "publisher-user-1", password: "publisher-password-1-long", evidenceDirectory: directory });
   let processLines = "901 unrelated-service";
   const signals = [];
+  let unrefCount = 0;
   const manager = new SyntheticPublisherManager({
     sleep: async () => {},
     spawnImpl: (_command, args) => {
       processLines += `\n500 ffmpeg ${args.join(" ")}`;
-      return { pid: 500 };
+      return { pid: 500, unref: () => { unrefCount += 1; } };
     },
     runner: async () => ({ stdout: processLines, stderr: "" }),
     killImpl: (pid, signal) => {
@@ -52,6 +53,7 @@ test("starts and stops an exact detached publisher without killing peers", async
   const started = await manager.ensure(config);
   assert.equal(started.pid, 500);
   assert.equal(started.adopted, false);
+  assert.equal(unrefCount, 1);
   await manager.stop({ marker: config.marker });
   assert.deepEqual(signals, [{ pid: -500, signal: "SIGTERM" }]);
   assert.match(processLines, /unrelated-service/);

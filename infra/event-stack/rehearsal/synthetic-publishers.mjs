@@ -105,6 +105,8 @@ export class SyntheticPublisherManager {
     try {
       child = this.spawnImpl(config.ffmpegPath, config.args, { detached: true, stdio: ["ignore", log.fd, log.fd] });
       if (!Number.isInteger(child.pid) || child.pid < 2) throw new Error("synthetic publisher did not return a process id");
+      if (typeof child.unref !== "function") throw new Error("synthetic publisher process cannot be detached from the operator");
+      child.unref();
     } finally {
       await log.close();
     }

@@ -93,6 +93,8 @@ export class CommentaryClientManager {
         stdio: ["ignore", log.fd, log.fd]
       });
       if (!Number.isInteger(child.pid) || child.pid < 2) throw new Error("commentary rehearsal client did not return a process id");
+      if (typeof child.unref !== "function") throw new Error("commentary rehearsal client cannot be detached from the operator");
+      child.unref();
     } finally {
       await log.close();
     }

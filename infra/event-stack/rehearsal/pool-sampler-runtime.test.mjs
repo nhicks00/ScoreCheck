@@ -23,19 +23,21 @@ test("starts, adopts, and exactly stops the protected pool sampler", async () =>
   const evidenceDirectory = await mkdtemp(join(tmpdir(), "scorecheck-pool-runtime-"));
   let processLines = "800 unrelated";
   const signals = [];
+  let unrefCount = 0;
   const runtime = new PoolSamplerRuntime({
     repoRoot: "/repo",
     sshKey: "/keys/event",
     knownHosts: "/keys/known",
     nodePath: "/usr/bin/node",
     sleep: async () => {},
-    spawnImpl: (_command, args) => { processLines += `\n700 /usr/bin/node ${args.join(" ")}`; return { pid: 700 }; },
+    spawnImpl: (_command, args) => { processLines += `\n700 /usr/bin/node ${args.join(" ")}`; return { pid: 700, unref: () => { unrefCount += 1; } }; },
     runner: async () => ({ stdout: processLines, stderr: "" }),
     killImpl: (pid, signal) => { signals.push({ pid, signal }); processLines = processLines.split("\n").filter((line) => !line.startsWith("700 ")).join("\n"); }
   });
   const started = await runtime.ensure({ manifest, lifecycleState, evidenceDirectory });
   assert.equal(started.pid, 700);
   assert.equal(started.adopted, false);
+  assert.equal(unrefCount, 1);
   assert.equal((await runtime.ensure({ manifest, lifecycleState, evidenceDirectory })).adopted, true);
   const stopped = await runtime.stop(started);
   assert.equal(stopped.status, "stopped");

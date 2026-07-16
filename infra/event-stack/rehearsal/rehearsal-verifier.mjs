@@ -144,7 +144,7 @@ export function rawProblems(snapshot, nowMs = Date.now()) {
     if ((path?.inboundBitrateBps ?? 0) < 1_000_000) problems.push(`Camera ${court} raw bitrate is below 1 Mbps`);
     if (path?.frameErrors !== 0) problems.push(`Camera ${court} raw frame errors are nonzero`);
     if (path?.sourceMode !== "PUSH" || path?.sourceProtocol !== protocol) problems.push(`Camera ${court} raw source is not ${protocol} PUSH`);
-    if (path?.videoCodec !== "H264" || path?.audioCodec !== "MPEG4Audio" || path?.videoWidth !== 1280 || path?.videoHeight !== 720) problems.push(`Camera ${court} raw codec/profile is not the rehearsal 720p H264/AAC contract`);
+    if (path?.videoCodec !== "H264" || path?.audioCodec !== "AAC" || path?.videoWidth !== 1280 || path?.videoHeight !== 720) problems.push(`Camera ${court} raw codec/profile is not the rehearsal 720p H264/AAC contract`);
   }
   return unique(problems);
 }
