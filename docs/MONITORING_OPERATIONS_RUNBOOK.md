@@ -331,6 +331,29 @@ fingerprint has more than one durable episode. Once recurrence history exists,
 use the pre-cutover backup or a forward fix; never delete incident history to
 make rollback possible.
 
+Migration `029_monitoring_pushover_only.sql` is a schema-only hard cutover. The
+runtime already emits and reads only Pushover notifications; migration 029
+removes the obsolete Twilio and external provider values from the database
+constraint. Apply it only while coverage is idle and only after verifying that
+every existing `incident_notifications.provider` value is `pushover`.
+
+Production's migration ledger currently ends at 022. Preserve that fact during
+this cutover: do not replay migrations 023 through 028, do not mark them applied,
+and do not use a broad `db push`. Apply exactly migration 029 in one transaction,
+then add only the exact `029 / monitoring_pushover_only` ledger row. Run
+`infra/monitoring/sql/verify-pushover-only.sql`; it proves the ledger entry,
+accepts Pushover, rejects a non-Pushover provider, and rolls back all probe data.
+Capture the before/after provider counts, constraint definition, migration row,
+monitor snapshot, and unchanged service/container identities.
+
+`infra/monitoring/sql/rollback-pushover-only.sql` is the guarded rollback. It
+refuses an absent or mismatched migration-029 ledger entry and refuses a current
+constraint that already accepts non-Pushover values. It restores the former
+provider constraint and removes only the exact migration-029 ledger row; it
+never deletes or rewrites notification history. No monitor-service restart is
+required for either direction because the runtime contract remains Pushover
+only.
+
 The executable migration queue has one file per monotonically increasing
 version. The unapproved vision receipt schema remains outside that queue at
 `apps/web/supabase/proposals/vision_shadow_receipts.sql`; do not copy, mark, or
