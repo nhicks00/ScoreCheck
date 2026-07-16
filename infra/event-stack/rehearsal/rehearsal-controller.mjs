@@ -47,6 +47,7 @@ export class RehearsalController {
         await this.store.save(state);
         state.program.deployment = await this.vercel.waitReady({ deploymentId: deployment.id, project, generationId: state.generationId });
         state.program.origin = project.origin;
+        state.program.preflight = await this.vercel.verifyProgramPage({ project, token: material.programPageToken });
         await this.store.save(state);
 
         for (const court of COURTS) {
@@ -144,10 +145,9 @@ export class RehearsalController {
           await this.store.save(state);
           courtState.admission = await this.egress.proveSecondStartRejected({ host, court, expectedId: active.id });
           await this.store.save(state);
-        }
-
-        for (const court of COURTS) {
-          const courtState = state.courts[court];
+          // Ramp one court end to end before admitting the next. This both
+          // bounds startup load and prevents one broken Program chain from
+          // occupying every compositor and YouTube destination.
           await this.youtube.waitFor({ streamId: courtState.stream.id, broadcastId: courtState.broadcast.id, streamStatus: "active" });
           courtState.broadcast = await this.youtube.transition(courtState.broadcast.id, "live");
           await this.store.save(state);

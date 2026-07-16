@@ -5,11 +5,12 @@ const PROJECT_NAME = /^scorecheck-rehearsal-[a-z0-9-]{8,40}$/;
 const SHA = /^[a-f0-9]{40}$/;
 
 export class VercelRehearsalProvider {
-  constructor({ token, teamId, teamSlug = null, fetchImpl = globalThis.fetch, sleep = delay }) {
+  constructor({ token, teamId, teamSlug = null, fetchImpl = globalThis.fetch, publicFetchImpl = globalThis.fetch, sleep = delay }) {
     this.token = required(token, "Vercel token");
     this.teamId = required(teamId, "Vercel team id");
     this.team = teamSlug === null ? null : normalizeTeam({ id: this.teamId, slug: teamSlug }, this.teamId);
     this.fetchImpl = fetchImpl;
+    this.publicFetchImpl = publicFetchImpl;
     this.sleep = sleep;
   }
 
@@ -83,6 +84,28 @@ export class VercelRehearsalProvider {
       await this.sleep(intervalMs);
     }
     throw new Error(`Vercel rehearsal deployment did not become ready (last state ${current?.state ?? "unknown"})`);
+  }
+
+  async verifyProgramPage({ project, token }) {
+    const normalized = normalizeProject(project, project.name, project.origin);
+    if (typeof token !== "string" || token.length < 24 || /[\r\n\0]/u.test(token)) throw new Error("Vercel rehearsal Program token is invalid");
+    const pageUrl = `${normalized.origin}/program/court/1?token=${encodeURIComponent(token)}&scene=0`;
+    const invalidUrl = `${normalized.origin}/program/court/1?token=invalid-rehearsal-token&scene=0`;
+    const request = (url) => this.publicFetchImpl(url, {
+      method: "GET",
+      redirect: "error",
+      headers: { "user-agent": "ScoreCheck-Rehearsal-Preflight/1" },
+      signal: AbortSignal.timeout(30_000),
+      cache: "no-store"
+    });
+    const [accepted, rejected] = await Promise.all([request(pageUrl), request(invalidUrl)]);
+    if (accepted.status !== 200 || !accepted.headers.get("content-type")?.toLowerCase().includes("text/html")) {
+      throw new Error(`Vercel rehearsal Program page preflight returned HTTP ${accepted.status}`);
+    }
+    const body = await accepted.text();
+    if (!body.includes("program-root")) throw new Error("Vercel rehearsal Program page preflight returned the wrong document");
+    if (rejected.status !== 404) throw new Error(`Vercel rehearsal Program token rejection returned HTTP ${rejected.status}`);
+    return { status: "healthy", origin: normalized.origin, acceptedStatus: 200, rejectedStatus: 404 };
   }
 
   async deleteProject(projectId) {

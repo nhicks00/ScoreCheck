@@ -127,8 +127,11 @@ paths:
   court8_raw:
     source: __COURT_8_RAW_SOURCE__
 
-  # Low-latency normalized H.264 + Opus for commentators, scorers, and producer
-  # previews. It starts only when preview or program has a reader.
+  # Low-latency H.264 + Opus for commentators, scorers, and producer previews.
+  # The admitted camera contract is already H.264 Main 1280x720 at 30 fps, so
+  # video is stream-copied instead of re-encoded on the shared ingest host. Only
+  # AAC audio is converted to browser-compatible Opus. It starts only when a
+  # preview or program reader exists.
   "~^court([1-8])_preview$":
     runOnDemand: >
       /usr/local/bin/scorecheck-ffmpeg-runner "court${G1}_preview"
@@ -137,9 +140,7 @@ paths:
       -fflags nobuffer -flags low_delay -rtsp_transport tcp
       -i "rtsp://127.0.0.1:${RTSP_PORT}/court${G1}_raw"
       -map 0:v:0 -map 0:a:0?
-      -c:v libx264 -preset ultrafast -tune zerolatency -profile:v main
-      -pix_fmt yuv420p -vf "fps=30,scale=-2:720" -g 30 -keyint_min 30 -sc_threshold 0
-      -b:v 2500k -maxrate 2750k -bufsize 5000k
+      -c:v copy
       -c:a libopus -b:a 96k -ar 48000 -ac 2 -af "aresample=async=1:first_pts=0"
       -f rtsp -rtsp_transport tcp "rtsp://127.0.0.1:${RTSP_PORT}/${MTX_PATH}"
     runOnDemandRestart: yes

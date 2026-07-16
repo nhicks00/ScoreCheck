@@ -33,6 +33,9 @@ test("renders an isolated MediaMTX public host and matching TLS health proxy", (
   assert.match(rendered.caddyConfig, /^preview-rehearsal-1234\.beachvolleyballmedia\.com \{/u);
   assert.match(rendered.caddyConfig, /handle \/healthz/u);
   assert.match(rendered.caddyConfig, /reverse_proxy 127\.0\.0\.1:8889/u);
+  const previewRule = rendered.mediaConfig.match(/"~\^court\(\[1-8\]\)_preview\$":([\s\S]+?)runOnDemandRestart:/u)?.[1] ?? "";
+  assert.match(previewRule, /-c:v copy/u);
+  assert.doesNotMatch(previewRule, /libx264|scale=|fps=/u);
   assert.doesNotMatch(rendered.mediaConfig, /__[A-Z0-9_]+__/u);
 });
 

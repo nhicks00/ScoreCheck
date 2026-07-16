@@ -31,6 +31,7 @@ function harness({ failPublisherOnce = false, failPreflight = false, failIdle = 
     ensureProject: async ({ name }) => ({ id: "prj_test", name, origin: `https://${name}.vercel.app`, framework: "nextjs", rootDirectory: "apps/web" }),
     ensureDeployment: async ({ project, generationId: marker }) => ({ id: "dpl_test", projectId: project.id, name: project.name, state: "BUILDING", target: "production", aliases: [], marker }),
     waitReady: async ({ project, generationId: marker }) => ({ id: "dpl_test", projectId: project.id, name: project.name, state: "READY", target: "production", aliases: [`${project.name}.vercel.app`], marker }),
+    verifyProgramPage: async ({ project }) => ({ status: "healthy", origin: project.origin, acceptedStatus: 200, rejectedStatus: 404 }),
     findProject: async (name) => orphanedProviderResources ? { id: "prj_orphan", name, origin: `https://${name}.vercel.app`, framework: "nextjs", rootDirectory: "apps/web" } : null,
     deleteProject: async (id) => { log.push(`delete-project:${id}`); return { absent: true }; }
   };
@@ -112,12 +113,14 @@ test("runs the full isolated rehearsal and cleans every external resource by exa
   const lifecycle = lifecycleState();
   await controller.plan({ manifest, lifecycleState: lifecycle });
   await controller.prepare({ manifest, lifecycleState: lifecycle, material, git: { repoId: 1, ref: "branch", sha: "a".repeat(40) }, secretsDirectory: "/tmp/rehearsal-secrets" });
+  assert.equal((await controller.store.load()).program.preflight.status, "healthy");
   lifecycle.phase = "ready";
   await controller.start({ manifest, lifecycleState: lifecycle, material, evidenceDirectory: "/tmp/rehearsal-evidence" });
   let summary = rehearsalSummary(await controller.store.load());
   assert.equal(summary.activePublishers, 8);
   assert.equal(summary.activeEgresses, 8);
   assert.equal(summary.liveBroadcasts, 8);
+  assert.ok(log.indexOf("youtube-live:broadcast1") < log.indexOf("egress-start:2"));
   await controller.soak({ manifest, lifecycleState: lifecycle, evidenceDirectory: "/tmp/rehearsal-evidence", durationMs: 1_800_000 });
   await controller.stop({ manifest, lifecycleState: lifecycle });
   await controller.cleanup({ manifest, lifecycleState: lifecycle });

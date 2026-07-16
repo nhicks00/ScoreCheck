@@ -3,8 +3,14 @@ import test from "node:test";
 
 import { rehearsalProjectName, VercelRehearsalProvider } from "./vercel-provider.mjs";
 
-function response(status, body = null) {
-  return { status, ok: status >= 200 && status < 300, json: async () => body };
+function response(status, body = null, contentType = "application/json") {
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    headers: { get: (name) => name.toLowerCase() === "content-type" ? contentType : null },
+    json: async () => body,
+    text: async () => typeof body === "string" ? body : JSON.stringify(body)
+  };
 }
 
 const name = rehearsalProjectName("abcdefgh12345678");
@@ -90,6 +96,38 @@ test("requires the isolated alias before accepting READY", async () => {
   await assert.rejects(() => client.waitReady({ deploymentId: "dpl_test123", project, generationId }), /without its isolated project alias/);
   includeAlias = true;
   assert.equal((await client.waitReady({ deploymentId: "dpl_test123", project, generationId })).state, "READY");
+});
+
+test("probes the token-gated Program document before event resources are created", async () => {
+  const requests = [];
+  const client = new VercelRehearsalProvider({
+    token: "token",
+    teamId: "team",
+    teamSlug,
+    fetchImpl: async () => response(500),
+    publicFetchImpl: async (url, init) => {
+      requests.push({ url, init });
+      return url.includes("invalid-rehearsal-token")
+        ? response(404, "not found", "text/plain")
+        : response(200, '<div class="program-root"></div>', "text/html; charset=utf-8");
+    }
+  });
+  const result = await client.verifyProgramPage({ project, token: "x".repeat(32) });
+  assert.equal(result.status, "healthy");
+  assert.equal(requests.length, 2);
+  assert.ok(requests.every((entry) => entry.init.redirect === "error"));
+  assert.ok(requests.every((entry) => !entry.init.headers.authorization));
+});
+
+test("fails Program preflight on deployment protection, wrong content, or a weak token gate", async () => {
+  for (const [accepted, rejected] of [
+    [response(401, "protected", "text/html"), response(404, "not found", "text/plain")],
+    [response(200, "wrong page", "text/html"), response(404, "not found", "text/plain")],
+    [response(200, '<div class="program-root"></div>', "text/html"), response(200, '<div class="program-root"></div>', "text/html")]
+  ]) {
+    const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, publicFetchImpl: async (url) => url.includes("invalid-rehearsal-token") ? rejected : accepted });
+    await assert.rejects(() => client.verifyProgramPage({ project, token: "x".repeat(32) }), /preflight|wrong document|token rejection/);
+  }
 });
 
 test("derives the isolated production origin from the authenticated Vercel team", async () => {

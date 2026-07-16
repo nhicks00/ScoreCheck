@@ -28,7 +28,7 @@ function snapshot(mode) {
     agents,
     courts: Array.from({ length: 8 }, (_, index) => {
       const court = index + 1;
-      const path = (branch) => ({ ready: branch === "raw" ? raw : active, readerCount: active ? 1 : 0, inboundBitrateBps: branch === "raw" && raw ? 2_500_000 : active ? 2_000_000 : 0, frameErrors: 0, sourceMode: branch === "raw" && raw ? "PUSH" : null, sourceProtocol: branch === "raw" && raw ? (court <= 2 ? "RTMP" : "SRT") : null, videoCodec: branch === "raw" && raw ? "H264" : "H264", audioCodec: branch === "raw" && raw ? "AAC" : "Opus", videoWidth: 1280, videoHeight: 720 });
+      const path = (branch) => ({ ready: branch === "raw" ? raw : active, readerCount: active ? 1 : 0, inboundBitrateBps: branch === "raw" && raw ? 2_500_000 : active ? 2_000_000 : 0, frameErrors: 0, sourceMode: branch === "raw" && raw ? "PUSH" : null, sourceProtocol: branch === "raw" && raw ? (court <= 2 ? "RTMP" : "SRT") : null, videoCodec: "H264", videoProfile: "Main", audioCodec: branch === "raw" ? "AAC" : "Opus", videoWidth: 1280, videoHeight: 720, audioSampleRateHz: 48_000, audioChannelCount: 2 });
       return {
         courtNumber: court,
         paths: { raw: path("raw"), preview: path("preview"), program: path("program") },
@@ -90,6 +90,14 @@ test("hard-cuts raw audio telemetry to the monitor AAC label", () => {
   const value = snapshot("raw");
   value.courts[0].paths.raw.audioCodec = "MPEG4Audio";
   assert.match(rawProblems(value, now).join("; "), /raw codec\/profile/);
+});
+
+test("rejects raw feeds that are unsafe for shared-ingest video stream copy", () => {
+  const value = snapshot();
+  value.courts[0].paths.raw.videoProfile = "High";
+  value.courts[1].paths.raw.audioSampleRateHz = 44_100;
+  value.courts[2].paths.raw.audioChannelCount = 1;
+  assert.match(rawProblems(value, now).join("; "), /Camera 1 raw codec\/profile.*Camera 2 raw codec\/profile.*Camera 3 raw codec\/profile/);
 });
 
 test("accepts exact one-reader program chains, clean browser quality, commentary, Egress, and spare", () => {
