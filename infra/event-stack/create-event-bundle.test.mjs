@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { createEventBundle, parseBundleArgs } from "./create-event-bundle.mjs";
+import { assertRehearsalGitIdentity, createEventBundle, parseBundleArgs } from "./create-event-bundle.mjs";
+
+const createFixtureBundle = (options) => createEventBundle(options, { verifyGitIdentity: async () => {} });
 
 async function fixture(kind = "rehearsal") {
   const parent = await mkdtemp(join(tmpdir(), "scorecheck-bundle-"));
@@ -59,7 +61,7 @@ async function fixture(kind = "rehearsal") {
 
 test("creates a complete protected rehearsal bundle and exact one-command invocation", async () => {
   const options = await fixture();
-  const result = await createEventBundle(options);
+  const result = await createFixtureBundle(options);
   const eventProfile = JSON.parse(await readFile(result.eventProfile, "utf8"));
   const rehearsalProfile = JSON.parse(await readFile(result.rehearsalProfile, "utf8"));
   const manifest = JSON.parse(await readFile(result.manifest, "utf8"));
@@ -75,12 +77,12 @@ test("creates a complete protected rehearsal bundle and exact one-command invoca
   for (const name of ["manifest.json", "event-profile.json", "rehearsal-profile.json", "rehearsal-endpoint-binding.json", "BUNDLE.json"]) {
     assert.equal((await stat(join(options.root, name))).mode & 0o077, 0);
   }
-  await assert.rejects(() => createEventBundle(options), /already exists/);
+  await assert.rejects(() => createFixtureBundle(options), /already exists/);
 });
 
 test("creates a production bundle bound to existing persistent anchors", async () => {
   const options = await fixture("production");
-  const result = await createEventBundle(options);
+  const result = await createFixtureBundle(options);
   const profile = JSON.parse(await readFile(result.eventProfile, "utf8"));
   assert.equal(result.rehearsalProfile, null);
   assert.equal(profile.anchors, options.anchors);
@@ -92,13 +94,13 @@ test("creates a production bundle bound to existing persistent anchors", async (
 test("rejects weak input permissions and incomplete mode-specific options", async () => {
   const rehearsal = await fixture();
   await chmod(rehearsal.credentialsEnv, 0o644);
-  await assert.rejects(() => createEventBundle(rehearsal), /protected file/);
+  await assert.rejects(() => createFixtureBundle(rehearsal), /protected file/);
   const production = await fixture("production");
-  await assert.rejects(() => createEventBundle({ ...production, anchors: undefined }), /requires --anchors/);
-  await assert.rejects(() => createEventBundle({ ...production, productionSource: undefined }), /requires --production-source/);
-  await assert.rejects(() => createEventBundle({ ...production, networkSpec: undefined }), /networkSpec is required/);
+  await assert.rejects(() => createFixtureBundle({ ...production, anchors: undefined }), /requires --anchors/);
+  await assert.rejects(() => createFixtureBundle({ ...production, productionSource: undefined }), /requires --production-source/);
+  await assert.rejects(() => createFixtureBundle({ ...production, networkSpec: undefined }), /networkSpec is required/);
   await writeFile(production.anchors, "{}\n", { mode: 0o600 });
-  await assert.rejects(() => createEventBundle(production), /schemaVersion must be 2/);
+  await assert.rejects(() => createFixtureBundle(production), /schemaVersion must be 2/);
   assert.throws(() => parseBundleArgs(["create", "--root", "relative"]), /absolute path/);
 });
 
@@ -106,7 +108,23 @@ test("rejects a protected but nondeployable template network", async () => {
   const options = await fixture();
   const template = await readFile(new URL("./network-contract.json", import.meta.url), "utf8");
   await writeFile(options.networkSpec, template, { mode: 0o600 });
-  await assert.rejects(() => createEventBundle(options), /public operator host address/u);
+  await assert.rejects(() => createFixtureBundle(options), /public operator host address/u);
+});
+
+test("requires the rehearsal SHA to match local and remote branch tips exactly", async () => {
+  const sha = "a".repeat(40);
+  const calls = [];
+  const runGit = async (args) => {
+    calls.push(args);
+    return args[0] === "rev-parse" ? `${sha}\n` : `${sha}\trefs/heads/master\n`;
+  };
+  await assertRehearsalGitIdentity({ ref: "master", sha }, { runGit });
+  assert.deepEqual(calls, [
+    ["rev-parse", "--verify", "--end-of-options", "master^{commit}"],
+    ["ls-remote", "--exit-code", "origin", "refs/heads/master"]
+  ]);
+  await assert.rejects(() => assertRehearsalGitIdentity({ ref: "master", sha: "b".repeat(40) }, { runGit }), /does not match local/);
+  await assert.rejects(() => assertRehearsalGitIdentity({ ref: "master", sha }, { runGit: async (args) => args[0] === "rev-parse" ? `${sha}\n` : `${"b".repeat(40)}\trefs\/heads\/master\n` }), /does not match remote/);
 });
 
 async function productionSourceFixture(parent) {

@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
 import { createHash, randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
 import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import process from "node:process";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
 import { buildEventManifest, loadManifestInputs } from "./event-manifest.mjs";
@@ -15,6 +17,8 @@ import { validateRehearsalProfile } from "./rehearsal/rehearsal-stack.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const REHEARSAL_SCRIPT = resolve(dirname(SCRIPT_PATH), "rehearsal/turnkey-rehearsal.mjs");
+const REPO_ROOT = resolve(dirname(SCRIPT_PATH), "../..");
+const execFileAsync = promisify(execFile);
 
 if (process.argv[1] && resolve(process.argv[1]) === SCRIPT_PATH) {
   main().catch((error) => {
@@ -30,8 +34,9 @@ async function main() {
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
-export async function createEventBundle(options) {
+export async function createEventBundle(options, { verifyGitIdentity = assertRehearsalGitIdentity } = {}) {
   validateBundleOptions(options);
+  if (options.kind === "rehearsal") await verifyGitIdentity({ ref: options.gitRef, sha: options.gitSha });
   await Promise.all([
     assertProtectedFile(options.credentialsEnv, "provider credentials"),
     assertProtectedFile(options.sshKey, "SSH private key"),
@@ -217,9 +222,28 @@ function validateBundleOptions(value) {
     for (const key of ["gitRepoId", "gitRef", "gitSha", "ffmpegPath", "liveKitCliPath"]) {
       if (typeof value[key] !== "string" || !value[key]) throw new Error(`rehearsal bundle requires ${key}`);
     }
-    if (!/^[A-Za-z0-9._/-]{1,200}$/.test(value.gitRef) || !/^[a-f0-9]{40}$/.test(value.gitSha)) throw new Error("rehearsal Git identity is invalid");
+    if (!/^[A-Za-z0-9._/-]{1,200}$/.test(value.gitRef) || value.gitRef.startsWith("-") || value.gitRef.includes("..") || !/^[a-f0-9]{40}$/.test(value.gitSha)) throw new Error("rehearsal Git identity is invalid");
     if (!Number.isInteger(value.soakDurationSeconds) || value.soakDurationSeconds < 1_800 || value.soakDurationSeconds > 43_200) throw new Error("rehearsal soak must be 1800-43200 seconds");
   }
+}
+
+export async function assertRehearsalGitIdentity({ ref, sha }, { runGit = defaultRunGit } = {}) {
+  const local = (await runGit(["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`])).trim();
+  if (local !== sha) throw new Error(`rehearsal Git SHA does not match local ${ref}`);
+  const remoteRef = ref.startsWith("refs/heads/") ? ref : `refs/heads/${ref}`;
+  const remoteRows = (await runGit(["ls-remote", "--exit-code", "origin", remoteRef]))
+    .trim()
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => line.split(/\s+/));
+  if (remoteRows.length !== 1 || remoteRows[0][0] !== sha || remoteRows[0][1] !== remoteRef) {
+    throw new Error(`rehearsal Git SHA does not match remote origin ${remoteRef}`);
+  }
+}
+
+async function defaultRunGit(args) {
+  const { stdout } = await execFileAsync("git", args, { cwd: REPO_ROOT, encoding: "utf8", timeout: 30_000, maxBuffer: 1024 * 1024 });
+  return stdout;
 }
 
 function bundlePaths(root) {
