@@ -41,6 +41,7 @@ runcmd:
   - ufw allow 22/tcp
   - ufw allow 80/tcp
   - ufw allow 443/tcp
+  - ufw allow from 172.30.255.0/28 to any port 9108 proto tcp
   - ufw --force enable
 
 final_message: "ScoreCheck observability host bootstrap complete."

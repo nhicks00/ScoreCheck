@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { fullProblems, idleProblems, preflightProblems, providerProblems, rawProblems } from "./rehearsal-verifier.mjs";
+import { RehearsalVerifier, fullProblems, idleProblems, preflightProblems, providerProblems, rawProblems } from "./rehearsal-verifier.mjs";
 
 const now = Date.parse("2026-07-15T12:00:00Z");
 
@@ -19,7 +19,7 @@ function snapshot(mode) {
     agent({ agentId: "spare", role: "worker", assignedCourts: [], state: "HEALTHY", nativeServices: { egress: { idle: true, canAcceptRequest: true, activeWebRequests: 0, maximumWebRequests: 1, cpuLoadRatio: 0, memoryLoadRatio: 0 } } })
   ];
   return {
-    version: 2,
+    version: 3,
     generatedAt: new Date(now).toISOString(),
     collector: { agentsExpected: 12, agentsFresh: 12 },
     event: null,
@@ -55,6 +55,31 @@ function snapshot(mode) {
 
 test("accepts a completely idle isolated preflight", () => {
   assert.deepEqual(preflightProblems(snapshot("idle"), now), []);
+});
+
+test("hard-cuts the rehearsal monitor fetch contract to version 3", async () => {
+  const verifier = (value) => new RehearsalVerifier({
+    monitorOrigin: "https://monitor.example.com",
+    monitorToken: "x".repeat(24),
+    youtube: null,
+    sampler: null,
+    fetchImpl: async () => new Response(JSON.stringify(value), { status: 200, headers: { "content-type": "application/json" } }),
+    sleep: async () => {},
+    now: () => now
+  });
+  assert.equal((await verifier(snapshot("idle")).preflight()).passed, true);
+  await assert.rejects(() => verifier({ ...snapshot("idle"), version: 2 }).preflight(), /snapshot contract is invalid/);
+});
+
+test("reports a missing agent host snapshot without throwing", () => {
+  const value = snapshot("idle");
+  value.collector.agentsFresh = 11;
+  value.agents[1].state = "UNKNOWN";
+  value.agents[1].host = null;
+  const problems = preflightProblems(value, now).join("; ");
+  assert.match(problems, /all 12 rehearsal agents fresh/);
+  assert.match(problems, /agents are unhealthy/);
+  assert.match(problems, /insufficient memory headroom/);
 });
 
 test("accepts all eight protocol-correct raw camera feeds", () => {

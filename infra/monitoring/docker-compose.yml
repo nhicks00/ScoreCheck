@@ -127,3 +127,9 @@ volumes:
   alertmanager-data:
   caddy-data:
   caddy-config:
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.255.0/28

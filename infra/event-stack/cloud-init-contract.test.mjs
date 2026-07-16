@@ -54,7 +54,10 @@ test("host firewalls mirror public role exposure and keep agent telemetry privat
 
   const observability = await readFile(profiles.observability, "utf8");
   for (const command of ["22/tcp", "80/tcp", "443/tcp"]) assert.match(observability, new RegExp(`ufw allow ${escapeRegexp(command)}`));
-  assert.doesNotMatch(observability, /port 9108/);
+  assert.match(observability, /ufw allow from 172\.30\.255\.0\/28 to any port 9108 proto tcp/);
+  assert.doesNotMatch(observability, new RegExp(`ufw allow from ${escapeRegexp(vpcCidr)} to any port 9108 proto tcp`));
+  const observabilityCompose = await readFile(resolve(root, "infra/monitoring/docker-compose.yml"), "utf8");
+  assert.match(observabilityCompose, /subnet: 172\.30\.255\.0\/28/);
 
   for (const source of [commentary, compositor, ingest, observability]) {
     assert.match(source, /ufw default deny incoming/);

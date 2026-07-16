@@ -109,7 +109,7 @@ export class RehearsalVerifier {
     });
     if (!response.ok) throw new Error(`rehearsal monitor snapshot returned HTTP ${response.status}`);
     const snapshot = await response.json();
-    if (!snapshot || snapshot.version !== 2 || !Array.isArray(snapshot.courts) || !Array.isArray(snapshot.agents)) throw new Error("rehearsal monitor snapshot contract is invalid");
+    if (!snapshot || snapshot.version !== 3 || !Array.isArray(snapshot.courts) || !Array.isArray(snapshot.agents)) throw new Error("rehearsal monitor snapshot contract is invalid");
     return snapshot;
   }
 }
@@ -222,7 +222,7 @@ function commonProblems(snapshot, nowMs) {
   for (const agent of snapshot?.agents ?? []) {
     const host = agent.host;
     if (!host || host.memoryTotalBytes <= 0 || host.memoryAvailableBytes / host.memoryTotalBytes < 0.15) problems.push(`${agent.agentId} has insufficient memory headroom`);
-    if (host?.diskTotalBytes !== null && host?.diskFreeBytes !== null && (host.diskTotalBytes <= 0 || host.diskFreeBytes / host.diskTotalBytes < 0.1)) problems.push(`${agent.agentId} has insufficient disk headroom`);
+    if (host && host.diskTotalBytes !== null && host.diskFreeBytes !== null && (host.diskTotalBytes <= 0 || host.diskFreeBytes / host.diskTotalBytes < 0.1)) problems.push(`${agent.agentId} has insufficient disk headroom`);
     if ((agent.services ?? []).some((service) => !service.running || service.healthy === false || service.restartCount !== 0 || service.oomKilled)) problems.push(`${agent.agentId} has an unhealthy, restarted, or OOM-killed service`);
   }
   if ((snapshot?.incidents ?? []).length !== 0) problems.push("rehearsal monitor has an active incident");

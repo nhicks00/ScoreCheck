@@ -22,7 +22,7 @@ function lifecycleState(phase = "planned") {
   };
 }
 
-function harness({ failPublisherOnce = false, orphanedProviderResources = false } = {}) {
+function harness({ failPublisherOnce = false, failPreflight = false, failIdle = false, orphanedProviderResources = false } = {}) {
   const log = [];
   let publisherFailure = failPublisherOnce;
   const activeEgress = new Map();
@@ -81,11 +81,17 @@ function harness({ failPublisherOnce = false, orphanedProviderResources = false 
     stop: async (state) => ({ ...state, status: "stopped" })
   };
   const verifier = {
-    preflight: async () => ({ healthy: true }),
+    preflight: async () => {
+      if (failPreflight) throw new Error("intentional preflight failure");
+      return { healthy: true };
+    },
     waitForRaw: async () => ({ healthy: true }),
     waitForFull: async () => ({ healthy: true }),
     captureEndpoint: async () => ({ passed: true }),
-    waitForIdle: async () => ({ healthy: true })
+    waitForIdle: async () => {
+      if (failIdle) throw new Error("idle verifier must not run");
+      return { healthy: true };
+    }
   };
   const soakEvaluator = {
     run: async ({ state }) => ({ passed: true, event: state.event, generationId: state.generationId, problems: [], reportPath: "/evidence/rehearsal-soak-report.json" })
@@ -137,6 +143,22 @@ test("resumes a partial start without replacing prepared provider identities", a
   assert.equal(partial.courts[1].stream.id, "stream1");
   await controller.start({ manifest, lifecycleState: ready, material, evidenceDirectory: "/tmp/rehearsal-evidence" });
   assert.equal((await store.load()).phase, "running");
+});
+
+test("cleans a preflight failure through direct provider reconciliation without aggregate idle telemetry", async () => {
+  const { controller, store } = harness({ failPreflight: true, failIdle: true });
+  const lifecycle = lifecycleState();
+  await controller.plan({ manifest, lifecycleState: lifecycle });
+  await controller.prepare({ manifest, lifecycleState: lifecycle, material, git: { repoId: 1, ref: "branch", sha: "a".repeat(40) }, secretsDirectory: "/tmp/rehearsal-secrets" });
+  const live = lifecycleState("live");
+  await assert.rejects(() => controller.start({ manifest, lifecycleState: live, material, evidenceDirectory: "/tmp/rehearsal-evidence" }), /intentional preflight failure/);
+
+  await controller.stop({ manifest, lifecycleState: live });
+
+  const stopped = await store.load();
+  assert.equal(stopped.phase, "stopped");
+  assert.equal(stopped.stopEvidence.mode, "direct-pre-start-cleanup");
+  assert.equal(stopped.stopEvidence.passed, true);
 });
 
 test("refuses provider cleanup while workload ownership is still active", async () => {

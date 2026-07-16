@@ -176,6 +176,15 @@ export class RehearsalController {
       let state = await this.#loadBound(manifest, lifecycleState);
       assertPhase(state, ["starting", "running", "stopping"], "stop rehearsal workload");
       const reachedRunning = state.phase === "running" || state.startedAt !== null;
+      const workloadNeverStarted = state.startedAt === null
+        && state.sampler === null
+        && COURTS.every((court) => {
+          const courtState = state.courts[court];
+          return !courtState.publisher?.marker
+            && !courtState.commentary?.marker
+            && !courtState.egress?.id
+            && !["testing", "live"].includes(courtState.broadcast?.lifecycleStatus);
+        });
       state.phase = "stopping";
       state.lastError = null;
       await this.store.save(state);
@@ -252,7 +261,15 @@ export class RehearsalController {
           state.sampler = await this.sampler.stop(state.sampler);
           await this.store.save(state);
         }
-        state.stopEvidence = await this.verifier.waitForIdle({ manifest, lifecycleState, state: structuredClone(state) });
+        state.stopEvidence = workloadNeverStarted
+          ? {
+              passed: true,
+              observedAt: this.now().toISOString(),
+              mode: "direct-pre-start-cleanup",
+              problems: [],
+              note: "Workload ownership never started; provider state and all compositor Egress lists were reconciled directly."
+            }
+          : await this.verifier.waitForIdle({ manifest, lifecycleState, state: structuredClone(state) });
         state.phase = "stopped";
         state.stoppedAt = this.now().toISOString();
         await this.store.save(state);
