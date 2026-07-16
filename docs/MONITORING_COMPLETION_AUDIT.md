@@ -1,9 +1,10 @@
 # ScoreCheck Monitoring Completion Audit
 
 Status: implementation audit updated after the Camera 1 physical lifecycle
-gate, the qualified one-court `c-4` capacity run, and the deterministic
-eight-court fault-matrix deployment. This document separates deployed evidence
-from tests and from work that still requires real faults or final event
+gate, the qualified one-court `c-4` capacity run, the deterministic eight-court
+fault-matrix deployment, and the isolated Camera 4 full-bitrate freeze gate.
+This document separates deployed evidence from tests, functional real-fault
+evidence, detection-SLA evidence, and work that still requires final event
 capacity.
 
 ## Acceptance matrix
@@ -15,7 +16,7 @@ capacity.
 | Eight-camera operator dashboard | Authenticated two-column desktop/one-column mobile matrix, low-rate thumbnails, one selected WHEP player, stage evidence, trends, incidents | Deployed and passing |
 | Media transport telemetry | MediaMTX readiness, bitrate, source protocol/mode, codec/profile/resolution/audio, bounded SRT transport counters, readers, FFmpeg progress | Contract v2 deployed and passing |
 | Program render telemetry | FPS, dimensions, RTP loss/jitter, reset-safe receive/decode/drop/freeze rates, packet age, feedback counters, reconnects, reloads | Deployed; Camera 1 comparator and same-page physical loss/recovery passed at 30 fps with no stable-window quality loss. Eight simultaneous outputs remain unqualified |
-| Full-bitrate repeated-picture detection | Existing decoded element sampled at 160x90/1 Hz; warning/critical correlator and alert rules | Unit and deterministic fault gate passing; real fault pending |
+| Full-bitrate repeated-picture detection | Existing decoded element sampled at 160x90/1 Hz; warning/critical correlator and alert rules | Camera 4 functional/isolation/durable gate passed; 27.319s first classification and 37.535s Pushover acceptance failed the 20s detection target |
 | Black/covered-picture detection | Luma, dark ratio, variance, persistence; mutually exclusive with freeze paging | Unit and deterministic fault gate passing; real fault pending |
 | Camera and commentary audio quality | Track/mute, RMS/peak, clipping, silence age, RTP loss/jitter, adaptive sync evidence | Implemented; real audio fault gate pending |
 | Score and overlay alignment | Current match, source score, persisted overlay, rendered DOM signatures, exact 67-67 invalid-state checks | Deployed and passing fixtures |
@@ -26,7 +27,7 @@ capacity.
 | Page suppression behavior | Disposable network-isolated Alertmanager proves same-court and shared-dependency inhibition while peer alerts remain active | Enforced before deployment |
 | Phone paging | Pushover emergency acknowledgement and recovery | Operator-visible emergency acknowledgement and one recovery passed on 2026-07-16; Pushover is the sole phone provider |
 | Independent dead-man | Baseline and active Healthchecks senders with coverage-aware cadence plus read-only Pushover attachment audit | Baseline and active withheld-ping gates passed; final state baseline running, active idle-paused, Pushover attached to both, and no duplicate recovery |
-| One-court real fault gate | Camera, network, preview, browser, commentary, score, Egress, YouTube, agent, dead-man faults | Physical Camera 1 loss/recovery, durable paging, same-page viewer continuity, A/V sync, and one-court `c-4` capacity passed. Remaining real fault rows are pending |
+| One-court real fault gate | Camera, network, preview, browser, commentary, score, Egress, YouTube, agent, dead-man faults | Physical Camera 1 lifecycle and one-court `c-4` capacity passed. Camera 4 freeze correlation/isolation/durability passed but its 20s detection SLA failed. Remaining real fault rows are pending |
 | Eight-court real load/fault gate | Independent compositor per court plus warm spare, eight qualified feeds, two commentary rooms, score on all courts | Final evaluator now binds a fresh schema-2 all-camera monitor/ffprobe qualification artifact to exact source profiles; revised-topology profile and endurance runs remain pending |
 
 ## Deterministic isolation gate
@@ -66,6 +67,18 @@ feed health, the same Program page survived a full stop/start without reload,
 the stable recovery window rendered at 30.003 fps with no counter growth, and
 the foreground clap test passed subjective A/V sync. The remaining one-court
 work is the rest of the real fault matrix, not another Camera 1 reconnect cycle.
+
+The isolated Camera 4 synthetic full-bitrate freeze gate then proved the real
+content-analysis path. One browser identity stayed connected with zero RTP
+loss, dropped frames, reconnects, or reloads while the repeated picture opened
+exactly one `FULL_BITRATE_VISUAL_FREEZE` episode. Cameras 1-3 and 5-8 remained
+isolated, and dependency recovery produced one recovery notification. The
+functional recorder passed 240/240 samples, but detection did not meet the
+runbook target: the monitor first classified the issue 27.319 seconds after
+injection, the durable incident opened at 34.604 seconds, and Pushover accepted
+the open at 37.535 seconds. This is a detection-SLA failure, not permission to
+weaken persistence thresholds after the run. The evidence and tradeoff are
+sealed in `docs/monitoring-gates/2026-07-16-camera4-visual-freeze.md`.
 
 The first full eight-feed load attempt was useful failure evidence, not a pass.
 One shared `c-4` normalizer reached about 394 percent CPU, produced only 18-24
@@ -222,25 +235,31 @@ bounded publisher loss without changing MediaMTX configuration. Its explicit
 content-analysis gap. Guardrails refuse occupied paths, active events, dirty
 monitoring state, wrong gate profiles, stale Program viewers, and unsafe stop;
 the generated 1280x720/30 H.264 + AAC stream was locally probed at about 2.58
-Mbps. This is prepared test tooling, not evidence that any remaining real fault
-row has passed.
+Mbps. `PROGRAM_CONTENT` now explicitly establishes and verifies one Program
+viewer before arming so viewer startup cannot create a false camera-audio
+incident. Camera 4 freeze evidence is real and functional, but its detection
+SLA remains failed; the other real rows remain pending.
 
 The operator path now uses a pinned, source-hashed container after live baseline
 qualification exposed that the local macOS FFmpeg lacked SRT support. Capability
 preflight rejects that host before publication, and publisher containment is
 bounded to one restart with regression coverage. A subsequent Camera 4 SRT
 baseline published, remained healthy, and retired cleanly without arming a gate
-or creating an incident. That validates the runner baseline and cleanup only;
-the phone-visible Camera 4 fault row remains pending.
+or creating an incident. The later Camera 4 freeze gate closed the functional
+content-freeze row while leaving its detection-SLA correction pending.
 
-1. Use test feeds to inject the remaining real rows: full-bitrate freeze,
-   black/covered picture, venue/uplink loss, preview normalizer failure, Program
+1. Decide whether to add a low-latency per-court content analyzer on the final
+   compositor topology, which is recommended, or explicitly accept an
+   approximately 35-40 second content-fault phone-opening objective. Do not
+   lower persistence merely to make the completed freeze gate pass.
+2. Use test feeds to inject the remaining real rows: black/covered picture,
+   venue/uplink loss, preview normalizer failure, Program
    browser failure, commentary loss/silence/clipping/sync, score corruption,
    Egress stop, YouTube unbind/degradation, agent loss, and dead-man loss.
-2. Preserve detection latency, affected component and camera, unaffected-camera
+3. Preserve detection latency, affected component and camera, unaffected-camera
    evidence, notification deduplication, recovery time, CPU/memory trends, and
    Supabase growth for every real fault.
-3. Expand or reshape capacity so every compositor can admit its assigned live
+4. Expand or reshape capacity so every compositor can admit its assigned live
    outputs, then run eight representative feeds for at least two hours with
    scoring on all cameras and at least two commentary rooms.
    The exact aggregate evaluator and one-watcher-per-host evidence sampler are
@@ -252,5 +271,5 @@ the phone-visible Camera 4 fault row remains pending.
    event manifest; create-time event/temporary/destroy-date tags and post-create
    verification prevent a missing worker from becoming an untracked cost
    orphan while the final pool is assembled.
-4. Qualify the final camera profiles and the 75 Mbps bonded-upload venue floor.
+5. Qualify the final camera profiles and the 75 Mbps bonded-upload venue floor.
 5. Only after these gates pass, accept monitoring as ready for the shadow event.

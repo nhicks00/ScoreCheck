@@ -456,9 +456,14 @@ active event, an existing gate or incident, stale agents, unhealthy Pushover or
 dead-man state, and any peer already needing attention.
 
 The controller first publishes a moving 1280x720/30 H.264 + AAC baseline. After
-it prints `TEST FEED READY`, the operator must arm the exact requested profile,
-start `capture-fault-evidence.mjs`, and, for `PROGRAM_CONTENT`, open exactly one
-protected Program viewer. Enter `FAULT` only after its second preflight passes.
+it prints `TEST FEED READY`, a `PROGRAM_CONTENT` test must open exactly one
+protected Program viewer **before** arming the gate. Wait until the raw,
+preview, and program paths each have one dependency-chain reader and the viewer
+reports clean visual and audible camera telemetry. Only then arm the exact
+profile and start `capture-fault-evidence.mjs`. This order prevents startup
+from being misclassified as a missing camera-audio track. For `RAW_ONLY`, arm
+after the raw baseline as before. Enter `FAULT` only after the controller's
+second preflight passes.
 Available scenarios are `freeze`, `black`, `camera-silence`, and
 `publisher-loss`. Enter `RECOVER` after detection and phone evidence, leave the
 normal feed running through durable recovery, disarm the gate, and enter

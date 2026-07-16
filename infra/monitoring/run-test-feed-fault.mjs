@@ -28,6 +28,15 @@ export const TEST_FEED_SCENARIOS = Object.freeze({
   "publisher-loss": Object.freeze({ profile: "RAW_ONLY", expectedIssue: "REQUIRED_RAW_PATH_MISSING", mode: "publisher-loss", requiresBrowser: false })
 });
 
+export function baselineReadyInstruction(scenarioName) {
+  const scenario = TEST_FEED_SCENARIOS[scenarioName];
+  if (!scenario) throw new Error(`Unknown fault scenario: ${scenarioName}`);
+  if (scenario.requiresBrowser) {
+    return "Open exactly one protected Program viewer and wait for clean video, visual, and camera-audio telemetry. Then arm the PROGRAM_CONTENT gate, start the protected evidence recorder, and enter FAULT.";
+  }
+  return `Arm one ${scenario.profile} gate, start the protected evidence recorder, and then enter FAULT.`;
+}
+
 const ATTENTION_STATES = new Set(["CRITICAL", "DEGRADED", "UNKNOWN"]);
 
 export function parseTestFeedArgs(argv, env = process.env) {
@@ -414,7 +423,7 @@ export class TestFeedController {
     this.phase = "BASELINE_READY";
     await this.audit.write({ kind: "transition", transition: "BASELINE_READY", at: new Date(baseline.receivedAt).toISOString(), snapshot: snapshotSummary(baseline.snapshot, this.options.courtNumber) }, true);
     process.stdout.write(`TEST FEED READY: Camera ${this.options.courtNumber} is publishing a healthy synthetic baseline.\n`);
-    process.stdout.write(`Arm one ${this.scenario.profile} gate, start the protected evidence recorder, and prepare the required Program viewer when applicable. Then enter FAULT.\n`);
+    process.stdout.write(`${baselineReadyInstruction(this.options.scenario)}\n`);
     this.watchPromise = this.watch();
   }
 

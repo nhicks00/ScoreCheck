@@ -7,6 +7,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import {
   SyntheticPublisher,
   TestFeedController,
+  baselineReadyInstruction,
   createAudioChunk,
   createVideoFrame,
   faultReadyProblems,
@@ -64,6 +65,13 @@ describe("test-feed fault controller", () => {
     assert.deepEqual(faultReadyProblems(content, 4, "freeze", NOW), []);
     assert.match(faultReadyProblems(snapshotWith(content, { program: branchPath("program", { readerCount: 2 }) }), 4, "freeze", NOW).join(";"), /exactly one active viewer/);
     assert.match(faultReadyProblems(snapshotWith(content, { browser: browser({ visual: { frozenDurationMs: 6_000 } }) }), 4, "freeze", NOW).join(";"), /visual analysis is not clean/);
+  });
+
+  it("requires the Program viewer before arming a content-analysis gate", () => {
+    const contentInstruction = baselineReadyInstruction("freeze");
+    assert.ok(contentInstruction.indexOf("Open exactly one protected Program viewer") < contentInstruction.indexOf("arm the PROGRAM_CONTENT gate"));
+    assert.match(baselineReadyInstruction("publisher-loss"), /^Arm one RAW_ONLY gate/);
+    assert.throws(() => baselineReadyInstruction("unknown"), /Unknown fault scenario/);
   });
 
   it("requires audible camera audio before injecting silence", () => {
