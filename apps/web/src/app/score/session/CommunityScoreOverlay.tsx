@@ -110,7 +110,7 @@ export function CommunityScoreOverlay({
                     disabled={addDisabled}
                   >
                     <Plus size={22} strokeWidth={2.5} aria-hidden="true" />
-                    <span>{savingPoint ? "Recording…" : "Add point"}</span>
+                    <span>{savingPoint ? "Adding…" : "Add point"}</span>
                   </button>
                 )}
                 <button
@@ -121,7 +121,7 @@ export function CommunityScoreOverlay({
                   disabled={removeDisabled[side]}
                 >
                   <Minus size={19} strokeWidth={2.5} aria-hidden="true" />
-                  <span>{savingCorrection ? "Correcting…" : "Remove point"}</span>
+                  <span>{savingCorrection ? "Removing…" : "Remove point"}</span>
                 </button>
               </div>
             </article>

@@ -54,23 +54,23 @@
 }
 
 .watchDensity .contributionControls {
-  gap: 9px;
-  padding-top: 18px;
+  gap: 6px;
+  padding-top: 12px;
 }
 
 .watchDensity .addPoint {
-  font-size: clamp(16px, 4vw, 20px);
-  min-height: 66px;
+  font-size: clamp(15px, 3.7vw, 18px);
+  min-height: 52px;
 }
 
 .watchDensity .removePoint {
-  font-size: clamp(13px, 3.4vw, 16px);
-  min-height: 46px;
+  font-size: clamp(12px, 3.2vw, 15px);
+  min-height: 44px;
 }
 
 .watchDensity .controlIcon {
-  height: 32px;
-  width: 32px;
+  height: 28px;
+  width: 28px;
 }
 
 .watchDensity .journey {
@@ -466,13 +466,14 @@
 }
 
 .contributionControls {
+  align-content: start;
   display: grid;
-  gap: 12px;
-  padding-top: 30px;
+  gap: 8px;
+  padding-top: 18px;
 }
 
 .finalCorrectionControls {
-  padding-top: 22px;
+  padding-top: 14px;
 }
 
 .contributionControls button {
@@ -490,17 +491,22 @@
   border-radius: 999px;
   display: inline-flex;
   flex: 0 0 auto;
-  height: 38px;
+  height: 32px;
   justify-content: center;
-  width: 38px;
+  width: 32px;
+}
+
+.controlIcon svg {
+  height: 18px;
+  width: 18px;
 }
 
 .addPoint {
   color: #fff;
-  font-size: clamp(17px, 5vw, 25px);
-  gap: 10px;
-  min-height: 86px;
-  padding: 12px 9px;
+  font-size: clamp(16px, 4.5vw, 21px);
+  gap: 8px;
+  min-height: 56px;
+  padding: 8px 7px;
 }
 
 .blue .addPoint {
@@ -524,15 +530,15 @@
   background: transparent;
   border: 1px solid currentColor;
   color: currentColor;
-  font-size: clamp(14px, 4vw, 19px);
-  gap: 9px;
-  min-height: 52px;
-  padding: 8px 6px;
+  font-size: clamp(13px, 3.7vw, 17px);
+  gap: 7px;
+  min-height: 44px;
+  padding: 5px;
 }
 
 .removePoint .controlIcon {
-  height: 32px;
-  width: 32px;
+  height: 28px;
+  width: 28px;
 }
 
 .contributionControls button:hover:not(:disabled) {
@@ -835,11 +841,11 @@
   }
 
   .contributionControls {
-    padding-top: 28px;
+    padding-top: 14px;
   }
 
   .addPoint {
-    gap: 8px;
+    gap: 6px;
   }
 
   .removePoint {
@@ -847,8 +853,8 @@
   }
 
   .controlIcon {
-    height: 36px;
-    width: 36px;
+    height: 30px;
+    width: 30px;
   }
 
   .coverage {
@@ -917,12 +923,13 @@
 
   .addPoint,
   .removePoint {
-    flex-direction: column;
     gap: 4px;
   }
 
-  .addPoint {
-    min-height: 96px;
+  .controlIcon,
+  .removePoint .controlIcon {
+    height: 28px;
+    width: 28px;
   }
 }
 

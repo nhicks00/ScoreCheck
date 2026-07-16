@@ -245,14 +245,27 @@
 @media (orientation: landscape) {
   .focusMode .videoPane :global(.scoring-video-controls) {
     bottom: auto;
+    flex-wrap: nowrap;
     left: max(8px, env(safe-area-inset-left));
+    max-width: calc(50% - 16px);
     top: max(8px, env(safe-area-inset-top));
     transform: none;
+  }
+
+  .focusMode .videoPane :global(.scoring-video-controls) > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .scoreControlsTop.focusMode .videoPane :global(.scoring-video-controls) {
     bottom: max(8px, env(safe-area-inset-bottom));
     top: auto;
+  }
+
+  .scoreControlsBottom.focusMode .videoPane :global(.scoring-video-controls) {
+    max-width: calc(50% - 72px);
   }
 
   .watchShell.withVideo.focusMode {
