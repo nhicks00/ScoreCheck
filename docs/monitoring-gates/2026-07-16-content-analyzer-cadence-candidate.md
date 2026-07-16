@@ -1,8 +1,8 @@
 # Content Analyzer Cadence Candidate
 
 Date: 2026-07-16
-Result: local functional and production-class one- and two-analyzer capacity
-gates passed; idle production cutover and timing gates pending
+Result: local functional, production-class one- and two-analyzer capacity, and
+idle production cutover passed; timing gates pending
 
 ## Change
 
@@ -70,10 +70,29 @@ Protected evidence:
 - two-analyzer summary SHA-256
   `ae3366011280cc2d9f43ed69ae5f222e80074547ee808677b65ddfad06bf3f24`
 
+## Idle production cutover
+
+All four compositor agents were rebuilt sequentially from exact Git revision
+`5f718473e8c758b4a554c6312d054daf30443b5c` while the system was idle. Each old
+agent remained active during its image build; only that host's monitor-agent
+container was recreated. Every agent returned healthy with restart count zero
+before the next host began.
+
+Post-cutover verification at `2026-07-16T16:44:33Z` found:
+
+- all four remote `contentAnalysis.ts` hashes exactly matched `master`;
+- collector healthy with 6/6 fresh agents;
+- no active event, incident, or fault gate;
+- Cameras 1-8 all `EXPECTED_OFF`;
+- no notification row newer than the prior formal gate recovery at
+  `2026-07-16T15:47:20.440Z`;
+- monitor-service, Prometheus, Alertmanager, Caddy, media, Egress, routing, and
+  outputs were not restarted or reconfigured.
+
 ## Remaining release gate
 
-After capacity passes, deploy all analyzer agents on one revision in an idle
-bounded cutover and repeat the Camera 4 repeated-picture and black timing gates.
-Thresholds remain 15 and 20 seconds. The candidate is accepted only if the
-runbook's 20- and 25-second monitor-classification limits pass without peer
-incidents or duplicate notifications.
+Repeat the Camera 4 repeated-picture and black timing gates in an explicit
+phone-visible operator window. Thresholds remain 15 and 20 seconds. The
+hard cutover is accepted only if the runbook's 20- and 25-second
+monitor-classification limits pass without peer incidents or duplicate
+notifications.

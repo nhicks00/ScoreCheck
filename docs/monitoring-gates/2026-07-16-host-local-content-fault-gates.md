@@ -68,10 +68,11 @@ Evidence directory:
 ## Remaining acceptance
 
 Do not lower the content-persistence thresholds to manufacture a latency pass.
-The full-frame, one-frame-per-second cadence candidate passed local functional
-validation and the one- and two-analyzer production-class `c-4` capacity gates.
-See `2026-07-16-content-analyzer-cadence-candidate.md`. Before the real
-eight-court gate, deploy that candidate in an idle bounded cutover and repeat
-the repeated-picture and black timing gates, or explicitly revise the operator
-SLA. The remaining real one-court fault rows and the full eight-court endurance
-and isolation gate are still required.
+The full-frame, one-frame-per-second cadence hard cutover passed local
+functional validation, the one- and two-analyzer production-class `c-4`
+capacity gates, and an idle all-compositor production deployment. See
+`2026-07-16-content-analyzer-cadence-candidate.md`. Before the real eight-court
+gate, repeat the repeated-picture and black timing gates in an explicit
+phone-visible window, or explicitly revise the operator SLA. The remaining
+real one-court fault rows and the full eight-court endurance and isolation gate
+are still required.
