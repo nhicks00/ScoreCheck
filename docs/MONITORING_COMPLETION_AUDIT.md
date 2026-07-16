@@ -160,19 +160,22 @@ dedicated token's snapshot read/delete scopes are therefore proven by provider
 behavior, not inferred from configuration. See
 `docs/monitoring-gates/2026-07-15-event-infrastructure-lifecycle.md`.
 
-That PASS does not close the eight-output gate. The immutable 12-Droplet
-rehearsal bundle is prepared, and the DigitalOcean API reconfirmed the active
-account limit as 15 at `2026-07-16T01:06Z`: seven Droplets exist and eight slots
-are free. The exact manifest needs five additional compositor slots while the
-current hosts remain, or twelve slots after the legacy hosts are retired, so
-the quota gate is closed without creating or billing an extra server. The
-recurring topology is zero event Droplets -> exactly 12 -> zero; the seven
+That PASS does not close the eight-output gate. A fresh live preflight at
+`2026-07-16T17:19:14.870Z` reconfirmed an active account, seven existing
+Droplets, a limit of 15, eight free slots, four compatible `c-4` compositors,
+and exactly five missing compositor slots. The stale rehearsal artifacts remain
+immutable evidence but are not reusable because their embedded SSH rules
+predate host-CIDR hardening. A fresh network contract passed a read-only live
+provider comparison, and the new 12-Droplet rehearsal bundle was locally
+planned at tested SHA `220eb2aa` with zero Droplets or endpoints created. The
+recurring topology remains zero event Droplets -> exactly 12 -> zero; the seven
 legacy/test Droplets are not a rollback tier and will not remain beside the
 rehearsal fleet. The protected recovery source, persistent endpoint anchors,
 off-device backup, firewall contract, provider/DNS anchor assignment, and venue
 router rebind are complete. All cameras are expected off. The remaining
-destructive-rehearsal prerequisite is explicit operator approval to remove the
-seven legacy/test Droplets and execute the zero-to-12-to-zero drill.
+destructive-rehearsal prerequisite is exact operator approval to remove the
+seven legacy/test Droplets and execute the zero-to-12-to-zero drill. See
+`docs/monitoring-gates/2026-07-16-eight-court-prerequisite-audit.md`.
 
 The Pushover-only monitoring contract was hard-cut over in production after a
 bounded staged release at `2026-07-16T01:11:25Z`. The first attempt exposed a
@@ -279,5 +282,11 @@ content-freeze row while leaving its detection-SLA correction pending.
    event manifest; create-time event/temporary/destroy-date tags and post-create
    verification prevent a missing worker from becoming an untracked cost
    orphan while the final pool is assembled.
-5. Qualify the final camera profiles and the 75 Mbps bonded-upload venue floor.
-6. Only after these gates pass, accept monitoring as ready for the shadow event.
+5. Reconcile the endurance candidate's 8-vCPU ingest declaration with the
+   manifest's 4-vCPU `c-4` ingest host. Do not run the final evaluator until
+   camera-side stream-copy or a separately qualified normalization tier closes
+   the prior ingest saturation failure.
+6. Qualify the final camera profiles and the 75 Mbps bonded-upload venue floor.
+7. Execute the protected zero-to-12-to-zero rehearsal only after the exact
+   destructive approval phrase in the prerequisite audit.
+8. Only after these gates pass, accept monitoring as ready for the shadow event.
