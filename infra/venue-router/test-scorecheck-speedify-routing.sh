@@ -5,6 +5,7 @@ set -eu
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 ROUTING_TOOL="$SCRIPT_DIR/scorecheck-speedify-routing.sh"
 RECORDER="$SCRIPT_DIR/scorecheck-speedify-soak-recorder.sh"
+INGEST_IP="138.197.236.201"
 TEST_ROOT="$(mktemp -d)"
 MOCK_BIN="$TEST_ROOT/bin"
 MOCK_STATE="$TEST_ROOT/state"
@@ -21,6 +22,11 @@ fail() {
   printf 'FAIL: %s\n' "$*" >&2
   exit 1
 }
+
+grep -Fq "INGEST_IP=\"\${SCORECHECK_INGEST_IP:-$INGEST_IP}\"" "$ROUTING_TOOL" \
+  || fail "routing tool default ingest endpoint does not match the retained anchor"
+grep -Fq "INGEST_IP=\"\${SCORECHECK_INGEST_IP:-$INGEST_IP}\"" "$RECORDER" \
+  || fail "soak recorder default ingest endpoint does not match the retained anchor"
 
 assert_contains() {
   file="$1"
@@ -224,14 +230,14 @@ assert_contains "$MOCK_STATE/iptables.rules" 'dport 1935 ! -o connectify0 -j REJ
 
 # Once Speedify is healthy, reconciliation adds the primary path and clears
 # only stale camera connections.
-printf '702: from all to 206.189.169.162 ipproto udp dport 8890 lookup 900\n' >>"$MOCK_STATE/rules"
+printf '702: from all to %s ipproto udp dport 8890 lookup 900\n' "$INGEST_IP" >>"$MOCK_STATE/rules"
 printf 'CONNECTED\n' >"$MOCK_STATE/speedify.state"
 touch "$MOCK_STATE/interface-up" "$MOCK_STATE/active-flows"
 "$ROUTING_TOOL" reconcile-once
 assert_rule_count 900 2
 assert_rule_count 901 2
 assert_contains "$MOCK_STATE/route.900" '^default dev connectify0 .*src 10\.0\.0\.2$'
-assert_contains "$MOCK_STATE/conntrack.log" '^-D -d 206\.189\.169\.162$'
+assert_contains "$MOCK_STATE/conntrack.log" '^-D -d 138\.197\.236\.201$'
 
 # A daemon/interface loss removes the primary path but preserves both guards.
 printf 'LOGGED_IN\n' >"$MOCK_STATE/speedify.state"
@@ -239,7 +245,7 @@ rm -f "$MOCK_STATE/interface-up"
 "$ROUTING_TOOL" reconcile-once || true
 assert_rule_count 900 0
 assert_rule_count 901 2
-if ip route get 206.189.169.162 ipproto udp dport 8890 >/dev/null 2>&1; then
+if ip route get "$INGEST_IP" ipproto udp dport 8890 >/dev/null 2>&1; then
   fail "SRT resolved to a direct route while Speedify was unavailable"
 fi
 
