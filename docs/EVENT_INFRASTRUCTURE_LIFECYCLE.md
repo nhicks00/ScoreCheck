@@ -25,6 +25,15 @@ downsized Droplets.
 | Warm spare compositor | 1 | `c-4` | event-specific public/private IPv4s |
 | **Total** | **12** | | |
 
+DigitalOcean's API prices at `2026-07-16T01:21Z` make this exact manifest
+`$1.3125/hour`: one `s-2vcpu-2gb` at `$0.02679/hour`, one `s-2vcpu-4gb` at
+`$0.03571/hour`, and ten `c-4` hosts at `$0.125/hour` each. That is about
+`$63.02` for 48 hours or `$94.54` for 72 hours. The `$882/month` sum is only the
+monthly equivalent if all 12 Droplets are left allocated continuously; it is
+not the normal event cost. Provider credit and unused account quota do not
+create a Droplet or a charge. Reserved IPv4, bandwidth, snapshot, tax, or other
+provider charges remain separate.
+
 Each camera has one compositor. The spare is not preassigned to a camera. This
 is intentionally more machines than a dense shared-worker layout: one failed or
 overloaded compositor cannot take several courts down with it, and one court can

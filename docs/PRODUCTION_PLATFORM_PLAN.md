@@ -124,14 +124,14 @@ outputs on that shape would not retain the required CPU headroom, so the current
 four workers cannot cover eight live cameras despite their existing two-court
 monitoring assignments.
 
-DigitalOcean's live account inventory on 2026-07-15 exposes `c-4` as the largest
+DigitalOcean's live account inventory on 2026-07-16 exposes `c-4` as the largest
 non-GPU CPU-optimized Droplet available to this account. Seven event Droplets
-are active and the account Droplet limit is ten. The qualified direct-eight
-layout needs eight `c-4` compositors plus ingest, commentary, and observability:
-eleven total Droplets, or twelve with one warm spare. Do not provision only
-three additional workers and call the topology qualified. Request a limit of at
-least twelve (sixteen preferred for event headroom), or obtain and benchmark a
-larger CPU shape before provisioning the final pool.
+are active, the account Droplet limit is 15, and eight slots are free. The
+qualified direct-eight layout needs eight `c-4` compositors plus ingest,
+commentary, and observability: eleven total Droplets, or twelve with one warm
+spare. The exact 12-host manifest fits the approved limit and leaves three
+unused slots. Unused quota is not a resource and creates no charge; do not
+request or provision additional capacity unless the manifest itself changes.
 
 Before creating any additional worker, run the credential-protected, read-only
 account gate. It verifies the complete provider collections, requested regional

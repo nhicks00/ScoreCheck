@@ -148,13 +148,30 @@ behavior, not inferred from configuration. See
 `docs/monitoring-gates/2026-07-15-event-infrastructure-lifecycle.md`.
 
 That PASS does not close the eight-output gate. The immutable 12-Droplet
-rehearsal bundle is prepared, but the DigitalOcean limit remained 10 after a
-higher ceiling was requested. Only a limit of at least 12 is required. The
+rehearsal bundle is prepared, and the DigitalOcean API reconfirmed the active
+account limit as 15 at `2026-07-16T01:06Z`: seven Droplets exist and eight slots
+are free. The exact manifest needs five additional compositor slots while the
+current hosts remain, or twelve slots after the legacy hosts are retired, so
+the quota gate is closed without creating or billing an extra server. The
 recurring topology is zero event Droplets -> exactly 12 -> zero; the seven
 legacy/test Droplets are not a rollback tier and will not remain beside the
-rehearsal fleet. The full rehearsal remains fail-closed until the protected
-recovery source, persistent endpoint anchors, quota, off-device backup, and
-explicit destructive approval gates are complete.
+rehearsal fleet. The protected recovery source, persistent endpoint anchors,
+off-device backup, and firewall contract are also complete. The remaining
+destructive-rehearsal prerequisites are the venue-router endpoint rebind,
+stopping the active Camera 1 publisher, and explicit operator approval to
+remove the seven legacy/test Droplets.
+
+The Pushover-only monitoring contract was hard-cut over in production after a
+bounded staged release at `2026-07-16T01:11:25Z`. The first attempt exposed a
+deployment-validator race: Docker marked the candidate healthy while
+Prometheus still held a normal transient `up=0` sample, and the one-shot scrape
+assertion rolled back a healthy service. Revision `8fe05bde` now requires a
+successful Prometheus sample whose timestamp is at or after the candidate
+cutover. The retry completed with `monitor-service` healthy at restart count
+zero, all four static observability containers preserved, 8/8 targets up,
+49/49 rules healthy, zero Alertmanager alerts, six of six agents fresh, and no
+incident or fault gate. The production web dashboard remains exact build
+`39a6c0ff`; no web redeploy was required for the validator-only fix.
 
 ScoreCheck Pushover and both Healthchecks checks are configured. Healthchecks
 has one Pushover integration attached exactly to the baseline and active checks,
