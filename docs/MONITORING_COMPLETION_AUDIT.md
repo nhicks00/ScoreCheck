@@ -265,8 +265,13 @@ monitoring state, wrong gate profiles, stale Program viewers, and unsafe stop;
 the generated 1280x720/30 H.264 + AAC stream was locally probed at about 2.58
 Mbps. `PROGRAM_CONTENT` now explicitly establishes and verifies one Program
 viewer before arming so viewer startup cannot create a false camera-audio
-incident. Camera 4 freeze evidence is real and functional, but its detection
-SLA remains failed; the other real rows remain pending.
+incident. Its browser-required contract is independent from production
+Egress/YouTube expectations. The isolated Camera 4 viewer-disappearance gate
+opened `PROGRAM_BROWSER_HEARTBEAT_MISSING` in 26.515 seconds, passed the
+30-second detection target, persisted one episode and one opening/recovery
+Pushover pair, recovered cleanly, and left all peers unaffected. Camera 4
+freeze evidence is real and functional, but its detection SLA remains failed;
+the other real rows remain pending.
 
 The operator path now uses a pinned, source-hashed container after live baseline
 qualification exposed that the local macOS FFmpeg lacked SRT support. Capability
@@ -282,8 +287,8 @@ content-freeze row while leaving its detection-SLA correction pending.
    evaluation optimization is already deployed and repeated. Do not lower
    persistence or media latency merely to make the failures pass.
 2. Use isolated test feeds and unlisted outputs to inject the remaining real
-   rows: venue/uplink loss, preview normalizer failure, Program
-   browser failure, commentary loss/silence/clipping/sync, score corruption,
+   rows: venue/uplink loss, preview normalizer failure, commentary
+   loss/silence/clipping/sync, score corruption,
    Egress stop, YouTube unbind/degradation, and agent loss. Dead-man delivery is
    already accepted and must not be repeated solely for evidence.
 3. Preserve detection latency, affected component and camera, unaffected-camera

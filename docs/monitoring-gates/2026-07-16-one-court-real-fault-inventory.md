@@ -14,7 +14,7 @@ the measured first monitor issue is within the runbook maximum.
 | Cover camera or send uniform black | Camera 4 host-local gate isolated `CAMERA_CONTENT_BLACK` and excluded duplicate freeze paging. The one-second private polling/evaluation hard cutover reduced first monitor issue from 29.484s to 26.310s; the optimized recorder, durable episode, one-open/one-recovery Pushover, and peer isolation all passed | Functional pass; 25s monitor latency fail by 1.310s | Safe central scheduling work is complete. Choose host-local pre-SRT alert evaluation or revise the target to at least 30s without weakening the 20s persistence threshold |
 | Degrade venue uplink | Deterministic transport and bitrate fixtures only | Pending real dependency gate | Use one isolated camera/test publisher through the venue router and an approved bounded network impairment; preserve Speedify fail-closed evidence and peer flows |
 | Stall preview normalizer | Deterministic path/FFmpeg fixtures only | Pending real process gate | Use an isolated test camera and stop only its disposable preview normalizer; do not change global MediaMTX configuration |
-| Close program browser | Camera 1 proved same-page camera-loss recovery, but no controlled browser-only disappearance gate | Pending real browser gate | Use one isolated protected Program viewer and close only that viewer while raw/preview remain healthy |
+| Close program browser | Synthetic Camera 4 held raw/preview/program healthy while its sole protected Program viewer closed. `PROGRAM_BROWSER_HEARTBEAT_MISSING` opened in 26.515s, one opening Pushover was delivered, one recovery Pushover was accepted, durable recovery completed after viewer reopen, and all peers remained isolated | Functional and 30s detection pass | Accepted; see `2026-07-16-program-browser-disappearance.md` and do not repeat solely for evidence |
 | Disconnect commentator | Commentary telemetry and fixtures are deployed | Pending real commentary gate | Use an isolated commentary room with commentary explicitly expected, then disconnect the test publisher |
 | Mute, clip, or silence commentator | Camera-audio silence passed at 64.091s; that is not commentary-audio evidence | Pending real commentary-audio gates | Exercise silence, mute/track loss, clipping, transport degradation, and sync loss on an isolated commentary room |
 | Corrupt score or rendered score | Deterministic source/render mismatch and exact 67-67 fixtures pass | Pending real score gate | Use a disposable test event/match and a bounded test-only score/render fixture; never corrupt an active event |
@@ -27,6 +27,8 @@ the measured first monitor issue is within the runbook maximum.
 
 - Camera 1 physical loss/recovery and dead-man delivery are accepted and should
   not be repeated merely to increase sample count.
+- The isolated Program-browser disappearance/recovery row is accepted and does
+  not require a physical camera repeat.
 - The repeated-picture and black phone-visible latency repeats and their
   one-second private-loop optimization repeat are complete. Both confirm
   functional paging and isolation, but neither meets its original timing
