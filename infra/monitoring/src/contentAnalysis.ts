@@ -172,7 +172,7 @@ export function contentAnalyzerFfmpegArgs(url: string, audio: boolean): string[]
   const args = [
     "-nostdin", "-hide_banner", "-loglevel", "error",
     "-fflags", "nobuffer", "-flags", "low_delay",
-    "-rtsp_transport", "tcp", "-skip_frame", "nokey",
+    "-rtsp_transport", "tcp",
     "-i", url,
     "-map", "0:v:0", "-an",
     "-vf", `fps=1,scale=${CONTENT_ANALYSIS_WIDTH}:${CONTENT_ANALYSIS_HEIGHT}:flags=fast_bilinear,format=gray`,

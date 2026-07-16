@@ -50,15 +50,16 @@ describe("host-local camera-content analysis", () => {
     expect(active.health.secondsSinceAudio).toBe(0);
   });
 
-  it("builds direct, low-cadence FFmpeg argv and probes optional audio first", () => {
+  it("decodes every frame before low-cadence analysis and probes optional audio first", () => {
     const url = "rtsp://10.0.0.2:8554/court4_raw";
     expect(contentAnalyzerFfprobeArgs(url).at(-1)).toBe(url);
     expect(parseContentAnalyzerProbe("video\naudio\n")).toEqual({ video: true, audio: true });
     expect(parseContentAnalyzerProbe("video\n")).toEqual({ video: true, audio: false });
     const withAudio = contentAnalyzerFfmpegArgs(url, true);
     const withoutAudio = contentAnalyzerFfmpegArgs(url, false);
-    expect(withAudio).toContain("-skip_frame");
-    expect(withAudio).toContain("nokey");
+    expect(withAudio).not.toContain("-skip_frame");
+    expect(withAudio).not.toContain("nokey");
+    expect(withAudio).toContain("fps=1,scale=160:90:flags=fast_bilinear,format=gray");
     expect(withAudio).toContain("pipe:3");
     expect(withoutAudio).not.toContain("pipe:3");
     expect(withAudio).not.toContain("sh");
