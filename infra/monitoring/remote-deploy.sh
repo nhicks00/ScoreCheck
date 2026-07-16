@@ -42,6 +42,24 @@ else
   exit 1
 fi
 
+retry_docker_operation() {
+  local attempt=1 delay_seconds=2 status
+  while true; do
+    if "$@"; then
+      return 0
+    else
+      status=$?
+    fi
+    if (( attempt >= 5 )); then
+      return "$status"
+    fi
+    echo "Docker image acquisition failed (attempt $attempt/5); retrying in ${delay_seconds}s." >&2
+    sleep "$delay_seconds"
+    attempt=$((attempt + 1))
+    delay_seconds=$((delay_seconds * 2))
+  done
+}
+
 candidate_image="scorecheck-monitoring:candidate-${REVISION:0:12}-$$"
 rollback_image="scorecheck-monitoring:rollback-${REVISION:0:12}-$$"
 monitoring_contract_version=3
@@ -257,6 +275,11 @@ chmod 0444 \
 
 prometheus_image='prom/prometheus:v3.13.1@sha256:3c42b892cf723fa54d2f262c37a0e1f80aa8c8ddb1da7b9b0df9455a35a7f893'
 alertmanager_image='prom/alertmanager:v0.33.1@sha256:9e082985f56f4c8c9f724e18f2288c6708f472e56a5286b8863d080434ea065d'
+node_image='node:22.23.1-alpine3.24@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2'
+
+retry_docker_operation docker pull --quiet "$prometheus_image"
+retry_docker_operation docker pull --quiet "$alertmanager_image"
+retry_docker_operation docker pull --quiet "$node_image"
 
 docker run --rm --network none --read-only --cap-drop ALL \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m --entrypoint promtool \
@@ -289,11 +312,11 @@ docker run -d --name "$inhibition_container" --network none --read-only --cap-dr
 docker run --rm --network "container:$inhibition_container" --read-only --cap-drop ALL \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
   -v "$CANDIDATE_DIR/test-alertmanager-inhibition.mjs:/test-alertmanager-inhibition.mjs:ro" \
-  node:22.23.1-alpine3.24@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 \
+  "$node_image" \
   node /test-alertmanager-inhibition.mjs
 docker rm -f "$inhibition_container" >/dev/null
 
-docker build --label "org.opencontainers.image.revision=$REVISION" \
+retry_docker_operation docker build --pull --label "org.opencontainers.image.revision=$REVISION" \
   --tag "$candidate_image" "$CANDIDATE_DIR"
 
 monitor_before="$(compose ps -q monitor-service)"

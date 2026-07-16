@@ -30,6 +30,23 @@ rsync -a -e "$rsync_shell" \
 ssh "${ssh_options[@]}" "$SSH_HOST" "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE'
 set -euo pipefail
 cd "$REMOTE_DIR"
+retry_docker_operation() {
+  local attempt=1 delay_seconds=2 status
+  while true; do
+    if "$@"; then
+      return 0
+    else
+      status=$?
+    fi
+    if (( attempt >= 5 )); then
+      return "$status"
+    fi
+    echo "Docker image acquisition failed (attempt $attempt/5); retrying in ${delay_seconds}s." >&2
+    sleep "$delay_seconds"
+    attempt=$((attempt + 1))
+    delay_seconds=$((delay_seconds * 2))
+  done
+}
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p backups
 had_previous=0
@@ -43,7 +60,7 @@ install -m 0600 .incoming/livekit.yaml livekit.yaml
 install -m 0644 .incoming/caddy.yaml caddy.yaml
 install -m 0644 .incoming/redis.conf redis.conf
 docker compose -f docker-compose.yaml config -q
-docker compose -f docker-compose.yaml pull --quiet
+retry_docker_operation docker compose -f docker-compose.yaml pull --quiet
 docker compose -f docker-compose.yaml up -d --remove-orphans
 
 for attempt in $(seq 1 60); do

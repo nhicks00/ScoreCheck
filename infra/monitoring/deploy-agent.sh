@@ -32,6 +32,23 @@ rsync -a -e "$rsync_shell" "$GENERATED_ENV" "$SSH_HOST:$REMOTE_DIR/.incoming/.en
 ssh "${ssh_options[@]}" "$SSH_HOST" "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE'
 set -euo pipefail
 cd "$REMOTE_DIR"
+retry_docker_operation() {
+  local attempt=1 delay_seconds=2 status
+  while true; do
+    if "$@"; then
+      return 0
+    else
+      status=$?
+    fi
+    if (( attempt >= 5 )); then
+      return "$status"
+    fi
+    echo "Docker image acquisition failed (attempt $attempt/5); retrying in ${delay_seconds}s." >&2
+    sleep "$delay_seconds"
+    attempt=$((attempt + 1))
+    delay_seconds=$((delay_seconds * 2))
+  done
+}
 mkdir -p /var/lib/scorecheck-monitoring/ffmpeg
 if docker compose version >/dev/null 2>&1; then
   compose() { docker compose "$@"; }
@@ -57,7 +74,9 @@ install -m 0644 .incoming/tsconfig.json tsconfig.json
 install -m 0600 .incoming/.env .env
 mv .incoming/src src
 compose -f agent-compose.yml config -q
-compose -f agent-compose.yml up -d --build --remove-orphans
+retry_docker_operation compose -f agent-compose.yml pull --quiet docker-proxy
+retry_docker_operation compose -f agent-compose.yml build --pull monitor-agent
+compose -f agent-compose.yml up -d --no-build --remove-orphans
 for attempt in $(seq 1 60); do
   agent_container="$(compose -f agent-compose.yml ps -q monitor-agent 2>/dev/null || true)"
   if [[ -n "$agent_container" ]] \

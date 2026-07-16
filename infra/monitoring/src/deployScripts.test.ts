@@ -66,7 +66,7 @@ describe("staged observability deployment", () => {
 
   it("rejects topology changes before any image build or runtime cutover", () => {
     const topologyGate = remoteDeploy.indexOf("Routine deployment rejected infrastructure change");
-    const imageBuild = remoteDeploy.indexOf("docker build --label");
+    const imageBuild = remoteDeploy.indexOf("docker build --pull --label");
     const cutover = remoteDeploy.indexOf("rollback_required=1");
 
     expect(topologyGate).toBeGreaterThan(0);

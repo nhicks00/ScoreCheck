@@ -37,6 +37,23 @@ rsync -a -e "$rsync_shell" "$ENV_FILE" "$SSH_HOST:$REMOTE_DIR/.incoming/.env"
 ssh "${ssh_options[@]}" "$SSH_HOST" "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE'
 set -euo pipefail
 cd "$REMOTE_DIR"
+retry_docker_operation() {
+  local attempt=1 delay_seconds=2 status
+  while true; do
+    if "$@"; then
+      return 0
+    else
+      status=$?
+    fi
+    if (( attempt >= 5 )); then
+      return "$status"
+    fi
+    echo "Docker image acquisition failed (attempt $attempt/5); retrying in ${delay_seconds}s." >&2
+    sleep "$delay_seconds"
+    attempt=$((attempt + 1))
+    delay_seconds=$((delay_seconds * 2))
+  done
+}
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 had_previous=0
 if [[ -f docker-compose.yml && -f .env ]]; then
@@ -56,8 +73,9 @@ for file in headless_shell lib.sh list-egress.sh start-court.sh stop-court.sh; d
 done
 install -m 0600 .incoming/.env .env
 docker compose config -q
+retry_docker_operation docker compose pull --quiet
 
-if ! docker compose up -d --pull always --remove-orphans; then
+if ! docker compose up -d --remove-orphans; then
   if [[ "$had_previous" -eq 1 ]]; then
     tar -xzf "backups/compositor-$timestamp.tar.gz"
     docker compose up -d --remove-orphans || true

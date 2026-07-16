@@ -33,6 +33,23 @@ rsync -a -e "$rsync_shell" \
 ssh "${ssh_options[@]}" "$SSH_HOST" "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE'
 set -euo pipefail
 cd "$REMOTE_DIR"
+retry_docker_operation() {
+  local attempt=1 delay_seconds=2 status
+  while true; do
+    if "$@"; then
+      return 0
+    else
+      status=$?
+    fi
+    if (( attempt >= 5 )); then
+      return "$status"
+    fi
+    echo "Docker image acquisition failed (attempt $attempt/5); retrying in ${delay_seconds}s." >&2
+    sleep "$delay_seconds"
+    attempt=$((attempt + 1))
+    delay_seconds=$((delay_seconds * 2))
+  done
+}
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p backups
 had_previous=0
@@ -85,6 +102,7 @@ if [[ "$had_previous" -eq 1 && -z "$caddy_before" ]]; then
   exit 1
 fi
 
+retry_docker_operation docker compose pull --quiet "${services[@]}"
 if ! docker compose up -d --force-recreate "${services[@]}"; then
   if [[ "$had_previous" -eq 1 ]]; then
     restore_previous
