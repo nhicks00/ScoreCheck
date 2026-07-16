@@ -13,7 +13,7 @@ metrics: yes
 metricsAddress: 127.0.0.1:9998
 
 rtsp: yes
-rtspAddress: :8554
+rtspAddress: ":8554"
 rtspTransports: [tcp]
 
 rtmp: yes
