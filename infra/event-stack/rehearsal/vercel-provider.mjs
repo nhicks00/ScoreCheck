@@ -1,6 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 
 const API = "https://api.vercel.com";
+export const DEPLOYMENT_CREATE_TIMEOUT_MS = 120_000;
 const PROJECT_NAME = /^scorecheck-rehearsal-[a-z0-9-]{8,40}$/;
 const SHA = /^[a-f0-9]{40}$/;
 
@@ -52,7 +53,7 @@ export class VercelRehearsalProvider {
     let lastError = null;
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
-        return normalizeDeployment(await this.#request("POST", "/v13/deployments", body), normalizedProject, generationId);
+        return normalizeDeployment(await this.#request("POST", "/v13/deployments", body, { timeoutMs: DEPLOYMENT_CREATE_TIMEOUT_MS }), normalizedProject, generationId);
       } catch (error) {
         if (!retryableCreateError(error)) throw error;
         lastError = error;
@@ -186,13 +187,13 @@ export class VercelRehearsalProvider {
     return this.team;
   }
 
-  async #request(method, path, body = undefined) {
+  async #request(method, path, body = undefined, { timeoutMs = 30_000 } = {}) {
     const separator = path.includes("?") ? "&" : "?";
     const response = await this.fetchImpl(`${API}${path}${separator}teamId=${encodeURIComponent(this.teamId)}`, {
       method,
       headers: { authorization: `Bearer ${this.token}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: AbortSignal.timeout(30_000)
+      signal: AbortSignal.timeout(timeoutMs)
     });
     if (response.status === 404) throw new VercelNotFoundError("Vercel rehearsal resource was not found");
     if (!response.ok) {

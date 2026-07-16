@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { rehearsalProjectName, VercelRehearsalProvider } from "./vercel-provider.mjs";
+import { DEPLOYMENT_CREATE_TIMEOUT_MS, rehearsalProjectName, VercelRehearsalProvider } from "./vercel-provider.mjs";
 
 function response(status, body = null, contentType = "application/json") {
   return {
@@ -87,6 +87,23 @@ test("reconciles an ambiguously created deployment after a provider request time
   const result = await client.ensureDeployment({ project, generationId, repoId: 123, ref: "master", sha: "a".repeat(40), environment });
   assert.equal(result.id, "dpl_timeout");
   assert.equal(postCount, 1);
+});
+
+test("gives deployment creation a longer bounded response window", async () => {
+  assert.equal(DEPLOYMENT_CREATE_TIMEOUT_MS, 120_000);
+  let deploymentSignal;
+  const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, fetchImpl: async (url, init) => {
+    if (url.includes("/v6/deployments")) return response(200, { deployments: [], pagination: {} });
+    if (url.includes("/v13/deployments") && init.method === "POST") {
+      deploymentSignal = init.signal;
+      return response(200, { id: "dpl_slow", projectId: project.id, name, target: "production", readyState: "BUILDING", meta: { scorecheckRehearsalGeneration: generationId }, alias: [] });
+    }
+    throw new Error(`unexpected ${init.method} ${url}`);
+  }});
+  const result = await client.ensureDeployment({ project, generationId, repoId: 123, ref: "master", sha: "a".repeat(40), environment });
+  assert.equal(result.id, "dpl_slow");
+  assert.equal(deploymentSignal.aborted, false);
+  assert.ok(deploymentSignal instanceof AbortSignal);
 });
 
 test("retries a definite transient deployment failure only after bounded absence proof", async () => {
