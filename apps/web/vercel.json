@@ -1,4 +1,4 @@
 {
   "framework": "nextjs",
-  "ignoreCommand": "if [ \"$NEXT_PUBLIC_SCORECHECK_REHEARSAL\" = \"true\" ]; then exit 1; fi; git diff HEAD^ HEAD --quiet -- ."
+  "ignoreCommand": "case \"$VERCEL_PROJECT_NAME\" in scorecheck-rehearsal-*) exit 1 ;; esac; git diff HEAD^ HEAD --quiet -- ."
 }

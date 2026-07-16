@@ -24,8 +24,8 @@ test("always builds isolated rehearsals while retaining unchanged production bui
   execFileSync("git", ["add", "."], { cwd: root });
   execFileSync("git", ["commit", "-qm", "outside"], { cwd: root });
 
-  const production = spawnSync("sh", ["-c", config.ignoreCommand], { cwd: web, env: { ...process.env, NEXT_PUBLIC_SCORECHECK_REHEARSAL: "false" } });
-  const rehearsal = spawnSync("sh", ["-c", config.ignoreCommand], { cwd: web, env: { ...process.env, NEXT_PUBLIC_SCORECHECK_REHEARSAL: "true" } });
+  const production = spawnSync("sh", ["-c", config.ignoreCommand], { cwd: web, env: { ...process.env, VERCEL_PROJECT_NAME: "scorecheck" } });
+  const rehearsal = spawnSync("sh", ["-c", config.ignoreCommand], { cwd: web, env: { ...process.env, VERCEL_PROJECT_NAME: "scorecheck-rehearsal-test" } });
   assert.equal(production.status, 0, "unchanged production web build should be skipped");
   assert.equal(rehearsal.status, 1, "isolated rehearsal must always continue its build");
 });
