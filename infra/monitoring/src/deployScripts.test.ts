@@ -94,6 +94,14 @@ describe("staged observability deployment", () => {
     expect(prometheusReload).toBeGreaterThan(rulesCutover);
   });
 
+  it("waits for a successful Prometheus sample from after the candidate cutover", () => {
+    expect(remoteDeploy).toContain('candidate_cutover_epoch="$(date +%s)"');
+    expect(remoteDeploy).toContain('wait_for_prometheus_monitor "$candidate_cutover_epoch"');
+    expect(remoteDeploy).toContain('(.data.result[0].value[0] | tonumber) >= $minimum');
+    expect(remoteDeploy).toContain('Prometheus did not observe a successful post-cutover monitor-service scrape within 60 seconds.');
+    expect(remoteDeploy).not.toContain(".data.result[0].value[1] == \"1\"' >/dev/null");
+  });
+
   it("never evaluates protected service environment values as shell code", () => {
     expect(remoteDeploy).not.toMatch(/(^|\n)\s*\.\s+"?\$REMOTE_DIR\/\.env"?/);
     expect(remoteDeploy).not.toContain("source \"$REMOTE_DIR/.env\"");

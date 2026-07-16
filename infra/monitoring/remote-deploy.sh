@@ -134,6 +134,30 @@ wait_for_public_health() {
   return 1
 }
 
+wait_for_prometheus_monitor() {
+  local minimum_sample_epoch="$1"
+  local payload
+  if [[ ! "$minimum_sample_epoch" =~ ^[0-9]+$ ]]; then
+    echo "Prometheus monitor sample boundary is invalid." >&2
+    return 1
+  fi
+  for _attempt in $(seq 1 30); do
+    payload="$(curl --fail --silent --show-error --max-time 10 \
+      'http://127.0.0.1:9090/api/v1/query?query=up%7Bjob%3D%22monitor-service%22%7D' 2>/dev/null || true)"
+    if printf '%s' "$payload" | jq -e --argjson minimum "$minimum_sample_epoch" '
+      .status == "success"
+      and (.data.result | length) == 1
+      and (.data.result[0].value[0] | tonumber) >= $minimum
+      and .data.result[0].value[1] == "1"
+    ' >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  echo "Prometheus did not observe a successful post-cutover monitor-service scrape within 60 seconds." >&2
+  return 1
+}
+
 assert_control_plane_ready() {
   curl --fail --silent --show-error --max-time 10 \
     http://127.0.0.1:9090/-/ready >/dev/null
@@ -320,6 +344,7 @@ docker tag scorecheck-monitoring:local "$rollback_image"
 rollback_required=1
 install -m 0600 "$CANDIDATE_DIR/.env" "$REMOTE_DIR/.env"
 docker tag "$candidate_image" scorecheck-monitoring:local
+candidate_cutover_epoch="$(date +%s)"
 compose up -d --no-deps --force-recreate --no-build monitor-service
 if ! wait_for_monitor "$REVISION"; then
   compose logs --tail=120 monitor-service >&2 || true
@@ -342,9 +367,7 @@ curl --fail --silent --show-error --max-time 10 \
 curl --fail --silent --show-error --max-time 10 \
   http://127.0.0.1:9090/api/v1/rules \
   | jq -e '.status == "success" and ([.data.groups[].rules[]] | length > 0)' >/dev/null
-curl --fail --silent --show-error --max-time 10 \
-  'http://127.0.0.1:9090/api/v1/query?query=up%7Bjob%3D%22monitor-service%22%7D' \
-  | jq -e '.status == "success" and .data.result[0].value[1] == "1"' >/dev/null
+wait_for_prometheus_monitor "$candidate_cutover_epoch"
 assert_control_plane_ready
 
 for path in .dockerignore Dockerfile package.json package-lock.json test-alertmanager-inhibition.mjs tsconfig.json; do
