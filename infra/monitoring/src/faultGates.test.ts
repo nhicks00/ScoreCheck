@@ -40,18 +40,18 @@ describe("deterministic eight-court fault gate", () => {
   });
 
   it("detects repeated content on one court without blaming its transport or seven peers", () => {
-    const browsers = healthyBrowsers();
-    browsers.set(3, browser(3, { frozenDurationMs: 16_000 }));
-    const snapshot = build(mediaAgent(), browsers);
+    const runtimes = healthyRuntimes(mediaAgent());
+    setContentVisual(runtimes, 3, { frozenDurationMs: 16_000 });
+    const snapshot = buildMonitorSnapshot(targets, runtimes, 8, nowMs, [], healthyBrowsers(), controlPlane(), youtube());
     expect(criticalCourts(snapshot)).toEqual([3]);
     expect(stage(snapshot, 3, "RAW_INGEST")?.issueCode).toBe("FULL_BITRATE_VISUAL_FREEZE");
     expect(stage(snapshot, 3, "PROGRAM_BROWSER")?.state).toBe("HEALTHY");
   });
 
   it("detects a persistently black picture without opening a duplicate freeze diagnosis", () => {
-    const browsers = healthyBrowsers();
-    browsers.set(2, browser(2, { blackDurationMs: 21_000, frozenDurationMs: 16_000 }));
-    const snapshot = build(mediaAgent(), browsers);
+    const runtimes = healthyRuntimes(mediaAgent());
+    setContentVisual(runtimes, 2, { blackDurationMs: 21_000, frozenDurationMs: 16_000 });
+    const snapshot = buildMonitorSnapshot(targets, runtimes, 8, nowMs, [], healthyBrowsers(), controlPlane(), youtube());
     expect(criticalCourts(snapshot)).toEqual([2]);
     expect(stage(snapshot, 2, "RAW_INGEST")?.issueCode).toBe("CAMERA_CONTENT_BLACK");
     expect(stage(snapshot, 2, "PROGRAM_BROWSER")?.state).toBe("HEALTHY");
@@ -270,6 +270,16 @@ function compositorAgent(agentId: string, assignedCourts: number[]): AgentSnapsh
   return {
     ...agentBase(agentId, "compositor"),
     assignedCourts,
+    contentAnalysis: assignedCourts.map((courtNumber) => ({
+      courtNumber,
+      sourceBranch: "raw" as const,
+      state: "ANALYZING" as const,
+      sessionStartedAt: observedAt,
+      framesAnalyzed: 120,
+      visual: { sampledAt: observedAt, meanLuma: 120, lumaVariance: 900, darkPixelRatio: 0.02, frameDifference: 14, frozenDurationMs: 0, blackDurationMs: 0 },
+      audio: { sampledAt: observedAt, trackPresent: true, rmsDb: -24, peakDb: -10, clippedSampleRatio: 0, secondsSinceAudio: 0 },
+      process: { running: true, restartCount: 0, lastExitAt: null }
+    })),
     nativeServices: {
       endpoints: [{ service: "egress-metrics", up: true }, { service: "egress-health", up: true }],
       livekit: null,
@@ -280,7 +290,7 @@ function compositorAgent(agentId: string, assignedCourts: number[]): AgentSnapsh
 
 function agentBase(agentId: string, role: AgentSnapshot["role"]): AgentSnapshot {
   return {
-    version: 2,
+    version: 3,
     agentId,
     role,
     assignedCourts: [],
@@ -291,8 +301,24 @@ function agentBase(agentId: string, role: AgentSnapshot["role"]): AgentSnapshot 
     services: [],
     mediaPaths: [],
     ffmpegBranches: [],
+    contentAnalysis: [],
     nativeServices: { endpoints: [], livekit: null, egress: null }
   };
+}
+
+function setContentVisual(
+  runtimes: Map<string, AgentRuntime>,
+  courtNumber: number,
+  patch: Partial<AgentSnapshot["contentAnalysis"][number]["visual"]>
+): void {
+  for (const runtime of runtimes.values()) {
+    const content = runtime.snapshot?.contentAnalysis.find((entry) => entry.courtNumber === courtNumber);
+    if (content) {
+      Object.assign(content.visual, patch);
+      return;
+    }
+  }
+  throw new Error(`Missing content analyzer fixture for Camera ${courtNumber}.`);
 }
 
 function healthyBrowsers(): Map<number, BrowserHeartbeatSnapshot> {
@@ -301,7 +327,7 @@ function healthyBrowsers(): Map<number, BrowserHeartbeatSnapshot> {
 
 function browser(courtNumber: number, visualPatch: Partial<BrowserHeartbeatSnapshot["visual"]> = {}): BrowserHeartbeatSnapshot {
   const payload = browserHeartbeatPayloadSchema.parse({
-    version: 2,
+    version: 3,
     credentialId: `40000000-0000-4000-8000-${String(courtNumber).padStart(12, "0")}`,
     courtNumber,
     heartbeatSeq: 1,

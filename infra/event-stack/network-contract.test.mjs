@@ -17,6 +17,10 @@ test("validates the exact persistent VPC and four tag-addressed firewalls", () =
     "bvm-observability"
   ]);
   assert.deepEqual(firewallPayload(contract.firewalls[0]).droplet_ids, []);
+  assert.deepEqual(
+    contract.firewalls[0].inboundRules.find((rule) => rule.ports === "8554"),
+    { protocol: "tcp", ports: "8554", sources: { tags: ["bvm-compositor"] } }
+  );
 });
 
 test("rejects duplicate target tags and non-private VPC ranges", () => {

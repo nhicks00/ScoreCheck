@@ -50,6 +50,7 @@ test("host firewalls mirror public role exposure and keep agent telemetry privat
     assert.match(ingest, new RegExp(`ufw allow ${escapeRegexp(command)}`));
   }
   assert.match(ingest, new RegExp(`ufw allow from ${escapeRegexp(vpcCidr)} to any port 9108 proto tcp`));
+  assert.match(ingest, new RegExp(`ufw allow from ${escapeRegexp(vpcCidr)} to any port 8554 proto tcp`));
 
   const observability = await readFile(profiles.observability, "utf8");
   for (const command of ["22/tcp", "80/tcp", "443/tcp"]) assert.match(observability, new RegExp(`ufw allow ${escapeRegexp(command)}`));

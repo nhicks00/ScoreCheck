@@ -7,60 +7,127 @@ tests:
   - name: repeated picture is isolated and does not masquerade as black
     interval: 5s
     input_series:
-      - series: 'scorecheck_program_visual_frozen_duration_seconds{court="1"}'
+      - series: 'scorecheck_camera_visual_frozen_duration_seconds{agent="comp-a",court="1"}'
         values: '0 5 10 16 21 26'
-      - series: 'scorecheck_program_visual_black_duration_seconds{court="1"}'
+      - series: 'scorecheck_camera_visual_black_duration_seconds{agent="comp-a",court="1"}'
         values: '0 0 0 0 0 0'
+      - series: 'scorecheck_camera_content_analyzer_available{agent="comp-a",court="1"}'
+        values: '1 1 1 1 1 1'
       - series: 'scorecheck_court_live_match{court="1"}'
         values: '1 1 1 1 1 1'
-      - series: 'scorecheck_program_visual_frozen_duration_seconds{court="2"}'
+      - series: 'scorecheck_camera_visual_frozen_duration_seconds{agent="comp-b",court="2"}'
         values: '0 0 0 0 0 0'
-      - series: 'scorecheck_program_visual_black_duration_seconds{court="2"}'
+      - series: 'scorecheck_camera_visual_black_duration_seconds{agent="comp-b",court="2"}'
         values: '0 0 0 0 0 0'
+      - series: 'scorecheck_camera_content_analyzer_available{agent="comp-b",court="2"}'
+        values: '1 1 1 1 1 1'
       - series: 'scorecheck_court_live_match{court="2"}'
         values: '1 1 1 1 1 1'
     alert_rule_test:
       - eval_time: 20s
-        alertname: ScoreCheckProgramVisualFreeze
+        alertname: ScoreCheckCameraVisualFreeze
         exp_alerts:
           - exp_labels:
               court: '1'
+              agent: comp-a
               severity: critical
               stage: RAW_INGEST
               issue_code: FULL_BITRATE_VISUAL_FREEZE
               root_dependency: venue-camera
             exp_annotations:
-              summary: Court 1 picture is repeating while rendered frames continue.
+              summary: Camera 1 picture is repeating while encoded frames continue.
               first_action: Inspect the camera encoder and source capture; healthy bitrate does not prove changing video content.
       - eval_time: 20s
-        alertname: ScoreCheckProgramBlackPicture
+        alertname: ScoreCheckCameraBlackPicture
         exp_alerts: []
 
   - name: persistent black suppresses the repeated-picture page
     interval: 5s
     input_series:
-      - series: 'scorecheck_program_visual_frozen_duration_seconds{court="1"}'
+      - series: 'scorecheck_camera_visual_frozen_duration_seconds{agent="comp-a",court="1"}'
         values: '0 5 10 16 21 26'
-      - series: 'scorecheck_program_visual_black_duration_seconds{court="1"}'
+      - series: 'scorecheck_camera_visual_black_duration_seconds{agent="comp-a",court="1"}'
         values: '0 5 10 16 21 26'
+      - series: 'scorecheck_camera_content_analyzer_available{agent="comp-a",court="1"}'
+        values: '1 1 1 1 1 1'
       - series: 'scorecheck_court_live_match{court="1"}'
         values: '1 1 1 1 1 1'
     alert_rule_test:
       - eval_time: 25s
-        alertname: ScoreCheckProgramVisualFreeze
+        alertname: ScoreCheckCameraVisualFreeze
         exp_alerts: []
       - eval_time: 25s
-        alertname: ScoreCheckProgramBlackPicture
+        alertname: ScoreCheckCameraBlackPicture
         exp_alerts:
           - exp_labels:
               court: '1'
+              agent: comp-a
               severity: critical
               stage: RAW_INGEST
               issue_code: CAMERA_CONTENT_BLACK
               root_dependency: venue-camera
             exp_annotations:
-              summary: Court 1 picture is persistently black or covered.
+              summary: Camera 1 picture is persistently black or covered.
               first_action: Inspect the physical camera view and lens before changing network or encoder settings.
+
+  - name: camera content analyzer ownership and availability fail closed
+    interval: 1s
+    input_series:
+      - series: 'scorecheck_camera_content_analyzer_configured{agent="comp-a",court="1"}'
+        values: '0+0x8'
+      - series: 'scorecheck_camera_content_analyzer_configured{agent="comp-b",court="2"}'
+        values: '1+0x8'
+      - series: 'scorecheck_camera_content_analyzer_available{agent="comp-b",court="2"}'
+        values: '0+0x8'
+      - series: 'scorecheck_camera_content_analyzer_configured{agent="comp-c",court="3"}'
+        values: '1+0x8'
+      - series: 'scorecheck_camera_content_analyzer_configured{agent="comp-d",court="3"}'
+        values: '1+0x8'
+      - series: 'scorecheck_court_live_match{court="1"}'
+        values: '1+0x8'
+      - series: 'scorecheck_court_live_match{court="2"}'
+        values: '1+0x8'
+      - series: 'scorecheck_court_live_match{court="3"}'
+        values: '1+0x8'
+    alert_rule_test:
+      - eval_time: 6s
+        alertname: ScoreCheckCameraContentAnalyzerUnassigned
+        exp_alerts:
+          - exp_labels:
+              agent: comp-a
+              court: '1'
+              severity: critical
+              stage: RAW_INGEST
+              issue_code: CAMERA_CONTENT_ANALYZER_UNAVAILABLE
+              root_dependency: monitoring-agent
+            exp_annotations:
+              summary: Camera 1 has no host-local picture and audio analyzer.
+              first_action: Check the assigned compositor analyzer configuration before trusting camera-content health.
+      - eval_time: 6s
+        alertname: ScoreCheckCameraContentAnalyzerUnavailable
+        exp_alerts:
+          - exp_labels:
+              agent: comp-b
+              court: '2'
+              severity: critical
+              stage: RAW_INGEST
+              issue_code: CAMERA_CONTENT_ANALYZER_UNAVAILABLE
+              root_dependency: monitoring-agent
+            exp_annotations:
+              summary: Camera 2 picture and audio analyzer is unavailable on comp-b.
+              first_action: Check the assigned compositor agent, analyzer process, and private raw RTSP path.
+      - eval_time: 6s
+        alertname: ScoreCheckCameraContentAnalyzerConflict
+        exp_alerts:
+          - exp_labels:
+              court: '3'
+              severity: critical
+              stage: RAW_INGEST
+              issue_code: CAMERA_CONTENT_ANALYZER_CONFLICT
+              root_dependency: monitoring-configuration
+            exp_annotations:
+              summary: Camera 3 is assigned to more than one host-local analyzer.
+              first_action: Remove the duplicate analyzer assignment before trusting camera-content health.
 
   - name: required camera loss pages only the affected court after its hold
     interval: 5s
@@ -124,14 +191,22 @@ tests:
   - name: camera audio failures keep exact issue codes and live-match gating
     interval: 5s
     input_series:
-      - series: 'scorecheck_program_camera_audio_track_present{court="1"}'
+      - series: 'scorecheck_camera_audio_track_present{agent="comp-a",court="1"}'
         values: '0 0 0 0 0 0'
-      - series: 'scorecheck_program_camera_audio_silence_age_seconds{court="2"}'
+      - series: 'scorecheck_camera_content_analyzer_available{agent="comp-a",court="1"}'
+        values: '1 1 1 1 1 1'
+      - series: 'scorecheck_camera_audio_silence_age_seconds{agent="comp-b",court="2"}'
         values: '61 62 63 64 65 66'
-      - series: 'scorecheck_program_camera_audio_clipped_sample_ratio{court="3"}'
+      - series: 'scorecheck_camera_content_analyzer_available{agent="comp-b",court="2"}'
+        values: '1 1 1 1 1 1'
+      - series: 'scorecheck_camera_audio_clipped_sample_ratio{agent="comp-c",court="3"}'
         values: '0.06 0.06 0.06 0.06 0.06 0.06'
-      - series: 'scorecheck_program_camera_audio_track_present{court="4"}'
+      - series: 'scorecheck_camera_content_analyzer_available{agent="comp-c",court="3"}'
+        values: '1 1 1 1 1 1'
+      - series: 'scorecheck_camera_audio_track_present{agent="comp-d",court="4"}'
         values: '0 0 0 0 0 0'
+      - series: 'scorecheck_camera_content_analyzer_available{agent="comp-d",court="4"}'
+        values: '1 1 1 1 1 1'
       - series: 'scorecheck_court_live_match{court="1"}'
         values: '1 1 1 1 1 1'
       - series: 'scorecheck_court_live_match{court="2"}'
@@ -146,37 +221,40 @@ tests:
         exp_alerts:
           - exp_labels:
               court: '1'
-              severity: warning
+              agent: comp-a
+              severity: critical
               stage: RAW_INGEST
               issue_code: CAMERA_AUDIO_TRACK_MISSING
               root_dependency: venue-camera
             exp_annotations:
-              summary: Camera audio track is missing on court 1.
+              summary: Camera audio track is missing on Camera 1.
               first_action: Check the camera microphone and encoder audio-track configuration.
       - eval_time: 20s
         alertname: ScoreCheckCameraAudioSilent
         exp_alerts:
           - exp_labels:
               court: '2'
-              severity: warning
+              agent: comp-b
+              severity: critical
               stage: RAW_INGEST
               issue_code: CAMERA_AUDIO_SILENT
               root_dependency: venue-camera
             exp_annotations:
-              summary: Camera audio is persistently silent on court 2.
+              summary: Camera audio is persistently silent on Camera 2.
               first_action: Check the camera microphone, physical audio source, and input gain.
       - eval_time: 20s
         alertname: ScoreCheckCameraAudioClipping
         exp_alerts:
           - exp_labels:
               court: '3'
+              agent: comp-c
               severity: warning
               stage: RAW_INGEST
               issue_code: CAMERA_AUDIO_CLIPPING
               root_dependency: venue-camera
             exp_annotations:
-              summary: Camera audio is clipping heavily on court 3.
-              first_action: Reduce camera input or program camera gain and verify peak recovery.
+              summary: Camera audio is clipping heavily on Camera 3.
+              first_action: Reduce camera input gain and verify that the audio peak recovers.
 
   - name: commentary track and network faults are isolated to required courts
     interval: 5s

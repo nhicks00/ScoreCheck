@@ -40,6 +40,22 @@ Compositor ownership is stored centrally and repeated by the agent. A mismatched
 assignment is rejected, and an unreachable compositor remains attributable to
 its pair even if observability restarts during the outage.
 
+Each assigned camera also has exactly one browser-independent content analyzer
+on its owning compositor. It reads the raw camera path over private RTSP before
+preview normalization, program delay, browser rendering, or Egress. The
+analyzer decodes keyframes to 160x90 grayscale at one sample per second and
+downmixes camera audio to mono 8 kHz PCM. It never publishes media and cannot
+control MediaMTX. Browser heartbeats remain authoritative for viewer rendering,
+WHEP reconnects, browser drops/freezes, and A/V synchronization; they are not
+the authority for camera black, repeated-picture, or camera-audio faults.
+
+Private analyzer reads are credential-free so secrets never appear in FFmpeg
+process arguments. Access is still fail closed at three layers: the DigitalOcean
+firewall admits TCP 8554 only from the `bvm-compositor` tag, host UFW admits it
+only from the event VPC, and MediaMTX internal authentication binds each exact
+compositor private IP to only its assigned raw camera path(s). Do not broaden
+that final allowlist to the full VPC or all raw paths.
+
 ## Dashboard reading order
 
 1. Check the global strip. Collector must report `6/6 agents` before coverage.
@@ -104,8 +120,9 @@ before public coverage.
 | Five-minute sparklines | 30 seconds while visible | optional |
 | Durable Supabase checkpoint | 60 seconds | fallback only |
 | Browser thumbnail | 15 seconds | 45 seconds |
-| Local visual content sample | 1 second | carried by browser heartbeat |
-| Local audio level sample | 0.5 seconds | carried by browser heartbeat |
+| Host-local camera visual sample | 1 second | 4 seconds |
+| Host-local camera audio sample | 1 second | 4 seconds |
+| Browser visual/render sample | 5 seconds | 15 seconds |
 
 High-frequency samples stay in Prometheus. Supabase receives only expectations,
 incident transitions, acknowledgements, silences, notification receipts, and a
@@ -151,12 +168,16 @@ disposable Alertmanager before restarting production observability.
 
 ### Content and audio thresholds
 
+- Host-local analyzer configuration conflict or loss: critical while the raw
+  path is required and healthy. Never fall back to browser content analysis.
 - Repeated picture: warning after 5 seconds, critical after 15 seconds, only
   during `LIVE_MATCH` and only while raw transport remains healthy.
 - Uniform black or covered picture: critical after 20 seconds. It suppresses the
   repeated-picture alert so one physical symptom does not produce two pages.
-- Camera or required commentary silence: warning after 60 seconds from track
-  arrival or the last audible sample.
+- Missing camera audio track: critical after 15 seconds during `LIVE_MATCH`.
+- Camera silence: critical after 60 seconds from track arrival or the last
+  audible sample plus a 15-second alert hold. Required commentary silence
+  remains warning-level.
 - Camera or commentary clipping: warning when more than 5 percent of recent
   samples are at or above 0.99 absolute amplitude.
 - Commentary packet loss: warning above 10 percent over one minute.
@@ -166,7 +187,8 @@ disposable Alertmanager before restarting production observability.
 
 Use the current thumbnail and stage evidence before changing equipment. Content
 analysis distinguishes changing from repeated pixels, but cannot prove whether
-a static view was intentional.
+a static view was intentional. Camera-content incidents use host-local raw
+analysis; browser visual counters are retained only as downstream corroboration.
 
 ### Timed silence
 
@@ -334,6 +356,37 @@ service image, environment, rules, scrape config, and source provenance.
 Compose topology, Caddy, and Alertmanager changes are rejected here and require
 a separate, explicitly reviewed infrastructure cutover.
 
+Monitoring contract v3 is a same-revision hard cutover. Contract-v2 service
+rejects v3 agents and contract-v3 service rejects v2 agents, so do not leave a
+mixed fleet running. Perform the cutover only with every court expected off,
+no active event, no incident or fault gate, idle Egress workers, and no public
+output. The bounded order is:
+
+1. Capture the monitor snapshot, container identities/restart counts, current
+   MediaMTX config hash, exact compositor private IPs, Prometheus targets/rules,
+   Alertmanager state, and Pushover/dead-man health.
+2. Apply the reviewed DigitalOcean TCP-8554 compositor-tag firewall rule and
+   confirm host UFW still restricts TCP 8554 to the event VPC.
+3. Render MediaMTX with `MEDIAMTX_CONTENT_ANALYZER_BINDINGS` set to the exact
+   active compositor private-IP-to-court assignments, deploy it during the idle
+   window, and prove public camera publish authentication is unchanged. This is
+   the only media-service recreate in the cutover.
+4. Recreate every compositor monitor agent from the same commit with its owned
+   analyzer courts and the ingest private RTSP origin. Do not configure an
+   analyzer on the spare compositor.
+5. Recreate monitor-service and load the matching one-second compositor scrape,
+   one-second camera-content rules, Alertmanager inhibitions, and dashboard
+   contract from that same commit.
+6. Prove all agents are contract v3 and fresh, each assigned camera has exactly
+   one configured analyzer, no duplicates exist, private reads do not activate
+   preview/program branches, and container identities outside the approved
+   MediaMTX/agent/monitor-service set are unchanged.
+
+The current paired-compositor topology can run two analyzers per c-4. The final
+eight-compositor event topology runs one. Both were capacity-qualified before
+this cutover; see
+`docs/monitoring-gates/2026-07-16-host-local-content-analyzer.md`.
+
 Register or replace a compositor agent with:
 
 ```bash
@@ -342,6 +395,7 @@ MONITOR_SSH_HOST=root@OBSERVABILITY_PUBLIC_IP \
   --name HOST_NAME \
   --ssh-host root@COMPOSITOR_PUBLIC_IP \
   --private-ip COMPOSITOR_VPC_IP \
+  --ingest-private-ip INGEST_VPC_IP \
   --courts COURT_NUMBER_OR_CURRENT_PAIR \
   --observability-private-ip OBSERVABILITY_VPC_IP \
   --refresh
@@ -355,6 +409,9 @@ After every deployment verify:
 - Alertmanager can deliver to the correlator;
 - snapshot reports eight courts and six fresh agents;
 - every court has exactly one expected compositor mapping;
+- every assigned court has exactly one fresh host-local content analyzer and no
+  analyzer conflict;
+- raw analyzer readers do not start preview or program branches;
 - there are no unexplained active incidents;
 - `/admin/monitor` loads through an authenticated production admin session;
 - the browser console contains no monitoring errors.

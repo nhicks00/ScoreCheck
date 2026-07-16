@@ -64,7 +64,7 @@ describe("test-feed fault controller", () => {
     });
     assert.deepEqual(faultReadyProblems(content, 4, "freeze", NOW), []);
     assert.match(faultReadyProblems(snapshotWith(content, { program: branchPath("program", { readerCount: 2 }) }), 4, "freeze", NOW).join(";"), /exactly one active viewer/);
-    assert.match(faultReadyProblems(snapshotWith(content, { browser: browser({ visual: { frozenDurationMs: 6_000 } }) }), 4, "freeze", NOW).join(";"), /visual analysis is not clean/);
+    assert.match(faultReadyProblems(snapshotWith(content, { contentAnalysis: analyzer({ visual: { frozenDurationMs: 6_000 } }) }), 4, "freeze", NOW).join(";"), /visual analysis is not clean/);
   });
 
   it("requires the Program viewer before arming a content-analysis gate", () => {
@@ -79,7 +79,8 @@ describe("test-feed fault controller", () => {
       raw: rawPath({ readerCount: 1 }),
       preview: branchPath("preview", { readerCount: 1 }),
       program: branchPath("program", { readerCount: 1 }),
-      browser: browser({ commentary: { secondsSinceCameraAudio: 8 } }),
+      browser: browser(),
+      contentAnalysis: analyzer({ audio: { secondsSinceAudio: 8 } }),
       gates: [gate("PROGRAM_CONTENT")],
       expectation: gateExpectation("PROGRAM_CONTENT"),
       selectedState: "HEALTHY"
@@ -202,6 +203,7 @@ function snapshot(patch = {}) {
       ["program", patch.program]
     ].filter(([, value]) => value)),
     browser: patch.browser ?? null,
+    contentAnalysis: patch.contentAnalysis ?? analyzer(),
     faultGate: patch.gates?.find((entry) => entry.courtNumber === 4) ?? null
   });
   return {
@@ -227,7 +229,8 @@ function snapshotWith(base, patch) {
         ...(patch.program ? { program: patch.program } : {}),
         ...(patch.preview ? { preview: patch.preview } : {})
       },
-      browser: patch.browser ?? selected.browser
+      browser: patch.browser ?? selected.browser,
+      contentAnalysis: patch.contentAnalysis ?? selected.contentAnalysis
     } : entry)
   };
 }
@@ -238,6 +241,7 @@ function court(courtNumber, patch = {}) {
     overallState: patch.overallState ?? "EXPECTED_OFF",
     stages: [],
     paths: patch.paths ?? {},
+    contentAnalysis: patch.contentAnalysis ?? null,
     browser: patch.browser ?? null,
     expectation: patch.expectation ?? offExpectation(),
     faultGate: patch.faultGate ?? null
@@ -300,6 +304,29 @@ function browser(patch = {}) {
       secondsSinceCameraAudio: 0,
       ...(patch.commentary ?? {})
     }
+  };
+}
+
+function analyzer(patch = {}) {
+  return {
+    courtNumber: 4,
+    sourceBranch: "raw",
+    state: "ANALYZING",
+    sessionStartedAt: "2026-07-15T05:59:00.000Z",
+    framesAnalyzed: 60,
+    visual: {
+      sampledAt: "2026-07-15T05:59:59.000Z",
+      frozenDurationMs: 0,
+      blackDurationMs: 0,
+      ...(patch.visual ?? {})
+    },
+    audio: {
+      sampledAt: "2026-07-15T05:59:59.000Z",
+      trackPresent: true,
+      secondsSinceAudio: 0,
+      ...(patch.audio ?? {})
+    },
+    process: { running: true, restartCount: 0, lastExitAt: null }
   };
 }
 

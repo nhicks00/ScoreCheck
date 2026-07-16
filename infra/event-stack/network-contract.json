@@ -12,6 +12,7 @@
         { "protocol": "tcp", "ports": "80", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
         { "protocol": "tcp", "ports": "443", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
         { "protocol": "tcp", "ports": "1935", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
+        { "protocol": "tcp", "ports": "8554", "sources": { "tags": ["bvm-compositor"] } },
         { "protocol": "tcp", "ports": "9108", "sources": { "tags": ["bvm-observability"] } },
         { "protocol": "udp", "ports": "8189", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },
         { "protocol": "udp", "ports": "8890", "sources": { "addresses": ["0.0.0.0/0", "::/0"] } },

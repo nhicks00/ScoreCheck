@@ -88,3 +88,12 @@ on the final compositor topology, retaining conservative persistence and peer
 isolation. Alternatively, the operator may explicitly accept an approximately
 35-40 second phone-opening objective. That tradeoff must be decided before the
 remaining black-picture and camera-silence gates are run.
+
+## Follow-up
+
+The host-local analyzer hard-cutover was implemented and its one- and two-stream
+c-4 capacity gates passed on 2026-07-16. This does not revise the result above:
+the browser-authoritative gate still failed the 20-second SLA. Production
+contract-v3 cutover and repeat Pushover freeze/black/audio gates remain required.
+See `2026-07-16-host-local-content-analyzer.md` for the new authority contract,
+private-network boundary, capacity evidence, and remaining acceptance.

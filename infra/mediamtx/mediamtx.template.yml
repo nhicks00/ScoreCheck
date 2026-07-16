@@ -13,7 +13,7 @@ metrics: yes
 metricsAddress: 127.0.0.1:9998
 
 rtsp: yes
-rtspAddress: 127.0.0.1:8554
+rtspAddress: :8554
 rtspTransports: [tcp]
 
 rtmp: yes
@@ -43,6 +43,11 @@ authInternalUsers:
         path: "~^court[1-8]_(preview|program|monitor|calibration)$"
       - action: playback
         path: "~^court[1-8]_(preview|program|monitor|calibration)$"
+
+  # Each assigned compositor analyzes only its owned raw camera feed before the
+  # program delay. Exact source-IP/path bindings are rendered from lifecycle
+  # state; cloud and host firewalls independently restrict the RTSP listener.
+__CONTENT_ANALYZER_USERS__
 
   # Each venue encoder has a separate credential and can publish only to its
   # permanent raw court identity. This limits a copied or stale camera profile

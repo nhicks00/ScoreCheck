@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { buildEventManifest, loadManifestInputs } from "./event-manifest.mjs";
-import { buildAgentPlans, commentaryEndpointHosts, loadProtectedEnv, roleConfigBindings, serializeAgentTargets, servicePublicIpv4, verifyProtectedSecretDirectory } from "./stack-deployer.mjs";
+import { buildAgentPlans, commentaryEndpointHosts, compositorContentAnalyzerBindings, loadProtectedEnv, roleConfigBindings, serializeAgentTargets, servicePublicIpv4, verifyProtectedSecretDirectory } from "./stack-deployer.mjs";
 
 const inputs = await loadManifestInputs();
 const manifest = buildEventManifest({ event: "deploy-test", kind: "production", destroyAfter: "2026-08-01", ...inputs });
@@ -49,10 +49,39 @@ test("builds one private monitoring target per exact event resource", () => {
   const spare = plans.find((entry) => entry.id === "bvm-compositor-spare");
   assert.equal(spare.role, "worker");
   assert.equal(spare.courts, "");
+  assert.equal(spare.environment.MONITOR_CONTENT_ANALYZER_COURTS, undefined);
+  assert.equal(spare.environment.MONITOR_CONTENT_ANALYZER_RTSP_BASE_URL, undefined);
   assert.equal(plans.find((entry) => entry.id === "bvm-preview-01").role, "mediamtx");
+  const compositor = plans.find((entry) => entry.id === "bvm-compositor-a");
+  assert.equal(compositor.environment.MONITOR_CONTENT_ANALYZER_COURTS, "1");
+  assert.equal(compositor.environment.MONITOR_CONTENT_ANALYZER_RTSP_BASE_URL, "rtsp://10.20.0.3:8554");
+  assert.deepEqual(compositorContentAnalyzerBindings({ manifest, state: stateFixture() }), [
+    { ip: "10.20.0.4", courts: [1] }, { ip: "10.20.0.5", courts: [2] },
+    { ip: "10.20.0.6", courts: [3] }, { ip: "10.20.0.7", courts: [4] },
+    { ip: "10.20.0.8", courts: [5] }, { ip: "10.20.0.9", courts: [6] },
+    { ip: "10.20.0.10", courts: [7] }, { ip: "10.20.0.11", courts: [8] }
+  ]);
   const serialized = serializeAgentTargets(plans);
   assert.equal(serialized.split(",").length, 12);
   assert.match(serialized, /bvm-compositor-a\|compositor\|http:\/\/10\.20\.0\.4:9108\|[^|]+\|1/);
+});
+
+test("fails closed when analyzer source ownership or private addresses are incomplete", () => {
+  const state = stateFixture();
+  delete state.droplets["bvm-preview-01"].privateIpv4;
+  assert.throws(() => buildAgentPlans({ manifest, state, tokenConfig: tokenFixture() }), /ingest service is missing private IPv4/u);
+
+  const missingCompositor = stateFixture();
+  delete missingCompositor.droplets["bvm-compositor-h"].privateIpv4;
+  assert.throws(() => compositorContentAnalyzerBindings({ manifest, state: missingCompositor }), /every assigned compositor/u);
+
+  const duplicated = stateFixture();
+  duplicated.droplets["bvm-compositor-h"].privateIpv4 = duplicated.droplets["bvm-compositor-g"].privateIpv4;
+  assert.throws(() => compositorContentAnalyzerBindings({ manifest, state: duplicated }), /must be unique/u);
+
+  const duplicatedCourt = structuredClone(manifest);
+  duplicatedCourt.droplets.find((entry) => entry.name === "bvm-compositor-h").court = 7;
+  assert.throws(() => compositorContentAnalyzerBindings({ manifest: duplicatedCourt, state: stateFixture() }), /courts must be unique/u);
 });
 
 test("selects exact production and rehearsal commentary TLS hosts", () => {

@@ -43,6 +43,7 @@ runcmd:
   - ufw allow 8189/udp
   - ufw allow 8890/udp
   - ufw allow 51820/udp
+  - ufw allow from 10.120.0.0/20 to any port 8554 proto tcp
   - ufw allow from 10.120.0.0/20 to any port 9108 proto tcp
   - ufw --force enable
 

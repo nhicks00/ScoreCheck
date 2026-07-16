@@ -27,6 +27,15 @@ export function operatorNotificationCopy(incident: IncidentSnapshot): OperatorNo
     };
   }
 
+  if (matches(issue, ["CAMERA_CONTENT_ANALYZER_UNAVAILABLE", "CAMERA_CONTENT_ANALYZER_CONFLICT"])) {
+    return {
+      ...base,
+      problem: `ScoreCheck cannot verify ${camera ?? "a camera"}'s picture or sound.`,
+      action: `Leave ${camera ?? "the camera"} streaming and contact the technical operator. Do not restart the camera for this alert.`,
+      recovery: `ScoreCheck can verify ${camera ?? "the camera"}'s picture and sound again. No action is needed.`
+    };
+  }
+
   if (matches(issue, ["FULL_BITRATE_VISUAL_FREEZE", "VISUAL_FREEZE_SUSPECTED"])) {
     return { ...base, problem: `${camera ?? "A camera"}'s picture is frozen.`, action: `Check ${camera ?? "the camera"}. If its screen is also frozen, restart that camera's stream.`, recovery: `${camera ?? "The camera"}'s picture is moving again. No action is needed.` };
   }

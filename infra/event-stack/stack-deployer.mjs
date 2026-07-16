@@ -63,7 +63,8 @@ export class LocalStackDeployer {
         MEDIAMTX_SSH_HOST: `root@${resource.publicIpv4}`,
         MEDIAMTX_SSH_KEY: this.sshPrivateKey,
         MEDIAMTX_PUBLIC_IP: servicePublicIpv4({ manifest, state, spec, resource }),
-        MEDIAMTX_PUBLIC_HOST: endpointForRole(manifest, "ingest")
+        MEDIAMTX_PUBLIC_HOST: endpointForRole(manifest, "ingest"),
+        MEDIAMTX_CONTENT_ANALYZER_BINDINGS: JSON.stringify(compositorContentAnalyzerBindings({ manifest, state }))
       });
     } else if (["compositor", "compositor-spare"].includes(spec.role)) {
       const environmentPath = join(this.secretsDirectory, "compositors", `${spec.name}.env`);
@@ -227,6 +228,11 @@ export function buildAgentPlans({ manifest, state, tokenConfig }) {
   if (JSON.stringify(Object.keys(tokenConfig.tokens).sort()) !== JSON.stringify(expectedNames)) {
     throw new Error("agent token configuration must contain exactly one token per event Droplet");
   }
+  const ingestSpecs = manifest.droplets.filter((entry) => entry.role === "ingest");
+  if (ingestSpecs.length !== 1) throw new Error("event manifest must contain exactly one ingest service");
+  const ingestResource = state.droplets[ingestSpecs[0].name];
+  if (!ingestResource?.privateIpv4) throw new Error("ingest service is missing private IPv4 state");
+  const analyzerOrigin = `rtsp://${ingestResource.privateIpv4}:8554`;
   return manifest.droplets.map((spec) => {
     const resource = state.droplets[spec.name];
     if (!resource?.publicIpv4 || !resource?.privateIpv4) throw new Error(`${spec.name} is missing public/private IPv4 state`);
@@ -241,10 +247,32 @@ export function buildAgentPlans({ manifest, state, tokenConfig }) {
       MONITOR_AGENT_TOKEN: token,
       MONITOR_AGENT_BIND: resource.privateIpv4,
       MONITOR_AGENT_COURTS: courts,
-      ...agentRoleEnvironment(spec.role)
+      ...agentRoleEnvironment(spec.role),
+      ...(spec.role === "compositor" ? {
+        MONITOR_CONTENT_ANALYZER_COURTS: courts,
+        MONITOR_CONTENT_ANALYZER_RTSP_BASE_URL: analyzerOrigin
+      } : {})
     };
     return { id, role, token, courts, publicIpv4: resource.publicIpv4, privateIpv4: resource.privateIpv4, environment };
   });
+}
+
+export function compositorContentAnalyzerBindings({ manifest, state }) {
+  const activeCompositors = manifest.droplets.filter((entry) => entry.role === "compositor");
+  if (activeCompositors.length !== 8) throw new Error("event manifest must contain exactly eight assigned compositors");
+  const bindings = activeCompositors.map((spec) => ({
+    ip: state.droplets[spec.name]?.privateIpv4,
+    courts: [spec.court]
+  }));
+  if (bindings.some((binding) => typeof binding.ip !== "string" || !binding.ip)) {
+    throw new Error("every assigned compositor must have private IPv4 state");
+  }
+  if (bindings.some((binding) => !Number.isInteger(binding.courts[0]) || binding.courts[0] < 1 || binding.courts[0] > 8)) {
+    throw new Error("every assigned compositor must own exactly one court from 1 through 8");
+  }
+  if (new Set(bindings.map((binding) => binding.ip)).size !== bindings.length) throw new Error("assigned compositor private IPv4 addresses must be unique");
+  if (new Set(bindings.map((binding) => binding.courts[0])).size !== 8) throw new Error("assigned compositor courts must be unique");
+  return bindings.sort((left, right) => left.courts[0] - right.courts[0]);
 }
 
 export function serializeAgentTargets(plans) {

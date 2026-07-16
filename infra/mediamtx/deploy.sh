@@ -17,6 +17,7 @@ for court in $(seq 1 8); do
   [[ -n "${!pass_var:-}" ]] || { echo "error: $pass_var is required" >&2; exit 1; }
 done
 : "${MEDIAMTX_PUBLIC_HOST:?MEDIAMTX_PUBLIC_HOST is required}"
+: "${MEDIAMTX_CONTENT_ANALYZER_BINDINGS:?MEDIAMTX_CONTENT_ANALYZER_BINDINGS is required}"
 export MEDIAMTX_PUBLIC_IP="${MEDIAMTX_PUBLIC_IP:-${SSH_HOST#*@}}"
 
 node "$SCRIPT_DIR/render-config.mjs"
@@ -35,24 +36,59 @@ cd "$REMOTE_DIR"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p backups
 had_previous=0
-if [[ -f docker-compose.yml && -f mediamtx.yml && -f Caddyfile ]]; then
+compose_changed=1
+caddy_changed=1
+installed_files=(docker-compose.yml mediamtx.yml Caddyfile scorecheck-ffmpeg-runner.sh)
+existing_files=0
+for path in "${installed_files[@]}"; do
+  [[ -f "$path" ]] && existing_files=$((existing_files + 1))
+done
+if [[ "$existing_files" -ne 0 && "$existing_files" -ne "${#installed_files[@]}" ]]; then
+  echo "MediaMTX deployment directory contains an incomplete rollback baseline." >&2
+  exit 1
+fi
+if [[ "$existing_files" -eq "${#installed_files[@]}" ]]; then
   cp docker-compose.yml "backups/docker-compose.$timestamp.yml"
   cp mediamtx.yml "backups/mediamtx.$timestamp.yml"
   cp Caddyfile "backups/Caddyfile.$timestamp"
+  cp scorecheck-ffmpeg-runner.sh "backups/scorecheck-ffmpeg-runner.$timestamp.sh"
+  cmp -s docker-compose.yml .incoming/docker-compose.yml && compose_changed=0
+  cmp -s Caddyfile .incoming/Caddyfile && caddy_changed=0
   had_previous=1
 fi
+
+restore_previous() {
+  cp "backups/docker-compose.$timestamp.yml" docker-compose.yml
+  cp "backups/mediamtx.$timestamp.yml" mediamtx.yml
+  cp "backups/Caddyfile.$timestamp" Caddyfile
+  cp "backups/scorecheck-ffmpeg-runner.$timestamp.sh" scorecheck-ffmpeg-runner.sh
+}
 
 install -m 0644 .incoming/docker-compose.yml docker-compose.yml
 install -m 0600 .incoming/mediamtx.yml mediamtx.yml
 install -m 0644 .incoming/Caddyfile Caddyfile
 install -m 0755 .incoming/scorecheck-ffmpeg-runner.sh scorecheck-ffmpeg-runner.sh
-docker compose config -q
+if ! docker compose config -q; then
+  if [[ "$had_previous" -eq 1 ]]; then restore_previous; fi
+  echo "MediaMTX candidate Compose configuration is invalid." >&2
+  exit 1
+fi
 
-if ! docker compose up -d --force-recreate; then
+services=(mediamtx)
+if [[ "$had_previous" -eq 0 || "$compose_changed" -eq 1 || "$caddy_changed" -eq 1 ]]; then
+  services+=(caddy)
+fi
+caddy_before="$(docker inspect bvm-mediamtx-caddy --format '{{.Id}}' 2>/dev/null || true)"
+if [[ "$had_previous" -eq 1 && -z "$caddy_before" ]]; then
+  restore_previous
+  echo "Existing Caddy container must be running before a bounded MediaMTX deployment." >&2
+  exit 1
+fi
+
+if ! docker compose up -d --force-recreate "${services[@]}"; then
   if [[ "$had_previous" -eq 1 ]]; then
-    cp "backups/docker-compose.$timestamp.yml" docker-compose.yml
-    cp "backups/mediamtx.$timestamp.yml" mediamtx.yml
-    docker compose up -d --force-recreate
+    restore_previous
+    docker compose up -d --force-recreate "${services[@]}"
   else
     docker compose down --remove-orphans || true
   fi
@@ -63,6 +99,13 @@ for attempt in $(seq 1 30); do
   if docker inspect mediamtx --format '{{.State.Running}}' 2>/dev/null | grep -qx true \
     && docker inspect bvm-mediamtx-caddy --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null | grep -qx healthy \
     && curl -fsS http://127.0.0.1:9997/v3/config/global/get >/dev/null; then
+    if [[ "$had_previous" -eq 1 && "$compose_changed" -eq 0 && "$caddy_changed" -eq 0 ]]; then
+      caddy_after="$(docker inspect bvm-mediamtx-caddy --format '{{.Id}}' 2>/dev/null || true)"
+      if [[ "$caddy_after" != "$caddy_before" ]]; then
+        echo "Caddy identity changed during a MediaMTX-only deployment." >&2
+        break
+      fi
+    fi
     echo "MediaMTX deployment healthy."
     exit 0
   fi
@@ -71,10 +114,8 @@ done
 
 docker logs --tail=100 mediamtx >&2 || true
 if [[ "$had_previous" -eq 1 ]]; then
-  cp "backups/docker-compose.$timestamp.yml" docker-compose.yml
-  cp "backups/mediamtx.$timestamp.yml" mediamtx.yml
-  cp "backups/Caddyfile.$timestamp" Caddyfile
-  docker compose up -d --force-recreate
+  restore_previous
+  docker compose up -d --force-recreate "${services[@]}"
   echo "MediaMTX health check failed; previous config restored." >&2
 else
   docker compose down --remove-orphans || true

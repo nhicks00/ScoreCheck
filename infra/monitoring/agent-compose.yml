@@ -33,6 +33,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: agent
     image: scorecheck-monitoring:local
     command: ["npm", "run", "start:agent"]
     restart: unless-stopped

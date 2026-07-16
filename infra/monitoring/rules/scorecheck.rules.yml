@@ -1,4 +1,103 @@
 groups:
+  - name: scorecheck-camera-content
+    interval: 1s
+    rules:
+      - alert: ScoreCheckCameraContentAnalyzerUnassigned
+        expr: (scorecheck_camera_content_analyzer_configured == 0) and on(court) (scorecheck_court_live_match == 1)
+        for: 5s
+        labels:
+          severity: critical
+          stage: RAW_INGEST
+          issue_code: CAMERA_CONTENT_ANALYZER_UNAVAILABLE
+          root_dependency: monitoring-agent
+        annotations:
+          summary: "Camera {{ $labels.court }} has no host-local picture and audio analyzer."
+          first_action: "Check the assigned compositor analyzer configuration before trusting camera-content health."
+
+      - alert: ScoreCheckCameraContentAnalyzerConflict
+        expr: (sum by (court) (scorecheck_camera_content_analyzer_configured) > 1) and on(court) (scorecheck_court_live_match == 1)
+        for: 5s
+        labels:
+          severity: critical
+          stage: RAW_INGEST
+          issue_code: CAMERA_CONTENT_ANALYZER_CONFLICT
+          root_dependency: monitoring-configuration
+        annotations:
+          summary: "Camera {{ $labels.court }} is assigned to more than one host-local analyzer."
+          first_action: "Remove the duplicate analyzer assignment before trusting camera-content health."
+
+      - alert: ScoreCheckCameraContentAnalyzerUnavailable
+        expr: (scorecheck_camera_content_analyzer_configured == 1) and on(agent, court) (scorecheck_camera_content_analyzer_available == 0) and on(court) (scorecheck_court_live_match == 1)
+        for: 5s
+        labels:
+          severity: critical
+          stage: RAW_INGEST
+          issue_code: CAMERA_CONTENT_ANALYZER_UNAVAILABLE
+          root_dependency: monitoring-agent
+        annotations:
+          summary: "Camera {{ $labels.court }} picture and audio analyzer is unavailable on {{ $labels.agent }}."
+          first_action: "Check the assigned compositor agent, analyzer process, and private raw RTSP path."
+
+      - alert: ScoreCheckCameraVisualFreeze
+        expr: (scorecheck_camera_visual_frozen_duration_seconds > 15) and on(agent, court) (scorecheck_camera_visual_black_duration_seconds == 0) and on(agent, court) (scorecheck_camera_content_analyzer_available == 1) and on(court) (scorecheck_court_live_match == 1)
+        for: 0s
+        labels:
+          severity: critical
+          stage: RAW_INGEST
+          issue_code: FULL_BITRATE_VISUAL_FREEZE
+          root_dependency: venue-camera
+        annotations:
+          summary: "Camera {{ $labels.court }} picture is repeating while encoded frames continue."
+          first_action: "Inspect the camera encoder and source capture; healthy bitrate does not prove changing video content."
+
+      - alert: ScoreCheckCameraBlackPicture
+        expr: (scorecheck_camera_visual_black_duration_seconds > 20) and on(agent, court) (scorecheck_camera_content_analyzer_available == 1) and on(court) (scorecheck_court_live_match == 1)
+        for: 0s
+        labels:
+          severity: critical
+          stage: RAW_INGEST
+          issue_code: CAMERA_CONTENT_BLACK
+          root_dependency: venue-camera
+        annotations:
+          summary: "Camera {{ $labels.court }} picture is persistently black or covered."
+          first_action: "Inspect the physical camera view and lens before changing network or encoder settings."
+
+      - alert: ScoreCheckCameraAudioTrackMissing
+        expr: (scorecheck_camera_audio_track_present == 0) and on(agent, court) (scorecheck_camera_content_analyzer_available == 1) and on(court) (scorecheck_court_live_match == 1)
+        for: 15s
+        labels:
+          severity: critical
+          stage: RAW_INGEST
+          issue_code: CAMERA_AUDIO_TRACK_MISSING
+          root_dependency: venue-camera
+        annotations:
+          summary: "Camera audio track is missing on Camera {{ $labels.court }}."
+          first_action: "Check the camera microphone and encoder audio-track configuration."
+
+      - alert: ScoreCheckCameraAudioSilent
+        expr: (scorecheck_camera_audio_silence_age_seconds > 60) and on(agent, court) (scorecheck_camera_content_analyzer_available == 1) and on(court) (scorecheck_court_live_match == 1)
+        for: 15s
+        labels:
+          severity: critical
+          stage: RAW_INGEST
+          issue_code: CAMERA_AUDIO_SILENT
+          root_dependency: venue-camera
+        annotations:
+          summary: "Camera audio is persistently silent on Camera {{ $labels.court }}."
+          first_action: "Check the camera microphone, physical audio source, and input gain."
+
+      - alert: ScoreCheckCameraAudioClipping
+        expr: (scorecheck_camera_audio_clipped_sample_ratio > 0.05) and on(agent, court) (scorecheck_camera_content_analyzer_available == 1) and on(court) (scorecheck_court_live_match == 1)
+        for: 10s
+        labels:
+          severity: warning
+          stage: RAW_INGEST
+          issue_code: CAMERA_AUDIO_CLIPPING
+          root_dependency: venue-camera
+        annotations:
+          summary: "Camera audio is clipping heavily on Camera {{ $labels.court }}."
+          first_action: "Reduce camera input gain and verify that the audio peak recovers."
+
   - name: scorecheck-monitoring
     interval: 5s
     rules:
@@ -109,66 +208,6 @@ groups:
         annotations:
           summary: "Raw ingest bitrate is below 500 kbps on court {{ $labels.court }}."
           first_action: "Compare camera encoder bitrate, venue uplink quality, packet loss, and reconnect counters."
-
-      - alert: ScoreCheckProgramVisualFreeze
-        expr: (scorecheck_program_visual_frozen_duration_seconds > 15) and on(court) (scorecheck_program_visual_black_duration_seconds == 0) and on(court) (scorecheck_court_live_match == 1)
-        for: 0s
-        labels:
-          severity: critical
-          stage: RAW_INGEST
-          issue_code: FULL_BITRATE_VISUAL_FREEZE
-          root_dependency: venue-camera
-        annotations:
-          summary: "Court {{ $labels.court }} picture is repeating while rendered frames continue."
-          first_action: "Inspect the camera encoder and source capture; healthy bitrate does not prove changing video content."
-
-      - alert: ScoreCheckProgramBlackPicture
-        expr: (scorecheck_program_visual_black_duration_seconds > 20) and on(court) (scorecheck_court_live_match == 1)
-        for: 0s
-        labels:
-          severity: critical
-          stage: RAW_INGEST
-          issue_code: CAMERA_CONTENT_BLACK
-          root_dependency: venue-camera
-        annotations:
-          summary: "Court {{ $labels.court }} picture is persistently black or covered."
-          first_action: "Inspect the physical camera view and lens before changing network or encoder settings."
-
-      - alert: ScoreCheckCameraAudioTrackMissing
-        expr: (scorecheck_program_camera_audio_track_present == 0) and on(court) (scorecheck_court_live_match == 1)
-        for: 15s
-        labels:
-          severity: warning
-          stage: RAW_INGEST
-          issue_code: CAMERA_AUDIO_TRACK_MISSING
-          root_dependency: venue-camera
-        annotations:
-          summary: "Camera audio track is missing on court {{ $labels.court }}."
-          first_action: "Check the camera microphone and encoder audio-track configuration."
-
-      - alert: ScoreCheckCameraAudioSilent
-        expr: (scorecheck_program_camera_audio_silence_age_seconds > 60) and on(court) (scorecheck_court_live_match == 1)
-        for: 15s
-        labels:
-          severity: warning
-          stage: RAW_INGEST
-          issue_code: CAMERA_AUDIO_SILENT
-          root_dependency: venue-camera
-        annotations:
-          summary: "Camera audio is persistently silent on court {{ $labels.court }}."
-          first_action: "Check the camera microphone, physical audio source, and input gain."
-
-      - alert: ScoreCheckCameraAudioClipping
-        expr: (scorecheck_program_camera_audio_clipped_sample_ratio > 0.05) and on(court) (scorecheck_court_live_match == 1)
-        for: 10s
-        labels:
-          severity: warning
-          stage: RAW_INGEST
-          issue_code: CAMERA_AUDIO_CLIPPING
-          root_dependency: venue-camera
-        annotations:
-          summary: "Camera audio is clipping heavily on court {{ $labels.court }}."
-          first_action: "Reduce camera input or program camera gain and verify peak recovery."
 
       - alert: ScoreCheckProgramBrowserMissing
         expr: (scorecheck_program_browser_heartbeat_fresh == 0) and on(court) (scorecheck_court_broadcast_live == 1)

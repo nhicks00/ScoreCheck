@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentTarget } from "./config.js";
-import { browserHeartbeatPayloadSchema, type AgentSnapshot, type BrowserHeartbeatSnapshot, type ControlPlaneSnapshot, type IncidentSnapshot } from "./contracts.js";
+import { browserHeartbeatPayloadSchema, type AgentSnapshot, type BrowserHeartbeatSnapshot, type CameraContentSnapshot, type ControlPlaneSnapshot, type IncidentSnapshot } from "./contracts.js";
 import { buildMonitorSnapshot, type AgentRuntime } from "./correlator.js";
 
 const target: AgentTarget = { id: "preview", role: "mediamtx", url: "http://agent", token: "abcdefghijklmnopqrstuvwxyz", assignedCourts: [] };
@@ -267,9 +267,13 @@ describe("monitor correlator", () => {
   it("detects a repeated full-bitrate picture while transport frames continue", () => {
     const generatedAt = "2026-07-12T12:00:00.000Z";
     const agent = rawAgentSnapshot(generatedAt);
-    const runtimes = new Map<string, AgentRuntime>([[target.id, { target, snapshot: agent, lastSeenAt: generatedAt, lastErrorAt: null }]]);
-    const browser = browserHeartbeat(generatedAt, { frozenDurationMs: 16_000 });
-    const result = buildMonitorSnapshot([target], runtimes, 1, Date.parse(generatedAt) + 1_000, [], new Map([[1, browser]]), liveControlPlane(generatedAt));
+    const analyzer = contentAgentSnapshot(generatedAt, { frozenDurationMs: 16_000 });
+    const runtimes = new Map<string, AgentRuntime>([
+      [target.id, { target, snapshot: agent, lastSeenAt: generatedAt, lastErrorAt: null }],
+      [compositorTarget.id, { target: compositorTarget, snapshot: analyzer, lastSeenAt: generatedAt, lastErrorAt: null }]
+    ]);
+    const browser = browserHeartbeat(generatedAt);
+    const result = buildMonitorSnapshot([target, compositorTarget], runtimes, 1, Date.parse(generatedAt) + 1_000, [], new Map([[1, browser]]), liveControlPlane(generatedAt));
     const ingest = result.courts[0]?.stages.find((stage) => stage.stage === "RAW_INGEST");
     expect(ingest?.state).toBe("CRITICAL");
     expect(ingest?.issueCode).toBe("FULL_BITRATE_VISUAL_FREEZE");
@@ -279,12 +283,41 @@ describe("monitor correlator", () => {
   it("distinguishes a persistently black picture from a missing transport", () => {
     const generatedAt = "2026-07-12T12:00:00.000Z";
     const agent = rawAgentSnapshot(generatedAt);
-    const runtimes = new Map<string, AgentRuntime>([[target.id, { target, snapshot: agent, lastSeenAt: generatedAt, lastErrorAt: null }]]);
-    const browser = browserHeartbeat(generatedAt, { blackDurationMs: 21_000, meanLuma: 2, lumaVariance: 1, darkPixelRatio: 1 });
-    const result = buildMonitorSnapshot([target], runtimes, 1, Date.parse(generatedAt) + 1_000, [], new Map([[1, browser]]), liveControlPlane(generatedAt));
+    const analyzer = contentAgentSnapshot(generatedAt, { blackDurationMs: 21_000, meanLuma: 2, lumaVariance: 1, darkPixelRatio: 1 });
+    const runtimes = new Map<string, AgentRuntime>([
+      [target.id, { target, snapshot: agent, lastSeenAt: generatedAt, lastErrorAt: null }],
+      [compositorTarget.id, { target: compositorTarget, snapshot: analyzer, lastSeenAt: generatedAt, lastErrorAt: null }]
+    ]);
+    const browser = browserHeartbeat(generatedAt);
+    const result = buildMonitorSnapshot([target, compositorTarget], runtimes, 1, Date.parse(generatedAt) + 1_000, [], new Map([[1, browser]]), liveControlPlane(generatedAt));
     const ingest = result.courts[0]?.stages.find((stage) => stage.stage === "RAW_INGEST");
     expect(ingest?.issueCode).toBe("CAMERA_CONTENT_BLACK");
     expect(ingest?.evidence.renderedFps).toBe(30);
+  });
+
+  it("fails closed when live transport has no assigned camera-content analyzer", () => {
+    const generatedAt = "2026-07-12T12:00:00.000Z";
+    const agent = rawAgentSnapshot(generatedAt);
+    const runtimes = new Map<string, AgentRuntime>([[target.id, { target, snapshot: agent, lastSeenAt: generatedAt, lastErrorAt: null }]]);
+    const result = buildMonitorSnapshot([target], runtimes, 1, Date.parse(generatedAt) + 1_000, [], new Map(), liveControlPlane(generatedAt));
+    const ingest = result.courts[0]?.stages.find((stage) => stage.stage === "RAW_INGEST");
+    expect(ingest?.state).toBe("UNKNOWN");
+    expect(ingest?.issueCode).toBe("CAMERA_CONTENT_ANALYZER_UNAVAILABLE");
+  });
+
+  it("fails closed when two fresh agents analyze the same camera", () => {
+    const generatedAt = "2026-07-12T12:00:00.000Z";
+    const duplicateTarget: AgentTarget = { ...compositorTarget, id: "compositor-b", url: "http://compositor-b" };
+    const runtimes = new Map<string, AgentRuntime>([
+      [target.id, { target, snapshot: rawAgentSnapshot(generatedAt), lastSeenAt: generatedAt, lastErrorAt: null }],
+      [compositorTarget.id, { target: compositorTarget, snapshot: contentAgentSnapshot(generatedAt), lastSeenAt: generatedAt, lastErrorAt: null }],
+      [duplicateTarget.id, { target: duplicateTarget, snapshot: { ...contentAgentSnapshot(generatedAt), agentId: duplicateTarget.id }, lastSeenAt: generatedAt, lastErrorAt: null }]
+    ]);
+    const result = buildMonitorSnapshot([target, compositorTarget, duplicateTarget], runtimes, 1, Date.parse(generatedAt) + 1_000, [], new Map(), liveControlPlane(generatedAt));
+    const ingest = result.courts[0]?.stages.find((stage) => stage.stage === "RAW_INGEST");
+    expect(ingest?.state).toBe("UNKNOWN");
+    expect(ingest?.issueCode).toBe("CAMERA_CONTENT_ANALYZER_CONFLICT");
+    expect(ingest?.evidence.analyzerAgents).toBe("compositor-a,compositor-b");
   });
 
   it("makes a missing required commentary track critical without declaring video down", () => {
@@ -326,9 +359,49 @@ function rawAgentSnapshot(generatedAt: string): AgentSnapshot {
   };
 }
 
+function contentAgentSnapshot(
+  generatedAt: string,
+  visual: Partial<CameraContentSnapshot["visual"]> = {},
+  audio: Partial<CameraContentSnapshot["audio"]> = {}
+): AgentSnapshot {
+  return {
+    ...emptyAgentSnapshot(generatedAt),
+    agentId: compositorTarget.id,
+    role: "compositor",
+    assignedCourts: [1, 2],
+    contentAnalysis: [{
+      courtNumber: 1,
+      sourceBranch: "raw",
+      state: "ANALYZING",
+      sessionStartedAt: generatedAt,
+      framesAnalyzed: 30,
+      visual: {
+        sampledAt: generatedAt,
+        meanLuma: 120,
+        lumaVariance: 900,
+        darkPixelRatio: 0.02,
+        frameDifference: 14,
+        frozenDurationMs: 0,
+        blackDurationMs: 0,
+        ...visual
+      },
+      audio: {
+        sampledAt: generatedAt,
+        trackPresent: true,
+        rmsDb: -24,
+        peakDb: -10,
+        clippedSampleRatio: 0,
+        secondsSinceAudio: 0,
+        ...audio
+      },
+      process: { running: true, restartCount: 0, lastExitAt: null }
+    }]
+  };
+}
+
 function browserHeartbeat(observedAt: string, visual: Partial<BrowserHeartbeatSnapshot["visual"]> = {}): BrowserHeartbeatSnapshot {
   const payload = browserHeartbeatPayloadSchema.parse({
-    version: 2,
+    version: 3,
     credentialId: "40000000-0000-4000-8000-000000000001",
     courtNumber: 1,
     heartbeatSeq: 1,
@@ -427,7 +500,7 @@ function liveControlPlane(observedAt: string): ControlPlaneSnapshot {
 
 function emptyAgentSnapshot(generatedAt: string): AgentSnapshot {
   return {
-    version: 2,
+    version: 3,
     agentId: "preview",
     role: "mediamtx",
     assignedCourts: [],
@@ -438,6 +511,7 @@ function emptyAgentSnapshot(generatedAt: string): AgentSnapshot {
     services: [],
     mediaPaths: [],
     ffmpegBranches: [],
+    contentAnalysis: [],
     nativeServices: { endpoints: [], livekit: null, egress: null }
   };
 }

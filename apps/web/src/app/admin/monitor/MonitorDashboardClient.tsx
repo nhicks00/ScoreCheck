@@ -571,7 +571,7 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
       </div>
       <div className="monitor-court-footer">
         <span className="monitor-source-profile" title={sourceDetail(raw)}><Signal size={14} /> {sourceProfile(raw)}</span>
-        <span><Camera size={14} /> {visualLabel(liveBrowser)}</span>
+        <span><Camera size={14} /> {visualLabel(court.contentAnalysis)}</span>
         <span><Headphones size={14} /> {commentaryLabel(liveBrowser)}</span>
         <span><Youtube size={14} /> {friendlyState(court.youtube?.state ?? "NOT_APPLICABLE")}</span>
         <span title={browserQualityDetail(liveBrowser)}><Activity size={14} /> {browserQualityLabel(liveBrowser, liveBrowser ? history : null)}</span>
@@ -779,12 +779,12 @@ function formatDuration(ms: number): string {
   return `${Math.floor(ms / 60_000)}m`;
 }
 
-function visualLabel(browser: MonitorCourt["browser"]): string {
-  if (!browser?.visual.sampledAt) return "picture --";
-  if (browser.visual.blackDurationMs > 0) return `black ${formatDuration(browser.visual.blackDurationMs)}`;
-  if (browser.visual.frozenDurationMs > 0) return `still ${formatDuration(browser.visual.frozenDurationMs)}`;
-  if (!browser.commentary.cameraTrackPresent) return "audio missing";
-  if ((browser.commentary.cameraClippedSampleRatio ?? 0) > 0.05) return "audio clipping";
+function visualLabel(content: MonitorCourt["contentAnalysis"]): string {
+  if (!content || content.state !== "ANALYZING" || !content.visual.sampledAt) return "picture check unavailable";
+  if (content.visual.blackDurationMs > 0) return `black ${formatDuration(content.visual.blackDurationMs)}`;
+  if (content.visual.frozenDurationMs > 0) return `still ${formatDuration(content.visual.frozenDurationMs)}`;
+  if (!content.audio.trackPresent) return "camera audio missing";
+  if ((content.audio.clippedSampleRatio ?? 0) > 0.05) return "camera audio clipping";
   return "picture active";
 }
 

@@ -3,6 +3,12 @@ import type { IncidentSnapshot } from "./contracts.js";
 import { operatorNotificationCopy } from "./operatorNotificationCopy.js";
 
 describe("operator notification copy", () => {
+  it("does not tell the operator to restart a camera for an analyzer failure", () => {
+    const copy = operatorNotificationCopy(incident({ stage: "RAW_INGEST", issueCode: "CAMERA_CONTENT_ANALYZER_UNAVAILABLE", courtNumber: 4 }));
+    expect(copy.problem).toBe("ScoreCheck cannot verify Camera 4's picture or sound.");
+    expect(copy.action).toBe("Leave Camera 4 streaming and contact the technical operator. Do not restart the camera for this alert.");
+  });
+
   it("turns a missing camera feed into a direct physical check", () => {
     const copy = operatorNotificationCopy(incident());
     expect(copy).toMatchObject({

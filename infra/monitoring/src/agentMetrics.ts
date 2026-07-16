@@ -1,5 +1,5 @@
 import { Counter, Gauge, Registry } from "prom-client";
-import type { AgentSnapshot, FfmpegBranchSnapshot } from "./contracts.js";
+import type { AgentSnapshot, CameraContentSnapshot, FfmpegBranchSnapshot } from "./contracts.js";
 
 export class AgentMetrics {
   readonly registry = new Registry();
@@ -41,6 +41,20 @@ export class AgentMetrics {
   private readonly ffmpegDuplicated = new Gauge({ name: "scorecheck_ffmpeg_duplicated_frames", help: "FFmpeg branch cumulative duplicated frames for the current process.", labelNames: ["agent", "court", "branch"], registers: [this.registry] });
   private readonly ffmpegSpeed = new Gauge({ name: "scorecheck_ffmpeg_speed_ratio", help: "FFmpeg processing speed where one equals real time.", labelNames: ["agent", "court", "branch"], registers: [this.registry] });
   private readonly ffmpegSpeedAvailable = new Gauge({ name: "scorecheck_ffmpeg_speed_available", help: "Whether FFmpeg speed is reported or derived from consecutive output timestamps.", labelNames: ["agent", "court", "branch"], registers: [this.registry] });
+  private readonly contentConfigured = new Gauge({ name: "scorecheck_camera_content_analyzer_configured", help: "Whether the assigned compositor has a host-local content analyzer for the court.", labelNames: ["agent", "court"], registers: [this.registry] });
+  private readonly contentAvailable = new Gauge({ name: "scorecheck_camera_content_analyzer_available", help: "Whether the host-local raw camera analyzer is producing fresh frames.", labelNames: ["agent", "court"], registers: [this.registry] });
+  private readonly contentSampleAge = new Gauge({ name: "scorecheck_camera_content_sample_age_seconds", help: "Age of the latest host-local camera-content sample.", labelNames: ["agent", "court"], registers: [this.registry] });
+  private readonly contentFrames = new Gauge({ name: "scorecheck_camera_content_frames_analyzed_total", help: "Frames analyzed during the current agent process lifetime.", labelNames: ["agent", "court"], registers: [this.registry] });
+  private readonly contentRestarts = new Gauge({ name: "scorecheck_camera_content_analyzer_restarts_total", help: "Analyzer process restarts during the current agent process lifetime.", labelNames: ["agent", "court"], registers: [this.registry] });
+  private readonly contentFrozenDuration = new Gauge({ name: "scorecheck_camera_visual_frozen_duration_seconds", help: "Monotonic duration of repeated raw-camera pictures.", labelNames: ["agent", "court"], registers: [this.registry] });
+  private readonly contentBlackDuration = new Gauge({ name: "scorecheck_camera_visual_black_duration_seconds", help: "Monotonic duration of persistently black or covered raw-camera pictures.", labelNames: ["agent", "court"], registers: [this.registry] });
+  private readonly contentDarkRatio = new Gauge({ name: "scorecheck_camera_visual_dark_pixel_ratio", help: "Fraction of host-local sampled camera pixels below the dark threshold.", labelNames: ["agent", "court"], registers: [this.registry] });
+  private readonly contentFrameDifference = new Gauge({ name: "scorecheck_camera_visual_frame_difference", help: "Mean absolute luminance difference from the prior host-local camera sample.", labelNames: ["agent", "court"], registers: [this.registry] });
+  private readonly contentAudioTrack = new Gauge({ name: "scorecheck_camera_audio_track_present", help: "Whether the host-local analyzer receives the camera audio track.", labelNames: ["agent", "court"], registers: [this.registry] });
+  private readonly contentAudioRms = new Gauge({ name: "scorecheck_camera_audio_rms_db", help: "Host-local camera audio RMS in decibels.", labelNames: ["agent", "court"], registers: [this.registry] });
+  private readonly contentAudioPeak = new Gauge({ name: "scorecheck_camera_audio_peak_db", help: "Host-local camera audio peak in decibels.", labelNames: ["agent", "court"], registers: [this.registry] });
+  private readonly contentAudioClipping = new Gauge({ name: "scorecheck_camera_audio_clipped_sample_ratio", help: "Fraction of clipped host-local camera audio samples.", labelNames: ["agent", "court"], registers: [this.registry] });
+  private readonly contentAudioSilenceAge = new Gauge({ name: "scorecheck_camera_audio_silence_age_seconds", help: "Monotonic seconds since host-local camera audio last exceeded the signal threshold.", labelNames: ["agent", "court"], registers: [this.registry] });
   private readonly nativeEndpointUp = new Gauge({ name: "scorecheck_native_endpoint_up", help: "Whether an allowlisted local native metrics or health endpoint is reachable.", labelNames: ["agent", "role", "service"], registers: [this.registry] });
   private readonly livekitRooms = new Gauge({ name: "scorecheck_livekit_rooms", help: "Current LiveKit room count.", labelNames: ["agent"], registers: [this.registry] });
   private readonly livekitParticipants = new Gauge({ name: "scorecheck_livekit_participants", help: "Current LiveKit participant count.", labelNames: ["agent"], registers: [this.registry] });
@@ -155,6 +169,13 @@ export class AgentMetrics {
       }
     }
 
+    this.updateContentAnalysis(
+      snapshot.agentId,
+      snapshot.role === "compositor" ? snapshot.assignedCourts : [],
+      snapshot.contentAnalysis,
+      Date.parse(snapshot.generatedAt)
+    );
+
     this.nativeEndpointUp.reset();
     for (const endpoint of snapshot.nativeServices.endpoints) {
       this.nativeEndpointUp.set({ ...base, service: endpoint.service }, endpoint.up ? 1 : 0);
@@ -190,6 +211,56 @@ export class AgentMetrics {
       if (snapshot.nativeServices.egress.cgroupMemoryBytes != null) this.egressCgroupMemory.set(labels, snapshot.nativeServices.egress.cgroupMemoryBytes);
       if (snapshot.nativeServices.egress.cpuLoadRatio != null) this.egressCpuLoad.set(labels, snapshot.nativeServices.egress.cpuLoadRatio);
       if (snapshot.nativeServices.egress.memoryLoadRatio != null) this.egressMemoryLoad.set(labels, snapshot.nativeServices.egress.memoryLoadRatio);
+    }
+  }
+
+  updateContentAnalysis(
+    agentId: string,
+    assignedCourts: number[],
+    snapshots: CameraContentSnapshot[],
+    observedAtMs = Date.now()
+  ): void {
+    const contentMetrics = [
+      this.contentConfigured,
+      this.contentAvailable,
+      this.contentSampleAge,
+      this.contentFrames,
+      this.contentRestarts,
+      this.contentFrozenDuration,
+      this.contentBlackDuration,
+      this.contentDarkRatio,
+      this.contentFrameDifference,
+      this.contentAudioTrack,
+      this.contentAudioRms,
+      this.contentAudioPeak,
+      this.contentAudioClipping,
+      this.contentAudioSilenceAge
+    ];
+    for (const metric of contentMetrics) metric.reset();
+    for (const court of assignedCourts) {
+      const labels = { agent: agentId, court: String(court) };
+      this.contentConfigured.set(labels, 0);
+      this.contentAvailable.set(labels, 0);
+    }
+    for (const content of snapshots) {
+      const labels = { agent: agentId, court: String(content.courtNumber) };
+      this.contentConfigured.set(labels, 1);
+      this.contentAvailable.set(labels, content.state === "ANALYZING" ? 1 : 0);
+      this.contentFrames.set(labels, content.framesAnalyzed);
+      this.contentRestarts.set(labels, content.process.restartCount);
+      if (content.visual.sampledAt) {
+        const ageSeconds = Math.max(0, observedAtMs - Date.parse(content.visual.sampledAt)) / 1_000;
+        this.contentSampleAge.set(labels, ageSeconds);
+      }
+      this.contentFrozenDuration.set(labels, content.visual.frozenDurationMs / 1_000);
+      this.contentBlackDuration.set(labels, content.visual.blackDurationMs / 1_000);
+      if (content.visual.darkPixelRatio != null) this.contentDarkRatio.set(labels, content.visual.darkPixelRatio);
+      if (content.visual.frameDifference != null) this.contentFrameDifference.set(labels, content.visual.frameDifference);
+      this.contentAudioTrack.set(labels, content.audio.trackPresent ? 1 : 0);
+      if (content.audio.rmsDb != null) this.contentAudioRms.set(labels, content.audio.rmsDb);
+      if (content.audio.peakDb != null) this.contentAudioPeak.set(labels, content.audio.peakDb);
+      if (content.audio.clippedSampleRatio != null) this.contentAudioClipping.set(labels, content.audio.clippedSampleRatio);
+      if (content.audio.secondsSinceAudio != null) this.contentAudioSilenceAge.set(labels, content.audio.secondsSinceAudio);
     }
   }
 

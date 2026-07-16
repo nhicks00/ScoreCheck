@@ -56,13 +56,6 @@ const commentaryPacketsReceived = new Gauge({ name: "scorecheck_program_commenta
 const commentaryJitterBuffer = new Gauge({ name: "scorecheck_program_commentary_jitter_buffer_ms", help: "Recent commentary receiver jitter-buffer delay in milliseconds.", labelNames: ["court"], registers: [registry] });
 const commentarySyncLocked = new Gauge({ name: "scorecheck_program_commentary_sync_locked", help: "Whether adaptive commentary synchronization is locked.", labelNames: ["court"], registers: [registry] });
 const commentarySyncGap = new Gauge({ name: "scorecheck_program_commentary_sync_gap_ms", help: "Absolute target-to-applied commentary delay gap.", labelNames: ["court"], registers: [registry] });
-const cameraAudioTrack = new Gauge({ name: "scorecheck_program_camera_audio_track_present", help: "Whether the camera media stream contains a live audio track.", labelNames: ["court"], registers: [registry] });
-const cameraAudioClipping = new Gauge({ name: "scorecheck_program_camera_audio_clipped_sample_ratio", help: "Recent camera-audio clipped-sample ratio.", labelNames: ["court"], registers: [registry] });
-const cameraAudioSilenceAge = new Gauge({ name: "scorecheck_program_camera_audio_silence_age_seconds", help: "Seconds since camera audio last exceeded the non-silence threshold.", labelNames: ["court"], registers: [registry] });
-const visualFrozenDuration = new Gauge({ name: "scorecheck_program_visual_frozen_duration_seconds", help: "Duration of low inter-frame visual change while rendered frames continue.", labelNames: ["court"], registers: [registry] });
-const visualBlackDuration = new Gauge({ name: "scorecheck_program_visual_black_duration_seconds", help: "Duration of a high-confidence black or covered program image.", labelNames: ["court"], registers: [registry] });
-const visualDarkRatio = new Gauge({ name: "scorecheck_program_visual_dark_pixel_ratio", help: "Fraction of sampled program pixels below the dark threshold.", labelNames: ["court"], registers: [registry] });
-const visualFrameDifference = new Gauge({ name: "scorecheck_program_visual_frame_difference", help: "Mean absolute luminance difference from the prior sampled frame.", labelNames: ["court"], registers: [registry] });
 const scoreRenderAligned = new Gauge({ name: "scorecheck_program_score_render_aligned", help: "Whether scorebug source and rendered DOM signatures agree.", labelNames: ["court"], registers: [registry] });
 const controlPlaneFresh = new Gauge({ name: "scorecheck_control_plane_fresh", help: "Whether the latest Supabase control-plane sample is fresh.", registers: [registry] });
 const scoreWorkerHealthy = new Gauge({ name: "scorecheck_score_worker_healthy", help: "Score worker state: 1 healthy, 0 unavailable, -1 not applicable.", registers: [registry] });
@@ -416,13 +409,6 @@ async function pollAll() {
   commentaryJitterBuffer.reset();
   commentarySyncLocked.reset();
   commentarySyncGap.reset();
-  cameraAudioTrack.reset();
-  cameraAudioClipping.reset();
-  cameraAudioSilenceAge.reset();
-  visualFrozenDuration.reset();
-  visualBlackDuration.reset();
-  visualDarkRatio.reset();
-  visualFrameDifference.reset();
   scoreRenderAligned.reset();
   courtMediaRequired.reset();
   courtExpectationContext.reset();
@@ -485,7 +471,6 @@ async function pollAll() {
     commentaryTracks.set(labels, browser.commentary.audioTrackCount);
     commentaryMutedTracks.set(labels, browser.commentary.mutedAudioTrackCount);
     commentarySyncLocked.set(labels, browser.commentary.syncStatus === "locked" ? 1 : 0);
-    cameraAudioTrack.set(labels, browser.commentary.cameraTrackPresent ? 1 : 0);
     setOptionalGauge(commentaryClipping, labels, browser.commentary.clippedSampleRatio);
     setOptionalGauge(commentarySilenceAge, labels, browser.commentary.secondsSinceAudio);
     setOptionalGauge(commentaryPacketsLost, labels, browser.commentary.packetsLost);
@@ -495,12 +480,6 @@ async function pollAll() {
       ? Math.abs(browser.commentary.targetDelayMs - browser.commentary.appliedDelayMs)
       : null;
     setOptionalGauge(commentarySyncGap, labels, syncGapMs);
-    setOptionalGauge(cameraAudioClipping, labels, browser.commentary.cameraClippedSampleRatio);
-    setOptionalGauge(cameraAudioSilenceAge, labels, browser.commentary.secondsSinceCameraAudio);
-    visualFrozenDuration.set(labels, browser.visual.frozenDurationMs / 1_000);
-    visualBlackDuration.set(labels, browser.visual.blackDurationMs / 1_000);
-    setOptionalGauge(visualDarkRatio, labels, browser.visual.darkPixelRatio);
-    setOptionalGauge(visualFrameDifference, labels, browser.visual.frameDifference);
     const render = browser.scoreRender;
     scoreRenderAligned.set(labels, render.loaded
       && render.connected

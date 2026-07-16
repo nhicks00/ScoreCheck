@@ -636,13 +636,14 @@ function contentBaselineProblems(court, scenarioName, receivedAtMs) {
     const fps = browser.video?.framesPerSecond;
     if (typeof fps !== "number" || fps < 25 || fps > 35) problems.push("the Program browser frame rate is outside the clean baseline band");
     if ((browser.video?.packetsLost ?? 0) !== 0) problems.push("the Program browser has RTP packet loss before the fault");
-    const visualAge = receivedAtMs - Date.parse(browser.visual?.sampledAt);
-    if (!Number.isFinite(visualAge) || visualAge < -5_000 || visualAge > 15_000) problems.push("visual analysis is missing or stale");
-    if ((browser.visual?.frozenDurationMs ?? 0) !== 0 || (browser.visual?.blackDurationMs ?? 0) !== 0) problems.push("visual analysis is not clean before the fault");
-    if (scenarioName === "camera-silence") {
-      if (!browser.commentary?.cameraTrackPresent) problems.push("the camera audio track is missing before the silence fault");
-      if (browser.commentary?.secondsSinceCameraAudio == null || browser.commentary.secondsSinceCameraAudio > 5) problems.push("camera audio is already silent before the fault");
-    }
+  }
+  const content = court.contentAnalysis;
+  const visualAge = receivedAtMs - Date.parse(content?.visual?.sampledAt);
+  if (content?.state !== "ANALYZING" || !Number.isFinite(visualAge) || visualAge < -5_000 || visualAge > 5_000) problems.push("host-local visual analysis is missing or stale");
+  if ((content?.visual?.frozenDurationMs ?? 0) !== 0 || (content?.visual?.blackDurationMs ?? 0) !== 0) problems.push("host-local visual analysis is not clean before the fault");
+  if (scenarioName === "camera-silence") {
+    if (!content?.audio?.trackPresent) problems.push("the camera audio track is missing before the silence fault");
+    if (content?.audio?.secondsSinceAudio == null || content.audio.secondsSinceAudio > 5) problems.push("camera audio is already silent before the fault");
   }
   return problems;
 }

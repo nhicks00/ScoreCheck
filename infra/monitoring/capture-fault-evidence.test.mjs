@@ -134,7 +134,7 @@ test("records media and browser transitions without relying on counter monotonic
   down.court.paths.preview.ready = false;
   down.court.browser = null;
   const recovered = sample({ at: 2_000 });
-  recovered.court.browser.reconnectCount = 4;
+  recovered.court.browser.video.reconnectCount = 4;
   const result = evaluateEvidence([baseline, down, recovered], options());
   assert.deepEqual(result.pathTransitions, [
     { branch: "raw", ready: false, at: iso(1_000) },
@@ -423,7 +423,7 @@ function court(courtNumber, overallState) {
       program: { ready: overallState === "HEALTHY" }
     },
     ffmpeg: {},
-    browser: overallState === "HEALTHY" ? { state: "playing", pageLoadedAt: iso(0), reconnectCount: 0, reloadCount: 0 } : null,
+    browser: overallState === "HEALTHY" ? { pageLoadedAt: iso(0), video: { state: "playing", reconnectCount: 0, reloadCount: 0 } } : null,
     expectation: {},
     faultGate: null,
     youtube: null,

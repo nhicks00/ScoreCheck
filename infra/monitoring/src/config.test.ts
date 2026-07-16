@@ -107,6 +107,27 @@ describe("monitoring configuration", () => {
     })).toThrow();
   });
 
+  it("binds camera-content analyzers to owned compositor courts and a credential-free RTSP origin", () => {
+    const base = {
+      MONITOR_AGENT_ID: "compositor-a",
+      MONITOR_AGENT_ROLE: "compositor",
+      MONITOR_AGENT_TOKEN: "abcdefghijklmnopqrstuvwxyz",
+      MONITOR_AGENT_COURTS: "1,2"
+    };
+    const parsed = loadAgentConfig({
+      ...base,
+      MONITOR_CONTENT_ANALYZER_COURTS: "2",
+      MONITOR_CONTENT_ANALYZER_RTSP_BASE_URL: "rtsp://10.0.0.2:8554/"
+    });
+    expect(parsed.contentAnalyzerCourts).toEqual([2]);
+    expect(parsed.contentAnalyzerRtspBaseUrl).toBe("rtsp://10.0.0.2:8554");
+    expect(() => loadAgentConfig({ ...base, MONITOR_CONTENT_ANALYZER_COURTS: "3", MONITOR_CONTENT_ANALYZER_RTSP_BASE_URL: "rtsp://10.0.0.2:8554" })).toThrow(/must be owned/);
+    expect(() => loadAgentConfig({ ...base, MONITOR_CONTENT_ANALYZER_COURTS: "1" })).toThrow(/requires MONITOR_CONTENT_ANALYZER_RTSP_BASE_URL/);
+    expect(() => loadAgentConfig({ ...base, MONITOR_CONTENT_ANALYZER_COURTS: "1", MONITOR_CONTENT_ANALYZER_RTSP_BASE_URL: "rtsp://user:pass@10.0.0.2:8554" })).toThrow();
+    expect(() => loadAgentConfig({ ...base, MONITOR_CONTENT_ANALYZER_RTSP_BASE_URL: "rtsp://10.0.0.2:8554" })).toThrow(/requires at least one analyzer court/);
+    expect(() => loadAgentConfig({ ...base, MONITOR_AGENT_ROLE: "commentary", MONITOR_CONTENT_ANALYZER_COURTS: "1", MONITOR_CONTENT_ANALYZER_RTSP_BASE_URL: "rtsp://10.0.0.2:8554" })).toThrow(/only on compositor/);
+  });
+
   it("bounds the compositor web Egress ceiling", () => {
     const base = {
       MONITOR_AGENT_ID: "compositor-a",

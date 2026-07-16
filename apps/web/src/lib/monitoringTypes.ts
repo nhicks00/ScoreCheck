@@ -50,7 +50,7 @@ export type MonitorMediaPath = {
 export type MonitorFfmpegBranch = {
   name: string;
   courtNumber: number;
-  branch: "preview" | "program" | "calibration";
+  branch: "preview" | "program" | "calibration" | "monitor";
   sampledAt: string;
   frame: number;
   framesPerSecond: number | null;
@@ -59,6 +59,32 @@ export type MonitorFfmpegBranch = {
   duplicatedFrames: number;
   droppedFrames: number;
   speedRatio: number | null;
+};
+
+export type MonitorCameraContent = {
+  courtNumber: number;
+  sourceBranch: "raw";
+  state: "STARTING" | "ANALYZING" | "UNAVAILABLE";
+  sessionStartedAt: string | null;
+  framesAnalyzed: number;
+  visual: {
+    sampledAt: string | null;
+    meanLuma: number | null;
+    lumaVariance: number | null;
+    darkPixelRatio: number | null;
+    frameDifference: number | null;
+    frozenDurationMs: number;
+    blackDurationMs: number;
+  };
+  audio: {
+    sampledAt: string | null;
+    trackPresent: boolean;
+    rmsDb: number | null;
+    peakDb: number | null;
+    clippedSampleRatio: number | null;
+    secondsSinceAudio: number | null;
+  };
+  process: { running: boolean; restartCount: number; lastExitAt: string | null };
 };
 
 export type MonitorBrowser = {
@@ -171,6 +197,7 @@ export type MonitorCourt = {
   stages: MonitorStage[];
   paths: Partial<Record<MonitorMediaPath["branch"], MonitorMediaPath>>;
   ffmpeg: Partial<Record<MonitorFfmpegBranch["branch"], MonitorFfmpegBranch>>;
+  contentAnalysis: MonitorCameraContent | null;
   browser: MonitorBrowser | null;
   competition: MonitorCompetition | null;
   expectation: MonitorExpectation;
@@ -231,7 +258,7 @@ export type MonitorAgent = {
   nativeServices: {
     endpoints: Array<{ service: string; up: boolean }>;
     livekit: { roomCount: number; participantCount: number; packetsOut: number; packetsDropped: number } | null;
-    egress: { idle: boolean; canAcceptRequest: boolean; cgroupMemoryBytes: number | null; cpuLoadRatio: number | null; memoryLoadRatio: number | null } | null;
+    egress: { idle: boolean; canAcceptRequest: boolean; nativeCanAcceptRequest: boolean; activeWebRequests: number; maximumWebRequests: number; cgroupMemoryBytes: number | null; cpuLoadRatio: number | null; memoryLoadRatio: number | null } | null;
   } | null;
 };
 

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const MONITORING_CONTRACT_VERSION = 2 as const;
+export const MONITORING_CONTRACT_VERSION = 3 as const;
 
 export const AGENT_ROLES = [
   "mediamtx",
@@ -114,6 +114,37 @@ export const ffmpegBranchSnapshotSchema = z.object({
   speedRatio: z.number().nonnegative().max(20).nullable()
 }).strict();
 export type FfmpegBranchSnapshot = z.infer<typeof ffmpegBranchSnapshotSchema>;
+
+export const cameraContentSnapshotSchema = z.object({
+  courtNumber: z.number().int().min(1).max(8),
+  sourceBranch: z.literal("raw"),
+  state: z.enum(["STARTING", "ANALYZING", "UNAVAILABLE"]),
+  sessionStartedAt: isoDate.nullable(),
+  framesAnalyzed: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  visual: z.object({
+    sampledAt: isoDate.nullable(),
+    meanLuma: z.number().min(0).max(255).nullable(),
+    lumaVariance: z.number().min(0).max(65_025).nullable(),
+    darkPixelRatio: z.number().min(0).max(1).nullable(),
+    frameDifference: z.number().min(0).max(255).nullable(),
+    frozenDurationMs: z.number().nonnegative().max(86_400_000),
+    blackDurationMs: z.number().nonnegative().max(86_400_000)
+  }).strict(),
+  audio: z.object({
+    sampledAt: isoDate.nullable(),
+    trackPresent: z.boolean(),
+    rmsDb: z.number().min(-120).max(12).nullable(),
+    peakDb: z.number().min(-120).max(12).nullable(),
+    clippedSampleRatio: z.number().min(0).max(1).nullable(),
+    secondsSinceAudio: z.number().nonnegative().max(86_400).nullable()
+  }).strict(),
+  process: z.object({
+    running: z.boolean(),
+    restartCount: z.number().int().nonnegative(),
+    lastExitAt: isoDate.nullable()
+  }).strict()
+}).strict();
+export type CameraContentSnapshot = z.infer<typeof cameraContentSnapshotSchema>;
 
 export const nativeServiceSnapshotSchema = z.object({
   endpoints: z.array(z.object({
@@ -399,6 +430,7 @@ export const agentSnapshotSchema = z.object({
   services: z.array(serviceSnapshotSchema).max(40),
   mediaPaths: z.array(mediaPathSnapshotSchema).max(48),
   ffmpegBranches: z.array(ffmpegBranchSnapshotSchema).max(32).default([]),
+  contentAnalysis: z.array(cameraContentSnapshotSchema).max(8).default([]),
   nativeServices: nativeServiceSnapshotSchema.default({ endpoints: [], livekit: null, egress: null })
 }).strict();
 export type AgentSnapshot = z.infer<typeof agentSnapshotSchema>;
@@ -422,6 +454,7 @@ export type CourtMonitorSnapshot = {
   stages: StageHealth[];
   paths: Partial<Record<MediaPathSnapshot["branch"], MediaPathSnapshot>>;
   ffmpeg: Partial<Record<FfmpegBranchSnapshot["branch"], FfmpegBranchSnapshot>>;
+  contentAnalysis: CameraContentSnapshot | null;
   browser: BrowserHeartbeatSnapshot | null;
   competition: CompetitionCourtSnapshot | null;
   expectation: CourtExpectation;

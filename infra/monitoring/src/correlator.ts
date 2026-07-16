@@ -1,4 +1,4 @@
-import { MONITORING_CONTRACT_VERSION, worstHealthState, type AgentSnapshot, type BrowserHeartbeatSnapshot, type BrowserThumbnailMetadata, type ControlPlaneSnapshot, type CourtExpectation, type DeadManHealth, type FfmpegBranchSnapshot, type HealthState, type IncidentSnapshot, type MediaPathSnapshot, type MonitoringFaultGate, type MonitoringSilence, type MonitorSnapshot, type MonitoringStage, type NotificationHealth, type StageHealth, type YouTubeMonitorSnapshot } from "./contracts.js";
+import { MONITORING_CONTRACT_VERSION, worstHealthState, type AgentSnapshot, type BrowserHeartbeatSnapshot, type BrowserThumbnailMetadata, type CameraContentSnapshot, type ControlPlaneSnapshot, type CourtExpectation, type DeadManHealth, type FfmpegBranchSnapshot, type HealthState, type IncidentSnapshot, type MediaPathSnapshot, type MonitoringFaultGate, type MonitoringSilence, type MonitorSnapshot, type MonitoringStage, type NotificationHealth, type StageHealth, type YouTubeMonitorSnapshot } from "./contracts.js";
 import type { AgentTarget } from "./config.js";
 import { faultGateExpectation } from "./faultGateControl.js";
 
@@ -7,6 +7,11 @@ export type AgentRuntime = {
   snapshot: AgentSnapshot | null;
   lastSeenAt: string | null;
   lastErrorAt: string | null;
+};
+
+type ContentAnalysisSelection = {
+  content: CameraContentSnapshot;
+  agentIds: string[];
 };
 
 export function buildMonitorSnapshot(
@@ -42,6 +47,7 @@ export function buildMonitorSnapshot(
 
   const paths = latestMediaPaths(runtimes, nowMs);
   const ffmpegBranches = latestFfmpegBranches(runtimes, nowMs);
+  const contentAnalysis = latestContentAnalysis(runtimes, nowMs);
   const courts = Array.from({ length: courtCount }, (_, index) => {
     const courtNumber = index + 1;
     const courtPaths = paths.filter((path) => path.courtNumber === courtNumber);
@@ -49,6 +55,8 @@ export function buildMonitorSnapshot(
     const courtFfmpeg = ffmpegBranches.filter((branch) => branch.courtNumber === courtNumber);
     const ffmpeg = Object.fromEntries(courtFfmpeg.map((branch) => [branch.branch, branch])) as Partial<Record<FfmpegBranchSnapshot["branch"], FfmpegBranchSnapshot>>;
     const browser = browserHeartbeats.get(courtNumber) ?? null;
+    const contentSelection = contentAnalysis.get(courtNumber) ?? null;
+    const content = contentSelection?.content ?? null;
     const competition = controlPlane?.courts.find((court) => court.courtNumber === courtNumber) ?? null;
     const youtube = youtubeMonitor?.courts.find((court) => court.courtNumber === courtNumber) ?? null;
     const egressAgent = agents.find((agent) => agent.role === "compositor" && agent.assignedCourts.includes(courtNumber)) ?? null;
@@ -62,7 +70,14 @@ export function buildMonitorSnapshot(
     const productionExpectation = competition?.expectation ?? OFF_EXPECTATION;
     const expectation = faultGate ? faultGateExpectation(faultGate) : productionExpectation;
     const observedStages = [
-      contentAwareRawStage(pathStage("RAW_INGEST", "raw", byBranch.raw ?? null, nowMs, expectation), browser, expectation, nowMs),
+      contentAwareRawStage(
+        pathStage("RAW_INGEST", "raw", byBranch.raw ?? null, nowMs, expectation),
+        content,
+        contentSelection?.agentIds ?? [],
+        browser,
+        expectation,
+        nowMs
+      ),
       pathStage("PREVIEW", "preview", byBranch.preview ?? null, nowMs, productionExpectation),
       pathStage("PROGRAM_PATH", "program", byBranch.program ?? null, nowMs, productionExpectation),
       programBrowserStage(browser, nowMs, productionExpectation),
@@ -79,6 +94,7 @@ export function buildMonitorSnapshot(
       stages,
       paths: byBranch,
       ffmpeg,
+      contentAnalysis: content,
       browser,
       competition,
       expectation,
@@ -384,51 +400,75 @@ function commentaryStage(browser: BrowserHeartbeatSnapshot | null, nowMs: number
 
 function contentAwareRawStage(
   raw: StageHealth,
+  content: CameraContentSnapshot | null,
+  analyzerAgentIds: string[],
   browser: BrowserHeartbeatSnapshot | null,
   expectation: CourtExpectation,
   nowMs: number
 ): StageHealth {
-  if (!browser || expectation.coveragePhase !== "LIVE_MATCH" || raw.state !== "HEALTHY") return raw;
-  const visual = browser.visual;
+  if (expectation.coveragePhase !== "LIVE_MATCH" || raw.state !== "HEALTHY") return raw;
+  if (analyzerAgentIds.length > 1) {
+    return stage(
+      "RAW_INGEST",
+      "UNKNOWN",
+      "critical",
+      "CAMERA_CONTENT_ANALYZER_CONFLICT",
+      "More than one host-local analyzer is assigned to this camera.",
+      "Remove the duplicate camera analyzer assignment before trusting content health.",
+      content?.visual.sampledAt ?? null,
+      age(content?.visual.sampledAt ?? null, nowMs),
+      { analyzerAgents: analyzerAgentIds.join(",") }
+    );
+  }
+  if (!content) {
+    return stage("RAW_INGEST", "UNKNOWN", "critical", "CAMERA_CONTENT_ANALYZER_UNAVAILABLE", "Camera transport is healthy, but its host-local picture and audio analyzer is not assigned.", "Check the assigned compositor agent and camera-content analyzer configuration.", null, null, {});
+  }
+  const visual = content.visual;
   const visualAgeMs = age(visual.sampledAt, nowMs);
-  if (visual.sampledAt && visualAgeMs != null && visualAgeMs <= 15_000) {
+  if (content.state !== "ANALYZING" || !visual.sampledAt || visualAgeMs == null || visualAgeMs > 5_000) {
+    return stage("RAW_INGEST", "UNKNOWN", "critical", "CAMERA_CONTENT_ANALYZER_UNAVAILABLE", "Camera transport is healthy, but host-local picture analysis is unavailable or stale.", "Inspect the assigned compositor agent, analyzer process, and private RTSP path.", visual.sampledAt, visualAgeMs, contentEvidence(content, browser));
+  }
+  if (visual.sampledAt && visualAgeMs <= 5_000) {
     if (visual.blackDurationMs > 20_000) {
-      return stage("RAW_INGEST", "CRITICAL", "critical", "CAMERA_CONTENT_BLACK", "Camera picture is persistently black or covered while encoded frames continue.", "Inspect the physical camera view and lens before changing network or encoder settings.", visual.sampledAt, visualAgeMs, visualEvidence(browser));
+      return stage("RAW_INGEST", "CRITICAL", "critical", "CAMERA_CONTENT_BLACK", "Camera picture is persistently black or covered while encoded frames continue.", "Inspect the physical camera view and lens before changing network or encoder settings.", visual.sampledAt, visualAgeMs, contentEvidence(content, browser));
     }
     if (visual.frozenDurationMs > 15_000) {
-      return stage("RAW_INGEST", "CRITICAL", "critical", "FULL_BITRATE_VISUAL_FREEZE", "Camera picture is repeating while transport and rendered frames continue.", "Check the camera encoder and source capture; do not treat healthy bitrate as healthy video content.", visual.sampledAt, visualAgeMs, visualEvidence(browser));
+      return stage("RAW_INGEST", "CRITICAL", "critical", "FULL_BITRATE_VISUAL_FREEZE", "Camera picture is repeating while transport continues.", "Check the camera encoder and source capture; do not treat healthy bitrate as healthy video content.", visual.sampledAt, visualAgeMs, contentEvidence(content, browser));
     }
     if (visual.frozenDurationMs > 5_000) {
-      return stage("RAW_INGEST", "DEGRADED", "warning", "VISUAL_FREEZE_SUSPECTED", "Camera picture has very low inter-frame change while frames continue.", "Confirm on the live thumbnail and watch whether motion returns before escalating.", visual.sampledAt, visualAgeMs, visualEvidence(browser));
+      return stage("RAW_INGEST", "DEGRADED", "warning", "VISUAL_FREEZE_SUSPECTED", "Camera picture has very low inter-frame change while frames continue.", "Confirm on the live thumbnail and watch whether motion returns before escalating.", visual.sampledAt, visualAgeMs, contentEvidence(content, browser));
     }
   }
-  const audio = browser.commentary;
-  if (!audio.cameraTrackPresent) {
-    return stage("RAW_INGEST", "DEGRADED", "warning", "CAMERA_AUDIO_TRACK_MISSING", "Camera video is present but its audio track is missing.", "Check the camera audio input and encoder audio configuration.", browser.sampledAt, age(browser.sampledAt, nowMs), visualEvidence(browser));
+  const audio = content.audio;
+  if (!audio.trackPresent) {
+    return stage("RAW_INGEST", "CRITICAL", "critical", "CAMERA_AUDIO_TRACK_MISSING", "Camera video is present but its audio track is missing.", "Check the camera audio input and encoder audio configuration.", visual.sampledAt, visualAgeMs, contentEvidence(content, browser));
   }
-  if ((audio.secondsSinceCameraAudio ?? 0) > 60) {
-    return stage("RAW_INGEST", "DEGRADED", "warning", "CAMERA_AUDIO_SILENT", "Camera audio track is present but has remained silent.", "Check the camera microphone, gain, and physical audio source.", browser.sampledAt, age(browser.sampledAt, nowMs), visualEvidence(browser));
+  if ((audio.secondsSinceAudio ?? 0) > 60) {
+    return stage("RAW_INGEST", "CRITICAL", "critical", "CAMERA_AUDIO_SILENT", "Camera audio track is present but has remained silent.", "Check the camera microphone, gain, and physical audio source.", audio.sampledAt, age(audio.sampledAt, nowMs), contentEvidence(content, browser));
   }
-  if ((audio.cameraClippedSampleRatio ?? 0) > 0.05) {
-    return stage("RAW_INGEST", "DEGRADED", "warning", "CAMERA_AUDIO_CLIPPING", "Camera audio is clipping heavily.", "Reduce camera input or program camera gain and confirm peak level recovery.", browser.sampledAt, age(browser.sampledAt, nowMs), visualEvidence(browser));
+  if ((audio.clippedSampleRatio ?? 0) > 0.05) {
+    return stage("RAW_INGEST", "DEGRADED", "warning", "CAMERA_AUDIO_CLIPPING", "Camera audio is clipping heavily.", "Reduce camera input or program camera gain and confirm peak level recovery.", audio.sampledAt, age(audio.sampledAt, nowMs), contentEvidence(content, browser));
   }
   return raw;
 }
 
-function visualEvidence(browser: BrowserHeartbeatSnapshot): StageHealth["evidence"] {
+function contentEvidence(content: CameraContentSnapshot, browser: BrowserHeartbeatSnapshot | null): StageHealth["evidence"] {
   return {
-    renderedFps: browser.video.framesPerSecond,
-    meanLuma: browser.visual.meanLuma,
-    lumaVariance: browser.visual.lumaVariance,
-    darkPixelRatio: browser.visual.darkPixelRatio,
-    frameDifference: browser.visual.frameDifference,
-    frozenDurationMs: browser.visual.frozenDurationMs,
-    blackDurationMs: browser.visual.blackDurationMs,
-    cameraTrackPresent: browser.commentary.cameraTrackPresent,
-    cameraRmsDb: browser.commentary.cameraRmsDb,
-    cameraPeakDb: browser.commentary.cameraPeakDb,
-    cameraClippedSampleRatio: browser.commentary.cameraClippedSampleRatio,
-    secondsSinceCameraAudio: browser.commentary.secondsSinceCameraAudio
+    analyzerState: content.state,
+    analyzerRestarts: content.process.restartCount,
+    framesAnalyzed: content.framesAnalyzed,
+    renderedFps: browser?.video.framesPerSecond ?? null,
+    meanLuma: content.visual.meanLuma,
+    lumaVariance: content.visual.lumaVariance,
+    darkPixelRatio: content.visual.darkPixelRatio,
+    frameDifference: content.visual.frameDifference,
+    frozenDurationMs: content.visual.frozenDurationMs,
+    blackDurationMs: content.visual.blackDurationMs,
+    cameraTrackPresent: content.audio.trackPresent,
+    cameraRmsDb: content.audio.rmsDb,
+    cameraPeakDb: content.audio.peakDb,
+    cameraClippedSampleRatio: content.audio.clippedSampleRatio,
+    secondsSinceCameraAudio: content.audio.secondsSinceAudio
   };
 }
 
@@ -585,6 +625,27 @@ function latestFfmpegBranches(runtimes: Map<string, AgentRuntime>, nowMs: number
     }
   }
   return [...byName.values()].map((entry) => entry.branch);
+}
+
+function latestContentAnalysis(runtimes: Map<string, AgentRuntime>, nowMs: number): Map<number, ContentAnalysisSelection> {
+  const byCourt = new Map<number, Array<{ agentId: string; content: CameraContentSnapshot; observedAtMs: number }>>();
+  for (const runtime of runtimes.values()) {
+    if (!runtime.snapshot) continue;
+    const observedAtMs = Date.parse(runtime.snapshot.generatedAt);
+    if (!Number.isFinite(observedAtMs) || nowMs - observedAtMs > 20_000) continue;
+    for (const content of runtime.snapshot.contentAnalysis) {
+      const entries = byCourt.get(content.courtNumber) ?? [];
+      entries.push({ agentId: runtime.snapshot.agentId, content, observedAtMs });
+      byCourt.set(content.courtNumber, entries);
+    }
+  }
+  return new Map([...byCourt].map(([court, entries]) => {
+    const ordered = entries.sort((left, right) => right.observedAtMs - left.observedAtMs);
+    return [court, {
+      content: ordered[0]!.content,
+      agentIds: [...new Set(ordered.map((entry) => entry.agentId))].sort()
+    }];
+  }));
 }
 
 function pathStage(stage: MonitoringStage, branch: MediaPathSnapshot["branch"], path: MediaPathSnapshot | null, nowMs: number, expectation: CourtExpectation): StageHealth {

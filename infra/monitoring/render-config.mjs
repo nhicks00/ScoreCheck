@@ -13,7 +13,7 @@ const scrapeJobs = targets.map((target) => {
   return `  - job_name: ${yaml(`agent-${target.id}`)}
     scheme: ${yaml(url.protocol.slice(0, -1))}
     metrics_path: ${yaml(`${url.pathname.replace(/\/$/, "")}/metrics` || "/metrics")}
-    authorization:
+${target.role === "compositor" ? "    scrape_interval: 1s\n    scrape_timeout: 800ms\n" : ""}    authorization:
       type: Bearer
       credentials: ${yaml(target.token)}
     static_configs:
@@ -61,12 +61,19 @@ route:
   group_wait: 5s
   group_interval: 30s
   repeat_interval: 15m
+  routes:
+    - receiver: monitor-service
+      matchers:
+        - 'alertname=~"ScoreCheckCameraContentAnalyzerUnassigned|ScoreCheckCameraContentAnalyzerConflict|ScoreCheckCameraContentAnalyzerUnavailable|ScoreCheckCameraVisualFreeze|ScoreCheckCameraBlackPicture|ScoreCheckCameraAudioTrackMissing|ScoreCheckCameraAudioSilent|ScoreCheckCameraAudioClipping"'
+      group_wait: 0s
+      group_interval: 5s
+      repeat_interval: 15m
 
 inhibit_rules:
   - source_matchers:
       - 'alertname="ScoreCheckAgentMissing"'
     target_matchers:
-      - 'alertname=~"ScoreCheckServiceNotRunning|ScoreCheckServiceUnhealthy|ScoreCheckNativeEndpointDown|ScoreCheckEgressWorkerUnavailable|ScoreCheckEgressExpectationExceedsCapacity|ScoreCheckEgressOutputMissing|ScoreCheckEgressAdmissionBlocked|ScoreCheckEgressRequestMultiplicity"'
+      - 'alertname=~"ScoreCheckServiceNotRunning|ScoreCheckServiceUnhealthy|ScoreCheckNativeEndpointDown|ScoreCheckEgressWorkerUnavailable|ScoreCheckEgressExpectationExceedsCapacity|ScoreCheckEgressOutputMissing|ScoreCheckEgressAdmissionBlocked|ScoreCheckEgressRequestMultiplicity|ScoreCheckCameraContentAnalyzerUnavailable|ScoreCheckCameraVisualFreeze|ScoreCheckCameraBlackPicture|ScoreCheckCameraAudioTrackMissing|ScoreCheckCameraAudioSilent|ScoreCheckCameraAudioClipping"'
     equal: [agent]
   - source_matchers:
       - 'alertname="ScoreCheckServiceNotRunning"'
@@ -76,7 +83,12 @@ inhibit_rules:
   - source_matchers:
       - 'alertname="ScoreCheckRequiredRawPathMissing"'
     target_matchers:
-      - 'alertname=~"ScoreCheckProgramBranchProgressMissing|ScoreCheckPreviewBranchFpsLow|ScoreCheckEgressOutputMissing|ScoreCheckProgramBrowserMissing|ScoreCheckProgramFpsLow|ScoreCheckYouTubeUnhealthy|ScoreCheckYouTubeDegraded"'
+      - 'alertname=~"ScoreCheckCameraContentAnalyzerUnavailable|ScoreCheckCameraVisualFreeze|ScoreCheckCameraBlackPicture|ScoreCheckCameraAudioTrackMissing|ScoreCheckCameraAudioSilent|ScoreCheckCameraAudioClipping|ScoreCheckProgramBranchProgressMissing|ScoreCheckPreviewBranchFpsLow|ScoreCheckEgressOutputMissing|ScoreCheckProgramBrowserMissing|ScoreCheckProgramFpsLow|ScoreCheckYouTubeUnhealthy|ScoreCheckYouTubeDegraded"'
+    equal: [court]
+  - source_matchers:
+      - 'alertname=~"ScoreCheckCameraContentAnalyzerUnassigned|ScoreCheckCameraContentAnalyzerConflict|ScoreCheckCameraContentAnalyzerUnavailable"'
+    target_matchers:
+      - 'alertname=~"ScoreCheckCameraVisualFreeze|ScoreCheckCameraBlackPicture|ScoreCheckCameraAudioTrackMissing|ScoreCheckCameraAudioSilent|ScoreCheckCameraAudioClipping"'
     equal: [court]
   - source_matchers:
       - 'alertname="ScoreCheckProgramBranchProgressMissing"'

@@ -10,12 +10,14 @@ SSH_HOST=""
 PRIVATE_IP=""
 COURTS=""
 OBSERVABILITY_PRIVATE_IP=""
+INGEST_PRIVATE_IP=""
 REFRESH=0
 
 usage() {
   cat <<'USAGE'
 Usage: register-monitoring.sh --name ID --ssh-host root@PUBLIC_IP \
-  --private-ip VPC_IP --courts 1,2 --observability-private-ip VPC_IP [--refresh]
+  --private-ip VPC_IP --courts 1,2 --observability-private-ip VPC_IP \
+  --ingest-private-ip VPC_IP [--refresh]
 
 Deploys a read-only compositor monitor agent, atomically registers its private
 target in the protected monitoring config, and optionally refreshes the central
@@ -30,6 +32,7 @@ while [[ $# -gt 0 ]]; do
     --private-ip) PRIVATE_IP="$2"; shift 2 ;;
     --courts) COURTS="$2"; shift 2 ;;
     --observability-private-ip) OBSERVABILITY_PRIVATE_IP="$2"; shift 2 ;;
+    --ingest-private-ip) INGEST_PRIVATE_IP="$2"; shift 2 ;;
     --refresh) REFRESH=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "error: unknown option '$1'" >&2; usage >&2; exit 1 ;;
@@ -40,6 +43,7 @@ done
 [[ -n "$SSH_HOST" ]] || { echo "error: --ssh-host is required" >&2; exit 1; }
 [[ "$PRIVATE_IP" =~ ^10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || { echo "error: --private-ip must be a private VPC address" >&2; exit 1; }
 [[ "$OBSERVABILITY_PRIVATE_IP" =~ ^10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || { echo "error: --observability-private-ip must be a private VPC address" >&2; exit 1; }
+[[ "$INGEST_PRIVATE_IP" =~ ^10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || { echo "error: --ingest-private-ip must be a private VPC address" >&2; exit 1; }
 [[ "$COURTS" =~ ^[1-8](,[1-8])*$ ]] || { echo "error: --courts must be a comma-separated subset of 1-8" >&2; exit 1; }
 
 CONFIG_FILE="${MONITOR_CONFIG_FILE:-$HOME/.config/scorecheck/monitoring.env}"
@@ -66,6 +70,8 @@ MONITOR_AGENT_TOKEN="$TOKEN" \
 MONITOR_AGENT_BIND="$PRIVATE_IP" \
 MONITOR_AGENT_CONTAINERS=bvm-egress,bvm-livekit,bvm-redis \
 MONITOR_AGENT_COURTS="$COURTS" \
+MONITOR_CONTENT_ANALYZER_COURTS="$COURTS" \
+MONITOR_CONTENT_ANALYZER_RTSP_BASE_URL="rtsp://$INGEST_PRIVATE_IP:8554" \
 EGRESS_METRICS_URL=http://127.0.0.1:9090/metrics \
 EGRESS_HEALTH_URL=http://127.0.0.1:9091/ \
 "$MONITORING_DIR/deploy-agent.sh"

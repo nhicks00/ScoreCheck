@@ -25,9 +25,24 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv = process.env) {
     LIVEKIT_METRICS_URL: optionalHttpUrl,
     EGRESS_METRICS_URL: optionalHttpUrl,
     EGRESS_HEALTH_URL: optionalHttpUrl,
-    MONITOR_EGRESS_MAX_WEB_REQUESTS: z.coerce.number().int().min(1).max(32).default(1)
+    MONITOR_EGRESS_MAX_WEB_REQUESTS: z.coerce.number().int().min(1).max(32).default(1),
+    MONITOR_CONTENT_ANALYZER_COURTS: z.string().default(""),
+    MONITOR_CONTENT_ANALYZER_RTSP_BASE_URL: optionalRtspUrl,
+    MONITOR_CONTENT_ANALYZER_FFMPEG_PATH: safeExecutablePath.default("/usr/bin/ffmpeg"),
+    MONITOR_CONTENT_ANALYZER_FFPROBE_PATH: safeExecutablePath.default("/usr/bin/ffprobe")
   });
   const parsed = schema.parse(env);
+  const assignedCourts = parseCourtList(parsed.MONITOR_AGENT_COURTS, "MONITOR_AGENT_COURTS");
+  const contentAnalyzerCourts = parseCourtList(parsed.MONITOR_CONTENT_ANALYZER_COURTS, "MONITOR_CONTENT_ANALYZER_COURTS");
+  if (contentAnalyzerCourts.length > 0) {
+    if (parsed.MONITOR_AGENT_ROLE !== "compositor") throw new Error("Camera-content analysis may run only on compositor agents.");
+    if (!parsed.MONITOR_CONTENT_ANALYZER_RTSP_BASE_URL) throw new Error("Camera-content analysis requires MONITOR_CONTENT_ANALYZER_RTSP_BASE_URL.");
+    if (contentAnalyzerCourts.some((court) => !assignedCourts.includes(court))) {
+      throw new Error("Camera-content analyzer courts must be owned by the compositor agent.");
+    }
+  } else if (parsed.MONITOR_CONTENT_ANALYZER_RTSP_BASE_URL) {
+    throw new Error("MONITOR_CONTENT_ANALYZER_RTSP_BASE_URL requires at least one analyzer court.");
+  }
   return {
     agentId: parsed.MONITOR_AGENT_ID,
     role: parsed.MONITOR_AGENT_ROLE,
@@ -36,7 +51,7 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv = process.env) {
     port: parsed.MONITOR_AGENT_PORT,
     intervalMs: parsed.MONITOR_AGENT_INTERVAL_MS,
     containers: parsed.MONITOR_AGENT_CONTAINERS.split(",").map((value) => value.trim()).filter(Boolean).map((value) => safeIdSchema.parse(value)),
-    assignedCourts: parseCourtList(parsed.MONITOR_AGENT_COURTS),
+    assignedCourts,
     diskPath: parsed.MONITOR_DISK_PATH,
     ffmpegProgressDir: parsed.FFMPEG_PROGRESS_DIR.trim() || null,
     dockerApiUrl: parsed.DOCKER_API_URL ?? null,
@@ -45,13 +60,17 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv = process.env) {
     livekitMetricsUrl: parsed.LIVEKIT_METRICS_URL ?? null,
     egressMetricsUrl: parsed.EGRESS_METRICS_URL ?? null,
     egressHealthUrl: parsed.EGRESS_HEALTH_URL ?? null,
-    egressMaxWebRequests: parsed.MONITOR_EGRESS_MAX_WEB_REQUESTS
+    egressMaxWebRequests: parsed.MONITOR_EGRESS_MAX_WEB_REQUESTS,
+    contentAnalyzerCourts,
+    contentAnalyzerRtspBaseUrl: parsed.MONITOR_CONTENT_ANALYZER_RTSP_BASE_URL?.replace(/\/+$/, "") ?? null,
+    contentAnalyzerFfmpegPath: parsed.MONITOR_CONTENT_ANALYZER_FFMPEG_PATH,
+    contentAnalyzerFfprobePath: parsed.MONITOR_CONTENT_ANALYZER_FFPROBE_PATH
   };
 }
 
-function parseCourtList(raw: string): number[] {
+function parseCourtList(raw: string, field: string): number[] {
   const courts = raw.split(",").map((value) => value.trim()).filter(Boolean).map(Number);
-  if (courts.some((court) => !Number.isInteger(court) || court < 1 || court > 8)) throw new Error("MONITOR_AGENT_COURTS must contain court numbers 1-8.");
+  if (courts.some((court) => !Number.isInteger(court) || court < 1 || court > 8)) throw new Error(`${field} must contain court numbers 1-8.`);
   return [...new Set(courts)].sort((left, right) => left - right);
 }
 
@@ -155,6 +174,17 @@ function parseOrigins(raw: string): string[] {
   if (origins.length === 0 || origins.length > 10) throw new Error("MONITOR_BROWSER_ALLOWED_ORIGINS must contain 1-10 origins.");
   return [...new Set(origins)];
 }
+
+const optionalRtspUrl = z.preprocess(emptyStringToUndefined, z.string().url().transform((value, context) => {
+  const parsed = new URL(value);
+  if (parsed.protocol !== "rtsp:" || parsed.username || parsed.password || parsed.search || parsed.hash || !["", "/"].includes(parsed.pathname)) {
+    context.addIssue({ code: "custom", message: "Camera-content analyzer base URL must be a credential-free RTSP origin." });
+    return z.NEVER;
+  }
+  return parsed.toString();
+}).optional());
+
+const safeExecutablePath = z.string().trim().min(1).max(512).refine((value) => !/[\r\n\0]/.test(value));
 
 export function parseAgentTargets(raw: string): AgentTarget[] {
   if (!raw.trim()) return [];

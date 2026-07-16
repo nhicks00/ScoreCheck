@@ -30,6 +30,46 @@ describe("agent metrics", () => {
     expect(output).not.toContain('scorecheck_egress_idle{agent="bvm-compositor-a"}');
   });
 
+  it("exports host-local camera content without requiring a full host recollection", async () => {
+    const metrics = new AgentMetrics();
+    const snapshot = compositorSnapshot({ idle: true, canAcceptRequest: true });
+    snapshot.contentAnalysis = [{
+      courtNumber: 1,
+      sourceBranch: "raw",
+      state: "ANALYZING",
+      sessionStartedAt: "2026-07-12T17:59:00.000Z",
+      framesAnalyzed: 61,
+      visual: {
+        sampledAt: "2026-07-12T17:59:59.500Z",
+        meanLuma: 110,
+        lumaVariance: 850,
+        darkPixelRatio: 0.03,
+        frameDifference: 12,
+        frozenDurationMs: 16_000,
+        blackDurationMs: 0
+      },
+      audio: {
+        sampledAt: "2026-07-12T17:59:59.000Z",
+        trackPresent: true,
+        rmsDb: -28,
+        peakDb: -9,
+        clippedSampleRatio: 0.01,
+        secondsSinceAudio: 0
+      },
+      process: { running: true, restartCount: 2, lastExitAt: null }
+    }];
+    metrics.update(snapshot);
+    metrics.updateContentAnalysis(snapshot.agentId, snapshot.assignedCourts, snapshot.contentAnalysis, Date.parse("2026-07-12T18:00:00.000Z"));
+    const output = await metrics.registry.metrics();
+
+    expect(output).toContain('scorecheck_camera_content_analyzer_configured{agent="bvm-compositor-a",court="1"} 1');
+    expect(output).toContain('scorecheck_camera_content_analyzer_configured{agent="bvm-compositor-a",court="2"} 0');
+    expect(output).toContain('scorecheck_camera_content_analyzer_available{agent="bvm-compositor-a",court="1"} 1');
+    expect(output).toContain('scorecheck_camera_content_sample_age_seconds{agent="bvm-compositor-a",court="1"} 0.5');
+    expect(output).toContain('scorecheck_camera_visual_frozen_duration_seconds{agent="bvm-compositor-a",court="1"} 16');
+    expect(output).toContain('scorecheck_camera_audio_rms_db{agent="bvm-compositor-a",court="1"} -28');
+  });
+
   it("exports bounded source transport metrics without identity labels", async () => {
     const metrics = new AgentMetrics();
     const snapshot = compositorSnapshot({ idle: true, canAcceptRequest: true });
@@ -147,7 +187,7 @@ function mediamtxSnapshot(): AgentSnapshot {
 
 function compositorSnapshot(egress: { idle: boolean; canAcceptRequest: boolean }): AgentSnapshot {
   return {
-    version: 2,
+    version: 3,
     agentId: "bvm-compositor-a",
     role: "compositor",
     assignedCourts: [1, 2],
@@ -165,6 +205,7 @@ function compositorSnapshot(egress: { idle: boolean; canAcceptRequest: boolean }
     services: [],
     mediaPaths: [],
     ffmpegBranches: [],
+    contentAnalysis: [],
     nativeServices: {
       endpoints: [{ service: "egress-metrics", up: true }, { service: "egress-health", up: true }],
       livekit: null,

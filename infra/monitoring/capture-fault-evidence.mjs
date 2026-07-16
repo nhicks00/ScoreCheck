@@ -711,10 +711,10 @@ function browserTransitions(samples) {
   for (const sample of samples) {
     const browser = sample.court.browser;
     const current = browser ? {
-      state: browser.state,
+      state: browser.video?.state ?? "unknown",
       pageLoadedAt: browser.pageLoadedAt,
-      reconnectCount: browser.reconnectCount,
-      reloadCount: browser.reloadCount
+      reconnectCount: browser.video?.reconnectCount ?? null,
+      reloadCount: browser.video?.reloadCount ?? null
     } : null;
     if (JSON.stringify(current) !== JSON.stringify(previous)) transitions.push({ at: sample.receivedAt, ...current });
     previous = current;

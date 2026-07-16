@@ -72,7 +72,7 @@ describe("monitoring fault-gate control", () => {
 
 function idleSnapshot(): MonitorSnapshot {
   return {
-    version: 2,
+    version: 3,
     generatedAt: "2026-07-13T13:00:00.000Z",
     collector: { state: "HEALTHY", agentsExpected: 6, agentsFresh: 6 },
     controlPlane: { state: "HEALTHY", observedAt: "2026-07-13T13:00:00.000Z", ageMs: 0, worker: { state: "NOT_APPLICABLE", status: null, lastSeenAt: null, ageMs: null } },
@@ -91,6 +91,7 @@ function idleSnapshot(): MonitorSnapshot {
       stages: [],
       paths: { raw: { name: "court4_raw", courtNumber: 4, branch: "raw", ready: true, readySince: "2026-07-13T12:00:00.000Z", bytesReceived: 1_000, bytesSent: 0, inboundBitrateBps: 3_000_000, frameErrors: 0, readerCount: 0, sourceProtocol: "SRT", sourceMode: "PUSH", videoCodec: "H265", audioCodec: "AAC", videoWidth: 1920, videoHeight: 1080, videoProfile: "Main", audioSampleRateHz: 48_000, audioChannelCount: 2, transport: null } },
       ffmpeg: {},
+      contentAnalysis: null,
       browser: null,
       competition: null,
       expectation: { coveragePhase: "OFF", mediaExpectation: "OFF", broadcastExpectation: "OFF", commentaryExpectation: "NONE", scoringExpectation: "NONE", overrideExpiresAt: null },
