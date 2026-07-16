@@ -37,7 +37,7 @@ export class RehearsalController {
       await this.store.save(state);
       try {
         const projectName = state.program.projectName;
-        const project = await this.vercel.ensureProject({ name: projectName });
+        const project = await this.vercel.ensureProject({ name: projectName, repository: { slug: git.repo, repoId: git.repoId } });
         state.program.project = project;
         await this.store.save(state);
 

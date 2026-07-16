@@ -16,7 +16,9 @@ function response(status, body = null, contentType = "application/json") {
 const name = rehearsalProjectName("abcdefgh12345678");
 const teamSlug = "test-team";
 const origin = `https://${name}-${teamSlug}.vercel.app`;
-const project = { id: "prj_test123", name, origin, framework: "nextjs", rootDirectory: "apps/web" };
+const repository = { slug: "nhicks00/ScoreCheck", repoId: "123" };
+const project = { id: "prj_test123", name, origin, framework: "nextjs", rootDirectory: "apps/web", repository };
+const projectResponse = { id: project.id, name, framework: "nextjs", rootDirectory: "apps/web", link: { type: "github", org: "nhicks00", repo: "ScoreCheck", repoId: 123 } };
 const generationId = "generation-1234";
 const environment = { NEXT_PUBLIC_SCORECHECK_REHEARSAL: "true", SCORECHECK_REHEARSAL_ORIGIN: origin, PROGRAM_PAGE_TOKEN: "secret" };
 
@@ -31,12 +33,13 @@ test("creates an isolated Next.js project and adopts it by deterministic name", 
   const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, fetchImpl: async (url, init) => {
     requests.push({ url, init });
     if (init.method === "GET" && !created) return response(404, { error: { code: "not_found" } });
-    if (init.method === "POST") { created = true; return response(200, project); }
-    return response(200, project);
+    if (init.method === "POST") { created = true; return response(200, projectResponse); }
+    return response(200, projectResponse);
   }});
-  assert.equal((await client.ensureProject({ name })).id, "prj_test123");
-  assert.equal((await client.ensureProject({ name })).id, "prj_test123");
+  assert.equal((await client.ensureProject({ name, repository })).id, "prj_test123");
+  assert.equal((await client.ensureProject({ name, repository })).id, "prj_test123");
   assert.equal(requests.filter((entry) => entry.init.method === "POST").length, 1);
+  assert.deepEqual(JSON.parse(requests.find((entry) => entry.init.method === "POST").init.body).gitRepository, { type: "github", repo: "nhicks00/ScoreCheck" });
 });
 
 test("creates exactly one marked deployment from an exact Git SHA", async () => {
@@ -227,12 +230,22 @@ test("derives the isolated production origin from the authenticated Vercel team"
     requests.push({ url, init });
     if (url.includes("/v9/projects/")) return response(404, { error: { code: "not_found" } });
     if (url.includes("/v2/teams/team_123")) return response(200, { id: "team_123", slug: "volleyfest" });
-    if (init.method === "POST") return response(200, { ...project, origin: undefined });
+    if (init.method === "POST") return response(200, { ...projectResponse, origin: undefined });
     throw new Error(`unexpected ${init.method} ${url}`);
   }});
-  const created = await client.ensureProject({ name });
+  const created = await client.ensureProject({ name, repository });
   assert.equal(created.origin, `https://${name}-volleyfest.vercel.app`);
   assert.equal(requests.filter((entry) => entry.url.includes("/v2/teams/")).length, 1);
+});
+
+test("rejects an existing isolated project that is not linked to the exact repository", async () => {
+  const client = new VercelRehearsalProvider({
+    token: "token",
+    teamId: "team",
+    teamSlug,
+    fetchImpl: async () => response(200, { ...projectResponse, link: null })
+  });
+  await assert.rejects(() => client.ensureProject({ name, repository }), /Git repository contract/);
 });
 
 test("rejects production web origins and Supabase environment", async () => {

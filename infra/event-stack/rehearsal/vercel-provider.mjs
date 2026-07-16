@@ -15,27 +15,29 @@ export class VercelRehearsalProvider {
     this.sleep = sleep;
   }
 
-  async ensureProject({ name }) {
+  async ensureProject({ name, repository }) {
     validateProjectName(name);
-    const existing = await this.findProject(name);
+    const normalizedRepository = normalizeRepository(repository);
+    const existing = await this.findProject(name, normalizedRepository);
     if (existing) return existing;
     const team = await this.#team();
     const created = await this.#request("POST", "/v11/projects", {
       name,
       framework: "nextjs",
-      rootDirectory: "apps/web"
+      rootDirectory: "apps/web",
+      gitRepository: { type: "github", repo: normalizedRepository.slug }
     });
-    return normalizeProject(created, name, projectOrigin(name, team.slug));
+    return normalizeProject(created, name, projectOrigin(name, team.slug), normalizedRepository);
   }
 
-  async findProject(name) {
+  async findProject(name, repository = null) {
     validateProjectName(name);
     const [existing, team] = await Promise.all([this.#projectOrNull(name), this.#team()]);
-    return existing ? normalizeProject(existing, name, projectOrigin(name, team.slug)) : null;
+    return existing ? normalizeProject(existing, name, projectOrigin(name, team.slug), repository) : null;
   }
 
   async ensureDeployment({ project, generationId, repoId, ref, sha, environment }) {
-    const normalizedProject = normalizeProject(project, project.name, project.origin);
+    const normalizedProject = normalizeProject(project, project.name, project.origin, project.repository);
     validateGeneration(generationId);
     validateGitSource({ repoId, ref, sha });
     validateEnvironment(environment, normalizedProject.origin);
@@ -72,7 +74,7 @@ export class VercelRehearsalProvider {
   async getDeployment(deploymentId, project, generationId) {
     validateProviderId(deploymentId, "deployment id");
     const value = await this.#request("GET", `/v13/deployments/${encodeURIComponent(deploymentId)}`);
-    return normalizeDeployment(value, normalizeProject(project, project.name, project.origin), generationId);
+    return normalizeDeployment(value, normalizeProject(project, project.name, project.origin, project.repository), generationId);
   }
 
   async waitReady({ deploymentId, project, generationId, timeoutMs = 15 * 60_000, intervalMs = 5_000 }) {
@@ -93,7 +95,7 @@ export class VercelRehearsalProvider {
   }
 
   async verifyProgramPage({ project, token, timeoutMs = 5 * 60_000, intervalMs = 5_000 }) {
-    const normalized = normalizeProject(project, project.name, project.origin);
+    const normalized = normalizeProject(project, project.name, project.origin, project.repository);
     if (typeof token !== "string" || token.length < 24 || /[\r\n\0]/u.test(token)) throw new Error("Vercel rehearsal Program token is invalid");
     const pageUrl = `${normalized.origin}/program/court/1?token=${encodeURIComponent(token)}&scene=0`;
     const invalidUrl = `${normalized.origin}/program/court/1?token=invalid-rehearsal-token&scene=0`;
@@ -237,7 +239,7 @@ export function rehearsalProjectName(namespace) {
   return name;
 }
 
-function normalizeProject(value, expectedName, expectedOrigin) {
+function normalizeProject(value, expectedName, expectedOrigin, expectedRepository = null) {
   if (!value || typeof value !== "object" || String(value.name) !== expectedName || value.framework !== "nextjs" || value.rootDirectory !== "apps/web") {
     throw new Error("Vercel rehearsal project contract is invalid");
   }
@@ -245,7 +247,23 @@ function normalizeProject(value, expectedName, expectedOrigin) {
   validateProjectName(value.name);
   validateProjectOrigin(expectedOrigin, value.name);
   if (value.origin !== undefined && value.origin !== expectedOrigin) throw new Error("Vercel rehearsal project origin changed");
-  return { id: String(value.id), name: value.name, origin: expectedOrigin, framework: value.framework, rootDirectory: value.rootDirectory };
+  const repository = expectedRepository === null ? null : normalizeRepository(expectedRepository);
+  if (repository) {
+    const [organization, repo] = repository.slug.split("/");
+    const providerLinkMatches = value.link?.type === "github" && value.link.org === organization && value.link.repo === repo && String(value.link.repoId) === repository.repoId;
+    const normalizedValueMatches = value.origin === expectedOrigin && value.repository?.slug === repository.slug && String(value.repository?.repoId) === repository.repoId;
+    if (!providerLinkMatches && !normalizedValueMatches) {
+      throw new Error("Vercel rehearsal project Git repository contract is invalid");
+    }
+  }
+  return { id: String(value.id), name: value.name, origin: expectedOrigin, framework: value.framework, rootDirectory: value.rootDirectory, ...(repository ? { repository } : {}) };
+}
+
+function normalizeRepository(value) {
+  if (!value || typeof value !== "object" || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value.slug ?? "") || (!(Number.isInteger(value.repoId) && value.repoId > 0) && !(typeof value.repoId === "string" && /^\d+$/.test(value.repoId)))) {
+    throw new Error("Vercel rehearsal GitHub repository contract is invalid");
+  }
+  return { slug: value.slug, repoId: String(value.repoId) };
 }
 
 function normalizeTeam(value, expectedId) {

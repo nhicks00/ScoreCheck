@@ -183,7 +183,7 @@ export function validateRehearsalProfile(value) {
   const expected = ["schemaVersion", ...pathFields, "git", "soakDurationSeconds"].sort();
   if (JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(expected)) throw new Error("rehearsal operator profile must contain exactly the supported fields");
   for (const key of pathFields) normalizedAbsolute(value[key], `profile ${key}`);
-  if (!value.git || !new Set(["string", "number"]).has(typeof value.git.repoId) || !/^[a-zA-Z0-9._/-]{1,200}$/.test(value.git.ref ?? "") || !/^[a-f0-9]{40}$/.test(value.git.sha ?? "")) throw new Error("rehearsal operator Git source is invalid");
+  if (!value.git || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value.git.repo ?? "") || !new Set(["string", "number"]).has(typeof value.git.repoId) || !/^[a-zA-Z0-9._/-]{1,200}$/.test(value.git.ref ?? "") || !/^[a-f0-9]{40}$/.test(value.git.sha ?? "")) throw new Error("rehearsal operator Git source is invalid");
   if (!Number.isInteger(value.soakDurationSeconds) || value.soakDurationSeconds < 1_800 || value.soakDurationSeconds > 12 * 60 * 60) throw new Error("rehearsal soak must be from 1800 through 43200 seconds");
   return value;
 }

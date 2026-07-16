@@ -16,7 +16,7 @@ const profile = {
   knownHosts: "/protected/rehearsal/known_hosts",
   ffmpegPath: "/opt/homebrew/bin/ffmpeg",
   liveKitCliPath: "/opt/homebrew/bin/lk",
-  git: { repoId: 123, ref: "main", sha: "a".repeat(40) },
+  git: { repo: "nhicks00/ScoreCheck", repoId: 123, ref: "main", sha: "a".repeat(40) },
   soakDurationSeconds: 1_800
 };
 

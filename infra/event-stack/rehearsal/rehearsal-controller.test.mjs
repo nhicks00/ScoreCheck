@@ -28,7 +28,7 @@ function harness({ failPublisherOnce = false, failPreflight = false, failIdle = 
   const activeEgress = new Map();
   const store = new RehearsalMemoryStateStore();
   const vercel = {
-    ensureProject: async ({ name }) => ({ id: "prj_test", name, origin: `https://${name}.vercel.app`, framework: "nextjs", rootDirectory: "apps/web" }),
+    ensureProject: async ({ name, repository }) => ({ id: "prj_test", name, origin: `https://${name}.vercel.app`, framework: "nextjs", rootDirectory: "apps/web", repository: { slug: repository.slug, repoId: String(repository.repoId) } }),
     ensureDeployment: async ({ project, generationId: marker }) => ({ id: "dpl_test", projectId: project.id, name: project.name, state: "BUILDING", target: "production", aliases: [], marker }),
     waitReady: async ({ project, generationId: marker }) => ({ id: "dpl_test", projectId: project.id, name: project.name, state: "READY", target: "production", aliases: [`${project.name}.vercel.app`], marker }),
     verifyProgramPage: async ({ project }) => ({ status: "healthy", origin: project.origin, acceptedStatus: 200, rejectedStatus: 404 }),
@@ -112,7 +112,7 @@ test("runs the full isolated rehearsal and cleans every external resource by exa
   const { controller, log } = harness();
   const lifecycle = lifecycleState();
   await controller.plan({ manifest, lifecycleState: lifecycle });
-  await controller.prepare({ manifest, lifecycleState: lifecycle, material, git: { repoId: 1, ref: "branch", sha: "a".repeat(40) }, secretsDirectory: "/tmp/rehearsal-secrets" });
+  await controller.prepare({ manifest, lifecycleState: lifecycle, material, git: { repo: "nhicks00/ScoreCheck", repoId: 1, ref: "branch", sha: "a".repeat(40) }, secretsDirectory: "/tmp/rehearsal-secrets" });
   assert.equal((await controller.store.load()).program.preflight.status, "healthy");
   lifecycle.phase = "ready";
   await controller.start({ manifest, lifecycleState: lifecycle, material, evidenceDirectory: "/tmp/rehearsal-evidence" });
@@ -138,7 +138,7 @@ test("resumes a partial start without replacing prepared provider identities", a
   const { controller, store } = harness({ failPublisherOnce: true });
   const lifecycle = lifecycleState();
   await controller.plan({ manifest, lifecycleState: lifecycle });
-  await controller.prepare({ manifest, lifecycleState: lifecycle, material, git: { repoId: 1, ref: "branch", sha: "a".repeat(40) }, secretsDirectory: "/tmp/rehearsal-secrets" });
+  await controller.prepare({ manifest, lifecycleState: lifecycle, material, git: { repo: "nhicks00/ScoreCheck", repoId: 1, ref: "branch", sha: "a".repeat(40) }, secretsDirectory: "/tmp/rehearsal-secrets" });
   const ready = lifecycleState("ready");
   await assert.rejects(() => controller.start({ manifest, lifecycleState: ready, material, evidenceDirectory: "/tmp/rehearsal-evidence" }), /intentional publisher interruption/);
   const partial = await store.load();
@@ -152,7 +152,7 @@ test("cleans a preflight failure through direct provider reconciliation without 
   const { controller, store } = harness({ failPreflight: true, failIdle: true });
   const lifecycle = lifecycleState();
   await controller.plan({ manifest, lifecycleState: lifecycle });
-  await controller.prepare({ manifest, lifecycleState: lifecycle, material, git: { repoId: 1, ref: "branch", sha: "a".repeat(40) }, secretsDirectory: "/tmp/rehearsal-secrets" });
+  await controller.prepare({ manifest, lifecycleState: lifecycle, material, git: { repo: "nhicks00/ScoreCheck", repoId: 1, ref: "branch", sha: "a".repeat(40) }, secretsDirectory: "/tmp/rehearsal-secrets" });
   const live = lifecycleState("live");
   await assert.rejects(() => controller.start({ manifest, lifecycleState: live, material, evidenceDirectory: "/tmp/rehearsal-evidence" }), /intentional preflight failure/);
 
@@ -168,7 +168,7 @@ test("refuses provider cleanup while workload ownership is still active", async 
   const { controller } = harness();
   const lifecycle = lifecycleState();
   await controller.plan({ manifest, lifecycleState: lifecycle });
-  await controller.prepare({ manifest, lifecycleState: lifecycle, material, git: { repoId: 1, ref: "branch", sha: "a".repeat(40) }, secretsDirectory: "/tmp/rehearsal-secrets" });
+  await controller.prepare({ manifest, lifecycleState: lifecycle, material, git: { repo: "nhicks00/ScoreCheck", repoId: 1, ref: "branch", sha: "a".repeat(40) }, secretsDirectory: "/tmp/rehearsal-secrets" });
   const ready = lifecycleState("ready");
   await controller.start({ manifest, lifecycleState: ready, material, evidenceDirectory: "/tmp/rehearsal-evidence" });
   await assert.rejects(() => controller.cleanup({ manifest, lifecycleState: ready }), /phase is running|must be stopped/);
@@ -192,7 +192,7 @@ test("adopts and stops a lone Egress whose successful start was interrupted befo
   const { controller, store, log, activeEgress } = harness();
   const lifecycle = lifecycleState();
   await controller.plan({ manifest, lifecycleState: lifecycle });
-  await controller.prepare({ manifest, lifecycleState: lifecycle, material, git: { repoId: 1, ref: "branch", sha: "a".repeat(40) }, secretsDirectory: "/tmp/rehearsal-secrets" });
+  await controller.prepare({ manifest, lifecycleState: lifecycle, material, git: { repo: "nhicks00/ScoreCheck", repoId: 1, ref: "branch", sha: "a".repeat(40) }, secretsDirectory: "/tmp/rehearsal-secrets" });
   const ready = lifecycleState("ready");
   const interrupted = await store.load();
   interrupted.phase = "starting";

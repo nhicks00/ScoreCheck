@@ -534,8 +534,8 @@ node --test infra/event-stack/*.test.mjs
 ```
 
 The live 12-server rehearsal bundle is generated once and contains the exact
-one-command runner invocation. It points to the numeric GitHub repository ID,
-the exact tested Git ref and 40-character commit SHA, and the local executables
+one-command runner invocation. It points to the GitHub owner/repository slug,
+numeric repository ID, exact tested Git ref and 40-character commit SHA, and the local executables
 used for the eight synthetic publishers and LiveKit verification:
 
 ```bash
@@ -548,6 +548,7 @@ node infra/event-stack/create-event-bundle.mjs create \
   --ssh-key /absolute/protected/scorecheck_do \
   --attestation /absolute/protected/lifecycle-attestation.json \
   --network-spec /absolute/protected/network/network-contract.json \
+  --git-repo GITHUB_OWNER/GITHUB_REPOSITORY \
   --git-repo-id NUMERIC_GITHUB_REPOSITORY_ID \
   --git-ref codex/turnkey-event-lifecycle \
   --git-sha 40_CHARACTER_TESTED_COMMIT_SHA \

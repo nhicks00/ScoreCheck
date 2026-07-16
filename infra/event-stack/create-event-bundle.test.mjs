@@ -49,6 +49,7 @@ async function fixture(kind = "rehearsal") {
     lifecycleAttestation: protectedFiles["attestation.json"],
     networkSpec: protectedFiles["network.json"],
     ...(kind === "production" ? { anchors: protectedFiles["anchors.json"], productionSource } : {
+      gitRepo: "nhicks00/ScoreCheck",
       gitRepoId: "123",
       gitRef: "codex/turnkey-event-lifecycle",
       gitSha: "a".repeat(40),
@@ -116,15 +117,18 @@ test("requires the rehearsal SHA to match local and remote branch tips exactly",
   const calls = [];
   const runGit = async (args) => {
     calls.push(args);
+    if (args[0] === "remote") return "https://github.com/nhicks00/ScoreCheck.git\n";
     return args[0] === "rev-parse" ? `${sha}\n` : `${sha}\trefs/heads/master\n`;
   };
-  await assertRehearsalGitIdentity({ ref: "master", sha }, { runGit });
+  await assertRehearsalGitIdentity({ repo: "nhicks00/ScoreCheck", ref: "master", sha }, { runGit });
   assert.deepEqual(calls, [
+    ["remote", "get-url", "origin"],
     ["rev-parse", "--verify", "--end-of-options", "master^{commit}"],
     ["ls-remote", "--exit-code", "origin", "refs/heads/master"]
   ]);
-  await assert.rejects(() => assertRehearsalGitIdentity({ ref: "master", sha: "b".repeat(40) }, { runGit }), /does not match local/);
-  await assert.rejects(() => assertRehearsalGitIdentity({ ref: "master", sha }, { runGit: async (args) => args[0] === "rev-parse" ? `${sha}\n` : `${"b".repeat(40)}\trefs\/heads\/master\n` }), /does not match remote/);
+  await assert.rejects(() => assertRehearsalGitIdentity({ repo: "wrong/ScoreCheck", ref: "master", sha }, { runGit }), /does not match remote origin/);
+  await assert.rejects(() => assertRehearsalGitIdentity({ repo: "nhicks00/ScoreCheck", ref: "master", sha: "b".repeat(40) }, { runGit }), /does not match local/);
+  await assert.rejects(() => assertRehearsalGitIdentity({ repo: "nhicks00/ScoreCheck", ref: "master", sha }, { runGit: async (args) => args[0] === "remote" ? "git@github.com:nhicks00/ScoreCheck.git\n" : args[0] === "rev-parse" ? `${sha}\n` : `${"b".repeat(40)}\trefs\/heads\/master\n` }), /does not match remote/);
 });
 
 async function productionSourceFixture(parent) {

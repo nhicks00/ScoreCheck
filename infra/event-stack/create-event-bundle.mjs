@@ -36,7 +36,7 @@ async function main() {
 
 export async function createEventBundle(options, { verifyGitIdentity = assertRehearsalGitIdentity } = {}) {
   validateBundleOptions(options);
-  if (options.kind === "rehearsal") await verifyGitIdentity({ ref: options.gitRef, sha: options.gitSha });
+  if (options.kind === "rehearsal") await verifyGitIdentity({ repo: options.gitRepo, ref: options.gitRef, sha: options.gitSha });
   await Promise.all([
     assertProtectedFile(options.credentialsEnv, "provider credentials"),
     assertProtectedFile(options.sshKey, "SSH private key"),
@@ -129,7 +129,7 @@ export async function createEventBundle(options, { verifyGitIdentity = assertReh
         knownHosts: final.knownHosts,
         ffmpegPath: options.ffmpegPath,
         liveKitCliPath: options.liveKitCliPath,
-        git: { repoId: options.gitRepoId, ref: options.gitRef, sha: options.gitSha },
+        git: { repo: options.gitRepo, repoId: options.gitRepoId, ref: options.gitRef, sha: options.gitSha },
         soakDurationSeconds: options.soakDurationSeconds
       };
       validateRehearsalProfile(rehearsalProfile);
@@ -187,7 +187,7 @@ export function parseBundleArgs(argv) {
     ["--event", "event"], ["--kind", "kind"], ["--destroy-after", "destroyAfter"], ["--root", "root"],
     ["--credentials-env", "credentialsEnv"], ["--ssh-key", "sshKey"], ["--attestation", "lifecycleAttestation"],
     ["--network-spec", "networkSpec"],
-    ["--anchors", "anchors"], ["--production-source", "productionSource"], ["--git-repo-id", "gitRepoId"], ["--git-ref", "gitRef"], ["--git-sha", "gitSha"],
+    ["--anchors", "anchors"], ["--production-source", "productionSource"], ["--git-repo", "gitRepo"], ["--git-repo-id", "gitRepoId"], ["--git-ref", "gitRef"], ["--git-sha", "gitSha"],
     ["--ffmpeg", "ffmpegPath"], ["--livekit-cli", "liveKitCliPath"], ["--soak-seconds", "soakDurationSeconds"]
   ]);
   for (let index = 1; index < argv.length; index += 1) {
@@ -214,20 +214,22 @@ function validateBundleOptions(value) {
   if (value.kind === "production") {
     if (!value.anchors) throw new Error("production bundle requires --anchors");
     if (!value.productionSource) throw new Error("production bundle requires --production-source");
-    for (const key of ["gitRepoId", "gitRef", "gitSha", "ffmpegPath", "liveKitCliPath"]) {
+    for (const key of ["gitRepo", "gitRepoId", "gitRef", "gitSha", "ffmpegPath", "liveKitCliPath"]) {
       if (value[key] !== undefined) throw new Error(`production bundle does not accept ${key}`);
     }
   } else {
     if (value.productionSource !== undefined) throw new Error("rehearsal bundle does not accept productionSource");
-    for (const key of ["gitRepoId", "gitRef", "gitSha", "ffmpegPath", "liveKitCliPath"]) {
+    for (const key of ["gitRepo", "gitRepoId", "gitRef", "gitSha", "ffmpegPath", "liveKitCliPath"]) {
       if (typeof value[key] !== "string" || !value[key]) throw new Error(`rehearsal bundle requires ${key}`);
     }
-    if (!/^[A-Za-z0-9._/-]{1,200}$/.test(value.gitRef) || value.gitRef.startsWith("-") || value.gitRef.includes("..") || !/^[a-f0-9]{40}$/.test(value.gitSha)) throw new Error("rehearsal Git identity is invalid");
+    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value.gitRepo) || !/^[A-Za-z0-9._/-]{1,200}$/.test(value.gitRef) || value.gitRef.startsWith("-") || value.gitRef.includes("..") || !/^[a-f0-9]{40}$/.test(value.gitSha)) throw new Error("rehearsal Git identity is invalid");
     if (!Number.isInteger(value.soakDurationSeconds) || value.soakDurationSeconds < 1_800 || value.soakDurationSeconds > 43_200) throw new Error("rehearsal soak must be 1800-43200 seconds");
   }
 }
 
-export async function assertRehearsalGitIdentity({ ref, sha }, { runGit = defaultRunGit } = {}) {
+export async function assertRehearsalGitIdentity({ repo, ref, sha }, { runGit = defaultRunGit } = {}) {
+  const remote = normalizeGitHubRemote((await runGit(["remote", "get-url", "origin"])).trim());
+  if (remote !== repo) throw new Error("rehearsal Git repository does not match remote origin");
   const local = (await runGit(["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`])).trim();
   if (local !== sha) throw new Error(`rehearsal Git SHA does not match local ${ref}`);
   const remoteRef = ref.startsWith("refs/heads/") ? ref : `refs/heads/${ref}`;
@@ -299,6 +301,12 @@ function normalizedAbsolute(value, label) {
 
 function sha256(value) { return createHash("sha256").update(value).digest("hex"); }
 
+function normalizeGitHubRemote(value) {
+  const match = /^(?:https:\/\/github\.com\/|git@github\.com:)([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?$/u.exec(value);
+  if (!match) throw new Error("rehearsal remote origin must be a GitHub repository");
+  return match[1];
+}
+
 function usage() {
-  process.stdout.write("Usage: node infra/event-stack/create-event-bundle.mjs create --event SLUG --kind production|rehearsal --destroy-after YYYY-MM-DD --root /PROTECTED/DIR --credentials-env FILE --ssh-key FILE --attestation FILE --network-spec /PROTECTED/RENDERED-NETWORK.json [production: --anchors FILE --production-source DIR] [rehearsal: --git-repo-id ID --git-ref REF --git-sha SHA --ffmpeg FILE --livekit-cli FILE --soak-seconds 1800]\n");
+  process.stdout.write("Usage: node infra/event-stack/create-event-bundle.mjs create --event SLUG --kind production|rehearsal --destroy-after YYYY-MM-DD --root /PROTECTED/DIR --credentials-env FILE --ssh-key FILE --attestation FILE --network-spec /PROTECTED/RENDERED-NETWORK.json [production: --anchors FILE --production-source DIR] [rehearsal: --git-repo OWNER/REPO --git-repo-id ID --git-ref REF --git-sha SHA --ffmpeg FILE --livekit-cli FILE --soak-seconds 1800]\n");
 }
