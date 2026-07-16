@@ -67,6 +67,7 @@ rsync -a -e "$rsync_shell" \
   "$SCRIPT_DIR/Dockerfile" \
   "$SCRIPT_DIR/docker-compose.yml" \
   "$SCRIPT_DIR/Caddyfile" \
+  "$SCRIPT_DIR/remote-provision.sh" \
   "$SCRIPT_DIR/remote-deploy.sh" \
   "$SSH_HOST:$candidate_dir/"
 rsync -a -e "$rsync_shell" "$SCRIPT_DIR/.generated/service.env" "$SSH_HOST:$candidate_dir/.env"
@@ -75,8 +76,31 @@ rsync -a -e "$rsync_shell" \
   "$SCRIPT_DIR/.generated/alertmanager.yml" \
   "$SSH_HOST:$candidate_dir/.generated/"
 
+deployment_mode="$(ssh "${ssh_options[@]}" "$SSH_HOST" "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE'
+set -euo pipefail
+required=(docker-compose.yml Caddyfile .env .generated/prometheus.yml .generated/alertmanager.yml rules src)
+present=0
+for path in "${required[@]}"; do
+  [[ -e "$REMOTE_DIR/$path" ]] && present=$((present + 1))
+done
+if [[ "$present" -eq 0 ]]; then
+  printf 'provision\n'
+elif [[ "$present" -eq "${#required[@]}" ]]; then
+  printf 'deploy\n'
+else
+  echo "Observability host has an incomplete live baseline." >&2
+  exit 1
+fi
+REMOTE
+)"
+
+case "$deployment_mode" in
+  provision) remote_entrypoint=remote-provision.sh ;;
+  deploy) remote_entrypoint=remote-deploy.sh ;;
+  *) echo "Unknown observability deployment mode." >&2; exit 1 ;;
+esac
 ssh "${ssh_options[@]}" "$SSH_HOST" \
-  "REMOTE_DIR='$REMOTE_DIR' CANDIDATE_DIR='$candidate_dir' REVISION='$REVISION' bash '$candidate_dir/remote-deploy.sh'"
+  "REMOTE_DIR='$REMOTE_DIR' CANDIDATE_DIR='$candidate_dir' REVISION='$REVISION' bash '$candidate_dir/$remote_entrypoint'"
 
 trap - EXIT INT TERM HUP
 cleanup_candidate

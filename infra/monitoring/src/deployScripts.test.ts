@@ -5,12 +5,14 @@ import { describe, expect, it } from "vitest";
 
 const deployPath = fileURLToPath(new URL("../deploy.sh", import.meta.url));
 const remoteDeployPath = fileURLToPath(new URL("../remote-deploy.sh", import.meta.url));
+const remoteProvisionPath = fileURLToPath(new URL("../remote-provision.sh", import.meta.url));
 const contractsPath = fileURLToPath(new URL("./contracts.ts", import.meta.url));
 const dockerignorePath = fileURLToPath(new URL("../.dockerignore", import.meta.url));
 const testFeedDockerfilePath = fileURLToPath(new URL("../Dockerfile.test-feed", import.meta.url));
 const testFeedRunnerPath = fileURLToPath(new URL("../run-test-feed-container.sh", import.meta.url));
 const deploy = readFileSync(deployPath, "utf8");
 const remoteDeploy = readFileSync(remoteDeployPath, "utf8");
+const remoteProvision = readFileSync(remoteProvisionPath, "utf8");
 const contracts = readFileSync(contractsPath, "utf8");
 const dockerignore = readFileSync(dockerignorePath, "utf8");
 const testFeedDockerfile = readFileSync(testFeedDockerfilePath, "utf8");
@@ -18,10 +20,31 @@ const testFeedRunner = readFileSync(testFeedRunnerPath, "utf8");
 
 describe("staged observability deployment", () => {
   it("keeps both shell entrypoints syntactically valid", () => {
-    for (const path of [deployPath, remoteDeployPath]) {
+    for (const path of [deployPath, remoteDeployPath, remoteProvisionPath]) {
       const result = spawnSync("bash", ["-n", path], { encoding: "utf8" });
       expect(result.status, result.stderr).toBe(0);
     }
+  });
+
+  it("selects a guarded first-provision transaction only for an empty live baseline", () => {
+    expect(deploy).toContain('printf \'provision\\n\'');
+    expect(deploy).toContain('printf \'deploy\\n\'');
+    expect(deploy).toContain('Observability host has an incomplete live baseline.');
+    expect(deploy).toContain('remote_entrypoint=remote-provision.sh');
+    expect(remoteProvision).toContain('First provisioning requires an empty observability baseline');
+    expect(remoteProvision).toContain('compose down --volumes --remove-orphans');
+    expect(remoteProvision).toContain('ScoreCheck first observability provisioning healthy revision=$REVISION');
+  });
+
+  it("fully validates the first observability stack before accepting it", () => {
+    expect(remoteProvision).toContain('promtool');
+    expect(remoteProvision).toContain('amtool');
+    expect(remoteProvision).toContain('test-alertmanager-inhibition.mjs');
+    expect(remoteProvision).toContain('docker build --pull --label');
+    expect(remoteProvision).toContain('compose up -d --no-build --remove-orphans');
+    expect(remoteProvision).toContain('running_count\" == \"5');
+    expect(remoteProvision).toContain('.status == "ok" and .version == 3');
+    expect(remoteProvision).toContain('api/v1/rules');
   });
 
   it("requires a clean exact revision and excludes secrets from the build context", () => {
