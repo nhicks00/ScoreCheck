@@ -16,8 +16,8 @@ capacity.
 | Eight-camera operator dashboard | Authenticated two-column desktop/one-column mobile matrix, low-rate thumbnails, one selected WHEP player, stage evidence, trends, incidents | Deployed and passing |
 | Media transport telemetry | MediaMTX readiness, bitrate, source protocol/mode, codec/profile/resolution/audio, bounded SRT transport counters, readers, FFmpeg progress | Contract v2 deployed and passing |
 | Program render telemetry | FPS, dimensions, RTP loss/jitter, reset-safe receive/decode/drop/freeze rates, packet age, feedback counters, reconnects, reloads | Deployed; Camera 1 comparator and same-page physical loss/recovery passed at 30 fps with no stable-window quality loss. Eight simultaneous outputs remain unqualified |
-| Full-bitrate repeated-picture detection | Existing decoded element sampled at 160x90/1 Hz; warning/critical correlator and alert rules | Camera 4 functional/isolation/durable gates passed. Browser-authoritative detection was 27.319s and the first host-local repeat was 27.110s; both failed the 20s target. Repeat timing on the deployed full-frame analyzer remains pending |
-| Black/covered-picture detection | Luma, dark ratio, variance, persistence; mutually exclusive with freeze paging | Camera 4 host-local functional/isolation/durable gate passed at 33.230s; its 25s target failed. Repeat timing on the deployed full-frame analyzer remains pending |
+| Full-bitrate repeated-picture detection | Existing decoded element sampled at full-frame 1 Hz; warning/critical correlator and alert rules | Camera 4 functional/isolation/durable gates passed. The phone-visible full-frame repeat detected at 26.891s against the 20s target; Pushover submission followed at 29.560s. Timing remains failed, not pending measurement |
+| Black/covered-picture detection | Luma, dark ratio, variance, persistence; mutually exclusive with freeze paging | Camera 4 functional/isolation/durable gate passed. The phone-visible full-frame repeat detected at 29.484s against the 25s target; Pushover submission followed at 28.895s. Timing remains failed, not pending measurement |
 | Camera and commentary audio quality | Track/mute, RMS/peak, clipping, silence age, RTP loss/jitter, adaptive sync evidence | Camera 4 camera-audio silence passed functionally and met its 75s target at 64.091s. Commentary disconnect, silence, clipping, transport, and sync real-fault rows remain pending |
 | Score and overlay alignment | Current match, source score, persisted overlay, rendered DOM signatures, exact 67-67 invalid-state checks | Deployed and passing fixtures |
 | Infrastructure and Egress attribution | Host/container health, idle/busy state, capacity, expected-versus-active web requests, assigned court pair, exact missing-output attribution, mapping mismatch rejection | Deployed; one-court `c-4` capacity and ordered teardown passed. Current four-worker topology still cannot admit eight simultaneous outputs |
@@ -27,7 +27,7 @@ capacity.
 | Page suppression behavior | Disposable network-isolated Alertmanager proves same-court and shared-dependency inhibition while peer alerts remain active | Enforced before deployment |
 | Phone paging | Pushover emergency acknowledgement and recovery | Operator-visible emergency acknowledgement and one recovery passed on 2026-07-16; the runtime and production database constraint are Pushover-only |
 | Independent dead-man | Baseline and active Healthchecks senders with coverage-aware cadence plus read-only Pushover attachment audit | Baseline and active withheld-ping gates passed; final state baseline running, active idle-paused, Pushover attached to both, and no duplicate recovery |
-| One-court real fault gate | Camera, network, preview, browser, commentary, score, Egress, YouTube, agent, dead-man faults | Physical Camera 1 lifecycle, one-court `c-4` capacity, Camera 4 freeze/black/camera-silence functional gates, and both dead-man gates passed. Freeze and black latency repeats plus the remaining dependency rows are pending; see `2026-07-16-one-court-real-fault-inventory.md` |
+| One-court real fault gate | Camera, network, preview, browser, commentary, score, Egress, YouTube, agent, dead-man faults | Physical Camera 1 lifecycle, one-court `c-4` capacity, Camera 4 freeze/black/camera-silence functional gates, and both dead-man gates passed. Freeze and black repeats are complete but still fail timing; remaining dependency rows are pending; see `2026-07-16-one-court-real-fault-inventory.md` |
 | Eight-court real load/fault gate | Independent compositor per court plus warm spare, eight qualified feeds, two commentary rooms, score on all courts | Final evaluator now binds a fresh schema-2 all-camera monitor/ffprobe qualification artifact to exact source profiles; revised-topology profile and endurance runs remain pending |
 
 ## Deterministic isolation gate
@@ -79,6 +79,16 @@ injection, the durable incident opened at 34.604 seconds, and Pushover accepted
 the open at 37.535 seconds. This is a detection-SLA failure, not permission to
 weaken persistence thresholds after the run. The evidence and tradeoff are
 sealed in `docs/monitoring-gates/2026-07-16-camera4-visual-freeze.md`.
+
+The later explicit phone-visible repeat on the deployed full-frame analyzer
+removed operator availability and the prior cadence candidate as explanations.
+Repeated picture first classified at 26.891 seconds and submitted Pushover at
+29.560 seconds against a 20-second target. Uniform black first classified at
+29.484 seconds and submitted Pushover at 28.895 seconds against a 25-second
+target. Both recorders passed durable episode, one-open/one-recovery,
+dependency-driven closure, browser quality, and Cameras 1-3/5-8 isolation.
+The timing failures are therefore confirmed and need pipeline-latency work or
+an explicit SLA revision; persistence thresholds remain unchanged.
 
 The first full eight-feed load attempt was useful failure evidence, not a pass.
 One shared `c-4` normalizer reached about 394 percent CPU, produced only 18-24
@@ -214,8 +224,9 @@ observability container identities and restart counts remained unchanged. See
 
 Operator approval for isolated monitoring fault gates is recorded. The user
 ended the active soak at 16:00 CDT on 2026-07-13 after the final recheck. The
-deployment freeze is closed, but every phone-visible or physical-source fault
-still needs an explicit operator timing window and a fresh healthy baseline.
+deployment freeze is closed. Phone-visible freeze/black repeats are complete;
+future physical-source faults still need an explicit operator timing window
+and a fresh healthy baseline.
 
 The exact deployed dashboard build passed local authenticated visual validation
 against the live read-only monitor API at 1600x1000 and 390x844: eight cards,
@@ -259,9 +270,10 @@ baseline published, remained healthy, and retired cleanly without arming a gate
 or creating an incident. The later Camera 4 freeze gate closed the functional
 content-freeze row while leaving its detection-SLA correction pending.
 
-1. Repeat Camera 4 repeated-picture and black timing on the deployed full-frame
-   host-local analyzer in an explicit phone-visible window. Do not lower
-   persistence merely to make the prior latency failures pass.
+1. Close the confirmed Camera 4 repeated-picture and black timing gap by either
+   reducing collection/evaluation latency and rerunning both synthetic gates,
+   or explicitly revising the operator SLA. Do not lower persistence merely to
+   make the latency failures pass.
 2. Use isolated test feeds and unlisted outputs to inject the remaining real
    rows: venue/uplink loss, preview normalizer failure, Program
    browser failure, commentary loss/silence/clipping/sync, score corruption,

@@ -10,8 +10,8 @@ the measured first monitor issue is within the runbook maximum.
 | Fault row | Current evidence | Classification | Required next action |
 | --- | --- | --- | --- |
 | Stop camera publishing | Camera 1 recurrence opened `REQUIRED_RAW_PATH_MISSING` 9.290s after the physical stop acknowledgement, delivered one opening Pushover, recovered from observed feed health, and isolated Cameras 2-8 | Functional and 20s detection pass | Accepted; do not repeat solely for evidence |
-| Freeze full-bitrate camera content | Camera 4 browser-authoritative and host-local gates both isolated `FULL_BITRATE_VISUAL_FREEZE`, durably opened/resolved one episode, and delivered one open/recovery pair. First monitor issues were 27.319s and 27.110s | Functional pass; 20s latency fail | Repeat once on the deployed full-frame analyzer in an explicit phone-visible window |
-| Cover camera or send uniform black | Camera 4 host-local gate isolated `CAMERA_CONTENT_BLACK`, excluded duplicate freeze paging, and durably delivered one open/recovery pair. First monitor issue was 33.230s | Functional pass; 25s latency fail | Repeat once on the deployed full-frame analyzer in the same explicit phone-visible window |
+| Freeze full-bitrate camera content | Camera 4 browser-authoritative and host-local gates isolated `FULL_BITRATE_VISUAL_FREEZE`. The deployed full-frame phone-visible repeat passed functional/durable/dedupe/recovery/isolation checks but first monitor issue was 26.891s and Pushover submission was 29.560s | Functional pass; 20s monitor latency fail | Reduce collection/evaluation latency and repeat, or explicitly revise the operator SLA without weakening the 15s persistence threshold |
+| Cover camera or send uniform black | Camera 4 host-local gate isolated `CAMERA_CONTENT_BLACK` and excluded duplicate freeze paging. The deployed full-frame phone-visible repeat passed functional/durable/dedupe/recovery/isolation checks but first monitor issue was 29.484s and Pushover submission was 28.895s | Functional pass; 25s monitor latency fail | Reduce collection/evaluation latency and repeat, or explicitly revise the operator SLA without weakening the 20s persistence threshold |
 | Degrade venue uplink | Deterministic transport and bitrate fixtures only | Pending real dependency gate | Use one isolated camera/test publisher through the venue router and an approved bounded network impairment; preserve Speedify fail-closed evidence and peer flows |
 | Stall preview normalizer | Deterministic path/FFmpeg fixtures only | Pending real process gate | Use an isolated test camera and stop only its disposable preview normalizer; do not change global MediaMTX configuration |
 | Close program browser | Camera 1 proved same-page camera-loss recovery, but no controlled browser-only disappearance gate | Pending real browser gate | Use one isolated protected Program viewer and close only that viewer while raw/preview remain healthy |
@@ -27,9 +27,10 @@ the measured first monitor issue is within the runbook maximum.
 
 - Camera 1 physical loss/recovery and dead-man delivery are accepted and should
   not be repeated merely to increase sample count.
-- The repeated-picture and black rows are the only functional gates awaiting a
-  latency repeat after the analyzer cadence hard cutover. They require Nathan
-  to be ready to observe Pushover before the first fault is injected.
+- The repeated-picture and black phone-visible latency repeats are complete.
+  Both confirm functional paging and isolation, but neither meets its timing
+  target. Further work is an engineering/SLA decision, not another operator
+  availability requirement.
 - Every remaining row changes an isolated dependency and therefore requires a
   fresh healthy baseline, explicit test window, exact dependency identity, and
   a verified cleanup. No public output, active event, global MediaMTX setting,
