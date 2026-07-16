@@ -1,8 +1,8 @@
 # Content Analyzer Cadence Candidate
 
 Date: 2026-07-16
-Result: local functional validation passed; production capacity qualification
-pending
+Result: local functional and production-class one- and two-analyzer capacity
+gates passed; idle production cutover and timing gates pending
 
 ## Change
 
@@ -28,15 +28,49 @@ SLA misses.
 - The analyzer reported `ANALYZING` with zero process restarts.
 - Temporary publisher, MediaMTX container, and agent were stopped after capture.
 
-## Release gate
+## Production-class capacity evidence
 
-Do not merge or deploy this candidate from functional evidence alone. Full-frame
-decode is more CPU intensive than keyframe-only decode. Repeat the existing
-one- and two-analyzer `c-4` capacity gates with the exact candidate image and
-retain the 75% p95 / 80% max host CPU, memory, restart, freshness, and cleanup
-requirements. If the final topology assigns one court per compositor, the
-one-analyzer result is authoritative for that topology; a two-analyzer result
-does not substitute for a different assignment.
+The exact candidate image was built and exercised on idle production-class
+`c-4` compositor D with disposable localhost MediaMTX and synthetic 1280x720/30
+H.264 Baseline/AAC sources using five-second GOPs. The production monitoring
+agent and files were not restarted or replaced. A sustained-host-CPU safety
+cutoff was armed at 85%.
+
+One analyzer, 180 one-second samples:
+
+- analyzer host CPU: 2.62% mean, 2.81% p95, 3.59% max;
+- analyzer memory: 68.3 MB mean, 70.0 MB p95, 70.5 MB max;
+- whole test-host CPU: 18.14% p95, 23.66% max, including the synthetic encoder
+  and test MediaMTX;
+- 7 to 192 analyzed frames, every sample `ANALYZING`, zero restarts.
+
+Two analyzers, 180 one-second samples:
+
+- combined analyzer host CPU: 5.32% mean, 5.63% p95, 5.94% max;
+- combined analyzer memory: 90.3 MB mean, 92.4 MB p95, 93.2 MB max;
+- whole test-host CPU: 29.93% p95, 35.44% max, including two synthetic encoders
+  and test MediaMTX;
+- Camera 7 advanced 7 to 194 frames and Camera 8 advanced 7 to 193; every
+  sample was `ANALYZING`, with zero restarts.
+
+All temporary containers drained to zero. The exact candidate image and remote
+build/evidence directories were removed after checksummed evidence was copied
+to protected local storage. The production monitor agent remained healthy.
+
+Protected evidence:
+
+`~/.config/scorecheck/capacity/content-analyzer-cadence-283115a1/`
+
+- one-analyzer samples SHA-256
+  `a62fa67ec6772f791d338ecfd087f3211442d39c267d9b0370fe792a78dbda6f`
+- one-analyzer summary SHA-256
+  `514d0373f68014abbc8037c317556c6df7071492d53113cc75e9138433adb71c`
+- two-analyzer samples SHA-256
+  `a3600c8dd5423667f03e7fba14ff8eee88f271b8512809b524df7c20538ca8a2`
+- two-analyzer summary SHA-256
+  `ae3366011280cc2d9f43ed69ae5f222e80074547ee808677b65ddfad06bf3f24`
+
+## Remaining release gate
 
 After capacity passes, deploy all analyzer agents on one revision in an idle
 bounded cutover and repeat the Camera 4 repeated-picture and black timing gates.
