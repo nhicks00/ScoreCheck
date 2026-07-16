@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "event": "gate8-2026-07-13",
+  "region": "sfo2",
+  "requiredTags": [
+    "scorecheck-event:gate8-2026-07-13",
+    "scorecheck-temporary"
+  ],
+  "resources": [
+    { "name": "bvm-preview-01", "role": "ingest", "size": "c-4", "reservedIpv4Slot": "ingest" },
+    { "name": "bvm-commentary-01", "role": "commentary", "size": "s-2vcpu-2gb", "reservedIpv4Slot": "commentary" },
+    { "name": "bvm-observability-01", "role": "observability", "size": "s-2vcpu-4gb", "reservedIpv4Slot": null },
+    { "name": "bvm-compositor-a", "role": "compositor", "size": "c-4", "reservedIpv4Slot": null },
+    { "name": "bvm-compositor-b", "role": "compositor", "size": "c-4", "reservedIpv4Slot": null },
+    { "name": "bvm-compositor-c", "role": "compositor", "size": "c-4", "reservedIpv4Slot": null },
+    { "name": "bvm-compositor-d", "role": "compositor", "size": "c-4", "reservedIpv4Slot": null }
+  ]
+}
