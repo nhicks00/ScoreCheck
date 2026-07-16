@@ -461,9 +461,11 @@ Arming is a hard-cutover contract and requires an explicit `profile` in the
 JSON body. Use `RAW_ONLY` for publisher-loss or uplink tests. Use
 `PROGRAM_CONTENT` only when a protected Program viewer is planned for
 black-picture, repeated-picture, or camera-audio analysis. That profile enables
-camera content analysis for the test camera while scoring, commentary,
-YouTube, Egress, and production control remain off. Requests without a profile
-are rejected instead of guessing operator intent.
+camera content analysis and requires that test viewer to keep heartbeating for
+the selected camera while scoring, commentary, YouTube, Egress, and production
+control remain off. Closing or losing the viewer is therefore a real
+Program-browser fault during the gate. Requests without a profile are rejected
+instead of guessing operator intent.
 
 ```json
 {

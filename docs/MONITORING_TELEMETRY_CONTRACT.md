@@ -79,6 +79,14 @@ scoring_expectation: NONE | SCHEDULED | LIVE | FINAL_HOLD
 
 Every manual override includes `createdBy`, `createdAt`, `reason`, and `expiresAt`.
 
+Program-browser liveness is driven by the explicit
+`scorecheck_program_browser_required` signal. It is `1` for real live-broadcast
+coverage and for the selected court while a bounded `PROGRAM_CONTENT` fault
+gate is active. The fault-gate case requires only its protected Program viewer;
+it does not make Egress, YouTube, commentary, scoring, preview, or the program
+branch a production expectation. A `RAW_ONLY` gate leaves the Program browser
+optional.
+
 ## Agent roles
 
 ```text

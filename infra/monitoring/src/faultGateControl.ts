@@ -78,6 +78,10 @@ export function faultGateExpectation(gate: MonitoringFaultGate): CourtExpectatio
   };
 }
 
+export function programBrowserIsRequired(expectation: CourtExpectation, faultGate: MonitoringFaultGate | null): boolean {
+  return expectation.broadcastExpectation === "LIVE" || faultGate?.profile === "PROGRAM_CONTENT";
+}
+
 function expectationIsOff(expectation: CourtExpectation): boolean {
   return expectation.coveragePhase === "OFF"
     && expectation.mediaExpectation === "OFF"

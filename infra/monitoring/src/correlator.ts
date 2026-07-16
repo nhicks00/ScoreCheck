@@ -1,6 +1,6 @@
 import { MONITORING_CONTRACT_VERSION, worstHealthState, type AgentSnapshot, type BrowserHeartbeatSnapshot, type BrowserThumbnailMetadata, type CameraContentSnapshot, type ControlPlaneSnapshot, type CourtExpectation, type DeadManHealth, type FfmpegBranchSnapshot, type HealthState, type IncidentSnapshot, type MediaPathSnapshot, type MonitoringFaultGate, type MonitoringSilence, type MonitorSnapshot, type MonitoringStage, type NotificationHealth, type StageHealth, type YouTubeMonitorSnapshot } from "./contracts.js";
 import type { AgentTarget } from "./config.js";
-import { faultGateExpectation } from "./faultGateControl.js";
+import { faultGateExpectation, programBrowserIsRequired } from "./faultGateControl.js";
 
 export type AgentRuntime = {
   target: AgentTarget;
@@ -80,7 +80,7 @@ export function buildMonitorSnapshot(
       ),
       pathStage("PREVIEW", "preview", byBranch.preview ?? null, nowMs, productionExpectation),
       pathStage("PROGRAM_PATH", "program", byBranch.program ?? null, nowMs, productionExpectation),
-      programBrowserStage(browser, nowMs, productionExpectation),
+      programBrowserStage(browser, nowMs, programBrowserIsRequired(productionExpectation, faultGate)),
       commentaryStage(browser, nowMs, productionExpectation),
       scoreSourceStage(competition, controlPlane, nowMs, productionExpectation),
       scoreRenderStage(browser, nowMs, productionExpectation),
@@ -279,13 +279,13 @@ function youtubeStage(
   );
 }
 
-function programBrowserStage(browser: BrowserHeartbeatSnapshot | null, nowMs: number, expectation: CourtExpectation): StageHealth {
+function programBrowserStage(browser: BrowserHeartbeatSnapshot | null, nowMs: number, required: boolean): StageHealth {
   const timing = browserTiming(browser, nowMs);
-  if (expectation.broadcastExpectation === "OFF") {
+  if (!required) {
     return expectedOffStage("PROGRAM_BROWSER", "Program browser is not expected.");
   }
   if (!browser || timing.stale) {
-    return missingBrowserStage("PROGRAM_BROWSER", timing, expectation.broadcastExpectation === "LIVE");
+    return missingBrowserStage("PROGRAM_BROWSER", timing, true);
   }
   const video = browser.video;
   const critical = video.state === "fatal" || video.state === "stalled" || video.framesPerSecond === 0;

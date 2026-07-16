@@ -646,7 +646,32 @@ tests:
         alertname: ScoreCheckDeadManPhoneChannelMissing
         exp_alerts: []
 
-  - name: sustained browser decode loss is live-only and severity-banded
+  - name: Program browser heartbeat is required by the explicit browser contract
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_program_browser_heartbeat_fresh{court="1"}'
+        values: '0 0 0 0 0 0 0 0'
+      - series: 'scorecheck_program_browser_required{court="1"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_program_browser_heartbeat_fresh{court="2"}'
+        values: '0 0 0 0 0 0 0 0'
+      - series: 'scorecheck_program_browser_required{court="2"}'
+        values: '0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 20s
+        alertname: ScoreCheckProgramBrowserMissing
+        exp_alerts:
+          - exp_labels:
+              court: '1'
+              severity: critical
+              stage: PROGRAM_BROWSER
+              issue_code: PROGRAM_BROWSER_HEARTBEAT_MISSING
+              root_dependency: compositor
+            exp_annotations:
+              summary: Camera 1's required Program viewer stopped reporting.
+              first_action: Check the streaming computer first, then reopen Camera 1's Program page if it is closed.
+
+  - name: sustained browser decode loss is required-only and severity-banded
     interval: 5s
     input_series:
       - series: 'scorecheck_program_browser_frames_received_total{court="1"}'
@@ -655,6 +680,8 @@ tests:
         values: '0+2x72'
       - series: 'scorecheck_court_broadcast_live{court="1"}'
         values: '1+0x72'
+      - series: 'scorecheck_program_browser_required{court="1"}'
+        values: '1+0x72'
 
       - series: 'scorecheck_program_browser_frames_received_total{court="2"}'
         values: '0+150x72'
@@ -662,12 +689,16 @@ tests:
         values: '0+12x72'
       - series: 'scorecheck_court_broadcast_live{court="2"}'
         values: '1+0x72'
+      - series: 'scorecheck_program_browser_required{court="2"}'
+        values: '1+0x72'
 
       - series: 'scorecheck_program_browser_frames_received_total{court="3"}'
         values: '0+150x72'
       - series: 'scorecheck_program_browser_frames_dropped_total{court="3"}'
         values: '0+2x72'
       - series: 'scorecheck_court_broadcast_live{court="3"}'
+        values: '0+0x72'
+      - series: 'scorecheck_program_browser_required{court="3"}'
         values: '0+0x72'
     alert_rule_test:
       - eval_time: 4m
@@ -680,7 +711,7 @@ tests:
               issue_code: PROGRAM_FRAME_DROP_RATIO_HIGH
               root_dependency: program-browser
             exp_annotations:
-              summary: Program browser decode drops exceed 0.5% on live court 1.
+              summary: Camera 1's required Program viewer is dropping some video frames.
               first_action: Compare received, decoded, dropped, jitter-buffer, preview, and host-load telemetry before changing the camera or compositor.
       - eval_time: 4m
         alertname: ScoreCheckProgramFrameDropRatioCritical
@@ -692,10 +723,10 @@ tests:
               issue_code: PROGRAM_FRAME_DROP_RATIO_CRITICAL
               root_dependency: program-browser
             exp_annotations:
-              summary: Program browser decode drops exceed 5% on live court 2.
+              summary: Camera 2's required Program viewer is dropping many video frames.
               first_action: Inspect the program WHEP decoder and timestamp path immediately; verify upstream preview health before changing source encoding.
 
-  - name: sustained browser freeze time is live-only and severity-banded
+  - name: sustained browser freeze time is required-only and severity-banded
     interval: 5s
     input_series:
       - series: 'scorecheck_program_browser_frames_received_total{court="4"}'
@@ -706,6 +737,8 @@ tests:
         values: '0+0.1x72'
       - series: 'scorecheck_court_broadcast_live{court="4"}'
         values: '1+0x72'
+      - series: 'scorecheck_program_browser_required{court="4"}'
+        values: '1+0x72'
 
       - series: 'scorecheck_program_browser_frames_received_total{court="5"}'
         values: '0+150x72'
@@ -715,6 +748,8 @@ tests:
         values: '0+1x72'
       - series: 'scorecheck_court_broadcast_live{court="5"}'
         values: '1+0x72'
+      - series: 'scorecheck_program_browser_required{court="5"}'
+        values: '1+0x72'
 
       - series: 'scorecheck_program_browser_frames_received_total{court="6"}'
         values: '0+150x72'
@@ -723,6 +758,8 @@ tests:
       - series: 'scorecheck_program_browser_freeze_duration_seconds_total{court="6"}'
         values: '0+0.1x72'
       - series: 'scorecheck_court_broadcast_live{court="6"}'
+        values: '0+0x72'
+      - series: 'scorecheck_program_browser_required{court="6"}'
         values: '0+0x72'
     alert_rule_test:
       - eval_time: 4m
@@ -735,7 +772,7 @@ tests:
               issue_code: PROGRAM_FREEZE_RATIO_HIGH
               root_dependency: program-browser
             exp_annotations:
-              summary: Program browser spent more than 1% of the last two minutes frozen on live court 4.
+              summary: Camera 4's required Program viewer is intermittently freezing.
               first_action: Compare Chrome freeze, frame-drop, jitter-buffer, preview, and host-load telemetry to isolate the affected stage.
       - eval_time: 4m
         alertname: ScoreCheckProgramFreezeRatioCritical
@@ -747,7 +784,7 @@ tests:
               issue_code: PROGRAM_FREEZE_RATIO_CRITICAL
               root_dependency: program-browser
             exp_annotations:
-              summary: Program browser spent more than 10% of the last two minutes frozen on live court 5.
+              summary: Camera 5's required Program viewer is repeatedly freezing.
               first_action: Inspect the program WHEP decoder and timestamp path immediately; verify upstream preview health before changing source encoding.
 
   - name: browser quality alerts wait for a meaningful sample
@@ -762,6 +799,8 @@ tests:
       - series: 'scorecheck_program_browser_freeze_duration_seconds_total{court="1"}'
         values: '0+1x10'
       - series: 'scorecheck_court_broadcast_live{court="1"}'
+        values: '1+0x10'
+      - series: 'scorecheck_program_browser_required{court="1"}'
         values: '1+0x10'
     alert_rule_test:
       - eval_time: 45s

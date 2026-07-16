@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { MonitorSnapshot } from "./contracts.js";
-import { assertFaultGateCanArm, faultGateArmRequestSchema, FaultGateConflictError, FaultGateControl, faultGateExpectation } from "./faultGateControl.js";
+import type { CourtExpectation, MonitorSnapshot } from "./contracts.js";
+import { assertFaultGateCanArm, faultGateArmRequestSchema, FaultGateConflictError, FaultGateControl, faultGateExpectation, programBrowserIsRequired } from "./faultGateControl.js";
 import { buildMonitorSnapshot } from "./correlator.js";
 
 describe("monitoring fault-gate control", () => {
@@ -66,7 +66,25 @@ describe("monitoring fault-gate control", () => {
     expect(court.stages.find((stage) => stage.stage === "RAW_INGEST")?.state).toBe("CRITICAL");
     expect(court.stages.find((stage) => stage.stage === "PREVIEW")?.state).toBe("EXPECTED_OFF");
     expect(court.stages.find((stage) => stage.stage === "PROGRAM_PATH")?.state).toBe("EXPECTED_OFF");
-    expect(court.stages.find((stage) => stage.stage === "PROGRAM_BROWSER")?.state).toBe("EXPECTED_OFF");
+    expect(court.stages.find((stage) => stage.stage === "PROGRAM_BROWSER")?.state).toBe("CRITICAL");
+    expect(court.stages.find((stage) => stage.stage === "EGRESS")?.state).toBe("EXPECTED_OFF");
+    expect(court.stages.find((stage) => stage.stage === "YOUTUBE")?.state).toBe("NOT_APPLICABLE");
+    expect(programBrowserIsRequired(court.expectation, court.faultGate)).toBe(true);
+  });
+
+  it("requires a Program browser for live coverage but not RAW_ONLY gates", () => {
+    const nowMs = Date.parse("2026-07-13T13:00:00.000Z");
+    const rawGate = new FaultGateControl().arm({ courtNumber: 4, profile: "RAW_ONLY", actor: "codex", reason: "raw gate", durationSeconds: 120 }, nowMs);
+    const liveExpectation: CourtExpectation = {
+      coveragePhase: "LIVE_MATCH",
+      mediaExpectation: "REQUIRED",
+      broadcastExpectation: "LIVE",
+      commentaryExpectation: "NONE",
+      scoringExpectation: "NONE",
+      overrideExpiresAt: null
+    };
+    expect(programBrowserIsRequired(faultGateExpectation(rawGate), rawGate)).toBe(false);
+    expect(programBrowserIsRequired(liveExpectation, null)).toBe(true);
   });
 });
 

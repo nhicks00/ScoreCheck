@@ -17,7 +17,7 @@ import { loadCourtPipelineRange, parseRangeInput } from "./rangeQueries.js";
 import { BrowserThumbnailManager } from "./browserThumbnails.js";
 import { activeSilences, incidentIsSilenced, silenceMatchesIncident } from "./silences.js";
 import { deadManTestGateArmSchema, DeadManTestGateError, ExternalDeadMan, type DeadManTestGateArmRequest } from "./deadMan.js";
-import { assertFaultGateCanArm, faultGateArmRequestSchema, FaultGateConflictError, FaultGateControl } from "./faultGateControl.js";
+import { assertFaultGateCanArm, faultGateArmRequestSchema, FaultGateConflictError, FaultGateControl, programBrowserIsRequired } from "./faultGateControl.js";
 import { BrowserCounterAccumulator } from "./browserCounterAccumulator.js";
 import { incrementCourtCounter } from "./prometheusCounter.js";
 
@@ -63,6 +63,7 @@ const scoreWorkerHealthy = new Gauge({ name: "scorecheck_score_worker_healthy", 
 const courtMediaRequired = new Gauge({ name: "scorecheck_court_media_required", help: "Whether media is currently required for a court.", labelNames: ["court"], registers: [registry] });
 const courtExpectationContext = new Gauge({ name: "scorecheck_court_expectation_context", help: "Expectation source context for court-scoped alert evidence.", labelNames: ["court", "expectation_source"], registers: [registry] });
 const courtBroadcastLive = new Gauge({ name: "scorecheck_court_broadcast_live", help: "Whether a court broadcast is expected live.", labelNames: ["court"], registers: [registry] });
+const programBrowserRequired = new Gauge({ name: "scorecheck_program_browser_required", help: "Whether a court Program browser is required by live coverage or a bounded PROGRAM_CONTENT fault gate.", labelNames: ["court"], registers: [registry] });
 const courtCommentaryRequired = new Gauge({ name: "scorecheck_court_commentary_required", help: "Whether commentary is required for a court.", labelNames: ["court"], registers: [registry] });
 const courtScoringLive = new Gauge({ name: "scorecheck_court_scoring_live", help: "Whether live scoring is required for a court.", labelNames: ["court"], registers: [registry] });
 const courtLiveMatch = new Gauge({ name: "scorecheck_court_live_match", help: "Whether the court is in the LIVE_MATCH coverage phase.", labelNames: ["court"], registers: [registry] });
@@ -429,6 +430,7 @@ async function pollAllOnce() {
   courtMediaRequired.reset();
   courtExpectationContext.reset();
   courtBroadcastLive.reset();
+  programBrowserRequired.reset();
   courtCommentaryRequired.reset();
   courtScoringLive.reset();
   courtLiveMatch.reset();
@@ -448,6 +450,7 @@ async function pollAllOnce() {
     courtMediaRequired.set(labels, court.expectation.mediaExpectation === "REQUIRED" ? 1 : 0);
     courtExpectationContext.set({ ...labels, expectation_source: court.faultGate ? "fault_gate" : "control_plane" }, 1);
     courtBroadcastLive.set(labels, court.expectation.broadcastExpectation === "LIVE" ? 1 : 0);
+    programBrowserRequired.set(labels, programBrowserIsRequired(court.expectation, court.faultGate) ? 1 : 0);
     courtCommentaryRequired.set(labels, court.expectation.commentaryExpectation === "REQUIRED" ? 1 : 0);
     courtScoringLive.set(labels, court.expectation.scoringExpectation === "LIVE" ? 1 : 0);
     courtLiveMatch.set(labels, court.expectation.coveragePhase === "LIVE_MATCH" ? 1 : 0);
