@@ -88,7 +88,7 @@ export class RehearsalController {
   }
 
   async start({ manifest, lifecycleState, material, evidenceDirectory }) {
-    validateLifecycleBinding(manifest, lifecycleState, ["ready"]);
+    validateLifecycleBinding(manifest, lifecycleState, ["ready", "live"]);
     return this.store.withLock(async () => {
       let state = await this.#loadBound(manifest, lifecycleState);
       assertPhase(state, ["prepared", "starting"], "start rehearsal workload");

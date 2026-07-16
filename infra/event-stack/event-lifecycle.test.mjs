@@ -163,6 +163,24 @@ test("runs the production-shaped 12-Droplet lifecycle without changing critical 
   assert.equal(notifier.messages.length, 2);
 });
 
+test("allows an isolated rehearsal to tear down before a production-style review date", async () => {
+  const setup = fixture({ kind: "rehearsal", now: new Date("2026-07-16T12:00:00.000Z") });
+  const evidence = await prepareDestroyableLifecycle(setup, "early-rehearsal-destroy");
+  const destroyed = await setup.controller.destroy(setup.manifest, evidence, "DESTROY:turnkey-test");
+  assert.equal(destroyed.phase, "destroyed");
+  assert.equal(setup.cloud.droplets.size, 0);
+  assert.equal(setup.cloud.deleteCalls.length, 12);
+});
+
+test("still rejects early production teardown", async () => {
+  const setup = fixture({ now: new Date("2026-07-16T12:00:00.000Z") });
+  const evidence = await prepareDestroyableLifecycle(setup, "early-production-destroy");
+  await assert.rejects(
+    () => setup.controller.destroy(setup.manifest, evidence, "DESTROY:turnkey-test"),
+    /destroy review date is 2026-08-01/
+  );
+});
+
 test("resumes after a definite partial create without duplicates", async () => {
   const cloud = new FakeDigitalOceanProvider();
   cloud.failCreateAt = 5;

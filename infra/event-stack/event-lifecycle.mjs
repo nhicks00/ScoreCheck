@@ -266,7 +266,9 @@ export class EventLifecycleController {
       assertPhase(state, ["closed", "destroying"], "destroy");
       if (confirmation !== `DESTROY:${state.event}`) throw new Error(`confirmation must be exactly DESTROY:${state.event}`);
       const today = this.now().toISOString().slice(0, 10);
-      if (today < manifest.destroyAfter) throw new Error(`destroy review date is ${manifest.destroyAfter}; current UTC date is ${today}`);
+      if (manifest.kind !== "rehearsal" && today < manifest.destroyAfter) {
+        throw new Error(`destroy review date is ${manifest.destroyAfter}; current UTC date is ${today}`);
+      }
       await verifyEvidenceBundle(state, evidenceDirectory);
       if (state.phase === "closed") {
         await this.#assertExactEventInventory(state, manifest);

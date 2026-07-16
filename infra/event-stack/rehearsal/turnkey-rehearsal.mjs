@@ -62,9 +62,9 @@ export function buildRunPlan({ event, eventProfile, rehearsalProfile }) {
     rehearsalStep("start", rehearsalProfile, `START-REHEARSAL:${event}`),
     rehearsalStep("soak", rehearsalProfile),
     rehearsalStep("stop", rehearsalProfile),
+    eventStep("close", eventProfile, `CLOSE:${event}`),
     rehearsalStep("cleanup", rehearsalProfile, `CLEANUP:${event}`),
     rehearsalStep("seal", rehearsalProfile),
-    eventStep("close", eventProfile, `CLOSE:${event}`),
     eventStep("evidence", eventProfile),
     eventStep("destroy", eventProfile, `DESTROY:${event}`)
   ];
@@ -77,13 +77,13 @@ export function buildRecoveryPlan({ event, eventProfile, rehearsalProfile, lifec
     rehearsalPhase = "planned";
   }
   if (["starting", "running", "stopping"].includes(rehearsalPhase)) steps.push(rehearsalStep("stop", rehearsalProfile));
-  if (["planned", "preparing", "prepared", "starting", "running", "stopping", "stopped", "cleaning"].includes(rehearsalPhase)) steps.push(rehearsalStep("cleanup", rehearsalProfile, `CLEANUP:${event}`));
-  if (rehearsalPhase !== null && rehearsalPhase !== "cleaned") rehearsalPhase = "cleaned";
-  if (rehearsalPhase === "cleaned") steps.push(rehearsalStep("seal", rehearsalProfile));
   if (lifecyclePhase === "live") {
     steps.push(eventStep("close", eventProfile, `CLOSE:${event}`));
     lifecyclePhase = "closed";
   }
+  if (["planned", "preparing", "prepared", "starting", "running", "stopping", "stopped", "cleaning"].includes(rehearsalPhase)) steps.push(rehearsalStep("cleanup", rehearsalProfile, `CLEANUP:${event}`));
+  if (rehearsalPhase !== null && rehearsalPhase !== "cleaned") rehearsalPhase = "cleaned";
+  if (rehearsalPhase === "cleaned") steps.push(rehearsalStep("seal", rehearsalProfile));
   if (lifecyclePhase === "closed") {
     steps.push(eventStep("evidence", eventProfile));
     steps.push(eventStep("destroy", eventProfile, `DESTROY:${event}`));
