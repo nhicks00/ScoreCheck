@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -146,6 +146,26 @@ test("seals and verifies failed evidence only after every provider resource is d
   assert.equal(marker.classification, "FAIL");
   const verified = await verifyRehearsalEvidence({ directory: root, event: state.event, generationId: state.generationId, manifestSha256: digest });
   assert.equal(verified.marker.providerCleanupComplete, true);
+});
+
+test("creates protected cancelled evidence when preparation fails before evidence collection", async () => {
+  const parent = await mkdtemp(join(os.tmpdir(), "scorecheck-rehearsal-cancelled-"));
+  const root = join(parent, "evidence");
+  const manifest = { kind: "rehearsal", event: "gate", droplets: Array(12).fill({}) };
+  const digest = sha(manifest);
+  const state = {
+    phase: "cleaned", event: "gate", generationId: "generation-1234", manifestSha256: digest,
+    createdAt: "2026-07-15T12:00:00Z", preparedAt: null, startedAt: null, stoppedAt: null, cleanedAt: "2026-07-15T12:01:00Z",
+    program: { project: { id: "project", status: "deleted" } },
+    courts: Object.fromEntries(Array.from({ length: 8 }, (_, index) => [index + 1, { stream: { id: null, status: "absent" }, broadcast: { id: null, status: "absent" } }])),
+    startEvidence: null, soakEvidence: null, endpointEvidence: null, stopEvidence: null
+  };
+
+  const marker = await sealRehearsalEvidence({ state, manifest, evidenceDirectory: root });
+  assert.equal(marker.classification, "CANCELLED");
+  assert.equal((await stat(root)).mode & 0o077, 0);
+  const verified = await verifyRehearsalEvidence({ directory: root, event: state.event, generationId: state.generationId, manifestSha256: digest });
+  assert.equal(verified.evidence.classification, "CANCELLED");
 });
 
 function sha(value) {

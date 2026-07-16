@@ -228,6 +228,8 @@ export function browserContinuityProblems(previous, current) {
 export async function sealRehearsalEvidence({ state, manifest, evidenceDirectory, now = new Date() }) {
   validateSealInputs(state, manifest);
   const root = resolve(evidenceDirectory);
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  await chmod(root, 0o700);
   const info = await stat(root);
   if (!info.isDirectory() || (info.mode & 0o077) !== 0) throw new Error("rehearsal evidence directory must be protected");
   const classification = state.soakEvidence?.passed && state.endpointEvidence?.passed ? "PASS" : state.startedAt ? "FAIL" : "CANCELLED";
