@@ -87,6 +87,7 @@ fi
 exit 1
 REMOTE
 
-curl -fsS --retry 12 --retry-delay 2 --max-time 5 \
+curl -fsS --retry 30 --retry-all-errors --retry-delay 2 --retry-max-time 120 \
+  --connect-timeout 5 --max-time 10 \
   "https://$LIVEKIT_COMMENTARY_RTC_HOST" >/dev/null
 echo "LiveKit commentary TLS endpoint healthy."

@@ -43,3 +43,11 @@ test("all changed deployment entrypoints remain valid Bash", async () => {
     assert.equal(result.status, 0, `${path}: ${result.stderr}`);
   }
 });
+
+test("fresh public TLS endpoints retry handshake failures within a bounded deadline", () => {
+  for (const [path, script] of scripts.slice(0, 3).filter(([path]) => path.includes("commentary") || path.includes("mediamtx"))) {
+    assert.match(script, /--retry-all-errors/u, `${path} retries TLS handshake failures`);
+    assert.match(script, /--retry-max-time 120/u, `${path} has a bounded readiness deadline`);
+    assert.match(script, /--connect-timeout 5 --max-time 10/u, `${path} bounds each attempt`);
+  }
+});

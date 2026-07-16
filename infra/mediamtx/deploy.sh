@@ -142,5 +142,6 @@ fi
 exit 1
 REMOTE
 
-curl -fsS --retry 30 --retry-delay 2 --max-time 5 "https://$MEDIAMTX_PUBLIC_HOST/healthz" >/dev/null
+curl -fsS --retry 30 --retry-all-errors --retry-delay 2 --retry-max-time 120 \
+  --connect-timeout 5 --max-time 10 "https://$MEDIAMTX_PUBLIC_HOST/healthz" >/dev/null
 echo "MediaMTX public TLS endpoint healthy."
