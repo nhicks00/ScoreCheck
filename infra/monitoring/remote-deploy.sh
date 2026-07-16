@@ -44,6 +44,7 @@ fi
 
 candidate_image="scorecheck-monitoring:candidate-${REVISION:0:12}-$$"
 rollback_image="scorecheck-monitoring:rollback-${REVISION:0:12}-$$"
+monitoring_contract_version=3
 inhibition_container="scorecheck-alertmanager-preflight-$$"
 backup_dir=""
 rollback_required=0
@@ -120,7 +121,8 @@ assert_public_health() {
   fi
   curl --fail --silent --show-error --max-time 10 \
     "https://${public_host}/healthz" \
-    | jq -e '.status == "ok" and .version == 2' >/dev/null
+    | jq -e --argjson version "$monitoring_contract_version" \
+      '.status == "ok" and .version == $version' >/dev/null
 }
 
 wait_for_public_health() {
