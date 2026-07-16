@@ -93,7 +93,7 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     MONITOR_AGENT_TARGETS: z.string().default(""),
     MONITOR_SERVICE_BIND: z.string().default("127.0.0.1"),
     MONITOR_SERVICE_PORT: port.default(9110),
-    MONITOR_SERVICE_INTERVAL_MS: interval.default(5_000),
+    MONITOR_SERVICE_INTERVAL_MS: interval.default(1_000),
     MONITOR_COURT_COUNT: z.coerce.number().int().min(1).max(8).default(8),
     HEALTHCHECKS_BASELINE_PING_URL: optionalHttpsUrl,
     HEALTHCHECKS_BASELINE_CHECK_ID: z.preprocess(emptyStringToUndefined, z.string().uuid().optional()),

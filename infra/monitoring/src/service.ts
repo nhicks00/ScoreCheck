@@ -26,6 +26,7 @@ const app = express();
 const registry = new Registry();
 const agentFresh = new Gauge({ name: "scorecheck_monitor_agent_fresh", help: "Whether an expected host agent has reported within ten seconds.", labelNames: ["agent", "role"], registers: [registry] });
 const agentPollErrors = new Counter({ name: "scorecheck_monitor_agent_poll_errors_total", help: "Agent snapshot poll errors.", labelNames: ["agent", "role"], registers: [registry] });
+const agentPollSkipped = new Counter({ name: "scorecheck_monitor_agent_poll_skipped_total", help: "Agent snapshot poll cycles skipped because the previous cycle was still running.", registers: [registry] });
 const snapshotGenerated = new Gauge({ name: "scorecheck_monitor_snapshot_generated_timestamp_seconds", help: "Unix timestamp of the latest monitor snapshot.", registers: [registry] });
 const browserFresh = new Gauge({ name: "scorecheck_program_browser_heartbeat_fresh", help: "Whether a court program browser heartbeat was received within ten seconds.", labelNames: ["court"], registers: [registry] });
 const browserFps = new Gauge({ name: "scorecheck_program_browser_frames_per_second", help: "Program browser rendered video frames per second.", labelNames: ["court"], registers: [registry] });
@@ -102,6 +103,7 @@ const externalDeadMan = new ExternalDeadMan(config);
 const faultGateControl = new FaultGateControl();
 const browserCounterAccumulator = new BrowserCounterAccumulator();
 let deadManMaintenanceRunning = false;
+let agentPollRunning = false;
 let silences: MonitoringSilence[] = [];
 if (incidentStore) {
   try {
@@ -120,7 +122,8 @@ app.disable("x-powered-by");
 app.use(express.json({ limit: "64kb" }));
 app.get("/healthz", (_req, res) => {
   const ageMs = Date.now() - Date.parse(snapshot.generatedAt);
-  res.status(ageMs <= config.intervalMs * 3 ? 200 : 503).json({ version: MONITORING_CONTRACT_VERSION, status: ageMs <= config.intervalMs * 3 ? "ok" : "stale", ageMs });
+  const healthy = ageMs <= Math.max(config.intervalMs * 3, 10_000);
+  res.status(healthy ? 200 : 503).json({ version: MONITORING_CONTRACT_VERSION, status: healthy ? "ok" : "stale", ageMs });
 });
 app.get("/metrics", bearerAuth(config.token), async (_req, res) => {
   res.type(registry.contentType).send(await registry.metrics());
@@ -376,6 +379,19 @@ app.post("/v1/silences", bearerAuth(config.token), async (req, res) => {
   }
 });
 async function pollAll() {
+  if (agentPollRunning) {
+    agentPollSkipped.inc();
+    return;
+  }
+  agentPollRunning = true;
+  try {
+    await pollAllOnce();
+  } finally {
+    agentPollRunning = false;
+  }
+}
+
+async function pollAllOnce() {
   await Promise.all([
     ...config.targets.map((target) => pollAgent(target)),
     controlPlane.refresh().catch(() => null)

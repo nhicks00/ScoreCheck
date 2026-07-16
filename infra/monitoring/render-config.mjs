@@ -25,7 +25,7 @@ ${target.role === "compositor" ? "    scrape_interval: 1s\n    scrape_timeout: 8
 
 const prometheus = `global:
   scrape_interval: 5s
-  evaluation_interval: 5s
+  evaluation_interval: 1s
   external_labels:
     system: scorecheck
 

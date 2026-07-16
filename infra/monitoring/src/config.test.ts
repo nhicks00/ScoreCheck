@@ -55,6 +55,7 @@ describe("monitoring configuration", () => {
     expect(service.healthchecksActiveCheckId).toBeNull();
     expect(service.supabaseUrl).toBeNull();
     expect(service.browserAllowedOrigins).toEqual(["https://score.beachvolleyballmedia.com"]);
+    expect(service.intervalMs).toBe(1_000);
   });
 
   it("requires the complete Healthchecks lifecycle and channel-audit configuration as one unit", () => {
