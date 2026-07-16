@@ -37,11 +37,9 @@ export class VercelRehearsalProvider {
     validateGeneration(generationId);
     validateGitSource({ repoId, ref, sha });
     validateEnvironment(environment, normalizedProject.origin);
-    const matches = (await this.#listDeployments(normalizedProject.id))
-      .filter((entry) => entry.meta?.scorecheckRehearsalGeneration === generationId);
-    if (matches.length > 1) throw new Error("Vercel returned multiple deployments for the rehearsal generation");
-    if (matches.length === 1) return normalizeDeployment(matches[0], normalizedProject, generationId);
-    const deployment = await this.#request("POST", "/v13/deployments", {
+    const existing = await this.#markedDeployment(normalizedProject, generationId);
+    if (existing) return existing;
+    const body = {
       name: normalizedProject.name,
       project: normalizedProject.id,
       target: "production",
@@ -49,8 +47,19 @@ export class VercelRehearsalProvider {
       projectSettings: { framework: "nextjs", rootDirectory: "apps/web" },
       env: environment,
       meta: { scorecheckRehearsalGeneration: generationId }
-    });
-    return normalizeDeployment(deployment, normalizedProject, generationId);
+    };
+    let lastError = null;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        return normalizeDeployment(await this.#request("POST", "/v13/deployments", body), normalizedProject, generationId);
+      } catch (error) {
+        if (!(error instanceof VercelRequestError) || error.status < 500) throw error;
+        lastError = error;
+      }
+      const reconciled = await this.#waitForMarkedDeployment(normalizedProject, generationId);
+      if (reconciled) return reconciled;
+    }
+    throw new VercelRequestError("Vercel deployment creation could not be reconciled after transient provider failures", lastError?.status ?? 500);
   }
 
   async getDeployment(deploymentId, project, generationId) {
@@ -113,6 +122,22 @@ export class VercelRehearsalProvider {
       seen.add(until);
     }
     throw new Error("Vercel deployment pagination exceeded the safety limit");
+  }
+
+  async #markedDeployment(project, generationId) {
+    const matches = (await this.#listDeployments(project.id))
+      .filter((entry) => entry.meta?.scorecheckRehearsalGeneration === generationId);
+    if (matches.length > 1) throw new Error("Vercel returned multiple deployments for the rehearsal generation");
+    return matches.length === 1 ? normalizeDeployment(matches[0], project, generationId) : null;
+  }
+
+  async #waitForMarkedDeployment(project, generationId, polls = 12, intervalMs = 5_000) {
+    for (let poll = 0; poll < polls; poll += 1) {
+      const deployment = await this.#markedDeployment(project, generationId);
+      if (deployment) return deployment;
+      if (poll + 1 < polls) await this.sleep(intervalMs);
+    }
+    return null;
   }
 
   async #team() {

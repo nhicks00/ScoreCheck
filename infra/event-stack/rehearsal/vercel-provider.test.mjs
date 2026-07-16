@@ -49,6 +49,39 @@ test("creates exactly one marked deployment from an exact Git SHA", async () => 
   assert.equal(requests.filter((entry) => entry.init.method === "POST").length, 1);
 });
 
+test("adopts an ambiguously created deployment after a transient provider failure", async () => {
+  let deployment = null;
+  let postCount = 0;
+  const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, sleep: async () => {}, fetchImpl: async (url, init) => {
+    if (url.includes("/v6/deployments")) return response(200, { deployments: deployment ? [deployment] : [], pagination: {} });
+    if (url.includes("/v13/deployments") && init.method === "POST") {
+      postCount += 1;
+      deployment = { id: "dpl_ambiguous", projectId: project.id, name, target: "production", readyState: "BUILDING", meta: { scorecheckRehearsalGeneration: generationId }, alias: [] };
+      return response(500, { error: { code: "internal_server_error" } });
+    }
+    throw new Error(`unexpected ${init.method} ${url}`);
+  }});
+  const result = await client.ensureDeployment({ project, generationId, repoId: 123, ref: "master", sha: "a".repeat(40), environment });
+  assert.equal(result.id, "dpl_ambiguous");
+  assert.equal(postCount, 1);
+});
+
+test("retries a definite transient deployment failure only after bounded absence proof", async () => {
+  let postCount = 0;
+  const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, sleep: async () => {}, fetchImpl: async (url, init) => {
+    if (url.includes("/v6/deployments")) return response(200, { deployments: [], pagination: {} });
+    if (url.includes("/v13/deployments") && init.method === "POST") {
+      postCount += 1;
+      if (postCount === 1) return response(500, { error: { code: "internal_server_error" } });
+      return response(200, { id: "dpl_retry", projectId: project.id, name, target: "production", readyState: "BUILDING", meta: { scorecheckRehearsalGeneration: generationId }, alias: [] });
+    }
+    throw new Error(`unexpected ${init.method} ${url}`);
+  }});
+  const result = await client.ensureDeployment({ project, generationId, repoId: 123, ref: "master", sha: "a".repeat(40), environment });
+  assert.equal(result.id, "dpl_retry");
+  assert.equal(postCount, 2);
+});
+
 test("requires the isolated alias before accepting READY", async () => {
   let includeAlias = false;
   const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, sleep: async () => {}, fetchImpl: async () => response(200, {
