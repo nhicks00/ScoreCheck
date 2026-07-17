@@ -17,7 +17,7 @@ export function buildCommentaryClientConfig({ court, generationId, material, pro
   const marker = `scorecheck-rehearsal-${generationId}-commentator-${court}`;
   const root = resolve(runtimeDirectory);
   const configPath = resolve(root, `commentator-${court}.json`);
-  const fixturePath = resolve(root, "commentary-tone.wav");
+  const fixturePath = resolve(root, "commentary-microphone.wav");
   const logPath = resolve(evidenceDirectory, `commentator-${court}.log`);
   const readyPath = resolve(evidenceDirectory, `commentator-${court}.ready.json`);
   const workerPath = resolve(SCRIPT_DIRECTORY, "commentary-browser-worker.cjs");
@@ -56,13 +56,19 @@ export class CommentaryClientManager {
   }
 
   async preflight(config) {
-    const [node, ffmpeg, playwright] = await Promise.all([
+    const [node, ffmpeg, filters, playwright] = await Promise.all([
       this.runner(config.nodePath, ["--version"]),
       this.runner(config.ffmpegPath, ["-hide_banner", "-encoders"]),
+      this.runner(config.ffmpegPath, ["-hide_banner", "-filters"]),
       this.runner(config.nodePath, [config.workerPath, "--preflight", "--playwright", config.playwrightPath])
     ]);
     if (!/^v\d+/m.test(node.stdout)) throw new Error("commentary browser Node.js preflight failed");
     if (!/(^|\s)pcm_s16le(\s|$)/m.test(`${ffmpeg.stdout}\n${ffmpeg.stderr}`)) throw new Error("commentary browser fixture requires the pcm_s16le encoder");
+    for (const required of ["anoisesrc", "highpass", "lowpass"]) {
+      if (!new RegExp(`(^|\\s)${required}(\\s|$)`, "m").test(`${filters.stdout}\n${filters.stderr}`)) {
+        throw new Error(`commentary browser fixture requires the ${required} filter`);
+      }
+    }
     if (!/playwright chromium ready/i.test(playwright.stdout)) throw new Error("commentary browser Playwright preflight failed");
     return { healthy: true };
   }
@@ -73,7 +79,7 @@ export class CommentaryClientManager {
     await chmod(dirname(config.fixturePath), 0o700);
     const result = await this.runner(config.ffmpegPath, [
       "-hide_banner", "-nostdin", "-loglevel", "error",
-      "-f", "lavfi", "-i", "sine=frequency=523.25:sample_rate=48000",
+      "-f", "lavfi", "-i", "anoisesrc=color=pink:amplitude=0.08:sample_rate=48000:seed=20260717,highpass=f=120,lowpass=f=7000",
       "-t", "2700", "-c:a", "pcm_s16le", "-ac", "1",
       config.fixturePath
     ]);

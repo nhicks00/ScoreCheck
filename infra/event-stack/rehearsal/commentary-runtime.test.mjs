@@ -39,9 +39,16 @@ test("preflights, starts, adopts, and stops the exact commentary browser", async
     runner: async (command, args) => {
       if (command === "ps") return { code: 0, stdout: processLines, stderr: "" };
       if (args.includes("-encoders")) return { code: 0, stdout: "pcm_s16le", stderr: "" };
+      if (args.includes("-filters")) return { code: 0, stdout: "anoisesrc highpass lowpass", stderr: "" };
       if (args.includes("--version")) return { code: 0, stdout: "v24.0.0", stderr: "" };
       if (args.includes("--preflight")) return { code: 0, stdout: "playwright chromium ready", stderr: "" };
-      if (command === "ffmpeg") { await writeFile(config.fixturePath, "fixture", { mode: 0o600 }); return { code: 0, stdout: "", stderr: "" }; }
+      if (command === "ffmpeg") {
+        assert.equal(config.fixturePath.endsWith("commentary-microphone.wav"), true);
+        assert.match(args.join(" "), /anoisesrc=color=pink:amplitude=0\.08:sample_rate=48000:seed=20260717,highpass=f=120,lowpass=f=7000/u);
+        assert.doesNotMatch(args.join(" "), /sine=/u);
+        await writeFile(config.fixturePath, "fixture", { mode: 0o600 });
+        return { code: 0, stdout: "", stderr: "" };
+      }
       throw new Error(`unexpected ${command}`);
     },
     spawnImpl: (_command, args) => {
