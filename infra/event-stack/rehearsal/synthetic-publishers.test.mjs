@@ -14,7 +14,7 @@ test("maps Cameras 1-2 to RTMP and Cameras 3-8 to SRT", () => {
 
 test("builds visibly distinct 720p30 publishers with a resumable process marker", async () => {
   const directory = await mkdtemp(join(tmpdir(), "scorecheck-publisher-"));
-  const config = buildSyntheticPublisherConfig({ court: 8, generationId: "generation-1234", host: "preview-test.example.com", user: "publisher-user-8", password: "publisher-password-8-long", evidenceDirectory: directory });
+  const config = buildSyntheticPublisherConfig({ court: 8, generationId: "generation-1234", host: "preview-test.example.com", user: "publisher-user-8", password: "publisher-password-8-long", evidenceDirectory: directory, runtimeDirectory: join(directory, "runtime") });
   assert.equal(config.marker, publisherMarker("generation-1234", 8));
   assert.equal(config.protocol, "SRT");
   assert.ok(config.args.includes("comment=scorecheck-rehearsal-generation-1234-camera-8"));
@@ -27,22 +27,28 @@ test("builds visibly distinct 720p30 publishers with a resumable process marker"
   assert.equal(config.fixtureArgs[config.fixtureArgs.indexOf("-bufsize") + 1], "2500k");
   assert.equal(config.args[config.args.indexOf("-c") + 1], "copy");
   assert.equal(config.args[config.args.indexOf("-stream_loop") + 1], "-1");
+  assert.equal(config.args[config.args.indexOf("-rw_timeout") + 1], "10000000");
+  assert.match(config.outputUrl, /timeout=10000000/u);
+  assert.match(config.workerPath, /synthetic-publisher-worker\.cjs$/u);
+  assert.equal(config.protectedSupervisorConfiguration.ffmpegArgs, config.args);
+  assert.match(config.supervisorConfigPath, /\/runtime\/camera-8\.supervisor\.json$/u);
+  assert.doesNotMatch(config.supervisorStatusPath, /\/runtime\//u);
   assert.equal(JSON.stringify(config.redacted).includes("publisher-password"), false);
   assert.equal(JSON.stringify(config.redacted).includes("streamid="), false);
 });
 
 test("adopts one exact marked process and fails closed on duplicates", async () => {
   const marker = publisherMarker("generation-1234", 1);
-  let processLines = `123 ffmpeg -metadata comment=${marker}`;
+  let processLines = `123 node synthetic-publisher-worker.cjs --marker ${marker} --config /tmp/camera.json`;
   const manager = new SyntheticPublisherManager({ runner: async () => ({ stdout: processLines, stderr: "" }) });
   assert.equal((await manager.inspect(marker)).pid, 123);
-  processLines += `\n124 ffmpeg -metadata comment=${marker}`;
+  processLines += `\n124 node synthetic-publisher-worker.cjs --marker ${marker} --config /tmp/camera-2.json`;
   await assert.rejects(() => manager.inspect(marker), /multiple synthetic publishers/);
 });
 
 test("starts and stops an exact detached publisher without killing peers", async () => {
   const directory = await mkdtemp(join(tmpdir(), "scorecheck-publisher-runtime-"));
-  const config = buildSyntheticPublisherConfig({ court: 1, generationId: "generation-1234", host: "preview-test.example.com", user: "publisher-user-1", password: "publisher-password-1-long", evidenceDirectory: directory });
+  const config = buildSyntheticPublisherConfig({ court: 1, generationId: "generation-1234", host: "preview-test.example.com", user: "publisher-user-1", password: "publisher-password-1-long", evidenceDirectory: directory, runtimeDirectory: join(directory, "runtime") });
   let processLines = "901 unrelated-service";
   const signals = [];
   let unrefCount = 0;
@@ -50,8 +56,10 @@ test("starts and stops an exact detached publisher without killing peers", async
   const manager = new SyntheticPublisherManager({
     sleep: async () => {},
     fixtureBuilder: async () => { fixtureBuilds += 1; },
-    spawnImpl: (_command, args) => {
-      processLines += `\n500 ffmpeg ${args.join(" ")}`;
+    spawnImpl: (command, args) => {
+      assert.equal(command, config.nodePath);
+      assert.deepEqual(args, [config.workerPath, "--marker", config.marker, "--config", config.supervisorConfigPath]);
+      processLines += `\n500 node ${args.join(" ")}`;
       return { pid: 500, unref: () => { unrefCount += 1; } };
     },
     runner: async () => ({ stdout: processLines, stderr: "" }),
@@ -72,7 +80,7 @@ test("starts and stops an exact detached publisher without killing peers", async
 
 test("prepares each encoded fixture once and adopts it on repeat", async () => {
   const directory = await mkdtemp(join(tmpdir(), "scorecheck-publisher-prepare-"));
-  const config = buildSyntheticPublisherConfig({ court: 1, generationId: "generation-1234", host: "preview-test.example.com", user: "publisher-user-1", password: "publisher-password-1-long", evidenceDirectory: directory });
+  const config = buildSyntheticPublisherConfig({ court: 1, generationId: "generation-1234", host: "preview-test.example.com", user: "publisher-user-1", password: "publisher-password-1-long", evidenceDirectory: directory, runtimeDirectory: join(directory, "runtime") });
   let fixtureBuilds = 0;
   const manager = new SyntheticPublisherManager({
     runner: async (_command, args) => {
@@ -109,9 +117,11 @@ test("requires all eight stream-copy publishers to remain fresh at realtime cade
   for (let court = 1; court <= 8; court += 1) {
     const marker = publisherMarker("generation-1234", court);
     const progressPath = join(directory, `camera-${court}.progress`);
+    const supervisorStatusPath = join(directory, `camera-${court}.supervisor-status.json`);
     await writeFile(progressPath, "frame=900\nfps=30.00\ndup_frames=0\ndrop_frames=0\nspeed=1.00x\nprogress=continue\n");
-    entries.push({ court, marker, progressPath });
-    processLines.push(`${500 + court} ffmpeg -metadata comment=${marker}`);
+    await writeFile(supervisorStatusPath, `${JSON.stringify({ schemaVersion: 1, court, marker, state: "running", ffmpegPid: 700 + court, restartCount: 0 })}\n`);
+    entries.push({ court, marker, progressPath, supervisorStatusPath });
+    processLines.push(`${500 + court} node synthetic-publisher-worker.cjs --marker ${marker} --config /tmp/camera-${court}.json`);
   }
   now = Date.now();
   const manager = new SyntheticPublisherManager({
@@ -127,6 +137,14 @@ test("requires all eight stream-copy publishers to remain fresh at realtime cade
   const degraded = await manager.observeHealth(entries);
   assert.equal(degraded.passed, false);
   assert.match(degraded.problems.join("; "), /Camera 1 synthetic publisher is outside 30fps/);
+  await writeFile(entries[1].supervisorStatusPath, `${JSON.stringify({ schemaVersion: 1, court: 2, marker: entries[1].marker, state: "running", ffmpegPid: 702, restartCount: 1, lastRestartAt: new Date(now).toISOString() })}\n`);
+  const restarted = await manager.observeHealth(entries);
+  assert.equal(restarted.passed, false);
+  assert.match(restarted.problems.join("; "), /Camera 2 synthetic publisher restarted 1 time/u);
+  await writeFile(entries[2].supervisorStatusPath, `${JSON.stringify({ schemaVersion: 1, court: 4, marker: entries[3].marker, state: "running", ffmpegPid: 703, restartCount: 0 })}\n`);
+  const crossedIdentity = await manager.observeHealth(entries);
+  assert.equal(crossedIdentity.passed, false);
+  assert.match(crossedIdentity.problems.join("; "), /Camera 3 synthetic publisher supervisor status is missing/u);
   await assert.rejects(() => manager.waitForHealthy(entries, { stableSamples: 1, timeoutMs: 0, intervalMs: 1 }), (error) => {
     assert.equal(error.name, "SyntheticPublisherHealthError");
     assert.equal(error.evidence.passed, false);

@@ -18,6 +18,9 @@ async function main() {
     headless: true,
     args: [
       "--autoplay-policy=no-user-gesture-required",
+      "--disable-background-timer-throttling",
+      "--disable-backgrounding-occluded-windows",
+      "--disable-renderer-backgrounding",
       "--use-fake-device-for-media-stream",
       "--use-fake-ui-for-media-stream",
       `--use-file-for-fake-audio-capture=${config.audioFixturePath}`
@@ -56,11 +59,13 @@ async function main() {
     }
     if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.currentTime <= 0) throw new Error("rehearsal preview did not render");
   });
+  const localMedia = await verifyLocalMediaCadence(page);
   await writeJsonAtomic(config.readyPath, {
     schemaVersion: 1,
     court: config.court,
     marker: config.marker,
-    readyAt: new Date().toISOString()
+    readyAt: new Date().toISOString(),
+    localMedia
   });
 
   let closing = false;
@@ -73,6 +78,24 @@ async function main() {
   process.on("SIGTERM", () => void close());
   process.on("SIGINT", () => void close());
   await new Promise(() => {});
+}
+
+async function verifyLocalMediaCadence(page, { durationMs = 8_000, intervalMs = 250 } = {}) {
+  const startedAt = Date.now();
+  const initialTime = await page.locator("video").evaluate((video) => video.currentTime);
+  let movingMicrophoneSamples = 0;
+  let samples = 0;
+  while (Date.now() - startedAt < durationMs) {
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    const width = await page.locator(".commentary-live-meter span").evaluate((element) => Number.parseFloat(element.style.width || "0"));
+    if (Number.isFinite(width) && width >= 1) movingMicrophoneSamples += 1;
+    samples += 1;
+  }
+  const finalTime = await page.locator("video").evaluate((video) => video.currentTime);
+  const previewAdvanceSeconds = finalTime - initialTime;
+  if (previewAdvanceSeconds < durationMs / 1_000 * 0.75) throw new Error("rehearsal preview cadence did not remain active");
+  if (samples < 1 || movingMicrophoneSamples / samples < 0.9) throw new Error("rehearsal microphone cadence did not remain active");
+  return { durationMs, samples, movingMicrophoneSamples, previewAdvanceSeconds };
 }
 
 async function joinCommentaryPage(page, {
@@ -138,4 +161,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { joinCommentaryPage };
+module.exports = { joinCommentaryPage, verifyLocalMediaCadence };

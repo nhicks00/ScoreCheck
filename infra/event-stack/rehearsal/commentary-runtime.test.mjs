@@ -9,7 +9,7 @@ import { buildCommentaryClientConfig, CommentaryClientManager } from "./commenta
 import { createRehearsalSecretMaterial } from "./rehearsal-secrets.mjs";
 
 const require = createRequire(import.meta.url);
-const { joinCommentaryPage } = require("./commentary-browser-worker.cjs");
+const { joinCommentaryPage, verifyLocalMediaCadence } = require("./commentary-browser-worker.cjs");
 
 const material = createRehearsalSecretMaterial({ random: (length) => Buffer.alloc(length, 4) });
 
@@ -169,6 +169,50 @@ test("manager startup deadline covers both bounded browser join attempts", async
   assert.match(source, /attempt < COMMENTARY_READY_POLL_ATTEMPTS/u);
 });
 
+test("headless commentary disables background throttling and proves local media cadence before readiness", async () => {
+  const source = await readFile(new URL("./commentary-browser-worker.cjs", import.meta.url), "utf8");
+  for (const flag of [
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding"
+  ]) assert.match(source, new RegExp(flag));
+  assert.match(source, /const localMedia = await verifyLocalMediaCadence\(page\)/u);
+  assert.match(source, /movingMicrophoneSamples \/ samples < 0\.9/u);
+  assert.match(source, /previewAdvanceSeconds < durationMs \/ 1_000 \* 0\.75/u);
+});
+
+test("accepts continuously advancing preview and microphone cadence", async () => {
+  let videoSamples = 0;
+  const page = mediaCadencePage({
+    currentTime: () => videoSamples++ * 0.1,
+    microphoneWidth: () => 12
+  });
+  const result = await verifyLocalMediaCadence(page, { durationMs: 40, intervalMs: 10 });
+  assert.equal(result.samples >= 3, true);
+  assert.equal(result.movingMicrophoneSamples, result.samples);
+  assert.equal(result.previewAdvanceSeconds >= 0.1, true);
+});
+
+test("fails closed when the synthetic microphone is locally silent", async () => {
+  let videoSamples = 0;
+  const page = mediaCadencePage({
+    currentTime: () => videoSamples++ * 0.1,
+    microphoneWidth: () => 0
+  });
+  await assert.rejects(
+    () => verifyLocalMediaCadence(page, { durationMs: 40, intervalMs: 10 }),
+    /microphone cadence did not remain active/u
+  );
+});
+
 function locator({ text }) {
   return { textContent: async () => text };
+}
+
+function mediaCadencePage({ currentTime, microphoneWidth }) {
+  return {
+    locator: (selector) => ({
+      evaluate: async () => selector === "video" ? currentTime() : microphoneWidth()
+    })
+  };
 }

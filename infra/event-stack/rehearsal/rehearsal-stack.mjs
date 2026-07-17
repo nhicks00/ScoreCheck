@@ -112,6 +112,7 @@ function runtimeDependencies({ profile, manifest, material, environment }) {
       user: material.publishers[court].user,
       password: material.publishers[court].password,
       evidenceDirectory,
+      runtimeDirectory: resolve(state.secretsDirectory, "runtime"),
       ffmpegPath: profile.ffmpegPath
     }),
     commentaryConfiguration: ({ court, state, evidenceDirectory }) => buildCommentaryClientConfig({
