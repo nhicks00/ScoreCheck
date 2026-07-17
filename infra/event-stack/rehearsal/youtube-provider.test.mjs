@@ -108,6 +108,61 @@ test("does not retry a non-visibility provider failure during binding", async ()
   assert.equal(reads, 1);
 });
 
+test("retries only explicit transient YouTube rate limits with a bounded backoff", async () => {
+  const marker = rehearsalMarker("generation-1234", 8);
+  const sleeps = [];
+  let creates = 0;
+  const client = new YouTubeRehearsalProvider({
+    clientId: "client",
+    clientSecret: "secret",
+    refreshToken: "refresh",
+    sleep: async (milliseconds) => { sleeps.push(milliseconds); },
+    fetchImpl: async (url, init) => {
+      if (url.includes("oauth2")) return response(200, { access_token: "access" });
+      if (init.method === "GET") return response(200, { items: [] });
+      creates += 1;
+      if (creates === 1) return response(403, { error: { errors: [{ reason: "userRequestsExceedRateLimit" }] } });
+      if (creates === 2) return response(403, { error: { errors: [{ reason: "rateLimitExceeded" }] } });
+      return response(200, broadcast(marker, "broadcast8"));
+    }
+  });
+  const created = await client.ensureBroadcast({ court: 8, marker });
+  assert.equal(created.id, "broadcast8");
+  assert.equal(creates, 3);
+  assert.deepEqual(sleeps, [5_000, 10_000]);
+});
+
+test("bounds rate-limit retries and never retries quota exhaustion", async () => {
+  const marker = rehearsalMarker("generation-1234", 8);
+  const sleeps = [];
+  let requests = 0;
+  const limited = new YouTubeRehearsalProvider({
+    clientId: "client",
+    clientSecret: "secret",
+    refreshToken: "refresh",
+    sleep: async (milliseconds) => { sleeps.push(milliseconds); },
+    fetchImpl: async (url, init) => {
+      if (url.includes("oauth2")) return response(200, { access_token: "access" });
+      if (init.method === "GET") return response(200, { items: [] });
+      requests += 1;
+      return response(403, { error: { errors: [{ reason: "userRequestsExceedRateLimit" }] } });
+    }
+  });
+  await assert.rejects(() => limited.ensureBroadcast({ court: 8, marker }), /userRequestsExceedRateLimit/u);
+  assert.equal(requests, 8);
+  assert.deepEqual(sleeps, [5_000, 10_000, 20_000, 40_000, 80_000, 120_000, 120_000]);
+
+  let quotaRequests = 0;
+  const exhausted = provider(async (url, init) => {
+    if (url.includes("oauth2")) return response(200, { access_token: "access" });
+    if (init.method === "GET") return response(200, { items: [] });
+    quotaRequests += 1;
+    return response(403, { error: { errors: [{ reason: "quotaExceeded" }] } });
+  });
+  await assert.rejects(() => exhausted.ensureBroadcast({ court: 8, marker }), /quotaExceeded/u);
+  assert.equal(quotaRequests, 1);
+});
+
 test("fails closed on duplicate markers and unsafe broadcast settings", async () => {
   const marker = rehearsalMarker("generation-1234", 3);
   const duplicate = provider(async (url) => url.includes("oauth2")

@@ -4,6 +4,8 @@ const API = "https://www.googleapis.com/youtube/v3";
 const OAUTH = "https://oauth2.googleapis.com/token";
 const COURT_RANGE = new Set(Array.from({ length: 8 }, (_, index) => index + 1));
 const MARKER = /^\[scorecheck-rehearsal:[a-zA-Z0-9-]{8,80}:court-[1-8]\]$/;
+const RATE_LIMIT_REASONS = new Set(["rateLimitExceeded", "userRequestsExceedRateLimit"]);
+const RATE_LIMIT_DELAYS_MS = [5_000, 10_000, 20_000, 40_000, 80_000, 120_000, 120_000];
 
 export class YouTubeRehearsalProvider {
   constructor({ clientId, clientSecret, refreshToken, fetchImpl = globalThis.fetch, now = () => new Date(), sleep = delay }) {
@@ -158,6 +160,20 @@ export class YouTubeRehearsalProvider {
   }
 
   async #request(method, path, body = undefined) {
+    for (let attempt = 0; attempt <= RATE_LIMIT_DELAYS_MS.length; attempt += 1) {
+      try {
+        return await this.#requestOnce(method, path, body);
+      } catch (error) {
+        if (!(error instanceof ProviderRequestError)
+          || !RATE_LIMIT_REASONS.has(error.reason)
+          || attempt === RATE_LIMIT_DELAYS_MS.length) throw error;
+        await this.sleep(RATE_LIMIT_DELAYS_MS[attempt]);
+      }
+    }
+    throw new Error("YouTube request retry loop exited unexpectedly");
+  }
+
+  async #requestOnce(method, path, body = undefined) {
     const token = await this.#token();
     const response = await this.fetchImpl(`${API}${path}`, {
       method,
@@ -169,7 +185,7 @@ export class YouTubeRehearsalProvider {
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
       const reason = payload.error?.errors?.[0]?.reason ?? payload.error?.status ?? "unknown";
-      throw new ProviderRequestError(`YouTube ${method} ${path.split("?")[0]} failed with HTTP ${response.status} (${reason})`, response.status);
+      throw new ProviderRequestError(`YouTube ${method} ${path.split("?")[0]} failed with HTTP ${response.status} (${reason})`, response.status, reason);
     }
     if (response.status === 204) return null;
     return response.json();
@@ -258,5 +274,5 @@ export class ProviderNotFoundError extends Error {
 }
 
 export class ProviderRequestError extends Error {
-  constructor(message, status) { super(message); this.status = status; }
+  constructor(message, status, reason = "unknown") { super(message); this.status = status; this.reason = reason; }
 }
