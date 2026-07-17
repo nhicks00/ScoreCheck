@@ -321,5 +321,5 @@ function normalizeGitHubRemote(value) {
 }
 
 function usage() {
-  process.stdout.write("Usage: node infra/event-stack/create-event-bundle.mjs create --event SLUG --kind production|rehearsal --destroy-after YYYY-MM-DD --root /PROTECTED/DIR --credentials-env FILE --ssh-key FILE --attestation FILE --network-spec /PROTECTED/RENDERED-NETWORK.json [production: --anchors FILE --production-source DIR] [rehearsal: --git-repo OWNER/REPO --git-repo-id ID --git-ref REF --git-sha SHA --ffmpeg FILE --livekit-cli FILE --soak-seconds 1800]\n");
+  process.stdout.write("Usage: node infra/event-stack/create-event-bundle.mjs create --event SLUG --kind production|rehearsal --destroy-after YYYY-MM-DD --root /PROTECTED/DIR --credentials-env FILE --ssh-key FILE --attestation FILE --network-spec /PROTECTED/RENDERED-NETWORK.json [production: --anchors FILE --production-source DIR] [rehearsal: --git-repo OWNER/REPO --git-repo-id ID --git-ref REF --git-sha SHA --ffmpeg FILE --soak-seconds 1800]\n");
 }
