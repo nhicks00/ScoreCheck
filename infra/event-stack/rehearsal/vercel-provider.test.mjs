@@ -102,6 +102,30 @@ test("creates exactly one marked deployment from an exact Git SHA", async () => 
   assert.equal(requests.filter((entry) => entry.url.includes("/v13/deployments") && entry.init.method === "POST").length, 1);
 });
 
+test("cancels the linked project's automatic build before admitting the marked deployment", async () => {
+  const automatic = { id: "dpl_auto", projectId: project.id, name, target: "production", readyState: "BUILDING", meta: {}, alias: [] };
+  let deployments = [automatic];
+  const calls = [];
+  const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, fetchImpl: async (url, init) => {
+    calls.push(`${init.method} ${new URL(url).pathname}`);
+    if (url.includes("/v10/projects/") && url.includes("/env")) return environmentResponse(init);
+    if (url.includes("/v6/deployments")) return response(200, { deployments, pagination: {} });
+    if (url.includes("/v12/deployments/dpl_auto/cancel")) {
+      automatic.readyState = "CANCELED";
+      return response(200, automatic);
+    }
+    if (url.includes("/v13/deployments") && init.method === "POST") {
+      const marked = { id: "dpl_marked", projectId: project.id, name, target: "production", readyState: "BUILDING", meta: { scorecheckRehearsalGeneration: generationId }, alias: [] };
+      deployments = [marked, automatic];
+      return response(200, marked);
+    }
+    throw new Error(`unexpected ${init.method} ${url}`);
+  }});
+  const result = await client.ensureDeployment({ project, generationId, repoId: 123, ref: "master", sha: "a".repeat(40), environment });
+  assert.equal(result.id, "dpl_marked");
+  assert.ok(calls.indexOf("PATCH /v12/deployments/dpl_auto/cancel") < calls.indexOf("POST /v13/deployments"));
+});
+
 test("adopts an ambiguously created deployment after a transient provider failure", async () => {
   let deployment = null;
   let postCount = 0;
@@ -304,8 +328,35 @@ test("deletes one exact project id and proves absence", async () => {
   const calls = [];
   const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, fetchImpl: async (url, init) => {
     calls.push(`${init.method} ${url}`);
+    if (url.includes("/v6/deployments")) return response(200, { deployments: [], pagination: {} });
     return init.method === "DELETE" ? response(204) : response(404, { error: { code: "not_found" } });
   }});
   assert.deepEqual(await client.deleteProject("prj_test123"), { absent: true });
-  assert.match(calls[0], /DELETE .*\/v9\/projects\/prj_test123/);
+  assert.ok(calls.some((call) => /DELETE .*\/v9\/projects\/prj_test123/.test(call)));
+});
+
+test("cancels every active isolated-project deployment before deleting the project", async () => {
+  let deleted = false;
+  const cancelled = [];
+  const deployments = [
+    { id: "dpl_auto", readyState: "BUILDING" },
+    { id: "dpl_marked", readyState: "QUEUED", meta: { scorecheckRehearsalGeneration: generationId } },
+    { id: "dpl_ready", readyState: "READY" }
+  ];
+  const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, fetchImpl: async (url, init) => {
+    if (url.includes("/v6/deployments")) return response(200, { deployments, pagination: {} });
+    if (url.includes("/cancel")) {
+      const id = url.match(/deployments\/(dpl_[^/]+)\/cancel/u)?.[1];
+      cancelled.push(id);
+      return response(200, { id, readyState: "CANCELED" });
+    }
+    if (url.includes("/v9/projects/") && init.method === "DELETE") {
+      deleted = true;
+      return response(204);
+    }
+    if (url.includes("/v9/projects/") && init.method === "GET") return deleted ? response(404, { error: { code: "not_found" } }) : response(200, projectResponse);
+    throw new Error(`unexpected ${init.method} ${url}`);
+  }});
+  assert.deepEqual(await client.deleteProject(project.id), { absent: true });
+  assert.deepEqual(cancelled.sort(), ["dpl_auto", "dpl_marked"]);
 });

@@ -5,6 +5,7 @@ export const DEPLOYMENT_CREATE_TIMEOUT_MS = 120_000;
 export const PROJECT_CREATE_TIMEOUT_MS = 120_000;
 const PROJECT_NAME = /^scorecheck-rehearsal-[a-z0-9-]{8,40}$/;
 const SHA = /^[a-f0-9]{40}$/;
+const ACTIVE_DEPLOYMENT_STATES = new Set(["QUEUED", "INITIALIZING", "BUILDING"]);
 
 export class VercelRehearsalProvider {
   constructor({ token, teamId, teamSlug = null, fetchImpl = globalThis.fetch, publicFetchImpl = globalThis.fetch, sleep = delay }) {
@@ -59,7 +60,11 @@ export class VercelRehearsalProvider {
     validateEnvironment(environment, normalizedProject.origin);
     await this.#upsertEnvironment(normalizedProject, environment);
     const existing = await this.#markedDeployment(normalizedProject, generationId);
-    if (existing) return existing;
+    if (existing) {
+      await this.#cancelUnmarkedActiveDeployments(normalizedProject, generationId);
+      return existing;
+    }
+    await this.#cancelUnmarkedActiveDeployments(normalizedProject, generationId);
     const body = {
       name: normalizedProject.name,
       project: normalizedProject.id,
@@ -71,18 +76,23 @@ export class VercelRehearsalProvider {
     let lastError = null;
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
-        return normalizeDeployment(await this.#request(
+        const deployment = normalizeDeployment(await this.#request(
           "POST",
           "/v13/deployments?forceNew=1&skipAutoDetectionConfirmation=1",
           body,
           { timeoutMs: DEPLOYMENT_CREATE_TIMEOUT_MS }
         ), normalizedProject, generationId);
+        await this.#cancelUnmarkedActiveDeployments(normalizedProject, generationId);
+        return deployment;
       } catch (error) {
         if (!retryableCreateError(error)) throw error;
         lastError = error;
       }
       const reconciled = await this.#waitForMarkedDeployment(normalizedProject, generationId);
-      if (reconciled) return reconciled;
+      if (reconciled) {
+        await this.#cancelUnmarkedActiveDeployments(normalizedProject, generationId);
+        return reconciled;
+      }
     }
     throw new VercelRequestError("Vercel deployment creation could not be reconciled after transient provider failures", lastError?.status ?? 500);
   }
@@ -151,6 +161,11 @@ export class VercelRehearsalProvider {
 
   async deleteProject(projectId) {
     validateProviderId(projectId, "project id");
+    for (const deployment of await this.#listDeployments(projectId)) {
+      if (ACTIVE_DEPLOYMENT_STATES.has(deploymentState(deployment))) {
+        await this.#cancelDeployment(String(deployment.id ?? deployment.uid));
+      }
+    }
     try {
       await this.#request("DELETE", `/v9/projects/${encodeURIComponent(projectId)}`);
     } catch (error) {
@@ -186,6 +201,34 @@ export class VercelRehearsalProvider {
       seen.add(until);
     }
     throw new Error("Vercel deployment pagination exceeded the safety limit");
+  }
+
+  async #cancelUnmarkedActiveDeployments(project, generationId) {
+    const deployments = await this.#listDeployments(project.id);
+    const unmarked = deployments.filter((entry) => entry.meta?.scorecheckRehearsalGeneration !== generationId
+      && ACTIVE_DEPLOYMENT_STATES.has(deploymentState(entry)));
+    for (const deployment of unmarked) {
+      await this.#cancelDeployment(String(deployment.id ?? deployment.uid));
+    }
+  }
+
+  async #cancelDeployment(deploymentId) {
+    validateProviderId(deploymentId, "deployment id");
+    try {
+      const cancelled = await this.#request("PATCH", `/v12/deployments/${encodeURIComponent(deploymentId)}/cancel`, {});
+      if (deploymentState(cancelled) !== "CANCELED") throw new Error("Vercel rehearsal deployment cancellation was not confirmed");
+    } catch (error) {
+      if (error instanceof VercelNotFoundError) return;
+      if (!(error instanceof VercelRequestError) || error.status !== 400) throw error;
+      let current;
+      try {
+        current = await this.#request("GET", `/v13/deployments/${encodeURIComponent(deploymentId)}`);
+      } catch (readError) {
+        if (readError instanceof VercelNotFoundError) return;
+        throw readError;
+      }
+      if (ACTIVE_DEPLOYMENT_STATES.has(deploymentState(current))) throw error;
+    }
   }
 
   async #ensureUnprotectedProject(project) {
@@ -328,7 +371,7 @@ function normalizeDeployment(value, project, generationId) {
   }
   validateProviderId(String(value.id ?? value.uid), "deployment id");
   if (value.meta?.scorecheckRehearsalGeneration !== generationId) throw new Error("Vercel rehearsal deployment marker is invalid");
-  const state = String(value.readyState ?? value.state ?? "");
+  const state = deploymentState(value);
   if (!new Set(["QUEUED", "BUILDING", "INITIALIZING", "READY", "ERROR", "CANCELED"]).has(state)) throw new Error("Vercel rehearsal deployment state is invalid");
   const aliases = Array.isArray(value.alias) ? value.alias.filter((entry) => typeof entry === "string") : [];
   return {
@@ -342,6 +385,10 @@ function normalizeDeployment(value, project, generationId) {
     marker: generationId,
     createdAt: Number.isFinite(value.createdAt) ? new Date(value.createdAt).toISOString() : null
   };
+}
+
+function deploymentState(value) {
+  return String(value?.readyState ?? value?.state ?? "");
 }
 
 function validateEnvironment(value, expectedOrigin) {
