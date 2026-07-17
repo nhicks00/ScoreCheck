@@ -162,9 +162,10 @@ export function fullProblems(snapshot, nowMs = Date.now()) {
   for (const court of COURTS) {
     const value = courtByNumber(snapshot, court, problems);
     if (!value) continue;
+    const expectedReaders = { raw: 2, preview: 2, program: 1 };
     for (const branch of ["raw", "preview", "program"]) {
       const path = value.paths?.[branch];
-      if (!path?.ready || path.readerCount !== 1 || path.frameErrors !== 0) problems.push(`Camera ${court} ${branch} path is not ready with exactly one reader and zero errors`);
+      if (!path?.ready || path.readerCount !== expectedReaders[branch] || path.frameErrors !== 0) problems.push(`Camera ${court} ${branch} path is not ready with exactly ${expectedReaders[branch]} reader${expectedReaders[branch] === 1 ? "" : "s"} and zero errors`);
       if ((path?.inboundBitrateBps ?? 0) <= 0) problems.push(`Camera ${court} ${branch} path has no positive bitrate`);
     }
     for (const branch of ["preview", "program"]) {

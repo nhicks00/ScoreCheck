@@ -115,9 +115,10 @@ function runtimeDependencies({ profile, manifest, material, environment }) {
       court,
       generationId: state.generationId,
       material,
-      rtcHost: commentaryRtcHost(manifest),
+      programOrigin: state.program.origin,
       evidenceDirectory,
-      lkPath: profile.liveKitCliPath,
+      runtimeDirectory: resolve(state.secretsDirectory, "runtime"),
+      nodePath: process.execPath,
       ffmpegPath: profile.ffmpegPath
     })
   };
@@ -179,7 +180,7 @@ async function loadOrCreateMaterial(path, manifest) {
 
 export function validateRehearsalProfile(value) {
   if (!value || value.schemaVersion !== 1) throw new Error("rehearsal operator profile schemaVersion must be 1");
-  const pathFields = ["manifest", "lifecycleState", "rehearsalState", "secrets", "material", "rehearsalEvidence", "credentialsEnv", "sshKey", "knownHosts", "ffmpegPath", "liveKitCliPath"];
+  const pathFields = ["manifest", "lifecycleState", "rehearsalState", "secrets", "material", "rehearsalEvidence", "credentialsEnv", "sshKey", "knownHosts", "ffmpegPath"];
   const expected = ["schemaVersion", ...pathFields, "git", "soakDurationSeconds"].sort();
   if (JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(expected)) throw new Error("rehearsal operator profile must contain exactly the supported fields");
   for (const key of pathFields) normalizedAbsolute(value[key], `profile ${key}`);
@@ -236,12 +237,6 @@ function endpointForRole(manifest, role) {
   const values = manifest.endpoints.filter((entry) => entry.role === role);
   if (values.length !== 1) throw new Error(`manifest must contain exactly one ${role} endpoint`);
   return values[0].hostname;
-}
-
-function commentaryRtcHost(manifest) {
-  const value = manifest.endpoints.find((entry) => entry.role === "commentary" && entry.hostname.split(".")[0].startsWith("rtc-"));
-  if (!value) throw new Error("manifest has no rehearsal commentary RTC endpoint");
-  return value.hostname;
 }
 
 function requiredEnvironment(environment, name) {

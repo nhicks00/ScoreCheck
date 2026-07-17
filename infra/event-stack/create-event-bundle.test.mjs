@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { assertRehearsalGitIdentity, createEventBundle, parseBundleArgs } from "./create-event-bundle.mjs";
+import { assertCommentaryBrowserRuntime, assertRehearsalGitIdentity, createEventBundle, parseBundleArgs } from "./create-event-bundle.mjs";
 
-const createFixtureBundle = (options) => createEventBundle(options, { verifyGitIdentity: async () => {} });
+const createFixtureBundle = (options) => createEventBundle(options, { verifyGitIdentity: async () => {}, verifyCommentaryRuntime: async () => {} });
 
 async function fixture(kind = "rehearsal") {
   const parent = await mkdtemp(join(tmpdir(), "scorecheck-bundle-"));
@@ -26,7 +26,7 @@ async function fixture(kind = "rehearsal") {
       }
     }, null, 2)}\n` : "test\n", { mode: 0o600 });
   }
-  for (const name of ["ffmpeg", "lk"]) {
+  for (const name of ["ffmpeg"]) {
     protectedFiles[name] = join(parent, name);
     await writeFile(protectedFiles[name], "#!/bin/sh\n", { mode: 0o700 });
   }
@@ -54,7 +54,6 @@ async function fixture(kind = "rehearsal") {
       gitRef: "codex/turnkey-event-lifecycle",
       gitSha: "a".repeat(40),
       ffmpegPath: protectedFiles.ffmpeg,
-      liveKitCliPath: protectedFiles.lk,
       soakDurationSeconds: 1_800
     })
   };
@@ -79,6 +78,11 @@ test("creates a complete protected rehearsal bundle and exact one-command invoca
     assert.equal((await stat(join(options.root, name))).mode & 0o077, 0);
   }
   await assert.rejects(() => createFixtureBundle(options), /already exists/);
+});
+
+test("fails before bundle or provider work when the real commentary browser runtime is absent", async () => {
+  await assert.doesNotReject(() => assertCommentaryBrowserRuntime({ run: async () => ({ stdout: "playwright chromium ready\n" }) }));
+  await assert.rejects(() => assertCommentaryBrowserRuntime({ run: async () => ({ stdout: "" }) }), /npm ci --prefix infra\/event-stack/);
 });
 
 test("creates a production bundle bound to existing persistent anchors", async () => {

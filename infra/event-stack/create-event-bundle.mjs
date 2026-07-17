@@ -17,6 +17,8 @@ import { validateRehearsalProfile } from "./rehearsal/rehearsal-stack.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const REHEARSAL_SCRIPT = resolve(dirname(SCRIPT_PATH), "rehearsal/turnkey-rehearsal.mjs");
+const COMMENTARY_WORKER = resolve(dirname(SCRIPT_PATH), "rehearsal/commentary-browser-worker.cjs");
+const PLAYWRIGHT_PACKAGE = resolve(dirname(SCRIPT_PATH), "node_modules/playwright");
 const REPO_ROOT = resolve(dirname(SCRIPT_PATH), "../..");
 const execFileAsync = promisify(execFile);
 
@@ -34,9 +36,10 @@ async function main() {
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
-export async function createEventBundle(options, { verifyGitIdentity = assertRehearsalGitIdentity } = {}) {
+export async function createEventBundle(options, { verifyGitIdentity = assertRehearsalGitIdentity, verifyCommentaryRuntime = assertCommentaryBrowserRuntime } = {}) {
   validateBundleOptions(options);
   if (options.kind === "rehearsal") await verifyGitIdentity({ repo: options.gitRepo, ref: options.gitRef, sha: options.gitSha });
+  if (options.kind === "rehearsal") await verifyCommentaryRuntime();
   await Promise.all([
     assertProtectedFile(options.credentialsEnv, "provider credentials"),
     assertProtectedFile(options.sshKey, "SSH private key"),
@@ -44,7 +47,7 @@ export async function createEventBundle(options, { verifyGitIdentity = assertReh
     assertProtectedFile(options.networkSpec, "rendered network contract"),
     ...(options.kind === "production" ? [assertProtectedFile(options.anchors, "production endpoint anchors")] : []),
     ...(options.kind === "production" ? [assertProtectedDirectory(options.productionSource, "production recovery source")] : []),
-    ...(options.kind === "rehearsal" ? [assertExecutable(options.ffmpegPath, "FFmpeg"), assertExecutable(options.liveKitCliPath, "LiveKit CLI")] : [])
+    ...(options.kind === "rehearsal" ? [assertExecutable(options.ffmpegPath, "FFmpeg")] : [])
   ]);
   const parent = dirname(options.root);
   const parentInfo = await stat(parent);
@@ -128,7 +131,6 @@ export async function createEventBundle(options, { verifyGitIdentity = assertReh
         sshKey: options.sshKey,
         knownHosts: final.knownHosts,
         ffmpegPath: options.ffmpegPath,
-        liveKitCliPath: options.liveKitCliPath,
         git: { repo: options.gitRepo, repoId: options.gitRepoId, ref: options.gitRef, sha: options.gitSha },
         soakDurationSeconds: options.soakDurationSeconds
       };
@@ -188,7 +190,7 @@ export function parseBundleArgs(argv) {
     ["--credentials-env", "credentialsEnv"], ["--ssh-key", "sshKey"], ["--attestation", "lifecycleAttestation"],
     ["--network-spec", "networkSpec"],
     ["--anchors", "anchors"], ["--production-source", "productionSource"], ["--git-repo", "gitRepo"], ["--git-repo-id", "gitRepoId"], ["--git-ref", "gitRef"], ["--git-sha", "gitSha"],
-    ["--ffmpeg", "ffmpegPath"], ["--livekit-cli", "liveKitCliPath"], ["--soak-seconds", "soakDurationSeconds"]
+    ["--ffmpeg", "ffmpegPath"], ["--soak-seconds", "soakDurationSeconds"]
   ]);
   for (let index = 1; index < argv.length; index += 1) {
     const flag = argv[index];
@@ -197,7 +199,7 @@ export function parseBundleArgs(argv) {
     if (!key || !value || value.startsWith("--")) throw new Error(`${flag} is unknown or missing a value`);
     values[key] = key === "soakDurationSeconds" ? Number(value) : value;
   }
-  for (const key of ["root", "credentialsEnv", "sshKey", "lifecycleAttestation", "networkSpec", "anchors", "productionSource", "ffmpegPath", "liveKitCliPath"]) {
+  for (const key of ["root", "credentialsEnv", "sshKey", "lifecycleAttestation", "networkSpec", "anchors", "productionSource", "ffmpegPath"]) {
     if (values[key] !== undefined) values[key] = normalizedAbsolute(values[key], `--${key}`);
   }
   return values;
@@ -214,17 +216,28 @@ function validateBundleOptions(value) {
   if (value.kind === "production") {
     if (!value.anchors) throw new Error("production bundle requires --anchors");
     if (!value.productionSource) throw new Error("production bundle requires --production-source");
-    for (const key of ["gitRepo", "gitRepoId", "gitRef", "gitSha", "ffmpegPath", "liveKitCliPath"]) {
+    for (const key of ["gitRepo", "gitRepoId", "gitRef", "gitSha", "ffmpegPath"]) {
       if (value[key] !== undefined) throw new Error(`production bundle does not accept ${key}`);
     }
   } else {
     if (value.productionSource !== undefined) throw new Error("rehearsal bundle does not accept productionSource");
-    for (const key of ["gitRepo", "gitRepoId", "gitRef", "gitSha", "ffmpegPath", "liveKitCliPath"]) {
+    for (const key of ["gitRepo", "gitRepoId", "gitRef", "gitSha", "ffmpegPath"]) {
       if (typeof value[key] !== "string" || !value[key]) throw new Error(`rehearsal bundle requires ${key}`);
     }
     if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value.gitRepo) || !/^[A-Za-z0-9._/-]{1,200}$/.test(value.gitRef) || value.gitRef.startsWith("-") || value.gitRef.includes("..") || !/^[a-f0-9]{40}$/.test(value.gitSha)) throw new Error("rehearsal Git identity is invalid");
     if (!Number.isInteger(value.soakDurationSeconds) || value.soakDurationSeconds < 1_800 || value.soakDurationSeconds > 43_200) throw new Error("rehearsal soak must be 1800-43200 seconds");
   }
+}
+
+export async function assertCommentaryBrowserRuntime({ run = defaultRunCommentaryPreflight } = {}) {
+  const result = await run();
+  if (!/playwright chromium ready/i.test(result.stdout ?? "")) {
+    throw new Error("rehearsal commentary browser runtime is unavailable; run npm ci --prefix infra/event-stack and npx --prefix infra/event-stack playwright install chromium");
+  }
+}
+
+async function defaultRunCommentaryPreflight() {
+  return execFileAsync(process.execPath, [COMMENTARY_WORKER, "--preflight", "--playwright", PLAYWRIGHT_PACKAGE], { cwd: REPO_ROOT });
 }
 
 export async function assertRehearsalGitIdentity({ repo, ref, sha }, { runGit = defaultRunGit } = {}) {

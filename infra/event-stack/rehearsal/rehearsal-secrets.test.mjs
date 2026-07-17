@@ -17,6 +17,8 @@ test("generates isolated Vercel configuration without Supabase", () => {
   assert.equal(environment.MEDIAMTX_WHEP_BASE_URL, `https://${manifest.endpoints.find((entry) => entry.role === "ingest").hostname}`);
   assert.equal(Object.keys(environment).some((key) => key.startsWith("SUPABASE_")), false);
   assert.equal(environment.SCORECHECK_REHEARSAL_ORIGIN, "https://scorecheck-rehearsal-test.vercel.app");
+  assert.equal(environment.ADMIN_SECRET, material.adminSecret);
+  assert.equal(environment.COMMENTATOR_PASSCODE, material.commentatorPasscode);
 });
 
 test("renders protected all-publisher, eight-compositor secrets with no production control plane", async () => {

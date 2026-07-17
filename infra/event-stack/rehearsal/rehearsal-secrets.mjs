@@ -3,13 +3,15 @@ import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/pro
 import { join, resolve } from "node:path";
 
 const COURTS = Object.freeze(Array.from({ length: 8 }, (_, index) => index + 1));
-const SECRET_SCHEMA_VERSION = 1;
+const SECRET_SCHEMA_VERSION = 2;
 
 export function createRehearsalSecretMaterial({ random = randomBytes } = {}) {
   const secret = (bytes = 32) => random(bytes).toString("base64url");
   return {
     schemaVersion: SECRET_SCHEMA_VERSION,
     programPageToken: secret(),
+    adminSecret: secret(),
+    commentatorPasscode: secret(18),
     monitorApiToken: secret(),
     alertmanagerWebhookToken: secret(),
     browserHeartbeatSecret: secret(),
@@ -40,6 +42,8 @@ export function buildRehearsalVercelEnvironment({ manifest, material, programOri
   const commentaryHosts = commentaryEndpointHosts(manifest);
   return {
     PROGRAM_PAGE_TOKEN: material.programPageToken,
+    ADMIN_SECRET: material.adminSecret,
+    COMMENTATOR_PASSCODE: material.commentatorPasscode,
     MEDIAMTX_WHEP_BASE_URL: `https://${ingestHost}`,
     MONITOR_PUBLIC_URL: `https://${monitorHost}`,
     MONITOR_BROWSER_HEARTBEAT_SECRET: material.browserHeartbeatSecret,
@@ -173,7 +177,7 @@ export async function loadProtectedSecretMaterial(path) {
 
 export function validateSecretMaterial(value) {
   if (!value || value.schemaVersion !== SECRET_SCHEMA_VERSION) throw new Error("rehearsal secret material schema is invalid");
-  for (const key of ["programPageToken", "monitorApiToken", "alertmanagerWebhookToken", "browserHeartbeatSecret"]) requireSecret(value[key], key);
+  for (const key of ["programPageToken", "adminSecret", "commentatorPasscode", "monitorApiToken", "alertmanagerWebhookToken", "browserHeartbeatSecret"]) requireSecret(value[key], key);
   requireSecret(value.commentary?.apiKey, "commentary api key", 12);
   requireSecret(value.commentary?.apiSecret, "commentary api secret");
   requireSecret(value.commentary?.roomPrefix, "commentary room prefix", 12);

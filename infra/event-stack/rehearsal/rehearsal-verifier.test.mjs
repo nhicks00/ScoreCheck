@@ -28,7 +28,7 @@ function snapshot(mode) {
     agents,
     courts: Array.from({ length: 8 }, (_, index) => {
       const court = index + 1;
-      const path = (branch) => ({ ready: branch === "raw" ? raw : active, readerCount: active ? 1 : 0, inboundBitrateBps: branch === "raw" && raw ? 2_500_000 : active ? 2_000_000 : 0, frameErrors: 0, sourceMode: branch === "raw" && raw ? "PUSH" : null, sourceProtocol: branch === "raw" && raw ? (court <= 2 ? "RTMP" : "SRT") : null, videoCodec: "H264", videoProfile: "Main", audioCodec: branch === "raw" ? "AAC" : "Opus", videoWidth: 1280, videoHeight: 720, audioSampleRateHz: 48_000, audioChannelCount: 2 });
+      const path = (branch) => ({ ready: branch === "raw" ? raw : active, readerCount: active ? ({ raw: 2, preview: 2, program: 1 })[branch] : 0, inboundBitrateBps: branch === "raw" && raw ? 2_500_000 : active ? 2_000_000 : 0, frameErrors: 0, sourceMode: branch === "raw" && raw ? "PUSH" : null, sourceProtocol: branch === "raw" && raw ? (court <= 2 ? "RTMP" : "SRT") : null, videoCodec: "H264", videoProfile: "Main", audioCodec: branch === "raw" ? "AAC" : "Opus", videoWidth: 1280, videoHeight: 720, audioSampleRateHz: 48_000, audioChannelCount: 2 });
       return {
         courtNumber: court,
         paths: { raw: path("raw"), preview: path("preview"), program: path("program") },
@@ -100,7 +100,7 @@ test("rejects raw feeds that are unsafe for shared-ingest video stream copy", ()
   assert.match(rawProblems(value, now).join("; "), /Camera 1 raw codec\/profile.*Camera 2 raw codec\/profile.*Camera 3 raw codec\/profile/);
 });
 
-test("accepts exact one-reader program chains, clean browser quality, commentary, Egress, and spare", () => {
+test("accepts the exact normalization, commentary-preview, and program reader topology", () => {
   assert.deepEqual(fullProblems(snapshot("full"), now), []);
 });
 
@@ -112,7 +112,7 @@ test("detects viewer, commentary, reader, FFmpeg, and headroom defects", () => {
   value.courts[0].browser.commentary.syncStatus = "fallback";
   value.agents.find((agent) => agent.assignedCourts?.includes(1)).nativeServices.egress.cpuLoadRatio = 0.9;
   const problems = fullProblems(value, now).join("; ");
-  assert.match(problems, /exactly one reader/);
+  assert.match(problems, /exactly 1 reader/);
   assert.match(problems, /FFmpeg/);
   assert.match(problems, /browser quality/);
   assert.match(problems, /commentary/);

@@ -1,32 +1,48 @@
 import { spawn } from "node:child_process";
-import { access, chmod, mkdir, open } from "node:fs/promises";
+import { chmod, mkdir, open, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 
 const COURTS = Object.freeze(Array.from({ length: 8 }, (_, index) => index + 1));
 const MARKER = /^scorecheck-rehearsal-[a-zA-Z0-9-]{8,80}-commentator-[1-8]$/;
+const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
+const EVENT_STACK_DIRECTORY = resolve(SCRIPT_DIRECTORY, "..");
 
-export function buildCommentaryClientConfig({ court, generationId, material, rtcHost, evidenceDirectory, lkPath = "lk", ffmpegPath = "ffmpeg" }) {
+export function buildCommentaryClientConfig({ court, generationId, material, programOrigin, evidenceDirectory, runtimeDirectory, nodePath = process.execPath, ffmpegPath = "ffmpeg" }) {
   if (!COURTS.includes(court) || typeof generationId !== "string" || !/^[a-zA-Z0-9-]{8,80}$/.test(generationId)) throw new Error("commentary rehearsal identity is invalid");
-  if (!/^[a-zA-Z0-9.-]{1,253}$/.test(rtcHost ?? "")) throw new Error("commentary rehearsal host is invalid");
+  const parsed = new URL(programOrigin);
+  if (parsed.protocol !== "https:" || parsed.origin !== programOrigin) throw new Error("commentary rehearsal program origin is invalid");
   const marker = `scorecheck-rehearsal-${generationId}-commentator-${court}`;
-  const room = `${material.commentary.roomPrefix}${court}`;
-  const fixturePath = resolve(evidenceDirectory, "commentary-tone.ogg");
+  const root = resolve(runtimeDirectory);
+  const configPath = resolve(root, `commentator-${court}.json`);
+  const fixturePath = resolve(root, "commentary-tone.wav");
   const logPath = resolve(evidenceDirectory, `commentator-${court}.log`);
+  const readyPath = resolve(evidenceDirectory, `commentator-${court}.ready.json`);
+  const workerPath = resolve(SCRIPT_DIRECTORY, "commentary-browser-worker.cjs");
+  const playwrightPath = resolve(EVENT_STACK_DIRECTORY, "node_modules", "playwright");
   return {
     court,
     marker,
-    room,
+    configPath,
     fixturePath,
     logPath,
-    lkPath,
+    readyPath,
+    workerPath,
+    playwrightPath,
+    nodePath,
     ffmpegPath,
-    environment: {
-      LIVEKIT_URL: `wss://${rtcHost}`,
-      LIVEKIT_API_KEY: material.commentary.apiKey,
-      LIVEKIT_API_SECRET: material.commentary.apiSecret
+    protectedConfiguration: {
+      schemaVersion: 1,
+      court,
+      marker,
+      origin: programOrigin,
+      pageUrl: `${programOrigin}/rehearsal/commentary/court/${court}?token=${encodeURIComponent(material.programPageToken)}`,
+      commentatorPasscode: material.commentatorPasscode,
+      audioFixturePath: fixturePath,
+      readyPath
     },
-    redacted: { court, marker, room, rtcHost, fixturePath, logPath }
+    redacted: { court, marker, origin: programOrigin, configPath, fixturePath, logPath, readyPath }
   };
 }
 
@@ -39,12 +55,14 @@ export class CommentaryClientManager {
   }
 
   async preflight(config) {
-    const [lk, ffmpeg] = await Promise.all([
-      this.runner(config.lkPath, ["--version"]),
-      this.runner(config.ffmpegPath, ["-hide_banner", "-encoders"])
+    const [node, ffmpeg, playwright] = await Promise.all([
+      this.runner(config.nodePath, ["--version"]),
+      this.runner(config.ffmpegPath, ["-hide_banner", "-encoders"]),
+      this.runner(config.nodePath, [config.workerPath, "--preflight", "--playwright", config.playwrightPath])
     ]);
-    if (!/lk version|version/i.test(`${lk.stdout} ${lk.stderr}`)) throw new Error("LiveKit CLI rehearsal preflight failed");
-    if (!/(^|\s)libopus(\s|$)/m.test(`${ffmpeg.stdout}\n${ffmpeg.stderr}`)) throw new Error("commentary fixture requires the libopus encoder");
+    if (!/^v\d+/m.test(node.stdout)) throw new Error("commentary browser Node.js preflight failed");
+    if (!/(^|\s)pcm_s16le(\s|$)/m.test(`${ffmpeg.stdout}\n${ffmpeg.stderr}`)) throw new Error("commentary browser fixture requires the pcm_s16le encoder");
+    if (!/playwright chromium ready/i.test(playwright.stdout)) throw new Error("commentary browser Playwright preflight failed");
     return { healthy: true };
   }
 
@@ -55,7 +73,7 @@ export class CommentaryClientManager {
     const result = await this.runner(config.ffmpegPath, [
       "-hide_banner", "-nostdin", "-loglevel", "error",
       "-f", "lavfi", "-i", "sine=frequency=523.25:sample_rate=48000",
-      "-t", "7200", "-c:a", "libopus", "-b:a", "64k", "-ac", "1",
+      "-t", "2700", "-c:a", "pcm_s16le", "-ac", "1",
       config.fixturePath
     ]);
     if (result.code !== 0 || !(await exists(config.fixturePath))) throw new Error("commentary rehearsal audio fixture was not created");
@@ -66,8 +84,8 @@ export class CommentaryClientManager {
   async inspect(marker) {
     validateMarker(marker);
     const result = await this.runner("ps", ["-axo", "pid=,command="]);
-    const matches = result.stdout.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.includes(`--identity ${marker}`));
-    if (matches.length > 1) throw new Error(`multiple commentary clients exist for ${marker}`);
+    const matches = result.stdout.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.includes(`commentary-browser-worker.cjs --marker ${marker} `));
+    if (matches.length > 1) throw new Error(`multiple commentary browsers exist for ${marker}`);
     if (!matches.length) return null;
     const match = /^(\d+)\s+/.exec(matches[0]);
     if (!match) throw new Error("commentary rehearsal process inventory is invalid");
@@ -77,31 +95,52 @@ export class CommentaryClientManager {
   async ensure(config) {
     validateConfig(config);
     const existing = await this.inspect(config.marker);
-    if (existing) return { ...existing, status: "running", adopted: true, ...config.redacted };
+    if (existing) {
+      await this.#waitReady(config, existing.pid);
+      return { ...existing, status: "running", adopted: true, ...config.redacted };
+    }
     await this.ensureFixture(config);
+    await mkdir(dirname(config.configPath), { recursive: true, mode: 0o700 });
+    await chmod(dirname(config.configPath), 0o700);
+    await rm(config.readyPath, { force: true });
+    await writeFile(config.configPath, `${JSON.stringify(config.protectedConfiguration, null, 2)}\n`, { mode: 0o600 });
+    await chmod(config.configPath, 0o600);
     const log = await open(config.logPath, "a", 0o600);
     let child;
     try {
-      child = this.spawnImpl(config.lkPath, [
-        "--yes", "room", "join",
-        "--identity", config.marker,
-        "--publish", config.fixturePath,
-        config.room
+      child = this.spawnImpl(config.nodePath, [
+        config.workerPath,
+        "--marker", config.marker,
+        "--config", config.configPath,
+        "--playwright", config.playwrightPath
       ], {
         detached: true,
-        env: { ...process.env, ...config.environment },
         stdio: ["ignore", log.fd, log.fd]
       });
-      if (!Number.isInteger(child.pid) || child.pid < 2) throw new Error("commentary rehearsal client did not return a process id");
-      if (typeof child.unref !== "function") throw new Error("commentary rehearsal client cannot be detached from the operator");
+      if (!Number.isInteger(child.pid) || child.pid < 2) throw new Error("commentary rehearsal browser did not return a process id");
+      if (typeof child.unref !== "function") throw new Error("commentary rehearsal browser cannot be detached from the operator");
       child.unref();
     } finally {
       await log.close();
     }
-    await this.sleep(2_000);
+    await this.#waitReady(config, child.pid);
     const observed = await this.inspect(config.marker);
-    if (!observed || observed.pid !== child.pid) throw new Error(`commentary rehearsal client Camera ${config.court} did not remain connected`);
+    if (!observed || observed.pid !== child.pid) throw new Error(`commentary rehearsal browser Camera ${config.court} did not remain connected`);
     return { ...observed, status: "running", adopted: false, startedAt: new Date().toISOString(), ...config.redacted };
+  }
+
+  async #waitReady(config, pid) {
+    for (let attempt = 0; attempt < 300; attempt += 1) {
+      if (await exists(config.readyPath)) {
+        const ready = JSON.parse(await readFile(config.readyPath, "utf8"));
+        if (ready.schemaVersion === 1 && ready.court === config.court && ready.marker === config.marker) return;
+        throw new Error(`commentary rehearsal browser Camera ${config.court} wrote an invalid readiness marker`);
+      }
+      if (!(await this.inspect(config.marker)) && attempt > 1) throw new Error(`commentary rehearsal browser Camera ${config.court} exited before readiness; inspect ${config.logPath}`);
+      await this.sleep(200);
+    }
+    this.killImpl(-pid, "SIGTERM");
+    throw new Error(`commentary rehearsal browser Camera ${config.court} did not become ready; inspect ${config.logPath}`);
   }
 
   async stop({ marker }) {
@@ -109,7 +148,7 @@ export class CommentaryClientManager {
     let current = await this.inspect(marker);
     if (!current) return { absent: true };
     this.killImpl(-current.pid, "SIGTERM");
-    for (let attempt = 0; attempt < 50; attempt += 1) {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
       await this.sleep(100);
       current = await this.inspect(marker);
       if (!current) return { absent: true };
@@ -119,12 +158,12 @@ export class CommentaryClientManager {
       await this.sleep(100);
       if (!(await this.inspect(marker))) return { absent: true };
     }
-    throw new Error(`commentary rehearsal client ${marker} did not stop`);
+    throw new Error(`commentary rehearsal browser ${marker} did not stop`);
   }
 }
 
 function validateConfig(value) {
-  if (!value || !COURTS.includes(value.court) || !MARKER.test(value.marker) || !value.room || !value.environment?.LIVEKIT_API_SECRET) throw new Error("commentary rehearsal configuration is invalid");
+  if (!value || !COURTS.includes(value.court) || !MARKER.test(value.marker) || !value.protectedConfiguration?.commentatorPasscode || !value.protectedConfiguration?.pageUrl) throw new Error("commentary rehearsal configuration is invalid");
 }
 
 function validateMarker(value) {
@@ -132,7 +171,7 @@ function validateMarker(value) {
 }
 
 async function exists(path) {
-  try { await access(path); return true; } catch (error) { if (error?.code === "ENOENT") return false; throw error; }
+  try { await stat(path); return true; } catch (error) { if (error?.code === "ENOENT") return false; throw error; }
 }
 
 async function runCommand(command, args) {
@@ -143,7 +182,7 @@ async function runCommand(command, args) {
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.stderr.on("data", (chunk) => { stderr += chunk; });
     child.on("error", reject);
-    child.on("close", (code) => code === 0 ? resolvePromise({ code, stdout, stderr }) : reject(new Error(`${command} failed with exit ${code}`)));
+    child.on("close", (code) => code === 0 ? resolvePromise({ code, stdout, stderr }) : reject(new Error(`${command} failed with exit ${code}: ${stderr.slice(0, 300)}`)));
   });
 }
 
