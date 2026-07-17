@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { buildEventManifest, loadManifestInputs } from "./event-manifest.mjs";
-import { buildAgentPlans, commentaryEndpointHosts, compositorContentAnalyzerBindings, deploymentScriptEnvironment, loadProtectedEnv, roleConfigBindings, serializeAgentTargets, servicePublicIpv4, verifyProtectedSecretDirectory } from "./stack-deployer.mjs";
+import { buildAgentPlans, commentaryEndpointHosts, compositorContentAnalyzerBindings, deploymentScriptEnvironment, isRetryableDeploymentTransportError, loadProtectedEnv, roleConfigBindings, runDeploymentScript, serializeAgentTargets, servicePublicIpv4, verifyProtectedSecretDirectory } from "./stack-deployer.mjs";
 
 const inputs = await loadManifestInputs();
 const manifest = buildEventManifest({ event: "deploy-test", kind: "production", destroyAfter: "2026-08-01", ...inputs });
@@ -18,6 +18,48 @@ test("makes the exact lifecycle Node runtime available to every deployment scrip
   assert.equal(value.HOME, "/tmp/home");
   assert.equal(value.SERVICE_VALUE, "configured");
   assert.equal(value.PATH.includes("/untrusted"), false);
+});
+
+test("retries only exact transient SSH transport failures", () => {
+  for (const message of [
+    "ssh failed with exit 255: Connection timed out during banner exchange\nConnection to 192.0.2.1 port 22 timed out",
+    "ssh failed: Connection reset by peer",
+    "rsync failed: kex_exchange_identification: read: Connection reset by peer"
+  ]) assert.equal(isRetryableDeploymentTransportError(new Error(message)), true);
+  for (const message of [
+    "Permission denied (publickey)",
+    "host key verification failed",
+    "deployment did not pass its health gate",
+    "docker compose returned exit 1",
+    "connect to host 192.0.2.1 port 22: No route to host"
+  ]) assert.equal(isRetryableDeploymentTransportError(new Error(message)), false);
+});
+
+test("bounds transient deployment retries and never retries a configuration failure", async () => {
+  const waits = [];
+  let attempts = 0;
+  const result = await runDeploymentScript({
+    script: "/repo/deploy.sh",
+    environment: {},
+    wait: async (milliseconds) => { waits.push(milliseconds); },
+    runner: async () => {
+      attempts += 1;
+      if (attempts < 3) throw new Error("ssh failed: Connection timed out during banner exchange");
+      return { code: 0 };
+    }
+  });
+  assert.deepEqual(result, { code: 0 });
+  assert.equal(attempts, 3);
+  assert.deepEqual(waits, [2_000, 4_000]);
+
+  let configurationAttempts = 0;
+  await assert.rejects(() => runDeploymentScript({
+    script: "/repo/deploy.sh",
+    environment: {},
+    wait: async () => assert.fail("configuration failure must not wait"),
+    runner: async () => { configurationAttempts += 1; throw new Error("invalid rendered configuration"); }
+  }), /invalid rendered configuration/);
+  assert.equal(configurationAttempts, 1);
 });
 
 function stateFixture() {

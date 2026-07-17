@@ -216,8 +216,19 @@ export class LocalStackDeployer {
   }
 
   async #script(relativePath, environment) {
-    return this.runner(join(this.repoRoot, relativePath), [], { env: deploymentScriptEnvironment(environment), capture: true });
+    return runDeploymentScript({ runner: this.runner, script: join(this.repoRoot, relativePath), environment });
   }
+}
+
+export async function runDeploymentScript({ runner, script, environment, wait = delay }) {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try { return await runner(script, [], { env: deploymentScriptEnvironment(environment), capture: true }); }
+    catch (error) {
+      if (attempt === 3 || !isRetryableDeploymentTransportError(error)) throw error;
+      await wait(attempt * 2_000);
+    }
+  }
+  throw new Error(`${script} exhausted its deployment retries`);
 }
 
 export function deploymentScriptEnvironment(environment, inherited = process.env, nodeExecutable = process.execPath) {
@@ -225,6 +236,18 @@ export function deploymentScriptEnvironment(environment, inherited = process.env
   const nodeDirectory = dirname(resolve(nodeExecutable));
   const path = [nodeDirectory, ...inheritedPath.split(":").filter((entry) => entry && entry !== nodeDirectory)].join(":");
   return { ...inherited, ...environment, PATH: path };
+}
+
+export function isRetryableDeploymentTransportError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return [
+    /Connection timed out during banner exchange/u,
+    /Connection to [0-9a-f:.]+ port 22 timed out/u,
+    /Connection reset by peer/u,
+    /Connection closed by remote host/u,
+    /kex_exchange_identification:.*Connection (?:closed|reset)/u,
+    /ssh_exchange_identification:.*Connection (?:closed|reset)/u
+  ].some((pattern) => pattern.test(message));
 }
 
 export function buildAgentPlans({ manifest, state, tokenConfig }) {
