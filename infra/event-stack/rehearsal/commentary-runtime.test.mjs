@@ -75,6 +75,17 @@ test("rehearsal commentary uses direct low-latency preview playback", async () =
   assert.doesNotMatch(source, /mode="scoring"/);
 });
 
+test("rehearsal commentary disables DTX so the synthetic microphone remains continuously measurable", async () => {
+  const source = await readFile(new URL(
+    "../../../apps/web/src/app/commentary/court/[courtNumber]/CommentaryAudioClient.tsx",
+    import.meta.url
+  ), "utf8");
+  assert.match(source, /dtx:\s*audioProcessing/u);
+  assert.match(source, /echoCancellation:\s*audioProcessing/u);
+  assert.match(source, /noiseSuppression:\s*audioProcessing/u);
+  assert.match(source, /autoGainControl:\s*false/u);
+});
+
 test("retries one transient commentary join only after reloading the isolated page", async () => {
   let liveWaits = 0;
   let reloads = 0;

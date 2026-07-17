@@ -125,7 +125,10 @@ export function CommentaryAudioClient({
         autoGainControl: false
       });
       trackRef.current = track;
-      await room.localParticipant.publishTrack(track, { source: Track.Source.Microphone });
+      await room.localParticipant.publishTrack(track, {
+        source: Track.Source.Microphone,
+        dtx: audioProcessing
+      });
       meterCleanupRef.current = startMicrophoneMeter(track, setLevel);
       const publishPreviewTiming = () => {
         const timing = previewTimingRef.current;
