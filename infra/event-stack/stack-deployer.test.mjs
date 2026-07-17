@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { buildEventManifest, loadManifestInputs } from "./event-manifest.mjs";
-import { buildAgentPlans, commentaryEndpointHosts, compositorContentAnalyzerBindings, deploymentScriptEnvironment, isRetryableDeploymentTransportError, loadProtectedEnv, roleConfigBindings, runDeploymentScript, serializeAgentTargets, servicePublicIpv4, verifyProtectedSecretDirectory } from "./stack-deployer.mjs";
+import { buildAgentPlans, commandFailureMessage, commentaryEndpointHosts, compositorContentAnalyzerBindings, deploymentScriptEnvironment, isRetryableDeploymentTransportError, loadProtectedEnv, roleConfigBindings, runDeploymentScript, serializeAgentTargets, servicePublicIpv4, verifyProtectedSecretDirectory } from "./stack-deployer.mjs";
 
 const inputs = await loadManifestInputs();
 const manifest = buildEventManifest({ event: "deploy-test", kind: "production", destroyAfter: "2026-08-01", ...inputs });
@@ -60,6 +60,20 @@ test("bounds transient deployment retries and never retries a configuration fail
     runner: async () => { configurationAttempts += 1; throw new Error("invalid rendered configuration"); }
   }), /invalid rendered configuration/);
   assert.equal(configurationAttempts, 1);
+});
+
+test("retains the decisive command-output tail instead of an unhelpful prefix", () => {
+  const stderr = `UNHELPFUL INITIAL PREFIX\n${"build progress\n".repeat(500)}final health contract mismatch`;
+  const message = commandFailureMessage("/repo/deploy.sh", 4, {
+    stdout: "candidate cleanup complete",
+    stderr
+  });
+  assert.match(message, /^deploy\.sh failed with exit 4:/u);
+  assert.match(message, /\[earlier output omitted\]/u);
+  assert.match(message, /final health contract mismatch/u);
+  assert.match(message, /stdout tail:\ncandidate cleanup complete/u);
+  assert.doesNotMatch(message, /UNHELPFUL INITIAL PREFIX/u);
+  assert.ok(message.length < stderr.length);
 });
 
 function stateFixture() {

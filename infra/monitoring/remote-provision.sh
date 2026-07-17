@@ -44,6 +44,7 @@ retry_docker_operation() {
 
 candidate_image="scorecheck-monitoring:provision-${REVISION:0:12}-$$"
 inhibition_container="scorecheck-alertmanager-provision-$$"
+monitoring_contract_version=4
 cutover_started=0
 
 cleanup() {
@@ -151,7 +152,8 @@ for _attempt in $(seq 1 90); do
     && curl -fsS --max-time 5 http://127.0.0.1:9090/-/ready >/dev/null 2>&1 \
     && curl -fsS --max-time 5 http://127.0.0.1:9093/-/ready >/dev/null 2>&1 \
     && curl -fsS --max-time 10 "https://$public_host/healthz" \
-      | jq -e '.status == "ok" and .version == 3' >/dev/null 2>&1; then
+      | jq -e --argjson version "$monitoring_contract_version" \
+        '.status == "ok" and .version == $version' >/dev/null 2>&1; then
     break
   fi
   sleep 2
@@ -165,7 +167,8 @@ curl -fsS --max-time 10 http://127.0.0.1:9090/api/v1/rules \
   | jq -e '.status == "success" and ([.data.groups[].rules[]] | length > 0)' >/dev/null
 curl -fsS --retry 30 --retry-all-errors --retry-delay 2 --retry-max-time 120 \
   --connect-timeout 5 --max-time 10 "https://$public_host/healthz" \
-  | jq -e '.status == "ok" and .version == 3' >/dev/null
+  | jq -e --argjson version "$monitoring_contract_version" \
+    '.status == "ok" and .version == $version' >/dev/null
 
 cutover_started=0
 docker image rm "$candidate_image" >/dev/null 2>&1 || true

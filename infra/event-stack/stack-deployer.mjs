@@ -509,9 +509,24 @@ async function runCommand(command, args, options = {}) {
     child.on("error", reject);
     child.on("close", (code) => {
       if (code === 0 || options.allowFailure) resolvePromise({ code, stdout, stderr });
-      else reject(new Error(`${basename(command)} failed with exit ${code}: ${stderr.trim().slice(0, 500)}`));
+      else reject(new Error(commandFailureMessage(command, code, { stdout, stderr })));
     });
   });
+}
+
+export function commandFailureMessage(command, code, { stdout = "", stderr = "" } = {}) {
+  const sections = [];
+  const stderrTail = diagnosticTail(stderr);
+  const stdoutTail = diagnosticTail(stdout);
+  if (stderrTail) sections.push(`stderr tail:\n${stderrTail}`);
+  if (stdoutTail) sections.push(`stdout tail:\n${stdoutTail}`);
+  return `${basename(command)} failed with exit ${code ?? "unknown"}${sections.length ? `:\n${sections.join("\n")}` : ""}`;
+}
+
+function diagnosticTail(value, limit = 4_000) {
+  const normalized = String(value ?? "").trim();
+  if (normalized.length <= limit) return normalized;
+  return `[earlier output omitted]\n${normalized.slice(-limit)}`;
 }
 
 function sha256(value) {

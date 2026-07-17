@@ -43,7 +43,6 @@ describe("staged observability deployment", () => {
     expect(remoteProvision).toContain('docker build --pull --label');
     expect(remoteProvision).toContain('compose up -d --no-build --remove-orphans');
     expect(remoteProvision).toContain('running_count\" == \"5');
-    expect(remoteProvision).toContain('.status == "ok" and .version == 3');
     expect(remoteProvision).toContain('api/v1/rules');
   });
 
@@ -123,7 +122,9 @@ describe("staged observability deployment", () => {
     const contractVersion = contracts.match(/MONITORING_CONTRACT_VERSION = (\d+) as const/)?.[1];
     expect(contractVersion).toBeDefined();
     expect(remoteDeploy).toContain(`monitoring_contract_version=${contractVersion}`);
+    expect(remoteProvision).toContain(`monitoring_contract_version=${contractVersion}`);
     expect(remoteDeploy).toContain(".version == $version");
+    expect(remoteProvision).toContain(".version == $version");
   });
 
   it("waits for a successful Prometheus sample from after the candidate cutover", () => {
