@@ -19,6 +19,8 @@ test("builds visibly distinct 720p30 publishers with a resumable process marker"
   assert.equal(config.protocol, "SRT");
   assert.ok(config.args.includes("comment=scorecheck-rehearsal-generation-1234-camera-8"));
   assert.ok(config.args.some((value) => value.includes("CAMERA 8 REHEARSAL")));
+  assert.equal(config.args[config.args.indexOf("-profile:v") + 1], "main");
+  assert.match(config.args[config.args.indexOf("-x264-params") + 1], /(?:^|:)cabac=1(?:$|:)/);
   assert.equal(JSON.stringify(config.redacted).includes("publisher-password"), false);
   assert.equal(JSON.stringify(config.redacted).includes("streamid="), false);
 });

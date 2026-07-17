@@ -42,7 +42,7 @@ export function buildSyntheticPublisherConfig({ court, generationId, host, user,
     "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-profile:v", "main",
     "-r", "30", "-g", "60", "-keyint_min", "60", "-sc_threshold", "0",
     "-b:v", "2500k", "-minrate", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
-    "-x264-params", "nal-hrd=cbr:force-cfr=1",
+    "-x264-params", "cabac=1:nal-hrd=cbr:force-cfr=1",
     "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
     "-metadata", `comment=${marker}`,
     "-progress", progressPath
