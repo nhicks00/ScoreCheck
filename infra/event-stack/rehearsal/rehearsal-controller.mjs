@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 import { rehearsalMarker } from "./youtube-provider.mjs";
+import { withProcessLock } from "../process-lock.mjs";
 
 const STATE_SCHEMA_VERSION = 2;
 const PHASES = new Set(["planned", "preparing", "prepared", "starting", "running", "stopping", "stopped", "cleaning", "cleaned"]);
@@ -422,16 +423,7 @@ export class RehearsalFileStateStore {
 
   async withLock(operation) {
     await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
-    let handle;
-    try {
-      handle = await open(this.lockPath, "wx", 0o600);
-      await handle.writeFile(JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() }) + "\n");
-    } catch (error) {
-      if (error?.code === "EEXIST") throw new Error(`rehearsal lock already exists: ${this.lockPath}`);
-      throw error;
-    }
-    try { return await operation(); }
-    finally { await handle.close(); await rm(this.lockPath, { force: true }); }
+    return withProcessLock({ lockPath: this.lockPath, label: "rehearsal" }, operation);
   }
 }
 

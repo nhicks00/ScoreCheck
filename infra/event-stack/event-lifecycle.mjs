@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { verifyRehearsalEvidence } from "./rehearsal/rehearsal-evidence.mjs";
+import { withProcessLock } from "./process-lock.mjs";
 
 const STATE_SCHEMA_VERSION = 6;
 const ANCHOR_SCHEMA_VERSION = 2;
@@ -795,20 +796,7 @@ export class FileStateStore {
 
   async withLock(operation) {
     await mkdir(dirname(this.statePath), { recursive: true, mode: 0o700 });
-    let handle;
-    try {
-      handle = await open(this.lockPath, "wx", 0o600);
-      await handle.writeFile(`${JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() })}\n`);
-    } catch (error) {
-      if (error?.code === "EEXIST") throw new Error(`lifecycle lock already exists: ${this.lockPath}`);
-      throw error;
-    }
-    try {
-      return await operation();
-    } finally {
-      await handle.close();
-      await rm(this.lockPath, { force: true });
-    }
+    return withProcessLock({ lockPath: this.lockPath, label: "lifecycle" }, operation);
   }
 }
 
