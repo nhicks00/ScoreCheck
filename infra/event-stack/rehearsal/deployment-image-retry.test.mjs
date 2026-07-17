@@ -56,5 +56,6 @@ test("fresh public TLS endpoints retry handshake failures within a bounded deadl
   }
   assert.match(commentary, /--retry 100[\s\S]*--retry-max-time 300/u);
   assert.match(commentary, /docker compose -f docker-compose\.yaml logs --tail=120 caddy/u);
-  assert.match(media, /--retry-max-time 120/u);
+  assert.match(media, /--retry 60[\s\S]*--retry-max-time 300/u);
+  assert.match(media, /docker compose logs --tail=120 caddy/u);
 });

@@ -11,6 +11,7 @@ import {
   MemoryStateStore,
   createInitialState,
   lifecycleTags,
+  managedLifecycleTags,
   stateSummary,
   validateAnchorConfig
 } from "./event-lifecycle.mjs";
@@ -156,6 +157,8 @@ test("runs the production-shaped 12-Droplet lifecycle without changing critical 
   assert.equal(deployer.retainedStateCalls, 1);
   assert.equal(cloud.droplets.size, 0);
   assert.equal(cloud.deleteCalls.length, 12);
+  assert.ok(managedLifecycleTags(manifest).every((name) => !cloud.tags.has(name)));
+  assert.ok(Object.values(destroyed.tagCleanup).every((entry) => new Set(["deleted", "absent", "reconciled-absent"]).has(entry.status)));
   assert.equal((await cloud.getReservedIpv4(anchors.reservedIpv4.ingest)).dropletId, null);
   assert.equal((await cloud.getReservedIpv4(anchors.reservedIpv4.commentary)).dropletId, null);
   assert.equal(dns.records.get("preview.beachvolleyballmedia.com").value, anchors.reservedIpv4.ingest);
@@ -163,6 +166,28 @@ test("runs the production-shaped 12-Droplet lifecycle without changing critical 
   assert.equal(dns.records.get("monitor.beachvolleyballmedia.com").value, "203.0.113.12");
   assert.deepEqual(dns.restores, ["monitor.beachvolleyballmedia.com"]);
   assert.equal(notifier.messages.length, 2);
+});
+
+test("retains a shared lifecycle tag only while another resource still uses it", async () => {
+  const cloud = new FakeDigitalOceanProvider({ dropletLimit: 13 });
+  await cloud.createDroplet({
+    name: "another-event-compositor",
+    region: "sfo2",
+    vpcUuid: "6ece4819-6f6a-4ab9-934c-f6a92660aab2",
+    size: "c-4",
+    image: "ubuntu-24-04-x64",
+    tags: ["scorecheck-role:compositor", "scorecheck-event:another-event"],
+    userDataProfile: "none",
+    userDataSha256: "unused"
+  });
+  const setup = fixture({ cloud });
+  const evidence = await prepareDestroyableLifecycle(setup, "shared-tag-retention");
+  const destroyed = await setup.controller.destroy(setup.manifest, evidence, "DESTROY:turnkey-test");
+
+  assert.equal(await cloud.tagExists("scorecheck-event:turnkey-test"), false);
+  assert.equal(await cloud.tagExists("scorecheck-role:compositor"), true);
+  assert.equal(destroyed.tagCleanup["scorecheck-role:compositor"].status, "retained-in-use");
+  assert.equal(destroyed.tagCleanup["scorecheck-role:compositor"].resourceCount, 1);
 });
 
 test("fails closed before deleting a healthy stack when retained TLS state cannot be preserved", async () => {
@@ -359,6 +384,7 @@ test("abort removes a partial dynamic-address rehearsal before the first endpoin
 
   assert.equal(aborted.phase, "aborted");
   assert.equal(cloud.droplets.size, 0);
+  assert.equal(await cloud.tagExists("scorecheck-event:turnkey-test"), false);
   assert.equal(cloud.reserved.size, 0);
   assert.deepEqual(aborted.addressSlots, {});
   assert.equal(JSON.parse(await readFile(join(evidence, "ABORT_COMPLETE.json"), "utf8")).event, "turnkey-test");
@@ -616,7 +642,7 @@ test("hard-cuts pre-attestation lifecycle state before provider mutation", async
   const cloud = new FakeDigitalOceanProvider();
   const setup = fixture({ cloud, store: new MemoryStateStore(legacy) });
 
-  await assert.rejects(() => setup.controller.up(setup.manifest, setup.anchors), /schemaVersion must be 7/);
+  await assert.rejects(() => setup.controller.up(setup.manifest, setup.anchors), /schemaVersion must be 8/);
   assert.equal(cloud.createCalls, 0);
   assert.equal(cloud.droplets.size, 0);
 });

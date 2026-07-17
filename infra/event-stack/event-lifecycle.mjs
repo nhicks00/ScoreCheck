@@ -8,7 +8,7 @@ import { isDeepStrictEqual } from "node:util";
 import { verifyRehearsalEvidence } from "./rehearsal/rehearsal-evidence.mjs";
 import { withProcessLock } from "./process-lock.mjs";
 
-const STATE_SCHEMA_VERSION = 7;
+const STATE_SCHEMA_VERSION = 8;
 const ANCHOR_SCHEMA_VERSION = 2;
 const PHASES = new Set(["planned", "provisioning", "ready", "live", "closed", "destroying", "destroyed", "aborting", "aborted"]);
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -287,6 +287,7 @@ export class EventLifecycleController {
         : manifest.endpoints.filter((entry) => entry.addressMode === "dynamic-ipv4");
       await this.#restoreEndpoints(state, manifest, endpointsToRestore, { requireEveryEndpoint: true });
       await this.#cleanupAddressSlots(state, manifest);
+      await this.#cleanupLifecycleTags(state, manifest);
       const removalNotification = await this.#notifyOnce(state, `destroyed:${state.event}:${state.generationId}`, {
         title: manifest.kind === "rehearsal" ? "ScoreCheck TEST rehearsal removed" : "ScoreCheck event servers removed",
         message: manifest.kind === "rehearsal"
@@ -341,6 +342,7 @@ export class EventLifecycleController {
       await this.#deleteEventDroplets(state, manifest);
       await this.#restoreEndpoints(state, manifest, manifest.endpoints, { requireEveryEndpoint: false });
       await this.#cleanupAddressSlots(state, manifest);
+      await this.#cleanupLifecycleTags(state, manifest);
       const finalInventory = await this.cloud.listDropletsByEvent(manifest.event);
       if (finalInventory.length !== 0) throw new Error("event-tagged Droplets remain after setup abort");
 
@@ -652,6 +654,21 @@ export class EventLifecycleController {
     }
   }
 
+  async #cleanupLifecycleTags(state, manifest) {
+    const eventTag = `scorecheck-event:${manifest.event}`;
+    for (const name of managedLifecycleTags(manifest)) {
+      const prior = state.tagCleanup[name] ?? null;
+      if (prior && new Set(["absent", "deleted", "reconciled-absent"]).has(prior.status)) {
+        if (await this.cloud.tagExists(name)) throw new Error(`DigitalOcean tag ${name} reappeared after lifecycle cleanup`);
+        continue;
+      }
+      const result = await this.cloud.deleteEmptyTag(name, { allowInUse: name !== eventTag });
+      state.tagCleanup[name] = { ...result, checkedAt: this.now().toISOString() };
+      await this.store.save(state);
+    }
+    if (await this.cloud.tagExists(eventTag)) throw new Error(`event tag ${eventTag} remains after lifecycle cleanup`);
+  }
+
   async #assertExactEventInventory(state, manifest) {
     const inventory = await this.cloud.listDropletsByEvent(manifest.event);
     const expectedNames = manifest.droplets.map((entry) => entry.providerName).sort();
@@ -701,6 +718,7 @@ export class EventLifecycleController {
     if (inventory.length !== 0) {
       throw new Error(`terminal event inventory is not empty: ${inventory.map((entry) => entry.name).sort().join(",")}`);
     }
+    if (await this.cloud.tagExists(`scorecheck-event:${manifest.event}`)) throw new Error("terminal event tag is not empty");
     return [];
   }
 
@@ -864,6 +882,7 @@ export function createInitialState(manifest, now = new Date()) {
     finalization: null,
     stackHealth: null,
     notifications: {},
+    tagCleanup: {},
     evidence: null,
     retainedState: null,
     abort: null
@@ -928,6 +947,10 @@ export function lifecycleTags(manifest, spec) {
   ])];
 }
 
+export function managedLifecycleTags(manifest) {
+  return [...new Set(manifest.droplets.flatMap((spec) => lifecycleTags(manifest, spec)))].sort();
+}
+
 export function stateSummary(state) {
   return {
     event: state.event,
@@ -942,6 +965,7 @@ export function stateSummary(state) {
     lastError: state.lastError,
     abort: state.abort,
     retainedState: state.retainedState,
+    tagCleanup: state.tagCleanup,
     provisioningAttestation: state.provisioningAttestation,
     networkContract: state.networkContract
   };
@@ -955,8 +979,17 @@ function validateState(value) {
   }
   if (!SHA256.test(value.manifestSha256 ?? "")) throw new Error("lifecycle state manifest digest is invalid");
   if (!PHASES.has(value.phase)) throw new Error("lifecycle state phase is invalid");
-  for (const key of ["droplets", "addressSlots", "endpoints", "deployments", "notifications"]) {
+  for (const key of ["droplets", "addressSlots", "endpoints", "deployments", "notifications", "tagCleanup"]) {
     if (!value[key] || typeof value[key] !== "object" || Array.isArray(value[key])) throw new Error(`lifecycle state ${key} map is invalid`);
+  }
+  for (const [name, result] of Object.entries(value.tagCleanup)) {
+    if (
+      typeof name !== "string"
+      || !result
+      || !new Set(["absent", "deleted", "reconciled-absent", "retained-in-use"]).has(result.status)
+      || typeof result.checkedAt !== "string"
+      || (result.status === "retained-in-use" && (!Number.isInteger(result.resourceCount) || result.resourceCount < 1))
+    ) throw new Error("lifecycle state tag cleanup evidence is invalid");
   }
   if (value.anchorConfig !== null) validateLifecycleAnchorBinding(value.anchorConfig, value.kind);
   if (value.abort !== null && (!value.abort || typeof value.abort !== "object" || Array.isArray(value.abort))) {

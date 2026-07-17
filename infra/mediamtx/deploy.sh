@@ -142,6 +142,11 @@ fi
 exit 1
 REMOTE
 
-curl -fsS --retry 30 --retry-all-errors --retry-delay 2 --retry-max-time 120 \
-  --connect-timeout 5 --max-time 10 "https://$MEDIAMTX_PUBLIC_HOST/healthz" >/dev/null
+if ! curl -fsS --retry 60 --retry-all-errors --retry-delay 5 --retry-max-time 300 \
+  --connect-timeout 5 --max-time 10 "https://$MEDIAMTX_PUBLIC_HOST/healthz" >/dev/null; then
+  echo "MediaMTX public TLS endpoint did not become healthy within 300 seconds." >&2
+  ssh "${ssh_options[@]}" "$SSH_HOST" \
+    "cd '$REMOTE_DIR' && docker compose logs --tail=120 caddy" >&2 || true
+  exit 1
+fi
 echo "MediaMTX public TLS endpoint healthy."

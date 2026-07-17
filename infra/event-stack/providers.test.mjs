@@ -192,6 +192,73 @@ test("DigitalOcean retries Reserved IPv4 release across asynchronous unassignmen
   assert.deepEqual(requests.map((entry) => entry.options.method), ["GET", "DELETE", "GET", "DELETE", "GET", "DELETE", "GET"]);
 });
 
+test("DigitalOcean deletes only an exact empty event tag and proves absence", async () => {
+  const requests = [];
+  const provider = new DigitalOceanProvider({
+    token: "token",
+    sshKeys: [],
+    cloudInitPaths: {},
+    fetchImpl: queueFetch([
+      response(200, { tag: { name: "scorecheck-event:test", resources: { count: 0 } } }),
+      response(204, null),
+      response(404, { message: "not found" })
+    ], requests)
+  });
+  assert.deepEqual(await provider.deleteEmptyTag("scorecheck-event:test"), {
+    name: "scorecheck-event:test",
+    status: "deleted"
+  });
+  assert.deepEqual(requests.map((entry) => entry.options.method), ["GET", "DELETE", "GET"]);
+  assert.match(requests[1].url, /\/tags\/scorecheck-event%3Atest$/u);
+});
+
+test("DigitalOcean refuses to remove a tag that still owns resources", async () => {
+  const requests = [];
+  const provider = new DigitalOceanProvider({
+    token: "token",
+    sshKeys: [],
+    cloudInitPaths: {},
+    fetchImpl: queueFetch([
+      response(200, { tag: { name: "scorecheck-event:test", resources: { count: 1 } } })
+    ], requests)
+  });
+  await assert.rejects(() => provider.deleteEmptyTag("scorecheck-event:test"), /still owns 1 resources/u);
+  assert.equal(requests.length, 1);
+});
+
+test("DigitalOcean retains a shared lifecycle tag while another resource uses it", async () => {
+  const provider = new DigitalOceanProvider({
+    token: "token",
+    sshKeys: [],
+    cloudInitPaths: {},
+    fetchImpl: queueFetch([
+      response(200, { tag: { name: "scorecheck-role:compositor", resources: { count: 2 } } })
+    ])
+  });
+  assert.deepEqual(await provider.deleteEmptyTag("scorecheck-role:compositor", { allowInUse: true }), {
+    name: "scorecheck-role:compositor",
+    status: "retained-in-use",
+    resourceCount: 2
+  });
+});
+
+test("DigitalOcean reconciles a lost empty-tag delete response", async () => {
+  const provider = new DigitalOceanProvider({
+    token: "token",
+    sshKeys: [],
+    cloudInitPaths: {},
+    fetchImpl: queueFetch([
+      response(200, { tag: { name: "scorecheck-event:test", resources: { count: 0 } } }),
+      response(500, { message: "lost response" }),
+      response(404, { message: "not found" })
+    ])
+  });
+  assert.deepEqual(await provider.deleteEmptyTag("scorecheck-event:test"), {
+    name: "scorecheck-event:test",
+    status: "reconciled-absent"
+  });
+});
+
 test("DigitalOcean verifies the exact pinned VPC and tag-addressed firewall contract", async () => {
   const provider = new DigitalOceanProvider({
     token: "token",

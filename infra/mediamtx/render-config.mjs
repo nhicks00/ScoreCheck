@@ -10,6 +10,7 @@ const caddySourcePath = path.join(directory, "Caddyfile.template");
 export function renderMediaMtxConfigs({ mediaTemplate, caddyTemplate, environment }) {
   const publicIp = required(environment, "MEDIAMTX_PUBLIC_IP");
   const publicHost = required(environment, "MEDIAMTX_PUBLIC_HOST");
+  const acmeEmail = email(required(environment, "MEDIAMTX_ACME_EMAIL"));
   const contentAnalyzerBindings = exactContentAnalyzerBindings(required(environment, "MEDIAMTX_CONTENT_ANALYZER_BINDINGS"));
   const delayMs = integerInRange(environment.MEDIAMTX_PROGRAM_DELAY_MS ?? "3500", 0, 30_000);
 
@@ -30,7 +31,9 @@ export function renderMediaMtxConfigs({ mediaTemplate, caddyTemplate, environmen
       .replaceAll(`__COURT_${court}_PUBLISH_PASSWORD__`, JSON.stringify(required(environment, `MEDIAMTX_COURT_${court}_PUBLISH_PASS`)));
   }
 
-  const caddyConfig = caddyTemplate.replaceAll("__PUBLIC_HOST__", publicHost);
+  const caddyConfig = caddyTemplate
+    .replaceAll("__PUBLIC_HOST__", publicHost)
+    .replaceAll("__ACME_EMAIL__", acmeEmail);
   for (const [name, value] of Object.entries({ mediaConfig, caddyConfig })) {
     if (/__[A-Z0-9_]+__/u.test(value)) throw new Error(`${name} still contains an unresolved placeholder.`);
   }
@@ -67,6 +70,11 @@ async function main() {
 function required(environment, name) {
   const value = environment[name]?.trim();
   if (!value) throw new Error(`${name} is required.`);
+  return value;
+}
+
+function email(value) {
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value)) throw new Error("MEDIAMTX_ACME_EMAIL must be a valid email address.");
   return value;
 }
 

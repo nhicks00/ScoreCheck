@@ -1,4 +1,15 @@
 __PUBLIC_HOST__ {
+    tls {
+        issuer acme {
+            dir https://acme.zerossl.com/v2/DV90
+            email __ACME_EMAIL__
+        }
+        issuer acme {
+            dir https://acme-v02.api.letsencrypt.org/directory
+            email __ACME_EMAIL__
+        }
+    }
+
     handle /healthz {
         respond "ok" 200
     }

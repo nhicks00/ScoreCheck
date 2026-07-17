@@ -94,6 +94,7 @@ export class LocalStackDeployer {
       };
     } else if (spec.role === "ingest") {
       const env = await loadProtectedEnv(join(this.secretsDirectory, "ingest.env"));
+      if (typeof this.acmeEmail !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(this.acmeEmail)) throw new Error("SCORECHECK_ACME_EMAIL is required for ingest certificate automation");
       const wireguardConfig = join(this.secretsDirectory, "wireguard/camera-lan.conf");
       if (await exists(wireguardConfig)) {
         await assertProtectedFile(wireguardConfig, "ingest WireGuard configuration");
@@ -111,6 +112,7 @@ export class LocalStackDeployer {
         MEDIAMTX_SSH_KEY: this.sshPrivateKey,
         MEDIAMTX_PUBLIC_IP: servicePublicIpv4({ manifest, state, spec, resource }),
         MEDIAMTX_PUBLIC_HOST: endpointForRole(manifest, "ingest"),
+        MEDIAMTX_ACME_EMAIL: this.acmeEmail,
         MEDIAMTX_CONTENT_ANALYZER_BINDINGS: JSON.stringify(compositorContentAnalyzerBindings({ manifest, state }))
       });
     } else if (["compositor", "compositor-spare"].includes(spec.role)) {

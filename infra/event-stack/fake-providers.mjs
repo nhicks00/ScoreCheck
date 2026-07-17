@@ -3,6 +3,7 @@ export class FakeDigitalOceanProvider {
     this.account = { status: "active", dropletLimit };
     this.region = region;
     this.droplets = new Map();
+    this.tags = new Set();
     this.reserved = new Map(Object.values(reservedIpv4).map((ip) => [ip, { ip, region, dropletId: null, locked: false }]));
     this.nextId = 1000;
     this.createCalls = 0;
@@ -67,6 +68,7 @@ export class FakeDigitalOceanProvider {
       tags: [...request.tags],
       createdAt: new Date(0).toISOString()
     };
+    for (const tag of request.tags) this.tags.add(tag);
     this.droplets.set(id, droplet);
     if (this.ambiguousCreateAt === this.createCalls) throw new Error("injected ambiguous create result");
     return clone(droplet);
@@ -101,6 +103,27 @@ export class FakeDigitalOceanProvider {
   async waitDropletAbsent(id) {
     if (this.droplets.has(String(id))) throw new Error(`Droplet ${id} still exists`);
     return true;
+  }
+
+  async inspectTag(name) {
+    if (!this.tags.has(name)) return null;
+    const resourceCount = [...this.droplets.values()].filter((entry) => entry.tags.includes(name)).length;
+    return { name, resourceCount };
+  }
+
+  async deleteEmptyTag(name, { allowInUse = false } = {}) {
+    const current = await this.inspectTag(name);
+    if (current === null) return { name, status: "absent" };
+    if (current.resourceCount !== 0) {
+      if (allowInUse) return { name, status: "retained-in-use", resourceCount: current.resourceCount };
+      throw new Error(`DigitalOcean tag ${name} still owns ${current.resourceCount} resources`);
+    }
+    this.tags.delete(name);
+    return { name, status: "deleted" };
+  }
+
+  async tagExists(name) {
+    return this.tags.has(name);
   }
 
   async getReservedIpv4(ip) {

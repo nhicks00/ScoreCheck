@@ -302,6 +302,37 @@ export class DigitalOceanProvider {
     await this.#request("DELETE", `/tags/${encodeURIComponent(name)}`, undefined, [204]);
   }
 
+  async inspectTag(name) {
+    try {
+      const payload = await this.#request("GET", `/tags/${encodeURIComponent(name)}`);
+      const tag = payload?.tag;
+      if (!tag || String(tag.name ?? "") !== name) throw new Error(`DigitalOcean tag ${name} returned the wrong identity`);
+      const resourceCount = Number(tag.resources?.count);
+      if (!Number.isInteger(resourceCount) || resourceCount < 0) throw new Error(`DigitalOcean tag ${name} has invalid resource metadata`);
+      return { name, resourceCount };
+    } catch (error) {
+      if (error?.status === 404) return null;
+      throw error;
+    }
+  }
+
+  async deleteEmptyTag(name, { allowInUse = false } = {}) {
+    const current = await this.inspectTag(name);
+    if (current === null) return { name, status: "absent" };
+    if (current.resourceCount !== 0) {
+      if (allowInUse) return { name, status: "retained-in-use", resourceCount: current.resourceCount };
+      throw new Error(`DigitalOcean tag ${name} still owns ${current.resourceCount} resources`);
+    }
+    try {
+      await this.deleteTag(name);
+    } catch (error) {
+      if (await this.tagExists(name)) throw error;
+      return { name, status: "reconciled-absent" };
+    }
+    if (await this.tagExists(name)) throw new Error(`DigitalOcean tag ${name} still exists after deletion`);
+    return { name, status: "deleted" };
+  }
+
   async tagExists(name) {
     try {
       await this.#request("GET", `/tags/${encodeURIComponent(name)}`);
