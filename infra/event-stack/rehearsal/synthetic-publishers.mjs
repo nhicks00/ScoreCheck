@@ -113,13 +113,18 @@ export class SyntheticPublisherManager {
     return { pid: Number(match[1]), marker, commandSha256: await sha256Text(match[2]) };
   }
 
+  async prepare(config) {
+    validateConfig(config);
+    await mkdir(resolve(config.logPath, ".."), { recursive: true, mode: 0o700 });
+    await chmod(resolve(config.logPath, ".."), 0o700);
+    return this.fixtureBuilder(config, this.runner);
+  }
+
   async ensure(config) {
     validateConfig(config);
     const existing = await this.inspect(config.marker);
     if (existing) return { ...existing, adopted: true, startedAt: null, ...config.redacted };
-    await mkdir(resolve(config.logPath, ".."), { recursive: true, mode: 0o700 });
-    await chmod(resolve(config.logPath, ".."), 0o700);
-    await this.fixtureBuilder(config, this.runner);
+    await this.prepare(config);
     await unlink(config.progressPath).catch((error) => {
       if (error?.code !== "ENOENT") throw error;
     });
@@ -248,6 +253,14 @@ async function runCommand(command, args) {
 }
 
 async function prepareFixture(config, runner) {
+  try {
+    const existing = await stat(config.fixturePath);
+    if (!existing.isFile() || existing.size < 100_000) throw new Error(`synthetic publisher Camera ${config.court} fixture is incomplete`);
+    await chmod(config.fixturePath, 0o600);
+    return { path: config.fixturePath, size: existing.size, adopted: true };
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
   await unlink(config.fixtureTempPath).catch((error) => {
     if (error?.code !== "ENOENT") throw error;
   });
@@ -258,6 +271,7 @@ async function prepareFixture(config, runner) {
     await chmod(config.fixtureTempPath, 0o600);
     await rename(config.fixtureTempPath, config.fixturePath);
     await chmod(config.fixturePath, 0o600);
+    return { path: config.fixturePath, size: information.size, adopted: false };
   } catch (error) {
     await unlink(config.fixtureTempPath).catch(() => {});
     throw error;

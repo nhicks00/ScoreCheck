@@ -66,6 +66,24 @@ test("starts and stops an exact detached publisher without killing peers", async
   assert.match(processLines, /unrelated-service/);
 });
 
+test("prepares each encoded fixture once and adopts it on repeat", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "scorecheck-publisher-prepare-"));
+  const config = buildSyntheticPublisherConfig({ court: 1, generationId: "generation-1234", host: "preview-test.example.com", user: "publisher-user-1", password: "publisher-password-1-long", evidenceDirectory: directory });
+  let fixtureBuilds = 0;
+  const manager = new SyntheticPublisherManager({
+    runner: async (_command, args) => {
+      assert.equal(args, config.fixtureArgs);
+      fixtureBuilds += 1;
+      await writeFile(config.fixtureTempPath, Buffer.alloc(100_001));
+      return { stdout: "", stderr: "" };
+    }
+  });
+
+  assert.equal((await manager.prepare(config)).adopted, false);
+  assert.equal((await manager.prepare(config)).adopted, true);
+  assert.equal(fixtureBuilds, 1);
+});
+
 test("preflight requires both protocols, encoders, and visual generators", async () => {
   const outputs = {
     "-protocols": "rtmp srt",

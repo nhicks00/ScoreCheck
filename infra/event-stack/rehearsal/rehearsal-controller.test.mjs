@@ -68,6 +68,7 @@ function harness({ failPublisherOnce = false, failPreflight = false, failFullEvi
   };
   const publishers = {
     preflight: async () => ({ healthy: true }),
+    prepare: async (config) => { log.push(`publisher-prepare:${config.court}`); return { adopted: false }; },
     ensure: async (config) => {
       if (publisherFailure && config.court === 3) { publisherFailure = false; throw new Error("intentional publisher interruption"); }
       log.push(`publisher-start:${config.court}`);
@@ -148,6 +149,7 @@ test("runs the full isolated rehearsal and retains every persistent stream by ex
   assert.equal(summary.activePublishers, 8);
   assert.equal(summary.activeEgresses, 8);
   assert.equal(summary.activeProviderStreams, 8);
+  assert.ok(log.indexOf("publisher-prepare:8") < log.indexOf("publisher-start:1"));
   assert.ok(log.indexOf("youtube-active:stream1") < log.indexOf("egress-start:2"));
   await controller.soak({ manifest, lifecycleState: lifecycle, evidenceDirectory: "/tmp/rehearsal-evidence", durationMs: 1_800_000 });
   await controller.stop({ manifest, lifecycleState: lifecycle });

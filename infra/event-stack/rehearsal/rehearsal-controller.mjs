@@ -105,10 +105,15 @@ export class RehearsalController {
         state.sampler = await this.sampler.ensure({ manifest, lifecycleState, state: structuredClone(state), evidenceDirectory });
         await this.store.save(state);
 
-        await this.publishers.preflight(this.publisherConfiguration({ manifest, material, court: 1, state, evidenceDirectory }).ffmpegPath);
+        const publisherConfigurations = Object.fromEntries(COURTS.map((court) => [court, this.publisherConfiguration({ manifest, material, court, state, evidenceDirectory })]));
+        await this.publishers.preflight(publisherConfigurations[1].ffmpegPath);
+        // Fixture encoding is intentionally completed before the first live
+        // publisher starts. Encoding later fixtures while RTMP is active can
+        // starve the earliest publisher and trigger MediaMTX's read timeout.
+        for (const court of COURTS) await this.publishers.prepare(publisherConfigurations[court]);
         for (const court of COURTS) {
           const courtState = state.courts[court];
-          const configuration = this.publisherConfiguration({ manifest, material, court, state, evidenceDirectory });
+          const configuration = publisherConfigurations[court];
           if (courtState.publisher?.status !== "running") {
             courtState.publisher = { status: "starting", marker: courtState.publisherMarker };
             await this.store.save(state);
