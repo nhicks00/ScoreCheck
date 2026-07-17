@@ -568,7 +568,8 @@ node --test infra/event-stack/*.test.mjs
 ```
 
 The live 12-server rehearsal bundle is generated once and contains the exact
-one-command runner invocation. It points to the GitHub owner/repository slug,
+runner executable and argument array in `operator.command` and `operator.args`.
+It points to the GitHub owner/repository slug,
 numeric repository ID, exact tested Git ref and 40-character commit SHA, and the local executables
 used for the eight synthetic publishers and LiveKit verification:
 
@@ -591,8 +592,9 @@ node infra/event-stack/create-event-bundle.mjs create \
   --soak-seconds 1800
 ```
 
-Run the exact `nextCommand` written to the protected bundle's `BUNDLE.json`.
-That runner owns plan, prepare, provision, explicit start, 30-minute soak,
+Execute the exact `operator.command` with the exact `operator.args` written to
+the protected bundle's `BUNDLE.json`. Do not transcribe or reconstruct the
+invocation. That runner owns plan, prepare, provision, explicit start, 30-minute soak,
 ordered output cleanup, evidence sealing, and exact infrastructure teardown. A
 failure enters the bounded recovery plan and leaves a protected report; it does
 not silently skip cleanup.
