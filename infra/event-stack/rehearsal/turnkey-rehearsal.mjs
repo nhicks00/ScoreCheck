@@ -26,9 +26,10 @@ async function main() {
   const manifest = await readProtectedJson(eventProfile.manifest);
   if (manifest.kind !== "rehearsal") throw new Error("turnkey rehearsal requires a rehearsal manifest");
   if (options.confirm !== `FULL-DRY-RUN:${manifest.event}`) throw new Error(`confirmation must be exactly FULL-DRY-RUN:${manifest.event}`);
-  const report = { schemaVersion: 1, event: manifest.event, startedAt: new Date().toISOString(), endedAt: null, classification: "RUNNING", steps: [], recovery: [], error: null };
+  const initialPhases = await currentPhases(eventProfile.state, rehearsalProfile.rehearsalState);
+  const report = { schemaVersion: 1, event: manifest.event, startedAt: new Date().toISOString(), endedAt: null, classification: "RUNNING", initialPhases, steps: [], recovery: [], error: null };
   try {
-    for (const step of buildRunPlan({ event: manifest.event, eventProfile: options.eventProfile, rehearsalProfile: options.rehearsalProfile })) {
+    for (const step of buildRunPlan({ event: manifest.event, eventProfile: options.eventProfile, rehearsalProfile: options.rehearsalProfile, ...initialPhases })) {
       await executeStep(step, report.steps);
     }
     report.classification = "PASS";
@@ -52,22 +53,57 @@ async function main() {
   if (report.classification !== "PASS") process.exitCode = 1;
 }
 
-export function buildRunPlan({ event, eventProfile, rehearsalProfile }) {
-  return [
-    eventStep("plan", eventProfile),
-    rehearsalStep("plan", rehearsalProfile),
-    rehearsalStep("prepare", rehearsalProfile, `PREPARE:${event}`),
-    eventStep("up", eventProfile),
-    eventStep("start", eventProfile, `START:${event}`),
-    rehearsalStep("start", rehearsalProfile, `START-REHEARSAL:${event}`),
-    rehearsalStep("soak", rehearsalProfile),
-    rehearsalStep("stop", rehearsalProfile),
-    eventStep("close", eventProfile, `CLOSE:${event}`),
-    rehearsalStep("cleanup", rehearsalProfile, `CLEANUP:${event}`),
-    rehearsalStep("seal", rehearsalProfile),
-    eventStep("evidence", eventProfile),
-    eventStep("destroy", eventProfile, `DESTROY:${event}`)
-  ];
+export function buildRunPlan({ event, eventProfile, rehearsalProfile, lifecyclePhase = "planned", rehearsalPhase = null }) {
+  if (["aborting", "aborted"].includes(lifecyclePhase)) throw new Error(`cannot resume a rehearsal whose lifecycle is ${lifecyclePhase}`);
+  if (lifecyclePhase === "destroyed") throw new Error("rehearsal lifecycle is already destroyed; inspect its sealed report instead of creating a new PASS");
+
+  const steps = [];
+  if (lifecyclePhase === "destroying") return [eventStep("destroy", eventProfile, `DESTROY:${event}`)];
+
+  if (lifecyclePhase === "planned") steps.push(eventStep("plan", eventProfile));
+  if (rehearsalPhase === null) {
+    steps.push(rehearsalStep("plan", rehearsalProfile));
+    rehearsalPhase = "planned";
+  }
+  if (["planned", "preparing"].includes(rehearsalPhase)) {
+    steps.push(rehearsalStep("prepare", rehearsalProfile, `PREPARE:${event}`));
+    rehearsalPhase = "prepared";
+  }
+  if (["planned", "provisioning"].includes(lifecyclePhase)) {
+    steps.push(eventStep("up", eventProfile));
+    lifecyclePhase = "ready";
+  }
+  if (lifecyclePhase === "ready") {
+    steps.push(eventStep("start", eventProfile, `START:${event}`));
+    lifecyclePhase = "live";
+  }
+  if (["prepared", "starting"].includes(rehearsalPhase)) {
+    steps.push(rehearsalStep("start", rehearsalProfile, `START-REHEARSAL:${event}`));
+    rehearsalPhase = "running";
+  }
+  if (rehearsalPhase === "running") {
+    steps.push(rehearsalStep("soak", rehearsalProfile));
+    steps.push(rehearsalStep("stop", rehearsalProfile));
+    rehearsalPhase = "stopped";
+  } else if (rehearsalPhase === "stopping") {
+    steps.push(rehearsalStep("stop", rehearsalProfile));
+    rehearsalPhase = "stopped";
+  }
+  if (lifecyclePhase === "live" && rehearsalPhase === "stopped") {
+    steps.push(eventStep("close", eventProfile, `CLOSE:${event}`));
+    lifecyclePhase = "closed";
+  }
+  if (lifecyclePhase === "closed" && ["stopped", "cleaning"].includes(rehearsalPhase)) {
+    steps.push(rehearsalStep("cleanup", rehearsalProfile, `CLEANUP:${event}`));
+    rehearsalPhase = "cleaned";
+  }
+  if (lifecyclePhase === "closed" && rehearsalPhase === "cleaned") {
+    steps.push(rehearsalStep("seal", rehearsalProfile));
+    steps.push(eventStep("evidence", eventProfile));
+    steps.push(eventStep("destroy", eventProfile, `DESTROY:${event}`));
+    return steps;
+  }
+  throw new Error(`unsupported resumable rehearsal state lifecycle=${lifecyclePhase}, rehearsal=${rehearsalPhase}`);
 }
 
 export function buildRecoveryPlan({ event, eventProfile, rehearsalProfile, lifecyclePhase, rehearsalPhase }) {
