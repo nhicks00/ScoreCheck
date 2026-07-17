@@ -8,6 +8,7 @@ const COURTS = Object.freeze(Array.from({ length: 8 }, (_, index) => index + 1))
 const MARKER = /^scorecheck-rehearsal-[a-zA-Z0-9-]{8,80}-commentator-[1-8]$/;
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const EVENT_STACK_DIRECTORY = resolve(SCRIPT_DIRECTORY, "..");
+const COMMENTARY_READY_POLL_ATTEMPTS = 900;
 
 export function buildCommentaryClientConfig({ court, generationId, material, programOrigin, evidenceDirectory, runtimeDirectory, nodePath = process.execPath, ffmpegPath = "ffmpeg" }) {
   if (!COURTS.includes(court) || typeof generationId !== "string" || !/^[a-zA-Z0-9-]{8,80}$/.test(generationId)) throw new Error("commentary rehearsal identity is invalid");
@@ -130,7 +131,7 @@ export class CommentaryClientManager {
   }
 
   async #waitReady(config, pid) {
-    for (let attempt = 0; attempt < 300; attempt += 1) {
+    for (let attempt = 0; attempt < COMMENTARY_READY_POLL_ATTEMPTS; attempt += 1) {
       if (await exists(config.readyPath)) {
         const ready = JSON.parse(await readFile(config.readyPath, "utf8"));
         if (ready.schemaVersion === 1 && ready.court === config.court && ready.marker === config.marker) return;

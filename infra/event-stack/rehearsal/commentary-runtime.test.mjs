@@ -2,10 +2,14 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createRequire } from "node:module";
 import test from "node:test";
 
 import { buildCommentaryClientConfig, CommentaryClientManager } from "./commentary-runtime.mjs";
 import { createRehearsalSecretMaterial } from "./rehearsal-secrets.mjs";
+
+const require = createRequire(import.meta.url);
+const { joinCommentaryPage } = require("./commentary-browser-worker.cjs");
 
 const material = createRehearsalSecretMaterial({ random: (length) => Buffer.alloc(length, 4) });
 
@@ -70,3 +74,65 @@ test("rehearsal commentary uses direct low-latency preview playback", async () =
   assert.match(source, /audioProcessing=\{false\}/);
   assert.doesNotMatch(source, /mode="scoring"/);
 });
+
+test("retries one transient commentary join only after reloading the isolated page", async () => {
+  let liveWaits = 0;
+  let reloads = 0;
+  let clicks = 0;
+  const messages = [];
+  const status = locator({ text: "Connecting" });
+  const alert = locator({ text: "" });
+  const page = {
+    reload: async (options) => { reloads += 1; assert.equal(options.waitUntil, "domcontentloaded"); },
+    getByRole: () => ({ click: async () => { clicks += 1; } }),
+    locator: (selector) => {
+      if (selector === ".commentary-audio-panel .status") {
+        return {
+          ...status,
+          filter: () => ({ waitFor: async () => {
+            liveWaits += 1;
+            if (liveWaits === 1) throw new Error("transient join timeout");
+          } })
+        };
+      }
+      if (selector === ".commentary-audio-panel [role=alert]") return alert;
+      return { filter: () => ({ waitFor: async () => {} }) };
+    }
+  };
+  const result = await joinCommentaryPage(page, { attempts: 2, timeoutMs: 10, log: (message) => messages.push(message) });
+  assert.deepEqual(result, { attempt: 2 });
+  assert.equal(reloads, 1);
+  assert.equal(clicks, 2);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /status=Connecting; alert=none/u);
+});
+
+test("fails closed with bounded safe diagnostics after every commentary join attempt", async () => {
+  let reloads = 0;
+  const page = {
+    reload: async () => { reloads += 1; },
+    getByRole: () => ({ click: async () => {} }),
+    locator: (selector) => {
+      if (selector === ".commentary-audio-panel .status") {
+        return { ...locator({ text: "Not joined" }), filter: () => ({ waitFor: async () => { throw new Error("timeout with protected URL"); } }) };
+      }
+      if (selector === ".commentary-audio-panel [role=alert]") return locator({ text: "Audio room is not ready. Ask the producer to check it." });
+      return { filter: () => ({ waitFor: async () => {} }) };
+    }
+  };
+  await assert.rejects(
+    () => joinCommentaryPage(page, { attempts: 2, timeoutMs: 10, log: () => {} }),
+    /after 2 attempts \(status=Not joined; alert=Audio room is not ready/u
+  );
+  assert.equal(reloads, 1);
+});
+
+test("manager startup deadline covers both bounded browser join attempts", async () => {
+  const source = await readFile(new URL("./commentary-runtime.mjs", import.meta.url), "utf8");
+  assert.match(source, /const COMMENTARY_READY_POLL_ATTEMPTS = 900;/u);
+  assert.match(source, /attempt < COMMENTARY_READY_POLL_ATTEMPTS/u);
+});
+
+function locator({ text }) {
+  return { textContent: async () => text };
+}

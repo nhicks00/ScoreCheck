@@ -48,9 +48,7 @@ async function main() {
   }]);
 
   await page.goto(config.pageUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
-  await page.getByRole("button", { name: "Join live audio" }).click({ timeout: 60_000 });
-  await page.locator("[data-preview-state]").filter({ hasText: "Preview live" }).waitFor({ timeout: 60_000 });
-  await page.locator(".commentary-audio-panel .status").filter({ hasText: "Live" }).waitFor({ timeout: 60_000 });
+  await joinCommentaryPage(page);
   await page.locator("video").evaluate(async (video) => {
     const started = performance.now();
     while ((video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.currentTime <= 0) && performance.now() - started < 30_000) {
@@ -77,6 +75,42 @@ async function main() {
   await new Promise(() => {});
 }
 
+async function joinCommentaryPage(page, {
+  attempts = 2,
+  timeoutMs = 60_000,
+  log = (message) => process.stderr.write(`${message}\n`)
+} = {}) {
+  if (!Number.isInteger(attempts) || attempts < 1 || attempts > 3) throw new Error("commentary join attempts are invalid");
+  let diagnostic = "status=unknown; alert=none";
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (attempt > 1) await page.reload({ waitUntil: "domcontentloaded", timeout: timeoutMs });
+    try {
+      await page.locator("[data-preview-state]").filter({ hasText: "Preview live" }).waitFor({ timeout: timeoutMs });
+      await page.getByRole("button", { name: "Join live audio" }).click({ timeout: timeoutMs });
+      await page.locator(".commentary-audio-panel .status").filter({ hasText: "Live" }).waitFor({ timeout: timeoutMs });
+      return { attempt };
+    } catch {
+      diagnostic = await commentaryJoinDiagnostic(page);
+      log(`commentary join attempt ${attempt}/${attempts} did not become live (${diagnostic})`);
+    }
+  }
+  throw new Error(`commentary audio did not become live after ${attempts} attempts (${diagnostic})`);
+}
+
+async function commentaryJoinDiagnostic(page) {
+  const status = await safeText(page.locator(".commentary-audio-panel .status"));
+  const alert = await safeText(page.locator(".commentary-audio-panel [role=alert]"));
+  return `status=${status || "missing"}; alert=${alert || "none"}`;
+}
+
+async function safeText(locator) {
+  try {
+    return String(await locator.textContent() ?? "").replace(/\s+/gu, " ").trim().slice(0, 160);
+  } catch {
+    return "";
+  }
+}
+
 function parseArgs(args) {
   const result = { preflight: false, marker: null, config: null, playwright: null };
   for (let index = 0; index < args.length; index += 1) {
@@ -97,7 +131,11 @@ async function writeJsonAtomic(path, value) {
   await chmod(path, 0o600);
 }
 
-main().catch((error) => {
-  process.stderr.write(`commentary browser failed: ${error instanceof Error ? error.message : String(error)}\n`);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    process.stderr.write(`commentary browser failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { joinCommentaryPage };
