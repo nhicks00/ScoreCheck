@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildRecoveryPlan, buildRunPlan } from "./turnkey-rehearsal.mjs";
+import { buildRecoveryPlan, buildRunPlan, subprocessFailureMessage } from "./turnkey-rehearsal.mjs";
 
 test("runs the exact build, workload, provider cleanup, evidence, and Droplet teardown order", () => {
   const commands = buildRunPlan({ event: "test", eventProfile: "/event.json", rehearsalProfile: "/rehearsal.json" }).map((step) => `${step.system}:${step.command}`);
@@ -73,4 +73,13 @@ test("recovery resumes an interrupted infrastructure destroy instead of abandoni
 test("recovery creates cancellable rehearsal evidence when failure precedes rehearsal state", () => {
   const commands = buildRecoveryPlan({ event: "test", eventProfile: "/event.json", rehearsalProfile: "/rehearsal.json", lifecyclePhase: "planned", rehearsalPhase: null }).map((step) => `${step.system}:${step.command}`);
   assert.deepEqual(commands, ["rehearsal:plan", "rehearsal:cleanup", "rehearsal:seal", "lifecycle:abort"]);
+});
+
+test("records the decisive child error tail in the turnkey report", () => {
+  const stderr = `UNHELPFUL PREFIX ${"provider progress ".repeat(40)}YouTube broadcast was not yet visible`;
+  const message = subprocessFailureMessage("prepare", 1, stderr);
+  assert.match(message, /^prepare failed with exit 1:/u);
+  assert.match(message, /\[earlier child output omitted\]/u);
+  assert.match(message, /YouTube broadcast was not yet visible/u);
+  assert.doesNotMatch(message, /UNHELPFUL PREFIX/u);
 });

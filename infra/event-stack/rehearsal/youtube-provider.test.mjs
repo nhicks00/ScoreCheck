@@ -68,6 +68,46 @@ test("creates unlisted manual broadcasts and verifies exact binding", async () =
   assert.equal(result.boundStreamId, "stream2");
 });
 
+test("bounds post-create visibility lag while preserving the exact binding", async () => {
+  const marker = rehearsalMarker("generation-1234", 2);
+  let boundReads = 0;
+  const sleeps = [];
+  const fetchImpl = async (url, init) => {
+    if (url.includes("oauth2")) return response(200, { access_token: "access" });
+    if (url.includes("liveBroadcasts/bind")) return response(200, broadcast(marker, "broadcast2", "stream2"));
+    if (url.includes("liveBroadcasts?") && init.method === "GET" && url.includes("&id=")) {
+      boundReads += 1;
+      if (boundReads <= 2) return response(200, { items: [] });
+      if (boundReads === 3) return response(200, { items: [broadcast(marker, "broadcast2", null)] });
+      return response(200, { items: [broadcast(marker, "broadcast2", "stream2")] });
+    }
+    return response(200, { items: [] });
+  };
+  const client = new YouTubeRehearsalProvider({
+    clientId: "client",
+    clientSecret: "secret",
+    refreshToken: "refresh",
+    fetchImpl,
+    sleep: async (milliseconds) => { sleeps.push(milliseconds); }
+  });
+  const result = await client.bind({ broadcastId: "broadcast2", streamId: "stream2" });
+  assert.equal(result.boundStreamId, "stream2");
+  assert.equal(boundReads, 4);
+  assert.deepEqual(sleeps, [1_000, 1_000, 1_000]);
+});
+
+test("does not retry a non-visibility provider failure during binding", async () => {
+  let reads = 0;
+  const client = provider(async (url, init) => {
+    if (url.includes("oauth2")) return response(200, { access_token: "access" });
+    if (url.includes("liveBroadcasts/bind")) return response(200, {});
+    reads += 1;
+    return response(403, { error: { errors: [{ reason: "quotaExceeded" }] } });
+  });
+  await assert.rejects(() => client.bind({ broadcastId: "broadcast2", streamId: "stream2" }), /HTTP 403 \(quotaExceeded\)/u);
+  assert.equal(reads, 1);
+});
+
 test("fails closed on duplicate markers and unsafe broadcast settings", async () => {
   const marker = rehearsalMarker("generation-1234", 3);
   const duplicate = provider(async (url) => url.includes("oauth2")

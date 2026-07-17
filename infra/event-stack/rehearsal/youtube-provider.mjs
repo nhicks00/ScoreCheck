@@ -65,9 +65,11 @@ export class YouTubeRehearsalProvider {
     validateProviderId(broadcastId, "broadcast id");
     validateProviderId(streamId, "stream id");
     await this.#request("POST", `/liveBroadcasts/bind?id=${encodeURIComponent(broadcastId)}&streamId=${encodeURIComponent(streamId)}&part=id,contentDetails`);
-    const current = await this.getBroadcast(broadcastId);
-    if (current.boundStreamId !== streamId) throw new Error("YouTube rehearsal broadcast did not retain its exact stream binding");
-    return current;
+    return this.#waitForProviderRead({
+      read: () => this.getBroadcast(broadcastId),
+      accepted: (current) => current.boundStreamId === streamId,
+      description: "YouTube rehearsal broadcast did not retain its exact stream binding"
+    });
   }
 
   async getStream(streamId) {
@@ -95,12 +97,29 @@ export class YouTubeRehearsalProvider {
     const startedAt = Date.now();
     let last;
     while (Date.now() - startedAt <= timeoutMs) {
-      const [stream, broadcast] = await Promise.all([this.getStream(streamId), this.getBroadcast(broadcastId)]);
-      last = { stream, broadcast };
-      if ((!streamStatus || stream.streamStatus === streamStatus) && (!broadcastStatus || broadcast.lifecycleStatus === broadcastStatus)) return last;
+      try {
+        const [stream, broadcast] = await Promise.all([this.getStream(streamId), this.getBroadcast(broadcastId)]);
+        last = { stream, broadcast };
+        if ((!streamStatus || stream.streamStatus === streamStatus) && (!broadcastStatus || broadcast.lifecycleStatus === broadcastStatus)) return last;
+      } catch (error) {
+        if (!(error instanceof ProviderNotFoundError)) throw error;
+      }
       await this.sleep(intervalMs);
     }
     throw new Error(`YouTube rehearsal status did not converge (stream=${last?.stream.streamStatus ?? "unknown"}, broadcast=${last?.broadcast.lifecycleStatus ?? "unknown"})`);
+  }
+
+  async #waitForProviderRead({ read, accepted, description, attempts = 30, intervalMs = 1_000 }) {
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const current = await read();
+        if (accepted(current)) return current;
+      } catch (error) {
+        if (!(error instanceof ProviderNotFoundError)) throw error;
+      }
+      if (attempt < attempts) await this.sleep(intervalMs);
+    }
+    throw new Error(`${description} after ${attempts} bounded checks`);
   }
 
   async deleteBroadcast(broadcastId) {

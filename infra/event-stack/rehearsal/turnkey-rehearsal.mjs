@@ -210,10 +210,24 @@ function safeError(error) { return { message: error instanceof Error ? error.mes
 
 function run(command, args) {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(command, args, { stdio: "inherit" });
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stderr = "";
+    child.stdout.on("data", (chunk) => process.stdout.write(chunk));
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+      process.stderr.write(chunk);
+    });
     child.on("error", reject);
-    child.on("close", (code) => code === 0 ? resolvePromise() : reject(new Error(`${args[1] ?? command} failed with exit ${code}`)));
+    child.on("close", (code) => code === 0
+      ? resolvePromise()
+      : reject(new Error(subprocessFailureMessage(args[1] ?? command, code, stderr))));
   });
+}
+
+export function subprocessFailureMessage(command, code, stderr) {
+  const normalized = String(stderr ?? "").trim();
+  const tail = normalized.length > 350 ? `[earlier child output omitted] ${normalized.slice(-350)}` : normalized;
+  return `${command} failed with exit ${code ?? "unknown"}${tail ? `: ${tail}` : ""}`;
 }
 
 function usage() {
