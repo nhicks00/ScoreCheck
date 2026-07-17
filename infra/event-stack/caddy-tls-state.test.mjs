@@ -52,6 +52,10 @@ test("captures, verifies, restores, and integrity-binds protected multi-host Cad
   const restored = await store.restore({ publicIpv4: "192.0.2.11", hosts });
   assert.equal(restored.status, "restored");
   assert.ok(commands.some(([command, args]) => command === "rsync" && String(args.at(-2)).endsWith("/data/")));
+  assert.ok(commands.some(([command, args]) => (
+    command === "ssh"
+    && String(args.at(-1)).includes("chown -R 0:0 '/opt/livekit/caddy_data'")
+  )), "restored state must not retain the workstation UID on the Linux host");
 
   await writeFile(join(stateDirectory, "data", "acme-account.json"), "tampered\n", { mode: 0o600 });
   await assert.rejects(() => inspectCaddyTlsState({ directory: stateDirectory, hosts }), /integrity verification/u);

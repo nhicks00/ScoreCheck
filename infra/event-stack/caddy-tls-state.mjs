@@ -28,7 +28,7 @@ export class CaddyTlsStateStore {
     await this.#ssh(publicIpv4, `install -d -m 0750 '${this.remoteDirectory}' && rm -rf '${stage}' && install -d -m 0700 '${stage}'`);
     try {
       await this.#rsync(`${join(this.directory, "data")}/`, `root@${publicIpv4}:${stage}/`);
-      await this.#ssh(publicIpv4, `rm -rf '${this.remoteDirectory}/caddy_data' && mv '${stage}' '${this.remoteDirectory}/caddy_data' && chmod 0700 '${this.remoteDirectory}/caddy_data'`);
+      await this.#ssh(publicIpv4, `rm -rf '${this.remoteDirectory}/caddy_data' && mv '${stage}' '${this.remoteDirectory}/caddy_data' && chown -R 0:0 '${this.remoteDirectory}/caddy_data' && chmod 0700 '${this.remoteDirectory}/caddy_data'`);
     } catch (error) {
       await this.#ssh(publicIpv4, `rm -rf '${stage}'`, { allowFailure: true });
       throw error;
