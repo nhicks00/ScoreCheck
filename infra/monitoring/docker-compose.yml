@@ -105,9 +105,10 @@ services:
     logging: *default-logging
     environment:
       MONITOR_PUBLIC_HOST: "${MONITOR_PUBLIC_HOST}"
+      MONITOR_ACME_EMAIL: "${MONITOR_ACME_EMAIL}"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
+      - ./caddy_data:/data
       - caddy-config:/config
     ports:
       - "80:80"
@@ -125,7 +126,6 @@ services:
 volumes:
   prometheus-data:
   alertmanager-data:
-  caddy-data:
   caddy-config:
 
 networks:

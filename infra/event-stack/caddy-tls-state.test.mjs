@@ -6,12 +6,12 @@ import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 
-import { CommentaryTlsStateStore, inspectCommentaryTlsState } from "./commentary-tls-state.mjs";
+import { CaddyTlsStateStore, inspectCaddyTlsState } from "./caddy-tls-state.mjs";
 
 const run = promisify(execFile);
 const hosts = ["rtc-rehearsal.beachvolleyballmedia.com", "turn-rehearsal.beachvolleyballmedia.com"];
 
-test("captures, verifies, restores, and integrity-binds protected commentary TLS state", async () => {
+test("captures, verifies, restores, and integrity-binds protected multi-host Caddy TLS state", async () => {
   const root = await mkdtemp(join(tmpdir(), "scorecheck-commentary-tls-"));
   await chmod(root, 0o700);
   const remote = join(root, "remote");
@@ -34,7 +34,7 @@ test("captures, verifies, restores, and integrity-binds protected commentary TLS
     return { code: 0, stdout: "", stderr: "" };
   };
   const stateDirectory = join(root, "retained", "state");
-  const store = new CommentaryTlsStateStore({
+  const store = new CaddyTlsStateStore({
     directory: stateDirectory,
     sshPrivateKey: join(root, "fixture.key"),
     knownHostsPath: join(root, "known_hosts"),
@@ -54,7 +54,38 @@ test("captures, verifies, restores, and integrity-binds protected commentary TLS
   assert.ok(commands.some(([command, args]) => command === "rsync" && String(args.at(-2)).endsWith("/data/")));
 
   await writeFile(join(stateDirectory, "data", "acme-account.json"), "tampered\n", { mode: 0o600 });
-  await assert.rejects(() => inspectCommentaryTlsState({ directory: stateDirectory, hosts }), /integrity verification/u);
+  await assert.rejects(() => inspectCaddyTlsState({ directory: stateDirectory, hosts }), /integrity verification/u);
+});
+
+test("supports a single observability hostname binding", async () => {
+  const root = await mkdtemp(join(tmpdir(), "scorecheck-observability-tls-"));
+  await chmod(root, 0o700);
+  const remote = join(root, "remote");
+  const host = "monitor-rehearsal.beachvolleyballmedia.com";
+  const certificateDirectory = join(remote, "caddy", "certificates", "test");
+  await mkdir(certificateDirectory, { recursive: true, mode: 0o700 });
+  await run("openssl", [
+    "req", "-x509", "-nodes", "-newkey", "rsa:2048", "-days", "3650",
+    "-subj", `/CN=${host}`,
+    "-addext", `subjectAltName=DNS:${host}`,
+    "-keyout", join(root, "fixture.key"),
+    "-out", join(certificateDirectory, "fixture.crt")
+  ]);
+  const runner = async (command, args) => {
+    if (command === "rsync" && String(args.at(-2)).startsWith("root@")) await cp(remote, args.at(-1), { recursive: true, force: true });
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const store = new CaddyTlsStateStore({
+    directory: join(root, "retained", "state"),
+    sshPrivateKey: join(root, "fixture.key"),
+    knownHostsPath: join(root, "known_hosts"),
+    runner,
+    remoteDirectory: "/opt/scorecheck-monitoring",
+    now: () => new Date("2026-08-01T12:00:00.000Z")
+  });
+  const captured = await store.capture({ publicIpv4: "192.0.2.12", hosts: [host] });
+  assert.equal(captured.status, "ready");
+  assert.deepEqual(captured.hosts, [host]);
 });
 
 test("fails closed on endpoint binding drift and incomplete retained state", async () => {
@@ -62,11 +93,11 @@ test("fails closed on endpoint binding drift and incomplete retained state", asy
   await chmod(root, 0o700);
   await mkdir(join(root, "data"), { mode: 0o700 });
   await assert.rejects(
-    () => inspectCommentaryTlsState({ directory: root, hosts }),
+    () => inspectCaddyTlsState({ directory: root, hosts }),
     /TLS_STATE_COMPLETE|no such file|ENOENT|marker/u
   );
   assert.throws(
-    () => new CommentaryTlsStateStore({ directory: "relative", sshPrivateKey: "/key", knownHostsPath: "/known", runner: async () => {} }),
+    () => new CaddyTlsStateStore({ directory: "relative", sshPrivateKey: "/key", knownHostsPath: "/known", runner: async () => {} }),
     /normalized absolute/u
   );
 });

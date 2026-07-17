@@ -1,10 +1,21 @@
 {$MONITOR_PUBLIC_HOST} {
-  encode zstd gzip
+	tls {
+		issuer acme {
+			dir https://acme.zerossl.com/v2/DV90
+			email {$MONITOR_ACME_EMAIL}
+		}
+		issuer acme {
+			dir https://acme-v02.api.letsencrypt.org/directory
+			email {$MONITOR_ACME_EMAIL}
+		}
+	}
 
-  @allowed path /healthz /v1/*
-  handle @allowed {
-    reverse_proxy monitor-service:9110
-  }
+	encode zstd gzip
 
-  respond 404
+	@allowed path /healthz /v1/*
+	handle @allowed {
+		reverse_proxy monitor-service:9110
+	}
+
+	respond 404
 }

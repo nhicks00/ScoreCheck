@@ -125,7 +125,7 @@ docker rm -f "$inhibition_container" >/dev/null
 retry_docker_operation docker build --pull --label "org.opencontainers.image.revision=$REVISION" \
   --tag "$candidate_image" "$CANDIDATE_DIR"
 
-install -d -m 0700 "$REMOTE_DIR/.generated"
+install -d -m 0700 "$REMOTE_DIR/.generated" "$REMOTE_DIR/caddy_data"
 install -m 0600 "$CANDIDATE_DIR/.env" "$REMOTE_DIR/.env"
 install -m 0400 -o 65534 -g 65534 "$CANDIDATE_DIR/.generated/prometheus.yml" "$REMOTE_DIR/.generated/prometheus.yml"
 install -m 0444 "$CANDIDATE_DIR/.generated/alertmanager.yml" "$REMOTE_DIR/.generated/alertmanager.yml"

@@ -160,7 +160,7 @@ async function currentPhases(lifecyclePath, rehearsalPath) {
 }
 
 function validateProfileBinding(eventProfile, rehearsalProfile) {
-  if (eventProfile.schemaVersion !== 4 || rehearsalProfile.schemaVersion !== 1) throw new Error("operator profile schemas are incompatible");
+  if (eventProfile.schemaVersion !== 5 || rehearsalProfile.schemaVersion !== 1) throw new Error("operator profile schemas are incompatible");
   if (eventProfile.manifest !== rehearsalProfile.manifest || eventProfile.state !== rehearsalProfile.lifecycleState || eventProfile.secrets !== rehearsalProfile.secrets || eventProfile.rehearsalEvidence !== rehearsalProfile.rehearsalEvidence) throw new Error("event and rehearsal profiles do not bind the same manifest, lifecycle state, secrets, and rehearsal evidence");
 }
 

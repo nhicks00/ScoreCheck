@@ -5,20 +5,20 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 const MARKER = "TLS_STATE_COMPLETE.json";
 const MINIMUM_REMAINING_VALIDITY_MS = 24 * 60 * 60 * 1_000;
 
-export class CommentaryTlsStateStore {
+export class CaddyTlsStateStore {
   constructor({ directory, sshPrivateKey, knownHostsPath, runner, now = () => new Date(), remoteDirectory = "/opt/livekit" }) {
-    this.directory = protectedAbsolute(directory, "commentary TLS state directory");
+    this.directory = protectedAbsolute(directory, "Caddy TLS state directory");
     this.sshPrivateKey = protectedAbsolute(sshPrivateKey, "SSH private key");
     this.knownHostsPath = protectedAbsolute(knownHostsPath, "known_hosts path");
-    if (typeof runner !== "function") throw new Error("commentary TLS state runner is required");
-    if (!/^\/[A-Za-z0-9._/-]+$/u.test(remoteDirectory) || remoteDirectory.includes("..")) throw new Error("commentary remote directory is invalid");
+    if (typeof runner !== "function") throw new Error("Caddy TLS state runner is required");
+    if (!/^\/[A-Za-z0-9._/-]+$/u.test(remoteDirectory) || remoteDirectory.includes("..")) throw new Error("Caddy remote directory is invalid");
     this.runner = runner;
     this.now = now;
     this.remoteDirectory = remoteDirectory;
   }
 
   async inspect(hosts, { allowMissing = false } = {}) {
-    return inspectCommentaryTlsState({ directory: this.directory, hosts, now: this.now(), allowMissing });
+    return inspectCaddyTlsState({ directory: this.directory, hosts, now: this.now(), allowMissing });
   }
 
   async restore({ publicIpv4, hosts }) {
@@ -91,27 +91,27 @@ export class CommentaryTlsStateStore {
   }
 }
 
-export async function inspectCommentaryTlsState({ directory, hosts, now = new Date(), allowMissing = false }) {
-  const root = protectedAbsolute(directory, "commentary TLS state directory");
+export async function inspectCaddyTlsState({ directory, hosts, now = new Date(), allowMissing = false }) {
+  const root = protectedAbsolute(directory, "Caddy TLS state directory");
   let information;
   try { information = await stat(root); }
   catch (error) {
     if (allowMissing && error?.code === "ENOENT") return { status: "missing", hosts: normalizedHosts(hosts) };
     throw error;
   }
-  if (!information.isDirectory() || (information.mode & 0o077) !== 0) throw new Error("commentary TLS state directory must be mode 0700 or stricter");
+  if (!information.isDirectory() || (information.mode & 0o077) !== 0) throw new Error("Caddy TLS state directory must be mode 0700 or stricter");
   const markerPath = join(root, MARKER);
   const markerInfo = await stat(markerPath);
-  if (!markerInfo.isFile() || (markerInfo.mode & 0o077) !== 0) throw new Error("commentary TLS state marker must be mode 0600 or stricter");
+  if (!markerInfo.isFile() || (markerInfo.mode & 0o077) !== 0) throw new Error("Caddy TLS state marker must be mode 0600 or stricter");
   let marker;
   try { marker = JSON.parse(await readFile(markerPath, "utf8")); }
-  catch { throw new Error("commentary TLS state marker is invalid JSON"); }
+  catch { throw new Error("Caddy TLS state marker is invalid JSON"); }
   if (marker.schemaVersion !== 1 || JSON.stringify(marker.hosts) !== JSON.stringify(normalizedHosts(hosts))) {
-    throw new Error("commentary TLS state endpoint binding is invalid");
+    throw new Error("Caddy TLS state endpoint binding is invalid");
   }
   const observed = await inspectData({ data: join(root, "data"), hosts, now });
-  if (stableJson(marker.files) !== stableJson(observed.files)) throw new Error("commentary TLS state file integrity verification failed");
-  if (stableJson(marker.certificates) !== stableJson(observed.certificates)) throw new Error("commentary TLS state certificate evidence changed");
+  if (stableJson(marker.files) !== stableJson(observed.files)) throw new Error("Caddy TLS state file integrity verification failed");
+  if (stableJson(marker.certificates) !== stableJson(observed.certificates)) throw new Error("Caddy TLS state certificate evidence changed");
   return {
     status: "ready",
     hosts: marker.hosts,
@@ -125,7 +125,7 @@ export async function inspectCommentaryTlsState({ directory, hosts, now = new Da
 async function inspectData({ data, hosts, now }) {
   const values = normalizedHosts(hosts);
   const files = await collectFiles(data);
-  if (files.length === 0) throw new Error("commentary TLS state contains no files");
+  if (files.length === 0) throw new Error("Caddy TLS state contains no files");
   const digests = {};
   const certificates = [];
   for (const path of files) {
@@ -144,7 +144,7 @@ async function inspectData({ data, hosts, now }) {
     const matches = certificates
       .filter((certificate) => certificate.checkHost(host) === host && Date.parse(certificate.validFrom) <= now.getTime() + 300_000 && Date.parse(certificate.validTo) >= minimum)
       .sort((left, right) => Date.parse(right.validTo) - Date.parse(left.validTo));
-    if (matches.length === 0) throw new Error(`commentary TLS state has no certificate with at least 24 hours remaining for ${host}`);
+    if (matches.length === 0) throw new Error(`Caddy TLS state has no certificate with at least 24 hours remaining for ${host}`);
     binding[host] = { validTo: new Date(matches[0].validTo).toISOString(), fingerprint256: matches[0].fingerprint256 };
   }
   return { files: Object.fromEntries(Object.entries(digests).sort(([left], [right]) => left.localeCompare(right))), certificates: binding };
@@ -152,27 +152,27 @@ async function inspectData({ data, hosts, now }) {
 
 async function collectFiles(root) {
   const information = await lstat(root);
-  if (!information.isDirectory() || information.isSymbolicLink()) throw new Error("commentary TLS data root is invalid");
+  if (!information.isDirectory() || information.isSymbolicLink()) throw new Error("Caddy TLS data root is invalid");
   const output = [];
   for (const name of (await readdir(root)).sort()) {
     const path = join(root, name);
     const child = await lstat(path);
-    if (child.isSymbolicLink()) throw new Error("commentary TLS state cannot contain symbolic links");
+    if (child.isSymbolicLink()) throw new Error("Caddy TLS state cannot contain symbolic links");
     if (child.isDirectory()) output.push(...await collectFiles(path));
     else if (child.isFile()) output.push(path);
-    else throw new Error("commentary TLS state contains an unsupported filesystem entry");
+    else throw new Error("Caddy TLS state contains an unsupported filesystem entry");
   }
   return output;
 }
 
 async function hardenTree(root) {
   const information = await lstat(root);
-  if (information.isSymbolicLink()) throw new Error("commentary TLS state cannot contain symbolic links");
+  if (information.isSymbolicLink()) throw new Error("Caddy TLS state cannot contain symbolic links");
   if (information.isDirectory()) {
     await chmod(root, 0o700);
     for (const name of await readdir(root)) await hardenTree(join(root, name));
   } else if (information.isFile()) await chmod(root, 0o600);
-  else throw new Error("commentary TLS state contains an unsupported filesystem entry");
+  else throw new Error("Caddy TLS state contains an unsupported filesystem entry");
 }
 
 async function replaceDirectory(target, temporary) {
@@ -198,12 +198,12 @@ async function ensureProtectedDirectory(path) {
   await mkdir(path, { recursive: true, mode: 0o700 });
   await chmod(path, 0o700);
   const information = await stat(path);
-  if (!information.isDirectory() || (information.mode & 0o077) !== 0) throw new Error("commentary TLS state parent must be protected");
+  if (!information.isDirectory() || (information.mode & 0o077) !== 0) throw new Error("Caddy TLS state parent must be protected");
 }
 
 function normalizedHosts(hosts) {
-  if (!Array.isArray(hosts) || hosts.length !== 2 || new Set(hosts).size !== 2 || hosts.some((host) => typeof host !== "string" || !/^[a-z0-9.-]+$/u.test(host))) {
-    throw new Error("commentary TLS state requires exactly two DNS hosts");
+  if (!Array.isArray(hosts) || hosts.length < 1 || hosts.length > 4 || new Set(hosts).size !== hosts.length || hosts.some((host) => typeof host !== "string" || !/^[a-z0-9.-]+$/u.test(host))) {
+    throw new Error("Caddy TLS state requires one to four unique DNS hosts");
   }
   return [...hosts].sort();
 }
@@ -214,7 +214,7 @@ function protectedAbsolute(value, label) {
 }
 
 function assertIpv4(value) {
-  if (typeof value !== "string" || value.split(".").length !== 4 || value.split(".").some((part) => !/^\d{1,3}$/u.test(part) || Number(part) > 255)) throw new Error("commentary TLS state target must be an IPv4 address");
+  if (typeof value !== "string" || value.split(".").length !== 4 || value.split(".").some((part) => !/^\d{1,3}$/u.test(part) || Number(part) > 255)) throw new Error("Caddy TLS state target must be an IPv4 address");
 }
 
 function shellQuote(value) { return `'${String(value).replaceAll("'", `'\\''`)}'`; }

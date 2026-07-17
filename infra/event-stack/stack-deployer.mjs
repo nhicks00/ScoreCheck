@@ -5,7 +5,7 @@ import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
-import { CommentaryTlsStateStore } from "./commentary-tls-state.mjs";
+import { CaddyTlsStateStore } from "./caddy-tls-state.mjs";
 import { collectReconstructionProvenance, sha256 as provenanceSha256 } from "./reconstruction-provenance.mjs";
 
 const REQUIRED_DEPLOYMENT_SECRET_FILES = Object.freeze([
@@ -18,7 +18,19 @@ const REQUIRED_DEPLOYMENT_SECRET_FILES = Object.freeze([
 ]);
 
 export class LocalStackDeployer {
-  constructor({ repoRoot, secretsDirectory, sshPrivateKey, knownHostsPath, commentaryTlsStateDirectory = null, acmeEmail = null, runner = runCommand, fetchImpl = globalThis.fetch, commentaryTlsStateStore = null }) {
+  constructor({
+    repoRoot,
+    secretsDirectory,
+    sshPrivateKey,
+    knownHostsPath,
+    commentaryTlsStateDirectory = null,
+    observabilityTlsStateDirectory = null,
+    acmeEmail = null,
+    runner = runCommand,
+    fetchImpl = globalThis.fetch,
+    commentaryTlsStateStore = null,
+    observabilityTlsStateStore = null
+  }) {
     this.repoRoot = resolve(repoRoot);
     this.secretsDirectory = protectedAbsolute(secretsDirectory, "secrets directory");
     this.sshPrivateKey = protectedAbsolute(sshPrivateKey, "SSH private key");
@@ -27,11 +39,18 @@ export class LocalStackDeployer {
     this.fetchImpl = fetchImpl;
     this.agentConfig = null;
     this.acmeEmail = acmeEmail;
-    this.commentaryTlsState = commentaryTlsStateStore ?? (commentaryTlsStateDirectory ? new CommentaryTlsStateStore({
+    this.commentaryTlsState = commentaryTlsStateStore ?? (commentaryTlsStateDirectory ? new CaddyTlsStateStore({
       directory: commentaryTlsStateDirectory,
       sshPrivateKey: this.sshPrivateKey,
       knownHostsPath: this.knownHostsPath,
       runner
+    }) : null);
+    this.observabilityTlsState = observabilityTlsStateStore ?? (observabilityTlsStateDirectory ? new CaddyTlsStateStore({
+      directory: observabilityTlsStateDirectory,
+      sshPrivateKey: this.sshPrivateKey,
+      knownHostsPath: this.knownHostsPath,
+      runner,
+      remoteDirectory: "/opt/scorecheck-monitoring"
     }) : null);
   }
 
@@ -39,6 +58,7 @@ export class LocalStackDeployer {
     await this.#validateProtectedInputs();
     const hostKeySha256 = await this.#ensureSsh(resource.publicIpv4);
     let commentaryTlsEvidence = null;
+    let observabilityTlsEvidence = null;
     const common = {
       SCORECHECK_SSH_KNOWN_HOSTS: this.knownHostsPath
     };
@@ -105,14 +125,33 @@ export class LocalStackDeployer {
     } else if (spec.role === "observability") {
       const env = await loadProtectedEnv(join(this.secretsDirectory, "observability.env"));
       const plans = await this.#agentPlans(manifest, state);
+      const host = endpointForRole(manifest, "observability");
+      if (!this.observabilityTlsState) throw new Error("observability TLS state store is required");
+      if (typeof this.acmeEmail !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(this.acmeEmail)) throw new Error("SCORECHECK_ACME_EMAIL is required for observability certificate automation");
+      const restoredTlsState = await this.observabilityTlsState.restore({
+        publicIpv4: resource.publicIpv4,
+        hosts: [host]
+      });
       await this.#script("infra/monitoring/deploy.sh", {
         ...env,
         ...common,
         MONITOR_SSH_HOST: `root@${resource.publicIpv4}`,
         MONITOR_SSH_KEY: this.sshPrivateKey,
-        MONITOR_PUBLIC_HOST: endpointForRole(manifest, "observability"),
+        MONITOR_PUBLIC_HOST: host,
+        MONITOR_ACME_EMAIL: this.acmeEmail,
         MONITOR_AGENT_TARGETS: serializeAgentTargets(plans)
       });
+      const capturedTlsState = await this.observabilityTlsState.capture({
+        publicIpv4: resource.publicIpv4,
+        hosts: [host]
+      });
+      observabilityTlsEvidence = {
+        restored: restoredTlsState.status,
+        captured: capturedTlsState.status,
+        stateSha256: capturedTlsState.stateSha256,
+        fileCount: capturedTlsState.fileCount,
+        certificates: capturedTlsState.certificates
+      };
     } else {
       throw new Error(`unsupported deployment role ${spec.role}`);
     }
@@ -127,34 +166,70 @@ export class LocalStackDeployer {
     return { healthy: true, revision, evidence: {
       hostKeySha256,
       reconstruction,
-      ...(commentaryTlsEvidence ? { commentaryTlsState: commentaryTlsEvidence } : {})
+      ...(commentaryTlsEvidence ? { commentaryTlsState: commentaryTlsEvidence } : {}),
+      ...(observabilityTlsEvidence ? { observabilityTlsState: observabilityTlsEvidence } : {})
     } };
   }
 
   async prepareForTeardown({ manifest, state }) {
-    const spec = manifest.droplets.find((entry) => entry.role === "commentary");
-    if (!spec) throw new Error("event manifest has no commentary service");
-    if (!this.commentaryTlsState) throw new Error("commentary TLS state store is required before teardown");
+    const commentarySpec = manifest.droplets.find((entry) => entry.role === "commentary");
+    const observabilitySpec = manifest.droplets.find((entry) => entry.role === "observability");
+    if (!commentarySpec || !observabilitySpec) throw new Error("event manifest is missing a TLS service");
+    if (!this.commentaryTlsState || !this.observabilityTlsState) throw new Error("both Caddy TLS state stores are required before teardown");
+    const commentaryHosts = commentaryEndpointHosts(manifest);
+    const commentaryStartCommand = "cd /opt/livekit && docker compose -f docker-compose.yaml start caddy";
+    let commentary = null;
+    try {
+      commentary = await this.#preserveCaddyState({
+        state,
+        spec: commentarySpec,
+        store: this.commentaryTlsState,
+        hosts: [commentaryHosts.rtc, commentaryHosts.turn],
+        stopCommand: "cd /opt/livekit && test -f docker-compose.yaml && docker compose -f docker-compose.yaml stop caddy",
+        startCommand: commentaryStartCommand
+      });
+      const observability = await this.#preserveCaddyState({
+        state,
+        spec: observabilitySpec,
+        store: this.observabilityTlsState,
+        hosts: [endpointForRole(manifest, "observability")],
+        stopCommand: "cd /opt/scorecheck-monitoring && test -f docker-compose.yml && docker compose stop caddy",
+        startCommand: "cd /opt/scorecheck-monitoring && docker compose start caddy"
+      });
+      return { healthy: true, evidence: { commentaryTlsState: commentary, observabilityTlsState: observability } };
+    } catch (error) {
+      if (commentary?.caddyStopped) {
+        const resource = state.droplets[commentarySpec.name];
+        const restarted = await this.#ssh(resource.publicIpv4, commentaryStartCommand, { allowFailure: true });
+        if (restarted.code !== 0) {
+          const reason = error instanceof Error ? error.message : String(error);
+          throw new Error(`TLS teardown preparation failed (${reason}) and commentary Caddy could not be restarted`);
+        }
+      }
+      throw error;
+    }
+  }
+
+  async #preserveCaddyState({ state, spec, store, hosts, stopCommand, startCommand }) {
     const resource = state.droplets[spec.name];
-    const hosts = commentaryEndpointHosts(manifest);
-    const existing = await this.commentaryTlsState.inspect([hosts.rtc, hosts.turn], { allowMissing: true });
+    const existing = await store.inspect(hosts, { allowMissing: true });
     if (!resource?.publicIpv4 || resource.status === "destroyed") {
-      if (state.deployments[spec.name]?.status === "healthy" && existing.status !== "ready") throw new Error("healthy commentary service has no retained TLS state before teardown");
-      return { healthy: true, evidence: existing };
+      if (state.deployments[spec.name]?.status === "healthy" && existing.status !== "ready") throw new Error(`healthy ${spec.role} service has no retained TLS state before teardown`);
+      return existing;
     }
     await assertProtectedFile(this.sshPrivateKey, "SSH private key");
     await this.#ensureSsh(resource.publicIpv4);
-    const stop = await this.#ssh(resource.publicIpv4, "cd /opt/livekit && test -f docker-compose.yaml && docker compose -f docker-compose.yaml stop caddy", { allowFailure: true });
+    const stop = await this.#ssh(resource.publicIpv4, stopCommand, { allowFailure: true });
     try {
-      const captured = await this.commentaryTlsState.capture({ publicIpv4: resource.publicIpv4, hosts: [hosts.rtc, hosts.turn] });
-      return { healthy: true, evidence: { ...captured, caddyStopped: stop.code === 0 } };
+      const captured = await store.capture({ publicIpv4: resource.publicIpv4, hosts });
+      return { ...captured, caddyStopped: stop.code === 0 };
     } catch (error) {
       if (existing.status === "ready") {
-        return { healthy: true, evidence: { ...existing, status: "existing-retained", remoteCapture: "unavailable", caddyStopped: stop.code === 0 } };
+        return { ...existing, status: "existing-retained", remoteCapture: "unavailable", caddyStopped: stop.code === 0 };
       }
-      if (stop.code === 0) await this.#ssh(resource.publicIpv4, "cd /opt/livekit && docker compose -f docker-compose.yaml start caddy", { allowFailure: true });
-      if (state.deployments[spec.name]?.status === "healthy") throw new Error(`healthy commentary TLS state could not be retained: ${error instanceof Error ? error.message : String(error)}`);
-      return { healthy: true, evidence: { status: "not-yet-issued", caddyStopped: false } };
+      if (stop.code === 0) await this.#ssh(resource.publicIpv4, startCommand, { allowFailure: true });
+      if (state.deployments[spec.name]?.status === "healthy") throw new Error(`healthy ${spec.role} TLS state could not be retained: ${error instanceof Error ? error.message : String(error)}`);
+      return { status: "not-yet-issued", caddyStopped: false };
     }
   }
 

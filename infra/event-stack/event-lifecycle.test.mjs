@@ -588,8 +588,8 @@ test("creates a 12-Droplet rehearsal beside seven legacy servers without adoptin
     [...cloud.droplets.values()].filter((entry) => entry.tags.includes("legacy-production")),
     legacyBefore
   );
-  assert.ok(setup.manifest.endpoints.filter((entry) => entry.role !== "commentary").every((entry) => entry.hostname.includes(setup.manifest.namespace)));
-  assert.ok(setup.manifest.endpoints.filter((entry) => entry.role === "commentary").every((entry) => entry.hostname.includes("-rehearsal.")));
+  assert.ok(setup.manifest.endpoints.filter((entry) => entry.role === "ingest").every((entry) => entry.hostname.includes(setup.manifest.namespace)));
+  assert.ok(setup.manifest.endpoints.filter((entry) => ["commentary", "observability"].includes(entry.role)).every((entry) => entry.hostname.includes("-rehearsal.")));
   assert.match(setup.notifier.messages[0].title, /TEST rehearsal/);
 });
 

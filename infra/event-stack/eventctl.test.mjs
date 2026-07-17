@@ -4,7 +4,7 @@ import test from "node:test";
 import { buildEventctlInvocation, validateProfile } from "./eventctl.mjs";
 
 const profile = {
-  schemaVersion: 4,
+  schemaVersion: 5,
   manifest: "/protected/event/manifest.json",
   state: "/protected/event/state.json",
   anchors: "/protected/endpoint-anchors.json",
@@ -12,6 +12,7 @@ const profile = {
   sshKey: "/protected/scorecheck_do",
   knownHosts: "/protected/event/known_hosts",
   commentaryTlsState: "/protected/retained-commentary-tls/state",
+  observabilityTlsState: "/protected/retained-observability-tls/state",
   credentialsEnv: "/protected/provider.env",
   lifecycleAttestation: "/protected/lifecycle-attestation.json",
   evidence: "/protected/event/evidence",
@@ -24,6 +25,7 @@ test("expands one operator profile into exact non-shell lifecycle arguments", ()
     "--anchors", profile.anchors, "--secrets", profile.secrets,
     "--ssh-key", profile.sshKey, "--known-hosts", profile.knownHosts,
     "--commentary-tls-state", profile.commentaryTlsState,
+    "--observability-tls-state", profile.observabilityTlsState,
     "--credentials-env", profile.credentialsEnv,
     "--attestation", profile.lifecycleAttestation
   ]);
@@ -31,6 +33,7 @@ test("expands one operator profile into exact non-shell lifecycle arguments", ()
     "destroy", "--manifest", profile.manifest, "--state", profile.state,
     "--secrets", profile.secrets, "--ssh-key", profile.sshKey,
     "--known-hosts", profile.knownHosts, "--commentary-tls-state", profile.commentaryTlsState,
+    "--observability-tls-state", profile.observabilityTlsState,
     "--credentials-env", profile.credentialsEnv, "--evidence", profile.evidence,
     "--confirm", "DESTROY:event"
   ]);
@@ -38,6 +41,7 @@ test("expands one operator profile into exact non-shell lifecycle arguments", ()
     "abort", "--manifest", profile.manifest, "--state", profile.state,
     "--secrets", profile.secrets, "--ssh-key", profile.sshKey,
     "--known-hosts", profile.knownHosts, "--commentary-tls-state", profile.commentaryTlsState,
+    "--observability-tls-state", profile.observabilityTlsState,
     "--credentials-env", profile.credentialsEnv, "--evidence", profile.evidence,
     "--confirm", "ABORT:event"
   ]);

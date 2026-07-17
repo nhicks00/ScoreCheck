@@ -101,12 +101,14 @@ to an unrelated new Droplet. The monitoring record is restored to its exact
 pre-event record.
 
 A rehearsal never uses those production names or permanent anchors. It gets a
-deterministic event namespace, unique Droplet provider names, and four
-event-scoped DNS names that point directly to the rehearsal Droplets. Teardown
-removes every rehearsal DNS record and proves it is absent. It allocates no
-Reserved IPv4, so an interrupted test cannot leak an unnamed address. A
-pre-existing rehearsal hostname is treated as an ownership collision rather
-than adopted.
+deterministic event namespace and unique Droplet provider names. The ingest
+endpoint is namespace-unique; commentary and observability use the stable
+`rtc-rehearsal`, `turn-rehearsal`, and `monitor-rehearsal` names so their Caddy
+certificate state can be reused safely across disposable stacks. All four names
+still point directly to rehearsal Droplets and are removed and proved absent at
+teardown. Rehearsal allocates no Reserved IPv4, so an interrupted test cannot
+leak an unnamed address. Any pre-existing rehearsal hostname is treated as an
+ownership collision rather than adopted.
 
 ## Address and identity complications
 
@@ -297,7 +299,7 @@ operator profile:
 
 ```json
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "manifest": "/absolute/protected/event/manifest.json",
   "state": "/absolute/protected/event/state.json",
   "anchors": "/absolute/protected/endpoint-anchors.json",
@@ -305,6 +307,7 @@ operator profile:
   "sshKey": "/absolute/protected/scorecheck_do",
   "knownHosts": "/absolute/protected/event/known_hosts",
   "commentaryTlsState": "/absolute/protected/retained-commentary-tls/HOSTSET_ID",
+  "observabilityTlsState": "/absolute/protected/retained-observability-tls/HOSTSET_ID",
   "credentialsEnv": "/absolute/protected/provider.env",
   "lifecycleAttestation": "/absolute/protected/lifecycle-attestation.json",
   "evidence": "/absolute/protected/event/final-evidence",
@@ -313,11 +316,14 @@ operator profile:
 ```
 
 The protected provider environment also contains `SCORECHECK_ACME_EMAIL`.
-`commentaryTlsState` is deliberately outside the disposable event bundle. It
-contains the complete Caddy data directory, a mode-`0600` integrity manifest,
-certificate fingerprints, expiry evidence, and the exact two-host binding.
-The lifecycle refuses a healthy teardown unless this state verifies with at
-least 24 hours of certificate validity remaining.
+Both TLS state paths are deliberately outside the disposable event bundle. Each
+contains the complete role-specific Caddy data directory, a mode-`0600`
+integrity manifest, certificate fingerprints, expiry evidence, and the exact
+hostname binding. Commentary retains the two commentary hosts; observability
+retains the monitor host. The lifecycle refuses a healthy teardown unless both
+states verify with at least 24 hours of certificate validity remaining. Caddy
+requests ZeroSSL first and uses Let's Encrypt as the fallback issuer, preventing
+one CA's per-domain issuance limit from blocking a rebuild.
 
 Then event-day commands are short and consistent:
 
@@ -401,9 +407,10 @@ configuration, or an unbound manifest. It embeds the normalized effective
 network contract in the immutable manifest, writes the exact next command, and
 does not execute it.
 
-This is a hard cutover to event manifest schema v5. Any earlier schema-v4 event
-bundle must be regenerated from the protected recovery source and rendered
-network contract; lifecycle commands reject it before provider access.
+This is a hard cutover to event manifest schema v6 and operator profile schema
+v5. Any earlier bundle must be regenerated from the protected recovery source
+and rendered network contract; lifecycle commands reject it before provider
+access.
 
 ## Event build
 
@@ -439,6 +446,7 @@ node infra/event-stack/event-stack.mjs up \
   --ssh-key /absolute/protected/scorecheck_do \
   --known-hosts /absolute/protected/next-event-slug/known_hosts \
   --commentary-tls-state /absolute/protected/retained-commentary-tls/HOSTSET_ID \
+  --observability-tls-state /absolute/protected/retained-observability-tls/HOSTSET_ID \
   --credentials-env /absolute/protected/provider.env \
   --attestation /absolute/protected/lifecycle-attestation.json
 ```
@@ -475,6 +483,7 @@ node infra/event-stack/event-stack.mjs start \
   --ssh-key /absolute/protected/scorecheck_do \
   --known-hosts /absolute/protected/next-event-slug/known_hosts \
   --commentary-tls-state /absolute/protected/retained-commentary-tls/HOSTSET_ID \
+  --observability-tls-state /absolute/protected/retained-observability-tls/HOSTSET_ID \
   --credentials-env /absolute/protected/provider.env \
   --confirm START:next-event-slug
 ```
@@ -494,6 +503,7 @@ node infra/event-stack/event-stack.mjs evidence \
   --ssh-key /absolute/protected/scorecheck_do \
   --known-hosts /absolute/protected/next-event-slug/known_hosts \
   --commentary-tls-state /absolute/protected/retained-commentary-tls/HOSTSET_ID \
+  --observability-tls-state /absolute/protected/retained-observability-tls/HOSTSET_ID \
   --credentials-env /absolute/protected/provider.env \
   --evidence /absolute/protected/next-event-slug/final-evidence
 
@@ -504,6 +514,7 @@ node infra/event-stack/event-stack.mjs destroy \
   --ssh-key /absolute/protected/scorecheck_do \
   --known-hosts /absolute/protected/next-event-slug/known_hosts \
   --commentary-tls-state /absolute/protected/retained-commentary-tls/HOSTSET_ID \
+  --observability-tls-state /absolute/protected/retained-observability-tls/HOSTSET_ID \
   --credentials-env /absolute/protected/provider.env \
   --evidence /absolute/protected/next-event-slug/final-evidence \
   --confirm DESTROY:next-event-slug
@@ -511,11 +522,12 @@ node infra/event-stack/event-stack.mjs destroy \
 
 Destroy is blocked while coverage is live, before the manifest review date,
 without protected evidence, or when provider inventory differs from state. It
-stops Caddy and atomically refreshes the protected retained TLS state before
-deleting any Droplet. If a healthy commentary deployment cannot preserve a
-valid state, teardown fails closed and restarts Caddy; no compute is deleted.
-The retained directory is local lifecycle authority, not a provider resource,
-so it does not create DigitalOcean idle cost. Destroy then
+stops both Caddy services and atomically refreshes the protected commentary and
+observability TLS states before deleting any Droplet. If either healthy service
+cannot preserve valid state, teardown fails closed and restarts that Caddy
+service; no compute is deleted. The retained directories are local lifecycle
+authority, not provider resources, so they create no DigitalOcean idle cost.
+Destroy then
 deletes 12 verified Droplet IDs one by one; it never issues a tag-wide bulk
 delete. It is resumable after a lost delete response or local interruption. It
 then proves production anchors are unassigned, restores dynamic DNS, and sends
@@ -546,7 +558,7 @@ a timer is not authorized to decide that coverage is over.
 ## Dry run and live canary
 
 The provider-free rehearsal exercises the exact isolated 12-server workflow,
-dynamic event-scoped endpoints, live teardown rejection, partial and ambiguous
+dynamic rehearsal endpoints, retained TLS restoration, live teardown rejection, partial and ambiguous
 create resumption, DNS failure recovery, failed-build abort, protected
 evidence, exact teardown, and event DNS removal:
 
@@ -675,5 +687,6 @@ headroom during coverage.
 
 The full 12-server test costs approximately `$1.3125` for each running hour at
 the captured rate. Rehearsal endpoints use the ordinary public IPv4 addresses
-included with their Droplets and add no Reserved-IP charge. Event-scoped DNS is
-deleted during teardown.
+included with their Droplets and add no Reserved-IP charge. The unique ingest
+name and stable rehearsal commentary/monitor names are all deleted during
+teardown; only their protected local TLS state remains.

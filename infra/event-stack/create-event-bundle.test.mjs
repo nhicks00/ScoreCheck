@@ -71,10 +71,12 @@ test("creates a complete protected rehearsal bundle and exact one-command invoca
     .some((rule) => rule.protocol === "tcp" && rule.ports === "22" && rule.sources.addresses?.includes("1.1.1.1/32"))));
   assert.ok(manifest.endpoints.every((entry) => entry.addressMode === "dynamic-ipv4"));
   assert.deepEqual(binding.reservedIpv4, {});
-  assert.equal(eventProfile.schemaVersion, 4);
+  assert.equal(eventProfile.schemaVersion, 5);
   assert.match(eventProfile.commentaryTlsState, /retained-commentary-tls\/[a-f0-9]{16}$/u);
+  assert.match(eventProfile.observabilityTlsState, /retained-observability-tls\/[a-f0-9]{16}$/u);
   assert.equal(manifest.endpoints.find((entry) => entry.hostname.startsWith("rtc-")).hostname, "rtc-rehearsal.beachvolleyballmedia.com");
   assert.equal(manifest.endpoints.find((entry) => entry.hostname.startsWith("turn-")).hostname, "turn-rehearsal.beachvolleyballmedia.com");
+  assert.equal(manifest.endpoints.find((entry) => entry.role === "observability").hostname, "monitor-rehearsal.beachvolleyballmedia.com");
   assert.equal(eventProfile.rehearsalEvidence, rehearsalProfile.rehearsalEvidence);
   assert.equal(result.nextCommand.args.at(-1), `FULL-DRY-RUN:${manifest.event}`);
   assert.equal((await stat(options.root)).mode & 0o077, 0);

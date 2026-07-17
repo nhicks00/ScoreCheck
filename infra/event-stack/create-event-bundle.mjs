@@ -102,14 +102,15 @@ export async function createEventBundle(options, { verifyGitIdentity = assertReh
       });
     }
     const eventProfile = {
-      schemaVersion: 4,
+      schemaVersion: 5,
       manifest: final.manifest,
       state: final.lifecycleState,
       anchors,
       secrets: final.secrets,
       sshKey: options.sshKey,
       knownHosts: final.knownHosts,
-      commentaryTlsState: commentaryTlsStatePath(parent, manifest),
+      commentaryTlsState: tlsStatePath(parent, manifest, "commentary", "retained-commentary-tls"),
+      observabilityTlsState: tlsStatePath(parent, manifest, "observability", "retained-observability-tls"),
       credentialsEnv: options.credentialsEnv,
       lifecycleAttestation: options.lifecycleAttestation,
       evidence: final.finalEvidence,
@@ -315,10 +316,11 @@ function normalizedAbsolute(value, label) {
 
 function sha256(value) { return createHash("sha256").update(value).digest("hex"); }
 
-function commentaryTlsStatePath(parent, manifest) {
-  const hosts = manifest.endpoints.filter((entry) => entry.role === "commentary").map((entry) => entry.hostname).sort();
-  if (hosts.length !== 2) throw new Error("event manifest must contain exactly two commentary TLS endpoints");
-  return join(parent, "retained-commentary-tls", sha256(Buffer.from(hosts.join("\n"), "utf8")).slice(0, 16));
+function tlsStatePath(parent, manifest, role, directoryName) {
+  const hosts = manifest.endpoints.filter((entry) => entry.role === role).map((entry) => entry.hostname).sort();
+  const expected = role === "commentary" ? 2 : 1;
+  if (hosts.length !== expected) throw new Error(`event manifest must contain exactly ${expected} ${role} TLS endpoint${expected === 1 ? "" : "s"}`);
+  return join(parent, directoryName, sha256(Buffer.from(hosts.join("\n"), "utf8")).slice(0, 16));
 }
 
 function normalizeGitHubRemote(value) {

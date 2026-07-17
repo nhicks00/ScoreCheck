@@ -32,6 +32,8 @@ if ! flock -n 9; then
   echo "Another observability deployment is already running." >&2
   exit 1
 fi
+[[ -d "$REMOTE_DIR/caddy_data" ]] || { echo "Observability Caddy TLS state is not on the retained bind-mount contract." >&2; exit 1; }
+chmod 0700 "$REMOTE_DIR/caddy_data"
 
 if docker compose version >/dev/null 2>&1; then
   compose() { docker compose "$@"; }

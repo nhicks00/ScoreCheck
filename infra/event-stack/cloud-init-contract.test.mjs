@@ -59,6 +59,17 @@ test("host firewalls mirror public role exposure and keep agent telemetry privat
   assert.doesNotMatch(observability, new RegExp(`ufw allow from ${escapeRegexp(vpcCidr)} to any port 9108 proto tcp`));
   const observabilityCompose = await readFile(resolve(root, "infra/monitoring/docker-compose.yml"), "utf8");
   assert.match(observabilityCompose, /subnet: 172\.30\.255\.0\/28/);
+  assert.match(observabilityCompose, /MONITOR_ACME_EMAIL: "\$\{MONITOR_ACME_EMAIL\}"/);
+  assert.match(observabilityCompose, /\.\/caddy_data:\/data/);
+  assert.doesNotMatch(observabilityCompose, /^\s+caddy-data:$/m);
+
+  const observabilityCaddy = await readFile(resolve(root, "infra/monitoring/Caddyfile"), "utf8");
+  assert.match(observabilityCaddy, /dir https:\/\/acme\.zerossl\.com\/v2\/DV90/);
+  assert.match(observabilityCaddy, /dir https:\/\/acme-v02\.api\.letsencrypt\.org\/directory/);
+  assert.equal((observabilityCaddy.match(/email \{\$MONITOR_ACME_EMAIL\}/g) ?? []).length, 2);
+
+  const observabilityProvision = await readFile(resolve(root, "infra/monitoring/remote-provision.sh"), "utf8");
+  assert.match(observabilityProvision, /install -d -m 0700 "\$REMOTE_DIR\/\.generated" "\$REMOTE_DIR\/caddy_data"/);
 
   for (const source of [commentary, compositor, ingest, observability]) {
     assert.match(source, /ufw default deny incoming/);

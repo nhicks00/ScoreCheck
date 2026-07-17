@@ -26,7 +26,7 @@ function manifest() {
 
 test("generates isolated provider services, endpoints, eight assigned workers, and warm spare", () => {
   const value = manifest();
-  assert.equal(value.schemaVersion, 5);
+  assert.equal(value.schemaVersion, 6);
   assert.equal(value.kind, "rehearsal");
   assert.equal(value.droplets.length, 12);
   assert.deepEqual(value.droplets.slice(0, 3).map((entry) => entry.name), [
@@ -61,8 +61,8 @@ test("generates isolated provider services, endpoints, eight assigned workers, a
   assert.equal(value.endpoints.filter((entry) => entry.addressMode === "reserved-ipv4").length, 0);
   assert.equal(value.endpoints.filter((entry) => entry.addressMode === "dynamic-ipv4").length, 4);
   assert.ok(value.endpoints.every((entry) => entry.addressSlot === undefined));
-  assert.ok(value.endpoints.filter((entry) => entry.role !== "commentary").every((entry) => entry.hostname.includes(value.namespace)));
-  assert.ok(value.endpoints.filter((entry) => entry.role === "commentary").every((entry) => entry.hostname.includes("-rehearsal.")));
+  assert.ok(value.endpoints.filter((entry) => !["commentary", "observability"].includes(entry.role)).every((entry) => entry.hostname.includes(value.namespace)));
+  assert.ok(value.endpoints.filter((entry) => ["commentary", "observability"].includes(entry.role)).every((entry) => entry.hostname.includes("-rehearsal.")));
   assert.match(value.sourceBindings.compositorPoolSpecSha256, /^[a-f0-9]{64}$/);
   assert.match(value.sourceBindings.serviceSpecSha256, /^[a-f0-9]{64}$/);
   assert.match(value.sourceBindings.networkSpecSha256, /^[a-f0-9]{64}$/);
@@ -108,10 +108,10 @@ test("rejects invalid event and calendar values", () => {
   );
 });
 
-test("hard-cuts schema-v4 event bundles", () => {
+test("hard-cuts earlier event bundles", () => {
   const value = manifest();
-  value.schemaVersion = 4;
-  assert.throws(() => validateEventManifest(value, inputs), /schemaVersion must be 5/u);
+  value.schemaVersion = 5;
+  assert.throws(() => validateEventManifest(value, inputs), /schemaVersion must be 6/u);
 });
 
 test("production keeps canonical endpoints while rehearsal is isolated by deterministic bounded identity", () => {
@@ -134,6 +134,9 @@ test("production keeps canonical endpoints while rehearsal is isolated by determ
   assert.deepEqual(rehearsal.endpoints.filter((entry) => entry.role === "commentary").map((entry) => entry.hostname).sort(), [
     "rtc-rehearsal.beachvolleyballmedia.com",
     "turn-rehearsal.beachvolleyballmedia.com"
+  ]);
+  assert.deepEqual(rehearsal.endpoints.filter((entry) => entry.role === "observability").map((entry) => entry.hostname), [
+    "monitor-rehearsal.beachvolleyballmedia.com"
   ]);
   assert.deepEqual(production.droplets.map((entry) => entry.name), rehearsal.droplets.map((entry) => entry.name));
   assert.notDeepEqual(production.droplets.map((entry) => entry.providerName), rehearsal.droplets.map((entry) => entry.providerName));

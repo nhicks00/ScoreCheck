@@ -92,7 +92,7 @@ export function buildEventManifest({
   }
 
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     event,
     kind,
     namespace,
@@ -131,7 +131,7 @@ export function validateEventManifest(manifest, inputs) {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
     throw new Error("event manifest must be an object");
   }
-  if (manifest.schemaVersion !== 5) throw new Error("event manifest schemaVersion must be 5");
+  if (manifest.schemaVersion !== 6) throw new Error("event manifest schemaVersion must be 6");
   const bindings = manifest.sourceBindings;
   if (!bindings || typeof bindings !== "object" || Array.isArray(bindings)) {
     throw new Error("event manifest source bindings are required");
@@ -437,7 +437,7 @@ function scopedEndpoints(endpoints, dnsZone, kind, namespace) {
   return endpoints.map((endpoint) => {
     const suffix = `.${dnsZone}`;
     const relative = endpoint.hostname.slice(0, -suffix.length).replaceAll(".", "-");
-    const label = endpoint.role === "commentary" ? `${relative}-rehearsal` : `${relative}-${namespace}`;
+    const label = ["commentary", "observability"].includes(endpoint.role) ? `${relative}-rehearsal` : `${relative}-${namespace}`;
     if (label.length > 63) throw new Error(`rehearsal endpoint label for ${endpoint.hostname} is too long`);
     return {
       hostname: `${label}.${dnsZone}`,
