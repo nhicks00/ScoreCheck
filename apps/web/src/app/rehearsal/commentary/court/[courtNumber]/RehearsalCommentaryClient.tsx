@@ -35,7 +35,7 @@ export function RehearsalCommentaryClient({ courtNumber, whepUrl }: RehearsalCom
             <StreamPlayer
               courtNumber={courtNumber}
               sources={{ whepUrl, hlsUrl: null }}
-              mode="scoring"
+              mode="preview"
               onTimingSample={updatePreviewTiming}
             />
           </section>

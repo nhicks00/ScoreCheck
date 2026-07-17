@@ -60,3 +60,12 @@ test("preflights, starts, adopts, and stops the exact commentary browser", async
   assert.deepEqual(signals, [{ pid: -500, signal: "SIGTERM" }]);
   assert.match(processLines, /unrelated/);
 });
+
+test("rehearsal commentary uses direct low-latency preview playback", async () => {
+  const source = await readFile(new URL(
+    "../../../apps/web/src/app/rehearsal/commentary/court/[courtNumber]/RehearsalCommentaryClient.tsx",
+    import.meta.url
+  ), "utf8");
+  assert.match(source, /mode="preview"/);
+  assert.doesNotMatch(source, /mode="scoring"/);
+});
