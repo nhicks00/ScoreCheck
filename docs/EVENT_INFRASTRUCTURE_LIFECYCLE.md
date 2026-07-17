@@ -530,8 +530,12 @@ authority, not provider resources, so they create no DigitalOcean idle cost.
 Destroy then
 deletes 12 verified Droplet IDs one by one; it never issues a tag-wide bulk
 delete. It is resumable after a lost delete response or local interruption. It
-then proves production anchors are unassigned, restores dynamic DNS, and sends
-one Pushover completion message before declaring the lifecycle destroyed.
+then deletes each lifecycle tag object only after DigitalOcean proves the tag
+owns zero resources. The event-specific tag must be absent before the lifecycle
+can become terminal; shared role/kind tags are retained only while another
+resource still uses them and are reconsidered on a resumed cleanup. It then
+proves production anchors are unassigned, restores dynamic DNS, and sends one
+Pushover completion message before declaring the lifecycle destroyed.
 Rehearsal teardown instead removes all event DNS and proves that no rehearsal
 Reserved IP exists. The ordinary public IPv4s disappear with their exact
 Droplets. A failed completion notification leaves teardown in a retryable
@@ -550,7 +554,8 @@ node infra/event-stack/eventctl.mjs abort \
 ```
 
 Abort is unavailable after `start`; live coverage must follow close, evidence,
-and destroy. There is no tag-wide deletion command in the repository.
+and destroy. There is no tag-wide resource-deletion command in the repository;
+tag metadata is removed individually only after its resource count is zero.
 
 There is no timer deletion. Tournament schedules and post-event soaks move, so
 a timer is not authorized to decide that coverage is over.
@@ -680,7 +685,7 @@ The expected between-event DigitalOcean state is:
 
 - zero event Droplets;
 - zero event snapshots and volumes;
-- no canary DNS, tags, addresses, or images;
+- no event or canary DNS, empty lifecycle tags, addresses, or images;
 - exactly two unassigned endpoint Reserved IPv4s, approximately `$10/month`
   total at the current rate.
 
