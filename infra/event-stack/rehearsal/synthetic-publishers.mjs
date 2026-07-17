@@ -6,6 +6,11 @@ import { setTimeout as delay } from "node:timers/promises";
 const COURTS = Object.freeze(Array.from({ length: 8 }, (_, index) => index + 1));
 const MARKER = /^scorecheck-rehearsal-[a-zA-Z0-9-]{8,80}-camera-[1-8]$/;
 const FIXTURE_DURATION_SECONDS = 12;
+// Eight 720p30 sources originate from the operator workstation during a
+// rehearsal. Keep their aggregate video load at 10 Mbps so source-side WAN
+// contention cannot masquerade as an ingest/compositor failure. Resolution
+// and cadence still exercise the complete eight-court decode/Egress path.
+const FIXTURE_VIDEO_BITRATE_KBPS = 1_250;
 const PROGRESS_FRESHNESS_MS = 5_000;
 
 export function publisherMarker(generationId, court) {
@@ -47,7 +52,7 @@ export function buildSyntheticPublisherConfig({ court, generationId, host, user,
     "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-profile:v", "main",
     "-pix_fmt", "yuv420p",
     "-r", "30", "-g", "60", "-keyint_min", "60", "-sc_threshold", "0",
-    "-b:v", "2500k", "-minrate", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
+    "-b:v", `${FIXTURE_VIDEO_BITRATE_KBPS}k`, "-minrate", `${FIXTURE_VIDEO_BITRATE_KBPS}k`, "-maxrate", `${FIXTURE_VIDEO_BITRATE_KBPS}k`, "-bufsize", `${FIXTURE_VIDEO_BITRATE_KBPS * 2}k`,
     "-x264-params", "cabac=1:nal-hrd=cbr:force-cfr=1",
     "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
     "-metadata", `comment=${marker}`,

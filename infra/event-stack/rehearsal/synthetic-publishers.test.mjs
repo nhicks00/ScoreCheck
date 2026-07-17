@@ -21,6 +21,10 @@ test("builds visibly distinct 720p30 publishers with a resumable process marker"
   assert.ok(config.fixtureArgs.some((value) => value.includes("CAMERA 8 REHEARSAL")));
   assert.equal(config.fixtureArgs[config.fixtureArgs.indexOf("-profile:v") + 1], "main");
   assert.match(config.fixtureArgs[config.fixtureArgs.indexOf("-x264-params") + 1], /(?:^|:)cabac=1(?:$|:)/);
+  assert.equal(config.fixtureArgs[config.fixtureArgs.indexOf("-b:v") + 1], "1250k");
+  assert.equal(config.fixtureArgs[config.fixtureArgs.indexOf("-minrate") + 1], "1250k");
+  assert.equal(config.fixtureArgs[config.fixtureArgs.indexOf("-maxrate") + 1], "1250k");
+  assert.equal(config.fixtureArgs[config.fixtureArgs.indexOf("-bufsize") + 1], "2500k");
   assert.equal(config.args[config.args.indexOf("-c") + 1], "copy");
   assert.equal(config.args[config.args.indexOf("-stream_loop") + 1], "-1");
   assert.equal(JSON.stringify(config.redacted).includes("publisher-password"), false);
