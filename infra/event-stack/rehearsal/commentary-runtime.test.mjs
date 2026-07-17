@@ -39,14 +39,29 @@ test("preflights, starts, adopts, and stops the exact commentary browser", async
     runner: async (command, args) => {
       if (command === "ps") return { code: 0, stdout: processLines, stderr: "" };
       if (args.includes("-encoders")) return { code: 0, stdout: "pcm_s16le", stderr: "" };
-      if (args.includes("-filters")) return { code: 0, stdout: "anoisesrc highpass lowpass", stderr: "" };
+      if (args.includes("-filters")) return { code: 0, stdout: "highpass lowpass loudnorm", stderr: "" };
       if (args.includes("--version")) return { code: 0, stdout: "v24.0.0", stderr: "" };
       if (args.includes("--preflight")) return { code: 0, stdout: "playwright chromium ready", stderr: "" };
+      if (command === "/usr/bin/say") {
+        if (args.join(" ") === "-v ?") return { code: 0, stdout: "Samantha en_US # Hello", stderr: "" };
+        assert.deepEqual(args.slice(0, 4), ["-r", "210", "-o", config.speechSeedPath]);
+        assert.match(args.at(-1), /ScoreCheck commentary rehearsal/u);
+        await writeFile(config.speechSeedPath, "speech", { mode: 0o600 });
+        return { code: 0, stdout: "", stderr: "" };
+      }
       if (command === "ffmpeg") {
         assert.equal(config.fixturePath.endsWith("commentary-microphone.wav"), true);
-        assert.match(args.join(" "), /anoisesrc=color=pink:amplitude=0\.08:sample_rate=48000:seed=20260717,highpass=f=120,lowpass=f=7000/u);
+        assert.doesNotMatch(args.join(" "), /anoisesrc=/u);
         assert.doesNotMatch(args.join(" "), /sine=/u);
-        await writeFile(config.fixturePath, "fixture", { mode: 0o600 });
+        if (args.includes("-stream_loop")) {
+          assert.match(args.join(" "), /-stream_loop -1/u);
+          assert.match(args.join(" "), /-t 2700 -c:a copy/u);
+          await writeFile(config.fixturePath, "fixture", { mode: 0o600 });
+        } else {
+          assert.match(args.join(" "), /highpass=f=100,lowpass=f=8000,loudnorm=I=-20:LRA=7:TP=-3/u);
+          assert.match(args.join(" "), /-ar 48000/u);
+          await writeFile(config.normalizedSeedPath, "normalized speech", { mode: 0o600 });
+        }
         return { code: 0, stdout: "", stderr: "" };
       }
       throw new Error(`unexpected ${command}`);
@@ -63,6 +78,8 @@ test("preflights, starts, adopts, and stops the exact commentary browser", async
   await manager.preflight(config);
   assert.equal((await manager.ensure(config)).pid, 500);
   assert.equal(unrefCount, 1);
+  await assert.rejects(stat(config.speechSeedPath), { code: "ENOENT" });
+  await assert.rejects(stat(config.normalizedSeedPath), { code: "ENOENT" });
   assert.equal((await stat(config.configPath)).mode & 0o077, 0);
   const protectedConfig = await readFile(config.configPath, "utf8");
   assert.match(protectedConfig, new RegExp(material.commentatorPasscode));

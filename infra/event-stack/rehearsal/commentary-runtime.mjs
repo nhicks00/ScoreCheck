@@ -9,8 +9,10 @@ const MARKER = /^scorecheck-rehearsal-[a-zA-Z0-9-]{8,80}-commentator-[1-8]$/;
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const EVENT_STACK_DIRECTORY = resolve(SCRIPT_DIRECTORY, "..");
 const COMMENTARY_READY_POLL_ATTEMPTS = 900;
+const COMMENTARY_SPEECH = "ScoreCheck commentary rehearsal. Camera one is live. The serve is in, the rally continues, and the score is twelve to ten. Testing clear remote commentary audio synchronization.";
+const DEFAULT_SAY_PATH = "/usr/bin/say";
 
-export function buildCommentaryClientConfig({ court, generationId, material, programOrigin, evidenceDirectory, runtimeDirectory, nodePath = process.execPath, ffmpegPath = "ffmpeg" }) {
+export function buildCommentaryClientConfig({ court, generationId, material, programOrigin, evidenceDirectory, runtimeDirectory, nodePath = process.execPath, ffmpegPath = "ffmpeg", sayPath = DEFAULT_SAY_PATH }) {
   if (!COURTS.includes(court) || typeof generationId !== "string" || !/^[a-zA-Z0-9-]{8,80}$/.test(generationId)) throw new Error("commentary rehearsal identity is invalid");
   const parsed = new URL(programOrigin);
   if (parsed.protocol !== "https:" || parsed.origin !== programOrigin) throw new Error("commentary rehearsal program origin is invalid");
@@ -18,6 +20,8 @@ export function buildCommentaryClientConfig({ court, generationId, material, pro
   const root = resolve(runtimeDirectory);
   const configPath = resolve(root, `commentator-${court}.json`);
   const fixturePath = resolve(root, "commentary-microphone.wav");
+  const speechSeedPath = resolve(root, "commentary-microphone-seed.aiff");
+  const normalizedSeedPath = resolve(root, "commentary-microphone-seed.wav");
   const logPath = resolve(evidenceDirectory, `commentator-${court}.log`);
   const readyPath = resolve(evidenceDirectory, `commentator-${court}.ready.json`);
   const workerPath = resolve(SCRIPT_DIRECTORY, "commentary-browser-worker.cjs");
@@ -27,12 +31,15 @@ export function buildCommentaryClientConfig({ court, generationId, material, pro
     marker,
     configPath,
     fixturePath,
+    speechSeedPath,
+    normalizedSeedPath,
     logPath,
     readyPath,
     workerPath,
     playwrightPath,
     nodePath,
     ffmpegPath,
+    sayPath,
     protectedConfiguration: {
       schemaVersion: 1,
       court,
@@ -56,19 +63,22 @@ export class CommentaryClientManager {
   }
 
   async preflight(config) {
-    const [node, ffmpeg, filters, playwright] = await Promise.all([
+    const [node, ffmpeg, filters, speech, playwright] = await Promise.all([
       this.runner(config.nodePath, ["--version"]),
       this.runner(config.ffmpegPath, ["-hide_banner", "-encoders"]),
       this.runner(config.ffmpegPath, ["-hide_banner", "-filters"]),
+      this.runner(config.sayPath, ["-v", "?"]),
       this.runner(config.nodePath, [config.workerPath, "--preflight", "--playwright", config.playwrightPath])
     ]);
+    if ([node, ffmpeg, filters, speech, playwright].some((result) => result.code !== 0)) throw new Error("commentary browser dependency preflight failed");
     if (!/^v\d+/m.test(node.stdout)) throw new Error("commentary browser Node.js preflight failed");
     if (!/(^|\s)pcm_s16le(\s|$)/m.test(`${ffmpeg.stdout}\n${ffmpeg.stderr}`)) throw new Error("commentary browser fixture requires the pcm_s16le encoder");
-    for (const required of ["anoisesrc", "highpass", "lowpass"]) {
+    for (const required of ["highpass", "lowpass", "loudnorm"]) {
       if (!new RegExp(`(^|\\s)${required}(\\s|$)`, "m").test(`${filters.stdout}\n${filters.stderr}`)) {
         throw new Error(`commentary browser fixture requires the ${required} filter`);
       }
     }
+    if (!/\ben_[A-Z]{2}\b/m.test(speech.stdout)) throw new Error("commentary browser fixture requires an installed English macOS speech voice");
     if (!/playwright chromium ready/i.test(playwright.stdout)) throw new Error("commentary browser Playwright preflight failed");
     return { healthy: true };
   }
@@ -77,13 +87,31 @@ export class CommentaryClientManager {
     if (await exists(config.fixturePath)) return config.fixturePath;
     await mkdir(dirname(config.fixturePath), { recursive: true, mode: 0o700 });
     await chmod(dirname(config.fixturePath), 0o700);
-    const result = await this.runner(config.ffmpegPath, [
-      "-hide_banner", "-nostdin", "-loglevel", "error",
-      "-f", "lavfi", "-i", "anoisesrc=color=pink:amplitude=0.08:sample_rate=48000:seed=20260717,highpass=f=120,lowpass=f=7000",
-      "-t", "2700", "-c:a", "pcm_s16le", "-ac", "1",
-      config.fixturePath
-    ]);
-    if (result.code !== 0 || !(await exists(config.fixturePath))) throw new Error("commentary rehearsal audio fixture was not created");
+    await rm(config.fixturePath, { force: true });
+    await rm(config.speechSeedPath, { force: true });
+    await rm(config.normalizedSeedPath, { force: true });
+    let result;
+    try {
+      const speech = await this.runner(config.sayPath, ["-r", "210", "-o", config.speechSeedPath, COMMENTARY_SPEECH]);
+      if (speech.code !== 0 || !(await exists(config.speechSeedPath))) throw new Error("commentary rehearsal speech seed was not created");
+      const normalized = await this.runner(config.ffmpegPath, [
+        "-hide_banner", "-nostdin", "-loglevel", "error",
+        "-i", config.speechSeedPath,
+        "-af", "highpass=f=100,lowpass=f=8000,loudnorm=I=-20:LRA=7:TP=-3",
+        "-ar", "48000", "-c:a", "pcm_s16le", "-ac", "1",
+        config.normalizedSeedPath
+      ]);
+      if (normalized.code !== 0 || !(await exists(config.normalizedSeedPath))) throw new Error("commentary rehearsal normalized speech seed was not created");
+      result = await this.runner(config.ffmpegPath, [
+        "-hide_banner", "-nostdin", "-loglevel", "error",
+        "-stream_loop", "-1", "-i", config.normalizedSeedPath,
+        "-t", "2700", "-c:a", "copy", config.fixturePath
+      ]);
+    } finally {
+      await rm(config.speechSeedPath, { force: true });
+      await rm(config.normalizedSeedPath, { force: true });
+    }
+    if (result.code !== 0 || !(await exists(config.fixturePath))) throw new Error("commentary rehearsal speech fixture was not created");
     await chmod(config.fixturePath, 0o600);
     return config.fixturePath;
   }
