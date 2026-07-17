@@ -2,15 +2,23 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { buildEventManifest, loadManifestInputs } from "./event-manifest.mjs";
-import { buildAgentPlans, commentaryEndpointHosts, compositorContentAnalyzerBindings, loadProtectedEnv, roleConfigBindings, serializeAgentTargets, servicePublicIpv4, verifyProtectedSecretDirectory } from "./stack-deployer.mjs";
+import { buildAgentPlans, commentaryEndpointHosts, compositorContentAnalyzerBindings, deploymentScriptEnvironment, loadProtectedEnv, roleConfigBindings, serializeAgentTargets, servicePublicIpv4, verifyProtectedSecretDirectory } from "./stack-deployer.mjs";
 
 const inputs = await loadManifestInputs();
 const manifest = buildEventManifest({ event: "deploy-test", kind: "production", destroyAfter: "2026-08-01", ...inputs });
 const rehearsalManifest = buildEventManifest({ event: "deploy-test", kind: "rehearsal", destroyAfter: "2026-08-01", ...inputs });
+
+test("makes the exact lifecycle Node runtime available to every deployment script", () => {
+  const value = deploymentScriptEnvironment({ SERVICE_VALUE: "configured", PATH: "/untrusted" }, { PATH: "/usr/bin:/bin", HOME: "/tmp/home" }, process.execPath);
+  assert.deepEqual(value.PATH.split(":"), [dirname(process.execPath), "/usr/bin", "/bin"]);
+  assert.equal(value.HOME, "/tmp/home");
+  assert.equal(value.SERVICE_VALUE, "configured");
+  assert.equal(value.PATH.includes("/untrusted"), false);
+});
 
 function stateFixture() {
   return {

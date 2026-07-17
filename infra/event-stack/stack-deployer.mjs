@@ -216,8 +216,15 @@ export class LocalStackDeployer {
   }
 
   async #script(relativePath, environment) {
-    return this.runner(join(this.repoRoot, relativePath), [], { env: { ...process.env, ...environment }, capture: true });
+    return this.runner(join(this.repoRoot, relativePath), [], { env: deploymentScriptEnvironment(environment), capture: true });
   }
+}
+
+export function deploymentScriptEnvironment(environment, inherited = process.env, nodeExecutable = process.execPath) {
+  const inheritedPath = typeof inherited.PATH === "string" && inherited.PATH.trim() ? inherited.PATH.trim() : "/usr/bin:/bin:/usr/sbin:/sbin";
+  const nodeDirectory = dirname(resolve(nodeExecutable));
+  const path = [nodeDirectory, ...inheritedPath.split(":").filter((entry) => entry && entry !== nodeDirectory)].join(":");
+  return { ...inherited, ...environment, PATH: path };
 }
 
 export function buildAgentPlans({ manifest, state, tokenConfig }) {
