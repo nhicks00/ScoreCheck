@@ -242,7 +242,7 @@ export async function sealRehearsalEvidence({ state, manifest, evidenceDirectory
     || state.publisherEvidence != null
     || state.startEvidence != null
     || Object.values(state.courts).some((court) => court.publisher?.marker || court.commentary?.marker || court.egress?.id);
-  const classification = state.soakEvidence?.passed && state.endpointEvidence?.passed ? "PASS" : workloadAttempted ? "FAIL" : "CANCELLED";
+  const classification = state.soakEvidence?.passed && state.endpointEvidence?.passed && state.stopEvidence?.passed ? "PASS" : workloadAttempted ? "FAIL" : "CANCELLED";
   const artifactNames = ["pool-host-samples.jsonl", "rehearsal-monitor-samples.jsonl", "rehearsal-soak-report.json"];
   const artifacts = {};
   for (const name of artifactNames) {
@@ -257,8 +257,14 @@ export async function sealRehearsalEvidence({ state, manifest, evidenceDirectory
   }
   if (workloadAttempted && !artifacts["pool-host-samples.jsonl"]) throw new Error("attempted rehearsal has no pool-host evidence");
   if (state.soakEvidence && (!artifacts["rehearsal-monitor-samples.jsonl"] || !artifacts["rehearsal-soak-report.json"])) throw new Error("rehearsal soak artifacts are incomplete");
+  const providerCleanup = {
+    youtubeMode: state.providerMode,
+    vercelProject: state.program.project,
+    courts: Object.fromEntries(Object.entries(state.courts).map(([court, value]) => [court, value.providerCleanup]))
+  };
+  assertProviderCleanup(providerCleanup, { requireRetained: classification === "PASS" });
   const evidence = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     event: state.event,
     generationId: state.generationId,
     manifestSha256: state.manifestSha256,
@@ -271,22 +277,23 @@ export async function sealRehearsalEvidence({ state, manifest, evidenceDirectory
       stoppedAt: state.stoppedAt,
       cleanedAt: state.cleanedAt
     },
-    providerCleanup: {
-      vercelProject: state.program.project,
-      courts: Object.fromEntries(Object.entries(state.courts).map(([court, value]) => [court, { stream: value.stream, broadcast: value.broadcast }]))
-    },
+    providerCleanup,
     startEvidence: state.startEvidence ?? null,
     publisherEvidence: state.publisherEvidence ?? null,
     soakEvidence: state.soakEvidence ?? null,
     endpointEvidence: state.endpointEvidence ?? null,
     stopEvidence: state.stopEvidence ?? null,
     artifacts,
-    excludedBoundaries: ["production Supabase event/scoring/control-plane persistence", "venue Speedify uplink"]
+    excludedBoundaries: [
+      "production Supabase event/scoring/control-plane persistence",
+      "venue Speedify uplink",
+      "YouTube broadcast/watch-page creation and recording lifecycle (separate tournament control-plane preflight)"
+    ]
   };
   const evidencePath = join(root, "rehearsal-evidence.json");
   await writeAtomicProtected(evidencePath, evidence);
   const marker = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     event: state.event,
     generationId: state.generationId,
     manifestSha256: state.manifestSha256,
@@ -309,9 +316,9 @@ export async function verifyRehearsalEvidence({ directory, event, generationId, 
   for (const [key, expected] of [["event", event], ["generationId", generationId], ["manifestSha256", manifestSha256]]) {
     if (marker[key] !== expected || evidence[key] !== expected) throw new Error(`rehearsal evidence ${key} does not match the lifecycle generation`);
   }
-  if (marker.schemaVersion !== 1 || marker.providerCleanupComplete !== true || marker.evidenceSha256 !== sha256(stableJson(evidence))) throw new Error("rehearsal evidence marker failed integrity verification");
+  if (marker.schemaVersion !== 2 || evidence.schemaVersion !== 2 || marker.providerCleanupComplete !== true || marker.evidenceSha256 !== sha256(stableJson(evidence))) throw new Error("rehearsal evidence marker failed integrity verification");
   if (!new Set(["PASS", "FAIL", "CANCELLED"]).has(marker.classification) || marker.classification !== evidence.classification) throw new Error("rehearsal evidence classification is invalid");
-  assertProviderCleanup(evidence.providerCleanup);
+  assertProviderCleanup(evidence.providerCleanup, { requireRetained: evidence.classification === "PASS" });
   for (const [name, expected] of Object.entries(evidence.artifacts ?? {})) {
     const path = join(root, name);
     const info = await stat(path);
@@ -331,17 +338,29 @@ function validateRunInputs({ state, evidenceDirectory, durationMs, sampleInterva
 function validateSealInputs(state, manifest) {
   if (!state || state.phase !== "cleaned" || manifest?.kind !== "rehearsal" || state.event !== manifest.event || state.manifestSha256 !== sha256(stableJson(manifest))) throw new Error("only a cleaned, bound rehearsal can be sealed");
   assertProviderCleanup({
+    youtubeMode: state.providerMode,
     vercelProject: state.program.project,
-    courts: Object.fromEntries(Object.entries(state.courts).map(([court, value]) => [court, { stream: value.stream, broadcast: value.broadcast }]))
+    courts: Object.fromEntries(Object.entries(state.courts).map(([court, value]) => [court, value.providerCleanup]))
   });
 }
 
-function assertProviderCleanup(value) {
+function assertProviderCleanup(value, { requireRetained = false } = {}) {
   if (!new Set(["deleted", "absent"]).has(value?.vercelProject?.status)) throw new Error("rehearsal Vercel project cleanup is incomplete");
+  if (value?.youtubeMode !== "persistent-youtube-stream-ingest-v1") throw new Error("rehearsal YouTube cleanup mode is invalid");
   const courts = value?.courts;
   if (!courts || Object.keys(courts).length !== 8) throw new Error("rehearsal provider cleanup does not contain eight cameras");
   for (let court = 1; court <= 8; court += 1) {
-    if (!new Set(["deleted", "absent"]).has(courts[court]?.stream?.status) || !new Set(["deleted", "absent"]).has(courts[court]?.broadcast?.status)) throw new Error(`Camera ${court} provider cleanup is incomplete`);
+    const entry = courts[court];
+    if (entry?.mode !== value.youtubeMode || !new Set(["retained", "not-adopted"]).has(entry?.status)) throw new Error(`Camera ${court} provider cleanup is incomplete`);
+    if (requireRetained && entry.status !== "retained") throw new Error(`Camera ${court} persistent YouTube stream was not retained`);
+    if (entry.status === "retained"
+      && (typeof entry.streamId !== "string"
+        || !entry.streamId
+        || entry.title !== `ScoreCheck Court ${court} Test Stream`
+        || entry.isReusable !== true
+        || (requireRetained && entry.streamStatus !== "inactive"))) {
+      throw new Error(`Camera ${court} retained YouTube stream identity is invalid`);
+    }
   }
 }
 

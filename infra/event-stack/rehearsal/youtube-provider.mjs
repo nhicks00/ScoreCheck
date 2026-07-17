@@ -3,7 +3,6 @@ import { setTimeout as delay } from "node:timers/promises";
 const API = "https://www.googleapis.com/youtube/v3";
 const OAUTH = "https://oauth2.googleapis.com/token";
 const COURT_RANGE = new Set(Array.from({ length: 8 }, (_, index) => index + 1));
-const MARKER = /^\[scorecheck-rehearsal:[a-zA-Z0-9-]{8,80}:court-[1-8]\]$/;
 const RATE_LIMIT_REASONS = new Set(["rateLimitExceeded", "userRequestsExceedRateLimit"]);
 const RATE_LIMIT_DELAYS_MS = [
   5_000, 10_000, 20_000, 40_000, 80_000, 120_000,
@@ -11,138 +10,60 @@ const RATE_LIMIT_DELAYS_MS = [
 ];
 
 export class YouTubeRehearsalProvider {
-  constructor({ clientId, clientSecret, refreshToken, fetchImpl = globalThis.fetch, now = () => new Date(), sleep = delay }) {
+  constructor({ clientId, clientSecret, refreshToken, fetchImpl = globalThis.fetch, sleep = delay }) {
     this.clientId = requiredCredential(clientId, "YouTube client id");
     this.clientSecret = requiredCredential(clientSecret, "YouTube client secret");
     this.refreshToken = requiredCredential(refreshToken, "YouTube refresh token");
     this.fetchImpl = fetchImpl;
-    this.now = now;
     this.sleep = sleep;
     this.accessToken = null;
   }
 
-  async ensureStream({ court, marker }) {
-    validateCourtMarker(court, marker);
-    const existing = await this.findStream({ court, marker });
-    const stream = existing ?? await this.#request("POST", "/liveStreams?part=id,snippet,cdn,status,contentDetails", {
-      snippet: { title: `ScoreCheck TEST ${marker}`, description: marker },
-      cdn: { ingestionType: "rtmp", resolution: "720p", frameRate: "30fps" },
-      contentDetails: { isReusable: false }
-    });
-    return existing ?? normalizeStream(stream, court, marker);
-  }
-
-  async ensureBroadcast({ court, marker }) {
-    validateCourtMarker(court, marker);
-    const existing = await this.findBroadcast({ court, marker });
-    const scheduledStartTime = new Date(this.now().getTime() + 10 * 60_000).toISOString();
-    const broadcast = existing ?? await this.#request("POST", "/liveBroadcasts?part=id,snippet,status,contentDetails", {
-      snippet: { title: `ScoreCheck TEST ${marker}`, description: marker, scheduledStartTime },
-      status: { privacyStatus: "unlisted", selfDeclaredMadeForKids: false },
-      contentDetails: {
-        monitorStream: { enableMonitorStream: false },
-        enableEmbed: true,
-        enableDvr: true,
-        recordFromStart: true,
-        latencyPreference: "low",
-        enableAutoStart: false,
-        enableAutoStop: false
+  async resolvePersistentStreamPool() {
+    const items = await this.#list("liveStreams", "id,snippet,cdn,status,contentDetails");
+    const streams = {};
+    for (const court of COURT_RANGE) {
+      const title = persistentStreamTitle(court);
+      const matches = items.filter((item) => item.snippet?.title === title);
+      if (matches.length !== 1) {
+        throw new Error(`YouTube must contain exactly one persistent rehearsal stream titled ${title}; observed ${matches.length}`);
       }
-    });
-    return existing ?? normalizeBroadcast(broadcast, court, marker);
-  }
-
-  async findStream({ court, marker }) {
-    validateCourtMarker(court, marker);
-    const matches = (await this.#list("liveStreams", "id,snippet,cdn,status,contentDetails")).filter((item) => item.snippet?.description === marker);
-    if (matches.length > 1) throw new Error(`YouTube returned multiple rehearsal streams for Camera ${court}`);
-    return matches.length ? normalizeStream(matches[0], court, marker) : null;
-  }
-
-  async findBroadcast({ court, marker }) {
-    validateCourtMarker(court, marker);
-    const matches = (await this.#list("liveBroadcasts", "id,snippet,status,contentDetails")).filter((item) => item.snippet?.description === marker);
-    if (matches.length > 1) throw new Error(`YouTube returned multiple rehearsal broadcasts for Camera ${court}`);
-    return matches.length ? normalizeBroadcast(matches[0], court, marker) : null;
-  }
-
-  async bind({ broadcastId, streamId }) {
-    validateProviderId(broadcastId, "broadcast id");
-    validateProviderId(streamId, "stream id");
-    await this.#request("POST", `/liveBroadcasts/bind?id=${encodeURIComponent(broadcastId)}&streamId=${encodeURIComponent(streamId)}&part=id,contentDetails`);
-    return this.#waitForProviderRead({
-      read: () => this.getBroadcast(broadcastId),
-      accepted: (current) => current.boundStreamId === streamId,
-      description: "YouTube rehearsal broadcast did not retain its exact stream binding"
-    });
+      const stream = normalizePersistentStream(matches[0], court);
+      if (!new Set(["inactive", "ready"]).has(stream.streamStatus)) {
+        throw new Error(`YouTube persistent rehearsal stream for Camera ${court} is not idle (status=${stream.streamStatus ?? "unknown"})`);
+      }
+      streams[court] = stream;
+    }
+    const ids = Object.values(streams).map((stream) => stream.id);
+    const streamNames = Object.values(streams).map((stream) => stream.streamName);
+    if (new Set(ids).size !== 8 || new Set(streamNames).size !== 8) {
+      throw new Error("YouTube persistent rehearsal stream identities are not unique");
+    }
+    return streams;
   }
 
   async getStream(streamId) {
     validateProviderId(streamId, "stream id");
     const page = await this.#request("GET", `/liveStreams?part=id,snippet,cdn,status,contentDetails&id=${encodeURIComponent(streamId)}`);
     if (!Array.isArray(page.items) || page.items.length !== 1) throw new ProviderNotFoundError("YouTube rehearsal stream was not found");
-    return normalizeStream(page.items[0], null, null, { allowAnyMarker: true });
+    return normalizePersistentStream(page.items[0]);
   }
 
-  async getBroadcast(broadcastId) {
-    validateProviderId(broadcastId, "broadcast id");
-    const page = await this.#request("GET", `/liveBroadcasts?part=id,snippet,status,contentDetails&id=${encodeURIComponent(broadcastId)}`);
-    if (!Array.isArray(page.items) || page.items.length !== 1) throw new ProviderNotFoundError("YouTube rehearsal broadcast was not found");
-    return normalizeBroadcast(page.items[0], null, null, { allowAnyMarker: true });
-  }
-
-  async transition(broadcastId, status) {
-    validateProviderId(broadcastId, "broadcast id");
-    if (!new Set(["testing", "live", "complete"]).has(status)) throw new Error("YouTube rehearsal transition status is invalid");
-    const value = await this.#request("POST", `/liveBroadcasts/transition?broadcastStatus=${status}&id=${encodeURIComponent(broadcastId)}&part=id,status,contentDetails,snippet`);
-    return normalizeBroadcast(value, null, null, { allowAnyMarker: true });
-  }
-
-  async waitFor({ streamId, broadcastId, streamStatus, broadcastStatus, timeoutMs = 180_000, intervalMs = 2_000 }) {
+  async waitForStream({ streamId, streamStatus, timeoutMs = 180_000, intervalMs = 2_000 }) {
+    validateProviderId(streamId, "stream id");
+    if (typeof streamStatus !== "string" || !streamStatus) throw new Error("YouTube rehearsal stream status is required");
     const startedAt = Date.now();
     let last;
     while (Date.now() - startedAt <= timeoutMs) {
       try {
-        const [stream, broadcast] = await Promise.all([this.getStream(streamId), this.getBroadcast(broadcastId)]);
-        last = { stream, broadcast };
-        if ((!streamStatus || stream.streamStatus === streamStatus) && (!broadcastStatus || broadcast.lifecycleStatus === broadcastStatus)) return last;
+        last = await this.getStream(streamId);
+        if (last.streamStatus === streamStatus) return last;
       } catch (error) {
         if (!(error instanceof ProviderNotFoundError)) throw error;
       }
       await this.sleep(intervalMs);
     }
-    throw new Error(`YouTube rehearsal status did not converge (stream=${last?.stream.streamStatus ?? "unknown"}, broadcast=${last?.broadcast.lifecycleStatus ?? "unknown"})`);
-  }
-
-  async #waitForProviderRead({ read, accepted, description, attempts = 30, intervalMs = 1_000 }) {
-    for (let attempt = 1; attempt <= attempts; attempt += 1) {
-      try {
-        const current = await read();
-        if (accepted(current)) return current;
-      } catch (error) {
-        if (!(error instanceof ProviderNotFoundError)) throw error;
-      }
-      if (attempt < attempts) await this.sleep(intervalMs);
-    }
-    throw new Error(`${description} after ${attempts} bounded checks`);
-  }
-
-  async deleteBroadcast(broadcastId) {
-    return this.#delete(`/liveBroadcasts?id=${encodeURIComponent(broadcastId)}`);
-  }
-
-  async deleteStream(streamId) {
-    return this.#delete(`/liveStreams?id=${encodeURIComponent(streamId)}`);
-  }
-
-  async #delete(path) {
-    try {
-      await this.#request("DELETE", path);
-      return { absent: true };
-    } catch (error) {
-      if (error instanceof ProviderNotFoundError) return { absent: true };
-      throw error;
-    }
+    throw new Error(`YouTube rehearsal stream status did not converge (stream=${last?.streamStatus ?? "unknown"}, expected=${streamStatus})`);
   }
 
   async #list(resource, part) {
@@ -217,12 +138,14 @@ export function rehearsalMarker(generationId, court) {
   return `[scorecheck-rehearsal:${generationId}:court-${court}]`;
 }
 
-function normalizeStream(value, court, marker, { allowAnyMarker = false } = {}) {
-  const description = value?.snippet?.description;
-  if (!value?.id || typeof description !== "string" || (!allowAnyMarker && description !== marker) || (allowAnyMarker && !MARKER.test(description))) {
-    throw new Error(`YouTube rehearsal stream identity is invalid${court ? ` for Camera ${court}` : ""}`);
+function normalizePersistentStream(value, expectedCourt = null) {
+  const title = value?.snippet?.title;
+  const match = typeof title === "string" ? /^ScoreCheck Court ([1-8]) Test Stream$/.exec(title) : null;
+  const court = match ? Number(match[1]) : null;
+  if (!value?.id || !court || (expectedCourt !== null && court !== expectedCourt)) {
+    throw new Error(`YouTube persistent rehearsal stream identity is invalid${expectedCourt ? ` for Camera ${expectedCourt}` : ""}`);
   }
-  if (value.contentDetails?.isReusable !== false || value.cdn?.ingestionType !== "rtmp" || value.cdn?.resolution !== "720p" || value.cdn?.frameRate !== "30fps") {
+  if (value.contentDetails?.isReusable !== true || value.cdn?.ingestionType !== "rtmp" || value.cdn?.resolution !== "720p" || value.cdn?.frameRate !== "30fps") {
     throw new Error(`YouTube rehearsal stream profile is invalid${court ? ` for Camera ${court}` : ""}`);
   }
   const ingestion = value.cdn?.ingestionInfo;
@@ -231,7 +154,9 @@ function normalizeStream(value, court, marker, { allowAnyMarker = false } = {}) 
   }
   return {
     id: String(value.id),
-    marker: description,
+    court,
+    title,
+    isReusable: true,
     streamName: ingestion.streamName,
     rtmpsIngestionAddress: ingestion.rtmpsIngestionAddress,
     streamStatus: value.status?.streamStatus ?? null,
@@ -240,27 +165,9 @@ function normalizeStream(value, court, marker, { allowAnyMarker = false } = {}) 
   };
 }
 
-function normalizeBroadcast(value, court, marker, { allowAnyMarker = false } = {}) {
-  const description = value?.snippet?.description;
-  if (!value?.id || typeof description !== "string" || (!allowAnyMarker && description !== marker) || (allowAnyMarker && !MARKER.test(description))) {
-    throw new Error(`YouTube rehearsal broadcast identity is invalid${court ? ` for Camera ${court}` : ""}`);
-  }
-  if (value.status?.privacyStatus !== "unlisted" || value.contentDetails?.enableAutoStart !== false || value.contentDetails?.enableAutoStop !== false || value.contentDetails?.monitorStream?.enableMonitorStream !== false) {
-    throw new Error(`YouTube rehearsal broadcast safety settings are invalid${court ? ` for Camera ${court}` : ""}`);
-  }
-  return {
-    id: String(value.id),
-    marker: description,
-    privacyStatus: value.status.privacyStatus,
-    lifecycleStatus: value.status.lifeCycleStatus ?? null,
-    recordingStatus: value.status.recordingStatus ?? null,
-    boundStreamId: value.contentDetails.boundStreamId ?? null,
-    watchUrl: `https://www.youtube.com/watch?v=${value.id}`
-  };
-}
-
-function validateCourtMarker(court, marker) {
-  if (!COURT_RANGE.has(court) || !MARKER.test(marker) || !marker.endsWith(`:court-${court}]`)) throw new Error("YouTube rehearsal court marker is invalid");
+export function persistentStreamTitle(court) {
+  if (!COURT_RANGE.has(court)) throw new Error("YouTube rehearsal court is invalid");
+  return `ScoreCheck Court ${court} Test Stream`;
 }
 
 function validateProviderId(value, label) {

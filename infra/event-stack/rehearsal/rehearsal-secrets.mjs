@@ -202,10 +202,16 @@ function validateRehearsalInputs({ manifest, material, programOrigin }) {
 
 function validateYoutubeDestinations(values) {
   if (!Array.isArray(values) || values.length !== 8 || new Set(values.map((entry) => entry.court)).size !== 8) {
-    throw new Error("rehearsal requires exactly eight fresh YouTube destinations");
+    throw new Error("rehearsal requires exactly eight persistent YouTube ingest streams");
   }
   for (const destination of values) {
-    if (!COURTS.includes(destination.court) || !destination.streamId || !destination.broadcastId || !destination.streamName || !destination.rtmpsIngestionAddress?.startsWith("rtmps://")) {
+    if (!COURTS.includes(destination.court)
+      || destination.mode !== "persistent-youtube-stream-ingest-v1"
+      || destination.title !== `ScoreCheck Court ${destination.court} Test Stream`
+      || destination.isReusable !== true
+      || !destination.streamId
+      || !destination.streamName
+      || !destination.rtmpsIngestionAddress?.startsWith("rtmps://")) {
       throw new Error("rehearsal YouTube destination is invalid");
     }
   }

@@ -658,12 +658,24 @@ it does **not** qualify the 12-server media system. With the verified account
 limit of 15, the final dry run is a full isolated rehearsal from a proved zero
 event-Droplet baseline: 12 unique rehearsal Droplets, eight synthetic moving
 camera publishers, eight preview/program chains, eight one-per-host Egress
-jobs, an isolated program-page deployment, eight fresh unlisted YouTube
-broadcasts, monitoring, commentary connectivity, resource and zombie gates,
+jobs, an isolated program-page deployment, eight persistent reusable YouTube
+ingest streams, monitoring, commentary connectivity, resource and zombie gates,
 exact evidence, ordered output cleanup, and complete infrastructure teardown.
 No legacy Droplet is retained as an undocumented rollback dependency.
 Production is not approved until this run passes and provider inventory returns
 to the exact persistent non-Droplet baseline.
+
+The rehearsal YouTube contract is an exact persistent pool named `ScoreCheck
+Court 1 Test Stream` through `ScoreCheck Court 8 Test Stream`. Every member must
+be reusable RTMP, 720p30, idle before admission, unique by provider ID and stream
+key, then active/good with no configuration issues during qualification. The
+controller never creates or deletes these streams. Fresh unlisted broadcasts,
+watch pages, stream binding, recording, and lifecycle transitions are a
+separate once-per-tournament control-plane preflight. That preflight should be
+completed at least 24 hours before coverage and may use YouTube Studio through
+an authenticated operator session when the API is unavailable. A channel daily
+creation limit applies to both API and Studio and cannot be bypassed by changing
+clients; it must not delay compute teardown or cause rehearsal resource churn.
 
 ## Cost model
 
@@ -688,6 +700,8 @@ The expected between-event DigitalOcean state is:
 - no event or canary DNS, empty lifecycle tags, addresses, or images;
 - exactly two unassigned endpoint Reserved IPv4s, approximately `$10/month`
   total at the current rate.
+- exactly eight retained reusable YouTube test ingest streams; they are provider
+  control-plane objects, not billable DigitalOcean compute.
 
 Savings come from deleting replaceable event compute, not from reducing
 headroom during coverage.

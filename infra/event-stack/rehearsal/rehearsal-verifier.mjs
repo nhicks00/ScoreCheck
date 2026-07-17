@@ -77,24 +77,18 @@ export class RehearsalVerifier {
     const courts = [];
     for (const court of COURTS) {
       const courtState = state.courts[court];
-      const [stream, broadcast] = await Promise.all([
-        this.youtube.getStream(courtState.stream.id),
-        this.youtube.getBroadcast(courtState.broadcast.id)
-      ]);
+      const stream = await this.youtube.getStream(courtState.stream.id);
       courts.push({
         court,
         streamId: stream.id,
-        broadcastId: broadcast.id,
+        title: stream.title,
+        isReusable: stream.isReusable,
         streamStatus: stream.streamStatus,
         healthStatus: stream.healthStatus,
-        configurationIssues: stream.configurationIssues,
-        broadcastLifecycle: broadcast.lifecycleStatus,
-        recordingStatus: broadcast.recordingStatus,
-        privacyStatus: broadcast.privacyStatus,
-        boundStreamId: broadcast.boundStreamId
+        configurationIssues: stream.configurationIssues
       });
     }
-    return { observedAt: new Date(this.now()).toISOString(), courts };
+    return { mode: state.providerMode, observedAt: new Date(this.now()).toISOString(), courts };
   }
 
   async #waitForStableFull({ stableSamples, timeoutMs }) {
@@ -429,15 +423,26 @@ function unique(values) { return [...new Set(values)]; }
 
 export function providerProblems(provider) {
   const problems = [];
-  if (!provider || !Array.isArray(provider.courts) || provider.courts.length !== 8) return ["YouTube evidence does not contain exactly eight cameras"];
+  if (!provider || provider.mode !== "persistent-youtube-stream-ingest-v1" || !Array.isArray(provider.courts) || provider.courts.length !== 8) {
+    return ["YouTube evidence does not contain the exact persistent eight-stream ingest contract"];
+  }
   for (const court of provider.courts) {
-    if (court.streamStatus !== "active" || court.healthStatus !== "good" || court.configurationIssues.length !== 0 || court.broadcastLifecycle !== "live" || court.recordingStatus !== "recording" || court.privacyStatus !== "unlisted" || court.boundStreamId !== court.streamId) {
-      problems.push(`Camera ${court.court} YouTube destination is not live, recording, unlisted, healthy, and bound to its exact stream`);
+    if (court.title !== `ScoreCheck Court ${court.court} Test Stream`
+      || court.isReusable !== true
+      || court.streamStatus !== "active"
+      || court.healthStatus !== "good"
+      || !Array.isArray(court.configurationIssues)
+      || court.configurationIssues.length !== 0) {
+      problems.push(`Camera ${court.court} persistent YouTube ingest stream is not exact, reusable, active, and healthy`);
     }
   }
   return unique(problems);
 }
 
 function excludedBoundaries() {
-  return ["production Supabase event/scoring/control-plane persistence", "venue Speedify uplink"];
+  return [
+    "production Supabase event/scoring/control-plane persistence",
+    "venue Speedify uplink",
+    "YouTube broadcast/watch-page creation and recording lifecycle (separate tournament control-plane preflight)"
+  ];
 }

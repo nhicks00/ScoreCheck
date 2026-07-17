@@ -218,6 +218,7 @@ async function cleanedRehearsalEvidence(status, root) {
     event: lifecycle.event,
     generationId: lifecycle.generationId,
     manifestSha256: lifecycle.manifestSha256,
+    providerMode: "persistent-youtube-stream-ingest-v1",
     createdAt: lifecycle.createdAt,
     preparedAt: null,
     startedAt: null,
@@ -225,8 +226,7 @@ async function cleanedRehearsalEvidence(status, root) {
     cleanedAt: new Date().toISOString(),
     program: { project: { id: "offline-project", status: "absent" } },
     courts: Object.fromEntries(Array.from({ length: 8 }, (_, index) => [index + 1, {
-      stream: { id: `offline-stream-${index + 1}`, status: "absent" },
-      broadcast: { id: `offline-broadcast-${index + 1}`, status: "absent" }
+      providerCleanup: { mode: "persistent-youtube-stream-ingest-v1", status: "not-adopted", streamId: null }
     }])),
     startEvidence: null,
     soakEvidence: null,

@@ -148,15 +148,17 @@ test("evaluates exact DigitalOcean host identity, sampler cadence, CPU, shared m
   assert.match(mismatched.problems.join("; "), /provider_identity/);
 });
 
-test("seals and verifies failed evidence only after every provider resource is deleted", async () => {
+test("seals and verifies failed evidence after ephemeral cleanup and persistent stream retention", async () => {
   const root = await mkdtemp(join(os.tmpdir(), "scorecheck-rehearsal-seal-"));
   const manifest = { kind: "rehearsal", event: "gate", droplets: Array(12).fill({}) };
   const digest = sha(manifest);
   const state = {
-    phase: "cleaned", event: "gate", generationId: "generation-1234", manifestSha256: digest,
+    phase: "cleaned", event: "gate", generationId: "generation-1234", manifestSha256: digest, providerMode: "persistent-youtube-stream-ingest-v1",
     createdAt: "2026-07-15T12:00:00Z", preparedAt: "2026-07-15T12:01:00Z", startedAt: "2026-07-15T12:02:00Z", stoppedAt: "2026-07-15T12:03:00Z", cleanedAt: "2026-07-15T12:04:00Z",
     program: { project: { id: "project", status: "deleted" } },
-    courts: Object.fromEntries(Array.from({ length: 8 }, (_, index) => [index + 1, { stream: { id: `s${index}`, status: "deleted" }, broadcast: { id: `b${index}`, status: "deleted" } }])),
+    courts: Object.fromEntries(Array.from({ length: 8 }, (_, index) => [index + 1, {
+      providerCleanup: { mode: "persistent-youtube-stream-ingest-v1", status: "retained", streamId: `s${index}`, title: `ScoreCheck Court ${index + 1} Test Stream`, isReusable: true, streamStatus: "inactive" }
+    }])),
     startEvidence: { passed: true }, soakEvidence: { passed: false }, endpointEvidence: { passed: false }, stopEvidence: { passed: true }
   };
   await Promise.all([
@@ -177,10 +179,12 @@ test("creates protected cancelled evidence when preparation fails before evidenc
   const manifest = { kind: "rehearsal", event: "gate", droplets: Array(12).fill({}) };
   const digest = sha(manifest);
   const state = {
-    phase: "cleaned", event: "gate", generationId: "generation-1234", manifestSha256: digest,
+    phase: "cleaned", event: "gate", generationId: "generation-1234", manifestSha256: digest, providerMode: "persistent-youtube-stream-ingest-v1",
     createdAt: "2026-07-15T12:00:00Z", preparedAt: null, startedAt: null, stoppedAt: null, cleanedAt: "2026-07-15T12:01:00Z",
     program: { project: { id: "project", status: "deleted" } },
-    courts: Object.fromEntries(Array.from({ length: 8 }, (_, index) => [index + 1, { stream: { id: null, status: "absent" }, broadcast: { id: null, status: "absent" } }])),
+    courts: Object.fromEntries(Array.from({ length: 8 }, (_, index) => [index + 1, {
+      providerCleanup: { mode: "persistent-youtube-stream-ingest-v1", status: "not-adopted", streamId: null }
+    }])),
     startEvidence: null, soakEvidence: null, endpointEvidence: null, stopEvidence: null
   };
 
@@ -195,14 +199,14 @@ test("classifies a launched workload rejected before soak admission as failed, n
   const root = await mkdtemp(join(os.tmpdir(), "scorecheck-rehearsal-start-fail-"));
   const manifest = { kind: "rehearsal", event: "gate", droplets: Array(12).fill({}) };
   const state = {
-    phase: "cleaned", event: "gate", generationId: "generation-1234", manifestSha256: sha(manifest),
+    phase: "cleaned", event: "gate", generationId: "generation-1234", manifestSha256: sha(manifest), providerMode: "persistent-youtube-stream-ingest-v1",
     createdAt: "2026-07-15T12:00:00Z", preparedAt: "2026-07-15T12:01:00Z", startedAt: null, stoppedAt: "2026-07-15T12:04:00Z", cleanedAt: "2026-07-15T12:05:00Z",
     sampler: { status: "stopped", output: join(root, "pool-host-samples.jsonl") },
     publisherEvidence: { passed: false, problems: ["Camera 1 synthetic publisher is slow"] },
     program: { project: { id: "project", status: "deleted" } },
     courts: Object.fromEntries(Array.from({ length: 8 }, (_, index) => [index + 1, {
       publisher: { marker: `publisher-${index + 1}`, status: "stopped" },
-      stream: { id: `s${index}`, status: "deleted" }, broadcast: { id: `b${index}`, status: "deleted" }
+      providerCleanup: { mode: "persistent-youtube-stream-ingest-v1", status: "retained", streamId: `s${index}`, title: `ScoreCheck Court ${index + 1} Test Stream`, isReusable: true, streamStatus: "inactive" }
     }]))
   };
   await writeFile(state.sampler.output, "{}\n", { mode: 0o600 });

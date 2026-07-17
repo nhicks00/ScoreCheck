@@ -5,7 +5,8 @@ import { dirname, resolve } from "node:path";
 import { rehearsalMarker } from "./youtube-provider.mjs";
 import { withProcessLock } from "../process-lock.mjs";
 
-const STATE_SCHEMA_VERSION = 2;
+const STATE_SCHEMA_VERSION = 3;
+const PROVIDER_MODE = "persistent-youtube-stream-ingest-v1";
 const PHASES = new Set(["planned", "preparing", "prepared", "starting", "running", "stopping", "stopped", "cleaning", "cleaned"]);
 const COURTS = Object.freeze(Array.from({ length: 8 }, (_, index) => index + 1));
 
@@ -51,15 +52,11 @@ export class RehearsalController {
         state.program.preflight = await this.vercel.verifyProgramPage({ project, token: material.programPageToken });
         await this.store.save(state);
 
+        const streamPool = await this.youtube.resolvePersistentStreamPool();
         for (const court of COURTS) {
           const courtState = state.courts[court];
-          const marker = courtState.marker;
-          courtState.stream = await this.youtube.ensureStream({ court, marker });
-          await this.store.save(state);
-          courtState.broadcast = await this.youtube.ensureBroadcast({ court, marker });
-          await this.store.save(state);
-          courtState.broadcast = await this.youtube.bind({ broadcastId: courtState.broadcast.id, streamId: courtState.stream.id });
-          courtState.bound = true;
+          courtState.stream = streamPool[court];
+          courtState.providerReady = true;
           await this.store.save(state);
         }
 
@@ -70,8 +67,10 @@ export class RehearsalController {
           programOrigin: state.program.origin,
           youtubeDestinations: COURTS.map((court) => ({
             court,
+            mode: state.providerMode,
             streamId: state.courts[court].stream.id,
-            broadcastId: state.courts[court].broadcast.id,
+            title: state.courts[court].stream.title,
+            isReusable: state.courts[court].stream.isReusable,
             streamName: state.courts[court].stream.streamName,
             rtmpsIngestionAddress: state.courts[court].stream.rtmpsIngestionAddress
           })),
@@ -151,12 +150,8 @@ export class RehearsalController {
           // Ramp one court end to end before admitting the next. This both
           // bounds startup load and prevents one broken Program chain from
           // occupying every compositor and YouTube destination.
-          await this.youtube.waitFor({ streamId: courtState.stream.id, broadcastId: courtState.broadcast.id, streamStatus: "active" });
-          courtState.broadcast = await this.youtube.transition(courtState.broadcast.id, "live");
-          await this.store.save(state);
-          const live = await this.youtube.waitFor({ streamId: courtState.stream.id, broadcastId: courtState.broadcast.id, streamStatus: "active", broadcastStatus: "live" });
-          courtState.stream = { ...courtState.stream, ...live.stream };
-          courtState.broadcast = live.broadcast;
+          const activeStream = await this.youtube.waitForStream({ streamId: courtState.stream.id, streamStatus: "active" });
+          courtState.stream = { ...courtState.stream, ...activeStream };
           await this.store.save(state);
         }
 
@@ -180,15 +175,13 @@ export class RehearsalController {
     return this.store.withLock(async () => {
       let state = await this.#loadBound(manifest, lifecycleState);
       assertPhase(state, ["starting", "running", "stopping"], "stop rehearsal workload");
-      const reachedRunning = state.phase === "running" || state.startedAt !== null;
       const workloadNeverStarted = state.startedAt === null
         && state.sampler === null
         && COURTS.every((court) => {
           const courtState = state.courts[court];
           return !courtState.publisher?.marker
             && !courtState.commentary?.marker
-            && !courtState.egress?.id
-            && !["testing", "live"].includes(courtState.broadcast?.lifecycleStatus);
+            && !courtState.egress?.id;
         });
       state.phase = "stopping";
       state.lastError = null;
@@ -201,32 +194,6 @@ export class RehearsalController {
             state.endpointEvidence = { passed: false, observedAt: this.now().toISOString(), problems: [`endpoint capture failed: ${error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)}`] };
           }
           await this.store.save(state);
-        }
-        for (const court of COURTS) {
-          const courtState = state.courts[court];
-          if (!courtState.broadcast?.id) continue;
-          let current;
-          try {
-            current = await this.youtube.getBroadcast(courtState.broadcast.id);
-          } catch (error) {
-            if (error?.status !== 404) throw error;
-            courtState.broadcast = { id: courtState.broadcast.id, status: "absent" };
-            await this.store.save(state);
-            continue;
-          }
-          courtState.broadcast = current;
-          await this.store.save(state);
-          if (current.lifecycleStatus === "complete") continue;
-          if (["testing", "live"].includes(current.lifecycleStatus)) {
-            courtState.broadcast = await this.youtube.transition(current.id, "complete");
-            await this.store.save(state);
-            const completed = await this.youtube.waitFor({ streamId: courtState.stream.id, broadcastId: current.id, broadcastStatus: "complete" });
-            courtState.broadcast = completed.broadcast;
-            await this.store.save(state);
-          } else {
-            courtState.broadcast = { ...current, completionSkipped: true, completionSkippedReason: reachedRunning ? "provider was not live at endpoint" : "startup ended before provider became live" };
-            await this.store.save(state);
-          }
         }
         for (const court of [...COURTS].reverse()) {
           const courtState = state.courts[court];
@@ -266,7 +233,22 @@ export class RehearsalController {
           state.sampler = await this.sampler.stop(state.sampler);
           await this.store.save(state);
         }
-        state.stopEvidence = workloadNeverStarted
+        const providerRetirementProblems = [];
+        for (const court of COURTS) {
+          const courtState = state.courts[court];
+          if (!courtState.stream?.id) continue;
+          try {
+            const inactive = await this.youtube.waitForStream({ streamId: courtState.stream.id, streamStatus: "inactive" });
+            courtState.stream = { ...courtState.stream, ...inactive };
+            courtState.providerRetirement = { passed: true, observedAt: this.now().toISOString(), streamStatus: inactive.streamStatus };
+          } catch (error) {
+            const message = `Camera ${court} persistent YouTube stream did not retire: ${error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)}`;
+            providerRetirementProblems.push(message);
+            courtState.providerRetirement = { passed: false, observedAt: this.now().toISOString(), problem: message };
+          }
+          await this.store.save(state);
+        }
+        const idleEvidence = workloadNeverStarted
           ? {
               passed: true,
               observedAt: this.now().toISOString(),
@@ -275,6 +257,11 @@ export class RehearsalController {
               note: "Workload ownership never started; provider state and all compositor Egress lists were reconciled directly."
             }
           : await this.verifier.waitForIdle({ manifest, lifecycleState, state: structuredClone(state) });
+        state.stopEvidence = {
+          ...idleEvidence,
+          passed: idleEvidence.passed !== false && providerRetirementProblems.length === 0,
+          problems: [...(idleEvidence.problems ?? []), ...providerRetirementProblems]
+        };
         state.phase = "stopped";
         state.stoppedAt = this.now().toISOString();
         await this.store.save(state);
@@ -303,24 +290,17 @@ export class RehearsalController {
       try {
         for (const court of [...COURTS].reverse()) {
           const courtState = state.courts[court];
-          if (!courtState.broadcast) {
-            courtState.broadcast = await this.youtube.findBroadcast({ court, marker: courtState.marker }) ?? { id: null, status: "absent" };
-            await this.store.save(state);
-          }
-          if (!courtState.stream) {
-            courtState.stream = await this.youtube.findStream({ court, marker: courtState.marker }) ?? { id: null, status: "absent" };
-            await this.store.save(state);
-          }
-          if (courtState.broadcast?.id && courtState.broadcast.status !== "deleted") {
-            await this.youtube.deleteBroadcast(courtState.broadcast.id);
-            courtState.broadcast = { id: courtState.broadcast.id, status: "deleted" };
-            await this.store.save(state);
-          }
-          if (courtState.stream?.id && courtState.stream.status !== "deleted") {
-            await this.youtube.deleteStream(courtState.stream.id);
-            courtState.stream = { id: courtState.stream.id, status: "deleted" };
-            await this.store.save(state);
-          }
+          courtState.providerCleanup = courtState.stream?.id
+            ? {
+                mode: PROVIDER_MODE,
+                status: "retained",
+                streamId: courtState.stream.id,
+                title: courtState.stream.title,
+                isReusable: courtState.stream.isReusable === true,
+                streamStatus: courtState.stream.streamStatus ?? null
+              }
+            : { mode: PROVIDER_MODE, status: "not-adopted", streamId: null };
+          await this.store.save(state);
         }
         if (!state.program.project) {
           state.program.project = await this.vercel.findProject(state.program.projectName) ?? { id: null, name: state.program.projectName, status: "absent" };
@@ -446,6 +426,7 @@ export function createRehearsalState(manifest, lifecycleState, now = new Date())
     generationId: lifecycleState.generationId,
     lifecycleManifestSha256: lifecycleState.manifestSha256,
     manifestSha256: sha256(stableJson(manifest)),
+    providerMode: PROVIDER_MODE,
     phase: "planned",
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
@@ -459,8 +440,9 @@ export function createRehearsalState(manifest, lifecycleState, now = new Date())
       marker: rehearsalMarker(lifecycleState.generationId, court),
       publisherMarker: `scorecheck-rehearsal-${lifecycleState.generationId}-camera-${court}`,
       stream: null,
-      broadcast: null,
-      bound: false,
+      providerReady: false,
+      providerRetirement: null,
+      providerCleanup: null,
       publisher: null,
       commentary: null,
       egress: null,
@@ -486,10 +468,10 @@ export function rehearsalSummary(state) {
     phase: state.phase,
     programProjectId: state.program.project?.id ?? null,
     programDeploymentId: state.program.deployment?.id ?? null,
-    preparedCourts: COURTS.filter((court) => state.courts[court].bound).length,
+    preparedCourts: COURTS.filter((court) => state.courts[court].providerReady).length,
     activePublishers: COURTS.filter((court) => state.courts[court].publisher?.status === "running").length,
     activeEgresses: COURTS.filter((court) => state.courts[court].egress?.status === "active").length,
-    liveBroadcasts: COURTS.filter((court) => state.courts[court].broadcast?.lifecycleStatus === "live").length,
+    activeProviderStreams: COURTS.filter((court) => state.courts[court].stream?.streamStatus === "active").length,
     samplerStatus: state.sampler?.status ?? null,
     soakStatus: state.soak?.status ?? null,
     evidenceClassification: state.evidence?.classification ?? null,
@@ -498,7 +480,7 @@ export function rehearsalSummary(state) {
 }
 
 export function validateRehearsalState(value) {
-  if (!value || value.schemaVersion !== STATE_SCHEMA_VERSION || !PHASES.has(value.phase)) throw new Error("rehearsal state schema or phase is invalid");
+  if (!value || value.schemaVersion !== STATE_SCHEMA_VERSION || value.providerMode !== PROVIDER_MODE || !PHASES.has(value.phase)) throw new Error("rehearsal state schema, provider mode, or phase is invalid");
   for (const key of ["event", "generationId", "lifecycleManifestSha256", "manifestSha256", "createdAt", "updatedAt"]) {
     if (typeof value[key] !== "string" || !value[key]) throw new Error(`rehearsal state ${key} is invalid`);
   }
@@ -506,7 +488,7 @@ export function validateRehearsalState(value) {
   if (JSON.stringify(Object.keys(value.courts).map(Number).sort((a, b) => a - b)) !== JSON.stringify(COURTS)) throw new Error("rehearsal state courts are incomplete");
   for (const court of COURTS) {
     const entry = value.courts[court];
-    if (!entry || typeof entry.marker !== "string" || typeof entry.publisherMarker !== "string") throw new Error(`rehearsal state Camera ${court} is invalid`);
+    if (!entry || typeof entry.marker !== "string" || typeof entry.publisherMarker !== "string" || typeof entry.providerReady !== "boolean") throw new Error(`rehearsal state Camera ${court} is invalid`);
   }
   return value;
 }

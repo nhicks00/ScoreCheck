@@ -135,9 +135,12 @@ rehearsal or physical eight-court endurance evidence.
    attempt saturated near four cores and failed realtime. Either prove final
    camera-side 720p30 H.264 stream-copy on `c-4` or qualify a separate
    normalization tier before the endurance run.
-5. **Eight fresh unlisted destinations.** Create and independently verify eight
-   isolated YouTube streams/broadcasts with no public production destination or
-   StreamRun dependency.
+5. **Eight isolated YouTube destinations.** The infrastructure rehearsal now
+   uses the exact retained reusable 720p30 test ingest pool, one stream per
+   camera, with no public production destination or StreamRun dependency. Fresh
+   unlisted broadcasts and watch pages are created and independently verified
+   once per tournament as a separate control-plane preflight; they are not
+   churned by repeated infrastructure rehearsals.
 6. **Commentary and score load.** Run at least two active commentary rooms with
    fresh human clap/sync attestations, while all eight score/render paths remain
    aligned and healthy.

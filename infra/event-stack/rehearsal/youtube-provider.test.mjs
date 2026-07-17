@@ -1,194 +1,119 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { rehearsalMarker, YouTubeRehearsalProvider } from "./youtube-provider.mjs";
+import { persistentStreamTitle, rehearsalMarker, YouTubeRehearsalProvider } from "./youtube-provider.mjs";
 
 function response(status, body = null) {
   return { status, ok: status >= 200 && status < 300, json: async () => body };
 }
 
-function stream(marker, id = "stream1") {
+function stream(court, overrides = {}) {
   return {
-    id,
-    snippet: { description: marker },
-    cdn: { ingestionType: "rtmp", resolution: "720p", frameRate: "30fps", ingestionInfo: { streamName: "do-not-print", rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2" } },
-    contentDetails: { isReusable: false },
-    status: { streamStatus: "ready", healthStatus: { status: "good", configurationIssues: [] } }
+    id: `stream${court}`,
+    snippet: { title: persistentStreamTitle(court) },
+    cdn: {
+      ingestionType: "rtmp",
+      resolution: "720p",
+      frameRate: "30fps",
+      ingestionInfo: { streamName: `protected-key-${court}`, rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2" }
+    },
+    contentDetails: { isReusable: true },
+    status: { streamStatus: "inactive", healthStatus: { status: "noData", configurationIssues: [] } },
+    ...overrides
   };
 }
 
-function broadcast(marker, id = "broadcast1", boundStreamId = null) {
-  return {
-    id,
-    snippet: { description: marker },
-    status: { privacyStatus: "unlisted", lifeCycleStatus: "ready", recordingStatus: "notRecording" },
-    contentDetails: { enableAutoStart: false, enableAutoStop: false, monitorStream: { enableMonitorStream: false }, boundStreamId }
-  };
+function provider(fetchImpl, sleep = async () => {}) {
+  return new YouTubeRehearsalProvider({ clientId: "client", clientSecret: "secret", refreshToken: "refresh", fetchImpl, sleep });
 }
 
-function provider(fetchImpl) {
-  return new YouTubeRehearsalProvider({ clientId: "client", clientSecret: "secret", refreshToken: "refresh", fetchImpl, sleep: async () => {} });
-}
-
-test("creates a disposable 720p30 stream and adopts it by exact marker on retry", async () => {
-  const marker = rehearsalMarker("generation-1234", 1);
+test("adopts the exact persistent reusable eight-stream pool without provider mutations", async () => {
   const requests = [];
-  const fetchImpl = async (url, init) => {
-    requests.push({ url, init });
-    if (url.includes("oauth2")) return response(200, { access_token: "access" });
-    if (init.method === "GET") return response(200, { items: requests.filter((entry) => entry.init.method === "POST" && entry.url.includes("liveStreams")).length ? [stream(marker)] : [] });
-    return response(200, stream(marker));
-  };
-  const client = provider(fetchImpl);
-  const first = await client.ensureStream({ court: 1, marker });
-  const second = await client.ensureStream({ court: 1, marker });
-  assert.equal(first.id, "stream1");
-  assert.equal(second.id, "stream1");
-  const create = requests.find((entry) => entry.init.method === "POST" && entry.url.includes("liveStreams"));
-  const body = JSON.parse(create.init.body);
-  assert.equal(body.contentDetails.isReusable, false);
-  assert.equal(body.cdn.resolution, "720p");
-  assert.equal(requests.filter((entry) => entry.init.method === "POST" && entry.url.includes("liveStreams")).length, 1);
-});
-
-test("creates unlisted manual broadcasts and verifies exact binding", async () => {
-  const marker = rehearsalMarker("generation-1234", 2);
-  let bound = false;
-  const fetchImpl = async (url, init) => {
-    if (url.includes("oauth2")) return response(200, { access_token: "access" });
-    if (url.includes("liveBroadcasts/bind")) { bound = true; return response(200, broadcast(marker, "broadcast2", "stream2")); }
-    if (url.includes("liveBroadcasts?") && init.method === "GET" && url.includes("&id=")) return response(200, { items: [broadcast(marker, "broadcast2", bound ? "stream2" : null)] });
-    if (url.includes("liveBroadcasts?") && init.method === "GET") return response(200, { items: [] });
-    return response(200, broadcast(marker, "broadcast2"));
-  };
-  const client = provider(fetchImpl);
-  const created = await client.ensureBroadcast({ court: 2, marker });
-  assert.equal(created.privacyStatus, "unlisted");
-  const result = await client.bind({ broadcastId: "broadcast2", streamId: "stream2" });
-  assert.equal(result.boundStreamId, "stream2");
-});
-
-test("bounds post-create visibility lag while preserving the exact binding", async () => {
-  const marker = rehearsalMarker("generation-1234", 2);
-  let boundReads = 0;
-  const sleeps = [];
-  const fetchImpl = async (url, init) => {
-    if (url.includes("oauth2")) return response(200, { access_token: "access" });
-    if (url.includes("liveBroadcasts/bind")) return response(200, broadcast(marker, "broadcast2", "stream2"));
-    if (url.includes("liveBroadcasts?") && init.method === "GET" && url.includes("&id=")) {
-      boundReads += 1;
-      if (boundReads <= 2) return response(200, { items: [] });
-      if (boundReads === 3) return response(200, { items: [broadcast(marker, "broadcast2", null)] });
-      return response(200, { items: [broadcast(marker, "broadcast2", "stream2")] });
-    }
-    return response(200, { items: [] });
-  };
-  const client = new YouTubeRehearsalProvider({
-    clientId: "client",
-    clientSecret: "secret",
-    refreshToken: "refresh",
-    fetchImpl,
-    sleep: async (milliseconds) => { sleeps.push(milliseconds); }
-  });
-  const result = await client.bind({ broadcastId: "broadcast2", streamId: "stream2" });
-  assert.equal(result.boundStreamId, "stream2");
-  assert.equal(boundReads, 4);
-  assert.deepEqual(sleeps, [1_000, 1_000, 1_000]);
-});
-
-test("does not retry a non-visibility provider failure during binding", async () => {
-  let reads = 0;
   const client = provider(async (url, init) => {
+    requests.push({ url, method: init.method });
     if (url.includes("oauth2")) return response(200, { access_token: "access" });
-    if (url.includes("liveBroadcasts/bind")) return response(200, {});
-    reads += 1;
-    return response(403, { error: { errors: [{ reason: "quotaExceeded" }] } });
+    return response(200, { items: Array.from({ length: 8 }, (_, index) => stream(index + 1)) });
   });
-  await assert.rejects(() => client.bind({ broadcastId: "broadcast2", streamId: "stream2" }), /HTTP 403 \(quotaExceeded\)/u);
-  assert.equal(reads, 1);
+
+  const pool = await client.resolvePersistentStreamPool();
+
+  assert.deepEqual(Object.keys(pool), ["1", "2", "3", "4", "5", "6", "7", "8"]);
+  assert.equal(pool[1].title, "ScoreCheck Court 1 Test Stream");
+  assert.equal(pool[8].isReusable, true);
+  assert.equal(pool[8].streamStatus, "inactive");
+  assert.equal(requests.filter((entry) => entry.url.includes("youtube/v3")).every((entry) => entry.method === "GET"), true);
+  assert.equal(typeof client.deleteStream, "undefined");
+  assert.equal(typeof client.ensureBroadcast, "undefined");
 });
 
-test("retries only explicit transient YouTube rate limits with a bounded backoff", async () => {
-  const marker = rehearsalMarker("generation-1234", 8);
-  const sleeps = [];
-  let creates = 0;
-  const client = new YouTubeRehearsalProvider({
-    clientId: "client",
-    clientSecret: "secret",
-    refreshToken: "refresh",
-    sleep: async (milliseconds) => { sleeps.push(milliseconds); },
-    fetchImpl: async (url, init) => {
-      if (url.includes("oauth2")) return response(200, { access_token: "access" });
-      if (init.method === "GET") return response(200, { items: [] });
-      creates += 1;
-      if (creates === 1) return response(403, { error: { errors: [{ reason: "userRequestsExceedRateLimit" }] } });
-      if (creates === 2) return response(403, { error: { errors: [{ reason: "rateLimitExceeded" }] } });
-      return response(200, broadcast(marker, "broadcast8"));
-    }
-  });
-  const created = await client.ensureBroadcast({ court: 8, marker });
-  assert.equal(created.id, "broadcast8");
-  assert.equal(creates, 3);
-  assert.deepEqual(sleeps, [5_000, 10_000]);
-});
-
-test("bounds rate-limit retries and never retries quota exhaustion", async () => {
-  const marker = rehearsalMarker("generation-1234", 8);
-  const sleeps = [];
-  let requests = 0;
-  const limited = new YouTubeRehearsalProvider({
-    clientId: "client",
-    clientSecret: "secret",
-    refreshToken: "refresh",
-    sleep: async (milliseconds) => { sleeps.push(milliseconds); },
-    fetchImpl: async (url, init) => {
-      if (url.includes("oauth2")) return response(200, { access_token: "access" });
-      if (init.method === "GET") return response(200, { items: [] });
-      requests += 1;
-      return response(403, { error: { errors: [{ reason: "userRequestsExceedRateLimit" }] } });
-    }
-  });
-  await assert.rejects(() => limited.ensureBroadcast({ court: 8, marker }), /userRequestsExceedRateLimit/u);
-  assert.equal(requests, 13);
-  assert.deepEqual(sleeps, [
-    5_000, 10_000, 20_000, 40_000, 80_000, 120_000,
-    180_000, 240_000, 300_000, 300_000, 300_000, 300_000
-  ]);
-
-  let quotaRequests = 0;
-  const exhausted = provider(async (url, init) => {
-    if (url.includes("oauth2")) return response(200, { access_token: "access" });
-    if (init.method === "GET") return response(200, { items: [] });
-    quotaRequests += 1;
-    return response(403, { error: { errors: [{ reason: "quotaExceeded" }] } });
-  });
-  await assert.rejects(() => exhausted.ensureBroadcast({ court: 8, marker }), /quotaExceeded/u);
-  assert.equal(quotaRequests, 1);
-});
-
-test("fails closed on duplicate markers and unsafe broadcast settings", async () => {
-  const marker = rehearsalMarker("generation-1234", 3);
-  const duplicate = provider(async (url) => url.includes("oauth2")
+test("fails closed on missing, duplicate, active, unsafe, or nonunique persistent streams", async () => {
+  const listProvider = (items) => provider(async (url) => url.includes("oauth2")
     ? response(200, { access_token: "access" })
-    : response(200, { items: [stream(marker, "one"), stream(marker, "two")] }));
-  await assert.rejects(() => duplicate.ensureStream({ court: 3, marker }), /multiple rehearsal streams/);
-  const unsafe = broadcast(marker);
-  unsafe.status.privacyStatus = "public";
-  const client = provider(async (url, init) => {
-    if (url.includes("oauth2")) return response(200, { access_token: "access" });
-    if (init.method === "GET") return response(200, { items: [] });
-    return response(200, unsafe);
-  });
-  await assert.rejects(() => client.ensureBroadcast({ court: 3, marker }), /safety settings/);
+    : response(200, { items }));
+  const complete = Array.from({ length: 8 }, (_, index) => stream(index + 1));
+
+  await assert.rejects(() => listProvider(complete.slice(0, 7)).resolvePersistentStreamPool(), /exactly one persistent rehearsal stream titled ScoreCheck Court 8 Test Stream; observed 0/u);
+  await assert.rejects(() => listProvider([...complete, stream(4, { id: "duplicate4" })]).resolvePersistentStreamPool(), /observed 2/u);
+
+  const active = structuredClone(complete);
+  active[0].status.streamStatus = "active";
+  await assert.rejects(() => listProvider(active).resolvePersistentStreamPool(), /not idle/u);
+
+  const disposable = structuredClone(complete);
+  disposable[1].contentDetails.isReusable = false;
+  await assert.rejects(() => listProvider(disposable).resolvePersistentStreamPool(), /profile is invalid/u);
+
+  const duplicateKey = structuredClone(complete);
+  duplicateKey[7].cdn.ingestionInfo.streamName = duplicateKey[6].cdn.ingestionInfo.streamName;
+  await assert.rejects(() => listProvider(duplicateKey).resolvePersistentStreamPool(), /identities are not unique/u);
 });
 
-test("deletes only exact ids and treats confirmed absence as success", async () => {
-  const urls = [];
-  const client = provider(async (url, init) => {
-    urls.push(`${init.method} ${url}`);
+test("waits for one exact persistent stream to become active", async () => {
+  let reads = 0;
+  const sleeps = [];
+  const client = provider(async (url) => {
     if (url.includes("oauth2")) return response(200, { access_token: "access" });
-    return response(404, { error: { status: "NOT_FOUND" } });
+    reads += 1;
+    const value = stream(3);
+    value.status.streamStatus = reads < 3 ? "inactive" : "active";
+    value.status.healthStatus.status = reads < 3 ? "noData" : "good";
+    return response(200, { items: [value] });
+  }, async (milliseconds) => { sleeps.push(milliseconds); });
+
+  const active = await client.waitForStream({ streamId: "stream3", streamStatus: "active", timeoutMs: 10_000, intervalMs: 250 });
+
+  assert.equal(active.streamStatus, "active");
+  assert.equal(active.healthStatus, "good");
+  assert.equal(reads, 3);
+  assert.deepEqual(sleeps, [250, 250]);
+});
+
+test("retries only explicit transient YouTube rate limits on reads", async () => {
+  const sleeps = [];
+  let reads = 0;
+  const client = provider(async (url) => {
+    if (url.includes("oauth2")) return response(200, { access_token: "access" });
+    reads += 1;
+    if (reads === 1) return response(403, { error: { errors: [{ reason: "userRequestsExceedRateLimit" }] } });
+    if (reads === 2) return response(403, { error: { errors: [{ reason: "rateLimitExceeded" }] } });
+    return response(200, { items: Array.from({ length: 8 }, (_, index) => stream(index + 1)) });
+  }, async (milliseconds) => { sleeps.push(milliseconds); });
+
+  assert.equal(Object.keys(await client.resolvePersistentStreamPool()).length, 8);
+  assert.equal(reads, 3);
+  assert.deepEqual(sleeps, [5_000, 10_000]);
+
+  let quotaReads = 0;
+  const quota = provider(async (url) => {
+    if (url.includes("oauth2")) return response(200, { access_token: "access" });
+    quotaReads += 1;
+    return response(403, { error: { errors: [{ reason: "quotaExceeded" }] } });
   });
-  assert.deepEqual(await client.deleteStream("stream-123"), { absent: true });
-  assert.match(urls.at(-1), /DELETE .*liveStreams\?id=stream-123$/);
+  await assert.rejects(() => quota.resolvePersistentStreamPool(), /quotaExceeded/u);
+  assert.equal(quotaReads, 1);
+});
+
+test("retains rehearsal markers for non-provider workload ownership", () => {
+  assert.equal(rehearsalMarker("generation-1234", 7), "[scorecheck-rehearsal:generation-1234:court-7]");
+  assert.throws(() => persistentStreamTitle(9), /court is invalid/u);
 });

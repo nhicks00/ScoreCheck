@@ -149,8 +149,10 @@ test("uses a reset-safe quality window while preserving historical startup count
     monitorOrigin: "https://monitor.example.com",
     monitorToken: "x".repeat(24),
     youtube: {
-      getStream: async (id) => ({ id, streamStatus: "active", healthStatus: "good", configurationIssues: [] }),
-      getBroadcast: async (id) => ({ id, lifecycleStatus: "live", recordingStatus: "recording", privacyStatus: "unlisted", boundStreamId: id.replace("broadcast", "stream") })
+      getStream: async (id) => {
+        const court = Number(id.replace("stream", ""));
+        return { id, court, title: `ScoreCheck Court ${court} Test Stream`, isReusable: true, streamStatus: "active", healthStatus: "good", configurationIssues: [] };
+      }
     },
     sampler: { inspect: async () => ({ pid: 42 }) },
     fetchImpl: async () => {
@@ -173,8 +175,9 @@ test("uses a reset-safe quality window while preserving historical startup count
     sampler: { output: "/tmp/rehearsal-sampler.ndjson" },
     courts: Object.fromEntries(Array.from({ length: 8 }, (_, index) => {
       const court = index + 1;
-      return [court, { stream: { id: `stream${court}` }, broadcast: { id: `broadcast${court}` } }];
-    }))
+      return [court, { stream: { id: `stream${court}` } }];
+    })),
+    providerMode: "persistent-youtube-stream-ingest-v1"
   };
 
   const result = await verifier.waitForFull({ state });
@@ -216,21 +219,20 @@ test("accepts full post-stop retirement", () => {
   assert.deepEqual(idleProblems(snapshot("idle"), now), []);
 });
 
-test("requires each YouTube broadcast to be recording, unlisted, healthy, and bound to its exact stream", () => {
+test("requires each persistent YouTube stream to be exact, reusable, active, and healthy", () => {
   const provider = {
+    mode: "persistent-youtube-stream-ingest-v1",
     courts: Array.from({ length: 8 }, (_, index) => ({
       court: index + 1,
       streamId: `stream${index + 1}`,
-      boundStreamId: `stream${index + 1}`,
+      title: `ScoreCheck Court ${index + 1} Test Stream`,
+      isReusable: true,
       streamStatus: "active",
       healthStatus: "good",
-      configurationIssues: [],
-      broadcastLifecycle: "live",
-      recordingStatus: "recording",
-      privacyStatus: "unlisted"
+      configurationIssues: []
     }))
   };
   assert.deepEqual(providerProblems(provider), []);
-  provider.courts[0].boundStreamId = "wrong";
-  assert.match(providerProblems(provider).join("; "), /exact stream/);
+  provider.courts[0].title = "wrong";
+  assert.match(providerProblems(provider).join("; "), /persistent YouTube ingest stream/);
 });

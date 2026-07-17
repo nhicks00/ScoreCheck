@@ -77,6 +77,7 @@ async function fakeCleanedRehearsalEvidence(setup, root) {
     event: lifecycle.event,
     generationId: lifecycle.generationId,
     manifestSha256: lifecycle.manifestSha256,
+    providerMode: "persistent-youtube-stream-ingest-v1",
     createdAt: lifecycle.createdAt,
     preparedAt: null,
     startedAt: null,
@@ -84,8 +85,11 @@ async function fakeCleanedRehearsalEvidence(setup, root) {
     cleanedAt: "2026-08-01T12:00:00.000Z",
     program: { project: { id: "project-test", status: "deleted" } },
     courts: Object.fromEntries(Array.from({ length: 8 }, (_, index) => [index + 1, {
-      stream: { id: `stream-${index + 1}`, status: "deleted" },
-      broadcast: { id: `broadcast-${index + 1}`, status: "deleted" }
+      providerCleanup: {
+        mode: "persistent-youtube-stream-ingest-v1",
+        status: "not-adopted",
+        streamId: null
+      }
     }])),
     startEvidence: null,
     soakEvidence: null,

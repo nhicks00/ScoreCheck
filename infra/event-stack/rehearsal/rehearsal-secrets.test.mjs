@@ -27,8 +27,10 @@ test("renders protected all-publisher, eight-compositor secrets with no producti
   const material = completeAgentSecrets(createRehearsalSecretMaterial({ random: deterministic }), manifest, { random: deterministic });
   const destinations = Array.from({ length: 8 }, (_, index) => ({
     court: index + 1,
+    mode: "persistent-youtube-stream-ingest-v1",
     streamId: `stream-${index + 1}`,
-    broadcastId: `broadcast-${index + 1}`,
+    title: `ScoreCheck Court ${index + 1} Test Stream`,
+    isReusable: true,
     streamName: `secret-key-${index + 1}`,
     rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2"
   }));

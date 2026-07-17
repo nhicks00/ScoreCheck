@@ -36,16 +36,35 @@ function harness({ failPublisherOnce = false, failPreflight = false, failFullEvi
     deleteProject: async (id) => { log.push(`delete-project:${id}`); return { absent: true }; }
   };
   const youtube = {
-    findStream: async ({ court, marker }) => orphanedProviderResources ? { id: `orphan-stream${court}`, marker, streamName: `key${court}`, rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2", streamStatus: "ready" } : null,
-    findBroadcast: async ({ court, marker }) => orphanedProviderResources ? { id: `orphan-broadcast${court}`, marker, privacyStatus: "unlisted", lifecycleStatus: "ready" } : null,
-    ensureStream: async ({ court, marker }) => ({ id: `stream${court}`, marker, streamName: `key${court}`, rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2", streamStatus: "ready" }),
-    ensureBroadcast: async ({ court, marker }) => ({ id: `broadcast${court}`, marker, privacyStatus: "unlisted", lifecycleStatus: "ready" }),
-    bind: async ({ broadcastId, streamId }) => ({ id: broadcastId, marker: `[scorecheck-rehearsal:${generationId}:court-${Number(broadcastId.replace("broadcast", ""))}]`, privacyStatus: "unlisted", lifecycleStatus: "ready", boundStreamId: streamId }),
-    waitFor: async ({ streamId, broadcastId, broadcastStatus }) => ({ stream: { id: streamId, streamStatus: "active" }, broadcast: { id: broadcastId, lifecycleStatus: broadcastStatus ?? "ready", privacyStatus: "unlisted" } }),
-    getBroadcast: async (id) => ({ id, lifecycleStatus: "live", privacyStatus: "unlisted" }),
-    transition: async (id, status) => { log.push(`youtube-${status}:${id}`); return { id, lifecycleStatus: status, privacyStatus: "unlisted" }; },
-    deleteBroadcast: async (id) => { log.push(`delete-broadcast:${id}`); },
-    deleteStream: async (id) => { log.push(`delete-stream:${id}`); }
+    resolvePersistentStreamPool: async () => Object.fromEntries(Array.from({ length: 8 }, (_, index) => {
+      const court = index + 1;
+      return [court, {
+        id: `stream${court}`,
+        court,
+        title: `ScoreCheck Court ${court} Test Stream`,
+        isReusable: true,
+        streamName: `key${court}`,
+        rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2",
+        streamStatus: "inactive",
+        healthStatus: "noData",
+        configurationIssues: []
+      }];
+    })),
+    waitForStream: async ({ streamId, streamStatus }) => {
+      log.push(`youtube-${streamStatus}:${streamId}`);
+      const court = Number(streamId.replace("stream", ""));
+      return {
+        id: streamId,
+        court,
+        title: `ScoreCheck Court ${court} Test Stream`,
+        isReusable: true,
+        streamName: `key${court}`,
+        rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2",
+        streamStatus,
+        healthStatus: streamStatus === "active" ? "good" : "noData",
+        configurationIssues: []
+      };
+    }
   };
   const publishers = {
     preflight: async () => ({ healthy: true }),
@@ -117,7 +136,7 @@ function harness({ failPublisherOnce = false, failPreflight = false, failFullEvi
   return { controller, store, log, activeEgress };
 }
 
-test("runs the full isolated rehearsal and cleans every external resource by exact id", async () => {
+test("runs the full isolated rehearsal and retains every persistent stream by exact id", async () => {
   const { controller, log } = harness();
   const lifecycle = lifecycleState();
   await controller.plan({ manifest, lifecycleState: lifecycle });
@@ -128,8 +147,8 @@ test("runs the full isolated rehearsal and cleans every external resource by exa
   let summary = rehearsalSummary(await controller.store.load());
   assert.equal(summary.activePublishers, 8);
   assert.equal(summary.activeEgresses, 8);
-  assert.equal(summary.liveBroadcasts, 8);
-  assert.ok(log.indexOf("youtube-live:broadcast1") < log.indexOf("egress-start:2"));
+  assert.equal(summary.activeProviderStreams, 8);
+  assert.ok(log.indexOf("youtube-active:stream1") < log.indexOf("egress-start:2"));
   await controller.soak({ manifest, lifecycleState: lifecycle, evidenceDirectory: "/tmp/rehearsal-evidence", durationMs: 1_800_000 });
   await controller.stop({ manifest, lifecycleState: lifecycle });
   await controller.cleanup({ manifest, lifecycleState: lifecycle });
@@ -137,9 +156,10 @@ test("runs the full isolated rehearsal and cleans every external resource by exa
   summary = rehearsalSummary(await controller.store.load());
   assert.equal(summary.phase, "cleaned");
   assert.equal(summary.evidenceClassification, "PASS");
-  assert.ok(log.indexOf("youtube-complete:broadcast8") < log.indexOf("egress-stop:8:EG_8"));
-  assert.equal(log.filter((entry) => entry.startsWith("delete-broadcast:")).length, 8);
-  assert.equal(log.filter((entry) => entry.startsWith("delete-stream:")).length, 8);
+  assert.ok(log.indexOf("egress-stop:8:EG_8") < log.indexOf("youtube-inactive:stream1"));
+  const cleaned = await controller.store.load();
+  assert.equal(Object.values(cleaned.courts).every((court) => court.providerCleanup.status === "retained"), true);
+  assert.equal(Object.values(cleaned.courts).every((court) => court.providerCleanup.isReusable === true), true);
   assert.ok(log.includes("delete-project:prj_test"));
 });
 
@@ -196,7 +216,7 @@ test("refuses provider cleanup while workload ownership is still active", async 
   await assert.rejects(() => controller.cleanup({ manifest, lifecycleState: ready }), /phase is running|must be stopped/);
 });
 
-test("reconciles marker-owned provider resources whose create responses were lost before local state save", async () => {
+test("cleans interrupted preparation without deleting the persistent stream pool", async () => {
   const { controller, store, log } = harness({ orphanedProviderResources: true });
   const lifecycle = lifecycleState();
   await controller.plan({ manifest, lifecycleState: lifecycle });
@@ -204,10 +224,10 @@ test("reconciles marker-owned provider resources whose create responses were los
   interrupted.phase = "preparing";
   await store.save(interrupted);
   await controller.cleanup({ manifest, lifecycleState: lifecycle });
-  assert.equal(log.filter((entry) => entry.startsWith("delete-broadcast:orphan-")).length, 8);
-  assert.equal(log.filter((entry) => entry.startsWith("delete-stream:orphan-")).length, 8);
   assert.ok(log.includes("delete-project:prj_orphan"));
-  assert.equal((await store.load()).phase, "cleaned");
+  const cleaned = await store.load();
+  assert.equal(cleaned.phase, "cleaned");
+  assert.equal(Object.values(cleaned.courts).every((court) => court.providerCleanup.status === "not-adopted"), true);
 });
 
 test("adopts and stops a lone Egress whose successful start was interrupted before its id was persisted", async () => {
