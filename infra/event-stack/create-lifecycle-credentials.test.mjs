@@ -31,7 +31,7 @@ async function fixture() {
   await writeFile(providerEnv, env(PROVIDER), { mode: 0o600 });
   await writeFile(monitoringEnv, env(MONITORING), { mode: 0o600 });
   await writeFile(tokenFile, "new-do-token\n", { mode: 0o600 });
-  return { command: "create", providerEnv, monitoringEnv, digitalOceanTokenFile: tokenFile, output };
+  return { command: "create", providerEnv, monitoringEnv, digitalOceanTokenFile: tokenFile, acmeEmail: "operations@example.com", output };
 }
 
 test("atomically creates the exact Pushover-only lifecycle credential contract", async () => {
@@ -42,6 +42,7 @@ test("atomically creates the exact Pushover-only lifecycle credential contract",
   assert.match(output, /^DIGITALOCEAN_TOKEN=new-do-token$/mu);
   assert.match(output, /^YOUTUBE_REFRESH_TOKEN=youtube-refresh$/mu);
   assert.match(output, /^PUSHOVER_USER_KEY=pushover-user$/mu);
+  assert.match(output, /^SCORECHECK_ACME_EMAIL=operations@example\.com$/mu);
   assert.doesNotMatch(output, /TWILIO/u);
   assert.equal((await stat(options.output)).mode & 0o077, 0);
   await assert.rejects(() => createLifecycleCredentials(options), /already exists/);
@@ -65,6 +66,8 @@ test("fails closed on weak files, missing values, relative paths, and path alias
   await assert.rejects(() => createLifecycleCredentials(missing), /YOUTUBE_CLIENT_ID is missing/);
 
   assert.throws(() => parseCredentialArgs(["create", "--provider-env", "relative"]), /normalized absolute path/);
+  const invalidEmail = await fixture();
+  await assert.rejects(() => createLifecycleCredentials({ ...invalidEmail, acmeEmail: "invalid" }), /valid email address/);
   const aliased = await fixture();
   await assert.rejects(() => createLifecycleCredentials({ ...aliased, output: aliased.providerEnv }), /paths must be distinct/);
 });

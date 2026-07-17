@@ -10,7 +10,7 @@ import { loadProtectedEnv } from "./stack-deployer.mjs";
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const PROVIDER_KEYS = ["DIGITALOCEAN_TOKEN", "SCORECHECK_DO_SSH_KEYS", "VERCEL_TOKEN", "VERCEL_TEAM_ID"];
 const MONITORING_KEYS = ["YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_REFRESH_TOKEN", "PUSHOVER_APP_TOKEN", "PUSHOVER_USER_KEY"];
-const OUTPUT_KEYS = [...PROVIDER_KEYS, ...MONITORING_KEYS];
+const OUTPUT_KEYS = [...PROVIDER_KEYS, ...MONITORING_KEYS, "SCORECHECK_ACME_EMAIL"];
 
 if (process.argv[1] && resolve(process.argv[1]) === SCRIPT_PATH) {
   main().catch((error) => {
@@ -44,7 +44,8 @@ export async function createLifecycleCredentials(options) {
     YOUTUBE_CLIENT_SECRET: monitoring.YOUTUBE_CLIENT_SECRET,
     YOUTUBE_REFRESH_TOKEN: monitoring.YOUTUBE_REFRESH_TOKEN,
     PUSHOVER_APP_TOKEN: monitoring.PUSHOVER_APP_TOKEN,
-    PUSHOVER_USER_KEY: monitoring.PUSHOVER_USER_KEY
+    PUSHOVER_USER_KEY: monitoring.PUSHOVER_USER_KEY,
+    SCORECHECK_ACME_EMAIL: options.acmeEmail
   };
   for (const key of OUTPUT_KEYS) validateSecretValue(values[key], key);
 
@@ -78,11 +79,12 @@ export async function createLifecycleCredentials(options) {
 export function parseCredentialArgs(argv) {
   if ([undefined, "help", "-h", "--help"].includes(argv[0])) return null;
   if (argv[0] !== "create") throw new Error("first argument must be create");
-  const options = { command: "create", providerEnv: null, monitoringEnv: null, digitalOceanTokenFile: null, output: null };
+  const options = { command: "create", providerEnv: null, monitoringEnv: null, digitalOceanTokenFile: null, acmeEmail: null, output: null };
   const fields = new Map([
     ["--provider-env", "providerEnv"],
     ["--monitoring-env", "monitoringEnv"],
     ["--digitalocean-token-file", "digitalOceanTokenFile"],
+    ["--acme-email", "acmeEmail"],
     ["--output", "output"]
   ]);
   for (let index = 1; index < argv.length; index += 1) {
@@ -90,7 +92,7 @@ export function parseCredentialArgs(argv) {
     const field = fields.get(flag);
     const value = argv[++index];
     if (!field || !value || value.startsWith("--")) throw new Error(`${flag} is unknown or missing a value`);
-    options[field] = normalizedAbsolute(value, flag);
+    options[field] = field === "acmeEmail" ? value : normalizedAbsolute(value, flag);
   }
   return options;
 }
@@ -99,6 +101,7 @@ function validateOptions(value) {
   if (!value || value.command !== "create") throw new Error("credential create options are required");
   for (const field of ["providerEnv", "monitoringEnv", "output"]) normalizedAbsolute(value[field], field);
   if (value.digitalOceanTokenFile !== null) normalizedAbsolute(value.digitalOceanTokenFile, "digitalOceanTokenFile");
+  if (typeof value.acmeEmail !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value.acmeEmail)) throw new Error("acmeEmail must be a valid email address");
   const inputs = [value.providerEnv, value.monitoringEnv, value.digitalOceanTokenFile].filter(Boolean);
   if (new Set(inputs).size !== inputs.length || inputs.includes(value.output)) throw new Error("credential input and output paths must be distinct");
 }
@@ -126,5 +129,5 @@ function normalizedAbsolute(value, label) {
 }
 
 function usage() {
-  process.stdout.write("Usage: node infra/event-stack/create-lifecycle-credentials.mjs create --provider-env FILE --monitoring-env FILE [--digitalocean-token-file FILE] --output FILE\n");
+  process.stdout.write("Usage: node infra/event-stack/create-lifecycle-credentials.mjs create --provider-env FILE --monitoring-env FILE [--digitalocean-token-file FILE] --acme-email ADDRESS --output FILE\n");
 }

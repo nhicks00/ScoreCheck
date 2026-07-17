@@ -283,10 +283,12 @@ node infra/event-stack/create-lifecycle-credentials.mjs create \
   --provider-env /absolute/protected/existing-provider.env \
   --monitoring-env /absolute/protected/monitoring.env \
   --digitalocean-token-file /absolute/protected/digitalocean-lifecycle.token \
+  --acme-email operations@example.com \
   --output /absolute/protected/provider.env
 ```
 
-The output contains exactly DigitalOcean, Vercel, YouTube, and Pushover values.
+The output contains exactly DigitalOcean, Vercel, YouTube, Pushover, and ACME
+contact values.
 It intentionally excludes Twilio, Supabase, dashboard passwords, and unrelated
 runtime configuration. Existing output is never overwritten.
 
