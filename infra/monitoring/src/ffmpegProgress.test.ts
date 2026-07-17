@@ -60,22 +60,25 @@ describe("FFmpeg progress parser", () => {
 });
 
 describe("FFmpeg speed derivation", () => {
-  it("publishes reset-safe current cadence and real-time ratio into the agent snapshot contract", () => {
+  it("publishes reset-safe windowed cadence and real-time ratio into the agent snapshot contract", () => {
     const deriver = new FfmpegSpeedDeriver();
-    expect(deriver.update([branch("2026-07-17T00:00:00Z", 10_000, 300)])[0]).toMatchObject({ framesPerSecond: 23, speedRatio: null });
-    expect(deriver.update([branch("2026-07-17T00:00:05Z", 15_000, 450)])[0]).toMatchObject({ framesPerSecond: 30, speedRatio: 1 });
-    expect(deriver.update([branch("2026-07-17T00:00:05Z", 15_000, 450)])[0]).toMatchObject({ framesPerSecond: 30, speedRatio: 1 });
-    expect(deriver.update([branch("2026-07-17T00:00:10Z", 1_000, 30)])[0]).toMatchObject({ framesPerSecond: null, speedRatio: null });
+    expect(deriver.update([branch("2026-07-17T00:00:00Z", 10_000, 300)])[0]).toMatchObject({ framesPerSecond: null, speedRatio: null });
+    expect(deriver.update([branch("2026-07-17T00:00:05Z", 15_500, 462)])[0]).toMatchObject({ framesPerSecond: null, speedRatio: null });
+    expect(deriver.update([branch("2026-07-17T00:00:15Z", 25_000, 750)])[0]).toMatchObject({ framesPerSecond: 30, speedRatio: 1 });
+    expect(deriver.update([branch("2026-07-17T00:00:15Z", 25_000, 750)])[0]).toMatchObject({ framesPerSecond: 30, speedRatio: 1 });
+    expect(deriver.update([branch("2026-07-17T00:00:20Z", 1_000, 30)])[0]).toMatchObject({ framesPerSecond: null, speedRatio: null });
     expect(deriver.update([])).toEqual([]);
-    expect(deriver.update([branch("2026-07-17T00:00:15Z", 6_000, 180)])[0]).toMatchObject({ framesPerSecond: 23, speedRatio: null });
+    expect(deriver.update([branch("2026-07-17T00:00:25Z", 6_000, 180)])[0]).toMatchObject({ framesPerSecond: null, speedRatio: null });
   });
 
-  it("uses frame deltas instead of FFmpeg's lifetime-average fps after delayed startup", () => {
+  it("smooths progress-file quantization instead of exposing a noisy one-sample cadence", () => {
     const deriver = new FfmpegSpeedDeriver();
     const first = branch("2026-07-17T00:00:00Z", 6_000, 120);
     first.speedRatio = 0.8;
     deriver.update([first]);
-    expect(deriver.update([branch("2026-07-17T00:00:05Z", 11_000, 270)])[0]).toMatchObject({
+    expect(deriver.update([branch("2026-07-17T00:00:05Z", 10_600, 282)])[0]).toMatchObject({ framesPerSecond: null, speedRatio: null });
+    expect(deriver.update([branch("2026-07-17T00:00:10Z", 15_400, 426)])[0]).toMatchObject({ framesPerSecond: null, speedRatio: null });
+    expect(deriver.update([branch("2026-07-17T00:00:15Z", 21_000, 570)])[0]).toMatchObject({
       framesPerSecond: 30,
       speedRatio: 1
     });

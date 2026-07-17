@@ -265,7 +265,8 @@ function fullProblemsInternal(snapshot, nowMs, requireZeroBrowserHistory) {
     } else {
       const countersInvalid = BROWSER_COUNTER_FIELDS.some((field) => !Number.isFinite(browser.video[field]) || browser.video[field] < 0);
       const historyNotClean = requireZeroBrowserHistory && BROWSER_COUNTER_FIELDS.some((field) => browser.video[field] !== 0);
-      if ((browser.video.framesPerSecond ?? 0) < 25 || browser.video.framesPerSecond > 35 || countersInvalid || historyNotClean) problems.push(`Camera ${court} browser quality counters are not clean`);
+      const pointFpsInvalid = !Number.isFinite(browser.video.framesPerSecond) || browser.video.framesPerSecond < 0 || browser.video.framesPerSecond > 120;
+      if (pointFpsInvalid || countersInvalid || historyNotClean) problems.push(`Camera ${court} browser quality counters are not clean`);
       const commentary = browser.commentary;
       const syncGapMs = commentary.targetDelayMs === null || commentary.appliedDelayMs === null ? Infinity : Math.abs(commentary.targetDelayMs - commentary.appliedDelayMs);
       if (!commentary.configured || !commentary.roomConnected || commentary.participantCount < 1 || commentary.audioTrackCount < 1 || commentary.mutedAudioTrackCount !== 0
@@ -301,7 +302,16 @@ export function browserQualityDeltaProblems(previous, current) {
     }
     if (!Number.isInteger(after.heartbeatSeq) || after.heartbeatSeq <= before.heartbeatSeq) problems.push(`Camera ${court} browser heartbeat sequence did not advance`);
     if (!Number.isFinite(Date.parse(after.receivedAt)) || Date.parse(after.receivedAt) <= Date.parse(before.receivedAt)) problems.push(`Camera ${court} browser receipt timestamp did not advance`);
-    if (!Number.isInteger(after.video?.framesRendered) || after.video.framesRendered <= before.video?.framesRendered) problems.push(`Camera ${court} rendered frames did not advance`);
+    const beforeReceivedAt = Date.parse(before.receivedAt);
+    const afterReceivedAt = Date.parse(after.receivedAt);
+    const beforeFramesRendered = before.video?.framesRendered;
+    const afterFramesRendered = after.video?.framesRendered;
+    if (!Number.isInteger(afterFramesRendered) || afterFramesRendered <= beforeFramesRendered) problems.push(`Camera ${court} rendered frames did not advance`);
+    if (Number.isFinite(beforeReceivedAt) && Number.isFinite(afterReceivedAt) && afterReceivedAt > beforeReceivedAt
+      && Number.isInteger(beforeFramesRendered) && Number.isInteger(afterFramesRendered) && afterFramesRendered > beforeFramesRendered) {
+      const aggregateFps = ((afterFramesRendered - beforeFramesRendered) * 1_000) / (afterReceivedAt - beforeReceivedAt);
+      if (aggregateFps < 25 || aggregateFps > 35) problems.push(`Camera ${court} aggregate rendered cadence is outside 25-35fps (${aggregateFps.toFixed(2)}fps)`);
+    }
     for (const field of BROWSER_COUNTER_FIELDS) {
       const beforeValue = before.video?.[field];
       const afterValue = after.video?.[field];

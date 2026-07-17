@@ -207,6 +207,23 @@ test("rejects browser counter growth and identity or heartbeat discontinuity", (
   assert.match(problems, /Camera 3 browser heartbeat sequence did not advance/);
 });
 
+test("uses reset-safe rendered-frame deltas instead of quantized point-in-time browser FPS", () => {
+  const before = snapshot("full");
+  const after = structuredClone(before);
+  for (const court of before.courts) court.browser.video.framesPerSecond = 47;
+  for (const court of after.courts) {
+    court.browser.video.framesPerSecond = 12;
+    court.browser.heartbeatSeq += 1;
+    court.browser.receivedAt = new Date(now + 5_000).toISOString();
+    court.browser.video.framesRendered += 150;
+  }
+  assert.deepEqual(fullCurrentProblems(before, now), []);
+  assert.deepEqual(browserQualityDeltaProblems(before, after), []);
+
+  after.courts[0].browser.video.framesRendered -= 100;
+  assert.match(browserQualityDeltaProblems(before, after).join("; "), /Camera 1 aggregate rendered cadence is outside 25-35fps \(10\.00fps\)/);
+});
+
 test("keeps strict point-in-time checks while current health tolerates flat startup history", () => {
   const value = snapshot("full");
   value.courts[0].browser.video.freezeCount = 1;

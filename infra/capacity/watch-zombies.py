@@ -203,7 +203,10 @@ def classification_map(processes, retained_healthcheck_shims=None):
         elif (
             classification is None
             and healthcheck is not None
-            and process.get("cgroupFingerprint") == healthcheck["cgroupFingerprint"]
+            and (
+                process.get("cgroupFingerprint") is None
+                or process.get("cgroupFingerprint") == healthcheck["cgroupFingerprint"]
+            )
             and process["command"] == ORPHANED_HEALTHCHECK_COMMANDS.get(healthcheck["classification"])
         ):
             classification = healthcheck["classification"]
@@ -511,6 +514,7 @@ def self_test():
         60: {"pid": 60, "ppid": 50, "identity": "60:6", "command": "redis-server", "parentCommand": "containerd-shim", "commandLine": b"redis-server *:6379", "cgroupFingerprint": "redis"},
         70: {"pid": 70, "ppid": 50, "identity": "70:7", "command": "redis-cli", "parentCommand": "containerd-shim", "commandLine": b"", "cgroupFingerprint": "redis"},
         80: {"pid": 80, "ppid": 50, "identity": "80:8", "command": "redis-cli", "parentCommand": "containerd-shim", "commandLine": b"", "cgroupFingerprint": "other"},
+        95: {"pid": 95, "ppid": 50, "identity": "95:95", "command": "redis-cli", "parentCommand": "containerd-shim", "commandLine": b"", "cgroupFingerprint": None},
         90: {"pid": 90, "ppid": 50, "identity": "90:9", "command": "node", "parentCommand": "containerd-shim", "commandLine": b"", "cgroupFingerprint": "redis"},
         100: {"pid": 100, "ppid": 10, "identity": "100:10", "command": "egress", "parentCommand": "tini", "commandLine": b"egress", "cgroupFingerprint": "egress"},
         110: {"pid": 110, "ppid": 100, "identity": "110:11", "command": "pactl", "parentCommand": "egress", "commandLine": b"", "cgroupFingerprint": "egress"},
@@ -524,6 +528,7 @@ def self_test():
     assert "40:4" not in classifications
     assert classifications["70:7"] == "healthcheck.redis"
     assert "80:8" not in classifications
+    assert classifications["95:95"] == "healthcheck.redis"
     assert "90:9" not in classifications
     assert classifications["110:11"] == "workload.egress-pactl"
     assert "120:12" not in classifications

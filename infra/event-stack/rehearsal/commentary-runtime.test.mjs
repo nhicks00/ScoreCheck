@@ -39,7 +39,7 @@ test("preflights, starts, adopts, and stops the exact commentary browser", async
     runner: async (command, args) => {
       if (command === "ps") return { code: 0, stdout: processLines, stderr: "" };
       if (args.includes("-encoders")) return { code: 0, stdout: "pcm_s16le", stderr: "" };
-      if (args.includes("-filters")) return { code: 0, stdout: "amix highpass lowpass loudnorm volume", stderr: "" };
+      if (args.includes("-filters")) return { code: 0, stdout: "alimiter amix anoisesrc highpass lowpass loudnorm", stderr: "" };
       if (args.includes("--version")) return { code: 0, stdout: "v24.0.0", stderr: "" };
       if (args.includes("--preflight")) return { code: 0, stdout: "playwright chromium ready", stderr: "" };
       if (command === "/usr/bin/say") {
@@ -51,12 +51,11 @@ test("preflights, starts, adopts, and stops the exact commentary browser", async
       }
       if (command === "ffmpeg") {
         assert.equal(config.fixturePath.endsWith("commentary-microphone.wav"), true);
-        assert.doesNotMatch(args.join(" "), /anoisesrc=/u);
         if (args.includes("-stream_loop")) {
           assert.match(args.join(" "), /-stream_loop -1/u);
-          assert.match(args.join(" "), /sine=frequency=220:sample_rate=48000/u);
-          assert.match(args.join(" "), /volume=0\.18\[carrier\]/u);
-          assert.match(args.join(" "), /amix=inputs=2:duration=first:normalize=0/u);
+          assert.match(args.join(" "), /anoisesrc=color=pink:amplitude=0\.18:sample_rate=48000:seed=20260717/u);
+          assert.match(args.join(" "), /highpass=f=180,lowpass=f=7000\[bed\]/u);
+          assert.match(args.join(" "), /amix=inputs=2:duration=first:normalize=0,alimiter=limit=0\.95/u);
           assert.match(args.join(" "), /-t 2700 -ar 48000 -c:a pcm_s16le -ac 1/u);
           await writeFile(config.fixturePath, "fixture", { mode: 0o600 });
         } else {

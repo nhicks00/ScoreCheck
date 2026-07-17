@@ -73,7 +73,7 @@ export class CommentaryClientManager {
     if ([node, ffmpeg, filters, speech, playwright].some((result) => result.code !== 0)) throw new Error("commentary browser dependency preflight failed");
     if (!/^v\d+/m.test(node.stdout)) throw new Error("commentary browser Node.js preflight failed");
     if (!/(^|\s)pcm_s16le(\s|$)/m.test(`${ffmpeg.stdout}\n${ffmpeg.stderr}`)) throw new Error("commentary browser fixture requires the pcm_s16le encoder");
-    for (const required of ["amix", "highpass", "lowpass", "loudnorm", "volume"]) {
+    for (const required of ["alimiter", "amix", "anoisesrc", "highpass", "lowpass", "loudnorm"]) {
       if (!new RegExp(`(^|\\s)${required}(\\s|$)`, "m").test(`${filters.stdout}\n${filters.stderr}`)) {
         throw new Error(`commentary browser fixture requires the ${required} filter`);
       }
@@ -105,8 +105,8 @@ export class CommentaryClientManager {
       result = await this.runner(config.ffmpegPath, [
         "-hide_banner", "-nostdin", "-loglevel", "error",
         "-stream_loop", "-1", "-i", config.normalizedSeedPath,
-        "-f", "lavfi", "-i", "sine=frequency=220:sample_rate=48000",
-        "-filter_complex", "[1:a]volume=0.18[carrier];[0:a][carrier]amix=inputs=2:duration=first:normalize=0[out]",
+        "-f", "lavfi", "-i", "anoisesrc=color=pink:amplitude=0.18:sample_rate=48000:seed=20260717",
+        "-filter_complex", "[1:a]highpass=f=180,lowpass=f=7000[bed];[0:a][bed]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[out]",
         "-map", "[out]", "-t", "2700", "-ar", "48000", "-c:a", "pcm_s16le", "-ac", "1", config.fixturePath
       ]);
     } finally {

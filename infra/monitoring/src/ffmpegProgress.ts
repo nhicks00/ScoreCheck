@@ -5,6 +5,8 @@ import type { FfmpegBranchSnapshot } from "./contracts.js";
 const FILE_PATTERN = /^(court([1-8])_(preview|program|calibration|monitor))\.progress$/;
 const MAX_FILE_BYTES = 4_096;
 const MAX_SAMPLE_AGE_MS = 20_000;
+const MIN_DERIVATION_WINDOW_MS = 15_000;
+const MAX_DERIVATION_WINDOW_MS = 30_000;
 
 export async function collectFfmpegProgress(directory: string | null, nowMs = Date.now()): Promise<FfmpegBranchSnapshot[]> {
   if (!directory) return [];
@@ -36,10 +38,8 @@ export async function collectFfmpegProgress(directory: string | null, nowMs = Da
 
 export class FfmpegSpeedDeriver {
   private readonly previous = new Map<string, {
-    sampledAtMs: number;
-    frame: number;
+    samples: Array<{ sampledAtMs: number; frame: number; outputTimeMs: number }>;
     framesPerSecond: number | null;
-    outputTimeMs: number;
     speedRatio: number | null;
   }>();
 
@@ -59,29 +59,38 @@ export class FfmpegSpeedDeriver {
       return branch;
     }
 
+    const current = { sampledAtMs, frame: branch.frame, outputTimeMs };
     const previous = this.previous.get(branch.name);
-    let framesPerSecond = branch.framesPerSecond;
-    let speedRatio = branch.speedRatio;
-    if (previous) {
-      const elapsedMs = sampledAtMs - previous.sampledAtMs;
-      const frameDelta = branch.frame - previous.frame;
-      const outputDeltaMs = outputTimeMs - previous.outputTimeMs;
-      if (elapsedMs === 0 && frameDelta === 0 && outputDeltaMs === 0) {
-        framesPerSecond = previous.framesPerSecond;
-        speedRatio = previous.speedRatio;
-      } else if (elapsedMs > 0 && frameDelta >= 0 && outputDeltaMs >= 0) {
-        const derivedFramesPerSecond = (frameDelta * 1_000) / elapsedMs;
-        framesPerSecond = Number.isFinite(derivedFramesPerSecond) && derivedFramesPerSecond <= 240
-          ? derivedFramesPerSecond
-          : null;
-        const derivedSpeedRatio = outputDeltaMs / elapsedMs;
-        speedRatio = Number.isFinite(derivedSpeedRatio) && derivedSpeedRatio <= 20 ? derivedSpeedRatio : null;
-      } else {
-        framesPerSecond = null;
-        speedRatio = null;
-      }
+    if (!previous) {
+      this.previous.set(branch.name, { samples: [current], framesPerSecond: null, speedRatio: null });
+      return { ...branch, framesPerSecond: null, speedRatio: null };
     }
-    this.previous.set(branch.name, { sampledAtMs, frame: branch.frame, framesPerSecond, outputTimeMs, speedRatio });
+
+    const latest = previous.samples.at(-1);
+    if (!latest) throw new Error("FFmpeg cadence history is empty");
+    if (sampledAtMs === latest.sampledAtMs && branch.frame === latest.frame && outputTimeMs === latest.outputTimeMs) {
+      return { ...branch, framesPerSecond: previous.framesPerSecond, speedRatio: previous.speedRatio };
+    }
+    if (sampledAtMs <= latest.sampledAtMs || branch.frame < latest.frame || outputTimeMs < latest.outputTimeMs) {
+      this.previous.set(branch.name, { samples: [current], framesPerSecond: null, speedRatio: null });
+      return { ...branch, framesPerSecond: null, speedRatio: null };
+    }
+
+    const samples = [...previous.samples, current]
+      .filter((sample) => sampledAtMs - sample.sampledAtMs <= MAX_DERIVATION_WINDOW_MS);
+    const anchor = samples.find((sample) => sampledAtMs - sample.sampledAtMs >= MIN_DERIVATION_WINDOW_MS);
+    let framesPerSecond: number | null = null;
+    let speedRatio: number | null = null;
+    if (anchor) {
+      const elapsedMs = sampledAtMs - anchor.sampledAtMs;
+      const derivedFramesPerSecond = ((branch.frame - anchor.frame) * 1_000) / elapsedMs;
+      framesPerSecond = Number.isFinite(derivedFramesPerSecond) && derivedFramesPerSecond <= 240
+        ? derivedFramesPerSecond
+        : null;
+      const derivedSpeedRatio = (outputTimeMs - anchor.outputTimeMs) / elapsedMs;
+      speedRatio = Number.isFinite(derivedSpeedRatio) && derivedSpeedRatio <= 20 ? derivedSpeedRatio : null;
+    }
+    this.previous.set(branch.name, { samples, framesPerSecond, speedRatio });
     return { ...branch, framesPerSecond, speedRatio };
   }
 }
