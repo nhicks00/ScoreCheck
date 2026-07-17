@@ -6,6 +6,7 @@ export const COMMENTARY_SYNC_INTERVAL_MS = 1000;
 export const COMMENTARY_SYNC_PING_INTERVAL_MS = 3000;
 export const COMMENTARY_SYNC_SAMPLE_MAX_AGE_MS = 5000;
 export const COMMENTARY_SYNC_BASELINE_SAMPLES = 8;
+export const COMMENTARY_SYNC_MISSING_OBSERVATION_GRACE_SAMPLES = 5;
 export const COMMENTARY_SYNC_MAX_CORRECTION_MS = 500;
 export const COMMENTARY_SYNC_SLEW_MS_PER_TICK = 25;
 
@@ -56,6 +57,7 @@ export type CommentarySyncController = {
   baselineOffsetsMs: number[];
   baselineOffsetMs: number | null;
   recentOffsetsMs: number[];
+  missingObservationSamples: number;
 };
 
 export function encodeCommentarySyncMessage(message: CommentarySyncMessage): Uint8Array<ArrayBuffer> {
@@ -132,7 +134,8 @@ export function initialCommentarySyncController(configuredDelayMs: number): Comm
     targetDelayMs: safeDelay,
     baselineOffsetsMs: [],
     baselineOffsetMs: null,
-    recentOffsetsMs: []
+    recentOffsetsMs: [],
+    missingObservationSamples: 0
   };
 }
 
@@ -140,20 +143,31 @@ export function commentarySyncStep(
   state: CommentarySyncController,
   observation: SyncObservation | null
 ): CommentarySyncController {
-  if (!observation) return { ...state, status: "fallback" };
+  if (!observation) {
+    const missingObservationSamples = state.missingObservationSamples + 1;
+    return {
+      ...state,
+      status: state.baselineOffsetMs != null
+        && missingObservationSamples <= COMMENTARY_SYNC_MISSING_OBSERVATION_GRACE_SAMPLES
+        ? "locked"
+        : "fallback",
+      missingObservationSamples
+    };
+  }
   const offset = observationOffsetMs(observation);
 
   if (state.baselineOffsetMs == null) {
     const samples = [...state.baselineOffsetsMs, offset].slice(-COMMENTARY_SYNC_BASELINE_SAMPLES);
     if (samples.length < COMMENTARY_SYNC_BASELINE_SAMPLES) {
-      return { ...state, status: "calibrating", baselineOffsetsMs: samples };
+      return { ...state, status: "calibrating", baselineOffsetsMs: samples, missingObservationSamples: 0 };
     }
     return {
       ...state,
       status: "locked",
       baselineOffsetsMs: samples,
       baselineOffsetMs: median(samples),
-      recentOffsetsMs: [offset]
+      recentOffsetsMs: [offset],
+      missingObservationSamples: 0
     };
   }
 
@@ -178,7 +192,8 @@ export function commentarySyncStep(
     status: "locked",
     targetDelayMs,
     appliedDelayMs,
-    recentOffsetsMs
+    recentOffsetsMs,
+    missingObservationSamples: 0
   };
 }
 

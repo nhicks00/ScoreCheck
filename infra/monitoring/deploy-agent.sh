@@ -49,7 +49,7 @@ retry_docker_operation() {
     delay_seconds=$((delay_seconds * 2))
   done
 }
-mkdir -p /var/lib/scorecheck-monitoring/ffmpeg
+install -d -m 0755 /var/lib/scorecheck-monitoring/ffmpeg
 if docker compose version >/dev/null 2>&1; then
   compose() { docker compose "$@"; }
 elif command -v docker-compose >/dev/null 2>&1; then

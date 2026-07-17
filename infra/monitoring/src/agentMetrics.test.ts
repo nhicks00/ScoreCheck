@@ -187,7 +187,7 @@ function mediamtxSnapshot(): AgentSnapshot {
 
 function compositorSnapshot(egress: { idle: boolean; canAcceptRequest: boolean }): AgentSnapshot {
   return {
-    version: 3,
+    version: 4,
     agentId: "bvm-compositor-a",
     role: "compositor",
     assignedCourts: [1, 2],

@@ -45,6 +45,7 @@ export function RehearsalCommentaryClient({ courtNumber, whepUrl }: RehearsalCom
               displayName={`Rehearsal commentator ${courtNumber}`}
               configured
               previewTimingRef={previewTimingRef}
+              audioProcessing={false}
             />
           </aside>
         </div>

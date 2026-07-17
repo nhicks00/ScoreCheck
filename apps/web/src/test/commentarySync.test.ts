@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  COMMENTARY_SYNC_MISSING_OBSERVATION_GRACE_SAMPLES,
   commentarySyncStep,
   decodeCommentarySyncMessage,
   encodeCommentarySyncMessage,
@@ -108,5 +109,22 @@ describe("commentary sync controller", () => {
       commentaryJitterMs: 40,
       commentaryClockRttMs: 100
     })).toBeNull();
+  });
+
+  it("holds a proven lock across brief stats gaps but fails sustained loss", () => {
+    const observation = { programTransportMs: 100, previewTransportMs: 60, commentaryTransportMs: 90 };
+    let state = initialCommentarySyncController(3000);
+    for (let index = 0; index < 8; index += 1) state = commentarySyncStep(state, observation);
+
+    for (let index = 0; index < COMMENTARY_SYNC_MISSING_OBSERVATION_GRACE_SAMPLES; index += 1) {
+      state = commentarySyncStep(state, null);
+      expect(state.status).toBe("locked");
+    }
+    state = commentarySyncStep(state, null);
+    expect(state.status).toBe("fallback");
+
+    state = commentarySyncStep(state, observation);
+    expect(state.status).toBe("locked");
+    expect(state.missingObservationSamples).toBe(0);
   });
 });

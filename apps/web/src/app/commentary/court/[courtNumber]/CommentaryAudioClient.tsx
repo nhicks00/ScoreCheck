@@ -29,6 +29,7 @@ type CommentaryAudioClientProps = {
   displayName: string;
   configured: boolean;
   previewTimingRef: RefObject<StreamTimingSample | null>;
+  audioProcessing?: boolean;
 };
 
 type ConnectionResponse = {
@@ -43,7 +44,8 @@ export function CommentaryAudioClient({
   courtNumber,
   displayName,
   configured,
-  previewTimingRef
+  previewTimingRef,
+  audioProcessing = true
 }: CommentaryAudioClientProps) {
   const roomRef = useRef<Room | null>(null);
   const trackRef = useRef<LocalAudioTrack | null>(null);
@@ -118,8 +120,8 @@ export function CommentaryAudioClient({
       await room.connect(connection.serverUrl, connection.token, { autoSubscribe: true });
       await room.startAudio();
       const track = await createLocalAudioTrack({
-        echoCancellation: true,
-        noiseSuppression: true,
+        echoCancellation: audioProcessing,
+        noiseSuppression: audioProcessing,
         autoGainControl: false
       });
       trackRef.current = track;

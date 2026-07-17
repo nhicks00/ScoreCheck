@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { RehearsalVerifier, fullProblems, idleProblems, preflightProblems, providerProblems, rawProblems } from "./rehearsal-verifier.mjs";
+import { browserQualityDeltaProblems, RehearsalVerifier, fullCurrentProblems, fullProblems, idleProblems, preflightProblems, providerProblems, rawProblems } from "./rehearsal-verifier.mjs";
 
 const now = Date.parse("2026-07-15T12:00:00Z");
 
@@ -19,7 +19,7 @@ function snapshot(mode) {
     agent({ agentId: "spare", role: "worker", assignedCourts: [], state: "HEALTHY", nativeServices: { egress: { idle: true, canAcceptRequest: true, activeWebRequests: 0, maximumWebRequests: 1, cpuLoadRatio: 0, memoryLoadRatio: 0 } } })
   ];
   return {
-    version: 3,
+    version: 4,
     generatedAt: new Date(now).toISOString(),
     collector: { agentsExpected: 12, agentsFresh: 12 },
     event: null,
@@ -57,7 +57,7 @@ test("accepts a completely idle isolated preflight", () => {
   assert.deepEqual(preflightProblems(snapshot("idle"), now), []);
 });
 
-test("hard-cuts the rehearsal monitor fetch contract to version 3", async () => {
+test("hard-cuts the rehearsal monitor fetch contract to version 4", async () => {
   const verifier = (value) => new RehearsalVerifier({
     monitorOrigin: "https://monitor.example.com",
     monitorToken: "x".repeat(24),
@@ -140,6 +140,76 @@ test("detects viewer, commentary, reader, FFmpeg, and headroom defects", () => {
   assert.match(problems, /browser quality/);
   assert.match(problems, /commentary/);
   assert.match(problems, /headroom/);
+});
+
+test("uses a reset-safe quality window while preserving historical startup counters", async () => {
+  let current = now;
+  let sequence = 0;
+  const verifier = new RehearsalVerifier({
+    monitorOrigin: "https://monitor.example.com",
+    monitorToken: "x".repeat(24),
+    youtube: {
+      getStream: async (id) => ({ id, streamStatus: "active", healthStatus: "good", configurationIssues: [] }),
+      getBroadcast: async (id) => ({ id, lifecycleStatus: "live", recordingStatus: "recording", privacyStatus: "unlisted", boundStreamId: id.replace("broadcast", "stream") })
+    },
+    sampler: { inspect: async () => ({ pid: 42 }) },
+    fetchImpl: async () => {
+      const value = snapshot("full");
+      for (const court of value.courts) {
+        court.browser.heartbeatSeq = 100 + sequence;
+        court.browser.receivedAt = new Date(current).toISOString();
+        court.browser.video.framesRendered = 1_800 + sequence * 150;
+      }
+      value.courts[1].browser.video.freezeCount = 1;
+      value.courts[1].browser.video.totalFreezesDurationMs = 200;
+      value.generatedAt = new Date(current).toISOString();
+      sequence += 1;
+      return new Response(JSON.stringify(value), { status: 200, headers: { "content-type": "application/json" } });
+    },
+    sleep: async (ms) => { current += ms; },
+    now: () => current
+  });
+  const state = {
+    sampler: { output: "/tmp/rehearsal-sampler.ndjson" },
+    courts: Object.fromEntries(Array.from({ length: 8 }, (_, index) => {
+      const court = index + 1;
+      return [court, { stream: { id: `stream${court}` }, broadcast: { id: `broadcast${court}` } }];
+    }))
+  };
+
+  const result = await verifier.waitForFull({ state });
+  assert.equal(result.passed, true);
+  assert.equal(result.stableSamples, 6);
+  assert.equal(result.qualityWindow.baseline[1].freezeCount, 1);
+  assert.equal(result.qualityWindow.endpoint[1].freezeCount, 1);
+  assert.deepEqual(result.problems, []);
+});
+
+test("rejects browser counter growth and identity or heartbeat discontinuity", () => {
+  const before = snapshot("full");
+  const after = structuredClone(before);
+  for (const court of after.courts) {
+    court.browser.heartbeatSeq += 1;
+    court.browser.receivedAt = new Date(now + 5_000).toISOString();
+    court.browser.video.framesRendered += 150;
+  }
+  assert.deepEqual(browserQualityDeltaProblems(before, after), []);
+
+  after.courts[0].browser.video.framesDropped += 1;
+  after.courts[1].browser.pageLoadedAt = new Date(now).toISOString();
+  after.courts[2].browser.heartbeatSeq -= 1;
+  const problems = browserQualityDeltaProblems(before, after).join("; ");
+  assert.match(problems, /Camera 1 browser framesDropped changed/);
+  assert.match(problems, /Camera 2 browser pageLoadedAt changed/);
+  assert.match(problems, /Camera 3 browser heartbeat sequence did not advance/);
+});
+
+test("keeps strict point-in-time checks while current health tolerates flat startup history", () => {
+  const value = snapshot("full");
+  value.courts[0].browser.video.freezeCount = 1;
+  value.courts[0].browser.video.totalFreezesDurationMs = 200;
+  assert.match(fullProblems(value, now).join("; "), /browser quality counters are not clean/);
+  assert.deepEqual(fullCurrentProblems(value, now), []);
 });
 
 test("accepts full post-stop retirement", () => {

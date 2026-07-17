@@ -32,6 +32,8 @@ test("remote deployments retry only idempotent Docker acquisition before runtime
   assert.match(agent, /retry_docker_operation compose .* pull --quiet docker-proxy/u);
   assert.match(agent, /retry_docker_operation compose .* build --pull monitor-agent/u);
   assert.match(agent, /up -d --no-build --remove-orphans/u);
+  assert.match(media, /install -d -m 0755 \/var\/lib\/scorecheck-monitoring\/ffmpeg/u);
+  assert.match(agent, /install -d -m 0755 \/var\/lib\/scorecheck-monitoring\/ffmpeg/u);
   assert.match(monitoring, /retry_docker_operation docker build --pull/u);
 });
 

@@ -32,7 +32,10 @@ runcmd:
   - apt-get update
   - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   - systemctl enable --now docker
-  - install -d -m 0750 /opt/mediamtx /var/lib/scorecheck-monitoring/ffmpeg
+  - install -d -m 0750 /opt/mediamtx
+  # FFmpeg writes only bounded numeric progress telemetry here. The monitoring
+  # agent runs as an unprivileged container user and must be able to read it.
+  - install -d -m 0755 /var/lib/scorecheck-monitoring/ffmpeg
   - systemctl reload ssh
   - ufw default deny incoming
   - ufw default allow outgoing

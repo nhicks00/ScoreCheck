@@ -35,7 +35,10 @@ export class AgentCollector {
       }),
       this.collectFrameErrors(errors),
       this.collectMediaPaths(errors, sampledAtMs),
-      collectFfmpegProgress(this.config.ffmpegProgressDir, sampledAtMs)
+      collectFfmpegProgress(this.config.ffmpegProgressDir, sampledAtMs).catch(() => {
+        errors.add("FFMPEG_PROGRESS_UNAVAILABLE");
+        return [];
+      })
     ]);
 
     const [livekit, egress, egressHealthUp] = await Promise.all([

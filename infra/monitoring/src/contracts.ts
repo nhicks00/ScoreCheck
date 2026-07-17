@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const MONITORING_CONTRACT_VERSION = 3 as const;
+export const MONITORING_CONTRACT_VERSION = 4 as const;
 
 export const AGENT_ROLES = [
   "mediamtx",
@@ -414,6 +414,7 @@ export const agentSnapshotSchema = z.object({
     "MEDIAMTX_PATH_DETAILS_UNAVAILABLE",
     "MEDIAMTX_METRICS_UNAVAILABLE",
     "MEDIAMTX_TRANSPORT_METRICS_UNAVAILABLE",
+    "FFMPEG_PROGRESS_UNAVAILABLE",
     "LIVEKIT_METRICS_UNAVAILABLE",
     "EGRESS_METRICS_UNAVAILABLE",
     "DOCKER_UNAVAILABLE",

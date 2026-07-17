@@ -1,6 +1,8 @@
 import { setTimeout as delay } from "node:timers/promises";
 
 const COURTS = Object.freeze(Array.from({ length: 8 }, (_, index) => index + 1));
+const BROWSER_IDENTITY_FIELDS = Object.freeze(["credentialId", "pageLoadedAt", "pageBuildVersion", "configurationVersion"]);
+const BROWSER_COUNTER_FIELDS = Object.freeze(["framesDropped", "freezeCount", "totalFreezesDurationMs", "packetsLost", "reconnectCount", "reloadCount"]);
 
 export class RehearsalStabilizationError extends Error {
   constructor(label, evidence) {
@@ -28,7 +30,7 @@ export class RehearsalVerifier {
   }
 
   async waitForFull({ state }) {
-    const result = await this.#wait("eight complete program chains", fullProblems, { stableSamples: 6, timeoutMs: 240_000 });
+    const result = await this.#waitForStableFull({ stableSamples: 6, timeoutMs: 240_000 });
     const provider = await this.#providerEvidence(state);
     const problems = providerProblems(provider);
     const sampler = await this.sampler.inspect(state.sampler.output);
@@ -44,7 +46,10 @@ export class RehearsalVerifier {
 
   async observeFull({ state, includeProvider = false }) {
     const snapshot = await this.#snapshot();
-    const problems = fullProblems(snapshot, this.now());
+    const problems = fullCurrentProblems(snapshot, this.now());
+    if (!this.acceptedFullSnapshot) problems.push("accepted browser quality baseline is unavailable");
+    else problems.push(...browserQualityDeltaProblems(this.acceptedFullSnapshot, snapshot));
+    if (hasCompleteBrowserSet(snapshot)) this.acceptedFullSnapshot = snapshot;
     const sampler = await this.sampler.inspect(state.sampler.output);
     if (!sampler) problems.push("pool host sampler is not running");
     const provider = includeProvider ? await this.#providerEvidence(state) : null;
@@ -92,6 +97,68 @@ export class RehearsalVerifier {
     return { observedAt: new Date(this.now()).toISOString(), courts };
   }
 
+  async #waitForStableFull({ stableSamples, timeoutMs }) {
+    const startedAt = this.now();
+    let stable = 0;
+    let previousSnapshot = null;
+    let windowStartSnapshot = null;
+    let lastProblems = [];
+    let lastSnapshot = null;
+    const discardedWindows = [];
+    while (this.now() - startedAt <= timeoutMs) {
+      const snapshot = await this.#snapshot();
+      lastSnapshot = snapshot;
+      const currentProblems = fullCurrentProblems(snapshot, this.now());
+      const deltaProblems = currentProblems.length === 0 && previousSnapshot
+        ? browserQualityDeltaProblems(previousSnapshot, snapshot)
+        : [];
+      lastProblems = unique([...currentProblems, ...deltaProblems]);
+      if (lastProblems.length === 0) {
+        if (!previousSnapshot || !windowStartSnapshot) windowStartSnapshot = snapshot;
+        stable += 1;
+        if (stable >= stableSamples) {
+          this.acceptedFullSnapshot = snapshot;
+          return {
+            passed: true,
+            observedAt: new Date(this.now()).toISOString(),
+            stableSamples,
+            snapshot: sanitizeSnapshotEvidence(snapshot),
+            qualityWindow: {
+              startedAt: windowStartSnapshot.generatedAt,
+              endedAt: snapshot.generatedAt,
+              samples: stable,
+              baseline: browserQualityEvidence(windowStartSnapshot),
+              endpoint: browserQualityEvidence(snapshot)
+            },
+            discardedWindows,
+            problems: []
+          };
+        }
+      } else {
+        if (stable > 0) {
+          discardedWindows.push({
+            observedAt: snapshot.generatedAt,
+            completedSamples: stable,
+            problems: lastProblems
+          });
+          if (discardedWindows.length > 20) discardedWindows.shift();
+        }
+        stable = 0;
+        windowStartSnapshot = null;
+      }
+      previousSnapshot = snapshot;
+      await this.sleep(5_000);
+    }
+    throw new RehearsalStabilizationError("eight complete program chains", {
+      passed: false,
+      observedAt: new Date(this.now()).toISOString(),
+      stableSamples: stable,
+      snapshot: lastSnapshot ? sanitizeSnapshotEvidence(lastSnapshot) : null,
+      discardedWindows,
+      problems: lastProblems
+    });
+  }
+
   async #wait(label, problemFunction, { stableSamples, timeoutMs }) {
     const startedAt = this.now();
     let stable = 0;
@@ -124,7 +191,7 @@ export class RehearsalVerifier {
     });
     if (!response.ok) throw new Error(`rehearsal monitor snapshot returned HTTP ${response.status}`);
     const snapshot = await response.json();
-    if (!snapshot || snapshot.version !== 3 || !Array.isArray(snapshot.courts) || !Array.isArray(snapshot.agents)) throw new Error("rehearsal monitor snapshot contract is invalid");
+    if (!snapshot || snapshot.version !== 4 || !Array.isArray(snapshot.courts) || !Array.isArray(snapshot.agents)) throw new Error("rehearsal monitor snapshot contract is invalid");
     return snapshot;
   }
 }
@@ -169,6 +236,14 @@ export function rawProblems(snapshot, nowMs = Date.now()) {
 }
 
 export function fullProblems(snapshot, nowMs = Date.now()) {
+  return fullProblemsInternal(snapshot, nowMs, true);
+}
+
+export function fullCurrentProblems(snapshot, nowMs = Date.now()) {
+  return fullProblemsInternal(snapshot, nowMs, false);
+}
+
+function fullProblemsInternal(snapshot, nowMs, requireZeroBrowserHistory) {
   const problems = rawProblems(snapshot, nowMs);
   const compositorAssignments = new Map();
   for (const agent of snapshot.agents ?? []) {
@@ -194,7 +269,9 @@ export function fullProblems(snapshot, nowMs = Date.now()) {
     if (!browser || browserAge < 0 || browserAge > 15_000 || browser.video?.state !== "playing" || browser.video?.connectionState !== "connected" || browser.video?.transport !== "whep") {
       problems.push(`Camera ${court} browser heartbeat is not fresh and playing over WHEP`);
     } else {
-      if ((browser.video.framesPerSecond ?? 0) < 25 || browser.video.framesPerSecond > 35 || browser.video.framesDropped !== 0 || browser.video.freezeCount !== 0 || browser.video.totalFreezesDurationMs !== 0 || browser.video.packetsLost !== 0 || browser.video.reconnectCount !== 0 || browser.video.reloadCount !== 0) problems.push(`Camera ${court} browser quality counters are not clean`);
+      const countersInvalid = BROWSER_COUNTER_FIELDS.some((field) => !Number.isFinite(browser.video[field]) || browser.video[field] < 0);
+      const historyNotClean = requireZeroBrowserHistory && BROWSER_COUNTER_FIELDS.some((field) => browser.video[field] !== 0);
+      if ((browser.video.framesPerSecond ?? 0) < 25 || browser.video.framesPerSecond > 35 || countersInvalid || historyNotClean) problems.push(`Camera ${court} browser quality counters are not clean`);
       const commentary = browser.commentary;
       const syncGapMs = commentary.targetDelayMs === null || commentary.appliedDelayMs === null ? Infinity : Math.abs(commentary.targetDelayMs - commentary.appliedDelayMs);
       if (!commentary.configured || !commentary.roomConnected || commentary.participantCount < 1 || commentary.audioTrackCount < 1 || commentary.mutedAudioTrackCount !== 0
@@ -213,6 +290,31 @@ export function fullProblems(snapshot, nowMs = Date.now()) {
   const spare = (snapshot.agents ?? []).find((agent) => agent.role === "worker");
   const spareEgress = spare?.nativeServices?.egress;
   if (!spare || spare.state !== "HEALTHY" || !spareEgress?.idle || spareEgress.activeWebRequests !== 0 || !spareEgress.canAcceptRequest) problems.push("warm spare is not healthy, idle, and admission-ready");
+  return unique(problems);
+}
+
+export function browserQualityDeltaProblems(previous, current) {
+  const problems = [];
+  for (const court of COURTS) {
+    const before = (previous?.courts ?? []).find((entry) => entry.courtNumber === court)?.browser;
+    const after = (current?.courts ?? []).find((entry) => entry.courtNumber === court)?.browser;
+    if (!before || !after) {
+      problems.push(`Camera ${court} browser continuity sample is missing`);
+      continue;
+    }
+    for (const field of BROWSER_IDENTITY_FIELDS) {
+      if (!before[field] || after[field] !== before[field]) problems.push(`Camera ${court} browser ${field} changed`);
+    }
+    if (!Number.isInteger(after.heartbeatSeq) || after.heartbeatSeq <= before.heartbeatSeq) problems.push(`Camera ${court} browser heartbeat sequence did not advance`);
+    if (!Number.isFinite(Date.parse(after.receivedAt)) || Date.parse(after.receivedAt) <= Date.parse(before.receivedAt)) problems.push(`Camera ${court} browser receipt timestamp did not advance`);
+    if (!Number.isInteger(after.video?.framesRendered) || after.video.framesRendered <= before.video?.framesRendered) problems.push(`Camera ${court} rendered frames did not advance`);
+    for (const field of BROWSER_COUNTER_FIELDS) {
+      const beforeValue = before.video?.[field];
+      const afterValue = after.video?.[field];
+      if (!Number.isFinite(beforeValue) || !Number.isFinite(afterValue)) problems.push(`Camera ${court} browser ${field} is unavailable`);
+      else if (afterValue !== beforeValue) problems.push(`Camera ${court} browser ${field} changed from ${beforeValue} to ${afterValue}`);
+    }
+  }
   return unique(problems);
 }
 
@@ -262,6 +364,30 @@ function courtByNumber(snapshot, court, problems) {
   return values[0];
 }
 
+function hasCompleteBrowserSet(snapshot) {
+  return COURTS.every((court) => {
+    const browser = (snapshot?.courts ?? []).find((entry) => entry.courtNumber === court)?.browser;
+    return browser && BROWSER_IDENTITY_FIELDS.every((field) => browser[field])
+      && Number.isInteger(browser.heartbeatSeq)
+      && Number.isInteger(browser.video?.framesRendered)
+      && BROWSER_COUNTER_FIELDS.every((field) => Number.isFinite(browser.video?.[field]));
+  });
+}
+
+function browserQualityEvidence(snapshot) {
+  return (snapshot?.courts ?? []).map((court) => ({
+    courtNumber: court.courtNumber,
+    credentialId: court.browser?.credentialId ?? null,
+    pageLoadedAt: court.browser?.pageLoadedAt ?? null,
+    pageBuildVersion: court.browser?.pageBuildVersion ?? null,
+    configurationVersion: court.browser?.configurationVersion ?? null,
+    heartbeatSeq: court.browser?.heartbeatSeq ?? null,
+    receivedAt: court.browser?.receivedAt ?? null,
+    framesRendered: court.browser?.video?.framesRendered ?? null,
+    ...Object.fromEntries(BROWSER_COUNTER_FIELDS.map((field) => [field, court.browser?.video?.[field] ?? null]))
+  }));
+}
+
 function sanitizeSnapshotEvidence(snapshot) {
   return {
     generatedAt: snapshot.generatedAt,
@@ -277,6 +403,13 @@ function sanitizeSnapshotEvidence(snapshot) {
         inboundBitrateBps: court.paths[branch].inboundBitrateBps,
         frameErrors: court.paths[branch].frameErrors,
         sourceProtocol: court.paths[branch].sourceProtocol
+      } : null])),
+      ffmpeg: Object.fromEntries(["preview", "program"].map((branch) => [branch, court.ffmpeg?.[branch] ? {
+        sampledAt: court.ffmpeg[branch].sampledAt,
+        framesPerSecond: court.ffmpeg[branch].framesPerSecond,
+        droppedFrames: court.ffmpeg[branch].droppedFrames,
+        duplicatedFrames: court.ffmpeg[branch].duplicatedFrames,
+        speedRatio: court.ffmpeg[branch].speedRatio
       } : null])),
       browser: court.browser ? {
         credentialId: court.browser.credentialId,

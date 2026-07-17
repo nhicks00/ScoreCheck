@@ -67,5 +67,6 @@ test("rehearsal commentary uses direct low-latency preview playback", async () =
     import.meta.url
   ), "utf8");
   assert.match(source, /mode="preview"/);
+  assert.match(source, /audioProcessing=\{false\}/);
   assert.doesNotMatch(source, /mode="scoring"/);
 });

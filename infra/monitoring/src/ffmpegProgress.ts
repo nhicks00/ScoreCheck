@@ -8,7 +8,7 @@ const MAX_SAMPLE_AGE_MS = 20_000;
 
 export async function collectFfmpegProgress(directory: string | null, nowMs = Date.now()): Promise<FfmpegBranchSnapshot[]> {
   if (!directory) return [];
-  const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
+  const entries = await readdir(directory, { withFileTypes: true });
   const snapshots = await Promise.all(entries.filter((entry) => entry.isFile() && FILE_PATTERN.test(entry.name)).map(async (entry) => {
     const match = FILE_PATTERN.exec(entry.name);
     if (!match?.[1] || !match[2] || !match[3]) return null;

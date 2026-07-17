@@ -1,5 +1,8 @@
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { metricSum, metricValue, parseEgressMetrics } from "./collectors.js";
+import { AgentCollector, metricSum, metricValue, parseEgressMetrics } from "./collectors.js";
+import { loadAgentConfig } from "./config.js";
 
 describe("native Prometheus metric parsing", () => {
   const metrics = [
@@ -48,5 +51,21 @@ describe("native Prometheus metric parsing", () => {
     )).toMatchObject({ idle: true, activeWebRequests: 0, maximumWebRequests: 1, canAcceptRequest: true });
     expect(() => parseEgressMetrics(egressMetrics.replace('type="web"} 1', 'type="web"} 1.5'), 1)).toThrow(/Required Egress state metrics/);
     expect(() => parseEgressMetrics(egressMetrics.replace('type="web"} 1', 'type="web"} -1'), 1)).toThrow(/Required Egress state metrics/);
+  });
+});
+
+describe("agent collector telemetry failures", () => {
+  it("reports a configured FFmpeg progress directory that cannot be read", async () => {
+    const config = loadAgentConfig({
+      MONITOR_AGENT_ID: "rehearsal-ingest",
+      MONITOR_AGENT_ROLE: "mediamtx",
+      MONITOR_AGENT_TOKEN: "x".repeat(24),
+      FFMPEG_PROGRESS_DIR: path.join(tmpdir(), `missing-scorecheck-progress-${Date.now()}`)
+    });
+
+    const snapshot = await new AgentCollector(config).collect();
+
+    expect(snapshot.ffmpegBranches).toEqual([]);
+    expect(snapshot.collectionErrors).toContain("FFMPEG_PROGRESS_UNAVAILABLE");
   });
 });

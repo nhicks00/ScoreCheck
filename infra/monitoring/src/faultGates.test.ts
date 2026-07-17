@@ -290,7 +290,7 @@ function compositorAgent(agentId: string, assignedCourts: number[]): AgentSnapsh
 
 function agentBase(agentId: string, role: AgentSnapshot["role"]): AgentSnapshot {
   return {
-    version: 3,
+    version: 4,
     agentId,
     role,
     assignedCourts: [],
@@ -327,7 +327,7 @@ function healthyBrowsers(): Map<number, BrowserHeartbeatSnapshot> {
 
 function browser(courtNumber: number, visualPatch: Partial<BrowserHeartbeatSnapshot["visual"]> = {}): BrowserHeartbeatSnapshot {
   const payload = browserHeartbeatPayloadSchema.parse({
-    version: 3,
+    version: 4,
     credentialId: `40000000-0000-4000-8000-${String(courtNumber).padStart(12, "0")}`,
     courtNumber,
     heartbeatSeq: 1,

@@ -19,7 +19,7 @@ describe("monitoring contract", () => {
 
   it("rejects unbounded service names", () => {
     expect(() => agentSnapshotSchema.parse({
-      version: 3,
+      version: 4,
       agentId: "agent-1",
       role: "mediamtx",
       generatedAt: new Date().toISOString(),
@@ -33,7 +33,7 @@ describe("monitoring contract", () => {
 
   it("hard-cuts Egress activity from available to idle", () => {
     const snapshot = {
-      version: 3,
+      version: 4,
       agentId: "compositor-a",
       role: "compositor",
       assignedCourts: [1, 2],
