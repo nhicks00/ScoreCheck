@@ -149,8 +149,11 @@ test("bounds rate-limit retries and never retries quota exhaustion", async () =>
     }
   });
   await assert.rejects(() => limited.ensureBroadcast({ court: 8, marker }), /userRequestsExceedRateLimit/u);
-  assert.equal(requests, 8);
-  assert.deepEqual(sleeps, [5_000, 10_000, 20_000, 40_000, 80_000, 120_000, 120_000]);
+  assert.equal(requests, 13);
+  assert.deepEqual(sleeps, [
+    5_000, 10_000, 20_000, 40_000, 80_000, 120_000,
+    180_000, 240_000, 300_000, 300_000, 300_000, 300_000
+  ]);
 
   let quotaRequests = 0;
   const exhausted = provider(async (url, init) => {

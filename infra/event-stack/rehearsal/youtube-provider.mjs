@@ -5,7 +5,10 @@ const OAUTH = "https://oauth2.googleapis.com/token";
 const COURT_RANGE = new Set(Array.from({ length: 8 }, (_, index) => index + 1));
 const MARKER = /^\[scorecheck-rehearsal:[a-zA-Z0-9-]{8,80}:court-[1-8]\]$/;
 const RATE_LIMIT_REASONS = new Set(["rateLimitExceeded", "userRequestsExceedRateLimit"]);
-const RATE_LIMIT_DELAYS_MS = [5_000, 10_000, 20_000, 40_000, 80_000, 120_000, 120_000];
+const RATE_LIMIT_DELAYS_MS = [
+  5_000, 10_000, 20_000, 40_000, 80_000, 120_000,
+  180_000, 240_000, 300_000, 300_000, 300_000, 300_000
+];
 
 export class YouTubeRehearsalProvider {
   constructor({ clientId, clientSecret, refreshToken, fetchImpl = globalThis.fetch, now = () => new Date(), sleep = delay }) {
