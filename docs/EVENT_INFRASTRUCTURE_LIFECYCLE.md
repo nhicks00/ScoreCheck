@@ -295,19 +295,27 @@ operator profile:
 
 ```json
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "manifest": "/absolute/protected/event/manifest.json",
   "state": "/absolute/protected/event/state.json",
   "anchors": "/absolute/protected/endpoint-anchors.json",
   "secrets": "/absolute/protected/event/secrets",
   "sshKey": "/absolute/protected/scorecheck_do",
   "knownHosts": "/absolute/protected/event/known_hosts",
+  "commentaryTlsState": "/absolute/protected/retained-commentary-tls/HOSTSET_ID",
   "credentialsEnv": "/absolute/protected/provider.env",
   "lifecycleAttestation": "/absolute/protected/lifecycle-attestation.json",
   "evidence": "/absolute/protected/event/final-evidence",
   "rehearsalEvidence": null
 }
 ```
+
+The protected provider environment also contains `SCORECHECK_ACME_EMAIL`.
+`commentaryTlsState` is deliberately outside the disposable event bundle. It
+contains the complete Caddy data directory, a mode-`0600` integrity manifest,
+certificate fingerprints, expiry evidence, and the exact two-host binding.
+The lifecycle refuses a healthy teardown unless this state verifies with at
+least 24 hours of certificate validity remaining.
 
 Then event-day commands are short and consistent:
 
@@ -428,6 +436,7 @@ node infra/event-stack/event-stack.mjs up \
   --secrets /absolute/protected/event-secrets \
   --ssh-key /absolute/protected/scorecheck_do \
   --known-hosts /absolute/protected/next-event-slug/known_hosts \
+  --commentary-tls-state /absolute/protected/retained-commentary-tls/HOSTSET_ID \
   --credentials-env /absolute/protected/provider.env \
   --attestation /absolute/protected/lifecycle-attestation.json
 ```
@@ -463,6 +472,7 @@ node infra/event-stack/event-stack.mjs start \
   --secrets /absolute/protected/event-secrets \
   --ssh-key /absolute/protected/scorecheck_do \
   --known-hosts /absolute/protected/next-event-slug/known_hosts \
+  --commentary-tls-state /absolute/protected/retained-commentary-tls/HOSTSET_ID \
   --credentials-env /absolute/protected/provider.env \
   --confirm START:next-event-slug
 ```
@@ -481,12 +491,17 @@ node infra/event-stack/event-stack.mjs evidence \
   --secrets /absolute/protected/event-secrets \
   --ssh-key /absolute/protected/scorecheck_do \
   --known-hosts /absolute/protected/next-event-slug/known_hosts \
+  --commentary-tls-state /absolute/protected/retained-commentary-tls/HOSTSET_ID \
   --credentials-env /absolute/protected/provider.env \
   --evidence /absolute/protected/next-event-slug/final-evidence
 
 node infra/event-stack/event-stack.mjs destroy \
   --manifest /absolute/protected/next-event-slug/manifest.json \
   --state /absolute/protected/next-event-slug/state.json \
+  --secrets /absolute/protected/event-secrets \
+  --ssh-key /absolute/protected/scorecheck_do \
+  --known-hosts /absolute/protected/next-event-slug/known_hosts \
+  --commentary-tls-state /absolute/protected/retained-commentary-tls/HOSTSET_ID \
   --credentials-env /absolute/protected/provider.env \
   --evidence /absolute/protected/next-event-slug/final-evidence \
   --confirm DESTROY:next-event-slug
@@ -494,6 +509,11 @@ node infra/event-stack/event-stack.mjs destroy \
 
 Destroy is blocked while coverage is live, before the manifest review date,
 without protected evidence, or when provider inventory differs from state. It
+stops Caddy and atomically refreshes the protected retained TLS state before
+deleting any Droplet. If a healthy commentary deployment cannot preserve a
+valid state, teardown fails closed and restarts Caddy; no compute is deleted.
+The retained directory is local lifecycle authority, not a provider resource,
+so it does not create DigitalOcean idle cost. Destroy then
 deletes 12 verified Droplet IDs one by one; it never issues a tag-wide bulk
 delete. It is resumable after a lost delete response or local interruption. It
 then proves production anchors are unassigned, restores dynamic DNS, and sends

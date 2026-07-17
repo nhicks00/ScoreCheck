@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { buildEventManifest, loadManifestInputs } from "./event-manifest.mjs";
-import { buildAgentPlans, commandFailureMessage, commentaryEndpointHosts, compositorContentAnalyzerBindings, deploymentScriptEnvironment, isRetryableDeploymentTransportError, loadProtectedEnv, roleConfigBindings, runDeploymentScript, serializeAgentTargets, servicePublicIpv4, verifyProtectedSecretDirectory } from "./stack-deployer.mjs";
+import { LocalStackDeployer, buildAgentPlans, commandFailureMessage, commentaryEndpointHosts, compositorContentAnalyzerBindings, deploymentScriptEnvironment, isRetryableDeploymentTransportError, loadProtectedEnv, roleConfigBindings, runDeploymentScript, serializeAgentTargets, servicePublicIpv4, verifyProtectedSecretDirectory } from "./stack-deployer.mjs";
 
 const inputs = await loadManifestInputs();
 const manifest = buildEventManifest({ event: "deploy-test", kind: "production", destroyAfter: "2026-08-01", ...inputs });
@@ -154,8 +154,87 @@ test("selects exact production and rehearsal commentary TLS hosts", () => {
     turn: "turn.beachvolleyballmedia.com"
   });
   const rehearsal = commentaryEndpointHosts(rehearsalManifest);
-  assert.equal(rehearsal.rtc, `rtc-${rehearsalManifest.namespace}.beachvolleyballmedia.com`);
-  assert.equal(rehearsal.turn, `turn-${rehearsalManifest.namespace}.beachvolleyballmedia.com`);
+  assert.equal(rehearsal.rtc, "rtc-rehearsal.beachvolleyballmedia.com");
+  assert.equal(rehearsal.turn, "turn-rehearsal.beachvolleyballmedia.com");
+});
+
+test("captures commentary TLS state before a healthy stack can be deleted", async () => {
+  const root = await mkdtemp(join(tmpdir(), "scorecheck-retained-tls-deployer-"));
+  await chmod(root, 0o700);
+  const sshKey = join(root, "ssh-key");
+  const knownHosts = join(root, "known_hosts");
+  await writeFile(sshKey, "fixture\n", { mode: 0o600 });
+  await writeFile(knownHosts, "fixture\n", { mode: 0o600 });
+  const commands = [];
+  const runner = async (command, args) => {
+    commands.push([command, args]);
+    return { code: 0, stdout: command === "ssh-keygen" ? "fixture-host-key\n" : "", stderr: "" };
+  };
+  const commentary = rehearsalManifest.droplets.find((entry) => entry.role === "commentary");
+  const state = {
+    droplets: { [commentary.name]: { publicIpv4: "192.0.2.20", status: "active" } },
+    deployments: { [commentary.name]: { status: "healthy" } }
+  };
+  const captured = {
+    status: "ready",
+    stateSha256: "a".repeat(64),
+    fileCount: 4,
+    certificates: Object.fromEntries(Object.values(commentaryEndpointHosts(rehearsalManifest)).map((host) => [host, { validTo: "2026-08-02T00:00:00.000Z", fingerprint256: "AA" }]))
+  };
+  const tlsState = {
+    async inspect() { return { status: "missing" }; },
+    async capture() { return captured; }
+  };
+  const deployer = new LocalStackDeployer({
+    repoRoot: "/repo",
+    secretsDirectory: "/secrets",
+    sshPrivateKey: sshKey,
+    knownHostsPath: knownHosts,
+    commentaryTlsStateStore: tlsState,
+    runner
+  });
+
+  const result = await deployer.prepareForTeardown({ manifest: rehearsalManifest, state });
+  assert.equal(result.healthy, true);
+  assert.equal(result.evidence.stateSha256, captured.stateSha256);
+  assert.equal(result.evidence.caddyStopped, true);
+  assert.ok(commands.some(([command, args]) => command === "ssh" && args.at(-1).includes("stop caddy")));
+});
+
+test("fails closed and restores Caddy when a healthy stack has no retainable TLS state", async () => {
+  const root = await mkdtemp(join(tmpdir(), "scorecheck-retained-tls-failure-"));
+  await chmod(root, 0o700);
+  const sshKey = join(root, "ssh-key");
+  const knownHosts = join(root, "known_hosts");
+  await writeFile(sshKey, "fixture\n", { mode: 0o600 });
+  await writeFile(knownHosts, "fixture\n", { mode: 0o600 });
+  const commands = [];
+  const runner = async (command, args) => {
+    commands.push([command, args]);
+    return { code: 0, stdout: command === "ssh-keygen" ? "fixture-host-key\n" : "", stderr: "" };
+  };
+  const commentary = rehearsalManifest.droplets.find((entry) => entry.role === "commentary");
+  const state = {
+    droplets: { [commentary.name]: { publicIpv4: "192.0.2.20", status: "active" } },
+    deployments: { [commentary.name]: { status: "healthy" } }
+  };
+  const deployer = new LocalStackDeployer({
+    repoRoot: "/repo",
+    secretsDirectory: "/secrets",
+    sshPrivateKey: sshKey,
+    knownHostsPath: knownHosts,
+    commentaryTlsStateStore: {
+      async inspect() { return { status: "missing" }; },
+      async capture() { throw new Error("remote TLS state unavailable"); }
+    },
+    runner
+  });
+
+  await assert.rejects(
+    () => deployer.prepareForTeardown({ manifest: rehearsalManifest, state }),
+    /healthy commentary TLS state could not be retained/u
+  );
+  assert.ok(commands.some(([command, args]) => command === "ssh" && args.at(-1).includes("start caddy")));
 });
 
 test("rejects missing, extra, short, or duplicated token ownership", () => {

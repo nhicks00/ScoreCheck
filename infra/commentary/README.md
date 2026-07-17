@@ -23,8 +23,18 @@ LIVEKIT_COMMENTARY_SSH_HOST=root@SERVER_IPV4 \
 LIVEKIT_COMMENTARY_PUBLIC_IP=RESERVED_IPV4 \
 LIVEKIT_COMMENTARY_RTC_HOST=rtc.beachvolleyballmedia.com \
 LIVEKIT_COMMENTARY_TURN_HOST=turn.beachvolleyballmedia.com \
+LIVEKIT_COMMENTARY_ACME_EMAIL=operations@example.com \
 ./deploy.sh
 ```
+
+Caddy requests certificates from ZeroSSL first and uses Let's Encrypt only as a
+fallback. The lifecycle restores the complete protected Caddy data directory
+before deployment and captures it again before any healthy commentary Droplet
+can be deleted. This preserves the ACME account and certificates across event
+teardown without retaining billable compute. Rehearsals always use the stable
+`rtc-rehearsal.beachvolleyballmedia.com` and
+`turn-rehearsal.beachvolleyballmedia.com` names; generating a new certificate
+hostname for every rehearsal is forbidden.
 
 The current Gate 1 node is a `2 vCPU / 2 GB` DigitalOcean droplet in `sfo2`
 at $18/month. It is sized for the audio-only commentary workload; compositor

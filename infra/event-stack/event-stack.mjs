@@ -42,7 +42,7 @@ async function main() {
 
   const needsCloud = ["up", "status", "start", "evidence", "destroy", "abort"].includes(options.command);
   const needsDns = ["up", "destroy", "abort"].includes(options.command);
-  const needsDeployment = ["up", "start", "evidence"].includes(options.command);
+  const needsDeployment = ["up", "start", "evidence", "destroy", "abort"].includes(options.command);
   const digitalOceanToken = needsCloud ? requiredEnvironment(environment, "DIGITALOCEAN_TOKEN") : null;
   const digitalOceanSshKeys = options.command === "up" ? splitList(environment.SCORECHECK_DO_SSH_KEYS) : [];
   const vercelToken = needsDns ? requiredEnvironment(environment, "VERCEL_TOKEN") : null;
@@ -60,7 +60,9 @@ async function main() {
     repoRoot: REPO_ROOT,
     secretsDirectory: requiredOption(options.secrets, "--secrets"),
     sshPrivateKey: requiredOption(options.sshKey, "--ssh-key"),
-    knownHostsPath: requiredOption(options.knownHosts, "--known-hosts")
+    knownHostsPath: requiredOption(options.knownHosts, "--known-hosts"),
+    commentaryTlsStateDirectory: requiredOption(options.commentaryTlsState, "--commentary-tls-state"),
+    acmeEmail: options.command === "up" ? requiredEnvironment(environment, "SCORECHECK_ACME_EMAIL") : null
   }) : unavailable("stack deployment is unavailable for this command");
   const notifier = environment.PUSHOVER_APP_TOKEN?.trim() && environment.PUSHOVER_USER_KEY?.trim()
     ? new PushoverNotifier({ appToken: environment.PUSHOVER_APP_TOKEN.trim(), userKey: environment.PUSHOVER_USER_KEY.trim() })
@@ -104,14 +106,14 @@ function parseArgs(argv) {
   const command = argv[0];
   if ([undefined, "help", "-h", "--help"].includes(command)) return null;
   if (!new Set(["plan", "up", "status", "start", "close", "evidence", "destroy", "abort"]).has(command)) throw new Error(`unknown lifecycle command ${command}`);
-  const options = { command, manifest: null, state: null, anchors: null, secrets: null, sshKey: null, knownHosts: null, credentialsEnv: null, attestation: null, evidence: null, rehearsalEvidence: null, confirm: null };
+  const options = { command, manifest: null, state: null, anchors: null, secrets: null, sshKey: null, knownHosts: null, commentaryTlsState: null, credentialsEnv: null, attestation: null, evidence: null, rehearsalEvidence: null, confirm: null };
   for (let index = 1; index < argv.length; index += 1) {
     const flag = argv[index];
     const value = argv[++index];
     if (!value || value.startsWith("--")) throw new Error(`${flag} requires a value`);
     const mapping = new Map([
       ["--manifest", "manifest"], ["--state", "state"], ["--anchors", "anchors"], ["--secrets", "secrets"],
-      ["--ssh-key", "sshKey"], ["--known-hosts", "knownHosts"], ["--credentials-env", "credentialsEnv"],
+      ["--ssh-key", "sshKey"], ["--known-hosts", "knownHosts"], ["--commentary-tls-state", "commentaryTlsState"], ["--credentials-env", "credentialsEnv"],
       ["--attestation", "attestation"], ["--evidence", "evidence"], ["--rehearsal-evidence", "rehearsalEvidence"], ["--confirm", "confirm"]
     ]);
     const key = mapping.get(flag);
@@ -126,13 +128,13 @@ function parseArgs(argv) {
 function usage() {
   process.stdout.write(`Usage:
   node infra/event-stack/event-stack.mjs plan --manifest FILE --state FILE
-  node infra/event-stack/event-stack.mjs up --manifest FILE --state FILE --anchors FILE --secrets DIR --ssh-key FILE --known-hosts FILE --credentials-env FILE --attestation FILE
+  node infra/event-stack/event-stack.mjs up --manifest FILE --state FILE --anchors FILE --secrets DIR --ssh-key FILE --known-hosts FILE --commentary-tls-state DIR --credentials-env FILE --attestation FILE
   node infra/event-stack/event-stack.mjs status --manifest FILE --state FILE --credentials-env FILE
-  node infra/event-stack/event-stack.mjs start --manifest FILE --state FILE --secrets DIR --ssh-key FILE --known-hosts FILE --credentials-env FILE --confirm START:EVENT
+  node infra/event-stack/event-stack.mjs start --manifest FILE --state FILE --secrets DIR --ssh-key FILE --known-hosts FILE --commentary-tls-state DIR --credentials-env FILE --confirm START:EVENT
   node infra/event-stack/event-stack.mjs close --manifest FILE --state FILE --confirm CLOSE:EVENT
-  node infra/event-stack/event-stack.mjs evidence --manifest FILE --state FILE --secrets DIR --ssh-key FILE --known-hosts FILE --credentials-env FILE --evidence DIR [--rehearsal-evidence DIR]
-  node infra/event-stack/event-stack.mjs destroy --manifest FILE --state FILE --credentials-env FILE --evidence DIR --confirm DESTROY:EVENT
-  node infra/event-stack/event-stack.mjs abort --manifest FILE --state FILE --credentials-env FILE --evidence DIR --confirm ABORT:EVENT
+  node infra/event-stack/event-stack.mjs evidence --manifest FILE --state FILE --secrets DIR --ssh-key FILE --known-hosts FILE --commentary-tls-state DIR --credentials-env FILE --evidence DIR [--rehearsal-evidence DIR]
+  node infra/event-stack/event-stack.mjs destroy --manifest FILE --state FILE --secrets DIR --ssh-key FILE --known-hosts FILE --commentary-tls-state DIR --credentials-env FILE --evidence DIR --confirm DESTROY:EVENT
+  node infra/event-stack/event-stack.mjs abort --manifest FILE --state FILE --secrets DIR --ssh-key FILE --known-hosts FILE --commentary-tls-state DIR --credentials-env FILE --evidence DIR --confirm ABORT:EVENT
 \nNo command prints secrets. Destroy is ID-scoped, requires closed coverage, protected evidence, the review date, and exact confirmation. Abort is ID-scoped and is unavailable after coverage starts.\n`);
 }
 

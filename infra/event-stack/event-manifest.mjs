@@ -437,7 +437,7 @@ function scopedEndpoints(endpoints, dnsZone, kind, namespace) {
   return endpoints.map((endpoint) => {
     const suffix = `.${dnsZone}`;
     const relative = endpoint.hostname.slice(0, -suffix.length).replaceAll(".", "-");
-    const label = `${relative}-${namespace}`;
+    const label = endpoint.role === "commentary" ? `${relative}-rehearsal` : `${relative}-${namespace}`;
     if (label.length > 63) throw new Error(`rehearsal endpoint label for ${endpoint.hostname} is too long`);
     return {
       hostname: `${label}.${dnsZone}`,

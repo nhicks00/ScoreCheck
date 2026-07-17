@@ -12,9 +12,10 @@ export function renderCommentaryConfigs({
   apiSecret,
   publicIp,
   rtcHost,
-  turnHost
+  turnHost,
+  acmeEmail
 }) {
-  for (const [name, value] of Object.entries({ livekitTemplate, caddyTemplate, apiKey, apiSecret, publicIp, rtcHost, turnHost })) {
+  for (const [name, value] of Object.entries({ livekitTemplate, caddyTemplate, apiKey, apiSecret, publicIp, rtcHost, turnHost, acmeEmail })) {
     if (typeof value !== "string" || !value.trim()) throw new Error(`${name} is required.`);
   }
   const livekitConfig = livekitTemplate
@@ -24,7 +25,8 @@ export function renderCommentaryConfigs({
   const caddyConfig = caddyTemplate
     .replaceAll("__PUBLIC_IP__", publicIp)
     .replaceAll("__RTC_HOST__", rtcHost)
-    .replaceAll("__TURN_HOST__", turnHost);
+    .replaceAll("__TURN_HOST__", turnHost)
+    .replaceAll("__ACME_EMAIL__", JSON.stringify(acmeEmail));
   for (const [name, value] of Object.entries({ livekitConfig, caddyConfig })) {
     if (/__[A-Z0-9_]+__/u.test(value)) throw new Error(`${name} contains an unresolved template value.`);
   }
@@ -39,7 +41,8 @@ async function main() {
     apiSecret: required("LIVEKIT_COMMENTARY_API_SECRET"),
     publicIp: required("LIVEKIT_COMMENTARY_PUBLIC_IP"),
     rtcHost: required("LIVEKIT_COMMENTARY_RTC_HOST"),
-    turnHost: required("LIVEKIT_COMMENTARY_TURN_HOST")
+    turnHost: required("LIVEKIT_COMMENTARY_TURN_HOST"),
+    acmeEmail: required("LIVEKIT_COMMENTARY_ACME_EMAIL")
   });
   await mkdir(outputDirectory, { recursive: true });
   await writeSecure("livekit.yaml", rendered.livekitConfig);

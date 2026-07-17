@@ -4,13 +4,14 @@ import test from "node:test";
 import { buildEventctlInvocation, validateProfile } from "./eventctl.mjs";
 
 const profile = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   manifest: "/protected/event/manifest.json",
   state: "/protected/event/state.json",
   anchors: "/protected/endpoint-anchors.json",
   secrets: "/protected/event/secrets",
   sshKey: "/protected/scorecheck_do",
   knownHosts: "/protected/event/known_hosts",
+  commentaryTlsState: "/protected/retained-commentary-tls/state",
   credentialsEnv: "/protected/provider.env",
   lifecycleAttestation: "/protected/lifecycle-attestation.json",
   evidence: "/protected/event/evidence",
@@ -22,16 +23,21 @@ test("expands one operator profile into exact non-shell lifecycle arguments", ()
     "up", "--manifest", profile.manifest, "--state", profile.state,
     "--anchors", profile.anchors, "--secrets", profile.secrets,
     "--ssh-key", profile.sshKey, "--known-hosts", profile.knownHosts,
+    "--commentary-tls-state", profile.commentaryTlsState,
     "--credentials-env", profile.credentialsEnv,
     "--attestation", profile.lifecycleAttestation
   ]);
   assert.deepEqual(buildEventctlInvocation("destroy", profile, "DESTROY:event"), [
     "destroy", "--manifest", profile.manifest, "--state", profile.state,
+    "--secrets", profile.secrets, "--ssh-key", profile.sshKey,
+    "--known-hosts", profile.knownHosts, "--commentary-tls-state", profile.commentaryTlsState,
     "--credentials-env", profile.credentialsEnv, "--evidence", profile.evidence,
     "--confirm", "DESTROY:event"
   ]);
   assert.deepEqual(buildEventctlInvocation("abort", profile, "ABORT:event"), [
     "abort", "--manifest", profile.manifest, "--state", profile.state,
+    "--secrets", profile.secrets, "--ssh-key", profile.sshKey,
+    "--known-hosts", profile.knownHosts, "--commentary-tls-state", profile.commentaryTlsState,
     "--credentials-env", profile.credentialsEnv, "--evidence", profile.evidence,
     "--confirm", "ABORT:event"
   ]);

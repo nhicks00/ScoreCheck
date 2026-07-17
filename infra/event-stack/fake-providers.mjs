@@ -229,6 +229,7 @@ export class FakeStackDeployer {
     this.deployCalls = [];
     this.failName = null;
     this.stackHealthy = true;
+    this.retainedStateCalls = 0;
   }
 
   async deploy({ spec }) {
@@ -245,6 +246,11 @@ export class FakeStackDeployer {
         healthyDeployments: Object.values(state.deployments).filter((entry) => entry.status === "healthy").length
       }
     };
+  }
+
+  async prepareForTeardown() {
+    this.retainedStateCalls += 1;
+    return { healthy: true, evidence: { status: "ready", stateSha256: "b".repeat(64) } };
   }
 }
 

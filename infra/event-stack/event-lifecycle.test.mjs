@@ -152,6 +152,8 @@ test("runs the production-shaped 12-Droplet lifecycle without changing critical 
 
   const destroyed = await controller.destroy(manifest, evidence, "DESTROY:turnkey-test");
   assert.equal(destroyed.phase, "destroyed");
+  assert.equal(destroyed.retainedState.status, "healthy");
+  assert.equal(deployer.retainedStateCalls, 1);
   assert.equal(cloud.droplets.size, 0);
   assert.equal(cloud.deleteCalls.length, 12);
   assert.equal((await cloud.getReservedIpv4(anchors.reservedIpv4.ingest)).dropletId, null);
@@ -161,6 +163,19 @@ test("runs the production-shaped 12-Droplet lifecycle without changing critical 
   assert.equal(dns.records.get("monitor.beachvolleyballmedia.com").value, "203.0.113.12");
   assert.deepEqual(dns.restores, ["monitor.beachvolleyballmedia.com"]);
   assert.equal(notifier.messages.length, 2);
+});
+
+test("fails closed before deleting a healthy stack when retained TLS state cannot be preserved", async () => {
+  const deployer = new FakeStackDeployer();
+  deployer.prepareForTeardown = async () => ({ healthy: false });
+  const setup = fixture({ deployer });
+  const evidence = await prepareDestroyableLifecycle(setup, "retained-state-failure");
+  await assert.rejects(
+    () => setup.controller.destroy(setup.manifest, evidence, "DESTROY:turnkey-test"),
+    /retained event state did not pass/u
+  );
+  assert.equal(setup.cloud.droplets.size, 12);
+  assert.equal((await setup.store.load()).phase, "closed");
 });
 
 test("allows an isolated rehearsal to tear down before a production-style review date", async () => {
@@ -573,7 +588,8 @@ test("creates a 12-Droplet rehearsal beside seven legacy servers without adoptin
     [...cloud.droplets.values()].filter((entry) => entry.tags.includes("legacy-production")),
     legacyBefore
   );
-  assert.ok(setup.manifest.endpoints.every((entry) => entry.hostname.includes(setup.manifest.namespace)));
+  assert.ok(setup.manifest.endpoints.filter((entry) => entry.role !== "commentary").every((entry) => entry.hostname.includes(setup.manifest.namespace)));
+  assert.ok(setup.manifest.endpoints.filter((entry) => entry.role === "commentary").every((entry) => entry.hostname.includes("-rehearsal.")));
   assert.match(setup.notifier.messages[0].title, /TEST rehearsal/);
 });
 
@@ -600,7 +616,7 @@ test("hard-cuts pre-attestation lifecycle state before provider mutation", async
   const cloud = new FakeDigitalOceanProvider();
   const setup = fixture({ cloud, store: new MemoryStateStore(legacy) });
 
-  await assert.rejects(() => setup.controller.up(setup.manifest, setup.anchors), /schemaVersion must be 6/);
+  await assert.rejects(() => setup.controller.up(setup.manifest, setup.anchors), /schemaVersion must be 7/);
   assert.equal(cloud.createCalls, 0);
   assert.equal(cloud.droplets.size, 0);
 });

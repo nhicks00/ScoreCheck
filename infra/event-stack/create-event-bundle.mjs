@@ -102,13 +102,14 @@ export async function createEventBundle(options, { verifyGitIdentity = assertReh
       });
     }
     const eventProfile = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       manifest: final.manifest,
       state: final.lifecycleState,
       anchors,
       secrets: final.secrets,
       sshKey: options.sshKey,
       knownHosts: final.knownHosts,
+      commentaryTlsState: commentaryTlsStatePath(parent, manifest),
       credentialsEnv: options.credentialsEnv,
       lifecycleAttestation: options.lifecycleAttestation,
       evidence: final.finalEvidence,
@@ -313,6 +314,12 @@ function normalizedAbsolute(value, label) {
 }
 
 function sha256(value) { return createHash("sha256").update(value).digest("hex"); }
+
+function commentaryTlsStatePath(parent, manifest) {
+  const hosts = manifest.endpoints.filter((entry) => entry.role === "commentary").map((entry) => entry.hostname).sort();
+  if (hosts.length !== 2) throw new Error("event manifest must contain exactly two commentary TLS endpoints");
+  return join(parent, "retained-commentary-tls", sha256(Buffer.from(hosts.join("\n"), "utf8")).slice(0, 16));
+}
 
 function normalizeGitHubRemote(value) {
   const match = /^(?:https:\/\/github\.com\/|git@github\.com:)([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?$/u.exec(value);

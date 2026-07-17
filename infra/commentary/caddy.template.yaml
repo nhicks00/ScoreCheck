@@ -11,6 +11,18 @@ apps:
       automate:
         - __RTC_HOST__
         - __TURN_HOST__
+    automation:
+      policies:
+        - subjects:
+            - __RTC_HOST__
+            - __TURN_HOST__
+          issuers:
+            - module: acme
+              ca: https://acme.zerossl.com/v2/DV90
+              email: __ACME_EMAIL__
+            - module: acme
+              ca: https://acme-v02.api.letsencrypt.org/directory
+              email: __ACME_EMAIL__
   layer4:
     servers:
       main:

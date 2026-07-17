@@ -8,7 +8,7 @@ import { isDeepStrictEqual } from "node:util";
 import { verifyRehearsalEvidence } from "./rehearsal/rehearsal-evidence.mjs";
 import { withProcessLock } from "./process-lock.mjs";
 
-const STATE_SCHEMA_VERSION = 6;
+const STATE_SCHEMA_VERSION = 7;
 const ANCHOR_SCHEMA_VERSION = 2;
 const PHASES = new Set(["planned", "provisioning", "ready", "live", "closed", "destroying", "destroyed", "aborting", "aborted"]);
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -273,6 +273,7 @@ export class EventLifecycleController {
       await verifyEvidenceBundle(state, evidenceDirectory);
       if (state.phase === "closed") {
         await this.#assertExactEventInventory(state, manifest);
+        await this.#preserveRetainedState(state, manifest);
         state.phase = "destroying";
         state.updatedAt = this.now().toISOString();
         await this.store.save(state);
@@ -320,6 +321,7 @@ export class EventLifecycleController {
 
       const inventory = await this.#reconcileAbortInventory(state, manifest);
       if (state.phase !== "aborting") {
+        await this.#preserveRetainedState(state, manifest);
         const marker = await initializeAbortEvidence(state, evidenceDirectory, inventory, this.now());
         state.phase = "aborting";
         state.abort = {
@@ -380,6 +382,21 @@ export class EventLifecycleController {
       }
       return { state, inventory, networkContract };
     });
+  }
+
+  async #preserveRetainedState(state, manifest) {
+    if (state.retainedState?.status === "healthy") return state.retainedState;
+    if (typeof this.deployer.prepareForTeardown !== "function") throw new Error("stack deployer cannot preserve retained state before teardown");
+    const result = await this.deployer.prepareForTeardown({ manifest, state: structuredClone(state) });
+    if (result?.healthy !== true) throw new Error("retained event state did not pass its teardown gate");
+    state.retainedState = {
+      status: "healthy",
+      checkedAt: this.now().toISOString(),
+      evidence: result.evidence ?? null
+    };
+    state.updatedAt = this.now().toISOString();
+    await this.store.save(state);
+    return state.retainedState;
   }
 
   async #inspectNetworkContract(state, manifest) {
@@ -848,6 +865,7 @@ export function createInitialState(manifest, now = new Date()) {
     stackHealth: null,
     notifications: {},
     evidence: null,
+    retainedState: null,
     abort: null
   };
 }
@@ -923,6 +941,7 @@ export function stateSummary(state) {
     evidence: state.evidence,
     lastError: state.lastError,
     abort: state.abort,
+    retainedState: state.retainedState,
     provisioningAttestation: state.provisioningAttestation,
     networkContract: state.networkContract
   };
@@ -942,6 +961,9 @@ function validateState(value) {
   if (value.anchorConfig !== null) validateLifecycleAnchorBinding(value.anchorConfig, value.kind);
   if (value.abort !== null && (!value.abort || typeof value.abort !== "object" || Array.isArray(value.abort))) {
     throw new Error("lifecycle state abort evidence is invalid");
+  }
+  if (value.retainedState !== null && (value.retainedState?.status !== "healthy" || typeof value.retainedState.checkedAt !== "string")) {
+    throw new Error("lifecycle retained state evidence is invalid");
   }
   if (value.networkContract !== null) {
     if (

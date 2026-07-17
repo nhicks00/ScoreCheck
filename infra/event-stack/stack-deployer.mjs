@@ -5,6 +5,7 @@ import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
+import { CommentaryTlsStateStore } from "./commentary-tls-state.mjs";
 import { collectReconstructionProvenance, sha256 as provenanceSha256 } from "./reconstruction-provenance.mjs";
 
 const REQUIRED_DEPLOYMENT_SECRET_FILES = Object.freeze([
@@ -17,7 +18,7 @@ const REQUIRED_DEPLOYMENT_SECRET_FILES = Object.freeze([
 ]);
 
 export class LocalStackDeployer {
-  constructor({ repoRoot, secretsDirectory, sshPrivateKey, knownHostsPath, runner = runCommand, fetchImpl = globalThis.fetch }) {
+  constructor({ repoRoot, secretsDirectory, sshPrivateKey, knownHostsPath, commentaryTlsStateDirectory = null, acmeEmail = null, runner = runCommand, fetchImpl = globalThis.fetch, commentaryTlsStateStore = null }) {
     this.repoRoot = resolve(repoRoot);
     this.secretsDirectory = protectedAbsolute(secretsDirectory, "secrets directory");
     this.sshPrivateKey = protectedAbsolute(sshPrivateKey, "SSH private key");
@@ -25,17 +26,31 @@ export class LocalStackDeployer {
     this.runner = runner;
     this.fetchImpl = fetchImpl;
     this.agentConfig = null;
+    this.acmeEmail = acmeEmail;
+    this.commentaryTlsState = commentaryTlsStateStore ?? (commentaryTlsStateDirectory ? new CommentaryTlsStateStore({
+      directory: commentaryTlsStateDirectory,
+      sshPrivateKey: this.sshPrivateKey,
+      knownHostsPath: this.knownHostsPath,
+      runner
+    }) : null);
   }
 
   async deploy({ manifest, spec, resource, state }) {
     await this.#validateProtectedInputs();
     const hostKeySha256 = await this.#ensureSsh(resource.publicIpv4);
+    let commentaryTlsEvidence = null;
     const common = {
       SCORECHECK_SSH_KNOWN_HOSTS: this.knownHostsPath
     };
     if (spec.role === "commentary") {
       const env = await loadProtectedEnv(join(this.secretsDirectory, "commentary.env"));
       const commentaryHosts = commentaryEndpointHosts(manifest);
+      if (!this.commentaryTlsState) throw new Error("commentary TLS state store is required");
+      if (typeof this.acmeEmail !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(this.acmeEmail)) throw new Error("SCORECHECK_ACME_EMAIL is required for commentary certificate automation");
+      const restoredTlsState = await this.commentaryTlsState.restore({
+        publicIpv4: resource.publicIpv4,
+        hosts: [commentaryHosts.rtc, commentaryHosts.turn]
+      });
       await this.#script("infra/commentary/deploy.sh", {
         ...env,
         ...common,
@@ -43,8 +58,20 @@ export class LocalStackDeployer {
         LIVEKIT_COMMENTARY_SSH_KEY: this.sshPrivateKey,
         LIVEKIT_COMMENTARY_PUBLIC_IP: servicePublicIpv4({ manifest, state, spec, resource }),
         LIVEKIT_COMMENTARY_RTC_HOST: commentaryHosts.rtc,
-        LIVEKIT_COMMENTARY_TURN_HOST: commentaryHosts.turn
+        LIVEKIT_COMMENTARY_TURN_HOST: commentaryHosts.turn,
+        LIVEKIT_COMMENTARY_ACME_EMAIL: this.acmeEmail
       });
+      const capturedTlsState = await this.commentaryTlsState.capture({
+        publicIpv4: resource.publicIpv4,
+        hosts: [commentaryHosts.rtc, commentaryHosts.turn]
+      });
+      commentaryTlsEvidence = {
+        restored: restoredTlsState.status,
+        captured: capturedTlsState.status,
+        stateSha256: capturedTlsState.stateSha256,
+        fileCount: capturedTlsState.fileCount,
+        certificates: capturedTlsState.certificates
+      };
     } else if (spec.role === "ingest") {
       const env = await loadProtectedEnv(join(this.secretsDirectory, "ingest.env"));
       const wireguardConfig = join(this.secretsDirectory, "wireguard/camera-lan.conf");
@@ -97,7 +124,38 @@ export class LocalStackDeployer {
       expectedConfigHashes,
       runRemote: (command) => this.#ssh(resource.publicIpv4, command)
     });
-    return { healthy: true, revision, evidence: { hostKeySha256, reconstruction } };
+    return { healthy: true, revision, evidence: {
+      hostKeySha256,
+      reconstruction,
+      ...(commentaryTlsEvidence ? { commentaryTlsState: commentaryTlsEvidence } : {})
+    } };
+  }
+
+  async prepareForTeardown({ manifest, state }) {
+    const spec = manifest.droplets.find((entry) => entry.role === "commentary");
+    if (!spec) throw new Error("event manifest has no commentary service");
+    if (!this.commentaryTlsState) throw new Error("commentary TLS state store is required before teardown");
+    const resource = state.droplets[spec.name];
+    const hosts = commentaryEndpointHosts(manifest);
+    const existing = await this.commentaryTlsState.inspect([hosts.rtc, hosts.turn], { allowMissing: true });
+    if (!resource?.publicIpv4 || resource.status === "destroyed") {
+      if (state.deployments[spec.name]?.status === "healthy" && existing.status !== "ready") throw new Error("healthy commentary service has no retained TLS state before teardown");
+      return { healthy: true, evidence: existing };
+    }
+    await assertProtectedFile(this.sshPrivateKey, "SSH private key");
+    await this.#ensureSsh(resource.publicIpv4);
+    const stop = await this.#ssh(resource.publicIpv4, "cd /opt/livekit && test -f docker-compose.yaml && docker compose -f docker-compose.yaml stop caddy", { allowFailure: true });
+    try {
+      const captured = await this.commentaryTlsState.capture({ publicIpv4: resource.publicIpv4, hosts: [hosts.rtc, hosts.turn] });
+      return { healthy: true, evidence: { ...captured, caddyStopped: stop.code === 0 } };
+    } catch (error) {
+      if (existing.status === "ready") {
+        return { healthy: true, evidence: { ...existing, status: "existing-retained", remoteCapture: "unavailable", caddyStopped: stop.code === 0 } };
+      }
+      if (stop.code === 0) await this.#ssh(resource.publicIpv4, "cd /opt/livekit && docker compose -f docker-compose.yaml start caddy", { allowFailure: true });
+      if (state.deployments[spec.name]?.status === "healthy") throw new Error(`healthy commentary TLS state could not be retained: ${error instanceof Error ? error.message : String(error)}`);
+      return { healthy: true, evidence: { status: "not-yet-issued", caddyStopped: false } };
+    }
   }
 
   async finalizeStack({ manifest, state }) {
@@ -202,7 +260,7 @@ export class LocalStackDeployer {
     throw new Error(`SSH/cloud-init did not become ready for ${ip}: ${lastError?.message ?? "unknown error"}`);
   }
 
-  async #ssh(ip, remoteCommand) {
+  async #ssh(ip, remoteCommand, options = {}) {
     return this.runner("ssh", [
       "-i", this.sshPrivateKey,
       "-o", "IdentitiesOnly=yes",
@@ -212,7 +270,7 @@ export class LocalStackDeployer {
       "-o", "ConnectTimeout=10",
       `root@${ip}`,
       remoteCommand
-    ], { capture: true });
+    ], { capture: true, ...options });
   }
 
   async #script(relativePath, environment) {

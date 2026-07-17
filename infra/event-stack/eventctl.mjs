@@ -34,6 +34,7 @@ export function buildEventctlInvocation(command, profile, confirmation = null) {
     "--secrets", profile.secrets,
     "--ssh-key", profile.sshKey,
     "--known-hosts", profile.knownHosts,
+    "--commentary-tls-state", profile.commentaryTlsState,
     "--credentials-env", profile.credentialsEnv,
     "--attestation", profile.lifecycleAttestation
   );
@@ -42,17 +43,23 @@ export function buildEventctlInvocation(command, profile, confirmation = null) {
     "--secrets", profile.secrets,
     "--ssh-key", profile.sshKey,
     "--known-hosts", profile.knownHosts,
+    "--commentary-tls-state", profile.commentaryTlsState,
     "--credentials-env", profile.credentialsEnv
   );
   if (command === "evidence") args.push(
     "--secrets", profile.secrets,
     "--ssh-key", profile.sshKey,
     "--known-hosts", profile.knownHosts,
+    "--commentary-tls-state", profile.commentaryTlsState,
     "--credentials-env", profile.credentialsEnv,
     "--evidence", profile.evidence
   );
   if (command === "evidence" && profile.rehearsalEvidence !== null) args.push("--rehearsal-evidence", profile.rehearsalEvidence);
   if (["destroy", "abort"].includes(command)) args.push(
+    "--secrets", profile.secrets,
+    "--ssh-key", profile.sshKey,
+    "--known-hosts", profile.knownHosts,
+    "--commentary-tls-state", profile.commentaryTlsState,
     "--credentials-env", profile.credentialsEnv,
     "--evidence", profile.evidence
   );
@@ -67,8 +74,8 @@ export function buildEventctlInvocation(command, profile, confirmation = null) {
 }
 
 export function validateProfile(value) {
-  if (!value || value.schemaVersion !== 3) throw new Error("event operator profile schemaVersion must be 3");
-  const expected = ["manifest", "state", "anchors", "secrets", "sshKey", "knownHosts", "credentialsEnv", "lifecycleAttestation", "evidence", "rehearsalEvidence"];
+  if (!value || value.schemaVersion !== 4) throw new Error("event operator profile schemaVersion must be 4");
+  const expected = ["manifest", "state", "anchors", "secrets", "sshKey", "knownHosts", "commentaryTlsState", "credentialsEnv", "lifecycleAttestation", "evidence", "rehearsalEvidence"];
   if (JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(["schemaVersion", ...expected].sort())) {
     throw new Error("event operator profile must contain exactly the supported fields");
   }

@@ -61,7 +61,8 @@ test("generates isolated provider services, endpoints, eight assigned workers, a
   assert.equal(value.endpoints.filter((entry) => entry.addressMode === "reserved-ipv4").length, 0);
   assert.equal(value.endpoints.filter((entry) => entry.addressMode === "dynamic-ipv4").length, 4);
   assert.ok(value.endpoints.every((entry) => entry.addressSlot === undefined));
-  assert.ok(value.endpoints.every((entry) => entry.hostname.includes(value.namespace)));
+  assert.ok(value.endpoints.filter((entry) => entry.role !== "commentary").every((entry) => entry.hostname.includes(value.namespace)));
+  assert.ok(value.endpoints.filter((entry) => entry.role === "commentary").every((entry) => entry.hostname.includes("-rehearsal.")));
   assert.match(value.sourceBindings.compositorPoolSpecSha256, /^[a-f0-9]{64}$/);
   assert.match(value.sourceBindings.serviceSpecSha256, /^[a-f0-9]{64}$/);
   assert.match(value.sourceBindings.networkSpecSha256, /^[a-f0-9]{64}$/);
@@ -130,6 +131,10 @@ test("production keeps canonical endpoints while rehearsal is isolated by determ
   assert.equal(production.endpoints.filter((entry) => entry.addressMode === "reserved-ipv4").length, 3);
   assert.ok(rehearsal.endpoints.every((entry) => !production.endpoints.some((candidate) => candidate.hostname === entry.hostname)));
   assert.ok(rehearsal.endpoints.every((entry) => entry.addressMode === "dynamic-ipv4" && entry.addressSlot === undefined));
+  assert.deepEqual(rehearsal.endpoints.filter((entry) => entry.role === "commentary").map((entry) => entry.hostname).sort(), [
+    "rtc-rehearsal.beachvolleyballmedia.com",
+    "turn-rehearsal.beachvolleyballmedia.com"
+  ]);
   assert.deepEqual(production.droplets.map((entry) => entry.name), rehearsal.droplets.map((entry) => entry.name));
   assert.notDeepEqual(production.droplets.map((entry) => entry.providerName), rehearsal.droplets.map((entry) => entry.providerName));
 

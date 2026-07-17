@@ -18,12 +18,15 @@ test("renders event-scoped LiveKit and Caddy hostnames without changing the rese
     apiSecret: "api-secret",
     publicIp: "192.0.2.10",
     rtcHost,
-    turnHost
+    turnHost,
+    acmeEmail: "ops@example.com"
   });
   assert.match(rendered.livekitConfig, new RegExp(`domain: "${turnHost.replaceAll(".", "\\.")}"`));
   assert.match(rendered.caddyConfig, new RegExp(rtcHost.replaceAll(".", "\\."), "g"));
   assert.match(rendered.caddyConfig, new RegExp(turnHost.replaceAll(".", "\\."), "g"));
   assert.match(rendered.caddyConfig, /192\.0\.2\.10:5349/u);
+  assert.match(rendered.caddyConfig, /acme\.zerossl\.com\/v2\/DV90/u);
+  assert.match(rendered.caddyConfig, /ops@example\.com/u);
   assert.doesNotMatch(rendered.livekitConfig, /turn\.beachvolleyballmedia\.com/u);
   assert.doesNotMatch(rendered.caddyConfig, /__[A-Z0-9_]+__/u);
 });
@@ -37,7 +40,8 @@ test("fails closed when a required event hostname is absent", () => {
       apiSecret: "api-secret",
       publicIp: "192.0.2.10",
       rtcHost: "",
-      turnHost: "turn.example.com"
+      turnHost: "turn.example.com",
+      acmeEmail: "ops@example.com"
     }),
     /rtcHost is required/
   );
