@@ -6,7 +6,7 @@ import { readFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
-import { firewallPayload, networkContractProblems, validateNetworkContract } from "./network-contract.mjs";
+import { firewallPayload, networkContractProblems, networkContractTags, validateNetworkContract } from "./network-contract.mjs";
 
 const DEFAULT_DO_API = "https://api.digitalocean.com/v2";
 const DEFAULT_VERCEL_API = "https://api.vercel.com";
@@ -84,6 +84,8 @@ export class DigitalOceanProvider {
     if (vpc.region !== contract.region || vpc.ipRange !== contract.vpcCidr) {
       throw new Error("the pinned DigitalOcean VPC identity drifted; refusing firewall changes");
     }
+
+    for (const tag of networkContractTags(contract)) await this.ensureTag(tag);
 
     const firewalls = await this.listFirewalls();
     for (const desired of contract.firewalls) {

@@ -3,7 +3,7 @@ export class FakeDigitalOceanProvider {
     this.account = { status: "active", dropletLimit };
     this.region = region;
     this.droplets = new Map();
-    this.tags = new Set();
+    this.tags = new Set(["bvm-preview-01", "bvm-commentary", "bvm-compositor", "bvm-observability"]);
     this.reserved = new Map(Object.values(reservedIpv4).map((ip) => [ip, { ip, region, dropletId: null, locked: false }]));
     this.nextId = 1000;
     this.createCalls = 0;

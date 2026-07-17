@@ -288,6 +288,10 @@ test("DigitalOcean network apply updates drift, creates missing rules, and prove
     timeoutMs: 50,
     fetchImpl: queueFetch([
       response(200, { vpcs: [apiVpc()], meta: { total: 1 } }),
+      response(201, {}),
+      response(201, {}),
+      response(201, {}),
+      response(201, {}),
       response(200, { firewalls: initial, meta: { total: 3 } }),
       response(200, { firewall: apiFirewall(networkContract.firewalls[0], 1) }),
       response(202, { firewall: apiFirewall(networkContract.firewalls[3], 4) }),
@@ -298,9 +302,12 @@ test("DigitalOcean network apply updates drift, creates missing rules, and prove
 
   const result = await provider.applyNetworkContract(networkContract);
   assert.equal(result.healthy, true);
-  assert.deepEqual(requests.map((entry) => entry.options.method), ["GET", "GET", "PUT", "POST", "GET", "GET"]);
-  const update = JSON.parse(requests[2].options.body);
-  const create = JSON.parse(requests[3].options.body);
+  assert.deepEqual(requests.map((entry) => entry.options.method), ["GET", "POST", "POST", "POST", "POST", "GET", "PUT", "POST", "GET", "GET"]);
+  assert.deepEqual(requests.slice(1, 5).map((entry) => JSON.parse(entry.options.body).name), [
+    "bvm-commentary", "bvm-compositor", "bvm-observability", "bvm-preview-01"
+  ]);
+  const update = JSON.parse(requests[6].options.body);
+  const create = JSON.parse(requests[7].options.body);
   assert.deepEqual(update, firewallPayload(networkContract.firewalls[0]));
   assert.deepEqual(create, firewallPayload(networkContract.firewalls[3]));
   assert.deepEqual(update.droplet_ids, []);

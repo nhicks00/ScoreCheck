@@ -7,6 +7,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import { verifyRehearsalEvidence } from "./rehearsal/rehearsal-evidence.mjs";
 import { withProcessLock } from "./process-lock.mjs";
+import { networkContractTags } from "./network-contract.mjs";
 
 const STATE_SCHEMA_VERSION = 8;
 const ANCHOR_SCHEMA_VERSION = 2;
@@ -656,8 +657,21 @@ export class EventLifecycleController {
 
   async #cleanupLifecycleTags(state, manifest) {
     const eventTag = `scorecheck-event:${manifest.event}`;
+    const retainedNetworkTags = new Set(networkContractTags(manifest.network));
     for (const name of managedLifecycleTags(manifest)) {
       const prior = state.tagCleanup[name] ?? null;
+      if (retainedNetworkTags.has(name)) {
+        const current = await this.cloud.inspectTag(name);
+        if (current === null) throw new Error(`persistent network tag ${name} disappeared during lifecycle cleanup`);
+        state.tagCleanup[name] = {
+          name,
+          status: "retained-network-contract",
+          resourceCount: current.resourceCount,
+          checkedAt: this.now().toISOString()
+        };
+        await this.store.save(state);
+        continue;
+      }
       if (prior && new Set(["absent", "deleted", "reconciled-absent"]).has(prior.status)) {
         if (await this.cloud.tagExists(name)) throw new Error(`DigitalOcean tag ${name} reappeared after lifecycle cleanup`);
         continue;
@@ -986,9 +1000,10 @@ function validateState(value) {
     if (
       typeof name !== "string"
       || !result
-      || !new Set(["absent", "deleted", "reconciled-absent", "retained-in-use"]).has(result.status)
+      || !new Set(["absent", "deleted", "reconciled-absent", "retained-in-use", "retained-network-contract"]).has(result.status)
       || typeof result.checkedAt !== "string"
       || (result.status === "retained-in-use" && (!Number.isInteger(result.resourceCount) || result.resourceCount < 1))
+      || (result.status === "retained-network-contract" && (!Number.isInteger(result.resourceCount) || result.resourceCount < 0))
     ) throw new Error("lifecycle state tag cleanup evidence is invalid");
   }
   if (value.anchorConfig !== null) validateLifecycleAnchorBinding(value.anchorConfig, value.kind);

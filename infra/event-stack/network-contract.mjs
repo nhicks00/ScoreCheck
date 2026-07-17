@@ -26,6 +26,15 @@ export function assertNetworkContractDeployable(value) {
   return contract;
 }
 
+export function networkContractTags(value) {
+  const contract = validateNetworkContract(value);
+  return [...new Set(contract.firewalls.flatMap((firewall) => [
+    firewall.targetTag,
+    ...firewall.inboundRules.flatMap((rule) => rule.sources.tags ?? []),
+    ...firewall.outboundRules.flatMap((rule) => rule.destinations.tags ?? [])
+  ]))].sort();
+}
+
 export function renderAdminSshNetworkContract(templateInput, adminSshInput) {
   const template = validateNetworkContract(templateInput);
   const addresses = validateAdminSshCidrs(adminSshInput);

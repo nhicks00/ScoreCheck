@@ -157,8 +157,11 @@ test("runs the production-shaped 12-Droplet lifecycle without changing critical 
   assert.equal(deployer.retainedStateCalls, 1);
   assert.equal(cloud.droplets.size, 0);
   assert.equal(cloud.deleteCalls.length, 12);
-  assert.ok(managedLifecycleTags(manifest).every((name) => !cloud.tags.has(name)));
-  assert.ok(Object.values(destroyed.tagCleanup).every((entry) => new Set(["deleted", "absent", "reconciled-absent"]).has(entry.status)));
+  const networkTags = new Set(["bvm-commentary", "bvm-compositor", "bvm-observability", "bvm-preview-01"]);
+  assert.ok(managedLifecycleTags(manifest).every((name) => cloud.tags.has(name) === networkTags.has(name)));
+  assert.ok([...networkTags].every((name) => destroyed.tagCleanup[name].status === "retained-network-contract"));
+  assert.ok(Object.entries(destroyed.tagCleanup).filter(([name]) => !networkTags.has(name))
+    .every(([, entry]) => new Set(["deleted", "absent", "reconciled-absent"]).has(entry.status)));
   assert.equal((await cloud.getReservedIpv4(anchors.reservedIpv4.ingest)).dropletId, null);
   assert.equal((await cloud.getReservedIpv4(anchors.reservedIpv4.commentary)).dropletId, null);
   assert.equal(dns.records.get("preview.beachvolleyballmedia.com").value, anchors.reservedIpv4.ingest);
