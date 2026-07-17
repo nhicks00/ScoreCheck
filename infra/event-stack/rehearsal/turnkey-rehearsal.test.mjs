@@ -13,6 +13,19 @@ test("runs the exact build, workload, provider cleanup, evidence, and Droplet te
   assert.ok(commands.indexOf("rehearsal:cleanup") < commands.indexOf("lifecycle:destroy"));
 });
 
+test("treats a brand-new bundle with no state files as the initial full run", () => {
+  const commands = buildRunPlan({ event: "test", eventProfile: "/event.json", rehearsalProfile: "/rehearsal.json", lifecyclePhase: null, rehearsalPhase: null }).map((step) => `${step.system}:${step.command}`);
+  assert.deepEqual(commands, [
+    "lifecycle:plan", "rehearsal:plan", "rehearsal:prepare", "lifecycle:up", "lifecycle:start",
+    "rehearsal:start", "rehearsal:soak", "rehearsal:stop", "lifecycle:close", "rehearsal:cleanup",
+    "rehearsal:seal", "lifecycle:evidence", "lifecycle:destroy"
+  ]);
+  assert.throws(
+    () => buildRunPlan({ event: "test", eventProfile: "/event.json", rehearsalProfile: "/rehearsal.json", lifecyclePhase: null, rehearsalPhase: "prepared" }),
+    /without a lifecycle state/
+  );
+});
+
 test("resumes an interrupted partial Droplet build without replacing prepared providers", () => {
   const commands = buildRunPlan({ event: "test", eventProfile: "/event.json", rehearsalProfile: "/rehearsal.json", lifecyclePhase: "provisioning", rehearsalPhase: "prepared" }).map((step) => `${step.system}:${step.command}`);
   assert.deepEqual(commands, [

@@ -54,6 +54,8 @@ async function main() {
 }
 
 export function buildRunPlan({ event, eventProfile, rehearsalProfile, lifecyclePhase = "planned", rehearsalPhase = null }) {
+  if (lifecyclePhase === null && rehearsalPhase === null) lifecyclePhase = "planned";
+  else if (lifecyclePhase === null) throw new Error(`cannot resume rehearsal state ${rehearsalPhase} without a lifecycle state`);
   if (["aborting", "aborted"].includes(lifecyclePhase)) throw new Error(`cannot resume a rehearsal whose lifecycle is ${lifecyclePhase}`);
   if (lifecyclePhase === "destroyed") throw new Error("rehearsal lifecycle is already destroyed; inspect its sealed report instead of creating a new PASS");
 
