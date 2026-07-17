@@ -211,6 +211,7 @@ def classification_map(processes):
             ("chrome", "egress"): "workload.egress-chrome",
             ("chrome", "chrome"): "workload.egress-chrome",
             ("pactl", "egress"): "workload.egress-pactl",
+            ("gst-plugin-scan", "egress"): "workload.egress-gst-plugin-scan",
         }.get((process["command"], process.get("parentCommand")))
         if workload_classification is None:
             continue
@@ -489,6 +490,7 @@ def self_test():
         110: {"pid": 110, "ppid": 100, "identity": "110:11", "command": "pactl", "parentCommand": "egress", "commandLine": b"", "cgroupFingerprint": "egress"},
         120: {"pid": 120, "ppid": 100, "identity": "120:12", "command": "pactl", "parentCommand": "egress", "commandLine": b"", "cgroupFingerprint": "other"},
         130: {"pid": 130, "ppid": 20, "identity": "130:13", "command": "pactl", "parentCommand": "chrome", "commandLine": b"", "cgroupFingerprint": "egress"},
+        140: {"pid": 140, "ppid": 100, "identity": "140:14", "command": "gst-plugin-scan", "parentCommand": "egress", "commandLine": b"gst-plugin-scanner", "cgroupFingerprint": "egress"},
     }
     classifications = classification_map(processes)
     assert classifications["20:2"] == "workload.egress-chrome"
@@ -500,6 +502,7 @@ def self_test():
     assert classifications["110:11"] == "workload.egress-pactl"
     assert "120:12" not in classifications
     assert "130:13" not in classifications
+    assert classifications["140:14"] == "workload.egress-gst-plugin-scan"
 
 
 def parse_args():

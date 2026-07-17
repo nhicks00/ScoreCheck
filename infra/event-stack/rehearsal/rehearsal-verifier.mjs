@@ -171,7 +171,7 @@ export function fullProblems(snapshot, nowMs = Date.now()) {
     for (const branch of ["preview", "program"]) {
       const ffmpeg = value.ffmpeg?.[branch];
       if (!ffmpeg || (ffmpeg.framesPerSecond ?? 0) < 29 || ffmpeg.framesPerSecond > 31 || ffmpeg.droppedFrames !== 0 || ffmpeg.duplicatedFrames !== 0 || (ffmpeg.speedRatio ?? 0) < 0.95 || ffmpeg.speedRatio > 1.05) {
-        problems.push(`Camera ${court} ${branch} FFmpeg is outside 30fps/zero-drop/realtime bounds`);
+        problems.push(`Camera ${court} ${branch} FFmpeg is outside 30fps/zero-drop/realtime bounds (${ffmpegSummary(ffmpeg)})`);
       }
     }
     const browser = value.browser;
@@ -199,6 +199,11 @@ export function fullProblems(snapshot, nowMs = Date.now()) {
   const spareEgress = spare?.nativeServices?.egress;
   if (!spare || spare.state !== "HEALTHY" || !spareEgress?.idle || spareEgress.activeWebRequests !== 0 || !spareEgress.canAcceptRequest) problems.push("warm spare is not healthy, idle, and admission-ready");
   return unique(problems);
+}
+
+function ffmpegSummary(value) {
+  if (!value) return "missing";
+  return `fps=${value.framesPerSecond ?? "null"},drop=${value.droppedFrames ?? "null"},dup=${value.duplicatedFrames ?? "null"},speed=${value.speedRatio ?? "null"}`;
 }
 
 export function idleProblems(snapshot, nowMs = Date.now()) {

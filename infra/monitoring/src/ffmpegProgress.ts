@@ -34,6 +34,41 @@ export async function collectFfmpegProgress(directory: string | null, nowMs = Da
   return snapshots.filter((snapshot): snapshot is FfmpegBranchSnapshot => snapshot !== null);
 }
 
+export class FfmpegSpeedDeriver {
+  private readonly previous = new Map<string, { sampledAtMs: number; outputTimeMs: number; speedRatio: number | null }>();
+
+  update(branches: FfmpegBranchSnapshot[]): FfmpegBranchSnapshot[] {
+    const active = new Set(branches.map((branch) => branch.name));
+    for (const name of this.previous.keys()) {
+      if (!active.has(name)) this.previous.delete(name);
+    }
+    return branches.map((branch) => ({ ...branch, speedRatio: this.observe(branch) }));
+  }
+
+  private observe(branch: FfmpegBranchSnapshot): number | null {
+    const sampledAtMs = Date.parse(branch.sampledAt);
+    const outputTimeMs = branch.outputTimeMs;
+    if (!Number.isFinite(sampledAtMs) || outputTimeMs == null || !Number.isFinite(outputTimeMs)) {
+      this.previous.delete(branch.name);
+      return branch.speedRatio;
+    }
+
+    const previous = this.previous.get(branch.name);
+    let speedRatio = branch.speedRatio;
+    if (speedRatio == null && previous) {
+      const elapsedMs = sampledAtMs - previous.sampledAtMs;
+      const outputDeltaMs = outputTimeMs - previous.outputTimeMs;
+      if (elapsedMs === 0 && outputDeltaMs === 0) speedRatio = previous.speedRatio;
+      else if (elapsedMs > 0 && outputDeltaMs >= 0) {
+        const derived = outputDeltaMs / elapsedMs;
+        speedRatio = Number.isFinite(derived) && derived <= 20 ? derived : null;
+      }
+    }
+    this.previous.set(branch.name, { sampledAtMs, outputTimeMs, speedRatio });
+    return speedRatio;
+  }
+}
+
 export function parseKeyValues(text: string): Map<string, string> {
   const values = new Map<string, string>();
   for (const line of text.split(/\r?\n/).slice(0, 64)) {

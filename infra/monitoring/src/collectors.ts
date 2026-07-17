@@ -4,7 +4,7 @@ import type { AgentConfig } from "./config.js";
 import { agentSnapshotSchema, MONITORING_CONTRACT_VERSION, type AgentSnapshot, type CameraContentSnapshot, type MediaPathSnapshot } from "./contracts.js";
 import { collectDockerServices } from "./docker.js";
 import { MediaPathDetailCache, parseMediaPath, parseSrtTransports, type ByteSample, type MediaPathApiRow } from "./media.js";
-import { collectFfmpegProgress } from "./ffmpegProgress.js";
+import { collectFfmpegProgress, FfmpegSpeedDeriver } from "./ffmpegProgress.js";
 
 type CollectionError = AgentSnapshot["collectionErrors"][number];
 type MediaMtxListResponse = { items?: unknown[] };
@@ -12,6 +12,7 @@ type MediaMtxListResponse = { items?: unknown[] };
 export class AgentCollector {
   private readonly previousBytes = new Map<string, ByteSample>();
   private readonly mediaPathDetails = new MediaPathDetailCache();
+  private readonly ffmpegSpeed = new FfmpegSpeedDeriver();
 
   constructor(
     private readonly config: AgentConfig,
@@ -71,7 +72,7 @@ export class AgentCollector {
       },
       services,
       mediaPaths: pathsWithErrors,
-      ffmpegBranches,
+      ffmpegBranches: this.ffmpegSpeed.update(ffmpegBranches),
       contentAnalysis: this.contentSnapshots(),
       nativeServices: { endpoints, livekit, egress }
     });

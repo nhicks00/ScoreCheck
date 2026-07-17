@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parseKeyValues } from "./ffmpegProgress.js";
+import type { FfmpegBranchSnapshot } from "./contracts.js";
+import { FfmpegSpeedDeriver, parseKeyValues } from "./ffmpegProgress.js";
 
 describe("FFmpeg progress parser", () => {
   it("accepts only bounded numeric progress fields", () => {
@@ -19,3 +20,31 @@ describe("FFmpeg progress parser", () => {
     });
   });
 });
+
+describe("FFmpeg speed derivation", () => {
+  it("publishes a reset-safe real-time ratio into the agent snapshot contract", () => {
+    const deriver = new FfmpegSpeedDeriver();
+    expect(deriver.update([branch("2026-07-17T00:00:00Z", 10_000)])[0]?.speedRatio).toBeNull();
+    expect(deriver.update([branch("2026-07-17T00:00:05Z", 15_000)])[0]?.speedRatio).toBe(1);
+    expect(deriver.update([branch("2026-07-17T00:00:05Z", 15_000)])[0]?.speedRatio).toBe(1);
+    expect(deriver.update([branch("2026-07-17T00:00:10Z", 1_000)])[0]?.speedRatio).toBeNull();
+    expect(deriver.update([])).toEqual([]);
+    expect(deriver.update([branch("2026-07-17T00:00:15Z", 6_000)])[0]?.speedRatio).toBeNull();
+  });
+});
+
+function branch(sampledAt: string, outputTimeMs: number): FfmpegBranchSnapshot {
+  return {
+    name: "court1_preview",
+    courtNumber: 1,
+    branch: "preview",
+    sampledAt,
+    frame: 300,
+    framesPerSecond: 30,
+    bitrateBps: 2_500_000,
+    outputTimeMs,
+    duplicatedFrames: 0,
+    droppedFrames: 0,
+    speedRatio: null
+  };
+}
