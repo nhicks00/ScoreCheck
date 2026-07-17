@@ -35,37 +35,54 @@ export async function collectFfmpegProgress(directory: string | null, nowMs = Da
 }
 
 export class FfmpegSpeedDeriver {
-  private readonly previous = new Map<string, { sampledAtMs: number; outputTimeMs: number; speedRatio: number | null }>();
+  private readonly previous = new Map<string, {
+    sampledAtMs: number;
+    frame: number;
+    framesPerSecond: number | null;
+    outputTimeMs: number;
+    speedRatio: number | null;
+  }>();
 
   update(branches: FfmpegBranchSnapshot[]): FfmpegBranchSnapshot[] {
     const active = new Set(branches.map((branch) => branch.name));
     for (const name of this.previous.keys()) {
       if (!active.has(name)) this.previous.delete(name);
     }
-    return branches.map((branch) => ({ ...branch, speedRatio: this.observe(branch) }));
+    return branches.map((branch) => this.observe(branch));
   }
 
-  private observe(branch: FfmpegBranchSnapshot): number | null {
+  private observe(branch: FfmpegBranchSnapshot): FfmpegBranchSnapshot {
     const sampledAtMs = Date.parse(branch.sampledAt);
     const outputTimeMs = branch.outputTimeMs;
     if (!Number.isFinite(sampledAtMs) || outputTimeMs == null || !Number.isFinite(outputTimeMs)) {
       this.previous.delete(branch.name);
-      return branch.speedRatio;
+      return branch;
     }
 
     const previous = this.previous.get(branch.name);
+    let framesPerSecond = branch.framesPerSecond;
     let speedRatio = branch.speedRatio;
-    if (speedRatio == null && previous) {
+    if (previous) {
       const elapsedMs = sampledAtMs - previous.sampledAtMs;
+      const frameDelta = branch.frame - previous.frame;
       const outputDeltaMs = outputTimeMs - previous.outputTimeMs;
-      if (elapsedMs === 0 && outputDeltaMs === 0) speedRatio = previous.speedRatio;
-      else if (elapsedMs > 0 && outputDeltaMs >= 0) {
-        const derived = outputDeltaMs / elapsedMs;
-        speedRatio = Number.isFinite(derived) && derived <= 20 ? derived : null;
+      if (elapsedMs === 0 && frameDelta === 0 && outputDeltaMs === 0) {
+        framesPerSecond = previous.framesPerSecond;
+        speedRatio = previous.speedRatio;
+      } else if (elapsedMs > 0 && frameDelta >= 0 && outputDeltaMs >= 0) {
+        const derivedFramesPerSecond = (frameDelta * 1_000) / elapsedMs;
+        framesPerSecond = Number.isFinite(derivedFramesPerSecond) && derivedFramesPerSecond <= 240
+          ? derivedFramesPerSecond
+          : null;
+        const derivedSpeedRatio = outputDeltaMs / elapsedMs;
+        speedRatio = Number.isFinite(derivedSpeedRatio) && derivedSpeedRatio <= 20 ? derivedSpeedRatio : null;
+      } else {
+        framesPerSecond = null;
+        speedRatio = null;
       }
     }
-    this.previous.set(branch.name, { sampledAtMs, outputTimeMs, speedRatio });
-    return speedRatio;
+    this.previous.set(branch.name, { sampledAtMs, frame: branch.frame, framesPerSecond, outputTimeMs, speedRatio });
+    return { ...branch, framesPerSecond, speedRatio };
   }
 }
 

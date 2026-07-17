@@ -60,25 +60,36 @@ describe("FFmpeg progress parser", () => {
 });
 
 describe("FFmpeg speed derivation", () => {
-  it("publishes a reset-safe real-time ratio into the agent snapshot contract", () => {
+  it("publishes reset-safe current cadence and real-time ratio into the agent snapshot contract", () => {
     const deriver = new FfmpegSpeedDeriver();
-    expect(deriver.update([branch("2026-07-17T00:00:00Z", 10_000)])[0]?.speedRatio).toBeNull();
-    expect(deriver.update([branch("2026-07-17T00:00:05Z", 15_000)])[0]?.speedRatio).toBe(1);
-    expect(deriver.update([branch("2026-07-17T00:00:05Z", 15_000)])[0]?.speedRatio).toBe(1);
-    expect(deriver.update([branch("2026-07-17T00:00:10Z", 1_000)])[0]?.speedRatio).toBeNull();
+    expect(deriver.update([branch("2026-07-17T00:00:00Z", 10_000, 300)])[0]).toMatchObject({ framesPerSecond: 23, speedRatio: null });
+    expect(deriver.update([branch("2026-07-17T00:00:05Z", 15_000, 450)])[0]).toMatchObject({ framesPerSecond: 30, speedRatio: 1 });
+    expect(deriver.update([branch("2026-07-17T00:00:05Z", 15_000, 450)])[0]).toMatchObject({ framesPerSecond: 30, speedRatio: 1 });
+    expect(deriver.update([branch("2026-07-17T00:00:10Z", 1_000, 30)])[0]).toMatchObject({ framesPerSecond: null, speedRatio: null });
     expect(deriver.update([])).toEqual([]);
-    expect(deriver.update([branch("2026-07-17T00:00:15Z", 6_000)])[0]?.speedRatio).toBeNull();
+    expect(deriver.update([branch("2026-07-17T00:00:15Z", 6_000, 180)])[0]).toMatchObject({ framesPerSecond: 23, speedRatio: null });
+  });
+
+  it("uses frame deltas instead of FFmpeg's lifetime-average fps after delayed startup", () => {
+    const deriver = new FfmpegSpeedDeriver();
+    const first = branch("2026-07-17T00:00:00Z", 6_000, 120);
+    first.speedRatio = 0.8;
+    deriver.update([first]);
+    expect(deriver.update([branch("2026-07-17T00:00:05Z", 11_000, 270)])[0]).toMatchObject({
+      framesPerSecond: 30,
+      speedRatio: 1
+    });
   });
 });
 
-function branch(sampledAt: string, outputTimeMs: number): FfmpegBranchSnapshot {
+function branch(sampledAt: string, outputTimeMs: number, frame: number): FfmpegBranchSnapshot {
   return {
     name: "court1_preview",
     courtNumber: 1,
     branch: "preview",
     sampledAt,
-    frame: 300,
-    framesPerSecond: 30,
+    frame,
+    framesPerSecond: 23,
     bitrateBps: 2_500_000,
     outputTimeMs,
     duplicatedFrames: 0,

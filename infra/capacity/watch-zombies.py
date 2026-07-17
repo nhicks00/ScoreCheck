@@ -17,6 +17,7 @@ ALLOWED_ROLES = {"ingest", "compositor"}
 HEARTBEAT_SECONDS = 1.0
 CACHE_RETENTION_SECONDS = 5.0
 ORPHANED_HEALTHCHECK_COMMANDS = {
+    "healthcheck.caddy": "caddy",
     "healthcheck.egress": "curl",
     "healthcheck.mediamtx": "wget",
     "healthcheck.redis": "redis-cli",
@@ -140,6 +141,8 @@ def direct_classification(process):
 
     if b"MONITOR_AGENT_BIND" in cmdline and b"/healthz" in cmdline and b"fetch(" in cmdline:
         return "healthcheck.monitor-agent"
+    if command == "caddy" and cmdline == b"caddy validate --config /etc/caddy/Caddyfile":
+        return "healthcheck.caddy"
     if b"curl -fsS http://127.0.0.1:9091/" in cmdline:
         return "healthcheck.egress"
     if b"wget -qO- http://127.0.0.1:9997/v3/config/global/get" in cmdline:
@@ -153,6 +156,8 @@ def direct_classification(process):
 
 def container_healthcheck_classification(process):
     cmdline = (process.get("commandLine") or b"").strip()
+    if cmdline == b"caddy run --config /etc/caddy/Caddyfile --adapter caddyfile":
+        return "healthcheck.caddy"
     if cmdline == b"npm run start:agent":
         return "healthcheck.monitor-agent"
     if cmdline == b"/mediamtx":
@@ -164,26 +169,35 @@ def container_healthcheck_classification(process):
     return None
 
 
-def classification_map(processes):
-    classifications = {}
+def healthcheck_shim_map(processes):
     healthcheck_shims = {}
-    egress_inits = []
     for process in processes.values():
-        if (process.get("commandLine") or b"").strip() == b"/tini -- egress":
-            egress_inits.append(process)
         parent = processes.get(process["ppid"])
         if parent is None or parent["command"] != "containerd-shim":
             continue
         classification = container_healthcheck_classification(process)
         if classification is not None:
-            healthcheck_shims[parent["pid"]] = {
+            healthcheck_shims[parent["identity"]] = {
+                "pid": parent["pid"],
                 "classification": classification,
                 "cgroupFingerprint": process.get("cgroupFingerprint"),
             }
+    return healthcheck_shims
+
+
+def classification_map(processes, retained_healthcheck_shims=None):
+    classifications = {}
+    healthcheck_shims = dict(retained_healthcheck_shims or {})
+    egress_inits = []
+    for process in processes.values():
+        if (process.get("commandLine") or b"").strip() == b"/tini -- egress":
+            egress_inits.append(process)
+    healthcheck_shims.update(healthcheck_shim_map(processes))
 
     for process in processes.values():
         classification = direct_classification(process)
-        healthcheck = healthcheck_shims.get(process["ppid"])
+        parent = processes.get(process["ppid"])
+        healthcheck = healthcheck_shims.get(parent["identity"]) if parent else None
         if process["command"] == "runc" and healthcheck is not None:
             classification = f"{healthcheck['classification']}.runtime"
         elif (
@@ -350,6 +364,7 @@ def run(role, poll_interval_ms, sample_interval_seconds, duration_seconds):
     scan_count = 0
     process_cache = {}
     classification_cache = {}
+    healthcheck_shim_cache = {}
     active_zombies = {}
     initial_scan = True
     previous_cpu = read_cpu_times()
@@ -374,7 +389,15 @@ def run(role, poll_interval_ms, sample_interval_seconds, duration_seconds):
         last_scan = scan_started
         processes = scan_processes()
         scan_count += 1
-        current_classifications = classification_map(processes)
+        for identity, value in healthcheck_shim_map(processes).items():
+            healthcheck_shim_cache[identity] = {**value, "lastSeenMonotonic": scan_started}
+        for identity, value in list(healthcheck_shim_cache.items()):
+            parent = processes.get(value["pid"])
+            if parent is not None and parent["identity"] != identity:
+                healthcheck_shim_cache.pop(identity, None)
+            elif scan_started - value["lastSeenMonotonic"] > CACHE_RETENTION_SECONDS:
+                healthcheck_shim_cache.pop(identity, None)
+        current_classifications = classification_map(processes, healthcheck_shim_cache)
 
         for process in processes.values():
             identity = process["identity"]
@@ -464,6 +487,8 @@ def self_test():
         "commandLine": b"node -e fetch('http://'+(process.env.MONITOR_AGENT_BIND||'127.0.0.1')+':9108/healthz')",
     }
     assert direct_classification(base) == "healthcheck.monitor-agent"
+    assert direct_classification({"command": "caddy", "parentCommand": "runc", "commandLine": b"caddy validate --config /etc/caddy/Caddyfile"}) == "healthcheck.caddy"
+    assert direct_classification({"command": "caddy", "parentCommand": "runc", "commandLine": b"caddy reload --config /tmp/operator.json"}) is None
     assert direct_classification({**base, "commandLine": b"node worker.js"}) is None
     assert direct_classification({"command": "pactl", "parentCommand": "chrome", "commandLine": b"pactl info"}) is None
     assert direct_classification({"command": "runc", "parentCommand": "dockerd", "commandLine": b"runc exec"}) is None
@@ -471,6 +496,7 @@ def self_test():
     assert direct_classification({"command": "sshd", "parentCommand": "systemd", "commandLine": b""}) == "observer.capacity-ssh"
     assert direct_classification({"command": "sshd", "parentCommand": "bash", "commandLine": b"sshd"}) is None
     assert container_healthcheck_classification({"commandLine": b"npm run start:agent"}) == "healthcheck.monitor-agent"
+    assert container_healthcheck_classification({"commandLine": b"caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"}) == "healthcheck.caddy"
     assert container_healthcheck_classification({"commandLine": b"/mediamtx"}) == "healthcheck.mediamtx"
     assert container_healthcheck_classification({"commandLine": b"/tini -- egress"}) == "healthcheck.egress"
     assert container_healthcheck_classification({"commandLine": b"redis-server *:6379"}) == "healthcheck.redis"
@@ -503,6 +529,23 @@ def self_test():
     assert "120:12" not in classifications
     assert "130:13" not in classifications
     assert classifications["140:14"] == "workload.egress-gst-plugin-scan"
+
+    mediamtx_init = {
+        200: {"pid": 200, "ppid": 1, "identity": "200:20", "command": "containerd-shim", "parentCommand": "systemd", "commandLine": b"containerd-shim-runc-v2", "cgroupFingerprint": "host"},
+        210: {"pid": 210, "ppid": 200, "identity": "210:21", "command": "mediamtx", "parentCommand": "containerd-shim", "commandLine": b"/mediamtx", "cgroupFingerprint": "mediamtx"},
+    }
+    retained = healthcheck_shim_map(mediamtx_init)
+    assert retained["200:20"]["classification"] == "healthcheck.mediamtx"
+    runc_exit_race = {
+        200: mediamtx_init[200],
+        220: {"pid": 220, "ppid": 200, "identity": "220:22", "command": "runc", "parentCommand": "containerd-shim", "commandLine": b"", "cgroupFingerprint": "runtime"},
+    }
+    assert classification_map(runc_exit_race, retained)["220:22"] == "healthcheck.mediamtx.runtime"
+    replaced_shim = {
+        200: {**mediamtx_init[200], "identity": "200:99"},
+        220: runc_exit_race[220],
+    }
+    assert "220:22" not in classification_map(replaced_shim, retained)
 
 
 def parse_args():

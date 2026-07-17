@@ -90,6 +90,22 @@ test("does not misclassify observation end as process reaping", () => {
   assert.equal(summary.roles.compositor.unclosedObserverCount, 1);
 });
 
+test("accepts only the exact Caddy healthcheck and runtime classifications as bounded observer work", () => {
+  const events = baseEvents();
+  events.push(open("ingest", 12, "510:51", "caddy", "runc", "healthcheck.caddy", false));
+  events.push(close("ingest", 12.1, "510:51", "healthcheck.caddy", 100));
+  events.push(open("ingest", 13, "520:52", "runc", "containerd-shim", "healthcheck.caddy.runtime", false));
+  events.push(close("ingest", 13.15, "520:52", "healthcheck.caddy.runtime", 150));
+  const summary = summarize(events);
+
+  assert.equal(summary.roles.ingest.newUnclassifiedCount, 0);
+  assert.deepEqual(summary.roles.ingest.observerClassifications, {
+    "healthcheck.caddy": 1,
+    "healthcheck.caddy.runtime": 1
+  });
+  assert.equal(summary.roles.ingest.observerMaximumDurationMs, 150);
+});
+
 test("rejects malformed, unsafe, or over-broad event data", () => {
   const valid = open("ingest", 12, "600:60", "node", "runc", "healthcheck.monitor-agent", false);
   const started = event("ingest", "watcher_started", 0, {
