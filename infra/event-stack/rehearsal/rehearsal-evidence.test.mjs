@@ -19,6 +19,7 @@ test("runs an aligned resumable gate and checks providers at bounded intervals",
     hostEvidenceEvaluator: async () => ({ passed: true, problems: [] }),
     now: () => now,
     sleep: async (ms) => { now += ms; },
+    publisherObserver: async () => ({ passed: true, samples: [], problems: [] }),
     verifier: {
       observeFull: async ({ includeProvider }) => {
         if (includeProvider) providerSlots.push(now);
@@ -44,12 +45,34 @@ test("fails closed and preserves the first monitor defect", async () => {
     hostEvidenceEvaluator: async () => ({ passed: true, problems: [] }),
     now: () => now,
     sleep: async (ms) => { now += ms; },
+    publisherObserver: async () => ({ passed: true, samples: [], problems: [] }),
     verifier: { observeFull: async () => ({ snapshot: {}, sampler: { running: true }, provider: null, problems: ++calls === 2 ? ["Camera 4 has frame errors"] : [] }) }
   });
   const report = await evaluator.run({ state, evidenceDirectory: root, durationMs: 1_000, sampleIntervalMs: 250, providerIntervalMs: 500 });
   assert.equal(report.passed, false);
   assert.equal(report.observedSamples, 2);
   assert.deepEqual(report.problems, ["Camera 4 has frame errors"]);
+});
+
+test("fails the soak immediately when a synthetic source loses realtime cadence", async () => {
+  const root = await mkdtemp(join(os.tmpdir(), "scorecheck-rehearsal-source-fail-"));
+  let now = Date.parse("2026-07-15T12:00:00Z");
+  const state = { event: "gate", generationId: "generation-1234", sampler: { output: join(root, "pool.jsonl") }, soak: { startedAt: new Date(now).toISOString() } };
+  const evaluator = new RehearsalSoakEvaluator({
+    minimumDurationMs: 0,
+    hostEvidenceSettleMs: 0,
+    hostEvidenceEvaluator: async () => ({ passed: true, problems: [] }),
+    now: () => now,
+    sleep: async (ms) => { now += ms; },
+    publisherObserver: async () => ({ passed: false, samples: [{ court: 1, progress: { framesPerSecond: 17.5, speedRatio: 0.58 } }], problems: ["Camera 1 synthetic publisher is outside 30fps/zero-drop/realtime bounds"] }),
+    verifier: { observeFull: async () => ({ snapshot: {}, sampler: { running: true }, provider: null, problems: [] }) }
+  });
+  const report = await evaluator.run({ state, evidenceDirectory: root, durationMs: 1_000, sampleIntervalMs: 250, providerIntervalMs: 500 });
+  assert.equal(report.passed, false);
+  assert.equal(report.observedSamples, 1);
+  assert.match(report.problems.join("; "), /synthetic publisher/);
+  const sample = JSON.parse((await readFile(report.samplesPath, "utf8")).trim());
+  assert.equal(sample.publishers.samples[0].progress.framesPerSecond, 17.5);
 });
 
 test("pins browser page identity and requires reset-safe heartbeat and rendered-frame progress", () => {
@@ -166,6 +189,27 @@ test("creates protected cancelled evidence when preparation fails before evidenc
   assert.equal((await stat(root)).mode & 0o077, 0);
   const verified = await verifyRehearsalEvidence({ directory: root, event: state.event, generationId: state.generationId, manifestSha256: digest });
   assert.equal(verified.evidence.classification, "CANCELLED");
+});
+
+test("classifies a launched workload rejected before soak admission as failed, not cancelled", async () => {
+  const root = await mkdtemp(join(os.tmpdir(), "scorecheck-rehearsal-start-fail-"));
+  const manifest = { kind: "rehearsal", event: "gate", droplets: Array(12).fill({}) };
+  const state = {
+    phase: "cleaned", event: "gate", generationId: "generation-1234", manifestSha256: sha(manifest),
+    createdAt: "2026-07-15T12:00:00Z", preparedAt: "2026-07-15T12:01:00Z", startedAt: null, stoppedAt: "2026-07-15T12:04:00Z", cleanedAt: "2026-07-15T12:05:00Z",
+    sampler: { status: "stopped", output: join(root, "pool-host-samples.jsonl") },
+    publisherEvidence: { passed: false, problems: ["Camera 1 synthetic publisher is slow"] },
+    program: { project: { id: "project", status: "deleted" } },
+    courts: Object.fromEntries(Array.from({ length: 8 }, (_, index) => [index + 1, {
+      publisher: { marker: `publisher-${index + 1}`, status: "stopped" },
+      stream: { id: `s${index}`, status: "deleted" }, broadcast: { id: `b${index}`, status: "deleted" }
+    }]))
+  };
+  await writeFile(state.sampler.output, "{}\n", { mode: 0o600 });
+  const marker = await sealRehearsalEvidence({ state, manifest, evidenceDirectory: root });
+  assert.equal(marker.classification, "FAIL");
+  const verified = await verifyRehearsalEvidence({ directory: root, event: state.event, generationId: state.generationId, manifestSha256: state.manifestSha256 });
+  assert.equal(verified.evidence.publisherEvidence.passed, false);
 });
 
 function sha(value) {

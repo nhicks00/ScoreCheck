@@ -71,6 +71,29 @@ test("hard-cuts the rehearsal monitor fetch contract to version 3", async () => 
   await assert.rejects(() => verifier({ ...snapshot("idle"), version: 2 }).preflight(), /snapshot contract is invalid/);
 });
 
+test("preserves the complete sanitized snapshot and problem set when stabilization expires", async () => {
+  let current = now;
+  const value = snapshot("idle");
+  value.collector.agentsFresh = 11;
+  const verifier = new RehearsalVerifier({
+    monitorOrigin: "https://monitor.example.com",
+    monitorToken: "x".repeat(24),
+    youtube: null,
+    sampler: null,
+    fetchImpl: async () => new Response(JSON.stringify({ ...value, generatedAt: new Date(current).toISOString() }), { status: 200, headers: { "content-type": "application/json" } }),
+    sleep: async (ms) => { current += ms; },
+    now: () => current
+  });
+  await assert.rejects(() => verifier.preflight(), (error) => {
+    assert.equal(error.name, "RehearsalStabilizationError");
+    assert.equal(error.evidenceKind, "monitor");
+    assert.equal(error.evidence.passed, false);
+    assert.equal(error.evidence.snapshot.agentCount, 12);
+    assert.match(error.evidence.problems.join("; "), /all 12 rehearsal agents fresh/);
+    return true;
+  });
+});
+
 test("reports a missing agent host snapshot without throwing", () => {
   const value = snapshot("idle");
   value.collector.agentsFresh = 11;

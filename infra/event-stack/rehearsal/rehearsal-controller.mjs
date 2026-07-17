@@ -119,6 +119,8 @@ export class RehearsalController {
           await this.store.save(state);
         }
         await this.verifier.waitForRaw({ manifest, lifecycleState, state: structuredClone(state) });
+        state.publisherEvidence = await this.publishers.waitForHealthy(COURTS.map((court) => state.courts[court].publisher));
+        await this.store.save(state);
 
         await this.commentary.preflight(this.commentaryConfiguration({ manifest, material, court: 1, state, evidenceDirectory }));
         for (const court of COURTS) {
@@ -164,6 +166,8 @@ export class RehearsalController {
         await this.store.save(state);
         return state;
       } catch (error) {
+        if (error?.evidenceKind === "publisher") state.publisherEvidence = error.evidence;
+        if (error?.evidenceKind === "monitor") state.startEvidence = error.evidence;
         state.lastError = safeError(error, this.now());
         await this.store.save(state);
         throw error;
@@ -464,6 +468,7 @@ export function createRehearsalState(manifest, lifecycleState, now = new Date())
     }])),
     sampler: null,
     soak: null,
+    publisherEvidence: null,
     startEvidence: null,
     soakEvidence: null,
     endpointEvidence: null,

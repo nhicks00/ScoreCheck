@@ -12,8 +12,10 @@ const DEFAULT_PROVIDER_INTERVAL_MS = 60_000;
 const MARKER_NAME = "REHEARSAL_COMPLETE.json";
 
 export class RehearsalSoakEvaluator {
-  constructor({ verifier, sleep = delay, now = () => Date.now(), minimumDurationMs = DEFAULT_DURATION_MS, maximumSampleLagMs = 1_000, hostEvidenceSettleMs = 1_250, hostEvidenceEvaluator = evaluateRehearsalPoolEvidence }) {
+  constructor({ verifier, publisherObserver, sleep = delay, now = () => Date.now(), minimumDurationMs = DEFAULT_DURATION_MS, maximumSampleLagMs = 1_000, hostEvidenceSettleMs = 1_250, hostEvidenceEvaluator = evaluateRehearsalPoolEvidence }) {
+    if (typeof publisherObserver !== "function") throw new Error("rehearsal soak requires a synthetic publisher observer");
     this.verifier = verifier;
+    this.publisherObserver = publisherObserver;
     this.sleep = sleep;
     this.now = now;
     this.minimumDurationMs = minimumDurationMs;
@@ -50,7 +52,9 @@ export class RehearsalSoakEvaluator {
         const lagMs = sampledAt - dueAt;
         const includeProvider = nextSlot === 0 || nextSlot === expectedSamples - 1 || nextSlot % providerEvery === 0;
         const observation = await this.verifier.observeFull({ state, includeProvider });
+        const publishers = await this.publisherObserver(state);
         const problems = [...observation.problems];
+        problems.push(...publishers.problems);
         problems.push(...browserContinuityProblems(previousMonitor, observation.snapshot));
         if (lagMs < 0 || lagMs > this.maximumSampleLagMs) problems.push(`sample ${nextSlot} lag ${lagMs}ms exceeds ${this.maximumSampleLagMs}ms`);
         if (previousObservedMs !== null) {
@@ -67,6 +71,7 @@ export class RehearsalSoakEvaluator {
           observedAt: new Date(sampledAt).toISOString(),
           lagMs,
           monitor: observation.snapshot,
+          publishers,
           sampler: observation.sampler,
           provider: observation.provider,
           problems: [...new Set(problems)]
@@ -232,7 +237,12 @@ export async function sealRehearsalEvidence({ state, manifest, evidenceDirectory
   await chmod(root, 0o700);
   const info = await stat(root);
   if (!info.isDirectory() || (info.mode & 0o077) !== 0) throw new Error("rehearsal evidence directory must be protected");
-  const classification = state.soakEvidence?.passed && state.endpointEvidence?.passed ? "PASS" : state.startedAt ? "FAIL" : "CANCELLED";
+  const workloadAttempted = state.startedAt != null
+    || state.sampler != null
+    || state.publisherEvidence != null
+    || state.startEvidence != null
+    || Object.values(state.courts).some((court) => court.publisher?.marker || court.commentary?.marker || court.egress?.id);
+  const classification = state.soakEvidence?.passed && state.endpointEvidence?.passed ? "PASS" : workloadAttempted ? "FAIL" : "CANCELLED";
   const artifactNames = ["pool-host-samples.jsonl", "rehearsal-monitor-samples.jsonl", "rehearsal-soak-report.json"];
   const artifacts = {};
   for (const name of artifactNames) {
@@ -245,7 +255,7 @@ export async function sealRehearsalEvidence({ state, manifest, evidenceDirectory
       if (error?.code !== "ENOENT") throw error;
     }
   }
-  if (state.startedAt && !artifacts["pool-host-samples.jsonl"]) throw new Error("started rehearsal has no pool-host evidence");
+  if (workloadAttempted && !artifacts["pool-host-samples.jsonl"]) throw new Error("attempted rehearsal has no pool-host evidence");
   if (state.soakEvidence && (!artifacts["rehearsal-monitor-samples.jsonl"] || !artifacts["rehearsal-soak-report.json"])) throw new Error("rehearsal soak artifacts are incomplete");
   const evidence = {
     schemaVersion: 1,
@@ -265,10 +275,11 @@ export async function sealRehearsalEvidence({ state, manifest, evidenceDirectory
       vercelProject: state.program.project,
       courts: Object.fromEntries(Object.entries(state.courts).map(([court, value]) => [court, { stream: value.stream, broadcast: value.broadcast }]))
     },
-    startEvidence: state.startEvidence,
-    soakEvidence: state.soakEvidence,
-    endpointEvidence: state.endpointEvidence,
-    stopEvidence: state.stopEvidence,
+    startEvidence: state.startEvidence ?? null,
+    publisherEvidence: state.publisherEvidence ?? null,
+    soakEvidence: state.soakEvidence ?? null,
+    endpointEvidence: state.endpointEvidence ?? null,
+    stopEvidence: state.stopEvidence ?? null,
     artifacts,
     excludedBoundaries: ["production Supabase event/scoring/control-plane persistence", "venue Speedify uplink"]
   };

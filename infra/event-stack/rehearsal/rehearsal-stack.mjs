@@ -98,7 +98,10 @@ function runtimeDependencies({ profile, manifest, material, environment }) {
     egress,
     sampler,
     verifier,
-    soakEvaluator: new RehearsalSoakEvaluator({ verifier }),
+    soakEvaluator: new RehearsalSoakEvaluator({
+      verifier,
+      publisherObserver: (state) => publishers.observeHealth(Object.values(state.courts).map((court) => court.publisher))
+    }),
     sealEvidence: sealRehearsalEvidence,
     renderSecrets: renderRehearsalSecretDirectory,
     programEnvironment: buildRehearsalVercelEnvironment,

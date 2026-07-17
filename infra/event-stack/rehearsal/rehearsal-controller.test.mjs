@@ -22,7 +22,7 @@ function lifecycleState(phase = "planned") {
   };
 }
 
-function harness({ failPublisherOnce = false, failPreflight = false, failIdle = false, orphanedProviderResources = false } = {}) {
+function harness({ failPublisherOnce = false, failPreflight = false, failFullEvidence = false, failIdle = false, orphanedProviderResources = false } = {}) {
   const log = [];
   let publisherFailure = failPublisherOnce;
   const activeEgress = new Map();
@@ -54,6 +54,7 @@ function harness({ failPublisherOnce = false, failPreflight = false, failIdle = 
       log.push(`publisher-start:${config.court}`);
       return { pid: 100 + config.court, marker: config.marker, status: "running" };
     },
+    waitForHealthy: async () => ({ passed: true, stableSamples: 3, samples: [], problems: [] }),
     stop: async ({ marker }) => { log.push(`publisher-stop:${marker.at(-1)}`); return { absent: true }; }
   };
   const egress = {
@@ -87,7 +88,15 @@ function harness({ failPublisherOnce = false, failPreflight = false, failIdle = 
       return { healthy: true };
     },
     waitForRaw: async () => ({ healthy: true }),
-    waitForFull: async () => ({ healthy: true }),
+    waitForFull: async () => {
+      if (failFullEvidence) {
+        const error = new Error("intentional full-chain stabilization failure");
+        error.evidenceKind = "monitor";
+        error.evidence = { passed: false, snapshot: { agentCount: 12 }, problems: ["Camera 4 browser quality counters are not clean"] };
+        throw error;
+      }
+      return { healthy: true };
+    },
     captureEndpoint: async () => ({ passed: true }),
     waitForIdle: async () => {
       if (failIdle) throw new Error("idle verifier must not run");
@@ -146,6 +155,19 @@ test("resumes a partial start without replacing prepared provider identities", a
   assert.equal(partial.courts[1].stream.id, "stream1");
   await controller.start({ manifest, lifecycleState: ready, material, evidenceDirectory: "/tmp/rehearsal-evidence" });
   assert.equal((await store.load()).phase, "running");
+});
+
+test("durably preserves full startup evidence when program-chain stabilization fails", async () => {
+  const { controller, store } = harness({ failFullEvidence: true });
+  const lifecycle = lifecycleState();
+  await controller.plan({ manifest, lifecycleState: lifecycle });
+  await controller.prepare({ manifest, lifecycleState: lifecycle, material, git: { repo: "nhicks00/ScoreCheck", repoId: 1, ref: "branch", sha: "a".repeat(40) }, secretsDirectory: "/tmp/rehearsal-secrets" });
+  const ready = lifecycleState("ready");
+  await assert.rejects(() => controller.start({ manifest, lifecycleState: ready, material, evidenceDirectory: "/tmp/rehearsal-evidence" }), /intentional full-chain/);
+  const failed = await store.load();
+  assert.equal(failed.phase, "starting");
+  assert.equal(failed.startEvidence.passed, false);
+  assert.match(failed.startEvidence.problems.join("; "), /Camera 4 browser quality/);
 });
 
 test("cleans a preflight failure through direct provider reconciliation without aggregate idle telemetry", async () => {

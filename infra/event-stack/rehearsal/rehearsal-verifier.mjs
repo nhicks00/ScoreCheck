@@ -2,6 +2,15 @@ import { setTimeout as delay } from "node:timers/promises";
 
 const COURTS = Object.freeze(Array.from({ length: 8 }, (_, index) => index + 1));
 
+export class RehearsalStabilizationError extends Error {
+  constructor(label, evidence) {
+    super(`${label} did not stabilize: ${evidence.problems.slice(0, 8).join("; ") || "no current snapshot"}${evidence.snapshot ? "" : "; snapshot unavailable"}`);
+    this.name = "RehearsalStabilizationError";
+    this.evidenceKind = "monitor";
+    this.evidence = evidence;
+  }
+}
+
 export class RehearsalVerifier {
   constructor({ monitorOrigin, monitorToken, youtube, sampler, fetchImpl = globalThis.fetch, sleep = delay, now = () => Date.now() }) {
     const parsed = new URL(monitorOrigin);
@@ -98,7 +107,13 @@ export class RehearsalVerifier {
       } else stable = 0;
       await this.sleep(5_000);
     }
-    throw new Error(`${label} did not stabilize: ${lastProblems.slice(0, 8).join("; ") || "no current snapshot"}${lastSnapshot ? "" : "; snapshot unavailable"}`);
+    throw new RehearsalStabilizationError(label, {
+      passed: false,
+      observedAt: new Date(this.now()).toISOString(),
+      stableSamples: stable,
+      snapshot: lastSnapshot ? sanitizeSnapshotEvidence(lastSnapshot) : null,
+      problems: lastProblems
+    });
   }
 
   async #snapshot() {
