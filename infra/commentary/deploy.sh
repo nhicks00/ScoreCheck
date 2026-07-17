@@ -87,7 +87,14 @@ fi
 exit 1
 REMOTE
 
-curl -fsS --retry 30 --retry-all-errors --retry-delay 2 --retry-max-time 120 \
+tls_status=0
+curl -fsS --retry 100 --retry-all-errors --retry-delay 3 --retry-max-time 300 \
   --connect-timeout 5 --max-time 10 \
-  "https://$LIVEKIT_COMMENTARY_RTC_HOST" >/dev/null
+  "https://$LIVEKIT_COMMENTARY_RTC_HOST" >/dev/null || tls_status=$?
+if [[ "$tls_status" -ne 0 ]]; then
+  echo "LiveKit commentary TLS endpoint did not become ready within 300 seconds." >&2
+  ssh "${ssh_options[@]}" "$SSH_HOST" \
+    "cd '$REMOTE_DIR' && docker compose -f docker-compose.yaml ps && docker compose -f docker-compose.yaml logs --tail=120 caddy" >&2 || true
+  exit "$tls_status"
+fi
 echo "LiveKit commentary TLS endpoint healthy."

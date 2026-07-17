@@ -47,9 +47,14 @@ test("all changed deployment entrypoints remain valid Bash", async () => {
 });
 
 test("fresh public TLS endpoints retry handshake failures within a bounded deadline", () => {
-  for (const [path, script] of scripts.slice(0, 3).filter(([path]) => path.includes("commentary") || path.includes("mediamtx"))) {
+  const commentary = scripts.find(([path]) => path.includes("commentary"))[1];
+  const media = scripts.find(([path]) => path.includes("mediamtx"))[1];
+
+  for (const [path, script] of [["commentary", commentary], ["mediamtx", media]]) {
     assert.match(script, /--retry-all-errors/u, `${path} retries TLS handshake failures`);
-    assert.match(script, /--retry-max-time 120/u, `${path} has a bounded readiness deadline`);
     assert.match(script, /--connect-timeout 5 --max-time 10/u, `${path} bounds each attempt`);
   }
+  assert.match(commentary, /--retry 100[\s\S]*--retry-max-time 300/u);
+  assert.match(commentary, /docker compose -f docker-compose\.yaml logs --tail=120 caddy/u);
+  assert.match(media, /--retry-max-time 120/u);
 });
