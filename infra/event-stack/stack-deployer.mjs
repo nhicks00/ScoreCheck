@@ -9,6 +9,7 @@ import { CaddyTlsStateStore } from "./caddy-tls-state.mjs";
 import { collectReconstructionProvenance, sha256 as provenanceSha256 } from "./reconstruction-provenance.mjs";
 
 export const DEPLOYMENT_SCRIPT_TIMEOUT_MS = 10 * 60 * 1_000;
+export const AGENT_DEPLOY_CONCURRENCY = 3;
 
 const REQUIRED_DEPLOYMENT_SECRET_FILES = Object.freeze([
   "agent-tokens.json",
@@ -239,7 +240,7 @@ export class LocalStackDeployer {
 
   async finalizeStack({ manifest, state }) {
     const plans = await this.#agentPlans(manifest, state);
-    for (const plan of plans) {
+    await mapWithConcurrency(plans, AGENT_DEPLOY_CONCURRENCY, async (plan) => {
       await this.#ensureSsh(plan.publicIpv4);
       await this.#script("infra/monitoring/deploy-agent.sh", {
         SCORECHECK_SSH_KNOWN_HOSTS: this.knownHostsPath,
@@ -247,7 +248,8 @@ export class LocalStackDeployer {
         MONITOR_AGENT_SSH_KEY: this.sshPrivateKey,
         ...plan.environment
       });
-    }
+      return plan.id;
+    });
     return { healthy: true, evidence: { deployedAgents: plans.map((entry) => entry.id) } };
   }
 
@@ -372,6 +374,23 @@ export async function runDeploymentScript({ runner, script, environment, wait = 
     }
   }
   throw new Error(`${script} exhausted its deployment retries`);
+}
+
+export async function mapWithConcurrency(values, concurrency, operation) {
+  if (!Array.isArray(values)) throw new Error("concurrent values must be an array");
+  if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error("concurrency must be a positive integer");
+  if (typeof operation !== "function") throw new Error("concurrent operation must be a function");
+  const results = new Array(values.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(values.length, concurrency);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < values.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await operation(values[index], index);
+    }
+  }));
+  return results;
 }
 
 export function deploymentScriptEnvironment(environment, inherited = process.env, nodeExecutable = process.execPath) {

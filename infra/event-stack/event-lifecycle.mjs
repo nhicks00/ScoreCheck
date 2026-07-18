@@ -11,7 +11,7 @@ import { networkContractTags } from "./network-contract.mjs";
 
 const STATE_SCHEMA_VERSION = 8;
 const ANCHOR_SCHEMA_VERSION = 2;
-export const STACK_FINALIZATION_TIMEOUT_MS = 15 * 60_000;
+export const STACK_FINALIZATION_TIMEOUT_MS = 45 * 60_000;
 const PHASES = new Set(["planned", "provisioning", "ready", "live", "closed", "destroying", "destroyed", "aborting", "aborted"]);
 const SHA256 = /^[a-f0-9]{64}$/;
 

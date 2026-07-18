@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { buildEventManifest, loadManifestInputs } from "./event-manifest.mjs";
-import { DEPLOYMENT_SCRIPT_TIMEOUT_MS, LocalStackDeployer, buildAgentPlans, commandFailureMessage, commentaryEndpointHosts, compositorContentAnalyzerBindings, deploymentScriptEnvironment, isRetryableDeploymentTransportError, loadProtectedEnv, roleConfigBindings, runCommand, runDeploymentScript, serializeAgentTargets, servicePublicIpv4, verifyProtectedSecretDirectory } from "./stack-deployer.mjs";
+import { AGENT_DEPLOY_CONCURRENCY, DEPLOYMENT_SCRIPT_TIMEOUT_MS, LocalStackDeployer, buildAgentPlans, commandFailureMessage, commentaryEndpointHosts, compositorContentAnalyzerBindings, deploymentScriptEnvironment, isRetryableDeploymentTransportError, loadProtectedEnv, mapWithConcurrency, roleConfigBindings, runCommand, runDeploymentScript, serializeAgentTargets, servicePublicIpv4, verifyProtectedSecretDirectory } from "./stack-deployer.mjs";
 
 const inputs = await loadManifestInputs();
 const manifest = buildEventManifest({ event: "deploy-test", kind: "production", destroyAfter: "2026-08-01", ...inputs });
@@ -60,6 +60,22 @@ test("bounds transient deployment retries and never retries a configuration fail
     runner: async () => { configurationAttempts += 1; throw new Error("invalid rendered configuration"); }
   }), /invalid rendered configuration/);
   assert.equal(configurationAttempts, 1);
+});
+
+test("bounds independent monitor-agent deployment work without changing its input order", async () => {
+  const values = ["a", "b", "c", "d", "e", "f", "g"];
+  let active = 0;
+  let maximumActive = 0;
+  const results = await mapWithConcurrency(values, AGENT_DEPLOY_CONCURRENCY, async (value) => {
+    active += 1;
+    maximumActive = Math.max(maximumActive, active);
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    active -= 1;
+    return value.toUpperCase();
+  });
+  assert.deepEqual(results, ["A", "B", "C", "D", "E", "F", "G"]);
+  assert.equal(maximumActive, AGENT_DEPLOY_CONCURRENCY);
+  await assert.rejects(() => mapWithConcurrency(values, 0, async () => {}), /positive integer/);
 });
 
 test("passes a bounded timeout to deployment scripts and terminates hung commands", async () => {
