@@ -197,7 +197,8 @@ test("headless commentary disables background throttling and proves local media 
     "--disable-renderer-backgrounding"
   ]) assert.match(source, new RegExp(flag));
   assert.match(source, /const localMedia = await verifyLocalMediaCadence\(page\)/u);
-  assert.match(source, /movingMicrophoneSampleRatio < 0\.75/u);
+  assert.match(source, /movingMicrophoneSamples < minimumMovingMicrophoneSamples/u);
+  assert.match(source, /Math\.floor\(samples \* 0\.1\)/u);
   assert.match(source, /minimumSampleDurationSeconds/u);
   assert.match(source, /minimumOutboundPackets/u);
   assert.match(source, /previewAdvanceSeconds < durationMs \/ 1_000 \* 0\.75/u);
@@ -294,6 +295,27 @@ test("fails closed when the local microphone meter does not move despite RTP", a
     () => verifyLocalMediaCadence(page, { durationMs: 40, intervalMs: 10 }),
     /microphone cadence did not remain active/u
   );
+});
+
+test("accepts sustained microphone RTP when normal speech silence makes the UI meter intermittent", async () => {
+  let videoSamples = 0;
+  let meterSamples = 0;
+  const page = mediaCadencePage({
+    currentTime: () => videoSamples++ * 0.1,
+    microphoneWidth: () => meterSamples++ % 4 === 0 ? 12 : 0,
+    microphoneStats: [
+      stats({ key: "speech", packets: 10, bytes: 1_000, energy: 1, durationSeconds: 2 }),
+      stats({ key: "speech", packets: 30, bytes: 3_000, energy: 3, durationSeconds: 2.04 }),
+      stats({ key: "speech", packets: 50, bytes: 5_000, energy: 5, durationSeconds: 2.08 }),
+      stats({ key: "speech", packets: 70, bytes: 7_000, energy: 7, durationSeconds: 2.12 }),
+      stats({ key: "speech", packets: 90, bytes: 9_000, energy: 9, durationSeconds: 2.16 })
+    ]
+  });
+  const result = await verifyLocalMediaCadence(page, { durationMs: 80, intervalMs: 10 });
+  assert.equal(result.movingMicrophoneSampleRatio < 0.75, true);
+  assert.equal(result.movingMicrophoneSamples >= result.minimumMovingMicrophoneSamples, true);
+  assert.equal(result.outboundPackets >= result.minimumOutboundPackets, true);
+  assert.equal(result.sampleDurationSeconds >= result.minimumSampleDurationSeconds, true);
 });
 
 test("accumulates commentary cadence across an in-window peer connection replacement", async () => {

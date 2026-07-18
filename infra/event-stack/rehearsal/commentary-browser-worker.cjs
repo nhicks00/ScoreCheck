@@ -132,12 +132,14 @@ async function verifyLocalMediaCadence(page, { durationMs = 8_000, intervalMs = 
     throw cadenceError("rehearsal microphone source statistics are unavailable", cadence, finalMicrophone);
   }
   const movingMicrophoneSampleRatio = samples > 0 ? movingMicrophoneSamples / samples : 0;
-  if (movingMicrophoneSampleRatio < 0.75) {
+  const minimumMovingMicrophoneSamples = Math.max(1, Math.floor(samples * 0.1));
+  if (movingMicrophoneSamples < minimumMovingMicrophoneSamples) {
     throw cadenceError("rehearsal microphone cadence did not remain active", {
       ...cadence,
       movingMicrophoneSamples,
       samples,
-      movingMicrophoneSampleRatio
+      movingMicrophoneSampleRatio,
+      minimumMovingMicrophoneSamples
     }, finalMicrophone);
   }
   const minimumSampleDurationSeconds = durationMs / 1_000 * 0.75;
@@ -162,6 +164,7 @@ async function verifyLocalMediaCadence(page, { durationMs = 8_000, intervalMs = 
     samples,
     movingMicrophoneSamples,
     movingMicrophoneSampleRatio,
+    minimumMovingMicrophoneSamples,
     previewAdvanceSeconds,
     maximumAudioSources,
     minimumOutboundPackets,
