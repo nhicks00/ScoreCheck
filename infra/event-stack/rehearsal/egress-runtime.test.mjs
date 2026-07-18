@@ -53,3 +53,38 @@ test("fails closed when an unexpected active Egress replaces the recorded one", 
   });
   await assert.rejects(() => runtime.stopExact({ host: "198.51.100.1", court: 1, egressId: "EG_expected" }), /unexpected active Egress/);
 });
+
+test("retries only transient SSH failures for idempotent Egress reads", async () => {
+  let attempts = 0;
+  const waits = [];
+  const runtime = new EgressRuntime({
+    sshKey: "/tmp/key",
+    knownHosts: "/tmp/known",
+    sleep: async (milliseconds) => { waits.push(milliseconds); },
+    runner: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("ssh failed with exit 255: Connection reset by peer");
+      return { code: 0, stdout: "[]", stderr: "" };
+    }
+  });
+  assert.deepEqual(await runtime.listActive("198.51.100.1"), []);
+  assert.equal(attempts, 2);
+  assert.deepEqual(waits, [2_000]);
+});
+
+test("does not retry Egress mutations after a transient SSH failure", async () => {
+  let attempts = 0;
+  const runtime = new EgressRuntime({
+    sshKey: "/tmp/key",
+    knownHosts: "/tmp/known",
+    sleep: async () => { throw new Error("mutation retry is unsafe"); },
+    runner: async (_command, args) => {
+      const remote = args.at(-1);
+      if (remote.includes("list-egress")) return { code: 0, stdout: "[]", stderr: "" };
+      attempts += 1;
+      throw new Error("ssh failed with exit 255: Connection reset by peer");
+    }
+  });
+  await assert.rejects(() => runtime.ensureStarted({ host: "198.51.100.1", court: 1 }), /Connection reset by peer/);
+  assert.equal(attempts, 1);
+});

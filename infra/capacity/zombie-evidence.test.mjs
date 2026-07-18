@@ -53,18 +53,21 @@ test("separately bounds exact Egress workload child lifecycles", () => {
   events.push(close("compositor", 14.05, "330:33", "workload.egress-pactl", 50));
   events.push(open("compositor", 15, "340:34", "gst-plugin-scan", "egress", "workload.egress-gst-plugin-scan", false));
   events.push(close("compositor", 15.12, "340:34", "workload.egress-gst-plugin-scan", 120));
+  events.push(open("compositor", 16, "350:35", "sh", "Xvfb", "workload.egress-xvfb-shell", false));
+  events.push(close("compositor", 16.08, "350:35", "workload.egress-xvfb-shell", 80));
   const summary = summarize(events);
 
   assert.equal(summary.roles.compositor.newUnclassifiedCount, 0);
   assert.equal(summary.roles.compositor.observerEventCount, 0);
-  assert.equal(summary.roles.compositor.workloadEventCount, 4);
+  assert.equal(summary.roles.compositor.workloadEventCount, 5);
   assert.deepEqual(summary.roles.compositor.workloadClassifications, {
     "workload.egress-chrome": 2,
     "workload.egress-pactl": 1,
-    "workload.egress-gst-plugin-scan": 1
+    "workload.egress-gst-plugin-scan": 1,
+    "workload.egress-xvfb-shell": 1
   });
   assert.equal(summary.roles.compositor.workloadMaximumDurationMs, 200);
-  assert.equal(summary.roles.compositor.workloadMaximumRollingMinuteCount, 4);
+  assert.equal(summary.roles.compositor.workloadMaximumRollingMinuteCount, 5);
   assert.equal(summary.roles.compositor.workloadMaximumConcurrentCount, 1);
   assert.equal(summary.roles.compositor.unclosedWorkloadCount, 0);
 });

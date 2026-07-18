@@ -246,6 +246,11 @@ def classification_map(processes, retained_healthcheck_shims=None):
             ("chrome", "chrome"): "workload.egress-chrome",
             ("pactl", "egress"): "workload.egress-pactl",
             ("gst-plugin-scan", "egress"): "workload.egress-gst-plugin-scan",
+            # Chromium's Egress display helper starts Xvfb, which can briefly
+            # leave its exact shell child as a zombie while Xvfb reaps it.
+            # The descendant and cgroup checks below keep this scoped to the
+            # running Egress container rather than exempting host Xvfb shells.
+            ("sh", "Xvfb"): "workload.egress-xvfb-shell",
             ("xkbcomp", "sh"): "workload.egress-xkbcomp",
         }.get((process["command"], process.get("parentCommand")))
         if workload_classification is None:
@@ -549,6 +554,9 @@ def self_test():
         171: {"pid": 171, "ppid": 170, "identity": "171:22", "command": "xkbcomp", "parentCommand": "sh", "commandLine": b"xkbcomp -w 1 -R/usr/share/X11/xkb", "cgroupFingerprint": "egress"},
         172: {"pid": 172, "ppid": 170, "identity": "172:23", "command": "xkbcomp", "parentCommand": "sh", "commandLine": b"xkbcomp", "cgroupFingerprint": "other"},
         173: {"pid": 173, "ppid": 1, "identity": "173:24", "command": "xkbcomp", "parentCommand": "sh", "commandLine": b"xkbcomp", "cgroupFingerprint": "egress"},
+        174: {"pid": 174, "ppid": 100, "identity": "174:25", "command": "Xvfb", "parentCommand": "egress", "commandLine": b"Xvfb :99", "cgroupFingerprint": "egress"},
+        175: {"pid": 175, "ppid": 174, "identity": "175:26", "command": "sh", "parentCommand": "Xvfb", "commandLine": b"/bin/sh", "cgroupFingerprint": "egress"},
+        176: {"pid": 176, "ppid": 174, "identity": "176:27", "command": "sh", "parentCommand": "Xvfb", "commandLine": b"/bin/sh", "cgroupFingerprint": "other"},
     }
     classifications = classification_map(processes)
     assert classifications["20:2"] == "workload.egress-chrome"
@@ -567,8 +575,10 @@ def self_test():
     assert "153:18" not in classifications
     assert "161:20" not in classifications
     assert classifications["171:22"] == "workload.egress-xkbcomp"
+    assert classifications["175:26"] == "workload.egress-xvfb-shell"
     assert "172:23" not in classifications
     assert "173:24" not in classifications
+    assert "176:27" not in classifications
 
     mediamtx_init = {
         200: {"pid": 200, "ppid": 1, "identity": "200:20", "command": "containerd-shim", "parentCommand": "systemd", "commandLine": b"containerd-shim-runc-v2", "cgroupFingerprint": "host"},
