@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { buildEventManifest, loadManifestInputs } from "./event-manifest.mjs";
-import { LocalStackDeployer, buildAgentPlans, commandFailureMessage, commentaryEndpointHosts, compositorContentAnalyzerBindings, deploymentScriptEnvironment, isRetryableDeploymentTransportError, loadProtectedEnv, roleConfigBindings, runDeploymentScript, serializeAgentTargets, servicePublicIpv4, verifyProtectedSecretDirectory } from "./stack-deployer.mjs";
+import { DEPLOYMENT_SCRIPT_TIMEOUT_MS, LocalStackDeployer, buildAgentPlans, commandFailureMessage, commentaryEndpointHosts, compositorContentAnalyzerBindings, deploymentScriptEnvironment, isRetryableDeploymentTransportError, loadProtectedEnv, roleConfigBindings, runCommand, runDeploymentScript, serializeAgentTargets, servicePublicIpv4, verifyProtectedSecretDirectory } from "./stack-deployer.mjs";
 
 const inputs = await loadManifestInputs();
 const manifest = buildEventManifest({ event: "deploy-test", kind: "production", destroyAfter: "2026-08-01", ...inputs });
@@ -60,6 +60,23 @@ test("bounds transient deployment retries and never retries a configuration fail
     runner: async () => { configurationAttempts += 1; throw new Error("invalid rendered configuration"); }
   }), /invalid rendered configuration/);
   assert.equal(configurationAttempts, 1);
+});
+
+test("passes a bounded timeout to deployment scripts and terminates hung commands", async () => {
+  let receivedTimeout = null;
+  await runDeploymentScript({
+    script: "/repo/deploy.sh",
+    environment: {},
+    runner: async (_script, _args, options) => {
+      receivedTimeout = options.timeoutMs;
+      return { code: 0 };
+    }
+  });
+  assert.equal(receivedTimeout, DEPLOYMENT_SCRIPT_TIMEOUT_MS);
+  await assert.rejects(
+    () => runCommand(process.execPath, ["-e", "setTimeout(() => {}, 10000)"], { capture: true, timeoutMs: 1_000 }),
+    /node timed out after 1000ms/u
+  );
 });
 
 test("retains the decisive command-output tail instead of an unhelpful prefix", () => {

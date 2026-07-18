@@ -8,6 +8,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { CaddyTlsStateStore } from "./caddy-tls-state.mjs";
 import { collectReconstructionProvenance, sha256 as provenanceSha256 } from "./reconstruction-provenance.mjs";
 
+export const DEPLOYMENT_SCRIPT_TIMEOUT_MS = 10 * 60 * 1_000;
+
 const REQUIRED_DEPLOYMENT_SECRET_FILES = Object.freeze([
   "agent-tokens.json",
   "commentary.env",
@@ -351,13 +353,19 @@ export class LocalStackDeployer {
   }
 
   async #script(relativePath, environment) {
-    return runDeploymentScript({ runner: this.runner, script: join(this.repoRoot, relativePath), environment });
+    return runDeploymentScript({
+      runner: this.runner,
+      script: join(this.repoRoot, relativePath),
+      environment,
+      timeoutMs: DEPLOYMENT_SCRIPT_TIMEOUT_MS
+    });
   }
 }
 
-export async function runDeploymentScript({ runner, script, environment, wait = delay }) {
+export async function runDeploymentScript({ runner, script, environment, wait = delay, timeoutMs = DEPLOYMENT_SCRIPT_TIMEOUT_MS }) {
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 60 * 60 * 1_000) throw new Error("deployment script timeout must be from 1000 through 3600000 milliseconds");
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    try { return await runner(script, [], { env: deploymentScriptEnvironment(environment), capture: true }); }
+    try { return await runner(script, [], { env: deploymentScriptEnvironment(environment), capture: true, timeoutMs }); }
     catch (error) {
       if (attempt === 3 || !isRetryableDeploymentTransportError(error)) throw error;
       await wait(attempt * 2_000);
@@ -631,20 +639,38 @@ async function gitRevision(repoRoot, runner) {
   return revision;
 }
 
-async function runCommand(command, args, options = {}) {
+export async function runCommand(command, args, options = {}) {
   return new Promise((resolvePromise, reject) => {
+    const timeoutMs = options.timeoutMs ?? null;
+    if (timeoutMs !== null && (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 60 * 60 * 1_000)) {
+      reject(new Error("command timeout must be from 1000 through 3600000 milliseconds"));
+      return;
+    }
     const child = spawn(command, args, {
       env: options.env ?? process.env,
       stdio: ["ignore", "pipe", "pipe"]
     });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const settle = (callback) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      callback();
+    };
+    const timer = timeoutMs === null ? null : setTimeout(() => {
+      child.kill("SIGTERM");
+      setTimeout(() => child.kill("SIGKILL"), 5_000).unref();
+      settle(() => reject(new Error(`${basename(command)} timed out after ${timeoutMs}ms`)));
+    }, timeoutMs);
+    timer?.unref();
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.on("error", reject);
+    child.on("error", (error) => settle(() => reject(error)));
     child.on("close", (code) => {
-      if (code === 0 || options.allowFailure) resolvePromise({ code, stdout, stderr });
-      else reject(new Error(commandFailureMessage(command, code, { stdout, stderr })));
+      if (code === 0 || options.allowFailure) settle(() => resolvePromise({ code, stdout, stderr }));
+      else settle(() => reject(new Error(commandFailureMessage(command, code, { stdout, stderr }))));
     });
   });
 }

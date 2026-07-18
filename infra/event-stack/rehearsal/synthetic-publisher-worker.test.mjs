@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 const { parseArgs, publisherFailure, validateConfig } = require("./synthetic-publisher-worker.cjs");
@@ -68,7 +69,7 @@ test("does not relaunch its FFmpeg child when the detached process group is stop
     logPath: log,
     statusPath: status
   })}\n`);
-  const worker = spawn(process.execPath, [new URL("./synthetic-publisher-worker.cjs", import.meta.url).pathname, "--marker", marker, "--config", configPath], {
+  const worker = spawn(process.execPath, [fileURLToPath(new URL("./synthetic-publisher-worker.cjs", import.meta.url)), "--marker", marker, "--config", configPath], {
     detached: true,
     stdio: "ignore"
   });
