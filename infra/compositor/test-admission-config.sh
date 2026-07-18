@@ -71,6 +71,15 @@ grep -Fq 'test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9091/"]' "$COMPOSE" ||
   printf 'FAIL: Egress healthcheck must use directly attributable exec form\n' >&2
   exit 1
 }
+awk '
+  /^  livekit:$/ { in_livekit = 1; next }
+  in_livekit && /^  [[:alnum:]_-]+:$/ { exit }
+  in_livekit && /^[[:space:]]+disable: true$/ { found = 1 }
+  END { exit found ? 0 : 1 }
+' "$COMPOSE" || {
+  printf 'FAIL: LiveKit must explicitly disable its inherited image healthcheck\n' >&2
+  exit 1
+}
 if grep -Fq 'test: ["CMD-SHELL"' "$COMPOSE"; then
   printf 'FAIL: shell-form healthchecks are forbidden in the compositor stack\n' >&2
   exit 1

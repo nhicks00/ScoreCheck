@@ -52,6 +52,12 @@ services:
     restart: unless-stopped
     logging: *default-logging
     command: ["--config", "/etc/livekit.yaml"]
+    # The upstream image includes a shell-form healthcheck. This control-plane
+    # process is already checked through its API by the deployer, and the
+    # inherited probe can leave an unclassifiable wget child on a burst host.
+    # Disable it explicitly rather than weakening the zombie gate.
+    healthcheck:
+      disable: true
     environment:
       # The one API keypair (shared with egress and the court scripts).
       # livekit-server accepts keys via the LIVEKIT_KEYS env var ("key: secret"),
