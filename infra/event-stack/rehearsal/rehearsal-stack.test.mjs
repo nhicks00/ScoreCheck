@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { materialModeForCommand, validateConfirmation, validateRehearsalProfile } from "./rehearsal-stack.mjs";
+import { dependencyModeForCommand, materialModeForCommand, validateConfirmation, validateRehearsalProfile } from "./rehearsal-stack.mjs";
 
 const profile = {
   schemaVersion: 1,
@@ -39,4 +39,12 @@ test("creates secret material only during prepare and never as a side effect of 
   for (const command of ["start", "soak", "stop"]) assert.equal(materialModeForCommand(command), "load");
   for (const command of ["plan", "status", "cleanup", "seal"]) assert.equal(materialModeForCommand(command), "none");
   assert.throws(() => materialModeForCommand("unknown"), /unsupported/);
+});
+
+test("does not resolve host-bound runtime dependencies before provider provisioning", () => {
+  for (const command of ["plan", "status", "seal"]) assert.equal(dependencyModeForCommand(command), "inert");
+  assert.equal(dependencyModeForCommand("prepare"), "prepare");
+  assert.equal(dependencyModeForCommand("cleanup"), "cleanup");
+  for (const command of ["start", "soak", "stop"]) assert.equal(dependencyModeForCommand(command), "runtime");
+  assert.throws(() => dependencyModeForCommand("unknown"), /unsupported/);
 });

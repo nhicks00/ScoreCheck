@@ -42,13 +42,15 @@ async function main() {
   const lifecycleState = await readProtectedJson(profile.lifecycleState, "lifecycle state");
   const material = await materialForCommand(options.command, profile.material, manifest);
   const store = new RehearsalFileStateStore(profile.rehearsalState);
-  const simple = ["plan", "status", "seal"].includes(options.command);
-  const environment = simple ? {} : { ...process.env, ...await loadProtectedEnv(profile.credentialsEnv) };
-  const dependencies = simple
+  const dependencyMode = dependencyModeForCommand(options.command);
+  const environment = dependencyMode === "inert" ? {} : { ...process.env, ...await loadProtectedEnv(profile.credentialsEnv) };
+  const dependencies = dependencyMode === "inert"
     ? inertDependencies()
-    : options.command === "cleanup"
+    : dependencyMode === "cleanup"
       ? providerCleanupDependencies(environment)
-      : runtimeDependencies({ profile, manifest, lifecycleState, material, environment });
+      : dependencyMode === "prepare"
+        ? providerPreparationDependencies(environment)
+        : runtimeDependencies({ profile, manifest, lifecycleState, material, environment });
   const controller = new RehearsalController({ store, ...dependencies });
   let result;
   if (options.command === "plan") result = await controller.plan({ manifest, lifecycleState });
@@ -160,6 +162,21 @@ function providerCleanupDependencies(environment) {
     teamId: requiredEnvironment(environment, "VERCEL_TEAM_ID")
   });
   return dependencies;
+}
+
+function providerPreparationDependencies(environment) {
+  const dependencies = providerCleanupDependencies(environment);
+  dependencies.renderSecrets = renderRehearsalSecretDirectory;
+  dependencies.programEnvironment = buildRehearsalVercelEnvironment;
+  return dependencies;
+}
+
+export function dependencyModeForCommand(command) {
+  if (["plan", "status", "seal"].includes(command)) return "inert";
+  if (command === "prepare") return "prepare";
+  if (command === "cleanup") return "cleanup";
+  if (["start", "soak", "stop"].includes(command)) return "runtime";
+  throw new Error(`unsupported rehearsal command ${command}`);
 }
 
 export function materialModeForCommand(command) {
