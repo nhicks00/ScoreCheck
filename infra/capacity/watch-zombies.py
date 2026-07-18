@@ -246,6 +246,7 @@ def classification_map(processes, retained_healthcheck_shims=None):
             ("chrome", "chrome"): "workload.egress-chrome",
             ("pactl", "egress"): "workload.egress-pactl",
             ("gst-plugin-scan", "egress"): "workload.egress-gst-plugin-scan",
+            ("xkbcomp", "sh"): "workload.egress-xkbcomp",
         }.get((process["command"], process.get("parentCommand")))
         if workload_classification is None:
             continue
@@ -544,6 +545,10 @@ def self_test():
         153: {"pid": 153, "ppid": 150, "identity": "153:18", "command": "ffprobe", "parentCommand": "node", "commandLine": b"", "cgroupFingerprint": "other"},
         160: {"pid": 160, "ppid": 1, "identity": "160:19", "command": "node", "parentCommand": "containerd-shim", "commandLine": b"node worker.js", "cgroupFingerprint": "other-agent"},
         161: {"pid": 161, "ppid": 160, "identity": "161:20", "command": "ffprobe", "parentCommand": "node", "commandLine": b"", "cgroupFingerprint": "other-agent"},
+        170: {"pid": 170, "ppid": 20, "identity": "170:21", "command": "sh", "parentCommand": "chrome", "commandLine": b"/bin/sh", "cgroupFingerprint": "egress"},
+        171: {"pid": 171, "ppid": 170, "identity": "171:22", "command": "xkbcomp", "parentCommand": "sh", "commandLine": b"xkbcomp -w 1 -R/usr/share/X11/xkb", "cgroupFingerprint": "egress"},
+        172: {"pid": 172, "ppid": 170, "identity": "172:23", "command": "xkbcomp", "parentCommand": "sh", "commandLine": b"xkbcomp", "cgroupFingerprint": "other"},
+        173: {"pid": 173, "ppid": 1, "identity": "173:24", "command": "xkbcomp", "parentCommand": "sh", "commandLine": b"xkbcomp", "cgroupFingerprint": "egress"},
     }
     classifications = classification_map(processes)
     assert classifications["20:2"] == "workload.egress-chrome"
@@ -561,6 +566,9 @@ def self_test():
     assert classifications["152:17"] == "workload.monitor-content-analyzer"
     assert "153:18" not in classifications
     assert "161:20" not in classifications
+    assert classifications["171:22"] == "workload.egress-xkbcomp"
+    assert "172:23" not in classifications
+    assert "173:24" not in classifications
 
     mediamtx_init = {
         200: {"pid": 200, "ppid": 1, "identity": "200:20", "command": "containerd-shim", "parentCommand": "systemd", "commandLine": b"containerd-shim-runc-v2", "cgroupFingerprint": "host"},
