@@ -128,17 +128,28 @@ async function verifyLocalMediaCadence(page, { durationMs = 8_000, intervalMs = 
   const finalTime = await page.locator("video").evaluate((video) => video.currentTime);
   const previewAdvanceSeconds = finalTime - initialTime;
   if (previewAdvanceSeconds < durationMs / 1_000 * 0.75) throw new Error("rehearsal preview cadence did not remain active");
-  if (maximumAudioSources < 1 || finalMicrophone.audioSources < 1) throw cadenceError("rehearsal microphone source statistics are unavailable", cadence, finalMicrophone);
+  if (maximumAudioSources < 1 || finalMicrophone.audioSources < 1 || finalMicrophone.activeMicrophoneConnections < 1) {
+    throw cadenceError("rehearsal microphone source statistics are unavailable", cadence, finalMicrophone);
+  }
   const movingMicrophoneSampleRatio = samples > 0 ? movingMicrophoneSamples / samples : 0;
-  // LiveKit pauses an upstream publication when no program mixer has subscribed
-  // yet. The full-stack verifier proves resumed RTP, non-silence, and sync after
-  // Egress starts; this pre-output gate proves the local source itself stays live.
   if (movingMicrophoneSampleRatio < 0.75) {
     throw cadenceError("rehearsal microphone cadence did not remain active", {
       ...cadence,
       movingMicrophoneSamples,
       samples,
       movingMicrophoneSampleRatio
+    }, finalMicrophone);
+  }
+  const minimumSampleDurationSeconds = durationMs / 1_000 * 0.75;
+  const minimumOutboundPackets = Math.max(1, Math.floor(durationMs / 1_000 * 20));
+  if (cadence.outboundPackets < minimumOutboundPackets
+    || cadence.outboundBytes < minimumOutboundPackets
+    || cadence.audioEnergy <= 0
+    || cadence.sampleDurationSeconds < minimumSampleDurationSeconds) {
+    throw cadenceError("rehearsal microphone RTP and capture did not remain active", {
+      ...cadence,
+      minimumOutboundPackets,
+      minimumSampleDurationSeconds
     }, finalMicrophone);
   }
   return {
@@ -153,7 +164,8 @@ async function verifyLocalMediaCadence(page, { durationMs = 8_000, intervalMs = 
     movingMicrophoneSampleRatio,
     previewAdvanceSeconds,
     maximumAudioSources,
-    preSubscriberRtpPaused: cadence.outboundPackets < 1 || cadence.outboundBytes < 1,
+    minimumOutboundPackets,
+    minimumSampleDurationSeconds,
     outboundPackets: cadence.outboundPackets,
     outboundBytes: cadence.outboundBytes,
     audioEnergy: cadence.audioEnergy,

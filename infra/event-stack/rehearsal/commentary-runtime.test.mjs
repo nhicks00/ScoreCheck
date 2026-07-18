@@ -178,7 +178,8 @@ test("headless commentary disables background throttling and proves local media 
   ]) assert.match(source, new RegExp(flag));
   assert.match(source, /const localMedia = await verifyLocalMediaCadence\(page\)/u);
   assert.match(source, /movingMicrophoneSampleRatio < 0\.75/u);
-  assert.match(source, /preSubscriberRtpPaused/u);
+  assert.match(source, /minimumSampleDurationSeconds/u);
+  assert.match(source, /minimumOutboundPackets/u);
   assert.match(source, /previewAdvanceSeconds < durationMs \/ 1_000 \* 0\.75/u);
   assert.match(source, /finally \{\s*await browser\?\.close\(\)\.catch/u);
 });
@@ -243,7 +244,7 @@ test("starts the cadence window only after a non-silent microphone publication e
   assert.equal(result.movingMicrophoneSampleRatio, 1);
 });
 
-test("accepts an initially published microphone that LiveKit pauses before a subscriber joins", async () => {
+test("fails closed when microphone RTP pauses after its initial publication", async () => {
   let videoSamples = 0;
   const page = mediaCadencePage({
     currentTime: () => videoSamples++ * 0.1,
@@ -252,11 +253,10 @@ test("accepts an initially published microphone that LiveKit pauses before a sub
       stats({ key: "published", packets: 24, bytes: 5_900, energy: 0.05, durationSeconds: 0.48 })
     ]
   });
-  const result = await verifyLocalMediaCadence(page, { durationMs: 40, intervalMs: 10, startupTimeoutMs: 60 });
-  assert.equal(result.publicationOutboundPackets, 24);
-  assert.equal(result.publicationSampleDurationSeconds, 0.48);
-  assert.equal(result.preSubscriberRtpPaused, true);
-  assert.equal(result.movingMicrophoneSampleRatio, 1);
+  await assert.rejects(
+    () => verifyLocalMediaCadence(page, { durationMs: 40, intervalMs: 10, startupTimeoutMs: 60 }),
+    /microphone RTP and capture did not remain active/u
+  );
 });
 
 test("fails closed when the local microphone meter does not move despite RTP", async () => {

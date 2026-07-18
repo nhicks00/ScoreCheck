@@ -594,7 +594,6 @@ node infra/event-stack/create-event-bundle.mjs create \
   --git-ref codex/turnkey-event-lifecycle \
   --git-sha 40_CHARACTER_TESTED_COMMIT_SHA \
   --ffmpeg /absolute/path/to/ffmpeg \
-  --livekit-cli /absolute/path/to/lk \
   --soak-seconds 1800
 ```
 
@@ -723,16 +722,16 @@ remain immediate hard failures. This prevents one transient new-Droplet SSH
 handshake from discarding an otherwise healthy 12-host build without masking a
 real ownership or deployment defect.
 
-Commentary startup evidence records the initial outbound-audio RTP and
-media-source totals, then samples report deltas as diagnostic evidence while the
-local cadence gate runs. Because the mixer has not subscribed yet, zero
-additional RTP during that window is explicitly recorded as
-`preSubscriberRtpPaused`, not treated as silence. Readiness requires advancing
-preview video, a still-present audio source, and at least 75 percent positive
-microphone-meter coverage. Once each program mixer exists, the monitor's
-commentary heartbeat is the authoritative transmitted-audio contract and must
-prove current audio, synchronization lock, bounded timing, and zero packet loss
-before qualification starts and throughout the soak.
+For each court, the controller starts Egress and waits for the empty-room program
+pipeline to reach its persistent YouTube destination before it starts the
+synthetic commentator. This guarantees that LiveKit has a program subscriber
+before the microphone publication begins. Commentary readiness then requires
+advancing preview video, a live microphone sender and source, at least 75 percent
+positive microphone-meter coverage, and sustained outbound RTP, captured-audio
+duration, and nonzero audio energy throughout the eight-second cadence window.
+The monitor's commentary heartbeat remains the authoritative program-side audio
+contract and must prove current audio, synchronization lock, bounded timing, and
+zero packet loss before qualification starts and throughout the soak.
 
 The rehearsal YouTube contract is an exact persistent pool named `ScoreCheck
 Court 1 Test Stream` through `ScoreCheck Court 8 Test Stream`. Every member must

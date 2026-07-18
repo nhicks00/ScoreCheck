@@ -129,17 +129,6 @@ export class RehearsalController {
         await this.commentary.preflight(this.commentaryConfiguration({ manifest, material, court: 1, state, evidenceDirectory }));
         for (const court of COURTS) {
           const courtState = state.courts[court];
-          const configuration = this.commentaryConfiguration({ manifest, material, court, state, evidenceDirectory });
-          if (courtState.commentary?.status !== "running") {
-            courtState.commentary = { status: "starting", marker: configuration.marker };
-            await this.store.save(state);
-          }
-          courtState.commentary = await this.commentary.ensure(configuration);
-          await this.store.save(state);
-        }
-
-        for (const court of COURTS) {
-          const courtState = state.courts[court];
           const host = compositorHost(lifecycleState, manifest, court);
           const expectedId = courtState.egress?.id ?? null;
           if (!expectedId) {
@@ -157,6 +146,18 @@ export class RehearsalController {
           // occupying every compositor and YouTube destination.
           const activeStream = await this.youtube.waitForStream({ streamId: courtState.stream.id, streamStatus: "active" });
           courtState.stream = { ...courtState.stream, ...activeStream };
+          await this.store.save(state);
+
+          // Wait for the empty-room program pipeline to reach its destination
+          // before publishing synthetic commentary. LiveKit may pause an
+          // upstream track that has no subscriber, so reversing this order can
+          // create a healthy local microphone that never resumes reliably.
+          const configuration = this.commentaryConfiguration({ manifest, material, court, state, evidenceDirectory });
+          if (courtState.commentary?.status !== "running") {
+            courtState.commentary = { status: "starting", marker: configuration.marker };
+            await this.store.save(state);
+          }
+          courtState.commentary = await this.commentary.ensure(configuration);
           await this.store.save(state);
         }
 
