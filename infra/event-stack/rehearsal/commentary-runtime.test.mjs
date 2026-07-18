@@ -209,7 +209,8 @@ test("accepts advancing preview and authoritative non-silent microphone RTP cade
     microphoneWidth: () => 12,
     microphoneStats: [
       { audioSources: 1, outboundPackets: 10, outboundBytes: 1000, totalAudioEnergy: 1, totalSamplesDuration: 2 },
-      { audioSources: 1, outboundPackets: 30, outboundBytes: 3000, totalAudioEnergy: 3, totalSamplesDuration: 2.04 }
+      { audioSources: 1, outboundPackets: 30, outboundBytes: 3000, totalAudioEnergy: 3, totalSamplesDuration: 2.04 },
+      { audioSources: 1, outboundPackets: 50, outboundBytes: 5000, totalAudioEnergy: 5, totalSamplesDuration: 2.08 }
     ]
   });
   const result = await verifyLocalMediaCadence(page, { durationMs: 40, intervalMs: 10 });
@@ -242,6 +243,28 @@ test("starts the cadence window only after authoritative microphone RTP becomes 
   assert.equal(result.sampleDurationSeconds >= 0.059, true);
 });
 
+test("ignores a positive but frozen peer report before a replacement begins advancing", async () => {
+  let videoSamples = 0;
+  const page = mediaCadencePage({
+    currentTime: () => videoSamples++ * 0.1,
+    microphoneWidth: () => 0,
+    microphoneStats: [
+      stats({ key: "stale", packets: 100, bytes: 10_000, energy: 2, durationSeconds: 5 }),
+      stats({ key: "stale", packets: 100, bytes: 10_000, energy: 2, durationSeconds: 5 }),
+      stats({ key: "stale", packets: 100, bytes: 10_000, energy: 2, durationSeconds: 5 }),
+      stats({ key: "replacement", packets: 5, bytes: 500, energy: 0.2, durationSeconds: 0.01 }),
+      stats({ key: "replacement", packets: 25, bytes: 2_500, energy: 1.2, durationSeconds: 0.05 }),
+      stats({ key: "replacement", packets: 45, bytes: 4_500, energy: 2.2, durationSeconds: 0.09 }),
+      stats({ key: "replacement", packets: 65, bytes: 6_500, energy: 3.2, durationSeconds: 0.13 })
+    ]
+  });
+  const result = await verifyLocalMediaCadence(page, { durationMs: 40, intervalMs: 10, startupTimeoutMs: 60 });
+  assert.equal(result.startupWaitMs >= 30, true);
+  assert.equal(result.startupOutboundPackets, 20);
+  assert.equal(result.outboundPackets >= 20, true);
+  assert.equal(result.sampleDurationSeconds >= 0.039, true);
+});
+
 test("accepts headless meter animation lag when RTP and captured audio energy advance", async () => {
   let videoSamples = 0;
   const page = mediaCadencePage({
@@ -249,7 +272,8 @@ test("accepts headless meter animation lag when RTP and captured audio energy ad
     microphoneWidth: () => 0,
     microphoneStats: [
       { audioSources: 1, outboundPackets: 10, outboundBytes: 1000, totalAudioEnergy: 1, totalSamplesDuration: 2 },
-      { audioSources: 1, outboundPackets: 30, outboundBytes: 3000, totalAudioEnergy: 3, totalSamplesDuration: 2.04 }
+      { audioSources: 1, outboundPackets: 30, outboundBytes: 3000, totalAudioEnergy: 3, totalSamplesDuration: 2.04 },
+      { audioSources: 1, outboundPackets: 50, outboundBytes: 5000, totalAudioEnergy: 5, totalSamplesDuration: 2.08 }
     ]
   });
   const result = await verifyLocalMediaCadence(page, { durationMs: 40, intervalMs: 10 });
@@ -266,6 +290,7 @@ test("accumulates commentary cadence across an in-window peer connection replace
     microphoneStats: [
       stats({ key: "old", packets: 100, bytes: 10_000, energy: 2, durationSeconds: 5 }),
       stats({ key: "old", packets: 110, bytes: 11_000, energy: 3, durationSeconds: 5.02 }),
+      stats({ key: "old", packets: 120, bytes: 12_000, energy: 4, durationSeconds: 5.04 }),
       stats({ key: "new", packets: 5, bytes: 500, energy: 0.2, durationSeconds: 0.01 }),
       stats({ key: "new", packets: 25, bytes: 2_500, energy: 1.2, durationSeconds: 0.05 })
     ]
@@ -284,7 +309,8 @@ test("fails closed when the synthetic microphone is silent despite packet flow",
     microphoneWidth: () => 0,
     microphoneStats: [
       { audioSources: 1, outboundPackets: 10, outboundBytes: 1000, totalAudioEnergy: 1, totalSamplesDuration: 2 },
-      { audioSources: 1, outboundPackets: 30, outboundBytes: 3000, totalAudioEnergy: 1, totalSamplesDuration: 2.04 }
+      { audioSources: 1, outboundPackets: 30, outboundBytes: 3000, totalAudioEnergy: 1, totalSamplesDuration: 2.04 },
+      { audioSources: 1, outboundPackets: 50, outboundBytes: 5000, totalAudioEnergy: 1, totalSamplesDuration: 2.08 }
     ]
   });
   await assert.rejects(

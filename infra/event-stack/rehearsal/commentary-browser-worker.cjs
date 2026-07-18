@@ -82,24 +82,30 @@ async function main() {
 
 async function verifyLocalMediaCadence(page, { durationMs = 8_000, intervalMs = 250, startupTimeoutMs = 30_000 } = {}) {
   const startupStartedAt = Date.now();
-  let previousMicrophone;
+  let previousMicrophone = await readMicrophoneStats(page);
+  let finalMicrophone = previousMicrophone;
+  let startupOutboundDelta = { packets: 0, bytes: 0 };
+  let startupSourceDelta = { energy: 0, durationSeconds: 0 };
   while (Date.now() - startupStartedAt < startupTimeoutMs) {
-    previousMicrophone = await readMicrophoneStats(page);
-    if (hasStartedMicrophone(previousMicrophone)) break;
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    finalMicrophone = await readMicrophoneStats(page);
+    startupOutboundDelta = positiveReportDeltas(previousMicrophone.outboundReports, finalMicrophone.outboundReports, ["packets", "bytes"]);
+    startupSourceDelta = positiveReportDeltas(previousMicrophone.audioSourceReports, finalMicrophone.audioSourceReports, ["energy", "durationSeconds"]);
+    if (hasAdvancingMicrophone(finalMicrophone, startupOutboundDelta, startupSourceDelta)) break;
+    previousMicrophone = finalMicrophone;
   }
-  if (!hasStartedMicrophone(previousMicrophone)) {
+  if (!hasAdvancingMicrophone(finalMicrophone, startupOutboundDelta, startupSourceDelta)) {
     throw cadenceError("rehearsal microphone did not begin sending", {
-      outboundPackets: 0,
-      outboundBytes: 0,
-      audioEnergy: 0,
-      sampleDurationSeconds: 0
-    }, previousMicrophone ?? emptyMicrophoneStats());
+      outboundPackets: startupOutboundDelta.packets,
+      outboundBytes: startupOutboundDelta.bytes,
+      audioEnergy: startupSourceDelta.energy,
+      sampleDurationSeconds: startupSourceDelta.durationSeconds
+    }, finalMicrophone);
   }
   const startupWaitMs = Date.now() - startupStartedAt;
+  previousMicrophone = finalMicrophone;
   const startedAt = Date.now();
   const initialTime = await page.locator("video").evaluate((video) => video.currentTime);
-  let finalMicrophone = previousMicrophone;
   let maximumAudioSources = previousMicrophone.audioSources;
   const cadence = { outboundPackets: 0, outboundBytes: 0, audioEnergy: 0, sampleDurationSeconds: 0 };
   let movingMicrophoneSamples = 0;
@@ -127,6 +133,10 @@ async function verifyLocalMediaCadence(page, { durationMs = 8_000, intervalMs = 
   if (cadence.audioEnergy <= 0 || cadence.sampleDurationSeconds < durationMs / 1_000 * 0.75) throw cadenceError("rehearsal microphone cadence did not remain active", cadence, finalMicrophone);
   return {
     startupWaitMs,
+    startupOutboundPackets: startupOutboundDelta.packets,
+    startupOutboundBytes: startupOutboundDelta.bytes,
+    startupAudioEnergy: startupSourceDelta.energy,
+    startupSampleDurationSeconds: startupSourceDelta.durationSeconds,
     durationMs,
     samples,
     movingMicrophoneSamples,
@@ -140,19 +150,10 @@ async function verifyLocalMediaCadence(page, { durationMs = 8_000, intervalMs = 
   };
 }
 
-function hasStartedMicrophone(stats) {
+function hasAdvancingMicrophone(stats, outboundDelta, sourceDelta) {
   if (!stats || stats.audioSources < 1) return false;
-  const hasOutboundRtp = stats.outboundReports.some((report) => Number(report.packets) > 0 && Number(report.bytes) > 0);
-  const hasCapturedAudio = stats.audioSourceReports.some((report) => Number(report.energy) > 0 && Number(report.durationSeconds) > 0);
-  return hasOutboundRtp && hasCapturedAudio;
-}
-
-function emptyMicrophoneStats() {
-  return {
-    audioSources: 0,
-    outboundReports: [],
-    audioSourceReports: []
-  };
+  if (!stats.outboundReports.length || !stats.audioSourceReports.length) return false;
+  return outboundDelta.packets > 0 && outboundDelta.bytes > 0 && sourceDelta.durationSeconds > 0;
 }
 
 function positiveReportDeltas(previousReports, currentReports, fields) {
