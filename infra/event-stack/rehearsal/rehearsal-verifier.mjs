@@ -64,11 +64,11 @@ export class RehearsalVerifier {
     };
   }
 
-  async observeFull({ state, includeProvider = false }) {
+  async observeFull({ state, includeProvider = false, requireBrowserAdvance = true }) {
     const snapshot = await this.#snapshot();
     const problems = fullCurrentProblems(snapshot, this.now());
     if (!this.acceptedFullSnapshot) problems.push("accepted browser quality baseline is unavailable");
-    else problems.push(...browserQualityDeltaProblems(this.acceptedFullSnapshot, snapshot));
+    else problems.push(...browserQualityDeltaProblems(this.acceptedFullSnapshot, snapshot, { requireProgress: requireBrowserAdvance }));
     if (hasCompleteBrowserSet(snapshot)) this.acceptedFullSnapshot = snapshot;
     const sampler = await this.sampler.inspect(state.sampler.output);
     if (!sampler) problems.push("pool host sampler is not running");
@@ -346,7 +346,7 @@ function fullProblemsInternal(snapshot, nowMs, requireZeroBrowserHistory) {
   return unique(problems);
 }
 
-export function browserQualityDeltaProblems(previous, current) {
+export function browserQualityDeltaProblems(previous, current, { requireProgress = true } = {}) {
   const problems = [];
   for (const court of COURTS) {
     const before = (previous?.courts ?? []).find((entry) => entry.courtNumber === court)?.browser;
@@ -358,14 +358,14 @@ export function browserQualityDeltaProblems(previous, current) {
     for (const field of BROWSER_IDENTITY_FIELDS) {
       if (!before[field] || after[field] !== before[field]) problems.push(`Camera ${court} browser ${field} changed`);
     }
-    if (!Number.isInteger(after.heartbeatSeq) || after.heartbeatSeq <= before.heartbeatSeq) problems.push(`Camera ${court} browser heartbeat sequence did not advance`);
-    if (!Number.isFinite(Date.parse(after.receivedAt)) || Date.parse(after.receivedAt) <= Date.parse(before.receivedAt)) problems.push(`Camera ${court} browser receipt timestamp did not advance`);
+    if (requireProgress && (!Number.isInteger(after.heartbeatSeq) || after.heartbeatSeq <= before.heartbeatSeq)) problems.push(`Camera ${court} browser heartbeat sequence did not advance`);
+    if (requireProgress && (!Number.isFinite(Date.parse(after.receivedAt)) || Date.parse(after.receivedAt) <= Date.parse(before.receivedAt))) problems.push(`Camera ${court} browser receipt timestamp did not advance`);
     const beforeReceivedAt = Date.parse(before.receivedAt);
     const afterReceivedAt = Date.parse(after.receivedAt);
     const beforeFramesRendered = before.video?.framesRendered;
     const afterFramesRendered = after.video?.framesRendered;
-    if (!Number.isInteger(afterFramesRendered) || afterFramesRendered <= beforeFramesRendered) problems.push(`Camera ${court} rendered frames did not advance`);
-    if (Number.isFinite(beforeReceivedAt) && Number.isFinite(afterReceivedAt) && afterReceivedAt > beforeReceivedAt
+    if (requireProgress && (!Number.isInteger(afterFramesRendered) || afterFramesRendered <= beforeFramesRendered)) problems.push(`Camera ${court} rendered frames did not advance`);
+    if (requireProgress && Number.isFinite(beforeReceivedAt) && Number.isFinite(afterReceivedAt) && afterReceivedAt > beforeReceivedAt
       && Number.isInteger(beforeFramesRendered) && Number.isInteger(afterFramesRendered) && afterFramesRendered > beforeFramesRendered) {
       const aggregateFps = ((afterFramesRendered - beforeFramesRendered) * 1_000) / (afterReceivedAt - beforeReceivedAt);
       if (aggregateFps < 25 || aggregateFps > 35) problems.push(`Camera ${court} aggregate rendered cadence is outside 25-35fps (${aggregateFps.toFixed(2)}fps)`);

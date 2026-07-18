@@ -7,11 +7,13 @@ import test from "node:test";
 
 import { buildEventManifest, loadManifestInputs } from "../event-manifest.mjs";
 import { RehearsalSoakEvaluator, browserContinuityProblems, evaluateRehearsalPoolEvidence, sealRehearsalEvidence, verifyRehearsalEvidence } from "./rehearsal-evidence.mjs";
+import { browserQualityDeltaProblems } from "./rehearsal-verifier.mjs";
 
 test("runs an aligned resumable gate and checks providers at bounded intervals", async () => {
   const root = await mkdtemp(join(os.tmpdir(), "scorecheck-rehearsal-soak-"));
   let now = Date.parse("2026-07-15T12:00:00Z");
   const providerSlots = [];
+  const browserAdvanceRequirements = [];
   const state = { event: "gate", generationId: "generation-1234", sampler: { output: join(root, "pool-host-samples.jsonl") }, soak: { startedAt: new Date(now).toISOString() } };
   const evaluator = new RehearsalSoakEvaluator({
     minimumDurationMs: 0,
@@ -21,7 +23,8 @@ test("runs an aligned resumable gate and checks providers at bounded intervals",
     sleep: async (ms) => { now += ms; },
     publisherObserver: async () => ({ passed: true, samples: [], problems: [] }),
     verifier: {
-      observeFull: async ({ includeProvider }) => {
+      observeFull: async ({ includeProvider, requireBrowserAdvance }) => {
+        browserAdvanceRequirements.push(requireBrowserAdvance);
         if (includeProvider) providerSlots.push(now);
         return { passed: true, observedAt: new Date(now).toISOString(), snapshot: { generatedAt: new Date(now).toISOString() }, sampler: { running: true, pid: 1 }, provider: includeProvider ? { courts: [] } : null, problems: [] };
       }
@@ -31,6 +34,7 @@ test("runs an aligned resumable gate and checks providers at bounded intervals",
   assert.equal(report.passed, true);
   assert.equal(report.observedSamples, 5);
   assert.equal(providerSlots.length, 3);
+  assert.deepEqual(browserAdvanceRequirements, [false, true, true, true, true]);
   assert.equal((await readFile(report.samplesPath, "utf8")).trim().split("\n").length, 5);
 });
 
@@ -76,16 +80,28 @@ test("fails the soak immediately when a synthetic source loses realtime cadence"
 });
 
 test("pins browser page identity and requires reset-safe heartbeat and rendered-frame progress", () => {
-  const browser = (court, overrides = {}) => ({
-    credentialId: `credential-${court}`,
-    pageLoadedAt: "2026-07-15T12:00:00.000Z",
-    pageBuildVersion: "build-a",
-    configurationVersion: "config-a",
-    heartbeatSeq: 10,
-    receivedAt: "2026-07-15T12:00:05.000Z",
-    video: { framesRendered: 150 },
-    ...overrides
-  });
+  const browser = (court, overrides = {}) => {
+    const { video = {}, ...rest } = overrides;
+    return {
+      credentialId: `credential-${court}`,
+      pageLoadedAt: "2026-07-15T12:00:00.000Z",
+      pageBuildVersion: "build-a",
+      configurationVersion: "config-a",
+      heartbeatSeq: 10,
+      receivedAt: "2026-07-15T12:00:05.000Z",
+      video: {
+        framesRendered: 150,
+        framesDropped: 0,
+        freezeCount: 0,
+        totalFreezesDurationMs: 0,
+        packetsLost: 0,
+        reconnectCount: 0,
+        reloadCount: 0,
+        ...video
+      },
+      ...rest
+    };
+  };
   const monitor = (overrides = {}) => ({ courts: Array.from({ length: 8 }, (_, index) => ({ courtNumber: index + 1, browser: browser(index + 1, overrides[index + 1] ?? {}) })) });
   const before = monitor();
   const after = monitor(Object.fromEntries(Array.from({ length: 8 }, (_, index) => [index + 1, { heartbeatSeq: 11, receivedAt: "2026-07-15T12:00:10.000Z", video: { framesRendered: 300 } }])));
@@ -97,6 +113,12 @@ test("pins browser page identity and requires reset-safe heartbeat and rendered-
   assert.match(problems, /pageLoadedAt changed/);
   assert.match(problems, /heartbeat sequence/);
   assert.match(problems, /rendered frames/);
+
+  const unchanged = monitor();
+  unchanged.courts[0].browser.video.framesDropped = 1;
+  const slotZeroProblems = browserQualityDeltaProblems(before, unchanged, { requireProgress: false }).join("; ");
+  assert.doesNotMatch(slotZeroProblems, /heartbeat sequence|receipt timestamp|rendered frames/);
+  assert.match(slotZeroProblems, /framesDropped changed/);
 });
 
 test("evaluates exact DigitalOcean host identity, sampler cadence, CPU, shared memory, and zombie evidence", async () => {

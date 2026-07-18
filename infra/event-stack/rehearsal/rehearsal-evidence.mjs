@@ -51,7 +51,15 @@ export class RehearsalSoakEvaluator {
         const sampledAt = this.now();
         const lagMs = sampledAt - dueAt;
         const includeProvider = nextSlot === 0 || nextSlot === expectedSamples - 1 || nextSlot % providerEvery === 0;
-        const observation = await this.verifier.observeFull({ state, includeProvider });
+        const observation = await this.verifier.observeFull({
+          state,
+          includeProvider,
+          // Slot zero pins the accepted stabilization endpoint as the official
+          // sample baseline. Requiring another heartbeat immediately would race
+          // the staggered browser heartbeat cadence. Every subsequent and
+          // resumed sample still requires reset-safe progress.
+          requireBrowserAdvance: nextSlot > 0
+        });
         const publishers = await this.publisherObserver(state);
         const problems = [...observation.problems];
         problems.push(...publishers.problems);
