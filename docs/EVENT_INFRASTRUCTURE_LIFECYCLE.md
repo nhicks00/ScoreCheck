@@ -727,7 +727,9 @@ pipeline to reach its persistent YouTube destination before it starts the
 synthetic commentator. It then requires two fresh monitor heartbeats proving
 that the actual program browser is playing with exactly one reader and is
 connected to its LiveKit commentary room. This guarantees that LiveKit has a
-program subscriber before the microphone publication begins. Commentary readiness then requires
+program subscriber before the microphone publication begins. The program mixer
+disables adaptive-stream suspension because it consumes remote commentary via
+Web Audio and must remain a continuous broadcast subscriber. Commentary readiness then requires
 advancing preview video, a live microphone sender and source, at least 75 percent
 positive microphone-meter coverage, and sustained outbound RTP, captured-audio
 duration, and nonzero audio energy throughout the eight-second cadence window.

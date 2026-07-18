@@ -242,7 +242,7 @@ export function ProgramAudioMixer({
 
     void context.resume();
     if (commentary) {
-      room = new Room({ adaptiveStream: true, dynacast: true });
+      room = new Room({ adaptiveStream: false, dynacast: true });
       room.on(RoomEvent.TrackSubscribed, attachTrack);
       room.on(RoomEvent.TrackUnsubscribed, detachTrack);
       room.on(RoomEvent.ParticipantConnected, (participant) => {

@@ -111,6 +111,15 @@ test("rehearsal commentary disables DTX so the synthetic microphone remains cont
   assert.match(source, /autoGainControl:\s*false/u);
 });
 
+test("program mixer disables adaptive stream because Web Audio must consume commentary continuously", async () => {
+  const source = await readFile(new URL(
+    "../../../apps/web/src/app/program/court/[courtNumber]/ProgramAudioMixer.tsx",
+    import.meta.url
+  ), "utf8");
+  assert.match(source, /new Room\(\{ adaptiveStream:\s*false, dynacast:\s*true \}\)/u);
+  assert.doesNotMatch(source, /new Room\(\{ adaptiveStream:\s*true/u);
+});
+
 test("retries one transient commentary join only after reloading the isolated page", async () => {
   let liveWaits = 0;
   let reloads = 0;
