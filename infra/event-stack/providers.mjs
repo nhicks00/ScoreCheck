@@ -390,12 +390,23 @@ export class DigitalOceanProvider {
 
   async #wait(probe, timeoutMessage) {
     const deadline = Date.now() + this.timeoutMs;
+    let transientFailures = 0;
     while (Date.now() <= deadline) {
-      const value = await probe();
-      if (value) return value;
-      await delay(this.pollIntervalMs);
+      try {
+        const value = await probe();
+        if (value) return value;
+      } catch (error) {
+        if (error?.retryable !== true) throw error;
+        transientFailures += 1;
+      }
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) break;
+      await delay(Math.min(this.pollIntervalMs, remainingMs));
     }
-    throw new Error(timeoutMessage);
+    const retryContext = transientFailures > 0
+      ? ` after ${transientFailures} transient DigitalOcean provider failure${transientFailures === 1 ? "" : "s"}`
+      : "";
+    throw new Error(`${timeoutMessage}${retryContext}`);
   }
 
   async #request(method, path, body = undefined, expected = method === "POST" ? [200, 201, 202] : [200]) {
@@ -420,7 +431,9 @@ export class DigitalOceanProvider {
           continue;
         }
         const detail = sanitizeProviderError(error);
-        throw new Error(`DigitalOcean ${method} ${requestPath} transport failed after ${attempt} attempt${attempt === 1 ? "" : "s"}${detail}`);
+        const transportError = new Error(`DigitalOcean ${method} ${requestPath} transport failed after ${attempt} attempt${attempt === 1 ? "" : "s"}${detail}`);
+        transportError.retryable = safeToRetry;
+        throw transportError;
       }
       if (!expected.includes(response.status)) {
         if (safeToRetry && DO_RETRYABLE_STATUSES.has(response.status) && attempt < attempts) {
@@ -439,6 +452,7 @@ export class DigitalOceanProvider {
           : "";
         const error = new Error(`DigitalOcean ${method} ${requestPath} failed with HTTP ${response.status}${attemptDetail}${detail}`);
         error.status = response.status;
+        error.retryable = safeToRetry && DO_RETRYABLE_STATUSES.has(response.status);
         throw error;
       }
       if (response.status === 204) return null;

@@ -132,6 +132,43 @@ test("DigitalOcean bounds exhausted GET transport retries with sanitized context
   assert.equal(requests.length, 3);
 });
 
+test("DigitalOcean convergence polling survives exhausted transient GET retries", async () => {
+  const requests = [];
+  const provider = new DigitalOceanProvider({
+    token: "token",
+    sshKeys: [],
+    cloudInitPaths: {},
+    fetchImpl: queueFetch([
+      new TypeError("fetch failed"),
+      response(200, { droplet: apiDroplet(123, "rehearsal", { status: "active", publicIpv4: "203.0.113.10" }) })
+    ], requests),
+    requestAttempts: 1,
+    requestRetryBaseMs: 0,
+    pollIntervalMs: 0,
+    timeoutMs: 100
+  });
+
+  assert.equal((await provider.waitDropletActive("123")).id, "123");
+  assert.equal(requests.length, 2);
+});
+
+test("DigitalOcean convergence polling still fails immediately for non-retryable responses", async () => {
+  const requests = [];
+  const provider = new DigitalOceanProvider({
+    token: "token",
+    sshKeys: [],
+    cloudInitPaths: {},
+    fetchImpl: queueFetch([response(403, { message: "forbidden" })], requests),
+    requestAttempts: 1,
+    requestRetryBaseMs: 0,
+    pollIntervalMs: 0,
+    timeoutMs: 100
+  });
+
+  await assert.rejects(() => provider.waitDropletActive("123"), /DigitalOcean GET \/droplets\/123 failed with HTTP 403/u);
+  assert.equal(requests.length, 1);
+});
+
 test("DigitalOcean create binds exact cloud-init bytes, tags, SSH keys, and safe defaults", async () => {
   const root = await mkdtemp(join(tmpdir(), "scorecheck-do-provider-"));
   const cloudInit = "#cloud-config\nruncmd: []\n";
