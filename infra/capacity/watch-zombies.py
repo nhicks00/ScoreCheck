@@ -256,7 +256,11 @@ def classification_map(processes, retained_healthcheck_shims=None):
         if workload_classification is None:
             continue
         for egress_init in egress_inits:
-            if process.get("cgroupFingerprint") != egress_init.get("cgroupFingerprint"):
+            same_cgroup = process.get("cgroupFingerprint") == egress_init.get("cgroupFingerprint")
+            missing_zombie_cgroup = is_direct_egress_child_with_missing_cgroup(
+                process, egress_init, processes
+            )
+            if not same_cgroup and not missing_zombie_cgroup:
                 continue
             if is_descendant(process, egress_init, processes):
                 classifications[process["identity"]] = workload_classification
@@ -289,6 +293,20 @@ def is_descendant(process, ancestor, processes):
         if current is None:
             return False
     return False
+
+
+def is_direct_egress_child_with_missing_cgroup(process, egress_init, processes):
+    """Allow only Egress's direct child when zombie /proc metadata is gone."""
+    if process["command"] != "pactl" or process.get("cgroupFingerprint") is not None:
+        return False
+    parent = processes.get(process["ppid"])
+    if parent is None or parent["command"] != "egress":
+        return False
+    if (parent.get("commandLine") or b"").strip() != b"egress":
+        return False
+    if parent.get("cgroupFingerprint") != egress_init.get("cgroupFingerprint"):
+        return False
+    return is_descendant(parent, egress_init, processes)
 
 
 def safe_process(process, classification, initial_observation):
@@ -540,7 +558,10 @@ def self_test():
         95: {"pid": 95, "ppid": 50, "identity": "95:95", "command": "redis-cli", "parentCommand": "containerd-shim", "commandLine": b"", "cgroupFingerprint": None},
         90: {"pid": 90, "ppid": 50, "identity": "90:9", "command": "node", "parentCommand": "containerd-shim", "commandLine": b"", "cgroupFingerprint": "redis"},
         100: {"pid": 100, "ppid": 10, "identity": "100:10", "command": "egress", "parentCommand": "tini", "commandLine": b"egress", "cgroupFingerprint": "egress"},
+        101: {"pid": 101, "ppid": 1, "identity": "101:10", "command": "egress", "parentCommand": "systemd", "commandLine": b"egress", "cgroupFingerprint": "egress"},
         110: {"pid": 110, "ppid": 100, "identity": "110:11", "command": "pactl", "parentCommand": "egress", "commandLine": b"", "cgroupFingerprint": "egress"},
+        111: {"pid": 111, "ppid": 100, "identity": "111:11", "command": "pactl", "parentCommand": "egress", "commandLine": b"", "cgroupFingerprint": None},
+        112: {"pid": 112, "ppid": 101, "identity": "112:11", "command": "pactl", "parentCommand": "egress", "commandLine": b"", "cgroupFingerprint": None},
         120: {"pid": 120, "ppid": 100, "identity": "120:12", "command": "pactl", "parentCommand": "egress", "commandLine": b"", "cgroupFingerprint": "other"},
         130: {"pid": 130, "ppid": 20, "identity": "130:13", "command": "pactl", "parentCommand": "chrome", "commandLine": b"", "cgroupFingerprint": "egress"},
         140: {"pid": 140, "ppid": 100, "identity": "140:14", "command": "gst-plugin-scan", "parentCommand": "egress", "commandLine": b"gst-plugin-scanner", "cgroupFingerprint": "egress"},
@@ -567,6 +588,8 @@ def self_test():
     assert classifications["95:95"] == "healthcheck.redis"
     assert "90:9" not in classifications
     assert classifications["110:11"] == "workload.egress-pactl"
+    assert classifications["111:11"] == "workload.egress-pactl"
+    assert "112:11" not in classifications
     assert "120:12" not in classifications
     assert "130:13" not in classifications
     assert classifications["140:14"] == "workload.egress-gst-plugin-scan"
