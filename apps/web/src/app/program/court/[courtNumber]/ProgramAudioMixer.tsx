@@ -106,6 +106,7 @@ type CommentarySourceState = {
   source: MediaStreamAudioSourceNode;
   delay: DelayNode;
   track: RemoteTrack;
+  playbackElement: HTMLAudioElement;
   participantIdentity: string;
   previousJitterTotals: RtcJitterTotals | null;
   controller: CommentarySyncController;
@@ -213,6 +214,16 @@ export function ProgramAudioMixer({
         lastNonSilenceAtMs = null;
         commentaryTrackObservedAtMs = Date.now();
       }
+      // Keep the LiveKit track attached through its supported media-element
+      // lifecycle. The element stays muted because the custom Web Audio graph
+      // below owns the broadcast mix, delay, gain, and metering.
+      const playbackElement = document.createElement("audio");
+      playbackElement.autoplay = true;
+      playbackElement.muted = true;
+      playbackElement.hidden = true;
+      playbackElement.setAttribute("aria-hidden", "true");
+      document.body.appendChild(playbackElement);
+      track.attach(playbackElement);
       const source = context.createMediaStreamSource(new MediaStream([track.mediaStreamTrack]));
       const delay = context.createDelay(10);
       const configuredDelay = clamp(commentaryDelayMs, 0, 10_000);
@@ -222,6 +233,7 @@ export function ProgramAudioMixer({
         source,
         delay,
         track,
+        playbackElement,
         participantIdentity: participant.identity,
         previousJitterTotals: null,
         controller: initialCommentarySyncController(configuredDelay),
@@ -233,6 +245,10 @@ export function ProgramAudioMixer({
       const state = commentarySources.get(track.mediaStreamTrack.id);
       state?.source.disconnect();
       state?.delay.disconnect();
+      if (state) {
+        state.track.detach(state.playbackElement);
+        state.playbackElement.remove();
+      }
       commentarySources.delete(track.mediaStreamTrack.id);
       if (commentarySources.size === 0) {
         lastNonSilenceAtMs = null;
@@ -467,6 +483,8 @@ export function ProgramAudioMixer({
       for (const state of commentarySources.values()) {
         state.source.disconnect();
         state.delay.disconnect();
+        state.track.detach(state.playbackElement);
+        state.playbackElement.remove();
       }
       commentarySources.clear();
       room?.disconnect();

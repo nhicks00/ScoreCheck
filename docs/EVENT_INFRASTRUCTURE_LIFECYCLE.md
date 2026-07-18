@@ -729,7 +729,10 @@ that the actual program browser is playing with exactly one reader and is
 connected to its LiveKit commentary room. This guarantees that LiveKit has a
 program subscriber before the microphone publication begins. The program mixer
 disables adaptive-stream suspension because it consumes remote commentary via
-Web Audio and must remain a continuous broadcast subscriber. Commentary readiness then requires
+Web Audio and must remain a continuous broadcast subscriber. It also keeps each
+remote commentary track attached to a muted LiveKit media sink; the custom Web
+Audio graph remains the only audible broadcast path while the SDK-supported
+attachment keeps the subscription lifecycle active. Commentary readiness then requires
 advancing preview video, a live microphone sender and source, at least 75 percent
 positive microphone-meter coverage, and sustained outbound RTP, captured-audio
 duration, and nonzero audio energy throughout the eight-second cadence window.

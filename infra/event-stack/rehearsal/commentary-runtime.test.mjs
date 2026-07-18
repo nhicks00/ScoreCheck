@@ -120,6 +120,17 @@ test("program mixer disables adaptive stream because Web Audio must consume comm
   assert.doesNotMatch(source, /new Room\(\{ adaptiveStream:\s*true/u);
 });
 
+test("program mixer keeps each commentary track on the supported muted media sink", async () => {
+  const source = await readFile(new URL(
+    "../../../apps/web/src/app/program/court/[courtNumber]/ProgramAudioMixer.tsx",
+    import.meta.url
+  ), "utf8");
+  assert.match(source, /playbackElement\.muted = true/u);
+  assert.match(source, /track\.attach\(playbackElement\)/u);
+  assert.match(source, /state\.track\.detach\(state\.playbackElement\)/u);
+  assert.match(source, /state\.playbackElement\.remove\(\)/u);
+});
+
 test("retries one transient commentary join only after reloading the isolated page", async () => {
   let liveWaits = 0;
   let reloads = 0;
