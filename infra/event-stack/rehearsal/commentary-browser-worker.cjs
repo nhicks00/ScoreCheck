@@ -80,10 +80,25 @@ async function main() {
   }
 }
 
-async function verifyLocalMediaCadence(page, { durationMs = 8_000, intervalMs = 250 } = {}) {
+async function verifyLocalMediaCadence(page, { durationMs = 8_000, intervalMs = 250, startupTimeoutMs = 30_000 } = {}) {
+  const startupStartedAt = Date.now();
+  let previousMicrophone;
+  while (Date.now() - startupStartedAt < startupTimeoutMs) {
+    previousMicrophone = await readMicrophoneStats(page);
+    if (hasStartedMicrophone(previousMicrophone)) break;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  if (!hasStartedMicrophone(previousMicrophone)) {
+    throw cadenceError("rehearsal microphone did not begin sending", {
+      outboundPackets: 0,
+      outboundBytes: 0,
+      audioEnergy: 0,
+      sampleDurationSeconds: 0
+    }, previousMicrophone ?? emptyMicrophoneStats());
+  }
+  const startupWaitMs = Date.now() - startupStartedAt;
   const startedAt = Date.now();
   const initialTime = await page.locator("video").evaluate((video) => video.currentTime);
-  let previousMicrophone = await readMicrophoneStats(page);
   let finalMicrophone = previousMicrophone;
   let maximumAudioSources = previousMicrophone.audioSources;
   const cadence = { outboundPackets: 0, outboundBytes: 0, audioEnergy: 0, sampleDurationSeconds: 0 };
@@ -111,6 +126,7 @@ async function verifyLocalMediaCadence(page, { durationMs = 8_000, intervalMs = 
   if (cadence.outboundPackets < 1 || cadence.outboundBytes < 1) throw cadenceError("rehearsal microphone did not send audio packets", cadence, finalMicrophone);
   if (cadence.audioEnergy <= 0 || cadence.sampleDurationSeconds < durationMs / 1_000 * 0.75) throw cadenceError("rehearsal microphone cadence did not remain active", cadence, finalMicrophone);
   return {
+    startupWaitMs,
     durationMs,
     samples,
     movingMicrophoneSamples,
@@ -121,6 +137,21 @@ async function verifyLocalMediaCadence(page, { durationMs = 8_000, intervalMs = 
     outboundBytes: cadence.outboundBytes,
     audioEnergy: cadence.audioEnergy,
     sampleDurationSeconds: cadence.sampleDurationSeconds
+  };
+}
+
+function hasStartedMicrophone(stats) {
+  if (!stats || stats.audioSources < 1) return false;
+  const hasOutboundRtp = stats.outboundReports.some((report) => Number(report.packets) > 0 && Number(report.bytes) > 0);
+  const hasCapturedAudio = stats.audioSourceReports.some((report) => Number(report.energy) > 0 && Number(report.durationSeconds) > 0);
+  return hasOutboundRtp && hasCapturedAudio;
+}
+
+function emptyMicrophoneStats() {
+  return {
+    audioSources: 0,
+    outboundReports: [],
+    audioSourceReports: []
   };
 }
 

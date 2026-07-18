@@ -220,6 +220,28 @@ test("accepts advancing preview and authoritative non-silent microphone RTP cade
   assert.equal(result.audioEnergy, 2);
 });
 
+test("starts the cadence window only after authoritative microphone RTP becomes active", async () => {
+  let videoSamples = 0;
+  const page = mediaCadencePage({
+    currentTime: () => videoSamples++ * 0.1,
+    microphoneWidth: () => 0,
+    microphoneStats: [
+      stats({ key: "starting", packets: 0, bytes: 0, energy: 0, durationSeconds: 0 }),
+      stats({ key: "starting", packets: 0, bytes: 0, energy: 0, durationSeconds: 0 }),
+      stats({ key: "active", packets: 10, bytes: 1_000, energy: 1, durationSeconds: 2 }),
+      stats({ key: "active", packets: 20, bytes: 2_000, energy: 2, durationSeconds: 2.02 }),
+      stats({ key: "active", packets: 30, bytes: 3_000, energy: 3, durationSeconds: 2.04 }),
+      stats({ key: "active", packets: 40, bytes: 4_000, energy: 4, durationSeconds: 2.06 }),
+      stats({ key: "active", packets: 50, bytes: 5_000, energy: 5, durationSeconds: 2.08 })
+    ]
+  });
+  const result = await verifyLocalMediaCadence(page, { durationMs: 40, intervalMs: 10, startupTimeoutMs: 40 });
+  assert.equal(result.startupWaitMs >= 10, true);
+  assert.equal(result.outboundPackets >= 30, true);
+  assert.equal(result.audioEnergy >= 3, true);
+  assert.equal(result.sampleDurationSeconds >= 0.059, true);
+});
+
 test("accepts headless meter animation lag when RTP and captured audio energy advance", async () => {
   let videoSamples = 0;
   const page = mediaCadencePage({
@@ -268,6 +290,20 @@ test("fails closed when the synthetic microphone is silent despite packet flow",
   await assert.rejects(
     () => verifyLocalMediaCadence(page, { durationMs: 40, intervalMs: 10 }),
     /microphone cadence did not remain active/u
+  );
+});
+
+test("fails closed when authoritative microphone RTP never starts", async () => {
+  const page = mediaCadencePage({
+    currentTime: () => 1,
+    microphoneWidth: () => 0,
+    microphoneStats: [
+      stats({ key: "silent", packets: 0, bytes: 0, energy: 0, durationSeconds: 0 })
+    ]
+  });
+  await assert.rejects(
+    () => verifyLocalMediaCadence(page, { durationMs: 40, intervalMs: 10, startupTimeoutMs: 30 }),
+    /microphone did not begin sending/u
   );
 });
 

@@ -626,6 +626,13 @@ lag even while the captured and transmitted audio is healthy. A failed startup
 closes Chromium immediately; it never waits on a leaked browser process before
 the bounded recovery and provider cleanup can begin.
 
+LiveKit may create or replace its publishing peer connection after the page has
+already rendered `Live`. The rehearsal therefore waits up to 30 seconds for
+positive outbound-audio RTP and captured-audio statistics before starting the
+eight-second cadence window. That warmup is not credited toward the cadence
+proof. Once the window starts, the complete packet, byte, energy, sample
+duration, and preview requirements still apply.
+
 This source placement removes the operator laptop and venue Wi-Fi from the
 DigitalOcean media-capacity result. It does not qualify the venue uplink,
 router, Speedify path, or physical cameras. Those remain a separate pre-event
@@ -723,10 +730,14 @@ Commentary startup evidence is reset-safe across a LiveKit peer-connection
 replacement. The browser samples individual outbound-audio RTP and media-source
 reports throughout the bounded cadence window and accumulates only positive
 deltas for each stable report identity. A removed report is not subtracted and
-a new report establishes a fresh baseline. Readiness still requires advancing
-preview video, outbound audio packets and bytes, nonzero captured-audio energy,
-and at least 75 percent media-sample coverage; meter animation remains supporting
-UI evidence rather than the authoritative audio contract.
+a new report establishes a fresh baseline. The cadence window begins only after
+the browser observes positive RTP and captured-audio statistics, so a delayed
+LiveKit publication cannot consume most of the measurement window while a
+partially initialized source is incorrectly judged as failed. Readiness still
+requires advancing preview video, outbound audio packets and bytes, nonzero
+captured-audio energy, and at least 75 percent media-sample coverage; meter
+animation remains supporting UI evidence rather than the authoritative audio
+contract.
 
 The rehearsal YouTube contract is an exact persistent pool named `ScoreCheck
 Court 1 Test Stream` through `ScoreCheck Court 8 Test Stream`. Every member must
