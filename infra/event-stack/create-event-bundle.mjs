@@ -14,6 +14,7 @@ import { validateProfile as validateEventProfile } from "./eventctl.mjs";
 import { assertNetworkContractDeployable } from "./network-contract.mjs";
 import { renderProductionSecretDirectory } from "./production-recovery.mjs";
 import { validateRehearsalProfile } from "./rehearsal/rehearsal-stack.mjs";
+import { SyntheticPublisherManager } from "./rehearsal/synthetic-publishers.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const REHEARSAL_SCRIPT = resolve(dirname(SCRIPT_PATH), "rehearsal/turnkey-rehearsal.mjs");
@@ -36,7 +37,11 @@ async function main() {
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
-export async function createEventBundle(options, { verifyGitIdentity = assertRehearsalGitIdentity, verifyCommentaryRuntime = assertCommentaryBrowserRuntime } = {}) {
+export async function createEventBundle(options, {
+  verifyGitIdentity = assertRehearsalGitIdentity,
+  verifyCommentaryRuntime = assertCommentaryBrowserRuntime,
+  verifyFfmpegRuntime = assertRehearsalFfmpegRuntime
+} = {}) {
   validateBundleOptions(options);
   if (options.kind === "rehearsal") await verifyGitIdentity({ repo: options.gitRepo, ref: options.gitRef, sha: options.gitSha });
   if (options.kind === "rehearsal") await verifyCommentaryRuntime();
@@ -49,6 +54,7 @@ export async function createEventBundle(options, { verifyGitIdentity = assertReh
     ...(options.kind === "production" ? [assertProtectedDirectory(options.productionSource, "production recovery source")] : []),
     ...(options.kind === "rehearsal" ? [assertExecutable(options.ffmpegPath, "FFmpeg")] : [])
   ]);
+  if (options.kind === "rehearsal") await verifyFfmpegRuntime(options.ffmpegPath);
   const parent = dirname(options.root);
   const parentInfo = await stat(parent);
   if (!parentInfo.isDirectory() || (parentInfo.mode & 0o077) !== 0) throw new Error("bundle parent directory must be mode 0700 or stricter");
@@ -236,6 +242,10 @@ export async function assertCommentaryBrowserRuntime({ run = defaultRunCommentar
   if (!/playwright chromium ready/i.test(result.stdout ?? "")) {
     throw new Error("rehearsal commentary browser runtime is unavailable; run npm ci --prefix infra/event-stack and npx --prefix infra/event-stack playwright install chromium");
   }
+}
+
+export async function assertRehearsalFfmpegRuntime(ffmpegPath, { manager = new SyntheticPublisherManager() } = {}) {
+  await manager.preflight(ffmpegPath);
 }
 
 async function defaultRunCommentaryPreflight() {

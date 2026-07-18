@@ -5,9 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { assertCommentaryBrowserRuntime, assertRehearsalGitIdentity, createEventBundle, parseBundleArgs } from "./create-event-bundle.mjs";
+import { assertCommentaryBrowserRuntime, assertRehearsalFfmpegRuntime, assertRehearsalGitIdentity, createEventBundle, parseBundleArgs } from "./create-event-bundle.mjs";
 
-const createFixtureBundle = (options) => createEventBundle(options, { verifyGitIdentity: async () => {}, verifyCommentaryRuntime: async () => {} });
+const createFixtureBundle = (options) => createEventBundle(options, {
+  verifyGitIdentity: async () => {},
+  verifyCommentaryRuntime: async () => {},
+  verifyFfmpegRuntime: async () => {}
+});
 
 async function fixture(kind = "rehearsal") {
   const parent = await mkdtemp(join(tmpdir(), "scorecheck-bundle-"));
@@ -89,6 +93,22 @@ test("creates a complete protected rehearsal bundle and exact one-command invoca
 test("fails before bundle or provider work when the real commentary browser runtime is absent", async () => {
   await assert.doesNotReject(() => assertCommentaryBrowserRuntime({ run: async () => ({ stdout: "playwright chromium ready\n" }) }));
   await assert.rejects(() => assertCommentaryBrowserRuntime({ run: async () => ({ stdout: "" }) }), /npm ci --prefix infra\/event-stack/);
+});
+
+test("fails before creating a bundle when FFmpeg lacks rehearsal media capabilities", async () => {
+  const options = await fixture();
+  await assert.rejects(() => createEventBundle(options, {
+    verifyGitIdentity: async () => {},
+    verifyCommentaryRuntime: async () => {},
+    verifyFfmpegRuntime: async () => { throw new Error("FFmpeg rehearsal preflight is missing drawtext"); }
+  }), /missing drawtext/u);
+  await assert.rejects(() => stat(options.root), { code: "ENOENT" });
+
+  let checkedPath = null;
+  await assertRehearsalFfmpegRuntime(options.ffmpegPath, {
+    manager: { preflight: async (path) => { checkedPath = path; } }
+  });
+  assert.equal(checkedPath, options.ffmpegPath);
 });
 
 test("creates a production bundle bound to existing persistent anchors", async () => {
