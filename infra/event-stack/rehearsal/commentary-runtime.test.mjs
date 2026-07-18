@@ -9,7 +9,7 @@ import { buildCommentaryClientConfig, CommentaryClientManager } from "./commenta
 import { createRehearsalSecretMaterial } from "./rehearsal-secrets.mjs";
 
 const require = createRequire(import.meta.url);
-const { joinCommentaryPage, verifyLocalMediaCadence } = require("./commentary-browser-worker.cjs");
+const { installPeerConnectionTracker, joinCommentaryPage, verifyLocalMediaCadence } = require("./commentary-browser-worker.cjs");
 
 const material = createRehearsalSecretMaterial({ random: (length) => Buffer.alloc(length, 4) });
 
@@ -177,27 +177,74 @@ test("headless commentary disables background throttling and proves local media 
     "--disable-renderer-backgrounding"
   ]) assert.match(source, new RegExp(flag));
   assert.match(source, /const localMedia = await verifyLocalMediaCadence\(page\)/u);
-  assert.match(source, /movingMicrophoneSamples \/ samples < 0\.9/u);
+  assert.match(source, /outboundPackets < 1 \|\| outboundBytes < 1/u);
+  assert.match(source, /audioEnergy <= 0 \|\| sampleDurationSeconds < durationMs/u);
   assert.match(source, /previewAdvanceSeconds < durationMs \/ 1_000 \* 0\.75/u);
+  assert.match(source, /finally \{\s*await browser\?\.close\(\)\.catch/u);
 });
 
-test("accepts continuously advancing preview and microphone cadence", async () => {
+test("tracks peer connections before page code creates LiveKit transports", async () => {
+  let initScript;
+  await installPeerConnectionTracker({ addInitScript: async (script) => { initScript = script; } });
+  const created = [];
+  class FakePeerConnection {
+    constructor(value) { this.value = value; created.push(this); }
+  }
+  globalThis.window = { RTCPeerConnection: FakePeerConnection };
+  try {
+    initScript();
+    const connection = new window.RTCPeerConnection("commentary");
+    assert.equal(connection.value, "commentary");
+    assert.deepEqual(created, [connection]);
+    assert.deepEqual(window.__scorecheckRehearsalPeerConnections, [connection]);
+  } finally {
+    delete globalThis.window;
+  }
+});
+
+test("accepts advancing preview and authoritative non-silent microphone RTP cadence", async () => {
   let videoSamples = 0;
   const page = mediaCadencePage({
     currentTime: () => videoSamples++ * 0.1,
-    microphoneWidth: () => 12
+    microphoneWidth: () => 12,
+    microphoneStats: [
+      { audioSources: 1, outboundPackets: 10, outboundBytes: 1000, totalAudioEnergy: 1, totalSamplesDuration: 2 },
+      { audioSources: 1, outboundPackets: 30, outboundBytes: 3000, totalAudioEnergy: 3, totalSamplesDuration: 2.04 }
+    ]
   });
   const result = await verifyLocalMediaCadence(page, { durationMs: 40, intervalMs: 10 });
   assert.equal(result.samples >= 3, true);
   assert.equal(result.movingMicrophoneSamples, result.samples);
   assert.equal(result.previewAdvanceSeconds >= 0.1, true);
+  assert.equal(result.outboundPackets, 20);
+  assert.equal(result.audioEnergy, 2);
 });
 
-test("fails closed when the synthetic microphone is locally silent", async () => {
+test("accepts headless meter animation lag when RTP and captured audio energy advance", async () => {
   let videoSamples = 0;
   const page = mediaCadencePage({
     currentTime: () => videoSamples++ * 0.1,
-    microphoneWidth: () => 0
+    microphoneWidth: () => 0,
+    microphoneStats: [
+      { audioSources: 1, outboundPackets: 10, outboundBytes: 1000, totalAudioEnergy: 1, totalSamplesDuration: 2 },
+      { audioSources: 1, outboundPackets: 30, outboundBytes: 3000, totalAudioEnergy: 3, totalSamplesDuration: 2.04 }
+    ]
+  });
+  const result = await verifyLocalMediaCadence(page, { durationMs: 40, intervalMs: 10 });
+  assert.equal(result.movingMicrophoneSamples, 0);
+  assert.equal(result.movingMicrophoneSampleRatio, 0);
+  assert.equal(result.outboundPackets, 20);
+});
+
+test("fails closed when the synthetic microphone is silent despite packet flow", async () => {
+  let videoSamples = 0;
+  const page = mediaCadencePage({
+    currentTime: () => videoSamples++ * 0.1,
+    microphoneWidth: () => 0,
+    microphoneStats: [
+      { audioSources: 1, outboundPackets: 10, outboundBytes: 1000, totalAudioEnergy: 1, totalSamplesDuration: 2 },
+      { audioSources: 1, outboundPackets: 30, outboundBytes: 3000, totalAudioEnergy: 1, totalSamplesDuration: 2.04 }
+    ]
   });
   await assert.rejects(
     () => verifyLocalMediaCadence(page, { durationMs: 40, intervalMs: 10 }),
@@ -209,8 +256,10 @@ function locator({ text }) {
   return { textContent: async () => text };
 }
 
-function mediaCadencePage({ currentTime, microphoneWidth }) {
+function mediaCadencePage({ currentTime, microphoneWidth, microphoneStats }) {
+  let statSample = 0;
   return {
+    evaluate: async () => microphoneStats[Math.min(statSample++, microphoneStats.length - 1)],
     locator: (selector) => ({
       evaluate: async () => selector === "video" ? currentTime() : microphoneWidth()
     })

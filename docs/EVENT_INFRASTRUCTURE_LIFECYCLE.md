@@ -617,6 +617,15 @@ duplicated frame. Source credentials live only in protected mode-0600 files;
 they are not placed in service names or process arguments. Source units and
 their generation directory are removed before infrastructure teardown.
 
+The synthetic commentator is admitted only after the preview advances and
+Chromium's WebRTC statistics prove that the captured microphone source has
+nonzero audio energy, captured-sample duration advances continuously, and the
+outbound audio RTP packets and bytes increase. The visible microphone meter is
+recorded as supporting UI evidence because headless animation scheduling can
+lag even while the captured and transmitted audio is healthy. A failed startup
+closes Chromium immediately; it never waits on a leaked browser process before
+the bounded recovery and provider cleanup can begin.
+
 This source placement removes the operator laptop and venue Wi-Fi from the
 DigitalOcean media-capacity result. It does not qualify the venue uplink,
 router, Speedify path, or physical cameras. Those remain a separate pre-event
