@@ -101,16 +101,8 @@ export class RehearsalController {
         const publisherConfigurations = Object.fromEntries(COURTS.map((court) => [court, this.publisherConfiguration({ manifest, material, court, state, evidenceDirectory })]));
         await this.publishers.preflight(publisherConfigurations[1].ffmpegPath);
         // Complete local fixture encoding, pinned source-image acquisition, and
-        // spare-host staging before host sampling starts. Qualification evidence
-        // must describe the media workload, not setup I/O.
+        // spare-host staging before the synthetic sources are started.
         for (const court of COURTS) await this.publishers.prepare(publisherConfigurations[court]);
-        if (!state.sampler) {
-          state.sampler = { status: "starting", output: `${resolve(evidenceDirectory)}/pool-host-samples.jsonl` };
-          await this.store.save(state);
-        }
-        state.sampler = await this.sampler.ensure({ manifest, lifecycleState, state: structuredClone(state), evidenceDirectory });
-        await this.store.save(state);
-
         for (const court of COURTS) {
           const courtState = state.courts[court];
           const configuration = publisherConfigurations[court];
@@ -124,6 +116,17 @@ export class RehearsalController {
         }
         await this.verifier.waitForRaw({ manifest, lifecycleState, state: structuredClone(state) });
         state.publisherEvidence = await this.publishers.waitForHealthy(COURTS.map((court) => state.courts[court].publisher));
+        await this.store.save(state);
+
+        // Begin formal host evidence only after publisher container creation and
+        // cadence qualification. The sampler still covers commentary, Egress,
+        // provider, browser, and the complete official soak, while generic runc
+        // startup waits remain fail-closed instead of being broadly allowlisted.
+        if (!state.sampler) {
+          state.sampler = { status: "starting", output: `${resolve(evidenceDirectory)}/pool-host-samples.jsonl` };
+          await this.store.save(state);
+        }
+        state.sampler = await this.sampler.ensure({ manifest, lifecycleState, state: structuredClone(state), evidenceDirectory });
         await this.store.save(state);
 
         await this.commentary.preflight(this.commentaryConfiguration({ manifest, material, court: 1, state, evidenceDirectory }));

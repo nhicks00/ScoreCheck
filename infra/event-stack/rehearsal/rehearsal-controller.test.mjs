@@ -100,7 +100,7 @@ function harness({ failPublisherOnce = false, failPreflight = false, failFullEvi
     stop: async ({ marker }) => { log.push(`commentary-stop:${marker.at(-1)}`); return { absent: true }; }
   };
   const sampler = {
-    ensure: async () => ({ status: "running", pid: 555, output: "/evidence/pool.jsonl" }),
+    ensure: async () => { log.push("sampler-start"); return { status: "running", pid: 555, output: "/evidence/pool.jsonl" }; },
     stop: async (state) => ({ ...state, status: "stopped" })
   };
   const verifier = {
@@ -164,6 +164,8 @@ test("runs the full isolated rehearsal and retains every persistent stream by ex
   assert.equal(summary.activeEgresses, 8);
   assert.equal(summary.activeProviderStreams, 8);
   assert.ok(log.indexOf("publisher-prepare:8") < log.indexOf("publisher-start:1"));
+  assert.ok(log.indexOf("publisher-start:8") < log.indexOf("sampler-start"));
+  assert.ok(log.indexOf("sampler-start") < log.indexOf("egress-start:1"));
   assert.ok(log.indexOf("egress-start:1") < log.indexOf("youtube-active:stream1"));
   assert.ok(log.indexOf("youtube-active:stream1") < log.indexOf("program-subscriber:1"));
   assert.ok(log.indexOf("program-subscriber:1") < log.indexOf("commentary-start:1"));
