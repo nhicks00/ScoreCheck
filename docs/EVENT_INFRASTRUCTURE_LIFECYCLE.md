@@ -617,17 +617,18 @@ they are not placed in service names or process arguments. Source units and
 their generation directory are removed before infrastructure teardown.
 
 The synthetic commentator is admitted before output only after the preview
-advances, Chromium proves that a non-silent microphone publication sent initial
-audio RTP, the audio source remains present, and the visible microphone meter
-moves in at least 75 percent of the eight-second cadence samples. This split is
-intentional: LiveKit pauses an upstream publication after roughly half a second
-when no program mixer has subscribed yet. Requiring sustained outbound RTP at
-this point creates a circular startup dependency. After Egress starts, the
-full-stack verifier remains authoritative and requires fresh non-silent
-commentary audio, zero packet loss, and locked clock/synchronization telemetry
-from the actual program mixer before the soak can begin. A failed startup closes
-Chromium immediately; it never waits on a leaked browser process before bounded
-recovery and provider cleanup can begin.
+advances and Chromium proves a live microphone source with non-silent capture
+energy, duration, RTP packets, and RTP bytes. The visible microphone meter is
+operator feedback, not an authority: its headless rendering can be silent while
+the actual WebRTC audio path is healthy. This split is intentional: LiveKit
+pauses an upstream publication after roughly half a second when no program mixer
+has subscribed yet. Requiring sustained outbound RTP at this point creates a
+circular startup dependency. After Egress starts, the full-stack verifier remains
+authoritative and requires fresh non-silent commentary audio, zero packet loss,
+and locked clock/synchronization telemetry from the actual program mixer before
+the soak can begin. A failed startup closes Chromium immediately; it never waits
+on a leaked browser process before bounded recovery and provider cleanup can
+begin.
 
 This source placement removes the operator laptop and venue Wi-Fi from the
 DigitalOcean media-capacity result. It does not qualify the venue uplink,
