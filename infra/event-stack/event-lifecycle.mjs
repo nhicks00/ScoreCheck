@@ -11,11 +11,15 @@ import { networkContractTags } from "./network-contract.mjs";
 
 const STATE_SCHEMA_VERSION = 8;
 const ANCHOR_SCHEMA_VERSION = 2;
+export const STACK_FINALIZATION_TIMEOUT_MS = 15 * 60_000;
 const PHASES = new Set(["planned", "provisioning", "ready", "live", "closed", "destroying", "destroyed", "aborting", "aborted"]);
 const SHA256 = /^[a-f0-9]{64}$/;
 
 export class EventLifecycleController {
-  constructor({ store, cloud, dns, deployer, notifier = new NullNotifier(), provisioningGuard = null, now = () => new Date() }) {
+  constructor({ store, cloud, dns, deployer, notifier = new NullNotifier(), provisioningGuard = null, now = () => new Date(), finalizationTimeoutMs = STACK_FINALIZATION_TIMEOUT_MS }) {
+    if (!Number.isInteger(finalizationTimeoutMs) || finalizationTimeoutMs < 1_000 || finalizationTimeoutMs > 60 * 60_000) {
+      throw new Error("stack finalization timeout must be from 1000 through 3600000 milliseconds");
+    }
     this.store = store;
     this.cloud = cloud;
     this.dns = dns;
@@ -23,6 +27,7 @@ export class EventLifecycleController {
     this.notifier = notifier;
     this.provisioningGuard = provisioningGuard;
     this.now = now;
+    this.finalizationTimeoutMs = finalizationTimeoutMs;
   }
 
   async plan(manifest) {
@@ -108,7 +113,11 @@ export class EventLifecycleController {
         }
 
         if (typeof this.deployer.finalizeStack === "function") {
-          const finalization = await this.deployer.finalizeStack({ manifest, state: structuredClone(state) });
+          const finalization = await withDeadline(
+            () => this.deployer.finalizeStack({ manifest, state: structuredClone(state) }),
+            this.finalizationTimeoutMs,
+            "event stack finalization"
+          );
           if (finalization?.healthy !== true) throw new Error("event stack deployment finalization failed");
           state.finalization = {
             status: "healthy",
@@ -870,6 +879,25 @@ export class MemoryStateStore {
 
 export class NullNotifier {
   async send() {}
+}
+
+export async function withDeadline(operation, timeoutMs, label) {
+  if (typeof operation !== "function") throw new Error("deadline operation must be a function");
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 60 * 60_000) {
+    throw new Error("deadline timeout must be from 1000 through 3600000 milliseconds");
+  }
+  if (typeof label !== "string" || !label.trim()) throw new Error("deadline label is required");
+  let timer = null;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(operation),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
 }
 
 export function createInitialState(manifest, now = new Date()) {

@@ -52,7 +52,16 @@ function fixture(overrides = {}) {
   const notifier = overrides.notifier ?? new FakeNotifier();
   const store = overrides.store ?? new MemoryStateStore();
   const provisioningGuard = overrides.provisioningGuard ?? { async verify() { return fakeProvisioningAttestation(); } };
-  const controller = new EventLifecycleController({ store, cloud, dns, deployer, notifier, provisioningGuard, now: () => new Date(now) });
+  const controller = new EventLifecycleController({
+    store,
+    cloud,
+    dns,
+    deployer,
+    notifier,
+    provisioningGuard,
+    now: () => new Date(now),
+    ...(overrides.finalizationTimeoutMs === undefined ? {} : { finalizationTimeoutMs: overrides.finalizationTimeoutMs })
+  });
   return { controller, manifest, anchors, cloud, dns, deployer, notifier, store };
 }
 
@@ -173,6 +182,32 @@ test("runs the production-shaped 12-Droplet lifecycle without changing critical 
   assert.equal(dns.records.get("monitor.beachvolleyballmedia.com").value, "203.0.113.12");
   assert.deepEqual(dns.restores, ["monitor.beachvolleyballmedia.com"]);
   assert.equal(notifier.messages.length, 2);
+});
+
+test("bounds an unresolved stack finalization and preserves a retryable provisioning state", async () => {
+  const deployer = new FakeStackDeployer();
+  deployer.finalizeStack = async () => new Promise(() => {});
+  const setup = fixture({ deployer, finalizationTimeoutMs: 1_000 });
+
+  await assert.rejects(
+    () => setup.controller.up(setup.manifest, setup.anchors),
+    /event stack finalization timed out after 1000ms/
+  );
+
+  const interrupted = await setup.store.load();
+  assert.equal(interrupted.phase, "provisioning");
+  assert.equal(interrupted.finalization, null);
+  assert.equal(interrupted.stackHealth, null);
+  assert.match(interrupted.lastError.message, /event stack finalization timed out after 1000ms/);
+  assert.equal(setup.notifier.messages.length, 1);
+  assert.match(setup.notifier.messages[0].title, /setup needs attention/);
+
+  deployer.finalizeStack = async () => ({ healthy: true, evidence: { status: "finalized" } });
+  const ready = await setup.controller.up(setup.manifest, setup.anchors);
+  assert.equal(ready.phase, "ready");
+  assert.equal(ready.finalization.status, "healthy");
+  assert.equal(ready.stackHealth.status, "healthy");
+  assert.equal(setup.cloud.createCalls, 12);
 });
 
 test("retains a shared lifecycle tag only while another resource still uses it", async () => {
