@@ -197,6 +197,8 @@ export class RehearsalController {
       try {
         if (!state.endpointEvidence) {
           try {
+            const baselineSnapshot = state.soak?.baselineEvidence?.snapshot ?? state.startEvidence?.snapshot ?? null;
+            if (baselineSnapshot) this.verifier.restoreAcceptedFullSnapshot(baselineSnapshot);
             state.endpointEvidence = await this.verifier.captureEndpoint({ manifest, lifecycleState, state: structuredClone(state) });
           } catch (error) {
             state.endpointEvidence = { passed: false, observedAt: this.now().toISOString(), problems: [`endpoint capture failed: ${error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)}`] };
@@ -339,11 +341,22 @@ export class RehearsalController {
       assertPhase(state, ["running"], "run the rehearsal soak");
       if (state.soakEvidence?.passed) return state;
       if (state.soakEvidence && !state.soakEvidence.passed) throw new Error("this rehearsal generation already has a failed soak; preserve it and start a new generation");
-      state.soak ??= { status: "running", startedAt: this.now().toISOString(), durationMs, evidenceDirectory: resolve(evidenceDirectory) };
+      state.soak ??= { status: "stabilizing", startedAt: null, durationMs, evidenceDirectory: resolve(evidenceDirectory), baselineEvidence: null };
       if (state.soak.durationMs !== durationMs || state.soak.evidenceDirectory !== resolve(evidenceDirectory)) throw new Error("rehearsal soak resume inputs changed");
       state.lastError = null;
       await this.store.save(state);
       try {
+        if (!state.soak.startedAt) {
+          state.soak.status = "stabilizing";
+          state.soak.baselineEvidence = await this.verifier.waitForFull({ manifest, lifecycleState, state: structuredClone(state) });
+          state.soak.startedAt = this.now().toISOString();
+          state.soak.status = "running";
+          await this.store.save(state);
+        } else {
+          const baselineSnapshot = state.soak.baselineEvidence?.snapshot;
+          if (!baselineSnapshot) throw new Error("persisted rehearsal soak baseline is unavailable");
+          this.verifier.restoreAcceptedFullSnapshot(baselineSnapshot);
+        }
         state.soakEvidence = await this.soakEvaluator.run({ state: structuredClone(state), manifest, lifecycleState, evidenceDirectory, durationMs });
         state.soak.status = state.soakEvidence.passed ? "passed" : "failed";
         state.soak.completedAt = this.now().toISOString();

@@ -22,9 +22,10 @@ function lifecycleState(phase = "planned") {
   };
 }
 
-function harness({ failPublisherOnce = false, failPreflight = false, failFullEvidence = false, failIdle = false, orphanedProviderResources = false } = {}) {
+function harness({ failPublisherOnce = false, failPreflight = false, failFullEvidence = false, failIdle = false, failSoakOnce = false, orphanedProviderResources = false } = {}) {
   const log = [];
   let publisherFailure = failPublisherOnce;
+  let soakFailure = failSoakOnce;
   const activeEgress = new Map();
   const store = new RehearsalMemoryStateStore();
   const vercel = {
@@ -113,14 +114,16 @@ function harness({ failPublisherOnce = false, failPreflight = false, failFullEvi
       return { passed: true, court, stableSamples: 2 };
     },
     waitForFull: async () => {
+      log.push("full-baseline");
       if (failFullEvidence) {
         const error = new Error("intentional full-chain stabilization failure");
         error.evidenceKind = "monitor";
         error.evidence = { passed: false, snapshot: { agentCount: 12 }, problems: ["Camera 4 browser quality counters are not clean"] };
         throw error;
       }
-      return { healthy: true };
+      return { passed: true, snapshot: { baselineId: "accepted-full-baseline", courts: Array.from({ length: 8 }, (_, index) => ({ courtNumber: index + 1, browser: { credentialId: `browser-${index + 1}` } })) } };
     },
+    restoreAcceptedFullSnapshot: (snapshot) => { log.push(`restore-baseline:${snapshot.baselineId}`); return { restored: true }; },
     captureEndpoint: async () => ({ passed: true }),
     waitForIdle: async () => {
       if (failIdle) throw new Error("idle verifier must not run");
@@ -128,7 +131,14 @@ function harness({ failPublisherOnce = false, failPreflight = false, failFullEvi
     }
   };
   const soakEvaluator = {
-    run: async ({ state }) => ({ passed: true, event: state.event, generationId: state.generationId, problems: [], reportPath: "/evidence/rehearsal-soak-report.json" })
+    run: async ({ state }) => {
+      log.push(`soak-run:${state.soak.startedAt}:${state.soak.baselineEvidence.snapshot.baselineId}`);
+      if (soakFailure) {
+        soakFailure = false;
+        throw new Error("intentional soak process interruption");
+      }
+      return { passed: true, event: state.event, generationId: state.generationId, problems: [], reportPath: "/evidence/rehearsal-soak-report.json" };
+    }
   };
   const sealEvidence = async ({ state, evidenceDirectory }) => ({ directory: evidenceDirectory, markerPath: `${evidenceDirectory}/REHEARSAL_COMPLETE.json`, event: state.event, generationId: state.generationId, classification: state.soakEvidence?.passed ? "PASS" : "CANCELLED", providerCleanupComplete: true });
   const controller = new RehearsalController({
@@ -159,6 +169,10 @@ test("runs the full isolated rehearsal and retains every persistent stream by ex
   assert.ok(log.indexOf("program-subscriber:1") < log.indexOf("commentary-start:1"));
   assert.ok(log.indexOf("commentary-start:1") < log.indexOf("egress-start:2"));
   await controller.soak({ manifest, lifecycleState: lifecycle, evidenceDirectory: "/tmp/rehearsal-evidence", durationMs: 1_800_000 });
+  const soaking = await controller.store.load();
+  assert.equal(soaking.soak.status, "passed");
+  assert.equal(soaking.soak.baselineEvidence.snapshot.baselineId, "accepted-full-baseline");
+  assert.equal(log.filter((entry) => entry === "full-baseline").length, 2);
   await controller.stop({ manifest, lifecycleState: lifecycle });
   await controller.cleanup({ manifest, lifecycleState: lifecycle });
   await controller.seal({ manifest, lifecycleState: lifecycle, evidenceDirectory: "/tmp/rehearsal-evidence" });
@@ -170,6 +184,25 @@ test("runs the full isolated rehearsal and retains every persistent stream by ex
   assert.equal(Object.values(cleaned.courts).every((court) => court.providerCleanup.status === "retained"), true);
   assert.equal(Object.values(cleaned.courts).every((court) => court.providerCleanup.isReusable === true), true);
   assert.ok(log.includes("delete-project:prj_test"));
+});
+
+test("restores the persisted browser baseline when a soak resumes in a new process", async () => {
+  const { controller, store, log } = harness({ failSoakOnce: true });
+  const lifecycle = lifecycleState();
+  await controller.plan({ manifest, lifecycleState: lifecycle });
+  await controller.prepare({ manifest, lifecycleState: lifecycle, material, git: { repo: "nhicks00/ScoreCheck", repoId: 1, ref: "branch", sha: "a".repeat(40) }, secretsDirectory: "/tmp/rehearsal-secrets" });
+  lifecycle.phase = "ready";
+  await controller.start({ manifest, lifecycleState: lifecycle, material, evidenceDirectory: "/tmp/rehearsal-evidence" });
+  await assert.rejects(() => controller.soak({ manifest, lifecycleState: lifecycle, evidenceDirectory: "/tmp/rehearsal-evidence", durationMs: 1_800_000 }), /intentional soak process interruption/);
+
+  const interrupted = await store.load();
+  assert.equal(interrupted.soak.status, "running");
+  assert.ok(interrupted.soak.startedAt);
+  assert.equal(interrupted.soak.baselineEvidence.snapshot.baselineId, "accepted-full-baseline");
+
+  await controller.soak({ manifest, lifecycleState: lifecycle, evidenceDirectory: "/tmp/rehearsal-evidence", durationMs: 1_800_000 });
+  assert.equal(log.filter((entry) => entry === "full-baseline").length, 2);
+  assert.equal(log.filter((entry) => entry === "restore-baseline:accepted-full-baseline").length, 1);
 });
 
 test("resumes a partial start without replacing prepared provider identities", async () => {

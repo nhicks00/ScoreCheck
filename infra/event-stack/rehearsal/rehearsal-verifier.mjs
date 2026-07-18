@@ -53,6 +53,15 @@ export class RehearsalVerifier {
     };
   }
 
+  restoreAcceptedFullSnapshot(snapshot) {
+    if (!hasCompleteBrowserSet(snapshot)) throw new Error("persisted rehearsal browser quality baseline is incomplete");
+    this.acceptedFullSnapshot = structuredClone(snapshot);
+    return {
+      restored: true,
+      generatedAt: snapshot.generatedAt ?? null
+    };
+  }
+
   async observeFull({ state, includeProvider = false }) {
     const snapshot = await this.#snapshot();
     const problems = fullCurrentProblems(snapshot, this.now());

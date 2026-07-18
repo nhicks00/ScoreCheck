@@ -220,6 +220,32 @@ test("uses a reset-safe quality window while preserving historical startup count
   assert.deepEqual(result.problems, []);
 });
 
+test("restores a persisted accepted browser baseline across CLI process boundaries", async () => {
+  let current = now + 5_000;
+  const baseline = snapshot("full");
+  const currentSnapshot = structuredClone(baseline);
+  currentSnapshot.generatedAt = new Date(current).toISOString();
+  for (const court of currentSnapshot.courts) {
+    court.browser.heartbeatSeq += 1;
+    court.browser.receivedAt = new Date(current).toISOString();
+    court.browser.video.framesRendered += 150;
+  }
+  const verifier = new RehearsalVerifier({
+    monitorOrigin: "https://monitor.example.com",
+    monitorToken: "x".repeat(24),
+    youtube: null,
+    sampler: { inspect: async () => ({ pid: 42 }) },
+    fetchImpl: async () => new Response(JSON.stringify(currentSnapshot), { status: 200, headers: { "content-type": "application/json" } }),
+    sleep: async () => {},
+    now: () => current
+  });
+  assert.deepEqual(verifier.restoreAcceptedFullSnapshot(baseline), { restored: true, generatedAt: baseline.generatedAt });
+  const observation = await verifier.observeFull({ state: { sampler: { output: "/tmp/pool.jsonl" } } });
+  assert.equal(observation.passed, true);
+  assert.deepEqual(observation.problems, []);
+  assert.throws(() => verifier.restoreAcceptedFullSnapshot(snapshot("idle")), /persisted rehearsal browser quality baseline is incomplete/);
+});
+
 test("rejects browser counter growth and identity or heartbeat discontinuity", () => {
   const before = snapshot("full");
   const after = structuredClone(before);
