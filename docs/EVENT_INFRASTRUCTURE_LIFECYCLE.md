@@ -702,6 +702,16 @@ asynchronous unassignment action. Exact Reserved-IP release therefore retries
 only the provider's transient HTTP 422 state and succeeds only after the same
 address returns HTTP 404.
 
+DigitalOcean control-plane reads, deletes, and idempotent updates use four
+bounded attempts for transport failures and HTTP 429/500/502/503/504 responses.
+Create and action `POST` requests remain single-attempt because a lost response
+can hide a successful provider-side mutation; automatically replaying one could
+duplicate a Droplet, Reserved IPv4, firewall, or action. After any ambiguous
+`POST` failure, rerun the exact immutable event bundle. The lifecycle reconciles
+the recorded event tags and resource identities before it creates anything else.
+Errors include only the provider method and sanitized path, never request bodies
+or credentials.
+
 The one-Droplet canary proves provider permissions and replacement mechanics;
 it does **not** qualify the 12-server media system. With the verified account
 limit of 15, the final dry run is a full isolated rehearsal from a proved zero

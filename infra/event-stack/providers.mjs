@@ -12,11 +12,27 @@ const DEFAULT_DO_API = "https://api.digitalocean.com/v2";
 const DEFAULT_VERCEL_API = "https://api.vercel.com";
 const DEFAULT_DNS_POLL_INTERVAL_MS = 15_000;
 const DEFAULT_DNS_TIMEOUT_MS = 40 * 60_000;
+const DO_RETRYABLE_METHODS = new Set(["GET", "DELETE", "PUT", "PATCH"]);
+const DO_RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
 
 export class DigitalOceanProvider {
-  constructor({ token, sshKeys, cloudInitPaths, apiBase = DEFAULT_DO_API, fetchImpl = globalThis.fetch, pollIntervalMs = 5_000, timeoutMs = 15 * 60_000 }) {
+  constructor({
+    token,
+    sshKeys,
+    cloudInitPaths,
+    apiBase = DEFAULT_DO_API,
+    fetchImpl = globalThis.fetch,
+    pollIntervalMs = 5_000,
+    timeoutMs = 15 * 60_000,
+    requestAttempts = 4,
+    requestRetryBaseMs = 500,
+    requestTimeoutMs = 30_000
+  }) {
     if (!token) throw new Error("DIGITALOCEAN_TOKEN is required");
     if (!Array.isArray(sshKeys)) throw new Error("DigitalOcean SSH keys must be an array");
+    if (!Number.isInteger(requestAttempts) || requestAttempts < 1 || requestAttempts > 8) throw new Error("DigitalOcean request attempts must be an integer from 1 to 8");
+    if (!Number.isInteger(requestRetryBaseMs) || requestRetryBaseMs < 0 || requestRetryBaseMs > 5_000) throw new Error("DigitalOcean request retry base must be an integer from 0 to 5000 milliseconds");
+    if (!Number.isInteger(requestTimeoutMs) || requestTimeoutMs < 1_000 || requestTimeoutMs > 120_000) throw new Error("DigitalOcean request timeout must be an integer from 1000 to 120000 milliseconds");
     this.token = token;
     this.sshKeys = sshKeys;
     this.cloudInitPaths = cloudInitPaths;
@@ -24,6 +40,9 @@ export class DigitalOceanProvider {
     this.fetchImpl = fetchImpl;
     this.pollIntervalMs = pollIntervalMs;
     this.timeoutMs = timeoutMs;
+    this.requestAttempts = requestAttempts;
+    this.requestRetryBaseMs = requestRetryBaseMs;
+    this.requestTimeoutMs = requestTimeoutMs;
   }
 
   async getAccount() {
@@ -290,13 +309,12 @@ export class DigitalOceanProvider {
   }
 
   async ensureTag(name) {
-    const response = await this.fetchImpl(`${this.apiBase}/tags`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${this.token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ name })
-    });
-    if (response.status === 201) return;
-    if (response.status !== 422) throw new Error(`DigitalOcean tag creation failed with HTTP ${response.status}`);
+    try {
+      await this.#request("POST", "/tags", { name }, [201]);
+      return;
+    } catch (error) {
+      if (error?.status !== 422) throw error;
+    }
     await this.#request("GET", `/tags/${encodeURIComponent(name)}`);
   }
 
@@ -381,27 +399,52 @@ export class DigitalOceanProvider {
   }
 
   async #request(method, path, body = undefined, expected = method === "POST" ? [200, 201, 202] : [200]) {
-    const response = await this.fetchImpl(`${this.apiBase}${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${this.token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/json" })
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) })
-    });
-    if (!expected.includes(response.status)) {
-      const providerMessage = await response.json()
-        .then((payload) => payload?.message ?? payload?.id ?? null)
-        .catch(() => null);
-      const detail = typeof providerMessage === "string" && providerMessage
-        ? `: ${providerMessage.replace(/[\r\n\t]+/g, " ").slice(0, 200)}`
-        : "";
-      const error = new Error(`DigitalOcean ${method} ${path.split("?")[0]} failed with HTTP ${response.status}${detail}`);
-      error.status = response.status;
-      throw error;
+    const safeToRetry = DO_RETRYABLE_METHODS.has(method);
+    const attempts = safeToRetry ? this.requestAttempts : 1;
+    const requestPath = path.split("?")[0];
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      let response;
+      try {
+        response = await this.fetchImpl(`${this.apiBase}${path}`, {
+          method,
+          headers: {
+            Authorization: `Bearer ${this.token}`,
+            ...(body === undefined ? {} : { "Content-Type": "application/json" })
+          },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          signal: AbortSignal.timeout(this.requestTimeoutMs)
+        });
+      } catch (error) {
+        if (attempt < attempts) {
+          await delay(this.requestRetryBaseMs * (2 ** (attempt - 1)));
+          continue;
+        }
+        const detail = sanitizeProviderError(error);
+        throw new Error(`DigitalOcean ${method} ${requestPath} transport failed after ${attempt} attempt${attempt === 1 ? "" : "s"}${detail}`);
+      }
+      if (!expected.includes(response.status)) {
+        if (safeToRetry && DO_RETRYABLE_STATUSES.has(response.status) && attempt < attempts) {
+          await response.json().catch(() => null);
+          await delay(this.requestRetryBaseMs * (2 ** (attempt - 1)));
+          continue;
+        }
+        const providerMessage = await response.json()
+          .then((payload) => payload?.message ?? payload?.id ?? null)
+          .catch(() => null);
+        const detail = typeof providerMessage === "string" && providerMessage
+          ? `: ${providerMessage.replace(/[\r\n\t]+/g, " ").slice(0, 200)}`
+          : "";
+        const attemptDetail = safeToRetry && DO_RETRYABLE_STATUSES.has(response.status)
+          ? ` after ${attempt} attempts`
+          : "";
+        const error = new Error(`DigitalOcean ${method} ${requestPath} failed with HTTP ${response.status}${attemptDetail}${detail}`);
+        error.status = response.status;
+        throw error;
+      }
+      if (response.status === 204) return null;
+      return response.json();
     }
-    if (response.status === 204) return null;
-    return response.json();
+    throw new Error(`DigitalOcean ${method} ${requestPath} exhausted its request attempts`);
   }
 }
 
@@ -618,6 +661,13 @@ export class PushoverNotifier {
     const response = await this.fetchImpl("https://api.pushover.net/1/messages.json", { method: "POST", body });
     if (!response.ok) throw new Error(`Pushover lifecycle notification failed with HTTP ${response.status}`);
   }
+}
+
+function sanitizeProviderError(error) {
+  const name = typeof error?.name === "string" && error.name ? error.name : "Error";
+  const message = typeof error?.message === "string" ? error.message.trim() : "";
+  if (["fetch failed", "network error", "request timed out"].includes(message.toLowerCase())) return `: ${message}`;
+  return ` (${name})`;
 }
 
 function normalizeVpc(value) {

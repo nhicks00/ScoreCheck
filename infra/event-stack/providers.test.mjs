@@ -58,6 +58,80 @@ test("DigitalOcean includes a sanitized provider reason for rejected actions", a
   );
 });
 
+test("DigitalOcean retries transient GET transport failures and succeeds", async () => {
+  const requests = [];
+  const provider = new DigitalOceanProvider({
+    token: "token",
+    sshKeys: [],
+    cloudInitPaths: {},
+    fetchImpl: queueFetch([
+      new TypeError("fetch failed"),
+      new TypeError("fetch failed"),
+      response(200, { account: { uuid: "account-uuid", status: "active", droplet_limit: 12 } })
+    ], requests),
+    requestRetryBaseMs: 0
+  });
+
+  assert.deepEqual(await provider.getAccount(), { uuid: "account-uuid", status: "active", dropletLimit: 12 });
+  assert.equal(requests.length, 3);
+});
+
+test("DigitalOcean retries a transient GET provider response and succeeds", async () => {
+  const requests = [];
+  const provider = new DigitalOceanProvider({
+    token: "token",
+    sshKeys: [],
+    cloudInitPaths: {},
+    fetchImpl: queueFetch([
+      response(503, { message: "temporarily unavailable" }),
+      response(200, { account: { uuid: "account-uuid", status: "active", droplet_limit: 12 } })
+    ], requests),
+    requestRetryBaseMs: 0
+  });
+
+  assert.deepEqual(await provider.getAccount(), { uuid: "account-uuid", status: "active", dropletLimit: 12 });
+  assert.equal(requests.length, 2);
+});
+
+test("DigitalOcean never retries an ambiguous POST transport failure", async () => {
+  const requests = [];
+  const provider = new DigitalOceanProvider({
+    token: "token",
+    sshKeys: [],
+    cloudInitPaths: {},
+    fetchImpl: queueFetch([new TypeError("fetch failed"), response(202, { reserved_ip: {} })], requests),
+    requestRetryBaseMs: 0
+  });
+
+  await assert.rejects(
+    () => provider.createReservedIpv4("sfo2"),
+    /DigitalOcean POST \/reserved_ips transport failed after 1 attempt: fetch failed/u
+  );
+  assert.equal(requests.length, 1);
+});
+
+test("DigitalOcean bounds exhausted GET transport retries with sanitized context", async () => {
+  const requests = [];
+  const provider = new DigitalOceanProvider({
+    token: "token",
+    sshKeys: [],
+    cloudInitPaths: {},
+    fetchImpl: queueFetch([
+      new TypeError("fetch failed"),
+      new TypeError("fetch failed"),
+      new TypeError("fetch failed")
+    ], requests),
+    requestAttempts: 3,
+    requestRetryBaseMs: 0
+  });
+
+  await assert.rejects(
+    () => provider.getAccount(),
+    /DigitalOcean GET \/account transport failed after 3 attempts: fetch failed/u
+  );
+  assert.equal(requests.length, 3);
+});
+
 test("DigitalOcean create binds exact cloud-init bytes, tags, SSH keys, and safe defaults", async () => {
   const root = await mkdtemp(join(tmpdir(), "scorecheck-do-provider-"));
   const cloudInit = "#cloud-config\nruncmd: []\n";
@@ -250,8 +324,10 @@ test("DigitalOcean reconciles a lost empty-tag delete response", async () => {
     fetchImpl: queueFetch([
       response(200, { tag: { name: "scorecheck-event:test", resources: { count: 0 } } }),
       response(500, { message: "lost response" }),
+      response(404, { message: "not found" }),
       response(404, { message: "not found" })
-    ])
+    ]),
+    requestRetryBaseMs: 0
   });
   assert.deepEqual(await provider.deleteEmptyTag("scorecheck-event:test"), {
     name: "scorecheck-event:test",
@@ -601,7 +677,9 @@ function queueFetch(responses, requests = []) {
   return async (url, options = {}) => {
     requests.push({ url: String(url), options });
     if (responses.length === 0) throw new Error(`unexpected request ${options.method ?? "GET"} ${url}`);
-    return responses.shift();
+    const next = responses.shift();
+    if (next instanceof Error) throw next;
+    return next;
   };
 }
 
