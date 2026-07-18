@@ -5,6 +5,7 @@ import { basename, dirname, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
+import { isRetryableDeploymentTransportError } from "../stack-deployer.mjs";
 import { COURTS, SyntheticPublisherHealthError, SyntheticPublisherManager, buildSyntheticPublisherConfig } from "./synthetic-publishers.mjs";
 
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
@@ -318,15 +319,27 @@ export class SpareHostSyntheticPublisherManager {
   }
 
   async #remote(command, { allowFailure = false } = {}) {
-    return this.runner("ssh", sshArguments(this.sshKey, this.knownHosts, this.sourceHost, command), { allowFailure });
+    return this.#transport("ssh", sshArguments(this.sshKey, this.knownHosts, this.sourceHost, command), { allowFailure });
   }
 
   async #copyToRemote(paths, remoteDirectory) {
-    return this.runner("scp", ["-q", ...transportArguments(this.sshKey, this.knownHosts), ...paths, `root@${this.sourceHost}:${remoteDirectory}/`]);
+    return this.#transport("scp", ["-q", ...transportArguments(this.sshKey, this.knownHosts), ...paths, `root@${this.sourceHost}:${remoteDirectory}/`]);
   }
 
   async #copyFromRemote(remotePath, localPath, { allowFailure = false } = {}) {
-    return this.runner("scp", ["-q", ...transportArguments(this.sshKey, this.knownHosts), `root@${this.sourceHost}:${remotePath}`, localPath], { allowFailure });
+    return this.#transport("scp", ["-q", ...transportArguments(this.sshKey, this.knownHosts), `root@${this.sourceHost}:${remotePath}`, localPath], { allowFailure });
+  }
+
+  async #transport(command, args, options = {}) {
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        return await this.runner(command, args, options);
+      } catch (error) {
+        if (attempt === 3 || !isRetryableDeploymentTransportError(error)) throw error;
+        await this.sleep(attempt * 2_000);
+      }
+    }
+    throw new Error(`${command} exhausted its spare-host transport retries`);
   }
 }
 

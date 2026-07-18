@@ -711,6 +711,14 @@ No legacy Droplet is retained as an undocumented rollback dependency.
 Production is not approved until this run passes and provider inventory returns
 to the exact persistent non-Droplet baseline.
 
+Rehearsal publisher staging uses the same bounded transport policy as host
+deployment: SSH and SCP retry at most three times, with short increasing waits,
+and only for recognized connection-level failures such as a banner timeout or
+connection reset. Authentication, host-key, command, and configuration failures
+remain immediate hard failures. This prevents one transient new-Droplet SSH
+handshake from discarding an otherwise healthy 12-host build without masking a
+real ownership or deployment defect.
+
 The rehearsal YouTube contract is an exact persistent pool named `ScoreCheck
 Court 1 Test Stream` through `ScoreCheck Court 8 Test Stream`. Every member must
 be reusable RTMP, 720p30, idle before admission, unique by provider ID and stream

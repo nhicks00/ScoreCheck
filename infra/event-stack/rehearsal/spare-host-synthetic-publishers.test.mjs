@@ -168,3 +168,48 @@ test("fails closed on spare-host cadence loss or any systemd restart", async () 
   assert.match(health.problems.join("; "), /Camera 4 synthetic publisher is outside 30fps/u);
   assert.match(health.problems.join("; "), /Camera 6 synthetic publisher restarted 1 time/u);
 });
+
+test("retries only recognized spare-host SSH and SCP transport failures", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "scorecheck-spare-retry-"));
+  const config = await configFor(1, directory);
+  const waits = [];
+  let sshFailures = 0;
+  let scpFailures = 0;
+  const manager = new SpareHostSyntheticPublisherManager({
+    sourceHost: SOURCE_HOST,
+    sshKey: "/tmp/scorecheck-key",
+    knownHosts: "/tmp/scorecheck-known-hosts",
+    localManager: {
+      preflight: async () => ({ healthy: true }),
+      prepare: async () => ({ path: config.fixturePath, size: 123_456, adopted: false })
+    },
+    sleep: async (milliseconds) => { waits.push(milliseconds); },
+    runner: async (command) => {
+      if (command === "ssh" && sshFailures++ === 0) {
+        throw new Error("ssh failed with exit 255: Connection timed out during banner exchange\nConnection to 203.0.113.9 port 22 timed out");
+      }
+      if (command === "scp" && scpFailures++ === 0) throw new Error("scp failed: Connection reset by peer");
+      return { code: 0, stdout: "", stderr: "" };
+    }
+  });
+
+  assert.equal((await manager.preflight("ffmpeg")).healthy, true);
+  assert.equal((await manager.prepare(config)).staged, true);
+  assert.equal(sshFailures >= 2, true);
+  assert.equal(scpFailures, 2);
+  assert.deepEqual(waits, [2_000, 2_000]);
+});
+
+test("does not retry spare-host authentication or command failures", async () => {
+  let attempts = 0;
+  const manager = new SpareHostSyntheticPublisherManager({
+    sourceHost: SOURCE_HOST,
+    sshKey: "/tmp/scorecheck-key",
+    knownHosts: "/tmp/scorecheck-known-hosts",
+    localManager: { preflight: async () => ({ healthy: true }) },
+    sleep: async () => { throw new Error("non-retryable failure must not sleep"); },
+    runner: async () => { attempts += 1; throw new Error("Permission denied (publickey)"); }
+  });
+  await assert.rejects(() => manager.preflight("ffmpeg"), /Permission denied/u);
+  assert.equal(attempts, 1);
+});
