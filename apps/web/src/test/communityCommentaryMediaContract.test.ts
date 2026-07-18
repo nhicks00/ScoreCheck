@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const commentaryClient = read("src/app/commentary/court/[courtNumber]/CommentaryCourtClient.tsx");
+const commentaryAudioClient = read("src/app/commentary/court/[courtNumber]/CommentaryAudioClient.tsx");
 const commentaryPage = read("src/app/commentary/court/[courtNumber]/page.tsx");
 const sessionClient = read("src/app/score/session/CommunityWitnessSessionClient.tsx");
 
@@ -29,6 +30,15 @@ describe("commentary community-media hard cut", () => {
     expect(sessionClient).toContain('snapshot.assignment.role === "DESIGNATED_SCORER"');
     expect(sessionClient).toContain('snapshot.assignment.trustTier !== "VERIFIED_COURTSIDE"');
     expect(sessionClient).not.toContain('"embedded" | "external"');
+  });
+
+  it("keeps the microphone meter graph running without audible local output", () => {
+    expect(commentaryAudioClient).toContain("await startMicrophoneMeter(track, setLevel)");
+    expect(commentaryAudioClient).toContain("silentSink.gain.value = 0");
+    expect(commentaryAudioClient).toContain("analyser.connect(silentSink)");
+    expect(commentaryAudioClient).toContain("silentSink.connect(context.destination)");
+    expect(commentaryAudioClient).toContain("await context.resume()");
+    expect(commentaryAudioClient).toContain('context.state !== "running"');
   });
 });
 

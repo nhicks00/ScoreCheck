@@ -129,7 +129,7 @@ export function CommentaryAudioClient({
         source: Track.Source.Microphone,
         dtx: audioProcessing
       });
-      meterCleanupRef.current = startMicrophoneMeter(track, setLevel);
+      meterCleanupRef.current = await startMicrophoneMeter(track, setLevel);
       const publishPreviewTiming = () => {
         const timing = previewTimingRef.current;
         if (!timing || timingSampleAgeMs(timing) > 3000) return;
@@ -249,12 +249,16 @@ export function CommentaryAudioClient({
   );
 }
 
-function startMicrophoneMeter(track: LocalAudioTrack, onLevel: (level: number) => void): () => void {
+async function startMicrophoneMeter(track: LocalAudioTrack, onLevel: (level: number) => void): Promise<() => void> {
   const context = new AudioContext();
   const source = context.createMediaStreamSource(new MediaStream([track.mediaStreamTrack]));
   const analyser = context.createAnalyser();
+  const silentSink = context.createGain();
+  silentSink.gain.value = 0;
   analyser.fftSize = 512;
   source.connect(analyser);
+  analyser.connect(silentSink);
+  silentSink.connect(context.destination);
   const samples = new Float32Array(analyser.fftSize);
   let frame = 0;
   const tick = () => {
@@ -264,12 +268,20 @@ function startMicrophoneMeter(track: LocalAudioTrack, onLevel: (level: number) =
     onLevel(Math.min(1, Math.sqrt(sum / samples.length) * 5));
     frame = requestAnimationFrame(tick);
   };
-  void context.resume();
+  await context.resume();
+  if (context.state !== "running") {
+    source.disconnect();
+    analyser.disconnect();
+    silentSink.disconnect();
+    void context.close();
+    throw new Error("Microphone level meter did not start");
+  }
   frame = requestAnimationFrame(tick);
   return () => {
     cancelAnimationFrame(frame);
     source.disconnect();
     analyser.disconnect();
+    silentSink.disconnect();
     void context.close();
   };
 }
