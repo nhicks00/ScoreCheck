@@ -177,8 +177,8 @@ test("headless commentary disables background throttling and proves local media 
     "--disable-renderer-backgrounding"
   ]) assert.match(source, new RegExp(flag));
   assert.match(source, /const localMedia = await verifyLocalMediaCadence\(page\)/u);
-  assert.match(source, /outboundPackets < 1 \|\| outboundBytes < 1/u);
-  assert.match(source, /audioEnergy <= 0 \|\| sampleDurationSeconds < durationMs/u);
+  assert.match(source, /cadence\.outboundPackets < 1 \|\| cadence\.outboundBytes < 1/u);
+  assert.match(source, /cadence\.audioEnergy <= 0 \|\| cadence\.sampleDurationSeconds < durationMs/u);
   assert.match(source, /previewAdvanceSeconds < durationMs \/ 1_000 \* 0\.75/u);
   assert.match(source, /finally \{\s*await browser\?\.close\(\)\.catch/u);
 });
@@ -236,6 +236,25 @@ test("accepts headless meter animation lag when RTP and captured audio energy ad
   assert.equal(result.outboundPackets, 20);
 });
 
+test("accumulates commentary cadence across an in-window peer connection replacement", async () => {
+  let videoSamples = 0;
+  const page = mediaCadencePage({
+    currentTime: () => videoSamples++ * 0.1,
+    microphoneWidth: () => 0,
+    microphoneStats: [
+      stats({ key: "old", packets: 100, bytes: 10_000, energy: 2, durationSeconds: 5 }),
+      stats({ key: "old", packets: 110, bytes: 11_000, energy: 3, durationSeconds: 5.02 }),
+      stats({ key: "new", packets: 5, bytes: 500, energy: 0.2, durationSeconds: 0.01 }),
+      stats({ key: "new", packets: 25, bytes: 2_500, energy: 1.2, durationSeconds: 0.05 })
+    ]
+  });
+  const result = await verifyLocalMediaCadence(page, { durationMs: 40, intervalMs: 10 });
+  assert.equal(result.outboundPackets, 30);
+  assert.equal(result.outboundBytes, 3_000);
+  assert.equal(result.audioEnergy, 2);
+  assert.equal(result.sampleDurationSeconds >= 0.059, true);
+});
+
 test("fails closed when the synthetic microphone is silent despite packet flow", async () => {
   let videoSamples = 0;
   const page = mediaCadencePage({
@@ -259,9 +278,30 @@ function locator({ text }) {
 function mediaCadencePage({ currentTime, microphoneWidth, microphoneStats }) {
   let statSample = 0;
   return {
-    evaluate: async () => microphoneStats[Math.min(statSample++, microphoneStats.length - 1)],
+    evaluate: async () => {
+      const value = microphoneStats[Math.min(statSample++, microphoneStats.length - 1)];
+      return value.outboundReports ? value : stats({
+        key: "stable",
+        packets: value.outboundPackets,
+        bytes: value.outboundBytes,
+        energy: value.totalAudioEnergy,
+        durationSeconds: value.totalSamplesDuration
+      });
+    },
     locator: (selector) => ({
       evaluate: async () => selector === "video" ? currentTime() : microphoneWidth()
     })
+  };
+}
+
+function stats({ key, packets, bytes, energy, durationSeconds }) {
+  return {
+    audioSources: 1,
+    outboundPackets: packets,
+    outboundBytes: bytes,
+    totalAudioEnergy: energy,
+    totalSamplesDuration: durationSeconds,
+    outboundReports: [{ key: `0:${key}-outbound`, packets, bytes }],
+    audioSourceReports: [{ key: `0:${key}-source`, energy, durationSeconds }]
   };
 }

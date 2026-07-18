@@ -719,6 +719,15 @@ remain immediate hard failures. This prevents one transient new-Droplet SSH
 handshake from discarding an otherwise healthy 12-host build without masking a
 real ownership or deployment defect.
 
+Commentary startup evidence is reset-safe across a LiveKit peer-connection
+replacement. The browser samples individual outbound-audio RTP and media-source
+reports throughout the bounded cadence window and accumulates only positive
+deltas for each stable report identity. A removed report is not subtracted and
+a new report establishes a fresh baseline. Readiness still requires advancing
+preview video, outbound audio packets and bytes, nonzero captured-audio energy,
+and at least 75 percent media-sample coverage; meter animation remains supporting
+UI evidence rather than the authoritative audio contract.
+
 The rehearsal YouTube contract is an exact persistent pool named `ScoreCheck
 Court 1 Test Stream` through `ScoreCheck Court 8 Test Stream`. Every member must
 be reusable RTMP, 720p30, idle before admission, unique by provider ID and stream

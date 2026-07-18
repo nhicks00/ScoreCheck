@@ -83,37 +83,67 @@ async function main() {
 async function verifyLocalMediaCadence(page, { durationMs = 8_000, intervalMs = 250 } = {}) {
   const startedAt = Date.now();
   const initialTime = await page.locator("video").evaluate((video) => video.currentTime);
-  const initialMicrophone = await readMicrophoneStats(page);
+  let previousMicrophone = await readMicrophoneStats(page);
+  let finalMicrophone = previousMicrophone;
+  let maximumAudioSources = previousMicrophone.audioSources;
+  const cadence = { outboundPackets: 0, outboundBytes: 0, audioEnergy: 0, sampleDurationSeconds: 0 };
   let movingMicrophoneSamples = 0;
   let samples = 0;
   while (Date.now() - startedAt < durationMs) {
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
     const width = await page.locator(".commentary-live-meter span").evaluate((element) => Number.parseFloat(element.style.width || "0"));
     if (Number.isFinite(width) && width >= 1) movingMicrophoneSamples += 1;
+    finalMicrophone = await readMicrophoneStats(page);
+    const outboundDelta = positiveReportDeltas(previousMicrophone.outboundReports, finalMicrophone.outboundReports, ["packets", "bytes"]);
+    const sourceDelta = positiveReportDeltas(previousMicrophone.audioSourceReports, finalMicrophone.audioSourceReports, ["energy", "durationSeconds"]);
+    cadence.outboundPackets += outboundDelta.packets;
+    cadence.outboundBytes += outboundDelta.bytes;
+    cadence.audioEnergy += sourceDelta.energy;
+    cadence.sampleDurationSeconds += sourceDelta.durationSeconds;
+    maximumAudioSources = Math.max(maximumAudioSources, finalMicrophone.audioSources);
+    previousMicrophone = finalMicrophone;
     samples += 1;
   }
   const finalTime = await page.locator("video").evaluate((video) => video.currentTime);
-  const finalMicrophone = await readMicrophoneStats(page);
   const previewAdvanceSeconds = finalTime - initialTime;
-  const outboundPackets = finalMicrophone.outboundPackets - initialMicrophone.outboundPackets;
-  const outboundBytes = finalMicrophone.outboundBytes - initialMicrophone.outboundBytes;
-  const audioEnergy = finalMicrophone.totalAudioEnergy - initialMicrophone.totalAudioEnergy;
-  const sampleDurationSeconds = finalMicrophone.totalSamplesDuration - initialMicrophone.totalSamplesDuration;
   if (previewAdvanceSeconds < durationMs / 1_000 * 0.75) throw new Error("rehearsal preview cadence did not remain active");
-  if (initialMicrophone.audioSources < 1 || finalMicrophone.audioSources < 1) throw new Error("rehearsal microphone source statistics are unavailable");
-  if (outboundPackets < 1 || outboundBytes < 1) throw new Error("rehearsal microphone did not send audio packets");
-  if (audioEnergy <= 0 || sampleDurationSeconds < durationMs / 1_000 * 0.75) throw new Error("rehearsal microphone cadence did not remain active");
+  if (maximumAudioSources < 1 || finalMicrophone.audioSources < 1) throw cadenceError("rehearsal microphone source statistics are unavailable", cadence, finalMicrophone);
+  if (cadence.outboundPackets < 1 || cadence.outboundBytes < 1) throw cadenceError("rehearsal microphone did not send audio packets", cadence, finalMicrophone);
+  if (cadence.audioEnergy <= 0 || cadence.sampleDurationSeconds < durationMs / 1_000 * 0.75) throw cadenceError("rehearsal microphone cadence did not remain active", cadence, finalMicrophone);
   return {
     durationMs,
     samples,
     movingMicrophoneSamples,
     movingMicrophoneSampleRatio: samples > 0 ? movingMicrophoneSamples / samples : 0,
     previewAdvanceSeconds,
-    outboundPackets,
-    outboundBytes,
-    audioEnergy,
-    sampleDurationSeconds
+    maximumAudioSources,
+    outboundPackets: cadence.outboundPackets,
+    outboundBytes: cadence.outboundBytes,
+    audioEnergy: cadence.audioEnergy,
+    sampleDurationSeconds: cadence.sampleDurationSeconds
   };
+}
+
+function positiveReportDeltas(previousReports, currentReports, fields) {
+  const previous = new Map(previousReports.map((report) => [report.key, report]));
+  return currentReports.reduce((totals, report) => {
+    const prior = previous.get(report.key);
+    for (const field of fields) {
+      const delta = prior ? Number(report[field]) - Number(prior[field]) : 0;
+      if (Number.isFinite(delta) && delta > 0) totals[field] += delta;
+    }
+    return totals;
+  }, Object.fromEntries(fields.map((field) => [field, 0])));
+}
+
+function cadenceError(message, cadence, finalMicrophone) {
+  const evidence = {
+    audioSources: finalMicrophone.audioSources,
+    outboundReports: finalMicrophone.outboundReports.length,
+    audioSourceReports: finalMicrophone.audioSourceReports.length,
+    ...cadence
+  };
+  return new Error(`${message} (${JSON.stringify(evidence)})`);
 }
 
 async function installPeerConnectionTracker(context) {
@@ -136,19 +166,33 @@ async function readMicrophoneStats(page) {
     const connections = Array.isArray(window.__scorecheckRehearsalPeerConnections)
       ? window.__scorecheckRehearsalPeerConnections
       : [];
-    const result = { audioSources: 0, outboundPackets: 0, outboundBytes: 0, totalAudioEnergy: 0, totalSamplesDuration: 0 };
-    for (const connection of connections) {
+    const result = {
+      audioSources: 0,
+      outboundPackets: 0,
+      outboundBytes: 0,
+      totalAudioEnergy: 0,
+      totalSamplesDuration: 0,
+      outboundReports: [],
+      audioSourceReports: []
+    };
+    for (const [connectionIndex, connection] of connections.entries()) {
       const reports = await connection.getStats();
       for (const report of reports.values()) {
         const kind = report.kind ?? report.mediaType;
         if (report.type === "outbound-rtp" && kind === "audio" && report.isRemote !== true) {
-          result.outboundPackets += Number(report.packetsSent ?? 0);
-          result.outboundBytes += Number(report.bytesSent ?? 0);
+          const packets = Number(report.packetsSent ?? 0);
+          const bytes = Number(report.bytesSent ?? 0);
+          result.outboundPackets += packets;
+          result.outboundBytes += bytes;
+          result.outboundReports.push({ key: `${connectionIndex}:${report.id}`, packets, bytes });
         }
         if (report.type === "media-source" && kind === "audio") {
+          const energy = Number(report.totalAudioEnergy ?? 0);
+          const durationSeconds = Number(report.totalSamplesDuration ?? 0);
           result.audioSources += 1;
-          result.totalAudioEnergy += Number(report.totalAudioEnergy ?? 0);
-          result.totalSamplesDuration += Number(report.totalSamplesDuration ?? 0);
+          result.totalAudioEnergy += energy;
+          result.totalSamplesDuration += durationSeconds;
+          result.audioSourceReports.push({ key: `${connectionIndex}:${report.id}`, energy, durationSeconds });
         }
       }
     }
