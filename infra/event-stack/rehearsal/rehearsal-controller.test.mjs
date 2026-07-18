@@ -108,6 +108,10 @@ function harness({ failPublisherOnce = false, failPreflight = false, failFullEvi
       return { healthy: true };
     },
     waitForRaw: async () => ({ healthy: true }),
+    waitForProgramSubscriber: async ({ court }) => {
+      log.push(`program-subscriber:${court}`);
+      return { passed: true, court, stableSamples: 2 };
+    },
     waitForFull: async () => {
       if (failFullEvidence) {
         const error = new Error("intentional full-chain stabilization failure");
@@ -151,7 +155,8 @@ test("runs the full isolated rehearsal and retains every persistent stream by ex
   assert.equal(summary.activeProviderStreams, 8);
   assert.ok(log.indexOf("publisher-prepare:8") < log.indexOf("publisher-start:1"));
   assert.ok(log.indexOf("egress-start:1") < log.indexOf("youtube-active:stream1"));
-  assert.ok(log.indexOf("youtube-active:stream1") < log.indexOf("commentary-start:1"));
+  assert.ok(log.indexOf("youtube-active:stream1") < log.indexOf("program-subscriber:1"));
+  assert.ok(log.indexOf("program-subscriber:1") < log.indexOf("commentary-start:1"));
   assert.ok(log.indexOf("commentary-start:1") < log.indexOf("egress-start:2"));
   await controller.soak({ manifest, lifecycleState: lifecycle, evidenceDirectory: "/tmp/rehearsal-evidence", durationMs: 1_800_000 });
   await controller.stop({ manifest, lifecycleState: lifecycle });

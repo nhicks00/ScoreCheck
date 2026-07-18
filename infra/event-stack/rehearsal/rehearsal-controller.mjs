@@ -147,6 +147,8 @@ export class RehearsalController {
           const activeStream = await this.youtube.waitForStream({ streamId: courtState.stream.id, streamStatus: "active" });
           courtState.stream = { ...courtState.stream, ...activeStream };
           await this.store.save(state);
+          courtState.programSubscriber = await this.verifier.waitForProgramSubscriber({ court });
+          await this.store.save(state);
 
           // Wait for the empty-room program pipeline to reach its destination
           // before publishing synthetic commentary. LiveKit may pause an

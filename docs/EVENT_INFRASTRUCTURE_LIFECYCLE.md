@@ -724,8 +724,10 @@ real ownership or deployment defect.
 
 For each court, the controller starts Egress and waits for the empty-room program
 pipeline to reach its persistent YouTube destination before it starts the
-synthetic commentator. This guarantees that LiveKit has a program subscriber
-before the microphone publication begins. Commentary readiness then requires
+synthetic commentator. It then requires two fresh monitor heartbeats proving
+that the actual program browser is playing with exactly one reader and is
+connected to its LiveKit commentary room. This guarantees that LiveKit has a
+program subscriber before the microphone publication begins. Commentary readiness then requires
 advancing preview video, a live microphone sender and source, at least 75 percent
 positive microphone-meter coverage, and sustained outbound RTP, captured-audio
 duration, and nonzero audio energy throughout the eight-second cadence window.

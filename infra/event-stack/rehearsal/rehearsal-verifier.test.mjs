@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { browserQualityDeltaProblems, RehearsalVerifier, fullCurrentProblems, fullProblems, idleProblems, preflightProblems, providerProblems, rawProblems } from "./rehearsal-verifier.mjs";
+import { browserQualityDeltaProblems, RehearsalVerifier, fullCurrentProblems, fullProblems, idleProblems, preflightProblems, programSubscriberProblems, providerProblems, rawProblems } from "./rehearsal-verifier.mjs";
 
 const now = Date.parse("2026-07-15T12:00:00Z");
 
@@ -107,6 +107,38 @@ test("reports a missing agent host snapshot without throwing", () => {
 
 test("accepts all eight protocol-correct raw camera feeds", () => {
   assert.deepEqual(rawProblems(snapshot("raw"), now), []);
+});
+
+test("requires the actual program browser commentary-room subscriber before microphone publication", async () => {
+  const value = snapshot("full");
+  value.courts[0].browser.commentary.participantCount = 0;
+  value.courts[0].browser.commentary.audioTrackCount = 0;
+  value.courts[0].browser.commentary.rmsDb = null;
+  value.courts[0].browser.commentary.secondsSinceAudio = null;
+  assert.deepEqual(programSubscriberProblems(value, now, 1), []);
+
+  value.courts[0].browser.commentary.roomConnected = false;
+  assert.match(programSubscriberProblems(value, now, 1).join("; "), /not connected to its commentary room/u);
+
+  value.courts[0].browser.commentary.roomConnected = true;
+  let current = now;
+  let fetches = 0;
+  const verifier = new RehearsalVerifier({
+    monitorOrigin: "https://monitor.example.com",
+    monitorToken: "x".repeat(24),
+    youtube: null,
+    sampler: null,
+    fetchImpl: async () => {
+      fetches += 1;
+      return new Response(JSON.stringify({ ...value, generatedAt: new Date(current).toISOString(), courts: value.courts.map((court) => court.courtNumber === 1 ? { ...court, browser: { ...court.browser, receivedAt: new Date(current).toISOString() } } : court) }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+    sleep: async (ms) => { current += ms; },
+    now: () => current
+  });
+  const evidence = await verifier.waitForProgramSubscriber({ court: 1 });
+  assert.equal(evidence.passed, true);
+  assert.equal(evidence.stableSamples, 2);
+  assert.equal(fetches, 2);
 });
 
 test("hard-cuts raw audio telemetry to the monitor AAC label", () => {

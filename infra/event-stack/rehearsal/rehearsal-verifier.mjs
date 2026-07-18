@@ -29,6 +29,15 @@ export class RehearsalVerifier {
     return this.#wait("eight raw camera paths", rawProblems, { stableSamples: 3, timeoutMs: 120_000 });
   }
 
+  async waitForProgramSubscriber({ court }) {
+    if (!COURTS.includes(court)) throw new Error("program subscriber court is invalid");
+    return this.#wait(
+      `Camera ${court} program subscriber`,
+      (snapshot, nowMs) => programSubscriberProblems(snapshot, nowMs, court),
+      { stableSamples: 2, timeoutMs: 60_000 }
+    );
+  }
+
   async waitForFull({ state }) {
     const result = await this.#waitForStableFull({ stableSamples: 6, timeoutMs: 240_000 });
     const provider = await this.#providerEvidence(state);
@@ -225,6 +234,44 @@ export function rawProblems(snapshot, nowMs = Date.now()) {
       || path?.audioSampleRateHz !== 48_000 || path?.audioChannelCount !== 2) {
       problems.push(`Camera ${court} raw codec/profile is not the rehearsal H264 Main 720p/AAC 48kHz stereo contract`);
     }
+  }
+  return unique(problems);
+}
+
+export function programSubscriberProblems(snapshot, nowMs = Date.now(), court) {
+  const problems = commonProblems(snapshot, nowMs);
+  if (!COURTS.includes(court)) return unique([...problems, "program subscriber court is invalid"]);
+  const value = courtByNumber(snapshot, court, problems);
+  if (!value) return unique(problems);
+  const program = value.paths?.program;
+  if (!program?.ready || program.readerCount !== 1 || (program.inboundBitrateBps ?? 0) <= 0 || program.frameErrors !== 0) {
+    problems.push(`Camera ${court} program path does not have exactly one healthy browser reader`);
+  }
+  const ffmpeg = value.ffmpeg?.program;
+  if (!ffmpeg || (ffmpeg.framesPerSecond ?? 0) < 29 || ffmpeg.framesPerSecond > 31
+    || ffmpeg.droppedFrames !== 0 || ffmpeg.duplicatedFrames !== 0
+    || (ffmpeg.speedRatio ?? 0) < 0.95 || ffmpeg.speedRatio > 1.05) {
+    problems.push(`Camera ${court} program FFmpeg is outside 30fps/zero-drop/realtime bounds (${ffmpegSummary(ffmpeg)})`);
+  }
+  const browser = value.browser;
+  const browserAge = browser ? nowMs - Date.parse(browser.receivedAt) : Infinity;
+  if (!browser || browserAge < 0 || browserAge > 15_000
+    || browser.video?.state !== "playing" || browser.video?.connectionState !== "connected" || browser.video?.transport !== "whep") {
+    problems.push(`Camera ${court} program browser heartbeat is not fresh and playing over WHEP`);
+  } else {
+    if (BROWSER_COUNTER_FIELDS.some((field) => !Number.isFinite(browser.video[field]) || browser.video[field] !== 0)) {
+      problems.push(`Camera ${court} program browser quality counters are not clean`);
+    }
+    if (!browser.commentary?.configured || !browser.commentary.roomConnected || !browser.commentary.cameraTrackPresent) {
+      problems.push(`Camera ${court} program browser is not connected to its commentary room`);
+    }
+  }
+  const agent = (snapshot.agents ?? []).find((entry) => entry.role === "compositor" && entry.assignedCourts?.includes(court));
+  const egress = agent?.nativeServices?.egress;
+  if (!agent || agent.state !== "HEALTHY" || !egress || egress.idle || egress.activeWebRequests !== 1
+    || egress.maximumWebRequests !== 1 || egress.canAcceptRequest
+    || (egress.cpuLoadRatio ?? 1) >= 0.85 || (egress.memoryLoadRatio ?? 1) >= 0.85) {
+    problems.push(`Camera ${court} compositor does not show exactly one healthy admitted Egress with headroom`);
   }
   return unique(problems);
 }
