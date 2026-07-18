@@ -22,6 +22,10 @@ ORPHANED_HEALTHCHECK_COMMANDS = {
     "healthcheck.mediamtx": "wget",
     "healthcheck.redis": "redis-cli",
 }
+MONITOR_CONTENT_WORKLOAD_COMMANDS = {
+    "ffprobe": "workload.monitor-content-probe",
+    "ffmpeg": "workload.monitor-content-analyzer",
+}
 
 
 def utc_now():
@@ -224,6 +228,19 @@ def classification_map(processes, retained_healthcheck_shims=None):
             parent_pid = parent["ppid"]
 
     for process in processes.values():
+        parent = processes.get(process["ppid"])
+        monitor_content_classification = MONITOR_CONTENT_WORKLOAD_COMMANDS.get(
+            process["command"]
+        )
+        if (
+            monitor_content_classification is not None
+            and parent is not None
+            and (parent.get("commandLine") or b"").strip() == b"node dist/agent.js"
+            and process.get("cgroupFingerprint") is not None
+            and process.get("cgroupFingerprint") == parent.get("cgroupFingerprint")
+        ):
+            classifications[process["identity"]] = monitor_content_classification
+
         workload_classification = {
             ("chrome", "egress"): "workload.egress-chrome",
             ("chrome", "chrome"): "workload.egress-chrome",
@@ -521,6 +538,12 @@ def self_test():
         120: {"pid": 120, "ppid": 100, "identity": "120:12", "command": "pactl", "parentCommand": "egress", "commandLine": b"", "cgroupFingerprint": "other"},
         130: {"pid": 130, "ppid": 20, "identity": "130:13", "command": "pactl", "parentCommand": "chrome", "commandLine": b"", "cgroupFingerprint": "egress"},
         140: {"pid": 140, "ppid": 100, "identity": "140:14", "command": "gst-plugin-scan", "parentCommand": "egress", "commandLine": b"gst-plugin-scanner", "cgroupFingerprint": "egress"},
+        150: {"pid": 150, "ppid": 1, "identity": "150:15", "command": "node", "parentCommand": "containerd-shim", "commandLine": b"node dist/agent.js", "cgroupFingerprint": "monitor-agent"},
+        151: {"pid": 151, "ppid": 150, "identity": "151:16", "command": "ffprobe", "parentCommand": "node", "commandLine": b"", "cgroupFingerprint": "monitor-agent"},
+        152: {"pid": 152, "ppid": 150, "identity": "152:17", "command": "ffmpeg", "parentCommand": "node", "commandLine": b"", "cgroupFingerprint": "monitor-agent"},
+        153: {"pid": 153, "ppid": 150, "identity": "153:18", "command": "ffprobe", "parentCommand": "node", "commandLine": b"", "cgroupFingerprint": "other"},
+        160: {"pid": 160, "ppid": 1, "identity": "160:19", "command": "node", "parentCommand": "containerd-shim", "commandLine": b"node worker.js", "cgroupFingerprint": "other-agent"},
+        161: {"pid": 161, "ppid": 160, "identity": "161:20", "command": "ffprobe", "parentCommand": "node", "commandLine": b"", "cgroupFingerprint": "other-agent"},
     }
     classifications = classification_map(processes)
     assert classifications["20:2"] == "workload.egress-chrome"
@@ -534,6 +557,10 @@ def self_test():
     assert "120:12" not in classifications
     assert "130:13" not in classifications
     assert classifications["140:14"] == "workload.egress-gst-plugin-scan"
+    assert classifications["151:16"] == "workload.monitor-content-probe"
+    assert classifications["152:17"] == "workload.monitor-content-analyzer"
+    assert "153:18" not in classifications
+    assert "161:20" not in classifications
 
     mediamtx_init = {
         200: {"pid": 200, "ppid": 1, "identity": "200:20", "command": "containerd-shim", "parentCommand": "systemd", "commandLine": b"containerd-shim-runc-v2", "cgroupFingerprint": "host"},
