@@ -15,7 +15,7 @@ import { RehearsalController, RehearsalFileStateStore, rehearsalSummary } from "
 import { RehearsalSoakEvaluator, sealRehearsalEvidence } from "./rehearsal-evidence.mjs";
 import { buildRehearsalVercelEnvironment, completeAgentSecrets, createRehearsalSecretMaterial, loadProtectedSecretMaterial, renderRehearsalSecretDirectory } from "./rehearsal-secrets.mjs";
 import { RehearsalVerifier } from "./rehearsal-verifier.mjs";
-import { SyntheticPublisherManager, buildSyntheticPublisherConfig } from "./synthetic-publishers.mjs";
+import { SpareHostSyntheticPublisherManager, buildSpareHostSyntheticPublisherConfig, sparePublisherHost } from "./spare-host-synthetic-publishers.mjs";
 import { VercelRehearsalProvider } from "./vercel-provider.mjs";
 import { YouTubeRehearsalProvider } from "./youtube-provider.mjs";
 
@@ -48,7 +48,7 @@ async function main() {
     ? inertDependencies()
     : options.command === "cleanup"
       ? providerCleanupDependencies(environment)
-      : runtimeDependencies({ profile, manifest, material, environment });
+      : runtimeDependencies({ profile, manifest, lifecycleState, material, environment });
   const controller = new RehearsalController({ store, ...dependencies });
   let result;
   if (options.command === "plan") result = await controller.plan({ manifest, lifecycleState });
@@ -70,7 +70,7 @@ async function main() {
   process.stdout.write(`${JSON.stringify(result.phase ? rehearsalSummary(result) : result, null, 2)}\n`);
 }
 
-function runtimeDependencies({ profile, manifest, material, environment }) {
+function runtimeDependencies({ profile, manifest, lifecycleState, material, environment }) {
   const youtube = new YouTubeRehearsalProvider({
     clientId: requiredEnvironment(environment, "YOUTUBE_CLIENT_ID"),
     clientSecret: requiredEnvironment(environment, "YOUTUBE_CLIENT_SECRET"),
@@ -80,7 +80,12 @@ function runtimeDependencies({ profile, manifest, material, environment }) {
     token: requiredEnvironment(environment, "VERCEL_TOKEN"),
     teamId: requiredEnvironment(environment, "VERCEL_TEAM_ID")
   });
-  const publishers = new SyntheticPublisherManager();
+  const source = sparePublisherHost(manifest, lifecycleState);
+  const publishers = new SpareHostSyntheticPublisherManager({
+    sourceHost: source.host,
+    sshKey: profile.sshKey,
+    knownHosts: profile.knownHosts
+  });
   const commentary = new CommentaryClientManager();
   const egress = new EgressRuntime({ sshKey: profile.sshKey, knownHosts: profile.knownHosts });
   const sampler = new PoolSamplerRuntime({ repoRoot: REPO_ROOT, sshKey: profile.sshKey, knownHosts: profile.knownHosts });
@@ -105,10 +110,12 @@ function runtimeDependencies({ profile, manifest, material, environment }) {
     sealEvidence: sealRehearsalEvidence,
     renderSecrets: renderRehearsalSecretDirectory,
     programEnvironment: buildRehearsalVercelEnvironment,
-    publisherConfiguration: ({ court, state, evidenceDirectory }) => buildSyntheticPublisherConfig({
+    publisherConfiguration: ({ court, state, evidenceDirectory }) => buildSpareHostSyntheticPublisherConfig({
       court,
       generationId: state.generationId,
       host: endpointForRole(manifest, "ingest"),
+      sourceHost: source.host,
+      sourceProviderName: source.providerName,
       user: material.publishers[court].user,
       password: material.publishers[court].password,
       evidenceDirectory,

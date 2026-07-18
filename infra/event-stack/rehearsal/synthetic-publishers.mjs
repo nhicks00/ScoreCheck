@@ -7,11 +7,13 @@ import { fileURLToPath } from "node:url";
 const COURTS = Object.freeze(Array.from({ length: 8 }, (_, index) => index + 1));
 const MARKER = /^scorecheck-rehearsal-[a-zA-Z0-9-]{8,80}-camera-[1-8]$/;
 const FIXTURE_DURATION_SECONDS = 12;
-// Eight 720p30 sources originate from the operator workstation during a
-// rehearsal. Keep their aggregate video load at 10 Mbps so source-side WAN
-// contention cannot masquerade as an ingest/compositor failure. Resolution
-// and cadence still exercise the complete eight-court decode/Egress path.
+// Keep the eight 720p30 rehearsal sources at an aggregate 10 Mbps. Their
+// fixtures are encoded before qualification and their stream-copy loops run on
+// the manifest-owned warm spare, so operator workstation/Wi-Fi contention
+// cannot masquerade as an ingest/compositor failure. Resolution and cadence
+// still exercise the complete eight-court decode/Egress path.
 const FIXTURE_VIDEO_BITRATE_KBPS = 1_250;
+const SRT_INPUT_BANDWIDTH_BYTES_PER_SECOND = 200_000;
 const PROGRESS_FRESHNESS_MS = 5_000;
 const SUPERVISOR_FRESHNESS_MS = 5_000;
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
@@ -50,7 +52,7 @@ export function buildSyntheticPublisherConfig({ court, generationId, host, user,
   const workerPath = resolve(SCRIPT_DIRECTORY, "synthetic-publisher-worker.cjs");
   const outputUrl = protocol === "RTMP"
     ? `rtmp://${host}:1935/court${court}_raw?user=${encodeURIComponent(user)}&pass=${encodeURIComponent(password)}`
-    : `srt://${host}:8890?mode=caller&streamid=publish:court${court}_raw:${user}:${password}&pkt_size=1316&latency=2500000&timeout=10000000&connect_timeout=5000&linger=0`;
+    : `srt://${host}:8890?mode=caller&transtype=live&tlpktdrop=1&streamid=publish:court${court}_raw:${user}:${password}&pkt_size=1316&latency=500000&maxbw=0&inputbw=${SRT_INPUT_BANDWIDTH_BYTES_PER_SECOND}&oheadbw=50&timeout=10000000&connect_timeout=5000&linger=0`;
   const hue = (court - 1) * 45;
   const tone = 330 + court * 55;
   const fixtureArgs = [

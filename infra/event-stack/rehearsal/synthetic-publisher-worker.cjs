@@ -72,6 +72,7 @@ async function main() {
   await launch();
   while (!closing) {
     await sleep(POLL_MS);
+    if (closing) break;
     let progressMtimeMs = null;
     let progressMissing = false;
     if (!childExit && Date.now() - launchedAtMs > STARTUP_GRACE_MS) {
@@ -91,6 +92,7 @@ async function main() {
     lastFailure = failure.slice(0, 240);
     await writeStatus("restarting");
     await stopChild();
+    if (closing) break;
     if (restartCount >= MAX_RESTARTS) {
       await writeStatus("failed");
       throw new Error(`synthetic publisher exhausted ${MAX_RESTARTS} restarts: ${lastFailure}`);
@@ -98,6 +100,7 @@ async function main() {
     restartCount += 1;
     lastRestartAt = new Date().toISOString();
     await sleep(1_000);
+    if (closing) break;
     await launch();
   }
 }

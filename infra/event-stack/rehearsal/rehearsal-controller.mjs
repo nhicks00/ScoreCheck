@@ -98,6 +98,12 @@ export class RehearsalController {
       await this.store.save(state);
       try {
         await this.verifier.preflight({ manifest, lifecycleState, state: structuredClone(state) });
+        const publisherConfigurations = Object.fromEntries(COURTS.map((court) => [court, this.publisherConfiguration({ manifest, material, court, state, evidenceDirectory })]));
+        await this.publishers.preflight(publisherConfigurations[1].ffmpegPath);
+        // Complete local fixture encoding, pinned source-image acquisition, and
+        // spare-host staging before host sampling starts. Qualification evidence
+        // must describe the media workload, not setup I/O.
+        for (const court of COURTS) await this.publishers.prepare(publisherConfigurations[court]);
         if (!state.sampler) {
           state.sampler = { status: "starting", output: `${resolve(evidenceDirectory)}/pool-host-samples.jsonl` };
           await this.store.save(state);
@@ -105,12 +111,6 @@ export class RehearsalController {
         state.sampler = await this.sampler.ensure({ manifest, lifecycleState, state: structuredClone(state), evidenceDirectory });
         await this.store.save(state);
 
-        const publisherConfigurations = Object.fromEntries(COURTS.map((court) => [court, this.publisherConfiguration({ manifest, material, court, state, evidenceDirectory })]));
-        await this.publishers.preflight(publisherConfigurations[1].ffmpegPath);
-        // Fixture encoding is intentionally completed before the first live
-        // publisher starts. Encoding later fixtures while RTMP is active can
-        // starve the earliest publisher and trigger MediaMTX's read timeout.
-        for (const court of COURTS) await this.publishers.prepare(publisherConfigurations[court]);
         for (const court of COURTS) {
           const courtState = state.courts[court];
           const configuration = publisherConfigurations[court];
@@ -229,7 +229,7 @@ export class RehearsalController {
         for (const court of [...COURTS].reverse()) {
           const courtState = state.courts[court];
           if (courtState.publisher?.marker) {
-            await this.publishers.stop({ marker: courtState.publisher.marker });
+            await this.publishers.stop(courtState.publisher);
             courtState.publisher.status = "stopped";
             await this.store.save(state);
           }

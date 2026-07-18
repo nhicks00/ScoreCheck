@@ -575,8 +575,9 @@ node --test infra/event-stack/*.test.mjs
 The live 12-server rehearsal bundle is generated once and contains the exact
 runner executable and argument array in `operator.command` and `operator.args`.
 It points to the GitHub owner/repository slug,
-numeric repository ID, exact tested Git ref and 40-character commit SHA, and the local executables
-used for the eight synthetic publishers and LiveKit verification:
+numeric repository ID, exact tested Git ref and 40-character commit SHA, and the
+local executables used to encode the protected synthetic fixtures and perform
+LiveKit verification:
 
 ```bash
 node infra/event-stack/create-event-bundle.mjs create \
@@ -603,6 +604,42 @@ invocation. That runner owns plan, prepare, provision, explicit start, 30-minute
 ordered output cleanup, evidence sealing, and exact infrastructure teardown. A
 failure enters the bounded recovery plan and leaves a protected report; it does
 not silently skip cleanup.
+
+During the full rehearsal, the eight 720p30 synthetic source loops run on the
+single manifest-owned warm-spare compositor. This does not add a thirteenth
+Droplet or alter the production pool shape. The controller encodes fixtures
+locally, pulls one digest-pinned MediaMTX FFmpeg image, and stages the fixtures
+before host sampling begins. It then starts one exact transient systemd/Docker
+unit per camera on the spare, publishes through the public rehearsal ingest
+hostname, and fails qualification on any missing source, restart, stale
+progress, cadence outside 29-31 fps, non-realtime speed, dropped frame, or
+duplicated frame. Source credentials live only in protected mode-0600 files;
+they are not placed in service names or process arguments. Source units and
+their generation directory are removed before infrastructure teardown.
+
+This source placement removes the operator laptop and venue Wi-Fi from the
+DigitalOcean media-capacity result. It does not qualify the venue uplink,
+router, Speedify path, or physical cameras. Those remain a separate pre-event
+connectivity gate using the actual venue network.
+
+Before provisioning and again after exact teardown, run the independent
+provider-zero audit into a new protected mode-0600 evidence file:
+
+```bash
+node infra/event-stack/audit-provider-zero.mjs \
+  --event next-event-full-rehearsal \
+  --credentials-env /absolute/protected/provider.env \
+  --anchors /absolute/protected/endpoint-anchors.json \
+  --zone beachvolleyballmedia.com \
+  --output /absolute/protected/provider-zero-audit.json
+```
+
+Admission and teardown are not complete unless this independent inventory
+proves an active account with capacity for 12 Droplets, zero Droplets, exactly
+two unassigned persistent endpoint Reserved IPv4s, zero ScoreCheck snapshots,
+zero event tags, zero rehearsal Vercel projects/DNS, zero volumes when that
+least-privilege API is readable, and the exact eight persistent YouTube test
+streams idle with no configuration issues.
 
 The isolated live canary uses one unique nonproduction hostname and tag. It does
 not use a production endpoint or select an existing Droplet. It performs:

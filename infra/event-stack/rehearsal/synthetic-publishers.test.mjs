@@ -29,6 +29,12 @@ test("builds visibly distinct 720p30 publishers with a resumable process marker"
   assert.equal(config.args[config.args.indexOf("-stream_loop") + 1], "-1");
   assert.equal(config.args[config.args.indexOf("-rw_timeout") + 1], "10000000");
   assert.match(config.outputUrl, /timeout=10000000/u);
+  assert.match(config.outputUrl, /transtype=live/u);
+  assert.match(config.outputUrl, /tlpktdrop=1/u);
+  assert.match(config.outputUrl, /latency=500000/u);
+  assert.match(config.outputUrl, /maxbw=0/u);
+  assert.match(config.outputUrl, /inputbw=200000/u);
+  assert.match(config.outputUrl, /oheadbw=50/u);
   assert.match(config.workerPath, /synthetic-publisher-worker\.cjs$/u);
   assert.equal(config.protectedSupervisorConfiguration.ffmpegArgs, config.args);
   assert.match(config.supervisorConfigPath, /\/runtime\/camera-8\.supervisor\.json$/u);
