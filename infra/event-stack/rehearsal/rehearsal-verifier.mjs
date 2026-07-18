@@ -3,6 +3,8 @@ import { setTimeout as delay } from "node:timers/promises";
 const COURTS = Object.freeze(Array.from({ length: 8 }, (_, index) => index + 1));
 const BROWSER_IDENTITY_FIELDS = Object.freeze(["credentialId", "pageLoadedAt", "pageBuildVersion", "configurationVersion"]);
 const BROWSER_COUNTER_FIELDS = Object.freeze(["framesDropped", "freezeCount", "totalFreezesDurationMs", "packetsLost", "reconnectCount", "reloadCount"]);
+const MAX_FUTURE_CLOCK_SKEW_MS = 5_000;
+const MAX_MONITOR_AGE_MS = 15_000;
 
 export class RehearsalStabilizationError extends Error {
   constructor(label, evidence) {
@@ -264,7 +266,7 @@ export function programSubscriberProblems(snapshot, nowMs = Date.now(), court) {
   }
   const browser = value.browser;
   const browserAge = browser ? nowMs - Date.parse(browser.receivedAt) : Infinity;
-  if (!browser || browserAge < 0 || browserAge > 15_000
+  if (!browser || !isFreshTimestampAge(browserAge)
     || browser.video?.state !== "playing" || browser.video?.connectionState !== "connected" || browser.video?.transport !== "whep") {
     problems.push(`Camera ${court} program browser heartbeat is not fresh and playing over WHEP`);
   } else {
@@ -316,7 +318,7 @@ function fullProblemsInternal(snapshot, nowMs, requireZeroBrowserHistory) {
     }
     const browser = value.browser;
     const browserAge = browser ? nowMs - Date.parse(browser.receivedAt) : Infinity;
-    if (!browser || browserAge < 0 || browserAge > 15_000 || browser.video?.state !== "playing" || browser.video?.connectionState !== "connected" || browser.video?.transport !== "whep") {
+    if (!browser || !isFreshTimestampAge(browserAge) || browser.video?.state !== "playing" || browser.video?.connectionState !== "connected" || browser.video?.transport !== "whep") {
       problems.push(`Camera ${court} browser heartbeat is not fresh and playing over WHEP`);
     } else {
       const countersInvalid = BROWSER_COUNTER_FIELDS.some((field) => !Number.isFinite(browser.video[field]) || browser.video[field] < 0);
@@ -403,7 +405,7 @@ export function idleProblems(snapshot, nowMs = Date.now()) {
 function commonProblems(snapshot, nowMs) {
   const problems = [];
   const generatedAge = nowMs - Date.parse(snapshot?.generatedAt);
-  if (!Number.isFinite(generatedAge) || generatedAge < 0 || generatedAge > 15_000) problems.push("monitor snapshot is stale");
+  if (!isFreshTimestampAge(generatedAge)) problems.push("monitor snapshot is stale");
   if (snapshot?.collector?.agentsExpected !== 12 || snapshot?.collector?.agentsFresh !== 12) problems.push("monitor does not have all 12 rehearsal agents fresh");
   if (!Array.isArray(snapshot?.agents) || snapshot.agents.length !== 12 || snapshot.agents.some((agent) => agent.state !== "HEALTHY")) problems.push("one or more rehearsal agents are unhealthy");
   for (const agent of snapshot?.agents ?? []) {
@@ -416,6 +418,10 @@ function commonProblems(snapshot, nowMs) {
   if ((snapshot?.faultGates ?? []).length !== 0) problems.push("rehearsal monitor has an armed fault gate");
   if (!Array.isArray(snapshot?.courts) || snapshot.courts.length !== 8) problems.push("monitor snapshot does not contain exactly eight cameras");
   return problems;
+}
+
+function isFreshTimestampAge(ageMs) {
+  return Number.isFinite(ageMs) && ageMs >= -MAX_FUTURE_CLOCK_SKEW_MS && ageMs <= MAX_MONITOR_AGE_MS;
 }
 
 function courtByNumber(snapshot, court, problems) {

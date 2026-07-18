@@ -159,6 +159,25 @@ test("accepts the exact normalization, commentary-preview, and program reader to
   assert.deepEqual(fullProblems(snapshot("full"), now), []);
 });
 
+test("tolerates bounded monitor and browser clock skew while rejecting invalid or excessive future timestamps", () => {
+  const value = snapshot("full");
+  value.generatedAt = new Date(now + 5_000).toISOString();
+  for (const court of value.courts) court.browser.receivedAt = new Date(now + 5_000).toISOString();
+  assert.deepEqual(fullCurrentProblems(value, now), []);
+  assert.deepEqual(programSubscriberProblems(value, now, 1), []);
+
+  value.generatedAt = new Date(now + 5_001).toISOString();
+  assert.match(fullCurrentProblems(value, now).join("; "), /monitor snapshot is stale/);
+
+  value.generatedAt = new Date(now).toISOString();
+  value.courts[0].browser.receivedAt = new Date(now + 5_001).toISOString();
+  assert.match(fullCurrentProblems(value, now).join("; "), /Camera 1 browser heartbeat is not fresh/);
+  assert.match(programSubscriberProblems(value, now, 1).join("; "), /Camera 1 program browser heartbeat is not fresh/);
+
+  value.courts[0].browser.receivedAt = "not-a-timestamp";
+  assert.match(fullCurrentProblems(value, now).join("; "), /Camera 1 browser heartbeat is not fresh/);
+});
+
 test("detects viewer, commentary, reader, FFmpeg, and headroom defects", () => {
   const value = snapshot("full");
   value.courts[0].paths.program.readerCount = 2;
