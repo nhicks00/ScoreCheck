@@ -215,6 +215,7 @@ test("uses a reset-safe quality window while preserving historical startup count
       }
       value.courts[1].browser.video.freezeCount = 1;
       value.courts[1].browser.video.totalFreezesDurationMs = 200;
+      value.courts[1].browser.commentary.packetsLost = 1;
       value.generatedAt = new Date(current).toISOString();
       sequence += 1;
       return new Response(JSON.stringify(value), { status: 200, headers: { "content-type": "application/json" } });
@@ -236,6 +237,8 @@ test("uses a reset-safe quality window while preserving historical startup count
   assert.equal(result.stableSamples, 6);
   assert.equal(result.qualityWindow.baseline[1].freezeCount, 1);
   assert.equal(result.qualityWindow.endpoint[1].freezeCount, 1);
+  assert.equal(result.qualityWindow.baseline[1].commentaryPacketsLost, 1);
+  assert.equal(result.qualityWindow.endpoint[1].commentaryPacketsLost, 1);
   assert.deepEqual(result.problems, []);
 });
 
@@ -278,10 +281,12 @@ test("rejects browser counter growth and identity or heartbeat discontinuity", (
   after.courts[0].browser.video.framesDropped += 1;
   after.courts[1].browser.pageLoadedAt = new Date(now).toISOString();
   after.courts[2].browser.heartbeatSeq -= 1;
+  after.courts[3].browser.commentary.packetsLost += 1;
   const problems = browserQualityDeltaProblems(before, after).join("; ");
   assert.match(problems, /Camera 1 browser framesDropped changed/);
   assert.match(problems, /Camera 2 browser pageLoadedAt changed/);
   assert.match(problems, /Camera 3 browser heartbeat sequence did not advance/);
+  assert.match(problems, /Camera 4 commentary packetsLost changed/);
 });
 
 test("uses reset-safe rendered-frame deltas instead of quantized point-in-time browser FPS", () => {
@@ -305,7 +310,9 @@ test("keeps strict point-in-time checks while current health tolerates flat star
   const value = snapshot("full");
   value.courts[0].browser.video.freezeCount = 1;
   value.courts[0].browser.video.totalFreezesDurationMs = 200;
+  value.courts[0].browser.commentary.packetsLost = 1;
   assert.match(fullProblems(value, now).join("; "), /browser quality counters are not clean/);
+  assert.match(fullProblems(value, now).join("; "), /commentary\/audio synchronization is not healthy/);
   assert.deepEqual(fullCurrentProblems(value, now), []);
 });
 

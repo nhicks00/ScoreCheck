@@ -326,9 +326,11 @@ function fullProblemsInternal(snapshot, nowMs, requireZeroBrowserHistory) {
       const pointFpsInvalid = !Number.isFinite(browser.video.framesPerSecond) || browser.video.framesPerSecond < 0 || browser.video.framesPerSecond > 120;
       if (pointFpsInvalid || countersInvalid || historyNotClean) problems.push(`Camera ${court} browser quality counters are not clean`);
       const commentary = browser.commentary;
-      const syncGapMs = commentary.targetDelayMs === null || commentary.appliedDelayMs === null ? Infinity : Math.abs(commentary.targetDelayMs - commentary.appliedDelayMs);
-      if (!commentary.configured || !commentary.roomConnected || commentary.participantCount < 1 || commentary.audioTrackCount < 1 || commentary.mutedAudioTrackCount !== 0
-        || commentary.rmsDb === null || (commentary.secondsSinceAudio ?? Infinity) > 5 || commentary.packetsLost !== 0 || (commentary.clippedSampleRatio ?? 0) > 0.05
+      const syncGapMs = commentary?.targetDelayMs === null || commentary?.appliedDelayMs === null ? Infinity : Math.abs(commentary?.targetDelayMs - commentary?.appliedDelayMs);
+      const commentaryPacketLossInvalid = !Number.isFinite(commentary?.packetsLost) || commentary.packetsLost < 0;
+      const commentaryHistoryNotClean = requireZeroBrowserHistory && commentary?.packetsLost !== 0;
+      if (!commentary?.configured || !commentary.roomConnected || commentary.participantCount < 1 || commentary.audioTrackCount < 1 || commentary.mutedAudioTrackCount !== 0
+        || commentary.rmsDb === null || (commentary.secondsSinceAudio ?? Infinity) > 5 || commentaryPacketLossInvalid || commentaryHistoryNotClean || (commentary.clippedSampleRatio ?? 0) > 0.05
         || !commentary.cameraTrackPresent || commentary.cameraRmsDb === null || (commentary.secondsSinceCameraAudio ?? Infinity) > 5 || (commentary.cameraClippedSampleRatio ?? 0) > 0.05
         || commentary.syncStatus !== "locked" || syncGapMs > 250 || (commentary.clockRttMs ?? Infinity) > 1_000 || (commentary.syncSampleAgeMs ?? Infinity) > 10_000) {
         problems.push(`Camera ${court} remote commentary/audio synchronization is not healthy and locked`);
@@ -375,6 +377,13 @@ export function browserQualityDeltaProblems(previous, current, { requireProgress
       const afterValue = after.video?.[field];
       if (!Number.isFinite(beforeValue) || !Number.isFinite(afterValue)) problems.push(`Camera ${court} browser ${field} is unavailable`);
       else if (afterValue !== beforeValue) problems.push(`Camera ${court} browser ${field} changed from ${beforeValue} to ${afterValue}`);
+    }
+    const beforeCommentaryPacketsLost = before.commentary?.packetsLost;
+    const afterCommentaryPacketsLost = after.commentary?.packetsLost;
+    if (!Number.isFinite(beforeCommentaryPacketsLost) || !Number.isFinite(afterCommentaryPacketsLost)) {
+      problems.push(`Camera ${court} commentary packetsLost is unavailable`);
+    } else if (afterCommentaryPacketsLost !== beforeCommentaryPacketsLost) {
+      problems.push(`Camera ${court} commentary packetsLost changed from ${beforeCommentaryPacketsLost} to ${afterCommentaryPacketsLost}`);
     }
   }
   return unique(problems);
@@ -436,7 +445,8 @@ function hasCompleteBrowserSet(snapshot) {
     return browser && BROWSER_IDENTITY_FIELDS.every((field) => browser[field])
       && Number.isInteger(browser.heartbeatSeq)
       && Number.isInteger(browser.video?.framesRendered)
-      && BROWSER_COUNTER_FIELDS.every((field) => Number.isFinite(browser.video?.[field]));
+      && BROWSER_COUNTER_FIELDS.every((field) => Number.isFinite(browser.video?.[field]))
+      && Number.isFinite(browser.commentary?.packetsLost);
   });
 }
 
@@ -450,6 +460,7 @@ function browserQualityEvidence(snapshot) {
     heartbeatSeq: court.browser?.heartbeatSeq ?? null,
     receivedAt: court.browser?.receivedAt ?? null,
     framesRendered: court.browser?.video?.framesRendered ?? null,
+    commentaryPacketsLost: court.browser?.commentary?.packetsLost ?? null,
     ...Object.fromEntries(BROWSER_COUNTER_FIELDS.map((field) => [field, court.browser?.video?.[field] ?? null]))
   }));
 }
