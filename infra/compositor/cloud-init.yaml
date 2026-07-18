@@ -67,6 +67,10 @@ write_files:
       WantedBy=multi-user.target
 
 runcmd:
+  # Event Droplets are short-lived and fully patched by the base image. Disable
+  # Ubuntu's deferred firmware metadata job so it cannot create unowned work
+  # or transient systemd children during a qualification window.
+  - systemctl mask --now fwupd-refresh.timer fwupd-refresh.service || true
   # Docker Engine + compose plugin via the official convenience script (fine
   # for cattle droplets that live for hours; the snapshot freezes the version).
   - curl -fsSL https://get.docker.com -o /tmp/get-docker.sh

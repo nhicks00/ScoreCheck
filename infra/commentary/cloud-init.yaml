@@ -21,6 +21,9 @@ write_files:
       X11Forwarding no
 
 runcmd:
+  # Firmware metadata refresh is unnecessary on ephemeral event hosts and
+  # must not run asynchronously during media qualification.
+  - systemctl mask --now fwupd-refresh.timer fwupd-refresh.service || true
   - install -m 0755 -d /etc/apt/keyrings
   - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
   - chmod a+r /etc/apt/keyrings/docker.asc

@@ -23,6 +23,7 @@ test("every event host disables password SSH and retains key-only root recovery"
     assert.match(source, /PermitRootLogin prohibit-password/);
     assert.match(source, /X11Forwarding no/);
     assert.match(source, /systemctl reload ssh/);
+    assert.match(source, /systemctl mask --now fwupd-refresh\.timer fwupd-refresh\.service \|\| true/, `${name} must suppress deferred firmware metadata refresh`);
     assert.doesNotMatch(source, /PasswordAuthentication yes|PermitRootLogin yes/);
   }
 });
