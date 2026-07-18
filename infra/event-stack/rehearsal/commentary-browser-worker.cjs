@@ -108,12 +108,9 @@ async function verifyLocalMediaCadence(page, { durationMs = 8_000, intervalMs = 
   const initialTime = await page.locator("video").evaluate((video) => video.currentTime);
   let maximumAudioSources = previousMicrophone.audioSources;
   const cadence = { outboundPackets: 0, outboundBytes: 0, audioEnergy: 0, sampleDurationSeconds: 0 };
-  let movingMicrophoneSamples = 0;
   let samples = 0;
   while (Date.now() - startedAt < durationMs) {
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
-    const width = await page.locator(".commentary-live-meter span").evaluate((element) => Number.parseFloat(element.style.width || "0"));
-    if (Number.isFinite(width) && width >= 1) movingMicrophoneSamples += 1;
     finalMicrophone = await readMicrophoneStats(page);
     const outboundDelta = positiveReportDeltas(previousMicrophone.outboundReports, finalMicrophone.outboundReports, ["packets", "bytes"]);
     const sourceDelta = positiveReportDeltas(previousMicrophone.audioSourceReports, finalMicrophone.audioSourceReports, ["energy", "durationSeconds"]);
@@ -130,17 +127,6 @@ async function verifyLocalMediaCadence(page, { durationMs = 8_000, intervalMs = 
   if (previewAdvanceSeconds < durationMs / 1_000 * 0.75) throw new Error("rehearsal preview cadence did not remain active");
   if (maximumAudioSources < 1 || finalMicrophone.audioSources < 1 || finalMicrophone.activeMicrophoneConnections < 1) {
     throw cadenceError("rehearsal microphone source statistics are unavailable", cadence, finalMicrophone);
-  }
-  const movingMicrophoneSampleRatio = samples > 0 ? movingMicrophoneSamples / samples : 0;
-  const minimumMovingMicrophoneSamples = Math.max(1, Math.floor(samples * 0.1));
-  if (movingMicrophoneSamples < minimumMovingMicrophoneSamples) {
-    throw cadenceError("rehearsal microphone cadence did not remain active", {
-      ...cadence,
-      movingMicrophoneSamples,
-      samples,
-      movingMicrophoneSampleRatio,
-      minimumMovingMicrophoneSamples
-    }, finalMicrophone);
   }
   const minimumSampleDurationSeconds = durationMs / 1_000 * 0.75;
   const minimumOutboundPackets = Math.max(1, Math.floor(durationMs / 1_000 * 20));
@@ -162,9 +148,6 @@ async function verifyLocalMediaCadence(page, { durationMs = 8_000, intervalMs = 
     publicationSampleDurationSeconds: publication.sampleDurationSeconds,
     durationMs,
     samples,
-    movingMicrophoneSamples,
-    movingMicrophoneSampleRatio,
-    minimumMovingMicrophoneSamples,
     previewAdvanceSeconds,
     maximumAudioSources,
     minimumOutboundPackets,
