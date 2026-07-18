@@ -42,8 +42,8 @@ export class RehearsalVerifier {
 
   async waitForFull({ state }) {
     const result = await this.#waitForStableFull({ stableSamples: 6, timeoutMs: 240_000 });
-    const provider = await this.#providerEvidence(state);
-    const problems = providerProblems(provider);
+    const provider = await this.#waitForStableProvider(state, { stableSamples: 3, timeoutMs: 60_000 });
+    const problems = [];
     const sampler = await this.sampler.inspect(state.sampler.output);
     if (!sampler) problems.push("pool host sampler is not running after workload stabilization");
     if (problems.length) throw new Error(`eight complete program chains did not pass provider checks: ${problems.join("; ")}`);
@@ -53,6 +53,31 @@ export class RehearsalVerifier {
       sampler: { running: true, pid: sampler.pid, output: state.sampler.output },
       excludedBoundaries: excludedBoundaries()
     };
+  }
+
+  async #waitForStableProvider(state, { stableSamples, timeoutMs }) {
+    const startedAt = this.now();
+    let stable = 0;
+    let lastProvider = null;
+    let lastProblems = [];
+    while (this.now() - startedAt <= timeoutMs) {
+      lastProvider = await this.#providerEvidence(state);
+      lastProblems = providerProblems(lastProvider);
+      if (lastProblems.length === 0) {
+        stable += 1;
+        if (stable >= stableSamples) return lastProvider;
+      } else {
+        stable = 0;
+      }
+      await this.sleep(5_000);
+    }
+    throw new RehearsalStabilizationError("persistent YouTube ingest streams", {
+      passed: false,
+      observedAt: new Date(this.now()).toISOString(),
+      stableSamples: stable,
+      snapshot: null,
+      problems: lastProblems
+    });
   }
 
   restoreAcceptedFullSnapshot(snapshot) {

@@ -242,6 +242,48 @@ test("uses a reset-safe quality window while preserving historical startup count
   assert.deepEqual(result.problems, []);
 });
 
+test("waits through transient YouTube health propagation before accepting a full rehearsal", async () => {
+  let current = now;
+  let sequence = 0;
+  let providerAttempt = 0;
+  const verifier = new RehearsalVerifier({
+    monitorOrigin: "https://monitor.example.com",
+    monitorToken: "x".repeat(24),
+    youtube: {
+      getStream: async (id) => {
+        const court = Number(id.replace("stream", ""));
+        if (court === 8) providerAttempt += 1;
+        return {
+          id, court, title: `ScoreCheck Court ${court} Test Stream`, isReusable: true,
+          streamStatus: "active", healthStatus: court === 8 && providerAttempt === 1 ? "starting" : "good", configurationIssues: []
+        };
+      }
+    },
+    sampler: { inspect: async () => ({ pid: 42 }) },
+    fetchImpl: async () => {
+      const value = snapshot("full");
+      for (const court of value.courts) {
+        court.browser.heartbeatSeq += sequence;
+        court.browser.receivedAt = new Date(current).toISOString();
+        court.browser.video.framesRendered += sequence * 150;
+      }
+      value.generatedAt = new Date(current).toISOString();
+      sequence += 1;
+      return new Response(JSON.stringify(value), { status: 200, headers: { "content-type": "application/json" } });
+    },
+    sleep: async (ms) => { current += ms; },
+    now: () => current
+  });
+  const state = {
+    sampler: { output: "/tmp/rehearsal-sampler.ndjson" },
+    courts: Object.fromEntries(Array.from({ length: 8 }, (_, index) => [index + 1, { stream: { id: `stream${index + 1}` } }])),
+    providerMode: "persistent-youtube-stream-ingest-v1"
+  };
+  const result = await verifier.waitForFull({ state });
+  assert.equal(result.passed, true);
+  assert.equal(providerAttempt, 4);
+});
+
 test("restores a persisted accepted browser baseline across CLI process boundaries", async () => {
   let current = now + 5_000;
   const baseline = snapshot("full");
