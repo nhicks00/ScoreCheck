@@ -617,23 +617,18 @@ duplicated frame. Source credentials live only in protected mode-0600 files;
 they are not placed in service names or process arguments. Source units and
 their generation directory are removed before infrastructure teardown.
 
-The synthetic commentator is admitted only after the preview advances and
-Chromium's WebRTC statistics prove that the captured microphone source has
-nonzero audio energy, captured-sample duration advances continuously, and the
-outbound audio RTP packets and bytes increase. The visible microphone meter is
-recorded as supporting UI evidence because headless animation scheduling can
-lag even while the captured and transmitted audio is healthy. A failed startup
-closes Chromium immediately; it never waits on a leaked browser process before
-the bounded recovery and provider cleanup can begin.
-
-LiveKit may create or replace its publishing peer connection after the page has
-already rendered `Live`. The rehearsal therefore waits up to 30 seconds for
-outbound-audio packets and bytes plus captured-audio duration to increase
-between consecutive statistics samples before starting the eight-second
-cadence window. A positive but frozen report from a replaced connection does
-not start the clock. That warmup is not credited toward the cadence proof. Once
-the window starts, the complete packet, byte, energy, sample-duration, and
-preview requirements still apply.
+The synthetic commentator is admitted before output only after the preview
+advances, Chromium proves that a non-silent microphone publication sent initial
+audio RTP, the audio source remains present, and the visible microphone meter
+moves in at least 75 percent of the eight-second cadence samples. This split is
+intentional: LiveKit pauses an upstream publication after roughly half a second
+when no program mixer has subscribed yet. Requiring sustained outbound RTP at
+this point creates a circular startup dependency. After Egress starts, the
+full-stack verifier remains authoritative and requires fresh non-silent
+commentary audio, zero packet loss, and locked clock/synchronization telemetry
+from the actual program mixer before the soak can begin. A failed startup closes
+Chromium immediately; it never waits on a leaked browser process before bounded
+recovery and provider cleanup can begin.
 
 This source placement removes the operator laptop and venue Wi-Fi from the
 DigitalOcean media-capacity result. It does not qualify the venue uplink,
@@ -728,17 +723,16 @@ remain immediate hard failures. This prevents one transient new-Droplet SSH
 handshake from discarding an otherwise healthy 12-host build without masking a
 real ownership or deployment defect.
 
-Commentary startup evidence is reset-safe across a LiveKit peer-connection
-replacement. The browser samples individual outbound-audio RTP and media-source
-reports throughout the bounded cadence window and accumulates only positive
-deltas for each stable report identity. A removed report is not subtracted and
-a new report establishes a fresh baseline. The cadence window begins only after
-the browser observes RTP and captured-audio duration advancing between samples,
-so neither delayed LiveKit publication nor a frozen old peer report can consume
-most of the measurement window. Readiness still requires advancing preview
-video, outbound audio packets and bytes, nonzero captured-audio energy, and at
-least 75 percent media-sample coverage; meter animation remains supporting UI
-evidence rather than the authoritative audio contract.
+Commentary startup evidence records the initial outbound-audio RTP and
+media-source totals, then samples report deltas as diagnostic evidence while the
+local cadence gate runs. Because the mixer has not subscribed yet, zero
+additional RTP during that window is explicitly recorded as
+`preSubscriberRtpPaused`, not treated as silence. Readiness requires advancing
+preview video, a still-present audio source, and at least 75 percent positive
+microphone-meter coverage. Once each program mixer exists, the monitor's
+commentary heartbeat is the authoritative transmitted-audio contract and must
+prove current audio, synchronization lock, bounded timing, and zero packet loss
+before qualification starts and throughout the soak.
 
 The rehearsal YouTube contract is an exact persistent pool named `ScoreCheck
 Court 1 Test Stream` through `ScoreCheck Court 8 Test Stream`. Every member must

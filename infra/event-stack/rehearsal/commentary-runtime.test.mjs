@@ -177,8 +177,8 @@ test("headless commentary disables background throttling and proves local media 
     "--disable-renderer-backgrounding"
   ]) assert.match(source, new RegExp(flag));
   assert.match(source, /const localMedia = await verifyLocalMediaCadence\(page\)/u);
-  assert.match(source, /cadence\.outboundPackets < 1 \|\| cadence\.outboundBytes < 1/u);
-  assert.match(source, /cadence\.audioEnergy <= 0 \|\| cadence\.sampleDurationSeconds < durationMs/u);
+  assert.match(source, /movingMicrophoneSampleRatio < 0\.75/u);
+  assert.match(source, /preSubscriberRtpPaused/u);
   assert.match(source, /previewAdvanceSeconds < durationMs \/ 1_000 \* 0\.75/u);
   assert.match(source, /finally \{\s*await browser\?\.close\(\)\.catch/u);
 });
@@ -217,15 +217,15 @@ test("accepts advancing preview and authoritative non-silent microphone RTP cade
   assert.equal(result.samples >= 3, true);
   assert.equal(result.movingMicrophoneSamples, result.samples);
   assert.equal(result.previewAdvanceSeconds >= 0.1, true);
-  assert.equal(result.outboundPackets, 20);
-  assert.equal(result.audioEnergy, 2);
+  assert.equal(result.outboundPackets, 40);
+  assert.equal(result.audioEnergy, 4);
 });
 
-test("starts the cadence window only after authoritative microphone RTP becomes active", async () => {
+test("starts the cadence window only after a non-silent microphone publication exists", async () => {
   let videoSamples = 0;
   const page = mediaCadencePage({
     currentTime: () => videoSamples++ * 0.1,
-    microphoneWidth: () => 0,
+    microphoneWidth: () => 12,
     microphoneStats: [
       stats({ key: "starting", packets: 0, bytes: 0, energy: 0, durationSeconds: 0 }),
       stats({ key: "starting", packets: 0, bytes: 0, energy: 0, durationSeconds: 0 }),
@@ -238,34 +238,28 @@ test("starts the cadence window only after authoritative microphone RTP becomes 
   });
   const result = await verifyLocalMediaCadence(page, { durationMs: 40, intervalMs: 10, startupTimeoutMs: 40 });
   assert.equal(result.startupWaitMs >= 10, true);
-  assert.equal(result.outboundPackets >= 30, true);
-  assert.equal(result.audioEnergy >= 3, true);
-  assert.equal(result.sampleDurationSeconds >= 0.059, true);
+  assert.equal(result.publicationOutboundPackets, 10);
+  assert.equal(result.publicationAudioEnergy, 1);
+  assert.equal(result.movingMicrophoneSampleRatio, 1);
 });
 
-test("ignores a positive but frozen peer report before a replacement begins advancing", async () => {
+test("accepts an initially published microphone that LiveKit pauses before a subscriber joins", async () => {
   let videoSamples = 0;
   const page = mediaCadencePage({
     currentTime: () => videoSamples++ * 0.1,
-    microphoneWidth: () => 0,
+    microphoneWidth: () => 12,
     microphoneStats: [
-      stats({ key: "stale", packets: 100, bytes: 10_000, energy: 2, durationSeconds: 5 }),
-      stats({ key: "stale", packets: 100, bytes: 10_000, energy: 2, durationSeconds: 5 }),
-      stats({ key: "stale", packets: 100, bytes: 10_000, energy: 2, durationSeconds: 5 }),
-      stats({ key: "replacement", packets: 5, bytes: 500, energy: 0.2, durationSeconds: 0.01 }),
-      stats({ key: "replacement", packets: 25, bytes: 2_500, energy: 1.2, durationSeconds: 0.05 }),
-      stats({ key: "replacement", packets: 45, bytes: 4_500, energy: 2.2, durationSeconds: 0.09 }),
-      stats({ key: "replacement", packets: 65, bytes: 6_500, energy: 3.2, durationSeconds: 0.13 })
+      stats({ key: "published", packets: 24, bytes: 5_900, energy: 0.05, durationSeconds: 0.48 })
     ]
   });
   const result = await verifyLocalMediaCadence(page, { durationMs: 40, intervalMs: 10, startupTimeoutMs: 60 });
-  assert.equal(result.startupWaitMs >= 30, true);
-  assert.equal(result.startupOutboundPackets, 20);
-  assert.equal(result.outboundPackets >= 20, true);
-  assert.equal(result.sampleDurationSeconds >= 0.039, true);
+  assert.equal(result.publicationOutboundPackets, 24);
+  assert.equal(result.publicationSampleDurationSeconds, 0.48);
+  assert.equal(result.preSubscriberRtpPaused, true);
+  assert.equal(result.movingMicrophoneSampleRatio, 1);
 });
 
-test("accepts headless meter animation lag when RTP and captured audio energy advance", async () => {
+test("fails closed when the local microphone meter does not move despite RTP", async () => {
   let videoSamples = 0;
   const page = mediaCadencePage({
     currentTime: () => videoSamples++ * 0.1,
@@ -276,17 +270,17 @@ test("accepts headless meter animation lag when RTP and captured audio energy ad
       { audioSources: 1, outboundPackets: 50, outboundBytes: 5000, totalAudioEnergy: 5, totalSamplesDuration: 2.08 }
     ]
   });
-  const result = await verifyLocalMediaCadence(page, { durationMs: 40, intervalMs: 10 });
-  assert.equal(result.movingMicrophoneSamples, 0);
-  assert.equal(result.movingMicrophoneSampleRatio, 0);
-  assert.equal(result.outboundPackets, 20);
+  await assert.rejects(
+    () => verifyLocalMediaCadence(page, { durationMs: 40, intervalMs: 10 }),
+    /microphone cadence did not remain active/u
+  );
 });
 
 test("accumulates commentary cadence across an in-window peer connection replacement", async () => {
   let videoSamples = 0;
   const page = mediaCadencePage({
     currentTime: () => videoSamples++ * 0.1,
-    microphoneWidth: () => 0,
+    microphoneWidth: () => 12,
     microphoneStats: [
       stats({ key: "old", packets: 100, bytes: 10_000, energy: 2, durationSeconds: 5 }),
       stats({ key: "old", packets: 110, bytes: 11_000, energy: 3, durationSeconds: 5.02 }),
@@ -296,21 +290,21 @@ test("accumulates commentary cadence across an in-window peer connection replace
     ]
   });
   const result = await verifyLocalMediaCadence(page, { durationMs: 40, intervalMs: 10 });
-  assert.equal(result.outboundPackets, 30);
-  assert.equal(result.outboundBytes, 3_000);
-  assert.equal(result.audioEnergy, 2);
-  assert.equal(result.sampleDurationSeconds >= 0.059, true);
+  assert.equal(result.outboundPackets, 40);
+  assert.equal(result.outboundBytes, 4_000);
+  assert.equal(result.audioEnergy, 3);
+  assert.equal(result.sampleDurationSeconds >= 0.079, true);
 });
 
-test("fails closed when the synthetic microphone is silent despite packet flow", async () => {
+test("fails closed when the synthetic microphone meter is silent despite packet flow", async () => {
   let videoSamples = 0;
   const page = mediaCadencePage({
     currentTime: () => videoSamples++ * 0.1,
     microphoneWidth: () => 0,
     microphoneStats: [
       { audioSources: 1, outboundPackets: 10, outboundBytes: 1000, totalAudioEnergy: 1, totalSamplesDuration: 2 },
-      { audioSources: 1, outboundPackets: 30, outboundBytes: 3000, totalAudioEnergy: 1, totalSamplesDuration: 2.04 },
-      { audioSources: 1, outboundPackets: 50, outboundBytes: 5000, totalAudioEnergy: 1, totalSamplesDuration: 2.08 }
+      { audioSources: 1, outboundPackets: 30, outboundBytes: 3000, totalAudioEnergy: 3, totalSamplesDuration: 2.04 },
+      { audioSources: 1, outboundPackets: 50, outboundBytes: 5000, totalAudioEnergy: 5, totalSamplesDuration: 2.08 }
     ]
   });
   await assert.rejects(
@@ -358,6 +352,7 @@ function mediaCadencePage({ currentTime, microphoneWidth, microphoneStats }) {
 
 function stats({ key, packets, bytes, energy, durationSeconds }) {
   return {
+    activeMicrophoneConnections: 1,
     audioSources: 1,
     outboundPackets: packets,
     outboundBytes: bytes,
