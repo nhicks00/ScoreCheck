@@ -12,7 +12,7 @@ const DEFAULT_PROVIDER_INTERVAL_MS = 60_000;
 const MARKER_NAME = "REHEARSAL_COMPLETE.json";
 
 export class RehearsalSoakEvaluator {
-  constructor({ verifier, publisherObserver, sleep = delay, now = () => Date.now(), minimumDurationMs = DEFAULT_DURATION_MS, maximumSampleLagMs = 1_000, hostEvidenceSettleMs = 1_250, hostEvidenceEvaluator = evaluateRehearsalPoolEvidence }) {
+  constructor({ verifier, publisherObserver, sleep = delay, now = () => Date.now(), minimumDurationMs = DEFAULT_DURATION_MS, maximumSampleLagMs = 1_000, maximumEarlySampleSkewMs = 10, hostEvidenceSettleMs = 1_250, hostEvidenceEvaluator = evaluateRehearsalPoolEvidence }) {
     if (typeof publisherObserver !== "function") throw new Error("rehearsal soak requires a synthetic publisher observer");
     this.verifier = verifier;
     this.publisherObserver = publisherObserver;
@@ -20,6 +20,7 @@ export class RehearsalSoakEvaluator {
     this.now = now;
     this.minimumDurationMs = minimumDurationMs;
     this.maximumSampleLagMs = maximumSampleLagMs;
+    this.maximumEarlySampleSkewMs = maximumEarlySampleSkewMs;
     this.hostEvidenceSettleMs = hostEvidenceSettleMs;
     this.hostEvidenceEvaluator = hostEvidenceEvaluator;
   }
@@ -64,7 +65,9 @@ export class RehearsalSoakEvaluator {
         const problems = [...observation.problems];
         problems.push(...publishers.problems);
         problems.push(...browserContinuityProblems(previousMonitor, observation.snapshot));
-        if (lagMs < 0 || lagMs > this.maximumSampleLagMs) problems.push(`sample ${nextSlot} lag ${lagMs}ms exceeds ${this.maximumSampleLagMs}ms`);
+        if (lagMs < -this.maximumEarlySampleSkewMs || lagMs > this.maximumSampleLagMs) {
+          problems.push(`sample ${nextSlot} lag ${lagMs}ms is outside -${this.maximumEarlySampleSkewMs}ms to ${this.maximumSampleLagMs}ms`);
+        }
         if (previousObservedMs !== null) {
           const gap = sampledAt - previousObservedMs;
           maximumGapMs = Math.max(maximumGapMs, gap);

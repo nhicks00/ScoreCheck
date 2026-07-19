@@ -21,7 +21,10 @@ test("runs an aligned resumable gate and checks providers at bounded intervals",
     hostEvidenceEvaluator: async () => ({ passed: true, problems: [] }),
     now: () => now,
     sleep: async (ms) => { now += ms; },
-    publisherObserver: async () => ({ passed: true, samples: [], problems: [] }),
+    publisherObserver: async () => {
+      now += 1;
+      return { passed: true, samples: [], problems: [] };
+    },
     verifier: {
       observeFull: async ({ includeProvider, requireBrowserAdvance }) => {
         browserAdvanceRequirements.push(requireBrowserAdvance);
@@ -56,6 +59,37 @@ test("fails closed and preserves the first monitor defect", async () => {
   assert.equal(report.passed, false);
   assert.equal(report.observedSamples, 2);
   assert.deepEqual(report.problems, ["Camera 4 has frame errors"]);
+});
+
+test("tolerates only bounded early wall-clock skew between aligned samples", async () => {
+  const root = await mkdtemp(join(os.tmpdir(), "scorecheck-rehearsal-skew-"));
+  let now = Date.parse("2026-07-15T12:00:00Z") - 1;
+  const state = { event: "gate", generationId: "generation-1234", sampler: { output: join(root, "pool.jsonl") }, soak: { startedAt: new Date(now + 1).toISOString() } };
+  const evaluator = new RehearsalSoakEvaluator({
+    minimumDurationMs: 0, hostEvidenceSettleMs: 0,
+    hostEvidenceEvaluator: async () => ({ passed: true, problems: [] }),
+    now: () => now, sleep: async (ms) => { now += ms - 1; },
+    publisherObserver: async () => {
+      now += 1;
+      return { passed: true, samples: [], problems: [] };
+    },
+    verifier: { observeFull: async () => ({ snapshot: {}, sampler: { running: true }, provider: null, problems: [] }) }
+  });
+  const report = await evaluator.run({ state, evidenceDirectory: root, durationMs: 0, sampleIntervalMs: 250, providerIntervalMs: 250 });
+  assert.equal(report.passed, true);
+
+  now = Date.parse("2026-07-15T12:01:00Z") - 11;
+  const failingRoot = await mkdtemp(join(os.tmpdir(), "scorecheck-rehearsal-skew-fail-"));
+  const failing = new RehearsalSoakEvaluator({
+    minimumDurationMs: 0, hostEvidenceSettleMs: 0,
+    hostEvidenceEvaluator: async () => ({ passed: true, problems: [] }),
+    now: () => now, sleep: async (ms) => { now += ms - 11; },
+    publisherObserver: async () => ({ passed: true, samples: [], problems: [] }),
+    verifier: { observeFull: async () => ({ snapshot: {}, sampler: { running: true }, provider: null, problems: [] }) }
+  });
+  const failed = await failing.run({ state: { ...state, soak: { startedAt: new Date(now + 11).toISOString() } }, evidenceDirectory: failingRoot, durationMs: 0, sampleIntervalMs: 250, providerIntervalMs: 250 });
+  assert.equal(failed.passed, false);
+  assert.match(failed.problems.join("; "), /outside -10ms to 1000ms/);
 });
 
 test("fails the soak immediately when a synthetic source loses realtime cadence", async () => {
