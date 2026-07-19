@@ -7390,6 +7390,8 @@ textarea:focus-visible {
   min-height: 0;
   overflow: hidden;
   padding: 0;
+  perspective: 780px;
+  perspective-origin: 50% 100%;
   position: relative;
 }
 
@@ -7462,7 +7464,9 @@ textarea:focus-visible {
   min-width: min(1080px, calc(100% - 64px));
   position: absolute;
   text-align: center;
-  transform: translateX(-50%);
+  transform: translateX(-50%) rotateX(42deg) scaleY(1.42);
+  transform-origin: 50% 100%;
+  transform-style: preserve-3d;
   z-index: 2;
 }
 
@@ -7619,7 +7623,7 @@ textarea:focus-visible {
   }
 
   .landing-court-score {
-    bottom: 38px;
+    bottom: clamp(126px, 14vw, 136px);
     min-width: calc(100% - 36px);
   }
 
@@ -7693,7 +7697,7 @@ textarea:focus-visible {
   }
 
   .landing-court-score {
-    bottom: 28px;
+    bottom: 136px;
     min-width: calc(100% - 24px);
   }
 
