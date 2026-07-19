@@ -7456,7 +7456,7 @@ textarea:focus-visible {
 }
 
 .landing-court-score {
-  bottom: clamp(38px, 3.35vw, 52px);
+  bottom: clamp(58px, 5.25vw, 78px);
   color: #fff;
   filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.42));
   font-family: var(--font-ui);
@@ -7464,7 +7464,7 @@ textarea:focus-visible {
   min-width: min(1080px, calc(100% - 64px));
   position: absolute;
   text-align: center;
-  transform: translateX(-50%) rotateX(42deg) scaleY(1.42);
+  transform: translateX(-50%) rotateX(42deg) scaleY(1.58);
   transform-origin: 50% 100%;
   transform-style: preserve-3d;
   z-index: 2;
