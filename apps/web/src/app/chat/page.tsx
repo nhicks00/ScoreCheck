@@ -1,3 +1,5 @@
+import { AdminTopbar } from "@/components/AdminTopbar";
+import { isAdminRequest } from "@/lib/auth";
 import { chatMonitorEnabled, isChatRequest } from "@/lib/chatAuth";
 import { chatMessageRowToDto, courtColor, type ChatMessageDbRow } from "@/lib/chatFeed";
 import { getEnv } from "@/lib/env";
@@ -18,6 +20,7 @@ const INITIAL_MESSAGE_LIMIT = 200;
 
 export default async function ChatPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
   const env = getEnv();
+  const adminAuthorized = await isAdminRequest();
 
   if (!(await isChatRequest())) {
     const { error } = await searchParams;
@@ -25,9 +28,9 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
     const disabled = !chatMonitorEnabled() || !env.adminSecret;
     return (
       <main className="shell">
-        <div className="container auth-container stack">
-          <span className="brand-mark">Score<em>Check</em></span>
-          <section className="panel stack">
+        <div className={`container stack ${adminAuthorized ? "" : "auth-container"}`}>
+          {adminAuthorized ? <AdminTopbar /> : <span className="brand-mark">Score<em>Check</em></span>}
+          <section className={`panel stack ${adminAuthorized ? "chat-admin-login" : ""}`}>
             <h1>Live Chat Monitor</h1>
             <p className="muted">Enter the passcode from your producer to watch YouTube live-chat from every court in one place.</p>
             {disabled && (
@@ -102,6 +105,7 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
       initialCursorMs={initialCursorMs}
       youtubeConfigured={youtubeConfigured}
       chatEnabled={env.youtubeChatEnabled}
+      showAdminNav={adminAuthorized}
     />
   );
 }

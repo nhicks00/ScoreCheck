@@ -1,5 +1,5 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
+import { AdminTopbar } from "@/components/AdminTopbar";
 import { isAdminRequest } from "@/lib/auth";
 import { getEnv, missingEnvKeys } from "@/lib/env";
 import { scoreForCurrentMatch } from "@/lib/scoreState";
@@ -21,12 +21,11 @@ export default async function CourtsPage({ params }: { params: Promise<{ eventId
   return (
     <main className="shell">
       <div className="container stack">
-        <div className="topbar">
-          <span className="brand-mark">Score<em>Check</em></span>
-          <nav className="topbar-nav" aria-label="Admin">
-            <Link className="button ghost" href={`/admin/events/${eventId}`}>Dashboard</Link>
-          </nav>
-        </div>
+        <AdminTopbar contextLabel="Event tools" contextLinks={[
+          { href: `/admin/events/${eventId}`, label: "Event setup" },
+          { href: `/admin/events/${eventId}/courts`, label: "Court Grid" },
+          { href: `/admin/events/${eventId}/fan-scoring`, label: "Community scoring" }
+        ]} />
         <header className="admin-dashboard-header">
           <div>
             <h1>Court Grid</h1>

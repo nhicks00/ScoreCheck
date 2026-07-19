@@ -3,6 +3,7 @@
 import { ArrowDown, MessageSquare, Radio, Search, Settings, WifiOff } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AdminTopbar } from "@/components/AdminTopbar";
 import { courtColor, relativeTime, type ChatMessageDto } from "@/lib/chatFeed";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 
@@ -22,6 +23,7 @@ type Props = {
   initialCursorMs: number | null;
   youtubeConfigured: boolean;
   chatEnabled: boolean;
+  showAdminNav: boolean;
 };
 
 const POLL_MS = 8_000;
@@ -37,7 +39,8 @@ export function ChatMonitorClient({
   initialMessages,
   initialCursorMs,
   youtubeConfigured,
-  chatEnabled
+  chatEnabled,
+  showAdminNav
 }: Props) {
   const [messages, setMessages] = useState<ChatMessageDto[]>(initialMessages);
   const [hiddenCourts, setHiddenCourts] = useState<Set<number>>(new Set());
@@ -210,10 +213,11 @@ export function ChatMonitorClient({
 
   return (
     <main className="shell chat-shell">
+      {showAdminNav ? <div className="container"><AdminTopbar /></div> : null}
       <div className="container chat-container stack">
         <header className="chat-header">
-          <div className="chat-header-top">
-            <span className="brand-mark small">Score<em>Check</em></span>
+          <div className={`chat-header-top ${showAdminNav ? "is-admin" : ""}`}>
+            {!showAdminNav ? <span className="brand-mark small">Score<em>Check</em></span> : null}
             <Link className="chat-admin-link" href="/admin/production" aria-label="Set court video IDs">
               <Settings size={16} aria-hidden="true" /> Video IDs
             </Link>

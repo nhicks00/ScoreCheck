@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { isAdminRequest } from "@/lib/auth";
 import { getEnv, missingEnvKeys } from "@/lib/env";
@@ -6,6 +5,7 @@ import { buildProgramMonitorPath, controllerConfiguredFromEnv } from "@/lib/opsC
 import { programPageToken } from "@/lib/program";
 import { loadProductionSnapshot } from "@/lib/productionStatus";
 import { courtStreamSources, videoConfigured } from "@/lib/video";
+import { AdminTopbar } from "@/components/AdminTopbar";
 import { SetupNotice } from "@/components/SetupNotice";
 import { ProductionConsoleClient, type CourtClientConfig } from "./ProductionConsoleClient";
 
@@ -30,13 +30,7 @@ export default async function ProductionConsolePage() {
     return (
       <main className="shell production-shell">
         <div className="container stack">
-          <div className="topbar">
-            <span className="brand-mark">Score<em>Check</em></span>
-            <nav className="topbar-nav" aria-label="Admin">
-              <Link className="button ghost" href="/admin/monitor">Monitor</Link>
-              <Link className="button ghost" href="/admin/events">Events</Link>
-            </nav>
-          </div>
+          <AdminTopbar />
           <SetupNotice />
         </div>
       </main>

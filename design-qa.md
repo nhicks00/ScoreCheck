@@ -1,56 +1,66 @@
-# ScoreCheck homepage score-clearance QA
+# ScoreCheck admin navigation and light-theme QA
 
 final result: passed
 
 ## Source and implementation evidence
 
-- Source visual truth: `/Users/nathanhicks/.codex/visualizations/2026/07/19/019f7ad7-35f3-7732-9d14-42e2543764fd/homepage-score-clearance-qa/before-production-1280x720-fullpage.jpg`
-- Browser-rendered implementation: `/Users/nathanhicks/.codex/visualizations/2026/07/19/019f7ad7-35f3-7732-9d14-42e2543764fd/homepage-score-clearance-qa/after-local-1280x720-fullpage.jpg`
-- Full-view comparison: `/Users/nathanhicks/.codex/visualizations/2026/07/19/019f7ad7-35f3-7732-9d14-42e2543764fd/homepage-score-clearance-qa/before-vs-after-1280x720.png`
-- Focused scoreboard comparison: `/Users/nathanhicks/.codex/visualizations/2026/07/19/019f7ad7-35f3-7732-9d14-42e2543764fd/homepage-score-clearance-qa/scoreboard-before-vs-after.png`
-- Safari-sized baseline: `/Users/nathanhicks/.codex/visualizations/2026/07/19/019f7ad7-35f3-7732-9d14-42e2543764fd/homepage-score-clearance-qa/before-production-1188x730-fullpage.jpg`
-- Compact capture: `/Users/nathanhicks/.codex/visualizations/2026/07/19/019f7ad7-35f3-7732-9d14-42e2543764fd/homepage-score-clearance-qa/after-local-compact-844x844-fullpage.jpg`
-- Mobile capture: `/Users/nathanhicks/.codex/visualizations/2026/07/19/019f7ad7-35f3-7732-9d14-42e2543764fd/homepage-score-clearance-qa/after-local-mobile-390x844-fullpage.jpg`
-- Primary comparison viewport: 1280 x 720, full-page capture. Additional checks: 1188 x 730 geometry, 844 x 844, and 390 x 844.
-- State: public homepage, setup complete, default interaction state.
+- Source visual truth: `/Users/nathanhicks/.codex/visualizations/2026/07/19/019f7ad7-35f3-7732-9d14-42e2543764fd/admin-light-shell-qa/source-events-light-1280x720.jpg`
+- Events implementation: `/Users/nathanhicks/.codex/visualizations/2026/07/19/019f7ad7-35f3-7732-9d14-42e2543764fd/admin-light-shell-qa/after-events-1280x720.jpg`
+- Monitor implementation: `/Users/nathanhicks/.codex/visualizations/2026/07/19/019f7ad7-35f3-7732-9d14-42e2543764fd/admin-light-shell-qa/after-monitor-light-1280x720.jpg`
+- Production implementation: `/Users/nathanhicks/.codex/visualizations/2026/07/19/019f7ad7-35f3-7732-9d14-42e2543764fd/admin-light-shell-qa/after-production-light-viewport.jpg`
+- Mobile Events implementation: `/Users/nathanhicks/.codex/visualizations/2026/07/19/019f7ad7-35f3-7732-9d14-42e2543764fd/admin-light-shell-qa/after-events-mobile-390x844.jpg`
+- Mobile Monitor implementation: `/Users/nathanhicks/.codex/visualizations/2026/07/19/019f7ad7-35f3-7732-9d14-42e2543764fd/admin-light-shell-qa/after-monitor-mobile-390x844.jpg`
+- Full-view comparison: `/Users/nathanhicks/.codex/visualizations/2026/07/19/019f7ad7-35f3-7732-9d14-42e2543764fd/admin-light-shell-qa/events-reference-vs-unified.png`
+- Focused navigation comparison: `/Users/nathanhicks/.codex/visualizations/2026/07/19/019f7ad7-35f3-7732-9d14-42e2543764fd/admin-light-shell-qa/admin-nav-reference-vs-unified.png`
+- Monitor before-and-after comparison: `/Users/nathanhicks/.codex/visualizations/2026/07/19/019f7ad7-35f3-7732-9d14-42e2543764fd/admin-light-shell-qa/monitor-before-vs-after.png`
+- Desktop viewport: 1280 x 720. Mobile viewport: 390 x 844. Device pixel ratio: 1.
+- State: authenticated admin, active event loaded. Monitor is shown in its configured-empty state because the local monitoring API is not configured.
 
 ## Findings
 
 - No actionable P0, P1, or P2 findings remain.
-- Fonts and typography: the score plane is approximately 11% taller, restoring vertical presence without changing font families, weights, sizes, tracking, copy, or the 42-degree perspective angle.
-- Spacing and layout rhythm: at the Safari-sized 1188 px view, the scoreboard bottom moves from 692.5 px to 669.9 px while the hero boundary remains at 732.3 px. The score is no longer crowded against the painted end line.
-- Colors and visual tokens: unchanged. No new color, gradient, shadow, border, radius, or decorative treatment was introduced.
-- Image quality and asset fidelity: the approved court image and crop are unchanged. Only the live DOM score overlay's bottom offset and vertical scale changed.
-- Copy and content: unchanged.
-- Accessibility and behavior: DOM order, accessible score label, navigation, and focus behavior are unchanged. `See live courts` still navigates to `/score`.
-- Responsiveness: the scoreboard remains fully inside the court at 844 x 844 and 390 x 844, with no horizontal overflow.
+- Information architecture: the same six destinations now appear on Events, event detail, Court Grid, Monitor, Production, Commentary, Stream Preview, and the admin-authenticated Live Chat entry. Event-specific actions remain in a separate contextual row instead of mutating the global navigation.
+- Fonts and typography: the existing ScoreCheck wordmark, serif page headings, sans-serif navigation, numeric treatments, weights, and wrapping are preserved. The active section uses weight and a quiet tonal surface, not an added dot, animated underline, or badge.
+- Spacing and layout rhythm: the desktop header keeps the source page margins and divider alignment. At 390 px, the six destinations use a balanced three-column, two-row grid with full gutters and no clipped labels.
+- Colors and visual tokens: Monitor and Production now inherit the same `--bg`, `--surface`, `--text`, line, and form tokens as Events and Commentary. Semantic green, amber, and red remain reserved for operational status.
+- Image quality and asset fidelity: no imagery, logo, broadcast overlay, video asset, or stream rendering was changed. Dark video wells remain only where live video content requires them; the application chrome is light.
+- Copy and content: existing page copy and controls are unchanged. The only new labels are the fixed destination names, Logout, and contextual navigation labels.
+- Accessibility and behavior: the global navigation has a stable `Admin sections` landmark, active links expose `aria-current="page"`, all links remain keyboard-addressable, and mobile has no page-level horizontal overflow.
 
 ## Comparison history
 
-1. The production baseline showed the score plane compacted to about 68 px tall and visually crowded against the near white end line.
-2. The focused post-fix comparison shows the block raised by about 22 px and increased to about 73 px tall at the Safari-sized geometry. The same perspective and horizontal alignment are preserved.
-3. The matched 1280 x 720 comparison and responsive captures found no remaining P0, P1, or P2 issue, so no additional design iteration was required.
+1. The source capture showed the approved Events light system, but its route-specific header omitted Events and Logout. The original Monitor capture used a separate dark palette and exposed only Production, Events, and Commentary.
+2. The first responsive implementation kept all six destinations in a horizontally scrollable row at 390 px. Browser geometry showed a 501 px navigation track inside a 358 px visible area, so Live Chat and Home were hidden until the user swiped.
+3. The navigation was changed to a three-column, two-row mobile grid. The post-fix geometry is 358 px wide with a 358 px scroll width, every label is visible, and the page remains 390 px wide with no overflow.
+4. Final side-by-side comparisons found no remaining P0, P1, or P2 issue. The Events body remains visually unchanged, while Monitor and Production use the approved light system.
+
+## Route and interaction checks
+
+- Browser-rendered routes passed: `/admin/events`, the active event dashboard, Court Grid, `/admin/monitor`, `/admin/production`, `/admin/commentary`, `/admin/stream-preview/1`, and the admin-authenticated `/chat` entry.
+- `Open event` was clicked from Events; the global navigation remained intact and the Event tools row appeared.
+- Monitor was clicked from the event dashboard; navigation completed and Monitor became the active section.
+- Desktop and mobile route checks reported no page-level horizontal overflow.
+- Browser console: no errors across the final route matrix above.
+- Local environment test gap: the Community Scoring admin route reaches a pre-existing Supabase schema-cache error for `community_admin_assignment_summary` and `community_list_open_disputes`. The shared header compiles on that route, but its complete rendered state cannot be captured against this local database.
 
 ## Anti-slop re-check
 
-- The two-value CSS diff introduces no new component, content, font, icon, asset, card, badge, pill, gradient, glow, glass, shadow, border, divider, animation, hover movement, fake interactivity, or layout pattern.
-- Clear-the-cut and overlap rules pass: team names, scores, divider, and court/set metadata are fully visible; the score block clears the painted line at desktop, compact, and mobile widths.
-- Centering and spacing rules pass: the scoreboard remains centered on the court and the increased vertical scale reduces the cramped-type appearance.
-- Contrast, palette, image seam, and grain rules are unchanged from the approved design; the overlay remains legible over the sand.
-- Content-visible-by-default and interaction rules pass: no entrance animation or hidden initial state exists, and the primary CTA was tested with a real navigation.
-- No new dependency, abstraction, feature flag, fallback, or speculative behavior was added.
+- Cohesion: one existing ScoreCheck light system is used everywhere. No alternate palette, generic dashboard theme, or newly invented visual language remains in the admin shell.
+- Composition: the change is limited to navigation and theme inheritance. No split hero, hero stack, pricing grid, testimonial card, fake application window, pre-footer CTA, or recycled marketing skeleton was introduced.
+- Color: no blue-purple gradient, candy gradient, background glow, radial halo, saturated decorative accent, slop gray, or cream editorial replacement was added. Existing orange and semantic colors retain real operational meaning.
+- Type: no new font, Google-font rotation, mono house voice, all-caps costume, gradient text, dangling accent word, or cramped display treatment was added.
+- Components: no pill badge, glowy CTA, icon tile, floating card, kitchen-sink card, fake shadow box, hairline accent bar, or ornamental eyebrow rule was added.
+- Navigation: the current section is communicated with type weight and a tonal surface. There is no active-nav dot, animated underline, hidden destination, dead control, or changing global link set.
+- Geometry: labels clear every edge, the mobile grid is centered and aligned, parallel rows share tracks, no content is clipped by overflow, and no section overlap cuts live content.
+- Motion: content is visible by default. No entrance reveal, hover lift, hover boop, fill animation, fixed decorative background, or motion dependency was introduced.
+- Contrast and depth: text clears its light surfaces, panels use the existing tonal system, shadows were not added, and dark media wells are confined to actual video surfaces.
+- Assets and iconography: no fake logo, invented asset, emoji, handcrafted SVG, or placeholder illustration was added. Existing product icons and the ScoreCheck mark are preserved.
+- Scope and implementation: no dependency, feature flag, route, API, backend behavior, or speculative configuration was added. The shared component replaces duplicate headers and is the smallest reusable implementation that keeps them identical.
 
-## Interaction and console checks
+## Verification
 
-- `See live courts` navigated to `http://localhost:3104/score`, then returned to the homepage.
-- `Open Admin` remains linked to `/admin/events`.
-- Browser console: no errors on the homepage.
-
-## Implementation checklist
-
-- [x] Raise the scoreboard enough to clear the near end line.
-- [x] Increase vertical presence without removing the sand-plane perspective.
-- [x] Preserve every other homepage element and behavior.
-- [x] Compare before and after at the same viewport.
-- [x] Verify compact and mobile geometry.
-- [x] Complete the anti-slop re-check.
+- `npm run lint`: passed.
+- `npm run typecheck`: passed.
+- `npm test -- --run`: 67 files and 527 tests passed.
+- `npm run build`: passed.
+- `git diff --check`: passed.

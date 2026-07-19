@@ -1,8 +1,8 @@
 "use client";
 
 import { Copy, ExternalLink, Headphones } from "lucide-react";
-import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { AdminTopbar } from "@/components/AdminTopbar";
 
 type StreamRow = {
   streamNumber: number;
@@ -36,14 +36,7 @@ export function AdminCommentaryClient({
   return (
     <main className="shell">
       <div className="container stack">
-        <div className="topbar">
-          <span className="brand-mark">Score<em>Check</em></span>
-          <nav className="topbar-nav" aria-label="Admin">
-            <Link className="button ghost" href="/admin/monitor">Monitor</Link>
-            <Link className="button ghost" href="/admin/events">Events</Link>
-            <Link className="button ghost" href="/commentary">Commentator portal</Link>
-          </nav>
-        </div>
+        <AdminTopbar contextLinks={[{ href: "/commentary", label: "Commentator portal" }]} />
 
         <header className="admin-dashboard-header">
           <div>

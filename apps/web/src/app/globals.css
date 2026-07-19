@@ -3,7 +3,7 @@
    ----------------------------------------------------------------------------
    The game is the visual system: salt-white paper, ink court lines, editorial
    titles, tabular scores, and orange reserved for live state and action.
-   Production and monitoring opt into the same system's deep-ink mode below.
+   Production and monitoring use this same light operations system.
    ========================================================================== */
 
 :root {
@@ -294,6 +294,76 @@ select {
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+}
+
+.admin-navigation {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+  min-width: 0;
+}
+
+.admin-navigation .topbar {
+  margin-bottom: 0;
+}
+
+.admin-topbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.admin-global-nav {
+  flex-wrap: nowrap;
+  min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+
+.admin-nav-link,
+.admin-context-nav a {
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 650;
+  min-height: 38px;
+  padding: 10px 12px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.admin-nav-link:hover,
+.admin-context-nav a:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.admin-nav-link[aria-current="page"],
+.admin-context-nav a[aria-current="page"] {
+  background: var(--surface-2);
+  color: var(--text);
+  font-weight: 800;
+}
+
+.admin-logout-form {
+  margin: 0;
+}
+
+.admin-logout-form button {
+  min-height: 38px;
+  padding: 8px 12px;
+}
+
+.admin-context-nav {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.admin-context-nav strong {
+  color: var(--text-soft);
+  font-size: 13px;
+  margin-right: 6px;
 }
 
 /* ---------------------------------------------------------------------------
@@ -4350,6 +4420,16 @@ body:has(.program-root) {
   justify-content: space-between;
 }
 
+.chat-header-top.is-admin {
+  justify-content: flex-end;
+}
+
+.chat-admin-login {
+  margin: 8vh auto 0;
+  max-width: 460px;
+  width: 100%;
+}
+
 .chat-admin-link {
   align-items: center;
   color: var(--muted);
@@ -4742,11 +4822,6 @@ body:has(.program-root) {
   max-width: 1760px;
 }
 
-.monitor-topbar {
-  border-radius: 8px;
-  margin-bottom: 14px;
-}
-
 .monitor-dashboard {
   display: flex;
   flex-direction: column;
@@ -4925,7 +5000,7 @@ body:has(.program-root) {
   background: var(--warn-soft);
   border: 1px solid var(--warn-line);
   border-radius: 8px;
-  color: #ffe09b;
+  color: #725000;
   display: flex;
   gap: 10px;
   padding: 10px 12px;
@@ -5093,7 +5168,7 @@ body:has(.program-root) {
 .monitor-state-badge[data-state="CRITICAL"] {
   background: var(--danger-soft);
   border-color: var(--danger-line);
-  color: #ff9c9c;
+  color: var(--danger);
 }
 
 .monitor-state-badge[data-state="DEGRADED"],
@@ -5133,7 +5208,7 @@ body:has(.program-root) {
 .monitor-thumbnail-meta {
   background: rgba(7, 10, 16, 0.82);
   border-radius: 4px;
-  color: var(--text-soft);
+  color: #f6f3ef;
   font-size: 10px;
   left: 7px;
   padding: 4px 6px;
@@ -5162,6 +5237,7 @@ body:has(.program-root) {
   border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 5px;
   bottom: 7px;
+  color: #f6f3ef;
   display: inline-flex;
   font-size: 10px;
   gap: 5px;
@@ -5387,7 +5463,7 @@ body:has(.program-root) {
 
 .monitor-court-alert {
   background: var(--danger-soft);
-  color: #ffaaa4;
+  color: var(--danger);
   align-items: flex-start;
   font-size: 11px;
   font-weight: 700;
@@ -5933,9 +6009,6 @@ body:has(.program-root) {
   .monitor-shell {
     padding: max(10px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
   }
-  .monitor-topbar { padding: 10px; }
-  .monitor-topbar .topbar-nav { gap: 4px; width: 100%; }
-  .monitor-topbar .topbar-nav .button { flex: 1 1 0; font-size: 12px; min-width: 0; padding-inline: 8px; }
   .monitor-icon-button { min-height: 44px; width: 44px; }
   .monitor-heading { align-items: flex-start; }
   .monitor-section-heading { align-items: stretch; flex-direction: column; }
@@ -6884,49 +6957,7 @@ textarea:focus-visible {
   text-decoration-color: var(--coral-line);
 }
 
-/* -- Deep-ink operations mode -------------------------------------------- */
-
-.production-shell,
-.monitor-shell {
-  --bg: #111418;
-  --bg-deep: #0b0e0f;
-  --surface: #171b1a;
-  --surface-2: #1d2221;
-  --surface-3: #252b29;
-  --line: rgba(224, 226, 218, 0.14);
-  --line-strong: rgba(224, 226, 218, 0.32);
-  --text: #f6f3ef;
-  --text-soft: #d5d3cc;
-  --muted: #9d9e98;
-  --ring: #f6f3ef;
-  background: #111418;
-  color: var(--text);
-  color-scheme: dark;
-}
-
-.production-shell .topbar,
-.monitor-shell .topbar {
-  border-bottom-color: var(--line-strong);
-}
-
-.production-shell .panel,
-.monitor-shell .panel {
-  background: transparent;
-}
-
-.production-shell input,
-.production-shell select,
-.monitor-shell input,
-.monitor-shell select {
-  background: #0d1110;
-  color: var(--text);
-}
-
-.production-shell .admin-dashboard-header h1,
-.monitor-shell h1,
-.monitor-shell h2 {
-  color: var(--text);
-}
+/* -- Operations layout refinements -------------------------------------- */
 
 .production-health {
   border-left: 0;
@@ -6963,10 +6994,6 @@ textarea:focus-visible {
   border-radius: 1px;
 }
 
-.production-match {
-  background: transparent;
-}
-
 .production-actions .primary,
 .production-actions .danger {
   min-width: 142px;
@@ -6974,7 +7001,7 @@ textarea:focus-visible {
 
 .production-actions .danger {
   border-color: var(--danger);
-  color: #ffb7af;
+  color: var(--danger);
 }
 
 .monitor-dashboard {
@@ -7023,12 +7050,6 @@ textarea:focus-visible {
   background-size: cover;
 }
 
-.monitor-stage-row,
-.monitor-agent,
-.monitor-incident {
-  background: transparent;
-}
-
 .monitor-trends-legend .is-bitrate,
 .monitor-sparkline.is-bitrate polyline {
   color: #78a6b9;
@@ -7064,6 +7085,46 @@ textarea:focus-visible {
 }
 
 /* -- Responsive hard cutover --------------------------------------------- */
+
+@media (max-width: 900px) {
+  .admin-topbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .admin-global-nav {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .admin-logout-form {
+    grid-column: 2;
+    grid-row: 1;
+  }
+}
+
+@media (max-width: 520px) {
+  .admin-global-nav {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    overflow-x: visible;
+  }
+
+  .admin-nav-link,
+  .admin-context-nav a {
+    font-size: 13px;
+    padding-inline: 10px;
+  }
+
+  .admin-nav-link {
+    text-align: center;
+  }
+
+  .admin-context-nav strong {
+    flex-basis: 100%;
+  }
+}
 
 @media (max-width: 1040px) {
   .fan-court-card {

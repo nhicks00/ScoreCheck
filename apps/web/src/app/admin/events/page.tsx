@@ -4,6 +4,7 @@ import { isAdminRequest } from "@/lib/auth";
 import { getEnv, missingEnvKeys } from "@/lib/env";
 import { getActiveEvent, type EventRow } from "@/lib/eventConfig";
 import { supabaseAdmin } from "@/lib/supabase";
+import { AdminTopbar } from "@/components/AdminTopbar";
 import { SetupNotice } from "@/components/SetupNotice";
 
 export const dynamic = "force-dynamic";
@@ -37,16 +38,7 @@ export default async function EventsPage() {
   return (
     <main className="shell">
       <div className="container stack">
-        <div className="topbar">
-          <span className="brand-mark">Score<em>Check</em></span>
-          <nav className="topbar-nav" aria-label="Admin">
-            <Link className="button ghost" href="/admin/monitor">Monitor</Link>
-            <Link className="button ghost" href="/admin/production">Production</Link>
-            <Link className="button ghost" href="/admin/commentary">Commentary</Link>
-            <Link className="button ghost" href="/chat">Live Chat</Link>
-            <Link className="button ghost" href="/">Home</Link>
-          </nav>
-        </div>
+        <AdminTopbar />
         <header className="admin-dashboard-header">
           <div>
             <h1>Events</h1>

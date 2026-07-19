@@ -1,9 +1,9 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { isAdminRequest } from "@/lib/auth";
 import { loadAdminCourtsWithCurrentScores } from "@/lib/adminCourtData";
 import { getEnv, missingEnvKeys } from "@/lib/env";
 import { supabaseAdmin } from "@/lib/supabase";
+import { AdminTopbar } from "@/components/AdminTopbar";
 import { SetupNotice } from "@/components/SetupNotice";
 import { FanScoringDashboard, type FanScoringCourt } from "@/components/fan-scoring/FanScoringDashboard";
 import { getCommunityAdminAssignmentSummary, listOpenCommunityDisputes } from "@/lib/communityWitness";
@@ -19,12 +19,7 @@ export default async function EventFanScoringPage({ params }: { params: Promise<
     return (
       <main className="shell">
         <div className="container stack">
-          <div className="topbar">
-            <span className="brand-mark">Score<em>Check</em></span>
-            <nav className="topbar-nav" aria-label="Admin">
-              <Link className="button ghost" href="/admin/events">Events</Link>
-            </nav>
-          </div>
+          <AdminTopbar />
           <SetupNotice />
         </div>
       </main>
@@ -42,14 +37,11 @@ export default async function EventFanScoringPage({ params }: { params: Promise<
   return (
     <main className="shell">
       <div className="container stack">
-        <div className="topbar">
-          <span className="brand-mark">Score<em>Check</em></span>
-          <nav className="topbar-nav" aria-label="Admin">
-            <Link className="button ghost" href={`/admin/events/${eventId}`}>Event setup</Link>
-            <Link className="button ghost" href="/admin/events">Events</Link>
-            <form action="/api/admin/logout" method="post"><button type="submit">Logout</button></form>
-          </nav>
-        </div>
+        <AdminTopbar contextLabel="Event tools" contextLinks={[
+          { href: `/admin/events/${eventId}`, label: "Event setup" },
+          { href: `/admin/events/${eventId}/courts`, label: "Court Grid" },
+          { href: `/admin/events/${eventId}/fan-scoring`, label: "Community scoring" }
+        ]} />
         <FanScoringDashboard
           event={{ id: eventResult.data.id, name: eventResult.data.name, slug: eventResult.data.slug ?? "event" }}
           courts={courts}

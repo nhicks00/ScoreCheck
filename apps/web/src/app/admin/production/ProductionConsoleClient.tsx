@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
+import { AdminTopbar } from "@/components/AdminTopbar";
 import { StreamPlayer } from "@/components/StreamPlayer";
 import { broadcastChipForEgress, egressForCourt } from "@/lib/opsConsole";
 import { formatRelativeTime } from "@/lib/timeLabels";
@@ -226,15 +227,7 @@ export function ProductionConsoleClient({
   return (
     <main className="shell production-shell">
       <div className="container stack">
-        <div className="topbar">
-          <span className="brand-mark">Score<em>Check</em></span>
-          <nav className="topbar-nav" aria-label="Admin">
-            <Link className="button ghost" href="/admin/monitor">Monitor</Link>
-            <Link className="button ghost" href="/admin/events">Events</Link>
-            <Link className="button ghost" href="/admin/commentary">Commentary</Link>
-            <Link className="button ghost" href="/chat">Live Chat</Link>
-          </nav>
-        </div>
+        <AdminTopbar />
 
         <header className="admin-dashboard-header">
           <div>

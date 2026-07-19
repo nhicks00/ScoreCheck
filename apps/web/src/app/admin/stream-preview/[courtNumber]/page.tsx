@@ -1,6 +1,6 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { isAdminRequest } from "@/lib/auth";
+import { AdminTopbar } from "@/components/AdminTopbar";
 import { StreamPlayer } from "@/components/StreamPlayer";
 
 export const dynamic = "force-dynamic";
@@ -15,10 +15,7 @@ export default async function AdminStreamPreviewPage({ params }: { params: Promi
   return (
     <main className="scorer-screen">
       <div className="scorer-wrap">
-        <div className="topbar">
-          <div className="brand">Court {courtNumber} Stream Preview</div>
-          <Link className="button" href="/admin/events">Admin</Link>
-        </div>
+        <AdminTopbar />
         <section className="role-banner active">
           <div>
             <span>Admin video check</span>
