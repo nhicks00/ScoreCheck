@@ -28,7 +28,7 @@ export default async function ProductionConsolePage() {
   const missing = missingEnvKeys();
   if (missing.length) {
     return (
-      <main className="shell">
+      <main className="shell production-shell">
         <div className="container stack">
           <div className="topbar">
             <span className="brand-mark">Score<em>Check</em></span>

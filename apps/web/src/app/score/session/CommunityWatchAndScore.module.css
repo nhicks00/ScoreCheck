@@ -315,3 +315,45 @@
     transition: none;
   }
 }
+
+/* SUNLIT CENTER COURT — broadcast-dark viewing frame with restrained controls. */
+.watchShell {
+  --watch-blue: #f05a28;
+  --watch-red: #f6f3ef;
+  background: #111418;
+  color: #f6f3ef;
+}
+
+.watchToolbar {
+  background: #111418;
+  border-color: rgba(246, 243, 239, 0.22);
+}
+
+.watchToolbar > div:first-child svg {
+  color: #f05a28;
+}
+
+.watchToolbar small {
+  color: #bdb8b1;
+}
+
+.watchActions button {
+  background: transparent;
+  border-color: rgba(246, 243, 239, 0.4);
+  border-radius: 2px;
+  color: #f6f3ef;
+}
+
+.watchActions button:hover:not(:disabled) {
+  background: #f6f3ef;
+  border-color: #f6f3ef;
+  color: #111418;
+}
+
+@media (min-width: 900px) {
+  .withVideo .watchToolbar,
+  .withVideo .videoPane {
+    border-color: rgba(246, 243, 239, 0.24);
+    border-radius: 2px;
+  }
+}

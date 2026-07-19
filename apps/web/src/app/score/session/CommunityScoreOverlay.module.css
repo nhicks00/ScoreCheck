@@ -593,3 +593,114 @@
     transform: none;
   }
 }
+
+/* SUNLIT CENTER COURT — live-video overlay. Layout values intentionally remain intact. */
+.scoreOverlay {
+  --overlay-blue: #f05a28;
+  --overlay-red: #f6f3ef;
+  --overlay-surface: rgba(17, 20, 24, 0.94);
+  --overlay-line: rgba(246, 243, 239, 0.42);
+  background: #111418;
+}
+
+.matchSummary > span {
+  color: #bdb8b1;
+}
+
+.matchSummary strong,
+.setSelector,
+.teamIdentity output {
+  font-family: var(--font-ui);
+  font-weight: 780;
+}
+
+.setSelector {
+  background: #111418;
+  border-color: rgba(246, 243, 239, 0.44);
+  border-radius: 2px;
+}
+
+.setSelector:focus-visible {
+  outline-color: #f05a28;
+}
+
+.teamDock {
+  backdrop-filter: none;
+  border-radius: 2px;
+  box-shadow: none;
+}
+
+.teamActions button,
+.utilityBar button,
+.recovery button {
+  border-radius: 2px;
+}
+
+.addPoint {
+  background: #f05a28;
+  border-color: #f05a28;
+  box-shadow: none;
+}
+
+.red .addPoint {
+  background: #111418;
+  border-color: #f6f3ef;
+  box-shadow: none;
+}
+
+.removePoint {
+  background: #111418;
+}
+
+.utilityBar {
+  background: #111418;
+  border-radius: 2px;
+}
+
+.utilityBar button:hover:not(:disabled),
+.recovery button:hover:not(:disabled) {
+  background: #f6f3ef;
+  border-color: #f6f3ef;
+  color: #111418;
+}
+
+.receipt,
+.recovery {
+  backdrop-filter: none;
+  background: rgba(17, 20, 24, 0.96);
+  border-radius: 2px;
+}
+
+.recovery {
+  background: rgba(77, 37, 20, 0.97);
+  border-color: #e5a05b;
+}
+
+@media (orientation: landscape) {
+  .scoreOverlay {
+    background: transparent;
+  }
+
+  .matchSummary {
+    backdrop-filter: none;
+    background: rgba(17, 20, 24, 0.96);
+    border-radius: 2px;
+  }
+
+  .setSelector {
+    border-radius: 2px;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 430px) {
+  .teamDock {
+    border-radius: 2px;
+  }
+}
+
+@media (max-width: 370px) and (orientation: portrait) {
+  .teamDock,
+  .recovery {
+    border-radius: 2px;
+  }
+}

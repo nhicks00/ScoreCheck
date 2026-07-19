@@ -956,3 +956,238 @@
     animation: none;
   }
 }
+
+/* SUNLIT CENTER COURT — visual hard cutover.
+   Geometry stays untouched so the proven compact-landscape scorer remains safe. */
+.scoreboard {
+  --witness-blue: #f05a28;
+  --witness-blue-deep: #cf4317;
+  --witness-blue-soft: rgba(240, 90, 40, 0.12);
+  --witness-red: #111418;
+  --witness-red-deep: #111418;
+  --witness-red-soft: rgba(17, 20, 24, 0.08);
+  --witness-line: #d8d2c9;
+  background: #f6f3ef;
+  color: #111418;
+}
+
+.sessionShell {
+  --witness-blue: #f05a28;
+  --witness-red: #111418;
+  background: #f6f3ef;
+  color: #111418;
+}
+
+.sessionAlert {
+  background: #fff4e7;
+  border-color: #e5a05b;
+  border-radius: 3px;
+  color: #6c3513;
+}
+
+.sessionAlert button {
+  border-color: #c47a3d;
+  color: #6c3513;
+}
+
+.sessionFooter {
+  background: #fff;
+  border-color: #d8d2c9;
+  border-radius: 3px;
+}
+
+.sessionFooter strong,
+.receipt p,
+.coverage p {
+  color: #111418;
+}
+
+.sessionFooter p,
+.terminalState p,
+.finalRecap p,
+.matchSummary small {
+  color: #67645f;
+}
+
+.roleLabel,
+.contextLabel svg,
+.receiptIcon {
+  color: #f05a28;
+}
+
+.releaseButton,
+.switchButton {
+  background: transparent;
+  border-color: #aaa39a;
+  border-radius: 2px;
+  color: #34373a;
+}
+
+.switchButton:hover:not(:disabled) {
+  background: #fff;
+  border-color: #f05a28;
+  color: #111418;
+}
+
+.loadingState span {
+  background: #ede7df;
+  border-color: #d8d2c9;
+  border-radius: 3px;
+}
+
+.terminalState > svg,
+.liveStatus.live {
+  color: #d94c1f;
+}
+
+.liveStatus.complete {
+  color: #1e8e3e;
+}
+
+.setStage span,
+.teamPanel + .teamPanel,
+.rallyStep:not(:last-child)::after {
+  border-color: #c9c2b8;
+}
+
+.setSelector > span,
+.contextLabel,
+.sectionLabel,
+.rallyNumber,
+.coverage p {
+  color: #67645f;
+}
+
+.setSelector select {
+  background: #fff;
+  border-color: #aaa39a;
+  border-radius: 2px;
+  color: #111418;
+}
+
+.setSelector select:focus-visible {
+  outline-color: #f05a28;
+}
+
+.blue {
+  color: #f05a28;
+}
+
+.red {
+  color: #111418;
+}
+
+.teamScore {
+  color: #111418;
+  font-family: var(--font-ui);
+  font-weight: 760;
+}
+
+.teamRule {
+  border-radius: 0;
+}
+
+.versus {
+  background: #fff;
+  border-color: #c9c2b8;
+  border-radius: 2px;
+  color: #67645f;
+}
+
+.contributionControls button,
+.controlIcon,
+.finalRecap,
+.recapIcon,
+.sectionIcon,
+.receiptIcon,
+.rallyMarker,
+.receipt,
+.coverage {
+  border-radius: 2px;
+}
+
+.blue .addPoint {
+  background: #f05a28;
+  border-color: #f05a28;
+  box-shadow: none;
+}
+
+.red .addPoint {
+  background: #111418;
+  border-color: #111418;
+  box-shadow: none;
+}
+
+.removePoint {
+  background: #fff;
+}
+
+.finalRecap {
+  background: #edf7ef;
+  border-color: #91c89e;
+}
+
+.recapIcon {
+  background: #fff;
+  border-color: #91c89e;
+  color: #1e8e3e;
+}
+
+.sectionIcon,
+.receiptIcon,
+.rallyMarker {
+  background: #fff;
+  border-color: #c9c2b8;
+}
+
+.pending .rallyMarker,
+.corrected .rallyMarker {
+  background: #fff1eb;
+  border-color: #f05a28;
+  box-shadow: none;
+  color: #f05a28;
+}
+
+.confirmed .rallyMarker {
+  border-color: #75b483;
+  color: #1e8e3e;
+}
+
+.pending .rallyNumber,
+.confirmed .rallyNumber,
+.corrected .rallyNumber {
+  color: #d94c1f;
+}
+
+.receipt,
+.coverage {
+  background: #fff;
+  border-color: #d8d2c9;
+}
+
+.receipt::after {
+  background: #f05a28;
+  border-radius: 0;
+  box-shadow: none;
+  width: 3px;
+}
+
+.receipt.sending,
+.receipt.retrying,
+.receipt.offline {
+  background: #fff9e8;
+  border-color: #d4a017;
+}
+
+.receipt.failed,
+.receipt.rejected {
+  background: #fff0ee;
+  border-color: #d93025;
+}
+
+@media (min-width: 700px) {
+  .scoreboard {
+    border-color: #d8d2c9;
+    border-radius: 3px;
+  }
+}

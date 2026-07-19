@@ -224,7 +224,7 @@ export function ProductionConsoleClient({
   }
 
   return (
-    <main className="shell">
+    <main className="shell production-shell">
       <div className="container stack">
         <div className="topbar">
           <span className="brand-mark">Score<em>Check</em></span>
