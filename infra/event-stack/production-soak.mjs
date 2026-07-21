@@ -722,7 +722,9 @@ class RouterSoakRuntime {
   constructor({ host, runner = runCommand }) { this.host = validateRouterHost(host); this.runner = runner; }
 
   async preflight() {
-    await this.#ssh("test -x /usr/sbin/scorecheck-speedify-soak-recorder && /usr/sbin/scorecheck-speedify-routing status >/dev/null");
+    const result = await this.#ssh("test -x /usr/sbin/scorecheck-speedify-soak-recorder && /usr/sbin/scorecheck-speedify-routing status");
+    const problems = productionRouterPreflightProblems(result.stdout);
+    if (problems.length) throw new Error(`venue router is not ready: ${problems.join("; ")}`);
     return { healthy: true };
   }
 
@@ -757,6 +759,30 @@ class RouterSoakRuntime {
   }
 
   #ssh(command) { return this.runner("ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", this.host, command]); }
+}
+
+export function productionRouterPreflightProblems(raw) {
+  const value = String(raw ?? "").replaceAll("\r", "");
+  const problems = [];
+  const ingestIp = /^Ingest IP: ((?:\d{1,3}\.){3}\d{1,3})$/m.exec(value)?.[1] ?? null;
+  const primaryRules = value.split("\n").filter((line) => /\blookup 900$/.test(line));
+  const guardRules = value.split("\n").filter((line) => /\blookup 901$/.test(line));
+  const validatedUpload = Number(/^validated_upload_mbps=(\d+)$/m.exec(value)?.[1]);
+  const minimumUpload = Number(/^minimum_upload_mbps=(\d+)$/m.exec(value)?.[1]);
+
+  if (!/^Enabled: yes$/m.test(value)) problems.push("ScoreCheck camera routing is not enabled");
+  if (!/^Speedify state: CONNECTED$/m.test(value)) problems.push("Speedify is not connected");
+  if (!/^Runtime status: CONNECTED_ROUTED$/m.test(value)) problems.push("camera traffic is not routed through Speedify");
+  if (!ingestIp) problems.push("the ingest endpoint is unavailable");
+  if (primaryRules.length !== 2 || !primaryRules.some((line) => /ipproto udp dport 8890 lookup 900$/.test(line)) || !primaryRules.some((line) => /ipproto tcp dport 1935 lookup 900$/.test(line)) || primaryRules.some((line) => ingestIp && !line.includes(`to ${ingestIp} `))) problems.push("the two primary camera routing rules are not exact");
+  if (guardRules.length !== 2 || !guardRules.some((line) => /ipproto udp dport 8890 lookup 901$/.test(line)) || !guardRules.some((line) => /ipproto tcp dport 1935 lookup 901$/.test(line)) || guardRules.some((line) => ingestIp && !line.includes(`to ${ingestIp} `))) problems.push("the two fail-closed guard rules are not exact");
+  if (!/^Primary route table 900:\ndefault dev connectify0\b/m.test(value)) problems.push("the primary camera route is not on Speedify");
+  if (!/^Guard route table 901:\nblackhole default\b/m.test(value)) problems.push("the fail-closed guard route is missing");
+  if (!/^Firewall kill switch: active$/m.test(value)) problems.push("the camera kill switch is not active");
+  if (!Number.isFinite(validatedUpload) || !Number.isFinite(minimumUpload) || validatedUpload < minimumUpload) problems.push("the validated bonded upload is below its required minimum");
+  if (!ingestIp || !new RegExp(`^ingest_ip=${ingestIp.replaceAll(".", "\\.")}$`, "m").test(value)) problems.push("the validated ingest endpoint does not match routing");
+  if (!/^Watchdog lock owner: [1-9]\d*$/m.test(value)) problems.push("the fail-closed routing watchdog is not active");
+  return unique(problems);
 }
 
 function createState({ event, evidence, nowMs, minimumDurationMs, maximumDurationMs }) {

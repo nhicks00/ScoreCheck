@@ -9,6 +9,7 @@ import {
   productionProviderIdleProblems,
   productionProviderProblems,
   productionRawProblems,
+  productionRouterPreflightProblems,
   productionSnapshotProblems
 } from "./production-soak.mjs";
 
@@ -122,6 +123,43 @@ test("qualifies continuous fail-closed Speedify evidence and rejects route drift
   assert.ok(failed.problems.includes("camera ingest routes did not remain on Speedify"));
   assert.ok(failed.problems.includes("camera fail-closed kill switch was not continuously active"));
   assert.ok(failed.problems.includes("fewer than 6 camera flows reached the ingest endpoint"));
+});
+
+test("arms only when Speedify and every fail-closed router control are active", () => {
+  const healthy = `Enabled: yes
+Speedify state: CONNECTED
+Ingest IP: 138.197.236.201
+Runtime status: CONNECTED_ROUTED
+Policy rules:
+700: from all to 138.197.236.201 ipproto udp dport 8890 lookup 900
+701: from all to 138.197.236.201 ipproto tcp dport 1935 lookup 900
+710: from all to 138.197.236.201 ipproto udp dport 8890 lookup 901
+711: from all to 138.197.236.201 ipproto tcp dport 1935 lookup 901
+Primary route table 900:
+default dev connectify0 scope link src 10.202.0.2
+Guard route table 901:
+blackhole default
+Firewall kill switch: active
+Validated state:
+validated_upload_mbps=31
+minimum_upload_mbps=31
+ingest_ip=138.197.236.201
+Watchdog lock owner: 19180
+`;
+  assert.deepEqual(productionRouterPreflightProblems(healthy), []);
+
+  const disconnected = healthy
+    .replace("Speedify state: CONNECTED", "Speedify state: AUTO_CONNECTING")
+    .replace("Runtime status: CONNECTED_ROUTED", "Runtime status: SPEEDIFY_UNAVAILABLE_BLOCKED")
+    .replace(/700:.*\n701:.*\n710:.*\n711:.*\n/, "none\n")
+    .replace("default dev connectify0 scope link src 10.202.0.2", "")
+    .replace("Watchdog lock owner: 19180", "Watchdog lock owner: none");
+  const problems = productionRouterPreflightProblems(disconnected);
+  assert.ok(problems.includes("Speedify is not connected"));
+  assert.ok(problems.includes("camera traffic is not routed through Speedify"));
+  assert.ok(problems.includes("the two primary camera routing rules are not exact"));
+  assert.ok(problems.includes("the primary camera route is not on Speedify"));
+  assert.ok(problems.includes("the fail-closed routing watchdog is not active"));
 });
 
 function snapshot({ active = true, sampledMs = startedMs, framesMultiplier = 0 } = {}) {
