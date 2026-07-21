@@ -140,13 +140,13 @@ export class RehearsalSoakEvaluator {
 }
 
 export async function evaluateRehearsalPoolEvidence({ state, manifest, lifecycleState, startMs, endMs, stepSeconds = 5 }) {
-  if (!state?.sampler?.output || manifest?.kind !== "rehearsal" || !lifecycleState?.droplets) throw new Error("rehearsal pool evidence inputs are incomplete");
+  if (!state?.sampler?.output || !new Set(["rehearsal", "production"]).has(manifest?.kind) || !lifecycleState?.droplets) throw new Error("event pool evidence inputs are incomplete");
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs || stepSeconds !== 5) throw new Error("rehearsal pool evidence window must use the exact five-second sampler cadence");
   const specs = [
     ...manifest.droplets.filter((entry) => entry.role === "ingest"),
     ...manifest.droplets.filter((entry) => ["compositor", "compositor-spare"].includes(entry.role)).sort((left, right) => left.providerName.localeCompare(right.providerName))
   ];
-  if (specs.length !== 10 || specs.filter((entry) => entry.role === "ingest").length !== 1) throw new Error("rehearsal pool topology must contain one ingest and nine compositor hosts");
+  if (specs.length !== 10 || specs.filter((entry) => entry.role === "ingest").length !== 1) throw new Error("event pool topology must contain one ingest and nine compositor hosts");
   const raw = await readFile(state.sampler.output, "utf8");
   const finalNewline = raw.lastIndexOf("\n");
   if (finalNewline < 0) throw new Error("pool host evidence has no complete records");

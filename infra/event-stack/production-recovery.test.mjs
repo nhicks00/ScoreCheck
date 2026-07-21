@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { buildEventManifest, loadManifestInputs } from "./event-manifest.mjs";
-import { buildProductionMaterial, buildProductionSecretFiles } from "./production-recovery.mjs";
+import { buildProductionMaterial, buildProductionSecretFiles, migrateProductionMaterial } from "./production-recovery.mjs";
 
 const inputs = await loadManifestInputs();
 const manifest = buildEventManifest({ event: "production-recovery-test", kind: "production", destroyAfter: "2026-08-01", ...inputs });
@@ -39,15 +39,13 @@ function fixture() {
       LIVEKIT_API_SECRET: `local-secret-${index}-abcdefghijklmnopqrstuvwxyz`,
       PROGRAM_PAGE_TOKEN: "program-page-token-abcdefghijklmnopqrstuvwxyz",
       YOUTUBE_RTMPS_BASE: "rtmps://a.rtmps.youtube.com/live2",
+      YOUTUBE_STREAM_RESOLUTION: "variable",
+      YOUTUBE_STREAM_FRAME_RATE: "variable",
+      PRODUCTION_OUTPUT_PROFILES: "1080p30,1080p60",
       [`COURT_${firstCourt}_YOUTUBE_KEY`]: `youtube-key-${firstCourt}-abcdefghijk`,
+      [`COURT_${firstCourt}_YOUTUBE_STREAM_ID`]: `youtube-stream-${firstCourt}`,
       [`COURT_${firstCourt + 1}_YOUTUBE_KEY`]: `youtube-key-${firstCourt + 1}-abcdefghijk`,
-      EGRESS_WIDTH: "1280",
-      EGRESS_HEIGHT: "720",
-      EGRESS_FRAMERATE: "30",
-      EGRESS_VIDEO_BITRATE: "4000",
-      EGRESS_AUDIO_BITRATE: "128",
-      EGRESS_AUDIO_FREQUENCY: "48000",
-      EGRESS_KEYFRAME_INTERVAL: "2"
+      [`COURT_${firstCourt + 1}_YOUTUBE_STREAM_ID`]: `youtube-stream-${firstCourt + 1}`
     };
   });
   return { globalConfig, pathConfig, webEnvironment, monitoringEnvironment, compositorEnvironments };
@@ -60,6 +58,8 @@ test("normalizes all eight stable camera and output identities without a live Dr
   assert.equal(material.publishers[1].source, "publisher");
   assert.match(material.publishers[8].source, /^srt:\/\//);
   assert.equal(material.compositors[7].streamKey, "youtube-key-7-abcdefghijk");
+  assert.equal(material.compositors[7].streamId, "youtube-stream-7");
+  assert.deepEqual(material.compositors[7].outputProfiles, ["1080p30", "1080p60"]);
   assert.equal(material.programPageToken, "program-page-token-abcdefghijklmnopqrstuvwxyz");
 });
 
@@ -73,6 +73,10 @@ test("renders the exact 12-host production secret contract and strips stale targ
   assert.doesNotMatch(files["observability.env"], /MONITOR_AGENT_TARGETS/);
   assert.doesNotMatch(files["observability.env"], /TWILIO_/);
   assert.match(files["compositors/bvm-compositor-h.env"], /COURT_8_YOUTUBE_KEY=/);
+  assert.match(files["compositors/bvm-compositor-h.env"], /COURT_8_YOUTUBE_STREAM_ID=/);
+  assert.match(files["compositors/bvm-compositor-h.env"], /YOUTUBE_STREAM_RESOLUTION="variable"/);
+  assert.match(files["compositors/bvm-compositor-h.env"], /PRODUCTION_OUTPUT_PROFILES="1080p30,1080p60"/);
+  assert.doesNotMatch(files["compositors/bvm-compositor-h.env"], /EGRESS_(WIDTH|HEIGHT|FRAMERATE|VIDEO_BITRATE)/);
   assert.doesNotMatch(files["compositors/bvm-compositor-h.env"], /COURT_7_YOUTUBE_KEY=/);
   assert.doesNotMatch(files["compositors/bvm-compositor-spare.env"], /COURT_[1-8]_YOUTUBE_KEY=/);
 });
@@ -89,4 +93,43 @@ test("fails closed on duplicate output ownership, incomplete camera credentials,
   const twilio = fixture();
   twilio.monitoringEnvironment.TWILIO_ACCOUNT_SID = "must-not-survive";
   assert.throws(() => buildProductionMaterial(twilio), /must not contain Twilio credentials/);
+
+  const duplicateStream = fixture();
+  duplicateStream.compositorEnvironments[1].COURT_3_YOUTUBE_STREAM_ID = "youtube-stream-1";
+  assert.throws(() => buildProductionMaterial(duplicateStream), /stream identities are not unique/);
+});
+
+test("migrates the qualified legacy 720 material to reusable variable YouTube streams without retaining fixed output dimensions", () => {
+  const current = buildProductionMaterial(fixture());
+  const legacyMaterial = {
+    ...current,
+    schemaVersion: 1,
+    compositors: Object.fromEntries(Object.entries(current.compositors).map(([court, compositor]) => [court, {
+      apiKey: compositor.apiKey,
+      apiSecret: compositor.apiSecret,
+      rtmpsBase: "rtmps://legacy.example/live2",
+      streamKey: `legacy-stream-key-${court}`,
+      encoding: { width: "1280", height: "720", framerate: "30", videoBitrate: "4000", audioBitrate: "128", audioFrequency: "48000", keyframeInterval: "2" }
+    }]))
+  };
+  const destinations = {
+    schemaVersion: 1,
+    streams: Object.fromEntries(Array.from({ length: 8 }, (_, index) => {
+      const court = index + 1;
+      return [court, {
+        id: `production-stream-${court}`,
+        court,
+        resolution: "variable",
+        frameRate: "variable",
+        streamName: `production-stream-key-${court}`,
+        rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2"
+      }];
+    }))
+  };
+  const migrated = migrateProductionMaterial({ legacyMaterial, destinations });
+  assert.equal(migrated.schemaVersion, 2);
+  assert.equal(migrated.compositors[1].streamId, "production-stream-1");
+  assert.equal(migrated.compositors[1].youtubeResolution, "variable");
+  assert.deepEqual(migrated.compositors[1].outputProfiles, ["1080p30", "1080p60"]);
+  assert.equal("encoding" in migrated.compositors[1], false);
 });

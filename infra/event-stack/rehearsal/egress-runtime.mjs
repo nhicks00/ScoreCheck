@@ -27,8 +27,9 @@ export class EgressRuntime {
     return { healthy: true, active: 0 };
   }
 
-  async ensureStarted({ host, court, expectedId = null }) {
+  async ensureStarted({ host, court, profile = "720p30", expectedId = null }) {
     validateCourt(court);
+    validateProfile(profile);
     if (expectedId !== null) validateEgressId(expectedId);
     let active = await this.listActive(host);
     if (active.length > 1) throw new Error(`compositor ${host} admitted multiple active Egress jobs`);
@@ -37,7 +38,7 @@ export class EgressRuntime {
       return { ...active[0], adopted: true };
     }
     if (expectedId) throw new Error(`expected Egress ${expectedId} is absent from compositor ${host}`);
-    const result = await this.#remote(host, `cd /opt/compositor && ./start-court.sh ${court}`);
+    const result = await this.#remote(host, `cd /opt/compositor && ./start-court.sh ${court} ${profile}`);
     const ids = [...new Set(result.stdout.match(/EG_[a-zA-Z0-9]+/g) ?? [])];
     if (ids.length !== 1) throw new Error(`compositor ${host} start did not return exactly one Egress id`);
     const id = ids[0];
@@ -50,10 +51,11 @@ export class EgressRuntime {
     throw new Error(`Egress ${id} did not become active on compositor ${host}`);
   }
 
-  async proveSecondStartRejected({ host, court, expectedId }) {
+  async proveSecondStartRejected({ host, court, profile = "720p30", expectedId }) {
     validateCourt(court);
+    validateProfile(profile);
     validateEgressId(expectedId);
-    const attempt = await this.#remote(host, `cd /opt/compositor && ./start-court.sh ${court}`, { allowFailure: true });
+    const attempt = await this.#remote(host, `cd /opt/compositor && ./start-court.sh ${court} ${profile}`, { allowFailure: true });
     if (attempt.code === 0) throw new Error(`compositor ${host} accepted a second Egress start`);
     const active = await this.listActive(host);
     if (active.length !== 1 || active[0].id !== expectedId) throw new Error(`compositor ${host} admission rejection changed the active Egress set`);
@@ -124,6 +126,10 @@ export function parseActiveEgress(raw) {
 
 function validateCourt(court) {
   if (!Number.isInteger(court) || court < 1 || court > 8) throw new Error("Egress court must be from 1 through 8");
+}
+
+function validateProfile(value) {
+  if (!new Set(["720p30", "1080p30", "1080p60"]).has(value)) throw new Error("Egress output profile is invalid");
 }
 
 function validateEgressId(value) {

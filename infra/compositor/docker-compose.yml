@@ -14,7 +14,7 @@
 #
 # Usage (on the compositor droplet, from /opt/compositor):
 #   docker compose up -d
-#   ./start-court.sh 1        # begin capture + YouTube push for court 1
+#   ./start-court.sh 1 1080p30  # begin native 1080p30 capture + YouTube push for court 1
 #   ./list-egress.sh          # see active egresses
 #   ./stop-court.sh 1         # end the broadcast
 #   docker compose down       # stop the whole stack

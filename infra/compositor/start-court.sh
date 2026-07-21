@@ -3,11 +3,12 @@
 # page (headless Chrome) and pushes it to YouTube RTMP.
 #
 # Usage:
-#   ./start-court.sh <court-number>
+#   ./start-court.sh <court-number> <output-profile>
 #
 #   court-number  1-8; the stream key is read only from COURT_<N>_YOUTUBE_KEY
+#   output-profile  one of: 720p30, 1080p30, 1080p60
 # Examples:
-#   ./start-court.sh 1
+#   ./start-court.sh 1 1080p30
 #
 # Requires the LiveKit CLI (see lib.sh for install commands) and a filled-in
 # ./.env (see .env.example). Writes:
@@ -21,11 +22,37 @@ umask 077
 # shellcheck source=lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-COURT="${1:?usage: start-court.sh <court-number>}"
-if (( $# != 1 )); then
-  echo "error: stream keys must come from the protected .env, never command arguments." >&2
+if (( $# != 2 )); then
+  echo "error: only court number and an allowlisted output profile are accepted; stream keys must come from the protected .env." >&2
   exit 1
 fi
+COURT="$1"
+OUTPUT_PROFILE="$2"
+
+case "$OUTPUT_PROFILE" in
+  720p30)
+    EGRESS_WIDTH=1280
+    EGRESS_HEIGHT=720
+    EGRESS_FRAMERATE=30
+    EGRESS_VIDEO_BITRATE=4000
+    ;;
+  1080p30)
+    EGRESS_WIDTH=1920
+    EGRESS_HEIGHT=1080
+    EGRESS_FRAMERATE=30
+    EGRESS_VIDEO_BITRATE=10000
+    ;;
+  1080p60)
+    EGRESS_WIDTH=1920
+    EGRESS_HEIGHT=1080
+    EGRESS_FRAMERATE=60
+    EGRESS_VIDEO_BITRATE=12000
+    ;;
+  *)
+    echo "error: output-profile must be 720p30, 1080p30, or 1080p60, got '$OUTPUT_PROFILE'." >&2
+    exit 1
+    ;;
+esac
 if ! [[ "$COURT" =~ ^[0-9]+$ ]]; then
   echo "error: court-number must be an integer, got '$COURT'" >&2
   exit 1
@@ -87,10 +114,6 @@ YOUTUBE_RTMPS_BASE="${YOUTUBE_RTMPS_BASE:-rtmps://a.rtmps.youtube.com/live2}"
 : "${PROGRAM_PAGE_BASE_URL:?set PROGRAM_PAGE_BASE_URL in .env (see .env.example)}"
 : "${PROGRAM_PAGE_TOKEN:?set PROGRAM_PAGE_TOKEN in .env (see .env.example)}"
 
-EGRESS_WIDTH="${EGRESS_WIDTH:-1280}"
-EGRESS_HEIGHT="${EGRESS_HEIGHT:-720}"
-EGRESS_FRAMERATE="${EGRESS_FRAMERATE:-30}"
-EGRESS_VIDEO_BITRATE="${EGRESS_VIDEO_BITRATE:-4000}"
 EGRESS_AUDIO_BITRATE="${EGRESS_AUDIO_BITRATE:-128}"
 EGRESS_AUDIO_FREQUENCY="${EGRESS_AUDIO_FREQUENCY:-48000}"
 EGRESS_KEYFRAME_INTERVAL="${EGRESS_KEYFRAME_INTERVAL:-2}"
@@ -134,7 +157,7 @@ chmod 600 "$REQ_FILE" # contains the stream key
 echo "court ${COURT}: starting web egress"
 echo "  page:   ${PROGRAM_PAGE_BASE_URL}/${COURT}?token=<redacted>"
 echo "  rtmps:  ${YOUTUBE_RTMPS_BASE}/<key-redacted>"
-echo "  encode: ${EGRESS_WIDTH}x${EGRESS_HEIGHT}@${EGRESS_FRAMERATE} ${EGRESS_VIDEO_BITRATE}kbps, keyframe ${EGRESS_KEYFRAME_INTERVAL}s"
+echo "  encode: ${OUTPUT_PROFILE} (${EGRESS_WIDTH}x${EGRESS_HEIGHT}@${EGRESS_FRAMERATE} ${EGRESS_VIDEO_BITRATE}kbps), keyframe ${EGRESS_KEYFRAME_INTERVAL}s"
 
 START_LOG="$REQ_DIR/court-${COURT}.start.log"
 if ! "$LK" egress start --type web "$REQ_FILE" >"$START_LOG" 2>&1; then

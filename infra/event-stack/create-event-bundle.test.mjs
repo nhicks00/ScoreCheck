@@ -164,9 +164,8 @@ test("requires the rehearsal SHA to match local and remote branch tips exactly",
 async function productionSourceFixture(parent) {
   const root = join(parent, "production-source");
   await mkdir(join(root, "wireguard"), { recursive: true, mode: 0o700 });
-  const encoding = { width: "1280", height: "720", framerate: "30", videoBitrate: "4000", audioBitrate: "128", audioFrequency: "48000", keyframeInterval: "2" };
   const material = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     programPageToken: "program-page-token-abcdefghijklmnopqrstuvwxyz",
     commentary: { apiKey: "commentary-key-123", apiSecret: "commentary-secret-abcdefghijklmnopqrstuvwxyz" },
     publishers: Object.fromEntries(Array.from({ length: 8 }, (_, index) => [index + 1, {
@@ -179,7 +178,10 @@ async function productionSourceFixture(parent) {
       apiSecret: `local-secret-${index + 1}-abcdefghijklmnopqrstuvwxyz`,
       rtmpsBase: "rtmps://a.rtmps.youtube.com/live2",
       streamKey: `youtube-key-${index + 1}-abcdefghijk`,
-      encoding
+      streamId: `youtube-stream-${index + 1}`,
+      youtubeResolution: "variable",
+      youtubeFrameRate: "variable",
+      outputProfiles: ["1080p30", "1080p60"]
     }]))
   };
   const requiredMonitoring = [
@@ -199,7 +201,7 @@ async function productionSourceFixture(parent) {
   };
   for (const [name, body] of Object.entries(files)) await writeFile(join(root, name), body, { mode: 0o600 });
   const marker = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     createdAt: "2026-07-15T00:00:00Z",
     captureSha256: "a".repeat(64),
     files: Object.fromEntries(Object.entries(files).map(([name, body]) => [name, createHash("sha256").update(body).digest("hex")]))

@@ -21,7 +21,7 @@ read_scalar() {
 
 max_utilization="$(read_scalar max_cpu_utilization)"
 web_cpu_cost="$(read_scalar web_cpu_cost)"
-host_vcpus="${SCORECHECK_COMPOSITOR_VCPUS:-4}"
+host_vcpus="${SCORECHECK_COMPOSITOR_VCPUS:-8}"
 
 awk -v max="$max_utilization" -v cost="$web_cpu_cost" -v cpus="$host_vcpus" '
   BEGIN {
@@ -39,7 +39,7 @@ awk -v max="$max_utilization" -v cost="$web_cpu_cost" -v cpus="$host_vcpus" '
       exit 1
     }
     if ((2 * cost) <= capacity) {
-      print "FAIL: two web egresses would be admitted on the c-4 baseline" > "/dev/stderr"
+      print "FAIL: two web egresses would be admitted on the production host" > "/dev/stderr"
       exit 1
     }
   }
@@ -98,5 +98,5 @@ grep -Fq "jq -er" "$START_SCRIPT" || {
 }
 
 capacity="$(awk -v max="$max_utilization" -v cpus="$host_vcpus" 'BEGIN { printf "%.1f", max * cpus }')"
-printf 'PASS: c-4 admission is one web egress (capacity=%s cores, cost=%s cores)\n' \
+printf 'PASS: production admission is one web egress (capacity=%s cores, cost=%s cores)\n' \
   "$capacity" "$web_cpu_cost"

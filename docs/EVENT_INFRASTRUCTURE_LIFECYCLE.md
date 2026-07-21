@@ -412,6 +412,56 @@ v5. Any earlier bundle must be regenerated from the protected recovery source
 and rendered network contract; lifecycle commands reject it before provider
 access.
 
+## Native 1080 production output
+
+Production YouTube destinations use reusable streams with variable resolution
+and frame-rate admission. At each broadcast start, the runner probes the exact
+camera source and accepts only progressive H.264 or H.265 1920x1080 at
+approximately 30 or 60 fps. It then starts a matching H.264 1080p30 or 1080p60
+scoreboard-overlay Web Egress. Monitoring previews remain independent
+low-bandwidth derivatives; they
+never determine the YouTube output profile. A camera that changes frame rate
+mid-broadcast requires a controlled output restart so one YouTube session never
+silently changes encoder contracts.
+
+Prepare the protected YouTube identities before creating the production
+bundle, then migrate the legacy recovery source once:
+
+```bash
+node infra/event-stack/production-youtube.mjs prepare \
+  --credentials-env /absolute/protected/provider.env \
+  --event next-event-slug \
+  --active-cameras 1,2,3,4,5,6 \
+  --output /absolute/protected/youtube/next-event-slug
+
+node infra/event-stack/production-recovery.mjs migrate-youtube \
+  --source /absolute/protected/production-recovery-source-v1 \
+  --destinations /absolute/protected/youtube/next-event-slug/destinations.json \
+  --output /absolute/protected/production-recovery-source-v2
+```
+
+The compositor pool uses one SFO2 premium Intel 8-vCPU/16-GiB host per camera
+plus one warm spare. Start no public output merely because the 12-host stack is
+ready. After the router is online and the lifecycle is explicitly live, arm
+the bounded six-camera soak:
+
+```bash
+node infra/event-stack/production-soak.mjs run \
+  --profile /absolute/protected/events/next-event-slug/operator-profile.json \
+  --destinations /absolute/protected/youtube/next-event-slug/destinations.json \
+  --evidence /absolute/protected/evidence/next-event-slug \
+  --minimum-hours 4 \
+  --maximum-hours 6
+```
+
+The runner first proves an idle 12-host baseline and healthy fail-closed venue
+routing, then prints `ARMED` while every public output remains stopped. Cameras
+1-6 may start only after that line. It probes each source, starts exactly one
+matching output per camera, verifies the scoreboard page and unlisted YouTube
+destination, records five-second end-to-end samples plus host and router
+evidence, and sends deduplicated plain-English Pushover alerts. Cameras 7-8
+must remain isolated for this six-camera soak.
+
 ## Event build
 
 The bundle contains a new immutable manifest for every event. The manifest

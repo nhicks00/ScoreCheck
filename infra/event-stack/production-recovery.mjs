@@ -7,11 +7,15 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { loadProtectedEnv } from "./stack-deployer.mjs";
+import { readProductionDestinations } from "./production-youtube.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const COURTS = Object.freeze(Array.from({ length: 8 }, (_, index) => index + 1));
-const SOURCE_SCHEMA_VERSION = 1;
-const MATERIAL_SCHEMA_VERSION = 1;
+const SOURCE_SCHEMA_VERSION = 2;
+const MATERIAL_SCHEMA_VERSION = 2;
+const LEGACY_SOURCE_SCHEMA_VERSION = 1;
+const LEGACY_MATERIAL_SCHEMA_VERSION = 1;
+const PRODUCTION_OUTPUT_PROFILES = Object.freeze(["1080p30", "1080p60"]);
 const SOURCE_FILES = Object.freeze([
   "material.json",
   "monitoring.env",
@@ -58,6 +62,11 @@ async function main() {
   if (!options) return usage();
   if (options.command === "capture") {
     const result = await createProductionRecoverySource(options);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+  if (options.command === "migrate-youtube") {
+    const result = await migrateProductionRecoverySource(options);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
   }
@@ -130,6 +139,82 @@ export async function createProductionRecoverySource({ captureRoot, output }) {
   }
 }
 
+export async function migrateProductionRecoverySource({ source, destinations, output }) {
+  const legacy = await loadLegacyProductionRecoverySource(source);
+  const youtube = await readProductionDestinations(destinations);
+  const material = migrateProductionMaterial({ legacyMaterial: legacy.material, destinations: youtube });
+  const target = normalizedAbsolute(output, "production recovery source");
+  await assertProtectedParent(target);
+  await assertAbsent(target, "production recovery source");
+  const temporary = `${target}.rendering-${process.pid}`;
+  await rm(temporary, { recursive: true, force: true });
+  await mkdir(join(temporary, "wireguard"), { recursive: true, mode: 0o700 });
+  await chmod(temporary, 0o700);
+  await chmod(join(temporary, "wireguard"), 0o700);
+  try {
+    await writeProtected(join(temporary, "material.json"), `${JSON.stringify(material, null, 2)}\n`);
+    for (const name of SOURCE_FILES.filter((entry) => entry !== "material.json")) {
+      const sourcePath = join(legacy.root, name);
+      const targetPath = join(temporary, name);
+      await copyFile(sourcePath, targetPath);
+      await chmod(targetPath, 0o600);
+    }
+    const marker = {
+      schemaVersion: SOURCE_SCHEMA_VERSION,
+      createdAt: new Date().toISOString(),
+      captureSha256: legacy.marker.captureSha256,
+      migratedFromSourceSha256: legacy.sourceSha256,
+      youtubeDestinationsSha256: sha256(await readFile(destinations)),
+      files: await hashesForFiles(temporary, SOURCE_FILES)
+    };
+    await writeProtected(join(temporary, "SOURCE_COMPLETE.json"), `${JSON.stringify(marker, null, 2)}\n`);
+    await rename(temporary, target);
+    await chmod(target, 0o700);
+    const loaded = await loadProductionRecoverySource(target);
+    return {
+      status: "PASS",
+      source: target,
+      schemaVersion: loaded.marker.schemaVersion,
+      fileCount: Object.keys(loaded.marker.files).length,
+      sourceSha256: loaded.sourceSha256
+    };
+  } catch (error) {
+    await rm(temporary, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+export function migrateProductionMaterial({ legacyMaterial, destinations }) {
+  validateLegacyProductionMaterial(legacyMaterial);
+  if (!destinations || destinations.schemaVersion !== 1 || !destinations.streams) throw new Error("production YouTube destinations are invalid");
+  const compositors = {};
+  for (const court of COURTS) {
+    const legacy = legacyMaterial.compositors[court];
+    const stream = destinations.streams[court];
+    if (!stream || stream.court !== court || stream.resolution !== "variable" || stream.frameRate !== "variable") {
+      throw new Error(`Camera ${court} production YouTube destination is invalid`);
+    }
+    compositors[court] = {
+      apiKey: legacy.apiKey,
+      apiSecret: legacy.apiSecret,
+      rtmpsBase: requireRtmps(stream.rtmpsIngestionAddress, `Camera ${court} YouTube RTMPS base`),
+      streamKey: requireSecret(stream.streamName, `Camera ${court} YouTube stream key`, 8),
+      streamId: requireProviderId(stream.id, `Camera ${court} YouTube stream id`),
+      youtubeResolution: "variable",
+      youtubeFrameRate: "variable",
+      outputProfiles: [...PRODUCTION_OUTPUT_PROFILES]
+    };
+  }
+  const material = {
+    schemaVersion: MATERIAL_SCHEMA_VERSION,
+    programPageToken: legacyMaterial.programPageToken,
+    commentary: { ...legacyMaterial.commentary },
+    publishers: structuredClone(legacyMaterial.publishers),
+    compositors
+  };
+  return validateProductionMaterial(material);
+}
+
 export function buildProductionMaterial({ globalConfig, pathConfig, webEnvironment, monitoringEnvironment, compositorEnvironments }) {
   if (!globalConfig || !Array.isArray(globalConfig.authInternalUsers)) throw new Error("ingest global configuration has no internal users");
   if (!pathConfig || !Array.isArray(pathConfig.items)) throw new Error("ingest path configuration has no items");
@@ -163,12 +248,14 @@ export function buildProductionMaterial({ globalConfig, pathConfig, webEnvironme
     const owners = compositorEnvironments.filter((environment) => typeof environment[keyName] === "string" && environment[keyName].trim());
     if (owners.length !== 1) throw new Error(`Camera ${court} must have exactly one protected YouTube stream key owner`);
     const owner = owners[0];
+    const streamIdName = `COURT_${court}_YOUTUBE_STREAM_ID`;
     compositors[court] = {
       apiKey: requireSecret(owner.LIVEKIT_API_KEY, `Camera ${court} compositor API key`, 8),
       apiSecret: requireSecret(owner.LIVEKIT_API_SECRET, `Camera ${court} compositor API secret`, 24),
       rtmpsBase: requireRtmps(owner.YOUTUBE_RTMPS_BASE, `Camera ${court} YouTube RTMPS base`),
       streamKey: requireSecret(owner[keyName], `Camera ${court} YouTube stream key`, 8),
-      encoding: encodingProfile(owner)
+      streamId: requireProviderId(owner[streamIdName], `Camera ${court} YouTube stream id`),
+      ...variableYouTubeProfile(owner)
     };
   }
   const material = {
@@ -205,6 +292,31 @@ export async function loadProductionRecoverySource(sourceDirectory) {
   }
   const material = JSON.parse(await readFile(join(root, "material.json"), "utf8"));
   validateProductionMaterial(material);
+  const monitoringEnvironment = await loadProtectedEnv(join(root, "monitoring.env"));
+  requireEnvironment(monitoringEnvironment, REQUIRED_MONITORING_KEYS);
+  rejectTwilio(monitoringEnvironment);
+  const sourceSha256 = sha256(Buffer.from(stableJson({ captureSha256: marker.captureSha256, files: marker.files }), "utf8"));
+  return { root, marker, material, monitoringEnvironment, sourceSha256 };
+}
+
+async function loadLegacyProductionRecoverySource(sourceDirectory) {
+  const root = normalizedAbsolute(sourceDirectory, "legacy production recovery source");
+  await assertProtectedDirectory(root, "legacy production recovery source");
+  const marker = await readProtectedJson(join(root, "SOURCE_COMPLETE.json"), "legacy production recovery marker");
+  if (marker.schemaVersion !== LEGACY_SOURCE_SCHEMA_VERSION || !marker.files || typeof marker.files !== "object" || Array.isArray(marker.files)) {
+    throw new Error("legacy production recovery marker is invalid");
+  }
+  if (!/^[a-f0-9]{64}$/.test(marker.captureSha256 ?? "")) throw new Error("legacy production recovery capture binding is invalid");
+  if (JSON.stringify(Object.keys(marker.files).sort()) !== JSON.stringify([...SOURCE_FILES].sort())) throw new Error("legacy production recovery source file set is incomplete");
+  for (const [name, expected] of Object.entries(marker.files)) {
+    validateRelativeFile(name);
+    if (!/^[a-f0-9]{64}$/.test(expected)) throw new Error("legacy production recovery source digest is invalid");
+    const path = join(root, name);
+    await assertProtectedFile(path, `legacy production recovery ${name}`);
+    if (sha256(await readFile(path)) !== expected) throw new Error(`legacy production recovery ${name} failed integrity verification`);
+  }
+  const material = JSON.parse(await readFile(join(root, "material.json"), "utf8"));
+  validateLegacyProductionMaterial(material);
   const monitoringEnvironment = await loadProtectedEnv(join(root, "monitoring.env"));
   requireEnvironment(monitoringEnvironment, REQUIRED_MONITORING_KEYS);
   rejectTwilio(monitoringEnvironment);
@@ -290,6 +402,8 @@ export function validateProductionMaterial(value) {
   requireSecret(value.programPageToken, "program-page token", 24);
   requireSecret(value.commentary?.apiKey, "commentary API key", 8);
   requireSecret(value.commentary?.apiSecret, "commentary API secret", 24);
+  const streamIds = new Set();
+  const streamKeys = new Set();
   for (const court of COURTS) {
     const publisher = value.publishers?.[court];
     requireSecret(publisher?.user, `Camera ${court} publisher user`, 4);
@@ -300,7 +414,31 @@ export function validateProductionMaterial(value) {
     requireSecret(compositor?.apiSecret, `Camera ${court} compositor API secret`, 24);
     requireRtmps(compositor?.rtmpsBase, `Camera ${court} YouTube RTMPS base`);
     requireSecret(compositor?.streamKey, `Camera ${court} YouTube stream key`, 8);
-    encodingProfile(compositor?.encoding ?? {});
+    requireProviderId(compositor?.streamId, `Camera ${court} YouTube stream id`);
+    if (streamIds.has(compositor.streamId) || streamKeys.has(compositor.streamKey)) throw new Error("production YouTube stream identities are not unique");
+    streamIds.add(compositor.streamId);
+    streamKeys.add(compositor.streamKey);
+    variableYouTubeProfile(compositor ?? {});
+  }
+  return value;
+}
+
+function validateLegacyProductionMaterial(value) {
+  if (!value || value.schemaVersion !== LEGACY_MATERIAL_SCHEMA_VERSION) throw new Error("legacy production recovery material schema is invalid");
+  requireSecret(value.programPageToken, "program-page token", 24);
+  requireSecret(value.commentary?.apiKey, "commentary API key", 8);
+  requireSecret(value.commentary?.apiSecret, "commentary API secret", 24);
+  for (const court of COURTS) {
+    const publisher = value.publishers?.[court];
+    requireSecret(publisher?.user, `Camera ${court} publisher user`, 4);
+    requireSecret(publisher?.password, `Camera ${court} publisher password`, 16);
+    if (publisher.source !== "publisher" && !(typeof publisher.source === "string" && publisher.source.startsWith("srt://"))) throw new Error(`Camera ${court} raw source is invalid`);
+    const compositor = value.compositors?.[court];
+    requireSecret(compositor?.apiKey, `Camera ${court} compositor API key`, 8);
+    requireSecret(compositor?.apiSecret, `Camera ${court} compositor API secret`, 24);
+    requireRtmps(compositor?.rtmpsBase, `Camera ${court} YouTube RTMPS base`);
+    requireSecret(compositor?.streamKey, `Camera ${court} YouTube stream key`, 8);
+    legacyEncodingProfile(compositor?.encoding ?? {});
   }
   return value;
 }
@@ -326,18 +464,26 @@ function filterMonitoringEnvironment(environment) {
     .sort(([left], [right]) => left.localeCompare(right)));
 }
 
-function encodingProfile(environment) {
+function variableYouTubeProfile(environment) {
+  const outputProfiles = Array.isArray(environment.outputProfiles)
+    ? environment.outputProfiles
+    : typeof environment.PRODUCTION_OUTPUT_PROFILES === "string"
+      ? environment.PRODUCTION_OUTPUT_PROFILES.split(",")
+      : [];
   const profile = {
-    width: String(environment.EGRESS_WIDTH ?? environment.width ?? "1280"),
-    height: String(environment.EGRESS_HEIGHT ?? environment.height ?? "720"),
-    framerate: String(environment.EGRESS_FRAMERATE ?? environment.framerate ?? "30"),
-    videoBitrate: String(environment.EGRESS_VIDEO_BITRATE ?? environment.videoBitrate ?? "4000"),
-    audioBitrate: String(environment.EGRESS_AUDIO_BITRATE ?? environment.audioBitrate ?? "128"),
-    audioFrequency: String(environment.EGRESS_AUDIO_FREQUENCY ?? environment.audioFrequency ?? "48000"),
-    keyframeInterval: String(environment.EGRESS_KEYFRAME_INTERVAL ?? environment.keyframeInterval ?? "2")
+    youtubeResolution: String(environment.YOUTUBE_STREAM_RESOLUTION ?? environment.youtubeResolution ?? ""),
+    youtubeFrameRate: String(environment.YOUTUBE_STREAM_FRAME_RATE ?? environment.youtubeFrameRate ?? ""),
+    outputProfiles
   };
+  const expected = { youtubeResolution: "variable", youtubeFrameRate: "variable", outputProfiles: PRODUCTION_OUTPUT_PROFILES };
+  if (stableJson(profile) !== stableJson(expected)) throw new Error("compositor YouTube destination is not the variable-profile 1080p30/60 contract");
+  return { youtubeResolution: profile.youtubeResolution, youtubeFrameRate: profile.youtubeFrameRate, outputProfiles: [...PRODUCTION_OUTPUT_PROFILES] };
+}
+
+function legacyEncodingProfile(value) {
+  const profile = Object.fromEntries(Object.entries(value ?? {}).map(([key, entry]) => [key, String(entry)]));
   const expected = { width: "1280", height: "720", framerate: "30", videoBitrate: "4000", audioBitrate: "128", audioFrequency: "48000", keyframeInterval: "2" };
-  if (stableJson(profile) !== stableJson(expected)) throw new Error("compositor encoding profile is not the qualified 720p30 contract");
+  if (stableJson(profile) !== stableJson(expected)) throw new Error("legacy compositor encoding profile is not the qualified 720p30 contract");
   return profile;
 }
 
@@ -349,14 +495,13 @@ function compositorEnvironment({ court, compositor, programPageToken }) {
     PROGRAM_PAGE_BASE_URL: "https://score.beachvolleyballmedia.com/program/court",
     PROGRAM_PAGE_TOKEN: programPageToken,
     YOUTUBE_RTMPS_BASE: compositor.rtmpsBase,
-    ...(court ? { [`COURT_${court}_YOUTUBE_KEY`]: compositor.streamKey } : {}),
-    EGRESS_WIDTH: compositor.encoding.width,
-    EGRESS_HEIGHT: compositor.encoding.height,
-    EGRESS_FRAMERATE: compositor.encoding.framerate,
-    EGRESS_VIDEO_BITRATE: compositor.encoding.videoBitrate,
-    EGRESS_AUDIO_BITRATE: compositor.encoding.audioBitrate,
-    EGRESS_AUDIO_FREQUENCY: compositor.encoding.audioFrequency,
-    EGRESS_KEYFRAME_INTERVAL: compositor.encoding.keyframeInterval
+    YOUTUBE_STREAM_RESOLUTION: compositor.youtubeResolution,
+    YOUTUBE_STREAM_FRAME_RATE: compositor.youtubeFrameRate,
+    PRODUCTION_OUTPUT_PROFILES: compositor.outputProfiles.join(","),
+    ...(court ? {
+      [`COURT_${court}_YOUTUBE_KEY`]: compositor.streamKey,
+      [`COURT_${court}_YOUTUBE_STREAM_ID`]: compositor.streamId
+    } : {})
   };
   return envFile(values);
 }
@@ -438,9 +583,9 @@ async function assertAbsent(path, label) {
 function parseArgs(argv) {
   const command = argv[0];
   if ([undefined, "help", "-h", "--help"].includes(command)) return null;
-  if (!new Set(["capture", "verify"]).has(command)) throw new Error("command must be capture or verify");
-  const options = { command, captureRoot: null, output: null, source: null };
-  const mapping = new Map([["--capture-root", "captureRoot"], ["--output", "output"], ["--source", "source"]]);
+  if (!new Set(["capture", "migrate-youtube", "verify"]).has(command)) throw new Error("command must be capture, migrate-youtube, or verify");
+  const options = { command, captureRoot: null, output: null, source: null, destinations: null };
+  const mapping = new Map([["--capture-root", "captureRoot"], ["--output", "output"], ["--source", "source"], ["--destinations", "destinations"]]);
   for (let index = 1; index < argv.length; index += 1) {
     const flag = argv[index];
     const key = mapping.get(flag);
@@ -448,13 +593,14 @@ function parseArgs(argv) {
     if (!key || !value || value.startsWith("--")) throw new Error(`${flag} is unknown or missing a value`);
     options[key] = normalizedAbsolute(value, flag);
   }
-  if (command === "capture" && (!options.captureRoot || !options.output || options.source)) throw new Error("capture requires --capture-root and --output");
-  if (command === "verify" && (!options.source || options.captureRoot || options.output)) throw new Error("verify requires --source");
+  if (command === "capture" && (!options.captureRoot || !options.output || options.source || options.destinations)) throw new Error("capture requires --capture-root and --output");
+  if (command === "migrate-youtube" && (!options.source || !options.destinations || !options.output || options.captureRoot)) throw new Error("migrate-youtube requires --source, --destinations, and --output");
+  if (command === "verify" && (!options.source || options.captureRoot || options.output || options.destinations)) throw new Error("verify requires --source");
   return options;
 }
 
 function usage() {
-  process.stdout.write("Usage:\n  node infra/event-stack/production-recovery.mjs capture --capture-root /PROTECTED/CAPTURE --output /PROTECTED/SOURCE\n  node infra/event-stack/production-recovery.mjs verify --source /PROTECTED/SOURCE\n");
+  process.stdout.write("Usage:\n  node infra/event-stack/production-recovery.mjs capture --capture-root /PROTECTED/CAPTURE --output /PROTECTED/SOURCE\n  node infra/event-stack/production-recovery.mjs migrate-youtube --source /PROTECTED/V1-SOURCE --destinations /PROTECTED/destinations.json --output /PROTECTED/V2-SOURCE\n  node infra/event-stack/production-recovery.mjs verify --source /PROTECTED/SOURCE\n");
 }
 
 function envFile(values) {
@@ -479,6 +625,11 @@ function requireSecret(value, label, minimum) {
 
 function requireRtmps(value, label) {
   if (typeof value !== "string" || !value.startsWith("rtmps://") || /[\r\n\0]/.test(value)) throw new Error(`${label} is invalid`);
+  return value;
+}
+
+function requireProviderId(value, label) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{3,100}$/.test(value)) throw new Error(`${label} is invalid`);
   return value;
 }
 

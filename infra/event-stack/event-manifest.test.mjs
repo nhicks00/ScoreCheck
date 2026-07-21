@@ -51,7 +51,7 @@ test("generates isolated provider services, endpoints, eight assigned workers, a
     role: "compositor-spare",
     warmSpare: true,
     region: "sfo2",
-    size: "c-4",
+    size: "s-8vcpu-16gb-480gb-intel",
     image: "ubuntu-24-04-x64",
     tag: "bvm-compositor",
     cloudInitProfile: "compositor",

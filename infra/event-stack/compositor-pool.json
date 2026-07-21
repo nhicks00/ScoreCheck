@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "region": "sfo2",
-  "size": "c-4",
+  "size": "s-8vcpu-16gb-480gb-intel",
   "image": "ubuntu-24-04-x64",
   "desiredCompositors": 8,
   "warmSpares": 1,
