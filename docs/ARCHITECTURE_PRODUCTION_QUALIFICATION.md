@@ -384,8 +384,9 @@ prepare, fault, restore, and cleanup confirmations. On failure it restores the
 dependency and removes the route automatically; after an operator interruption,
 the protected state supports an exact `restore` command.
 
-The isolated renderer must use this exact trailing-slash base URL for both
-`NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_URL`:
+The isolated renderer must use this exact trailing-slash base URL as
+`NEXT_PUBLIC_SUPABASE_URL`. The current web application intentionally consumes
+that same setting in both its browser client and server-side Supabase client:
 
 ```text
 https://<monitor-host>/_scorecheck-supabase-fault/<generation-id>/
@@ -395,8 +396,9 @@ The URL shape is compatible with Supabase REST and Realtime construction. The
 proxy strips only its exact generation prefix, forwards `/rest/v1/...` and
 `/realtime/v1/...` upstream, and rejects every other path. Renderer creation
 must remain a separate protected provider transaction using an isolated Vercel
-project, synthetic publishers, a test event/score row, and the ordinary anon
-and service-role credentials without printing them. The runner fails baseline
+project, synthetic publishers, a test event/score row, and the ordinary
+`NEXT_PUBLIC_SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` credentials
+without printing them. The runner fails baseline
 qualification unless it observes at least one authoritative HTTP request and
 exactly one active Realtime socket through the proxy.
 

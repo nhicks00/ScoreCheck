@@ -353,6 +353,8 @@ test("rejects production web origins and Supabase environment", async () => {
   const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, fetchImpl: async (url, init) => url.includes("/env") ? environmentResponse(init) : response(200, { deployments: [], pagination: {} }) });
   for (const changed of [
     { ...environment, SUPABASE_URL: "https://example.supabase.co" },
+    { ...environment, NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co" },
+    { ...environment, NEXT_PUBLIC_SUPABASE_ANON_KEY: "public-anon-key" },
     { ...environment, SCORECHECK_REHEARSAL_ORIGIN: "https://score.beachvolleyballmedia.com" }
   ]) {
     await assert.rejects(() => client.ensureDeployment({ project, generationId, repoId: 123, ref: "branch", sha: "a".repeat(40), environment: changed }), /Supabase|production web origin|origin does not match/);

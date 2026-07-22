@@ -433,7 +433,9 @@ function deploymentState(value) {
 function validateEnvironment(value, expectedOrigin) {
   if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length === 0) throw new Error("Vercel rehearsal environment is required");
   if (value.NEXT_PUBLIC_SCORECHECK_REHEARSAL !== "true") throw new Error("Vercel rehearsal environment marker is missing");
-  if (Object.keys(value).some((key) => key.startsWith("SUPABASE_"))) throw new Error("Vercel rehearsal must not use production Supabase configuration");
+  if (Object.keys(value).some((key) => key.startsWith("SUPABASE_") || key.startsWith("NEXT_PUBLIC_SUPABASE_"))) {
+    throw new Error("Vercel rehearsal must not use Supabase configuration");
+  }
   const serialized = JSON.stringify(value);
   if (serialized.includes("score.beachvolleyballmedia.com") || serialized.includes("www.beachvolleyballmedia.com")) throw new Error("Vercel rehearsal environment references a production web origin");
   if (value.SCORECHECK_REHEARSAL_ORIGIN !== expectedOrigin) throw new Error("Vercel rehearsal origin does not match the isolated project");
