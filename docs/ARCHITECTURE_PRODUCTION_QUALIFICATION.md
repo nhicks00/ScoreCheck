@@ -149,12 +149,16 @@ The target remains:
 | A-03 | State-aware Healthchecks | `SATISFIED` | Baseline/active schedules and channel audits exist. | Retain live subscription audit. |
 | A-04 | Local incident outbox during Supabase loss | `SATISFIED` | The monitoring service now has a protected bounded local WAL document for incident changes and notification state, with idempotent replay and notification maintenance independent of Supabase availability. | Exercise outage/replay in the acceptance matrix. |
 | A-05 | External YouTube viewer fresh-frame/audio probe | `SATISFIED` | A bounded no-cookie Chromium probe verifies playhead advance, changing frame fingerprints, nonblack video, decoded audio, and stable dimensions, then closes the temporary browser. Production soak rotates it across active cameras. | Run from an external host for production evidence. |
-| A-06 | External platform sentinel | `SATISFIED` | The production soak owns a separate off-VPC sentinel that checks monitor, ingest, commentary, and immutable renderer HTTPS endpoints every minute and reports success/failure to a dedicated Healthchecks check. Unique-process liveness, endpoint results, delivery, edge gaps, and coverage are mandatory evidence. | Create and attach the dedicated sentinel Healthchecks check, then retain one live loss/recovery artifact. |
+| A-06 | External platform sentinel | `SATISFIED` | The production soak owns a separate off-VPC sentinel that checks monitor, ingest, commentary, and immutable renderer HTTPS endpoints every minute and reports success/failure to the dedicated paused-between-events `scorecheck-platform-sentinel` Healthchecks check. The check has a unique ping identity and exactly one Pushover channel. Unique-process liveness, endpoint results, delivery, edge gaps, and coverage are mandatory evidence. | Retain one live loss/recovery artifact in the next camera-backed event run. |
 | A-07 | Continuous compact critical-log export | `SATISFIED` | One long-lived SSH/Compose stream per temporary host writes filtered, redacted, fsynced lifecycle/error records to protected off-host event evidence. It avoids repeated SSH/Docker polling, emits full-host readiness/coverage heartbeats, and fails the run if any stream exits or coverage is incomplete. | Verify all twelve streams in the next live run and archive the protected event evidence before provider teardown. |
 | A-08 | Prometheus headroom/cardinality | `SATISFIED` | Event-scoped monitoring, bounded metrics, disk/resource alerts, and durable incident summaries exist. | Audit labels for unbounded IDs/text before each contract change. |
 | A-09 | Cost dead-man without automatic destruction | `SATISFIED` | Coverage close sends an immediate non-blocking reminder; `cost-reminders.mjs` performs read-only provider/monitor checks and dedupes Pushover warnings for active output, one-hour/next-morning compute, unused setup, and terminal provider-nonzero. It never stops or deletes resources. | Schedule it at bounded cadence while an event lifecycle exists. |
 
 ## P1/P2 Scoring And Security Ledger
+
+The scoring chain remains atomic for every reconstruction and disaster-recovery
+audit: Applying only `030` is invalid because its provider commit RPC depends
+on the complete `023`, `024`, `026`, `027`, and `028` contract.
 
 | ID | Review item | Status | Checked-in evidence | Required disposition / proof |
 | --- | --- | --- | --- | --- |
@@ -202,8 +206,17 @@ In particular:
   now have fail-closed implementations; backup ingest remains deferred.
 - The exact qualification release is deployed to Vercel and the Render worker.
   No event infrastructure was created. A fresh independent audit at
-  `2026-07-22T12:52:02Z` proved provider zero, two unassigned retained endpoint
-  anchors, and the exact eight-stream idle YouTube pool.
+  `2026-07-22T13:20:28Z` proved provider zero, two unassigned retained endpoint
+  anchors, and the exact eight-stream idle YouTube pool. Evidence is
+  `~/.config/scorecheck/event-stack/audits/architecture-qualification-provider-zero-20260722T132017Z.json`.
+- The dedicated `scorecheck-platform-sentinel` Healthchecks check is paused
+  between events, Pushover-only, and distinct from both monitor dead-men.
+  Protected provider evidence is under
+  `~/.config/scorecheck/cutovers/platform-sentinel-20260722T131435923Z/`. The
+  refreshed immutable recovery source is
+  `~/.config/scorecheck/event-stack/production-recovery-source-current-20260722/`
+  with source SHA-256
+  `ec879a6931e2834d92e5410493045c28fb7b6554b70322175c28c7fccc00f1cf`.
 
 ## Rejected Wholesale Changes
 

@@ -418,16 +418,15 @@ v8. Any earlier bundle must be regenerated from the protected recovery source
 and rendered network contract; lifecycle commands reject it before provider
 access.
 
-The scoring schema is also a hard cutover. Production contains migrations `022`
-and `029`, but not the prerequisite community-scoring chain `023`, `024`, `026`,
-`027`, `028`, or poller fencing migration `030`. Applying only `030` is invalid
-because its provider commit RPC depends on the missing community-scoring RPCs.
-Follow `SCORING_SCHEMA_HARDCUTOVER_023_030.md`: stop every score worker, wait
-for leases to expire, run the generated rollback-only rehearsal against the
-production data, apply the exact missing chain in one verified transaction,
-then deploy the matching web/worker revision. Never replay `029`, use a broad
-database push, run the old worker against the new schema, or start the new
-worker before all six migrations are present.
+The scoring schema hard cutover is complete. On 2026-07-22 production applied
+exactly `023`, `024`, `026`, `027`, `028`, and `030` in one transaction after
+the rollback-only rehearsal passed. Independent SQL and PostgREST verification
+passed, and the matching web and worker revision is
+`2645dd484d4e537a7184feed8fa853ebd339bf1f`. The protected evidence is under
+`~/.config/scorecheck/cutovers/scoring-schema-023-030-20260722T122341Z/`.
+Never replay `029`, use a broad database push, or run a pre-cutover worker
+against the current schema. Applying only `030` is invalid because its provider
+commit RPC depends on the complete `023` through `028` scoring chain.
 
 ## Native 1080 production output
 
@@ -459,7 +458,18 @@ node infra/event-stack/production-recovery.mjs migrate-youtube \
   --source /absolute/protected/production-recovery-source-v1 \
   --destinations /absolute/protected/youtube/next-event-slug/destinations.json \
   --output /absolute/protected/production-recovery-source-v2
+
+node infra/event-stack/production-recovery.mjs refresh-monitoring \
+  --source /absolute/protected/production-recovery-source-v2 \
+  --monitoring-env /absolute/protected/monitoring.env \
+  --output /absolute/protected/production-recovery-source-current
 ```
+
+`refresh-monitoring` is the one-way migration for a schema-v2 recovery source
+captured before the dedicated platform-sentinel check existed. It preserves all
+other checksummed recovery material, adds only the unique sentinel ping URL,
+and refuses an already-migrated source, dead-man URL reuse, Twilio residue,
+weak permissions, malformed HTTPS, or a pre-existing destination.
 
 The compositor pool uses one SFO2 premium Intel 8-vCPU/16-GiB host per camera
 plus one warm spare. Start no public output merely because the 12-host stack is

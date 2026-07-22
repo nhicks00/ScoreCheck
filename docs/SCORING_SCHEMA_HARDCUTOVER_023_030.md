@@ -2,15 +2,24 @@
 
 Date: 2026-07-22
 
-Status: prepared, not applied
+Status: applied and independently verified
+
+Production result: the rollback-only rehearsal passed, then migrations `023`,
+`024`, `026`, `027`, `028`, and `030` were applied in one transaction on
+2026-07-22. Independent SQL and PostgREST verification passed. Vercel and the
+Render score worker run exact Git revision
+`2645dd484d4e537a7184feed8fa853ebd339bf1f`. Checksummed protected evidence is
+under
+`~/.config/scorecheck/cutovers/scoring-schema-023-030-20260722T122341Z/`.
 
 ## Why this is a chain cutover
 
 Production migration history was inspected before the poller-fencing release.
-It contains `022_monitoring_incident_episodes` and the separately applied
-`029_monitoring_pushover_only`, but it does not contain `023`, `024`, `026`,
-`027`, `028`, or `030`. The live REST contract also lacks the community
-scoring tables and RPCs created by `023-028`.
+At that preflight boundary it contained `022_monitoring_incident_episodes` and
+the separately applied `029_monitoring_pushover_only`, but not `023`, `024`,
+`026`, `027`, `028`, or `030`. The bounded cutover described below closed that
+gap; this section remains the rationale and recovery procedure for the applied
+change.
 
 Migration `030_poller_lease_fencing.sql` calls
 `community_commit_trusted_score`, which is installed by the missing community

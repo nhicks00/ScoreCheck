@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { buildEventManifest, loadManifestInputs } from "./event-manifest.mjs";
-import { buildProductionMaterial, buildProductionSecretFiles, migrateProductionMaterial } from "./production-recovery.mjs";
+import { buildProductionMaterial, buildProductionSecretFiles, migrateMonitoringEnvironment, migrateProductionMaterial } from "./production-recovery.mjs";
 import { createSyntheticRehearsalVenueProfile } from "./venue-admission.mjs";
 
 const inputs = await loadManifestInputs();
@@ -52,6 +52,9 @@ function fixture() {
     "MONITOR_BROWSER_HEARTBEAT_SECRET", "MONITOR_DASHBOARD_URL", "MONITOR_PUBLIC_HOST", "PUSHOVER_APP_TOKEN", "PUSHOVER_USER_KEY",
     "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_URL", "YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_REFRESH_TOKEN"
   ].map((key) => [key, `${key.toLowerCase()}-abcdefghijklmnopqrstuvwxyz`]));
+  monitoringEnvironment.HEALTHCHECKS_BASELINE_PING_URL = "https://hc-ping.com/monitor-baseline";
+  monitoringEnvironment.HEALTHCHECKS_ACTIVE_PING_URL = "https://hc-ping.com/monitor-active";
+  monitoringEnvironment.HEALTHCHECKS_SENTINEL_PING_URL = "https://hc-ping.com/platform-sentinel";
   monitoringEnvironment.MONITOR_AGENT_TARGETS = "old-target-must-not-survive";
   const compositorEnvironments = Array.from({ length: 4 }, (_, index) => {
     const firstCourt = (index * 2) + 1;
@@ -163,4 +166,37 @@ test("migrates the qualified legacy 720 material to reusable variable YouTube st
   assert.equal(migrated.compositors[1].youtubeResolution, "variable");
   assert.deepEqual(migrated.compositors[1].outputProfiles, ["1080p30", "1080p60"]);
   assert.equal("encoding" in migrated.compositors[1], false);
+});
+
+test("adds only a distinct dedicated Healthchecks sentinel to a pre-sentinel recovery environment", () => {
+  const sourceEnvironment = fixture().monitoringEnvironment;
+  delete sourceEnvironment.HEALTHCHECKS_SENTINEL_PING_URL;
+  const migrated = migrateMonitoringEnvironment({
+    sourceEnvironment,
+    currentEnvironment: { HEALTHCHECKS_SENTINEL_PING_URL: "https://hc-ping.com/platform-sentinel" }
+  });
+  assert.equal(migrated.HEALTHCHECKS_SENTINEL_PING_URL, "https://hc-ping.com/platform-sentinel");
+  assert.equal(migrated.PUSHOVER_APP_TOKEN, sourceEnvironment.PUSHOVER_APP_TOKEN);
+  assert.equal("MONITOR_AGENT_TARGETS" in migrated, false);
+});
+
+test("rejects an existing sentinel, dead-man reuse, malformed URLs, and Twilio residue during sentinel migration", () => {
+  const sourceEnvironment = fixture().monitoringEnvironment;
+  assert.throws(() => migrateMonitoringEnvironment({ sourceEnvironment, currentEnvironment: sourceEnvironment }), /already contains/);
+
+  delete sourceEnvironment.HEALTHCHECKS_SENTINEL_PING_URL;
+  assert.throws(() => migrateMonitoringEnvironment({
+    sourceEnvironment,
+    currentEnvironment: { HEALTHCHECKS_SENTINEL_PING_URL: sourceEnvironment.HEALTHCHECKS_ACTIVE_PING_URL }
+  }), /must not reuse/);
+  assert.throws(() => migrateMonitoringEnvironment({
+    sourceEnvironment,
+    currentEnvironment: { HEALTHCHECKS_SENTINEL_PING_URL: "http://hc-ping.com/not-secure" }
+  }), /must be HTTPS/);
+
+  sourceEnvironment.TWILIO_ACCOUNT_SID = "must-not-survive";
+  assert.throws(() => migrateMonitoringEnvironment({
+    sourceEnvironment,
+    currentEnvironment: { HEALTHCHECKS_SENTINEL_PING_URL: "https://hc-ping.com/platform-sentinel" }
+  }), /must not contain Twilio credentials/);
 });

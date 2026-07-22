@@ -52,6 +52,7 @@ const REQUIRED_MONITORING_KEYS = Object.freeze([
   "YOUTUBE_CLIENT_SECRET",
   "YOUTUBE_REFRESH_TOKEN"
 ]);
+const PRE_SENTINEL_MONITORING_KEYS = Object.freeze(REQUIRED_MONITORING_KEYS.filter((key) => key !== "HEALTHCHECKS_SENTINEL_PING_URL"));
 
 if (process.argv[1] && resolve(process.argv[1]) === SCRIPT_PATH) {
   main().catch((error) => {
@@ -70,6 +71,11 @@ async function main() {
   }
   if (options.command === "migrate-youtube") {
     const result = await migrateProductionRecoverySource(options);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+  if (options.command === "refresh-monitoring") {
+    const result = await refreshProductionRecoveryMonitoring(options);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
   }
@@ -187,6 +193,66 @@ export async function migrateProductionRecoverySource({ source, destinations, ou
   }
 }
 
+export async function refreshProductionRecoveryMonitoring({ source, monitoringEnvironment, output }) {
+  const previous = await loadPreSentinelProductionRecoverySource(source);
+  const currentEnvironment = await loadProtectedEnv(monitoringEnvironment);
+  const refreshedMonitoring = migrateMonitoringEnvironment({
+    sourceEnvironment: previous.monitoringEnvironment,
+    currentEnvironment
+  });
+  const target = normalizedAbsolute(output, "production recovery source");
+  await assertProtectedParent(target);
+  await assertAbsent(target, "production recovery source");
+  const temporary = `${target}.rendering-${process.pid}`;
+  await rm(temporary, { recursive: true, force: true });
+  await mkdir(join(temporary, "wireguard"), { recursive: true, mode: 0o700 });
+  await chmod(temporary, 0o700);
+  await chmod(join(temporary, "wireguard"), 0o700);
+  try {
+    for (const name of SOURCE_FILES.filter((entry) => entry !== "monitoring.env")) {
+      await copyFile(join(previous.root, name), join(temporary, name));
+      await chmod(join(temporary, name), 0o600);
+    }
+    await writeProtected(join(temporary, "monitoring.env"), envFile(refreshedMonitoring));
+    const marker = {
+      ...previous.marker,
+      createdAt: new Date().toISOString(),
+      monitoringMigratedFromSourceSha256: previous.sourceSha256,
+      sentinelPingSha256: sha256(Buffer.from(refreshedMonitoring.HEALTHCHECKS_SENTINEL_PING_URL, "utf8")),
+      files: await hashesForFiles(temporary, SOURCE_FILES)
+    };
+    await writeProtected(join(temporary, "SOURCE_COMPLETE.json"), `${JSON.stringify(marker, null, 2)}\n`);
+    await rename(temporary, target);
+    await chmod(target, 0o700);
+    const loaded = await loadProductionRecoverySource(target);
+    return {
+      status: "PASS",
+      source: target,
+      schemaVersion: loaded.marker.schemaVersion,
+      fileCount: Object.keys(loaded.marker.files).length,
+      sourceSha256: loaded.sourceSha256
+    };
+  } catch (error) {
+    await rm(temporary, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+export function migrateMonitoringEnvironment({ sourceEnvironment, currentEnvironment }) {
+  requireEnvironment(sourceEnvironment, PRE_SENTINEL_MONITORING_KEYS);
+  rejectTwilio(sourceEnvironment);
+  if (sourceEnvironment.HEALTHCHECKS_SENTINEL_PING_URL?.trim()) {
+    throw new Error("production recovery source already contains a Healthchecks sentinel ping URL");
+  }
+  requireEnvironment(currentEnvironment, ["HEALTHCHECKS_SENTINEL_PING_URL"]);
+  rejectTwilio(currentEnvironment);
+  const sentinel = validateHealthchecksPingUrl(currentEnvironment.HEALTHCHECKS_SENTINEL_PING_URL);
+  if ([sourceEnvironment.HEALTHCHECKS_BASELINE_PING_URL, sourceEnvironment.HEALTHCHECKS_ACTIVE_PING_URL].includes(sentinel)) {
+    throw new Error("Healthchecks sentinel ping URL must not reuse a monitor dead-man URL");
+  }
+  return filterMonitoringEnvironment({ ...sourceEnvironment, HEALTHCHECKS_SENTINEL_PING_URL: sentinel });
+}
+
 export function migrateProductionMaterial({ legacyMaterial, destinations }) {
   validateLegacyProductionMaterial(legacyMaterial);
   if (!destinations || destinations.schemaVersion !== 1 || !destinations.streams) throw new Error("production YouTube destinations are invalid");
@@ -276,6 +342,18 @@ export function buildProductionMaterial({ globalConfig, pathConfig, webEnvironme
 }
 
 export async function loadProductionRecoverySource(sourceDirectory) {
+  return loadProductionRecoverySourceWithKeys(sourceDirectory, REQUIRED_MONITORING_KEYS);
+}
+
+async function loadPreSentinelProductionRecoverySource(sourceDirectory) {
+  const source = await loadProductionRecoverySourceWithKeys(sourceDirectory, PRE_SENTINEL_MONITORING_KEYS);
+  if (source.monitoringEnvironment.HEALTHCHECKS_SENTINEL_PING_URL?.trim()) {
+    throw new Error("production recovery source already contains a Healthchecks sentinel ping URL");
+  }
+  return source;
+}
+
+async function loadProductionRecoverySourceWithKeys(sourceDirectory, monitoringKeys) {
   const root = normalizedAbsolute(sourceDirectory, "production recovery source");
   await assertProtectedDirectory(root, "production recovery source");
   const marker = await readProtectedJson(join(root, "SOURCE_COMPLETE.json"), "production recovery marker");
@@ -296,7 +374,7 @@ export async function loadProductionRecoverySource(sourceDirectory) {
   const material = JSON.parse(await readFile(join(root, "material.json"), "utf8"));
   validateProductionMaterial(material);
   const monitoringEnvironment = await loadProtectedEnv(join(root, "monitoring.env"));
-  requireEnvironment(monitoringEnvironment, REQUIRED_MONITORING_KEYS);
+  requireEnvironment(monitoringEnvironment, monitoringKeys);
   rejectTwilio(monitoringEnvironment);
   const sourceSha256 = sha256(Buffer.from(stableJson({ captureSha256: marker.captureSha256, files: marker.files }), "utf8"));
   return { root, marker, material, monitoringEnvironment, sourceSha256 };
@@ -618,9 +696,9 @@ async function assertAbsent(path, label) {
 function parseArgs(argv) {
   const command = argv[0];
   if ([undefined, "help", "-h", "--help"].includes(command)) return null;
-  if (!new Set(["capture", "migrate-youtube", "verify"]).has(command)) throw new Error("command must be capture, migrate-youtube, or verify");
-  const options = { command, captureRoot: null, output: null, source: null, destinations: null };
-  const mapping = new Map([["--capture-root", "captureRoot"], ["--output", "output"], ["--source", "source"], ["--destinations", "destinations"]]);
+  if (!new Set(["capture", "migrate-youtube", "refresh-monitoring", "verify"]).has(command)) throw new Error("command must be capture, migrate-youtube, refresh-monitoring, or verify");
+  const options = { command, captureRoot: null, output: null, source: null, destinations: null, monitoringEnvironment: null };
+  const mapping = new Map([["--capture-root", "captureRoot"], ["--output", "output"], ["--source", "source"], ["--destinations", "destinations"], ["--monitoring-env", "monitoringEnvironment"]]);
   for (let index = 1; index < argv.length; index += 1) {
     const flag = argv[index];
     const key = mapping.get(flag);
@@ -628,14 +706,15 @@ function parseArgs(argv) {
     if (!key || !value || value.startsWith("--")) throw new Error(`${flag} is unknown or missing a value`);
     options[key] = normalizedAbsolute(value, flag);
   }
-  if (command === "capture" && (!options.captureRoot || !options.output || options.source || options.destinations)) throw new Error("capture requires --capture-root and --output");
-  if (command === "migrate-youtube" && (!options.source || !options.destinations || !options.output || options.captureRoot)) throw new Error("migrate-youtube requires --source, --destinations, and --output");
-  if (command === "verify" && (!options.source || options.captureRoot || options.output || options.destinations)) throw new Error("verify requires --source");
+  if (command === "capture" && (!options.captureRoot || !options.output || options.source || options.destinations || options.monitoringEnvironment)) throw new Error("capture requires --capture-root and --output");
+  if (command === "migrate-youtube" && (!options.source || !options.destinations || !options.output || options.captureRoot || options.monitoringEnvironment)) throw new Error("migrate-youtube requires --source, --destinations, and --output");
+  if (command === "refresh-monitoring" && (!options.source || !options.monitoringEnvironment || !options.output || options.captureRoot || options.destinations)) throw new Error("refresh-monitoring requires --source, --monitoring-env, and --output");
+  if (command === "verify" && (!options.source || options.captureRoot || options.output || options.destinations || options.monitoringEnvironment)) throw new Error("verify requires --source");
   return options;
 }
 
 function usage() {
-  process.stdout.write("Usage:\n  node infra/event-stack/production-recovery.mjs capture --capture-root /PROTECTED/CAPTURE --output /PROTECTED/SOURCE\n  node infra/event-stack/production-recovery.mjs migrate-youtube --source /PROTECTED/V1-SOURCE --destinations /PROTECTED/destinations.json --output /PROTECTED/V2-SOURCE\n  node infra/event-stack/production-recovery.mjs verify --source /PROTECTED/SOURCE\n");
+  process.stdout.write("Usage:\n  node infra/event-stack/production-recovery.mjs capture --capture-root /PROTECTED/CAPTURE --output /PROTECTED/SOURCE\n  node infra/event-stack/production-recovery.mjs migrate-youtube --source /PROTECTED/V1-SOURCE --destinations /PROTECTED/destinations.json --output /PROTECTED/V2-SOURCE\n  node infra/event-stack/production-recovery.mjs refresh-monitoring --source /PROTECTED/V2-SOURCE --monitoring-env /PROTECTED/monitoring.env --output /PROTECTED/REFRESHED-SOURCE\n  node infra/event-stack/production-recovery.mjs verify --source /PROTECTED/SOURCE\n");
 }
 
 function envFile(values) {
@@ -671,6 +750,15 @@ function requireProviderId(value, label) {
 function rejectTwilio(environment) {
   const keys = Object.keys(environment ?? {}).filter((key) => key.startsWith("TWILIO_"));
   if (keys.length) throw new Error("production monitoring recovery source must not contain Twilio credentials");
+}
+
+function validateHealthchecksPingUrl(value) {
+  let url;
+  try { url = new URL(value); } catch { throw new Error("Healthchecks sentinel ping URL is invalid"); }
+  if (url.protocol !== "https:" || url.username || url.password || url.hash) {
+    throw new Error("Healthchecks sentinel ping URL must be HTTPS without credentials or fragments");
+  }
+  return url.toString();
 }
 
 function validateRelativeFile(value) {
