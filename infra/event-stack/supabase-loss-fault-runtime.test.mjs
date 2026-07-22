@@ -3,14 +3,14 @@ import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { buildSupabaseFaultCaddyfile, cleanupCommand, controlCommand, inspectCommand, prepareCommand, SupabaseLossFaultRuntime } from "./supabase-loss-fault-runtime.mjs";
+import { buildSupabaseFaultCaddyfile, cleanupCommand, controlCommand, inspectCommand, prepareCommand, SupabaseLossFaultRuntime, supabaseFaultPathPrefix } from "./supabase-loss-fault-runtime.mjs";
 
 const event = "production-event-20260722";
 const generationId = "generation-20260722-abcd1234";
 
-test("builds one exact generation-scoped Caddy route", async () => {
+test("builds one exact event-scoped Caddy route before a runtime generation exists", async () => {
   const source = await readFile(new URL("../monitoring/Caddyfile", import.meta.url), "utf8");
-  const prefix = `/_scorecheck-supabase-fault/${generationId}/`;
+  const prefix = supabaseFaultPathPrefix(event);
   const candidate = buildSupabaseFaultCaddyfile(source, prefix);
   assert.match(candidate, new RegExp(`path ${prefix.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\*`, "u"));
   assert.match(candidate, /reverse_proxy 127\.0\.0\.1:54329/u);
@@ -56,7 +56,7 @@ test("host runtime prepares, faults, restores, and removes only its exact sideca
     proxyScript,
     serviceScript
   });
-  assert.equal(target.publicOrigin, `https://monitor.example.test/_scorecheck-supabase-fault/${generationId}/`);
+  assert.equal(target.publicOrigin, `https://monitor.example.test/_scorecheck-supabase-fault/${event}/`);
   assert.equal((await runtime.inspect(target)).status, "CLEAN");
   assert.rejects(runtime.prepare({ target, confirmation: "yes" }), /confirmation must be exactly/u);
   assert.equal((await runtime.prepare({ target, confirmation: `PREPARE-SUPABASE-FAULT:${event}` })).status, "HEALTHY");
@@ -69,6 +69,7 @@ test("host runtime prepares, faults, restores, and removes only its exact sideca
   assert.match(prepare, /--network "container:\$caddy_id"/u);
   assert.match(prepare, /--read-only/u);
   assert.match(prepare, /--cap-drop ALL/u);
+  assert.match(prepare, new RegExp(`--event '${event}'`, "u"));
   assert.match(prepare, /scorecheck-monitoring\/fault-gates/u);
   assert.match(cleanup, /exit 62/u);
   assert.match(cleanup, /caddy reload/u);
@@ -123,6 +124,7 @@ function serviceSnapshot(target, status) {
   const faulted = status === "FAULTED";
   return {
     schemaVersion: 1,
+    event: target.event,
     generationId: target.generationId,
     status: faulted ? "FAULTED" : "HEALTHY",
     upstream: { protocol: "https:", hostname: "project.supabase.co", port: 443 },

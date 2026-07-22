@@ -5,17 +5,20 @@ import test from "node:test";
 import { parseArgs, runSupabaseFaultProxyService } from "./supabase-fault-proxy-service.mjs";
 
 const generation = "generation-supabase-12345678";
-const pathPrefix = `/_scorecheck-supabase-fault/${generation}/`;
+const event = "supabase-loss-event";
+const pathPrefix = `/_scorecheck-supabase-fault/${event}/`;
 
 test("service parser requires exact protected runtime inputs", () => {
   assert.deepEqual(parseArgs([
     "--upstream", "https://project.supabase.co",
+    "--event", event,
     "--generation", generation,
     "--path-prefix", pathPrefix,
     "--state", "/state/state.json",
     "--port", "54329"
   ]), {
     upstream: "https://project.supabase.co",
+    event,
     generation,
     pathPrefix,
     state: "/state/state.json",
@@ -23,11 +26,11 @@ test("service parser requires exact protected runtime inputs", () => {
   });
   assert.throws(() => parseArgs(["--generation", generation]), /--upstream is required/u);
   assert.throws(() => parseArgs([
-    "--upstream", "https://project.supabase.co", "--generation", generation, "--path-prefix", pathPrefix,
+    "--upstream", "https://project.supabase.co", "--event", event, "--generation", generation, "--path-prefix", pathPrefix,
     "--state", "relative.json"
   ]), /normalized absolute path/u);
   assert.throws(() => parseArgs([
-    "--upstream", "https://project.supabase.co", "--generation", generation, "--path-prefix", pathPrefix,
+    "--upstream", "https://project.supabase.co", "--event", event, "--generation", generation, "--path-prefix", pathPrefix,
     "--state", "/state/state.json", "--port", "54329", "--port", "54330"
   ]), /only once/u);
 });
@@ -43,6 +46,7 @@ test("service serializes signal controls and persists aggregate snapshots", asyn
   let intervalCleared = false;
   const service = await runSupabaseFaultProxyService({
     upstream: "https://project.supabase.co",
+    event,
     generation,
     pathPrefix,
     state: "/state/state.json",
@@ -85,6 +89,7 @@ test("a failed snapshot write does not block a later restore signal", async () =
   let writes = 0;
   const service = await runSupabaseFaultProxyService({
     upstream: "https://project.supabase.co",
+    event,
     generation,
     pathPrefix,
     state: "/state/state.json",
@@ -125,6 +130,7 @@ class FakeProxy {
   snapshot() {
     return {
       schemaVersion: 1,
+      event,
       generationId: generation,
       status: this.status,
       upstream: { protocol: "https:", hostname: "project.supabase.co", port: 443 },

@@ -34,7 +34,7 @@ export class SupabaseLossFaultRuntime {
       proxyScriptSha256: sha256(requiredText(proxyScript, "Supabase fault proxy script")),
       serviceScriptSha256: sha256(requiredText(serviceScript, "Supabase fault proxy service script"))
     };
-    target.pathPrefix = `/_scorecheck-supabase-fault/${target.generationId}/`;
+    target.pathPrefix = supabaseFaultPathPrefix(target.event);
     target.publicOrigin = `https://${target.publicHost}${target.pathPrefix}`;
     target.containerName = `scorecheck-supabase-fault-${sha256(target.gateId).slice(0, 12)}`;
     target.stateDirectory = `${REMOTE_ROOT}/.supabase-fault/${target.containerName}`;
@@ -161,12 +161,16 @@ export class SupabaseLossFaultRuntime {
 export function buildSupabaseFaultCaddyfile(baseline, pathPrefix, port = PROXY_PORT) {
   const source = requiredText(baseline, "Caddyfile");
   if (source.includes("scorecheckSupabaseFault")) throw new Error("Caddyfile already contains a Supabase fault route");
-  if (typeof pathPrefix !== "string" || !/^\/_scorecheck-supabase-fault\/[A-Za-z0-9][A-Za-z0-9._-]{7,127}\/$/u.test(pathPrefix)) throw new Error("Supabase fault Caddy path prefix is invalid");
+  if (typeof pathPrefix !== "string" || !/^\/_scorecheck-supabase-fault\/[A-Za-z0-9][A-Za-z0-9._-]{2,127}\/$/u.test(pathPrefix)) throw new Error("Supabase fault Caddy path prefix is invalid");
   if (!Number.isInteger(port) || port < 1024 || port > 65_535) throw new Error("Supabase fault proxy port is invalid");
   const anchor = "\n\t@allowed path /healthz /v1/*";
   if (source.split(anchor).length !== 2) throw new Error("Caddyfile monitor route anchor is not unique");
   const route = `\n\t@scorecheckSupabaseFault path ${pathPrefix}*\n\thandle @scorecheckSupabaseFault {\n\t\treverse_proxy 127.0.0.1:${port}\n\t}\n`;
   return source.replace(anchor, `${route}${anchor}`);
+}
+
+export function supabaseFaultPathPrefix(event) {
+  return `/_scorecheck-supabase-fault/${identifier(event, "event")}/`;
 }
 
 export function inspectCommand(target) {
@@ -242,7 +246,7 @@ docker run --detach --rm --name "$name" \
   --cap-drop ALL --security-opt no-new-privileges --pids-limit 64 --memory 128m \
   -v ${q(`${REMOTE_ROOT}/fault-gates`)}:/gate:ro -v "$state_dir":/state:rw \
   "$image" node /gate/supabase-fault-proxy-service.mjs \
-  --upstream ${q(target.upstreamOrigin)} --generation ${q(target.generationId)} \
+  --upstream ${q(target.upstreamOrigin)} --event ${q(target.event)} --generation ${q(target.generationId)} \
   --path-prefix ${q(target.pathPrefix)} --state /state/state.json --port ${PROXY_PORT} >/dev/null
 ready=0
 for attempt in $(seq 1 150); do
@@ -326,7 +330,7 @@ function validateTarget(value) {
   generation(value.generationId);
   if (!/^supabase-loss-[0-9a-f-]{36}$/u.test(value.gateId ?? "")) throw new Error("Supabase-loss gate id is invalid");
   upstream(value.upstreamOrigin);
-  const expectedPrefix = `/_scorecheck-supabase-fault/${value.generationId}/`;
+  const expectedPrefix = supabaseFaultPathPrefix(value.event);
   if (value.pathPrefix !== expectedPrefix || value.publicOrigin !== `https://${value.publicHost}${expectedPrefix}`) throw new Error("Supabase-loss public proxy binding is invalid");
   if (!/^scorecheck-supabase-fault-[a-f0-9]{12}$/u.test(value.containerName ?? "")) throw new Error("Supabase-loss container name is invalid");
   if (value.stateDirectory !== `${REMOTE_ROOT}/.supabase-fault/${value.containerName}`) throw new Error("Supabase-loss state directory is invalid");
@@ -336,7 +340,7 @@ function validateTarget(value) {
 }
 
 function validateServiceSnapshot(value, target) {
-  if (!value || value.schemaVersion !== 1 || value.generationId !== target.generationId || value.pathPrefix !== target.pathPrefix) throw new Error("Supabase-loss service snapshot binding is invalid");
+  if (!value || value.schemaVersion !== 1 || value.event !== target.event || value.generationId !== target.generationId || value.pathPrefix !== target.pathPrefix) throw new Error("Supabase-loss service snapshot binding is invalid");
   if (!new Set(["HEALTHY", "FAULTED"]).has(value.status)) throw new Error("Supabase-loss service state is invalid");
   if (!Number.isFinite(Date.parse(value.writtenAt)) || !Number.isFinite(Date.parse(value.startedAt))) throw new Error("Supabase-loss service timestamps are invalid");
   if (value.upstream?.protocol !== new URL(target.upstreamOrigin).protocol || value.upstream?.hostname !== new URL(target.upstreamOrigin).hostname) throw new Error("Supabase-loss service upstream changed");

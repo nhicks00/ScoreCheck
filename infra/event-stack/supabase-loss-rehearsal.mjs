@@ -38,6 +38,15 @@ async function main() {
     process.stdout.write(`${JSON.stringify(report ? publicReport(report) : publicState(state), null, 2)}\n`);
     return;
   }
+  if (options.command === "prepare") {
+    const runtime = await createPrepareRuntime(options);
+    const result = await withQualificationGateLock(
+      { ...runtime, gate: "Supabase-loss prepare" },
+      () => prepareSupabaseLossRehearsal(runtime)
+    );
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
   if (options.command === "restore") {
     const runtime = await createRestoreRuntime(options);
     const result = await withQualificationGateLock(
@@ -47,34 +56,37 @@ async function main() {
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
   }
+  if (options.command === "cleanup") {
+    const runtime = await createCleanupRuntime(options);
+    const result = await withQualificationGateLock(
+      { ...runtime, gate: "Supabase-loss cleanup" },
+      () => cleanupSupabaseLossRehearsal(runtime)
+    );
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
   const runtime = await createRuntime(options);
-  const report = await withQualificationGateLock(
+  const result = await withQualificationGateLock(
     { ...runtime, gate: "Supabase-loss run" },
     () => runSupabaseLossRehearsal(runtime)
   );
-  process.stdout.write(`${JSON.stringify(publicReport(report), null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
-export async function runSupabaseLossRehearsal(runtime) {
-  const { options, manifest, lifecycleState, renderer, venue, soakState, publisherState, monitor, fault, target, now = () => Date.now(), sleep = delay } = runtime;
+export async function prepareSupabaseLossRehearsal(runtime) {
+  const { options, manifest, lifecycleState, renderer, monitor, fault, target, now = () => Date.now() } = runtime;
   requireConfirmation(options.confirmPrepare, `PREPARE-SUPABASE-FAULT:${manifest.event}`);
-  requireConfirmation(options.confirmFault, `FAULT-SUPABASE:${lifecycleState.generationId}`);
-  requireConfirmation(options.confirmRestore, `RESTORE-SUPABASE:${lifecycleState.generationId}`);
-  requireConfirmation(options.confirmCleanup, `CLEANUP-SUPABASE-FAULT:${manifest.event}`);
-  if (lifecycleState.phase !== "live") throw new Error("Supabase-loss rehearsal requires lifecycle phase live");
-  if (soakState.phase !== "RUNNING") throw new Error("Supabase-loss rehearsal requires a running production soak");
-  if (publisherState.phase !== "RUNNING") throw new Error("Supabase-loss rehearsal requires active synthetic publishers");
+  if (lifecycleState.phase !== "live") throw new Error("Supabase-loss preparation requires lifecycle phase live");
+  assertAllEgressIdle(await monitor.snapshot());
   await prepareEvidenceDirectory(options.evidence);
   const statePath = join(options.evidence, "supabase-loss-rehearsal-state.json");
-  const samplesPath = join(options.evidence, "supabase-loss-rehearsal-samples.jsonl");
-  const handle = await open(samplesPath, "wx", 0o600);
-  await chmod(samplesPath, 0o600);
   let state = {
     schemaVersion: 1,
     event: manifest.event,
     generationId: lifecycleState.generationId,
     camera: options.camera,
-    phase: "PLANNED",
+    renderer,
+    phase: "PREPARING",
     target,
     startedAt: new Date(now()).toISOString(),
     updatedAt: new Date(now()).toISOString(),
@@ -85,6 +97,46 @@ export async function runSupabaseLossRehearsal(runtime) {
     restore: null,
     recovery: null,
     cleanup: null,
+    classification: null
+  };
+  await writeState(statePath, state);
+  try {
+    state.prepare = await fault.prepare({ target, confirmation: options.confirmPrepare });
+    state.phase = "PREPARED";
+    state.updatedAt = new Date(now()).toISOString();
+    await writeState(statePath, state);
+    return publicState(state);
+  } catch (error) {
+    state.phase = "PREPARE_FAILED";
+    state.classification = "FAIL";
+    state.updatedAt = new Date(now()).toISOString();
+    await writeState(statePath, state).catch(() => {});
+    throw error;
+  }
+}
+
+export async function runSupabaseLossRehearsal(runtime) {
+  const { options, manifest, lifecycleState, renderer, venue, soakState, publisherState, preparedState, monitor, fault, target, now = () => Date.now(), sleep = delay } = runtime;
+  requireConfirmation(options.confirmPrepare, `PREPARE-SUPABASE-FAULT:${manifest.event}`);
+  requireConfirmation(options.confirmFault, `FAULT-SUPABASE:${lifecycleState.generationId}`);
+  requireConfirmation(options.confirmRestore, `RESTORE-SUPABASE:${lifecycleState.generationId}`);
+  if (lifecycleState.phase !== "live") throw new Error("Supabase-loss rehearsal requires lifecycle phase live");
+  if (soakState.phase !== "RUNNING") throw new Error("Supabase-loss rehearsal requires a running production soak");
+  if (publisherState.phase !== "RUNNING") throw new Error("Supabase-loss rehearsal requires active synthetic publishers");
+  const statePath = join(options.evidence, "supabase-loss-rehearsal-state.json");
+  const samplesPath = join(options.evidence, "supabase-loss-rehearsal-samples.jsonl");
+  const handle = await open(samplesPath, "wx", 0o600);
+  await chmod(samplesPath, 0o600);
+  let state = {
+    ...preparedState,
+    phase: "PLANNED",
+    profile: soakState.profiles[options.camera],
+    updatedAt: new Date(now()).toISOString(),
+    baseline: null,
+    fault: null,
+    outage: null,
+    restore: null,
+    recovery: null,
     classification: null
   };
   await writeState(statePath, state);
@@ -119,36 +171,15 @@ export async function runSupabaseLossRehearsal(runtime) {
       label: "recovery", requiredStableSamples: 6, monitor, fault, target, profiles: soakState.profiles, venue, camera: options.camera, renderer,
       baseline: state.baseline.final.monitor, baselineDependency: state.baseline.final.dependency, initialPrevious: state.outage.final.monitor, handle, now, sleep
     });
-    state.cleanup = await fault.cleanup({ target, confirmation: options.confirmCleanup });
-    state.phase = "CLEANED";
+    state.phase = "RECOVERED_PENDING_CLEANUP";
     state.updatedAt = new Date(now()).toISOString();
     await writeState(statePath, state);
-
-    const report = evaluateSupabaseLossRehearsal({
-      event: manifest.event,
-      generationId: lifecycleState.generationId,
-      camera: options.camera,
-      renderer,
-      profile: soakState.profiles[options.camera],
-      target,
-      prepare: state.prepare,
-      fault: state.fault,
-      restore: state.restore,
-      cleanup: state.cleanup,
-      baseline: state.baseline,
-      outage: state.outage,
-      recovery: state.recovery,
-      completedAt: new Date(now()).toISOString()
-    });
-    await writeProtected(join(options.evidence, "supabase-loss-rehearsal-report.json"), report);
-    state.phase = "COMPLETE";
-    state.classification = report.classification;
-    state.updatedAt = report.completedAt;
-    await writeState(statePath, state);
-    return report;
+    return publicState(state);
   } catch (error) {
-    const safety = await safetyRestoreAndCleanup({ fault, target, restoreConfirmation: options.confirmRestore, cleanupConfirmation: options.confirmCleanup });
-    state.phase = "FAILED";
+    const safety = await safetyRestore({ fault, target, restoreConfirmation: options.confirmRestore });
+    state.phase = safety.restore?.status === "HEALTHY" || safety.inspect?.status === "HEALTHY"
+      ? "FAILED_RESTORED_PENDING_CLEANUP"
+      : "FAILED_FAULTED";
     state.classification = "FAIL";
     state.updatedAt = new Date(now()).toISOString();
     await writeState(statePath, state).catch(() => {});
@@ -171,20 +202,59 @@ export async function runSupabaseLossRehearsal(runtime) {
 export async function restoreInterruptedSupabaseLoss(runtime) {
   const { options, manifest, lifecycleState, state, fault } = runtime;
   if (state.event !== manifest.event || state.generationId !== lifecycleState.generationId) throw new Error("Supabase-loss recovery state does not match the event generation");
-  if (["COMPLETE", "RESTORED_AFTER_INTERRUPT"].includes(state.phase)) throw new Error(`Supabase-loss rehearsal is already ${state.phase.toLowerCase()}`);
+  if (["COMPLETE", "RECOVERED_PENDING_CLEANUP", "RESTORED_AFTER_INTERRUPT_PENDING_CLEANUP"].includes(state.phase)) throw new Error(`Supabase-loss rehearsal is already ${state.phase.toLowerCase()}`);
   requireConfirmation(options.confirmRestore, `RESTORE-SUPABASE:${state.generationId}`);
-  requireConfirmation(options.confirmCleanup, `CLEANUP-SUPABASE-FAULT:${state.event}`);
-  const result = await safetyRestoreAndCleanup({ fault, target: state.target, restoreConfirmation: options.confirmRestore, cleanupConfirmation: options.confirmCleanup });
-  if (result.cleanup?.status !== "CLEAN") throw new Error("Supabase-loss interrupted recovery did not clean the host");
-  const next = { ...state, phase: "RESTORED_AFTER_INTERRUPT", cleanup: result.cleanup, updatedAt: new Date().toISOString() };
+  const result = await safetyRestore({ fault, target: state.target, restoreConfirmation: options.confirmRestore });
+  if (result.restore?.status !== "HEALTHY" && result.inspect?.status !== "HEALTHY") throw new Error("Supabase-loss interrupted recovery did not restore the dependency");
+  const next = { ...state, phase: "RESTORED_AFTER_INTERRUPT_PENDING_CLEANUP", updatedAt: new Date().toISOString() };
   await writeState(join(options.evidence, "supabase-loss-rehearsal-state.json"), next);
-  return { status: "CLEAN", event: state.event, camera: state.camera, phase: next.phase };
+  return { status: "HEALTHY", event: state.event, camera: state.camera, phase: next.phase };
+}
+
+export async function cleanupSupabaseLossRehearsal(runtime) {
+  const { options, manifest, lifecycleState, state, monitor, fault, now = () => Date.now() } = runtime;
+  if (state.event !== manifest.event || state.generationId !== lifecycleState.generationId) throw new Error("Supabase-loss cleanup state does not match the event generation");
+  if (state.phase === "COMPLETE") throw new Error("Supabase-loss rehearsal is already complete");
+  if (state.phase === "FAILED_FAULTED") throw new Error("Supabase-loss dependency must be restored before cleanup");
+  if (!["PREPARED", "RECOVERED_PENDING_CLEANUP", "FAILED_RESTORED_PENDING_CLEANUP", "RESTORED_AFTER_INTERRUPT_PENDING_CLEANUP"].includes(state.phase)) {
+    throw new Error(`Supabase-loss cleanup cannot run from ${state.phase}`);
+  }
+  requireConfirmation(options.confirmCleanup, `CLEANUP-SUPABASE-FAULT:${state.event}`);
+  assertAllEgressIdle(await monitor.snapshot());
+  const cleanup = await fault.cleanup({ target: state.target, confirmation: options.confirmCleanup });
+  const completedAt = new Date(now()).toISOString();
+  let next = { ...state, cleanup, updatedAt: completedAt };
+  let report = null;
+  if (state.phase === "RECOVERED_PENDING_CLEANUP") {
+    report = evaluateSupabaseLossRehearsal({
+      event: state.event,
+      generationId: state.generationId,
+      camera: state.camera,
+      renderer: state.renderer,
+      profile: state.profile,
+      target: state.target,
+      prepare: state.prepare,
+      fault: state.fault,
+      restore: state.restore,
+      cleanup,
+      baseline: state.baseline,
+      outage: state.outage,
+      recovery: state.recovery,
+      completedAt
+    });
+    await writeProtected(join(options.evidence, "supabase-loss-rehearsal-report.json"), report);
+    next = { ...next, phase: "COMPLETE", classification: report.classification };
+  } else {
+    next = { ...next, phase: "COMPLETE", classification: "FAIL" };
+  }
+  await writeState(join(options.evidence, "supabase-loss-rehearsal-state.json"), next);
+  return report ?? publicState(next);
 }
 
 export function parseArgs(argv) {
   const command = argv[0];
   if ([undefined, "help", "-h", "--help"].includes(command)) return null;
-  if (!new Set(["run", "status", "restore"]).has(command)) throw new Error("first argument must be run, status, or restore");
+  if (!new Set(["prepare", "run", "status", "restore", "cleanup"]).has(command)) throw new Error("first argument must be prepare, run, status, restore, or cleanup");
   const options = {
     command, profile: null, soakEvidence: null, publisherState: null, rendererBinding: null, evidence: null, camera: null,
     confirmPrepare: null, confirmFault: null, confirmRestore: null, confirmCleanup: null
@@ -207,13 +277,28 @@ export function parseArgs(argv) {
     if (Object.entries(options).some(([key, value]) => !["command", "evidence"].includes(key) && value !== null)) throw new Error("status accepts only --evidence");
     return options;
   }
-  for (const key of ["profile", "confirmRestore", "confirmCleanup"]) if (!options[key]) throw new Error(`--${kebab(key)} is required`);
-  if (command === "restore") {
-    const extras = ["soakEvidence", "publisherState", "rendererBinding", "camera", "confirmPrepare", "confirmFault"].filter((key) => options[key] !== null);
-    if (extras.length) throw new Error("restore accepts only --profile, --evidence, --confirm-restore, and --confirm-cleanup");
+  if (!options.profile) throw new Error("--profile is required");
+  if (command === "prepare") {
+    for (const key of ["rendererBinding", "camera", "confirmPrepare"]) if (options[key] === null) throw new Error(`--${kebab(key)} is required`);
+    const extras = ["soakEvidence", "publisherState", "confirmFault", "confirmRestore", "confirmCleanup"].filter((key) => options[key] !== null);
+    if (extras.length) throw new Error("prepare accepts only --profile, --renderer-binding, --evidence, --camera, and --confirm-prepare");
+    if (!Number.isInteger(options.camera) || options.camera < 1 || options.camera > 8) throw new Error("--camera must be 1-8");
     return options;
   }
-  for (const key of ["soakEvidence", "publisherState", "rendererBinding", "camera", "confirmPrepare", "confirmFault"]) if (options[key] === null) throw new Error(`--${kebab(key)} is required`);
+  if (command === "restore") {
+    if (!options.confirmRestore) throw new Error("--confirm-restore is required");
+    const extras = ["soakEvidence", "publisherState", "rendererBinding", "camera", "confirmPrepare", "confirmFault", "confirmCleanup"].filter((key) => options[key] !== null);
+    if (extras.length) throw new Error("restore accepts only --profile, --evidence, and --confirm-restore");
+    return options;
+  }
+  if (command === "cleanup") {
+    if (!options.confirmCleanup) throw new Error("--confirm-cleanup is required");
+    const extras = ["soakEvidence", "publisherState", "rendererBinding", "camera", "confirmPrepare", "confirmFault", "confirmRestore"].filter((key) => options[key] !== null);
+    if (extras.length) throw new Error("cleanup accepts only --profile, --evidence, and --confirm-cleanup");
+    return options;
+  }
+  for (const key of ["soakEvidence", "publisherState", "rendererBinding", "camera", "confirmPrepare", "confirmFault", "confirmRestore"]) if (options[key] === null) throw new Error(`--${kebab(key)} is required`);
+  if (options.confirmCleanup !== null) throw new Error("run does not accept --confirm-cleanup; cleanup is a separate post-output command");
   if (!Number.isInteger(options.camera) || options.camera < 1 || options.camera > 8) throw new Error("--camera must be 1-8");
   return options;
 }
@@ -228,6 +313,30 @@ async function createRuntime(options) {
   if (soakState.runBinding?.renderer?.gitSha !== renderer.gitSha || soakState.runBinding?.renderer?.deploymentId !== renderer.deploymentId) throw new Error("Supabase-loss rehearsal soak renderer binding is stale");
   const publisherState = await new ProductionSyntheticPublisherStateStore(options.publisherState).load();
   if (!publisherState || publisherState.event !== base.manifest.event || publisherState.generationId !== base.lifecycleState.generationId || publisherState.phase !== "RUNNING" || Object.keys(publisherState.publishers ?? {}).length !== 8) throw new Error("Supabase-loss rehearsal synthetic publisher binding is invalid");
+  const preparedState = await readProtectedJson(join(options.evidence, "supabase-loss-rehearsal-state.json"), "Supabase-loss prepared state");
+  const assets = await createFaultAssets(base);
+  assertPreparedState(preparedState, base, renderer, options.camera, assets.target);
+  return {
+    ...base,
+    options,
+    renderer,
+    venue,
+    soakState,
+    publisherState,
+    preparedState,
+    target: preparedState.target,
+    monitor: assets.monitor,
+    fault: assets.fault
+  };
+}
+
+async function createPrepareRuntime(options) {
+  const base = await loadBaseRuntime(options);
+  const renderer = await loadRendererBinding(options.rendererBinding);
+  return { ...base, options, renderer, ...await createFaultAssets(base) };
+}
+
+async function createFaultAssets(base) {
   const observability = await loadProtectedEnv(join(base.profile.secrets, "observability.env"));
   const publicHost = onlyEndpoint(base.manifest, "observability");
   const host = hostForRole(base.manifest, base.lifecycleState, "observability");
@@ -246,12 +355,6 @@ async function createRuntime(options) {
     serviceScript
   });
   return {
-    ...base,
-    options,
-    renderer,
-    venue,
-    soakState,
-    publisherState,
     target,
     monitor: new MonitorSnapshotRuntime({ origin: `https://${publicHost}`, token: required(observability.MONITOR_API_TOKEN, "monitor API token") }),
     fault
@@ -262,6 +365,26 @@ async function createRestoreRuntime(options) {
   const base = await loadBaseRuntime(options);
   const state = await readProtectedJson(join(options.evidence, "supabase-loss-rehearsal-state.json"), "Supabase-loss rehearsal state");
   return { ...base, options, state, fault: new SupabaseLossFaultRuntime({ sshKey: base.profile.sshKey, knownHosts: base.profile.knownHosts }) };
+}
+
+async function createCleanupRuntime(options) {
+  const base = await loadBaseRuntime(options);
+  const state = await readProtectedJson(join(options.evidence, "supabase-loss-rehearsal-state.json"), "Supabase-loss rehearsal state");
+  const assets = await createFaultAssets(base);
+  assertTargetCompatible(state.target, assets.target);
+  return { ...base, options, state, monitor: assets.monitor, fault: assets.fault };
+}
+
+function assertPreparedState(state, base, renderer, camera, currentTarget) {
+  if (state?.phase !== "PREPARED") throw new Error("Supabase-loss rehearsal requires an explicit prepared proxy state");
+  if (state.event !== base.manifest.event || state.generationId !== base.lifecycleState.generationId || state.camera !== camera) throw new Error("Supabase-loss prepared state does not match the event generation and camera");
+  if (state.renderer?.gitSha !== renderer.gitSha || state.renderer?.deploymentId !== renderer.deploymentId || state.renderer?.origin !== renderer.origin) throw new Error("Supabase-loss prepared renderer binding is stale");
+  assertTargetCompatible(state.target, currentTarget);
+}
+
+function assertTargetCompatible(target, current) {
+  const fields = ["host", "publicHost", "event", "generationId", "upstreamOrigin", "pathPrefix", "publicOrigin", "baselineConfigSha256", "proxyScriptSha256", "serviceScriptSha256"];
+  for (const field of fields) if (target?.[field] !== current?.[field]) throw new Error(`Supabase-loss prepared target ${field} is stale`);
 }
 
 async function loadBaseRuntime(options) {
@@ -303,16 +426,23 @@ async function captureStablePhase({ label, requiredStableSamples, timeoutMs = PH
   throw new Error(`${label} Supabase-loss evidence did not stabilize: ${(latest?.problems ?? ["no sample"]).slice(0, 8).join("; ")}`);
 }
 
-async function safetyRestoreAndCleanup({ fault, target, restoreConfirmation, cleanupConfirmation }) {
-  const result = { inspect: null, restore: null, cleanup: null };
+async function safetyRestore({ fault, target, restoreConfirmation }) {
+  const result = { inspect: null, restore: null };
   try {
     result.inspect = await fault.inspect(target);
     if (result.inspect.status === "FAULTED") result.restore = await fault.restore({ target, confirmation: restoreConfirmation });
-    result.cleanup = await fault.cleanup({ target, confirmation: cleanupConfirmation });
   } catch (error) {
     result.error = safeError(error);
   }
   return result;
+}
+
+function assertAllEgressIdle(snapshot) {
+  const agents = snapshot?.agents?.filter((agent) => agent.nativeServices?.egress) ?? [];
+  if (agents.length === 0 || agents.some((agent) => agent.state !== "HEALTHY")) throw new Error("Supabase-loss route mutation requires current healthy Egress agent telemetry");
+  if (agents.some((agent) => agent.nativeServices.egress.idle !== true || agent.nativeServices.egress.activeWebRequests !== 0)) {
+    throw new Error("Supabase-loss route mutation is blocked while any Egress output is active");
+  }
 }
 
 class MonitorSnapshotRuntime {
@@ -411,5 +541,5 @@ function isDirectInvocation() {
 }
 
 function usage() {
-  process.stdout.write("usage:\n  supabase-loss-rehearsal.mjs run --profile <event-profile> --soak-evidence <dir> --publisher-state <file> --renderer-binding <file> --evidence <new-dir> --camera <1-8> --confirm-prepare <token> --confirm-fault <token> --confirm-restore <token> --confirm-cleanup <token>\n  supabase-loss-rehearsal.mjs status --evidence <dir>\n  supabase-loss-rehearsal.mjs restore --profile <event-profile> --evidence <dir> --confirm-restore <token> --confirm-cleanup <token>\n");
+  process.stdout.write("usage:\n  supabase-loss-rehearsal.mjs prepare --profile <event-profile> --renderer-binding <file> --evidence <new-dir> --camera <1-8> --confirm-prepare <token>\n  supabase-loss-rehearsal.mjs run --profile <event-profile> --soak-evidence <dir> --publisher-state <file> --renderer-binding <file> --evidence <prepared-dir> --camera <1-8> --confirm-prepare <token> --confirm-fault <token> --confirm-restore <token>\n  supabase-loss-rehearsal.mjs status --evidence <dir>\n  supabase-loss-rehearsal.mjs restore --profile <event-profile> --evidence <dir> --confirm-restore <token>\n  supabase-loss-rehearsal.mjs cleanup --profile <event-profile> --evidence <dir> --confirm-cleanup <token>\n");
 }

@@ -23,6 +23,7 @@ export async function runSupabaseFaultProxyService(options, dependencies = {}) {
   const clearIntervalImpl = dependencies.clearIntervalImpl ?? clearInterval;
   const proxy = dependencies.proxy ?? new SupabaseFaultProxy({
     upstream: options.upstream,
+    event: options.event,
     generationId: options.generation,
     pathPrefix: options.pathPrefix,
     host: "127.0.0.1",
@@ -70,10 +71,11 @@ export async function runSupabaseFaultProxyService(options, dependencies = {}) {
 }
 
 export function parseArgs(argv) {
-  const values = { upstream: null, generation: null, pathPrefix: null, state: null, port: 54329 };
+  const values = { upstream: null, event: null, generation: null, pathPrefix: null, state: null, port: 54329 };
   const seen = new Set();
   const fields = new Map([
     ["--upstream", "upstream"],
+    ["--event", "event"],
     ["--generation", "generation"],
     ["--path-prefix", "pathPrefix"],
     ["--state", "state"],
@@ -88,7 +90,7 @@ export function parseArgs(argv) {
     seen.add(key);
     values[key] = key === "port" ? Number(raw) : raw;
   }
-  for (const key of ["upstream", "generation", "pathPrefix", "state"]) if (!values[key]) throw new Error(`--${kebab(key)} is required`);
+  for (const key of ["upstream", "event", "generation", "pathPrefix", "state"]) if (!values[key]) throw new Error(`--${kebab(key)} is required`);
   if (!Number.isInteger(values.port) || values.port < 1024 || values.port > 65_535) throw new Error("--port must be from 1024 through 65535");
   const state = normalizedAbsolute(values.state, "--state");
   if (dirname(state) === "/") throw new Error("--state must use a protected state directory");

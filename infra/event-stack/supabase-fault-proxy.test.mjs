@@ -8,6 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { SupabaseFaultProxy } from "./supabase-fault-proxy.mjs";
 
 const generationId = "generation-supabase-12345678";
+const event = "supabase-loss-event";
 
 test("forwards read-only Supabase HTTP without retaining request secrets or targets", async (t) => {
   const upstream = http.createServer(async (req, res) => {
@@ -24,7 +25,7 @@ test("forwards read-only Supabase HTTP without retaining request secrets or targ
   });
   const upstreamOrigin = await listen(upstream);
   t.after(() => closeServer(upstream));
-  const proxy = new SupabaseFaultProxy({ upstream: upstreamOrigin, generationId });
+  const proxy = new SupabaseFaultProxy({ upstream: upstreamOrigin, event, generationId });
   await proxy.start();
   t.after(() => proxy.close());
 
@@ -64,7 +65,7 @@ test("rejects score mutations and non-GET WebSocket upgrades before upstream", a
   });
   const upstreamOrigin = await listen(upstream);
   t.after(() => closeServer(upstream));
-  const proxy = new SupabaseFaultProxy({ upstream: upstreamOrigin, generationId });
+  const proxy = new SupabaseFaultProxy({ upstream: upstreamOrigin, event, generationId });
   await proxy.start();
   t.after(() => proxy.close());
 
@@ -106,7 +107,7 @@ test("fault drains HTTP and Realtime together, rejects new work, and restores id
     for (const response of heldResponses) response.destroy();
     return closeServer(upstream);
   });
-  const proxy = new SupabaseFaultProxy({ upstream: upstreamOrigin, generationId });
+  const proxy = new SupabaseFaultProxy({ upstream: upstreamOrigin, event, generationId });
   await proxy.start();
   t.after(() => proxy.close());
 
@@ -148,7 +149,7 @@ test("rejects an open proxy target and unsafe listener or upstream contracts", a
   const upstream = http.createServer((_req, res) => res.end("unexpected"));
   const upstreamOrigin = await listen(upstream);
   t.after(() => closeServer(upstream));
-  const proxy = new SupabaseFaultProxy({ upstream: upstreamOrigin, generationId });
+  const proxy = new SupabaseFaultProxy({ upstream: upstreamOrigin, event, generationId });
   await proxy.start();
   t.after(() => proxy.close());
 
@@ -159,14 +160,15 @@ test("rejects an open proxy target and unsafe listener or upstream contracts", a
   }
   assert.match(await openRejectedUpgrade(proxy.origin(), "/realtime/v1/private"), /^HTTP\/1\.1 404 /u);
   assert.equal(proxy.snapshot().counters.httpRequestsForwarded, 0);
-  assert.throws(() => new SupabaseFaultProxy({ upstream: "http://example.com", generationId }), /plaintext.*loopback/u);
-  assert.throws(() => new SupabaseFaultProxy({ upstream: "https://user:secret@example.supabase.co", generationId }), /without credentials/u);
-  assert.throws(() => new SupabaseFaultProxy({ upstream: upstreamOrigin, generationId: "short" }), /generation is invalid/u);
-  assert.throws(() => new SupabaseFaultProxy({ upstream: upstreamOrigin, generationId, host: "0.0.0.0" }), /listen on loopback/u);
-  assert.throws(() => new SupabaseFaultProxy({ upstream: upstreamOrigin, generationId, pathPrefix: "/wrong/" }), /path prefix must be exactly/u);
+  assert.throws(() => new SupabaseFaultProxy({ upstream: "http://example.com", event, generationId }), /plaintext.*loopback/u);
+  assert.throws(() => new SupabaseFaultProxy({ upstream: "https://user:secret@example.supabase.co", event, generationId }), /without credentials/u);
+  assert.throws(() => new SupabaseFaultProxy({ upstream: upstreamOrigin, event, generationId: "short" }), /generation is invalid/u);
+  assert.throws(() => new SupabaseFaultProxy({ upstream: upstreamOrigin, event: "x", generationId }), /event is invalid/u);
+  assert.throws(() => new SupabaseFaultProxy({ upstream: upstreamOrigin, event, generationId, host: "0.0.0.0" }), /listen on loopback/u);
+  assert.throws(() => new SupabaseFaultProxy({ upstream: upstreamOrigin, event, generationId, pathPrefix: "/wrong/" }), /path prefix must be exactly/u);
 });
 
-test("generation path strips only its exact prefix and exposes bounded health", async (t) => {
+test("event path strips only its exact prefix and exposes bounded health", async (t) => {
   const seen = [];
   const upstream = http.createServer((req, res) => {
     seen.push(req.url);
@@ -175,8 +177,8 @@ test("generation path strips only its exact prefix and exposes bounded health", 
   });
   const upstreamOrigin = await listen(upstream);
   t.after(() => closeServer(upstream));
-  const pathPrefix = `/_scorecheck-supabase-fault/${generationId}/`;
-  const proxy = new SupabaseFaultProxy({ upstream: upstreamOrigin, generationId, pathPrefix });
+  const pathPrefix = `/_scorecheck-supabase-fault/${event}/`;
+  const proxy = new SupabaseFaultProxy({ upstream: upstreamOrigin, event, generationId, pathPrefix });
   await proxy.start();
   t.after(() => proxy.close());
 

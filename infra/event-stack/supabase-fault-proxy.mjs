@@ -12,14 +12,16 @@ const HOP_BY_HOP_HEADERS = new Set([
   "upgrade"
 ]);
 const GENERATION = /^[A-Za-z0-9][A-Za-z0-9._-]{7,127}$/u;
+const EVENT = /^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$/u;
 const READ_ONLY_HTTP_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 const READ_ONLY_REST_PATHS = new Set(["/rest/v1/events", "/rest/v1/courts", "/rest/v1/overlay_states"]);
 
 export class SupabaseFaultProxy {
-  constructor({ upstream, generationId, pathPrefix = "/", host = "127.0.0.1", port = 0, requestTimeoutMs = 30_000, now = () => new Date() }) {
+  constructor({ upstream, event, generationId, pathPrefix = "/", host = "127.0.0.1", port = 0, requestTimeoutMs = 30_000, now = () => new Date() }) {
     this.upstream = validateUpstream(upstream);
+    this.event = validateEvent(event);
     this.generationId = validateGeneration(generationId);
-    this.pathPrefix = validatePathPrefix(pathPrefix, this.generationId);
+    this.pathPrefix = validatePathPrefix(pathPrefix, this.event);
     if (!isLoopback(host)) throw new Error("Supabase fault proxy must listen on loopback");
     if (!Number.isInteger(port) || port < 0 || port > 65_535) throw new Error("Supabase fault proxy port is invalid");
     if (!Number.isInteger(requestTimeoutMs) || requestTimeoutMs < 1_000 || requestTimeoutMs > 120_000) throw new Error("Supabase fault proxy timeout is invalid");
@@ -123,6 +125,7 @@ export class SupabaseFaultProxy {
   snapshot() {
     return {
       schemaVersion: 1,
+      event: this.event,
       generationId: this.generationId,
       status: this.status,
       upstream: {
@@ -271,9 +274,14 @@ function validateGeneration(value) {
   return value;
 }
 
-function validatePathPrefix(value, generationId) {
+function validateEvent(value) {
+  if (typeof value !== "string" || !EVENT.test(value)) throw new Error("Supabase fault proxy event is invalid");
+  return value;
+}
+
+function validatePathPrefix(value, event) {
   if (value === "/") return value;
-  const expected = `/_scorecheck-supabase-fault/${generationId}/`;
+  const expected = `/_scorecheck-supabase-fault/${event}/`;
   if (value !== expected) throw new Error(`Supabase fault proxy path prefix must be exactly ${expected}`);
   return value;
 }

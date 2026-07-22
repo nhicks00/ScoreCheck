@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { evaluateSupabaseLossRehearsal, supabaseLossSnapshotProblems } from "./supabase-loss-evidence.mjs";
-import { parseArgs, restoreInterruptedSupabaseLoss, runSupabaseLossRehearsal } from "./supabase-loss-rehearsal.mjs";
+import { cleanupSupabaseLossRehearsal, parseArgs, prepareSupabaseLossRehearsal, restoreInterruptedSupabaseLoss, runSupabaseLossRehearsal } from "./supabase-loss-rehearsal.mjs";
 import { createSyntheticRehearsalVenueProfile, evaluateVenueAdmission } from "./venue-admission.mjs";
 
 const startedMs = Date.parse("2026-07-22T12:00:00Z");
@@ -43,12 +43,17 @@ const target = {
   generationId,
   gateId: "supabase-loss-12345678",
   publicHost: "monitor.example.test",
-  pathPrefix: `/_scorecheck-supabase-fault/${generationId}/`,
-  publicOrigin: `https://monitor.example.test/_scorecheck-supabase-fault/${generationId}/`,
+  pathPrefix: `/_scorecheck-supabase-fault/${event}/`,
+  publicOrigin: `https://monitor.example.test/_scorecheck-supabase-fault/${event}/`,
   upstreamOrigin: "https://project.supabase.co"
 };
 
-test("Supabase-loss CLI requires synthetic state, isolated renderer, and all four exact controls", () => {
+test("Supabase-loss CLI separates pre-soak preparation, live fault/recovery, and post-output cleanup", () => {
+  const prepare = parseArgs([
+    "prepare", "--profile", "/tmp/profile.json", "--renderer-binding", "/tmp/renderer.json", "--evidence", "/tmp/evidence", "--camera", "1",
+    "--confirm-prepare", `PREPARE-SUPABASE-FAULT:${event}`
+  ]);
+  assert.equal(prepare.command, "prepare");
   const run = parseArgs([
     "run",
     "--profile", "/tmp/profile.json",
@@ -59,17 +64,25 @@ test("Supabase-loss CLI requires synthetic state, isolated renderer, and all fou
     "--camera", "1",
     "--confirm-prepare", `PREPARE-SUPABASE-FAULT:${event}`,
     "--confirm-fault", `FAULT-SUPABASE:${generationId}`,
-    "--confirm-restore", `RESTORE-SUPABASE:${generationId}`,
-    "--confirm-cleanup", `CLEANUP-SUPABASE-FAULT:${event}`
+    "--confirm-restore", `RESTORE-SUPABASE:${generationId}`
   ]);
   assert.equal(run.camera, 1);
   assert.equal(run.rendererBinding, "/tmp/renderer.json");
   assert.throws(() => parseArgs(["run", "--evidence", "/tmp/evidence"]), /--profile is required/u);
   assert.equal(parseArgs([
     "restore", "--profile", "/tmp/profile.json", "--evidence", "/tmp/evidence",
-    "--confirm-restore", `RESTORE-SUPABASE:${generationId}`,
-    "--confirm-cleanup", `CLEANUP-SUPABASE-FAULT:${event}`
+    "--confirm-restore", `RESTORE-SUPABASE:${generationId}`
   ]).command, "restore");
+  assert.equal(parseArgs([
+    "cleanup", "--profile", "/tmp/profile.json", "--evidence", "/tmp/evidence",
+    "--confirm-cleanup", `CLEANUP-SUPABASE-FAULT:${event}`
+  ]).command, "cleanup");
+  assert.throws(() => parseArgs([
+    "run", "--profile", "/tmp/profile.json", "--soak-evidence", "/tmp/soak", "--publisher-state", "/tmp/publishers.json",
+    "--renderer-binding", "/tmp/renderer.json", "--evidence", "/tmp/evidence", "--camera", "1",
+    "--confirm-prepare", `PREPARE-SUPABASE-FAULT:${event}`, "--confirm-fault", `FAULT-SUPABASE:${generationId}`,
+    "--confirm-restore", `RESTORE-SUPABASE:${generationId}`, "--confirm-cleanup", `CLEANUP-SUPABASE-FAULT:${event}`
+  ]), /cleanup is a separate post-output command/u);
   assert.equal(parseArgs(["status", "--evidence", "/tmp/evidence"]).command, "status");
 });
 
@@ -125,14 +138,33 @@ test("Supabase-loss evidence passes only after exact cleanup and Realtime repair
   assert.equal(evaluateSupabaseLossRehearsal(dirty).classification, "FAIL");
 });
 
-test("Supabase-loss runner captures all phases and leaves the host clean", async (t) => {
+test("Supabase-loss gate prepares before output and cleans only after output stops", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "scorecheck-supabase-loss-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   let clock = startedMs;
   let status = "CLEAN";
   const actions = [];
   const evidence = join(root, "evidence");
-  const report = await runSupabaseLossRehearsal({
+  const fault = {
+    inspect: async () => status === "CLEAN" ? { status: "CLEAN", service: null } : dependency(status),
+    prepare: async () => { actions.push("prepare"); status = "HEALTHY"; return { status: "HEALTHY" }; },
+    fault: async () => { actions.push("fault"); status = "FAULTED"; return { status: "FAULTED", faultedAt: new Date(clock).toISOString() }; },
+    restore: async () => { actions.push("restore"); status = "HEALTHY_RESTORED"; return { status: "HEALTHY", restoredAt: new Date(clock).toISOString() }; },
+    cleanup: async () => { actions.push("cleanup"); status = "CLEAN"; return { status: "CLEAN" }; }
+  };
+  const stale = snapshot(clock, { outputsActive: false });
+  stale.agents.find((agent) => agent.nativeServices?.egress).state = "MISSING";
+  await assert.rejects(() => prepareSupabaseLossRehearsal({
+    options: confirmations(evidence), manifest: { event }, lifecycleState: { phase: "live", generationId }, renderer, target,
+    monitor: { snapshot: async () => stale }, fault, now: () => clock
+  }), /current healthy Egress agent telemetry/u);
+  const prepared = await prepareSupabaseLossRehearsal({
+    options: confirmations(evidence), manifest: { event }, lifecycleState: { phase: "live", generationId }, renderer, target,
+    monitor: { snapshot: async () => snapshot(clock, { outputsActive: false }) }, fault, now: () => clock
+  });
+  assert.equal(prepared.status, "PREPARED");
+  const preparedState = JSON.parse(await readFile(join(evidence, "supabase-loss-rehearsal-state.json"), "utf8"));
+  const recovered = await runSupabaseLossRehearsal({
     options: confirmations(evidence),
     manifest: { event },
     lifecycleState: { phase: "live", generationId },
@@ -140,67 +172,90 @@ test("Supabase-loss runner captures all phases and leaves the host clean", async
     venue,
     soakState: { phase: "RUNNING", profiles },
     publisherState: { phase: "RUNNING" },
+    preparedState,
     target,
     monitor: { snapshot: async () => { clock += 5_000; return snapshot(clock, { disconnected: status === "FAULTED", incident: status === "FAULTED" }); } },
-    fault: {
-      inspect: async () => status === "CLEAN" ? { status: "CLEAN", service: null } : dependency(status),
-      prepare: async () => { actions.push("prepare"); status = "HEALTHY"; return { status: "HEALTHY" }; },
-      fault: async () => { actions.push("fault"); status = "FAULTED"; return { status: "FAULTED", faultedAt: new Date(clock).toISOString() }; },
-      restore: async () => { actions.push("restore"); status = "HEALTHY_RESTORED"; return { status: "HEALTHY", restoredAt: new Date(clock).toISOString() }; },
-      cleanup: async () => { actions.push("cleanup"); status = "CLEAN"; return { status: "CLEAN" }; }
-    },
+    fault,
     now: () => clock,
     sleep: async () => {}
   });
+  assert.equal(recovered.status, "RECOVERED_PENDING_CLEANUP");
+  assert.deepEqual(actions, ["prepare", "prepare", "fault", "restore"]);
+  const recoveredState = JSON.parse(await readFile(join(evidence, "supabase-loss-rehearsal-state.json"), "utf8"));
+  await assert.rejects(() => cleanupSupabaseLossRehearsal({
+    options: confirmations(evidence), manifest: { event }, lifecycleState: { generationId }, state: recoveredState,
+    monitor: { snapshot: async () => snapshot(clock) }, fault, now: () => clock
+  }), /blocked while any Egress output is active/u);
+  const report = await cleanupSupabaseLossRehearsal({
+    options: confirmations(evidence), manifest: { event }, lifecycleState: { generationId }, state: recoveredState,
+    monitor: { snapshot: async () => snapshot(clock, { outputsActive: false }) }, fault, now: () => clock
+  });
   assert.equal(report.classification, "PASS");
-  assert.deepEqual(actions, ["prepare", "fault", "restore", "cleanup"]);
+  assert.deepEqual(actions, ["prepare", "prepare", "fault", "restore", "cleanup"]);
   const state = JSON.parse(await readFile(join(evidence, "supabase-loss-rehearsal-state.json"), "utf8"));
   assert.equal(state.phase, "COMPLETE");
   assert.equal(state.cleanup.status, "CLEAN");
 });
 
-test("Supabase-loss runner safety-restores and cleans after failed outage evidence", async (t) => {
+test("Supabase-loss failure restores the dependency but defers route cleanup until outputs stop", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "scorecheck-supabase-loss-fail-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   let clock = startedMs;
   let status = "CLEAN";
   let restoreCount = 0;
   let cleanupCount = 0;
+  const evidence = join(root, "evidence");
+  const fault = {
+    inspect: async () => status === "CLEAN" ? { status: "CLEAN", service: null } : dependency(status),
+    prepare: async () => { status = "HEALTHY"; return { status: "HEALTHY" }; },
+    fault: async () => { status = "FAULTED"; return { status: "FAULTED", faultedAt: new Date(clock).toISOString() }; },
+    restore: async () => { restoreCount += 1; status = "HEALTHY_RESTORED"; return { status: "HEALTHY", restoredAt: new Date(clock).toISOString() }; },
+    cleanup: async () => { cleanupCount += 1; status = "CLEAN"; return { status: "CLEAN" }; }
+  };
+  await prepareSupabaseLossRehearsal({
+    options: confirmations(evidence), manifest: { event }, lifecycleState: { phase: "live", generationId }, renderer, target,
+    monitor: { snapshot: async () => snapshot(clock, { outputsActive: false }) }, fault, now: () => clock
+  });
+  const preparedState = JSON.parse(await readFile(join(evidence, "supabase-loss-rehearsal-state.json"), "utf8"));
   await assert.rejects(() => runSupabaseLossRehearsal({
-    options: confirmations(join(root, "evidence")),
+    options: confirmations(evidence),
     manifest: { event },
     lifecycleState: { phase: "live", generationId },
     renderer,
     venue,
     soakState: { phase: "RUNNING", profiles },
     publisherState: { phase: "RUNNING" },
+    preparedState,
     target,
     monitor: { snapshot: async () => { clock += 5_000; return snapshot(clock); } },
-    fault: {
-      inspect: async () => status === "CLEAN" ? { status: "CLEAN", service: null } : dependency(status),
-      prepare: async () => { status = "HEALTHY"; return { status: "HEALTHY" }; },
-      fault: async () => { status = "FAULTED"; return { status: "FAULTED", faultedAt: new Date(clock).toISOString() }; },
-      restore: async () => { restoreCount += 1; status = "HEALTHY_RESTORED"; return { status: "HEALTHY", restoredAt: new Date(clock).toISOString() }; },
-      cleanup: async () => { cleanupCount += 1; status = "CLEAN"; return { status: "CLEAN" }; }
-    },
+    fault,
     now: () => clock,
     sleep: async () => {}
   }), /outage Supabase-loss evidence did not stabilize/u);
   assert.equal(restoreCount, 1);
+  assert.equal(cleanupCount, 0);
+  assert.equal(status, "HEALTHY_RESTORED");
+  const failedState = JSON.parse(await readFile(join(evidence, "supabase-loss-rehearsal-state.json"), "utf8"));
+  assert.equal(failedState.phase, "FAILED_RESTORED_PENDING_CLEANUP");
+  const cleaned = await cleanupSupabaseLossRehearsal({
+    options: confirmations(evidence), manifest: { event }, lifecycleState: { generationId }, state: failedState,
+    monitor: { snapshot: async () => snapshot(clock, { outputsActive: false }) }, fault, now: () => clock
+  });
+  assert.equal(cleaned.classification, "FAIL");
   assert.equal(cleanupCount, 1);
   assert.equal(status, "CLEAN");
 });
 
 test("Supabase-loss manual restore refuses completed evidence", async () => {
-  let cleanupCount = 0;
+  let restoreCount = 0;
   await assert.rejects(() => restoreInterruptedSupabaseLoss({
-    options: { evidence: "/tmp/evidence", confirmRestore: `RESTORE-SUPABASE:${generationId}`, confirmCleanup: `CLEANUP-SUPABASE-FAULT:${event}` },
+    options: { evidence: "/tmp/evidence", confirmRestore: `RESTORE-SUPABASE:${generationId}` },
     manifest: { event },
     lifecycleState: { generationId },
     state: { event, generationId, camera: 1, phase: "COMPLETE", target },
-    fault: { cleanup: async () => { cleanupCount += 1; } }
+    fault: { restore: async () => { restoreCount += 1; } }
   }), /already complete/u);
-  assert.equal(cleanupCount, 0);
+  assert.equal(restoreCount, 0);
 });
 
 function confirmations(evidence) {
@@ -237,12 +292,12 @@ function dependency(status) {
   };
 }
 
-function snapshot(sampledMs, { disconnected = false, incident = false } = {}) {
+function snapshot(sampledMs, { disconnected = false, incident = false, outputsActive = true } = {}) {
   const agents = [
     agent("bvm-commentary", "commentary"),
     agent("bvm-observability", "observability"),
     agent("bvm-ingest", "ingest"),
-    ...Array.from({ length: 8 }, (_, index) => agent(`bvm-compositor-${index + 1}`, "compositor", index + 1, true)),
+    ...Array.from({ length: 8 }, (_, index) => agent(`bvm-compositor-${index + 1}`, "compositor", index + 1, outputsActive)),
     agent("bvm-compositor-spare", "worker")
   ];
   return {

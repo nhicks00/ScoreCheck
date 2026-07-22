@@ -40,7 +40,7 @@ export function evaluateSupabaseLossRehearsal({ event, generationId, camera, ren
   const binding = validateRendererBinding(renderer);
   const problems = [];
   if (typeof event !== "string" || event !== target?.event || generationId !== target?.generationId) problems.push("Supabase-loss event binding is invalid");
-  if (target?.publicOrigin !== `https://${target?.publicHost}${target?.pathPrefix}` || target?.pathPrefix !== `/_scorecheck-supabase-fault/${generationId}/`) problems.push("Supabase-loss public dependency binding is invalid");
+  if (target?.publicOrigin !== `https://${target?.publicHost}${target?.pathPrefix}` || target?.pathPrefix !== `/_scorecheck-supabase-fault/${event}/`) problems.push("Supabase-loss public dependency binding is invalid");
   if (prepare?.status !== "HEALTHY") problems.push("Supabase-loss proxy was not prepared healthy");
   if (fault?.status !== "FAULTED") problems.push("Supabase-loss fault was not durably observed");
   if (restore?.status !== "HEALTHY") problems.push("Supabase-loss dependency did not restore healthy");
