@@ -217,10 +217,12 @@ In particular:
   destination-IP list unsafe, so no outbound proxy or extra host is admitted
   without measured need.
 - The exact qualification release is deployed to Vercel and the Render worker.
-  No event infrastructure was created. A fresh independent audit at
-  `2026-07-22T13:20:28Z` proved provider zero, two unassigned retained endpoint
+  No event infrastructure was created. A fresh independent read-only audit at
+  `2026-07-22T17:02:12Z` proved provider zero, two unassigned retained endpoint
   anchors, and the exact eight-stream idle YouTube pool. Evidence is
-  `~/.config/scorecheck/event-stack/audits/architecture-qualification-provider-zero-20260722T132017Z.json`.
+  `~/.config/scorecheck/event-stack/audits/architecture-qualification-provider-zero-20260722T170153Z.json`
+  with SHA-256
+  `0db2e17c3ef6831f16fb035a5533285663052531a6f2787c5778972b929785cf`.
 - The dedicated `scorecheck-platform-sentinel` Healthchecks check is paused
   between events, Pushover-only, and distinct from both monitor dead-men.
   Protected provider evidence is under
