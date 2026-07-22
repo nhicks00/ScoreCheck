@@ -42,8 +42,11 @@ bash -n "${shell_scripts[@]}"
 
 reviewed_shell_tests=(
   infra/compositor/test-admission-config.sh
+  infra/compositor/test-normalize-camera.sh
+  infra/compositor/test-qualify-output.sh
   infra/compositor/test-start-court.sh
   infra/mediamtx/test-scorecheck-ffmpeg-runner.sh
+  infra/mediamtx/test-scorecheck-preview-runner.sh
   infra/venue-router/test-scorecheck-speedify-routing.sh
 )
 discovered_shell_tests="$(rg --files infra | rg '(^|/)(test[^/]*\.sh|[^/]*test\.sh)$' | sort)"

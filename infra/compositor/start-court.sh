@@ -3,18 +3,19 @@
 # page (headless Chrome) and pushes it to YouTube RTMP.
 #
 # Usage:
-#   ./start-court.sh <court-number> <output-profile>
+#   ./start-court.sh <court-number> <output-profile> <event> <destination-id> <output-generation>
 #
 #   court-number  1-8; the stream key is read only from COURT_<N>_YOUTUBE_KEY
 #   output-profile  one of: 1080p30, 1080p60
 # Examples:
-#   ./start-court.sh 1 1080p30
+#   ./start-court.sh 1 1080p30 event-2026 broadcast123 generation123
 #
 # Requires the LiveKit CLI (see lib.sh for install commands) and a filled-in
 # ./.env (see .env.example). Writes:
 #   requests/court-<N>.json       generated WebEgressRequest (gitignored — holds
 #                                 the stream key)
-#   requests/court-<N>.egress-id  the started egress id, consumed by stop-court.sh
+#   requests/court-<N>.egress-id   the started egress id, consumed by stop-court.sh
+#   requests/court-<N>.owner.json  immutable event/destination/generation owner
 
 set -euo pipefail
 umask 077
@@ -22,16 +23,25 @@ umask 077
 # shellcheck source=lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-if (( $# != 2 )); then
-  echo "error: only court number and an allowlisted output profile are accepted; stream keys must come from the protected .env." >&2
+if (( $# != 5 )); then
+  echo "error: court number, output profile, event, destination id, and output generation are required; stream keys must come from the protected .env." >&2
   exit 1
 fi
 COURT="$1"
 OUTPUT_PROFILE="$2"
+EVENT_ID="$3"
+DESTINATION_ID="$4"
+OUTPUT_GENERATION="$5"
 if ! [[ "$COURT" =~ ^[0-9]+$ ]]; then
   echo "error: court-number must be an integer, got '$COURT'" >&2
   exit 1
 fi
+for binding in "$EVENT_ID" "$DESTINATION_ID" "$OUTPUT_GENERATION"; do
+  if ! [[ "$binding" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$ ]]; then
+    echo "error: event, destination id, and output generation must be 3-128 safe identifier characters." >&2
+    exit 1
+  fi
+done
 
 load_env
 require_livekit_env
@@ -72,6 +82,10 @@ command -v flock >/dev/null 2>&1 || {
 }
 command -v jq >/dev/null 2>&1 || {
   echo "error: jq is required for structured Egress admission checks." >&2
+  exit 1
+}
+command -v openssl >/dev/null 2>&1 || {
+  echo "error: openssl is required for Egress request ownership hashing." >&2
   exit 1
 }
 exec 9>"$REQ_DIR/start.lock"
@@ -181,9 +195,28 @@ chmod 600 "$START_LOG"
 # id so stop-court.sh can end this broadcast without a lookup.
 EGRESS_ID="$(grep -oE 'EG_[A-Za-z0-9]+' "$START_LOG" | head -n1 || true)"
 if [[ -n "$EGRESS_ID" ]]; then
-  echo "$EGRESS_ID" > "$REQ_DIR/court-${COURT}.egress-id"
+  REQUEST_SHA256="$(openssl dgst -sha256 -r "$REQ_FILE" | awk '{print $1}')"
+  ID_FILE="$REQ_DIR/court-${COURT}.egress-id"
+  OWNER_FILE="$REQ_DIR/court-${COURT}.owner.json"
+  printf '%s\n' "$EGRESS_ID" >"${ID_FILE}.tmp"
+  jq -n \
+    --arg event "$EVENT_ID" \
+    --argjson court "$COURT" \
+    --arg destinationId "$DESTINATION_ID" \
+    --arg outputGeneration "$OUTPUT_GENERATION" \
+    --arg outputProfile "$OUTPUT_PROFILE" \
+    --arg rendererGitSha "$PROGRAM_RENDERER_GIT_SHA" \
+    --arg rendererDeploymentId "$PROGRAM_RENDERER_DEPLOYMENT_ID" \
+    --arg egressId "$EGRESS_ID" \
+    --arg requestSha256 "$REQUEST_SHA256" \
+    --arg startedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{schemaVersion: 1, event: $event, court: $court, destinationId: $destinationId, outputGeneration: $outputGeneration, outputProfile: $outputProfile, rendererGitSha: $rendererGitSha, rendererDeploymentId: $rendererDeploymentId, egressId: $egressId, requestSha256: $requestSha256, startedAt: $startedAt}' \
+    >"${OWNER_FILE}.tmp"
+  chmod 600 "${ID_FILE}.tmp" "${OWNER_FILE}.tmp"
+  mv "${OWNER_FILE}.tmp" "$OWNER_FILE"
+  mv "${ID_FILE}.tmp" "$ID_FILE"
   rm -f "$START_LOG"
-  echo "saved egress id ${EGRESS_ID} -> requests/court-${COURT}.egress-id"
+  echo "saved owned egress id ${EGRESS_ID} -> requests/court-${COURT}.owner.json"
 else
   echo "error: Egress started but its id could not be parsed; protected diagnostics remain in requests/court-${COURT}.start.log." >&2
   exit 1

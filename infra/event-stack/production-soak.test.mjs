@@ -158,11 +158,14 @@ test("qualifies reset-safe aggregate cadence and fails on any sample defect", ()
     { runId: state.runId, slot: 0, monitor: first, problems: [] },
     { runId: state.runId, slot: 1, monitor: last, problems: [] }
   ];
-  const pass = evaluateProductionSoak({ state, samples, hostEvidence: { passed: true, problems: [] }, routerEvidence: { passed: true, problems: [] }, endedMs: startedMs + 5_000, minimumDurationMs: 5_000, maximumDurationMs: 10_000 });
+  const pass = evaluateProductionSoak({ state, samples, hostEvidence: { passed: true, problems: [] }, routerEvidence: { passed: true, problems: [] }, sentinelEvidence: { passed: true, problems: [] }, criticalLogEvidence: { passed: true, problems: [] }, endedMs: startedMs + 5_000, minimumDurationMs: 5_000, maximumDurationMs: 10_000 });
   assert.equal(pass.classification, "PASS");
   samples[1].problems.push("Camera 1 YouTube ingest is not active and healthy");
-  const fail = evaluateProductionSoak({ state, samples, hostEvidence: { passed: true, problems: [] }, routerEvidence: { passed: true, problems: [] }, endedMs: startedMs + 5_000, minimumDurationMs: 5_000, maximumDurationMs: 10_000 });
+  const fail = evaluateProductionSoak({ state, samples, hostEvidence: { passed: true, problems: [] }, routerEvidence: { passed: true, problems: [] }, sentinelEvidence: { passed: true, problems: [] }, criticalLogEvidence: { passed: true, problems: [] }, endedMs: startedMs + 5_000, minimumDurationMs: 5_000, maximumDurationMs: 10_000 });
   assert.equal(fail.classification, "FAIL");
+  samples[1].problems.length = 0;
+  const missingSentinel = evaluateProductionSoak({ state, samples, hostEvidence: { passed: true, problems: [] }, routerEvidence: { passed: true, problems: [] }, criticalLogEvidence: { passed: true, problems: [] }, endedMs: startedMs + 5_000, minimumDurationMs: 5_000, maximumDurationMs: 10_000 });
+  assert.ok(missingSentinel.problems.includes("external platform sentinel evidence is missing"));
 });
 
 test("fails qualification when an operator notification could not be delivered", () => {
@@ -186,7 +189,7 @@ test("fails qualification when an operator notification could not be delivered",
     { runId: state.runId, slot: 1, monitor: last, problems: [] }
   ];
 
-  const report = evaluateProductionSoak({ state, samples, hostEvidence: { passed: true, problems: [] }, routerEvidence: { passed: true, problems: [] }, endedMs: startedMs + 5_000, minimumDurationMs: 5_000, maximumDurationMs: 10_000 });
+  const report = evaluateProductionSoak({ state, samples, hostEvidence: { passed: true, problems: [] }, routerEvidence: { passed: true, problems: [] }, sentinelEvidence: { passed: true, problems: [] }, criticalLogEvidence: { passed: true, problems: [] }, endedMs: startedMs + 5_000, minimumDurationMs: 5_000, maximumDurationMs: 10_000 });
 
   assert.equal(report.classification, "FAIL");
   assert.ok(report.problems.includes("one or more Pushover notifications failed"));

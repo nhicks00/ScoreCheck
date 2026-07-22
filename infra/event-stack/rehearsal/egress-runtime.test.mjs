@@ -1,7 +1,27 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { EgressRuntime, parseActiveEgress } from "./egress-runtime.mjs";
+import { EgressRuntime, parseActiveEgress, parseEgressOwnership } from "./egress-runtime.mjs";
+
+const owner = Object.freeze({
+  event: "event-test",
+  destinationId: "broadcast-test",
+  outputGeneration: "generation-test",
+  rendererGitSha: "a".repeat(40),
+  rendererDeploymentId: "dpl_test123"
+});
+
+function ownership(egressId = "EG_started") {
+  return {
+    schemaVersion: 1,
+    ...owner,
+    court: 1,
+    outputProfile: "1080p30",
+    egressId,
+    requestSha256: "b".repeat(64),
+    startedAt: "2026-07-22T00:00:00Z"
+  };
+}
 
 test("parses null or exact unique active Egress identities", () => {
   assert.deepEqual(parseActiveEgress("null\n"), []);
@@ -9,27 +29,35 @@ test("parses null or exact unique active Egress identities", () => {
   assert.throws(() => parseActiveEgress('[{"egress_id":"EG_same"},{"egress_id":"EG_same"}]'), /duplicate/);
 });
 
+test("parses an exact immutable Egress ownership record", () => {
+  assert.deepEqual(parseEgressOwnership(JSON.stringify(ownership())), ownership());
+  assert.throws(() => parseEgressOwnership(JSON.stringify({ ...ownership(), requestSha256: "bad" })), /digest/);
+});
+
 test("starts one Egress, adopts it on resume, and proves second admission rejection", async () => {
   let active = [];
+  let recordedOwner = null;
   const calls = [];
   const runner = async (_command, args, options) => {
     const remote = args.at(-1);
     calls.push(remote);
     if (remote.includes("list-egress")) return { code: 0, stdout: JSON.stringify(active), stderr: "" };
+    if (remote.includes("owner.json")) return { code: 0, stdout: JSON.stringify(recordedOwner), stderr: "" };
     if (remote.includes("start-court")) {
       if (active.length) return { code: 1, stdout: "", stderr: "already active" };
       active = [{ egress_id: "EG_started", status: "EGRESS_ACTIVE" }];
-      return { code: 0, stdout: "saved egress id EG_started", stderr: "" };
+      recordedOwner = ownership();
+      return { code: 0, stdout: "saved owned egress id EG_started", stderr: "" };
     }
     return { code: options?.allowFailure ? 1 : 0, stdout: "", stderr: "" };
   };
   const runtime = new EgressRuntime({ sshKey: "/tmp/key", knownHosts: "/tmp/known", runner, sleep: async () => {} });
-  const started = await runtime.ensureStarted({ host: "198.51.100.1", court: 1 });
+  const started = await runtime.ensureStarted({ host: "198.51.100.1", court: 1, owner });
   assert.equal(started.id, "EG_started");
   assert.equal(started.adopted, false);
-  assert.equal((await runtime.ensureStarted({ host: "198.51.100.1", court: 1, expectedId: "EG_started" })).adopted, true);
-  assert.deepEqual(await runtime.proveSecondStartRejected({ host: "198.51.100.1", court: 1, expectedId: "EG_started" }), { rejected: true, activeId: "EG_started" });
-  assert.ok(calls.some((entry) => entry.includes("start-court.sh 1 1080p30")));
+  assert.equal((await runtime.ensureStarted({ host: "198.51.100.1", court: 1, owner, expectedId: "EG_started" })).adopted, true);
+  assert.deepEqual(await runtime.proveSecondStartRejected({ host: "198.51.100.1", court: 1, owner, expectedId: "EG_started" }), { rejected: true, activeId: "EG_started" });
+  assert.ok(calls.some((entry) => entry.includes("start-court.sh 1 1080p30 event-test broadcast-test generation-test")));
 });
 
 test("stops only the recorded Egress id and is resumable after confirmed absence", async () => {
@@ -37,11 +65,12 @@ test("stops only the recorded Egress id and is resumable after confirmed absence
   const runner = async (_command, args) => {
     const remote = args.at(-1);
     if (remote.includes("list-egress")) return { code: 0, stdout: JSON.stringify(active), stderr: "" };
+    if (remote.includes("owner.json")) return { code: 0, stdout: JSON.stringify(ownership()), stderr: "" };
     if (remote.includes("stop-court.sh 1 EG_started")) { active = []; return { code: 0, stdout: "stopped", stderr: "" }; }
     throw new Error(`unexpected ${remote}`);
   };
   const runtime = new EgressRuntime({ sshKey: "/tmp/key", knownHosts: "/tmp/known", runner, sleep: async () => {} });
-  assert.deepEqual(await runtime.stopExact({ host: "198.51.100.1", court: 1, egressId: "EG_started" }), { absent: true });
+  assert.deepEqual(await runtime.stopExact({ host: "198.51.100.1", court: 1, egressId: "EG_started", profile: "1080p30", owner }), { absent: true });
   assert.deepEqual(await runtime.stopExact({ host: "198.51.100.1", court: 1, egressId: "EG_started" }), { absent: true });
 });
 
@@ -85,6 +114,23 @@ test("does not retry Egress mutations after a transient SSH failure", async () =
       throw new Error("ssh failed with exit 255: Connection reset by peer");
     }
   });
-  await assert.rejects(() => runtime.ensureStarted({ host: "198.51.100.1", court: 1 }), /Connection reset by peer/);
+  await assert.rejects(() => runtime.ensureStarted({ host: "198.51.100.1", court: 1, owner }), /Connection reset by peer/);
   assert.equal(attempts, 1);
+});
+
+test("refuses to adopt an active Egress whose durable owner differs", async () => {
+  const runtime = new EgressRuntime({
+    sshKey: "/tmp/key",
+    knownHosts: "/tmp/known",
+    runner: async (_command, args) => {
+      const remote = args.at(-1);
+      if (remote.includes("list-egress")) return { code: 0, stdout: '[{"egress_id":"EG_started","status":"EGRESS_ACTIVE"}]', stderr: "" };
+      if (remote.includes("owner.json")) return { code: 0, stdout: JSON.stringify({ ...ownership(), outputGeneration: "another-generation" }), stderr: "" };
+      throw new Error(`unexpected ${remote}`);
+    }
+  });
+  await assert.rejects(
+    () => runtime.ensureStarted({ host: "198.51.100.1", court: 1, owner, expectedId: "EG_started" }),
+    /outputGeneration changed/
+  );
 });

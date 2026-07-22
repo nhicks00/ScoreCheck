@@ -144,6 +144,13 @@ export class RehearsalController {
           const courtState = state.courts[court];
           const host = compositorHost(lifecycleState, manifest, court);
           const expectedId = courtState.egress?.id ?? null;
+          const owner = {
+            event: state.event,
+            destinationId: courtState.stream.id,
+            outputGeneration: state.generationId,
+            rendererGitSha: state.program.gitSha,
+            rendererDeploymentId: state.program.deployment.id
+          };
           if (!courtState.outputConformance) {
             await this.egress.preflight(host);
             courtState.outputConformance = await this.outputConformance.qualify({
@@ -161,10 +168,10 @@ export class RehearsalController {
             courtState.egress = { status: "starting", id: null };
             await this.store.save(state);
           }
-          const active = await this.egress.ensureStarted({ host, court, expectedId });
+          const active = await this.egress.ensureStarted({ host, court, owner, expectedId });
           courtState.egress = { status: "active", ...active };
           await this.store.save(state);
-          courtState.admission = await this.egress.proveSecondStartRejected({ host, court, expectedId: active.id });
+          courtState.admission = await this.egress.proveSecondStartRejected({ host, court, owner, expectedId: active.id });
           await this.store.save(state);
           // Ramp one court end to end before admitting the next. This both
           // bounds startup load and prevents one broken Program chain from
@@ -243,7 +250,14 @@ export class RehearsalController {
             await this.store.save(state);
           }
           if (courtState.egress?.id) {
-            await this.egress.stopExact({ host, court, egressId: courtState.egress.id });
+            const owner = {
+              event: state.event,
+              destinationId: courtState.stream.id,
+              outputGeneration: state.generationId,
+              rendererGitSha: state.program.gitSha,
+              rendererDeploymentId: state.program.deployment.id
+            };
+            await this.egress.stopExact({ host, court, egressId: courtState.egress.id, profile: "1080p30", owner });
           }
           courtState.egress = { ...(courtState.egress ?? {}), status: "stopped" };
           await this.store.save(state);

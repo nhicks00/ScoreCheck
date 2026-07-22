@@ -21,6 +21,9 @@ import { loadProtectedEnv } from "./stack-deployer.mjs";
 import { loadVenueAdmission } from "./venue-admission.mjs";
 import { YouTubeViewerProbe } from "./youtube-viewer-probe.mjs";
 import { loadCommentaryQualification } from "./commentary-qualification.mjs";
+import { initialProgramSupervisor, programSupervisorStep } from "./program-supervisor.mjs";
+import { evaluatePlatformSentinelEvidence, PlatformSentinelRuntime } from "./platform-sentinel-runtime.mjs";
+import { CriticalLogRuntime, evaluateCriticalLogEvidence } from "./critical-log-runtime.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(SCRIPT_PATH), "../..");
@@ -85,6 +88,8 @@ export class ProductionSoakRuntime {
       sourceProbe: dependencies.sourceProbe ?? new ProductionSourceProbe({ sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
       viewerProbe: dependencies.viewerProbe ?? new YouTubeViewerProbe(),
       sampler: dependencies.sampler ?? new PoolSamplerRuntime({ repoRoot: REPO_ROOT, sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
+      sentinel: dependencies.sentinel ?? new PlatformSentinelRuntime({ repoRoot: REPO_ROOT, environment: join(profile.secrets, "observability.env") }),
+      criticalLogs: dependencies.criticalLogs ?? new CriticalLogRuntime({ repoRoot: REPO_ROOT, sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
       router: dependencies.router ?? new RouterSoakRuntime({ host: options.router }),
       fetchImpl: dependencies.fetchImpl ?? globalThis.fetch,
       sleep: dependencies.sleep ?? delay,
@@ -150,9 +155,14 @@ export class ProductionSoakRuntime {
     }
 
     if (state.phase === "STARTING") {
+      state.sentinel = await this.sentinel.ensure({ manifest: this.manifest, renderer: this.renderer, evidenceDirectory: this.options.evidence });
+      await writeState(statePath, state);
+      state.criticalLogs = await this.criticalLogs.ensure({ manifest: this.manifest, lifecycleState: this.lifecycleState, evidenceDirectory: this.options.evidence });
+      await writeState(statePath, state);
       for (const camera of this.venue.activeCameras) {
         const host = compositorHost(this.manifest, this.lifecycleState, camera);
         const expectedId = state.egress[camera]?.id ?? null;
+        const owner = egressOwner(state, camera);
         if (!state.outputConformance[camera]) {
           await this.egress.preflight(host);
           const evidence = await this.outputConformance.qualify({
@@ -173,10 +183,10 @@ export class ProductionSoakRuntime {
           await writeState(statePath, state);
         }
         if (!expectedId) await this.egress.preflight(host);
-        const active = await this.egress.ensureStarted({ host, court: camera, profile: state.profiles[camera].profile, expectedId });
+        const active = await this.egress.ensureStarted({ host, court: camera, profile: state.profiles[camera].profile, owner, expectedId });
         state.egress[camera] = { ...active, host, profile: state.profiles[camera].profile };
         await writeState(statePath, state);
-        state.admission[camera] = await this.egress.proveSecondStartRejected({ host, court: camera, profile: state.profiles[camera].profile, expectedId: active.id });
+        state.admission[camera] = await this.egress.proveSecondStartRejected({ host, court: camera, profile: state.profiles[camera].profile, owner, expectedId: active.id });
         await writeState(statePath, state);
         await this.#waitForCameraOutput(camera);
       }
@@ -192,6 +202,8 @@ export class ProductionSoakRuntime {
       if (state.phase === "COMPLETE") return publicState(state);
       throw new Error(`production soak state phase ${state.phase} cannot run`);
     }
+
+    if (state.supervisor.pendingRestart) await this.#completePendingSupervisorRestart(state, statePath);
 
     const signal = createSignalLatch();
     const handle = await open(samplesPath, "a", 0o600);
@@ -256,6 +268,38 @@ export class ProductionSoakRuntime {
         const provider = includeProvider ? await this.#providerEvidence() : null;
         const viewer = await flushViewer();
         const problems = productionSnapshotProblems(snapshot, state.profiles, this.venue, previous, observedMs);
+        if (includeProvider && !(await this.sentinel.inspect(state.sentinel.output))) problems.push("external platform sentinel is not running");
+        if (includeProvider && !(await this.criticalLogs.inspect(state.criticalLogs.output))) problems.push("external critical-log exporter is not running");
+        const supervisorStep = programSupervisorStep(state.supervisor, snapshot, this.venue.activeCameras, observedMs);
+        state.supervisor = supervisorStep.state;
+        const supervisorActions = [];
+        for (const action of supervisorStep.actions) {
+          if (action.type === "exhausted") {
+            supervisorActions.push({ ...action, observedAt: new Date(observedMs).toISOString(), status: "FAILED_CLOSED" });
+            problems.push(`Camera ${action.camera} browser restart limit is exhausted`);
+            continue;
+          }
+          const oldEgressId = state.egress[action.camera]?.id;
+          if (!oldEgressId) {
+            supervisorActions.push({ ...action, observedAt: new Date(observedMs).toISOString(), status: "REJECTED", error: "owned Egress id is missing" });
+            problems.push(`Camera ${action.camera} browser restart was rejected because its owned Egress id is missing`);
+            continue;
+          }
+          state.supervisor.pendingRestart = { ...action, oldEgressId, preparedAt: new Date(observedMs).toISOString() };
+          await writeState(statePath, state);
+          try {
+            const completed = await this.#completePendingSupervisorRestart(state, statePath);
+            supervisorActions.push(completed);
+            problems.push(`Camera ${action.camera} program browser required bounded Egress restart attempt ${action.attempt}`);
+          } catch (error) {
+            const failure = { ...action, observedAt: new Date(this.now()).toISOString(), status: "FAILED", error: safeError(error) };
+            state.supervisor.history.push(failure);
+            state.supervisor.pendingRestart = null;
+            await writeState(statePath, state);
+            supervisorActions.push(failure);
+            problems.push(`Camera ${action.camera} bounded browser restart failed: ${failure.error}`);
+          }
+        }
         if (provider) problems.push(...productionProviderProblems(provider, this.venue.activeCameras));
         if (viewer && !viewer.passed) problems.push(`Camera ${viewer.camera} external viewer delivery failed: ${viewer.problems.join("; ")}`);
         const lagMs = observedMs - dueAt;
@@ -277,6 +321,7 @@ export class ProductionSoakRuntime {
           monitor: snapshot,
           provider,
           viewer,
+          supervisorActions,
           problems: unique(problems)
         };
         await handle.write(`${JSON.stringify(sample)}\n`);
@@ -303,6 +348,8 @@ export class ProductionSoakRuntime {
     }
 
     state.sampler = await this.sampler.stop(state.sampler);
+    state.sentinel = await this.sentinel.stop(state.sentinel);
+    state.criticalLogs = await this.criticalLogs.stop(state.criticalLogs);
     state.router = await this.router.stopAndFetch(state.router, join(this.options.evidence, "speedify-soak.tsv"));
     const endedMs = this.now();
     const hostEvidence = await evaluateRehearsalPoolEvidence({
@@ -321,11 +368,26 @@ export class ProductionSoakRuntime {
       endMs: endedMs,
       activeCameras: this.venue.activeCameras.length
     });
+    const sentinelEvidence = await evaluatePlatformSentinelEvidence({
+      path: state.sentinel.output,
+      event: state.event,
+      startMs: Date.parse(state.startedAt),
+      endMs: endedMs
+    });
+    const criticalLogEvidence = await evaluateCriticalLogEvidence({
+      path: state.criticalLogs.output,
+      event: state.event,
+      expectedHosts: state.criticalLogs.expectedHosts,
+      startMs: Date.parse(state.startedAt),
+      endMs: endedMs
+    });
     const report = evaluateProductionSoak({
       state,
       samples,
       hostEvidence,
       routerEvidence,
+      sentinelEvidence,
+      criticalLogEvidence,
       viewerEvidence,
       endedMs,
       minimumDurationMs: this.options.minimumDurationMs,
@@ -434,6 +496,31 @@ export class ProductionSoakRuntime {
       cameras.push({ camera, stream, broadcast });
     }
     return { observedAt: new Date(this.now()).toISOString(), cameras };
+  }
+
+  async #completePendingSupervisorRestart(state, statePath) {
+    const pending = state.supervisor.pendingRestart;
+    if (!pending) return null;
+    const camera = pending.camera;
+    const host = compositorHost(this.manifest, this.lifecycleState, camera);
+    const profile = state.profiles[camera].profile;
+    const owner = egressOwner(state, camera);
+    const active = await this.egress.listActive(host);
+    if (active.length > 1) throw new Error(`Camera ${camera} compositor has multiple active Egress jobs`);
+    let replacement;
+    if (active.length === 0) {
+      replacement = await this.egress.ensureStarted({ host, court: camera, profile, owner });
+    } else if (active[0].id === pending.oldEgressId) {
+      replacement = await this.egress.restartOwned({ host, court: camera, profile, owner, egressId: pending.oldEgressId });
+    } else {
+      replacement = { ...await this.egress.reconcileOwned({ host, court: camera, profile, owner, expectedId: active[0].id }), adopted: true };
+    }
+    state.egress[camera] = { ...replacement, host, profile };
+    const completed = { ...pending, observedAt: new Date(this.now()).toISOString(), status: "COMPLETED", replacementEgressId: replacement.id };
+    state.supervisor.history.push(completed);
+    state.supervisor.pendingRestart = null;
+    await writeState(statePath, state);
+    return completed;
   }
 
   async #updateNotification(state, problems) {
@@ -617,7 +704,7 @@ export function productionProviderIdleProblems(provider, activeCameras) {
   return unique(problems);
 }
 
-export function evaluateProductionSoak({ state, samples, hostEvidence, routerEvidence, viewerEvidence = [], endedMs, minimumDurationMs, maximumDurationMs }) {
+export function evaluateProductionSoak({ state, samples, hostEvidence, routerEvidence, sentinelEvidence, criticalLogEvidence, viewerEvidence = [], endedMs, minimumDurationMs, maximumDurationMs }) {
   const startedMs = Date.parse(state.startedAt);
   const observedDurationMs = Math.max(0, endedMs - startedMs);
   const expectedElapsedSamples = Math.floor(observedDurationMs / SAMPLE_INTERVAL_MS) + 1;
@@ -625,6 +712,8 @@ export function evaluateProductionSoak({ state, samples, hostEvidence, routerEvi
     ...samples.flatMap((sample) => sample.problems),
     ...(hostEvidence?.problems ?? []),
     ...(routerEvidence?.problems ?? ["bonded-router evidence is missing"]),
+    ...(sentinelEvidence?.problems ?? ["external platform sentinel evidence is missing"]),
+    ...(criticalLogEvidence?.problems ?? ["external critical-log evidence is missing"]),
     ...(state.viewerProbeRequired ? viewerEvidenceProblems(viewerEvidence, state.activeCameras, state.outputConformance) : []),
     ...outputConformanceProblems(state.outputConformance, state.profiles, state.activeCameras, state.runBinding),
     ...(state.notifications.some((notification) => notification.kind === "FAILURE") ? ["one or more Pushover notifications failed"] : []),
@@ -635,7 +724,7 @@ export function evaluateProductionSoak({ state, samples, hostEvidence, routerEvi
   const durationQualified = observedDurationMs >= minimumDurationMs;
   const classification = problems.length ? "FAIL" : durationQualified ? "PASS" : "INCOMPLETE";
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     event: state.event,
     runId: state.runId,
     startedAt: state.startedAt,
@@ -658,6 +747,8 @@ export function evaluateProductionSoak({ state, samples, hostEvidence, routerEvi
     notifications: state.notifications,
     hostEvidence,
     routerEvidence,
+    sentinelEvidence,
+    criticalLogEvidence,
     viewerEvidence: {
       observed: viewerEvidence.length,
       passed: viewerEvidence.filter((entry) => entry.passed).length,
@@ -948,7 +1039,7 @@ export function productionRouterPreflightProblems(raw, minimumUploadMbps) {
 function createState({ event, evidence, nowMs, minimumDurationMs, maximumDurationMs, venue, commentary, renderer, destinations }) {
   validateVenueRuntime(venue);
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     event,
     runId: randomUUID(),
     phase: "ARMED",
@@ -978,6 +1069,8 @@ function createState({ event, evidence, nowMs, minimumDurationMs, maximumDuratio
     egress: {},
     admission: {},
     sampler: null,
+    sentinel: null,
+    criticalLogs: null,
     router: null,
     baseline: null,
     lastSnapshot: null,
@@ -990,6 +1083,7 @@ function createState({ event, evidence, nowMs, minimumDurationMs, maximumDuratio
     notifications: [],
     viewerProbeRequired: true,
     viewerProbe: { nextCameraIndex: 0, completed: 0, passed: 0, failed: 0, lastByCamera: {} },
+    supervisor: { ...initialProgramSupervisor(venue.activeCameras), pendingRestart: null, history: [] },
     classification: null,
     reportSha256: null
   };
@@ -1005,9 +1099,22 @@ function validateInputs({ options, profile, manifest, lifecycleState, venue }) {
 
 function validateState(state, event, options, venue, commentary, renderer, destinations) {
   const expectedRunBinding = createRunBinding(renderer, destinations, venue.activeCameras);
-  if (!state || state.schemaVersion !== 5 || state.event !== event || state.evidence !== options.evidence || state.minimumDurationMs !== options.minimumDurationMs || state.maximumDurationMs !== options.maximumDurationMs
+  if (!state || state.schemaVersion !== 6 || state.event !== event || state.evidence !== options.evidence || state.minimumDurationMs !== options.minimumDurationMs || state.maximumDurationMs !== options.maximumDurationMs
     || state.venueProfileSha256 !== venue.sha256 || state.commentaryQualificationSha256 !== commentary.sha256 || stableJson(state.runBinding) !== stableJson(expectedRunBinding)
     || JSON.stringify(state.activeCameras) !== JSON.stringify(venue.activeCameras) || JSON.stringify(state.inactiveCameras) !== JSON.stringify(venue.inactiveCameras)) throw new Error("production soak state does not match this run");
+}
+
+function egressOwner(state, camera) {
+  const destinationId = state.runBinding?.destinations?.[camera]?.broadcastId;
+  const renderer = state.runBinding?.renderer;
+  if (!destinationId || !renderer?.gitSha || !renderer?.deploymentId) throw new Error(`Camera ${camera} Egress owner binding is incomplete`);
+  return {
+    event: state.event,
+    destinationId,
+    outputGeneration: state.runId,
+    rendererGitSha: renderer.gitSha,
+    rendererDeploymentId: renderer.deploymentId
+  };
 }
 
 export function outputConformanceProblems(value, profiles, activeCameras, runBinding) {
@@ -1173,6 +1280,9 @@ function publicState(state) {
     profiles: state.profiles,
     runBinding: state.runBinding,
     normalizers: state.normalizers,
+    sentinel: state.sentinel,
+    criticalLogs: state.criticalLogs,
+    supervisor: state.supervisor,
     viewerProbe: state.viewerProbe,
     outputConformance: state.outputConformance,
     egress: state.egress,

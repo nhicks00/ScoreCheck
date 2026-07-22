@@ -218,11 +218,13 @@ HEALTHCHECKS_BASELINE_CHECK_ID
 HEALTHCHECKS_ACTIVE_PING_URL
 HEALTHCHECKS_API_KEY
 HEALTHCHECKS_ACTIVE_CHECK_ID
+HEALTHCHECKS_SENTINEL_PING_URL
 ```
 
 Store them only in the protected monitoring environment on the observability
 host and in the protected local deployment file. Never commit them. Pushover
-and both Healthchecks checks are configured in production. The baseline dead-man
+and the monitor service's baseline and active Healthchecks checks are configured
+in production. The baseline dead-man
 pings every ten minutes at all times. The active check pings
 every minute while any court expects coverage and is explicitly paused through
 the Healthchecks management API while the system is idle. A live ping resumes it
@@ -234,6 +236,14 @@ only when the pings are healthy and the Healthchecks Pushover integration is
 attached to both checks. Missing attachment or failed audit degrades the Watchdog
 item and the overall system header. The external provider must notify a phone
 independently of DigitalOcean, Supabase, Vercel, and ScoreCheck.
+
+The production lifecycle owns a third Healthchecks check through
+`HEALTHCHECKS_SENTINEL_PING_URL`. It is not a monitor-service dead-man and must
+not reuse either URL above. During an admitted production run, an off-VPC
+process checks the public monitor, ingest, commentary, and immutable renderer
+endpoints every minute and sends explicit success/failure pings. The run fails
+qualification if that process exits, any endpoint fails, Healthchecks delivery
+fails, or sample coverage/gaps are outside the contract.
 
 Phone notifications use operator language only. Every opening notification has
 `Problem:` and `Do this:` lines, identifies the permanent camera number when

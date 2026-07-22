@@ -94,7 +94,7 @@ The target remains:
 | R-03 | Existing scene survives Vercel loss | `PARTIAL` | The loaded browser can continue media and last rendered state; no full physical control-plane-loss acceptance is bound to the current event contract. | Run Vercel loss/recovery with Egress live. Existing video/audio/last-good score must continue without navigation. |
 | R-04 | Existing scene survives Supabase loss | `PARTIAL` | Video and commentary are separate from scoring, and the overlay has fail-transparent behavior. | Run Supabase loss/recovery with Egress live; score must hold last-good and expose stale telemetry without blanking video. |
 | R-05 | Program token leakage protections | `SATISFIED` | The protected token is carried only in a URL fragment to a one-time bootstrap, exchanged for a scoped HttpOnly session, then removed by navigation. Program routes enforce private/no-store, no-referrer, strict CSP, and redacted startup output. | Keep third-party resources absent from program routes. |
-| R-06 | Bounded browser supervisor | `PARTIAL` | Program heartbeat, render-stall, reconnect, reload, audio, and page counters exist. Recovery loops are bounded in portions of the client but there is no independent local supervisor contract tied to immutable identity. | Add local process/page/build/state supervision with bounded restart and no infinite reload loop. |
+| R-06 | Bounded browser supervisor | `SATISFIED` | `program-supervisor.mjs` acts only when raw/program/Egress remain healthy while the browser is unavailable for six consecutive samples. It preserves event/destination/output-generation/renderer ownership, permits at most two restarts with a ten-minute cooldown, persists a prepared restart before mutation, resumes it safely, and fails closed after exhaustion. Any restart remains visible and fails the qualification run rather than being hidden. | Prove one bounded recovery on the exact immutable renderer during the physical restart gate. |
 | R-07 | Separate renderer deployment blast radius | `DEFERRED` | Admin and program routes currently share the web project. | First prove immutable production deployment pinning. Split the renderer project only if pinning cannot prevent admin deployments from affecting restarted scenes. |
 | R-08 | Fully local renderer bundle | `REJECTED` | It would duplicate hosting/build/runtime concerns before immutable deployment pinning is tested. | Reconsider only if an external renderer outage still prevents the declared recovery objective. |
 
@@ -119,7 +119,7 @@ The target remains:
 | V-02 | Aggregate upload admission with reserve | `SATISFIED` | Venue admission sums enabled-camera source caps, applies the 30 percent reserve, and rejects stale or insufficient measured sustained upload. | Refresh the venue measurement before each event. |
 | V-03 | Per-camera source caps/fairness | `SATISFIED` | Each camera has a manifest cap and physical readiness attests router QoS/fairness; capacity gates reject observed maximum violations. | Device/router enforcement remains a venue responsibility and must be observed during soak. |
 | V-04 | Fail-closed bonded routing | `SATISFIED` | Speedify routing, guard table, kill switch, watchdog, and controlled failure gates are documented and tested. | Preserve the event-router preflight and never silently bypass bonding. |
-| V-05 | Reduced-bitrate single-WAN break-glass | `DEFERRED` | No automatic fallback is desirable; a controlled mode is not yet implemented. | Design only after source profiles are enforceable. It must be explicit, priority-court-only, reduced bitrate, paged, and reversible. |
+| V-05 | Reduced-bitrate single-WAN break-glass | `DEFERRED` | The operator contract is documented below, but no automatic or runtime fallback is implemented. | Rehearse the explicit priority-court procedure before enabling it. Default bonded routing remains fail closed. |
 | V-06 | Camera VLAN/wired/QoS/RF/UPS/thermal readiness | `SATISFIED` | The venue profile requires timestamped operator attestations for isolation, wired links or approved wireless exceptions, QoS, RF survey, router thermal headroom, protected power/UPS runtime, cabling, weather protection, and spare power. | Do not fabricate sensors; retain observed/operator evidence. |
 | V-07 | Local ISO recording | `DEFERRED` | This protects footage but not live continuity and depends on camera/venue storage. | Add as a finals checklist item after live-path P0 gates pass. |
 
@@ -135,7 +135,7 @@ The target remains:
 | I-04 | Dedicated thirteenth ingest standby | `DEFERRED` | Account limit 15 permits it, but it raises the ordinary event fleet from 12 to 13. | Admit only if dual-role spare recovery misses the measured RTO or creates unacceptable operational risk. |
 | I-05 | Active-active ingest | `REJECTED` | Complexity and dual-publisher behavior are unjustified for the current scale. | No action. |
 | I-06 | One Egress per compositor | `SATISFIED` | `start-court.sh` serializes starts, verifies active count zero, and the agent contract enforces one active request maximum. | Retain multiplicity fault tests. |
-| I-07 | Orphaned Egress reconciliation/idempotency | `PARTIAL` | Saved Egress IDs, active-list checks, stop scripts, and monitoring exist. Re-adoption across every control/Redis restart is not one explicit state machine. | Add event/camera/broadcast/output-generation identity and a fail-closed reconcile command before any replacement start. |
+| I-07 | Orphaned Egress reconciliation/idempotency | `SATISFIED` | Every Egress now has a protected atomic owner record binding event, camera, destination, output generation, renderer Git/deployment, output profile, Egress ID, and request digest. Starts, resume, second-admission proof, stop, and supervisor replacement reconcile exact active process plus owner/digest and reject ambiguous or changed ownership. | Retain a production interruption/resume artifact; never manually delete an owner record to force adoption. |
 | I-08 | Dedicated-CPU compositor benchmark | `DEFERRED` | Production-shaped capacity harness exists; current event fleet deliberately uses the declared compositor pool shape. | Compare qualified c-4/c-8 and current shape using p95/p99 CPU, steal, encode speed, frame pacing, `/dev/shm`, memory, cold/warm start, and cost. Do not resize from average CPU. |
 | I-09 | Spare to YouTube backup ingest | `DEFERRED` | The warm spare and YouTube lifecycle controls exist; backup-ingestion ownership/failover is not qualified. | Limit first gate to one priority court. Prove primary failure, backup continuity, return-to-primary, and no duplicate publisher. |
 | I-10 | YouTube lifecycle and destination ownership | `SATISFIED` | Production YouTube code validates stream/broadcast IDs, binding, privacy, lifecycle, health, issues, and watch page. | Extend with output-conformance and optional backup identity. |
@@ -149,8 +149,8 @@ The target remains:
 | A-03 | State-aware Healthchecks | `SATISFIED` | Baseline/active schedules and channel audits exist. | Retain live subscription audit. |
 | A-04 | Local incident outbox during Supabase loss | `SATISFIED` | The monitoring service now has a protected bounded local WAL document for incident changes and notification state, with idempotent replay and notification maintenance independent of Supabase availability. | Exercise outage/replay in the acceptance matrix. |
 | A-05 | External YouTube viewer fresh-frame/audio probe | `SATISFIED` | A bounded no-cookie Chromium probe verifies playhead advance, changing frame fingerprints, nonblack video, decoded audio, and stable dimensions, then closes the temporary browser. Production soak rotates it across active cameras. | Run from an external host for production evidence. |
-| A-06 | External platform sentinel | `DEFERRED` | Healthchecks detects monitor liveness but does not diagnose other public endpoints if observability is gone. | Start with Healthchecks plus viewer probe. Add another-provider sentinel only if that combination cannot distinguish monitor-host loss from viewer failure. |
-| A-07 | Continuous compact critical-log export | `PARTIAL` | Durable incidents/evidence exist; full detailed logs can still be lost with a failed host. | Export bounded structured lifecycle/crash/identity transitions asynchronously to inexpensive retained storage. Never block media. |
+| A-06 | External platform sentinel | `SATISFIED` | The production soak owns a separate off-VPC sentinel that checks monitor, ingest, commentary, and immutable renderer HTTPS endpoints every minute and reports success/failure to a dedicated Healthchecks check. Unique-process liveness, endpoint results, delivery, edge gaps, and coverage are mandatory evidence. | Create and attach the dedicated sentinel Healthchecks check, then retain one live loss/recovery artifact. |
+| A-07 | Continuous compact critical-log export | `SATISFIED` | One long-lived SSH/Compose stream per temporary host writes filtered, redacted, fsynced lifecycle/error records to protected off-host event evidence. It avoids repeated SSH/Docker polling, emits full-host readiness/coverage heartbeats, and fails the run if any stream exits or coverage is incomplete. | Verify all twelve streams in the next live run and archive the protected event evidence before provider teardown. |
 | A-08 | Prometheus headroom/cardinality | `SATISFIED` | Event-scoped monitoring, bounded metrics, disk/resource alerts, and durable incident summaries exist. | Audit labels for unbounded IDs/text before each contract change. |
 | A-09 | Cost dead-man without automatic destruction | `SATISFIED` | Coverage close sends an immediate non-blocking reminder; `cost-reminders.mjs` performs read-only provider/monitor checks and dedupes Pushover warnings for active output, one-hour/next-morning compute, unused setup, and terminal provider-nonzero. It never stops or deletes resources. | Schedule it at bounded cadence while an event lifecycle exists. |
 
@@ -196,9 +196,10 @@ In particular:
 - The dual-role spare ingest transaction is implemented but has no live
   DigitalOcean/SSH adapter or measured takeover RTO. Do not add a thirteenth
   host until that simpler recovery is rehearsed and shown insufficient.
-- Renderer and Supabase loss, host-level browser recovery, orphaned Egress
-  adoption, YouTube backup ingest, and retained critical-log export still need
-  production-shaped proof or an explicitly selected retention destination.
+- Renderer and Supabase loss, bounded browser recovery, exact Egress-owner
+  resume, the external platform sentinel, retained critical-log export, and
+  YouTube backup ingest still need production-shaped evidence. The first five
+  now have fail-closed implementations; backup ingest remains deferred.
 - No code in this qualification branch has been deployed and no event
   infrastructure was created. Between-event provider-zero remains the required
   state.
@@ -241,13 +242,47 @@ host identities, source/output profile, start/end timestamps, and cleanup state.
 | External viewer | Remote playhead advances, frame fingerprints change, frame is nonblack, audio is active, expected broadcast/build identity is present, and probe load is bounded. |
 | Teardown | Broadcasts complete, Egresses zero, temporary Droplets/DNS/firewalls are removed, provider-zero audit passes, only intended retained anchors remain, and cost reminder clears. |
 
+## Controlled Single-WAN Break-Glass Contract
+
+This is a documented emergency mode, not an implemented automatic fallback.
+Normal operation remains bonded and fail closed. No component may enter this
+mode merely because Speedify is degraded.
+
+Before a future implementation can be enabled, all of the following are
+required:
+
+1. Nathan gives an explicit event-specific approval naming the surviving WAN
+   and the one or two permanent Camera numbers to protect.
+2. The selected cameras are already configured for
+   `CONSTRAINED_1080P30`; every other camera output is stopped before routing is
+   changed.
+3. A fresh sustained-upload measurement proves at least 30 percent headroom
+   above the selected cameras' aggregate source caps on that one WAN.
+4. The lifecycle opens a critical Pushover incident that says bonded service is
+   unavailable, identifies the protected cameras, and instructs the operator
+   that all other courts must remain stopped.
+5. The routing transaction records the original rules, exact single-WAN route,
+   actor, reason, start time, and a bounded expiry. It never alters ordinary
+   operator traffic.
+6. Recovery is explicit: stop the protected publishers if needed, restore and
+   verify the fail-closed Speedify rules/guard table/kill switch, then re-admit
+   cameras from the venue profile one at a time.
+7. Any expiry, route mismatch, capacity loss, or inability to restore the
+   original rules fails closed and keeps camera traffic blocked.
+
+The first rehearsal must be test-feed-only and prove route rollback, bandwidth
+headroom, peer-camera isolation, one opening/recovery page, and no silent
+automatic transition. Until that artifact exists, V-05 remains disabled.
+
 ## Remaining Execution Order
 
 1. Merge the validated hard-cut branch. Stop all provider-score pollers, apply
    migration 030, deploy the matching web/worker revision, verify a fresh lease
    generation and fenced commit, then restore polling. Never overlap the old
    worker with migration 030 or the new worker with the old schema. Verify idle
-   contracts without starting media.
+   contracts without starting media. Configure a separate
+   `HEALTHCHECKS_SENTINEL_PING_URL` before capturing the new protected recovery
+   source.
 2. Capture a real venue profile, renderer binding, commentary qualification,
    camera H.264/HEVC admission traces, and actual output-conformance artifacts.
 3. Run physical H.264 1080p30/60 and compositor-local HEVC 1080p30/60 gates.
@@ -258,7 +293,7 @@ host identities, source/output profile, start/end timestamps, and cleanup state.
    adapter only for this protected rehearsal, measure RTO, and decide whether
    the thirteenth warm ingest is justified.
 6. Qualify one priority-court spare compositor against YouTube backup ingestion
-   and complete orphan/output-generation reconciliation evidence.
+   and capture interruption/resume evidence for exact Egress ownership.
 7. Run the eight-camera event-length endurance matrix, external viewer rotation,
    exact cleanup, and terminal provider-zero audit. Only then mark the active
    production-qualification goal complete.

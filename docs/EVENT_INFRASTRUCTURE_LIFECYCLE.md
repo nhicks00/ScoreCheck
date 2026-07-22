@@ -476,8 +476,18 @@ routing, then prints `ARMED` while every public output remains stopped. Cameras
 1-6 may start only after that line. It probes each source, starts exactly one
 matching output per camera, verifies the scoreboard page and unlisted YouTube
 destination, records five-second end-to-end samples plus host and router
-evidence, and sends deduplicated plain-English Pushover alerts. Cameras 7-8
-must remain isolated for this six-camera soak.
+evidence, and sends deduplicated plain-English Pushover alerts. A separate
+off-VPC sentinel checks monitor, ingest, commentary, and the immutable renderer
+once per minute through its own Healthchecks check. One long-lived Compose log
+stream per Droplet retains redacted critical lifecycle/error evidence on the
+operator machine without repeated SSH polling. Sentinel/log liveness, full-host
+readiness, edge gaps, and coverage are hard acceptance inputs. Cameras 7-8 must
+remain isolated for this six-camera soak.
+
+`HEALTHCHECKS_SENTINEL_PING_URL` is a third protected Healthchecks check. Do not
+reuse the monitor-service baseline or active ping URL: reuse could let one
+process mask another process's failure. Attach Pushover to the sentinel check
+before capturing the production recovery source.
 
 ## Event build
 

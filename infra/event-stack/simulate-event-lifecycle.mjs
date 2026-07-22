@@ -81,7 +81,10 @@ async function fullLifecycle() {
       noRehearsalReservedIpv4s: cloud.reserved.size === 0,
       isolatedDnsRemoved: manifest.endpoints.every((entry) => !dns.records.has(entry.hostname)),
       finalPhaseDestroyed: destroyed.phase === "destroyed",
-      plainLifecycleNotifications: notifier.messages.length === 2
+      plainLifecycleNotifications: notifier.messages.length === 3
+        && notifier.messages.some((entry) => entry.title === "ScoreCheck TEST rehearsal ready")
+        && notifier.messages.some((entry) => entry.title === "ScoreCheck event coverage ended")
+        && notifier.messages.some((entry) => entry.title === "ScoreCheck TEST rehearsal removed")
     };
     return outcome("full isolated rehearsal lifecycle", checks);
   } catch (error) {
