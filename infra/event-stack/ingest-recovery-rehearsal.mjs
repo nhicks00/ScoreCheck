@@ -16,6 +16,7 @@ import { assertNetworkContractDeployable } from "./network-contract.mjs";
 import { productionProviderProblems, productionSnapshotProblems } from "./production-soak.mjs";
 import { ProductionSyntheticPublisherStateStore } from "./production-synthetic-publishers.mjs";
 import { ProductionYouTubeProvider, readProductionDestinations } from "./production-youtube.mjs";
+import { withQualificationGateLock } from "./qualification-gate-lock.mjs";
 import { DigitalOceanProvider } from "./providers.mjs";
 import { SyntheticPublisherManager } from "./rehearsal/synthetic-publishers.mjs";
 import { loadProtectedEnv } from "./stack-deployer.mjs";
@@ -44,7 +45,10 @@ async function main() {
     return;
   }
   const runtime = await createRuntime(options);
-  const report = await runIngestRecoveryRehearsal(runtime);
+  const report = await withQualificationGateLock(
+    { ...runtime, gate: "ingest-recovery run" },
+    () => runIngestRecoveryRehearsal(runtime)
+  );
   process.stdout.write(`${JSON.stringify(publicReport(report), null, 2)}\n`);
 }
 

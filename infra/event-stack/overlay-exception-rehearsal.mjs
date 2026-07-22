@@ -13,6 +13,7 @@ import { OverlayExceptionDebugRuntime } from "./overlay-exception-debug-runtime.
 import { evaluateOverlayExceptionRehearsal, overlayExceptionSnapshotProblems } from "./overlay-exception-evidence.mjs";
 import { loadRendererBinding } from "./renderer-binding.mjs";
 import { ProductionSyntheticPublisherStateStore } from "./production-synthetic-publishers.mjs";
+import { withQualificationGateLock } from "./qualification-gate-lock.mjs";
 import { loadProtectedEnv } from "./stack-deployer.mjs";
 import { loadVenueAdmission } from "./venue-admission.mjs";
 
@@ -37,16 +38,28 @@ async function main() {
     return;
   }
   if (options.command === "prepare") {
-    const result = await prepareOverlayExceptionRehearsal(await createPrepareRuntime(options));
+    const runtime = await createPrepareRuntime(options);
+    const result = await withQualificationGateLock(
+      { ...runtime, gate: "overlay-exception prepare" },
+      () => prepareOverlayExceptionRehearsal(runtime)
+    );
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
   }
   if (options.command === "cleanup") {
-    const result = await cleanupOverlayExceptionRehearsal(await createCleanupRuntime(options));
+    const runtime = await createCleanupRuntime(options);
+    const result = await withQualificationGateLock(
+      { ...runtime, gate: "overlay-exception cleanup" },
+      () => cleanupOverlayExceptionRehearsal(runtime)
+    );
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
   }
-  const report = await runOverlayExceptionRehearsal(await createRunRuntime(options));
+  const runtime = await createRunRuntime(options);
+  const report = await withQualificationGateLock(
+    { ...runtime, gate: "overlay-exception run" },
+    () => runOverlayExceptionRehearsal(runtime)
+  );
   process.stdout.write(`${JSON.stringify(publicReport(report), null, 2)}\n`);
 }
 

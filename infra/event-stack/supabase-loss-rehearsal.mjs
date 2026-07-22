@@ -10,6 +10,7 @@ import { validateProfile } from "./eventctl.mjs";
 import { loadManifestInputs, validateEventManifest } from "./event-manifest.mjs";
 import { FileStateStore } from "./event-lifecycle.mjs";
 import { ProductionSyntheticPublisherStateStore } from "./production-synthetic-publishers.mjs";
+import { withQualificationGateLock } from "./qualification-gate-lock.mjs";
 import { loadRendererBinding } from "./renderer-binding.mjs";
 import { loadProtectedEnv } from "./stack-deployer.mjs";
 import { evaluateSupabaseLossRehearsal, supabaseLossSnapshotProblems } from "./supabase-loss-evidence.mjs";
@@ -38,11 +39,19 @@ async function main() {
     return;
   }
   if (options.command === "restore") {
-    const result = await restoreInterruptedSupabaseLoss(await createRestoreRuntime(options));
+    const runtime = await createRestoreRuntime(options);
+    const result = await withQualificationGateLock(
+      { ...runtime, gate: "Supabase-loss restore" },
+      () => restoreInterruptedSupabaseLoss(runtime)
+    );
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
   }
-  const report = await runSupabaseLossRehearsal(await createRuntime(options));
+  const runtime = await createRuntime(options);
+  const report = await withQualificationGateLock(
+    { ...runtime, gate: "Supabase-loss run" },
+    () => runSupabaseLossRehearsal(runtime)
+  );
   process.stdout.write(`${JSON.stringify(publicReport(report), null, 2)}\n`);
 }
 

@@ -14,6 +14,7 @@ import { RendererLossFaultRuntime } from "./renderer-loss-fault-runtime.mjs";
 import { evaluateRendererLossRehearsal, rendererLossSnapshotProblems } from "./renderer-loss-evidence.mjs";
 import { loadRendererBinding } from "./renderer-binding.mjs";
 import { ProductionSyntheticPublisherStateStore } from "./production-synthetic-publishers.mjs";
+import { withQualificationGateLock } from "./qualification-gate-lock.mjs";
 import { loadProtectedEnv } from "./stack-deployer.mjs";
 import { loadVenueAdmission } from "./venue-admission.mjs";
 
@@ -37,11 +38,19 @@ async function main() {
     return;
   }
   if (options.command === "restore") {
-    const result = await restoreInterruptedRendererLoss(await createRestoreRuntime(options));
+    const runtime = await createRestoreRuntime(options);
+    const result = await withQualificationGateLock(
+      { ...runtime, gate: "renderer-loss restore" },
+      () => restoreInterruptedRendererLoss(runtime)
+    );
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
   }
-  const report = await runRendererLossRehearsal(await createRuntime(options));
+  const runtime = await createRuntime(options);
+  const report = await withQualificationGateLock(
+    { ...runtime, gate: "renderer-loss run" },
+    () => runRendererLossRehearsal(runtime)
+  );
   process.stdout.write(`${JSON.stringify(publicReport(report), null, 2)}\n`);
 }
 

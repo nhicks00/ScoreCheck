@@ -526,6 +526,11 @@ The scoring prerequisite is complete. Checksummed production evidence is under
    isolated nonproduction dependency can interrupt both Realtime and
    authoritative server-side repair; a browser-only block is not evidence.
    Then run monitor loss/outbox replay and the exact renderer-restart gate.
+   Renderer loss, Supabase loss, overlay exception, and ingest recovery share
+   one event-generation process lock. A second disruptive gate must fail before
+   fault injection; do not remove a live owner's lock or overlap gates to save
+   time. The ordinary production-soak process remains concurrent because it is
+   the evidence source, not a fault transaction.
 4. Run the implemented camera-independent dual-role spare rehearsal on an
    attended protected 12-host event generation, measure takeover and rollback
    RTO, and decide whether the thirteenth warm ingest is justified. The runner

@@ -270,6 +270,15 @@ Run it only after the normal production build and live admission have passed,
 with enough time remaining for the ordinary ordered output close and explicit
 provider teardown. Never leave it running while the operator is unavailable.
 
+Every disruptive synthetic qualification CLI uses the single protected lock
+next to the event lifecycle state (`lifecycle-state.json.qualification-gate.lock`).
+Renderer loss, Supabase loss, overlay-exception prepare/run/cleanup, and ingest
+recovery therefore cannot mutate one event generation concurrently. Status
+commands do not acquire the lock, and the ordinary production-soak runner must
+remain active because it supplies the evidence baseline. If a second gate
+reports a live owner, stop and wait; never delete the lock. A later command may
+reclaim it only after the recorded local process is no longer alive.
+
 In one terminal, start the ordinary production soak and wait for its `ARMED`
 line. In a second terminal, start the synthetic publishers:
 
