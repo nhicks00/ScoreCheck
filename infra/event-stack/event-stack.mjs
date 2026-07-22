@@ -10,6 +10,7 @@ import { EventLifecycleController, FileStateStore, NullNotifier, stateSummary } 
 import { verifyLifecycleAttestation } from "./lifecycle-attestation.mjs";
 import { assertNetworkContractDeployable } from "./network-contract.mjs";
 import { DigitalOceanProvider, PushoverNotifier, VercelDnsProvider } from "./providers.mjs";
+import { withQualificationGateLock } from "./qualification-gate-lock.mjs";
 import { LocalStackDeployer, loadProtectedEnv } from "./stack-deployer.mjs";
 
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
@@ -86,6 +87,14 @@ async function main() {
     })
   } : null;
   const controller = new EventLifecycleController({ store, cloud, dns, deployer, notifier, provisioningGuard });
+  const runLifecycleTransition = async (gate, operation) => {
+    const lifecycleState = await store.load();
+    if (!lifecycleState) throw new Error(`${gate} requires existing lifecycle state`);
+    return withQualificationGateLock(
+      { profile: { state: options.state }, lifecycleState, gate },
+      operation
+    );
+  };
 
   let result;
   if (options.command === "plan") result = await controller.plan(manifest);
@@ -93,13 +102,13 @@ async function main() {
     const anchors = await readProtectedJson(requiredOption(options.anchors, "--anchors"), "anchor configuration");
     result = await controller.up(manifest, anchors);
   } else if (options.command === "status") result = (await controller.status(manifest)).state;
-  else if (options.command === "start") result = await controller.beginCoverage(manifest, requiredOption(options.confirm, "--confirm"));
-  else if (options.command === "close") result = await controller.closeCoverage(manifest, requiredOption(options.confirm, "--confirm"));
-  else if (options.command === "evidence") result = await controller.captureEvidence(manifest, requiredOption(options.evidence, "--evidence"), options.rehearsalEvidence);
+  else if (options.command === "start") result = await runLifecycleTransition("lifecycle start", () => controller.beginCoverage(manifest, requiredOption(options.confirm, "--confirm")));
+  else if (options.command === "close") result = await runLifecycleTransition("lifecycle close", () => controller.closeCoverage(manifest, requiredOption(options.confirm, "--confirm")));
+  else if (options.command === "evidence") result = await runLifecycleTransition("lifecycle evidence", () => controller.captureEvidence(manifest, requiredOption(options.evidence, "--evidence"), options.rehearsalEvidence));
   else if (options.command === "destroy") {
-    result = await controller.destroy(manifest, requiredOption(options.evidence, "--evidence"), requiredOption(options.confirm, "--confirm"));
+    result = await runLifecycleTransition("lifecycle destroy", () => controller.destroy(manifest, requiredOption(options.evidence, "--evidence"), requiredOption(options.confirm, "--confirm")));
   } else if (options.command === "abort") {
-    result = await controller.abort(manifest, requiredOption(options.evidence, "--evidence"), requiredOption(options.confirm, "--confirm"), options.rehearsalEvidence);
+    result = await runLifecycleTransition("lifecycle abort", () => controller.abort(manifest, requiredOption(options.evidence, "--evidence"), requiredOption(options.confirm, "--confirm"), options.rehearsalEvidence));
   } else throw new Error(`unsupported command ${options.command}`);
   process.stdout.write(`${JSON.stringify(stateSummary(result), null, 2)}\n`);
 }

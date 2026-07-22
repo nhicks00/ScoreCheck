@@ -530,7 +530,9 @@ The scoring prerequisite is complete. Checksummed production evidence is under
    one event-generation process lock. A second disruptive gate must fail before
    fault injection; do not remove a live owner's lock or overlap gates to save
    time. The ordinary production-soak process remains concurrent because it is
-   the evidence source, not a fault transaction.
+   the evidence source, not a fault transaction. Lifecycle start, close,
+   evidence, destroy, and abort also acquire the lock, preventing coverage or
+   teardown from racing an active fault gate.
 4. Run the implemented camera-independent dual-role spare rehearsal on an
    attended protected 12-host event generation, measure takeover and rollback
    RTO, and decide whether the thirteenth warm ingest is justified. The runner

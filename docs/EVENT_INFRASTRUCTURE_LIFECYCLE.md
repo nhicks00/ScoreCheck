@@ -278,6 +278,10 @@ commands do not acquire the lock, and the ordinary production-soak runner must
 remain active because it supplies the evidence baseline. If a second gate
 reports a live owner, stop and wait; never delete the lock. A later command may
 reclaim it only after the recorded local process is no longer alive.
+Lifecycle start, close, evidence, destroy, and abort use the same exclusion
+boundary, so coverage cannot transition or retire while a disruptive gate is
+still active. Read-only lifecycle plan/status and initial provisioning do not
+acquire it.
 
 In one terminal, start the ordinary production soak and wait for its `ARMED`
 line. In a second terminal, start the synthetic publishers:

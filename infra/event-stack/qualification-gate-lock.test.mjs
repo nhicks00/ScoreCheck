@@ -48,3 +48,11 @@ test("all disruptive rehearsal CLIs use the shared gate lock", async () => {
     assert.match(source, /withQualificationGateLock\(/u, file);
   }
 });
+
+test("coverage and retirement lifecycle transitions use the shared gate lock", async () => {
+  const source = await readFile(new URL("event-stack.mjs", import.meta.url), "utf8");
+  assert.match(source, /import \{ withQualificationGateLock \} from "\.\/qualification-gate-lock\.mjs";/u);
+  for (const command of ["start", "close", "evidence", "destroy", "abort"]) {
+    assert.equal(source.includes(`runLifecycleTransition("lifecycle ${command}"`), true, command);
+  }
+});
