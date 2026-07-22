@@ -92,7 +92,7 @@ The target remains:
 | R-01 | Pin exact renderer Git/deployment/assets/contracts per event | `SATISFIED` | A protected renderer binding captures canonical and generated Vercel origins, exact deployment ID, Git SHA, asset namespace, and overlay/commentary/heartbeat contracts; the event bundle hashes it. | Capture a fresh binding for each event release. |
 | R-02 | Restart reloads the same approved renderer | `SATISFIED` | Compositors require a generated immutable Vercel origin and exact renderer identity. The bootstrap session and browser heartbeat reject deployment/build drift. | Physical restart remains an acceptance-matrix gate. |
 | R-03 | Existing scene survives Vercel loss | `PARTIAL` | `renderer-loss-rehearsal.mjs` now reuses an active eight-feed synthetic production soak and blocks only one Egress container's immutable generated Vercel IPv4 destinations. Its owned firewall runtime is Egress-generation-bound, blocks TCP/UDP 443, rejects IPv6 ambiguity and DNS/container drift, restores exactly, and evaluates same-page/reset-safe media, score, peer, and YouTube continuity. Provider-free regressions pass; no attended host artifact exists yet. | Run the attended synthetic gate with Egress live. Existing video/audio/last-good score must continue without navigation, then recover on the same build and page. |
-| R-04 | Existing scene survives Supabase loss | `PARTIAL` | Video and commentary are separate from scoring, and the overlay is fail-transparent. Authoritative repair failure preserves the last-good overlay object and now reports disconnected state as stale in the browser heartbeat. A browser-only Supabase block is explicitly not accepted: it interrupts Realtime invalidation hints but leaves the authoritative same-origin Vercel repair route able to reach Supabase server-side. | Use an isolated nonproduction Supabase dependency/proxy or a separately approved provider outage. Prove authoritative repair failure/recovery, last-good score retention, stale telemetry, media continuity, and outbox replay without touching production scoring. |
+| R-04 | Existing scene survives Supabase loss | `PARTIAL` | Video and commentary are separate from scoring, and the overlay is fail-transparent. Authoritative repair failure preserves the last-good overlay object and reports disconnected state as stale in the browser heartbeat. `supabase-fault-proxy.mjs` now supplies a loopback-only, generation-bound nonproduction dependency that interrupts HTTP repair and Realtime together, drains active connections, restores idempotently, and retains no request target, header, credential, or body evidence. A browser-only Supabase block remains explicitly invalid. | Wire an isolated renderer deployment through the proxy, then prove authoritative repair failure/recovery, last-good score retention, stale telemetry, media continuity, and the separately implemented outbox replay without touching production scoring. |
 | R-05 | Program token leakage protections | `SATISFIED` | The protected token is carried only in a URL fragment to a one-time bootstrap, exchanged for a scoped HttpOnly session, then removed by navigation. Program routes enforce private/no-store, no-referrer, strict CSP, and redacted startup output. | Keep third-party resources absent from program routes. |
 | R-06 | Bounded browser supervisor | `SATISFIED` | `program-supervisor.mjs` acts only when raw/program/Egress remain healthy while the browser is unavailable for six consecutive samples. It preserves event/destination/output-generation/renderer ownership, permits at most two restarts with a ten-minute cooldown, persists a prepared restart before mutation, resumes it safely, and fails closed after exhaustion. Any restart remains visible and fails the qualification run rather than being hidden. | Prove one bounded recovery on the exact immutable renderer during the physical restart gate. |
 | R-07 | Separate renderer deployment blast radius | `DEFERRED` | Admin and program routes currently share the web project. | First prove immutable production deployment pinning. Split the renderer project only if pinning cannot prevent admin deployments from affecting restarted scenes. |
@@ -349,6 +349,39 @@ Do not mark R-03 satisfied from unit tests. A pass requires the protected host
 artifact showing baseline, disconnected last-good score state, same-page media
 continuity, exact firewall restoration, DNS stability, recovery, and unaffected
 peer cameras/YouTube outputs.
+
+## Camera-Free Supabase Dependency Proxy
+
+`supabase-fault-proxy.mjs` is an isolated acceptance-test dependency, not a
+production application switch. It listens only on loopback so a temporary
+event-scoped TLS proxy on the same rehearsal host must be its sole external
+entry point. An isolated renderer can then use that origin for both its public
+Supabase client and server-side overlay repair client. Production renderer and
+Supabase configuration must never point to it.
+
+The proxy forwards ordinary HTTP and WebSocket upgrade traffic only to one
+configured Supabase origin. It rejects absolute request targets, plaintext
+non-loopback upstreams, embedded upstream credentials, and non-loopback listen
+addresses. Fault and restore calls require exact event-generation
+confirmations:
+
+```text
+FAULT-SUPABASE:<generation-id>
+RESTORE-SUPABASE:<generation-id>
+```
+
+Faulting closes in-flight HTTP requests and active Realtime sockets before
+rejecting new traffic with `503`; restoration is explicit and idempotent. Its
+snapshot contains only bounded lifecycle timestamps, the upstream origin, and
+aggregate counters. It deliberately records no URL path/query, headers,
+credentials, or request/response body.
+
+This primitive alone is not R-04 evidence. The attended runner still must bind
+it to a disposable renderer, prove a healthy baseline, cut both dependency
+paths, observe the same page holding the last-good score as stale while media
+continues, restore the dependency, verify score/heartbeat recovery and local
+incident-outbox reconciliation, then remove the temporary TLS route and
+renderer. No production scoring outage is authorized.
 
 ## Remaining Execution Order
 
