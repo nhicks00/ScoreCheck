@@ -138,7 +138,7 @@ The target remains:
 | I-06 | One Egress per compositor | `SATISFIED` | `start-court.sh` serializes starts, verifies active count zero, and the agent contract enforces one active request maximum. | Retain multiplicity fault tests. |
 | I-07 | Orphaned Egress reconciliation/idempotency | `SATISFIED` | Every Egress now has a protected atomic owner record binding event, camera, destination, output generation, renderer Git/deployment, output profile, Egress ID, and request digest. Starts, resume, second-admission proof, stop, and supervisor replacement reconcile exact active process plus owner/digest and reject ambiguous or changed ownership. | Retain a production interruption/resume artifact; never manually delete an owner record to force adoption. |
 | I-08 | Dedicated-CPU compositor benchmark | `DEFERRED` | Production-shaped capacity harness exists; current event fleet deliberately uses the declared compositor pool shape. | Compare qualified c-4/c-8 and current shape using p95/p99 CPU, steal, encode speed, frame pacing, `/dev/shm`, memory, cold/warm start, and cost. Do not resize from average CPU. |
-| I-09 | Spare to YouTube backup ingest | `PARTIAL` | Production destination admission now requires distinct primary and backup RTMPS ingestion addresses. A protected one-court runner gives primary and backup Egresses explicit ownership roles, stages the shared stream key only on the spare for the gate, verifies dual/backup-only/restored/primary-only topology plus provider and external-viewer health, restores primary before removing backup on every handled failure path, and removes the temporary assignment. Provider-free state-machine, adapter, secret-redaction, and topology regressions pass. | Run the attended gate against one selected synthetic priority court and retain transition timing plus human or continuous-viewer interruption evidence. Unit tests and phase-local viewer probes do not prove seamless live continuity. |
+| I-09 | Spare to YouTube backup ingest | `PARTIAL` | Production destination admission requires distinct primary and backup RTMPS ingestion addresses. A protected one-court runner gives primary and backup Egresses explicit ownership roles, stages the shared stream key only on the spare, verifies dual/backup-only/restored/primary-only topology and provider health, restores primary before removing backup on every handled failure path, and removes the temporary assignment. One bounded no-cookie viewer now remains open through the full transition, samples playback every 250 ms, fails on a sample gap over one second or playhead stall over two seconds, verifies reset-safe audio growth and changing nonblank phase frames, and requires the complete ordered transition marker set. Losing that viewer process makes an otherwise safe resumed gate fail rather than inventing continuity. Provider-free regressions pass. | Run the attended gate against one selected synthetic priority court and retain its protected continuous-viewer artifact. Unit tests do not prove live provider continuity. |
 | I-10 | YouTube lifecycle and destination ownership | `SATISFIED` | Production YouTube code validates stream/broadcast IDs, binding, privacy, lifecycle, health, issues, watch page, and distinct primary/backup RTMPS identities. Egress owner schema 2 binds each output to `primary` or `backup`. | Retain output-conformance and exact role ownership evidence. |
 
 ### Monitoring, Evidence, And Paging
@@ -579,9 +579,9 @@ The scoring prerequisite is complete. Checksummed production evidence is under
    camera operation is required. Do not substitute unit tests for this
    provider/host transaction evidence.
 5. Run `youtube-backupctl.mjs` against one priority-court synthetic output.
-   Capture exact primary/backup ownership, transition timing, and continuous
-   human or external-viewer interruption/resume evidence. A phase-local viewer
-   probe alone is not seamless-continuity proof.
+   Capture exact primary/backup ownership and the runner-owned continuous
+   external-viewer trace spanning primary stop, backup-only delivery, primary
+   restoration, and backup removal. A restarted/lost trace is a failed gate.
 6. Run the eight-camera event-length endurance matrix, external viewer rotation,
    exact cleanup, and terminal provider-zero audit. Only then mark the active
    production-qualification goal complete.

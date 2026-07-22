@@ -1,6 +1,17 @@
 import { randomUUID } from "node:crypto";
 
 const PHASES = new Set(["PREPARING", "PREPARED", "BACKUP_ACTIVE", "PRIMARY_STOPPED", "PRIMARY_RESTORED", "BACKUP_STOPPED", "ROLLED_BACK"]);
+const REQUIRED_EVIDENCE = ["dualIngest", "continuity", "backupOnly", "dualRestored", "primaryOnly"];
+const REQUIRED_TIMELINE = [
+  "backup-assignment-staged",
+  "backup-egress-active",
+  "viewer-continuity-started",
+  "primary-egress-stopped",
+  "primary-egress-restored",
+  "backup-egress-stopped",
+  "backup-assignment-removed",
+  "viewer-continuity-completed"
+];
 
 export class YoutubeBackupRehearsalController {
   constructor({ platform, checkpoint = async () => {}, now = () => Date.now() }) {
@@ -9,7 +20,15 @@ export class YoutubeBackupRehearsalController {
     this.now = now;
   }
 
-  async run({ context, state = null }) {
+  async run(input) {
+    try {
+      return await this.#run(input);
+    } finally {
+      await this.platform.closeContinuity?.().catch(() => {});
+    }
+  }
+
+  async #run({ context, state = null }) {
     const expected = validateContext(context);
     let current = state ? validateYoutubeBackupState(state, expected) : createState(expected, this.now);
 
@@ -40,7 +59,12 @@ export class YoutubeBackupRehearsalController {
         current.timeline.push(timeline(this.now, "backup-assignment-removed"));
         await this.#save(current);
       } else {
+        current.evidence.continuity = await this.platform.startContinuity(expected);
+        current.timeline.push(timeline(this.now, "viewer-continuity-started"));
+        await this.#save(current);
+        await this.platform.markContinuity("primary-stop-requested");
         await this.platform.ensurePrimaryStopped({ ...expected, owner: current.primaryOwner, egressId: current.primaryEgressId });
+        await this.platform.markContinuity("primary-stopped");
         current.phase = "PRIMARY_STOPPED";
         current.timeline.push(timeline(this.now, "primary-egress-stopped"));
         await this.#save(current);
@@ -48,7 +72,10 @@ export class YoutubeBackupRehearsalController {
     }
     if (current.phase === "PRIMARY_STOPPED") {
       current.evidence.backupOnly = await this.platform.capture({ ...expected, backupOwner: current.backupOwner, primaryEgressId: current.primaryEgressId, backupEgressId: current.backupEgressId, label: "backup-only", primaryExpected: false, backupExpected: true });
+      await this.platform.markContinuity("backup-only-verified");
+      await this.platform.markContinuity("primary-start-requested");
       const primary = await this.platform.ensurePrimaryStarted({ ...expected, owner: current.primaryOwner });
+      await this.platform.markContinuity("primary-restored");
       current.primaryEgressId = primary.id;
       current.phase = "PRIMARY_RESTORED";
       current.timeline.push(timeline(this.now, "primary-egress-restored"));
@@ -56,7 +83,10 @@ export class YoutubeBackupRehearsalController {
     }
     if (current.phase === "PRIMARY_RESTORED") {
       current.evidence.dualRestored = await this.platform.capture({ ...expected, backupOwner: current.backupOwner, primaryEgressId: current.primaryEgressId, backupEgressId: current.backupEgressId, label: "dual-restored", primaryExpected: true, backupExpected: true });
+      await this.platform.markContinuity("dual-restored-verified");
+      await this.platform.markContinuity("backup-stop-requested");
       await this.platform.ensureBackupStopped({ ...expected, owner: current.backupOwner, egressId: current.backupEgressId });
+      await this.platform.markContinuity("backup-stopped");
       current.phase = "BACKUP_STOPPED";
       current.timeline.push(timeline(this.now, "backup-egress-stopped"));
       await this.#save(current);
@@ -68,6 +98,11 @@ export class YoutubeBackupRehearsalController {
       await this.#save(current);
     }
     current.evidence.primaryOnly = await this.platform.capture({ ...expected, backupOwner: current.backupOwner, primaryEgressId: current.primaryEgressId, backupEgressId: current.backupEgressId, label: "primary-only", primaryExpected: true, backupExpected: false });
+    if (current.evidence.continuity?.status === "RUNNING") {
+      await this.platform.markContinuity("primary-only-verified");
+      current.evidence.continuity = await this.platform.finishContinuity(current.evidence.continuity);
+      current.timeline.push(timeline(this.now, "viewer-continuity-completed"));
+    }
     current.completedAt = new Date(this.now()).toISOString();
     current.report = evaluateYoutubeBackupRehearsal(current);
     await this.#save(current);
@@ -84,13 +119,16 @@ export function evaluateYoutubeBackupRehearsal(input) {
   const state = validateYoutubeBackupState(input);
   const problems = [];
   if (state.phase !== "ROLLED_BACK") problems.push("YouTube backup rehearsal did not return to primary-only output");
-  for (const [label, evidence] of Object.entries(state.evidence)) {
+  for (const label of REQUIRED_EVIDENCE) {
+    const evidence = state.evidence[label];
     if (!evidence || evidence.passed !== true || evidence.label !== kebab(label)) problems.push(`${kebab(label)} evidence did not pass`);
   }
   const events = state.timeline.map((entry) => entry.event);
-  for (const expected of ["backup-assignment-staged", "backup-egress-active", "primary-egress-stopped", "primary-egress-restored", "backup-egress-stopped", "backup-assignment-removed"]) {
+  for (const expected of REQUIRED_TIMELINE) {
     if (events.filter((value) => value === expected).length !== 1) problems.push(`${expected} was not recorded exactly once`);
   }
+  const positions = REQUIRED_TIMELINE.map((event) => events.indexOf(event));
+  if (!positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1]))) problems.push("YouTube backup lifecycle events are not in the required order");
   return {
     schemaVersion: 1,
     classification: problems.length ? "FAIL" : "PASS",

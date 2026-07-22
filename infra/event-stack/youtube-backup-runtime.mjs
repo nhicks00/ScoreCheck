@@ -67,6 +67,22 @@ export class YoutubeBackupPlatform {
     return this.assignment.cleanup({ host: context.spareHost, assignment: context.assignment });
   }
 
+  async startContinuity(context) {
+    return this.observer.startContinuity({ camera: context.camera, broadcastId: context.broadcastId });
+  }
+
+  async markContinuity(label) {
+    return this.observer.markContinuity(label);
+  }
+
+  async finishContinuity(status) {
+    return this.observer.finishContinuity(status);
+  }
+
+  async closeContinuity() {
+    return this.observer.closeContinuity();
+  }
+
   async capture(context) {
     const primary = await this.egress.listActive(context.primaryHost);
     const backup = await this.egress.listActive(context.spareHost);
@@ -92,6 +108,47 @@ export class YoutubeBackupObserver {
     this.fetchImpl = fetchImpl;
     this.sleep = sleep;
     this.now = now;
+    this.continuity = null;
+  }
+
+  async startContinuity({ camera, broadcastId }) {
+    if (this.continuity) throw new Error("a continuous YouTube viewer trace is already active");
+    this.continuity = await this.viewer.startContinuity({ camera, broadcastId });
+    return this.continuity.status();
+  }
+
+  async markContinuity(label) {
+    if (!this.continuity) return { label, recorded: false };
+    await this.continuity.mark(label);
+    return { label, recorded: true };
+  }
+
+  async finishContinuity(status) {
+    if (!this.continuity) {
+      return {
+        ...status,
+        schemaVersion: 1,
+        label: "continuity",
+        completedAt: new Date(this.now()).toISOString(),
+        status: "FAILED",
+        passed: false,
+        problems: ["continuous viewer session did not survive the full backup transition"]
+      };
+    }
+    try {
+      return await this.continuity.finish();
+    } finally {
+      this.continuity = null;
+    }
+  }
+
+  async closeContinuity() {
+    if (!this.continuity) return;
+    try {
+      await this.continuity.close();
+    } finally {
+      this.continuity = null;
+    }
   }
 
   async capture({ label, camera, primaryExpected, backupExpected, primary, backup }) {

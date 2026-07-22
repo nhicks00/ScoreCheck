@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { evaluateYoutubeBackupSample, YoutubeBackupPlatform } from "./youtube-backup-runtime.mjs";
+import { evaluateYoutubeBackupSample, YoutubeBackupObserver, YoutubeBackupPlatform } from "./youtube-backup-runtime.mjs";
 
 const nowMs = Date.parse("2026-07-22T12:00:00Z");
 
@@ -19,7 +19,13 @@ test("maps the controller contract to exact primary and spare Egress ownership",
     verify: async () => { calls.push("assignment:verify"); },
     cleanup: async () => { calls.push("assignment:cleanup"); return { removed: true }; }
   };
-  const observer = { capture: async ({ primary, backup }) => ({ primary, backup, passed: true }) };
+  const observer = {
+    capture: async ({ primary, backup }) => ({ primary, backup, passed: true }),
+    startContinuity: async () => { calls.push("continuity:start"); return { status: "RUNNING" }; },
+    markContinuity: async (label) => { calls.push(`continuity:mark:${label}`); return { recorded: true }; },
+    finishContinuity: async () => { calls.push("continuity:finish"); return { passed: true }; },
+    closeContinuity: async () => { calls.push("continuity:close"); }
+  };
   const platform = new YoutubeBackupPlatform({ egress, assignment, observer });
   const base = { ...context(), assignment: { id: "assignment" }, primaryExpected: true, backupExpected: true, primaryEgressId: "EG_primary", backupEgressId: "EG_backup" };
   await platform.stageAssignment(base);
@@ -28,6 +34,10 @@ test("maps the controller contract to exact primary and spare Egress ownership",
   await platform.ensurePrimaryStarted({ ...base, owner: base.primaryOwner });
   await platform.ensureBackupStopped({ ...base, owner: base.backupOwner, egressId: "EG_backup" });
   await platform.cleanupAssignment(base);
+  await platform.startContinuity(base);
+  await platform.markContinuity("primary-stop-requested");
+  await platform.finishContinuity({ status: "RUNNING" });
+  await platform.closeContinuity();
   const captured = await platform.capture(base);
   assert.equal(captured.primary[0].id, "EG_primary");
   assert.equal(captured.backup[0].id, "EG_backup");
@@ -35,7 +45,8 @@ test("maps the controller contract to exact primary and spare Egress ownership",
     "preflight:198.51.100.12", "assignment:stage", "assignment:verify",
     "start:198.51.100.12:backup", "stop:198.51.100.1:EG_primary",
     "start:198.51.100.1:primary", "stop:198.51.100.12:EG_backup",
-    "preflight:198.51.100.12", "assignment:cleanup",
+    "preflight:198.51.100.12", "assignment:cleanup", "continuity:start",
+    "continuity:mark:primary-stop-requested", "continuity:finish", "continuity:close",
     "reconcile:198.51.100.1:primary:EG_primary",
     "reconcile:198.51.100.12:backup:EG_backup"
   ]);
@@ -56,6 +67,34 @@ test("admits the expected dual, backup-only, and primary-only topology without h
   const result = evaluateYoutubeBackupSample(broken);
   assert.equal(result.passed, false);
   assert.match(result.problems.join("\n"), /Camera 2 raw frame errors/u);
+});
+
+test("owns one continuous viewer session and fails closed when a resumed process lost it", async () => {
+  const calls = [];
+  const session = {
+    status: () => ({ schemaVersion: 1, label: "continuity", traceId: `youtube-continuity-${"a".repeat(36)}`, status: "RUNNING", passed: false, problems: ["running"] }),
+    mark: async (label) => { calls.push(`mark:${label}`); },
+    finish: async () => { calls.push("finish"); return { label: "continuity", status: "COMPLETE", passed: true, problems: [] }; },
+    close: async () => { calls.push("close"); }
+  };
+  const observer = new YoutubeBackupObserver({
+    monitorOrigin: "https://monitor.example.com",
+    monitorToken: "token",
+    youtube: {},
+    viewer: { startContinuity: async () => { calls.push("start"); return session; } },
+    destinations: {},
+    profiles: {},
+    venue: { activeCameras: [] },
+    now: () => nowMs
+  });
+  const status = await observer.startContinuity({ camera: 1, broadcastId: "broadcast_1" });
+  await observer.markContinuity("primary-stop-requested");
+  const completed = await observer.finishContinuity(status);
+  assert.equal(completed.passed, true);
+  const lost = await observer.finishContinuity(status);
+  assert.equal(lost.passed, false);
+  assert.match(lost.problems[0], /did not survive/u);
+  assert.deepEqual(calls, ["start", "mark:primary-stop-requested", "finish"]);
 });
 
 function fixture({ label, primaryExpected, backupExpected }) {

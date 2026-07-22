@@ -14,16 +14,20 @@ test("runs one priority court through backup-only delivery and returns to primar
   const state = await controller.run({ context: context() });
   assert.equal(state.report.classification, "PASS");
   assert.deepEqual(calls, [
-    "stage", "start-backup", "capture:dual-ingest:11", "stop-primary",
-    "capture:backup-only:01", "start-primary", "capture:dual-restored:11",
-    "stop-backup", "cleanup", "capture:primary-only:10"
+    "stage", "start-backup", "capture:dual-ingest:11", "start-continuity",
+    "mark:primary-stop-requested", "stop-primary", "mark:primary-stopped",
+    "capture:backup-only:01", "mark:backup-only-verified", "mark:primary-start-requested",
+    "start-primary", "mark:primary-restored", "capture:dual-restored:11",
+    "mark:dual-restored-verified", "mark:backup-stop-requested", "stop-backup",
+    "mark:backup-stopped", "cleanup", "capture:primary-only:10",
+    "mark:primary-only-verified", "finish-continuity", "close-continuity"
   ]);
   assert.equal(checkpoints.at(-1).phase, "ROLLED_BACK");
   assert.equal(state.primaryEgressId, "EG_primary2");
   assert.equal(state.backupEgressId, "EG_backup1");
 });
 
-test("resumes after primary stop without replaying prior mutations", async () => {
+test("resumes safely after primary stop but does not pass after losing the continuous viewer session", async () => {
   const firstCalls = [];
   const saved = [];
   const controller = new YoutubeBackupRehearsalController({
@@ -38,15 +42,24 @@ test("resumes after primary stop without replaying prior mutations", async () =>
   assert.equal(saved.at(-1).phase, "PRIMARY_STOPPED");
 
   const resumedCalls = [];
+  const resumedPlatform = passingPlatform(resumedCalls);
+  resumedPlatform.markContinuity = async (label) => { resumedCalls.push(`mark-missed:${label}`); return { label, recorded: false }; };
+  resumedPlatform.finishContinuity = async (status) => {
+    resumedCalls.push("finish-continuity-missed");
+    return { ...status, label: "continuity", status: "FAILED", passed: false, problems: ["session lost"] };
+  };
   const resumed = await new YoutubeBackupRehearsalController({
-    platform: passingPlatform(resumedCalls),
+    platform: resumedPlatform,
     checkpoint: async () => {},
     now: clock()
   }).run({ context: context(), state: saved.at(-1) });
-  assert.equal(resumed.report.classification, "PASS");
+  assert.equal(resumed.report.classification, "FAIL");
   assert.deepEqual(resumedCalls, [
-    "capture:backup-only:01", "start-primary", "capture:dual-restored:11",
-    "stop-backup", "cleanup", "capture:primary-only:10"
+    "capture:backup-only:01", "mark-missed:backup-only-verified", "mark-missed:primary-start-requested",
+    "start-primary", "mark-missed:primary-restored", "capture:dual-restored:11",
+    "mark-missed:dual-restored-verified", "mark-missed:backup-stop-requested", "stop-backup",
+    "mark-missed:backup-stopped", "cleanup", "capture:primary-only:10",
+    "mark-missed:primary-only-verified", "finish-continuity-missed", "close-continuity"
   ]);
 });
 
@@ -60,6 +73,16 @@ test("fails the report when any delivery phase does not pass", async () => {
   assert.match(report.problems.join("\n"), /backup-only/u);
 });
 
+test("fails the report when required evidence is missing or lifecycle events are reordered", async () => {
+  const state = await new YoutubeBackupRehearsalController({ platform: passingPlatform([]), now: clock() }).run({ context: context() });
+  const missing = structuredClone(state);
+  delete missing.evidence.backupOnly;
+  assert.match(evaluateYoutubeBackupRehearsal(missing).problems.join("\n"), /backup-only evidence did not pass/u);
+  const reordered = structuredClone(state);
+  [reordered.timeline[0], reordered.timeline[1]] = [reordered.timeline[1], reordered.timeline[0]];
+  assert.match(evaluateYoutubeBackupRehearsal(reordered).problems.join("\n"), /lifecycle events are not in the required order/u);
+});
+
 test("restores primary before removing backup when stale phase evidence no longer shows dual ingest", async () => {
   const calls = [];
   const platform = passingPlatform(calls);
@@ -71,7 +94,7 @@ test("restores primary before removing backup when stale phase evidence no longe
   assert.equal(state.report.classification, "FAIL");
   assert.deepEqual(calls, [
     "stage", "start-backup", "capture:dual-ingest", "start-primary",
-    "stop-backup", "cleanup", "capture:primary-only"
+    "stop-backup", "cleanup", "capture:primary-only", "close-continuity"
   ]);
 });
 
@@ -83,11 +106,23 @@ function passingPlatform(calls) {
     ensurePrimaryStarted: async () => { calls.push("start-primary"); return { id: "EG_primary2" }; },
     ensureBackupStopped: async () => { calls.push("stop-backup"); return { absent: true }; },
     cleanupAssignment: async () => { calls.push("cleanup"); return { removed: true }; },
+    startContinuity: async () => { calls.push("start-continuity"); return continuityStatus(); },
+    markContinuity: async (label) => { calls.push(`mark:${label}`); return { label, recorded: true }; },
+    finishContinuity: async () => { calls.push("finish-continuity"); return continuityEvidence(); },
+    closeContinuity: async () => { calls.push("close-continuity"); },
     capture: async ({ label, primaryExpected, backupExpected }) => {
       calls.push(`capture:${label}:${primaryExpected ? 1 : 0}${backupExpected ? 1 : 0}`);
       return { label, passed: true, problems: [] };
     }
   };
+}
+
+function continuityStatus() {
+  return { schemaVersion: 1, label: "continuity", traceId: `youtube-continuity-${"a".repeat(36)}`, camera: 1, broadcastId: "broadcast-1", startedAt: "2026-07-22T00:00:00Z", status: "RUNNING", passed: false, problems: ["running"] };
+}
+
+function continuityEvidence() {
+  return { ...continuityStatus(), completedAt: "2026-07-22T00:02:00Z", status: "COMPLETE", passed: true, problems: [] };
 }
 
 function context() {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,26 @@ import { chromium } from "playwright";
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const BROADCAST_ID = /^[A-Za-z0-9_-]{6,32}$/u;
 const PROBE_REFERER = "https://monitor.beachvolleyballmedia.com/";
+const CONTINUITY_SAMPLE_INTERVAL_MS = 250;
+const CONTINUITY_MAX_SAMPLES = 2_400;
+const CONTINUITY_MINIMUM_DURATION_MS = 15_000;
+const CONTINUITY_MAXIMUM_SAMPLE_GAP_MS = 1_000;
+const CONTINUITY_MAXIMUM_STALL_MS = 2_000;
+const CONTINUITY_TIMESTAMP_SKEW_MS = 2_000;
+const CONTINUITY_MARKERS = [
+  "baseline-start",
+  "baseline-ready",
+  "primary-stop-requested",
+  "primary-stopped",
+  "backup-only-verified",
+  "primary-start-requested",
+  "primary-restored",
+  "dual-restored-verified",
+  "backup-stop-requested",
+  "backup-stopped",
+  "primary-only-verified",
+  "complete"
+];
 
 export class YouTubeViewerProbe {
   constructor({ browserType = chromium, sleep = delay, sampleDelayMs = 8_000 } = {}) {
@@ -23,39 +43,15 @@ export class YouTubeViewerProbe {
     validateCamera(camera);
     if (!BROADCAST_ID.test(broadcastId ?? "")) throw new Error("YouTube broadcast id is invalid");
     const observedAt = new Date().toISOString();
-    let browser;
+    let viewer;
     try {
-      browser = await this.browserType.launch({ headless: true, args: ["--autoplay-policy=no-user-gesture-required"] });
-      const context = await browser.newContext({
-        viewport: { width: 1280, height: 720 },
-        locale: "en-US",
-        extraHTTPHeaders: { referer: PROBE_REFERER }
-      });
-      const page = await context.newPage();
-      await page.goto(`https://www.youtube-nocookie.com/embed/${broadcastId}?autoplay=1&mute=1&playsinline=1&controls=0`, {
-        waitUntil: "domcontentloaded",
-        timeout: 30_000
-      });
-      const video = page.locator("video").first();
-      await video.waitFor({ state: "attached", timeout: 30_000 });
-      await video.evaluate(async (element) => {
-        if (!element.paused) return;
-        try {
-          await element.play();
-        } catch (error) {
-          if (!(error instanceof DOMException) || error.name !== "AbortError") throw error;
-        }
-      });
-      await page.waitForFunction(() => {
-        const element = document.querySelector("video");
-        return element instanceof HTMLVideoElement && element.readyState >= 3 && !element.paused && element.currentTime > 0;
-      }, null, { timeout: 30_000 });
+      viewer = await openViewer({ browserType: this.browserType, broadcastId });
       await this.sleep(2_000);
-      const first = await sampleVideo(video);
-      const firstFrame = await video.screenshot({ type: "png" });
+      const first = await sampleVideo(viewer.video);
+      const firstFrame = await viewer.video.screenshot({ type: "png" });
       await this.sleep(this.sampleDelayMs);
-      const second = await sampleVideo(video);
-      const secondFrame = await video.screenshot({ type: "png" });
+      const second = await sampleVideo(viewer.video);
+      const secondFrame = await viewer.video.screenshot({ type: "png" });
       return evaluateViewerProbe({ camera, broadcastId, observedAt, first, second, firstFrame, secondFrame, elapsedMs: this.sampleDelayMs });
     } catch (error) {
       return {
@@ -67,9 +63,308 @@ export class YouTubeViewerProbe {
         problems: [`viewer probe failed: ${safeError(error)}`]
       };
     } finally {
-      await browser?.close().catch(() => {});
+      await viewer?.browser.close().catch(() => {});
     }
   }
+
+  async startContinuity({ camera, broadcastId }) {
+    validateCamera(camera);
+    if (!BROADCAST_ID.test(broadcastId ?? "")) throw new Error("YouTube broadcast id is invalid");
+    let viewer;
+    try {
+      viewer = await openViewer({ browserType: this.browserType, broadcastId });
+      await installContinuityCollector(viewer.page);
+      const session = new YouTubeViewerContinuitySession({
+        ...viewer,
+        camera,
+        broadcastId,
+        traceId: `youtube-continuity-${randomUUID()}`,
+        sleep: this.sleep
+      });
+      await session.mark("baseline-start");
+      await this.sleep(2_000);
+      await session.mark("baseline-ready");
+      return session;
+    } catch (error) {
+      await viewer?.browser.close().catch(() => {});
+      throw new Error(`continuous viewer could not start: ${safeError(error)}`);
+    }
+  }
+}
+
+export class YouTubeViewerContinuitySession {
+  constructor({ browser, page, video, camera, broadcastId, traceId, sleep = delay, now = Date.now }) {
+    this.browser = browser;
+    this.page = page;
+    this.video = video;
+    this.camera = camera;
+    this.broadcastId = broadcastId;
+    this.traceId = traceId;
+    this.sleep = sleep;
+    this.now = now;
+    this.startedAt = new Date(this.now()).toISOString();
+    this.markers = [];
+    this.closed = false;
+  }
+
+  status() {
+    return { schemaVersion: 1, label: "continuity", traceId: this.traceId, camera: this.camera, broadcastId: this.broadcastId, startedAt: this.startedAt, status: "RUNNING", passed: false, problems: ["continuous viewer trace is still running"] };
+  }
+
+  async mark(label) {
+    if (this.closed) throw new Error("continuous viewer session is closed");
+    if (!CONTINUITY_MARKERS.includes(label) || this.markers.some((entry) => entry.label === label)) throw new Error(`continuous viewer marker ${label} is invalid or duplicated`);
+    const frame = analyzePng(await this.video.screenshot({ type: "png" }));
+    const sample = await sampleVideo(this.video);
+    const marker = { label, observedAt: new Date(this.now()).toISOString(), sample, frame };
+    this.markers.push(marker);
+    return marker;
+  }
+
+  async finish() {
+    if (this.closed) throw new Error("continuous viewer session is closed");
+    try {
+      await this.mark("complete");
+      await this.sleep(CONTINUITY_SAMPLE_INTERVAL_MS);
+      const collected = await this.page.evaluate(() => {
+        const trace = window.__scorecheckYoutubeContinuity;
+        if (!trace || typeof trace.stop !== "function") return null;
+        return trace.stop();
+      });
+      return evaluateViewerContinuityTrace({
+        camera: this.camera,
+        broadcastId: this.broadcastId,
+        traceId: this.traceId,
+        startedAt: this.startedAt,
+        completedAt: new Date(this.now()).toISOString(),
+        samples: collected?.samples,
+        droppedSamples: collected?.droppedSamples,
+        markers: this.markers
+      });
+    } catch (error) {
+      return failedContinuityTrace({ camera: this.camera, broadcastId: this.broadcastId, traceId: this.traceId, startedAt: this.startedAt, problem: `continuous viewer trace failed: ${safeError(error)}` });
+    } finally {
+      await this.close();
+    }
+  }
+
+  async close() {
+    if (this.closed) return;
+    this.closed = true;
+    await this.page.evaluate(() => window.__scorecheckYoutubeContinuity?.stop?.()).catch(() => {});
+    await this.browser.close().catch(() => {});
+  }
+}
+
+export function evaluateViewerContinuityTrace({ camera, broadcastId, traceId, startedAt, completedAt, samples, droppedSamples, markers }) {
+  validateCamera(camera);
+  if (!BROADCAST_ID.test(broadcastId ?? "") || !/^youtube-continuity-[a-f0-9-]{36}$/u.test(traceId ?? "")) throw new Error("continuous viewer identity is invalid");
+  const startedAtMs = Date.parse(startedAt);
+  const completedAtMs = Date.parse(completedAt);
+  if (!Number.isFinite(startedAtMs) || !Number.isFinite(completedAtMs)) throw new Error("continuous viewer timestamps are invalid");
+  const problems = [];
+  if (completedAtMs <= startedAtMs) problems.push("continuous viewer completion timestamp is not after its start");
+  if (!Array.isArray(samples) || samples.length < 20) problems.push("continuous viewer trace has too few samples");
+  if (!Array.isArray(markers)) problems.push("continuous viewer trace markers are missing");
+  if (!Number.isInteger(droppedSamples) || droppedSamples < 0) problems.push("continuous viewer dropped-sample count is invalid");
+  else if (droppedSamples > 0) problems.push("continuous viewer trace exceeded its bounded sample capacity");
+  const normalizedSamples = Array.isArray(samples) ? samples.map(normalizeContinuitySample) : [];
+  const normalizedMarkers = Array.isArray(markers) ? markers.map(normalizeContinuityMarker) : [];
+  if (normalizedSamples.some((entry) => entry === null)) problems.push("continuous viewer trace contains an invalid sample");
+  if (normalizedMarkers.some((entry) => entry === null)) problems.push("continuous viewer trace contains an invalid marker");
+  const validSamples = normalizedSamples.filter(Boolean);
+  const validMarkers = normalizedMarkers.filter(Boolean);
+  const markerLabels = validMarkers.map((entry) => entry.label);
+  if (JSON.stringify(markerLabels) !== JSON.stringify(CONTINUITY_MARKERS)) problems.push("continuous viewer transition markers are missing, duplicated, or out of order");
+  const sampleTimes = validSamples.map((entry) => Date.parse(entry.observedAt));
+  const markerTimes = validMarkers.map((entry) => Date.parse(entry.observedAt));
+  if (!nondecreasing(markerTimes)) problems.push("continuous viewer marker timestamps moved backward");
+  if ([...sampleTimes, ...markerTimes].some((value) => value < startedAtMs - CONTINUITY_TIMESTAMP_SKEW_MS || value > completedAtMs + CONTINUITY_TIMESTAMP_SKEW_MS)) {
+    problems.push("continuous viewer evidence falls outside the trace time bounds");
+  }
+  const durationMs = sampleTimes.length > 1 ? sampleTimes.at(-1) - sampleTimes[0] : 0;
+  if (durationMs < CONTINUITY_MINIMUM_DURATION_MS) problems.push("continuous viewer trace is shorter than 15 seconds");
+  let maximumSampleGapMs = 0;
+  let maximumStallMs = 0;
+  let playheadRegression = false;
+  let lastAdvanceAt = sampleTimes[0] ?? 0;
+  let audioDecodedBytes = 0;
+  let audioCounterResets = 0;
+  for (let index = 1; index < validSamples.length; index += 1) {
+    const elapsed = sampleTimes[index] - sampleTimes[index - 1];
+    if (!Number.isFinite(elapsed) || elapsed <= 0) problems.push("continuous viewer sample timestamps are not strictly increasing");
+    else maximumSampleGapMs = Math.max(maximumSampleGapMs, elapsed);
+    const previous = validSamples[index - 1];
+    const current = validSamples[index];
+    if (current.currentTime + 0.25 < previous.currentTime) playheadRegression = true;
+    if (current.currentTime > previous.currentTime + 0.01) {
+      maximumStallMs = Math.max(maximumStallMs, sampleTimes[index] - lastAdvanceAt);
+      lastAdvanceAt = sampleTimes[index];
+    }
+    if (current.audioDecodedBytes >= previous.audioDecodedBytes) audioDecodedBytes += current.audioDecodedBytes - previous.audioDecodedBytes;
+    else {
+      audioCounterResets += 1;
+      audioDecodedBytes += current.audioDecodedBytes;
+    }
+  }
+  if (sampleTimes.length) maximumStallMs = Math.max(maximumStallMs, sampleTimes.at(-1) - lastAdvanceAt);
+  if (maximumSampleGapMs > CONTINUITY_MAXIMUM_SAMPLE_GAP_MS) problems.push("continuous viewer sampling had a gap over one second");
+  if (maximumStallMs > CONTINUITY_MAXIMUM_STALL_MS) problems.push("continuous viewer playhead stalled for more than two seconds");
+  if (playheadRegression) problems.push("continuous viewer playhead moved backward");
+  const playheadDeltaSeconds = validSamples.length > 1 ? validSamples.at(-1).currentTime - validSamples[0].currentTime : 0;
+  if (durationMs > 0 && playheadDeltaSeconds < durationMs / 1_000 * 0.85) problems.push("continuous viewer playhead did not advance for at least 85 percent of the transition");
+  if (audioDecodedBytes <= 0) problems.push("continuous viewer decoded no audio during the transition");
+  if (validSamples.some((entry) => entry.readyState < 3 || entry.paused)) problems.push("continuous viewer was paused or not playback-ready during the transition");
+  const dimensions = [...new Set(validSamples.map((entry) => `${entry.videoWidth}x${entry.videoHeight}`))];
+  if (validSamples.some((entry) => entry.videoWidth < 640 || entry.videoHeight < 360)) problems.push("continuous viewer dimensions were unavailable or below the accepted floor");
+  const visuals = validMarkers.map((entry) => entry.frame);
+  if (visuals.some((entry) => entry.darkPixelRatio > 0.98 || entry.lumaVariance < 2)) problems.push("continuous viewer phase frame was black or visually blank");
+  if (new Set(visuals.map((entry) => entry.sha256)).size < 2) problems.push("continuous viewer phase frames did not change");
+  return {
+    schemaVersion: 1,
+    label: "continuity",
+    camera,
+    broadcastId,
+    traceId,
+    startedAt,
+    completedAt,
+    sampledForMs: durationMs,
+    sampleCount: validSamples.length,
+    droppedSamples,
+    maximumSampleGapMs,
+    maximumStallMs,
+    playheadDeltaSeconds,
+    audioDecodedBytes,
+    audioCounterResets,
+    videoDimensions: dimensions,
+    markers: validMarkers,
+    samples: validSamples,
+    problems: [...new Set(problems)],
+    status: problems.length ? "FAILED" : "COMPLETE",
+    passed: problems.length === 0
+  };
+}
+
+async function openViewer({ browserType, broadcastId }) {
+  const browser = await browserType.launch({ headless: true, args: ["--autoplay-policy=no-user-gesture-required"] });
+  try {
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 720 },
+      locale: "en-US",
+      extraHTTPHeaders: { referer: PROBE_REFERER }
+    });
+    const page = await context.newPage();
+    await page.goto(`https://www.youtube-nocookie.com/embed/${broadcastId}?autoplay=1&mute=1&playsinline=1&controls=0`, {
+      waitUntil: "domcontentloaded",
+      timeout: 30_000
+    });
+    const video = page.locator("video").first();
+    await video.waitFor({ state: "attached", timeout: 30_000 });
+    await video.evaluate(async (element) => {
+      if (!element.paused) return;
+      try {
+        await element.play();
+      } catch (error) {
+        if (!(error instanceof DOMException) || error.name !== "AbortError") throw error;
+      }
+    });
+    await page.waitForFunction(() => {
+      const element = document.querySelector("video");
+      return element instanceof HTMLVideoElement && element.readyState >= 3 && !element.paused && element.currentTime > 0;
+    }, null, { timeout: 30_000 });
+    return { browser, context, page, video };
+  } catch (error) {
+    await browser.close().catch(() => {});
+    throw error;
+  }
+}
+
+async function installContinuityCollector(page) {
+  await page.evaluate(({ intervalMs, maximumSamples }) => {
+    const read = () => {
+      const element = document.querySelector("video");
+      if (!(element instanceof HTMLVideoElement)) return { observedAt: new Date().toISOString(), missing: true };
+      return {
+        observedAt: new Date().toISOString(),
+        currentTime: element.currentTime,
+        readyState: element.readyState,
+        paused: element.paused,
+        videoWidth: element.videoWidth,
+        videoHeight: element.videoHeight,
+        audioDecodedBytes: Number(element.webkitAudioDecodedByteCount)
+      };
+    };
+    const trace = {
+      samples: [],
+      droppedSamples: 0,
+      stopped: false,
+      timer: 0,
+      push() {
+        this.samples.push(read());
+        if (this.samples.length > maximumSamples) {
+          this.samples.shift();
+          this.droppedSamples += 1;
+        }
+      },
+      stop() {
+        if (!this.stopped) {
+          this.stopped = true;
+          window.clearInterval(this.timer);
+          this.push();
+        }
+        return { samples: this.samples, droppedSamples: this.droppedSamples };
+      }
+    };
+    trace.push();
+    trace.timer = window.setInterval(() => trace.push(), intervalMs);
+    window.__scorecheckYoutubeContinuity = trace;
+  }, { intervalMs: CONTINUITY_SAMPLE_INTERVAL_MS, maximumSamples: CONTINUITY_MAX_SAMPLES });
+}
+
+function normalizeContinuitySample(value) {
+  if (!value || value.missing === true || !Number.isFinite(Date.parse(value.observedAt ?? ""))) return null;
+  for (const field of ["currentTime", "readyState", "videoWidth", "videoHeight", "audioDecodedBytes"]) if (!Number.isFinite(value[field])) return null;
+  if (value.currentTime < 0 || !Number.isInteger(value.readyState) || value.readyState < 0 || value.readyState > 4
+    || !Number.isInteger(value.videoWidth) || value.videoWidth < 0 || !Number.isInteger(value.videoHeight) || value.videoHeight < 0
+    || !Number.isInteger(value.audioDecodedBytes) || value.audioDecodedBytes < 0 || typeof value.paused !== "boolean") return null;
+  return {
+    observedAt: value.observedAt,
+    currentTime: value.currentTime,
+    readyState: value.readyState,
+    paused: value.paused,
+    videoWidth: value.videoWidth,
+    videoHeight: value.videoHeight,
+    audioDecodedBytes: value.audioDecodedBytes
+  };
+}
+
+function normalizeContinuityMarker(value) {
+  const sample = normalizeContinuitySample({ ...value?.sample, observedAt: value?.observedAt });
+  const frame = value?.frame;
+  if (!CONTINUITY_MARKERS.includes(value?.label) || !sample || !frame || !/^[a-f0-9]{64}$/u.test(frame.sha256 ?? "")
+    || !Number.isFinite(frame.meanLuma) || frame.meanLuma < 0 || frame.meanLuma > 255
+    || !Number.isFinite(frame.lumaVariance) || frame.lumaVariance < 0
+    || !Number.isFinite(frame.darkPixelRatio) || frame.darkPixelRatio < 0 || frame.darkPixelRatio > 1) return null;
+  return { label: value.label, observedAt: value.observedAt, sample, frame };
+}
+
+function nondecreasing(values) {
+  return values.every((value, index) => index === 0 || value >= values[index - 1]);
+}
+
+function failedContinuityTrace({ camera, broadcastId, traceId, startedAt, problem }) {
+  return {
+    schemaVersion: 1,
+    label: "continuity",
+    camera,
+    broadcastId,
+    traceId,
+    startedAt,
+    completedAt: new Date().toISOString(),
+    status: "FAILED",
+    passed: false,
+    problems: [problem]
+  };
 }
 
 export function evaluateViewerProbe({ camera, broadcastId, observedAt, first, second, firstFrame, secondFrame, elapsedMs }) {

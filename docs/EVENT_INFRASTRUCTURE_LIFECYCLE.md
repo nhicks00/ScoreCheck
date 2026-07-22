@@ -760,11 +760,15 @@ primary-only rollback evidence. A stale checkpoint that no longer shows dual
 ingest restores primary before backup can be removed. It never creates a new
 stream or broadcast and never logs or stores the stream key in public state.
 
-The automated phase probes establish endpoint health after each transition,
-not zero-interruption continuity during the transition itself. Final acceptance
-therefore also requires an attended human observation or a continuous external
-viewer trace spanning primary stop and restoration. Until that artifact exists,
-the implementation is ready but I-09 remains `PARTIAL`.
+In addition to the phase probes, one no-cookie external viewer remains open for
+the entire transaction. It samples readiness, playhead, adaptive dimensions at
+or above 640x360, and decoded audio every 250 ms; hashes nonblank video frames at
+ordered phase markers; caps retained samples; fails a sampling gap over one
+second or playhead stall over two seconds; and closes on every success or failure
+path. A process restart can
+safely restore output, but it cannot reconstruct the lost trace and therefore
+cannot pass the gate. Until the attended protected artifact exists, the
+implementation is ready but I-09 remains `PARTIAL`.
 
 ## Event build
 
