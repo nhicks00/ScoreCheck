@@ -37,13 +37,6 @@ const ROUTER_COLUMNS = Object.freeze([
 const ROUTER_NUMERIC_COLUMNS = new Set(["primary_rule_count", "guard_rule_count", ...ROUTER_COLUMNS.slice(7)]);
 const ROUTER_COUNTER_COLUMNS = Object.freeze(["connectify_rx_bytes", "connectify_tx_bytes", "eth0_rx_bytes", "eth0_tx_bytes", "rmnet_rx_bytes", "rmnet_tx_bytes"]);
 
-if (process.argv[1] && resolve(process.argv[1]) === SCRIPT_PATH) {
-  main().catch((error) => {
-    process.stderr.write(`error: ${error instanceof Error ? error.message : String(error)}\n`);
-    process.exitCode = 1;
-  });
-}
-
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (!options) return usage();
@@ -968,5 +961,12 @@ async function runCommand(command, args) {
     child.stderr.on("data", (chunk) => { stderr += chunk; });
     child.on("error", reject);
     child.on("close", (code) => code === 0 ? resolvePromise({ stdout, stderr }) : reject(new Error(`${basename(command)} failed with exit ${code}${stderr.trim() ? `: ${stderr.trim().slice(-500)}` : ""}`)));
+  });
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === SCRIPT_PATH) {
+  main().catch((error) => {
+    process.stderr.write(`error: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
   });
 }

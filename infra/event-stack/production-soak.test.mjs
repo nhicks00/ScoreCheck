@@ -1,5 +1,7 @@
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 
 import {
   browserDeltaProblems,
@@ -19,6 +21,12 @@ const profiles = Object.fromEntries(Array.from({ length: 6 }, (_, index) => {
   const framesPerSecond = camera <= 2 ? 60 : 30;
   return [camera, { profile: framesPerSecond === 60 ? "1080p60" : "1080p30", width: 1920, height: 1080, framesPerSecond, videoBitrateKbps: framesPerSecond === 60 ? 12_000 : 10_000 }];
 }));
+
+test("starts through the real CLI entrypoint after module initialization", () => {
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL("./production-soak.mjs", import.meta.url)), "--help"], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^Usage:/);
+});
 
 test("accepts an idle twelve-host baseline with all cameras off", () => {
   assert.deepEqual(productionIdleProblems(snapshot({ active: false }), startedMs), []);
