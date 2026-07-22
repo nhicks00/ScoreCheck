@@ -130,7 +130,7 @@ export async function createEventBundle(options, {
       });
     }
     const eventProfile = {
-      schemaVersion: 8,
+      schemaVersion: 9,
       manifest: final.manifest,
       state: final.lifecycleState,
       anchors,
@@ -138,6 +138,7 @@ export async function createEventBundle(options, {
       sshKey: options.sshKey,
       knownHosts: final.knownHosts,
       commentaryTlsState: tlsStatePath(parent, manifest, "commentary", "retained-commentary-tls"),
+      ingestTlsState: tlsStatePath(parent, manifest, "ingest", "retained-ingest-tls"),
       observabilityTlsState: tlsStatePath(parent, manifest, "observability", "retained-observability-tls"),
       credentialsEnv: options.credentialsEnv,
       lifecycleAttestation: options.lifecycleAttestation,

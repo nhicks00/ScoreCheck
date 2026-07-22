@@ -1090,7 +1090,7 @@ function createState({ event, evidence, nowMs, minimumDurationMs, maximumDuratio
 }
 
 function validateInputs({ options, profile, manifest, lifecycleState, venue }) {
-  if (!profile || profile.schemaVersion !== 8) throw new Error("event operator profile contract is invalid");
+  if (!profile || profile.schemaVersion !== 9) throw new Error("event operator profile contract is invalid");
   if (manifest?.kind !== "production" || !Array.isArray(manifest.droplets) || manifest.droplets.length !== 12) throw new Error("production soak requires the exact 12-host production manifest");
   if (lifecycleState?.event !== manifest.event || !new Set(["ready", "live"]).has(lifecycleState.phase)) throw new Error("production soak requires a matching ready or live lifecycle state");
   if (options.command === "run" && lifecycleState.phase !== "live") throw new Error("production soak run requires lifecycle phase live");

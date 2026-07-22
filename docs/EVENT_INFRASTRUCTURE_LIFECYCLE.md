@@ -299,7 +299,7 @@ operator profile:
 
 ```json
 {
-  "schemaVersion": 8,
+  "schemaVersion": 9,
   "manifest": "/absolute/protected/event/manifest.json",
   "state": "/absolute/protected/event/state.json",
   "anchors": "/absolute/protected/endpoint-anchors.json",
@@ -307,6 +307,7 @@ operator profile:
   "sshKey": "/absolute/protected/scorecheck_do",
   "knownHosts": "/absolute/protected/event/known_hosts",
   "commentaryTlsState": "/absolute/protected/retained-commentary-tls/HOSTSET_ID",
+  "ingestTlsState": "/absolute/protected/retained-ingest-tls/HOSTSET_ID",
   "observabilityTlsState": "/absolute/protected/retained-observability-tls/HOSTSET_ID",
   "credentialsEnv": "/absolute/protected/provider.env",
   "lifecycleAttestation": "/absolute/protected/lifecycle-attestation.json",
@@ -319,11 +320,12 @@ operator profile:
 ```
 
 The protected provider environment also contains `SCORECHECK_ACME_EMAIL`.
-Both TLS state paths are deliberately outside the disposable event bundle. Each
-contains the complete role-specific Caddy data directory, a mode-`0600`
+All three TLS state paths are deliberately outside the disposable event bundle.
+Each contains the complete role-specific Caddy data directory, a mode-`0600`
 integrity manifest, certificate fingerprints, expiry evidence, and the exact
-hostname binding. Commentary retains the two commentary hosts; observability
-retains the monitor host. The lifecycle refuses a healthy teardown unless both
+hostname binding. Commentary retains the two commentary hosts, ingest retains
+the stable media endpoint, and observability retains the monitor host. The
+lifecycle refuses a healthy teardown unless all three
 states verify with at least 24 hours of certificate validity remaining. Caddy
 requests ZeroSSL first and uses Let's Encrypt as the fallback issuer, preventing
 one CA's per-domain issuance limit from blocking a rebuild.
@@ -537,6 +539,7 @@ node infra/event-stack/event-stack.mjs up \
   --ssh-key /absolute/protected/scorecheck_do \
   --known-hosts /absolute/protected/next-event-slug/known_hosts \
   --commentary-tls-state /absolute/protected/retained-commentary-tls/HOSTSET_ID \
+  --ingest-tls-state /absolute/protected/retained-ingest-tls/HOSTSET_ID \
   --observability-tls-state /absolute/protected/retained-observability-tls/HOSTSET_ID \
   --credentials-env /absolute/protected/provider.env \
   --attestation /absolute/protected/lifecycle-attestation.json
@@ -557,7 +560,7 @@ The stack is `ready` only after:
 4. Commentary, ingest, eight compositors, spare, and observability are deployed
    from the bound repository revision.
 5. All 12 read-only monitoring agents are reachable on generated private IPs.
-6. Public commentary and monitor TLS health checks pass.
+6. Public commentary, ingest, and monitor TLS health checks pass.
 7. Pushover accepts the plain-English readiness notification.
 
 Do not connect cameras or begin destinations before `ready`.
@@ -574,6 +577,7 @@ node infra/event-stack/event-stack.mjs start \
   --ssh-key /absolute/protected/scorecheck_do \
   --known-hosts /absolute/protected/next-event-slug/known_hosts \
   --commentary-tls-state /absolute/protected/retained-commentary-tls/HOSTSET_ID \
+  --ingest-tls-state /absolute/protected/retained-ingest-tls/HOSTSET_ID \
   --observability-tls-state /absolute/protected/retained-observability-tls/HOSTSET_ID \
   --credentials-env /absolute/protected/provider.env \
   --confirm START:next-event-slug
@@ -594,6 +598,7 @@ node infra/event-stack/event-stack.mjs evidence \
   --ssh-key /absolute/protected/scorecheck_do \
   --known-hosts /absolute/protected/next-event-slug/known_hosts \
   --commentary-tls-state /absolute/protected/retained-commentary-tls/HOSTSET_ID \
+  --ingest-tls-state /absolute/protected/retained-ingest-tls/HOSTSET_ID \
   --observability-tls-state /absolute/protected/retained-observability-tls/HOSTSET_ID \
   --credentials-env /absolute/protected/provider.env \
   --evidence /absolute/protected/next-event-slug/final-evidence
@@ -605,6 +610,7 @@ node infra/event-stack/event-stack.mjs destroy \
   --ssh-key /absolute/protected/scorecheck_do \
   --known-hosts /absolute/protected/next-event-slug/known_hosts \
   --commentary-tls-state /absolute/protected/retained-commentary-tls/HOSTSET_ID \
+  --ingest-tls-state /absolute/protected/retained-ingest-tls/HOSTSET_ID \
   --observability-tls-state /absolute/protected/retained-observability-tls/HOSTSET_ID \
   --credentials-env /absolute/protected/provider.env \
   --evidence /absolute/protected/next-event-slug/final-evidence \
@@ -613,9 +619,9 @@ node infra/event-stack/event-stack.mjs destroy \
 
 Destroy is blocked while coverage is live, before the manifest review date,
 without protected evidence, or when provider inventory differs from state. It
-stops both Caddy services and atomically refreshes the protected commentary and
-observability TLS states before deleting any Droplet. If either healthy service
-cannot preserve valid state, teardown fails closed and restarts that Caddy
+stops all three Caddy services and atomically refreshes the protected
+commentary, ingest, and observability TLS states before deleting any Droplet. If
+any healthy service cannot preserve valid state, teardown fails closed and restarts that Caddy
 service; no compute is deleted. The retained directories are local lifecycle
 authority, not provider resources, so they create no DigitalOcean idle cost.
 After TLS capture, teardown stops the observability monitor sender and pauses

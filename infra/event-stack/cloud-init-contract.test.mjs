@@ -72,6 +72,12 @@ test("host firewalls mirror public role exposure and keep agent telemetry privat
   const observabilityProvision = await readFile(resolve(root, "infra/monitoring/remote-provision.sh"), "utf8");
   assert.match(observabilityProvision, /install -d -m 0700 "\$REMOTE_DIR\/\.generated" "\$REMOTE_DIR\/caddy_data"/);
 
+  const ingestCompose = await readFile(resolve(root, "infra/mediamtx/docker-compose.yml"), "utf8");
+  assert.match(ingestCompose, /\.\/caddy_data:\/data/);
+  assert.doesNotMatch(ingestCompose, /^\s+caddy-data:$/m);
+  const ingestDeploy = await readFile(resolve(root, "infra/mediamtx/deploy.sh"), "utf8");
+  assert.match(ingestDeploy, /install -d -m 0700 '\$REMOTE_DIR\/caddy_data'/);
+
   for (const source of [commentary, compositor, ingest, observability]) {
     assert.match(source, /ufw default deny incoming/);
     assert.match(source, /ufw --force enable/);

@@ -4,7 +4,7 @@ import test from "node:test";
 import { buildEventctlInvocation, validateProfile } from "./eventctl.mjs";
 
 const profile = {
-  schemaVersion: 8,
+  schemaVersion: 9,
   manifest: "/protected/event/manifest.json",
   state: "/protected/event/state.json",
   anchors: "/protected/endpoint-anchors.json",
@@ -12,6 +12,7 @@ const profile = {
   sshKey: "/protected/scorecheck_do",
   knownHosts: "/protected/event/known_hosts",
   commentaryTlsState: "/protected/retained-commentary-tls/state",
+  ingestTlsState: "/protected/retained-ingest-tls/state",
   observabilityTlsState: "/protected/retained-observability-tls/state",
   credentialsEnv: "/protected/provider.env",
   lifecycleAttestation: "/protected/lifecycle-attestation.json",
@@ -28,6 +29,7 @@ test("expands one operator profile into exact non-shell lifecycle arguments", ()
     "--anchors", profile.anchors, "--secrets", profile.secrets,
     "--ssh-key", profile.sshKey, "--known-hosts", profile.knownHosts,
     "--commentary-tls-state", profile.commentaryTlsState,
+    "--ingest-tls-state", profile.ingestTlsState,
     "--observability-tls-state", profile.observabilityTlsState,
     "--credentials-env", profile.credentialsEnv,
     "--attestation", profile.lifecycleAttestation
@@ -36,6 +38,7 @@ test("expands one operator profile into exact non-shell lifecycle arguments", ()
     "destroy", "--manifest", profile.manifest, "--state", profile.state,
     "--secrets", profile.secrets, "--ssh-key", profile.sshKey,
     "--known-hosts", profile.knownHosts, "--commentary-tls-state", profile.commentaryTlsState,
+    "--ingest-tls-state", profile.ingestTlsState,
     "--observability-tls-state", profile.observabilityTlsState,
     "--credentials-env", profile.credentialsEnv, "--evidence", profile.evidence,
     "--confirm", "DESTROY:event"
@@ -44,10 +47,17 @@ test("expands one operator profile into exact non-shell lifecycle arguments", ()
     "abort", "--manifest", profile.manifest, "--state", profile.state,
     "--secrets", profile.secrets, "--ssh-key", profile.sshKey,
     "--known-hosts", profile.knownHosts, "--commentary-tls-state", profile.commentaryTlsState,
+    "--ingest-tls-state", profile.ingestTlsState,
     "--observability-tls-state", profile.observabilityTlsState,
     "--credentials-env", profile.credentialsEnv, "--evidence", profile.evidence,
     "--confirm", "ABORT:event"
   ]);
+  for (const [command, confirmation] of [["start", "START:event"], ["evidence", null]]) {
+    const invocation = buildEventctlInvocation(command, profile, confirmation);
+    const index = invocation.indexOf("--ingest-tls-state");
+    assert.notEqual(index, -1);
+    assert.equal(invocation[index + 1], profile.ingestTlsState);
+  }
 });
 
 test("never invents destructive confirmations", () => {

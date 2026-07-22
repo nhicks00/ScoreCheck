@@ -17,6 +17,13 @@ Both UFW and the DigitalOcean `bvm-preview-firewall` allow only SSH, HTTP/TLS,
 RTMP ingest, SRT ingest, and WebRTC UDP media. Keep those two rule sets aligned
 when an ingest protocol changes.
 
+Caddy stores certificate state in the protected host directory
+`/opt/mediamtx/caddy_data`, not a Docker named volume. Event deployment restores
+retained state before Caddy starts when it is available, and teardown captures
+the current state before deleting the ingest Droplet. This preserves the stable
+ingest endpoint certificate across the provider-zero lifecycle and a Reserved-IP
+recovery without relying on fresh ACME issuance.
+
 `courtN_calibration` is an on-demand UTC-burned test path and is never used by
 the production scene.
 

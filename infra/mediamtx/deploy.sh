@@ -25,7 +25,7 @@ node "$SCRIPT_DIR/render-config.mjs"
 ssh_options=(-i "$SSH_KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS")
 rsync_shell="ssh -i $SSH_KEY -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS"
 
-ssh "${ssh_options[@]}" "$SSH_HOST" "mkdir -p '$REMOTE_DIR/.incoming' '$REMOTE_DIR/fonts' && install -d -m 0755 /var/lib/scorecheck-monitoring/ffmpeg"
+ssh "${ssh_options[@]}" "$SSH_HOST" "mkdir -p '$REMOTE_DIR/.incoming' '$REMOTE_DIR/fonts' && install -d -m 0700 '$REMOTE_DIR/caddy_data' && install -d -m 0755 /var/lib/scorecheck-monitoring/ffmpeg"
 rsync -a -e "$rsync_shell" \
   "$SCRIPT_DIR/docker-compose.yml" "$SCRIPT_DIR/scorecheck-ffmpeg-runner.sh" "$SCRIPT_DIR/scorecheck-preview-runner.sh" "$GENERATED" "$GENERATED_CADDY" \
   "$SSH_HOST:$REMOTE_DIR/.incoming/"

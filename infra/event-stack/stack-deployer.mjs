@@ -31,11 +31,13 @@ export class LocalStackDeployer {
     sshPrivateKey,
     knownHostsPath,
     commentaryTlsStateDirectory = null,
+    ingestTlsStateDirectory = null,
     observabilityTlsStateDirectory = null,
     acmeEmail = null,
     runner = runCommand,
     fetchImpl = globalThis.fetch,
     commentaryTlsStateStore = null,
+    ingestTlsStateStore = null,
     observabilityTlsStateStore = null
   }) {
     this.repoRoot = resolve(repoRoot);
@@ -52,6 +54,13 @@ export class LocalStackDeployer {
       knownHostsPath: this.knownHostsPath,
       runner
     }) : null);
+    this.ingestTlsState = ingestTlsStateStore ?? (ingestTlsStateDirectory ? new CaddyTlsStateStore({
+      directory: ingestTlsStateDirectory,
+      sshPrivateKey: this.sshPrivateKey,
+      knownHostsPath: this.knownHostsPath,
+      runner,
+      remoteDirectory: "/opt/mediamtx"
+    }) : null);
     this.observabilityTlsState = observabilityTlsStateStore ?? (observabilityTlsStateDirectory ? new CaddyTlsStateStore({
       directory: observabilityTlsStateDirectory,
       sshPrivateKey: this.sshPrivateKey,
@@ -65,6 +74,7 @@ export class LocalStackDeployer {
     await this.#validateProtectedInputs();
     const hostKeySha256 = await this.#ensureSsh(resource.publicIpv4);
     let commentaryTlsEvidence = null;
+    let ingestTlsEvidence = null;
     let observabilityTlsEvidence = null;
     const common = {
       SCORECHECK_SSH_KNOWN_HOSTS: this.knownHostsPath
@@ -101,7 +111,13 @@ export class LocalStackDeployer {
       };
     } else if (spec.role === "ingest") {
       const env = await loadProtectedEnv(join(this.secretsDirectory, "ingest.env"));
+      const ingestHost = endpointForRole(manifest, "ingest");
+      if (!this.ingestTlsState) throw new Error("ingest TLS state store is required");
       if (typeof this.acmeEmail !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(this.acmeEmail)) throw new Error("SCORECHECK_ACME_EMAIL is required for ingest certificate automation");
+      const restoredTlsState = await this.ingestTlsState.restore({
+        publicIpv4: resource.publicIpv4,
+        hosts: [ingestHost]
+      });
       const wireguardConfig = join(this.secretsDirectory, "wireguard/camera-lan.conf");
       if (await exists(wireguardConfig)) {
         await assertProtectedFile(wireguardConfig, "ingest WireGuard configuration");
@@ -119,10 +135,21 @@ export class LocalStackDeployer {
         MEDIAMTX_SSH_KEY: this.sshPrivateKey,
         MEDIAMTX_PUBLIC_IP: servicePublicIpv4({ manifest, state, spec, resource }),
         MEDIAMTX_PRIVATE_IP: resource.privateIpv4,
-        MEDIAMTX_PUBLIC_HOST: endpointForRole(manifest, "ingest"),
+        MEDIAMTX_PUBLIC_HOST: ingestHost,
         MEDIAMTX_ACME_EMAIL: this.acmeEmail,
         MEDIAMTX_CONTENT_ANALYZER_BINDINGS: JSON.stringify(compositorContentAnalyzerBindings({ manifest, state }))
       });
+      const capturedTlsState = await this.ingestTlsState.capture({
+        publicIpv4: resource.publicIpv4,
+        hosts: [ingestHost]
+      });
+      ingestTlsEvidence = {
+        restored: restoredTlsState.status,
+        captured: capturedTlsState.status,
+        stateSha256: capturedTlsState.stateSha256,
+        fileCount: capturedTlsState.fileCount,
+        certificates: capturedTlsState.certificates
+      };
     } else if (["compositor", "compositor-spare"].includes(spec.role)) {
       const environmentPath = join(this.secretsDirectory, "compositors", `${spec.name}.env`);
       await assertProtectedFile(environmentPath, `${spec.name} environment`);
@@ -182,19 +209,23 @@ export class LocalStackDeployer {
       hostKeySha256,
       reconstruction,
       ...(commentaryTlsEvidence ? { commentaryTlsState: commentaryTlsEvidence } : {}),
+      ...(ingestTlsEvidence ? { ingestTlsState: ingestTlsEvidence } : {}),
       ...(observabilityTlsEvidence ? { observabilityTlsState: observabilityTlsEvidence } : {})
     } };
   }
 
   async prepareForTeardown({ manifest, state }) {
     const commentarySpec = manifest.droplets.find((entry) => entry.role === "commentary");
+    const ingestSpec = manifest.droplets.find((entry) => entry.role === "ingest");
     const observabilitySpec = manifest.droplets.find((entry) => entry.role === "observability");
-    if (!commentarySpec || !observabilitySpec) throw new Error("event manifest is missing a TLS service");
-    if (!this.commentaryTlsState || !this.observabilityTlsState) throw new Error("both Caddy TLS state stores are required before teardown");
+    if (!commentarySpec || !ingestSpec || !observabilitySpec) throw new Error("event manifest is missing a TLS service");
+    if (!this.commentaryTlsState || !this.ingestTlsState || !this.observabilityTlsState) throw new Error("all Caddy TLS state stores are required before teardown");
     const commentaryHosts = commentaryEndpointHosts(manifest);
     const commentaryStartCommand = "cd /opt/livekit && docker compose -f docker-compose.yaml start caddy";
+    const ingestStartCommand = "cd /opt/mediamtx && docker compose start caddy";
     const observabilityStartCommand = "cd /opt/scorecheck-monitoring && docker compose start monitor-service caddy";
     let commentary = null;
+    let ingest = null;
     let observability = null;
     let monitorServiceStopped = false;
     try {
@@ -205,6 +236,14 @@ export class LocalStackDeployer {
         hosts: [commentaryHosts.rtc, commentaryHosts.turn],
         stopCommand: "cd /opt/livekit && test -f docker-compose.yaml && docker compose -f docker-compose.yaml stop caddy",
         startCommand: commentaryStartCommand
+      });
+      ingest = await this.#preserveCaddyState({
+        state,
+        spec: ingestSpec,
+        store: this.ingestTlsState,
+        hosts: [endpointForRole(manifest, "ingest")],
+        stopCommand: "cd /opt/mediamtx && test -f docker-compose.yml && docker compose stop caddy",
+        startCommand: ingestStartCommand
       });
       observability = await this.#preserveCaddyState({
         state,
@@ -227,6 +266,7 @@ export class LocalStackDeployer {
         healthy: true,
         evidence: {
           commentaryTlsState: commentary,
+          ingestTlsState: ingest,
           observabilityTlsState: observability,
           observabilityMonitorStopped: monitorServiceStopped,
           healthchecks
@@ -243,6 +283,11 @@ export class LocalStackDeployer {
         const resource = state.droplets[commentarySpec.name];
         const restarted = await this.#ssh(resource.publicIpv4, commentaryStartCommand, { allowFailure: true });
         if (restarted.code !== 0) recoveryFailures.push("commentary Caddy");
+      }
+      if (ingest?.caddyStopped) {
+        const resource = state.droplets[ingestSpec.name];
+        const restarted = await this.#ssh(resource.publicIpv4, ingestStartCommand, { allowFailure: true });
+        if (restarted.code !== 0) recoveryFailures.push("ingest Caddy");
       }
       if (recoveryFailures.length) {
         const reason = error instanceof Error ? error.message : String(error);

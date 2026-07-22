@@ -248,7 +248,7 @@ test("selects exact production and rehearsal commentary TLS hosts", () => {
   assert.equal(rehearsal.turn, "turn-rehearsal.beachvolleyballmedia.com");
 });
 
-test("captures commentary and observability TLS state before a healthy stack can be deleted", async () => {
+test("captures commentary, ingest, and observability TLS state before a healthy stack can be deleted", async () => {
   const root = await mkdtemp(join(tmpdir(), "scorecheck-retained-tls-deployer-"));
   await chmod(root, 0o700);
   const sshKey = join(root, "ssh-key");
@@ -263,14 +263,17 @@ test("captures commentary and observability TLS state before a healthy stack can
     return { code: 0, stdout: command === "ssh-keygen" ? "fixture-host-key\n" : "", stderr: "" };
   };
   const commentary = rehearsalManifest.droplets.find((entry) => entry.role === "commentary");
+  const ingest = rehearsalManifest.droplets.find((entry) => entry.role === "ingest");
   const observability = rehearsalManifest.droplets.find((entry) => entry.role === "observability");
   const state = {
     droplets: {
       [commentary.name]: { publicIpv4: "192.0.2.20", status: "active" },
-      [observability.name]: { publicIpv4: "192.0.2.21", status: "active" }
+      [ingest.name]: { publicIpv4: "192.0.2.21", status: "active" },
+      [observability.name]: { publicIpv4: "192.0.2.22", status: "active" }
     },
     deployments: {
       [commentary.name]: { status: "healthy" },
+      [ingest.name]: { status: "healthy" },
       [observability.name]: { status: "healthy" }
     }
   };
@@ -290,6 +293,7 @@ test("captures commentary and observability TLS state before a healthy stack can
     sshPrivateKey: sshKey,
     knownHostsPath: knownHosts,
     commentaryTlsStateStore: tlsState,
+    ingestTlsStateStore: tlsState,
     observabilityTlsStateStore: tlsState,
     runner,
     fetchImpl: async (url, options = {}) => {
@@ -302,12 +306,14 @@ test("captures commentary and observability TLS state before a healthy stack can
   const result = await deployer.prepareForTeardown({ manifest: rehearsalManifest, state });
   assert.equal(result.healthy, true);
   assert.equal(result.evidence.commentaryTlsState.stateSha256, captured.stateSha256);
+  assert.equal(result.evidence.ingestTlsState.stateSha256, captured.stateSha256);
   assert.equal(result.evidence.observabilityTlsState.stateSha256, captured.stateSha256);
   assert.equal(result.evidence.commentaryTlsState.caddyStopped, true);
+  assert.equal(result.evidence.ingestTlsState.caddyStopped, true);
   assert.equal(result.evidence.observabilityTlsState.caddyStopped, true);
   assert.equal(result.evidence.observabilityMonitorStopped, true);
   assert.deepEqual(result.evidence.healthchecks, { status: "paused", checks: ["baseline", "active", "sentinel"] });
-  assert.equal(commands.filter(([command, args]) => command === "ssh" && args.at(-1).includes("stop caddy")).length, 2);
+  assert.equal(commands.filter(([command, args]) => command === "ssh" && args.at(-1).includes("stop caddy")).length, 3);
   assert.equal(commands.filter(([command, args]) => command === "ssh" && args.at(-1).includes("stop monitor-service")).length, 1);
   assert.equal(providerCalls.filter((call) => call.method === "POST").length, 3);
   for (const id of Object.values(monitoring.ids)) assert.equal(providerCalls.some((call) => call.url.includes(id)), true);
@@ -327,14 +333,17 @@ test("blocks teardown and restores monitoring services when Healthchecks cannot 
     return { code: 0, stdout: command === "ssh-keygen" ? "fixture-host-key\n" : "", stderr: "" };
   };
   const commentary = rehearsalManifest.droplets.find((entry) => entry.role === "commentary");
+  const ingest = rehearsalManifest.droplets.find((entry) => entry.role === "ingest");
   const observability = rehearsalManifest.droplets.find((entry) => entry.role === "observability");
   const state = {
     droplets: {
       [commentary.name]: { publicIpv4: "192.0.2.20", status: "active" },
-      [observability.name]: { publicIpv4: "192.0.2.21", status: "active" }
+      [ingest.name]: { publicIpv4: "192.0.2.21", status: "active" },
+      [observability.name]: { publicIpv4: "192.0.2.22", status: "active" }
     },
     deployments: {
       [commentary.name]: { status: "healthy" },
+      [ingest.name]: { status: "healthy" },
       [observability.name]: { status: "healthy" }
     }
   };
@@ -348,6 +357,7 @@ test("blocks teardown and restores monitoring services when Healthchecks cannot 
     sshPrivateKey: sshKey,
     knownHostsPath: knownHosts,
     commentaryTlsStateStore: tlsState,
+    ingestTlsStateStore: tlsState,
     observabilityTlsStateStore: tlsState,
     runner,
     fetchImpl: async () => new Response(null, { status: 503 })
@@ -361,6 +371,7 @@ test("blocks teardown and restores monitoring services when Healthchecks cannot 
   assert.ok(remoteCommands.some((command) => command.includes("stop monitor-service")));
   assert.ok(remoteCommands.some((command) => command.includes("start monitor-service caddy")));
   assert.ok(remoteCommands.some((command) => command.includes("/opt/livekit") && command.includes("start caddy")));
+  assert.ok(remoteCommands.some((command) => command.includes("/opt/mediamtx") && command.includes("start caddy")));
 });
 
 test("fails closed and restores Caddy when a healthy stack has no retainable TLS state", async () => {
@@ -389,6 +400,10 @@ test("fails closed and restores Caddy when a healthy stack has no retainable TLS
       async inspect() { return { status: "missing" }; },
       async capture() { throw new Error("remote TLS state unavailable"); }
     },
+    ingestTlsStateStore: {
+      async inspect() { return { status: "missing" }; },
+      async capture() { return { status: "ready" }; }
+    },
     observabilityTlsStateStore: {
       async inspect() { return { status: "missing" }; },
       async capture() { return { status: "ready" }; }
@@ -416,14 +431,17 @@ test("restores an earlier Caddy service when a later TLS capture fails", async (
     return { code: 0, stdout: command === "ssh-keygen" ? "fixture-host-key\n" : "", stderr: "" };
   };
   const commentary = rehearsalManifest.droplets.find((entry) => entry.role === "commentary");
+  const ingest = rehearsalManifest.droplets.find((entry) => entry.role === "ingest");
   const observability = rehearsalManifest.droplets.find((entry) => entry.role === "observability");
   const state = {
     droplets: {
       [commentary.name]: { publicIpv4: "192.0.2.20", status: "active" },
-      [observability.name]: { publicIpv4: "192.0.2.21", status: "active" }
+      [ingest.name]: { publicIpv4: "192.0.2.21", status: "active" },
+      [observability.name]: { publicIpv4: "192.0.2.22", status: "active" }
     },
     deployments: {
       [commentary.name]: { status: "healthy" },
+      [ingest.name]: { status: "healthy" },
       [observability.name]: { status: "healthy" }
     }
   };
@@ -433,6 +451,10 @@ test("restores an earlier Caddy service when a later TLS capture fails", async (
     sshPrivateKey: sshKey,
     knownHostsPath: knownHosts,
     commentaryTlsStateStore: {
+      async inspect() { return { status: "missing" }; },
+      async capture() { return { status: "ready" }; }
+    },
+    ingestTlsStateStore: {
       async inspect() { return { status: "missing" }; },
       async capture() { return { status: "ready" }; }
     },
@@ -450,8 +472,9 @@ test("restores an earlier Caddy service when a later TLS capture fails", async (
   const restartCommands = commands
     .filter(([command, args]) => command === "ssh" && args.at(-1).includes("start caddy"))
     .map(([, args]) => args.at(-1));
-  assert.equal(restartCommands.length, 2);
+  assert.equal(restartCommands.length, 3);
   assert.ok(restartCommands.some((command) => command.includes("/opt/livekit")));
+  assert.ok(restartCommands.some((command) => command.includes("/opt/mediamtx")));
   assert.ok(restartCommands.some((command) => command.includes("/opt/scorecheck-monitoring")));
 });
 
