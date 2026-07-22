@@ -91,8 +91,8 @@ The target remains:
 | --- | --- | --- | --- | --- |
 | R-01 | Pin exact renderer Git/deployment/assets/contracts per event | `SATISFIED` | A protected renderer binding captures canonical and generated Vercel origins, exact deployment ID, Git SHA, asset namespace, and overlay/commentary/heartbeat contracts; the event bundle hashes it. | Capture a fresh binding for each event release. |
 | R-02 | Restart reloads the same approved renderer | `SATISFIED` | Compositors require a generated immutable Vercel origin and exact renderer identity. The bootstrap session and browser heartbeat reject deployment/build drift. | Physical restart remains an acceptance-matrix gate. |
-| R-03 | Existing scene survives Vercel loss | `PARTIAL` | The loaded browser can continue media and last rendered state; no full physical control-plane-loss acceptance is bound to the current event contract. | Run Vercel loss/recovery with Egress live. Existing video/audio/last-good score must continue without navigation. |
-| R-04 | Existing scene survives Supabase loss | `PARTIAL` | Video and commentary are separate from scoring, and the overlay has fail-transparent behavior. | Run Supabase loss/recovery with Egress live; score must hold last-good and expose stale telemetry without blanking video. |
+| R-03 | Existing scene survives Vercel loss | `PARTIAL` | `renderer-loss-rehearsal.mjs` now reuses an active eight-feed synthetic production soak and blocks only one Egress container's immutable generated Vercel IPv4 destinations. Its owned firewall runtime is Egress-generation-bound, blocks TCP/UDP 443, rejects IPv6 ambiguity and DNS/container drift, restores exactly, and evaluates same-page/reset-safe media, score, peer, and YouTube continuity. Provider-free regressions pass; no attended host artifact exists yet. | Run the attended synthetic gate with Egress live. Existing video/audio/last-good score must continue without navigation, then recover on the same build and page. |
+| R-04 | Existing scene survives Supabase loss | `PARTIAL` | Video and commentary are separate from scoring, and the overlay has fail-transparent behavior. A browser-only Supabase block is explicitly not accepted: it interrupts Realtime invalidation hints but leaves the authoritative same-origin Vercel repair route able to reach Supabase server-side. | Use an isolated nonproduction Supabase dependency/proxy or a separately approved provider outage. Prove authoritative repair failure/recovery, last-good score retention, stale telemetry, media continuity, and outbox replay without touching production scoring. |
 | R-05 | Program token leakage protections | `SATISFIED` | The protected token is carried only in a URL fragment to a one-time bootstrap, exchanged for a scoped HttpOnly session, then removed by navigation. Program routes enforce private/no-store, no-referrer, strict CSP, and redacted startup output. | Keep third-party resources absent from program routes. |
 | R-06 | Bounded browser supervisor | `SATISFIED` | `program-supervisor.mjs` acts only when raw/program/Egress remain healthy while the browser is unavailable for six consecutive samples. It preserves event/destination/output-generation/renderer ownership, permits at most two restarts with a ten-minute cooldown, persists a prepared restart before mutation, resumes it safely, and fails closed after exhaustion. Any restart remains visible and fails the qualification run rather than being hidden. | Prove one bounded recovery on the exact immutable renderer during the physical restart gate. |
 | R-07 | Separate renderer deployment blast radius | `DEFERRED` | Admin and program routes currently share the web project. | First prove immutable production deployment pinning. Split the renderer project only if pinning cannot prevent admin deployments from affecting restarted scenes. |
@@ -205,10 +205,12 @@ In particular:
   and regression-tested. Measured takeover/rollback RTO on an attended paid
   12-host stack is still missing. Do not add a thirteenth host until that
   simpler recovery is rehearsed and shown insufficient.
-- Renderer and Supabase loss, bounded browser recovery, exact Egress-owner
-  resume, the external platform sentinel, retained critical-log export, and
-  YouTube backup ingest still need production-shaped evidence. The first five
-  now have fail-closed implementations; backup ingest remains deferred.
+- Renderer loss now has a fail-closed synthetic gate but still needs an
+  attended host artifact. Supabase loss still needs a truthful isolated
+  server-side dependency; browser-only blocking is insufficient. Bounded
+  browser recovery, exact Egress-owner resume, the external platform sentinel,
+  and retained critical-log export have implementations but still need
+  production-shaped evidence. YouTube backup ingest remains deferred.
 - The existing observability bastion remains the only event bastion. Key-only
   SSH and final accepted-session evidence are implemented; a first live event
   artifact is still required. Dynamic provider dependencies make a static
@@ -259,8 +261,8 @@ host identities, source/output profile, start/end timestamps, and cleanup state.
 | Ingest replacement | Primary loss, Reserved-IP takeover, source/path/browser recovery, rollback, and declared RTO with no duplicate ingest/publisher. |
 | Compositor replacement | Only one camera is affected; spare reuses the exact immutable renderer/output/broadcast generation without duplicate RTMPS publishing. |
 | Commentary | Two commentators, mix-minus, headphones, stable output track, late join/drop/rejoin, UDP-blocked TURN/TLS, measured calibration, and video continuity when commentary fails. |
-| Vercel loss | Existing program video/audio/last-good score continue; browser does not navigate; recovery does not change approved build. |
-| Supabase loss | Video/commentary continue; score holds and becomes observably stale; local incident outbox pages and later reconciles. |
+| Vercel loss | Run `renderer-loss-rehearsal.mjs` only against the exact running eight-feed synthetic soak. Existing program video/audio/last-good score continue; browser does not navigate; recovery does not change approved build/page/Egress generation; peers and YouTube remain healthy. |
+| Supabase loss | Use a nonproduction dependency that interrupts both Realtime and the server-side authoritative repair path. Video/commentary continue; score holds and becomes observably stale; local incident outbox pages and later reconciles. Browser-only Supabase blocking is not qualifying evidence. |
 | Overlay exception | Video and audio remain visible/continuous and Egress stays active. |
 | Renderer restart | Forced compositor/browser restart loads the exact approved deployment and contracts. |
 | Monitoring loss | Media continues; external dead-man pages; restored monitor reconciles without duplicate incident episodes. |
@@ -301,6 +303,51 @@ The first rehearsal must be test-feed-only and prove route rollback, bandwidth
 headroom, peer-camera isolation, one opening/recovery page, and no silent
 automatic transition. Until that artifact exists, V-05 remains disabled.
 
+## Camera-Free Renderer-Origin Rehearsal
+
+This is an attended synthetic gate. It does not start publishers, Egresses,
+broadcasts, or a soak. It requires the exact eight-feed synthetic publisher
+state and an already-running production soak so it cannot be used against an
+unidentified physical source.
+
+The runner targets one compositor and requires separate exact fault and restore
+confirmations:
+
+```text
+node infra/event-stack/renderer-loss-rehearsal.mjs run \
+  --profile /protected/event-profile.json \
+  --soak-evidence /protected/production-soak \
+  --publisher-state /protected/synthetic-publishers.json \
+  --evidence /protected/renderer-loss-evidence \
+  --camera 1 \
+  --confirm-fault FAULT-RENDERER:EVENT:CAMERA-1 \
+  --confirm-restore RESTORE-RENDERER:EVENT:CAMERA-1
+```
+
+Before mutation it binds the fault to the exact event generation, camera,
+renderer Git/deployment, Egress ID, YouTube destination, output generation,
+container identity/address, and current generated-origin IPv4 set. It refuses
+an IPv6-enabled Egress network because an unblocked IPv6 route would invalidate
+the test. The only inserted jump is in `DOCKER-USER` for that container source;
+its private MediaMTX path, monitor heartbeat destination, and YouTube RTMPS
+destination are not blocked.
+
+If the operator process exits normally after a failure, the runner attempts the
+exact restore automatically. After a hard interruption, use only the persisted
+state in the same evidence directory:
+
+```text
+node infra/event-stack/renderer-loss-rehearsal.mjs restore \
+  --profile /protected/event-profile.json \
+  --evidence /protected/renderer-loss-evidence \
+  --confirm-restore RESTORE-RENDERER:EVENT:CAMERA-1
+```
+
+Do not mark R-03 satisfied from unit tests. A pass requires the protected host
+artifact showing baseline, disconnected last-good score state, same-page media
+continuity, exact firewall restoration, DNS stability, recovery, and unaffected
+peer cameras/YouTube outputs.
+
 ## Remaining Execution Order
 
 The scoring prerequisite is complete. Checksummed production evidence is under
@@ -310,8 +357,11 @@ The scoring prerequisite is complete. Checksummed production evidence is under
    camera H.264/HEVC admission traces, and actual output-conformance artifacts.
 2. Run physical H.264 1080p30/60 and compositor-local HEVC 1080p30/60 gates.
    Keep any mode that fails disabled rather than weakening admission.
-3. Run Vercel/Supabase loss, overlay exception, monitor loss/outbox replay, and
-   exact renderer-restart gates with one nonpublic camera/output generation.
+3. Run the implemented Vercel renderer-origin loss and overlay exception gates
+   on the eight-feed synthetic soak. Run Supabase loss only after an isolated
+   nonproduction dependency can interrupt both Realtime and authoritative
+   server-side repair; a browser-only block is not evidence. Then run monitor
+   loss/outbox replay and the exact renderer-restart gate.
 4. Run the implemented camera-independent dual-role spare rehearsal on an
    attended protected 12-host event generation, measure takeover and rollback
    RTO, and decide whether the thirteenth warm ingest is justified. The runner
