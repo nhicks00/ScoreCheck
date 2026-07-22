@@ -21,6 +21,7 @@ import { assertFaultGateCanArm, faultGateArmRequestSchema, FaultGateConflictErro
 import { BrowserCounterAccumulator } from "./browserCounterAccumulator.js";
 import { incrementCourtCounter } from "./prometheusCounter.js";
 import { LocalIncidentOutbox } from "./localIncidentOutbox.js";
+import { replayDurableOutbox } from "./durableOutboxReplay.js";
 
 const config = loadServiceConfig();
 const app = express();
@@ -736,14 +737,7 @@ async function flushDurableOutbox(): Promise<void> {
   if (!incidentStore || outboxFlushRunning) return;
   outboxFlushRunning = true;
   try {
-    for (const pending of localIncidentOutbox.pendingChanges()) {
-      await incidentStore.persist(pending.change, pending.id);
-      await localIncidentOutbox.markChangeReplicated(pending.id);
-    }
-    for (const pending of localIncidentOutbox.pendingNotifications()) {
-      await incidentStore.persistNotification(pending.notification);
-      await localIncidentOutbox.markNotificationReplicated(pending.notification.id, pending.revision);
-    }
+    await replayDurableOutbox(localIncidentOutbox, incidentStore);
   } catch (error) {
     console.error(`durable monitoring outbox replay deferred code=${operationalErrorCode(error)}`);
   } finally {
