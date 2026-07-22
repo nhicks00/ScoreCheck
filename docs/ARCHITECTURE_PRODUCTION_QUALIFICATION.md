@@ -1,7 +1,7 @@
 # ScoreCheck Architecture Production Qualification
 
 Date: 2026-07-22
-Code baseline: `9d31467544be4eb77eade539bcdaeed54ce024d9`
+Code baseline: `2645dd484d4e537a7184feed8fa853ebd339bf1f`
 Status: implementation and physical qualification in progress
 
 ## Purpose
@@ -159,7 +159,7 @@ The target remains:
 | ID | Review item | Status | Checked-in evidence | Required disposition / proof |
 | --- | --- | --- | --- | --- |
 | S-01 | Monotonic score revisions and checksums | `SATISFIED` | Community witness migrations and transaction code use score revisions, source revisions/authority epochs, and state hashes. | Preserve exact transaction and replay tests. |
-| S-02 | Lease fencing | `REQUIRED` | Authority epochs fence scoring authority while migration `030_poller_lease_fencing.sql` separately increments poller lease generation; stale pollers must present the current generation before provider writes. Production has `022` and `029`, but lacks prerequisite community-scoring migrations `023`, `024`, `026`, `027`, and `028` as well as `030`. | Rehearse and apply the exact `023,024,026,027,028,030` chain before deploying the matching web/worker. Applying only `030` is prohibited. See `SCORING_SCHEMA_HARDCUTOVER_023_030.md`. |
+| S-02 | Lease fencing | `SATISFIED` | Production applied exactly `023,024,026,027,028,030` in one transaction after the rollback-only rehearsal. Independent SQL and PostgREST checks proved the migration ledger, `bigint` generation, current schema, removed legacy schema, forced RLS, service-role access, and anonymous denial. Vercel and the Render worker run exact Git SHA `2645dd484d4e537a7184feed8fa853ebd339bf1f`. | At the next active event, retain a fresh lease acquisition and fenced provider commit. Idle verification correctly found no active poller lease. See `SCORING_SCHEMA_HARDCUTOVER_023_030.md`. |
 | S-03 | Explicit source precedence/state machine | `SATISFIED` | Checked-in authority modes cover admin lock, provider primary, designated primary, verified consensus, and paused dispute. | Document mapping to operator language; do not replace the implemented model with the review's illustrative names. |
 | S-04 | Server-authorized semantic writes | `SATISFIED` | Mutations are service-role transactions and clients submit semantic scoring actions. | Retain RLS/security-boundary tests. |
 | S-05 | Private Realtime | `SATISFIED` | The security hard cut removes public table access and keeps authoritative writes server-side. | Verify subscriptions use intended private policy in the live schema. |
@@ -183,11 +183,10 @@ The target remains:
 
 ## Current Qualification Boundary
 
-The checked-in media contract has no remaining implementation-only `REQUIRED`
-row, but S-02 remains a production release blocker: the live database has an
-intentional out-of-order `029` cutover and lacks the prerequisite scoring chain.
-The release also remains conditional on production-shaped evidence for rows
-marked `PARTIAL` or `DEFERRED` and the acceptance matrix below.
+The checked-in contract has no remaining implementation-only `REQUIRED` row.
+The scoring schema-before-service hard cutover is live and independently
+verified, but event readiness remains conditional on production-shaped evidence
+for rows marked `PARTIAL` or `DEFERRED` and the acceptance matrix below.
 
 In particular:
 
@@ -201,9 +200,10 @@ In particular:
   resume, the external platform sentinel, retained critical-log export, and
   YouTube backup ingest still need production-shaped evidence. The first five
   now have fail-closed implementations; backup ingest remains deferred.
-- No code in this qualification branch has been deployed and no event
-  infrastructure was created. Between-event provider-zero remains the required
-  state.
+- The exact qualification release is deployed to Vercel and the Render worker.
+  No event infrastructure was created. A fresh independent audit at
+  `2026-07-22T12:52:02Z` proved provider zero, two unassigned retained endpoint
+  anchors, and the exact eight-stream idle YouTube pool.
 
 ## Rejected Wholesale Changes
 
@@ -277,26 +277,20 @@ automatic transition. Until that artifact exists, V-05 remains disabled.
 
 ## Remaining Execution Order
 
-1. Use `SCORING_SCHEMA_HARDCUTOVER_023_030.md`. Stop all provider-score
-   pollers, run the rollback-only production-data rehearsal, then apply exactly
-   `023,024,026,027,028,030` in one verified transaction. Deploy the matching
-   web/worker revision, verify a fresh lease generation and fenced commit, then
-   restore polling. Never apply `030` alone, overlap the old worker with the new
-   schema, or start the new worker against the old schema. Verify idle contracts
-   without starting media. Configure a separate
-   `HEALTHCHECKS_SENTINEL_PING_URL` before capturing the new protected recovery
-   source.
-2. Capture a real venue profile, renderer binding, commentary qualification,
+The scoring prerequisite is complete. Checksummed production evidence is under
+`~/.config/scorecheck/cutovers/scoring-schema-023-030-20260722T122341Z/`.
+
+1. Capture a real venue profile, renderer binding, commentary qualification,
    camera H.264/HEVC admission traces, and actual output-conformance artifacts.
-3. Run physical H.264 1080p30/60 and compositor-local HEVC 1080p30/60 gates.
+2. Run physical H.264 1080p30/60 and compositor-local HEVC 1080p30/60 gates.
    Keep any mode that fails disabled rather than weakening admission.
-4. Run Vercel/Supabase loss, overlay exception, monitor loss/outbox replay, and
+3. Run Vercel/Supabase loss, overlay exception, monitor loss/outbox replay, and
    exact renderer-restart gates with one nonpublic camera/output generation.
-5. Rehearse dual-role spare ingest takeover and rollback. Add the provider
+4. Rehearse dual-role spare ingest takeover and rollback. Add the provider
    adapter only for this protected rehearsal, measure RTO, and decide whether
    the thirteenth warm ingest is justified.
-6. Qualify one priority-court spare compositor against YouTube backup ingestion
+5. Qualify one priority-court spare compositor against YouTube backup ingestion
    and capture interruption/resume evidence for exact Egress ownership.
-7. Run the eight-camera event-length endurance matrix, external viewer rotation,
+6. Run the eight-camera event-length endurance matrix, external viewer rotation,
    exact cleanup, and terminal provider-zero audit. Only then mark the active
    production-qualification goal complete.
