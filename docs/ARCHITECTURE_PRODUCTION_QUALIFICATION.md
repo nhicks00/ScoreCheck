@@ -363,8 +363,13 @@ created. Production renderer and Supabase configuration must never point to it.
 The proxy forwards ordinary HTTP and WebSocket upgrade traffic only to one
 configured Supabase origin. It rejects absolute request targets, plaintext
 non-loopback upstreams, embedded upstream credentials, and non-loopback listen
-addresses. Fault and restore calls require exact event-generation
-confirmations:
+addresses. It also rejects every mutating HTTP method: only `GET`, `HEAD`,
+`OPTIONS`, and `GET` WebSocket upgrades can reach Supabase. The isolated
+renderer can therefore observe the current active event without modifying
+production score data. REST access is further limited to `events`, `courts`,
+and `overlay_states`; every RPC, auth route, unrelated table, and non-Realtime
+WebSocket path is rejected. Fault and restore calls require exact
+event-generation confirmations:
 
 ```text
 FAULT-SUPABASE:<generation-id>
@@ -393,10 +398,12 @@ https://<monitor-host>/_scorecheck-supabase-fault/<generation-id>/
 ```
 
 The URL shape is compatible with Supabase REST and Realtime construction. The
-proxy strips only its exact generation prefix, forwards `/rest/v1/...` and
-`/realtime/v1/...` upstream, and rejects every other path. Renderer creation
+proxy strips only its exact generation prefix, forwards only the allowlisted
+REST collection paths and exact `/realtime/v1/websocket` endpoint upstream,
+and rejects every other path. Renderer creation
 must remain a separate protected provider transaction using an isolated Vercel
-project, synthetic publishers, a test event/score row, and the ordinary
+project, synthetic publishers, read-only current active-event score state, and
+the ordinary
 `NEXT_PUBLIC_SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` credentials
 without printing them. The runner fails baseline
 qualification unless it observes at least one authoritative HTTP request and

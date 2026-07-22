@@ -9,7 +9,7 @@ import { SupabaseFaultProxy } from "./supabase-fault-proxy.mjs";
 
 const generationId = "generation-supabase-12345678";
 
-test("forwards Supabase HTTP without retaining request secrets or targets", async (t) => {
+test("forwards read-only Supabase HTTP without retaining request secrets or targets", async (t) => {
   const upstream = http.createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -29,34 +29,67 @@ test("forwards Supabase HTTP without retaining request secrets or targets", asyn
   t.after(() => proxy.close());
 
   const response = await fetch(`${proxy.origin()}/rest/v1/overlay_states?court_number=eq.1`, {
-    method: "POST",
     headers: {
       authorization: "Bearer service-role-secret",
-      apikey: "anonymous-key-secret",
-      "content-type": "application/json"
-    },
-    body: JSON.stringify({ score: "21-19" })
+      apikey: "anonymous-key-secret"
+    }
   });
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("etag"), 'W/"overlay-1"');
   assert.deepEqual(await response.json(), {
-    method: "POST",
+    method: "GET",
     path: "/rest/v1/overlay_states?court_number=eq.1",
     authorization: "Bearer service-role-secret",
     apiKey: "anonymous-key-secret",
-    body: '{"score":"21-19"}'
+    body: ""
   });
+  assert.equal((await fetch(`${proxy.origin()}/rest/v1/events`, { method: "HEAD" })).status, 200);
+  assert.equal((await fetch(`${proxy.origin()}/rest/v1/courts`, { method: "OPTIONS" })).status, 200);
 
   const evidence = JSON.stringify(proxy.snapshot());
-  assert.doesNotMatch(evidence, /service-role-secret|anonymous-key-secret|overlay_states|court_number|21-19/u);
-  assert.equal(proxy.snapshot().counters.httpRequestsForwarded, 1);
+  assert.doesNotMatch(evidence, /service-role-secret|anonymous-key-secret|overlay_states|court_number/u);
+  assert.equal(proxy.snapshot().counters.httpRequestsForwarded, 3);
   assert.equal(proxy.snapshot().counters.activeHttpRequests, 0);
+});
+
+test("rejects score mutations and non-GET WebSocket upgrades before upstream", async (t) => {
+  const seen = [];
+  const upstream = http.createServer((req, res) => {
+    seen.push(`${req.method} ${req.url}`);
+    res.end("unexpected");
+  });
+  upstream.on("upgrade", (req, socket) => {
+    seen.push(`${req.method} ${req.url}`);
+    socket.destroy();
+  });
+  const upstreamOrigin = await listen(upstream);
+  t.after(() => closeServer(upstream));
+  const proxy = new SupabaseFaultProxy({ upstream: upstreamOrigin, generationId });
+  await proxy.start();
+  t.after(() => proxy.close());
+
+  for (const method of ["POST", "PATCH", "DELETE"]) {
+    const response = await fetch(`${proxy.origin()}/rest/v1/overlay_states`, {
+      method,
+      headers: { "content-type": "application/json" },
+      body: method === "DELETE" ? undefined : '{"score":"mutation-must-not-pass"}'
+    });
+    assert.equal(response.status, 405);
+    assert.equal(response.headers.get("allow"), "GET, HEAD, OPTIONS");
+    assert.deepEqual(await response.json(), { error: "read-only proxy" });
+  }
+  const upgrade = await rawRequest(proxy.origin(), mutationUpgradeRequest("/realtime/v1/websocket"));
+  assert.match(upgrade, /^HTTP\/1\.1 405 Method Not Allowed/u);
+  assert.match(upgrade, /Allow: GET\r\n/u);
+  assert.deepEqual(seen, []);
+  assert.equal(proxy.snapshot().counters.httpRequestsForwarded, 0);
+  assert.doesNotMatch(JSON.stringify(proxy.snapshot()), /mutation-must-not-pass/u);
 });
 
 test("fault drains HTTP and Realtime together, rejects new work, and restores idempotently", async (t) => {
   const heldResponses = new Set();
   const upstream = http.createServer((req, res) => {
-    if (req.url === "/slow") {
+    if (req.url === "/rest/v1/events?slow=1") {
       heldResponses.add(res);
       res.once("close", () => heldResponses.delete(res));
       return;
@@ -77,7 +110,7 @@ test("fault drains HTTP and Realtime together, rejects new work, and restores id
   await proxy.start();
   t.after(() => proxy.close());
 
-  const slow = fetch(`${proxy.origin()}/slow`);
+  const slow = fetch(`${proxy.origin()}/rest/v1/events?slow=1`);
   await waitFor(() => proxy.snapshot().counters.activeHttpRequests === 1);
   const websocket = await openUpgrade(proxy.origin(), "/realtime/v1/websocket?apikey=browser-secret");
   assert.equal(proxy.snapshot().counters.activeWebSockets, 1);
@@ -121,6 +154,10 @@ test("rejects an open proxy target and unsafe listener or upstream contracts", a
 
   const response = await rawRequest(proxy.origin(), "GET https://example.com/rest/v1/private HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n");
   assert.match(response, /^HTTP\/1\.1 400 /u);
+  for (const path of ["/rest/v1/private", "/rest/v1/rpc/mutate", "/auth/v1/user"]) {
+    assert.equal((await fetch(`${proxy.origin()}${path}`)).status, 404);
+  }
+  assert.match(await openRejectedUpgrade(proxy.origin(), "/realtime/v1/private"), /^HTTP\/1\.1 404 /u);
   assert.equal(proxy.snapshot().counters.httpRequestsForwarded, 0);
   assert.throws(() => new SupabaseFaultProxy({ upstream: "http://example.com", generationId }), /plaintext.*loopback/u);
   assert.throws(() => new SupabaseFaultProxy({ upstream: "https://user:secret@example.supabase.co", generationId }), /without credentials/u);
@@ -212,6 +249,10 @@ async function connectedSocket(origin) {
 
 function upgradeRequest(path) {
   return `GET ${path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGVzdC1rZXk=\r\n\r\n`;
+}
+
+function mutationUpgradeRequest(path) {
+  return `POST ${path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGVzdC1rZXk=\r\nContent-Length: 0\r\n\r\n`;
 }
 
 async function readUntil(socket, marker) {

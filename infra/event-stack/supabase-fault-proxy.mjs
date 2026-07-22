@@ -12,6 +12,8 @@ const HOP_BY_HOP_HEADERS = new Set([
   "upgrade"
 ]);
 const GENERATION = /^[A-Za-z0-9][A-Za-z0-9._-]{7,127}$/u;
+const READ_ONLY_HTTP_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+const READ_ONLY_REST_PATHS = new Set(["/rest/v1/events", "/rest/v1/courts", "/rest/v1/overlay_states"]);
 
 export class SupabaseFaultProxy {
   constructor({ upstream, generationId, pathPrefix = "/", host = "127.0.0.1", port = 0, requestTimeoutMs = 30_000, now = () => new Date() }) {
@@ -156,6 +158,8 @@ export class SupabaseFaultProxy {
     const target = upstreamRequestTarget(req.url, this.pathPrefix);
     if (target === "INVALID") return rejectBadTarget(res);
     if (target === null) return rejectWrongPrefix(res);
+    if (target !== "/__healthz" && !allowedRestTarget(target)) return rejectWrongPrefix(res);
+    if (!READ_ONLY_HTTP_METHODS.has(String(req.method).toUpperCase())) return rejectMethod(res);
     if (target === "/__healthz") return writeHealth(res, this.status);
     if (this.status === "FAULTED") {
       this.requestsRejectedDuringFault += 1;
@@ -196,6 +200,8 @@ export class SupabaseFaultProxy {
     const target = upstreamRequestTarget(req.url, this.pathPrefix);
     if (target === "INVALID") return rejectSocket(socket, 400, "Bad Request");
     if (target === null || target === "/__healthz") return rejectSocket(socket, 404, "Not Found");
+    if (!exactPathOrQuery(target, "/realtime/v1/websocket")) return rejectSocket(socket, 404, "Not Found");
+    if (String(req.method).toUpperCase() !== "GET") return rejectSocket(socket, 405, "Read-only proxy");
     if (this.status === "FAULTED") {
       this.requestsRejectedDuringFault += 1;
       return rejectSocket(socket, 503, "Isolated Supabase dependency unavailable");
@@ -283,6 +289,15 @@ function upstreamRequestTarget(value, pathPrefix) {
   return `/${value.slice(pathPrefix.length)}`;
 }
 
+function allowedRestTarget(value) {
+  for (const path of READ_ONLY_REST_PATHS) if (exactPathOrQuery(value, path)) return true;
+  return false;
+}
+
+function exactPathOrQuery(value, path) {
+  return value === path || value.startsWith(`${path}?`);
+}
+
 function forwardedHeaders(headers, host, preserveUpgrade) {
   const result = {};
   for (const [name, value] of Object.entries(headers)) {
@@ -333,6 +348,11 @@ function rejectWrongPrefix(res) {
   res.end('{"error":"not found"}');
 }
 
+function rejectMethod(res) {
+  res.writeHead(405, { "content-type": "application/json", "cache-control": "no-store", allow: "GET, HEAD, OPTIONS" });
+  res.end('{"error":"read-only proxy"}');
+}
+
 function writeHealth(res, status) {
   const healthy = status === "HEALTHY";
   const body = JSON.stringify({ status });
@@ -353,7 +373,9 @@ function rejectUnavailable(res) {
 function rejectSocket(socket, status, message) {
   if (!socket.writable) return socket.destroy();
   const body = `${message}\n`;
-  socket.end(`HTTP/1.1 ${status} ${status === 400 ? "Bad Request" : status === 404 ? "Not Found" : status === 502 ? "Bad Gateway" : "Service Unavailable"}\r\nContent-Type: text/plain\r\nCache-Control: no-store\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`);
+  const reason = status === 400 ? "Bad Request" : status === 404 ? "Not Found" : status === 405 ? "Method Not Allowed" : status === 502 ? "Bad Gateway" : "Service Unavailable";
+  const allow = status === 405 ? "Allow: GET\r\n" : "";
+  socket.end(`HTTP/1.1 ${status} ${reason}\r\nContent-Type: text/plain\r\nCache-Control: no-store\r\n${allow}Content-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`);
 }
 
 function writeProxyError(res, error) {
