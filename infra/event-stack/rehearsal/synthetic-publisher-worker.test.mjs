@@ -23,14 +23,15 @@ test("parses an exact worker identity and protected configuration path", () => {
 test("fails closed unless the worker owns exact FFmpeg and evidence paths", () => {
   const marker = "scorecheck-rehearsal-generation-1234-camera-3";
   const config = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     court: 3,
     marker,
     ffmpegPath: "/opt/ffmpeg",
     ffmpegArgs: ["-metadata", `comment=${marker}`],
     progressPath: "/tmp/camera-3.progress",
     logPath: "/tmp/camera-3.log",
-    statusPath: "/tmp/camera-3.status.json"
+    statusPath: "/tmp/camera-3.status.json",
+    maxRestarts: 3
   };
   assert.doesNotThrow(() => validateConfig(config, marker));
   assert.throws(() => validateConfig({ ...config, ffmpegArgs: ["-metadata", "comment=peer"] }, marker), /configuration is invalid/u);
@@ -60,14 +61,15 @@ test("does not relaunch its FFmpeg child when the detached process group is stop
   await writeFile(fakeFfmpeg, `#!/bin/sh\nprintf 'start\\n' >> ${starts}\ntrap 'exit 0' TERM INT\nwhile :; do\n  printf 'frame=30\\nfps=30.00\\ndup_frames=0\\ndrop_frames=0\\nspeed=1.00x\\nprogress=continue\\n' > ${progress}\n  sleep 1\ndone\n`);
   await chmod(fakeFfmpeg, 0o700);
   await writeFile(configPath, `${JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
     court: 1,
     marker,
     ffmpegPath: fakeFfmpeg,
     ffmpegArgs: ["-metadata", `comment=${marker}`],
     progressPath: progress,
     logPath: log,
-    statusPath: status
+    statusPath: status,
+    maxRestarts: 3
   })}\n`);
   const worker = spawn(process.execPath, [fileURLToPath(new URL("./synthetic-publisher-worker.cjs", import.meta.url)), "--marker", marker, "--config", configPath], {
     detached: true,

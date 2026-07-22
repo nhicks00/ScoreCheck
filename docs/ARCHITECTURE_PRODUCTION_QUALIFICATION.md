@@ -131,7 +131,7 @@ The target remains:
 | --- | --- | --- | --- | --- |
 | I-01 | Private VPC agent/control traffic | `SATISFIED` | Deployment plans bind monitor agents to private addresses and scrape through the VPC. Firewall contracts pin the event VPC. | Retain provider/network drift checks. |
 | I-02 | Private VPC compositor-to-ingest media | `SATISFIED` | Compositor host mapping resolves the public TLS/SNI name to the ingest private address, browser heartbeat reports the selected media path, and production/rehearsal gates require `private-vpc`. | Verify selected ICE/path evidence on the live fleet. |
-| I-03 | Warm ingest replacement | `PARTIAL` | `ingest-recoveryctl.mjs` binds the controller to the protected atomic mode-0600 state store and process lock. The SSH/service adapter stages stopped MediaMTX, WireGuard, and retained Caddy TLS state on the existing compositor spare; attaches and removes only the exact ingest network policy; reconciles Reserved-IPv4 ownership; rebinds each compositor; checkpoints the current immutable output owner after every replacement Egress; switches the single MediaMTX monitoring role; and restores the spare compositor. Preparation, takeover, rollback, failure resume, lost provider responses, repeated staging, and legacy deployment upgrades have camera-independent regression coverage. No unassigned Reserved-IP interval or automatic transition is introduced. | Run the implemented transaction in a protected synthetic 12-host rehearsal, measure takeover/rollback RTO, and retain provider/host/output/monitor evidence. Keep the dual-role spare unless measured evidence shows a thirteenth host is necessary. Physical-source confirmation remains part of the later camera gate, not this implementation claim. |
+| I-03 | Warm ingest replacement | `PARTIAL` | `ingest-recoveryctl.mjs` binds the controller to the protected atomic mode-0600 state store and process lock. The SSH/service adapter stages stopped MediaMTX, WireGuard, and retained Caddy TLS state on the existing compositor spare; attaches and removes only the exact ingest network policy; reconciles Reserved-IPv4 ownership; rebinds each compositor; checkpoints the current immutable output owner after every replacement Egress; switches the single MediaMTX monitoring role; and restores the spare compositor. A camera-independent production rehearsal now launches eight protected synthetic source loops only after proving all raw paths idle, uses the ordinary production soak and outputs, owns a tightly bounded primary MediaMTX/Caddy fault, and records reset-safe stable baseline/spare/rollback evidence plus five-minute takeover and rollback RTO gates. Preparation, takeover, rollback, failure resume, lost provider responses, repeated staging, legacy deployment upgrades, rehearsal ownership, and evaluation have provider-free regression coverage. No unassigned Reserved-IP interval or automatic transition is introduced. | Execute the implemented runner on an attended paid 12-host event generation and retain its provider/host/output/monitor report. Keep the dual-role spare unless measured evidence shows a thirteenth host is necessary. Physical-source confirmation remains part of the later camera gate, not this implementation claim. |
 | I-04 | Dedicated thirteenth ingest standby | `DEFERRED` | Account limit 15 permits it, but it raises the ordinary event fleet from 12 to 13. | Admit only if dual-role spare recovery misses the measured RTO or creates unacceptable operational risk. |
 | I-05 | Active-active ingest | `REJECTED` | Complexity and dual-publisher behavior are unjustified for the current scale. | No action. |
 | I-06 | One Egress per compositor | `SATISFIED` | `start-court.sh` serializes starts, verifies active count zero, and the agent contract enforces one active request maximum. | Retain multiplicity fault tests. |
@@ -199,10 +199,11 @@ In particular:
   exact camera/compositor/output combination passes 1080p30 or 1080p60.
 - The dual-role spare ingest transaction, guarded DigitalOcean Reserved-IP
   reassignment, CLI, SSH/service orchestration, output-owner reconciliation,
-  and monitoring-role cutover are implemented and regression-tested. Measured
-  takeover/rollback RTO on a protected synthetic 12-host stack is still
-  missing. Do not add a thirteenth host until that simpler recovery is
-  rehearsed and shown insufficient.
+  monitoring-role cutover, protected eight-feed synthetic launcher, bounded
+  primary fault adapter, and camera-independent evidence runner are implemented
+  and regression-tested. Measured takeover/rollback RTO on an attended paid
+  12-host stack is still missing. Do not add a thirteenth host until that
+  simpler recovery is rehearsed and shown insufficient.
 - Renderer and Supabase loss, bounded browser recovery, exact Egress-owner
   resume, the external platform sentinel, retained critical-log export, and
   YouTube backup ingest still need production-shaped evidence. The first five
@@ -305,9 +306,11 @@ The scoring prerequisite is complete. Checksummed production evidence is under
    Keep any mode that fails disabled rather than weakening admission.
 3. Run Vercel/Supabase loss, overlay exception, monitor loss/outbox replay, and
    exact renderer-restart gates with one nonpublic camera/output generation.
-4. Run the implemented dual-role spare ingest prepare/takeover/rollback flow on
-   a protected synthetic 12-host rehearsal, measure RTO, and decide whether the
-   thirteenth warm ingest is justified. Do not substitute unit tests for this
+4. Run the implemented camera-independent dual-role spare rehearsal on an
+   attended protected 12-host event generation, measure takeover and rollback
+   RTO, and decide whether the thirteenth warm ingest is justified. The runner
+   supplies all eight synthetic feeds and exact evidence gates; no physical
+   camera operation is required. Do not substitute unit tests for this
    provider/host transaction evidence.
 5. Qualify one priority-court spare compositor against YouTube backup ingestion
    and capture interruption/resume evidence for exact Egress ownership.

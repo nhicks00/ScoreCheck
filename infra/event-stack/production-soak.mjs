@@ -483,9 +483,7 @@ export class ProductionSoakRuntime {
       signal: AbortSignal.timeout(15_000)
     });
     if (!response.ok) throw new Error(`production monitor snapshot returned HTTP ${response.status}`);
-    const value = await response.json();
-    if (!value || value.version !== 4 || !Array.isArray(value.courts) || !Array.isArray(value.agents)) throw new Error("production monitor snapshot contract is invalid");
-    return value;
+    return assertProductionMonitorSnapshot(await response.json());
   }
 
   async #providerEvidence() {
@@ -551,6 +549,11 @@ export class ProductionSoakRuntime {
       }
     }
   }
+}
+
+export function assertProductionMonitorSnapshot(value) {
+  if (!value || value.version !== 5 || !Array.isArray(value.courts) || !Array.isArray(value.agents)) throw new Error("production monitor snapshot contract is invalid");
+  return value;
 }
 
 export function productionIdleProblems(snapshot, venue, nowMs = Date.now()) {

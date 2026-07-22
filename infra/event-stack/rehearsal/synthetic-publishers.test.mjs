@@ -126,7 +126,7 @@ test("requires all eight stream-copy publishers to remain fresh at realtime cade
     const progressPath = join(directory, `camera-${court}.progress`);
     const supervisorStatusPath = join(directory, `camera-${court}.supervisor-status.json`);
     await writeFile(progressPath, "frame=900\nfps=30.00\ndup_frames=0\ndrop_frames=0\nspeed=1.00x\nprogress=continue\n");
-    await writeFile(supervisorStatusPath, `${JSON.stringify({ schemaVersion: 1, court, marker, state: "running", ffmpegPid: 700 + court, restartCount: 0 })}\n`);
+    await writeFile(supervisorStatusPath, `${JSON.stringify({ schemaVersion: 2, court, marker, state: "running", ffmpegPid: 700 + court, restartCount: 0 })}\n`);
     entries.push({ court, marker, progressPath, supervisorStatusPath });
     processLines.push(`${500 + court} node synthetic-publisher-worker.cjs --marker ${marker} --config /tmp/camera-${court}.json`);
   }
@@ -144,11 +144,13 @@ test("requires all eight stream-copy publishers to remain fresh at realtime cade
   const degraded = await manager.observeHealth(entries);
   assert.equal(degraded.passed, false);
   assert.match(degraded.problems.join("; "), /Camera 1 synthetic publisher is outside 30fps/);
-  await writeFile(entries[1].supervisorStatusPath, `${JSON.stringify({ schemaVersion: 1, court: 2, marker: entries[1].marker, state: "running", ffmpegPid: 702, restartCount: 1, lastRestartAt: new Date(now).toISOString() })}\n`);
+  await writeFile(entries[1].supervisorStatusPath, `${JSON.stringify({ schemaVersion: 2, court: 2, marker: entries[1].marker, state: "running", ffmpegPid: 702, restartCount: 1, lastRestartAt: new Date(now).toISOString() })}\n`);
   const restarted = await manager.observeHealth(entries);
   assert.equal(restarted.passed, false);
   assert.match(restarted.problems.join("; "), /Camera 2 synthetic publisher restarted 1 time/u);
-  await writeFile(entries[2].supervisorStatusPath, `${JSON.stringify({ schemaVersion: 1, court: 4, marker: entries[3].marker, state: "running", ffmpegPid: 703, restartCount: 0 })}\n`);
+  const recoveryHealthy = await manager.observeHealth(entries, { maximumRestartCount: 3 });
+  assert.equal(recoveryHealthy.problems.some((problem) => problem.includes("Camera 2 synthetic publisher restarted")), false);
+  await writeFile(entries[2].supervisorStatusPath, `${JSON.stringify({ schemaVersion: 2, court: 4, marker: entries[3].marker, state: "running", ffmpegPid: 703, restartCount: 0 })}\n`);
   const crossedIdentity = await manager.observeHealth(entries);
   assert.equal(crossedIdentity.passed, false);
   assert.match(crossedIdentity.problems.join("; "), /Camera 3 synthetic publisher supervisor status is missing/u);

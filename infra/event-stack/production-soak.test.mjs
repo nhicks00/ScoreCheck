@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   browserDeltaProblems,
+  assertProductionMonitorSnapshot,
   evaluateProductionSoak,
   evaluateSpeedifyEvidence,
   outputConformanceProblems,
@@ -63,6 +64,12 @@ test("starts through the real CLI entrypoint after module initialization", () =>
   const result = spawnSync(process.execPath, [fileURLToPath(new URL("./production-soak.mjs", import.meta.url)), "--help"], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /^Usage:/);
+});
+
+test("hard-cuts the production soak client to monitoring snapshot contract v5", () => {
+  const current = snapshot({ active: false });
+  assert.equal(assertProductionMonitorSnapshot(current), current);
+  assert.throws(() => assertProductionMonitorSnapshot({ ...current, version: 4 }), /snapshot contract is invalid/u);
 });
 
 test("accepts an idle twelve-host baseline with all cameras off", () => {

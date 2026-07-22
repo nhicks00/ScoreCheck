@@ -28,7 +28,7 @@ export function publisherProtocol(court) {
   return court <= 2 ? "RTMP" : "SRT";
 }
 
-export function buildSyntheticPublisherConfig({ court, generationId, host, user, password, evidenceDirectory, runtimeDirectory, ffmpegPath = "ffmpeg", nodePath = process.execPath }) {
+export function buildSyntheticPublisherConfig({ court, generationId, host, user, password, evidenceDirectory, runtimeDirectory, ffmpegPath = "ffmpeg", nodePath = process.execPath, maxRestarts = 3 }) {
   if (!COURTS.includes(court)) throw new Error("synthetic publisher court is invalid");
   if (!/^[a-zA-Z0-9.-]{1,253}$/.test(host ?? "")) throw new Error("synthetic publisher host is invalid");
   for (const [label, value] of [["user", user], ["password", password]]) {
@@ -36,6 +36,7 @@ export function buildSyntheticPublisherConfig({ court, generationId, host, user,
   }
   if (typeof ffmpegPath !== "string" || !ffmpegPath || /[\r\n\0]/.test(ffmpegPath)) throw new Error("synthetic publisher FFmpeg path is invalid");
   if (typeof nodePath !== "string" || !nodePath || /[\r\n\0]/.test(nodePath)) throw new Error("synthetic publisher Node.js path is invalid");
+  if (!Number.isInteger(maxRestarts) || maxRestarts < 0 || maxRestarts > 60) throw new Error("synthetic publisher restart limit is invalid");
   if (![evidenceDirectory, runtimeDirectory].every((value) => typeof value === "string" && value.startsWith("/") && !value.includes("..") && resolve(value) === value)) {
     throw new Error("synthetic publisher runtime directories are invalid");
   }
@@ -98,14 +99,15 @@ export function buildSyntheticPublisherConfig({ court, generationId, host, user,
     supervisorStatusPath,
     outputUrl,
     protectedSupervisorConfiguration: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       court,
       marker,
       ffmpegPath,
       ffmpegArgs: args,
       progressPath,
       logPath,
-      statusPath: supervisorStatusPath
+      statusPath: supervisorStatusPath,
+      maxRestarts
     },
     redacted: { court, marker, protocol, host, rawPath: `court${court}_raw`, fixturePath, progressPath, logPath, supervisorConfigPath, supervisorStatusPath }
   };
@@ -188,8 +190,9 @@ export class SyntheticPublisherManager {
     return { ...observed, adopted: false, startedAt: new Date().toISOString(), ...config.redacted };
   }
 
-  async observeHealth(entries) {
+  async observeHealth(entries, { maximumRestartCount = 0 } = {}) {
     if (!Array.isArray(entries) || entries.length !== COURTS.length) throw new Error("synthetic publisher health inventory must contain eight cameras");
+    if (!Number.isInteger(maximumRestartCount) || maximumRestartCount < 0 || maximumRestartCount > 60) throw new Error("synthetic publisher health restart limit is invalid");
     const inventory = await this.runner("ps", ["-axo", "pid=,command="]);
     const lines = inventory.stdout.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
     const observedAtMs = this.now();
@@ -230,7 +233,7 @@ export class SyntheticPublisherManager {
       else {
         if (supervisor.ageMs < -1_000 || supervisor.ageMs > SUPERVISOR_FRESHNESS_MS) problems.push(`Camera ${entry.court} synthetic publisher supervisor status is stale`);
         if (supervisor.state !== "running" || !Number.isInteger(supervisor.ffmpegPid) || supervisor.ffmpegPid < 2) problems.push(`Camera ${entry.court} synthetic publisher supervisor is not running one FFmpeg child`);
-        if (supervisor.restartCount !== 0) problems.push(`Camera ${entry.court} synthetic publisher restarted ${supervisor.restartCount} time(s)`);
+        if (supervisor.restartCount > maximumRestartCount) problems.push(`Camera ${entry.court} synthetic publisher restarted ${supervisor.restartCount} time(s)`);
       }
       samples.push({ court: entry.court, marker: entry.marker, processId, progress, supervisor });
     }
@@ -242,12 +245,12 @@ export class SyntheticPublisherManager {
     };
   }
 
-  async waitForHealthy(entries, { stableSamples = 3, timeoutMs = 60_000, intervalMs = 2_000 } = {}) {
+  async waitForHealthy(entries, { stableSamples = 3, timeoutMs = 60_000, intervalMs = 2_000, maximumRestartCount = 0 } = {}) {
     const startedAt = this.now();
     let stable = 0;
     let latest = null;
     while (this.now() - startedAt <= timeoutMs) {
-      latest = await this.observeHealth(entries);
+      latest = await this.observeHealth(entries, { maximumRestartCount });
       if (latest.passed) {
         stable += 1;
         if (stable >= stableSamples) return { ...latest, stableSamples };
@@ -284,7 +287,9 @@ function validateConfig(value) {
     || typeof value.fixturePath !== "string" || typeof value.fixtureTempPath !== "string"
     || typeof value.supervisorConfigPath !== "string" || typeof value.supervisorStatusPath !== "string"
     || typeof value.workerPath !== "string" || typeof value.nodePath !== "string"
-    || value.protectedSupervisorConfiguration?.marker !== value.marker) {
+    || value.protectedSupervisorConfiguration?.schemaVersion !== 2
+    || value.protectedSupervisorConfiguration?.marker !== value.marker
+    || !Number.isInteger(value.protectedSupervisorConfiguration?.maxRestarts)) {
     throw new Error("synthetic publisher configuration is invalid");
   }
 }
@@ -368,7 +373,7 @@ async function latestProgress(path, nowMs) {
 async function latestSupervisor(path, nowMs, expected) {
   const information = await stat(path);
   const value = JSON.parse(await readFile(path, "utf8"));
-  if (value?.schemaVersion !== 1 || typeof value.marker !== "string" || !MARKER.test(value.marker)
+  if (value?.schemaVersion !== 2 || typeof value.marker !== "string" || !MARKER.test(value.marker)
     || value.marker !== expected.marker || value.court !== expected.court
     || !Number.isInteger(value.restartCount) || value.restartCount < 0) return null;
   return {

@@ -8,7 +8,6 @@ const process = require("node:process");
 const POLL_MS = 1_000;
 const STARTUP_GRACE_MS = 15_000;
 const STALE_PROGRESS_MS = 12_000;
-const MAX_RESTARTS = 3;
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
@@ -23,7 +22,7 @@ async function main() {
   let closing = false;
 
   const writeStatus = async (state) => writeJsonAtomic(config.statusPath, {
-    schemaVersion: 1,
+    schemaVersion: 2,
     court: config.court,
     marker: config.marker,
     state,
@@ -93,9 +92,9 @@ async function main() {
     await writeStatus("restarting");
     await stopChild();
     if (closing) break;
-    if (restartCount >= MAX_RESTARTS) {
+    if (restartCount >= config.maxRestarts) {
       await writeStatus("failed");
-      throw new Error(`synthetic publisher exhausted ${MAX_RESTARTS} restarts: ${lastFailure}`);
+      throw new Error(`synthetic publisher exhausted ${config.maxRestarts} restarts: ${lastFailure}`);
     }
     restartCount += 1;
     lastRestartAt = new Date().toISOString();
@@ -119,8 +118,9 @@ function parseArgs(args) {
 
 function validateConfig(value, marker) {
   const identity = /^scorecheck-rehearsal-[a-zA-Z0-9-]{8,80}-camera-([1-8])$/.exec(marker);
-  if (value?.schemaVersion !== 1 || value.marker !== marker || !/^scorecheck-rehearsal-[a-zA-Z0-9-]{8,80}-camera-[1-8]$/.test(marker)
+  if (value?.schemaVersion !== 2 || value.marker !== marker || !/^scorecheck-rehearsal-[a-zA-Z0-9-]{8,80}-camera-[1-8]$/.test(marker)
     || !Number.isInteger(value.court) || value.court < 1 || value.court > 8
+    || !Number.isInteger(value.maxRestarts) || value.maxRestarts < 0 || value.maxRestarts > 60
     || Number(identity?.[1]) !== value.court
     || typeof value.ffmpegPath !== "string" || !Array.isArray(value.ffmpegArgs)
     || !value.ffmpegArgs.includes(`comment=${marker}`)
