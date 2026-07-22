@@ -219,13 +219,16 @@ In particular:
   artifact is still required. Dynamic provider dependencies make a static
   destination-IP list unsafe, so no outbound proxy or extra host is admitted
   without measured need.
-- The exact qualification release is deployed to Vercel and the Render worker.
-  No event infrastructure was created. A fresh independent read-only audit at
-  `2026-07-22T19:16:57Z` proved provider zero, two unassigned retained endpoint
-  anchors, and the exact eight-stream idle YouTube pool. Evidence is
-  `~/.config/scorecheck/event-stack/audits/architecture-qualification-provider-zero-20260722T191644Z.json`
+- The previously recorded web and worker release is deployed, but the current
+  qualification candidate contains later local-only event-stack hardening that
+  is not yet on `origin/master`. It must not be used to create an event bundle
+  until the complete candidate is reviewed and published as one immutable Git
+  revision. No event infrastructure was created. A fresh independent read-only
+  audit at `2026-07-22T20:14:58Z` proved provider zero, two unassigned retained
+  endpoint anchors, and the exact eight-stream idle YouTube pool. Evidence is
+  `~/.config/scorecheck/event-stack/audits/architecture-qualification-provider-zero-20260722T201441Z.json`
   with SHA-256
-  `3a9a4fab0dc1b7058526056bf86b12dea363d349d1857a667ccf858b3ef7958b`.
+  `b0ce42fa3410bbcf30a7c51d10d856a9c367b81f83c8598fcf645af90485f5eb`.
 - The dedicated `scorecheck-platform-sentinel` Healthchecks check is paused
   between events, Pushover-only, and distinct from both monitor dead-men.
   Protected provider evidence is under
