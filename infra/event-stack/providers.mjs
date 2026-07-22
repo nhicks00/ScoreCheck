@@ -597,15 +597,21 @@ export class VercelDnsProvider {
     throw new Error(`DNS ${hostname} did not converge to ${value}; providerRecord=${lastProviderRecordId ?? "missing"}; resolvers=${summary || "none"}`);
   }
 
-  async restoreRecord({ zone, hostname, change }) {
+  async restoreRecord({ zone, hostname, change, expectedCurrent = null }) {
     if (!change || change.action === "unchanged") return;
     if (change.action === "created") {
       await this.#request("DELETE", `/v2/domains/${encodeURIComponent(zone)}/records/${encodeURIComponent(change.recordId)}`, undefined, [200, 204, 404]);
       return;
     }
     if (change.action !== "updated" || !change.previous) throw new Error(`DNS ${hostname} has invalid restoration evidence`);
-    const previous = change.previous;
-    await this.#request("PATCH", `/v1/domains/records/${encodeURIComponent(change.recordId)}`, {
+    if (!expectedCurrent) throw new Error(`DNS ${hostname} has no expected lifecycle target for restoration`);
+    const records = await this.inspectHostname({ zone, hostname });
+    if (records.length !== 1) throw new Error(`DNS ${hostname} restoration requires exactly one current record`);
+    const current = records[0];
+    const previous = normalizeVercelRecord(change.previous);
+    if (sameDnsValue(current, previous)) return;
+    if (!sameDnsValue(current, expectedCurrent)) throw new Error(`DNS ${hostname} changed outside lifecycle control`);
+    await this.#request("PATCH", `/v1/domains/records/${encodeURIComponent(current.id)}`, {
       name: relativeRecordName(zone, hostname),
       type: previous.type,
       value: previous.value,
@@ -660,6 +666,12 @@ export class VercelDnsProvider {
     if (response.status === 204) return null;
     return response.json();
   }
+}
+
+function sameDnsValue(left, right) {
+  return left?.type === right?.type
+    && left?.value === right?.value
+    && Number(left?.ttl) === Number(right?.ttl);
 }
 
 export class PushoverNotifier {

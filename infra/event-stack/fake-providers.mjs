@@ -196,6 +196,8 @@ export class FakeDnsProvider {
     this.upserts = [];
     this.restores = [];
     this.ambiguousRestoreHostname = null;
+    this.replaceIdOnUpdate = false;
+    this.replaceIdOnRestore = false;
   }
 
   async inspectHostname({ hostname }) {
@@ -214,7 +216,8 @@ export class FakeDnsProvider {
     } else if (change.action === "created" && !change.recordId) {
       change = { ...change, recordId: current?.id ?? `dns-${this.nextId++}` };
     }
-    this.records.set(hostname, { id: change.recordId, value, ttl });
+    const recordId = change.action === "updated" && this.replaceIdOnUpdate ? `dns-${this.nextId++}` : change.recordId;
+    this.records.set(hostname, { id: recordId, value, ttl });
     this.upserts.push({ hostname, value, ttl });
     if (hostname === this.ambiguousHostname) {
       this.ambiguousHostname = null;
@@ -238,7 +241,10 @@ export class FakeDnsProvider {
 
   async restoreRecord({ hostname, change }) {
     if (change.action === "created") this.records.delete(hostname);
-    else if (change.action === "updated") this.records.set(hostname, clone(change.previous));
+    else if (change.action === "updated") this.records.set(hostname, {
+      ...clone(change.previous),
+      ...(this.replaceIdOnRestore ? { id: `dns-${this.nextId++}` } : {})
+    });
     this.restores.push(hostname);
     if (hostname === this.ambiguousRestoreHostname) {
       this.ambiguousRestoreHostname = null;

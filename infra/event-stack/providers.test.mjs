@@ -611,19 +611,59 @@ test("Vercel DNS fails closed on conflicting control-plane records", async () =>
   );
 });
 
-test("Vercel DNS updates and restores only the same record id", async () => {
+test("Vercel DNS restores an updated record after Vercel replaces its record id", async () => {
   const requests = [];
   const original = { id: "rec-1", name: "monitor", type: "A", value: "192.0.2.1", ttl: 300 };
+  const updated = { id: "rec-2", name: "monitor", type: "A", value: "192.0.2.2", ttl: 60 };
   const fetchImpl = queueFetch([
     response(200, { records: [original] }),
-    response(200, { id: "rec-1", name: "monitor", recordType: "A", value: "192.0.2.2", ttl: 60 }),
-    response(200, { id: "rec-1", name: "monitor", recordType: "A", value: "192.0.2.1", ttl: 300 })
+    response(200, { id: "rec-2", name: "monitor", recordType: "A", value: "192.0.2.2", ttl: 60 }),
+    response(200, { records: [updated] }),
+    response(200, { id: "rec-3", name: "monitor", recordType: "A", value: "192.0.2.1", ttl: 300 })
   ], requests);
   const dns = new VercelDnsProvider({ token: "token", fetchImpl, resolutionProbes: [{ name: "test", resolve: async () => [] }] });
   const change = await dns.upsertARecord({ zone: "example.com", hostname: "monitor.example.com", value: "192.0.2.2", ttl: 60 });
   assert.deepEqual(change, { action: "updated", recordId: "rec-1", previous: original });
-  await dns.restoreRecord({ zone: "example.com", hostname: "monitor.example.com", change });
-  assert.equal(JSON.parse(requests[2].options.body).value, "192.0.2.1");
+  await dns.restoreRecord({
+    zone: "example.com",
+    hostname: "monitor.example.com",
+    change,
+    expectedCurrent: { type: "A", value: "192.0.2.2", ttl: 60 }
+  });
+  assert.match(requests[3].url, /\/v1\/domains\/records\/rec-2$/u);
+  assert.equal(JSON.parse(requests[3].options.body).value, "192.0.2.1");
+});
+
+test("Vercel DNS restoration is idempotent after a replacement id reaches the previous value", async () => {
+  const requests = [];
+  const previous = { id: "rec-old", name: "monitor", type: "A", value: "192.0.2.1", ttl: 300 };
+  const fetchImpl = queueFetch([
+    response(200, { records: [{ ...previous, id: "rec-restored" }] })
+  ], requests);
+  const dns = new VercelDnsProvider({ token: "token", fetchImpl, resolutionProbes: [{ name: "test", resolve: async () => [] }] });
+  await dns.restoreRecord({
+    zone: "example.com",
+    hostname: "monitor.example.com",
+    change: { action: "updated", recordId: "rec-old", previous },
+    expectedCurrent: { type: "A", value: "192.0.2.2", ttl: 60 }
+  });
+  assert.deepEqual(requests.map((entry) => entry.options.method), ["GET"]);
+});
+
+test("Vercel DNS restoration fails closed when replacement content is not the lifecycle target", async () => {
+  const requests = [];
+  const previous = { id: "rec-old", name: "monitor", type: "A", value: "192.0.2.1", ttl: 300 };
+  const fetchImpl = queueFetch([
+    response(200, { records: [{ id: "rec-external", name: "monitor", type: "A", value: "192.0.2.99", ttl: 60 }] })
+  ], requests);
+  const dns = new VercelDnsProvider({ token: "token", fetchImpl, resolutionProbes: [{ name: "test", resolve: async () => [] }] });
+  await assert.rejects(() => dns.restoreRecord({
+    zone: "example.com",
+    hostname: "monitor.example.com",
+    change: { action: "updated", recordId: "rec-old", previous },
+    expectedCurrent: { type: "A", value: "192.0.2.2", ttl: 60 }
+  }), /changed outside lifecycle control/u);
+  assert.deepEqual(requests.map((entry) => entry.options.method), ["GET"]);
 });
 
 test("Vercel DNS applies and reconciles a prepared create without losing ownership", async () => {

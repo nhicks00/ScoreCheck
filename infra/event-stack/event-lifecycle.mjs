@@ -621,7 +621,12 @@ export class EventLifecycleController {
         record.change.recordId = records[0].id;
         await this.store.save(state);
       }
-      await this.dns.restoreRecord({ zone: manifest.dns.zone, hostname: endpoint.hostname, change: record.change });
+      await this.dns.restoreRecord({
+        zone: manifest.dns.zone,
+        hostname: endpoint.hostname,
+        change: record.change,
+        expectedCurrent: { type: "A", value: record.targetIpv4, ttl: endpoint.ttl }
+      });
       await this.#assertEndpointRestored(manifest, endpoint, record);
       record.status = "restored";
       record.restoredAt = this.now().toISOString();
@@ -804,7 +809,7 @@ export class EventLifecycleController {
       current.type !== expected.type
       || current.value !== expected.value
       || Number(current.ttl) !== Number(expected.ttl)
-      || (expected.id != null && current.id !== expected.id)
+      || (record.change.action !== "updated" && expected.id != null && current.id !== expected.id)
     ) {
       throw new Error(`DNS ${endpoint.hostname} did not return to its protected pre-event state`);
     }

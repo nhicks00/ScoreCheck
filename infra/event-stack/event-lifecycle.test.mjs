@@ -328,6 +328,30 @@ test("reconciles an ambiguous DNS response from protected pre-change evidence an
   assert.equal(dns.records.get("monitor.beachvolleyballmedia.com").value, "203.0.113.12");
 });
 
+test("production teardown restores DNS when Vercel replaces record ids on update and restore", async () => {
+  const hostname = "monitor.beachvolleyballmedia.com";
+  const dns = new FakeDnsProvider({ [hostname]: "203.0.113.12" });
+  dns.replaceIdOnUpdate = true;
+  dns.replaceIdOnRestore = true;
+  const setup = fixture({ dns });
+
+  const ready = await setup.controller.up(setup.manifest, setup.anchors);
+  const protectedId = ready.endpoints[hostname].change.recordId;
+  assert.notEqual(dns.records.get(hostname).id, protectedId);
+
+  await setup.controller.beginCoverage(setup.manifest, "START:turnkey-test");
+  await setup.controller.closeCoverage(setup.manifest, "CLOSE:turnkey-test");
+  const root = await mkdtemp(join(tmpdir(), "scorecheck-lifecycle-dns-id-churn-"));
+  await chmod(root, 0o700);
+  const evidence = join(root, "evidence");
+  await setup.controller.captureEvidence(setup.manifest, evidence);
+  const destroyed = await setup.controller.destroy(setup.manifest, evidence, "DESTROY:turnkey-test");
+
+  assert.equal(destroyed.phase, "destroyed");
+  assert.equal(dns.records.get(hostname).value, "203.0.113.12");
+  assert.notEqual(dns.records.get(hostname).id, protectedId);
+});
+
 test("rehearsal teardown removes every event DNS record without allocating Reserved IPv4s", async () => {
   const setup = fixture({ kind: "rehearsal" });
   const evidence = await prepareDestroyableLifecycle(setup, "rehearsal-cleanup");
