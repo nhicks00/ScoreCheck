@@ -15,7 +15,7 @@ import {
   createOverlayInvalidationScheduler,
   invalidationOnlyBroadcastHandler
 } from "@/lib/overlayInvalidation";
-import { overlayBoundaryRetryState, overlayFailureHealth, type OverlayBoundaryState } from "@/lib/overlayFailureRecovery";
+import { overlayBoundaryRetryState, overlayConnectionStale, overlayFailureHealth, type OverlayBoundaryState } from "@/lib/overlayFailureRecovery";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 
 // A browser-source overlay must NEVER black out the broadcast frame. If the
@@ -262,7 +262,7 @@ function OverlayClientInner({ courtNumber, eventId, buildVersion, reloadOnVersio
     onHealth?.({
       loaded: hasLoadedState,
       connected,
-      stale: state.health.stale,
+      stale: overlayConnectionStale(state.health.stale, connected),
       frozen: state.frozen,
       matchId: state.match.id,
       phase: state.phase,

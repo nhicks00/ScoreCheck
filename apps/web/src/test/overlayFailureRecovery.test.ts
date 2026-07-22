@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { overlayBoundaryRetryState, overlayFailureHealth } from "../lib/overlayFailureRecovery";
+import { overlayBoundaryRetryState, overlayConnectionStale, overlayFailureHealth } from "../lib/overlayFailureRecovery";
 
 describe("overlay failure recovery", () => {
   it("retries the overlay subtree once and then fails transparent", () => {
@@ -42,5 +42,24 @@ describe("overlay failure recovery", () => {
       domMismatchReason: null,
       stateUpdatedAt: null
     });
+  });
+
+  it("marks authoritative repair loss stale without clearing the last-good overlay", () => {
+    expect(overlayConnectionStale(false, true)).toBe(false);
+    expect(overlayConnectionStale(true, true)).toBe(true);
+    expect(overlayConnectionStale(false, false)).toBe(true);
+
+    const source = readFileSync(
+      join(process.cwd(), "src/app/overlay/court/[courtNumber]/OverlayClient.tsx"),
+      "utf8"
+    );
+    const fetchAuthoritativeState = source.slice(
+      source.indexOf("const fetchAuthoritativeState"),
+      source.indexOf("useEffect(() => {\n    void fetchAuthoritativeState")
+    );
+    const failurePath = fetchAuthoritativeState.slice(fetchAuthoritativeState.indexOf("} catch"));
+    expect(failurePath).toContain("setConnected(false)");
+    expect(failurePath).not.toContain("setState(");
+    expect(failurePath).not.toContain("lastApplied.current = null");
   });
 });
