@@ -131,7 +131,7 @@ The target remains:
 | --- | --- | --- | --- | --- |
 | I-01 | Private VPC agent/control traffic | `SATISFIED` | Deployment plans bind monitor agents to private addresses and scrape through the VPC. Firewall contracts pin the event VPC. | Retain provider/network drift checks. |
 | I-02 | Private VPC compositor-to-ingest media | `SATISFIED` | Compositor host mapping resolves the public TLS/SNI name to the ingest private address, browser heartbeat reports the selected media path, and production/rehearsal gates require `private-vpc`. | Verify selected ICE/path evidence on the live fleet. |
-| I-03 | Warm ingest replacement | `PARTIAL` | `ingest-recovery.mjs` implements a fail-closed, operator-confirmed transaction for spare-role staging, Reserved-IP move, all eight compositor private bindings, output-generation resumption, monitor-target switch, verification, and rollback. The real DigitalOcean/SSH adapter and physical RTO rehearsal are not complete. | Implement the provider adapter only when a protected 12-host rehearsal is scheduled, then select dual-role spare or a thirteenth host from measured RTO. |
+| I-03 | Warm ingest replacement | `PARTIAL` | `ingest-recovery.mjs` implements the operator-confirmed transaction model. The DigitalOcean provider now has an exact direct-reassignment primitive that verifies Reserved-IP ownership, unlocked state, active destination, common region/VPC, completed provider action, and final ownership. No unassigned interval is introduced. | The remaining SSH/service adapter must stage the spare ingest role, apply its network policy, rebind and verify all compositors, switch monitoring, preserve durable transaction state, and restore the spare role. Implement and run it only in a protected 12-host rehearsal, then select dual-role spare or a thirteenth host from measured RTO. |
 | I-04 | Dedicated thirteenth ingest standby | `DEFERRED` | Account limit 15 permits it, but it raises the ordinary event fleet from 12 to 13. | Admit only if dual-role spare recovery misses the measured RTO or creates unacceptable operational risk. |
 | I-05 | Active-active ingest | `REJECTED` | Complexity and dual-publisher behavior are unjustified for the current scale. | No action. |
 | I-06 | One Egress per compositor | `SATISFIED` | `start-court.sh` serializes starts, verifies active count zero, and the agent contract enforces one active request maximum. | Retain multiplicity fault tests. |
@@ -197,9 +197,10 @@ In particular:
 - HEVC is retained as a useful source-bandwidth option, but only through the
   isolated compositor normalizer. It is not admitted for an event until that
   exact camera/compositor/output combination passes 1080p30 or 1080p60.
-- The dual-role spare ingest transaction is implemented but has no live
-  DigitalOcean/SSH adapter or measured takeover RTO. Do not add a thirteenth
-  host until that simpler recovery is rehearsed and shown insufficient.
+- The dual-role spare ingest transaction model and guarded DigitalOcean
+  Reserved-IP reassignment are implemented, but the SSH/service orchestration
+  adapter and measured takeover RTO are not. Do not add a thirteenth host until
+  that simpler recovery is rehearsed and shown insufficient.
 - Renderer and Supabase loss, bounded browser recovery, exact Egress-owner
   resume, the external platform sentinel, retained critical-log export, and
   YouTube backup ingest still need production-shaped evidence. The first five
@@ -302,9 +303,9 @@ The scoring prerequisite is complete. Checksummed production evidence is under
    Keep any mode that fails disabled rather than weakening admission.
 3. Run Vercel/Supabase loss, overlay exception, monitor loss/outbox replay, and
    exact renderer-restart gates with one nonpublic camera/output generation.
-4. Rehearse dual-role spare ingest takeover and rollback. Add the provider
-   adapter only for this protected rehearsal, measure RTO, and decide whether
-   the thirteenth warm ingest is justified.
+4. Complete the SSH/service half of the dual-role spare ingest adapter for a
+   protected rehearsal, then run takeover and rollback, measure RTO, and decide
+   whether the thirteenth warm ingest is justified.
 5. Qualify one priority-court spare compositor against YouTube backup ingestion
    and capture interruption/resume evidence for exact Egress ownership.
 6. Run the eight-camera event-length endurance matrix, external viewer rotation,

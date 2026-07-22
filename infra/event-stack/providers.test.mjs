@@ -215,6 +215,112 @@ test("DigitalOcean pagination, reserved-IP actions, and snapshot lookup preserve
   assert.deepEqual(await provider.findSnapshotsByName("snap"), [{ id: "88", name: "snap", regions: ["sfo2"] }]);
 });
 
+test("DigitalOcean moves an exact Reserved IPv4 only after ownership and topology checks", async () => {
+  const requests = [];
+  const assignedToSource = { ip: "192.0.2.50", region: { slug: "sfo2" }, droplet: { id: 123 }, locked: false };
+  const assignedToDestination = { ...assignedToSource, droplet: { id: 456 } };
+  const provider = new DigitalOceanProvider({
+    token: "token",
+    sshKeys: [],
+    cloudInitPaths: {},
+    fetchImpl: queueFetch([
+      response(200, { reserved_ip: assignedToSource }),
+      response(200, { droplet: apiDroplet(123, "primary-ingest") }),
+      response(200, { droplet: apiDroplet(456, "warm-spare") }),
+      response(202, { action: { id: 9, status: "in-progress" } }),
+      response(200, { action: { id: 9, status: "completed" } }),
+      response(200, { reserved_ip: assignedToDestination })
+    ], requests),
+    pollIntervalMs: 1,
+    timeoutMs: 50
+  });
+
+  assert.deepEqual(await provider.moveReservedIpv4({ ip: "192.0.2.50", fromDropletId: "123", toDropletId: "456" }), {
+    ip: "192.0.2.50",
+    region: "sfo2",
+    fromDropletId: "123",
+    toDropletId: "456",
+    actionId: "9",
+    status: "assigned"
+  });
+  assert.deepEqual(JSON.parse(requests[3].options.body), { type: "assign", droplet_id: 456 });
+  assert.match(requests[4].url, /\/actions\/9$/u);
+  assert.equal(requests.length, 6);
+});
+
+test("DigitalOcean refuses Reserved IPv4 movement on ownership or lock drift", async () => {
+  for (const reservedIp of [
+    { ip: "192.0.2.50", region: { slug: "sfo2" }, droplet: { id: 999 }, locked: false },
+    { ip: "192.0.2.50", region: { slug: "sfo2" }, droplet: { id: 123 }, locked: true }
+  ]) {
+    const requests = [];
+    const provider = new DigitalOceanProvider({
+      token: "token",
+      sshKeys: [],
+      cloudInitPaths: {},
+      fetchImpl: queueFetch([
+        response(200, { reserved_ip: reservedIp }),
+        response(200, { droplet: apiDroplet(123, "primary-ingest") }),
+        response(200, { droplet: apiDroplet(456, "warm-spare") })
+      ], requests)
+    });
+    await assert.rejects(
+      () => provider.moveReservedIpv4({ ip: "192.0.2.50", fromDropletId: "123", toDropletId: "456" }),
+      reservedIp.locked ? /locked; refusing reassignment/u : /not expected source/u
+    );
+    assert.equal(requests.some((entry) => entry.options.method === "POST"), false);
+  }
+});
+
+test("DigitalOcean refuses Reserved IPv4 movement to an incompatible or inactive destination", async () => {
+  for (const { destination, expected } of [
+    { destination: { ...apiDroplet(456, "warm-spare"), region: { slug: "nyc3" } }, expected: /same region/u },
+    { destination: { ...apiDroplet(456, "warm-spare"), vpc_uuid: "another-vpc" }, expected: /same VPC/u },
+    { destination: { ...apiDroplet(456, "warm-spare"), status: "off" }, expected: /not active/u }
+  ]) {
+    const requests = [];
+    const provider = new DigitalOceanProvider({
+      token: "token",
+      sshKeys: [],
+      cloudInitPaths: {},
+      fetchImpl: queueFetch([
+        response(200, { reserved_ip: { ip: "192.0.2.50", region: { slug: "sfo2" }, droplet: { id: 123 }, locked: false } }),
+        response(200, { droplet: apiDroplet(123, "primary-ingest") }),
+        response(200, { droplet: destination })
+      ], requests)
+    });
+    await assert.rejects(
+      () => provider.moveReservedIpv4({ ip: "192.0.2.50", fromDropletId: "123", toDropletId: "456" }),
+      expected
+    );
+    assert.equal(requests.some((entry) => entry.options.method === "POST"), false);
+  }
+});
+
+test("DigitalOcean Reserved IPv4 movement fails when the provider action does not complete", async () => {
+  const requests = [];
+  const provider = new DigitalOceanProvider({
+    token: "token",
+    sshKeys: [],
+    cloudInitPaths: {},
+    fetchImpl: queueFetch([
+      response(200, { reserved_ip: { ip: "192.0.2.50", region: { slug: "sfo2" }, droplet: { id: 123 }, locked: false } }),
+      response(200, { droplet: apiDroplet(123, "primary-ingest") }),
+      response(200, { droplet: apiDroplet(456, "warm-spare") }),
+      response(202, { action: { id: 9, status: "in-progress" } }),
+      response(200, { action: { id: 9, status: "errored" } })
+    ], requests),
+    pollIntervalMs: 1,
+    timeoutMs: 50
+  });
+
+  await assert.rejects(
+    () => provider.moveReservedIpv4({ ip: "192.0.2.50", fromDropletId: "123", toDropletId: "456" }),
+    /action 9 failed/u
+  );
+  assert.equal(requests.length, 5);
+});
+
 test("DigitalOcean creates an attached Reserved IPv4 and polls until a completed snapshot is listed", async () => {
   const requests = [];
   const fetchImpl = queueFetch([
