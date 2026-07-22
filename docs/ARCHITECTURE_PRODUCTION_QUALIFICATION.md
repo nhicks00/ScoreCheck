@@ -206,8 +206,9 @@ In particular:
   12-host stack is still missing. Do not add a thirteenth host until that
   simpler recovery is rehearsed and shown insufficient.
 - Renderer loss now has a fail-closed synthetic gate but still needs an
-  attended host artifact. Supabase loss still needs a truthful isolated
-  server-side dependency; browser-only blocking is insufficient. Bounded
+  attended host artifact. Supabase loss now has a truthful isolated
+  server-side dependency gate but still needs its attended artifact;
+  browser-only blocking remains insufficient. Bounded
   browser recovery, exact Egress-owner resume, the external platform sentinel,
   and retained critical-log export have implementations but still need
   production-shaped evidence. YouTube backup ingest remains deferred.
