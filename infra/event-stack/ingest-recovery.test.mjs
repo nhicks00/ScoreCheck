@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { FileIngestRecoveryStateStore, IngestRecoveryController, IngestRecoveryError, recoveryTopology, validateRecoveryState } from "./ingest-recovery.mjs";
+import { FileIngestRecoveryStateStore, IngestRecoveryController, IngestRecoveryError, assertRecoveryTopologyCurrent, recoveryTopology, validateRecoveryState } from "./ingest-recovery.mjs";
 
 test("moves the Reserved IP, all private compositor bindings, exact output generations, and monitoring as one takeover", async () => {
   const calls = [];
@@ -36,7 +36,7 @@ test("requires explicit confirmation and a failed primary before takeover", asyn
   assert.equal(calls.includes("move-primary-spare"), false);
 });
 
-test("preserves a resumable failed state and never rolls back automatically", async () => {
+test("preserves and resumes a failed takeover without replaying completed mutations or rolling back", async () => {
   const calls = [];
   const platform = passingPlatform(calls);
   platform.rebindCompositorIngress = async ({ compositor }) => {
@@ -51,8 +51,20 @@ test("preserves a resumable failed state and never rolls back automatically", as
     catch (error) { failure = error; throw error; }
   }, IngestRecoveryError);
   assert.equal(failure.state.phase, "FAILED");
+  assert.equal(failure.state.resumePhase, "TAKING_OVER");
   assert.match(failure.state.failure, /binding failure/u);
   assert.equal(calls.some((entry) => entry.startsWith("move-spare-primary")), false);
+
+  const resumedCalls = [];
+  const resumed = await new IngestRecoveryController({ platform: passingPlatform(resumedCalls), now: clock() })
+    .takeover({ state: structuredClone(failure.state), confirmation: "TAKEOVER-INGEST:recovery-event" });
+  assert.equal(resumed.phase, "ACTIVE_ON_SPARE");
+  assert.equal(resumed.resumePhase, null);
+  assert.equal(resumed.failure, null);
+  assert.equal(resumedCalls.includes("attach-firewall"), false);
+  assert.equal(resumedCalls.includes("rebind-1"), false);
+  assert.equal(resumedCalls.includes("rebind-2"), false);
+  assert.ok(resumedCalls.includes("rebind-3"));
 });
 
 test("rolls back only after primary health and restores the spare role", async () => {
@@ -68,6 +80,22 @@ test("rolls back only after primary health and restores the spare role", async (
   assert.equal(calls[0], "primary-healthy");
   assert.ok(calls.indexOf("deactivate-spare") < calls.indexOf("detach-firewall"));
   assert.ok(calls.indexOf("detach-firewall") < calls.indexOf("restore-spare"));
+});
+
+test("checkpoints each replacement Egress owner and uses its current id during rollback", async () => {
+  const reboundOwners = [];
+  const platform = passingPlatform([]);
+  platform.rebindCompositorIngress = async ({ compositor, generation }) => {
+    reboundOwners.push({ camera: compositor.cameraNumber, egressId: generation.egressId });
+  };
+  const controller = new IngestRecoveryController({ platform, now: clock() });
+  const prepared = await controller.prepare(fixture());
+  const active = await controller.takeover({ state: prepared, confirmation: "TAKEOVER-INGEST:recovery-event" });
+  assert.equal(active.outputGenerations[1].egressId, "EG_restart11");
+  const rolledBack = await controller.rollback({ state: active, confirmation: "ROLLBACK-INGEST:recovery-event" });
+  assert.equal(reboundOwners[0].egressId, "EG_test1");
+  assert.equal(reboundOwners[8].egressId, "EG_restart11");
+  assert.equal(rolledBack.outputGenerations[1].egressId, "EG_restart12");
 });
 
 test("resumes takeover from the last durable checkpoint without replaying completed mutations", async () => {
@@ -136,6 +164,16 @@ test("checkpoints before staging and resumes an interrupted preparation without 
   );
 });
 
+test("revalidates an already prepared spare without restaging it", async () => {
+  const initial = new IngestRecoveryController({ platform: passingPlatform([]), now: clock() });
+  const prepared = await initial.prepare(fixture());
+  const calls = [];
+  const repeated = await new IngestRecoveryController({ platform: passingPlatform(calls), now: clock() })
+    .prepare({ ...fixture(), state: structuredClone(prepared) });
+  assert.equal(repeated.phase, "PREPARED");
+  assert.deepEqual(calls, ["primary-healthy", "spare-idle", "outputs-healthy", "spare-staged"]);
+});
+
 test("resumes rollback from the last durable checkpoint without replaying the Reserved IPv4 move", async () => {
   const platform = passingPlatform([]);
   const controller = new IngestRecoveryController({ platform, now: clock() });
@@ -156,6 +194,56 @@ test("resumes rollback from the last durable checkpoint without replaying the Re
   assert.equal(resumed.phase, "ROLLED_BACK");
   assert.equal(resumedCalls.includes("move-spare-primary"), false);
   assert.ok(resumedCalls.indexOf("public-health-bvm-preview-01") < resumedCalls.indexOf("rebind-1"));
+});
+
+test("resumes rollback after spare deactivation without requiring the stopped ingest role to be healthy", async () => {
+  const platform = passingPlatform([]);
+  const controller = new IngestRecoveryController({ platform, now: clock() });
+  const prepared = await controller.prepare(fixture());
+  const active = await controller.takeover({ state: prepared, confirmation: "TAKEOVER-INGEST:recovery-event" });
+  const checkpoints = [];
+  await new IngestRecoveryController({
+    platform,
+    now: clock(),
+    checkpoint: async (state) => checkpoints.push(structuredClone(state))
+  }).rollback({ state: active, confirmation: "ROLLBACK-INGEST:recovery-event" });
+  const interrupted = checkpoints.find((state) => state.timeline.at(-1).event === "spare-ingest-deactivated");
+
+  const resumedCalls = [];
+  const resumed = await new IngestRecoveryController({ platform: passingPlatform(resumedCalls), now: clock() })
+    .rollback({ state: structuredClone(interrupted), confirmation: "ROLLBACK-INGEST:recovery-event" });
+  assert.equal(resumed.phase, "ROLLED_BACK");
+  assert.equal(resumedCalls.includes("spare-ingest-healthy"), false);
+  assert.equal(resumedCalls.includes("deactivate-spare"), false);
+  assert.ok(resumedCalls.includes("spare-staged"));
+  assert.ok(resumedCalls.includes("detach-firewall"));
+});
+
+test("resumes a durably failed rollback at its first incomplete step", async () => {
+  const controller = new IngestRecoveryController({ platform: passingPlatform([]), now: clock() });
+  const prepared = await controller.prepare(fixture());
+  const active = await controller.takeover({ state: prepared, confirmation: "TAKEOVER-INGEST:recovery-event" });
+  const failing = passingPlatform([]);
+  failing.rebindCompositorIngress = async ({ compositor }) => {
+    if (compositor.cameraNumber === 4) throw new Error("injected rollback rebind failure");
+  };
+  let failure;
+  await assert.rejects(async () => {
+    try { await new IngestRecoveryController({ platform: failing, now: clock() }).rollback({ state: active, confirmation: "ROLLBACK-INGEST:recovery-event" }); }
+    catch (error) { failure = error; throw error; }
+  }, IngestRecoveryError);
+  assert.equal(failure.state.phase, "FAILED");
+  assert.equal(failure.state.resumePhase, "ROLLING_BACK");
+
+  const resumedCalls = [];
+  const resumed = await new IngestRecoveryController({ platform: passingPlatform(resumedCalls), now: clock() })
+    .rollback({ state: structuredClone(failure.state), confirmation: "ROLLBACK-INGEST:recovery-event" });
+  assert.equal(resumed.phase, "ROLLED_BACK");
+  assert.equal(resumedCalls.includes("move-spare-primary"), false);
+  assert.equal(resumedCalls.includes("rebind-1"), false);
+  assert.equal(resumedCalls.includes("rebind-2"), false);
+  assert.equal(resumedCalls.includes("rebind-3"), false);
+  assert.ok(resumedCalls.includes("rebind-4"));
 });
 
 test("persists recovery checkpoints atomically in a protected locked state file", async () => {
@@ -186,6 +274,18 @@ test("rejects missing spare, incomplete private identity, or wrong Reserved IP s
   assert.throws(() => recoveryTopology(manifest, lifecycleState, { reservedIpv4: {} }), /Reserved IPv4/u);
 });
 
+test("rejects takeover context after any lifecycle host identity changes", async () => {
+  const inputs = fixture();
+  const prepared = await new IngestRecoveryController({ platform: passingPlatform([]), now: clock() }).prepare(inputs);
+  assert.equal(assertRecoveryTopologyCurrent(prepared, inputs.manifest, inputs.lifecycleState, inputs.anchors), prepared.topology);
+  const changed = structuredClone(inputs.lifecycleState);
+  changed.droplets["bvm-compositor-c"].id = "999";
+  await assert.throws(
+    () => assertRecoveryTopologyCurrent(prepared, inputs.manifest, changed, inputs.anchors),
+    /topology changed/u
+  );
+});
+
 test("rejects recovery state whose phase disagrees with host, generations, or failure state", async () => {
   const controller = new IngestRecoveryController({ platform: passingPlatform([]), now: clock() });
   const prepared = await controller.prepare(fixture());
@@ -193,23 +293,37 @@ test("rejects recovery state whose phase disagrees with host, generations, or fa
   assert.throws(() => validateRecoveryState({ ...structuredClone(prepared), failure: "unexpected" }), /phase state is inconsistent/u);
   const active = await controller.takeover({ state: prepared, confirmation: "TAKEOVER-INGEST:recovery-event" });
   assert.throws(() => validateRecoveryState({ ...structuredClone(active), outputGenerations: null }), /phase state is inconsistent/u);
+  const incompleteOwner = structuredClone(active);
+  delete incompleteOwner.outputGenerations[1].rendererDeploymentId;
+  assert.throws(() => validateRecoveryState(incompleteOwner), /Camera 1 output generation is invalid/u);
+  const wrongEvent = structuredClone(active);
+  wrongEvent.outputGenerations[1].event = "different-event";
+  assert.throws(() => validateRecoveryState(wrongEvent), /belongs to a different event/u);
 });
 
 function passingPlatform(calls) {
+  const resumeCounts = new Map();
   return {
     assertPrimaryIngestHealthy: async () => { calls.push("primary-healthy"); },
     assertPrimaryIngestFailed: async () => { calls.push("primary-failed"); },
     assertSpareIdle: async () => { calls.push("spare-idle"); },
     assertCompositorOutputsHealthy: async () => { calls.push("outputs-healthy"); },
     assertSpareIngestHealthy: async () => { calls.push("spare-ingest-healthy"); },
+    assertSpareIngestStaged: async () => { calls.push("spare-staged"); },
     stageSpareIngest: async () => { calls.push("stage-spare"); return { status: "staged" }; },
-    captureOutputGenerations: async () => Object.fromEntries(Array.from({ length: 8 }, (_, index) => [index + 1, { broadcastId: `broadcast-${index + 1}`, outputGeneration: `generation-${index + 1}`, profile: "1080p30" }])),
+    captureOutputGenerations: async () => Object.fromEntries(Array.from({ length: 8 }, (_, index) => [index + 1, outputOwner(index + 1)])),
     attachIngestNetworkPolicy: async () => { calls.push("attach-firewall"); },
     activateSpareIngest: async () => { calls.push("activate-spare"); },
     moveReservedIpv4: async ({ fromDropletId, toDropletId }) => { calls.push(fromDropletId === "103" ? "move-primary-spare" : "move-spare-primary"); assert.notEqual(fromDropletId, toDropletId); },
     waitIngestPublicHealth: async (host) => { calls.push(`public-health-${host.name}`); },
     rebindCompositorIngress: async ({ compositor }) => { calls.push(`rebind-${compositor.cameraNumber}`); },
-    resumeOutputGeneration: async ({ compositor }) => { calls.push(`resume-${compositor.cameraNumber}`); },
+    resumeOutputGeneration: async ({ compositor, generation }) => {
+      calls.push(`resume-${compositor.cameraNumber}`);
+      const count = (resumeCounts.get(compositor.cameraNumber) ?? 0) + 1;
+      resumeCounts.set(compositor.cameraNumber, count);
+      const owner = { ...generation, egressId: `EG_restart${compositor.cameraNumber}${count}`, startedAt: `2026-07-21T12:00:0${count}.000Z` };
+      return { id: owner.egressId, owner };
+    },
     switchIngestMonitoring: async ({ from, to }) => { calls.push(`monitor-${from.name.includes("preview") ? "primary" : "spare"}-${to.name.includes("preview") ? "primary" : "spare"}`); },
     verifyRecoveredIngest: async () => { calls.push("verify-recovery"); },
     deactivateSpareIngest: async () => { calls.push("deactivate-spare"); },
@@ -218,12 +332,28 @@ function passingPlatform(calls) {
   };
 }
 
+function outputOwner(camera) {
+  return {
+    schemaVersion: 1,
+    event: "recovery-event",
+    court: camera,
+    destinationId: `broadcast-${camera}`,
+    outputGeneration: `generation-${camera}`,
+    outputProfile: "1080p30",
+    rendererGitSha: "a".repeat(40),
+    rendererDeploymentId: "dpl_test123",
+    egressId: `EG_test${camera}`,
+    requestSha256: "b".repeat(64),
+    startedAt: "2026-07-21T11:59:00.000Z"
+  };
+}
+
 function fixture() {
   const service = (name, role, extra = {}) => ({ name, providerName: `event-${name}`, role, ...extra });
   const droplets = [
-    service("bvm-commentary-01", "commentary"),
-    service("bvm-observability-01", "observability"),
-    service("bvm-preview-01", "ingest"),
+    service("bvm-commentary-01", "commentary", { tag: "bvm-commentary" }),
+    service("bvm-observability-01", "observability", { tag: "bvm-observability" }),
+    service("bvm-preview-01", "ingest", { tag: "bvm-preview-01" }),
     ...Array.from({ length: 8 }, (_, index) => service(`bvm-compositor-${String.fromCharCode(97 + index)}`, "compositor", { court: index + 1 })),
     service("bvm-compositor-spare", "compositor-spare", { warmSpare: true })
   ];
@@ -234,7 +364,14 @@ function fixture() {
     privateIpv4: `10.120.0.${10 + index}`
   }]));
   return {
-    manifest: { schemaVersion: 6, kind: "production", event: "recovery-event", droplets },
+    manifest: {
+      schemaVersion: 6,
+      kind: "production",
+      event: "recovery-event",
+      provider: { vpcCidr: "10.120.0.0/20" },
+      endpoints: [{ role: "ingest", hostname: "ingest.beachvolleyballmedia.com" }],
+      droplets
+    },
     lifecycleState: { event: "recovery-event", phase: "live", droplets: stateDroplets },
     anchors: { reservedIpv4: { ingest: "198.51.100.20", commentary: "198.51.100.21" } }
   };

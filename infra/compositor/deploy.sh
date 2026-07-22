@@ -38,6 +38,7 @@ rsync -a --delete -e "$rsync_shell" \
   "$SCRIPT_DIR/list-egress.sh" \
   "$SCRIPT_DIR/normalize-camera.sh" \
   "$SCRIPT_DIR/qualify-output.sh" \
+  "$SCRIPT_DIR/rebind-ingest.sh" \
   "$SCRIPT_DIR/start-court.sh" \
   "$SCRIPT_DIR/start-normalizer.sh" \
   "$SCRIPT_DIR/stop-normalizer.sh" \
@@ -72,7 +73,7 @@ if [[ -f docker-compose.yml && -f .env ]]; then
   backup_files=(docker-compose.yml livekit.yaml egress.yaml headless_shell
     chrome-sandboxing-seccomp-profile.json lib.sh list-egress.sh
     qualify-output.sh start-court.sh stop-court.sh .env)
-  for optional in normalize-camera.sh start-normalizer.sh stop-normalizer.sh; do
+  for optional in normalize-camera.sh rebind-ingest.sh start-normalizer.sh stop-normalizer.sh; do
     [[ -f "$optional" ]] && backup_files+=("$optional")
   done
   tar -czf "backups/compositor-$timestamp.tar.gz" "${backup_files[@]}"
@@ -82,7 +83,7 @@ fi
 for file in docker-compose.yml livekit.yaml egress.yaml chrome-sandboxing-seccomp-profile.json; do
   install -m 0644 ".incoming/$file" "$file"
 done
-for file in headless_shell lib.sh list-egress.sh normalize-camera.sh qualify-output.sh start-court.sh start-normalizer.sh stop-normalizer.sh stop-court.sh; do
+for file in headless_shell lib.sh list-egress.sh normalize-camera.sh qualify-output.sh rebind-ingest.sh start-court.sh start-normalizer.sh stop-normalizer.sh stop-court.sh; do
   install -m 0755 ".incoming/$file" "$file"
 done
 install -d -m 0700 evidence

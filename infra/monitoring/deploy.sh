@@ -69,6 +69,7 @@ rsync -a -e "$rsync_shell" \
   "$SCRIPT_DIR/Caddyfile" \
   "$SCRIPT_DIR/remote-provision.sh" \
   "$SCRIPT_DIR/remote-deploy.sh" \
+  "$SCRIPT_DIR/replace-agent-targets.sh" \
   "$SSH_HOST:$candidate_dir/"
 rsync -a -e "$rsync_shell" "$SCRIPT_DIR/.generated/service.env" "$SSH_HOST:$candidate_dir/.env"
 rsync -a -e "$rsync_shell" \

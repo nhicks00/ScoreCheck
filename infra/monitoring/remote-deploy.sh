@@ -80,6 +80,7 @@ provenance_paths=(
   package.json
   package-lock.json
   remote-deploy.sh
+  replace-agent-targets.sh
   remote-provision.sh
   test-alertmanager-inhibition.mjs
   tsconfig.json
@@ -252,7 +253,7 @@ done
 for path in \
   .dockerignore docker-compose.yml Caddyfile .env Dockerfile package.json \
   package-lock.json tsconfig.json test-alertmanager-inhibition.mjs \
-  remote-deploy.sh remote-provision.sh .generated/prometheus.yml .generated/alertmanager.yml \
+  remote-deploy.sh remote-provision.sh replace-agent-targets.sh .generated/prometheus.yml .generated/alertmanager.yml \
   rules src; do
   if [[ ! -e "$CANDIDATE_DIR/$path" ]]; then
     echo "Candidate is incomplete at $path." >&2
@@ -403,9 +404,10 @@ for path in .dockerignore Dockerfile package.json package-lock.json test-alertma
 done
 install -m 0755 "$CANDIDATE_DIR/remote-deploy.sh" "$REMOTE_DIR/remote-deploy.sh"
 install -m 0755 "$CANDIDATE_DIR/remote-provision.sh" "$REMOTE_DIR/remote-provision.sh"
+install -m 0755 "$CANDIDATE_DIR/replace-agent-targets.sh" "$REMOTE_DIR/replace-agent-targets.sh"
 rsync -a --delete "$CANDIDATE_DIR/src/" "$REMOTE_DIR/src/"
 diff -qr "$CANDIDATE_DIR/src" "$REMOTE_DIR/src" >/dev/null
-for path in .dockerignore Dockerfile package.json package-lock.json remote-deploy.sh remote-provision.sh test-alertmanager-inhibition.mjs tsconfig.json; do
+for path in .dockerignore Dockerfile package.json package-lock.json remote-deploy.sh remote-provision.sh replace-agent-targets.sh test-alertmanager-inhibition.mjs tsconfig.json; do
   cmp -s "$CANDIDATE_DIR/$path" "$REMOTE_DIR/$path"
 done
 

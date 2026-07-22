@@ -540,12 +540,15 @@ test("binds each role to exact remote reconstruction config paths", () => {
     "/opt/mediamtx/mediamtx.yml",
     "/opt/mediamtx/Caddyfile",
     "/opt/mediamtx/scorecheck-ffmpeg-runner.sh",
-    "/opt/mediamtx/scorecheck-preview-runner.sh"
+    "/opt/mediamtx/scorecheck-preview-runner.sh",
+    "/opt/mediamtx/recovery-role.sh"
   ]);
   const compositor = roleConfigBindings(repoRoot, secrets, { role: "compositor", name: "bvm-compositor-a" });
   assert.ok(compositor.some(([local, remote]) => local === "/secrets/compositors/bvm-compositor-a.env" && remote === "/opt/compositor/.env"));
-  for (const remote of ["/opt/compositor/normalize-camera.sh", "/opt/compositor/qualify-output.sh", "/opt/compositor/start-normalizer.sh", "/opt/compositor/stop-normalizer.sh"]) {
+  for (const remote of ["/opt/compositor/normalize-camera.sh", "/opt/compositor/qualify-output.sh", "/opt/compositor/rebind-ingest.sh", "/opt/compositor/start-normalizer.sh", "/opt/compositor/stop-normalizer.sh"]) {
     assert.ok(compositor.some(([, candidate]) => candidate === remote));
   }
+  const observability = roleConfigBindings(repoRoot, secrets, { role: "observability", name: "bvm-observability-01" });
+  assert.ok(observability.some(([, remote]) => remote === "/opt/scorecheck-monitoring/replace-agent-targets.sh"));
   assert.throws(() => roleConfigBindings(repoRoot, secrets, { role: "unknown", name: "unknown" }), /unsupported deployment role/);
 });

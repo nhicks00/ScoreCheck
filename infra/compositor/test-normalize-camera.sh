@@ -66,6 +66,8 @@ grep -Fq 'profiles: ["hevc-normalizer"]' "$COMPOSE" || fail "normalizer is not p
 grep -Fq 'network_mode: host' "$COMPOSE" || fail "normalizer cannot use the private host route"
 grep -Fq 'COMPOSITOR_INGEST_PRIVATE_IP' "$DEPLOY" || fail "deployment does not bind the ingest private IPv4"
 grep -Fq 'COMPOSITOR_INGEST_HOST' "$DEPLOY" || fail "deployment does not bind the ingest TLS hostname"
+grep -Fq 'for optional in normalize-camera.sh rebind-ingest.sh start-normalizer.sh stop-normalizer.sh' "$DEPLOY" \
+  || fail "deployment does not treat the new recovery helper as optional in legacy backups"
 grep -Fq 'extra_hosts:' "$COMPOSE" || fail "Egress does not route the ingest TLS hostname over the VPC"
 grep -Fq 'MEDIAMTX_PUBLIC_HOST' "$COMPOSE" || fail "Egress VPC binding omits the ingest TLS hostname"
 

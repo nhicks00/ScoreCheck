@@ -122,9 +122,13 @@ test("recreates only changed MediaMTX services and preserves a complete rollback
   assert.match(deployScript, /installed_files=\(docker-compose\.yml mediamtx\.yml Caddyfile scorecheck-ffmpeg-runner\.sh scorecheck-preview-runner\.sh\)/u);
   assert.match(deployScript, /cp scorecheck-ffmpeg-runner\.sh "backups\/scorecheck-ffmpeg-runner\.\$timestamp\.sh"/u);
   assert.match(deployScript, /cp scorecheck-preview-runner\.sh "backups\/scorecheck-preview-runner\.\$timestamp\.sh"/u);
+  assert.match(deployScript, /if \[\[ -f recovery-role\.sh \]\]; then[\s\S]*had_previous_recovery_role=1[\s\S]*had_previous_recovery_role=0/u);
   assert.match(deployScript, /cp "backups\/scorecheck-ffmpeg-runner\.\$timestamp\.sh" scorecheck-ffmpeg-runner\.sh/u);
+  assert.match(deployScript, /if \[\[ "\$had_previous_recovery_role" -eq 1 \]\]; then[\s\S]*else[\s\S]*rm -f recovery-role\.sh/u);
   assert.match(deployScript, /services=\(mediamtx\)/u);
+  assert.match(deployScript, /if \[\[ "\$DEPLOY_MODE" == "staged" \|\| "\$had_previous" -eq 0/u);
   assert.match(deployScript, /services\+=\(caddy\)/u);
+  assert.match(deployScript, /if \[\[ "\$DEPLOY_MODE" == "active" && "\$had_previous" -eq 1 && -z "\$caddy_before" \]\]/u);
   assert.match(deployScript, /caddy_after.*!=.*caddy_before/u);
   assert.match(deployScript, /docker compose up -d --force-recreate "\$\{services\[@\]\}"/u);
   assert.doesNotMatch(deployScript, /docker compose up -d --force-recreate\s*(?:;|\n)/u);

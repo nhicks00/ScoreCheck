@@ -175,6 +175,85 @@ There is intentionally no routine delete-anchors command. The anchors are the
 stable endpoint contract. Removing them is a separate architecture change, not
 ordinary post-event teardown.
 
+## Dual-role ingest recovery
+
+The existing warm compositor spare can temporarily become the ingest host. This
+is an operator-confirmed recovery transaction, not an automatic failover and
+not a thirteenth Droplet. Preparation copies the retained ingest TLS state and
+stages stopped MediaMTX and WireGuard roles while the spare compositor remains
+idle and healthy. Preparation does not move the Reserved IPv4, open the ingest
+firewall, stop the spare compositor service, or change monitoring targets.
+
+Use one protected recovery-state path per recovery episode. All paths below
+must be normalized absolute paths, and protected files remain mode `0600`:
+
+```bash
+node infra/event-stack/ingest-recoveryctl.mjs prepare \
+  --manifest /absolute/event/manifest.json \
+  --lifecycle-state /absolute/event/lifecycle-state.json \
+  --anchors /absolute/protected/endpoint-anchors.json \
+  --recovery-state /absolute/protected/ingest-recovery.json \
+  --secrets /absolute/protected/deployment-secrets \
+  --ssh-key /absolute/protected/scorecheck-do \
+  --known-hosts /absolute/event/known_hosts \
+  --ingest-tls-state /absolute/protected/ingest-tls-state \
+  --credentials-env /absolute/protected/provider.env
+
+node infra/event-stack/ingest-recoveryctl.mjs status \
+  --recovery-state /absolute/protected/ingest-recovery.json
+```
+
+Takeover is admitted only after the primary host fails the protected local
+health check, the stable endpoint fails three public checks, the Reserved IPv4
+still has the expected exact owner, the spare owns no Egress, and all eight
+current output-owner records are exact. The operator must provide the literal
+event-scoped confirmation shown by `status` and the manifest:
+
+```bash
+node infra/event-stack/ingest-recoveryctl.mjs takeover \
+  --manifest /absolute/event/manifest.json \
+  --lifecycle-state /absolute/event/lifecycle-state.json \
+  --anchors /absolute/protected/endpoint-anchors.json \
+  --recovery-state /absolute/protected/ingest-recovery.json \
+  --secrets /absolute/protected/deployment-secrets \
+  --ssh-key /absolute/protected/scorecheck-do \
+  --known-hosts /absolute/event/known_hosts \
+  --ingest-tls-state /absolute/protected/ingest-tls-state \
+  --credentials-env /absolute/protected/provider.env \
+  --confirm TAKEOVER-INGEST:EVENT
+```
+
+Every completed mutation is checkpointed. If a command exits in `FAILED`, run
+`status`, correct the reported dependency, and repeat the same exact command and
+confirmation. The controller resumes the first incomplete step; it does not
+replay a completed Reserved-IP move, firewall change, compositor rebind, or
+output start. Never delete or hand-edit the recovery state to force progress.
+
+Rollback is allowed only after the original ingest is locally healthy. It moves
+the same Reserved IPv4 back, rebinds and resumes each exact output generation,
+restores the single MediaMTX monitoring target, deactivates the temporary ingest
+role, removes only its temporary firewall policy, and verifies the warm spare as
+an idle compositor:
+
+```bash
+node infra/event-stack/ingest-recoveryctl.mjs rollback \
+  --manifest /absolute/event/manifest.json \
+  --lifecycle-state /absolute/event/lifecycle-state.json \
+  --anchors /absolute/protected/endpoint-anchors.json \
+  --recovery-state /absolute/protected/ingest-recovery.json \
+  --secrets /absolute/protected/deployment-secrets \
+  --ssh-key /absolute/protected/scorecheck-do \
+  --known-hosts /absolute/event/known_hosts \
+  --ingest-tls-state /absolute/protected/ingest-tls-state \
+  --credentials-env /absolute/protected/provider.env \
+  --confirm ROLLBACK-INGEST:EVENT
+```
+
+Archive the protected state only after phase `ROLLED_BACK`. A later recovery
+episode uses a new state path. This flow is implemented but remains unavailable
+for production reliance until a protected synthetic 12-host takeover and
+rollback records measured RTO and exact output/monitor/provider convergence.
+
 The bundle generator writes an empty, protected rehearsal endpoint binding.
 That binding proves the rehearsal manifest has no Reserved-IP slots; it does
 not call the Reserved-IP API. Rehearsal DNS is disposable and bound to exact

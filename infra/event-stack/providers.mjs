@@ -361,6 +361,50 @@ export class DigitalOceanProvider {
     await this.#request("GET", `/tags/${encodeURIComponent(name)}`);
   }
 
+  async attachTagToDroplet(name, dropletId) {
+    const id = exactProviderId(dropletId, "Droplet");
+    const tag = await this.inspectTag(name);
+    if (tag === null) throw new Error(`DigitalOcean tag ${name} does not exist`);
+    let droplet = await this.getDroplet(id);
+    if (droplet.tags.includes(name)) return { name, dropletId: id, status: "already-attached" };
+    try {
+      await this.#request("POST", `/tags/${encodeURIComponent(name)}/resources`, {
+        resources: [{ resource_id: id, resource_type: "droplet" }]
+      }, [204]);
+    } catch (error) {
+      droplet = await this.getDroplet(id);
+      if (droplet.tags.includes(name)) return { name, dropletId: id, status: "reconciled-attached" };
+      throw error;
+    }
+    await this.#wait(async () => {
+      droplet = await this.getDroplet(id);
+      return droplet.tags.includes(name) ? droplet : null;
+    }, `DigitalOcean tag ${name} was not attached to Droplet ${id}`);
+    return { name, dropletId: id, status: "attached" };
+  }
+
+  async detachTagFromDroplet(name, dropletId) {
+    const id = exactProviderId(dropletId, "Droplet");
+    let droplet = await this.getDroplet(id);
+    if (!droplet.tags.includes(name)) return { name, dropletId: id, status: "already-detached" };
+    const tag = await this.inspectTag(name);
+    if (tag === null) throw new Error(`Droplet ${id} reports missing DigitalOcean tag ${name}`);
+    try {
+      await this.#request("DELETE", `/tags/${encodeURIComponent(name)}/resources`, {
+        resources: [{ resource_id: id, resource_type: "droplet" }]
+      }, [204]);
+    } catch (error) {
+      droplet = await this.getDroplet(id);
+      if (!droplet.tags.includes(name)) return { name, dropletId: id, status: "reconciled-detached" };
+      throw error;
+    }
+    await this.#wait(async () => {
+      droplet = await this.getDroplet(id);
+      return droplet.tags.includes(name) ? null : droplet;
+    }, `DigitalOcean tag ${name} was not detached from Droplet ${id}`);
+    return { name, dropletId: id, status: "detached" };
+  }
+
   async deleteTag(name) {
     await this.#request("DELETE", `/tags/${encodeURIComponent(name)}`, undefined, [204]);
   }

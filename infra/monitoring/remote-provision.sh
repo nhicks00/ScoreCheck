@@ -58,7 +58,7 @@ cleanup() {
     rm -rf "$REMOTE_DIR/src" "$REMOTE_DIR/rules" "$REMOTE_DIR/.generated"
     rm -f "$REMOTE_DIR/.dockerignore" "$REMOTE_DIR/Caddyfile" "$REMOTE_DIR/Dockerfile" \
       "$REMOTE_DIR/docker-compose.yml" "$REMOTE_DIR/package.json" "$REMOTE_DIR/package-lock.json" \
-      "$REMOTE_DIR/remote-deploy.sh" "$REMOTE_DIR/remote-provision.sh" \
+      "$REMOTE_DIR/remote-deploy.sh" "$REMOTE_DIR/remote-provision.sh" "$REMOTE_DIR/replace-agent-targets.sh" \
       "$REMOTE_DIR/test-alertmanager-inhibition.mjs" "$REMOTE_DIR/tsconfig.json" "$REMOTE_DIR/.env"
   fi
   docker image rm "$candidate_image" >/dev/null 2>&1 || true
@@ -78,7 +78,7 @@ for path in "${live_paths[@]}"; do
   fi
 done
 for path in .dockerignore docker-compose.yml Caddyfile .env Dockerfile package.json package-lock.json \
-  tsconfig.json test-alertmanager-inhibition.mjs remote-deploy.sh remote-provision.sh \
+  tsconfig.json test-alertmanager-inhibition.mjs remote-deploy.sh remote-provision.sh replace-agent-targets.sh \
   .generated/prometheus.yml .generated/alertmanager.yml rules src; do
   [[ -e "$CANDIDATE_DIR/$path" ]] || { echo "Candidate is incomplete at $path." >&2; exit 1; }
 done
@@ -136,6 +136,7 @@ for path in .dockerignore Caddyfile Dockerfile docker-compose.yml package.json p
 done
 install -m 0755 "$CANDIDATE_DIR/remote-deploy.sh" "$REMOTE_DIR/remote-deploy.sh"
 install -m 0755 "$CANDIDATE_DIR/remote-provision.sh" "$REMOTE_DIR/remote-provision.sh"
+install -m 0755 "$CANDIDATE_DIR/replace-agent-targets.sh" "$REMOTE_DIR/replace-agent-targets.sh"
 docker tag "$candidate_image" scorecheck-monitoring:local
 
 cutover_started=1

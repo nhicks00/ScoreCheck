@@ -1,16 +1,16 @@
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const outputDirectory = path.join(directory, ".generated");
-const targets = parseTargets(process.env.MONITOR_AGENT_TARGETS ?? "");
-const monitorToken = required("MONITOR_API_TOKEN");
-const alertmanagerToken = required("ALERTMANAGER_WEBHOOK_TOKEN");
 
-const scrapeJobs = targets.map((target) => {
-  const url = new URL(target.url);
-  return `  - job_name: ${yaml(`agent-${target.id}`)}
+export function renderPrometheusConfig(rawTargets, monitorToken) {
+  requiredValue(monitorToken, "MONITOR_API_TOKEN");
+  const targets = parseTargets(rawTargets);
+  const scrapeJobs = targets.map((target) => {
+    const url = new URL(target.url);
+    return `  - job_name: ${yaml(`agent-${target.id}`)}
     scheme: ${yaml(url.protocol.slice(0, -1))}
     metrics_path: ${yaml(`${url.pathname.replace(/\/$/, "")}/metrics` || "/metrics")}
 ${target.role === "compositor" ? "    scrape_interval: 1s\n    scrape_timeout: 800ms\n" : ""}    authorization:
@@ -21,9 +21,9 @@ ${target.role === "compositor" ? "    scrape_interval: 1s\n    scrape_timeout: 8
         labels:
           agent: ${yaml(target.id)}
           role: ${yaml(target.role)}`;
-}).join("\n");
+  }).join("\n");
 
-const prometheus = `global:
+  return `global:
   scrape_interval: 5s
   evaluation_interval: 1s
   external_labels:
@@ -51,8 +51,11 @@ scrape_configs:
       - targets: [node-exporter:9100]
 ${scrapeJobs ? `\n${scrapeJobs}` : ""}
 `;
+}
 
-const alertmanager = `global:
+export function renderAlertmanagerConfig(alertmanagerToken) {
+  requiredValue(alertmanagerToken, "ALERTMANAGER_WEBHOOK_TOKEN");
+  return `global:
   resolve_timeout: 2m
 
 route:
@@ -140,11 +143,17 @@ receivers:
             type: Bearer
             credentials: ${yaml(alertmanagerToken)}
 `;
+}
 
-await mkdir(outputDirectory, { recursive: true });
-await writeSecure("prometheus.yml", prometheus);
-await writeSecure("alertmanager.yml", alertmanager);
-console.log(`Rendered monitoring configuration for ${targets.length} agent target(s).`);
+if (isDirectInvocation()) await main();
+
+async function main() {
+  const rawTargets = process.env.MONITOR_AGENT_TARGETS ?? "";
+  await mkdir(outputDirectory, { recursive: true });
+  await writeSecure("prometheus.yml", renderPrometheusConfig(rawTargets, required("MONITOR_API_TOKEN")));
+  await writeSecure("alertmanager.yml", renderAlertmanagerConfig(required("ALERTMANAGER_WEBHOOK_TOKEN")));
+  console.log(`Rendered monitoring configuration for ${parseTargets(rawTargets).length} agent target(s).`);
+}
 
 async function writeSecure(name, content) {
   const outputPath = path.join(outputDirectory, name);
@@ -177,6 +186,14 @@ function required(name) {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is required.`);
   return value;
+}
+
+function requiredValue(value, name) {
+  if (typeof value !== "string" || !value.trim()) throw new Error(`${name} is required.`);
+}
+
+function isDirectInvocation() {
+  return Boolean(process.argv[1]) && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
 }
 
 function safeId(value) {

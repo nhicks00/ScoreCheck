@@ -838,7 +838,8 @@ export function roleConfigBindings(repoRoot, secretsDirectory, spec) {
     [join(repoRoot, "infra/mediamtx/.generated/mediamtx.yml"), "/opt/mediamtx/mediamtx.yml"],
     [join(repoRoot, "infra/mediamtx/.generated/Caddyfile"), "/opt/mediamtx/Caddyfile"],
     [join(repoRoot, "infra/mediamtx/scorecheck-ffmpeg-runner.sh"), "/opt/mediamtx/scorecheck-ffmpeg-runner.sh"],
-    [join(repoRoot, "infra/mediamtx/scorecheck-preview-runner.sh"), "/opt/mediamtx/scorecheck-preview-runner.sh"]
+    [join(repoRoot, "infra/mediamtx/scorecheck-preview-runner.sh"), "/opt/mediamtx/scorecheck-preview-runner.sh"],
+    [join(repoRoot, "infra/mediamtx/recovery-role.sh"), "/opt/mediamtx/recovery-role.sh"]
   ];
   if (["compositor", "compositor-spare"].includes(spec.role)) return [
     [join(repoRoot, "infra/compositor/docker-compose.yml"), "/opt/compositor/docker-compose.yml"],
@@ -847,6 +848,7 @@ export function roleConfigBindings(repoRoot, secretsDirectory, spec) {
     [join(secretsDirectory, "compositors", `${spec.name}.env`), "/opt/compositor/.env"],
     [join(repoRoot, "infra/compositor/normalize-camera.sh"), "/opt/compositor/normalize-camera.sh"],
     [join(repoRoot, "infra/compositor/qualify-output.sh"), "/opt/compositor/qualify-output.sh"],
+    [join(repoRoot, "infra/compositor/rebind-ingest.sh"), "/opt/compositor/rebind-ingest.sh"],
     [join(repoRoot, "infra/compositor/start-court.sh"), "/opt/compositor/start-court.sh"],
     [join(repoRoot, "infra/compositor/start-normalizer.sh"), "/opt/compositor/start-normalizer.sh"],
     [join(repoRoot, "infra/compositor/stop-normalizer.sh"), "/opt/compositor/stop-normalizer.sh"],
@@ -855,6 +857,7 @@ export function roleConfigBindings(repoRoot, secretsDirectory, spec) {
   if (spec.role === "observability") return [
     [join(repoRoot, "infra/monitoring/docker-compose.yml"), "/opt/scorecheck-monitoring/docker-compose.yml"],
     [join(repoRoot, "infra/monitoring/Caddyfile"), "/opt/scorecheck-monitoring/Caddyfile"],
+    [join(repoRoot, "infra/monitoring/replace-agent-targets.sh"), "/opt/scorecheck-monitoring/replace-agent-targets.sh"],
     [join(repoRoot, "infra/monitoring/.generated/service.env"), "/opt/scorecheck-monitoring/.env"],
     [join(repoRoot, "infra/monitoring/.generated/prometheus.yml"), "/opt/scorecheck-monitoring/.generated/prometheus.yml"],
     [join(repoRoot, "infra/monitoring/.generated/alertmanager.yml"), "/opt/scorecheck-monitoring/.generated/alertmanager.yml"],

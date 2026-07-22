@@ -456,6 +456,92 @@ test("DigitalOcean deletes only an exact empty event tag and proves absence", as
   assert.match(requests[1].url, /\/tags\/scorecheck-event%3Atest$/u);
 });
 
+test("DigitalOcean attaches and detaches the existing ingest firewall tag by exact Droplet id", async () => {
+  const requests = [];
+  const before = apiDroplet(456, "warm-spare", { tags: ["bvm-compositor"] });
+  const attached = apiDroplet(456, "warm-spare", { tags: ["bvm-compositor", "bvm-preview-01"] });
+  const provider = new DigitalOceanProvider({
+    token: "token",
+    sshKeys: [],
+    cloudInitPaths: {},
+    fetchImpl: queueFetch([
+      response(200, { tag: { name: "bvm-preview-01", resources: { count: 1 } } }),
+      response(200, { droplet: before }),
+      response(204, null),
+      response(200, { droplet: attached }),
+      response(200, { droplet: attached }),
+      response(200, { tag: { name: "bvm-preview-01", resources: { count: 2 } } }),
+      response(204, null),
+      response(200, { droplet: before })
+    ], requests),
+    pollIntervalMs: 1,
+    timeoutMs: 50
+  });
+
+  assert.deepEqual(await provider.attachTagToDroplet("bvm-preview-01", "456"), {
+    name: "bvm-preview-01",
+    dropletId: "456",
+    status: "attached"
+  });
+  assert.deepEqual(await provider.detachTagFromDroplet("bvm-preview-01", "456"), {
+    name: "bvm-preview-01",
+    dropletId: "456",
+    status: "detached"
+  });
+  assert.deepEqual(JSON.parse(requests[2].options.body), { resources: [{ resource_id: "456", resource_type: "droplet" }] });
+  assert.deepEqual(JSON.parse(requests[6].options.body), { resources: [{ resource_id: "456", resource_type: "droplet" }] });
+  assert.match(requests[2].url, /\/tags\/bvm-preview-01\/resources$/u);
+  assert.equal(requests[2].options.method, "POST");
+  assert.equal(requests[6].options.method, "DELETE");
+});
+
+test("DigitalOcean reconciles ambiguous tag attachment and detachment results", async () => {
+  for (const operation of ["attach", "detach"]) {
+    const attached = apiDroplet(456, "warm-spare", { tags: ["bvm-compositor", "bvm-preview-01"] });
+    const detached = apiDroplet(456, "warm-spare", { tags: ["bvm-compositor"] });
+    const responses = operation === "attach"
+      ? [
+          response(200, { tag: { name: "bvm-preview-01", resources: { count: 1 } } }),
+          response(200, { droplet: detached }),
+          new TypeError("fetch failed"),
+          response(200, { droplet: attached })
+        ]
+      : [
+          response(200, { droplet: attached }),
+          response(200, { tag: { name: "bvm-preview-01", resources: { count: 2 } } }),
+          new TypeError("fetch failed"),
+          new TypeError("fetch failed"),
+          response(200, { droplet: detached })
+        ];
+    const provider = new DigitalOceanProvider({
+      token: "token",
+      sshKeys: [],
+      cloudInitPaths: {},
+      fetchImpl: queueFetch(responses),
+      requestAttempts: 2,
+      requestRetryBaseMs: 0
+    });
+    const result = operation === "attach"
+      ? await provider.attachTagToDroplet("bvm-preview-01", "456")
+      : await provider.detachTagFromDroplet("bvm-preview-01", "456");
+    assert.equal(result.status, operation === "attach" ? "reconciled-attached" : "reconciled-detached");
+  }
+});
+
+test("DigitalOcean treats an already converged Droplet tag as an idempotent no-op", async () => {
+  const attached = apiDroplet(456, "warm-spare", { tags: ["bvm-compositor", "bvm-preview-01"] });
+  const detached = apiDroplet(456, "warm-spare", { tags: ["bvm-compositor"] });
+  const attach = new DigitalOceanProvider({
+    token: "token", sshKeys: [], cloudInitPaths: {}, fetchImpl: queueFetch([
+      response(200, { tag: { name: "bvm-preview-01", resources: { count: 2 } } }),
+      response(200, { droplet: attached })
+    ])
+  });
+  const detach = new DigitalOceanProvider({ token: "token", sshKeys: [], cloudInitPaths: {}, fetchImpl: queueFetch([response(200, { droplet: detached })]) });
+  assert.equal((await attach.attachTagToDroplet("bvm-preview-01", "456")).status, "already-attached");
+  assert.equal((await detach.detachTagFromDroplet("bvm-preview-01", "456")).status, "already-detached");
+});
+
 test("DigitalOcean refuses to remove a tag that still owns resources", async () => {
   const requests = [];
   const provider = new DigitalOceanProvider({
@@ -904,7 +990,7 @@ function response(status, body) {
   };
 }
 
-function apiDroplet(id, name) {
+function apiDroplet(id, name, overrides = {}) {
   return {
     id,
     name,
@@ -915,7 +1001,8 @@ function apiDroplet(id, name) {
     image: { slug: "ubuntu-24-04-x64" },
     networks: { v4: [{ type: "public", ip_address: `198.51.100.${id}` }, { type: "private", ip_address: `10.20.0.${id}` }] },
     tags: ["canary:test"],
-    created_at: "2026-07-15T00:00:00Z"
+    created_at: "2026-07-15T00:00:00Z",
+    ...overrides
   };
 }
 
