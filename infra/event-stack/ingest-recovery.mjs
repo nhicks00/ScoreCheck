@@ -1,121 +1,199 @@
 import { randomUUID } from "node:crypto";
+import { chmod, lstat, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, resolve } from "node:path";
+import { withProcessLock } from "./process-lock.mjs";
 
 const CAMERA_NUMBERS = Object.freeze(Array.from({ length: 8 }, (_, index) => index + 1));
-const PHASES = new Set(["PREPARED", "TAKING_OVER", "ACTIVE_ON_SPARE", "ROLLING_BACK", "ROLLED_BACK", "FAILED"]);
+const PHASES = new Set(["PREPARING", "PREPARED", "TAKING_OVER", "ACTIVE_ON_SPARE", "ROLLING_BACK", "ROLLED_BACK", "FAILED"]);
 
 export class IngestRecoveryController {
-  constructor({ platform, now = () => new Date() }) {
+  constructor({ platform, now = () => new Date(), checkpoint = async () => {} }) {
     if (!platform) throw new Error("ingest recovery platform is required");
+    if (typeof checkpoint !== "function") throw new Error("ingest recovery checkpoint must be a function");
     this.platform = platform;
     this.now = now;
+    this.checkpoint = checkpoint;
   }
 
-  async prepare({ manifest, lifecycleState, anchors }) {
+  async prepare({ manifest, lifecycleState, anchors, state = null }) {
     const topology = recoveryTopology(manifest, lifecycleState, anchors);
     await this.platform.assertPrimaryIngestHealthy(topology.primary);
-    await this.platform.assertSpareIdle(topology.spare);
-    await this.platform.assertCompositorOutputsHealthy(topology.compositors);
+    if (state === null) {
+      await this.platform.assertSpareIdle(topology.spare);
+      await this.platform.assertCompositorOutputsHealthy(topology.compositors);
+      const at = this.now().toISOString();
+      state = validateRecoveryState({
+        schemaVersion: 2,
+        event: manifest.event,
+        recoveryId: randomUUID(),
+        phase: "PREPARING",
+        startedAt: at,
+        preparedAt: null,
+        updatedAt: at,
+        topology,
+        outputGenerations: null,
+        activeHost: "primary",
+        failure: null,
+        timeline: [{ at, event: "spare-ingest-staging-started" }]
+      });
+      await this.#checkpoint(state);
+    } else {
+      validateRecoveryState(state);
+      requirePhase(state, "PREPARING");
+      if (state.event !== manifest.event) throw new Error("ingest recovery state belongs to a different event");
+      requireMatchingTopology(state.topology, topology);
+      await this.platform.assertCompositorOutputsHealthy(topology.compositors);
+    }
     const staged = await this.platform.stageSpareIngest(topology);
     if (staged?.status !== "staged") throw new Error("spare ingest staging did not complete");
-    const at = this.now().toISOString();
-    return validateRecoveryState({
-      schemaVersion: 1,
-      event: manifest.event,
-      recoveryId: randomUUID(),
-      phase: "PREPARED",
-      preparedAt: at,
-      updatedAt: at,
-      topology,
-      outputGenerations: null,
-      activeHost: "primary",
-      failure: null,
-      timeline: [{ at, event: "spare-ingest-staged" }]
-    });
+    state.phase = "PREPARED";
+    state.preparedAt = this.now().toISOString();
+    await this.#record(state, "spare-ingest-staged");
+    return validateRecoveryState(state);
   }
 
   async takeover({ state, confirmation }) {
     validateRecoveryState(state);
-    requirePhase(state, "PREPARED");
+    requirePhase(state, ["PREPARED", "TAKING_OVER"]);
     requireConfirmation(confirmation, `TAKEOVER-INGEST:${state.event}`);
     const topology = state.topology;
     await this.platform.assertPrimaryIngestFailed(topology.primary);
-    await this.platform.assertSpareIdle(topology.spare);
-    state.phase = "TAKING_OVER";
-    this.#record(state, "takeover-started");
+    if (state.phase === "PREPARED") {
+      await this.platform.assertSpareIdle(topology.spare);
+      state.phase = "TAKING_OVER";
+      await this.#record(state, "takeover-started");
+    }
     try {
-      state.outputGenerations = await this.platform.captureOutputGenerations(topology.compositors);
-      validateOutputGenerations(state.outputGenerations, topology.compositors);
-      await this.platform.attachIngestNetworkPolicy(topology.spare);
-      await this.platform.activateSpareIngest(topology);
-      await this.platform.moveReservedIpv4({
+      if (state.outputGenerations === null) {
+        state.outputGenerations = await this.platform.captureOutputGenerations(topology.compositors);
+        validateOutputGenerations(state.outputGenerations, topology.compositors);
+        await this.#record(state, "output-generations-captured");
+      }
+      await this.#step(state, "ingest-network-policy-attached", () => this.platform.attachIngestNetworkPolicy(topology.spare));
+      await this.#step(state, "spare-ingest-activated", () => this.platform.activateSpareIngest(topology));
+      await this.#step(state, "reserved-ipv4-moved-to-spare", () => this.platform.moveReservedIpv4({
         ip: topology.reservedIpv4,
         fromDropletId: topology.primary.dropletId,
         toDropletId: topology.spare.dropletId
-      });
-      this.#record(state, "reserved-ipv4-moved-to-spare");
-      await this.platform.waitIngestPublicHealth(topology.spare);
+      }));
+      await this.#step(state, "spare-ingest-public-healthy", () => this.platform.waitIngestPublicHealth(topology.spare));
       for (const compositor of topology.compositors) {
         const generation = state.outputGenerations[compositor.cameraNumber];
-        await this.platform.rebindCompositorIngress({ compositor, fromPrivateIpv4: topology.primary.privateIpv4, toPrivateIpv4: topology.spare.privateIpv4 });
-        await this.platform.resumeOutputGeneration({ compositor, generation });
+        await this.#step(state, `compositor-${compositor.cameraNumber}-rebound-to-spare`, () => this.platform.rebindCompositorIngress({ compositor, fromPrivateIpv4: topology.primary.privateIpv4, toPrivateIpv4: topology.spare.privateIpv4 }));
+        await this.#step(state, `compositor-${compositor.cameraNumber}-output-resumed-on-spare`, () => this.platform.resumeOutputGeneration({ compositor, generation }));
       }
-      await this.platform.switchIngestMonitoring({ from: topology.primary, to: topology.spare });
+      await this.#step(state, "ingest-monitoring-switched-to-spare", () => this.platform.switchIngestMonitoring({ from: topology.primary, to: topology.spare }));
       await this.platform.verifyRecoveredIngest({ topology, outputGenerations: state.outputGenerations });
       state.phase = "ACTIVE_ON_SPARE";
       state.activeHost = "spare";
-      this.#record(state, "takeover-qualified");
+      await this.#record(state, "takeover-qualified");
       return validateRecoveryState(state);
     } catch (error) {
-      state.phase = "FAILED";
-      state.failure = safeError(error);
-      this.#record(state, "takeover-failed");
-      throw new IngestRecoveryError(state.failure, state);
+      throw await this.#failure(state, "takeover-failed", error);
     }
   }
 
   async rollback({ state, confirmation }) {
     validateRecoveryState(state);
-    requirePhase(state, "ACTIVE_ON_SPARE");
+    requirePhase(state, ["ACTIVE_ON_SPARE", "ROLLING_BACK"]);
     requireConfirmation(confirmation, `ROLLBACK-INGEST:${state.event}`);
     const topology = state.topology;
     await this.platform.assertPrimaryIngestHealthy(topology.primary);
     await this.platform.assertSpareIngestHealthy(topology.spare);
-    state.phase = "ROLLING_BACK";
-    this.#record(state, "rollback-started");
+    if (state.phase === "ACTIVE_ON_SPARE") {
+      state.phase = "ROLLING_BACK";
+      await this.#record(state, "rollback-started");
+    }
     try {
-      await this.platform.moveReservedIpv4({
+      await this.#step(state, "reserved-ipv4-restored-to-primary", () => this.platform.moveReservedIpv4({
         ip: topology.reservedIpv4,
         fromDropletId: topology.spare.dropletId,
         toDropletId: topology.primary.dropletId
-      });
-      this.#record(state, "reserved-ipv4-restored-to-primary");
-      await this.platform.waitIngestPublicHealth(topology.primary);
+      }));
+      await this.#step(state, "primary-ingest-public-healthy", () => this.platform.waitIngestPublicHealth(topology.primary));
       for (const compositor of topology.compositors) {
         const generation = state.outputGenerations[compositor.cameraNumber];
-        await this.platform.rebindCompositorIngress({ compositor, fromPrivateIpv4: topology.spare.privateIpv4, toPrivateIpv4: topology.primary.privateIpv4 });
-        await this.platform.resumeOutputGeneration({ compositor, generation });
+        await this.#step(state, `compositor-${compositor.cameraNumber}-rebound-to-primary`, () => this.platform.rebindCompositorIngress({ compositor, fromPrivateIpv4: topology.spare.privateIpv4, toPrivateIpv4: topology.primary.privateIpv4 }));
+        await this.#step(state, `compositor-${compositor.cameraNumber}-output-resumed-on-primary`, () => this.platform.resumeOutputGeneration({ compositor, generation }));
       }
-      await this.platform.switchIngestMonitoring({ from: topology.spare, to: topology.primary });
+      await this.#step(state, "ingest-monitoring-restored-to-primary", () => this.platform.switchIngestMonitoring({ from: topology.spare, to: topology.primary }));
       await this.platform.verifyRecoveredIngest({ topology: { ...topology, activeIngest: topology.primary }, outputGenerations: state.outputGenerations });
-      await this.platform.deactivateSpareIngest(topology.spare);
-      await this.platform.detachIngestNetworkPolicy(topology.spare);
-      await this.platform.restoreSpareCompositor(topology.spare);
+      await this.#step(state, "spare-ingest-deactivated", () => this.platform.deactivateSpareIngest(topology.spare));
+      await this.#step(state, "ingest-network-policy-detached", () => this.platform.detachIngestNetworkPolicy(topology.spare));
+      await this.#step(state, "spare-compositor-restored", () => this.platform.restoreSpareCompositor(topology.spare));
       state.phase = "ROLLED_BACK";
       state.activeHost = "primary";
-      this.#record(state, "rollback-qualified");
+      await this.#record(state, "rollback-qualified");
       return validateRecoveryState(state);
     } catch (error) {
-      state.phase = "FAILED";
-      state.failure = safeError(error);
-      this.#record(state, "rollback-failed");
-      throw new IngestRecoveryError(state.failure, state);
+      throw await this.#failure(state, "rollback-failed", error);
     }
   }
 
-  #record(state, event) {
+  async #step(state, event, operation) {
+    if (state.timeline.some((entry) => entry.event === event)) return;
+    await operation();
+    await this.#record(state, event);
+  }
+
+  async #failure(state, event, error) {
+    state.phase = "FAILED";
+    state.failure = safeError(error);
+    try {
+      await this.#record(state, event);
+    } catch (checkpointError) {
+      state.failure = `${state.failure}; recovery checkpoint failed: ${safeError(checkpointError)}`.slice(0, 500);
+    }
+    return new IngestRecoveryError(state.failure, state);
+  }
+
+  async #record(state, event) {
     const at = this.now().toISOString();
     state.updatedAt = at;
     state.timeline.push({ at, event });
+    await this.#checkpoint(state);
+  }
+
+  async #checkpoint(state) {
+    validateRecoveryState(state);
+    await this.checkpoint(structuredClone(state));
+  }
+}
+
+export class FileIngestRecoveryStateStore {
+  constructor(statePath) {
+    if (typeof statePath !== "string" || !isAbsolute(statePath) || resolve(statePath) !== statePath || statePath.includes("..") || /[\r\n\0]/u.test(statePath)) throw new Error("ingest recovery state path must be a normalized absolute path");
+    this.statePath = statePath;
+    this.lockPath = `${statePath}.lock`;
+  }
+
+  async load() {
+    try {
+      const information = await lstat(this.statePath);
+      if (!information.isFile() || information.isSymbolicLink() || (information.mode & 0o077) !== 0) throw new Error("ingest recovery state must be a protected regular file");
+      return validateRecoveryState(JSON.parse(await readFile(this.statePath, "utf8")));
+    } catch (error) {
+      if (error?.code === "ENOENT") return null;
+      throw error;
+    }
+  }
+
+  async save(state) {
+    validateRecoveryState(state);
+    const parent = dirname(this.statePath);
+    await mkdir(parent, { recursive: true, mode: 0o700 });
+    await chmod(parent, 0o700);
+    const temporary = `${this.statePath}.tmp-${process.pid}-${randomUUID()}`;
+    await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+    await rename(temporary, this.statePath);
+    await chmod(this.statePath, 0o600);
+  }
+
+  async withLock(operation) {
+    const parent = dirname(this.statePath);
+    await mkdir(parent, { recursive: true, mode: 0o700 });
+    await chmod(parent, 0o700);
+    return withProcessLock({ lockPath: this.lockPath, label: "ingest recovery" }, operation);
   }
 }
 
@@ -150,13 +228,15 @@ export function recoveryTopology(manifest, lifecycleState, anchors) {
 }
 
 export function validateRecoveryState(value) {
-  if (!value || value.schemaVersion !== 1 || typeof value.event !== "string" || !value.event || typeof value.recoveryId !== "string" || !value.recoveryId) throw new Error("ingest recovery state identity is invalid");
+  if (!value || value.schemaVersion !== 2 || typeof value.event !== "string" || !value.event || typeof value.recoveryId !== "string" || !value.recoveryId) throw new Error("ingest recovery state identity is invalid");
   if (!PHASES.has(value.phase) || !new Set(["primary", "spare"]).has(value.activeHost)) throw new Error("ingest recovery state phase is invalid");
-  for (const field of ["preparedAt", "updatedAt"]) if (!Number.isFinite(Date.parse(value[field]))) throw new Error(`ingest recovery ${field} is invalid`);
+  for (const field of ["startedAt", "updatedAt"]) if (!Number.isFinite(Date.parse(value[field]))) throw new Error(`ingest recovery ${field} is invalid`);
+  if (value.phase === "PREPARING" ? value.preparedAt !== null : !Number.isFinite(Date.parse(value.preparedAt))) throw new Error("ingest recovery preparedAt is invalid");
   recoveryTopologyFromState(value.topology);
   if (value.outputGenerations !== null) validateOutputGenerations(value.outputGenerations, value.topology.compositors);
   if (value.failure !== null && (typeof value.failure !== "string" || !value.failure)) throw new Error("ingest recovery failure is invalid");
   if (!Array.isArray(value.timeline) || value.timeline.length < 1 || value.timeline.some((entry) => !Number.isFinite(Date.parse(entry?.at)) || typeof entry.event !== "string" || !entry.event)) throw new Error("ingest recovery timeline is invalid");
+  validatePhaseState(value);
   return value;
 }
 
@@ -178,8 +258,30 @@ function validateOutputGenerations(value, compositors) {
   }
 }
 
-function requirePhase(state, phase) {
-  if (state.phase !== phase) throw new Error(`ingest recovery requires phase ${phase}`);
+function validatePhaseState(value) {
+  const outputCaptured = value.outputGenerations !== null;
+  const failed = value.failure !== null;
+  const expected = {
+    PREPARING: ["primary", false, false],
+    PREPARED: ["primary", false, false],
+    TAKING_OVER: ["primary", null, false],
+    ACTIVE_ON_SPARE: ["spare", true, false],
+    ROLLING_BACK: ["spare", true, false],
+    ROLLED_BACK: ["primary", true, false],
+    FAILED: [null, null, true]
+  }[value.phase];
+  if ((expected[0] !== null && value.activeHost !== expected[0]) || (expected[1] !== null && outputCaptured !== expected[1]) || failed !== expected[2]) {
+    throw new Error("ingest recovery phase state is inconsistent");
+  }
+}
+
+function requireMatchingTopology(actual, expected) {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error("ingest recovery topology changed while preparation was incomplete");
+}
+
+function requirePhase(state, phases) {
+  const allowed = Array.isArray(phases) ? phases : [phases];
+  if (!allowed.includes(state.phase)) throw new Error(`ingest recovery requires phase ${allowed.join(" or ")}`);
 }
 
 function requireConfirmation(actual, expected) {

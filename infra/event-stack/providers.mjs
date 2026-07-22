@@ -258,13 +258,11 @@ export class DigitalOceanProvider {
     const to = exactProviderId(toDropletId, "destination Droplet");
     if (from === to) throw new Error("Reserved IPv4 movement requires different source and destination Droplets");
 
-    const [address, source, destination] = await Promise.all([
+    let [address, source, destination] = await Promise.all([
       this.getReservedIpv4(ip),
       this.getDroplet(from),
       this.getDroplet(to)
     ]);
-    if (address.locked) throw new Error(`reserved IPv4 ${ip} is locked; refusing reassignment`);
-    if (address.dropletId !== from) throw new Error(`reserved IPv4 ${ip} is assigned to Droplet ${address.dropletId ?? "none"}, not expected source ${from}`);
     if (!address.region || source.region !== address.region || destination.region !== address.region) {
       throw new Error(`reserved IPv4 ${ip} and recovery Droplets must be in the same region`);
     }
@@ -272,6 +270,17 @@ export class DigitalOceanProvider {
       throw new Error("Reserved IPv4 recovery Droplets must share the same VPC");
     }
     if (destination.status !== "active") throw new Error(`destination Droplet ${to} is not active`);
+
+    if (address.locked) {
+      address = await this.#wait(async () => {
+        const current = await this.getReservedIpv4(ip);
+        return current.locked ? null : current;
+      }, `reserved IPv4 ${ip} remained locked during recovery reconciliation`);
+    }
+    if (address.dropletId === to) {
+      return { ip: address.ip, region: address.region, fromDropletId: from, toDropletId: to, actionId: null, status: "already-assigned" };
+    }
+    if (address.dropletId !== from) throw new Error(`reserved IPv4 ${ip} is assigned to Droplet ${address.dropletId ?? "none"}, not expected source ${from}`);
 
     const action = await this.assignReservedIpv4(ip, to);
     if (action?.id == null) throw new Error(`DigitalOcean did not return an action id while moving reserved IPv4 ${ip}`);
