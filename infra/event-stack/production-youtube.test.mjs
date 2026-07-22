@@ -25,6 +25,7 @@ function stream(court) {
     frameRate: "variable",
     streamName: `secret-stream-key-${court}`,
     rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2",
+    rtmpsBackupIngestionAddress: "rtmps://b.rtmps.youtube.com/live2",
     streamStatus: "inactive",
     healthStatus: null,
     configurationIssues: []
@@ -83,6 +84,8 @@ test("normalizes only the reusable variable-profile stream and safe unlisted bro
   assert.equal(normalizeProductionBroadcast(broadcast("six-camera-soak", 1, "stream-1"), "six-camera-soak", 1).autoStop, false);
 
   assert.throws(() => normalizeProductionStream({ ...stream(1), resolution: "1080p" }, 1), /variable-profile/);
+  assert.throws(() => normalizeProductionStream({ ...stream(1), rtmpsBackupIngestionAddress: null }, 1), /primary\/backup ingestion/);
+  assert.throws(() => normalizeProductionStream({ ...stream(1), rtmpsBackupIngestionAddress: stream(1).rtmpsIngestionAddress }, 1), /primary\/backup ingestion/);
   assert.throws(() => normalizeProductionStream({ ...stream(1), streamStatus: "active" }, 1, { requireIdle: true }), /not idle/);
   assert.throws(() => normalizeProductionBroadcast({ ...broadcast("six-camera-soak", 1, "stream-1"), privacyStatus: "public" }), /safety settings/);
 });

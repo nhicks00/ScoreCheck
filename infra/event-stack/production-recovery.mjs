@@ -263,10 +263,13 @@ export function migrateProductionMaterial({ legacyMaterial, destinations }) {
     if (!stream || stream.court !== court || stream.resolution !== "variable" || stream.frameRate !== "variable") {
       throw new Error(`Camera ${court} production YouTube destination is invalid`);
     }
+    const primaryRtmpsBase = requireRtmps(stream.rtmpsIngestionAddress, `Camera ${court} YouTube RTMPS base`);
+    const backupRtmpsBase = requireRtmps(stream.rtmpsBackupIngestionAddress, `Camera ${court} YouTube backup RTMPS base`);
+    if (backupRtmpsBase === primaryRtmpsBase) throw new Error(`Camera ${court} YouTube primary and backup RTMPS bases must differ`);
     compositors[court] = {
       apiKey: legacy.apiKey,
       apiSecret: legacy.apiSecret,
-      rtmpsBase: requireRtmps(stream.rtmpsIngestionAddress, `Camera ${court} YouTube RTMPS base`),
+      rtmpsBase: primaryRtmpsBase,
       streamKey: requireSecret(stream.streamName, `Camera ${court} YouTube stream key`, 8),
       streamId: requireProviderId(stream.id, `Camera ${court} YouTube stream id`),
       youtubeResolution: "variable",

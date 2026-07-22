@@ -217,8 +217,9 @@ function evidenceInput() {
   const outputGenerations = Object.fromEntries(Array.from({ length: 8 }, (_, index) => {
     const court = index + 1;
     return [court, {
-      schemaVersion: 1,
+      schemaVersion: 2,
       court,
+      destinationRole: "primary",
       event: "event-test",
       destinationId: `broadcast-${court}`,
       outputGeneration: "generation-1234",

@@ -14,7 +14,7 @@
 #
 # Usage (on the compositor droplet, from /opt/compositor):
 #   docker compose up -d
-#   ./start-court.sh 1 1080p30 event-id destination-id output-generation
+#   ./start-court.sh 1 1080p30 event-id destination-id output-generation primary
 #   ./list-egress.sh          # see active egresses
 #   ./stop-court.sh 1         # end the broadcast
 #   docker compose down       # stop the whole stack

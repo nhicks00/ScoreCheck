@@ -37,7 +37,8 @@ test("renders protected all-publisher, eight-compositor secrets with no producti
     title: `ScoreCheck Production Camera ${index + 1} Auto Stream`,
     isReusable: true,
     streamName: `secret-key-${index + 1}`,
-    rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2"
+    rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2",
+    rtmpsBackupIngestionAddress: "rtmps://b.rtmps.youtube.com/live2"
   }));
   await renderRehearsalSecretDirectory({
     manifest,

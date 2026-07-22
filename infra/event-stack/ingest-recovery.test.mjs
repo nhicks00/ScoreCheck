@@ -334,10 +334,11 @@ function passingPlatform(calls) {
 
 function outputOwner(camera) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     event: "recovery-event",
     court: camera,
     destinationId: `broadcast-${camera}`,
+    destinationRole: "primary",
     outputGeneration: `generation-${camera}`,
     outputProfile: "1080p30",
     rendererGitSha: "a".repeat(40),

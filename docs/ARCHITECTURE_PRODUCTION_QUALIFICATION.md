@@ -138,8 +138,8 @@ The target remains:
 | I-06 | One Egress per compositor | `SATISFIED` | `start-court.sh` serializes starts, verifies active count zero, and the agent contract enforces one active request maximum. | Retain multiplicity fault tests. |
 | I-07 | Orphaned Egress reconciliation/idempotency | `SATISFIED` | Every Egress now has a protected atomic owner record binding event, camera, destination, output generation, renderer Git/deployment, output profile, Egress ID, and request digest. Starts, resume, second-admission proof, stop, and supervisor replacement reconcile exact active process plus owner/digest and reject ambiguous or changed ownership. | Retain a production interruption/resume artifact; never manually delete an owner record to force adoption. |
 | I-08 | Dedicated-CPU compositor benchmark | `DEFERRED` | Production-shaped capacity harness exists; current event fleet deliberately uses the declared compositor pool shape. | Compare qualified c-4/c-8 and current shape using p95/p99 CPU, steal, encode speed, frame pacing, `/dev/shm`, memory, cold/warm start, and cost. Do not resize from average CPU. |
-| I-09 | Spare to YouTube backup ingest | `DEFERRED` | The warm spare and YouTube lifecycle controls exist; backup-ingestion ownership/failover is not qualified. | Limit first gate to one priority court. Prove primary failure, backup continuity, return-to-primary, and no duplicate publisher. |
-| I-10 | YouTube lifecycle and destination ownership | `SATISFIED` | Production YouTube code validates stream/broadcast IDs, binding, privacy, lifecycle, health, issues, and watch page. | Extend with output-conformance and optional backup identity. |
+| I-09 | Spare to YouTube backup ingest | `PARTIAL` | Production destination admission now requires distinct primary and backup RTMPS ingestion addresses. A protected one-court runner gives primary and backup Egresses explicit ownership roles, stages the shared stream key only on the spare for the gate, verifies dual/backup-only/restored/primary-only topology plus provider and external-viewer health, restores primary before removing backup on every handled failure path, and removes the temporary assignment. Provider-free state-machine, adapter, secret-redaction, and topology regressions pass. | Run the attended gate against one selected synthetic priority court and retain transition timing plus human or continuous-viewer interruption evidence. Unit tests and phase-local viewer probes do not prove seamless live continuity. |
+| I-10 | YouTube lifecycle and destination ownership | `SATISFIED` | Production YouTube code validates stream/broadcast IDs, binding, privacy, lifecycle, health, issues, watch page, and distinct primary/backup RTMPS identities. Egress owner schema 2 binds each output to `primary` or `backup`. | Retain output-conformance and exact role ownership evidence. |
 
 ### Monitoring, Evidence, And Paging
 
@@ -211,7 +211,9 @@ In particular:
   browser-only blocking remains insufficient. Bounded
   browser recovery, exact Egress-owner resume, the external platform sentinel,
   and retained critical-log export have implementations but still need
-  production-shaped evidence. YouTube backup ingest remains deferred.
+  production-shaped evidence. The YouTube backup runner is implemented and
+  regression-tested, but its attended one-court live transition artifact is
+  still missing.
 - The existing observability bastion remains the only event bastion. Key-only
   SSH and final accepted-session evidence are implemented; a first live event
   artifact is still required. Dynamic provider dependencies make a static
@@ -576,8 +578,10 @@ The scoring prerequisite is complete. Checksummed production evidence is under
    supplies all eight synthetic feeds and exact evidence gates; no physical
    camera operation is required. Do not substitute unit tests for this
    provider/host transaction evidence.
-5. Qualify one priority-court spare compositor against YouTube backup ingestion
-   and capture interruption/resume evidence for exact Egress ownership.
+5. Run `youtube-backupctl.mjs` against one priority-court synthetic output.
+   Capture exact primary/backup ownership, transition timing, and continuous
+   human or external-viewer interruption/resume evidence. A phase-local viewer
+   probe alone is not seamless-continuity proof.
 6. Run the eight-camera event-length endurance matrix, external viewer rotation,
    exact cleanup, and terminal provider-zero audit. Only then mark the active
    production-qualification goal complete.

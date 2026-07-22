@@ -245,12 +245,18 @@ export function normalizeProductionStream(value, expectedCourt = null, { require
   const ingestion = cdn.ingestionInfo ?? value;
   const streamName = ingestion.streamName;
   const rtmpsIngestionAddress = ingestion.rtmpsIngestionAddress;
-  if (typeof streamName !== "string" || !streamName || typeof rtmpsIngestionAddress !== "string" || !rtmpsIngestionAddress.startsWith("rtmps://")) throw new Error(`Camera ${court} production YouTube ingestion identity is invalid`);
+  const rtmpsBackupIngestionAddress = ingestion.rtmpsBackupIngestionAddress;
+  if (typeof streamName !== "string" || !streamName
+    || typeof rtmpsIngestionAddress !== "string" || !rtmpsIngestionAddress.startsWith("rtmps://")
+    || typeof rtmpsBackupIngestionAddress !== "string" || !rtmpsBackupIngestionAddress.startsWith("rtmps://")
+    || rtmpsBackupIngestionAddress === rtmpsIngestionAddress) {
+    throw new Error(`Camera ${court} production YouTube primary/backup ingestion identity is invalid`);
+  }
   const streamStatus = value.streamStatus ?? value.status?.streamStatus ?? null;
   if (requireIdle && !new Set(["inactive", "ready"]).has(streamStatus)) throw new Error(`Camera ${court} production YouTube stream is not idle`);
   return {
     id: String(value.id), court, title, isReusable: true, ingestionType: "rtmp", resolution: "variable", frameRate: "variable",
-    streamName, rtmpsIngestionAddress, streamStatus,
+    streamName, rtmpsIngestionAddress, rtmpsBackupIngestionAddress, streamStatus,
     healthStatus: value.healthStatus ?? value.status?.healthStatus?.status ?? null,
     configurationIssues: value.configurationIssues ?? (value.status?.healthStatus?.configurationIssues ?? []).map((entry) => entry.type).filter(Boolean)
   };

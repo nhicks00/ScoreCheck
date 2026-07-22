@@ -156,7 +156,8 @@ test("migrates the qualified legacy 720 material to reusable variable YouTube st
         resolution: "variable",
         frameRate: "variable",
         streamName: `production-stream-key-${court}`,
-        rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2"
+        rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2",
+        rtmpsBackupIngestionAddress: "rtmps://b.rtmps.youtube.com/live2"
       }];
     }))
   };

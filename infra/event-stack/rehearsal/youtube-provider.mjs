@@ -151,7 +151,10 @@ function normalizePersistentStream(value, expectedCourt = null) {
     throw new Error(`YouTube rehearsal stream profile is invalid${court ? ` for Camera ${court}` : ""}`);
   }
   const ingestion = value.cdn?.ingestionInfo;
-  if (typeof ingestion?.streamName !== "string" || !ingestion.streamName || typeof ingestion.rtmpsIngestionAddress !== "string" || !ingestion.rtmpsIngestionAddress.startsWith("rtmps://")) {
+  if (typeof ingestion?.streamName !== "string" || !ingestion.streamName
+    || typeof ingestion.rtmpsIngestionAddress !== "string" || !ingestion.rtmpsIngestionAddress.startsWith("rtmps://")
+    || typeof ingestion.rtmpsBackupIngestionAddress !== "string" || !ingestion.rtmpsBackupIngestionAddress.startsWith("rtmps://")
+    || ingestion.rtmpsBackupIngestionAddress === ingestion.rtmpsIngestionAddress) {
     throw new Error(`YouTube rehearsal stream ingestion identity is invalid${court ? ` for Camera ${court}` : ""}`);
   }
   return {
@@ -161,6 +164,7 @@ function normalizePersistentStream(value, expectedCourt = null) {
     isReusable: true,
     streamName: ingestion.streamName,
     rtmpsIngestionAddress: ingestion.rtmpsIngestionAddress,
+    rtmpsBackupIngestionAddress: ingestion.rtmpsBackupIngestionAddress,
     streamStatus: value.status?.streamStatus ?? null,
     healthStatus: value.status?.healthStatus?.status ?? null,
     configurationIssues: (value.status?.healthStatus?.configurationIssues ?? []).map((entry) => entry.type).filter(Boolean)

@@ -82,7 +82,8 @@ export class RehearsalController {
             title: state.courts[court].stream.title,
             isReusable: state.courts[court].stream.isReusable,
             streamName: state.courts[court].stream.streamName,
-            rtmpsIngestionAddress: state.courts[court].stream.rtmpsIngestionAddress
+            rtmpsIngestionAddress: state.courts[court].stream.rtmpsIngestionAddress,
+            rtmpsBackupIngestionAddress: state.courts[court].stream.rtmpsBackupIngestionAddress
           })),
           external
         });
@@ -147,6 +148,7 @@ export class RehearsalController {
           const owner = {
             event: state.event,
             destinationId: courtState.stream.id,
+            destinationRole: "primary",
             outputGeneration: state.generationId,
             rendererGitSha: state.program.gitSha,
             rendererDeploymentId: state.program.deployment.id
@@ -253,6 +255,7 @@ export class RehearsalController {
             const owner = {
               event: state.event,
               destinationId: courtState.stream.id,
+              destinationRole: "primary",
               outputGeneration: state.generationId,
               rendererGitSha: state.program.gitSha,
               rendererDeploymentId: state.program.deployment.id

@@ -305,7 +305,7 @@ function validateOutputGenerations(value, compositors, event) {
   if (JSON.stringify(Object.keys(value).sort((left, right) => Number(left) - Number(right))) !== JSON.stringify(cameras)) throw new Error("ingest recovery output generations do not match the compositor set");
   for (const camera of cameras) {
     const generation = value[camera];
-    if (!generation || generation.schemaVersion !== 1 || generation.court !== Number(camera)) throw new Error(`Camera ${camera} output generation is invalid`);
+    if (!generation || generation.schemaVersion !== 2 || generation.court !== Number(camera) || generation.destinationRole !== "primary") throw new Error(`Camera ${camera} output generation is invalid`);
     if (generation.event !== event) throw new Error(`Camera ${camera} output generation belongs to a different event`);
     for (const field of ["event", "destinationId", "outputGeneration"]) {
       if (typeof generation[field] !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$/u.test(generation[field])) throw new Error(`Camera ${camera} output generation is invalid`);

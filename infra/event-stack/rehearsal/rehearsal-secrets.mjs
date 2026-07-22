@@ -221,7 +221,9 @@ function validateYoutubeDestinations(values) {
       || destination.isReusable !== true
       || !destination.streamId
       || !destination.streamName
-      || !destination.rtmpsIngestionAddress?.startsWith("rtmps://")) {
+      || !destination.rtmpsIngestionAddress?.startsWith("rtmps://")
+      || !destination.rtmpsBackupIngestionAddress?.startsWith("rtmps://")
+      || destination.rtmpsBackupIngestionAddress === destination.rtmpsIngestionAddress) {
       throw new Error("rehearsal YouTube destination is invalid");
     }
   }

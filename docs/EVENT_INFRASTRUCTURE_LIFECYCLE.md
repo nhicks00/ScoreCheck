@@ -730,6 +730,42 @@ reuse the monitor-service baseline or active ping URL: reuse could let one
 process mask another process's failure. Attach Pushover to the sentinel check
 before capturing the production recovery source.
 
+### Priority-court YouTube backup gate
+
+YouTube exposes a distinct backup RTMPS ingestion address on the same reusable
+stream. Production destination admission requires both addresses and refuses a
+missing or identical pair. The primary compositor and warm spare use the same
+protected stream key, but their owner records are explicit schema-2 `primary`
+and `backup` roles and their RTMPS base hosts must differ.
+
+Run this only during an attended synthetic production soak for one selected
+priority court. It does not require a physical camera when the protected
+synthetic publishers are the admitted source:
+
+```bash
+node infra/event-stack/youtube-backupctl.mjs run \
+  --profile /absolute/protected/events/EVENT/operator-profile.json \
+  --destinations /absolute/protected/youtube/EVENT/destinations.json \
+  --soak-evidence /absolute/protected/evidence/EVENT \
+  --evidence /absolute/protected/evidence/EVENT/youtube-backup-camera-1 \
+  --camera 1 \
+  --confirm YOUTUBE-BACKUP:EVENT:SOAK_RUN_ID:CAMERA-1
+```
+
+The runner stages one mode-0600, court-scoped backup assignment on the spare;
+starts exactly one backup Egress; verifies dual ingest; stops the exact owned
+primary; verifies backup-only provider and viewer delivery; restores primary;
+verifies dual delivery; stops backup; removes the assignment; and seals
+primary-only rollback evidence. A stale checkpoint that no longer shows dual
+ingest restores primary before backup can be removed. It never creates a new
+stream or broadcast and never logs or stores the stream key in public state.
+
+The automated phase probes establish endpoint health after each transition,
+not zero-interruption continuity during the transition itself. Final acceptance
+therefore also requires an attended human observation or a continuous external
+viewer trace spanning primary stop and restoration. Until that artifact exists,
+the implementation is ready but I-09 remains `PARTIAL`.
+
 ## Event build
 
 The bundle contains a new immutable manifest for every event. The manifest

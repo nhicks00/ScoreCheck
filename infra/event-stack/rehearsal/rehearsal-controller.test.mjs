@@ -46,6 +46,7 @@ function harness({ failPublisherOnce = false, failPreflight = false, failFullEvi
         isReusable: true,
         streamName: `key${court}`,
         rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2",
+        rtmpsBackupIngestionAddress: "rtmps://b.rtmps.youtube.com/live2",
         streamStatus: "inactive",
         healthStatus: "noData",
         configurationIssues: []
@@ -61,6 +62,7 @@ function harness({ failPublisherOnce = false, failPreflight = false, failFullEvi
         isReusable: true,
         streamName: `key${court}`,
         rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2",
+        rtmpsBackupIngestionAddress: "rtmps://b.rtmps.youtube.com/live2",
         streamStatus,
         healthStatus: streamStatus === "active" ? "good" : "noData",
         configurationIssues: []

@@ -6,6 +6,7 @@ import { EgressRuntime, parseActiveEgress, parseEgressOwnership } from "./egress
 const owner = Object.freeze({
   event: "event-test",
   destinationId: "broadcast-test",
+  destinationRole: "primary",
   outputGeneration: "generation-test",
   rendererGitSha: "a".repeat(40),
   rendererDeploymentId: "dpl_test123"
@@ -13,7 +14,7 @@ const owner = Object.freeze({
 
 function ownership(egressId = "EG_started") {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     ...owner,
     court: 1,
     outputProfile: "1080p30",
@@ -57,7 +58,7 @@ test("starts one Egress, adopts it on resume, and proves second admission reject
   assert.equal(started.adopted, false);
   assert.equal((await runtime.ensureStarted({ host: "198.51.100.1", court: 1, owner, expectedId: "EG_started" })).adopted, true);
   assert.deepEqual(await runtime.proveSecondStartRejected({ host: "198.51.100.1", court: 1, owner, expectedId: "EG_started" }), { rejected: true, activeId: "EG_started" });
-  assert.ok(calls.some((entry) => entry.includes("start-court.sh 1 1080p30 event-test broadcast-test generation-test")));
+  assert.ok(calls.some((entry) => entry.includes("start-court.sh 1 1080p30 event-test broadcast-test generation-test primary")));
 });
 
 test("stops only the recorded Egress id and is resumable after confirmed absence", async () => {

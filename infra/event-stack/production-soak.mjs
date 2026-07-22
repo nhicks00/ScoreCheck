@@ -1114,6 +1114,7 @@ function egressOwner(state, camera) {
   return {
     event: state.event,
     destinationId,
+    destinationRole: "primary",
     outputGeneration: state.runId,
     rendererGitSha: renderer.gitSha,
     rendererDeploymentId: renderer.deploymentId

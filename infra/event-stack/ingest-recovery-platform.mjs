@@ -451,6 +451,7 @@ export function ownerForRestart(generation) {
   return {
     event: generation.event,
     destinationId: generation.destinationId,
+    destinationRole: generation.destinationRole,
     outputGeneration: generation.outputGeneration,
     rendererGitSha: generation.rendererGitSha,
     rendererDeploymentId: generation.rendererDeploymentId

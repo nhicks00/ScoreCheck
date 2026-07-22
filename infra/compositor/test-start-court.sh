@@ -39,13 +39,14 @@ printf '%s\n' \
   'EGRESS_KEYFRAME_INTERVAL=4' \
   'COURT_1_YOUTUBE_KEY=test-stream-key' >"$FIXTURE/.env"
 
-PATH="$FIXTURE/bin:$PATH" "$FIXTURE/start-court.sh" 1 1080p30 event-test broadcast-test generation-test >"$FIXTURE/start.out" 2>&1
+PATH="$FIXTURE/bin:$PATH" "$FIXTURE/start-court.sh" 1 1080p30 event-test broadcast-test generation-test primary >"$FIXTURE/start.out" 2>&1
 grep -Fxq 'EG_new' "$FIXTURE/requests/court-1.egress-id"
 jq -e '
-  .schemaVersion == 1
+  .schemaVersion == 2
   and .event == "event-test"
   and .court == 1
   and .destinationId == "broadcast-test"
+  and .destinationRole == "primary"
   and .outputGeneration == "generation-test"
   and .outputProfile == "1080p30"
   and .rendererGitSha == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -75,21 +76,31 @@ rm -f "$FIXTURE/requests/court-1.egress-id"
 PATH="$FIXTURE/bin:$PATH" "$FIXTURE/stop-court.sh" 1 >"$FIXTURE/stop.out" 2>&1
 test ! -e "$FIXTURE/requests/court-1.owner.json"
 grep -Fq 'court 1: stopped (ownership files cleared)' "$FIXTURE/stop.out"
+
+printf '%s\n' \
+  'YOUTUBE_BACKUP_RTMPS_BASE=rtmps://b.rtmps.youtube.com/live2' \
+  'COURT_1_YOUTUBE_KEY=test-stream-key' >"$FIXTURE/requests/court-1.backup.env"
+chmod 600 "$FIXTURE/requests/court-1.backup.env"
+PATH="$FIXTURE/bin:$PATH" "$FIXTURE/start-court.sh" 1 1080p30 event-test broadcast-test backup-generation backup >"$FIXTURE/backup.out" 2>&1
+jq -e '.schemaVersion == 2 and .destinationRole == "backup" and .outputGeneration == "backup-generation"' "$FIXTURE/requests/court-1.owner.json" >/dev/null
+grep -Fq 'rtmps://b.rtmps.youtube.com/live2/test-stream-key' "$FIXTURE/requests/court-1.json"
+PATH="$FIXTURE/bin:$PATH" "$FIXTURE/stop-court.sh" 1 EG_new >"$FIXTURE/backup-stop.out" 2>&1
+
 printf '%s\n' 'MOCK_ACTIVE=1' >>"$FIXTURE/.env"
-if PATH="$FIXTURE/bin:$PATH" "$FIXTURE/start-court.sh" 1 1080p30 event-test broadcast-test generation-test >"$FIXTURE/rejected.out" 2>&1; then
+if PATH="$FIXTURE/bin:$PATH" "$FIXTURE/start-court.sh" 1 1080p30 event-test broadcast-test generation-test primary >"$FIXTURE/rejected.out" 2>&1; then
   printf 'FAIL: second active Egress was admitted\n' >&2
   exit 1
 fi
 grep -Fq 'already has an active Egress' "$FIXTURE/rejected.out"
 test ! -e "$FIXTURE/requests/court-1.egress-id"
 
-if PATH="$FIXTURE/bin:$PATH" "$FIXTURE/start-court.sh" 1 1080p30 event-test broadcast-test >"$FIXTURE/argument.out" 2>&1; then
+if PATH="$FIXTURE/bin:$PATH" "$FIXTURE/start-court.sh" 1 1080p30 event-test broadcast-test generation-test >"$FIXTURE/argument.out" 2>&1; then
   printf 'FAIL: extra command-line argument was accepted\n' >&2
   exit 1
 fi
-grep -Fq 'court number, output profile, event, destination id, and output generation are required' "$FIXTURE/argument.out"
+grep -Fq 'court number, output profile, event, destination id, output generation, and destination role are required' "$FIXTURE/argument.out"
 
-if PATH="$FIXTURE/bin:$PATH" "$FIXTURE/start-court.sh" 1 auto event-test broadcast-test generation-test >"$FIXTURE/profile.out" 2>&1; then
+if PATH="$FIXTURE/bin:$PATH" "$FIXTURE/start-court.sh" 1 auto event-test broadcast-test generation-test primary >"$FIXTURE/profile.out" 2>&1; then
   printf 'FAIL: unknown output profile was accepted\n' >&2
   exit 1
 fi

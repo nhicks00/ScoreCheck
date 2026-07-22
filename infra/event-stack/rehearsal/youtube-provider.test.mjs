@@ -15,7 +15,11 @@ function stream(court, overrides = {}) {
       ingestionType: "rtmp",
       resolution: "variable",
       frameRate: "variable",
-      ingestionInfo: { streamName: `protected-key-${court}`, rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2" }
+      ingestionInfo: {
+        streamName: `protected-key-${court}`,
+        rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2",
+        rtmpsBackupIngestionAddress: "rtmps://b.rtmps.youtube.com/live2"
+      }
     },
     contentDetails: { isReusable: true },
     status: { streamStatus: "inactive", healthStatus: { status: "noData", configurationIssues: [] } },

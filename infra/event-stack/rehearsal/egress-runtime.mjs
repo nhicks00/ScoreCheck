@@ -67,7 +67,7 @@ export class EgressRuntime {
       return { ...await this.reconcileOwned({ host, court, profile, owner: expectedOwner, expectedId }), adopted: true };
     }
     if (expectedId) throw new Error(`expected Egress ${expectedId} is absent from compositor ${host}`);
-    const result = await this.#remote(host, `cd /opt/compositor && ./start-court.sh ${court} ${profile} ${expectedOwner.event} ${expectedOwner.destinationId} ${expectedOwner.outputGeneration}`);
+    const result = await this.#remote(host, `cd /opt/compositor && ./start-court.sh ${court} ${profile} ${expectedOwner.event} ${expectedOwner.destinationId} ${expectedOwner.outputGeneration} ${expectedOwner.destinationRole}`);
     const ids = [...new Set(result.stdout.match(/EG_[a-zA-Z0-9]+/g) ?? [])];
     if (ids.length !== 1) throw new Error(`compositor ${host} start did not return exactly one Egress id`);
     const id = ids[0];
@@ -87,7 +87,7 @@ export class EgressRuntime {
     validateProfile(profile);
     const expectedOwner = validateExpectedOwner(owner);
     validateEgressId(expectedId);
-    const attempt = await this.#remote(host, `cd /opt/compositor && ./start-court.sh ${court} ${profile} ${expectedOwner.event} ${expectedOwner.destinationId} ${expectedOwner.outputGeneration}`, { allowFailure: true });
+    const attempt = await this.#remote(host, `cd /opt/compositor && ./start-court.sh ${court} ${profile} ${expectedOwner.event} ${expectedOwner.destinationId} ${expectedOwner.outputGeneration} ${expectedOwner.destinationRole}`, { allowFailure: true });
     if (attempt.code === 0) throw new Error(`compositor ${host} accepted a second Egress start`);
     await this.reconcileOwned({ host, court, profile, owner: expectedOwner, expectedId });
     return { rejected: true, activeId: expectedId };
@@ -166,9 +166,10 @@ export function parseActiveEgress(raw) {
 export function parseEgressOwnership(raw) {
   let value;
   try { value = JSON.parse(raw.trim()); } catch { throw new Error("Egress ownership is invalid JSON"); }
-  if (!value || value.schemaVersion !== 1 || !Number.isInteger(value.court) || value.court < 1 || value.court > 8) throw new Error("Egress ownership is invalid");
+  if (!value || value.schemaVersion !== 2 || !Number.isInteger(value.court) || value.court < 1 || value.court > 8) throw new Error("Egress ownership is invalid");
   validateIdentifier(value.event, "event");
   validateIdentifier(value.destinationId, "destination id");
+  validateDestinationRole(value.destinationRole);
   validateIdentifier(value.outputGeneration, "output generation");
   validateProfile(value.outputProfile);
   if (!/^[a-f0-9]{40}$/.test(value.rendererGitSha ?? "")) throw new Error("Egress ownership renderer Git SHA is invalid");
@@ -191,16 +192,22 @@ function validateExpectedOwner(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Egress owner is required");
   validateIdentifier(value.event, "event");
   validateIdentifier(value.destinationId, "destination id");
+  validateDestinationRole(value.destinationRole);
   validateIdentifier(value.outputGeneration, "output generation");
   if (!/^[a-f0-9]{40}$/.test(value.rendererGitSha ?? "")) throw new Error("Egress owner renderer Git SHA is invalid");
   if (!/^dpl_[A-Za-z0-9]+$/.test(value.rendererDeploymentId ?? "")) throw new Error("Egress owner renderer deployment id is invalid");
   return {
     event: value.event,
     destinationId: value.destinationId,
+    destinationRole: value.destinationRole,
     outputGeneration: value.outputGeneration,
     rendererGitSha: value.rendererGitSha,
     rendererDeploymentId: value.rendererDeploymentId
   };
+}
+
+function validateDestinationRole(value) {
+  if (!new Set(["primary", "backup"]).has(value)) throw new Error("Egress destination role is invalid");
 }
 
 function validateIdentifier(value, label) {

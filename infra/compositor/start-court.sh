@@ -3,12 +3,12 @@
 # page (headless Chrome) and pushes it to YouTube RTMP.
 #
 # Usage:
-#   ./start-court.sh <court-number> <output-profile> <event> <destination-id> <output-generation>
+#   ./start-court.sh <court-number> <output-profile> <event> <destination-id> <output-generation> <destination-role>
 #
 #   court-number  1-8; the stream key is read only from COURT_<N>_YOUTUBE_KEY
 #   output-profile  one of: 1080p30, 1080p60
 # Examples:
-#   ./start-court.sh 1 1080p30 event-2026 broadcast123 generation123
+#   ./start-court.sh 1 1080p30 event-2026 broadcast123 generation123 primary
 #
 # Requires the LiveKit CLI (see lib.sh for install commands) and a filled-in
 # ./.env (see .env.example). Writes:
@@ -23,8 +23,8 @@ umask 077
 # shellcheck source=lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-if (( $# != 5 )); then
-  echo "error: court number, output profile, event, destination id, and output generation are required; stream keys must come from the protected .env." >&2
+if (( $# != 6 )); then
+  echo "error: court number, output profile, event, destination id, output generation, and destination role are required; stream keys must come from protected env files." >&2
   exit 1
 fi
 COURT="$1"
@@ -32,6 +32,7 @@ OUTPUT_PROFILE="$2"
 EVENT_ID="$3"
 DESTINATION_ID="$4"
 OUTPUT_GENERATION="$5"
+DESTINATION_ROLE="$6"
 if ! [[ "$COURT" =~ ^[0-9]+$ ]]; then
   echo "error: court-number must be an integer, got '$COURT'" >&2
   exit 1
@@ -42,8 +43,23 @@ for binding in "$EVENT_ID" "$DESTINATION_ID" "$OUTPUT_GENERATION"; do
     exit 1
   fi
 done
+if [[ "$DESTINATION_ROLE" != primary && "$DESTINATION_ROLE" != backup ]]; then
+  echo "error: destination role must be primary or backup." >&2
+  exit 1
+fi
 
 load_env
+if [[ "$DESTINATION_ROLE" == backup ]]; then
+  BACKUP_ENV="$COMPOSITOR_DIR/requests/court-${COURT}.backup.env"
+  if [[ ! -f "$BACKUP_ENV" ]]; then
+    echo "error: protected backup assignment is missing for court $COURT." >&2
+    exit 1
+  fi
+  set -a
+  # shellcheck disable=SC1090
+  source "$BACKUP_ENV"
+  set +a
+fi
 require_livekit_env
 find_lk
 
@@ -123,7 +139,12 @@ if [[ -z "$STREAM_KEY" ]]; then
   exit 1
 fi
 
-YOUTUBE_RTMPS_BASE="${YOUTUBE_RTMPS_BASE:-rtmps://a.rtmps.youtube.com/live2}"
+if [[ "$DESTINATION_ROLE" == backup ]]; then
+  : "${YOUTUBE_BACKUP_RTMPS_BASE:?set YOUTUBE_BACKUP_RTMPS_BASE in the protected backup assignment}"
+  YOUTUBE_OUTPUT_RTMPS_BASE="$YOUTUBE_BACKUP_RTMPS_BASE"
+else
+  YOUTUBE_OUTPUT_RTMPS_BASE="${YOUTUBE_RTMPS_BASE:-rtmps://a.rtmps.youtube.com/live2}"
+fi
 : "${PROGRAM_PAGE_BASE_URL:?set PROGRAM_PAGE_BASE_URL in .env (see .env.example)}"
 : "${PROGRAM_PAGE_TOKEN:?set PROGRAM_PAGE_TOKEN in .env (see .env.example)}"
 : "${PROGRAM_RENDERER_GIT_SHA:?set PROGRAM_RENDERER_GIT_SHA in .env (see .env.example)}"
@@ -143,7 +164,7 @@ fi
 
 PROGRAM_TOKEN_FRAGMENT="$(printf '%s' "$PROGRAM_PAGE_TOKEN" | jq -sRr @uri)"
 PAGE_URL="${PROGRAM_PAGE_BASE_URL}/bootstrap?court=${COURT}&build=${PROGRAM_RENDERER_GIT_SHA}&deployment=${PROGRAM_RENDERER_DEPLOYMENT_ID}#token=${PROGRAM_TOKEN_FRAGMENT}"
-RTMP_URL="${YOUTUBE_RTMPS_BASE}/${STREAM_KEY}"
+RTMP_URL="${YOUTUBE_OUTPUT_RTMPS_BASE}/${STREAM_KEY}"
 
 # --- generate the WebEgressRequest (protojson) ----------------------------------
 # await_start_signal: capture holds until the page console.log()s START_RECORDING,
@@ -179,8 +200,9 @@ EOF
 chmod 600 "$REQ_FILE" # contains the stream key
 
 echo "court ${COURT}: starting web egress"
+echo "  role:   ${DESTINATION_ROLE}"
 echo "  page:   ${PROGRAM_PAGE_BASE_URL}/bootstrap?court=${COURT}&build=${PROGRAM_RENDERER_GIT_SHA}&deployment=${PROGRAM_RENDERER_DEPLOYMENT_ID}#token=<redacted>"
-echo "  rtmps:  ${YOUTUBE_RTMPS_BASE}/<key-redacted>"
+echo "  rtmps:  ${YOUTUBE_OUTPUT_RTMPS_BASE}/<key-redacted>"
 echo "  encode: ${OUTPUT_PROFILE} (${EGRESS_WIDTH}x${EGRESS_HEIGHT}@${EGRESS_FRAMERATE} ${EGRESS_VIDEO_BITRATE}kbps), keyframe ${EGRESS_KEYFRAME_INTERVAL}s"
 
 START_LOG="$REQ_DIR/court-${COURT}.start.log"
@@ -210,7 +232,8 @@ if [[ -n "$EGRESS_ID" ]]; then
     --arg egressId "$EGRESS_ID" \
     --arg requestSha256 "$REQUEST_SHA256" \
     --arg startedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '{schemaVersion: 1, event: $event, court: $court, destinationId: $destinationId, outputGeneration: $outputGeneration, outputProfile: $outputProfile, rendererGitSha: $rendererGitSha, rendererDeploymentId: $rendererDeploymentId, egressId: $egressId, requestSha256: $requestSha256, startedAt: $startedAt}' \
+    --arg destinationRole "$DESTINATION_ROLE" \
+    '{schemaVersion: 2, event: $event, court: $court, destinationId: $destinationId, destinationRole: $destinationRole, outputGeneration: $outputGeneration, outputProfile: $outputProfile, rendererGitSha: $rendererGitSha, rendererDeploymentId: $rendererDeploymentId, egressId: $egressId, requestSha256: $requestSha256, startedAt: $startedAt}' \
     >"${OWNER_FILE}.tmp"
   chmod 600 "${ID_FILE}.tmp" "${OWNER_FILE}.tmp"
   mv "${OWNER_FILE}.tmp" "$OWNER_FILE"
