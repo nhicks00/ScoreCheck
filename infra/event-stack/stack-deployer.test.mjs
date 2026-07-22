@@ -12,6 +12,23 @@ const inputs = await loadManifestInputs();
 const manifest = buildEventManifest({ event: "deploy-test", kind: "production", destroyAfter: "2026-08-01", ...inputs });
 const rehearsalManifest = buildEventManifest({ event: "deploy-test", kind: "rehearsal", destroyAfter: "2026-08-01", ...inputs });
 
+async function teardownMonitoringFixture(root) {
+  const secretsDirectory = join(root, "secrets");
+  await mkdir(secretsDirectory, { mode: 0o700 });
+  const ids = {
+    baseline: "11111111-1111-4111-8111-111111111111",
+    active: "22222222-2222-4222-8222-222222222222",
+    sentinel: "33333333-3333-4333-8333-333333333333"
+  };
+  await writeFile(join(secretsDirectory, "observability.env"), [
+    'HEALTHCHECKS_API_KEY="healthchecks-api-key"',
+    `HEALTHCHECKS_BASELINE_CHECK_ID="${ids.baseline}"`,
+    `HEALTHCHECKS_ACTIVE_CHECK_ID="${ids.active}"`,
+    `HEALTHCHECKS_SENTINEL_PING_URL="https://hc-ping.com/${ids.sentinel}"`
+  ].join("\n") + "\n", { mode: 0o600 });
+  return { secretsDirectory, ids };
+}
+
 test("makes the exact lifecycle Node runtime available to every deployment script", () => {
   const value = deploymentScriptEnvironment({ SERVICE_VALUE: "configured", PATH: "/untrusted" }, { PATH: "/usr/bin:/bin", HOME: "/tmp/home" }, process.execPath);
   assert.deepEqual(value.PATH.split(":"), [dirname(process.execPath), "/usr/bin", "/bin"]);
@@ -238,7 +255,9 @@ test("captures commentary and observability TLS state before a healthy stack can
   const knownHosts = join(root, "known_hosts");
   await writeFile(sshKey, "fixture\n", { mode: 0o600 });
   await writeFile(knownHosts, "fixture\n", { mode: 0o600 });
+  const monitoring = await teardownMonitoringFixture(root);
   const commands = [];
+  const providerCalls = [];
   const runner = async (command, args) => {
     commands.push([command, args]);
     return { code: 0, stdout: command === "ssh-keygen" ? "fixture-host-key\n" : "", stderr: "" };
@@ -267,12 +286,17 @@ test("captures commentary and observability TLS state before a healthy stack can
   };
   const deployer = new LocalStackDeployer({
     repoRoot: "/repo",
-    secretsDirectory: "/secrets",
+    secretsDirectory: monitoring.secretsDirectory,
     sshPrivateKey: sshKey,
     knownHostsPath: knownHosts,
     commentaryTlsStateStore: tlsState,
     observabilityTlsStateStore: tlsState,
-    runner
+    runner,
+    fetchImpl: async (url, options = {}) => {
+      providerCalls.push({ url, method: options.method ?? "GET" });
+      if (options.method === "POST") return new Response(null, { status: 200 });
+      return new Response(JSON.stringify({ status: "paused" }), { status: 200, headers: { "content-type": "application/json" } });
+    }
   });
 
   const result = await deployer.prepareForTeardown({ manifest: rehearsalManifest, state });
@@ -281,7 +305,62 @@ test("captures commentary and observability TLS state before a healthy stack can
   assert.equal(result.evidence.observabilityTlsState.stateSha256, captured.stateSha256);
   assert.equal(result.evidence.commentaryTlsState.caddyStopped, true);
   assert.equal(result.evidence.observabilityTlsState.caddyStopped, true);
+  assert.equal(result.evidence.observabilityMonitorStopped, true);
+  assert.deepEqual(result.evidence.healthchecks, { status: "paused", checks: ["baseline", "active", "sentinel"] });
   assert.equal(commands.filter(([command, args]) => command === "ssh" && args.at(-1).includes("stop caddy")).length, 2);
+  assert.equal(commands.filter(([command, args]) => command === "ssh" && args.at(-1).includes("stop monitor-service")).length, 1);
+  assert.equal(providerCalls.filter((call) => call.method === "POST").length, 3);
+  for (const id of Object.values(monitoring.ids)) assert.equal(providerCalls.some((call) => call.url.includes(id)), true);
+});
+
+test("blocks teardown and restores monitoring services when Healthchecks cannot be paused", async () => {
+  const root = await mkdtemp(join(tmpdir(), "scorecheck-dead-man-teardown-failure-"));
+  await chmod(root, 0o700);
+  const sshKey = join(root, "ssh-key");
+  const knownHosts = join(root, "known_hosts");
+  await writeFile(sshKey, "fixture\n", { mode: 0o600 });
+  await writeFile(knownHosts, "fixture\n", { mode: 0o600 });
+  const monitoring = await teardownMonitoringFixture(root);
+  const commands = [];
+  const runner = async (command, args) => {
+    commands.push([command, args]);
+    return { code: 0, stdout: command === "ssh-keygen" ? "fixture-host-key\n" : "", stderr: "" };
+  };
+  const commentary = rehearsalManifest.droplets.find((entry) => entry.role === "commentary");
+  const observability = rehearsalManifest.droplets.find((entry) => entry.role === "observability");
+  const state = {
+    droplets: {
+      [commentary.name]: { publicIpv4: "192.0.2.20", status: "active" },
+      [observability.name]: { publicIpv4: "192.0.2.21", status: "active" }
+    },
+    deployments: {
+      [commentary.name]: { status: "healthy" },
+      [observability.name]: { status: "healthy" }
+    }
+  };
+  const tlsState = {
+    async inspect() { return { status: "missing" }; },
+    async capture() { return { status: "ready", stateSha256: "a".repeat(64), fileCount: 1, certificates: {} }; }
+  };
+  const deployer = new LocalStackDeployer({
+    repoRoot: "/repo",
+    secretsDirectory: monitoring.secretsDirectory,
+    sshPrivateKey: sshKey,
+    knownHostsPath: knownHosts,
+    commentaryTlsStateStore: tlsState,
+    observabilityTlsStateStore: tlsState,
+    runner,
+    fetchImpl: async () => new Response(null, { status: 503 })
+  });
+
+  await assert.rejects(
+    () => deployer.prepareForTeardown({ manifest: rehearsalManifest, state }),
+    /Healthchecks baseline pause failed with HTTP 503/u
+  );
+  const remoteCommands = commands.filter(([command]) => command === "ssh").map(([, args]) => args.at(-1));
+  assert.ok(remoteCommands.some((command) => command.includes("stop monitor-service")));
+  assert.ok(remoteCommands.some((command) => command.includes("start monitor-service caddy")));
+  assert.ok(remoteCommands.some((command) => command.includes("/opt/livekit") && command.includes("start caddy")));
 });
 
 test("fails closed and restores Caddy when a healthy stack has no retainable TLS state", async () => {

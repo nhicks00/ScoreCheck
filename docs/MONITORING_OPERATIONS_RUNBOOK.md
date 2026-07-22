@@ -224,11 +224,14 @@ HEALTHCHECKS_SENTINEL_PING_URL
 Store them only in the protected monitoring environment on the observability
 host and in the protected local deployment file. Never commit them. Pushover
 and the monitor service's baseline and active Healthchecks checks are configured
-in production. The baseline dead-man
-pings every ten minutes at all times. The active check pings
-every minute while any court expects coverage and is explicitly paused through
-the Healthchecks management API while the system is idle. A live ping resumes it
-automatically.
+in production. While the event observability host exists, the baseline dead-man
+pings every ten minutes. The active check pings every minute while any court
+expects coverage and is paused while coverage is idle. Before event compute is
+deleted, teardown stops the monitor sender and then pauses baseline, active, and
+platform-sentinel checks through the Healthchecks management API. All three must
+verify `paused` before deletion can proceed. Their next owning event process
+resumes them with a live ping; this prevents intentional provider-zero periods
+from producing false monitor-down pages.
 The service audits the Healthchecks channel list and both check assignments every
 five minutes using three read-only API requests, with a thirty-second retry after
 provider failure. The dashboard may show `Coverage protected` or `Idle protected`

@@ -618,7 +618,11 @@ observability TLS states before deleting any Droplet. If either healthy service
 cannot preserve valid state, teardown fails closed and restarts that Caddy
 service; no compute is deleted. The retained directories are local lifecycle
 authority, not provider resources, so they create no DigitalOcean idle cost.
-Destroy then
+After TLS capture, teardown stops the observability monitor sender and pauses
+the baseline, active-coverage, and external-sentinel Healthchecks checks. It
+verifies all three are paused before deletion; a provider error blocks teardown
+and restores the stopped monitor and Caddy services. This keeps intentional
+provider-zero periods quiet without weakening event-time dead-men. Destroy then
 deletes 12 verified Droplet IDs one by one; it never issues a tag-wide bulk
 delete. It is resumable after a lost delete response or local interruption. It
 then deletes each lifecycle tag object only after DigitalOcean proves the tag

@@ -146,7 +146,7 @@ The target remains:
 | --- | --- | --- | --- | --- |
 | A-01 | Correlated expected-state incidents | `SATISFIED` | Monitoring distinguishes expected-off from failure, tracks incident episodes, deduplicates notification kinds, and has reset-safe browser counters. | Retain fault-gate tests. |
 | A-02 | Pushover emergency receipts and cancellation | `SATISFIED` | `notifications.ts` stores emergency receipt IDs, polls acknowledgement, and cancels on acknowledgement, silence, or dependency recovery. | No duplicate notification system. Twilio remains removed. |
-| A-03 | State-aware Healthchecks | `SATISFIED` | Baseline/active schedules and channel audits exist. | Retain live subscription audit. |
+| A-03 | State-aware Healthchecks | `SATISFIED` | Baseline/active schedules and channel audits exist. Teardown stops the event-scoped sender, pauses baseline, active, and sentinel checks, verifies all three paused, and restores services instead of deleting compute if provider maintenance fails. Live provider-zero verification at `2026-07-22T13:28:51Z` proved all three paused with their intended channels. | Retain live subscription audit and preserve automatic pause evidence from the next teardown. |
 | A-04 | Local incident outbox during Supabase loss | `SATISFIED` | The monitoring service now has a protected bounded local WAL document for incident changes and notification state, with idempotent replay and notification maintenance independent of Supabase availability. | Exercise outage/replay in the acceptance matrix. |
 | A-05 | External YouTube viewer fresh-frame/audio probe | `SATISFIED` | A bounded no-cookie Chromium probe verifies playhead advance, changing frame fingerprints, nonblack video, decoded audio, and stable dimensions, then closes the temporary browser. Production soak rotates it across active cameras. | Run from an external host for production evidence. |
 | A-06 | External platform sentinel | `SATISFIED` | The production soak owns a separate off-VPC sentinel that checks monitor, ingest, commentary, and immutable renderer HTTPS endpoints every minute and reports success/failure to the dedicated paused-between-events `scorecheck-platform-sentinel` Healthchecks check. The check has a unique ping identity and exactly one Pushover channel. Unique-process liveness, endpoint results, delivery, edge gaps, and coverage are mandatory evidence. | Retain one live loss/recovery artifact in the next camera-backed event run. |
@@ -213,6 +213,9 @@ In particular:
   between events, Pushover-only, and distinct from both monitor dead-men.
   Protected provider evidence is under
   `~/.config/scorecheck/cutovers/platform-sentinel-20260722T131435923Z/`. The
+  quiet provider-zero dead-man proof is under
+  `~/.config/scorecheck/cutovers/provider-zero-healthchecks-20260722T132828Z/`.
+  The
   refreshed immutable recovery source is
   `~/.config/scorecheck/event-stack/production-recovery-source-current-20260722/`
   with source SHA-256

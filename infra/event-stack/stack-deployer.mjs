@@ -12,6 +12,8 @@ export const DEPLOYMENT_SCRIPT_TIMEOUT_MS = 10 * 60 * 1_000;
 export const AGENT_DEPLOY_CONCURRENCY = 3;
 export const MAX_CLOCK_OFFSET_MS = 1_000;
 export const MAX_CLOCK_PROBE_RTT_MS = 5_000;
+const HEALTHCHECKS_API = "https://healthchecks.io/api/v3";
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 const REQUIRED_DEPLOYMENT_SECRET_FILES = Object.freeze([
   "agent-tokens.json",
@@ -191,7 +193,10 @@ export class LocalStackDeployer {
     if (!this.commentaryTlsState || !this.observabilityTlsState) throw new Error("both Caddy TLS state stores are required before teardown");
     const commentaryHosts = commentaryEndpointHosts(manifest);
     const commentaryStartCommand = "cd /opt/livekit && docker compose -f docker-compose.yaml start caddy";
+    const observabilityStartCommand = "cd /opt/scorecheck-monitoring && docker compose start monitor-service caddy";
     let commentary = null;
+    let observability = null;
+    let monitorServiceStopped = false;
     try {
       commentary = await this.#preserveCaddyState({
         state,
@@ -201,7 +206,7 @@ export class LocalStackDeployer {
         stopCommand: "cd /opt/livekit && test -f docker-compose.yaml && docker compose -f docker-compose.yaml stop caddy",
         startCommand: commentaryStartCommand
       });
-      const observability = await this.#preserveCaddyState({
+      observability = await this.#preserveCaddyState({
         state,
         spec: observabilitySpec,
         store: this.observabilityTlsState,
@@ -209,18 +214,69 @@ export class LocalStackDeployer {
         stopCommand: "cd /opt/scorecheck-monitoring && test -f docker-compose.yml && docker compose stop caddy",
         startCommand: "cd /opt/scorecheck-monitoring && docker compose start caddy"
       });
-      return { healthy: true, evidence: { commentaryTlsState: commentary, observabilityTlsState: observability } };
+      const observabilityResource = state.droplets[observabilitySpec.name];
+      if (observabilityResource?.publicIpv4 && observabilityResource.status !== "destroyed") {
+        const stopped = await this.#ssh(observabilityResource.publicIpv4, "cd /opt/scorecheck-monitoring && test -f docker-compose.yml && docker compose stop monitor-service", { allowFailure: true });
+        if (stopped.code !== 0 && state.deployments[observabilitySpec.name]?.status === "healthy") {
+          throw new Error("healthy observability monitor service could not be stopped before dead-man maintenance");
+        }
+        monitorServiceStopped = stopped.code === 0;
+      }
+      const healthchecks = await this.#pauseEventHealthchecks(await loadProtectedEnv(join(this.secretsDirectory, "observability.env")));
+      return {
+        healthy: true,
+        evidence: {
+          commentaryTlsState: commentary,
+          observabilityTlsState: observability,
+          observabilityMonitorStopped: monitorServiceStopped,
+          healthchecks
+        }
+      };
     } catch (error) {
+      const recoveryFailures = [];
+      const observabilityResource = state.droplets[observabilitySpec.name];
+      if ((monitorServiceStopped || observability?.caddyStopped) && observabilityResource?.publicIpv4) {
+        const restarted = await this.#ssh(observabilityResource.publicIpv4, observabilityStartCommand, { allowFailure: true });
+        if (restarted.code !== 0) recoveryFailures.push("observability services");
+      }
       if (commentary?.caddyStopped) {
         const resource = state.droplets[commentarySpec.name];
         const restarted = await this.#ssh(resource.publicIpv4, commentaryStartCommand, { allowFailure: true });
-        if (restarted.code !== 0) {
-          const reason = error instanceof Error ? error.message : String(error);
-          throw new Error(`TLS teardown preparation failed (${reason}) and commentary Caddy could not be restarted`);
-        }
+        if (restarted.code !== 0) recoveryFailures.push("commentary Caddy");
+      }
+      if (recoveryFailures.length) {
+        const reason = error instanceof Error ? error.message : String(error);
+        throw new Error(`teardown preparation failed (${reason}) and ${recoveryFailures.join(" and ")} could not be restarted`);
       }
       throw error;
     }
+  }
+
+  async #pauseEventHealthchecks(environment) {
+    const apiKey = requiredEnvironment(environment, "HEALTHCHECKS_API_KEY");
+    const checks = {
+      baseline: requiredUuid(environment.HEALTHCHECKS_BASELINE_CHECK_ID, "HEALTHCHECKS_BASELINE_CHECK_ID"),
+      active: requiredUuid(environment.HEALTHCHECKS_ACTIVE_CHECK_ID, "HEALTHCHECKS_ACTIVE_CHECK_ID"),
+      sentinel: healthchecksUuidFromPingUrl(environment.HEALTHCHECKS_SENTINEL_PING_URL)
+    };
+    if (new Set(Object.values(checks)).size !== 3) throw new Error("event Healthchecks checks must have distinct identities");
+    for (const [name, id] of Object.entries(checks)) {
+      const pause = await this.fetchImpl(`${HEALTHCHECKS_API}/checks/${encodeURIComponent(id)}/pause`, {
+        method: "POST",
+        headers: { "x-api-key": apiKey },
+        body: "",
+        signal: AbortSignal.timeout(30_000)
+      });
+      if (!pause.ok && pause.status !== 409) throw new Error(`Healthchecks ${name} pause failed with HTTP ${pause.status}`);
+      const response = await this.fetchImpl(`${HEALTHCHECKS_API}/checks/${encodeURIComponent(id)}`, {
+        headers: { "x-api-key": apiKey },
+        signal: AbortSignal.timeout(30_000)
+      });
+      if (!response.ok) throw new Error(`Healthchecks ${name} verification failed with HTTP ${response.status}`);
+      const value = await response.json();
+      if (value.status !== "paused") throw new Error(`Healthchecks ${name} did not enter paused state`);
+    }
+    return { status: "paused", checks: Object.keys(checks) };
   }
 
   async #preserveCaddyState({ state, spec, store, hosts, stopCommand, startCommand }) {
@@ -829,6 +885,28 @@ function diagnosticTail(value, limit = 4_000) {
   const normalized = String(value ?? "").trim();
   if (normalized.length <= limit) return normalized;
   return `[earlier output omitted]\n${normalized.slice(-limit)}`;
+}
+
+function requiredEnvironment(environment, name) {
+  const value = environment?.[name]?.trim();
+  if (!value || /[\r\n\0]/u.test(value)) throw new Error(`${name} is required`);
+  return value;
+}
+
+function requiredUuid(value, label) {
+  const normalized = String(value ?? "").trim();
+  if (!UUID.test(normalized)) throw new Error(`${label} must be a UUID`);
+  return normalized;
+}
+
+function healthchecksUuidFromPingUrl(value) {
+  let url;
+  try { url = new URL(value); } catch { throw new Error("HEALTHCHECKS_SENTINEL_PING_URL is invalid"); }
+  const segments = url.pathname.split("/").filter(Boolean);
+  if (url.protocol !== "https:" || url.hostname !== "hc-ping.com" || segments.length !== 1 || url.search || url.hash) {
+    throw new Error("HEALTHCHECKS_SENTINEL_PING_URL must be a direct Healthchecks UUID URL");
+  }
+  return requiredUuid(segments[0], "HEALTHCHECKS_SENTINEL_PING_URL identity");
 }
 
 function sha256(value) {
