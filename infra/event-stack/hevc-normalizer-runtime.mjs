@@ -12,7 +12,7 @@ export class HevcNormalizerRuntime {
     this.sleep = sleep;
   }
 
-  async ensure({ host, court, required }) {
+  async ensure({ host, court, required, sourceProfile, frameRateMode, mediamtxPrivateHost }) {
     validateCourt(court);
     if (typeof required !== "boolean") throw new Error("normalizer requirement must be boolean");
     let state = await this.#status(host);
@@ -24,11 +24,15 @@ export class HevcNormalizerRuntime {
       await this.#remote(host, "cd /opt/compositor && ./start-normalizer.sh");
       state = await this.#status(host);
     }
-    validateRunningState(state, court);
+    validateAssignment({ sourceProfile, frameRateMode, mediamtxPrivateHost });
+    validateRunningState(state, court, { sourceProfile, frameRateMode, mediamtxPrivateHost });
     return {
       required: true,
       running: true,
       camera: court,
+      sourceProfile,
+      frameRateMode,
+      mediamtxPrivateHost,
       containerId: state.Id,
       startedAt: state.State.StartedAt,
       restartCount: state.RestartCount
@@ -78,7 +82,7 @@ export function parseNormalizerInspect(raw) {
   return value;
 }
 
-function validateRunningState(value, court) {
+function validateRunningState(value, court, assignment) {
   if (!value?.State?.Running) throw new Error(`Camera ${court} HEVC normalizer is not running`);
   if (value.RestartCount !== 0) throw new Error(`Camera ${court} HEVC normalizer restarted ${value.RestartCount} time(s)`);
   const environment = Object.fromEntries(value.Config.Env.map((entry) => {
@@ -90,12 +94,33 @@ function validateRunningState(value, court) {
     CAMERA_NORMALIZER_ENABLED: "true",
     CAMERA_SOURCE_PATH_MODE: "isolated-hevc-normalizer",
     CAMERA_SOURCE_CODEC: "H265",
+    CAMERA_SOURCE_PROFILE: assignment.sourceProfile,
+    CAMERA_FRAME_RATE_MODE: assignment.frameRateMode,
     CAMERA_NORMALIZER_INPUT_PATH: `court${court}_raw`,
-    CAMERA_NORMALIZER_OUTPUT_PATH: `court${court}_normalized`
+    CAMERA_NORMALIZER_OUTPUT_PATH: `court${court}_normalized`,
+    MEDIAMTX_PRIVATE_HOST: assignment.mediamtxPrivateHost
   };
   for (const [key, expectedValue] of Object.entries(expected)) {
     if (environment[key] !== expectedValue) throw new Error(`Camera ${court} normalizer environment ${key} does not match its assignment`);
   }
+}
+
+function validateAssignment({ sourceProfile, frameRateMode, mediamtxPrivateHost }) {
+  const validFrameRates = sourceProfile === "PRIORITY_1080P60"
+    ? new Set(["60000/1001", "60/1"])
+    : new Set(["30000/1001", "30/1"]);
+  if (!["CONSTRAINED_1080P30", "STANDARD_1080P30", "PRIORITY_1080P60"].includes(sourceProfile)) throw new Error("normalizer source profile is invalid");
+  if (!validFrameRates.has(frameRateMode)) throw new Error("normalizer frame-rate mode does not match its source profile");
+  if (!isPrivateIpv4(mediamtxPrivateHost)) throw new Error("normalizer MediaMTX host must be a private IPv4 address");
+}
+
+function isPrivateIpv4(value) {
+  if (typeof value !== "string" || !/^(?:\d{1,3}\.){3}\d{1,3}$/u.test(value)) return false;
+  const octets = value.split(".").map(Number);
+  if (octets.some((octet) => octet > 255)) return false;
+  return octets[0] === 10
+    || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+    || (octets[0] === 192 && octets[1] === 168);
 }
 
 function validateCourt(court) {

@@ -139,10 +139,17 @@ export class ProductionSoakRuntime {
       const raw = await this.#waitForRaw();
       state.rawReadyAt = raw.observedAt;
       for (const camera of this.venue.activeCameras) {
+        const assignment = this.venue.assignments[camera];
+        const required = assignment.sourcePathMode === "isolated-hevc-normalizer";
         state.normalizers[camera] = await this.normalizer.ensure({
           host: compositorHost(this.manifest, this.lifecycleState, camera),
           court: camera,
-          required: this.venue.assignments[camera].sourcePathMode === "isolated-hevc-normalizer"
+          required,
+          ...(required ? {
+            sourceProfile: assignment.sourceProfile,
+            frameRateMode: assignment.frameRateMode,
+            mediamtxPrivateHost: ingestPrivateHost(this.manifest, this.lifecycleState)
+          } : {})
         });
         await writeState(statePath, state);
       }
@@ -1194,6 +1201,13 @@ function ingestHost(manifest, lifecycleState) {
   const spec = manifest.droplets.find((entry) => entry.role === "ingest");
   const host = spec ? lifecycleState.droplets?.[spec.name]?.publicIpv4 : null;
   if (!host) throw new Error("production lifecycle has no ingest IPv4");
+  return host;
+}
+
+function ingestPrivateHost(manifest, lifecycleState) {
+  const spec = manifest.droplets.find((entry) => entry.role === "ingest");
+  const host = spec ? lifecycleState.droplets?.[spec.name]?.privateIpv4 : null;
+  if (!host) throw new Error("production lifecycle has no ingest private IPv4");
   return host;
 }
 
