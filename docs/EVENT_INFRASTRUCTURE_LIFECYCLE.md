@@ -418,12 +418,16 @@ v8. Any earlier bundle must be regenerated from the protected recovery source
 and rendered network contract; lifecycle commands reject it before provider
 access.
 
-Migration `030_poller_lease_fencing.sql` is also a hard cutover. Stop every
-poller/worker that can acquire or commit a provider-score lease, apply exactly
-migration 030, deploy the matching web/worker revision, and verify a fresh lease
-returns and commits with its generation before restoring normal polling. Never
-run the old worker against migration 030, and never start the new worker before
-the migration is present.
+The scoring schema is also a hard cutover. Production contains migrations `022`
+and `029`, but not the prerequisite community-scoring chain `023`, `024`, `026`,
+`027`, `028`, or poller fencing migration `030`. Applying only `030` is invalid
+because its provider commit RPC depends on the missing community-scoring RPCs.
+Follow `SCORING_SCHEMA_HARDCUTOVER_023_030.md`: stop every score worker, wait
+for leases to expire, run the generated rollback-only rehearsal against the
+production data, apply the exact missing chain in one verified transaction,
+then deploy the matching web/worker revision. Never replay `029`, use a broad
+database push, run the old worker against the new schema, or start the new
+worker before all six migrations are present.
 
 ## Native 1080 production output
 

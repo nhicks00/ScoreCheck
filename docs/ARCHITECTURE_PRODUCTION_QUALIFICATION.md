@@ -1,7 +1,7 @@
 # ScoreCheck Architecture Production Qualification
 
-Date: 2026-07-21
-Code baseline: `40af4d5113bee9276e7f16b76d63b48e255df947`
+Date: 2026-07-22
+Code baseline: `9d31467544be4eb77eade539bcdaeed54ce024d9`
 Status: implementation and physical qualification in progress
 
 ## Purpose
@@ -159,7 +159,7 @@ The target remains:
 | ID | Review item | Status | Checked-in evidence | Required disposition / proof |
 | --- | --- | --- | --- | --- |
 | S-01 | Monotonic score revisions and checksums | `SATISFIED` | Community witness migrations and transaction code use score revisions, source revisions/authority epochs, and state hashes. | Preserve exact transaction and replay tests. |
-| S-02 | Lease fencing | `SATISFIED` | Authority epochs fence scoring authority while migration `030_poller_lease_fencing.sql` separately increments poller lease generation; stale pollers must present the current generation before provider writes. | Apply migration 030 before deploying the matching worker. |
+| S-02 | Lease fencing | `REQUIRED` | Authority epochs fence scoring authority while migration `030_poller_lease_fencing.sql` separately increments poller lease generation; stale pollers must present the current generation before provider writes. Production has `022` and `029`, but lacks prerequisite community-scoring migrations `023`, `024`, `026`, `027`, and `028` as well as `030`. | Rehearse and apply the exact `023,024,026,027,028,030` chain before deploying the matching web/worker. Applying only `030` is prohibited. See `SCORING_SCHEMA_HARDCUTOVER_023_030.md`. |
 | S-03 | Explicit source precedence/state machine | `SATISFIED` | Checked-in authority modes cover admin lock, provider primary, designated primary, verified consensus, and paused dispute. | Document mapping to operator language; do not replace the implemented model with the review's illustrative names. |
 | S-04 | Server-authorized semantic writes | `SATISFIED` | Mutations are service-role transactions and clients submit semantic scoring actions. | Retain RLS/security-boundary tests. |
 | S-05 | Private Realtime | `SATISFIED` | The security hard cut removes public table access and keeps authoritative writes server-side. | Verify subscriptions use intended private policy in the live schema. |
@@ -183,10 +183,11 @@ The target remains:
 
 ## Current Qualification Boundary
 
-There are no remaining `REQUIRED` rows in the checked-in contract. That does
-not make the system event-ready by itself. The release remains conditional on
-production-shaped evidence for the rows marked `PARTIAL` or `DEFERRED` and the
-acceptance matrix below.
+The checked-in media contract has no remaining implementation-only `REQUIRED`
+row, but S-02 remains a production release blocker: the live database has an
+intentional out-of-order `029` cutover and lacks the prerequisite scoring chain.
+The release also remains conditional on production-shaped evidence for rows
+marked `PARTIAL` or `DEFERRED` and the acceptance matrix below.
 
 In particular:
 
@@ -276,11 +277,13 @@ automatic transition. Until that artifact exists, V-05 remains disabled.
 
 ## Remaining Execution Order
 
-1. Merge the validated hard-cut branch. Stop all provider-score pollers, apply
-   migration 030, deploy the matching web/worker revision, verify a fresh lease
-   generation and fenced commit, then restore polling. Never overlap the old
-   worker with migration 030 or the new worker with the old schema. Verify idle
-   contracts without starting media. Configure a separate
+1. Use `SCORING_SCHEMA_HARDCUTOVER_023_030.md`. Stop all provider-score
+   pollers, run the rollback-only production-data rehearsal, then apply exactly
+   `023,024,026,027,028,030` in one verified transaction. Deploy the matching
+   web/worker revision, verify a fresh lease generation and fenced commit, then
+   restore polling. Never apply `030` alone, overlap the old worker with the new
+   schema, or start the new worker against the old schema. Verify idle contracts
+   without starting media. Configure a separate
    `HEALTHCHECKS_SENTINEL_PING_URL` before capturing the new protected recovery
    source.
 2. Capture a real venue profile, renderer binding, commentary qualification,
