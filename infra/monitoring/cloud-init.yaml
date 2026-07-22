@@ -18,6 +18,7 @@ write_files:
       KbdInteractiveAuthentication no
       PermitRootLogin prohibit-password
       X11Forwarding no
+      LogLevel VERBOSE
   - path: /etc/sysctl.d/99-scorecheck-monitoring.conf
     permissions: "0644"
     content: |

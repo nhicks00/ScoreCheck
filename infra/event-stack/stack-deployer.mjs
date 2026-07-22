@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { CaddyTlsStateStore } from "./caddy-tls-state.mjs";
 import { collectReconstructionProvenance, sha256 as provenanceSha256 } from "./reconstruction-provenance.mjs";
+import { evaluateSshSessionAudit, sshSessionAuditCommand } from "./ssh-session-audit.mjs";
 
 export const DEPLOYMENT_SCRIPT_TIMEOUT_MS = 10 * 60 * 1_000;
 export const AGENT_DEPLOY_CONCURRENCY = 3;
@@ -23,6 +24,24 @@ const REQUIRED_DEPLOYMENT_SECRET_FILES = Object.freeze([
   ...["a", "b", "c", "d", "e", "f", "g", "h"].map((suffix) => `compositors/bvm-compositor-${suffix}.env`),
   "compositors/bvm-compositor-spare.env"
 ]);
+
+export function sshAuditSourcePolicy({ manifest, state, spec }) {
+  const firewall = manifest.network.firewalls.find((entry) => entry.targetTag === spec.tag);
+  if (!firewall) throw new Error(`${spec.name} SSH audit firewall is missing`);
+  const adminCidrs = firewall.inboundRules
+    .find((rule) => rule.protocol === "tcp" && rule.ports === "22" && rule.sources.addresses)
+    ?.sources.addresses;
+  if (!Array.isArray(adminCidrs) || adminCidrs.length === 0) throw new Error(`${spec.name} SSH audit admin sources are missing`);
+  const adminAddresses = adminCidrs.map((entry) => entry.slice(0, entry.lastIndexOf("/")));
+  if (spec.role === "observability") return { adminAddresses, bastionAddresses: [] };
+  const observabilitySpec = manifest.droplets.find((entry) => entry.role === "observability");
+  const observability = observabilitySpec ? state.droplets[observabilitySpec.name] : null;
+  if (!observability?.publicIpv4 || !observability?.privateIpv4) throw new Error(`${spec.name} SSH audit bastion addresses are missing`);
+  return {
+    adminAddresses,
+    bastionAddresses: [observability.publicIpv4, observability.privateIpv4]
+  };
+}
 
 export class LocalStackDeployer {
   constructor({
@@ -364,6 +383,7 @@ export class LocalStackDeployer {
 
   async verifyStack({ manifest, state }) {
     const checks = [];
+    let sshAuditsHealthy = true;
     for (const spec of manifest.droplets) {
       const resource = state.droplets[spec.name];
       await this.#ensureSsh(resource.publicIpv4);
@@ -385,13 +405,16 @@ export class LocalStackDeployer {
         expectedConfigHashes: await this.#expectedConfigHashes(spec, true),
         runRemote: (remoteCommand) => this.#ssh(resource.publicIpv4, remoteCommand)
       });
+      const sshAudit = await this.#sshAudit({ manifest, state, spec, resource });
+      if (sshAudit.status === "unhealthy") sshAuditsHealthy = false;
       checks.push({
         name: spec.name,
         role: spec.role,
         status: "healthy",
         clock,
         privateNetwork: privateNetwork?.evidence ?? { status: "not-required", targets: [] },
-        reconstruction
+        reconstruction,
+        sshAudit
       });
     }
     for (const endpoint of manifest.endpoints.filter(publicHttpHealthEndpoint)) {
@@ -402,7 +425,25 @@ export class LocalStackDeployer {
       });
       if (response.status < 200 || response.status >= 400) throw new Error(`${endpoint.hostname} public TLS health returned HTTP ${response.status}`);
     }
-    return { healthy: true, evidence: { resources: checks, verifiedAt: new Date().toISOString() } };
+    return { healthy: sshAuditsHealthy, evidence: { resources: checks, verifiedAt: new Date().toISOString() } };
+  }
+
+  async #sshAudit({ manifest, state, spec, resource }) {
+    if (!state.coverage?.startedAt || !state.coverage?.closedAt) {
+      return { schemaVersion: 1, status: "not-required", host: spec.name, problems: [] };
+    }
+    const { adminAddresses, bastionAddresses } = sshAuditSourcePolicy({ manifest, state, spec });
+    const endedAt = new Date().toISOString();
+    const queryEndedAt = new Date(Date.now() + MAX_CLOCK_OFFSET_MS + 4_000).toISOString();
+    const journal = await this.#ssh(resource.publicIpv4, sshSessionAuditCommand(state.createdAt, queryEndedAt));
+    return evaluateSshSessionAudit({
+      host: spec.name,
+      startedAt: state.createdAt,
+      endedAt,
+      stdout: journal.stdout,
+      adminAddresses,
+      bastionAddresses
+    });
   }
 
   async #agentPlans(manifest, state) {

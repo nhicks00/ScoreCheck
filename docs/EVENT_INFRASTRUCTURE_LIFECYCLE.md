@@ -559,6 +559,44 @@ If the operator address changes, render a new protected output path and verify
 it before an apply. Existing event manifests remain immutable evidence of the
 contract used for that event.
 
+### SSH evidence and outbound dependencies
+
+Every event host disables password and keyboard-interactive authentication,
+permits root recovery only with the protected key, disables X11 forwarding,
+and records accepted-key fingerprints plus session type at OpenSSH `VERBOSE`
+level. After coverage closes, final evidence queries each host's read-only SSH
+journal from event creation through capture. The retained summary contains the
+accepted source, key identity, authentication method, and whether the session
+was a command, subsystem, or interactive shell; it does not retain command
+content. Non-key authentication, a source outside the rendered admin addresses
+and exact event observability host, an unexpected user, or an interactive shell
+from the bastion marks stack evidence unhealthy. Evidence capture and cost-safe
+teardown remain available so an audit failure cannot strand billed compute.
+
+The observability host remains the only event bastion. Adding a thirteenth
+security-only host would increase cost and recovery complexity without removing
+the operator-key dependency. A separate bastion is not admitted unless retained
+event evidence shows that this bounded design is inadequate.
+
+DigitalOcean Cloud Firewalls support destination addresses and tags, not stable
+DNS-name policy. The event stack depends on dynamic provider networks, so a
+static IP allowlist would fail closed on ordinary address rotation and could
+interrupt coverage. The provider firewall therefore retains outbound TCP, UDP,
+and ICMP while ingress stays role-scoped. Required outbound purposes are:
+
+| Role | Required destinations and purpose |
+| --- | --- |
+| Every host during provisioning | DNS, NTP, Ubuntu and container registries; public TLS roles also require ACME |
+| Ingest | Camera return traffic, private compositor/monitor traffic, and certificate issuance |
+| Commentary | LiveKit ICE/TURN traffic, private monitoring, and certificate issuance |
+| Compositor | Private ingest WHEP/RTSP, pinned renderer and Supabase HTTPS/WSS, monitoring, LiveKit commentary, and YouTube RTMPS |
+| Observability | Private agent collection plus Supabase, Pushover, Healthchecks, YouTube API/watch probes, and bounded public sentinels |
+
+This is an explicit reliability tradeoff, not an assertion that unrestricted
+egress is ideal. Do not add a DNS proxy or destination gateway until an attended
+synthetic event captures the exact runtime dependency set and proves the new
+component cannot become a broadcast failure domain.
+
 ## Protected bundle
 
 Do not hand-author the manifest and operator profiles. Create one immutable,

@@ -19,6 +19,7 @@ write_files:
       KbdInteractiveAuthentication no
       PermitRootLogin prohibit-password
       X11Forwarding no
+      LogLevel VERBOSE
 
 runcmd:
   # Firmware metadata refresh is unnecessary on ephemeral event hosts and

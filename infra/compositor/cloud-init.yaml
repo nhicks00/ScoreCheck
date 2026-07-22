@@ -45,6 +45,7 @@ write_files:
       KbdInteractiveAuthentication no
       PermitRootLogin prohibit-password
       X11Forwarding no
+      LogLevel VERBOSE
   - path: /etc/systemd/system/compositor.service
     permissions: "0644"
     content: |

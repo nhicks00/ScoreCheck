@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { buildEventManifest, loadManifestInputs } from "./event-manifest.mjs";
-import { AGENT_DEPLOY_CONCURRENCY, DEPLOYMENT_SCRIPT_TIMEOUT_MS, LocalStackDeployer, buildAgentPlans, clockVerificationCommand, commandFailureMessage, commentaryEndpointHosts, compositorContentAnalyzerBindings, deploymentScriptEnvironment, evaluateClockProbe, isRetryableDeploymentTransportError, loadProtectedEnv, mapWithConcurrency, privateNetworkVerificationPlan, roleConfigBindings, runCommand, runDeploymentScript, serializeAgentTargets, servicePublicIpv4, verifyProtectedSecretDirectory } from "./stack-deployer.mjs";
+import { AGENT_DEPLOY_CONCURRENCY, DEPLOYMENT_SCRIPT_TIMEOUT_MS, LocalStackDeployer, buildAgentPlans, clockVerificationCommand, commandFailureMessage, commentaryEndpointHosts, compositorContentAnalyzerBindings, deploymentScriptEnvironment, evaluateClockProbe, isRetryableDeploymentTransportError, loadProtectedEnv, mapWithConcurrency, privateNetworkVerificationPlan, roleConfigBindings, runCommand, runDeploymentScript, serializeAgentTargets, servicePublicIpv4, sshAuditSourcePolicy, verifyProtectedSecretDirectory } from "./stack-deployer.mjs";
 
 const inputs = await loadManifestInputs();
 const manifest = buildEventManifest({ event: "deploy-test", kind: "production", destroyAfter: "2026-08-01", ...inputs });
@@ -146,6 +146,23 @@ test("uses stable Reserved IPv4s in production and exact Droplet IPv4s in rehear
   const rehearsalSpec = rehearsalManifest.droplets.find((entry) => entry.role === "ingest");
   assert.equal(servicePublicIpv4({ manifest, state, spec: productionSpec, resource: state.droplets[productionSpec.name] }), "192.0.2.10");
   assert.equal(servicePublicIpv4({ manifest: rehearsalManifest, state: { ...state, addressSlots: {} }, spec: rehearsalSpec, resource: state.droplets[rehearsalSpec.name] }), state.droplets[rehearsalSpec.name].publicIpv4);
+});
+
+test("binds SSH audit sources to the rendered admin hosts and exact event bastion", () => {
+  const state = stateFixture();
+  const compositor = manifest.droplets.find((entry) => entry.name === "bvm-compositor-a");
+  const observability = manifest.droplets.find((entry) => entry.role === "observability");
+  assert.deepEqual(sshAuditSourcePolicy({ manifest, state, spec: compositor }), {
+    adminAddresses: ["203.0.113.42"],
+    bastionAddresses: [
+      state.droplets[observability.name].publicIpv4,
+      state.droplets[observability.name].privateIpv4
+    ]
+  });
+  assert.deepEqual(sshAuditSourcePolicy({ manifest, state, spec: observability }), {
+    adminAddresses: ["203.0.113.42"],
+    bastionAddresses: []
+  });
 });
 
 function tokenFixture() {

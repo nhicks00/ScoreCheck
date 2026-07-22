@@ -171,7 +171,7 @@ on the complete `023`, `024`, `026`, `027`, and `028` contract.
 | S-07 | VolleyballLife bounded polling/backoff/schema/replay/manual fallback | `SATISFIED` | Provider reads are HTTPS-host restricted, eight-second bounded, schema-validated, retried with capped deterministic jittered backoff, recorded in `poller_errors`, and remain subordinate to the explicit manual/community authority model. | Retain provider fixtures and run a production-shape stale/schema failure gate. |
 | S-08 | Individual admin identities/MFA | `DEFERRED` | Event-scoped shared admin access is rate-limited and auditable enough for current small operations. | Revisit for higher-value events or multiple independent operators. Do not block current media qualification. |
 | S-09 | Program route strict CSP/no third parties/determinism | `SATISFIED` | Program routes use first-party assets, scoped one-time sessions, strict route headers, no-store/no-referrer, and a bounded renderer contract verified at bootstrap. | Preserve a browser resource inventory in event acceptance. |
-| S-10 | SSH bastion separation and outbound allowlist | `DEFERRED` | VPC/firewall contracts and scoped deployment access exist. Splitting bastion from observability adds infrastructure. | First document required egress and interactive SSH audit. Add a host only if the simpler restriction cannot meet recovery/security needs. |
+| S-10 | SSH bastion separation and outbound allowlist | `PARTIAL` | Password and keyboard-interactive SSH are disabled; ingress is limited to protected operator host CIDRs and the sole observability bastion. Event hosts now record accepted-key fingerprints/session type, and final evidence fails unhealthy on non-key auth, unexpected users/sources, or a bastion interactive shell without blocking cost-safe teardown. The lifecycle runbook documents role-specific outbound dependencies and the reason a static DigitalOcean destination-IP list is unsafe for dynamic Vercel, Supabase, YouTube, ACME, registry, and package endpoints. | Retain the first live event SSH audit artifact. Keep broad provider egress as an explicit reliability tradeoff until an attended synthetic run can capture an exact dependency set; add neither a separate bastion nor an outbound proxy without evidence that the simpler contract is insufficient. |
 
 ## Lifecycle And Manifest Ledger
 
@@ -208,6 +208,11 @@ In particular:
   resume, the external platform sentinel, retained critical-log export, and
   YouTube backup ingest still need production-shaped evidence. The first five
   now have fail-closed implementations; backup ingest remains deferred.
+- The existing observability bastion remains the only event bastion. Key-only
+  SSH and final accepted-session evidence are implemented; a first live event
+  artifact is still required. Dynamic provider dependencies make a static
+  destination-IP list unsafe, so no outbound proxy or extra host is admitted
+  without measured need.
 - The exact qualification release is deployed to Vercel and the Render worker.
   No event infrastructure was created. A fresh independent audit at
   `2026-07-22T13:20:28Z` proved provider zero, two unassigned retained endpoint
