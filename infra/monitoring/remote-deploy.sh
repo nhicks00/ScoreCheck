@@ -193,6 +193,12 @@ assert_control_plane_ready() {
 restore_provenance() {
   local path
   rsync -a --delete "$backup_dir/src/" "$REMOTE_DIR/src/"
+  if [[ -e "$backup_dir/fault-gates-present" ]]; then
+    install -d -m 0700 "$REMOTE_DIR/fault-gates"
+    rsync -a --delete "$backup_dir/fault-gates/" "$REMOTE_DIR/fault-gates/"
+  else
+    rm -rf "$REMOTE_DIR/fault-gates"
+  fi
   for path in "${provenance_paths[@]}"; do
     if grep -Fxq "$path" "$backup_dir/provenance-present"; then
       install -d "$(dirname "$REMOTE_DIR/$path")"
@@ -254,12 +260,18 @@ for path in \
   .dockerignore docker-compose.yml Caddyfile .env Dockerfile package.json \
   package-lock.json tsconfig.json test-alertmanager-inhibition.mjs \
   remote-deploy.sh remote-provision.sh replace-agent-targets.sh .generated/prometheus.yml .generated/alertmanager.yml \
-  rules src; do
+  fault-gates rules src; do
   if [[ ! -e "$CANDIDATE_DIR/$path" ]]; then
     echo "Candidate is incomplete at $path." >&2
     exit 1
   fi
 done
+
+if [[ -e "$REMOTE_DIR/.scorecheck-supabase-fault-gate.json" ]] \
+  || [[ -n "$(docker ps -aq --filter label=com.scorecheck.role=scorecheck-supabase-fault-proxy)" ]]; then
+  echo "Observability deployment is blocked while a Supabase fault gate is active or requires cleanup." >&2
+  exit 1
+fi
 
 # Routine releases must not silently become infrastructure cutovers. Caddy,
 # Alertmanager, and Compose topology changes require a separately reviewed plan.
@@ -353,11 +365,15 @@ timestamp="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 backup_dir="$REMOTE_DIR/backups/staged-$timestamp"
 install -d -m 0700 \
   "$backup_dir/.generated" "$backup_dir/provenance" \
-  "$backup_dir/rules" "$backup_dir/src"
+  "$backup_dir/fault-gates" "$backup_dir/rules" "$backup_dir/src"
 install -m 0600 "$REMOTE_DIR/.env" "$backup_dir/.env"
 install -m 0400 "$REMOTE_DIR/.generated/prometheus.yml" "$backup_dir/.generated/prometheus.yml"
 rsync -a --delete "$REMOTE_DIR/rules/" "$backup_dir/rules/"
 rsync -a --delete "$REMOTE_DIR/src/" "$backup_dir/src/"
+if [[ -d "$REMOTE_DIR/fault-gates" ]]; then
+  rsync -a --delete "$REMOTE_DIR/fault-gates/" "$backup_dir/fault-gates/"
+  : >"$backup_dir/fault-gates-present"
+fi
 : >"$backup_dir/provenance-present"
 for path in "${provenance_paths[@]}"; do
   if [[ -e "$REMOTE_DIR/$path" ]]; then
@@ -406,7 +422,9 @@ install -m 0755 "$CANDIDATE_DIR/remote-deploy.sh" "$REMOTE_DIR/remote-deploy.sh"
 install -m 0755 "$CANDIDATE_DIR/remote-provision.sh" "$REMOTE_DIR/remote-provision.sh"
 install -m 0755 "$CANDIDATE_DIR/replace-agent-targets.sh" "$REMOTE_DIR/replace-agent-targets.sh"
 rsync -a --delete "$CANDIDATE_DIR/src/" "$REMOTE_DIR/src/"
+rsync -a --delete "$CANDIDATE_DIR/fault-gates/" "$REMOTE_DIR/fault-gates/"
 diff -qr "$CANDIDATE_DIR/src" "$REMOTE_DIR/src" >/dev/null
+diff -qr "$CANDIDATE_DIR/fault-gates" "$REMOTE_DIR/fault-gates" >/dev/null
 for path in .dockerignore Dockerfile package.json package-lock.json remote-deploy.sh remote-provision.sh replace-agent-targets.sh test-alertmanager-inhibition.mjs tsconfig.json; do
   cmp -s "$CANDIDATE_DIR/$path" "$REMOTE_DIR/$path"
 done

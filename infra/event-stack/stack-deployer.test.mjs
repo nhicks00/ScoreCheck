@@ -567,5 +567,7 @@ test("binds each role to exact remote reconstruction config paths", () => {
   }
   const observability = roleConfigBindings(repoRoot, secrets, { role: "observability", name: "bvm-observability-01" });
   assert.ok(observability.some(([, remote]) => remote === "/opt/scorecheck-monitoring/replace-agent-targets.sh"));
+  assert.ok(observability.some(([local, remote]) => local === "/repo/infra/event-stack/supabase-fault-proxy.mjs" && remote === "/opt/scorecheck-monitoring/fault-gates/supabase-fault-proxy.mjs"));
+  assert.ok(observability.some(([local, remote]) => local === "/repo/infra/event-stack/supabase-fault-proxy-service.mjs" && remote === "/opt/scorecheck-monitoring/fault-gates/supabase-fault-proxy-service.mjs"));
   assert.throws(() => roleConfigBindings(repoRoot, secrets, { role: "unknown", name: "unknown" }), /unsupported deployment role/);
 });

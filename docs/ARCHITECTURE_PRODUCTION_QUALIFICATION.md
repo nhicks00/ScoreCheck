@@ -92,7 +92,7 @@ The target remains:
 | R-01 | Pin exact renderer Git/deployment/assets/contracts per event | `SATISFIED` | A protected renderer binding captures canonical and generated Vercel origins, exact deployment ID, Git SHA, asset namespace, and overlay/commentary/heartbeat contracts; the event bundle hashes it. | Capture a fresh binding for each event release. |
 | R-02 | Restart reloads the same approved renderer | `SATISFIED` | Compositors require a generated immutable Vercel origin and exact renderer identity. The bootstrap session and browser heartbeat reject deployment/build drift. | Physical restart remains an acceptance-matrix gate. |
 | R-03 | Existing scene survives Vercel loss | `PARTIAL` | `renderer-loss-rehearsal.mjs` now reuses an active eight-feed synthetic production soak and blocks only one Egress container's immutable generated Vercel IPv4 destinations. Its owned firewall runtime is Egress-generation-bound, blocks TCP/UDP 443, rejects IPv6 ambiguity and DNS/container drift, restores exactly, and evaluates same-page/reset-safe media, score, peer, and YouTube continuity. Provider-free regressions pass; no attended host artifact exists yet. | Run the attended synthetic gate with Egress live. Existing video/audio/last-good score must continue without navigation, then recover on the same build and page. |
-| R-04 | Existing scene survives Supabase loss | `PARTIAL` | Video and commentary are separate from scoring, and the overlay is fail-transparent. Authoritative repair failure preserves the last-good overlay object and reports disconnected state as stale in the browser heartbeat. `supabase-fault-proxy.mjs` now supplies a loopback-only, generation-bound nonproduction dependency that interrupts HTTP repair and Realtime together, drains active connections, restores idempotently, and retains no request target, header, credential, or body evidence. A browser-only Supabase block remains explicitly invalid. | Wire an isolated renderer deployment through the proxy, then prove authoritative repair failure/recovery, last-good score retention, stale telemetry, media continuity, and the separately implemented outbox replay without touching production scoring. |
+| R-04 | Existing scene survives Supabase loss | `PARTIAL` | Video and commentary are separate from scoring, and the overlay is fail-transparent. Authoritative repair failure preserves the last-good overlay object and reports disconnected state as stale in the browser heartbeat. The camera-free gate now includes a generation-bound loopback proxy, temporary exact Caddy route, least-privilege sidecar, durable fault/restore state, exact rollback, synthetic-soak runner, and reset-safe evidence evaluator. It interrupts authoritative HTTP repair and Realtime together and records only aggregate counters. A browser-only Supabase block remains explicitly invalid. | Deploy an isolated synthetic renderer with both Supabase URLs bound to the generated proxy origin, then run the attended gate and retain its protected PASS artifact. No production scoring outage is authorized. |
 | R-05 | Program token leakage protections | `SATISFIED` | The protected token is carried only in a URL fragment to a one-time bootstrap, exchanged for a scoped HttpOnly session, then removed by navigation. Program routes enforce private/no-store, no-referrer, strict CSP, and redacted startup output. | Keep third-party resources absent from program routes. |
 | R-06 | Bounded browser supervisor | `SATISFIED` | `program-supervisor.mjs` acts only when raw/program/Egress remain healthy while the browser is unavailable for six consecutive samples. It preserves event/destination/output-generation/renderer ownership, permits at most two restarts with a ten-minute cooldown, persists a prepared restart before mutation, resumes it safely, and fails closed after exhaustion. Any restart remains visible and fails the qualification run rather than being hidden. | Prove one bounded recovery on the exact immutable renderer during the physical restart gate. |
 | R-07 | Separate renderer deployment blast radius | `DEFERRED` | Admin and program routes currently share the web project. | First prove immutable production deployment pinning. Split the renderer project only if pinning cannot prevent admin deployments from affecting restarted scenes. |
@@ -353,11 +353,11 @@ peer cameras/YouTube outputs.
 ## Camera-Free Supabase Dependency Proxy
 
 `supabase-fault-proxy.mjs` is an isolated acceptance-test dependency, not a
-production application switch. It listens only on loopback so a temporary
-event-scoped TLS proxy on the same rehearsal host must be its sole external
-entry point. An isolated renderer can then use that origin for both its public
-Supabase client and server-side overlay repair client. Production renderer and
-Supabase configuration must never point to it.
+production application switch. It listens only on loopback. The host adapter
+starts it as a read-only, resource-bounded sidecar in the existing Caddy network
+namespace, adds one generation-specific Caddy path, and verifies that path over
+public TLS. No extra Droplet, public port, DNS record, or persistent route is
+created. Production renderer and Supabase configuration must never point to it.
 
 The proxy forwards ordinary HTTP and WebSocket upgrade traffic only to one
 configured Supabase origin. It rejects absolute request targets, plaintext
@@ -376,12 +376,63 @@ snapshot contains only bounded lifecycle timestamps, the upstream origin, and
 aggregate counters. It deliberately records no URL path/query, headers,
 credentials, or request/response body.
 
-This primitive alone is not R-04 evidence. The attended runner still must bind
-it to a disposable renderer, prove a healthy baseline, cut both dependency
-paths, observe the same page holding the last-good score as stale while media
-continues, restore the dependency, verify score/heartbeat recovery and local
-incident-outbox reconciliation, then remove the temporary TLS route and
-renderer. No production scoring outage is authorized.
+The observability deployment installs both proxy scripts atomically and rolls
+them back with the monitor-service source. Routine observability deployment is
+refused while a proxy marker or sidecar remains. The gate itself requires exact
+prepare, fault, restore, and cleanup confirmations. On failure it restores the
+dependency and removes the route automatically; after an operator interruption,
+the protected state supports an exact `restore` command.
+
+The isolated renderer must use this exact trailing-slash base URL for both
+`NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_URL`:
+
+```text
+https://<monitor-host>/_scorecheck-supabase-fault/<generation-id>/
+```
+
+The URL shape is compatible with Supabase REST and Realtime construction. The
+proxy strips only its exact generation prefix, forwards `/rest/v1/...` and
+`/realtime/v1/...` upstream, and rejects every other path. Renderer creation
+must remain a separate protected provider transaction using an isolated Vercel
+project, synthetic publishers, a test event/score row, and the ordinary anon
+and service-role credentials without printing them. The runner fails baseline
+qualification unless it observes at least one authoritative HTTP request and
+exactly one active Realtime socket through the proxy.
+
+Run the gate only against an already-running eight-feed synthetic production
+soak whose renderer binding matches the isolated deployment:
+
+```text
+node infra/event-stack/supabase-loss-rehearsal.mjs run \
+  --profile /protected/event-profile.json \
+  --soak-evidence /protected/production-soak \
+  --publisher-state /protected/synthetic-publishers.json \
+  --renderer-binding /protected/isolated-renderer.json \
+  --evidence /protected/supabase-loss-evidence \
+  --camera 1 \
+  --confirm-prepare PREPARE-SUPABASE-FAULT:EVENT \
+  --confirm-fault FAULT-SUPABASE:GENERATION \
+  --confirm-restore RESTORE-SUPABASE:GENERATION \
+  --confirm-cleanup CLEANUP-SUPABASE-FAULT:EVENT
+```
+
+After an interruption, restore from the persisted target only:
+
+```text
+node infra/event-stack/supabase-loss-rehearsal.mjs restore \
+  --profile /protected/event-profile.json \
+  --evidence /protected/supabase-loss-evidence \
+  --confirm-restore RESTORE-SUPABASE:GENERATION \
+  --confirm-cleanup CLEANUP-SUPABASE-FAULT:EVENT
+```
+
+A PASS requires the same page/build/configuration, unchanged reset-safe video
+quality counters, expected aggregate cadence, loaded/disconnected/stale
+last-good score, exactly one score-render incident, bounded detection, restored
+HTTP and Realtime counters, healthy peers and YouTube, and final host state
+`CLEAN`. The separately implemented local incident outbox remains A-04 evidence;
+R-04 does not claim outbox replay from this renderer gate. Until the protected
+attended artifact exists, R-04 remains `PARTIAL`.
 
 ## Overlay Exception Qualification Boundary
 

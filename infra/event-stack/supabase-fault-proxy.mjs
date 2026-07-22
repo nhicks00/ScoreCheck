@@ -14,9 +14,10 @@ const HOP_BY_HOP_HEADERS = new Set([
 const GENERATION = /^[A-Za-z0-9][A-Za-z0-9._-]{7,127}$/u;
 
 export class SupabaseFaultProxy {
-  constructor({ upstream, generationId, host = "127.0.0.1", port = 0, requestTimeoutMs = 30_000, now = () => new Date() }) {
+  constructor({ upstream, generationId, pathPrefix = "/", host = "127.0.0.1", port = 0, requestTimeoutMs = 30_000, now = () => new Date() }) {
     this.upstream = validateUpstream(upstream);
     this.generationId = validateGeneration(generationId);
+    this.pathPrefix = validatePathPrefix(pathPrefix, this.generationId);
     if (!isLoopback(host)) throw new Error("Supabase fault proxy must listen on loopback");
     if (!Number.isInteger(port) || port < 0 || port > 65_535) throw new Error("Supabase fault proxy port is invalid");
     if (!Number.isInteger(requestTimeoutMs) || requestTimeoutMs < 1_000 || requestTimeoutMs > 120_000) throw new Error("Supabase fault proxy timeout is invalid");
@@ -128,6 +129,7 @@ export class SupabaseFaultProxy {
         port: effectivePort(this.upstream)
       },
       origin: this.server ? this.origin() : null,
+      pathPrefix: this.pathPrefix,
       startedAt: this.startedAt,
       faultedAt: this.faultedAt,
       restoredAt: this.restoredAt,
@@ -151,7 +153,10 @@ export class SupabaseFaultProxy {
   }
 
   #handleHttp(req, res) {
-    if (!validRequestTarget(req.url)) return rejectBadTarget(res);
+    const target = upstreamRequestTarget(req.url, this.pathPrefix);
+    if (target === "INVALID") return rejectBadTarget(res);
+    if (target === null) return rejectWrongPrefix(res);
+    if (target === "/__healthz") return writeHealth(res, this.status);
     if (this.status === "FAULTED") {
       this.requestsRejectedDuringFault += 1;
       return rejectFaulted(res);
@@ -164,7 +169,7 @@ export class SupabaseFaultProxy {
       hostname: this.upstream.hostname,
       port: effectivePort(this.upstream),
       method: req.method,
-      path: req.url,
+      path: target,
       headers: forwardedHeaders(req.headers, this.upstream.host, false),
       timeout: this.requestTimeoutMs
     }, (upstreamResponse) => {
@@ -188,7 +193,9 @@ export class SupabaseFaultProxy {
   }
 
   #handleUpgrade(req, socket, head) {
-    if (!validRequestTarget(req.url)) return rejectSocket(socket, 400, "Bad Request");
+    const target = upstreamRequestTarget(req.url, this.pathPrefix);
+    if (target === "INVALID") return rejectSocket(socket, 400, "Bad Request");
+    if (target === null || target === "/__healthz") return rejectSocket(socket, 404, "Not Found");
     if (this.status === "FAULTED") {
       this.requestsRejectedDuringFault += 1;
       return rejectSocket(socket, 503, "Isolated Supabase dependency unavailable");
@@ -201,7 +208,7 @@ export class SupabaseFaultProxy {
       hostname: this.upstream.hostname,
       port: effectivePort(this.upstream),
       method: req.method,
-      path: req.url,
+      path: target,
       headers: forwardedHeaders(req.headers, this.upstream.host, true),
       timeout: this.requestTimeoutMs
     });
@@ -258,8 +265,22 @@ function validateGeneration(value) {
   return value;
 }
 
+function validatePathPrefix(value, generationId) {
+  if (value === "/") return value;
+  const expected = `/_scorecheck-supabase-fault/${generationId}/`;
+  if (value !== expected) throw new Error(`Supabase fault proxy path prefix must be exactly ${expected}`);
+  return value;
+}
+
 function validRequestTarget(value) {
   return typeof value === "string" && value.startsWith("/") && !value.startsWith("//") && !/[\r\n]/u.test(value);
+}
+
+function upstreamRequestTarget(value, pathPrefix) {
+  if (!validRequestTarget(value)) return "INVALID";
+  if (pathPrefix === "/") return value;
+  if (!value.startsWith(pathPrefix)) return null;
+  return `/${value.slice(pathPrefix.length)}`;
 }
 
 function forwardedHeaders(headers, host, preserveUpgrade) {
@@ -307,6 +328,18 @@ function rejectBadTarget(res) {
   res.end('{"error":"invalid request target"}');
 }
 
+function rejectWrongPrefix(res) {
+  res.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
+  res.end('{"error":"not found"}');
+}
+
+function writeHealth(res, status) {
+  const healthy = status === "HEALTHY";
+  const body = JSON.stringify({ status });
+  res.writeHead(healthy ? 200 : 503, { "content-type": "application/json", "cache-control": "no-store", "content-length": Buffer.byteLength(body) });
+  res.end(body);
+}
+
 function rejectFaulted(res) {
   res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store", "retry-after": "1" });
   res.end('{"error":"isolated Supabase dependency unavailable"}');
@@ -320,7 +353,7 @@ function rejectUnavailable(res) {
 function rejectSocket(socket, status, message) {
   if (!socket.writable) return socket.destroy();
   const body = `${message}\n`;
-  socket.end(`HTTP/1.1 ${status} ${status === 400 ? "Bad Request" : status === 502 ? "Bad Gateway" : "Service Unavailable"}\r\nContent-Type: text/plain\r\nCache-Control: no-store\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`);
+  socket.end(`HTTP/1.1 ${status} ${status === 400 ? "Bad Request" : status === 404 ? "Not Found" : status === 502 ? "Bad Gateway" : "Service Unavailable"}\r\nContent-Type: text/plain\r\nCache-Control: no-store\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`);
 }
 
 function writeProxyError(res, error) {

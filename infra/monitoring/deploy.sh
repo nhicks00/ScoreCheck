@@ -55,7 +55,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
-ssh "${ssh_options[@]}" "$SSH_HOST" "install -d -m 0700 '$candidate_dir/.generated'"
+ssh "${ssh_options[@]}" "$SSH_HOST" "install -d -m 0700 '$candidate_dir/.generated' '$candidate_dir/fault-gates'"
 rsync -a --delete -e "$rsync_shell" "$SCRIPT_DIR/src/" "$SSH_HOST:$candidate_dir/src/"
 rsync -a --delete -e "$rsync_shell" "$SCRIPT_DIR/rules/" "$SSH_HOST:$candidate_dir/rules/"
 rsync -a -e "$rsync_shell" \
@@ -71,6 +71,10 @@ rsync -a -e "$rsync_shell" \
   "$SCRIPT_DIR/remote-deploy.sh" \
   "$SCRIPT_DIR/replace-agent-targets.sh" \
   "$SSH_HOST:$candidate_dir/"
+rsync -a -e "$rsync_shell" \
+  "$REPO_ROOT/infra/event-stack/supabase-fault-proxy.mjs" \
+  "$REPO_ROOT/infra/event-stack/supabase-fault-proxy-service.mjs" \
+  "$SSH_HOST:$candidate_dir/fault-gates/"
 rsync -a -e "$rsync_shell" "$SCRIPT_DIR/.generated/service.env" "$SSH_HOST:$candidate_dir/.env"
 rsync -a -e "$rsync_shell" \
   "$SCRIPT_DIR/.generated/prometheus.yml" \

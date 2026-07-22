@@ -902,7 +902,9 @@ export function roleConfigBindings(repoRoot, secretsDirectory, spec) {
     [join(repoRoot, "infra/monitoring/.generated/service.env"), "/opt/scorecheck-monitoring/.env"],
     [join(repoRoot, "infra/monitoring/.generated/prometheus.yml"), "/opt/scorecheck-monitoring/.generated/prometheus.yml"],
     [join(repoRoot, "infra/monitoring/.generated/alertmanager.yml"), "/opt/scorecheck-monitoring/.generated/alertmanager.yml"],
-    [join(repoRoot, "infra/monitoring/rules/scorecheck.rules.yml"), "/opt/scorecheck-monitoring/rules/scorecheck.rules.yml"]
+    [join(repoRoot, "infra/monitoring/rules/scorecheck.rules.yml"), "/opt/scorecheck-monitoring/rules/scorecheck.rules.yml"],
+    [join(repoRoot, "infra/event-stack/supabase-fault-proxy.mjs"), "/opt/scorecheck-monitoring/fault-gates/supabase-fault-proxy.mjs"],
+    [join(repoRoot, "infra/event-stack/supabase-fault-proxy-service.mjs"), "/opt/scorecheck-monitoring/fault-gates/supabase-fault-proxy-service.mjs"]
   ];
   throw new Error(`unsupported deployment role ${spec.role}`);
 }

@@ -126,6 +126,36 @@ test("rejects an open proxy target and unsafe listener or upstream contracts", a
   assert.throws(() => new SupabaseFaultProxy({ upstream: "https://user:secret@example.supabase.co", generationId }), /without credentials/u);
   assert.throws(() => new SupabaseFaultProxy({ upstream: upstreamOrigin, generationId: "short" }), /generation is invalid/u);
   assert.throws(() => new SupabaseFaultProxy({ upstream: upstreamOrigin, generationId, host: "0.0.0.0" }), /listen on loopback/u);
+  assert.throws(() => new SupabaseFaultProxy({ upstream: upstreamOrigin, generationId, pathPrefix: "/wrong/" }), /path prefix must be exactly/u);
+});
+
+test("generation path strips only its exact prefix and exposes bounded health", async (t) => {
+  const seen = [];
+  const upstream = http.createServer((req, res) => {
+    seen.push(req.url);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end('{"ok":true}');
+  });
+  const upstreamOrigin = await listen(upstream);
+  t.after(() => closeServer(upstream));
+  const pathPrefix = `/_scorecheck-supabase-fault/${generationId}/`;
+  const proxy = new SupabaseFaultProxy({ upstream: upstreamOrigin, generationId, pathPrefix });
+  await proxy.start();
+  t.after(() => proxy.close());
+
+  const health = await fetch(`${proxy.origin()}${pathPrefix}__healthz`);
+  assert.equal(health.status, 200);
+  assert.deepEqual(await health.json(), { status: "HEALTHY" });
+  const forwarded = await fetch(`${proxy.origin()}${pathPrefix}rest/v1/overlay_states?court=eq.1`);
+  assert.equal(forwarded.status, 200);
+  assert.deepEqual(seen, ["/rest/v1/overlay_states?court=eq.1"]);
+  assert.equal((await fetch(`${proxy.origin()}/rest/v1/overlay_states`)).status, 404);
+
+  proxy.fault(`FAULT-SUPABASE:${generationId}`);
+  const faultedHealth = await fetch(`${proxy.origin()}${pathPrefix}__healthz`);
+  assert.equal(faultedHealth.status, 503);
+  assert.deepEqual(await faultedHealth.json(), { status: "FAULTED" });
+  assert.equal(proxy.snapshot().counters.requestsRejectedDuringFault, 0);
 });
 
 async function listen(server) {

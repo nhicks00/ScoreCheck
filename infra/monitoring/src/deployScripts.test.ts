@@ -164,4 +164,18 @@ describe("staged observability deployment", () => {
     expect(remoteDeploy).toContain('wait_for_monitor "$old_revision"');
     expect(remoteDeploy).toContain("Automatic rollback requires operator attention.");
   });
+
+  it("deploys Supabase fault tooling atomically and blocks releases during an active gate", () => {
+    expect(deploy).toContain("'$candidate_dir/fault-gates'");
+    expect(deploy).toContain('infra/event-stack/supabase-fault-proxy.mjs');
+    expect(deploy).toContain('infra/event-stack/supabase-fault-proxy-service.mjs');
+    expect(remoteProvision).toContain('rsync -a --delete "$CANDIDATE_DIR/fault-gates/" "$REMOTE_DIR/fault-gates/"');
+    expect(remoteDeploy).toContain('rsync -a --delete "$REMOTE_DIR/fault-gates/" "$backup_dir/fault-gates/"');
+    expect(remoteDeploy).toContain('rsync -a --delete "$backup_dir/fault-gates/" "$REMOTE_DIR/fault-gates/"');
+    expect(remoteDeploy).toContain('fault-gates-present');
+    expect(remoteDeploy).toContain('rm -rf "$REMOTE_DIR/fault-gates"');
+    expect(remoteDeploy).toContain('rsync -a --delete "$CANDIDATE_DIR/fault-gates/" "$REMOTE_DIR/fault-gates/"');
+    expect(remoteDeploy).toContain('com.scorecheck.role=scorecheck-supabase-fault-proxy');
+    expect(remoteDeploy).toContain('Observability deployment is blocked while a Supabase fault gate is active or requires cleanup.');
+  });
 });

@@ -55,7 +55,7 @@ cleanup() {
     echo "First observability provisioning failed; removing the partial stack." >&2
     (cd "$REMOTE_DIR" && compose down --volumes --remove-orphans) >/dev/null 2>&1 || true
     docker image rm scorecheck-monitoring:local >/dev/null 2>&1 || true
-    rm -rf "$REMOTE_DIR/src" "$REMOTE_DIR/rules" "$REMOTE_DIR/.generated"
+    rm -rf "$REMOTE_DIR/src" "$REMOTE_DIR/rules" "$REMOTE_DIR/fault-gates" "$REMOTE_DIR/.generated"
     rm -f "$REMOTE_DIR/.dockerignore" "$REMOTE_DIR/Caddyfile" "$REMOTE_DIR/Dockerfile" \
       "$REMOTE_DIR/docker-compose.yml" "$REMOTE_DIR/package.json" "$REMOTE_DIR/package-lock.json" \
       "$REMOTE_DIR/remote-deploy.sh" "$REMOTE_DIR/remote-provision.sh" "$REMOTE_DIR/replace-agent-targets.sh" \
@@ -70,7 +70,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
-live_paths=(docker-compose.yml Caddyfile .env .generated/prometheus.yml .generated/alertmanager.yml rules src)
+live_paths=(docker-compose.yml Caddyfile .env .generated/prometheus.yml .generated/alertmanager.yml fault-gates rules src)
 for path in "${live_paths[@]}"; do
   if [[ -e "$REMOTE_DIR/$path" ]]; then
     echo "First provisioning requires an empty observability baseline; found $path." >&2
@@ -79,7 +79,7 @@ for path in "${live_paths[@]}"; do
 done
 for path in .dockerignore docker-compose.yml Caddyfile .env Dockerfile package.json package-lock.json \
   tsconfig.json test-alertmanager-inhibition.mjs remote-deploy.sh remote-provision.sh replace-agent-targets.sh \
-  .generated/prometheus.yml .generated/alertmanager.yml rules src; do
+  .generated/prometheus.yml .generated/alertmanager.yml fault-gates rules src; do
   [[ -e "$CANDIDATE_DIR/$path" ]] || { echo "Candidate is incomplete at $path." >&2; exit 1; }
 done
 
@@ -131,6 +131,7 @@ install -m 0400 -o 65534 -g 65534 "$CANDIDATE_DIR/.generated/prometheus.yml" "$R
 install -m 0444 "$CANDIDATE_DIR/.generated/alertmanager.yml" "$REMOTE_DIR/.generated/alertmanager.yml"
 rsync -a --delete "$CANDIDATE_DIR/rules/" "$REMOTE_DIR/rules/"
 rsync -a --delete "$CANDIDATE_DIR/src/" "$REMOTE_DIR/src/"
+rsync -a --delete "$CANDIDATE_DIR/fault-gates/" "$REMOTE_DIR/fault-gates/"
 for path in .dockerignore Caddyfile Dockerfile docker-compose.yml package.json package-lock.json test-alertmanager-inhibition.mjs tsconfig.json; do
   install -m 0644 "$CANDIDATE_DIR/$path" "$REMOTE_DIR/$path"
 done
