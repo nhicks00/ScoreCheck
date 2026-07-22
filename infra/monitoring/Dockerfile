@@ -29,5 +29,7 @@ USER node
 CMD ["npm", "run", "start:agent"]
 
 FROM runtime AS service
+USER root
+RUN install -d -o node -g node -m 0700 /var/lib/scorecheck-monitoring
 USER node
 CMD ["npm", "run", "start:service"]

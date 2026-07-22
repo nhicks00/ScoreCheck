@@ -13,8 +13,8 @@ function stream(court, overrides = {}) {
     snippet: { title: persistentStreamTitle(court) },
     cdn: {
       ingestionType: "rtmp",
-      resolution: "720p",
-      frameRate: "30fps",
+      resolution: "variable",
+      frameRate: "variable",
       ingestionInfo: { streamName: `protected-key-${court}`, rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2" }
     },
     contentDetails: { isReusable: true },
@@ -38,7 +38,7 @@ test("adopts the exact persistent reusable eight-stream pool without provider mu
   const pool = await client.resolvePersistentStreamPool();
 
   assert.deepEqual(Object.keys(pool), ["1", "2", "3", "4", "5", "6", "7", "8"]);
-  assert.equal(pool[1].title, "ScoreCheck Court 1 Test Stream");
+  assert.equal(pool[1].title, "ScoreCheck Production Camera 1 Auto Stream");
   assert.equal(pool[8].isReusable, true);
   assert.equal(pool[8].streamStatus, "inactive");
   assert.equal(requests.filter((entry) => entry.url.includes("youtube/v3")).every((entry) => entry.method === "GET"), true);
@@ -52,7 +52,7 @@ test("fails closed on missing, duplicate, active, unsafe, or nonunique persisten
     : response(200, { items }));
   const complete = Array.from({ length: 8 }, (_, index) => stream(index + 1));
 
-  await assert.rejects(() => listProvider(complete.slice(0, 7)).resolvePersistentStreamPool(), /exactly one persistent rehearsal stream titled ScoreCheck Court 8 Test Stream; observed 0/u);
+  await assert.rejects(() => listProvider(complete.slice(0, 7)).resolvePersistentStreamPool(), /exactly one persistent rehearsal stream titled ScoreCheck Production Camera 8 Auto Stream; observed 0/u);
   await assert.rejects(() => listProvider([...complete, stream(4, { id: "duplicate4" })]).resolvePersistentStreamPool(), /observed 2/u);
 
   const active = structuredClone(complete);

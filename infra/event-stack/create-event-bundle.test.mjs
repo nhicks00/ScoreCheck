@@ -6,6 +6,8 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { assertCommentaryBrowserRuntime, assertRehearsalFfmpegRuntime, assertRehearsalGitIdentity, createEventBundle, parseBundleArgs } from "./create-event-bundle.mjs";
+import { createSyntheticRehearsalVenueProfile } from "./venue-admission.mjs";
+import { createSyntheticCommentaryQualification } from "./commentary-qualification.mjs";
 
 const createFixtureBundle = (options) => createEventBundle(options, {
   verifyGitIdentity: async () => {},
@@ -42,6 +44,11 @@ async function fixture(kind = "rehearsal") {
   protectedFiles["network.json"] = join(parent, "network.json");
   await writeFile(protectedFiles["network.json"], `${JSON.stringify(network, null, 2)}\n`, { mode: 0o600 });
   const productionSource = kind === "production" ? await productionSourceFixture(parent) : null;
+  const rendererBinding = kind === "production" ? await rendererBindingFixture(parent) : null;
+  const venueProfile = kind === "production" ? join(parent, "venue-profile.json") : null;
+  if (venueProfile) await writeFile(venueProfile, `${JSON.stringify(createSyntheticRehearsalVenueProfile("bundle-production"), null, 2)}\n`, { mode: 0o600 });
+  const commentaryQualification = kind === "production" ? join(parent, "commentary-qualification.json") : null;
+  if (commentaryQualification) await writeFile(commentaryQualification, `${JSON.stringify(createSyntheticCommentaryQualification("bundle-production"), null, 2)}\n`, { mode: 0o600 });
   return {
     command: "create",
     event: `bundle-${kind}`,
@@ -52,7 +59,7 @@ async function fixture(kind = "rehearsal") {
     sshKey: protectedFiles["ssh-key"],
     lifecycleAttestation: protectedFiles["attestation.json"],
     networkSpec: protectedFiles["network.json"],
-    ...(kind === "production" ? { anchors: protectedFiles["anchors.json"], productionSource } : {
+    ...(kind === "production" ? { anchors: protectedFiles["anchors.json"], productionSource, rendererBinding, venueProfile, commentaryQualification } : {
       gitRepo: "nhicks00/ScoreCheck",
       gitRepoId: "123",
       gitRef: "codex/turnkey-event-lifecycle",
@@ -75,16 +82,20 @@ test("creates a complete protected rehearsal bundle and exact one-command invoca
     .some((rule) => rule.protocol === "tcp" && rule.ports === "22" && rule.sources.addresses?.includes("1.1.1.1/32"))));
   assert.ok(manifest.endpoints.every((entry) => entry.addressMode === "dynamic-ipv4"));
   assert.deepEqual(binding.reservedIpv4, {});
-  assert.equal(eventProfile.schemaVersion, 5);
+  assert.equal(eventProfile.schemaVersion, 8);
+  assert.equal(rehearsalProfile.schemaVersion, 2);
+  assert.equal(eventProfile.rendererBinding, null);
   assert.match(eventProfile.commentaryTlsState, /retained-commentary-tls\/[a-f0-9]{16}$/u);
   assert.match(eventProfile.observabilityTlsState, /retained-observability-tls\/[a-f0-9]{16}$/u);
   assert.equal(manifest.endpoints.find((entry) => entry.hostname.startsWith("rtc-")).hostname, "rtc-rehearsal.beachvolleyballmedia.com");
   assert.equal(manifest.endpoints.find((entry) => entry.hostname.startsWith("turn-")).hostname, "turn-rehearsal.beachvolleyballmedia.com");
   assert.equal(manifest.endpoints.find((entry) => entry.role === "observability").hostname, "monitor-rehearsal.beachvolleyballmedia.com");
   assert.equal(eventProfile.rehearsalEvidence, rehearsalProfile.rehearsalEvidence);
+  assert.equal(eventProfile.venueProfile, rehearsalProfile.venueProfile);
+  assert.match(eventProfile.commentaryQualification, /commentary-qualification\.json$/u);
   assert.equal(result.nextCommand.args.at(-1), `FULL-DRY-RUN:${manifest.event}`);
   assert.equal((await stat(options.root)).mode & 0o077, 0);
-  for (const name of ["manifest.json", "event-profile.json", "rehearsal-profile.json", "rehearsal-endpoint-binding.json", "BUNDLE.json"]) {
+  for (const name of ["manifest.json", "event-profile.json", "rehearsal-profile.json", "rehearsal-endpoint-binding.json", "venue-profile.json", "commentary-qualification.json", "BUNDLE.json"]) {
     assert.equal((await stat(join(options.root, name))).mode & 0o077, 0);
   }
   await assert.rejects(() => createFixtureBundle(options), /already exists/);
@@ -117,9 +128,22 @@ test("creates a production bundle bound to existing persistent anchors", async (
   const profile = JSON.parse(await readFile(result.eventProfile, "utf8"));
   assert.equal(result.rehearsalProfile, null);
   assert.equal(profile.anchors, options.anchors);
+  assert.equal(profile.rendererBinding, join(options.root, "renderer-binding.json"));
+  assert.equal(profile.venueProfile, join(options.root, "venue-profile.json"));
+  assert.equal(profile.commentaryQualification, join(options.root, "commentary-qualification.json"));
+  assert.equal(JSON.parse(await readFile(profile.rendererBinding, "utf8")).deploymentId, "dpl_renderer123");
   assert.equal(profile.rehearsalEvidence, null);
   assert.equal((await stat(profile.secrets)).mode & 0o077, 0);
   assert.equal((await stat(join(profile.secrets, "RENDER_COMPLETE.json"))).mode & 0o077, 0);
+});
+
+test("rejects a production bundle before rendering when venue upload is not admitted", async () => {
+  const options = await fixture("production");
+  const venue = JSON.parse(await readFile(options.venueProfile, "utf8"));
+  venue.uploadMeasurement.sustainedUploadMbps = 1;
+  await writeFile(options.venueProfile, `${JSON.stringify(venue, null, 2)}\n`, { mode: 0o600 });
+  await assert.rejects(() => createFixtureBundle(options), /venue profile is not admitted.*below the event requirement/u);
+  await assert.rejects(() => stat(options.root), { code: "ENOENT" });
 });
 
 test("rejects weak input permissions and incomplete mode-specific options", async () => {
@@ -129,6 +153,9 @@ test("rejects weak input permissions and incomplete mode-specific options", asyn
   const production = await fixture("production");
   await assert.rejects(() => createFixtureBundle({ ...production, anchors: undefined }), /requires --anchors/);
   await assert.rejects(() => createFixtureBundle({ ...production, productionSource: undefined }), /requires --production-source/);
+  await assert.rejects(() => createFixtureBundle({ ...production, rendererBinding: undefined }), /requires --renderer-binding/);
+  await assert.rejects(() => createFixtureBundle({ ...production, venueProfile: undefined }), /requires --venue-profile/);
+  await assert.rejects(() => createFixtureBundle({ ...production, commentaryQualification: undefined }), /requires --commentary-qualification/);
   await assert.rejects(() => createFixtureBundle({ ...production, networkSpec: undefined }), /networkSpec is required/);
   await writeFile(production.anchors, "{}\n", { mode: 0o600 });
   await assert.rejects(() => createFixtureBundle(production), /schemaVersion must be 2/);
@@ -208,4 +235,23 @@ async function productionSourceFixture(parent) {
   };
   await writeFile(join(root, "SOURCE_COMPLETE.json"), `${JSON.stringify(marker, null, 2)}\n`, { mode: 0o600 });
   return root;
+}
+
+async function rendererBindingFixture(parent) {
+  const path = join(parent, "renderer.json");
+  await writeFile(path, `${JSON.stringify({
+    schemaVersion: 1,
+    provider: "vercel",
+    origin: "https://scorecheck-abc123-team.vercel.app",
+    deploymentId: "dpl_renderer123",
+    gitSha: "a".repeat(40),
+    assetNamespace: "dpl_renderer123",
+    contracts: {
+      programSession: "program-session-v1",
+      overlayState: "overlay-state-v1",
+      commentary: "commentary-v1",
+      browserHeartbeat: "browser-heartbeat-v5"
+    }
+  }, null, 2)}\n`, { mode: 0o600 });
+  return path;
 }

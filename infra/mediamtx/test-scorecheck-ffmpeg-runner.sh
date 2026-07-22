@@ -198,11 +198,13 @@ unset FAKE_FFMPEG_EXIT_EARLY
   || fail "early FFmpeg failure left stale progress state"
 
 direct_runner_count="$(grep -c '^[[:space:]]*/usr/local/bin/scorecheck-ffmpeg-runner ' "$TEMPLATE")"
-[ "$direct_runner_count" -eq 4 ] \
-  || fail "expected four direct MediaMTX runner commands, found $direct_runner_count"
+[ "$direct_runner_count" -eq 3 ] \
+  || fail "expected three direct MediaMTX runner commands plus the preview wrapper, found $direct_runner_count"
 wait_ready_count="$(grep -c -- '--wait-ready "court${G1}_raw"' "$TEMPLATE")"
-[ "$wait_ready_count" -eq 2 ] \
-  || fail "expected preview and monitor to use the runner readiness gate"
+[ "$wait_ready_count" -eq 1 ] \
+  || fail "expected only monitor to use the direct raw readiness gate"
+grep -q 'scorecheck-preview-runner "court${G1}_preview"' "$TEMPLATE" \
+  || fail "preview does not use the source-selecting wrapper"
 if grep -q '/bin/sh -c' "$TEMPLATE"; then
   fail "MediaMTX hooks still contain a nested shell that can orphan the runner"
 fi

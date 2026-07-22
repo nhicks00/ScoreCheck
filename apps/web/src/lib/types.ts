@@ -37,6 +37,15 @@ export type ScoreSnapshot = {
 };
 
 export type OverlayState = {
+  projection: {
+    schemaVersion: 1;
+    scoreRevision: number;
+    authorityEpoch: number;
+    sourceRevision: string | null;
+    sourceTimestamp: string | null;
+    materializedAt: string | null;
+    bodyChecksum: string | null;
+  };
   eventId: string;
   courtId: string;
   courtNumber: number;

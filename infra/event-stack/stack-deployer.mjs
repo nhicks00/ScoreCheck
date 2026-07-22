@@ -10,6 +10,8 @@ import { collectReconstructionProvenance, sha256 as provenanceSha256 } from "./r
 
 export const DEPLOYMENT_SCRIPT_TIMEOUT_MS = 10 * 60 * 1_000;
 export const AGENT_DEPLOY_CONCURRENCY = 3;
+export const MAX_CLOCK_OFFSET_MS = 1_000;
+export const MAX_CLOCK_PROBE_RTT_MS = 5_000;
 
 const REQUIRED_DEPLOYMENT_SECRET_FILES = Object.freeze([
   "agent-tokens.json",
@@ -114,6 +116,7 @@ export class LocalStackDeployer {
         MEDIAMTX_SSH_HOST: `root@${resource.publicIpv4}`,
         MEDIAMTX_SSH_KEY: this.sshPrivateKey,
         MEDIAMTX_PUBLIC_IP: servicePublicIpv4({ manifest, state, spec, resource }),
+        MEDIAMTX_PRIVATE_IP: resource.privateIpv4,
         MEDIAMTX_PUBLIC_HOST: endpointForRole(manifest, "ingest"),
         MEDIAMTX_ACME_EMAIL: this.acmeEmail,
         MEDIAMTX_CONTENT_ANALYZER_BINDINGS: JSON.stringify(compositorContentAnalyzerBindings({ manifest, state }))
@@ -121,11 +124,16 @@ export class LocalStackDeployer {
     } else if (["compositor", "compositor-spare"].includes(spec.role)) {
       const environmentPath = join(this.secretsDirectory, "compositors", `${spec.name}.env`);
       await assertProtectedFile(environmentPath, `${spec.name} environment`);
+      const ingestSpec = manifest.droplets.find((entry) => entry.role === "ingest");
+      const ingestPrivateIpv4 = ingestSpec ? state.droplets[ingestSpec.name]?.privateIpv4 : null;
+      if (!ingestPrivateIpv4) throw new Error("compositor deployment requires the ingest private IPv4 address");
       await this.#script("infra/compositor/deploy.sh", {
         ...common,
         COMPOSITOR_SSH_HOST: `root@${resource.publicIpv4}`,
         COMPOSITOR_SSH_KEY: this.sshPrivateKey,
-        COMPOSITOR_ENV_FILE: environmentPath
+        COMPOSITOR_ENV_FILE: environmentPath,
+        COMPOSITOR_INGEST_PRIVATE_IP: ingestPrivateIpv4,
+        COMPOSITOR_INGEST_HOST: endpointForRole(manifest, "ingest")
       });
     } else if (spec.role === "observability") {
       const env = await loadProtectedEnv(join(this.secretsDirectory, "observability.env"));
@@ -260,13 +268,30 @@ export class LocalStackDeployer {
       await this.#ensureSsh(resource.publicIpv4);
       const command = verificationCommand(spec.role);
       await this.#ssh(resource.publicIpv4, command);
+      const clockStartedAtMs = Date.now();
+      const clockProbe = await this.#ssh(resource.publicIpv4, clockVerificationCommand());
+      const clockEndedAtMs = Date.now();
+      const clock = evaluateClockProbe({
+        stdout: clockProbe.stdout,
+        startedAtMs: clockStartedAtMs,
+        endedAtMs: clockEndedAtMs
+      });
+      const privateNetwork = privateNetworkVerificationPlan({ manifest, state, spec });
+      if (privateNetwork) await this.#ssh(resource.publicIpv4, privateNetwork.command);
       const reconstruction = await collectReconstructionProvenance({
         spec,
         resource,
         expectedConfigHashes: await this.#expectedConfigHashes(spec, true),
         runRemote: (remoteCommand) => this.#ssh(resource.publicIpv4, remoteCommand)
       });
-      checks.push({ name: spec.name, role: spec.role, status: "healthy", reconstruction });
+      checks.push({
+        name: spec.name,
+        role: spec.role,
+        status: "healthy",
+        clock,
+        privateNetwork: privateNetwork?.evidence ?? { status: "not-required", targets: [] },
+        reconstruction
+      });
     }
     for (const endpoint of manifest.endpoints.filter(publicHttpHealthEndpoint)) {
       const healthPath = ["ingest", "observability"].includes(endpoint.role) ? "/healthz" : "";
@@ -362,6 +387,98 @@ export class LocalStackDeployer {
       timeoutMs: DEPLOYMENT_SCRIPT_TIMEOUT_MS
     });
   }
+}
+
+export function clockVerificationCommand() {
+  return "sync=$(timedatectl show --property=NTPSynchronized --value) && remote_ms=$(date +%s%3N) && printf '%s %s\\n' \"$sync\" \"$remote_ms\"";
+}
+
+export function evaluateClockProbe({ stdout, startedAtMs, endedAtMs }) {
+  if (!Number.isFinite(startedAtMs) || !Number.isFinite(endedAtMs) || endedAtMs < startedAtMs) {
+    throw new Error("clock probe timestamps are invalid");
+  }
+  const roundTripMs = endedAtMs - startedAtMs;
+  if (roundTripMs > MAX_CLOCK_PROBE_RTT_MS) throw new Error(`clock probe round trip ${roundTripMs}ms exceeds ${MAX_CLOCK_PROBE_RTT_MS}ms`);
+  const match = String(stdout ?? "").trim().match(/^(yes|no)\s+(\d{13})$/u);
+  if (!match) throw new Error("clock probe response is invalid");
+  if (match[1] !== "yes") throw new Error("host clock is not NTP synchronized");
+  const remoteTimeMs = Number(match[2]);
+  const midpointMs = startedAtMs + roundTripMs / 2;
+  const offsetMs = Math.round(remoteTimeMs - midpointMs);
+  if (Math.abs(offsetMs) > MAX_CLOCK_OFFSET_MS) {
+    throw new Error(`host clock offset ${offsetMs}ms exceeds ${MAX_CLOCK_OFFSET_MS}ms`);
+  }
+  return { status: "synchronized", offsetMs, roundTripMs, remoteTimeMs };
+}
+
+export function privateNetworkVerificationPlan({ manifest, state, spec }) {
+  const resource = state.droplets[spec.name];
+  const source = privateIpv4(resource?.privateIpv4, `${spec.name} private IPv4`);
+  const ingestSpec = manifest.droplets.find((entry) => entry.role === "ingest");
+  const ingest = ingestSpec ? state.droplets[ingestSpec.name] : null;
+  const ingestPrivateIpv4 = privateIpv4(ingest?.privateIpv4, "ingest private IPv4");
+  const ingestHost = endpointForRole(manifest, "ingest");
+
+  if (spec.role === "ingest") {
+    return {
+      command: `grep -Fq ${shellQuote(ingestPrivateIpv4)} /opt/mediamtx/mediamtx.yml`,
+      evidence: { status: "verified", targets: [{ purpose: "webrtc-private-candidate", address: ingestPrivateIpv4 }] }
+    };
+  }
+  if (["compositor", "compositor-spare"].includes(spec.role)) {
+    const exactPrivateBinding = `MEDIAMTX_PRIVATE_HOST=\"${ingestPrivateIpv4}\"`;
+    const exactPublicBinding = `MEDIAMTX_PUBLIC_HOST=\"${ingestHost}\"`;
+    const hostsPattern = `^${regexpEscape(ingestPrivateIpv4)}[[:space:]]+${regexpEscape(ingestHost)}([[:space:]]|$)`;
+    return {
+      command: [
+        `grep -Fxq ${shellQuote(exactPrivateBinding)} /opt/compositor/.env`,
+        `grep -Fxq ${shellQuote(exactPublicBinding)} /opt/compositor/.env`,
+        `ip -4 route get ${shellQuote(ingestPrivateIpv4)} | grep -Fq ${shellQuote(`src ${source}`)}`,
+        `timeout 3 bash -c ${shellQuote(`</dev/tcp/${ingestPrivateIpv4}/8554`)}`,
+        `docker exec bvm-egress grep -Eq ${shellQuote(hostsPattern)} /etc/hosts`,
+        `docker exec bvm-egress curl -fsS --max-time 5 ${shellQuote(`https://${ingestHost}/healthz`)} >/dev/null`
+      ].join(" && "),
+      evidence: {
+        status: "verified",
+        targets: [
+          { purpose: "normalizer-rtsp", address: `${ingestPrivateIpv4}:8554` },
+          { purpose: "program-whep-tls", address: `${ingestHost}->${ingestPrivateIpv4}:443` }
+        ]
+      }
+    };
+  }
+  if (spec.role === "observability") {
+    const targets = manifest.droplets.map((entry) => ({
+      name: entry.name,
+      address: privateIpv4(state.droplets[entry.name]?.privateIpv4, `${entry.name} private IPv4`)
+    }));
+    const commands = targets.flatMap((target) => [
+      `ip -4 route get ${shellQuote(target.address)} | grep -Fq ${shellQuote(`src ${source}`)}`,
+      `curl -fsS --max-time 3 ${shellQuote(`http://${target.address}:9108/healthz`)} >/dev/null`
+    ]);
+    return {
+      command: commands.join(" && "),
+      evidence: { status: "verified", targets: targets.map((target) => ({ purpose: `agent-${target.name}`, address: `${target.address}:9108` })) }
+    };
+  }
+  return null;
+}
+
+function privateIpv4(value, label) {
+  if (typeof value !== "string" || !/^(?:10\.\d{1,3}|192\.168|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}$/u.test(value)) {
+    throw new Error(`${label} is missing or not private`);
+  }
+  const octets = value.split(".").map(Number);
+  if (octets.some((octet) => octet < 0 || octet > 255)) throw new Error(`${label} is invalid`);
+  return value;
+}
+
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", `'\\''`)}'`;
+}
+
+function regexpEscape(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 export async function runDeploymentScript({ runner, script, environment, wait = delay, timeoutMs = DEPLOYMENT_SCRIPT_TIMEOUT_MS }) {
@@ -619,14 +736,19 @@ export function roleConfigBindings(repoRoot, secretsDirectory, spec) {
     [join(repoRoot, "infra/mediamtx/docker-compose.yml"), "/opt/mediamtx/docker-compose.yml"],
     [join(repoRoot, "infra/mediamtx/.generated/mediamtx.yml"), "/opt/mediamtx/mediamtx.yml"],
     [join(repoRoot, "infra/mediamtx/.generated/Caddyfile"), "/opt/mediamtx/Caddyfile"],
-    [join(repoRoot, "infra/mediamtx/scorecheck-ffmpeg-runner.sh"), "/opt/mediamtx/scorecheck-ffmpeg-runner.sh"]
+    [join(repoRoot, "infra/mediamtx/scorecheck-ffmpeg-runner.sh"), "/opt/mediamtx/scorecheck-ffmpeg-runner.sh"],
+    [join(repoRoot, "infra/mediamtx/scorecheck-preview-runner.sh"), "/opt/mediamtx/scorecheck-preview-runner.sh"]
   ];
   if (["compositor", "compositor-spare"].includes(spec.role)) return [
     [join(repoRoot, "infra/compositor/docker-compose.yml"), "/opt/compositor/docker-compose.yml"],
     [join(repoRoot, "infra/compositor/livekit.yaml"), "/opt/compositor/livekit.yaml"],
     [join(repoRoot, "infra/compositor/egress.yaml"), "/opt/compositor/egress.yaml"],
     [join(secretsDirectory, "compositors", `${spec.name}.env`), "/opt/compositor/.env"],
+    [join(repoRoot, "infra/compositor/normalize-camera.sh"), "/opt/compositor/normalize-camera.sh"],
+    [join(repoRoot, "infra/compositor/qualify-output.sh"), "/opt/compositor/qualify-output.sh"],
     [join(repoRoot, "infra/compositor/start-court.sh"), "/opt/compositor/start-court.sh"],
+    [join(repoRoot, "infra/compositor/start-normalizer.sh"), "/opt/compositor/start-normalizer.sh"],
+    [join(repoRoot, "infra/compositor/stop-normalizer.sh"), "/opt/compositor/stop-normalizer.sh"],
     [join(repoRoot, "infra/compositor/stop-court.sh"), "/opt/compositor/stop-court.sh"]
   ];
   if (spec.role === "observability") return [

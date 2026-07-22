@@ -1,7 +1,12 @@
 import type { ServiceConfig } from "./config.js";
 import type { IncidentSnapshot, NotificationHealth } from "./contracts.js";
 import type { IncidentChange } from "./incidents.js";
-import { IncidentStore, type StoredNotification } from "./incidentStore.js";
+import type {
+  NotificationKind,
+  NotificationProvider,
+  NotificationStatus,
+  StoredNotification
+} from "./incidentStore.js";
 import { operatorNotificationCopy } from "./operatorNotificationCopy.js";
 
 type NotificationConfig = Pick<ServiceConfig,
@@ -17,13 +22,34 @@ type ProviderState = {
   lastFailureAt: string | null;
 };
 
+export type NotificationStore = {
+  ensureNotification(
+    incidentId: string,
+    provider: NotificationProvider,
+    kind: NotificationKind,
+    now?: Date
+  ): Promise<{ notification: StoredNotification; created: boolean }>;
+  updateNotification(id: string, patch: Partial<{
+    providerMessageId: string | null;
+    status: NotificationStatus;
+    acceptedAt: string | null;
+    deliveredAt: string | null;
+    acknowledgedAt: string | null;
+    expiredAt: string | null;
+    escalatedAt: string | null;
+    providerErrorCode: string | null;
+  }>): Promise<StoredNotification>;
+  rearmNotification(id: string, now?: Date): Promise<StoredNotification>;
+  findNotification(incidentId: string, provider: NotificationProvider, kind: NotificationKind): Promise<StoredNotification | null>;
+};
+
 export class NotificationDispatcher {
   private readonly lastProviderPollAt = new Map<string, number>();
   private readonly providerHealth: ProviderState;
 
   constructor(
     private readonly config: NotificationConfig,
-    private readonly store: IncidentStore | null,
+    private readonly store: NotificationStore | null,
     private readonly send: typeof fetch = fetch
   ) {
     this.providerHealth = { configured: this.pushoverConfigured(), lastSuccessAt: null, lastFailureAt: null };

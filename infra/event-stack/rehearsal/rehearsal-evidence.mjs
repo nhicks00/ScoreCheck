@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, open, readFile, rename, stat, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { evaluateHostSamples, evaluateZombieEvidence } from "../../capacity/evaluate-gate.mjs";
@@ -253,7 +253,9 @@ export async function sealRehearsalEvidence({ state, manifest, evidenceDirectory
     || state.publisherEvidence != null
     || state.startEvidence != null
     || Object.values(state.courts).some((court) => court.publisher?.marker || court.commentary?.marker || court.egress?.id);
-  const classification = state.soakEvidence?.passed && state.endpointEvidence?.passed && state.stopEvidence?.passed ? "PASS" : workloadAttempted ? "FAIL" : "CANCELLED";
+  const outputConformancePassed = Object.values(state.courts).length === 8
+    && Object.values(state.courts).every((court) => court.outputConformance?.status === "QUALIFIED");
+  const classification = state.soakEvidence?.passed && state.endpointEvidence?.passed && state.stopEvidence?.passed && outputConformancePassed ? "PASS" : workloadAttempted ? "FAIL" : "CANCELLED";
   const artifactNames = ["pool-host-samples.jsonl", "rehearsal-monitor-samples.jsonl", "rehearsal-soak-report.json"];
   const artifacts = {};
   for (const name of artifactNames) {
@@ -264,6 +266,18 @@ export async function sealRehearsalEvidence({ state, manifest, evidenceDirectory
       artifacts[name] = { bytes: value.size, sha256: await sha256File(path) };
     } catch (error) {
       if (error?.code !== "ENOENT") throw error;
+    }
+  }
+  for (const [court, value] of Object.entries(state.courts)) {
+    const conformance = value.outputConformance;
+    if (!conformance) continue;
+    for (const [kind, path] of [["report", conformance.evidencePath], ["sample", conformance.samplePath]]) {
+      const absolutePath = resolve(path ?? "");
+      const name = relative(root, absolutePath);
+      if (!name || name.startsWith("..") || isAbsolute(name)) throw new Error(`Camera ${court} output-conformance ${kind} is outside the evidence directory`);
+      const information = await stat(absolutePath);
+      if (!information.isFile() || (information.mode & 0o077) !== 0) throw new Error(`Camera ${court} output-conformance ${kind} is not protected`);
+      artifacts[name] = { bytes: information.size, sha256: await sha256File(absolutePath) };
     }
   }
   if (workloadAttempted && !artifacts["pool-host-samples.jsonl"]) throw new Error("attempted rehearsal has no pool-host evidence");
@@ -294,6 +308,7 @@ export async function sealRehearsalEvidence({ state, manifest, evidenceDirectory
     soakEvidence: state.soakEvidence ?? null,
     endpointEvidence: state.endpointEvidence ?? null,
     stopEvidence: state.stopEvidence ?? null,
+    outputConformance: Object.fromEntries(Object.entries(state.courts).map(([court, value]) => [court, value.outputConformance ?? null])),
     artifacts,
     excludedBoundaries: [
       "production Supabase event/scoring/control-plane persistence",
@@ -367,7 +382,7 @@ function assertProviderCleanup(value, { requireRetained = false } = {}) {
     if (entry.status === "retained"
       && (typeof entry.streamId !== "string"
         || !entry.streamId
-        || entry.title !== `ScoreCheck Court ${court} Test Stream`
+        || entry.title !== `ScoreCheck Production Camera ${court} Auto Stream`
         || entry.isReusable !== true
         || (requireRetained && entry.streamStatus !== "inactive"))) {
       throw new Error(`Camera ${court} retained YouTube stream identity is invalid`);

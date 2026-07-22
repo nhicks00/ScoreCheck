@@ -31,7 +31,7 @@ moq: no
 webrtc: yes
 webrtcAddress: :8889
 webrtcLocalUDPAddress: :8189
-webrtcAdditionalHosts: [__PUBLIC_IP__, __PUBLIC_HOST__]
+webrtcAdditionalHosts: [__PUBLIC_IP__, __PUBLIC_HOST__, __PRIVATE_IP__]
 webrtcIPsFromInterfaces: no
 
 authInternalUsers:
@@ -44,9 +44,10 @@ authInternalUsers:
       - action: playback
         path: "~^court[1-8]_(preview|program|monitor|calibration)$"
 
-  # Each assigned compositor analyzes only its owned raw camera feed before the
-  # program delay. Exact source-IP/path bindings are rendered from lifecycle
-  # state; cloud and host firewalls independently restrict the RTSP listener.
+  # Each assigned compositor analyzes only its owned raw camera feed and may
+  # publish only its owned browser-safe normalization path. Exact source-IP/path
+  # bindings are rendered from lifecycle state; cloud and host firewalls
+  # independently restrict the RTSP listener.
 __CONTENT_ANALYZER_USERS__
 
   # Each venue encoder has a separate credential and can publish only to its
@@ -127,22 +128,29 @@ paths:
   court8_raw:
     source: __COURT_8_RAW_SOURCE__
 
-  # Low-latency native video + Opus for commentators, scorers, and producers.
-  # Production admits H.264 or H.265 1920x1080 at 30 or 60 fps, so video is
-  # stream-copied instead of re-encoded on the shared ingest host. Only AAC
-  # audio is converted to browser-compatible Opus. It starts only when a preview
-  # or program reader exists.
+  # HEVC camera assignments are normalized on their owning compositors and
+  # published back over the private VPC. Direct-H264 assignments leave these
+  # paths idle. Per-compositor source-IP authorization prevents cross-camera
+  # publication.
+  court1_normalized:
+  court2_normalized:
+  court3_normalized:
+  court4_normalized:
+  court5_normalized:
+  court6_normalized:
+  court7_normalized:
+  court8_normalized:
+
+  # Low-latency H.264 + Opus for commentators, scorers, and producers. The
+  # production source gate admits this direct branch only when the camera is
+  # browser-safe H.264 (no B-frames, yuv420p, progressive, bounded GOP). HEVC
+  # requires a separately assigned and capacity-qualified normalizer that
+  # publishes a browser-safe preview; it must never be copied through this
+  # direct branch. The shared ingest host converts AAC to Opus but does not
+  # software-encode production video.
   "~^court([1-8])_preview$":
     runOnDemand: >
-      /usr/local/bin/scorecheck-ffmpeg-runner "court${G1}_preview"
-      --wait-ready "court${G1}_raw" --
-      -nostdin -hide_banner -loglevel warning
-      -fflags nobuffer -flags low_delay -rtsp_transport tcp
-      -i "rtsp://127.0.0.1:${RTSP_PORT}/court${G1}_raw"
-      -map 0:v:0 -map 0:a:0?
-      -c:v copy
-      -c:a libopus -b:a 96k -ar 48000 -ac 2 -af "aresample=async=1:first_pts=0"
-      -f rtsp -rtsp_transport tcp "rtsp://127.0.0.1:${RTSP_PORT}/${MTX_PATH}"
+      /usr/local/bin/scorecheck-preview-runner "court${G1}_preview" "__BROWSER_SOURCE_MAP__"
     runOnDemandRestart: yes
     runOnDemandStartTimeout: 20s
     runOnDemandCloseAfter: 90s
@@ -168,8 +176,8 @@ paths:
 
   # Program-only path. SRT receiver latency deliberately holds both video and
   # ambient audio for the configured coarse delay, then stream-copies the
-  # normalized codecs into a distinct WHEP path. Opening the preview input is
-  # what triggers its on-demand normalizer; polling for preview readiness here
+  # admitted browser-safe codecs into a distinct WHEP path. Opening the preview
+  # input triggers its on-demand direct branch; polling for preview readiness here
   # would deadlock when no separate preview reader is connected. Commentary
   # gets fine delay in the program page's Web Audio graph.
   "~^court([1-8])_program$":
@@ -185,7 +193,7 @@ paths:
 
   # Gate calibration only. This path adds UTC timecode without contaminating
   # either the commentator preview or the clean program feed. Its RTSP read
-  # directly triggers the on-demand preview normalizer.
+  # directly triggers the on-demand preview branch.
   "~^court([1-8])_calibration$":
     runOnDemand: >
       /usr/local/bin/scorecheck-ffmpeg-runner "court${G1}_calibration" --

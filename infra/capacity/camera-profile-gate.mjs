@@ -7,10 +7,15 @@ import { createServer, connect } from "node:net";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 
+import { selectProductionOutputProfile } from "../event-stack/production-media-profile.mjs";
+
 const execFileAsync = promisify(execFile);
 const SAFE_ID = /^[a-zA-Z0-9_.:-]{1,80}$/;
+const SAFE_DECLARATION = /^[a-zA-Z0-9][a-zA-Z0-9 ._()+/-]{0,79}$/;
 const SAFE_HOST = /^[a-zA-Z0-9_.:@-]{1,255}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
+const SOURCE_PATH_MODES = new Set(["direct-h264", "isolated-hevc-normalizer"]);
+const FRAME_RATE_MODES = new Set(["30000/1001", "30/1", "60000/1001", "60/1"]);
 const PROFILE_FIELDS = [
   "sourceProtocol",
   "sourceMode",
@@ -47,7 +52,7 @@ function addCheck(checks, id, pass, observed, expected) {
 }
 
 function validateConfig(config) {
-  if (config?.schemaVersion !== 1) throw new Error("camera profile config schemaVersion must be 1");
+  if (config?.schemaVersion !== 2) throw new Error("camera profile config schemaVersion must be 2");
   if (!SAFE_ID.test(config.gateId ?? "")) throw new Error("gateId is invalid");
   if (!Array.isArray(config.requiredCourts) || config.requiredCourts.length === 0) throw new Error("requiredCourts must be a non-empty array");
   const courts = new Set();
@@ -78,12 +83,29 @@ function validateConfig(config) {
   if (config.thresholds.maximumSampleGapSeconds < config.intervalSeconds) throw new Error("maximumSampleGapSeconds cannot be less than intervalSeconds");
 
   if (!config.expectedProfiles || typeof config.expectedProfiles !== "object") throw new Error("expectedProfiles is required");
-  for (const court of config.requiredCourts) validateExpectedProfile(config.expectedProfiles[String(court)], court);
+  for (const court of config.requiredCourts) {
+    const profile = config.expectedProfiles[String(court)];
+    validateExpectedProfile(profile, court);
+    if (profile.minimumRawBitrateBps < config.thresholds.minimumRawBitrateBps) {
+      throw new Error(`expectedProfiles.${court}.minimumRawBitrateBps cannot be less than the global safety floor`);
+    }
+  }
   return config;
 }
 
 function validateExpectedProfile(profile, court) {
   if (!profile || typeof profile !== "object") throw new Error(`expectedProfiles.${court} is required`);
+  if (profile.cameraIdentity !== `camera-${court}`) throw new Error(`expectedProfiles.${court}.cameraIdentity must be camera-${court}`);
+  for (const field of ["cameraModel", "cameraFirmware"]) {
+    if (typeof profile[field] !== "string" || !SAFE_DECLARATION.test(profile[field])) {
+      throw new Error(`expectedProfiles.${court}.${field} is invalid`);
+    }
+    if (/^(?:replace|unknown|unverified|example)/i.test(profile[field])) {
+      throw new Error(`expectedProfiles.${court}.${field} must be replaced with the installed value`);
+    }
+  }
+  if (!SOURCE_PATH_MODES.has(profile.sourcePathMode)) throw new Error(`expectedProfiles.${court}.sourcePathMode is invalid`);
+  if (!FRAME_RATE_MODES.has(profile.videoFrameRateMode)) throw new Error(`expectedProfiles.${court}.videoFrameRateMode is invalid`);
   for (const field of PROFILE_FIELDS) {
     const value = profile[field];
     if (typeof value === "string") {
@@ -98,16 +120,32 @@ function validateExpectedProfile(profile, court) {
   for (const value of profile.videoProfilesAllowed) {
     if (typeof value !== "string" || !SAFE_ID.test(value)) throw new Error(`expectedProfiles.${court}.videoProfilesAllowed is invalid`);
   }
-  if (!finite(profile.minimumFps) || !finite(profile.maximumFps) || profile.minimumFps <= 0 || profile.maximumFps < profile.minimumFps) {
-    throw new Error(`expectedProfiles.${court} FPS range is invalid`);
+  for (const field of ["minimumRawBitrateBps", "maximumRawBitrateBps", "videoHasBFrames"]) {
+    if (!Number.isInteger(profile[field]) || profile[field] < 0) throw new Error(`expectedProfiles.${court}.${field} is invalid`);
   }
+  if (profile.minimumRawBitrateBps < 1 || profile.maximumRawBitrateBps < profile.minimumRawBitrateBps) {
+    throw new Error(`expectedProfiles.${court} bitrate range is invalid`);
+  }
+  if (profile.videoFieldOrder !== "progressive") throw new Error(`expectedProfiles.${court}.videoFieldOrder must be progressive`);
+  if (profile.videoPixelFormat !== "yuv420p") throw new Error(`expectedProfiles.${court}.videoPixelFormat must be yuv420p`);
+  if (profile.videoWidth !== 1920 || profile.videoHeight !== 1080) throw new Error(`expectedProfiles.${court} must require 1920x1080`);
+  if (profile.audioCodec.toUpperCase() !== "AAC" || profile.audioSampleRateHz !== 48_000 || profile.audioChannelCount !== 2) {
+    throw new Error(`expectedProfiles.${court} must require AAC 48 kHz stereo camera audio`);
+  }
+  if (profile.sourcePathMode === "direct-h264" && (profile.videoCodec.toUpperCase() !== "H264" || profile.videoHasBFrames !== 0)) {
+    throw new Error(`expectedProfiles.${court} direct-h264 requires H264 with zero B-frames`);
+  }
+  if (profile.sourcePathMode === "isolated-hevc-normalizer" && profile.videoCodec.toUpperCase() !== "H265") {
+    throw new Error(`expectedProfiles.${court} isolated-hevc-normalizer requires H265`);
+  }
+  if (profile.maximumGopSeconds !== 2) throw new Error(`expectedProfiles.${court}.maximumGopSeconds must be 2`);
 }
 
 export function sanitizeSnapshot(snapshot, requiredCourts, sampledAt, scheduledAt) {
   const courtsByNumber = new Map((snapshot?.courts ?? []).map((court) => [court.courtNumber, court]));
   return {
     recordType: "sample",
-    schemaVersion: 1,
+    schemaVersion: 2,
     sampledAt,
     scheduledAt,
     generatedAt: snapshot?.generatedAt ?? null,
@@ -125,6 +163,7 @@ export function sanitizeSnapshot(snapshot, requiredCourts, sampledAt, scheduledA
         courtNumber,
         overallState: court?.overallState ?? null,
         raw: raw ? {
+          name: raw.name,
           ready: raw.ready,
           readySince: raw.readySince,
           inboundBitrateBps: raw.inboundBitrateBps,
@@ -170,7 +209,7 @@ export function evaluateCameraProfileGate(configInput, evidenceInput, probes, so
   const samples = [...evidenceInput.samples].sort((a, b) => Date.parse(a.sampledAt) - Date.parse(b.sampledAt));
   const errors = evidenceInput.errors ?? [];
   if (!run) throw new Error("evidence run metadata is missing");
-  if (run.schemaVersion !== 1 || run.gateId !== config.gateId) throw new Error("evidence run metadata does not match the config");
+  if (run.schemaVersion !== 2 || run.gateId !== config.gateId) throw new Error("evidence run metadata does not match the config");
   if (JSON.stringify(run.requiredCourts) !== JSON.stringify(config.requiredCourts)) throw new Error("evidence requiredCourts do not match the config");
 
   const startMs = parseTime(run.plannedStartAt, "plannedStartAt");
@@ -181,7 +220,9 @@ export function evaluateCameraProfileGate(configInput, evidenceInput, probes, so
   const expectedSamples = Math.floor(durationSeconds / config.intervalSeconds) + 1;
   const coverageRatio = samples.length / expectedSamples;
   addCheck(checks, "duration", durationSeconds >= config.minimumDurationSeconds, durationSeconds, `>= ${config.minimumDurationSeconds} seconds`);
-  addCheck(checks, "source_evidence_digests", SHA256.test(sourceEvidence.samplesSha256 ?? "") && SHA256.test(sourceEvidence.probesSha256 ?? ""), sourceEvidence, "lowercase SHA-256 for the sanitized sample and probe artifacts");
+  addCheck(checks, "source_evidence_digests", SHA256.test(sourceEvidence.configSha256 ?? "")
+    && SHA256.test(sourceEvidence.samplesSha256 ?? "")
+    && SHA256.test(sourceEvidence.probesSha256 ?? ""), sourceEvidence, "lowercase SHA-256 for the config, sanitized sample, and probe artifacts");
   addCheck(checks, "sample_errors", errors.length === 0, errors.length, "0");
   addCheck(checks, "sample_coverage", coverageRatio >= config.thresholds.minimumSampleCoverageRatio, coverageRatio, `>= ${config.thresholds.minimumSampleCoverageRatio}`);
 
@@ -226,6 +267,7 @@ export function evaluateCameraProfileGate(configInput, evidenceInput, probes, so
     generatedAt: new Date().toISOString(),
     qualification: qualificationContract(config),
     sourceEvidence: {
+      configSha256: sourceEvidence.configSha256 ?? null,
       samplesSha256: sourceEvidence.samplesSha256 ?? null,
       probesSha256: sourceEvidence.probesSha256 ?? null
     },
@@ -250,7 +292,7 @@ export function evaluateCameraProfileGate(configInput, evidenceInput, probes, so
 
 function qualificationContract(config) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     requiredCourts: [...config.requiredCourts],
     minimumDurationSeconds: config.minimumDurationSeconds,
     intervalSeconds: config.intervalSeconds,
@@ -275,7 +317,9 @@ function evaluateCourt(checks, config, samples, probes, courtNumber, startMs, en
 
   const bitrateValues = rawSamples.map((raw) => raw?.inboundBitrateBps).filter(finite);
   const bitrateP05 = percentile(bitrateValues, 0.05);
-  addCheck(checks, `${prefix}_bitrate_p05`, bitrateValues.length === samples.length && bitrateP05 >= config.thresholds.minimumRawBitrateBps, bitrateP05, `>= ${config.thresholds.minimumRawBitrateBps}`);
+  const bitrateMaximum = bitrateValues.length > 0 ? Math.max(...bitrateValues) : null;
+  addCheck(checks, `${prefix}_bitrate_p05`, bitrateValues.length === samples.length && bitrateP05 >= expected.minimumRawBitrateBps, bitrateP05, `>= ${expected.minimumRawBitrateBps}`);
+  addCheck(checks, `${prefix}_bitrate_max`, bitrateValues.length === samples.length && bitrateMaximum <= expected.maximumRawBitrateBps, bitrateMaximum, `<= ${expected.maximumRawBitrateBps}`);
 
   const frameErrors = rawSamples.map((raw) => raw?.frameErrors).filter(finite);
   const frameErrorGrowth = counterGrowth(frameErrors);
@@ -288,6 +332,11 @@ function evaluateCourt(checks, config, samples, probes, courtNumber, startMs, en
 
   const readySinceValues = new Set(rawSamples.map((raw) => raw?.readySince).filter((value) => typeof value === "string"));
   addCheck(checks, `${prefix}_publisher_continuity`, readySinceValues.size === 1 && rawSamples.every((raw) => typeof raw?.readySince === "string"), [...readySinceValues], "one unchanged readySince timestamp");
+  const expectedPath = `court${courtNumber}_raw`;
+  addCheck(checks, `${prefix}_camera_identity`, expected.cameraIdentity === `camera-${courtNumber}` && rawSamples.every((raw) => raw?.name === expectedPath), {
+    cameraIdentity: expected.cameraIdentity,
+    paths: [...new Set(rawSamples.map((raw) => raw?.name))]
+  }, { cameraIdentity: `camera-${courtNumber}`, path: expectedPath });
 
   for (const field of PROFILE_FIELDS) {
     const values = rawSamples.map((raw) => raw?.[field]);
@@ -308,43 +357,48 @@ function evaluateCourt(checks, config, samples, probes, courtNumber, startMs, en
   const probeFps = [];
   let probeProfile = null;
   for (const probe of courtProbes) {
-    const videos = probe.streams?.filter((stream) => stream.codecType === "video") ?? [];
-    const audios = probe.streams?.filter((stream) => stream.codecType === "audio") ?? [];
-    addCheck(checks, `${prefix}_probe_${probe.sampledAt}_video_count`, videos.length === 1, videos.length, "1");
-    addCheck(checks, `${prefix}_probe_${probe.sampledAt}_audio_count`, audios.length === 1, audios.length, "1");
-    if (videos.length === 1) {
-      const video = videos[0];
-      const fps = parseFrameRate(video.avgFrameRate) ?? parseFrameRate(video.realFrameRate);
-      probeFps.push(fps);
-      addCheck(checks, `${prefix}_probe_${probe.sampledAt}_video_codec`, sameText(video.codecName, expected.videoCodec), video.codecName, expected.videoCodec);
-      addCheck(checks, `${prefix}_probe_${probe.sampledAt}_video_profile`, expected.videoProfilesAllowed.includes(video.profile), video.profile, expected.videoProfilesAllowed);
-      addCheck(checks, `${prefix}_probe_${probe.sampledAt}_dimensions`, video.width === expected.videoWidth && video.height === expected.videoHeight, `${video.width}x${video.height}`, `${expected.videoWidth}x${expected.videoHeight}`);
-      addCheck(checks, `${prefix}_probe_${probe.sampledAt}_fps`, finite(fps) && fps >= expected.minimumFps && fps <= expected.maximumFps, fps, `${expected.minimumFps}-${expected.maximumFps}`);
+    let productionProfile = null;
+    let probeError = null;
+    try {
+      productionProfile = selectProductionOutputProfile(probe.raw, {
+        sourcePathMode: expected.sourcePathMode,
+        expectedFrameRateMode: expected.videoFrameRateMode,
+        browserProbe: probe.preview
+      });
+    } catch (error) {
+      probeError = error instanceof Error ? error.message : "media contract validation failed";
     }
-    if (audios.length === 1) {
-      const audio = audios[0];
-      addCheck(checks, `${prefix}_probe_${probe.sampledAt}_audio_codec`, sameText(audio.codecName, expected.audioCodec), audio.codecName, expected.audioCodec);
-      addCheck(checks, `${prefix}_probe_${probe.sampledAt}_audio_sample_rate`, Number(audio.sampleRateHz) === expected.audioSampleRateHz, Number(audio.sampleRateHz), expected.audioSampleRateHz);
-      addCheck(checks, `${prefix}_probe_${probe.sampledAt}_audio_channels`, audio.channels === expected.audioChannelCount, audio.channels, expected.audioChannelCount);
-    }
-    if (courtProbes.length === 1 && videos.length === 1 && audios.length === 1) {
-      const video = videos[0];
-      const audio = audios[0];
-      probeProfile = {
-        videoCodec: video.codecName,
-        videoProfile: video.profile,
-        videoWidth: video.width,
-        videoHeight: video.height,
-        videoFps: parseFrameRate(video.avgFrameRate) ?? parseFrameRate(video.realFrameRate),
-        audioCodec: audio.codecName,
-        audioSampleRateHz: Number(audio.sampleRateHz),
-        audioChannelCount: audio.channels
-      };
+    const source = productionProfile?.source;
+    const sourceMatches = source
+      && sameText(source.codec, expected.videoCodec)
+      && expected.videoProfilesAllowed.some((profile) => sameText(profile, source.profile))
+      && source.pixelFormat === expected.videoPixelFormat
+      && source.fieldOrder === expected.videoFieldOrder
+      && source.hasBFrames === expected.videoHasBFrames
+      && source.frameRateMode === expected.videoFrameRateMode
+      && source.audioCodec === expected.audioCodec.toUpperCase()
+      && source.audioSampleRateHz === expected.audioSampleRateHz
+      && source.audioChannelCount === expected.audioChannelCount
+      && source.maximumKeyframeIntervalSeconds <= expected.maximumGopSeconds + 0.1;
+    addCheck(checks, `${prefix}_probe_${probe.sampledAt}_media_contract`, productionProfile !== null && sourceMatches, productionProfile ?? probeError, {
+      sourcePathMode: expected.sourcePathMode,
+      videoCodec: expected.videoCodec,
+      videoProfilesAllowed: expected.videoProfilesAllowed,
+      videoPixelFormat: expected.videoPixelFormat,
+      videoFieldOrder: expected.videoFieldOrder,
+      videoFrameRateMode: expected.videoFrameRateMode,
+      maximumGopSeconds: expected.maximumGopSeconds,
+      browserInput: "H264/yuv420p/progressive/no-B-frames/Opus-48k-stereo"
+    });
+    if (productionProfile) {
+      probeFps.push(productionProfile.source.measuredFramesPerSecond);
+      probeProfile = productionProfile;
     }
   }
 
   return {
     bitrateP05,
+    bitrateMaximum,
     frameErrorGrowth,
     byteGrowth,
     readySince: readySinceValues.size === 1 ? [...readySinceValues][0] : null,
@@ -399,15 +453,28 @@ export function sanitizeProbeStreams(payload) {
   if (!payload || !Array.isArray(payload.streams)) throw new Error("ffprobe output did not contain streams");
   return payload.streams.map((stream) => ({
     index: stream.index,
-    codecType: stream.codec_type,
-    codecName: stream.codec_name,
+    codec_type: stream.codec_type,
+    codec_name: stream.codec_name,
     profile: stream.profile ?? null,
     width: stream.width ?? null,
     height: stream.height ?? null,
-    realFrameRate: stream.r_frame_rate ?? null,
-    avgFrameRate: stream.avg_frame_rate ?? null,
-    sampleRateHz: stream.sample_rate ?? null,
+    r_frame_rate: stream.r_frame_rate ?? null,
+    avg_frame_rate: stream.avg_frame_rate ?? null,
+    field_order: stream.field_order ?? null,
+    pix_fmt: stream.pix_fmt ?? null,
+    has_b_frames: stream.has_b_frames ?? null,
+    sample_rate: stream.sample_rate ?? null,
     channels: stream.channels ?? null
+  }));
+}
+
+export function sanitizeProbePackets(payload) {
+  if (!payload || !Array.isArray(payload.packets)) throw new Error("ffprobe output did not contain packets");
+  return payload.packets.map((packet) => ({
+    pts_time: packet.pts_time ?? null,
+    dts_time: packet.dts_time ?? null,
+    duration_time: packet.duration_time ?? null,
+    flags: packet.flags ?? null
   }));
 }
 
@@ -446,7 +513,7 @@ async function sampleCommand(values) {
   const endMs = startMs + durationSeconds * 1_000;
   const writer = await protectedWriter(output);
   try {
-    await writer.write(`${JSON.stringify({ recordType: "run", schemaVersion: 1, gateId: config.gateId, requiredCourts: config.requiredCourts, plannedStartAt: iso(startMs), plannedEndAt: iso(endMs), intervalSeconds: config.intervalSeconds })}\n`);
+    await writer.write(`${JSON.stringify({ recordType: "run", schemaVersion: 2, gateId: config.gateId, requiredCourts: config.requiredCourts, plannedStartAt: iso(startMs), plannedEndAt: iso(endMs), intervalSeconds: config.intervalSeconds })}\n`);
     const slots = Math.floor((endMs - startMs) / intervalMs) + 1;
     for (let slot = 0; slot < slots; slot += 1) {
       const scheduledMs = startMs + slot * intervalMs;
@@ -454,7 +521,7 @@ async function sampleCommand(values) {
       if (delayMs > 0) await delay(delayMs);
       const sampledMs = Date.now();
       if (sampledMs - scheduledMs > intervalMs / 2) {
-        await writer.write(`${JSON.stringify({ recordType: "error", schemaVersion: 1, scheduledAt: iso(scheduledMs), sampledAt: iso(sampledMs), code: "SAMPLE_SLOT_MISSED" })}\n`);
+        await writer.write(`${JSON.stringify({ recordType: "error", schemaVersion: 2, scheduledAt: iso(scheduledMs), sampledAt: iso(sampledMs), code: "SAMPLE_SLOT_MISSED" })}\n`);
         continue;
       }
       try {
@@ -467,7 +534,7 @@ async function sampleCommand(values) {
         await writer.write(`${JSON.stringify(sanitizeSnapshot(snapshot, config.requiredCourts, iso(Date.now()), iso(scheduledMs)))}\n`);
       } catch (error) {
         const code = error instanceof Error && /^HTTP_\d+$/.test(error.message) ? error.message : "SNAPSHOT_UNAVAILABLE";
-        await writer.write(`${JSON.stringify({ recordType: "error", schemaVersion: 1, scheduledAt: iso(scheduledMs), sampledAt: iso(Date.now()), code })}\n`);
+        await writer.write(`${JSON.stringify({ recordType: "error", schemaVersion: 2, scheduledAt: iso(scheduledMs), sampledAt: iso(Date.now()), code })}\n`);
       }
     }
   } finally {
@@ -502,32 +569,52 @@ async function probeCommand(values) {
     } else {
       if (!SAFE_HOST.test(ingestHost)) throw new Error("ingest-host is invalid");
       const sshKey = required(values, "ssh-key");
+      const knownHosts = required(values, "known-hosts");
       const port = await allocatePort();
-      tunnel = await startSshTunnel(ingestHost, sshKey, port);
+      tunnel = await startSshTunnel(ingestHost, sshKey, knownHosts, port);
       baseUrl = new URL(`rtsp://127.0.0.1:${port}/`);
     }
     const courts = [];
     for (const courtNumber of config.requiredCourts) {
-      const args = buildFfprobeArgs(baseUrl, courtNumber);
-      const { stdout } = await execFileAsync(ffprobeBin, args, { timeout: 20_000, maxBuffer: 1_000_000 });
-      courts.push({ courtNumber, sampledAt: new Date().toISOString(), streams: sanitizeProbeStreams(JSON.parse(stdout)) });
+      const paths = {};
+      for (const branch of ["raw", "preview"]) {
+        const streamResult = await execFileAsync(ffprobeBin, buildFfprobeArgs(baseUrl, courtNumber, branch, false), { timeout: 20_000, maxBuffer: 1_000_000 });
+        const packetResult = await execFileAsync(ffprobeBin, buildFfprobeArgs(baseUrl, courtNumber, branch, true), { timeout: 20_000, maxBuffer: 4_000_000 });
+        paths[branch] = {
+          streams: sanitizeProbeStreams(JSON.parse(streamResult.stdout)),
+          packets: sanitizeProbePackets(JSON.parse(packetResult.stdout))
+        };
+      }
+      courts.push({ courtNumber, sampledAt: new Date().toISOString(), raw: paths.raw, preview: paths.preview });
     }
-    await writeProtectedJson(output, { schemaVersion: 1, gateId: config.gateId, generatedAt: new Date().toISOString(), courts });
+    await writeProtectedJson(output, { schemaVersion: 2, gateId: config.gateId, generatedAt: new Date().toISOString(), courts });
   } finally {
     if (tunnel) await stopChild(tunnel);
   }
 }
 
-export function buildFfprobeArgs(baseUrl, courtNumber) {
-  const url = new URL(`court${courtNumber}_raw`, baseUrl.href.endsWith("/") ? baseUrl : `${baseUrl.href}/`);
-  return [
+export function buildFfprobeArgs(baseUrl, courtNumber, branch = "raw", packets = false) {
+  if (!new Set(["raw", "preview"]).has(branch)) throw new Error("probe branch must be raw or preview");
+  const url = new URL(`court${courtNumber}_${branch}`, baseUrl.href.endsWith("/") ? baseUrl : `${baseUrl.href}/`);
+  const args = [
     "-v", "error",
     "-rtsp_transport", "tcp",
-    "-timeout", "5000000",
-    "-show_entries", "stream=index,codec_type,codec_name,profile,width,height,r_frame_rate,avg_frame_rate,sample_rate,channels",
-    "-of", "json",
-    url.href
+    "-timeout", "5000000"
   ];
+  if (packets) {
+    args.push(
+      "-select_streams", "v:0",
+      "-read_intervals", "%+6",
+      "-show_packets",
+      "-show_entries", "packet=pts_time,dts_time,duration_time,flags"
+    );
+  } else {
+    args.push(
+      "-show_entries", "stream=index,codec_type,codec_name,profile,width,height,r_frame_rate,avg_frame_rate,field_order,pix_fmt,has_b_frames,sample_rate,channels"
+    );
+  }
+  args.push("-of", "json", url.href);
+  return args;
 }
 
 function validateLocalRtspBase(input) {
@@ -548,18 +635,28 @@ async function allocatePort() {
   return port;
 }
 
-async function startSshTunnel(host, key, port) {
-  const { spawn } = await import("node:child_process");
-  const child = spawn("ssh", [
+export function buildSshTunnelArgs(host, key, knownHosts, port) {
+  if (!SAFE_HOST.test(host ?? "")) throw new Error("ingest-host is invalid");
+  if (typeof key !== "string" || !key.startsWith("/") || /[\r\n\0]/.test(key)) throw new Error("ssh-key must be an absolute path");
+  if (typeof knownHosts !== "string" || !knownHosts.startsWith("/") || /[\r\n\0]/.test(knownHosts)) throw new Error("known-hosts must be an absolute path");
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error("SSH tunnel port is invalid");
+  return [
     "-i", key,
     "-o", "IdentitiesOnly=yes",
     "-o", "BatchMode=yes",
+    "-o", "StrictHostKeyChecking=yes",
+    "-o", `UserKnownHostsFile=${knownHosts}`,
     "-o", "ConnectTimeout=10",
     "-o", "ExitOnForwardFailure=yes",
     "-L", `${port}:127.0.0.1:8554`,
     "-N",
     host
-  ], { stdio: "ignore" });
+  ];
+}
+
+async function startSshTunnel(host, key, knownHosts, port) {
+  const { spawn } = await import("node:child_process");
+  const child = spawn("ssh", buildSshTunnelArgs(host, key, knownHosts, port), { stdio: "ignore" });
   await waitForPort(port, child, 12_000);
   return child;
 }
@@ -595,13 +692,15 @@ async function stopChild(child) {
 }
 
 async function evaluateCommand(values) {
-  const config = await loadConfig(required(values, "config"));
+  const configText = await readFile(required(values, "config"), "utf8");
+  const config = validateConfig(JSON.parse(configText));
   const evidenceText = await readFile(required(values, "evidence"), "utf8");
   const probesText = await readFile(required(values, "probes"), "utf8");
   const evidence = parseEvidenceNdjson(evidenceText);
   const probes = JSON.parse(probesText);
-  if (probes.schemaVersion !== 1 || probes.gateId !== config.gateId || !Array.isArray(probes.courts)) throw new Error("probe evidence does not match the config");
+  if (probes.schemaVersion !== 2 || probes.gateId !== config.gateId || !Array.isArray(probes.courts)) throw new Error("probe evidence does not match the config");
   const report = evaluateCameraProfileGate(config, evidence, probes, {
+    configSha256: createHash("sha256").update(configText).digest("hex"),
     samplesSha256: createHash("sha256").update(evidenceText).digest("hex"),
     probesSha256: createHash("sha256").update(probesText).digest("hex")
   });

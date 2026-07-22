@@ -12,6 +12,7 @@ const deployScript = await readFile(fileURLToPath(new URL("./deploy.sh", import.
 test("renders an isolated MediaMTX public host and matching TLS health proxy", () => {
   const environment = {
     MEDIAMTX_PUBLIC_IP: "192.0.2.20",
+    MEDIAMTX_PRIVATE_IP: "10.120.0.10",
     MEDIAMTX_PUBLIC_HOST: "preview-rehearsal-1234.beachvolleyballmedia.com",
     MEDIAMTX_ACME_EMAIL: "operations@example.com",
     MEDIAMTX_CONTENT_ANALYZER_BINDINGS: JSON.stringify([
@@ -23,12 +24,15 @@ test("renders an isolated MediaMTX public host and matching TLS health proxy", (
   for (let court = 1; court <= 8; court += 1) {
     environment[`MEDIAMTX_COURT_${court}_PUBLISH_USER`] = `court${court}`;
     environment[`MEDIAMTX_COURT_${court}_PUBLISH_PASS`] = `pass-${court}`;
+    environment[`MEDIAMTX_COURT_${court}_BROWSER_SOURCE`] = court === 2 ? "normalized" : "raw";
   }
   const rendered = renderMediaMtxConfigs({ mediaTemplate, caddyTemplate, environment });
-  assert.match(rendered.mediaConfig, /webrtcAdditionalHosts: \["192\.0\.2\.20", "preview-rehearsal-1234\.beachvolleyballmedia\.com"\]/u);
+  assert.match(rendered.mediaConfig, /webrtcAdditionalHosts: \["192\.0\.2\.20", "preview-rehearsal-1234\.beachvolleyballmedia\.com", "10\.120\.0\.10"\]/u);
   assert.match(rendered.mediaConfig, /rtspAddress: ":8554"/u);
   assert.match(rendered.mediaConfig, /ips: \["10\.120\.0\.11"\][\s\S]+path: "~\^court\(1\|2\|5\|6\)_raw\$"/u);
   assert.match(rendered.mediaConfig, /ips: \["10\.120\.0\.12"\][\s\S]+path: "~\^court\(3\|4\|7\|8\)_raw\$"/u);
+  assert.match(rendered.mediaConfig, /action: publish\n\s+path: "~\^court\(1\|2\|5\|6\)_normalized\$"/u);
+  assert.match(rendered.mediaConfig, /scorecheck-preview-runner "court\$\{G1\}_preview" "raw,normalized,raw,raw,raw,raw,raw,raw"/u);
   assert.equal(rendered.contentAnalyzerBindingCount, 2);
   assert.equal(rendered.contentAnalyzerCourtCount, 8);
   assert.match(rendered.caddyConfig, /^preview-rehearsal-1234\.beachvolleyballmedia\.com \{/u);
@@ -38,7 +42,7 @@ test("renders an isolated MediaMTX public host and matching TLS health proxy", (
   assert.match(rendered.caddyConfig, /handle \/healthz/u);
   assert.match(rendered.caddyConfig, /reverse_proxy 127\.0\.0\.1:8889/u);
   const previewRule = rendered.mediaConfig.match(/"~\^court\(\[1-8\]\)_preview\$":([\s\S]+?)runOnDemandRestart:/u)?.[1] ?? "";
-  assert.match(previewRule, /-c:v copy/u);
+  assert.match(previewRule, /scorecheck-preview-runner/u);
   assert.doesNotMatch(previewRule, /libx264|scale=|fps=/u);
   assert.doesNotMatch(rendered.mediaConfig, /__[A-Z0-9_]+__/u);
   assert.doesNotMatch(rendered.caddyConfig, /__[A-Z0-9_]+__/u);
@@ -49,7 +53,7 @@ test("fails closed instead of defaulting a missing public hostname to production
     () => renderMediaMtxConfigs({
       mediaTemplate,
       caddyTemplate,
-      environment: { MEDIAMTX_PUBLIC_IP: "192.0.2.20", MEDIAMTX_ACME_EMAIL: "operations@example.com", MEDIAMTX_CONTENT_ANALYZER_BINDINGS: "[]" }
+      environment: { MEDIAMTX_PUBLIC_IP: "192.0.2.20", MEDIAMTX_PRIVATE_IP: "10.120.0.10", MEDIAMTX_ACME_EMAIL: "operations@example.com", MEDIAMTX_CONTENT_ANALYZER_BINDINGS: "[]" }
     }),
     /MEDIAMTX_PUBLIC_HOST is required/
   );
@@ -58,6 +62,7 @@ test("fails closed instead of defaulting a missing public hostname to production
 test("fails closed on absent, malformed, public, duplicated, or incomplete analyzer bindings", () => {
   const base = {
     MEDIAMTX_PUBLIC_IP: "192.0.2.20",
+    MEDIAMTX_PRIVATE_IP: "10.120.0.10",
     MEDIAMTX_PUBLIC_HOST: "preview.example.com",
     MEDIAMTX_ACME_EMAIL: "operations@example.com"
   };
@@ -84,6 +89,7 @@ test("fails closed on absent, malformed, public, duplicated, or incomplete analy
 test("fails closed on an absent or malformed ACME contact", () => {
   const base = {
     MEDIAMTX_PUBLIC_IP: "192.0.2.20",
+    MEDIAMTX_PRIVATE_IP: "10.120.0.10",
     MEDIAMTX_PUBLIC_HOST: "preview.example.com",
     MEDIAMTX_CONTENT_ANALYZER_BINDINGS: JSON.stringify([{ ip: "10.120.0.11", courts: [1, 2, 3, 4, 5, 6, 7, 8] }])
   };
@@ -95,9 +101,27 @@ test("fails closed on an absent or malformed ACME contact", () => {
   }
 });
 
+test("fails closed when the ingest ICE candidate is not private", () => {
+  assert.throws(
+    () => renderMediaMtxConfigs({
+      mediaTemplate,
+      caddyTemplate,
+      environment: {
+        MEDIAMTX_PUBLIC_IP: "192.0.2.20",
+        MEDIAMTX_PRIVATE_IP: "203.0.113.20",
+        MEDIAMTX_PUBLIC_HOST: "preview.example.com",
+        MEDIAMTX_ACME_EMAIL: "operations@example.com",
+        MEDIAMTX_CONTENT_ANALYZER_BINDINGS: JSON.stringify([{ ip: "10.120.0.11", courts: [1, 2, 3, 4, 5, 6, 7, 8] }])
+      }
+    }),
+    /MEDIAMTX_PRIVATE_IP/u
+  );
+});
+
 test("recreates only changed MediaMTX services and preserves a complete rollback baseline", () => {
-  assert.match(deployScript, /installed_files=\(docker-compose\.yml mediamtx\.yml Caddyfile scorecheck-ffmpeg-runner\.sh\)/u);
+  assert.match(deployScript, /installed_files=\(docker-compose\.yml mediamtx\.yml Caddyfile scorecheck-ffmpeg-runner\.sh scorecheck-preview-runner\.sh\)/u);
   assert.match(deployScript, /cp scorecheck-ffmpeg-runner\.sh "backups\/scorecheck-ffmpeg-runner\.\$timestamp\.sh"/u);
+  assert.match(deployScript, /cp scorecheck-preview-runner\.sh "backups\/scorecheck-preview-runner\.\$timestamp\.sh"/u);
   assert.match(deployScript, /cp "backups\/scorecheck-ffmpeg-runner\.\$timestamp\.sh" scorecheck-ffmpeg-runner\.sh/u);
   assert.match(deployScript, /services=\(mediamtx\)/u);
   assert.match(deployScript, /services\+=\(caddy\)/u);

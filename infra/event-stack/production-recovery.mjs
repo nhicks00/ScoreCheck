@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 
 import { loadProtectedEnv } from "./stack-deployer.mjs";
 import { readProductionDestinations } from "./production-youtube.mjs";
+import { validateRendererBinding } from "./renderer-binding.mjs";
+import { evaluateVenueAdmission, validateVenueProfile } from "./venue-admission.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const COURTS = Object.freeze(Array.from({ length: 8 }, (_, index) => index + 1));
@@ -324,13 +326,15 @@ async function loadLegacyProductionRecoverySource(sourceDirectory) {
   return { root, marker, material, monitoringEnvironment, sourceSha256 };
 }
 
-export async function renderProductionSecretDirectory({ manifest, sourceDirectory, directory, random = randomBytes }) {
+export async function renderProductionSecretDirectory({ manifest, sourceDirectory, directory, renderer, venueProfile, random = randomBytes }) {
   if (manifest?.kind !== "production" || !Array.isArray(manifest.droplets) || manifest.droplets.length !== 12) {
     throw new Error("production secrets require the exact 12-Droplet production manifest");
   }
+  const rendererBinding = validateRendererBinding(renderer);
+  validateVenueProfile(venueProfile, manifest.event);
   const source = await loadProductionRecoverySource(sourceDirectory);
   const target = normalizedAbsolute(directory, "production secret directory");
-  const inputSha256 = sha256(Buffer.from(stableJson({ manifest, sourceSha256: source.sourceSha256 }), "utf8"));
+  const inputSha256 = sha256(Buffer.from(stableJson({ manifest, renderer: rendererBinding, venueProfile, sourceSha256: source.sourceSha256 }), "utf8"));
   if (await exists(target)) {
     await verifyRenderedDirectory(target, inputSha256);
     return target;
@@ -341,7 +345,7 @@ export async function renderProductionSecretDirectory({ manifest, sourceDirector
   await mkdir(join(root, "wireguard"), { recursive: true, mode: 0o700 });
   await chmod(root, 0o700);
   const agentTokens = Object.fromEntries(manifest.droplets.map((spec) => [spec.name, random(32).toString("base64url")]));
-  const files = buildProductionSecretFiles({ manifest, material: source.material, monitoringEnvironment: source.monitoringEnvironment, agentTokens });
+  const files = buildProductionSecretFiles({ manifest, material: source.material, monitoringEnvironment: source.monitoringEnvironment, renderer: rendererBinding, venueProfile, agentTokens });
   try {
     for (const [name, body] of Object.entries(files)) await writeProtected(join(root, name), body);
     for (const name of ["camera-lan.conf", "camera-lan.key", "camera-lan.pub"]) {
@@ -361,13 +365,19 @@ export async function renderProductionSecretDirectory({ manifest, sourceDirector
   }
 }
 
-export function buildProductionSecretFiles({ manifest, material, monitoringEnvironment, agentTokens }) {
+export function buildProductionSecretFiles({ manifest, material, monitoringEnvironment, renderer, venueProfile, agentTokens }) {
   validateProductionMaterial(material);
+  const rendererBinding = validateRendererBinding(renderer);
+  const validatedVenueProfile = validateVenueProfile(venueProfile, manifest.event);
+  const venueAdmission = evaluateVenueAdmission(validatedVenueProfile);
+  if (!venueAdmission.passed) throw new Error(`production venue profile is not admitted: ${venueAdmission.problems.join("; ")}`);
   requireEnvironment(monitoringEnvironment, REQUIRED_MONITORING_KEYS);
   rejectTwilio(monitoringEnvironment);
   const expectedNames = manifest.droplets.map((entry) => entry.name).sort();
   if (JSON.stringify(Object.keys(agentTokens ?? {}).sort()) !== JSON.stringify(expectedNames)) throw new Error("production agent tokens must exactly match the manifest");
   for (const [name, token] of Object.entries(agentTokens)) requireSecret(token, `${name} agent token`, 24);
+  const observer = filterMonitoringEnvironment(monitoringEnvironment);
+  observer.MONITOR_BROWSER_ALLOWED_ORIGINS = rendererBinding.origin;
   const output = {
     "agent-tokens.json": `${JSON.stringify({ schemaVersion: 1, tokens: agentTokens }, null, 2)}\n`,
     "commentary.env": envFile({
@@ -378,22 +388,35 @@ export function buildProductionSecretFiles({ manifest, material, monitoringEnvir
       ["MEDIAMTX_PROGRAM_DELAY_MS", "3500"],
       ...COURTS.flatMap((court) => [
         [`MEDIAMTX_COURT_${court}_RAW_SOURCE`, material.publishers[court].source],
+        [`MEDIAMTX_COURT_${court}_BROWSER_SOURCE`, venueAdmission.assignments[court]?.sourcePathMode === "isolated-hevc-normalizer" ? "normalized" : "raw"],
         [`MEDIAMTX_COURT_${court}_PUBLISH_USER`, material.publishers[court].user],
         [`MEDIAMTX_COURT_${court}_PUBLISH_PASS`, material.publishers[court].password]
       ])
     ])),
-    "observability.env": envFile(filterMonitoringEnvironment(monitoringEnvironment)),
-    "source-binding.json": `${JSON.stringify({ schemaVersion: 1, materialSha256: sha256(Buffer.from(stableJson(material), "utf8")) }, null, 2)}\n`
+    "observability.env": envFile(observer),
+    "source-binding.json": `${JSON.stringify({
+      schemaVersion: 3,
+      materialSha256: sha256(Buffer.from(stableJson(material), "utf8")),
+      rendererSha256: sha256(Buffer.from(stableJson(rendererBinding), "utf8")),
+      venueProfileSha256: sha256(Buffer.from(stableJson(validatedVenueProfile), "utf8")),
+      renderer: rendererBinding
+    }, null, 2)}\n`
   };
   for (const court of COURTS) {
     const spec = manifest.droplets.find((entry) => entry.role === "compositor" && entry.court === court);
     if (!spec) throw new Error(`production manifest has no compositor for Camera ${court}`);
     const compositor = material.compositors[court];
-    output[`compositors/${spec.name}.env`] = compositorEnvironment({ court, compositor, programPageToken: material.programPageToken });
+    output[`compositors/${spec.name}.env`] = compositorEnvironment({
+      court,
+      compositor,
+      programPageToken: material.programPageToken,
+      renderer: rendererBinding,
+      assignment: venueAdmission.assignments[court] ?? null
+    });
   }
   const spare = manifest.droplets.find((entry) => entry.role === "compositor-spare");
   if (!spare) throw new Error("production manifest has no warm spare");
-  output[`compositors/${spare.name}.env`] = compositorEnvironment({ court: null, compositor: material.compositors[1], programPageToken: material.programPageToken });
+  output[`compositors/${spare.name}.env`] = compositorEnvironment({ court: null, compositor: material.compositors[1], programPageToken: material.programPageToken, renderer: rendererBinding, assignment: null });
   return output;
 }
 
@@ -487,18 +510,29 @@ function legacyEncodingProfile(value) {
   return profile;
 }
 
-function compositorEnvironment({ court, compositor, programPageToken }) {
+function compositorEnvironment({ court, compositor, programPageToken, renderer, assignment }) {
+  const normalizerEnabled = assignment?.sourcePathMode === "isolated-hevc-normalizer";
   const values = {
     LIVEKIT_API_KEY: compositor.apiKey,
     LIVEKIT_API_SECRET: compositor.apiSecret,
     LIVEKIT_URL: "http://127.0.0.1:7880",
-    PROGRAM_PAGE_BASE_URL: "https://score.beachvolleyballmedia.com/program/court",
+    PROGRAM_PAGE_BASE_URL: `${renderer.origin}/program`,
     PROGRAM_PAGE_TOKEN: programPageToken,
+    PROGRAM_RENDERER_GIT_SHA: renderer.gitSha,
+    PROGRAM_RENDERER_DEPLOYMENT_ID: renderer.deploymentId,
     YOUTUBE_RTMPS_BASE: compositor.rtmpsBase,
     YOUTUBE_STREAM_RESOLUTION: compositor.youtubeResolution,
     YOUTUBE_STREAM_FRAME_RATE: compositor.youtubeFrameRate,
     PRODUCTION_OUTPUT_PROFILES: compositor.outputProfiles.join(","),
     ...(court ? {
+      CAMERA_NUMBER: String(court),
+      CAMERA_SOURCE_PATH_MODE: assignment?.sourcePathMode ?? "inactive",
+      CAMERA_SOURCE_CODEC: assignment?.sourceCodec ?? "NONE",
+      CAMERA_SOURCE_PROFILE: assignment?.sourceProfile ?? "NONE",
+      CAMERA_FRAME_RATE_MODE: assignment?.frameRateMode ?? "NONE",
+      CAMERA_NORMALIZER_ENABLED: normalizerEnabled ? "true" : "false",
+      CAMERA_NORMALIZER_INPUT_PATH: `court${court}_raw`,
+      CAMERA_NORMALIZER_OUTPUT_PATH: `court${court}_normalized`,
       [`COURT_${court}_YOUTUBE_KEY`]: compositor.streamKey,
       [`COURT_${court}_YOUTUBE_STREAM_ID`]: compositor.streamId
     } : {})

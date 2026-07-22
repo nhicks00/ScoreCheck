@@ -1,9 +1,35 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { IncidentSnapshot } from "./contracts.js";
 import type { IncidentStore, StoredNotification } from "./incidentStore.js";
 import { NotificationDispatcher } from "./notifications.js";
+import { LocalIncidentOutbox } from "./localIncidentOutbox.js";
 
 describe("Pushover notification delivery", () => {
+  it("pages from the local durable claim even when Supabase is unavailable", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "scorecheck-notification-"));
+    try {
+      const outbox = await LocalIncidentOutbox.open(path.join(directory, "outbox.json"));
+      const send = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+        status: 1,
+        receipt: "receipt-local",
+        request: "request-local"
+      }), { status: 200 }));
+      const dispatcher = new NotificationDispatcher(notificationConfig(), outbox, send);
+      await dispatcher.handleChanges([{ incident: criticalIncident(), eventType: "OPENED" }]);
+      expect(send).toHaveBeenCalledOnce();
+      expect(outbox.latestNotifications()).toMatchObject([{
+        incidentId: criticalIncident().id,
+        status: "accepted",
+        providerMessageId: "receipt-local"
+      }]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("hydrates Pushover health from durable provider history", () => {
     const dispatcher = new NotificationDispatcher(notificationConfig(), {} as IncidentStore);
     dispatcher.hydrate([storedNotification({ status: "delivered", deliveredAt: "2026-07-12T18:00:30.000Z" })]);

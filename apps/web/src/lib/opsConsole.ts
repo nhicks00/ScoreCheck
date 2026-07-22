@@ -191,10 +191,26 @@ export function youtubeWatchUrl(videoId: string | null | undefined): string | nu
  * token returns null so the secret (or its absence) never shapes client
  * markup beyond a missing link.
  */
-export function buildProgramMonitorPath(courtNumber: number, token: string | null | undefined): string | null {
+export function buildProgramMonitorPath(
+  courtNumber: number,
+  token: string | null | undefined,
+  build: string | null | undefined,
+  deployment: string | null | undefined
+): string | null {
   const trimmed = (token ?? "").trim();
-  if (!trimmed || !isValidCourtNumber(courtNumber)) return null;
-  return `/program/court/${courtNumber}?token=${encodeURIComponent(trimmed)}&debug=1`;
+  const rendererBuild = (build ?? "").trim();
+  const rendererDeployment = (deployment ?? "").trim();
+  if (!trimmed
+    || !isValidCourtNumber(courtNumber)
+    || !/^[a-f0-9]{40}$/.test(rendererBuild)
+    || !/^dpl_[A-Za-z0-9]+$/.test(rendererDeployment)) return null;
+  const query = new URLSearchParams({
+    court: String(courtNumber),
+    build: rendererBuild,
+    deployment: rendererDeployment,
+    debug: "1"
+  });
+  return `/program/bootstrap?${query.toString()}#token=${encodeURIComponent(trimmed)}`;
 }
 
 /* ---------------------------------------------------------------------------

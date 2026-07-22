@@ -14,6 +14,7 @@ import {
   type PlaybackTransport
 } from "@/lib/communityPlaybackTiming";
 import {
+  classifyRtcNetworkPath,
   intervalJitterSample,
   monotonicEpochMs,
   STREAM_TIMING_INTERVAL_MS,
@@ -54,6 +55,7 @@ export type StreamPlayerHandle = {
 export type StreamConnectionHealth = {
   transport: PlaybackTransport;
   connectionState: PlaybackConnectionState;
+  networkPath: "private-vpc" | "public" | "unknown";
   framesPerSecond: number | null;
   width: number | null;
   height: number | null;
@@ -608,6 +610,7 @@ function extractTimingSample(
 ): { sample: StreamTimingSample; totals: RtcJitterTotals | null; health: Omit<StreamConnectionHealth, "transport" | "connectionState"> } {
   let totals: RtcJitterTotals | null = null;
   let rttMs: number | null = null;
+  let networkPath: StreamConnectionHealth["networkPath"] = "unknown";
   let jitterMs: number | null = null;
   let framesPerSecond: number | null = null;
   let width: number | null = null;
@@ -663,6 +666,8 @@ function extractTimingSample(
       && (row.nominated === true || row.selected === true)) {
       const candidateRtt = finiteNumber(row.currentRoundTripTime);
       if (candidateRtt != null) rttMs = Math.min(rttMs ?? Number.POSITIVE_INFINITY, candidateRtt * 1000);
+      const remote = typeof row.remoteCandidateId === "string" ? reports.get(row.remoteCandidateId) as (RTCStats & Record<string, unknown>) | undefined : undefined;
+      networkPath = classifyRtcNetworkPath(remote?.address ?? remote?.ip);
     }
   });
 
@@ -679,6 +684,7 @@ function extractTimingSample(
     },
     totals,
     health: {
+      networkPath,
       framesPerSecond,
       width,
       height,
@@ -715,6 +721,7 @@ function emptyConnectionHealth(): StreamConnectionHealth {
   return {
     transport: "none",
     connectionState: "unknown",
+    networkPath: "unknown",
     framesPerSecond: null,
     width: null,
     height: null,

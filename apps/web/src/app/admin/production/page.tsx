@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { isAdminRequest } from "@/lib/auth";
 import { getEnv, missingEnvKeys } from "@/lib/env";
 import { buildProgramMonitorPath, controllerConfiguredFromEnv } from "@/lib/opsConsole";
-import { programPageToken } from "@/lib/program";
+import { programPageToken, programRendererBinding } from "@/lib/program";
 import { loadProductionSnapshot } from "@/lib/productionStatus";
 import { courtStreamSources, videoConfigured } from "@/lib/video";
 import { AdminTopbar } from "@/components/AdminTopbar";
@@ -40,6 +40,7 @@ export default async function ProductionConsolePage() {
   const env = getEnv();
   const snapshot = await loadProductionSnapshot();
   const token = programPageToken();
+  const renderer = programRendererBinding();
   const hasVideo = videoConfigured();
 
   const courtConfigs: CourtClientConfig[] = snapshot.courts.map((court) => ({
@@ -50,7 +51,7 @@ export default async function ProductionConsolePage() {
     sources: hasVideo ? courtStreamSources(court.previewStreamPath) : null,
     // Token-gated program-page link: null unless PROGRAM_PAGE_TOKEN is set,
     // so the token never reaches the client as an empty/implied value.
-    programUrl: buildProgramMonitorPath(court.courtNumber, token)
+    programUrl: buildProgramMonitorPath(court.courtNumber, token, renderer?.build, renderer?.deployment)
   }));
 
   return (

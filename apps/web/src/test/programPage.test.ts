@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   checkProgramToken,
+  issueProgramSession,
   programBuildVersion,
+  programBootstrapPath,
   programCommentaryBufferMs,
-  programPageToken
+  programPageToken,
+  programRendererBinding,
+  programRendererOrigin,
+  verifyProgramSession
 } from "../lib/program";
 import { createProgramMonitoringConnection } from "../lib/programMonitoring";
 import {
@@ -20,6 +25,10 @@ const PROGRAM_ENV_KEYS = [
   "VERCEL_GIT_COMMIT_SHA",
   "NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA",
   "RENDER_GIT_COMMIT",
+  "VERCEL_DEPLOYMENT_ID",
+  "RENDER_DEPLOYMENT_ID",
+  "VERCEL_URL",
+  "NEXT_PUBLIC_VERCEL_URL",
   "MONITOR_PUBLIC_URL",
   "MONITOR_BROWSER_HEARTBEAT_SECRET"
 ];
@@ -101,6 +110,57 @@ describe("programBuildVersion", () => {
   });
 });
 
+describe("program renderer sessions", () => {
+  const build = "a".repeat(40);
+  const deployment = "dpl_renderer123";
+
+  beforeEach(() => {
+    process.env.PROGRAM_PAGE_TOKEN = "event-program-token-that-is-long-enough";
+    process.env.VERCEL_GIT_COMMIT_SHA = build;
+    process.env.VERCEL_DEPLOYMENT_ID = deployment;
+  });
+
+  it("binds the bootstrap session to court, exact Git build, deployment, and expiry", () => {
+    expect(programRendererBinding()).toEqual({ build, deployment });
+    const session = issueProgramSession({
+      token: "event-program-token-that-is-long-enough",
+      court: 3,
+      expectedBuild: build,
+      expectedDeployment: deployment,
+      nowMs: 1_000
+    });
+    expect(session).toBeTruthy();
+    expect(verifyProgramSession({ session, court: 3, expectedBuild: build, expectedDeployment: deployment, nowMs: 2_000 })).toBe(true);
+    expect(verifyProgramSession({ session, court: 4, expectedBuild: build, expectedDeployment: deployment, nowMs: 2_000 })).toBe(false);
+    expect(issueProgramSession({ token: "event-program-token-that-is-long-enough", court: 9, expectedBuild: build, expectedDeployment: deployment, nowMs: 1_000 })).toBeNull();
+    expect(verifyProgramSession({ session, court: 3, expectedBuild: "b".repeat(40), expectedDeployment: deployment, nowMs: 2_000 })).toBe(false);
+    expect(verifyProgramSession({ session, court: 3, expectedBuild: build, expectedDeployment: "dpl_other", nowMs: 2_000 })).toBe(false);
+    expect(verifyProgramSession({ session, court: 3, expectedBuild: build, expectedDeployment: deployment, nowMs: 18 * 60 * 60 * 1000 + 2_000 })).toBe(false);
+  });
+
+  it("rejects wrong tokens, malformed renderer identities, and tampered sessions", () => {
+    expect(issueProgramSession({ token: "wrong", court: 3, expectedBuild: build, expectedDeployment: deployment })).toBeNull();
+    expect(issueProgramSession({ token: "event-program-token-that-is-long-enough", court: 3, expectedBuild: "wrong", expectedDeployment: deployment })).toBeNull();
+    const session = issueProgramSession({ token: "event-program-token-that-is-long-enough", court: 3, expectedBuild: build, expectedDeployment: deployment });
+    expect(verifyProgramSession({ session: `${session}x`, court: 3, expectedBuild: build, expectedDeployment: deployment })).toBe(false);
+    process.env.VERCEL_DEPLOYMENT_ID = "mutable-alias";
+    expect(programRendererBinding()).toBeNull();
+  });
+
+  it("keeps the raw event token in the URL fragment rather than the request query", () => {
+    const path = programBootstrapPath(3, "token /+=", { build, deployment }, { debug: "1" });
+    expect(path).toBe(`/program/bootstrap?court=3&build=${build}&deployment=${deployment}&debug=1#token=token%20%2F%2B%3D`);
+    expect(path.slice(0, path.indexOf("#"))).not.toContain("token=");
+  });
+
+  it("derives only a generated Vercel deployment origin", () => {
+    process.env.VERCEL_URL = "scorecheck-abc123-team.vercel.app";
+    expect(programRendererOrigin()).toBe("https://scorecheck-abc123-team.vercel.app");
+    process.env.VERCEL_URL = "score.beachvolleyballmedia.com";
+    expect(programRendererOrigin()).toBeNull();
+  });
+});
+
 describe("createProgramMonitoringConnection", () => {
   it("mints the versioned credential format consumed by the monitor gateway", () => {
     process.env.MONITOR_PUBLIC_URL = "https://monitor.example.test/";
@@ -112,7 +172,7 @@ describe("createProgramMonitoringConnection", () => {
       heartbeatUrl: "https://monitor.example.test/v1/browser-heartbeats",
       thumbnailUrl: "https://monitor.example.test/v1/browser-thumbnails",
       credentialId: "10000000-0000-4000-8000-000000000001",
-      credential: "eyJ2Ijo0LCJjaWQiOiIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJjb3VydCI6MywiaWF0IjoxMDAwLCJleHAiOjY0ODAxMDAwfQ.YZ3EFSm3dpfp3Cr8SJjCC2Jb8A1fypoiJWV2bVBp3kk"
+      credential: "eyJ2Ijo1LCJjaWQiOiIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJjb3VydCI6MywiaWF0IjoxMDAwLCJleHAiOjY0ODAxMDAwfQ.5eVqGVhQwp4yCHe4SGmOwfKNvV9Pw5JX8ILpQvh0ScI"
     });
   });
 
@@ -258,8 +318,8 @@ describe("buildProgramMonitorHeartbeat", () => {
       commentarySyncRttMs: 54.8,
       commentarySyncSampleAgeMs: 210.2
     }));
-    expect(body.version).toBe(4);
-    expect(body.video).toMatchObject({ state: "playing", framesRendered: 5400, framesPerSecond: 30, transport: "whep" });
+    expect(body.version).toBe(5);
+    expect(body.video).toMatchObject({ state: "playing", framesRendered: 5400, framesPerSecond: 30, transport: "whep", networkPath: "private-vpc" });
     expect(body.commentary).toMatchObject({
       roomConnected: true,
       participantCount: 2,
@@ -349,6 +409,7 @@ function base(overrides: Partial<Parameters<typeof buildProgramMonitorHeartbeat>
     streamHealth: {
       transport: "whep",
       connectionState: "connected",
+      networkPath: "private-vpc",
       framesPerSecond: 30,
       width: 1280,
       height: 720,

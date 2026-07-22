@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { buildEventManifest, loadManifestInputs } from "./event-manifest.mjs";
-import { AGENT_DEPLOY_CONCURRENCY, DEPLOYMENT_SCRIPT_TIMEOUT_MS, LocalStackDeployer, buildAgentPlans, commandFailureMessage, commentaryEndpointHosts, compositorContentAnalyzerBindings, deploymentScriptEnvironment, isRetryableDeploymentTransportError, loadProtectedEnv, mapWithConcurrency, roleConfigBindings, runCommand, runDeploymentScript, serializeAgentTargets, servicePublicIpv4, verifyProtectedSecretDirectory } from "./stack-deployer.mjs";
+import { AGENT_DEPLOY_CONCURRENCY, DEPLOYMENT_SCRIPT_TIMEOUT_MS, LocalStackDeployer, buildAgentPlans, clockVerificationCommand, commandFailureMessage, commentaryEndpointHosts, compositorContentAnalyzerBindings, deploymentScriptEnvironment, evaluateClockProbe, isRetryableDeploymentTransportError, loadProtectedEnv, mapWithConcurrency, privateNetworkVerificationPlan, roleConfigBindings, runCommand, runDeploymentScript, serializeAgentTargets, servicePublicIpv4, verifyProtectedSecretDirectory } from "./stack-deployer.mjs";
 
 const inputs = await loadManifestInputs();
 const manifest = buildEventManifest({ event: "deploy-test", kind: "production", destroyAfter: "2026-08-01", ...inputs });
@@ -161,6 +161,46 @@ test("builds one private monitoring target per exact event resource", () => {
   const serialized = serializeAgentTargets(plans);
   assert.equal(serialized.split(",").length, 12);
   assert.match(serialized, /bvm-compositor-a\|compositor\|http:\/\/10\.20\.0\.4:9108\|[^|]+\|1/);
+});
+
+test("requires synchronized event-host clocks with a bounded measured offset", () => {
+  assert.match(clockVerificationCommand(), /NTPSynchronized/u);
+  assert.deepEqual(
+    evaluateClockProbe({ stdout: "yes 1784700000100\n", startedAtMs: 1_784_700_000_000, endedAtMs: 1_784_700_000_200 }),
+    { status: "synchronized", offsetMs: 0, roundTripMs: 200, remoteTimeMs: 1_784_700_000_100 }
+  );
+  assert.throws(
+    () => evaluateClockProbe({ stdout: "no 1784700000100\n", startedAtMs: 1_784_700_000_000, endedAtMs: 1_784_700_000_200 }),
+    /not NTP synchronized/u
+  );
+  assert.throws(
+    () => evaluateClockProbe({ stdout: "yes 1784700002000\n", startedAtMs: 1_784_700_000_000, endedAtMs: 1_784_700_000_200 }),
+    /clock offset/u
+  );
+  assert.throws(
+    () => evaluateClockProbe({ stdout: "yes 1784700002500\n", startedAtMs: 1_784_700_000_000, endedAtMs: 1_784_700_006_000 }),
+    /round trip/u
+  );
+});
+
+test("proves compositor WHEP and observability agent traffic use exact private targets", () => {
+  const state = stateFixture();
+  const compositor = manifest.droplets.find((entry) => entry.name === "bvm-compositor-a");
+  const compositorPlan = privateNetworkVerificationPlan({ manifest, state, spec: compositor });
+  assert.match(compositorPlan.command, /MEDIAMTX_PRIVATE_HOST/u);
+  assert.match(compositorPlan.command, /10\.20\.0\.3\/8554/u);
+  assert.match(compositorPlan.command, /bvm-egress/u);
+  assert.match(compositorPlan.command, /preview\.beachvolleyballmedia\.com\/healthz/u);
+  assert.deepEqual(compositorPlan.evidence.targets.map((entry) => entry.purpose), ["normalizer-rtsp", "program-whep-tls"]);
+
+  const observer = manifest.droplets.find((entry) => entry.role === "observability");
+  const observerPlan = privateNetworkVerificationPlan({ manifest, state, spec: observer });
+  assert.equal(observerPlan.evidence.targets.length, 12);
+  assert.equal((observerPlan.command.match(/\/healthz/g) ?? []).length, 12);
+  assert.match(observerPlan.command, /http:\/\/10\.20\.0\.4:9108\/healthz/u);
+
+  const ingest = manifest.droplets.find((entry) => entry.role === "ingest");
+  assert.match(privateNetworkVerificationPlan({ manifest, state, spec: ingest }).command, /10\.20\.0\.3/u);
 });
 
 test("fails closed when analyzer source ownership or private addresses are incomplete", () => {
@@ -397,9 +437,13 @@ test("binds each role to exact remote reconstruction config paths", () => {
     "/opt/mediamtx/docker-compose.yml",
     "/opt/mediamtx/mediamtx.yml",
     "/opt/mediamtx/Caddyfile",
-    "/opt/mediamtx/scorecheck-ffmpeg-runner.sh"
+    "/opt/mediamtx/scorecheck-ffmpeg-runner.sh",
+    "/opt/mediamtx/scorecheck-preview-runner.sh"
   ]);
   const compositor = roleConfigBindings(repoRoot, secrets, { role: "compositor", name: "bvm-compositor-a" });
   assert.ok(compositor.some(([local, remote]) => local === "/secrets/compositors/bvm-compositor-a.env" && remote === "/opt/compositor/.env"));
+  for (const remote of ["/opt/compositor/normalize-camera.sh", "/opt/compositor/qualify-output.sh", "/opt/compositor/start-normalizer.sh", "/opt/compositor/stop-normalizer.sh"]) {
+    assert.ok(compositor.some(([, candidate]) => candidate === remote));
+  }
   assert.throws(() => roleConfigBindings(repoRoot, secrets, { role: "unknown", name: "unknown" }), /unsupported deployment role/);
 });

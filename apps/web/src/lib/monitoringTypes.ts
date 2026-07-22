@@ -96,6 +96,7 @@ export type MonitorBrowser = {
     state: string;
     transport: string;
     connectionState: string;
+    networkPath: "private-vpc" | "public" | "unknown";
     framesRendered: number;
     framesPerSecond: number | null;
     width: number | null;

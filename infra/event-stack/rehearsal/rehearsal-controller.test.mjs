@@ -30,9 +30,9 @@ function harness({ failPublisherOnce = false, failPreflight = false, failFullEvi
   const store = new RehearsalMemoryStateStore();
   const vercel = {
     ensureProject: async ({ name, repository }) => ({ id: "prj_test", name, origin: `https://${name}.vercel.app`, framework: "nextjs", rootDirectory: "apps/web", repository: { slug: repository.slug, repoId: String(repository.repoId) } }),
-    ensureDeployment: async ({ project, generationId: marker }) => ({ id: "dpl_test", projectId: project.id, name: project.name, state: "BUILDING", target: "production", aliases: [], marker }),
-    waitReady: async ({ project, generationId: marker }) => ({ id: "dpl_test", projectId: project.id, name: project.name, state: "READY", target: "production", aliases: [`${project.name}.vercel.app`], marker }),
-    verifyProgramPage: async ({ project }) => ({ status: "healthy", origin: project.origin, acceptedStatus: 200, rejectedStatus: 404 }),
+    ensureDeployment: async ({ project, generationId: marker }) => ({ id: "dpl_test", projectId: project.id, name: project.name, state: "BUILDING", target: "production", url: `https://${project.name}-abc123.vercel.app`, aliases: [], marker }),
+    waitReady: async ({ project, generationId: marker }) => ({ id: "dpl_test", projectId: project.id, name: project.name, state: "READY", target: "production", url: `https://${project.name}-abc123.vercel.app`, aliases: [`${project.name}.vercel.app`], marker }),
+    verifyProgramPage: async ({ deployment, gitSha }) => ({ status: "healthy", origin: deployment.url, deploymentId: deployment.id, gitSha, acceptedStatus: 200, rejectedStatus: 404 }),
     findProject: async (name) => orphanedProviderResources ? { id: "prj_orphan", name, origin: `https://${name}.vercel.app`, framework: "nextjs", rootDirectory: "apps/web" } : null,
     deleteProject: async (id) => { log.push(`delete-project:${id}`); return { absent: true }; }
   };
@@ -42,7 +42,7 @@ function harness({ failPublisherOnce = false, failPreflight = false, failFullEvi
       return [court, {
         id: `stream${court}`,
         court,
-        title: `ScoreCheck Court ${court} Test Stream`,
+        title: `ScoreCheck Production Camera ${court} Auto Stream`,
         isReusable: true,
         streamName: `key${court}`,
         rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2",
@@ -57,7 +57,7 @@ function harness({ failPublisherOnce = false, failPreflight = false, failFullEvi
       return {
         id: streamId,
         court,
-        title: `ScoreCheck Court ${court} Test Stream`,
+        title: `ScoreCheck Production Camera ${court} Auto Stream`,
         isReusable: true,
         streamName: `key${court}`,
         rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2",
@@ -92,6 +92,23 @@ function harness({ failPublisherOnce = false, failPreflight = false, failFullEvi
       log.push(`egress-stop:${court}:${egressId}`);
       activeEgress.delete(host);
       return { absent: true };
+    }
+  };
+  const outputConformance = {
+    qualify: async ({ court, profile, evidenceId, renderer }) => {
+      log.push(`output-conformance:${court}`);
+      assert.equal(profile, "1080p30");
+      assert.equal(evidenceId, generationId);
+      assert.deepEqual(renderer, { gitSha: "a".repeat(40), deploymentId: "dpl_test" });
+      return {
+        status: "QUALIFIED",
+        court,
+        profile,
+        renderer,
+        sample: { sha256: String(court).repeat(64), durationSeconds: 20 },
+        evidencePath: `/tmp/rehearsal-evidence/output-conformance/court-${court}-1080p30.json`,
+        samplePath: `/tmp/rehearsal-evidence/output-conformance/court-${court}-1080p30.mp4`
+      };
     }
   };
   const commentary = {
@@ -142,13 +159,24 @@ function harness({ failPublisherOnce = false, failPreflight = false, failFullEvi
   };
   const sealEvidence = async ({ state, evidenceDirectory }) => ({ directory: evidenceDirectory, markerPath: `${evidenceDirectory}/REHEARSAL_COMPLETE.json`, event: state.event, generationId: state.generationId, classification: state.soakEvidence?.passed ? "PASS" : "CANCELLED", providerCleanupComplete: true });
   const controller = new RehearsalController({
-    store, vercel, youtube, publishers, commentary, egress, sampler, verifier, soakEvaluator, sealEvidence,
-    renderSecrets: async ({ directory }) => directory,
+    store, vercel, youtube, publishers, commentary, egress, outputConformance, sampler, verifier, soakEvaluator, sealEvidence,
+    renderSecrets: async ({ directory, renderer }) => {
+      assert.deepEqual(renderer, {
+        origin: `https://${rehearsalSummaryName(manifest)}-abc123.vercel.app`,
+        deploymentId: "dpl_test",
+        gitSha: "a".repeat(40)
+      });
+      return directory;
+    },
     programEnvironment: ({ programOrigin }) => ({ NEXT_PUBLIC_SCORECHECK_REHEARSAL: "true", SCORECHECK_REHEARSAL_ORIGIN: programOrigin }),
     publisherConfiguration: ({ court, state }) => ({ court, marker: state.courts[court].publisherMarker, ffmpegPath: "ffmpeg", args: [`comment=${state.courts[court].publisherMarker}`] }),
     commentaryConfiguration: ({ court }) => ({ court, marker: `scorecheck-rehearsal-${generationId}-commentator-${court}` })
   });
   return { controller, store, log, activeEgress };
+}
+
+function rehearsalSummaryName(value) {
+  return `scorecheck-rehearsal-${value.namespace}`.slice(0, 52).replace(/-+$/u, "");
 }
 
 test("runs the full isolated rehearsal and retains every persistent stream by exact id", async () => {
@@ -161,11 +189,13 @@ test("runs the full isolated rehearsal and retains every persistent stream by ex
   await controller.start({ manifest, lifecycleState: lifecycle, material, evidenceDirectory: "/tmp/rehearsal-evidence" });
   let summary = rehearsalSummary(await controller.store.load());
   assert.equal(summary.activePublishers, 8);
+  assert.equal(summary.qualifiedOutputs, 8);
   assert.equal(summary.activeEgresses, 8);
   assert.equal(summary.activeProviderStreams, 8);
   assert.ok(log.indexOf("publisher-prepare:8") < log.indexOf("publisher-start:1"));
   assert.ok(log.indexOf("publisher-start:8") < log.indexOf("sampler-start"));
-  assert.ok(log.indexOf("sampler-start") < log.indexOf("egress-start:1"));
+  assert.ok(log.indexOf("sampler-start") < log.indexOf("output-conformance:1"));
+  assert.ok(log.indexOf("output-conformance:1") < log.indexOf("egress-start:1"));
   assert.ok(log.indexOf("egress-start:1") < log.indexOf("youtube-active:stream1"));
   assert.ok(log.indexOf("youtube-active:stream1") < log.indexOf("program-subscriber:1"));
   assert.ok(log.indexOf("program-subscriber:1") < log.indexOf("commentary-start:1"));

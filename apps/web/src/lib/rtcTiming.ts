@@ -14,6 +14,14 @@ export type RtcJitterTotals = {
   jitterBufferTargetDelaySeconds: number | null;
 };
 
+export type RtcNetworkPath = "private-vpc" | "public" | "unknown";
+
+export function classifyRtcNetworkPath(value: unknown): RtcNetworkPath {
+  if (typeof value !== "string") return "unknown";
+  if (/^10\./u.test(value) || /^192\.168\./u.test(value) || /^172\.(?:1[6-9]|2\d|3[01])\./u.test(value)) return "private-vpc";
+  return /^(?:\d{1,3}\.){3}\d{1,3}$/u.test(value) || value.includes(":") ? "public" : "unknown";
+}
+
 export function intervalJitterSample(
   previous: RtcJitterTotals | null,
   current: RtcJitterTotals

@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "pngjs": "7.0.0",
     "playwright": "1.61.1"
   }
 }

@@ -12,13 +12,14 @@ test("maps Cameras 1-2 to RTMP and Cameras 3-8 to SRT", () => {
   for (let court = 3; court <= 8; court += 1) assert.equal(publisherProtocol(court), "SRT");
 });
 
-test("builds visibly distinct 720p30 publishers with a resumable process marker", async () => {
+test("builds visibly distinct 1080p30 publishers with a resumable process marker", async () => {
   const directory = await mkdtemp(join(tmpdir(), "scorecheck-publisher-"));
   const config = buildSyntheticPublisherConfig({ court: 8, generationId: "generation-1234", host: "preview-test.example.com", user: "publisher-user-8", password: "publisher-password-8-long", evidenceDirectory: directory, runtimeDirectory: join(directory, "runtime") });
   assert.equal(config.marker, publisherMarker("generation-1234", 8));
   assert.equal(config.protocol, "SRT");
   assert.ok(config.args.includes("comment=scorecheck-rehearsal-generation-1234-camera-8"));
   assert.ok(config.fixtureArgs.some((value) => value.includes("CAMERA 8 REHEARSAL")));
+  assert.ok(config.fixtureArgs.some((value) => value.includes("size=1920x1080:rate=30")));
   assert.equal(config.fixtureArgs[config.fixtureArgs.indexOf("-profile:v") + 1], "main");
   assert.match(config.fixtureArgs[config.fixtureArgs.indexOf("-x264-params") + 1], /(?:^|:)cabac=1(?:$|:)/);
   assert.equal(config.fixtureArgs[config.fixtureArgs.indexOf("-b:v") + 1], "1250k");

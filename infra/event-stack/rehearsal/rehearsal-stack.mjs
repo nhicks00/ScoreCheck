@@ -7,7 +7,9 @@ import { fileURLToPath } from "node:url";
 
 import { loadManifestInputs, validateEventManifest } from "../event-manifest.mjs";
 import { assertNetworkContractDeployable } from "../network-contract.mjs";
+import { OutputConformanceRuntime } from "../output-conformance.mjs";
 import { loadProtectedEnv } from "../stack-deployer.mjs";
+import { loadVenueAdmission } from "../venue-admission.mjs";
 import { CommentaryClientManager, buildCommentaryClientConfig } from "./commentary-runtime.mjs";
 import { EgressRuntime } from "./egress-runtime.mjs";
 import { PoolSamplerRuntime } from "./pool-sampler-runtime.mjs";
@@ -38,6 +40,8 @@ async function main() {
   validateEventManifest(manifest, await loadManifestInputs({ networkFromManifest: manifest.network }));
   assertNetworkContractDeployable(manifest.network);
   if (manifest.kind !== "rehearsal") throw new Error("rehearsal operator requires a rehearsal manifest");
+  const venueAdmission = await loadVenueAdmission(profile.venueProfile, manifest.event);
+  if (!venueAdmission.passed || venueAdmission.activeCameras.length !== 8) throw new Error("rehearsal venue profile must admit all eight synthetic cameras with bonded-upload reserve");
   validateConfirmation(options.command, options.confirm, manifest.event);
   const lifecycleState = await readProtectedJson(profile.lifecycleState, "lifecycle state");
   const material = await materialForCommand(options.command, profile.material, manifest);
@@ -90,6 +94,7 @@ function runtimeDependencies({ profile, manifest, lifecycleState, material, envi
   });
   const commentary = new CommentaryClientManager();
   const egress = new EgressRuntime({ sshKey: profile.sshKey, knownHosts: profile.knownHosts });
+  const outputConformance = new OutputConformanceRuntime({ sshKey: profile.sshKey, knownHosts: profile.knownHosts });
   const sampler = new PoolSamplerRuntime({ repoRoot: REPO_ROOT, sshKey: profile.sshKey, knownHosts: profile.knownHosts });
   const verifier = new RehearsalVerifier({
     monitorOrigin: `https://${endpointForRole(manifest, "observability")}`,
@@ -103,6 +108,7 @@ function runtimeDependencies({ profile, manifest, lifecycleState, material, envi
     publishers,
     commentary,
     egress,
+    outputConformance,
     sampler,
     verifier,
     soakEvaluator: new RehearsalSoakEvaluator({
@@ -140,7 +146,7 @@ function runtimeDependencies({ profile, manifest, lifecycleState, material, envi
 function inertDependencies() {
   const unavailable = new Proxy({}, { get() { return async () => { throw new Error("runtime dependency is unavailable for this command"); }; } });
   return {
-    vercel: unavailable, youtube: unavailable, publishers: unavailable, commentary: unavailable, egress: unavailable,
+    vercel: unavailable, youtube: unavailable, publishers: unavailable, commentary: unavailable, egress: unavailable, outputConformance: unavailable,
     sampler: unavailable, verifier: unavailable, soakEvaluator: unavailable,
     sealEvidence: sealRehearsalEvidence,
     renderSecrets: unavailable,
@@ -207,8 +213,8 @@ async function loadOrCreateMaterial(path, manifest) {
 }
 
 export function validateRehearsalProfile(value) {
-  if (!value || value.schemaVersion !== 1) throw new Error("rehearsal operator profile schemaVersion must be 1");
-  const pathFields = ["manifest", "lifecycleState", "rehearsalState", "secrets", "material", "rehearsalEvidence", "credentialsEnv", "sshKey", "knownHosts", "ffmpegPath"];
+  if (!value || value.schemaVersion !== 2) throw new Error("rehearsal operator profile schemaVersion must be 2");
+  const pathFields = ["manifest", "lifecycleState", "rehearsalState", "secrets", "material", "rehearsalEvidence", "credentialsEnv", "sshKey", "knownHosts", "venueProfile", "ffmpegPath"];
   const expected = ["schemaVersion", ...pathFields, "git", "soakDurationSeconds"].sort();
   if (JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(expected)) throw new Error("rehearsal operator profile must contain exactly the supported fields");
   for (const key of pathFields) normalizedAbsolute(value[key], `profile ${key}`);

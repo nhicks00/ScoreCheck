@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { buildOverlayState, overlayLayout } from "@/lib/overlay";
 import { missingEnvKeys } from "@/lib/env";
 import { coerceOverlayState, fallbackOverlayState } from "@/lib/overlayState";
+import { ifNoneMatchContains, overlayEntityTag } from "@/lib/overlayHttp";
 import { scoreForCurrentMatch } from "@/lib/scoreState";
 import { supabaseAdmin } from "@/lib/supabase";
 
@@ -11,7 +12,7 @@ export const revalidate = 0;
 export async function GET(req: NextRequest, { params }: { params: Promise<{ courtNumber: string }> }) {
   const { courtNumber } = await params;
   if (missingEnvKeys().some((key) => key.startsWith("NEXT_PUBLIC_SUPABASE") || key === "SUPABASE_SERVICE_ROLE_KEY")) {
-    return NextResponse.json(envFallbackOverlayState(Number(courtNumber)), { headers: { "cache-control": "no-store" } });
+    return overlayResponse(req, coerceOverlayState(envFallbackOverlayState(Number(courtNumber)), Number(courtNumber)));
   }
 
   const eventId = req.nextUrl.searchParams.get("eventId");
@@ -19,9 +20,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ cour
   const persisted = await loadPersistedOverlay(courtNumberValue, eventId);
   if (persisted.error) return NextResponse.json({ error: persisted.error.message }, { status: 500 });
   if (persisted.data?.payload) {
-    return NextResponse.json(coercePersistedOverlay(persisted.data, courtNumberValue), {
-      headers: { "cache-control": "no-store" }
-    });
+    return overlayResponse(req, coercePersistedOverlay(persisted.data, courtNumberValue));
   }
 
   // Only newly-created or partially-migrated courts should need this repair
@@ -36,12 +35,24 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ cour
 
   const match = Array.isArray(court.matches) ? court.matches[0] : court.matches;
   const score = scoreForCurrentMatch(court.score_states, match?.id);
-  return NextResponse.json(withOverlayLayout(buildOverlayState({
+  return overlayResponse(req, withOverlayLayout(buildOverlayState({
     event: { id: court.event_id, settings: eventSettings(court) },
     court,
     match: match ?? null,
     score: score ?? null
-  }), court), { headers: { "cache-control": "no-store" } });
+  }), court));
+}
+
+function overlayResponse(req: NextRequest, state: ReturnType<typeof coerceOverlayState>) {
+  const etag = overlayEntityTag(state);
+  const headers = {
+    "cache-control": "private, no-cache, must-revalidate",
+    etag
+  };
+  if (ifNoneMatchContains(req.headers.get("if-none-match"), etag)) {
+    return new NextResponse(null, { status: 304, headers });
+  }
+  return NextResponse.json(state, { headers });
 }
 
 async function loadPersistedOverlay(courtNumber: number, eventId: string | null) {

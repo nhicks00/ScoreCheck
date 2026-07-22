@@ -261,7 +261,7 @@ async function autoQueueDiscoveredMatches(eventId: string, matches: Record<strin
         fromMatchId: court.current_match_id,
         toMatchId: matchId,
         actionId: trustedScoreActionId({ type: "bracket-auto-activate", courtId: court.id, fromMatchId: court.current_match_id, matchId }),
-        actorType: "PROVIDER",
+        actorType: "SYSTEM",
         actorLabel: "VolleyballLife bracket discovery",
         initialAuthorityMode: "PROVIDER_PRIMARY"
       });

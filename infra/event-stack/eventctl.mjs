@@ -78,16 +78,17 @@ export function buildEventctlInvocation(command, profile, confirmation = null) {
 }
 
 export function validateProfile(value) {
-  if (!value || value.schemaVersion !== 5) throw new Error("event operator profile schemaVersion must be 5");
-  const expected = ["manifest", "state", "anchors", "secrets", "sshKey", "knownHosts", "commentaryTlsState", "observabilityTlsState", "credentialsEnv", "lifecycleAttestation", "evidence", "rehearsalEvidence"];
+  if (!value || value.schemaVersion !== 8) throw new Error("event operator profile schemaVersion must be 8");
+  const expected = ["manifest", "state", "anchors", "secrets", "sshKey", "knownHosts", "commentaryTlsState", "observabilityTlsState", "credentialsEnv", "lifecycleAttestation", "rendererBinding", "venueProfile", "commentaryQualification", "evidence", "rehearsalEvidence"];
   if (JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(["schemaVersion", ...expected].sort())) {
     throw new Error("event operator profile must contain exactly the supported fields");
   }
-  for (const key of expected.filter((key) => key !== "rehearsalEvidence")) {
+  for (const key of expected.filter((key) => !["rendererBinding", "rehearsalEvidence"].includes(key))) {
     if (typeof value[key] !== "string" || !isAbsolute(value[key]) || resolve(value[key]) !== value[key]) {
       throw new Error(`event operator profile ${key} must be a normalized absolute path`);
     }
   }
+  if (value.rendererBinding !== null && (typeof value.rendererBinding !== "string" || !isAbsolute(value.rendererBinding) || resolve(value.rendererBinding) !== value.rendererBinding)) throw new Error("event operator profile rendererBinding must be null or a normalized absolute path");
   if (value.rehearsalEvidence !== null && (typeof value.rehearsalEvidence !== "string" || !isAbsolute(value.rehearsalEvidence) || resolve(value.rehearsalEvidence) !== value.rehearsalEvidence)) throw new Error("event operator profile rehearsalEvidence must be null or a normalized absolute path");
   return value;
 }

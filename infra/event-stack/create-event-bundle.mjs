@@ -13,6 +13,9 @@ import { validateAnchorConfig } from "./event-lifecycle.mjs";
 import { validateProfile as validateEventProfile } from "./eventctl.mjs";
 import { assertNetworkContractDeployable } from "./network-contract.mjs";
 import { renderProductionSecretDirectory } from "./production-recovery.mjs";
+import { loadRendererBinding } from "./renderer-binding.mjs";
+import { createSyntheticRehearsalVenueProfile, evaluateVenueAdmission, loadVenueAdmission } from "./venue-admission.mjs";
+import { createSyntheticCommentaryQualification, loadCommentaryQualification } from "./commentary-qualification.mjs";
 import { validateRehearsalProfile } from "./rehearsal/rehearsal-stack.mjs";
 import { SyntheticPublisherManager } from "./rehearsal/synthetic-publishers.mjs";
 
@@ -51,6 +54,9 @@ export async function createEventBundle(options, {
     assertProtectedFile(options.lifecycleAttestation, "lifecycle attestation"),
     assertProtectedFile(options.networkSpec, "rendered network contract"),
     ...(options.kind === "production" ? [assertProtectedFile(options.anchors, "production endpoint anchors")] : []),
+    ...(options.kind === "production" ? [assertProtectedFile(options.rendererBinding, "production renderer binding")] : []),
+    ...(options.kind === "production" ? [assertProtectedFile(options.venueProfile, "production venue profile")] : []),
+    ...(options.kind === "production" ? [assertProtectedFile(options.commentaryQualification, "production commentary qualification")] : []),
     ...(options.kind === "production" ? [assertProtectedDirectory(options.productionSource, "production recovery source")] : []),
     ...(options.kind === "rehearsal" ? [assertExecutable(options.ffmpegPath, "FFmpeg")] : [])
   ]);
@@ -91,24 +97,40 @@ export async function createEventBundle(options, {
         timeline: [{ at: createdAt, event: "dynamic-rehearsal-binding-created" }]
       };
   validateAnchorConfig(anchorConfig, manifest);
+  const renderer = options.kind === "production" ? await loadRendererBinding(options.rendererBinding) : null;
+  const rehearsalVenueProfile = options.kind === "rehearsal" ? createSyntheticRehearsalVenueProfile(manifest.event) : null;
+  const venueAdmission = options.kind === "production"
+    ? await loadVenueAdmission(options.venueProfile, manifest.event)
+    : evaluateVenueAdmission(rehearsalVenueProfile);
+  if (!venueAdmission.passed) throw new Error(`venue profile is not admitted: ${venueAdmission.problems.join("; ")}`);
+  const venueProfile = options.kind === "production" ? venueAdmission.profile : rehearsalVenueProfile;
+  const activeCameras = venueProfile.cameras.filter((camera) => camera.enabled).map((camera) => camera.cameraNumber);
+  const commentaryQualification = options.kind === "production"
+    ? (await loadCommentaryQualification(options.commentaryQualification, manifest.event, activeCameras)).qualification
+    : createSyntheticCommentaryQualification(manifest.event, activeCameras);
   const final = bundlePaths(options.root);
   const temporary = `${options.root}.tmp-${process.pid}-${randomUUID()}`;
   await mkdir(temporary, { mode: 0o700 });
   const temporaryPaths = bundlePaths(temporary);
   try {
     await writeProtectedJson(temporaryPaths.manifest, manifest);
+    await writeProtectedJson(temporaryPaths.venueProfile, venueProfile);
+    await writeProtectedJson(temporaryPaths.commentaryQualification, commentaryQualification);
     const anchors = options.kind === "production" ? options.anchors : final.rehearsalBinding;
     if (options.kind === "rehearsal") {
       await writeProtectedJson(temporaryPaths.rehearsalBinding, anchorConfig);
     } else {
+      await writeProtectedJson(temporaryPaths.rendererBinding, renderer);
       await renderProductionSecretDirectory({
         manifest,
         sourceDirectory: options.productionSource,
-        directory: temporaryPaths.secrets
+        directory: temporaryPaths.secrets,
+        renderer,
+        venueProfile
       });
     }
     const eventProfile = {
-      schemaVersion: 5,
+      schemaVersion: 8,
       manifest: final.manifest,
       state: final.lifecycleState,
       anchors,
@@ -119,6 +141,9 @@ export async function createEventBundle(options, {
       observabilityTlsState: tlsStatePath(parent, manifest, "observability", "retained-observability-tls"),
       credentialsEnv: options.credentialsEnv,
       lifecycleAttestation: options.lifecycleAttestation,
+      rendererBinding: options.kind === "production" ? final.rendererBinding : null,
+      venueProfile: final.venueProfile,
+      commentaryQualification: final.commentaryQualification,
       evidence: final.finalEvidence,
       rehearsalEvidence: options.kind === "rehearsal" ? final.rehearsalEvidence : null
     };
@@ -128,7 +153,7 @@ export async function createEventBundle(options, {
     let rehearsalProfile = null;
     if (options.kind === "rehearsal") {
       rehearsalProfile = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         manifest: final.manifest,
         lifecycleState: final.lifecycleState,
         rehearsalState: final.rehearsalState,
@@ -138,6 +163,7 @@ export async function createEventBundle(options, {
         credentialsEnv: options.credentialsEnv,
         sshKey: options.sshKey,
         knownHosts: final.knownHosts,
+        venueProfile: final.venueProfile,
         ffmpegPath: options.ffmpegPath,
         git: { repo: options.gitRepo, repoId: options.gitRepoId, ref: options.gitRef, sha: options.gitSha },
         soakDurationSeconds: options.soakDurationSeconds
@@ -155,6 +181,9 @@ export async function createEventBundle(options, {
       destroyAfter: manifest.destroyAfter,
       manifestSha256: sha256(await readFile(temporaryPaths.manifest)),
       eventProfileSha256: sha256(await readFile(temporaryPaths.eventProfile)),
+      rendererBindingSha256: renderer ? sha256(await readFile(temporaryPaths.rendererBinding)) : null,
+      venueProfileSha256: sha256(await readFile(temporaryPaths.venueProfile)),
+      commentaryQualificationSha256: sha256(await readFile(temporaryPaths.commentaryQualification)),
       rehearsalProfileSha256: rehearsalProfile ? sha256(await readFile(temporaryPaths.rehearsalProfile)) : null,
       operator: options.kind === "rehearsal" ? {
         command: process.execPath,
@@ -197,7 +226,7 @@ export function parseBundleArgs(argv) {
     ["--event", "event"], ["--kind", "kind"], ["--destroy-after", "destroyAfter"], ["--root", "root"],
     ["--credentials-env", "credentialsEnv"], ["--ssh-key", "sshKey"], ["--attestation", "lifecycleAttestation"],
     ["--network-spec", "networkSpec"],
-    ["--anchors", "anchors"], ["--production-source", "productionSource"], ["--git-repo", "gitRepo"], ["--git-repo-id", "gitRepoId"], ["--git-ref", "gitRef"], ["--git-sha", "gitSha"],
+    ["--anchors", "anchors"], ["--production-source", "productionSource"], ["--renderer-binding", "rendererBinding"], ["--venue-profile", "venueProfile"], ["--commentary-qualification", "commentaryQualification"], ["--git-repo", "gitRepo"], ["--git-repo-id", "gitRepoId"], ["--git-ref", "gitRef"], ["--git-sha", "gitSha"],
     ["--ffmpeg", "ffmpegPath"], ["--soak-seconds", "soakDurationSeconds"]
   ]);
   for (let index = 1; index < argv.length; index += 1) {
@@ -207,7 +236,7 @@ export function parseBundleArgs(argv) {
     if (!key || !value || value.startsWith("--")) throw new Error(`${flag} is unknown or missing a value`);
     values[key] = key === "soakDurationSeconds" ? Number(value) : value;
   }
-  for (const key of ["root", "credentialsEnv", "sshKey", "lifecycleAttestation", "networkSpec", "anchors", "productionSource", "ffmpegPath"]) {
+  for (const key of ["root", "credentialsEnv", "sshKey", "lifecycleAttestation", "networkSpec", "anchors", "productionSource", "rendererBinding", "venueProfile", "commentaryQualification", "ffmpegPath"]) {
     if (values[key] !== undefined) values[key] = normalizedAbsolute(values[key], `--${key}`);
   }
   return values;
@@ -224,11 +253,17 @@ function validateBundleOptions(value) {
   if (value.kind === "production") {
     if (!value.anchors) throw new Error("production bundle requires --anchors");
     if (!value.productionSource) throw new Error("production bundle requires --production-source");
+    if (!value.rendererBinding) throw new Error("production bundle requires --renderer-binding");
+    if (!value.venueProfile) throw new Error("production bundle requires --venue-profile");
+    if (!value.commentaryQualification) throw new Error("production bundle requires --commentary-qualification");
     for (const key of ["gitRepo", "gitRepoId", "gitRef", "gitSha", "ffmpegPath"]) {
       if (value[key] !== undefined) throw new Error(`production bundle does not accept ${key}`);
     }
   } else {
     if (value.productionSource !== undefined) throw new Error("rehearsal bundle does not accept productionSource");
+    if (value.rendererBinding !== undefined) throw new Error("rehearsal bundle does not accept rendererBinding");
+    if (value.venueProfile !== undefined) throw new Error("rehearsal bundle does not accept venueProfile");
+    if (value.commentaryQualification !== undefined) throw new Error("rehearsal bundle does not accept commentaryQualification");
     for (const key of ["gitRepo", "gitRepoId", "gitRef", "gitSha", "ffmpegPath"]) {
       if (typeof value[key] !== "string" || !value[key]) throw new Error(`rehearsal bundle requires ${key}`);
     }
@@ -279,6 +314,9 @@ function bundlePaths(root) {
     lifecycleState: join(root, "lifecycle-state.json"),
     rehearsalState: join(root, "rehearsal-state.json"),
     rehearsalBinding: join(root, "rehearsal-endpoint-binding.json"),
+    rendererBinding: join(root, "renderer-binding.json"),
+    venueProfile: join(root, "venue-profile.json"),
+    commentaryQualification: join(root, "commentary-qualification.json"),
     eventProfile: join(root, "event-profile.json"),
     rehearsalProfile: join(root, "rehearsal-profile.json"),
     rehearsalMaterial: join(root, "rehearsal-material.json"),
@@ -340,5 +378,5 @@ function normalizeGitHubRemote(value) {
 }
 
 function usage() {
-  process.stdout.write("Usage: node infra/event-stack/create-event-bundle.mjs create --event SLUG --kind production|rehearsal --destroy-after YYYY-MM-DD --root /PROTECTED/DIR --credentials-env FILE --ssh-key FILE --attestation FILE --network-spec /PROTECTED/RENDERED-NETWORK.json [production: --anchors FILE --production-source DIR] [rehearsal: --git-repo OWNER/REPO --git-repo-id ID --git-ref REF --git-sha SHA --ffmpeg FILE --soak-seconds 1800]\n");
+  process.stdout.write("Usage: node infra/event-stack/create-event-bundle.mjs create --event SLUG --kind production|rehearsal --destroy-after YYYY-MM-DD --root /PROTECTED/DIR --credentials-env FILE --ssh-key FILE --attestation FILE --network-spec /PROTECTED/RENDERED-NETWORK.json [production: --anchors FILE --production-source DIR --renderer-binding FILE --venue-profile FILE --commentary-qualification FILE] [rehearsal: --git-repo OWNER/REPO --git-repo-id ID --git-ref REF --git-sha SHA --ffmpeg FILE --soak-seconds 1800]\n");
 }

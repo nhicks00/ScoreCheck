@@ -22,6 +22,8 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    volumes:
+      - monitor-state:/var/lib/scorecheck-monitoring
     cap_drop:
       - ALL
     security_opt:
@@ -124,6 +126,7 @@ services:
       - no-new-privileges:true
 
 volumes:
+  monitor-state:
   prometheus-data:
   alertmanager-data:
   caddy-config:

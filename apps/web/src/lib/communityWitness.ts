@@ -257,15 +257,15 @@ export async function commitTrustedCanonicalScore(input: {
   teamSide?: "A" | "B" | null;
   projectionMetadata: z.infer<typeof projectionMetadataSchema>;
   metadata?: Record<string, unknown>;
+  pollerLease?: { owner: string; generation: number };
 }): Promise<TrustedCommitResponse> {
   const commandType = canonicalCommandTypeSchema.parse(input.commandType ?? "CORRECT_SCORE");
   const teamSide = input.teamSide == null ? null : z.enum(["A", "B"]).parse(input.teamSide);
-  return rpc("community_commit_trusted_score", {
+  const common = {
     p_event_id: z.string().uuid().parse(input.eventId),
     p_court_id: z.string().uuid().parse(input.courtId),
     p_match_id: z.string().uuid().parse(input.matchId),
     p_action_id: z.string().uuid().parse(input.actionId),
-    p_actor_type: input.actorType,
     p_actor_label: input.actorLabel ?? null,
     p_authority_mode: authorityModeSchema.parse(input.authorityMode),
     p_expected_revision: input.expectedRevision ?? null,
@@ -275,6 +275,18 @@ export async function commitTrustedCanonicalScore(input: {
     p_team_side: teamSide,
     p_projection_metadata: projectionMetadataSchema.parse(input.projectionMetadata),
     p_metadata: input.metadata ?? {}
+  };
+  if (input.actorType === "PROVIDER") {
+    if (!input.pollerLease) throw new Error("Provider score commits require a poller lease fencing token");
+    return rpc("community_commit_provider_score_fenced", {
+      ...common,
+      p_lease_owner: z.string().trim().min(1).max(200).parse(input.pollerLease.owner),
+      p_lease_generation: z.number().int().positive().parse(input.pollerLease.generation)
+    }, trustedCommitResponseSchema);
+  }
+  return rpc("community_commit_trusted_score", {
+    ...common,
+    p_actor_type: input.actorType
   }, trustedCommitResponseSchema);
 }
 

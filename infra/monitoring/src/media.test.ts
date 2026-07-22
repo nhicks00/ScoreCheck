@@ -57,6 +57,21 @@ describe("media monitoring", () => {
     expect(fallback?.path).toMatchObject({ sourceProtocol: "SRT", sourceMode: "PULL", videoCodec: "H264", audioCodec: "AAC" });
   });
 
+  it("retains the browser-safe normalized path without exposing publisher identity", () => {
+    const parsed = parseMediaPath({
+      name: "court2_normalized",
+      ready: true,
+      readers: [{}],
+      source: { type: "rtspSession", id: "private-normalizer-session" },
+      tracks2: [
+        { codec: "H264", codecProps: { width: 1920, height: 1080, profile: "High" } },
+        { codec: "Opus", codecProps: { sampleRate: 48_000, channelCount: 2 } }
+      ]
+    }, null, 1_000);
+    expect(parsed?.path).toMatchObject({ name: "court2_normalized", branch: "normalized", videoCodec: "H264", audioCodec: "OPUS", readerCount: 1 });
+    expect(JSON.stringify(parsed?.path)).not.toContain("private-normalizer-session");
+  });
+
   it("caches sanitized path details for one ready epoch", async () => {
     const cache = new MediaPathDetailCache();
     const fetchDetail = vi.fn(async () => ({

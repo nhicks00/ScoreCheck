@@ -1,12 +1,14 @@
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 import { getEnv } from "@/lib/env";
 import { getActiveEvent } from "@/lib/eventConfig";
 import { createCommentaryConnection } from "@/lib/commentary";
 import {
-  checkProgramToken,
+  PROGRAM_SESSION_COOKIE,
   programBuildVersion,
-  programCommentaryBufferMs
+  programCommentaryBufferMs,
+  verifyProgramSession
 } from "@/lib/program";
 import { createProgramMonitoringConnection } from "@/lib/programMonitoring";
 import { supabaseAdmin } from "@/lib/supabase";
@@ -24,26 +26,31 @@ export const metadata: Metadata = {
 /**
  * The broadcast scene for one court (docs/PRODUCTION_PLATFORM_PLAN.md §3.1):
  * a headless-Chrome LiveKit egress opens this URL and pushes the rendered
- * canvas to YouTube. Token-gated with a plain 404 for anything else — the
- * consumer is a machine, so there are no cookies and no login redirect.
+ * canvas to YouTube. A fragment bootstrap exchanges the event-scoped machine
+ * token for a court/build/deployment-scoped HttpOnly cookie. Invalid or stale
+ * renderer bindings receive a plain 404 with no login redirect.
  *
- * Query params: ?token= (required), ?cbuf=<0..4000> commentary audio delay,
- * ?scene=0 disables commentary audio, ?debug=1 shows the diagnostics strip.
+ * Query params: ?build= and ?deployment= (required immutable renderer binding),
+ * ?cbuf=<0..10000> commentary audio delay, ?scene=0 disables commentary audio,
+ * ?debug=1 shows the diagnostics strip.
  */
 export default async function ProgramCourtPage({ params, searchParams }: {
   params: Promise<{ courtNumber: string }>;
-  searchParams: Promise<{ token?: string; cbuf?: string; scene?: string; debug?: string }>;
+  searchParams: Promise<{ build?: string; deployment?: string; cbuf?: string; scene?: string; debug?: string }>;
 }) {
   const { courtNumber: courtParam } = await params;
-  const { token, cbuf, scene, debug } = await searchParams;
-
-  // Wrong/missing token — or PROGRAM_PAGE_TOKEN unset — is a plain 404.
-  const tokenValue = typeof token === "string" ? token : null;
-  if (!tokenValue || !checkProgramToken(tokenValue)) notFound();
+  const { build, deployment, cbuf, scene, debug } = await searchParams;
 
   const env = getEnv();
   const courtNumber = Number(courtParam);
   if (!Number.isInteger(courtNumber) || courtNumber < 1 || courtNumber > env.courtCount) notFound();
+  const cookieStore = await cookies();
+  if (!verifyProgramSession({
+    session: cookieStore.get(PROGRAM_SESSION_COOKIE)?.value,
+    court: courtNumber,
+    expectedBuild: typeof build === "string" ? build : null,
+    expectedDeployment: typeof deployment === "string" ? deployment : null
+  })) notFound();
 
   const court = await loadCourt(courtNumber);
   const sources = videoConfigured()

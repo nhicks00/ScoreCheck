@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const MONITORING_CONTRACT_VERSION = 4 as const;
+export const MONITORING_CONTRACT_VERSION = 5 as const;
 
 export const AGENT_ROLES = [
   "mediamtx",
@@ -77,9 +77,9 @@ export const mediaTransportSnapshotSchema = z.object({
 export type MediaTransportSnapshot = z.infer<typeof mediaTransportSnapshotSchema>;
 
 export const mediaPathSnapshotSchema = z.object({
-  name: z.string().regex(/^court[1-8]_(raw|preview|program|calibration|monitor)$/),
+  name: z.string().regex(/^court[1-8]_(raw|normalized|preview|program|calibration|monitor)$/),
   courtNumber: z.number().int().min(1).max(8),
-  branch: z.enum(["raw", "preview", "program", "calibration", "monitor"]),
+  branch: z.enum(["raw", "normalized", "preview", "program", "calibration", "monitor"]),
   ready: z.boolean(),
   readySince: isoDate.nullable(),
   bytesReceived: z.number().int().nonnegative(),
@@ -101,9 +101,9 @@ export const mediaPathSnapshotSchema = z.object({
 export type MediaPathSnapshot = z.infer<typeof mediaPathSnapshotSchema>;
 
 export const ffmpegBranchSnapshotSchema = z.object({
-  name: z.string().regex(/^court[1-8]_(preview|program|calibration|monitor)$/),
+  name: z.string().regex(/^court[1-8]_(normalizer|preview|program|calibration|monitor)$/),
   courtNumber: z.number().int().min(1).max(8),
-  branch: z.enum(["preview", "program", "calibration", "monitor"]),
+  branch: z.enum(["normalizer", "preview", "program", "calibration", "monitor"]),
   sampledAt: isoDate,
   frame: z.number().int().nonnegative(),
   framesPerSecond: z.number().nonnegative().max(240).nullable(),
@@ -183,6 +183,7 @@ export const browserHeartbeatPayloadSchema = z.object({
     state: z.enum(["waiting", "stabilizing", "playing", "stalled", "reconnecting", "reloading", "fatal", "unknown"]),
     transport: z.enum(["whep", "hls", "none"]),
     connectionState: z.enum(["new", "connecting", "connected", "disconnected", "failed", "closed", "unknown"]),
+    networkPath: z.enum(["private-vpc", "public", "unknown"]),
     framesRendered: z.number().int().nonnegative(),
     framesPerSecond: z.number().nonnegative().max(240).nullable(),
     width: z.number().int().positive().max(8192).nullable(),
@@ -430,7 +431,7 @@ export const agentSnapshotSchema = z.object({
   }).strict(),
   services: z.array(serviceSnapshotSchema).max(40),
   mediaPaths: z.array(mediaPathSnapshotSchema).max(48),
-  ffmpegBranches: z.array(ffmpegBranchSnapshotSchema).max(32).default([]),
+  ffmpegBranches: z.array(ffmpegBranchSnapshotSchema).max(40).default([]),
   contentAnalysis: z.array(cameraContentSnapshotSchema).max(8).default([]),
   nativeServices: nativeServiceSnapshotSchema.default({ endpoints: [], livekit: null, egress: null })
 }).strict();

@@ -5,14 +5,14 @@ import { dirname, resolve } from "node:path";
 import { rehearsalMarker } from "./youtube-provider.mjs";
 import { withProcessLock } from "../process-lock.mjs";
 
-const STATE_SCHEMA_VERSION = 3;
+const STATE_SCHEMA_VERSION = 4;
 const PROVIDER_MODE = "persistent-youtube-stream-ingest-v1";
 const PHASES = new Set(["planned", "preparing", "prepared", "starting", "running", "stopping", "stopped", "cleaning", "cleaned"]);
 const COURTS = Object.freeze(Array.from({ length: 8 }, (_, index) => index + 1));
 
 export class RehearsalController {
-  constructor({ store, vercel, youtube, publishers, commentary, egress, sampler, verifier, soakEvaluator, sealEvidence, renderSecrets, programEnvironment, publisherConfiguration, commentaryConfiguration, now = () => new Date() }) {
-    Object.assign(this, { store, vercel, youtube, publishers, commentary, egress, sampler, verifier, soakEvaluator, sealEvidence, renderSecrets, programEnvironment, publisherConfiguration, commentaryConfiguration, now });
+  constructor({ store, vercel, youtube, publishers, commentary, egress, outputConformance, sampler, verifier, soakEvaluator, sealEvidence, renderSecrets, programEnvironment, publisherConfiguration, commentaryConfiguration, now = () => new Date() }) {
+    Object.assign(this, { store, vercel, youtube, publishers, commentary, egress, outputConformance, sampler, verifier, soakEvaluator, sealEvidence, renderSecrets, programEnvironment, publisherConfiguration, commentaryConfiguration, now });
   }
 
   async plan({ manifest, lifecycleState }) {
@@ -48,8 +48,14 @@ export class RehearsalController {
         state.program.deployment = deployment;
         await this.store.save(state);
         state.program.deployment = await this.vercel.waitReady({ deploymentId: deployment.id, project, generationId: state.generationId });
-        state.program.origin = project.origin;
-        state.program.preflight = await this.vercel.verifyProgramPage({ project, token: material.programPageToken });
+        state.program.origin = state.program.deployment.url;
+        state.program.gitSha = git.sha;
+        state.program.preflight = await this.vercel.verifyProgramPage({
+          project,
+          deployment: state.program.deployment,
+          gitSha: git.sha,
+          token: material.programPageToken
+        });
         await this.store.save(state);
 
         const streamPool = await this.youtube.resolvePersistentStreamPool();
@@ -64,7 +70,11 @@ export class RehearsalController {
           manifest,
           material,
           directory: secretsDirectory,
-          programOrigin: state.program.origin,
+          renderer: {
+            origin: state.program.origin,
+            deploymentId: state.program.deployment.id,
+            gitSha: git.sha
+          },
           youtubeDestinations: COURTS.map((court) => ({
             court,
             mode: state.providerMode,
@@ -134,6 +144,18 @@ export class RehearsalController {
           const courtState = state.courts[court];
           const host = compositorHost(lifecycleState, manifest, court);
           const expectedId = courtState.egress?.id ?? null;
+          if (!courtState.outputConformance) {
+            await this.egress.preflight(host);
+            courtState.outputConformance = await this.outputConformance.qualify({
+              host,
+              court,
+              profile: "1080p30",
+              evidenceId: state.generationId,
+              outputDirectory: resolve(evidenceDirectory, "output-conformance"),
+              renderer: { gitSha: state.program.gitSha, deploymentId: state.program.deployment.id }
+            });
+            await this.store.save(state);
+          }
           if (!expectedId) {
             await this.egress.preflight(host);
             courtState.egress = { status: "starting", id: null };
@@ -459,7 +481,7 @@ export function createRehearsalState(manifest, lifecycleState, now = new Date())
     stoppedAt: null,
     cleanedAt: null,
     secretsDirectory: null,
-    program: { projectName: `scorecheck-rehearsal-${manifest.namespace}`.slice(0, 52).replace(/-+$/u, ""), project: null, deployment: null, origin: null },
+    program: { projectName: `scorecheck-rehearsal-${manifest.namespace}`.slice(0, 52).replace(/-+$/u, ""), project: null, deployment: null, origin: null, gitSha: null },
     courts: Object.fromEntries(COURTS.map((court) => [court, {
       marker: rehearsalMarker(lifecycleState.generationId, court),
       publisherMarker: `scorecheck-rehearsal-${lifecycleState.generationId}-camera-${court}`,
@@ -469,6 +491,7 @@ export function createRehearsalState(manifest, lifecycleState, now = new Date())
       providerCleanup: null,
       publisher: null,
       commentary: null,
+      outputConformance: null,
       egress: null,
       admission: null
     }])),
@@ -494,6 +517,7 @@ export function rehearsalSummary(state) {
     programDeploymentId: state.program.deployment?.id ?? null,
     preparedCourts: COURTS.filter((court) => state.courts[court].providerReady).length,
     activePublishers: COURTS.filter((court) => state.courts[court].publisher?.status === "running").length,
+    qualifiedOutputs: COURTS.filter((court) => state.courts[court].outputConformance?.status === "QUALIFIED").length,
     activeEgresses: COURTS.filter((court) => state.courts[court].egress?.status === "active").length,
     activeProviderStreams: COURTS.filter((court) => state.courts[court].stream?.streamStatus === "active").length,
     samplerStatus: state.sampler?.status ?? null,

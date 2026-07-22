@@ -90,16 +90,21 @@ services:
       # falls back to these env vars so the keypair only ever lives in .env.
       LIVEKIT_API_KEY: "${LIVEKIT_API_KEY}"
       LIVEKIT_API_SECRET: "${LIVEKIT_API_SECRET}"
+    # Keep the public TLS/SNI hostname while routing WHEP signaling over the
+    # private VPC. MediaMTX also advertises its private ICE candidate.
+    extra_hosts:
+      - "${MEDIAMTX_PUBLIC_HOST:?MEDIAMTX_PUBLIC_HOST is required}:${MEDIAMTX_PRIVATE_HOST:?MEDIAMTX_PRIVATE_HOST is required}"
     volumes:
       - ./egress.yaml:/etc/egress.yaml:ro
       - ./headless_shell:/usr/local/bin/headless_shell:ro
+      - ./evidence:/out
     # Run Chrome's sandbox with LiveKit's version-matched seccomp profile rather
     # than giving every egress process broad SYS_ADMIN capability.
     security_opt:
       - seccomp=./chrome-sandboxing-seccomp-profile.json
     # Chrome renders via /dev/shm; egress.yaml explicitly removes LiveKit's
     # disable-dev-shm-usage default. Docker's 64 MB default causes tab crashes
-    # mid-broadcast. The current c-4 baseline admits one 720p court; 3 GB keeps
+    # mid-broadcast. The current c-4 baseline admits one 1080p court; 3 GB keeps
     # generous browser headroom. Re-size only with a capacity-qualified host.
     shm_size: "3gb"
     ports:
@@ -121,3 +126,30 @@ services:
         # livekit image has no shell/curl for a healthcheck; egress retries its
         # redis/ws connections on boot, so started-ordering is sufficient.
         condition: service_started
+
+  normalizer:
+    # HEVC remains an allowed venue transport codec, but Linux Chromium does
+    # not consume it directly through WHEP. Only a compositor explicitly bound
+    # to an HEVC camera starts this profile-scoped normalizer. Direct-H264
+    # cameras and the spare never run it.
+    profiles: ["hevc-normalizer"]
+    image: bluenviron/mediamtx:1.19.2-ffmpeg@sha256:08c837deb7bac85d509e2a4c2737308e5a34f8f084a46a0d8793cdb0579a6e5d
+    container_name: bvm-normalizer
+    restart: unless-stopped
+    init: true
+    network_mode: host
+    logging: *default-logging
+    environment:
+      CAMERA_NUMBER: "${CAMERA_NUMBER:-}"
+      CAMERA_SOURCE_PATH_MODE: "${CAMERA_SOURCE_PATH_MODE:-inactive}"
+      CAMERA_SOURCE_CODEC: "${CAMERA_SOURCE_CODEC:-NONE}"
+      CAMERA_SOURCE_PROFILE: "${CAMERA_SOURCE_PROFILE:-NONE}"
+      CAMERA_FRAME_RATE_MODE: "${CAMERA_FRAME_RATE_MODE:-NONE}"
+      CAMERA_NORMALIZER_ENABLED: "${CAMERA_NORMALIZER_ENABLED:-false}"
+      CAMERA_NORMALIZER_INPUT_PATH: "${CAMERA_NORMALIZER_INPUT_PATH:-}"
+      CAMERA_NORMALIZER_OUTPUT_PATH: "${CAMERA_NORMALIZER_OUTPUT_PATH:-}"
+      MEDIAMTX_PRIVATE_HOST: "${MEDIAMTX_PRIVATE_HOST:-}"
+    volumes:
+      - ./normalize-camera.sh:/usr/local/bin/normalize-camera:ro
+      - /var/lib/scorecheck-monitoring/ffmpeg:/monitoring/ffmpeg
+    command: ["/usr/local/bin/normalize-camera"]

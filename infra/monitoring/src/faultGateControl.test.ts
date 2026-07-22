@@ -90,7 +90,7 @@ describe("monitoring fault-gate control", () => {
 
 function idleSnapshot(): MonitorSnapshot {
   return {
-    version: 4,
+    version: 5,
     generatedAt: "2026-07-13T13:00:00.000Z",
     collector: { state: "HEALTHY", agentsExpected: 6, agentsFresh: 6 },
     controlPlane: { state: "HEALTHY", observedAt: "2026-07-13T13:00:00.000Z", ageMs: 0, worker: { state: "NOT_APPLICABLE", status: null, lastSeenAt: null, ageMs: null } },

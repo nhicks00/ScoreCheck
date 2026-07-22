@@ -9,22 +9,34 @@ import test from "node:test";
 
 import {
   buildFfprobeArgs,
+  buildSshTunnelArgs,
   evaluateCameraProfileGate,
   parseEvidenceNdjson,
   parseFrameRate,
+  sanitizeProbePackets,
   sanitizeProbeStreams,
   sanitizeSnapshot
 } from "./camera-profile-gate.mjs";
 
 const cliPath = fileURLToPath(new URL("./camera-profile-gate.mjs", import.meta.url));
 
-test("parses rational frame rates and builds a credential-free raw-path probe", () => {
+test("parses rational frame rates and builds credential-free raw and preview probes", () => {
   assert.equal(parseFrameRate("30000/1001"), 30000 / 1001);
   assert.equal(parseFrameRate("30/1"), 30);
   assert.equal(parseFrameRate("0/0"), null);
   const args = buildFfprobeArgs(new URL("rtsp://127.0.0.1:18554/"), 3);
   assert.equal(args.at(-1), "rtsp://127.0.0.1:18554/court3_raw");
   assert(!args.join(" ").includes("streamid"));
+  const previewPackets = buildFfprobeArgs(new URL("rtsp://127.0.0.1:18554/"), 3, "preview", true);
+  assert.equal(previewPackets.at(-1), "rtsp://127.0.0.1:18554/court3_preview");
+  assert(previewPackets.includes("-show_packets"));
+});
+
+test("pins the camera-profile SSH tunnel to the protected event host key", () => {
+  const args = buildSshTunnelArgs("root@10.10.0.2", "/protected/scorecheck-key", "/protected/event-known-hosts", 18_554);
+  assert(args.includes("StrictHostKeyChecking=yes"));
+  assert(args.includes("UserKnownHostsFile=/protected/event-known-hosts"));
+  assert.equal(args.at(-1), "root@10.10.0.2");
 });
 
 test("sanitizes monitor and ffprobe payloads", () => {
@@ -38,9 +50,10 @@ test("sanitizes monitor and ffprobe payloads", () => {
   assert.deepEqual(sanitized.courts[0].raw.videoCodec, "H264");
 
   const streams = sanitizeProbeStreams({ streams: [
-    { index: 0, codec_type: "video", codec_name: "h264", profile: "Main", width: 1280, height: 720, r_frame_rate: "30/1", avg_frame_rate: "30/1", extraneous: "secret" }
+    { index: 0, codec_type: "video", codec_name: "h264", profile: "Main", width: 1920, height: 1080, r_frame_rate: "30/1", avg_frame_rate: "30/1", field_order: "progressive", pix_fmt: "yuv420p", has_b_frames: 0, extraneous: "secret" }
   ] });
-  assert.equal(streams[0].avgFrameRate, "30/1");
+  assert.equal(streams[0].avg_frame_rate, "30/1");
+  assert.equal(streams[0].has_b_frames, 0);
   assert(!JSON.stringify(streams).includes("extraneous"));
 });
 
@@ -59,16 +72,10 @@ test("passes bounded stable camera profile evidence", () => {
   assert.equal(report.observedCourts[3].bitrateP05, 2_500_000);
   assert.equal(report.observedCourts[3].probeFps[0], 30);
   assert.equal(report.observedCourts[3].probeSampledAt, "2026-01-01T00:00:01Z");
-  assert.deepEqual(report.observedCourts[3].probeProfile, {
-    videoCodec: "h264",
-    videoProfile: "Main",
-    videoWidth: 1280,
-    videoHeight: 720,
-    videoFps: 30,
-    audioCodec: "aac",
-    audioSampleRateHz: 48000,
-    audioChannelCount: 2
-  });
+  assert.equal(report.observedCourts[3].bitrateMaximum, 2_500_000);
+  assert.equal(report.observedCourts[3].probeProfile.profile, "1080p30");
+  assert.equal(report.observedCourts[3].probeProfile.source.codec, "H264");
+  assert.equal(report.observedCourts[3].probeProfile.browserInput.hasBFrames, 0);
 });
 
 test("fails sparse, restarted, malformed, and degraded camera evidence", () => {
@@ -81,7 +88,7 @@ test("fails sparse, restarted, malformed, and degraded camera evidence", () => {
   evidence.samples[1].courts[0].raw.frameErrors = 2;
   evidence.samples[1].courts[0].raw.bytesReceived = 900;
   const probes = healthyProbes();
-  probes.courts[0].streams[0].avgFrameRate = "25/1";
+  probes.courts[0].raw.streams[0].avg_frame_rate = "25/1";
   const report = evaluateCameraProfileGate(gateConfig, evidence, probes, sourceEvidence());
   assert.equal(report.verdict, "FAIL");
   const failed = new Set(report.checks.filter((check) => !check.pass).map((check) => check.id));
@@ -92,7 +99,7 @@ test("fails sparse, restarted, malformed, and degraded camera evidence", () => {
   assert(failed.has("court_3_bytes_monotonic"));
   assert(failed.has("court_3_publisher_continuity"));
   assert(failed.has("court_3_monitor_videoCodec"));
-  assert([...failed].some((id) => id.endsWith("_fps")));
+  assert(failed.has("court_3_probe_2026-01-01T00:00:01Z_media_contract"));
 });
 
 test("fails duplicate or off-grid scheduled samples even when count coverage passes", () => {
@@ -132,7 +139,7 @@ test("parses run, sample, and bounded error records", () => {
   const parsed = parseEvidenceNdjson([
     JSON.stringify(healthyEvidence().run),
     JSON.stringify(healthyEvidence().samples[0]),
-    JSON.stringify({ recordType: "error", schemaVersion: 1, code: "SAMPLE_SLOT_MISSED" })
+    JSON.stringify({ recordType: "error", schemaVersion: 2, code: "SAMPLE_SLOT_MISSED" })
   ].join("\n"));
   assert.equal(parsed.samples.length, 1);
   assert.equal(parsed.errors.length, 1);
@@ -198,7 +205,16 @@ test("probe and evaluate CLIs write protected sanitized evidence", async () => {
   const fakeFfprobe = join(directory, "fake-ffprobe.mjs");
   const gateConfig = config();
   await writeFile(configPath, JSON.stringify(gateConfig));
-  await writeFile(fakeFfprobe, `#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify(${JSON.stringify(rawProbePayload())}));\n`, { mode: 0o755 });
+  const rawPayload = rawProbePayload();
+  const previewPayload = rawProbePayload({ audioCodec: "opus" });
+  const packets = packetProbePayload();
+  await writeFile(fakeFfprobe, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const packets = args.includes("-show_packets");
+const preview = args.at(-1).endsWith("_preview");
+const payload = preview ? ${JSON.stringify(previewPayload)} : ${JSON.stringify(rawPayload)};
+process.stdout.write(JSON.stringify(packets ? ${JSON.stringify(packets)} : payload));
+`, { mode: 0o755 });
   await chmod(fakeFfprobe, 0o755);
   try {
     const probeResult = await run(process.execPath, [
@@ -240,7 +256,7 @@ function config(overrides = {}) {
   const minimumDurationSeconds = overrides.minimumDurationSeconds ?? 2;
   const intervalSeconds = overrides.intervalSeconds ?? 1;
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     gateId: "camera-profile-test",
     requiredCourts: [3],
     minimumDurationSeconds,
@@ -256,14 +272,23 @@ function config(overrides = {}) {
     },
     expectedProfiles: {
       "3": {
+        cameraIdentity: "camera-3",
+        cameraModel: "Mevo-Core",
+        cameraFirmware: "event-qualified-1.0",
         sourceProtocol: "SRT",
         sourceMode: "PUSH",
+        sourcePathMode: "direct-h264",
         videoCodec: "H264",
         videoProfilesAllowed: ["Main"],
-        videoWidth: 1280,
-        videoHeight: 720,
-        minimumFps: 29,
-        maximumFps: 31,
+        videoWidth: 1920,
+        videoHeight: 1080,
+        videoFrameRateMode: "30/1",
+        videoPixelFormat: "yuv420p",
+        videoFieldOrder: "progressive",
+        videoHasBFrames: 0,
+        maximumGopSeconds: 2,
+        minimumRawBitrateBps: 2_000_000,
+        maximumRawBitrateBps: 8_000_000,
         audioCodec: "AAC",
         audioSampleRateHz: 48_000,
         audioChannelCount: 2
@@ -277,7 +302,7 @@ function healthyEvidence() {
   return {
     run: {
       recordType: "run",
-      schemaVersion: 1,
+      schemaVersion: 2,
       gateId: "camera-profile-test",
       requiredCourts: [3],
       plannedStartAt: times[0],
@@ -286,7 +311,7 @@ function healthyEvidence() {
     },
     samples: times.map((sampledAt, index) => ({
       recordType: "sample",
-      schemaVersion: 1,
+      schemaVersion: 2,
       sampledAt,
       scheduledAt: sampledAt,
       generatedAt: sampledAt,
@@ -305,20 +330,43 @@ function healthyEvidence() {
 
 function healthyProbes() {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     gateId: "camera-profile-test",
     generatedAt: "2026-01-01T00:00:01Z",
-    courts: [{ courtNumber: 3, sampledAt: "2026-01-01T00:00:01Z", streams: sanitizeProbeStreams(rawProbePayload()) }]
+    courts: [{
+      courtNumber: 3,
+      sampledAt: "2026-01-01T00:00:01Z",
+      raw: sanitizedProbe(rawProbePayload()),
+      preview: sanitizedProbe(rawProbePayload({ audioCodec: "opus" }))
+    }]
   };
 }
 
-function rawProbePayload() {
+function rawProbePayload({ audioCodec = "aac" } = {}) {
   return {
     credential: "must-not-survive",
     streams: [
-      { index: 0, codec_type: "video", codec_name: "h264", profile: "Main", width: 1280, height: 720, r_frame_rate: "30/1", avg_frame_rate: "30/1" },
-      { index: 1, codec_type: "audio", codec_name: "aac", profile: "LC", sample_rate: "48000", channels: 2, r_frame_rate: "0/0", avg_frame_rate: "0/0" }
+      { index: 0, codec_type: "video", codec_name: "h264", profile: "Main", width: 1920, height: 1080, r_frame_rate: "30/1", avg_frame_rate: "30/1", field_order: "progressive", pix_fmt: "yuv420p", has_b_frames: 0 },
+      { index: 1, codec_type: "audio", codec_name: audioCodec, profile: audioCodec === "aac" ? "LC" : null, sample_rate: "48000", channels: 2, r_frame_rate: "0/0", avg_frame_rate: "0/0" }
     ]
+  };
+}
+
+function packetProbePayload() {
+  return {
+    packets: Array.from({ length: 181 }, (_, index) => ({
+      pts_time: String(index / 30),
+      dts_time: String(index / 30),
+      duration_time: String(1 / 30),
+      flags: index % 60 === 0 ? "K__" : "___"
+    }))
+  };
+}
+
+function sanitizedProbe(streamPayload) {
+  return {
+    streams: sanitizeProbeStreams(streamPayload),
+    packets: sanitizeProbePackets(packetProbePayload())
   };
 }
 
@@ -335,6 +383,7 @@ function monitorSnapshot(generatedAt) {
 
 function rawPath(overrides = {}) {
   return {
+    name: "court3_raw",
     ready: true,
     readySince: "2026-01-01T00:00:00Z",
     inboundBitrateBps: 2_500_000,
@@ -344,8 +393,8 @@ function rawPath(overrides = {}) {
     sourceMode: "PUSH",
     videoCodec: "H264",
     videoProfile: "Main",
-    videoWidth: 1280,
-    videoHeight: 720,
+    videoWidth: 1920,
+    videoHeight: 1080,
     audioCodec: "AAC",
     audioSampleRateHz: 48_000,
     audioChannelCount: 2,
@@ -354,7 +403,7 @@ function rawPath(overrides = {}) {
 }
 
 function sourceEvidence() {
-  return { samplesSha256: "a".repeat(64), probesSha256: "b".repeat(64) };
+  return { configSha256: "c".repeat(64), samplesSha256: "a".repeat(64), probesSha256: "b".repeat(64) };
 }
 
 function run(command, args, env = {}) {

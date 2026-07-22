@@ -113,7 +113,7 @@ export class IncidentStore {
     return silenceFromRow(data as SilenceRow);
   }
 
-  async persist(change: IncidentChange): Promise<void> {
+  async persist(change: IncidentChange, eventId?: string): Promise<void> {
     const incident = change.incident;
     const { error } = await this.db.from("monitoring_incidents").upsert({
       id: incident.id,
@@ -139,14 +139,38 @@ export class IncidentStore {
     }, { onConflict: "id" });
     if (error) throw error;
 
-    const { error: eventError } = await this.db.from("monitoring_incident_events").insert({
+    const event = {
+      ...(eventId ? { id: eventId } : {}),
       incident_id: incident.id,
       event_type: change.eventType,
       actor: change.eventType === "ACKNOWLEDGED" ? incident.acknowledgedBy : "monitor-service",
       detail: { severity: incident.severity, status: incident.status, ...(change.detail ?? {}) },
       occurred_at: incident.lastObservedAt
-    });
+    };
+    const { error: eventError } = eventId
+      ? await this.db.from("monitoring_incident_events").upsert(event, { onConflict: "id", ignoreDuplicates: true })
+      : await this.db.from("monitoring_incident_events").insert(event);
     if (eventError) throw eventError;
+  }
+
+  async persistNotification(notification: StoredNotification): Promise<void> {
+    const { error } = await this.db.from("incident_notifications").upsert({
+      id: notification.id,
+      incident_id: notification.incidentId,
+      provider: notification.provider,
+      notification_kind: notification.kind,
+      provider_message_id: notification.providerMessageId,
+      status: notification.status,
+      submitted_at: notification.submittedAt,
+      accepted_at: notification.acceptedAt,
+      delivered_at: notification.deliveredAt,
+      acknowledged_at: notification.acknowledgedAt,
+      expired_at: notification.expiredAt,
+      escalated_at: notification.escalatedAt,
+      provider_error_code: notification.providerErrorCode,
+      updated_at: new Date().toISOString()
+    }, { onConflict: "id" });
+    if (error) throw error;
   }
 
   async checkpoint(snapshot: MonitorSnapshot): Promise<void> {
@@ -250,6 +274,17 @@ export class IncidentStore {
       if (!latest.has(notification.provider)) latest.set(notification.provider, notification);
     }
     return [...latest.values()];
+  }
+
+  async loadNotificationsForIncidents(incidentIds: string[]): Promise<StoredNotification[]> {
+    const ids = [...new Set(incidentIds)];
+    if (ids.length === 0) return [];
+    const { data, error } = await this.db.from("incident_notifications")
+      .select(NOTIFICATION_COLUMNS)
+      .in("incident_id", ids)
+      .order("submitted_at", { ascending: true });
+    if (error) throw error;
+    return (data ?? []).map((row) => notificationFromRow(row));
   }
 
   async findNotification(incidentId: string, provider: NotificationProvider, kind: NotificationKind): Promise<StoredNotification | null> {

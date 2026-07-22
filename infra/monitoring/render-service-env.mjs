@@ -32,6 +32,7 @@ for (const name of optionalNames) values[name] = process.env[name]?.trim() ?? ""
 values.MONITOR_SERVICE_BIND = "0.0.0.0";
 values.MONITOR_SERVICE_PORT = process.env.MONITOR_SERVICE_PORT?.trim() || "9110";
 values.MONITOR_SERVICE_INTERVAL_MS = process.env.MONITOR_SERVICE_INTERVAL_MS?.trim() || "1000";
+values.MONITOR_LOCAL_OUTBOX_PATH = process.env.MONITOR_LOCAL_OUTBOX_PATH?.trim() || "/var/lib/scorecheck-monitoring/incident-outbox.json";
 values.ALERTMANAGER_INTERNAL_URL = process.env.ALERTMANAGER_INTERNAL_URL?.trim() || "http://alertmanager:9093";
 values.MONITOR_COURT_COUNT = process.env.MONITOR_COURT_COUNT?.trim() || "8";
 values.MONITOR_BROWSER_ALLOWED_ORIGINS = process.env.MONITOR_BROWSER_ALLOWED_ORIGINS?.trim() || "https://score.beachvolleyballmedia.com";

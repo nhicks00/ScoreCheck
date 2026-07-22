@@ -3,11 +3,11 @@ import test from "node:test";
 
 import { DEPLOYMENT_CREATE_TIMEOUT_MS, PROJECT_CREATE_TIMEOUT_MS, rehearsalProjectName, VercelRehearsalProvider } from "./vercel-provider.mjs";
 
-function response(status, body = null, contentType = "application/json") {
+function response(status, body = null, contentType = "application/json", extraHeaders = {}) {
   return {
     status,
     ok: status >= 200 && status < 300,
-    headers: { get: (name) => name.toLowerCase() === "content-type" ? contentType : null },
+    headers: { get: (name) => name.toLowerCase() === "content-type" ? contentType : (extraHeaders[name.toLowerCase()] ?? null) },
     json: async () => body,
     text: async () => typeof body === "string" ? body : JSON.stringify(body)
   };
@@ -20,6 +20,18 @@ const repository = { slug: "nhicks00/ScoreCheck", repoId: "123" };
 const project = { id: "prj_test123", name, origin, framework: "nextjs", rootDirectory: "apps/web", repository };
 const projectResponse = { id: project.id, name, framework: "nextjs", rootDirectory: "apps/web", link: { type: "github", org: "nhicks00", repo: "ScoreCheck", repoId: 123 }, ssoProtection: null };
 const generationId = "generation-1234";
+const gitSha = "a".repeat(40);
+const deploymentUrl = `https://${name}-abc123-${teamSlug}.vercel.app`;
+const readyDeployment = {
+  id: "dpl_test123",
+  projectId: project.id,
+  name,
+  state: "READY",
+  target: "production",
+  url: deploymentUrl,
+  aliases: [new URL(origin).hostname],
+  marker: generationId
+};
 const environment = { NEXT_PUBLIC_SCORECHECK_REHEARSAL: "true", SCORECHECK_REHEARSAL_ORIGIN: origin, PROGRAM_PAGE_TOKEN: "secret" };
 
 function environmentResponse(init) {
@@ -205,7 +217,7 @@ test("retries a definite transient deployment failure only after bounded absence
 test("requires the isolated alias before accepting READY", async () => {
   let includeAlias = false;
   const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, sleep: async () => {}, fetchImpl: async () => response(200, {
-    id: "dpl_test123", projectId: project.id, name, target: "production", readyState: "READY", meta: { scorecheckRehearsalGeneration: generationId }, alias: includeAlias ? [new URL(origin).hostname] : []
+    id: "dpl_test123", projectId: project.id, name, target: "production", url: new URL(deploymentUrl).hostname, readyState: "READY", meta: { scorecheckRehearsalGeneration: generationId }, alias: includeAlias ? [new URL(origin).hostname] : []
   }) });
   await assert.rejects(() => client.waitReady({ deploymentId: "dpl_test123", project, generationId }), /without its isolated project alias/);
   includeAlias = true;
@@ -236,16 +248,23 @@ test("probes the token-gated Program document before event resources are created
     fetchImpl: async () => response(500),
     publicFetchImpl: async (url, init) => {
       requests.push({ url, init });
-      return url.includes("invalid-rehearsal-token")
+      if (init.method === "GET") return response(200, '<div class="program-root"></div>', "text/html; charset=utf-8");
+      const body = JSON.parse(init.body);
+      return body.token === "invalid-rehearsal-token"
         ? response(404, "not found", "text/plain")
-        : response(200, '<div class="program-root"></div>', "text/html; charset=utf-8");
+        : response(200, { next: "/program/court/1" }, "application/json", { "set-cookie": "scorecheck_program_session=signed; Path=/program; HttpOnly" });
     }
   });
-  const result = await client.verifyProgramPage({ project, token: "x".repeat(32) });
+  const result = await client.verifyProgramPage({ project, deployment: readyDeployment, gitSha, token: "x".repeat(32) });
   assert.equal(result.status, "healthy");
-  assert.equal(requests.length, 2);
+  assert.equal(result.origin, deploymentUrl);
+  assert.equal(result.deploymentId, "dpl_test123");
+  assert.equal(requests.length, 3);
   assert.ok(requests.every((entry) => entry.init.redirect === "error"));
   assert.ok(requests.every((entry) => !entry.init.headers.authorization));
+  assert.ok(requests.every((entry) => !entry.url.includes("token=")));
+  assert.equal(JSON.parse(requests[0].init.body).build, gitSha);
+  assert.equal(requests[1].init.headers.cookie, "scorecheck_program_session=signed");
 });
 
 test("retries a cold Program document until the isolated route is ready", async () => {
@@ -255,26 +274,42 @@ test("retries a cold Program document until the isolated route is ready", async 
     teamId: "team",
     teamSlug,
     sleep: async () => {},
-    publicFetchImpl: async (url) => {
-      if (url.includes("invalid-rehearsal-token")) return response(404, "not found", "text/plain");
+    publicFetchImpl: async (_url, init) => {
+      if (init.method === "POST") {
+        return JSON.parse(init.body).token === "invalid-rehearsal-token"
+          ? response(404, "not found", "text/plain")
+          : response(200, {}, "application/json", { "set-cookie": "scorecheck_program_session=signed; Path=/program; HttpOnly" });
+      }
       acceptedAttempts += 1;
       if (acceptedAttempts === 1) throw new DOMException("cold request timed out", "TimeoutError");
       if (acceptedAttempts === 2) return response(503, "warming", "text/plain");
       return response(200, '<div class="program-root"></div>', "text/html");
     }
   });
-  assert.equal((await client.verifyProgramPage({ project, token: "x".repeat(32) })).status, "healthy");
+  assert.equal((await client.verifyProgramPage({ project, deployment: readyDeployment, gitSha, token: "x".repeat(32) })).status, "healthy");
   assert.equal(acceptedAttempts, 3);
 });
 
 test("fails Program preflight on deployment protection, wrong content, or a weak token gate", async () => {
-  for (const [accepted, rejected] of [
-    [response(401, "protected", "text/html"), response(404, "not found", "text/plain")],
-    [response(200, "wrong page", "text/html"), response(404, "not found", "text/plain")],
-    [response(200, '<div class="program-root"></div>', "text/html"), response(200, '<div class="program-root"></div>', "text/html")]
+  const sessionAccepted = response(200, {}, "application/json", { "set-cookie": "scorecheck_program_session=signed; Path=/program; HttpOnly" });
+  for (const [sessionResponse, pageResponse, rejected] of [
+    [response(401, "protected", "text/html"), response(401, "protected", "text/html"), response(404, "not found", "text/plain")],
+    [sessionAccepted, response(200, "wrong page", "text/html"), response(404, "not found", "text/plain")],
+    [sessionAccepted, response(200, '<div class="program-root"></div>', "text/html"), response(200, {}, "application/json")]
   ]) {
-    const client = new VercelRehearsalProvider({ token: "token", teamId: "team", teamSlug, publicFetchImpl: async (url) => url.includes("invalid-rehearsal-token") ? rejected : accepted });
-    await assert.rejects(() => client.verifyProgramPage({ project, token: "x".repeat(32) }), /preflight|wrong document|token rejection/);
+    const client = new VercelRehearsalProvider({
+      token: "token",
+      teamId: "team",
+      teamSlug,
+      publicFetchImpl: async (_url, init) => {
+        if (init.method === "GET") return pageResponse;
+        return JSON.parse(init.body).token === "invalid-rehearsal-token" ? rejected : sessionResponse;
+      }
+    });
+    await assert.rejects(
+      () => client.verifyProgramPage({ project, deployment: readyDeployment, gitSha, token: "x".repeat(32), timeoutMs: 0 }),
+      /preflight|wrong document|token rejection/
+    );
   }
 });
 

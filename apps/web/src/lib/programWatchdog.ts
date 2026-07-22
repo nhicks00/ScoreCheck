@@ -133,6 +133,7 @@ export type ProgramMonitorHeartbeatBody = {
     state: ProgramVideoState;
     transport: ProgramTransport;
     connectionState: ProgramConnectionState;
+    networkPath: ProgramNetworkPath;
     framesRendered: number;
     framesPerSecond: number | null;
     width: number | null;
@@ -199,6 +200,7 @@ export type ProgramMonitorHeartbeatBody = {
 type ProgramVideoState = "waiting" | "stabilizing" | "playing" | "stalled" | "reconnecting" | "reloading" | "fatal" | "unknown";
 type ProgramTransport = "whep" | "hls" | "none";
 type ProgramConnectionState = "new" | "connecting" | "connected" | "disconnected" | "failed" | "closed" | "unknown";
+type ProgramNetworkPath = "private-vpc" | "public" | "unknown";
 type ProgramScorePhase = "IDLE" | "PREMATCH" | "LIVE" | "POSTMATCH" | "STALE" | "ERROR" | "UNKNOWN";
 
 const MAX_HEARTBEAT_TEXT = 64;
@@ -222,6 +224,7 @@ export function buildProgramMonitorHeartbeat(input: {
   streamHealth: {
     transport: string;
     connectionState: string;
+    networkPath: string;
     framesPerSecond: number | null;
     width: number | null;
     height: number | null;
@@ -295,6 +298,7 @@ export function buildProgramMonitorHeartbeat(input: {
       state: clampVideoState(input.videoState),
       transport: clampTransport(stream?.transport),
       connectionState: clampConnectionState(stream?.connectionState),
+      networkPath: clampNetworkPath(stream?.networkPath),
       framesRendered: clampCount(input.framesRendered),
       framesPerSecond: clampOptionalRange(stream?.framesPerSecond, 0, 240),
       width: clampOptionalInteger(stream?.width, 1, 8192),
@@ -391,6 +395,10 @@ function clampConnectionState(value: string | null | undefined): ProgramConnecti
   return ["new", "connecting", "connected", "disconnected", "failed", "closed"].includes(value ?? "")
     ? value as ProgramConnectionState
     : "unknown";
+}
+
+function clampNetworkPath(value: string | null | undefined): ProgramNetworkPath {
+  return value === "private-vpc" || value === "public" ? value : "unknown";
 }
 
 function clampScorePhase(value: string | null | undefined): ProgramScorePhase {

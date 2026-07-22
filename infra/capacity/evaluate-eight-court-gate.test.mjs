@@ -181,7 +181,7 @@ test("requires a fresh hard-qualified camera profile artifact for all eight cour
   assert.equal(report.checks.find((check) => check.id === "camera_profile_exact_profiles")?.pass, false);
 
   const impossibleFps = passingInput();
-  impossibleFps.cameraProfileEvidence.report.qualification.expectedProfiles[4].minimumFps = 32;
+  impossibleFps.cameraProfileEvidence.report.qualification.expectedProfiles[4].videoFrameRateMode = "25/1";
   report = evaluateEightCourtEvidence(impossibleFps);
   assert.equal(report.verdict, "FAIL");
   assert.equal(report.checks.find((check) => check.id === "camera_profile_exact_profiles")?.pass, false);
@@ -232,7 +232,7 @@ test("requires a fresh hard-qualified camera profile artifact for all eight cour
 
   const lowerCase = passingInput();
   lowerCase.cameraProfileEvidence.report.observedCourts[4].monitorProfile.videoCodec = "h264";
-  lowerCase.cameraProfileEvidence.report.observedCourts[4].probeProfile.videoCodec = "h264";
+  lowerCase.cameraProfileEvidence.report.observedCourts[4].probeProfile.source.codec = "h264";
   lowerCase.cameraProfileEvidence.report.qualification.expectedProfiles[4].videoCodec = "h264";
   report = evaluateEightCourtEvidence(lowerCase);
   assert.equal(report.verdict, "PASS", failures(report));
@@ -385,7 +385,7 @@ function passingInput() {
 
 function fixtureConfig() {
   const source = {
-    protocol: "SRT", mode: "PUSH", videoCodec: "H264", videoWidth: 1280, videoHeight: 720,
+    protocol: "SRT", mode: "PUSH", videoCodec: "H264", videoWidth: 1920, videoHeight: 1080,
     videoProfile: "Main", audioCodec: "AAC", audioSampleRateHz: 48000, audioChannelCount: 2
   };
   return {
@@ -471,7 +471,7 @@ function qualifiedCameraProfiles(config) {
       gateId: "eight-camera-profile-qualification",
       generatedAt: new Date(-500).toISOString(),
       qualification: {
-        schemaVersion: 1,
+        schemaVersion: 2,
         requiredCourts: config.courts.map((court) => court.court),
         minimumDurationSeconds: 600,
         intervalSeconds: 5,
@@ -484,9 +484,9 @@ function qualifiedCameraProfiles(config) {
           minimumRawBitrateBps: 2_000_000,
           maximumProbeOffsetSeconds: 30
         },
-        expectedProfiles: Object.fromEntries(config.courts.map((court) => [String(court.court), cameraQualificationProfile(court.expectedSourceProfile)]))
+        expectedProfiles: Object.fromEntries(config.courts.map((court) => [String(court.court), cameraQualificationProfile(court.expectedSourceProfile, court.court)]))
       },
-      sourceEvidence: { samplesSha256: "b".repeat(64), probesSha256: "c".repeat(64) },
+      sourceEvidence: { configSha256: "d".repeat(64), samplesSha256: "b".repeat(64), probesSha256: "c".repeat(64) },
       verdict: "PASS",
       window: {
         plannedStartAt: new Date(-601_000).toISOString(),
@@ -503,6 +503,7 @@ function qualifiedCameraProfiles(config) {
       },
       observedCourts: Object.fromEntries(config.courts.map((court) => [String(court.court), {
         bitrateP05: 2_500_000,
+        bitrateMaximum: 2_750_000,
         frameErrorGrowth: 0,
         byteGrowth: 1_000,
         readySince: "1969-12-31T23:49:59.000Z",
@@ -516,16 +517,25 @@ function qualifiedCameraProfiles(config) {
   };
 }
 
-function cameraQualificationProfile(profile) {
+function cameraQualificationProfile(profile, court) {
   return {
+    cameraIdentity: `camera-${court}`,
+    cameraModel: court <= 2 ? "Mevo-Core" : "AVKANS-Go",
+    cameraFirmware: "event-qualified-1.0",
     sourceProtocol: profile.protocol,
     sourceMode: profile.mode,
+    sourcePathMode: "direct-h264",
     videoCodec: profile.videoCodec,
     videoProfilesAllowed: [profile.videoProfile],
     videoWidth: profile.videoWidth,
     videoHeight: profile.videoHeight,
-    minimumFps: 29,
-    maximumFps: 31,
+    videoFrameRateMode: "30/1",
+    videoPixelFormat: "yuv420p",
+    videoFieldOrder: "progressive",
+    videoHasBFrames: 0,
+    maximumGopSeconds: 2,
+    minimumRawBitrateBps: 2_000_000,
+    maximumRawBitrateBps: 8_000_000,
     audioCodec: profile.audioCodec,
     audioSampleRateHz: profile.audioSampleRateHz,
     audioChannelCount: profile.audioChannelCount
@@ -548,14 +558,29 @@ function cameraMonitorProfile(profile) {
 
 function cameraProbeProfile(profile) {
   return {
-    videoCodec: profile.videoCodec,
-    videoProfile: profile.videoProfile,
-    videoWidth: profile.videoWidth,
-    videoHeight: profile.videoHeight,
-    videoFps: 30,
-    audioCodec: profile.audioCodec,
-    audioSampleRateHz: profile.audioSampleRateHz,
-    audioChannelCount: profile.audioChannelCount
+    profile: "1080p30",
+    width: profile.videoWidth,
+    height: profile.videoHeight,
+    sourcePathMode: "direct-h264",
+    source: {
+      codec: profile.videoCodec,
+      profile: profile.videoProfile,
+      pixelFormat: "yuv420p",
+      fieldOrder: "progressive",
+      hasBFrames: 0,
+      frameRateMode: "30/1",
+      measuredFramesPerSecond: 30,
+      audioCodec: profile.audioCodec,
+      audioSampleRateHz: profile.audioSampleRateHz,
+      audioChannelCount: profile.audioChannelCount,
+      maximumKeyframeIntervalSeconds: 2
+    },
+    browserInput: {
+      codec: "H264",
+      pixelFormat: "yuv420p",
+      fieldOrder: "progressive",
+      hasBFrames: 0
+    }
   };
 }
 
@@ -567,22 +592,22 @@ function cameraProfileReportCheckIds(courts) {
     "collector_healthy", "collector_complete", "incidents_absent", "fault_gates_absent"
   ];
   const monitorFields = ["sourceProtocol", "sourceMode", "videoCodec", "videoWidth", "videoHeight", "audioCodec", "audioSampleRateHz", "audioChannelCount"];
-  const probeSuffixes = ["video_count", "audio_count", "video_codec", "video_profile", "dimensions", "fps", "audio_codec", "audio_sample_rate", "audio_channels"];
   for (const court of courts) {
     const prefix = `court_${court}`;
     ids.push(
-      `${prefix}_present`, `${prefix}_ready`, `${prefix}_bitrate_p05`,
+      `${prefix}_present`, `${prefix}_ready`, `${prefix}_bitrate_p05`, `${prefix}_bitrate_max`,
       `${prefix}_frame_error_growth`, `${prefix}_bytes_monotonic`, `${prefix}_publisher_continuity`,
+      `${prefix}_camera_identity`,
       ...monitorFields.map((field) => `${prefix}_monitor_${field}`),
       `${prefix}_monitor_videoProfile`, `${prefix}_probe_count`, `${prefix}_probe_window`,
-      ...probeSuffixes.map((suffix) => `${prefix}_probe_1969-12-31T23:59:59.000Z_${suffix}`)
+      `${prefix}_probe_1969-12-31T23:59:59.000Z_media_contract`
     );
   }
   return ids;
 }
 
 function sourceEvidence() {
-  return { samplesSha256: "a".repeat(64), probesSha256: "b".repeat(64) };
+  return { configSha256: "c".repeat(64), samplesSha256: "a".repeat(64), probesSha256: "b".repeat(64) };
 }
 
 function providerResources(hosts) {

@@ -34,7 +34,7 @@
       "court": 1,
       "requiredBranches": ["raw", "preview", "program"],
       "ffmpegBranches": ["preview", "program"],
-      "expectedSourceProfile": { "protocol": "SRT", "mode": "PUSH", "videoCodec": "H264", "videoWidth": 1280, "videoHeight": 720, "videoProfile": "Main", "audioCodec": "AAC", "audioSampleRateHz": 48000, "audioChannelCount": 2 },
+      "expectedSourceProfile": { "protocol": "SRT", "mode": "PUSH", "videoCodec": "H264", "videoWidth": 1920, "videoHeight": 1080, "videoProfile": "Main", "audioCodec": "AAC", "audioSampleRateHz": 48000, "audioChannelCount": 2 },
       "commentaryRequired": true,
       "compositor": { "hostId": "bvm-compositor-a", "agent": "bvm-compositor-a", "service": "bvm-egress", "vcpus": 4, "allowedBaselineUnclassified": [] }
     },
@@ -42,7 +42,7 @@
       "court": 2,
       "requiredBranches": ["raw", "preview", "program"],
       "ffmpegBranches": ["preview", "program"],
-      "expectedSourceProfile": { "protocol": "SRT", "mode": "PUSH", "videoCodec": "H264", "videoWidth": 1280, "videoHeight": 720, "videoProfile": "Main", "audioCodec": "AAC", "audioSampleRateHz": 48000, "audioChannelCount": 2 },
+      "expectedSourceProfile": { "protocol": "SRT", "mode": "PUSH", "videoCodec": "H264", "videoWidth": 1920, "videoHeight": 1080, "videoProfile": "Main", "audioCodec": "AAC", "audioSampleRateHz": 48000, "audioChannelCount": 2 },
       "commentaryRequired": true,
       "compositor": { "hostId": "bvm-compositor-b", "agent": "bvm-compositor-b", "service": "bvm-egress", "vcpus": 4, "allowedBaselineUnclassified": [] }
     },
@@ -50,7 +50,7 @@
       "court": 3,
       "requiredBranches": ["raw", "preview", "program"],
       "ffmpegBranches": ["preview", "program"],
-      "expectedSourceProfile": { "protocol": "SRT", "mode": "PUSH", "videoCodec": "H264", "videoWidth": 1280, "videoHeight": 720, "videoProfile": "Main", "audioCodec": "AAC", "audioSampleRateHz": 48000, "audioChannelCount": 2 },
+      "expectedSourceProfile": { "protocol": "SRT", "mode": "PUSH", "videoCodec": "H264", "videoWidth": 1920, "videoHeight": 1080, "videoProfile": "Main", "audioCodec": "AAC", "audioSampleRateHz": 48000, "audioChannelCount": 2 },
       "commentaryRequired": false,
       "compositor": { "hostId": "bvm-compositor-c", "agent": "bvm-compositor-c", "service": "bvm-egress", "vcpus": 4, "allowedBaselineUnclassified": [] }
     },
@@ -58,7 +58,7 @@
       "court": 4,
       "requiredBranches": ["raw", "preview", "program"],
       "ffmpegBranches": ["preview", "program"],
-      "expectedSourceProfile": { "protocol": "SRT", "mode": "PUSH", "videoCodec": "H264", "videoWidth": 1280, "videoHeight": 720, "videoProfile": "Main", "audioCodec": "AAC", "audioSampleRateHz": 48000, "audioChannelCount": 2 },
+      "expectedSourceProfile": { "protocol": "SRT", "mode": "PUSH", "videoCodec": "H264", "videoWidth": 1920, "videoHeight": 1080, "videoProfile": "Main", "audioCodec": "AAC", "audioSampleRateHz": 48000, "audioChannelCount": 2 },
       "commentaryRequired": false,
       "compositor": { "hostId": "bvm-compositor-d", "agent": "bvm-compositor-d", "service": "bvm-egress", "vcpus": 4, "allowedBaselineUnclassified": [] }
     },
@@ -66,7 +66,7 @@
       "court": 5,
       "requiredBranches": ["raw", "preview", "program"],
       "ffmpegBranches": ["preview", "program"],
-      "expectedSourceProfile": { "protocol": "SRT", "mode": "PUSH", "videoCodec": "H264", "videoWidth": 1280, "videoHeight": 720, "videoProfile": "Main", "audioCodec": "AAC", "audioSampleRateHz": 48000, "audioChannelCount": 2 },
+      "expectedSourceProfile": { "protocol": "SRT", "mode": "PUSH", "videoCodec": "H264", "videoWidth": 1920, "videoHeight": 1080, "videoProfile": "Main", "audioCodec": "AAC", "audioSampleRateHz": 48000, "audioChannelCount": 2 },
       "commentaryRequired": false,
       "compositor": { "hostId": "bvm-compositor-e", "agent": "bvm-compositor-e", "service": "bvm-egress", "vcpus": 4, "allowedBaselineUnclassified": [] }
     },
@@ -74,7 +74,7 @@
       "court": 6,
       "requiredBranches": ["raw", "preview", "program"],
       "ffmpegBranches": ["preview", "program"],
-      "expectedSourceProfile": { "protocol": "SRT", "mode": "PUSH", "videoCodec": "H264", "videoWidth": 1280, "videoHeight": 720, "videoProfile": "Main", "audioCodec": "AAC", "audioSampleRateHz": 48000, "audioChannelCount": 2 },
+      "expectedSourceProfile": { "protocol": "SRT", "mode": "PUSH", "videoCodec": "H264", "videoWidth": 1920, "videoHeight": 1080, "videoProfile": "Main", "audioCodec": "AAC", "audioSampleRateHz": 48000, "audioChannelCount": 2 },
       "commentaryRequired": false,
       "compositor": { "hostId": "bvm-compositor-f", "agent": "bvm-compositor-f", "service": "bvm-egress", "vcpus": 4, "allowedBaselineUnclassified": [] }
     },
@@ -82,7 +82,7 @@
       "court": 7,
       "requiredBranches": ["raw", "preview", "program"],
       "ffmpegBranches": ["preview", "program"],
-      "expectedSourceProfile": { "protocol": "SRT", "mode": "PUSH", "videoCodec": "H264", "videoWidth": 1280, "videoHeight": 720, "videoProfile": "Main", "audioCodec": "AAC", "audioSampleRateHz": 48000, "audioChannelCount": 2 },
+      "expectedSourceProfile": { "protocol": "SRT", "mode": "PUSH", "videoCodec": "H264", "videoWidth": 1920, "videoHeight": 1080, "videoProfile": "Main", "audioCodec": "AAC", "audioSampleRateHz": 48000, "audioChannelCount": 2 },
       "commentaryRequired": false,
       "compositor": { "hostId": "bvm-compositor-g", "agent": "bvm-compositor-g", "service": "bvm-egress", "vcpus": 4, "allowedBaselineUnclassified": [] }
     },
@@ -90,7 +90,7 @@
       "court": 8,
       "requiredBranches": ["raw", "preview", "program"],
       "ffmpegBranches": ["preview", "program"],
-      "expectedSourceProfile": { "protocol": "SRT", "mode": "PUSH", "videoCodec": "H264", "videoWidth": 1280, "videoHeight": 720, "videoProfile": "Main", "audioCodec": "AAC", "audioSampleRateHz": 48000, "audioChannelCount": 2 },
+      "expectedSourceProfile": { "protocol": "SRT", "mode": "PUSH", "videoCodec": "H264", "videoWidth": 1920, "videoHeight": 1080, "videoProfile": "Main", "audioCodec": "AAC", "audioSampleRateHz": 48000, "audioChannelCount": 2 },
       "commentaryRequired": false,
       "compositor": { "hostId": "bvm-compositor-h", "agent": "bvm-compositor-h", "service": "bvm-egress", "vcpus": 4, "allowedBaselineUnclassified": [] }
     }

@@ -181,7 +181,24 @@ test("runs the production-shaped 12-Droplet lifecycle without changing critical 
   assert.equal(dns.records.get("rtc.beachvolleyballmedia.com").value, anchors.reservedIpv4.commentary);
   assert.equal(dns.records.get("monitor.beachvolleyballmedia.com").value, "203.0.113.12");
   assert.deepEqual(dns.restores, ["monitor.beachvolleyballmedia.com"]);
-  assert.equal(notifier.messages.length, 2);
+  assert.equal(notifier.messages.length, 3);
+  assert.match(notifier.messages[1].message, /Billing continues until temporary servers are deleted/);
+});
+
+test("closes coverage even when the non-blocking cost reminder cannot be delivered", async () => {
+  const notifier = new FakeNotifier();
+  const setup = fixture({ notifier });
+  await setup.controller.up(setup.manifest, setup.anchors);
+  await setup.controller.beginCoverage(setup.manifest, "START:turnkey-test");
+  notifier.failNext = 1;
+
+  const closed = await setup.controller.closeCoverage(setup.manifest, "CLOSE:turnkey-test");
+
+  assert.equal(closed.phase, "closed");
+  assert.ok(closed.coverage.closedAt);
+  const notification = closed.notifications[`coverage-closed:${closed.event}:${closed.generationId}`];
+  assert.equal(notification.status, "failed");
+  assert.match(notification.error, /injected notification failure/);
 });
 
 test("bounds an unresolved stack finalization and preserves a retryable provisioning state", async () => {

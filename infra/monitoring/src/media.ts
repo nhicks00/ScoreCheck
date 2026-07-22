@@ -106,7 +106,7 @@ export function parseMediaPath(
 ): { path: MediaPathSnapshot; byteSample: ByteSample } | null {
   const name = mediaPathName(input.name);
   if (!name) return null;
-  const match = /^court([1-8])_(raw|preview|program|calibration|monitor)$/.exec(name)!;
+  const match = /^court([1-8])_(raw|normalized|preview|program|calibration|monitor)$/.exec(name)!;
   const courtNumber = Number(match[1]);
   const branch = match[2] as MediaPathSnapshot["branch"];
   const bytesReceived = nonNegativeInteger(input.bytesReceived);
@@ -238,7 +238,7 @@ function hasCompletePathDetail(input: MediaPathApiRow): boolean {
 
 function mediaPathName(value: unknown): string | null {
   if (typeof value !== "string") return null;
-  return /^court[1-8]_(raw|preview|program|calibration|monitor)$/.test(value) ? value : null;
+  return /^court[1-8]_(raw|normalized|preview|program|calibration|monitor)$/.test(value) ? value : null;
 }
 
 function normalizeCodec(value: string): string | null {

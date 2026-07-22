@@ -83,6 +83,7 @@ export type TrustedScoreWrite = {
   currentRallyNumber?: number;
   scoreChangeObservedAt?: string;
   metadata?: Record<string, unknown>;
+  pollerLease?: { owner: string; generation: number };
 };
 
 type ScoreWriteInput = Partial<ScoreRecord> & {
@@ -189,7 +190,8 @@ export async function persistScoreAndOverlay(
     teamSide: command.teamSide,
     state: nextState,
     projectionMetadata,
-    metadata: write.metadata
+    metadata: write.metadata,
+    pollerLease: write.pollerLease
   });
 
   const savedScore = await loadCanonicalScore(match.id);

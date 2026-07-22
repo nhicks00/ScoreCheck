@@ -19,7 +19,7 @@ function snapshot(mode) {
     agent({ agentId: "spare", role: "worker", assignedCourts: [], state: "HEALTHY", nativeServices: { egress: { idle: true, canAcceptRequest: true, activeWebRequests: 0, maximumWebRequests: 1, cpuLoadRatio: 0, memoryLoadRatio: 0 } } })
   ];
   return {
-    version: 4,
+    version: 5,
     generatedAt: new Date(now).toISOString(),
     collector: { agentsExpected: 12, agentsFresh: 12 },
     event: null,
@@ -28,7 +28,7 @@ function snapshot(mode) {
     agents,
     courts: Array.from({ length: 8 }, (_, index) => {
       const court = index + 1;
-      const path = (branch) => ({ ready: branch === "raw" ? raw : active, readerCount: active ? ({ raw: 2, preview: 2, program: 1 })[branch] : 0, inboundBitrateBps: branch === "raw" && raw ? 2_500_000 : active ? 2_000_000 : 0, frameErrors: 0, sourceMode: branch === "raw" && raw ? "PUSH" : null, sourceProtocol: branch === "raw" && raw ? (court <= 2 ? "RTMP" : "SRT") : null, videoCodec: "H264", videoProfile: "Main", audioCodec: branch === "raw" ? "AAC" : "Opus", videoWidth: 1280, videoHeight: 720, audioSampleRateHz: 48_000, audioChannelCount: 2 });
+      const path = (branch) => ({ ready: branch === "raw" ? raw : active, readerCount: active ? ({ raw: 2, preview: 2, program: 1 })[branch] : 0, inboundBitrateBps: branch === "raw" && raw ? 2_500_000 : active ? 2_000_000 : 0, frameErrors: 0, sourceMode: branch === "raw" && raw ? "PUSH" : null, sourceProtocol: branch === "raw" && raw ? (court <= 2 ? "RTMP" : "SRT") : null, videoCodec: "H264", videoProfile: "Main", audioCodec: branch === "raw" ? "AAC" : "Opus", videoWidth: 1920, videoHeight: 1080, audioSampleRateHz: 48_000, audioChannelCount: 2 });
       return {
         courtNumber: court,
         paths: { raw: path("raw"), preview: path("preview"), program: path("program") },
@@ -40,7 +40,7 @@ function snapshot(mode) {
           pageLoadedAt: new Date(now - 60_000).toISOString(),
           pageBuildVersion: "rehearsal-build",
           configurationVersion: "rehearsal-config",
-          video: { state: "playing", connectionState: "connected", transport: "whep", framesRendered: 1_800, framesPerSecond: 30, framesDropped: 0, freezeCount: 0, totalFreezesDurationMs: 0, packetsLost: 0, reconnectCount: 0, reloadCount: 0 },
+          video: { state: "playing", connectionState: "connected", transport: "whep", networkPath: "private-vpc", width: 1920, height: 1080, framesRendered: 1_800, framesPerSecond: 30, framesDropped: 0, freezeCount: 0, totalFreezesDurationMs: 0, packetsLost: 0, reconnectCount: 0, reloadCount: 0 },
           commentary: {
             configured: true, roomConnected: true, participantCount: 1, audioTrackCount: 1, mutedAudioTrackCount: 0,
             rmsDb: -20, clippedSampleRatio: 0, secondsSinceAudio: 0, packetsLost: 0, cameraTrackPresent: true,
@@ -57,7 +57,7 @@ test("accepts a completely idle isolated preflight", () => {
   assert.deepEqual(preflightProblems(snapshot("idle"), now), []);
 });
 
-test("hard-cuts the rehearsal monitor fetch contract to version 4", async () => {
+test("hard-cuts the rehearsal monitor fetch contract to version 5", async () => {
   const verifier = (value) => new RehearsalVerifier({
     monitorOrigin: "https://monitor.example.com",
     monitorToken: "x".repeat(24),
@@ -202,7 +202,7 @@ test("uses a reset-safe quality window while preserving historical startup count
     youtube: {
       getStream: async (id) => {
         const court = Number(id.replace("stream", ""));
-        return { id, court, title: `ScoreCheck Court ${court} Test Stream`, isReusable: true, streamStatus: "active", healthStatus: "good", configurationIssues: [] };
+        return { id, court, title: `ScoreCheck Production Camera ${court} Auto Stream`, isReusable: true, streamStatus: "active", healthStatus: "good", configurationIssues: [] };
       }
     },
     sampler: { inspect: async () => ({ pid: 42 }) },
@@ -254,7 +254,7 @@ test("waits through transient YouTube health propagation before accepting a full
         const court = Number(id.replace("stream", ""));
         if (court === 8) providerAttempt += 1;
         return {
-          id, court, title: `ScoreCheck Court ${court} Test Stream`, isReusable: true,
+          id, court, title: `ScoreCheck Production Camera ${court} Auto Stream`, isReusable: true,
           streamStatus: "active", healthStatus: court === 8 && providerAttempt === 1 ? "starting" : "good", configurationIssues: []
         };
       }
@@ -368,7 +368,7 @@ test("requires each persistent YouTube stream to be exact, reusable, active, and
     courts: Array.from({ length: 8 }, (_, index) => ({
       court: index + 1,
       streamId: `stream${index + 1}`,
-      title: `ScoreCheck Court ${index + 1} Test Stream`,
+      title: `ScoreCheck Production Camera ${index + 1} Auto Stream`,
       isReusable: true,
       streamStatus: "active",
       healthStatus: "good",

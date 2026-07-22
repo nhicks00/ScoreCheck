@@ -11,7 +11,7 @@ import {
   syncObservation,
   type PreviewTimingMessage
 } from "../lib/commentarySync";
-import { intervalJitterSample, streamTransportDelayMs, type StreamTimingSample } from "../lib/rtcTiming";
+import { classifyRtcNetworkPath, intervalJitterSample, streamTransportDelayMs, type StreamTimingSample } from "../lib/rtcTiming";
 
 const timing = (overrides: Partial<StreamTimingSample> = {}): StreamTimingSample => ({
   version: 1,
@@ -20,6 +20,18 @@ const timing = (overrides: Partial<StreamTimingSample> = {}): StreamTimingSample
   jitterBufferTargetMs: 60,
   rttMs: 40,
   ...overrides
+});
+
+describe("WebRTC network path classification", () => {
+  it("distinguishes private VPC candidates from public and unavailable candidates", () => {
+    expect(classifyRtcNetworkPath("10.120.0.10")).toBe("private-vpc");
+    expect(classifyRtcNetworkPath("172.31.4.9")).toBe("private-vpc");
+    expect(classifyRtcNetworkPath("192.168.8.4")).toBe("private-vpc");
+    expect(classifyRtcNetworkPath("203.0.113.10")).toBe("public");
+    expect(classifyRtcNetworkPath("2001:db8::1")).toBe("public");
+    expect(classifyRtcNetworkPath("candidate.local")).toBe("unknown");
+    expect(classifyRtcNetworkPath(null)).toBe("unknown");
+  });
 });
 
 describe("commentary sync clock", () => {

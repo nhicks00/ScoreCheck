@@ -47,10 +47,13 @@ const config = {
   livekitUrl: process.env.LIVEKIT_URL ?? 'http://127.0.0.1:7880',
   livekitApiKey: requireEnv('LIVEKIT_API_KEY'),
   livekitApiSecret: requireEnv('LIVEKIT_API_SECRET'),
-  /** Court N's scene: `${programPageBaseUrl}/${n}?token=${programPageToken}` */
-  programPageBaseUrl: requireEnv('PROGRAM_PAGE_BASE_URL'),
+  /** Immutable renderer deployment origin plus `/program`. */
+  programPageBaseUrl: requireProgramBaseUrl(requireEnv('PROGRAM_PAGE_BASE_URL')),
   programPageToken: requireEnv('PROGRAM_PAGE_TOKEN'),
+  programRendererGitSha: requireGitSha(requireEnv('PROGRAM_RENDERER_GIT_SHA')),
+  programRendererDeploymentId: requireDeploymentId(requireEnv('PROGRAM_RENDERER_DEPLOYMENT_ID')),
   youtubeRtmpsBase: process.env.YOUTUBE_RTMPS_BASE ?? 'rtmps://a.rtmps.youtube.com/live2',
+  outputProfile: requireOutputProfile(process.env.PRODUCTION_OUTPUT_PROFILE),
 };
 
 const egress = new EgressClient(config.livekitUrl, config.livekitApiKey, config.livekitApiSecret);
@@ -59,31 +62,72 @@ const egress = new EgressClient(config.livekitUrl, config.livekitApiKey, config.
 
 /** Program-page URL for a court (the scene the egress captures). */
 function programPageUrl(court: number): string {
-  return `${config.programPageBaseUrl}/${court}?token=${config.programPageToken}`;
+  const query = new URLSearchParams({
+    court: String(court),
+    build: config.programRendererGitSha,
+    deployment: config.programRendererDeploymentId,
+  });
+  return `${config.programPageBaseUrl}/bootstrap?${query.toString()}#token=${encodeURIComponent(config.programPageToken)}`;
 }
 
 /** Same URL with the token blanked, safe for logs/API responses. */
 function redactedProgramPageUrl(court: number): string {
-  return `${config.programPageBaseUrl}/${court}?token=<redacted>`;
+  const query = new URLSearchParams({
+    court: String(court),
+    build: config.programRendererGitSha,
+    deployment: config.programRendererDeploymentId,
+  });
+  return `${config.programPageBaseUrl}/bootstrap?${query.toString()}#token=<redacted>`;
 }
 
+const selectedOutput = config.outputProfile === '1080p60'
+  ? { framerate: 60, videoBitrate: 12_000 }
+  : { framerate: 30, videoBitrate: 10_000 };
+
 const encodingOptions = new EncodingOptions({
-  width: 1280,
-  height: 720,
-  framerate: 30,
+  width: 1920,
+  height: 1080,
+  framerate: selectedOutput.framerate,
   audioCodec: AudioCodec.AAC,
   audioBitrate: 128,
   audioFrequency: 48_000,
   videoCodec: VideoCodec.H264_HIGH,
-  videoBitrate: 4_000,
+  videoBitrate: selectedOutput.videoBitrate,
   keyFrameInterval: 2,
 });
+
+function requireOutputProfile(value: string | undefined): '1080p30' | '1080p60' {
+  if (value === '1080p30' || value === '1080p60') return value;
+  throw new Error('PRODUCTION_OUTPUT_PROFILE must be 1080p30 or 1080p60');
+}
+
+function requireProgramBaseUrl(value: string): string {
+  const url = new URL(value);
+  if (url.protocol !== 'https:' || !url.hostname.endsWith('.vercel.app') || url.pathname !== '/program' || url.search || url.hash) {
+    throw new Error('PROGRAM_PAGE_BASE_URL must be an immutable generated Vercel deployment URL ending in /program');
+  }
+  return url.toString().replace(/\/$/, '');
+}
+
+function requireGitSha(value: string): string {
+  if (!/^[a-f0-9]{40}$/.test(value)) throw new Error('PROGRAM_RENDERER_GIT_SHA must be an exact 40-character commit');
+  return value;
+}
+
+function requireDeploymentId(value: string): string {
+  if (!/^dpl_[A-Za-z0-9]+$/.test(value)) throw new Error('PROGRAM_RENDERER_DEPLOYMENT_ID is invalid');
+  return value;
+}
 
 /** Best-effort reverse map: which court does an active egress belong to? */
 function courtForEgress(info: EgressInfo): number | undefined {
   if (info.request.case !== 'web') return undefined;
-  const match = info.request.value.url.match(/\/(\d+)(?:\?|$)/);
-  return match?.[1] !== undefined ? Number.parseInt(match[1], 10) : undefined;
+  try {
+    const value = new URL(info.request.value.url).searchParams.get('court');
+    return value && /^\d+$/.test(value) ? Number.parseInt(value, 10) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function egressSummary(info: EgressInfo): Record<string, unknown> {

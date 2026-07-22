@@ -143,7 +143,7 @@ export function metricValuesByPath(text: string, metricName: string): Map<string
     const labels = line.slice(metricName.length + 1, labelsEnd);
     const name = parsePrometheusLabel(labels, "name") ?? parsePrometheusLabel(labels, "path");
     const value = Number(line.slice(labelsEnd + 1).trim().split(/\s+/)[0]);
-    if (name && /^court[1-8]_(raw|preview|program|calibration|monitor)$/.test(name) && Number.isFinite(value) && value >= 0) {
+    if (name && /^court[1-8]_(raw|normalized|preview|program|calibration|monitor)$/.test(name) && Number.isFinite(value) && value >= 0) {
       values.set(name, value);
     }
   }

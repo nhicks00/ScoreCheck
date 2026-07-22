@@ -4,7 +4,7 @@ import test from "node:test";
 import { buildEventctlInvocation, validateProfile } from "./eventctl.mjs";
 
 const profile = {
-  schemaVersion: 5,
+  schemaVersion: 8,
   manifest: "/protected/event/manifest.json",
   state: "/protected/event/state.json",
   anchors: "/protected/endpoint-anchors.json",
@@ -15,6 +15,9 @@ const profile = {
   observabilityTlsState: "/protected/retained-observability-tls/state",
   credentialsEnv: "/protected/provider.env",
   lifecycleAttestation: "/protected/lifecycle-attestation.json",
+  rendererBinding: "/protected/event/renderer-binding.json",
+  venueProfile: "/protected/event/venue-profile.json",
+  commentaryQualification: "/protected/event/commentary-qualification.json",
   evidence: "/protected/event/evidence",
   rehearsalEvidence: null
 };

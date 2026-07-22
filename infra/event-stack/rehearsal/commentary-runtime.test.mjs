@@ -131,6 +131,19 @@ test("program mixer keeps each commentary track on the supported muted media sin
   assert.match(source, /state\.playbackElement\.remove\(\)/u);
 });
 
+test("program mixer keeps an inaudible source connected for output-track continuity", async () => {
+  const source = await readFile(new URL(
+    "../../../apps/web/src/app/program/court/[courtNumber]/ProgramAudioMixer.tsx",
+    import.meta.url
+  ), "utf8");
+  assert.match(source, /const silenceSource = context\.createConstantSource\(\)/u);
+  assert.match(source, /silenceSource\.connect\(silenceGain\)\.connect\(context\.destination\)/u);
+  assert.match(source, /silenceSource\.start\(\)/u);
+  assert.match(source, /silenceSource\.stop\(\)/u);
+  assert.match(source, /silenceSource\.disconnect\(\)/u);
+  assert.match(source, /silenceGain\.disconnect\(\)/u);
+});
+
 test("retries one transient commentary join only after reloading the isolated page", async () => {
   let liveWaits = 0;
   let reloads = 0;
@@ -325,7 +338,7 @@ test("accumulates commentary cadence across an in-window peer connection replace
       stats({ key: "new", packets: 25, bytes: 2_500, energy: 1.2, durationSeconds: 0.05 })
     ]
   });
-  const result = await verifyLocalMediaCadence(page, { durationMs: 40, intervalMs: 10 });
+  const result = await verifyLocalMediaCadence(page, { durationMs: 80, intervalMs: 10 });
   assert.equal(result.outboundPackets, 40);
   assert.equal(result.outboundBytes, 4_000);
   assert.equal(result.audioEnergy, 3);

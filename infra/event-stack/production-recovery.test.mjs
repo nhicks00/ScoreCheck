@@ -3,9 +3,30 @@ import assert from "node:assert/strict";
 
 import { buildEventManifest, loadManifestInputs } from "./event-manifest.mjs";
 import { buildProductionMaterial, buildProductionSecretFiles, migrateProductionMaterial } from "./production-recovery.mjs";
+import { createSyntheticRehearsalVenueProfile } from "./venue-admission.mjs";
 
 const inputs = await loadManifestInputs();
 const manifest = buildEventManifest({ event: "production-recovery-test", kind: "production", destroyAfter: "2026-08-01", ...inputs });
+const venueProfile = createSyntheticRehearsalVenueProfile(manifest.event);
+venueProfile.cameras[1] = {
+  ...venueProfile.cameras[1],
+  sourcePathMode: "isolated-hevc-normalizer",
+  sourceCodec: "H265"
+};
+const renderer = {
+  schemaVersion: 1,
+  provider: "vercel",
+  origin: "https://scorecheck-abc123-team.vercel.app",
+  deploymentId: "dpl_renderer123",
+  gitSha: "a".repeat(40),
+  assetNamespace: "dpl_renderer123",
+  contracts: {
+    programSession: "program-session-v1",
+    overlayState: "overlay-state-v1",
+    commentary: "commentary-v1",
+    browserHeartbeat: "browser-heartbeat-v5"
+  }
+};
 
 function fixture() {
   const globalConfig = {
@@ -67,18 +88,27 @@ test("renders the exact 12-host production secret contract and strips stale targ
   const values = fixture();
   const material = buildProductionMaterial(values);
   const agentTokens = Object.fromEntries(manifest.droplets.map((spec, index) => [spec.name, `agent-${index}-abcdefghijklmnopqrstuvwxyz123456`]));
-  const files = buildProductionSecretFiles({ manifest, material, monitoringEnvironment: values.monitoringEnvironment, agentTokens });
+  const files = buildProductionSecretFiles({ manifest, material, monitoringEnvironment: values.monitoringEnvironment, renderer, venueProfile, agentTokens });
   assert.equal(Object.keys(files).filter((name) => name.startsWith("compositors/")).length, 9);
   assert.match(files["ingest.env"], /MEDIAMTX_COURT_8_RAW_SOURCE="srt:\/\//);
+  assert.match(files["ingest.env"], /MEDIAMTX_COURT_1_BROWSER_SOURCE="raw"/);
+  assert.match(files["ingest.env"], /MEDIAMTX_COURT_2_BROWSER_SOURCE="normalized"/);
   assert.doesNotMatch(files["observability.env"], /MONITOR_AGENT_TARGETS/);
   assert.doesNotMatch(files["observability.env"], /TWILIO_/);
   assert.match(files["compositors/bvm-compositor-h.env"], /COURT_8_YOUTUBE_KEY=/);
   assert.match(files["compositors/bvm-compositor-h.env"], /COURT_8_YOUTUBE_STREAM_ID=/);
   assert.match(files["compositors/bvm-compositor-h.env"], /YOUTUBE_STREAM_RESOLUTION="variable"/);
   assert.match(files["compositors/bvm-compositor-h.env"], /PRODUCTION_OUTPUT_PROFILES="1080p30,1080p60"/);
+  assert.match(files["compositors/bvm-compositor-h.env"], /PROGRAM_PAGE_BASE_URL="https:\/\/scorecheck-abc123-team\.vercel\.app\/program"/);
+  assert.match(files["compositors/bvm-compositor-h.env"], /PROGRAM_RENDERER_DEPLOYMENT_ID="dpl_renderer123"/);
+  assert.match(files["compositors/bvm-compositor-b.env"], /CAMERA_NORMALIZER_ENABLED="true"/);
+  assert.match(files["compositors/bvm-compositor-b.env"], /CAMERA_SOURCE_CODEC="H265"/);
+  assert.match(files["compositors/bvm-compositor-a.env"], /CAMERA_NORMALIZER_ENABLED="false"/);
+  assert.match(files["observability.env"], /MONITOR_BROWSER_ALLOWED_ORIGINS="https:\/\/scorecheck-abc123-team\.vercel\.app"/);
   assert.doesNotMatch(files["compositors/bvm-compositor-h.env"], /EGRESS_(WIDTH|HEIGHT|FRAMERATE|VIDEO_BITRATE)/);
   assert.doesNotMatch(files["compositors/bvm-compositor-h.env"], /COURT_7_YOUTUBE_KEY=/);
   assert.doesNotMatch(files["compositors/bvm-compositor-spare.env"], /COURT_[1-8]_YOUTUBE_KEY=/);
+  assert.doesNotMatch(files["compositors/bvm-compositor-spare.env"], /CAMERA_NUMBER=/);
 });
 
 test("fails closed on duplicate output ownership, incomplete camera credentials, and Twilio residue", () => {

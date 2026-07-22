@@ -7,7 +7,14 @@ SSH_HOST="${COMPOSITOR_SSH_HOST:?COMPOSITOR_SSH_HOST is required}"
 SSH_KEY="${COMPOSITOR_SSH_KEY:-$HOME/.ssh/scorecheck_do}"
 REMOTE_DIR="${COMPOSITOR_REMOTE_DIR:-/opt/compositor}"
 ENV_FILE="${COMPOSITOR_ENV_FILE:?COMPOSITOR_ENV_FILE is required}"
+INGEST_PRIVATE_IP="${COMPOSITOR_INGEST_PRIVATE_IP:?COMPOSITOR_INGEST_PRIVATE_IP is required}"
+INGEST_HOST="${COMPOSITOR_INGEST_HOST:?COMPOSITOR_INGEST_HOST is required}"
 KNOWN_HOSTS="${SCORECHECK_SSH_KNOWN_HOSTS:?SCORECHECK_SSH_KNOWN_HOSTS is required}"
+
+[[ "$INGEST_PRIVATE_IP" =~ ^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.) ]] \
+  || { echo "error: COMPOSITOR_INGEST_PRIVATE_IP must be a private IPv4 address" >&2; exit 1; }
+[[ "$INGEST_HOST" =~ ^[a-z0-9.-]+$ && "$INGEST_HOST" == *.* ]] \
+  || { echo "error: COMPOSITOR_INGEST_HOST must be a DNS hostname" >&2; exit 1; }
 
 for command in rsync ssh stat; do
   command -v "$command" >/dev/null 2>&1 || { echo "error: $command is required" >&2; exit 1; }
@@ -29,12 +36,16 @@ rsync -a --delete -e "$rsync_shell" \
   "$SCRIPT_DIR/chrome-sandboxing-seccomp-profile.json" \
   "$SCRIPT_DIR/lib.sh" \
   "$SCRIPT_DIR/list-egress.sh" \
+  "$SCRIPT_DIR/normalize-camera.sh" \
+  "$SCRIPT_DIR/qualify-output.sh" \
   "$SCRIPT_DIR/start-court.sh" \
+  "$SCRIPT_DIR/start-normalizer.sh" \
+  "$SCRIPT_DIR/stop-normalizer.sh" \
   "$SCRIPT_DIR/stop-court.sh" \
   "$SSH_HOST:$REMOTE_DIR/.incoming/"
 rsync -a -e "$rsync_shell" "$ENV_FILE" "$SSH_HOST:$REMOTE_DIR/.incoming/.env"
 
-ssh "${ssh_options[@]}" "$SSH_HOST" "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE'
+ssh "${ssh_options[@]}" "$SSH_HOST" "REMOTE_DIR='$REMOTE_DIR' MEDIAMTX_PRIVATE_HOST='$INGEST_PRIVATE_IP' MEDIAMTX_PUBLIC_HOST='$INGEST_HOST' bash -s" <<'REMOTE'
 set -euo pipefail
 cd "$REMOTE_DIR"
 retry_docker_operation() {
@@ -58,22 +69,35 @@ timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 had_previous=0
 if [[ -f docker-compose.yml && -f .env ]]; then
   mkdir -p backups
-  tar -czf "backups/compositor-$timestamp.tar.gz" \
-    docker-compose.yml livekit.yaml egress.yaml headless_shell \
-    chrome-sandboxing-seccomp-profile.json lib.sh list-egress.sh \
-    start-court.sh stop-court.sh .env
+  backup_files=(docker-compose.yml livekit.yaml egress.yaml headless_shell
+    chrome-sandboxing-seccomp-profile.json lib.sh list-egress.sh
+    qualify-output.sh start-court.sh stop-court.sh .env)
+  for optional in normalize-camera.sh start-normalizer.sh stop-normalizer.sh; do
+    [[ -f "$optional" ]] && backup_files+=("$optional")
+  done
+  tar -czf "backups/compositor-$timestamp.tar.gz" "${backup_files[@]}"
   had_previous=1
 fi
 
 for file in docker-compose.yml livekit.yaml egress.yaml chrome-sandboxing-seccomp-profile.json; do
   install -m 0644 ".incoming/$file" "$file"
 done
-for file in headless_shell lib.sh list-egress.sh start-court.sh stop-court.sh; do
+for file in headless_shell lib.sh list-egress.sh normalize-camera.sh qualify-output.sh start-court.sh start-normalizer.sh stop-normalizer.sh stop-court.sh; do
   install -m 0755 ".incoming/$file" "$file"
 done
+install -d -m 0700 evidence
+install -d -m 0755 /var/lib/scorecheck-monitoring/ffmpeg
 install -m 0600 .incoming/.env .env
+if grep -Eq '^MEDIAMTX_(PRIVATE_HOST|PUBLIC_HOST)=' .env; then
+  echo "Compositor source environment unexpectedly owns an ingest network binding." >&2
+  exit 1
+fi
+printf 'MEDIAMTX_PRIVATE_HOST="%s"\n' "$MEDIAMTX_PRIVATE_HOST" >>.env
+printf 'MEDIAMTX_PUBLIC_HOST="%s"\n' "$MEDIAMTX_PUBLIC_HOST" >>.env
 docker compose config -q
 retry_docker_operation docker compose pull --quiet
+retry_docker_operation docker compose --profile hevc-normalizer pull --quiet normalizer
+docker compose --profile hevc-normalizer rm -sf normalizer >/dev/null 2>&1 || true
 
 if ! docker compose up -d --remove-orphans; then
   if [[ "$had_previous" -eq 1 ]]; then

@@ -29,7 +29,7 @@ test("starts one Egress, adopts it on resume, and proves second admission reject
   assert.equal(started.adopted, false);
   assert.equal((await runtime.ensureStarted({ host: "198.51.100.1", court: 1, expectedId: "EG_started" })).adopted, true);
   assert.deepEqual(await runtime.proveSecondStartRejected({ host: "198.51.100.1", court: 1, expectedId: "EG_started" }), { rejected: true, activeId: "EG_started" });
-  assert.ok(calls.some((entry) => entry.includes("start-court.sh 1 720p30")));
+  assert.ok(calls.some((entry) => entry.includes("start-court.sh 1 1080p30")));
 });
 
 test("stops only the recorded Egress id and is resumable after confirmed absence", async () => {

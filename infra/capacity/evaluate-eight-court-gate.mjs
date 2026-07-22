@@ -487,12 +487,13 @@ function evaluateCameraProfileEvidence(checks, config, artifact, startEpochSecon
     && requiredCheckIds.every((id) => reportCheckIds.includes(id))
     && dynamicProbeChecksComplete;
   check(checks, "camera_profile_artifact_digest", typeof artifact?.sha256 === "string" && SHA256.test(artifact.sha256), artifact?.sha256 ?? null, "64 lowercase hexadecimal characters");
-  check(checks, "camera_profile_report_schema", report?.schemaVersion === 2 && qualification?.schemaVersion === 1, {
+  check(checks, "camera_profile_report_schema", report?.schemaVersion === 2 && qualification?.schemaVersion === 2, {
     report: report?.schemaVersion ?? null,
     qualification: qualification?.schemaVersion ?? null
-  }, { report: 2, qualification: 1 });
+  }, { report: 2, qualification: 2 });
   check(checks, "camera_profile_gate_identity", report?.gateId === config.expectedCameraProfileGateId, report?.gateId ?? null, config.expectedCameraProfileGateId);
-  check(checks, "camera_profile_source_digests", SHA256.test(report?.sourceEvidence?.samplesSha256 ?? "")
+  check(checks, "camera_profile_source_digests", SHA256.test(report?.sourceEvidence?.configSha256 ?? "")
+    && SHA256.test(report?.sourceEvidence?.samplesSha256 ?? "")
     && SHA256.test(report?.sourceEvidence?.probesSha256 ?? ""), report?.sourceEvidence ?? null, "lowercase SHA-256 for sanitized sample and probe artifacts");
   check(checks, "camera_profile_report_pass", report?.verdict === "PASS" && reportChecksComplete, {
     verdict: report?.verdict ?? null,
@@ -597,10 +598,14 @@ function evaluateCameraProfileEvidence(checks, config, artifact, startEpochSecon
       && probeEpochSeconds <= profileEnd + maximumProbeOffsetSeconds;
     const matches = sourceProfilesEqual(sourceProfile, court.expectedSourceProfile)
       && cameraQualificationProfileMatches(expectedProfile, court.expectedSourceProfile)
-      && Array.isArray(probeFps) && probeFps.length === 1 && probeFps.every((fps) => Number.isFinite(fps) && fps >= 29 && fps <= 31)
-      && probeFps[0] === probeProfile?.videoFps
+      && expectedProfile?.cameraIdentity === `camera-${court.court}`
+      && typeof expectedProfile?.cameraModel === "string" && expectedProfile.cameraModel.length > 0
+      && typeof expectedProfile?.cameraFirmware === "string" && expectedProfile.cameraFirmware.length > 0
+      && Array.isArray(probeFps) && probeFps.length === 1 && probeFps.every(isProductionFrameRate)
+      && probeFps[0] === probeProfile?.source?.measuredFramesPerSecond
       && probeInWindow
       && Number.isFinite(courtEvidence?.bitrateP05) && courtEvidence.bitrateP05 >= thresholds?.minimumRawBitrateBps
+      && Number.isFinite(courtEvidence?.bitrateMaximum) && courtEvidence.bitrateMaximum <= expectedProfile?.maximumRawBitrateBps
       && courtEvidence?.frameErrorGrowth === 0
       && Number.isFinite(courtEvidence?.byteGrowth) && courtEvidence.byteGrowth > 0
       && Number.isFinite(Date.parse(courtEvidence?.readySince)) && Date.parse(courtEvidence.readySince) / 1_000 <= profileStart
@@ -610,6 +615,7 @@ function evaluateCameraProfileEvidence(checks, config, artifact, startEpochSecon
     observed.push({
       court: court.court,
       bitrateP05: courtEvidence?.bitrateP05 ?? null,
+      bitrateMaximum: courtEvidence?.bitrateMaximum ?? null,
       frameErrorGrowth: courtEvidence?.frameErrorGrowth ?? null,
       byteGrowth: courtEvidence?.byteGrowth ?? null,
       readySince: courtEvidence?.readySince ?? null,
@@ -634,8 +640,10 @@ function cameraProfileRequiredCheckIds(courts) {
     const prefix = `court_${court}`;
     ids.push(
       `${prefix}_present`, `${prefix}_ready`, `${prefix}_bitrate_p05`,
+      `${prefix}_bitrate_max`,
       `${prefix}_frame_error_growth`, `${prefix}_bytes_monotonic`,
-      `${prefix}_publisher_continuity`, ...CAMERA_MONITOR_FIELDS.map((field) => `${prefix}_monitor_${field}`),
+      `${prefix}_publisher_continuity`, `${prefix}_camera_identity`,
+      ...CAMERA_MONITOR_FIELDS.map((field) => `${prefix}_monitor_${field}`),
       `${prefix}_monitor_videoProfile`, `${prefix}_probe_count`, `${prefix}_probe_window`
     );
   }
@@ -644,20 +652,10 @@ function cameraProfileRequiredCheckIds(courts) {
 
 function cameraProfileProbeChecksComplete(checkIds, court, probeSampledAt) {
   const prefix = `court_${court}_probe_`;
-  const fixed = new Set([`${prefix}count`, `${prefix}window`]);
-  const dynamic = checkIds.filter((id) => typeof id === "string" && id.startsWith(prefix) && !fixed.has(id));
-  const suffixes = [
-    "video_count", "audio_count", "video_codec", "video_profile", "dimensions",
-    "fps", "audio_codec", "audio_sample_rate", "audio_channels"
-  ];
-  if (dynamic.length !== suffixes.length) return false;
-  const stems = suffixes.map((suffix) => {
-    const matches = dynamic.filter((id) => id.endsWith(`_${suffix}`));
-    return matches.length === 1 ? matches[0].slice(0, -(`_${suffix}`.length)) : null;
-  });
-  const expectedStem = `${prefix}${probeSampledAt}`;
+  const expected = `${prefix}${probeSampledAt}_media_contract`;
   return Number.isFinite(Date.parse(probeSampledAt))
-    && stems.every((stem) => typeof stem === "string" && stem === expectedStem);
+    && checkIds.filter((id) => typeof id === "string" && id.startsWith(prefix) && id.endsWith("_media_contract")).length === 1
+    && checkIds.filter((id) => id === expected).length === 1;
 }
 
 function cameraMonitorProfile(profile) {
@@ -685,22 +683,34 @@ function cameraQualificationProfileMatches(observed, expected) {
     && observed?.videoWidth === expected?.videoWidth
     && observed?.videoHeight === expected?.videoHeight
     && Array.isArray(observed?.videoProfilesAllowed) && observed.videoProfilesAllowed.some((profile) => sourceFieldEqual(profile, expected?.videoProfile))
-    && Number.isFinite(observed?.minimumFps) && observed.minimumFps >= 29
-    && Number.isFinite(observed?.maximumFps) && observed.maximumFps >= observed.minimumFps && observed.maximumFps <= 31
+    && new Set(["30000/1001", "30/1", "60000/1001", "60/1"]).has(observed?.videoFrameRateMode)
+    && observed?.videoWidth === 1920 && observed?.videoHeight === 1080
+    && observed?.videoPixelFormat === "yuv420p" && observed?.videoFieldOrder === "progressive"
+    && observed?.maximumGopSeconds === 2
+    && Number.isFinite(observed?.minimumRawBitrateBps) && observed.minimumRawBitrateBps >= 2_000_000
+    && Number.isFinite(observed?.maximumRawBitrateBps) && observed.maximumRawBitrateBps >= observed.minimumRawBitrateBps
     && sourceFieldEqual(observed?.audioCodec, expected?.audioCodec)
     && observed?.audioSampleRateHz === expected?.audioSampleRateHz
     && observed?.audioChannelCount === expected?.audioChannelCount;
 }
 
 function cameraProbeProfileMatches(observed, expected) {
-  return sourceFieldEqual(observed?.videoCodec, expected?.videoCodec)
-    && sourceFieldEqual(observed?.videoProfile, expected?.videoProfile)
-    && observed?.videoWidth === expected?.videoWidth
-    && observed?.videoHeight === expected?.videoHeight
-    && Number.isFinite(observed?.videoFps) && observed.videoFps >= 29 && observed.videoFps <= 31
-    && sourceFieldEqual(observed?.audioCodec, expected?.audioCodec)
-    && observed?.audioSampleRateHz === expected?.audioSampleRateHz
-    && observed?.audioChannelCount === expected?.audioChannelCount;
+  return sourceFieldEqual(observed?.source?.codec, expected?.videoCodec)
+    && sourceFieldEqual(observed?.source?.profile, expected?.videoProfile)
+    && observed?.width === expected?.videoWidth
+    && observed?.height === expected?.videoHeight
+    && isProductionFrameRate(observed?.source?.measuredFramesPerSecond)
+    && sourceFieldEqual(observed?.source?.audioCodec, expected?.audioCodec)
+    && observed?.source?.audioSampleRateHz === expected?.audioSampleRateHz
+    && observed?.source?.audioChannelCount === expected?.audioChannelCount
+    && observed?.browserInput?.codec === "H264"
+    && observed?.browserInput?.pixelFormat === "yuv420p"
+    && observed?.browserInput?.fieldOrder === "progressive"
+    && observed?.browserInput?.hasBFrames === 0;
+}
+
+function isProductionFrameRate(value) {
+  return [30_000 / 1_001, 30, 60_000 / 1_001, 60].some((allowed) => Math.abs(value - allowed) <= 0.001);
 }
 
 function sourceFieldEqual(left, right) {

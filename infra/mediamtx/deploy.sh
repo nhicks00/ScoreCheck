@@ -27,7 +27,7 @@ rsync_shell="ssh -i $SSH_KEY -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHos
 
 ssh "${ssh_options[@]}" "$SSH_HOST" "mkdir -p '$REMOTE_DIR/.incoming' '$REMOTE_DIR/fonts' && install -d -m 0755 /var/lib/scorecheck-monitoring/ffmpeg"
 rsync -a -e "$rsync_shell" \
-  "$SCRIPT_DIR/docker-compose.yml" "$SCRIPT_DIR/scorecheck-ffmpeg-runner.sh" "$GENERATED" "$GENERATED_CADDY" \
+  "$SCRIPT_DIR/docker-compose.yml" "$SCRIPT_DIR/scorecheck-ffmpeg-runner.sh" "$SCRIPT_DIR/scorecheck-preview-runner.sh" "$GENERATED" "$GENERATED_CADDY" \
   "$SSH_HOST:$REMOTE_DIR/.incoming/"
 
 ssh "${ssh_options[@]}" "$SSH_HOST" "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE'
@@ -55,7 +55,7 @@ mkdir -p backups
 had_previous=0
 compose_changed=1
 caddy_changed=1
-installed_files=(docker-compose.yml mediamtx.yml Caddyfile scorecheck-ffmpeg-runner.sh)
+installed_files=(docker-compose.yml mediamtx.yml Caddyfile scorecheck-ffmpeg-runner.sh scorecheck-preview-runner.sh)
 existing_files=0
 for path in "${installed_files[@]}"; do
   [[ -f "$path" ]] && existing_files=$((existing_files + 1))
@@ -69,6 +69,7 @@ if [[ "$existing_files" -eq "${#installed_files[@]}" ]]; then
   cp mediamtx.yml "backups/mediamtx.$timestamp.yml"
   cp Caddyfile "backups/Caddyfile.$timestamp"
   cp scorecheck-ffmpeg-runner.sh "backups/scorecheck-ffmpeg-runner.$timestamp.sh"
+  cp scorecheck-preview-runner.sh "backups/scorecheck-preview-runner.$timestamp.sh"
   cmp -s docker-compose.yml .incoming/docker-compose.yml && compose_changed=0
   cmp -s Caddyfile .incoming/Caddyfile && caddy_changed=0
   had_previous=1
@@ -79,12 +80,14 @@ restore_previous() {
   cp "backups/mediamtx.$timestamp.yml" mediamtx.yml
   cp "backups/Caddyfile.$timestamp" Caddyfile
   cp "backups/scorecheck-ffmpeg-runner.$timestamp.sh" scorecheck-ffmpeg-runner.sh
+  cp "backups/scorecheck-preview-runner.$timestamp.sh" scorecheck-preview-runner.sh
 }
 
 install -m 0644 .incoming/docker-compose.yml docker-compose.yml
 install -m 0600 .incoming/mediamtx.yml mediamtx.yml
 install -m 0644 .incoming/Caddyfile Caddyfile
 install -m 0755 .incoming/scorecheck-ffmpeg-runner.sh scorecheck-ffmpeg-runner.sh
+install -m 0755 .incoming/scorecheck-preview-runner.sh scorecheck-preview-runner.sh
 if ! docker compose config -q; then
   if [[ "$had_previous" -eq 1 ]]; then restore_previous; fi
   echo "MediaMTX candidate Compose configuration is invalid." >&2

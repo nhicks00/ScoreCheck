@@ -30,6 +30,15 @@ Remote co-commentators in the same court room hear one another. A commentator
 never subscribes to their own microphone, so headphones prevent the court feed
 or another participant from feeding back into the microphone.
 
+The commentator return contract is explicit:
+
+- video is the low-latency `courtN_preview` path;
+- return audio is camera ambience plus other commentators;
+- the local commentator microphone is excluded from that commentator's return;
+- headphones are mandatory;
+- program output receives delayed camera video/ambience plus independently
+  delayed commentary.
+
 ## Program mixer
 
 The program page joins the same room as a subscribe-only participant. Its Web
@@ -110,6 +119,16 @@ Calibrate with a real clap in frame:
 4. Change only the persisted commentary baseline unless the camera-to-cloud
    buffer changes materially. The runtime controller handles transport drift.
 
+Production bundle creation also requires a mode-0600 commentary qualification
+for every enabled camera. It records at least 120 seconds of return video and
+ambience, a two-commentator mix-minus observation, headphones, late join and
+drop/rejoin continuity, AAC stereo 128 kbps/48 kHz output, left/right centering,
+and clap offsets at the beginning, middle, and end. Each offset must remain
+within plus or minus 250 ms. The global section must prove at least 120 seconds
+of commentary over TURN/TLS TCP 443 from a network where UDP is blocked. A
+synthetic rehearsal exercises the contract shape only; it is not physical
+production proof.
+
 Never switch the program page to HLS to fix sync. Program mode is WHEP-only so
 its latency class cannot change silently.
 
@@ -121,5 +140,6 @@ its latency class cannot change silently.
 - The program remains on `courtN_program`; it never falls back to HLS.
 - Audio-health failures are reported through program heartbeats.
 
-The production gate is not complete until a real remote voice remains audible
-and in sync throughout the ten-hour one-court soak.
+The production gate is not complete until the protected qualification passes
+and a real remote voice remains audible and in sync throughout the event-shaped
+soak.

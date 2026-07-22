@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { isAuthoritativeScorePayload, normalizeScorePayload, normalizeVblBracketPayload } from "./scoring";
 import { refreshEventBracketSources } from "./bracketRefresh";
 import { CommunityWitnessError, resolveCommunityFallbackAuthority, transitionCommunityMatch } from "./communityWitness";
@@ -10,6 +11,7 @@ import type { ScoreSnapshot, SetScore } from "./types";
 import { VBL_OVERLAY_DELAY_MS, VBL_POST_FINAL_HOLD_MS, delayedScoreFromSnapshot, isDelayedScoreBehindVisible, pendingScoresForMatch, queueDelayedVblScore, shouldHoldDelayedFinalScore, splitDueDelayedVblScores, type DelayedVblScorePayload } from "./vblDelay";
 import { buildActiveVblSourceSet, matchBelongsToActiveVblSource } from "./vblSources";
 import { getCachedWorkerCoverageStatus } from "./workerSchedule";
+import { assertSupportedVblScorePayload, fetchVblJson, vblRetryDelayMs } from "./vbl";
 
 const POLL_WINDOW_MS = 25_000;
 const ACTIVE_INTERVAL_MS = 1_800;
@@ -29,8 +31,11 @@ const fallbackFinalHoldStartByMatch = new Map<string, string>();
 const nextQueuedMatchCache = new Map<string, { checkedAt: number; value: QueueRow | null }>();
 const activeSourceUrlsCache = new Map<string, { checkedAt: number; value: Set<string> }>();
 const eventTimeZoneCache = new Map<string, { checkedAt: number; value: string }>();
-const leaseClaims = new Map<string, { owner: string; renewedAtMs: number; expiresAtMs: number }>();
+type PollerLease = { eventId: string; courtId: string; owner: string; generation: number; renewedAtMs: number; expiresAtMs: number };
+const leaseClaims = new Map<string, PollerLease>();
+const pollerLeaseContext = new AsyncLocalStorage<PollerLease>();
 const workerHeartbeatWrites = new Map<string, { signature: string; writtenAtMs: number }>();
+const vblRetryState = new Map<string, { failures: number; retryAtMs: number }>();
 
 type Relation<T> = T | T[] | null | undefined;
 
@@ -172,7 +177,10 @@ export async function pollActiveCourtsOnce(options: { eventId?: string; eventIds
     const lease = await acquireLease(court.event_id, court.id, options.owner);
     if (!lease) return;
     try {
-      const polled = await pollCourt(court, eventTimeZones.get(court.event_id) ?? getEnv().timezone);
+      const polled = await pollerLeaseContext.run(
+        lease,
+        () => pollCourt(court, eventTimeZones.get(court.event_id) ?? getEnv().timezone)
+      );
       if (polled) polls += 1;
     } catch (err) {
       errors += 1;
@@ -274,12 +282,12 @@ export function shouldWriteWorkerHeartbeat(
   return elapsedMs < 0 || elapsedMs >= intervalMs;
 }
 
-async function acquireLease(eventId: string, courtId: string, owner: string): Promise<boolean> {
+async function acquireLease(eventId: string, courtId: string, owner: string): Promise<PollerLease | null> {
   const db = supabaseAdmin();
   const nowMs = Date.now();
   const cached = leaseClaims.get(courtId);
   if (cached?.owner === owner && cached.expiresAtMs > nowMs && nowMs - cached.renewedAtMs < LEASE_RENEWAL_INTERVAL_MS) {
-    return true;
+    return cached;
   }
 
   const { data, error } = await db.rpc("try_acquire_poller_lease", {
@@ -289,13 +297,17 @@ async function acquireLease(eventId: string, courtId: string, owner: string): Pr
     p_lease_ms: LEASE_MS
   });
   if (error) throw error;
-  const acquired = data === true;
-  if (acquired) {
-    leaseClaims.set(courtId, { owner, renewedAtMs: nowMs, expiresAtMs: nowMs + LEASE_MS });
+  const result = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : {};
+  const acquired = result.acquired === true;
+  const generation = Number(result.generation);
+  if (acquired && Number.isSafeInteger(generation) && generation > 0) {
+    const lease = { eventId, courtId, owner, generation, renewedAtMs: nowMs, expiresAtMs: nowMs + LEASE_MS };
+    leaseClaims.set(courtId, lease);
+    return lease;
   } else {
     leaseClaims.delete(courtId);
   }
-  return acquired;
+  return null;
 }
 
 async function pollCourt(court: CourtRow, timeZone: string) {
@@ -327,10 +339,15 @@ async function pollCourt(court: CourtRow, timeZone: string) {
 
   if (await advanceFinalMatchIfReady(court, match, currentScore, timeZone)) return true;
 
-  let res: Response;
+  const retry = vblRetryState.get(match.id);
+  if (retry && retry.retryAtMs > Date.now()) return false;
+  let payload: unknown;
   try {
-    res = await fetch(match.api_url, { cache: "no-store" });
+    payload = assertSupportedVblScorePayload(await fetchVblJson(match.api_url));
+    vblRetryState.delete(match.id);
   } catch (error) {
+    const failures = (vblRetryState.get(match.id)?.failures ?? 0) + 1;
+    vblRetryState.set(match.id, { failures, retryAtMs: Date.now() + vblRetryDelayMs(failures, match.id) });
     const laterLiveQueued = await laterLiveQueuedPromise;
     if (laterLiveQueued) {
       await activateQueuedMatch(court, laterLiveQueued);
@@ -338,15 +355,6 @@ async function pollCourt(court: CourtRow, timeZone: string) {
     }
     throw error;
   }
-  if (!res.ok) {
-    const laterLiveQueued = await laterLiveQueuedPromise;
-    if (laterLiveQueued) {
-      await activateQueuedMatch(court, laterLiveQueued);
-      return true;
-    }
-    throw new Error(`Match API HTTP ${res.status}`);
-  }
-  const payload = await res.json();
   const snapshot = normalizeScorePayload(payload, match);
   const sourceAvailable = isAuthoritativeScorePayload(payload, snapshot);
   const now = new Date().toISOString();
@@ -602,12 +610,9 @@ async function queuedMatchHasLivePointScoring(match: MatchRow | null) {
 
   let live = false;
   try {
-    const res = await fetch(match.api_url, { cache: "no-store" });
-    if (res.ok) {
-      const payload = await res.json();
-      const snapshot = normalizeScorePayload(payload, match);
-      live = hasLivePointScoringStarted(snapshot);
-    }
+    const payload = assertSupportedVblScorePayload(await fetchVblJson(match.api_url));
+    const snapshot = normalizeScorePayload(payload, match);
+    live = hasLivePointScoringStarted(snapshot);
   } catch {
     live = false;
   }
@@ -949,7 +954,7 @@ async function activateQueuedMatch(court: CourtRow, next: QueueRow) {
       queueId: next.id,
       toMatchId: next.match_id
     }),
-    actorType: match.source_type === "manual" || !match.api_url ? "SYSTEM" : "PROVIDER",
+    actorType: "SYSTEM",
     actorLabel: "Automatic court queue advance",
     initialAuthorityMode: match.source_type === "manual" || !match.api_url ? "PAUSED_DISPUTE" : "PROVIDER_PRIMARY"
   });
@@ -1261,11 +1266,14 @@ async function persistCurrentProviderProjection(
 }
 
 function providerWrite(actorLabel: string, options: { scoreChangeObservedAt?: string } = {}) {
+  const lease = pollerLeaseContext.getStore();
+  if (!lease) throw new Error("Provider score write is outside a fenced poller lease");
   return {
     actorType: "PROVIDER" as const,
     actorLabel,
     authorityMode: "PROVIDER_PRIMARY" as const,
-    scoreChangeObservedAt: options.scoreChangeObservedAt
+    scoreChangeObservedAt: options.scoreChangeObservedAt,
+    pollerLease: { owner: lease.owner, generation: lease.generation }
   };
 }
 

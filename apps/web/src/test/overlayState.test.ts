@@ -3,6 +3,7 @@ import {
   coerceOverlayState,
   completedSetScores,
   displayOverlayName,
+  overlayApplyCursor,
   overlayPhaseText,
   overlayStateUpdatedAtMs,
   scorebugDisplayScores,
@@ -425,6 +426,7 @@ describe("overlayState", () => {
       health: { lastUpdateAt: "2026-07-04T15:00:10.000Z" }
     }, 1);
     const appliedMs = overlayStateUpdatedAtMs(applied);
+    const appliedCursor = overlayApplyCursor(applied);
     expect(appliedMs).toBe(Date.parse("2026-07-04T15:00:10.000Z"));
 
     const stalePoll = coerceOverlayState({
@@ -440,13 +442,47 @@ describe("overlayState", () => {
       health: { lastUpdateAt: null }
     }, 1);
 
-    expect(shouldApplyOverlayUpdate(stalePoll, appliedMs)).toBe(false);
-    expect(shouldApplyOverlayUpdate(sameUpdate, appliedMs)).toBe(true);
-    expect(shouldApplyOverlayUpdate(newerRealtime, appliedMs)).toBe(true);
-    expect(shouldApplyOverlayUpdate(missingTimestamp, appliedMs)).toBe(false);
+    expect(shouldApplyOverlayUpdate(stalePoll, appliedCursor)).toBe(false);
+    expect(shouldApplyOverlayUpdate(sameUpdate, appliedCursor)).toBe(true);
+    expect(shouldApplyOverlayUpdate(newerRealtime, appliedCursor)).toBe(true);
+    expect(shouldApplyOverlayUpdate(missingTimestamp, appliedCursor)).toBe(false);
     expect(shouldApplyOverlayUpdate(missingTimestamp, null)).toBe(true);
     expect(shouldApplyOverlayUpdate(stalePoll, null)).toBe(true);
     expect(overlayStateUpdatedAtMs(missingTimestamp)).toBeNull();
+  });
+
+  it("rejects a lower score revision even when its wall-clock timestamp is newer", () => {
+    const applied = coerceOverlayState({
+      eventId: "event",
+      courtId: "court",
+      match: { id: "match" },
+      projection: { scoreRevision: 12, sourceTimestamp: "2026-07-21T12:00:00.000Z" },
+      health: { lastUpdateAt: "2026-07-21T12:00:00.000Z" }
+    });
+    const regressed = coerceOverlayState({
+      eventId: "event",
+      courtId: "court",
+      match: { id: "match" },
+      projection: { scoreRevision: 11, sourceTimestamp: "2026-07-21T12:01:00.000Z" },
+      health: { lastUpdateAt: "2026-07-21T12:01:00.000Z" }
+    });
+    expect(shouldApplyOverlayUpdate(regressed, overlayApplyCursor(applied))).toBe(false);
+  });
+
+  it("accepts an authoritative match transition even when the new score timestamp is older", () => {
+    const applied = coerceOverlayState({
+      eventId: "event",
+      courtId: "court",
+      match: { id: "match-a" },
+      projection: { scoreRevision: 12, sourceTimestamp: "2026-07-21T12:00:00.000Z" }
+    });
+    const nextMatch = coerceOverlayState({
+      eventId: "event",
+      courtId: "court",
+      match: { id: "match-b" },
+      projection: { scoreRevision: 1, sourceTimestamp: "2026-07-21T11:59:00.000Z" }
+    });
+    expect(shouldApplyOverlayUpdate(nextMatch, overlayApplyCursor(applied))).toBe(true);
   });
 
   it("uses current set status for live broadcast labels", () => {

@@ -20,6 +20,7 @@ import { deadManTestGateArmSchema, DeadManTestGateError, ExternalDeadMan, type D
 import { assertFaultGateCanArm, faultGateArmRequestSchema, FaultGateConflictError, FaultGateControl, programBrowserIsRequired } from "./faultGateControl.js";
 import { BrowserCounterAccumulator } from "./browserCounterAccumulator.js";
 import { incrementCourtCounter } from "./prometheusCounter.js";
+import { LocalIncidentOutbox } from "./localIncidentOutbox.js";
 
 const config = loadServiceConfig();
 const app = express();
@@ -99,24 +100,37 @@ const youtubeCollector = new YouTubeCollector({
 });
 let youtubeRefreshRunning = false;
 const incidentStore = IncidentStore.create(config.supabaseUrl, config.supabaseServiceRoleKey);
-const notificationDispatcher = new NotificationDispatcher(config, incidentStore);
+const localIncidentOutbox = await LocalIncidentOutbox.open(config.localOutboxPath);
+const notificationDispatcher = new NotificationDispatcher(config, localIncidentOutbox);
 const externalDeadMan = new ExternalDeadMan(config);
 const faultGateControl = new FaultGateControl();
 const browserCounterAccumulator = new BrowserCounterAccumulator();
 let deadManMaintenanceRunning = false;
 let agentPollRunning = false;
+let outboxFlushRunning = false;
 let silences: MonitoringSilence[] = [];
+let remoteNotifications = [] as Awaited<ReturnType<IncidentStore["latestProviderNotifications"]>>;
 if (incidentStore) {
   try {
     await incidentStore.assertEpisodeContract();
-    incidents.hydrate(await incidentStore.loadActive());
+    await localIncidentOutbox.markEpisodeContractVerified();
+    const remoteIncidents = await incidentStore.loadActive();
+    await localIncidentOutbox.mergeRemoteIncidents(remoteIncidents);
+    await localIncidentOutbox.mergeRemoteNotifications(
+      await incidentStore.loadNotificationsForIncidents(remoteIncidents.map((incident) => incident.id))
+    );
     silences = await incidentStore.loadActiveSilences();
-    notificationDispatcher.hydrate(await incidentStore.latestProviderNotifications());
+    remoteNotifications = await incidentStore.latestProviderNotifications();
   } catch (error) {
     console.error(`durable monitoring state could not be loaded code=${operationalErrorCode(error)}`);
-    throw new Error("Required durable monitoring contract is unavailable.");
+    if (!localIncidentOutbox.hasVerifiedEpisodeContract()) {
+      throw new Error("Required durable monitoring contract is unavailable.");
+    }
+    console.error("monitor-service continuing from its locally verified incident outbox until Supabase recovers");
   }
 }
+incidents.hydrate(localIncidentOutbox.loadActiveIncidents());
+notificationDispatcher.hydrate([...remoteNotifications, ...localIncidentOutbox.latestNotifications()]);
 let snapshot: MonitorSnapshot = currentSnapshot();
 
 app.disable("x-powered-by");
@@ -669,6 +683,7 @@ async function maintainNotifications() {
       snapshot = currentSnapshot();
       await persistIncidentChanges([change]);
     }
+    await flushDurableOutbox();
   } catch (error) {
     console.error(`notification maintenance failed code=${operationalErrorCode(error)}`);
   }
@@ -692,17 +707,47 @@ async function reconcileAlertmanager() {
 }
 
 async function persistIncidentChanges(changes: ReturnType<IncidentManager["applyWebhook"]>) {
-  if (!incidentStore) return;
   try {
-    for (const change of changes) await incidentStore.persist(change);
-    await incidentStore.checkpoint(snapshot);
+    await localIncidentOutbox.recordChanges(changes);
+  } catch (error) {
+    console.error(`local incident outbox could not be persisted code=${operationalErrorCode(error)}`);
+    return;
+  }
+  try {
     await notificationDispatcher.handleChanges(
       changes,
       new Date(),
       (incident) => incidentIsSilenced(incident, silences)
     );
   } catch (error) {
-    console.error(`durable incident state could not be persisted code=${operationalErrorCode(error)}`);
+    console.error(`incident notification dispatch failed code=${operationalErrorCode(error)}`);
+  }
+  await flushDurableOutbox();
+  if (incidentStore) {
+    try {
+      await incidentStore.checkpoint(snapshot);
+    } catch (error) {
+      console.error(`monitor checkpoint could not be persisted code=${operationalErrorCode(error)}`);
+    }
+  }
+}
+
+async function flushDurableOutbox(): Promise<void> {
+  if (!incidentStore || outboxFlushRunning) return;
+  outboxFlushRunning = true;
+  try {
+    for (const pending of localIncidentOutbox.pendingChanges()) {
+      await incidentStore.persist(pending.change, pending.id);
+      await localIncidentOutbox.markChangeReplicated(pending.id);
+    }
+    for (const pending of localIncidentOutbox.pendingNotifications()) {
+      await incidentStore.persistNotification(pending.notification);
+      await localIncidentOutbox.markNotificationReplicated(pending.notification.id, pending.revision);
+    }
+  } catch (error) {
+    console.error(`durable monitoring outbox replay deferred code=${operationalErrorCode(error)}`);
+  } finally {
+    outboxFlushRunning = false;
   }
 }
 
@@ -718,6 +763,7 @@ async function checkpoint() {
 await pollAll();
 await refreshYouTube();
 await maintainDeadMan();
+await flushDurableOutbox();
 const pollTimer = setInterval(() => void pollAll(), config.intervalMs);
 pollTimer.unref();
 const youtubeTimer = setInterval(() => void refreshYouTube(), 5_000);

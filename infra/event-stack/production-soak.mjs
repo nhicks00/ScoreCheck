@@ -9,17 +9,21 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 import { EgressRuntime } from "./rehearsal/egress-runtime.mjs";
+import { OutputConformanceRuntime } from "./output-conformance.mjs";
 import { PoolSamplerRuntime } from "./rehearsal/pool-sampler-runtime.mjs";
 import { evaluateRehearsalPoolEvidence } from "./rehearsal/rehearsal-evidence.mjs";
 import { PushoverNotifier } from "./providers.mjs";
+import { HevcNormalizerRuntime } from "./hevc-normalizer-runtime.mjs";
 import { ProductionSourceProbe } from "./production-media-profile.mjs";
 import { ProductionYouTubeProvider, readProductionDestinations } from "./production-youtube.mjs";
+import { loadRendererBinding } from "./renderer-binding.mjs";
 import { loadProtectedEnv } from "./stack-deployer.mjs";
+import { loadVenueAdmission } from "./venue-admission.mjs";
+import { YouTubeViewerProbe } from "./youtube-viewer-probe.mjs";
+import { loadCommentaryQualification } from "./commentary-qualification.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(SCRIPT_PATH), "../..");
-const ACTIVE_CAMERAS = Object.freeze([1, 2, 3, 4, 5, 6]);
-const INACTIVE_CAMERAS = Object.freeze([7, 8]);
 const SAMPLE_INTERVAL_MS = 5_000;
 const PROVIDER_INTERVAL_MS = 60_000;
 const MAX_SAMPLE_LAG_MS = 1_000;
@@ -50,8 +54,13 @@ export class ProductionSoakRuntime {
     const profile = await readProtectedJson(options.profile, "event operator profile");
     const manifest = await readProtectedJson(profile.manifest, "event manifest");
     const lifecycleState = await readProtectedJson(profile.state, "event lifecycle state");
-    const destinations = await readProductionDestinations(options.destinations, { event: manifest.event, activeCameras: ACTIVE_CAMERAS });
-    validateInputs({ options, profile, manifest, lifecycleState });
+    const renderer = await loadRendererBinding(profile.rendererBinding);
+    const venue = await loadVenueAdmission(profile.venueProfile, manifest.event);
+    if (!venue.passed) throw new Error(`venue profile is not admitted: ${venue.problems.join("; ")}`);
+    const commentary = await loadCommentaryQualification(profile.commentaryQualification, manifest.event, venue.activeCameras);
+    if (!commentary.passed) throw new Error(`commentary is not qualified: ${commentary.problems.join("; ")}`);
+    const destinations = await readProductionDestinations(options.destinations, { event: manifest.event, activeCameras: venue.activeCameras });
+    validateInputs({ options, profile, manifest, lifecycleState, venue });
     const environment = await loadProtectedEnv(profile.credentialsEnv);
     const monitorEnvironment = await loadProtectedEnv(join(profile.secrets, "observability.env"));
     const monitorEndpoint = manifest.endpoints.find((entry) => entry.role === "observability");
@@ -69,9 +78,12 @@ export class ProductionSoakRuntime {
     });
     return new ProductionSoakRuntime({
       ...dependencies,
-      options, profile, manifest, lifecycleState, destinations, monitorOrigin, monitorToken, youtube, pushover,
+      options, profile, manifest, lifecycleState, destinations, renderer, venue, commentary, monitorOrigin, monitorToken, youtube, pushover,
       egress: dependencies.egress ?? new EgressRuntime({ sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
+      normalizer: dependencies.normalizer ?? new HevcNormalizerRuntime({ sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
+      outputConformance: dependencies.outputConformance ?? new OutputConformanceRuntime({ sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
       sourceProbe: dependencies.sourceProbe ?? new ProductionSourceProbe({ sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
+      viewerProbe: dependencies.viewerProbe ?? new YouTubeViewerProbe(),
       sampler: dependencies.sampler ?? new PoolSamplerRuntime({ repoRoot: REPO_ROOT, sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
       router: dependencies.router ?? new RouterSoakRuntime({ host: options.router }),
       fetchImpl: dependencies.fetchImpl ?? globalThis.fetch,
@@ -92,24 +104,43 @@ export class ProductionSoakRuntime {
     await chmod(this.options.evidence, 0o700);
     const statePath = join(this.options.evidence, "production-soak-state.json");
     const samplesPath = join(this.options.evidence, "production-soak-samples.jsonl");
+    const viewerPath = join(this.options.evidence, "production-viewer-probes.jsonl");
     let state = await readStateOrNull(statePath);
     if (!state) {
       await assertEvidenceEmpty(this.options.evidence);
       const snapshot = await this.#snapshot();
       const problems = [
-        ...productionIdleProblems(snapshot, this.now()),
-        ...productionProviderIdleProblems(await this.#providerEvidence())
+        ...productionIdleProblems(snapshot, this.venue, this.now()),
+        ...productionProviderIdleProblems(await this.#providerEvidence(), this.venue.activeCameras)
       ];
       if (problems.length) throw new Error(`production soak cannot arm: ${problems.slice(0, 8).join("; ")}`);
-      await this.router.preflight();
-      state = createState({ event: this.manifest.event, evidence: this.options.evidence, nowMs: this.now(), minimumDurationMs: this.options.minimumDurationMs, maximumDurationMs: this.options.maximumDurationMs });
+      await this.router.preflight({ minimumUploadMbps: this.venue.requiredSustainedUploadMbpsRounded });
+      state = createState({
+        event: this.manifest.event,
+        evidence: this.options.evidence,
+        nowMs: this.now(),
+        minimumDurationMs: this.options.minimumDurationMs,
+        maximumDurationMs: this.options.maximumDurationMs,
+        venue: this.venue,
+        commentary: this.commentary,
+        renderer: this.renderer,
+        destinations: this.destinations
+      });
       await writeState(statePath, state);
-      process.stdout.write(`ARMED ${state.armedAt}: waiting for Cameras 1-6; no output has started.\n`);
-    } else validateState(state, this.manifest.event, this.options);
+      process.stdout.write(`ARMED ${state.armedAt}: waiting for ${cameraList(this.venue.activeCameras)}; no output has started.\n`);
+    } else validateState(state, this.manifest.event, this.options, this.venue, this.commentary, this.renderer, this.destinations);
 
     if (state.phase === "ARMED") {
       const raw = await this.#waitForRaw();
       state.rawReadyAt = raw.observedAt;
+      for (const camera of this.venue.activeCameras) {
+        state.normalizers[camera] = await this.normalizer.ensure({
+          host: compositorHost(this.manifest, this.lifecycleState, camera),
+          court: camera,
+          required: this.venue.assignments[camera].sourcePathMode === "isolated-hevc-normalizer"
+        });
+        await writeState(statePath, state);
+      }
       state.profiles = await this.#probeProfiles();
       state.phase = "STARTING";
       state.sampler = await this.sampler.ensure({ manifest: this.manifest, lifecycleState: this.lifecycleState, evidenceDirectory: this.options.evidence });
@@ -119,9 +150,28 @@ export class ProductionSoakRuntime {
     }
 
     if (state.phase === "STARTING") {
-      for (const camera of ACTIVE_CAMERAS) {
+      for (const camera of this.venue.activeCameras) {
         const host = compositorHost(this.manifest, this.lifecycleState, camera);
         const expectedId = state.egress[camera]?.id ?? null;
+        if (!state.outputConformance[camera]) {
+          await this.egress.preflight(host);
+          const evidence = await this.outputConformance.qualify({
+            host,
+            court: camera,
+            profile: state.profiles[camera].profile,
+            evidenceId: state.runId,
+            outputDirectory: join(this.options.evidence, "output-conformance"),
+            renderer: this.renderer
+          });
+          state.outputConformance[camera] = {
+            ...evidence,
+            destination: {
+              streamId: this.destinations.streams[camera].id,
+              broadcastId: this.destinations.broadcasts[camera].id
+            }
+          };
+          await writeState(statePath, state);
+        }
         if (!expectedId) await this.egress.preflight(host);
         const active = await this.egress.ensureStarted({ host, court: camera, profile: state.profiles[camera].profile, expectedId });
         state.egress[camera] = { ...active, host, profile: state.profiles[camera].profile };
@@ -135,7 +185,7 @@ export class ProductionSoakRuntime {
       state.startedAt = accepted.observedAt;
       state.baseline = accepted.snapshot;
       await writeState(statePath, state);
-      process.stdout.write(`SOAK_STARTED ${state.startedAt}: six native 1080 scoreboard outputs are live and healthy.\n`);
+      process.stdout.write(`SOAK_STARTED ${state.startedAt}: ${this.venue.activeCameras.length} native 1080 scoreboard output(s) are live and healthy.\n`);
     }
 
     if (state.phase !== "RUNNING") {
@@ -145,11 +195,55 @@ export class ProductionSoakRuntime {
 
     const signal = createSignalLatch();
     const handle = await open(samplesPath, "a", 0o600);
+    const viewerHandle = await open(viewerPath, "a", 0o600);
     await chmod(samplesPath, 0o600);
+    await chmod(viewerPath, 0o600);
+    const existingViewerEvidence = await readViewerProbes(viewerPath, state.runId);
+    state.viewerProbe.completed = existingViewerEvidence.length;
+    state.viewerProbe.passed = existingViewerEvidence.filter((entry) => entry.passed).length;
+    state.viewerProbe.failed = existingViewerEvidence.length - state.viewerProbe.passed;
+    state.viewerProbe.nextCameraIndex = existingViewerEvidence.length % this.venue.activeCameras.length;
+    state.viewerProbe.lastByCamera = Object.fromEntries(existingViewerEvidence.map((entry) => [entry.camera, entry]));
     let previous = state.lastSnapshot ?? state.baseline;
     let slot = state.sampleCount;
     let maximumGapMs = state.maximumGapMs;
     let previousObservedMs = state.lastObservedAt ? Date.parse(state.lastObservedAt) : null;
+    let viewerTask = null;
+    let completedViewer = null;
+    const flushViewer = async () => {
+      if (!completedViewer) return null;
+      const result = completedViewer;
+      completedViewer = null;
+      await viewerHandle.write(`${JSON.stringify(result)}\n`);
+      await viewerHandle.sync();
+      state.viewerProbe.completed += 1;
+      if (result.passed) state.viewerProbe.passed += 1;
+      else state.viewerProbe.failed += 1;
+      state.viewerProbe.lastByCamera[result.camera] = result;
+      return result;
+    };
+    const launchViewer = () => {
+      if (viewerTask) return;
+      const index = state.viewerProbe.nextCameraIndex % this.venue.activeCameras.length;
+      const camera = this.venue.activeCameras[index];
+      state.viewerProbe.nextCameraIndex = (index + 1) % this.venue.activeCameras.length;
+      const broadcastId = this.destinations.broadcasts[camera].id;
+      viewerTask = this.viewerProbe.probe({ camera, broadcastId })
+        .then((result) => { completedViewer = { ...result, runId: state.runId, sequence: state.viewerProbe.completed }; })
+        .catch((error) => {
+          completedViewer = {
+            schemaVersion: 1,
+            camera,
+            broadcastId,
+            observedAt: new Date(this.now()).toISOString(),
+            passed: false,
+            problems: [`viewer probe failed: ${safeError(error)}`],
+            runId: state.runId,
+            sequence: state.viewerProbe.completed
+          };
+        })
+        .finally(() => { viewerTask = null; });
+    };
     try {
       while (!signal.stopped) {
         const dueAt = Date.parse(state.startedAt) + slot * SAMPLE_INTERVAL_MS;
@@ -160,8 +254,10 @@ export class ProductionSoakRuntime {
         const snapshot = await this.#snapshot();
         const includeProvider = slot === 0 || slot % Math.ceil(PROVIDER_INTERVAL_MS / SAMPLE_INTERVAL_MS) === 0;
         const provider = includeProvider ? await this.#providerEvidence() : null;
-        const problems = productionSnapshotProblems(snapshot, state.profiles, previous, observedMs);
-        if (provider) problems.push(...productionProviderProblems(provider));
+        const viewer = await flushViewer();
+        const problems = productionSnapshotProblems(snapshot, state.profiles, this.venue, previous, observedMs);
+        if (provider) problems.push(...productionProviderProblems(provider, this.venue.activeCameras));
+        if (viewer && !viewer.passed) problems.push(`Camera ${viewer.camera} external viewer delivery failed: ${viewer.problems.join("; ")}`);
         const lagMs = observedMs - dueAt;
         if (lagMs < -10 || lagMs > MAX_SAMPLE_LAG_MS) problems.push(`sample ${slot} timing lag is ${lagMs}ms`);
         if (previousObservedMs !== null) {
@@ -180,6 +276,7 @@ export class ProductionSoakRuntime {
           profiles: state.profiles,
           monitor: snapshot,
           provider,
+          viewer,
           problems: unique(problems)
         };
         await handle.write(`${JSON.stringify(sample)}\n`);
@@ -191,6 +288,7 @@ export class ProductionSoakRuntime {
         state.problemCount += sample.problems.length;
         await this.#updateNotification(state, sample.problems);
         await writeState(statePath, state);
+        if (includeProvider) launchViewer();
         if (sample.problems.length) process.stderr.write(`SOAK_WARNING ${sample.observedAt}: ${sample.problems.slice(0, 4).join("; ")}\n`);
         previous = snapshot;
         previousObservedMs = observedMs;
@@ -198,7 +296,10 @@ export class ProductionSoakRuntime {
       }
     } finally {
       signal.close();
+      if (viewerTask) await viewerTask;
+      await flushViewer();
       await handle.close();
+      await viewerHandle.close();
     }
 
     state.sampler = await this.sampler.stop(state.sampler);
@@ -213,17 +314,19 @@ export class ProductionSoakRuntime {
       stepSeconds: 5
     });
     const samples = await readSamples(samplesPath, state.runId);
+    const viewerEvidence = await readViewerProbes(viewerPath, state.runId);
     const routerEvidence = await readAndEvaluateSpeedifyEvidence({
       path: state.router.localPath,
       startMs: Date.parse(state.startedAt),
       endMs: endedMs,
-      activeCameras: ACTIVE_CAMERAS.length
+      activeCameras: this.venue.activeCameras.length
     });
     const report = evaluateProductionSoak({
       state,
       samples,
       hostEvidence,
       routerEvidence,
+      viewerEvidence,
       endedMs,
       minimumDurationMs: this.options.minimumDurationMs,
       maximumDurationMs: this.options.maximumDurationMs
@@ -243,20 +346,30 @@ export class ProductionSoakRuntime {
     let lastProblems = [];
     while (this.now() - startedAt <= 30 * 60_000) {
       const snapshot = await this.#snapshot();
-      lastProblems = productionRawProblems(snapshot, this.now());
+      lastProblems = productionRawProblems(snapshot, this.venue, this.now());
       if (lastProblems.length === 0) {
         stable += 1;
         if (stable >= 3) return { observedAt: snapshot.generatedAt, snapshot };
       } else stable = 0;
       await this.sleep(2_000);
     }
-    throw new Error(`Cameras 1-6 did not reach a stable native 1080 raw baseline: ${lastProblems.slice(0, 8).join("; ")}`);
+    throw new Error(`${cameraList(this.venue.activeCameras)} did not reach a stable native 1080 raw baseline: ${lastProblems.slice(0, 8).join("; ")}`);
   }
 
   async #probeProfiles() {
     const ingest = ingestHost(this.manifest, this.lifecycleState);
     const profiles = {};
-    for (const camera of ACTIVE_CAMERAS) profiles[camera] = await this.sourceProbe.probe({ host: ingest, court: camera });
+    for (const camera of this.venue.activeCameras) {
+      const assignment = this.venue.assignments[camera];
+      profiles[camera] = await this.sourceProbe.probe({
+        host: ingest,
+        court: camera,
+        sourcePathMode: assignment.sourcePathMode,
+        expectedFrameRateMode: assignment.frameRateMode
+      });
+      const problems = admittedProfileProblems(camera, profiles[camera], assignment);
+      if (problems.length) throw new Error(problems.join("; "));
+    }
     return profiles;
   }
 
@@ -288,8 +401,8 @@ export class ProductionSoakRuntime {
       const snapshot = await this.#snapshot();
       const provider = await this.#providerEvidence();
       lastProblems = unique([
-        ...productionSnapshotProblems(snapshot, profiles, previous, this.now()),
-        ...productionProviderProblems(provider)
+        ...productionSnapshotProblems(snapshot, profiles, this.venue, previous, this.now()),
+        ...productionProviderProblems(provider, this.venue.activeCameras)
       ]);
       if (lastProblems.length === 0) {
         stable += 1;
@@ -298,7 +411,7 @@ export class ProductionSoakRuntime {
       previous = snapshot;
       await this.sleep(5_000);
     }
-    throw new Error(`six-camera output did not stabilize: ${lastProblems.slice(0, 8).join("; ")}`);
+    throw new Error(`${this.venue.activeCameras.length}-camera output did not stabilize: ${lastProblems.slice(0, 8).join("; ")}`);
   }
 
   async #snapshot() {
@@ -315,7 +428,7 @@ export class ProductionSoakRuntime {
 
   async #providerEvidence() {
     const cameras = [];
-    for (const camera of ACTIVE_CAMERAS) {
+    for (const camera of this.venue.activeCameras) {
       const stream = await this.youtube.getStream(this.destinations.streams[camera].id);
       const broadcast = await this.youtube.getBroadcast(this.destinations.broadcasts[camera].id);
       cameras.push({ camera, stream, broadcast });
@@ -342,7 +455,7 @@ export class ProductionSoakRuntime {
     state.consecutiveProblemSamples = 0;
     if (state.notificationOpen) {
       try {
-        await this.pushover.send({ title: "ScoreCheck streams recovered", message: "All six monitored YouTube feeds are healthy again. No action is needed.", priority: 0 });
+        await this.pushover.send({ title: "ScoreCheck streams recovered", message: `All ${this.venue.activeCameras.length} monitored YouTube feeds are healthy again. No action is needed.`, priority: 0 });
         state.notificationOpen = false;
         state.notifications.push({ kind: "RECOVERY", sentAt: new Date(this.now()).toISOString(), title: "ScoreCheck streams recovered" });
       } catch (error) {
@@ -353,16 +466,18 @@ export class ProductionSoakRuntime {
   }
 }
 
-export function productionIdleProblems(snapshot, nowMs = Date.now()) {
+export function productionIdleProblems(snapshot, venue, nowMs = Date.now()) {
+  validateVenueRuntime(venue);
   const problems = commonProblems(snapshot, nowMs);
-  for (const camera of [...ACTIVE_CAMERAS, ...INACTIVE_CAMERAS]) {
+  for (const camera of [...venue.activeCameras, ...venue.inactiveCameras]) {
     const court = courtByNumber(snapshot, camera, problems);
     if (!court) continue;
     if (court.browser) problems.push(`Camera ${camera} has a browser before the soak starts`);
-    for (const branch of ["raw", "preview", "program"]) {
+    for (const branch of ["raw", "normalized", "preview", "program"]) {
       const path = court.paths?.[branch];
       if (path?.ready || (path?.readerCount ?? 0) !== 0) problems.push(`Camera ${camera} ${branch} is occupied before the soak starts`);
     }
+    if (court.ffmpeg?.normalizer) problems.push(`Camera ${camera} has normalizer telemetry before the soak starts`);
   }
   for (const agent of snapshot.agents ?? []) {
     if (["compositor", "worker"].includes(agent.role)) {
@@ -373,35 +488,39 @@ export function productionIdleProblems(snapshot, nowMs = Date.now()) {
   return unique(problems);
 }
 
-export function productionRawProblems(snapshot, nowMs = Date.now()) {
+export function productionRawProblems(snapshot, venue, nowMs = Date.now()) {
+  validateVenueRuntime(venue);
   const problems = commonProblems(snapshot, nowMs);
-  for (const camera of ACTIVE_CAMERAS) {
+  for (const camera of venue.activeCameras) {
+    const assignment = venue.assignments[camera];
     const court = courtByNumber(snapshot, camera, problems);
     if (!court) continue;
     const raw = court.paths?.raw;
     if (!raw?.ready) problems.push(`Camera ${camera} raw video is not ready`);
-    if ((raw?.inboundBitrateBps ?? 0) < 1_000_000) problems.push(`Camera ${camera} raw bitrate is below 1 Mbps`);
+    if ((raw?.inboundBitrateBps ?? 0) < assignment.minimumSourceBitrateBps || (raw?.inboundBitrateBps ?? 0) > assignment.maximumSourceBitrateBps) problems.push(`Camera ${camera} raw bitrate is outside its admitted ${assignment.minimumSourceBitrateBps}-${assignment.maximumSourceBitrateBps} bps range`);
     if (raw?.frameErrors !== 0) problems.push(`Camera ${camera} raw frame errors are nonzero`);
-    if (!new Set(["H264", "H265"]).has(raw?.videoCodec) || raw?.videoWidth !== 1920 || raw?.videoHeight !== 1080) problems.push(`Camera ${camera} raw video is not H.264/H.265 1920x1080`);
+    if (raw?.videoCodec !== assignment.sourceCodec || raw?.videoWidth !== 1920 || raw?.videoHeight !== 1080) problems.push(`Camera ${camera} raw video does not match its admitted ${assignment.sourceCodec} 1920x1080 profile`);
     if (raw?.audioCodec !== "AAC" || raw?.audioSampleRateHz !== 48_000 || raw?.audioChannelCount !== 2) problems.push(`Camera ${camera} raw audio is not AAC 48kHz stereo`);
   }
-  for (const camera of INACTIVE_CAMERAS) inactiveCameraProblems(snapshot, camera, problems);
+  for (const camera of venue.inactiveCameras) inactiveCameraProblems(snapshot, camera, problems);
   return unique(problems);
 }
 
-export function productionSnapshotProblems(snapshot, profiles, previous = null, nowMs = Date.now()) {
-  const problems = productionRawProblems(snapshot, nowMs);
+export function productionSnapshotProblems(snapshot, profiles, venue, previous = null, nowMs = Date.now()) {
+  const problems = productionRawProblems(snapshot, venue, nowMs);
   const assignments = new Map();
   for (const agent of snapshot.agents ?? []) if (agent.role === "compositor") for (const camera of agent.assignedCourts ?? []) assignments.set(camera, agent);
-  for (const camera of ACTIVE_CAMERAS) {
+  for (const camera of venue.activeCameras) {
     const profile = profiles?.[camera];
-    if (!profile || !new Set(["1080p30", "1080p60"]).has(profile.profile)) {
+    const assignment = venue.assignments[camera];
+    if (!profile || profile.profile !== assignment.outputProfile || admittedProfileProblems(camera, profile, assignment).length > 0) {
       problems.push(`Camera ${camera} has no admitted 1080 output profile`);
       continue;
     }
     const expectedFps = profile.framesPerSecond;
     const court = courtByNumber(snapshot, camera, problems);
     if (!court) continue;
+    problems.push(...normalizerProblems(camera, court, assignment, expectedFps));
     const readerBounds = { raw: [1, 3], preview: [1, 2], program: [1, 1] };
     for (const branch of ["raw", "preview", "program"]) {
       const path = court.paths?.[branch];
@@ -423,6 +542,7 @@ export function productionSnapshotProblems(snapshot, profiles, previous = null, 
     if (!browser || !freshAge(age) || browser.video?.state !== "playing" || browser.video?.connectionState !== "connected" || browser.video?.transport !== "whep") {
       problems.push(`Camera ${camera} program browser is not fresh and playing`);
     } else {
+      if (browser.video.networkPath !== "private-vpc") problems.push(`Camera ${camera} program browser is not using the private VPC media path`);
       if (browser.video.width !== 1920 || browser.video.height !== 1080) problems.push(`Camera ${camera} program browser is not rendering 1920x1080`);
       if (!browser.scoreRender?.loaded || !browser.scoreRender.connected || browser.scoreRender.stale || browser.scoreRender.frozen || browser.scoreRender.domMismatchReason) problems.push(`Camera ${camera} scoreboard overlay is not loaded, connected, and current`);
       if (!browser.commentary?.cameraTrackPresent) problems.push(`Camera ${camera} program browser has no camera audio track`);
@@ -433,20 +553,21 @@ export function productionSnapshotProblems(snapshot, profiles, previous = null, 
     if (!agent || agent.state !== "HEALTHY" || !egress || egress.idle || egress.activeWebRequests !== 1 || egress.maximumWebRequests !== 1 || egress.canAcceptRequest
       || (egress.cpuLoadRatio ?? 1) >= 0.85 || (egress.memoryLoadRatio ?? 1) >= 0.85) problems.push(`Camera ${camera} output server is not running exactly one healthy Egress with headroom`);
   }
-  for (const camera of INACTIVE_CAMERAS) {
+  for (const camera of venue.inactiveCameras) {
     const agent = assignments.get(camera);
     const egress = agent?.nativeServices?.egress;
     if (!agent || agent.state !== "HEALTHY" || !egress?.idle || egress.activeWebRequests !== 0 || !egress.canAcceptRequest) problems.push(`Camera ${camera} output server is not healthy and idle`);
   }
   const spare = (snapshot.agents ?? []).find((agent) => agent.role === "worker");
   if (!spare || spare.state !== "HEALTHY" || !spare.nativeServices?.egress?.idle || spare.nativeServices.egress.activeWebRequests !== 0 || !spare.nativeServices.egress.canAcceptRequest) problems.push("warm spare is not healthy and idle");
-  if (previous) problems.push(...browserDeltaProblems(previous, snapshot, profiles));
+  if (previous) problems.push(...browserDeltaProblems(previous, snapshot, profiles, venue.activeCameras));
   return unique(problems);
 }
 
-export function browserDeltaProblems(previous, current, profiles) {
+export function browserDeltaProblems(previous, current, profiles, activeCameras) {
+  validateActiveCameras(activeCameras);
   const problems = [];
-  for (const camera of ACTIVE_CAMERAS) {
+  for (const camera of activeCameras) {
     const before = previous?.courts?.find((entry) => entry.courtNumber === camera)?.browser;
     const after = current?.courts?.find((entry) => entry.courtNumber === camera)?.browser;
     if (!before || !after) { problems.push(`Camera ${camera} browser continuity sample is missing`); continue; }
@@ -470,9 +591,11 @@ export function browserDeltaProblems(previous, current, profiles) {
   return unique(problems);
 }
 
-export function productionProviderProblems(provider) {
+export function productionProviderProblems(provider, activeCameras) {
+  validateActiveCameras(activeCameras);
   const problems = [];
-  if (!provider || !Array.isArray(provider.cameras) || provider.cameras.length !== ACTIVE_CAMERAS.length) return ["YouTube evidence is incomplete"];
+  if (!provider || !Array.isArray(provider.cameras) || provider.cameras.length !== activeCameras.length) return ["YouTube evidence is incomplete"];
+  if (JSON.stringify(provider.cameras.map((value) => value.camera)) !== JSON.stringify(activeCameras)) return ["YouTube evidence camera identities do not match the venue profile"];
   for (const value of provider.cameras) {
     const { camera, stream, broadcast } = value;
     if (!stream || stream.court !== camera || stream.resolution !== "variable" || stream.frameRate !== "variable" || stream.streamStatus !== "active" || stream.healthStatus !== "good" || stream.configurationIssues.length !== 0) problems.push(`Camera ${camera} YouTube ingest is not active and healthy`);
@@ -481,9 +604,11 @@ export function productionProviderProblems(provider) {
   return unique(problems);
 }
 
-export function productionProviderIdleProblems(provider) {
+export function productionProviderIdleProblems(provider, activeCameras) {
+  validateActiveCameras(activeCameras);
   const problems = [];
-  if (!provider || !Array.isArray(provider.cameras) || provider.cameras.length !== ACTIVE_CAMERAS.length) return ["YouTube idle evidence is incomplete"];
+  if (!provider || !Array.isArray(provider.cameras) || provider.cameras.length !== activeCameras.length) return ["YouTube idle evidence is incomplete"];
+  if (JSON.stringify(provider.cameras.map((value) => value.camera)) !== JSON.stringify(activeCameras)) return ["YouTube idle evidence camera identities do not match the venue profile"];
   for (const value of provider.cameras) {
     const { camera, stream, broadcast } = value;
     if (!stream || stream.court !== camera || stream.resolution !== "variable" || stream.frameRate !== "variable" || !new Set(["inactive", "ready"]).has(stream.streamStatus)) problems.push(`Camera ${camera} YouTube ingest is not idle`);
@@ -492,7 +617,7 @@ export function productionProviderIdleProblems(provider) {
   return unique(problems);
 }
 
-export function evaluateProductionSoak({ state, samples, hostEvidence, routerEvidence, endedMs, minimumDurationMs, maximumDurationMs }) {
+export function evaluateProductionSoak({ state, samples, hostEvidence, routerEvidence, viewerEvidence = [], endedMs, minimumDurationMs, maximumDurationMs }) {
   const startedMs = Date.parse(state.startedAt);
   const observedDurationMs = Math.max(0, endedMs - startedMs);
   const expectedElapsedSamples = Math.floor(observedDurationMs / SAMPLE_INTERVAL_MS) + 1;
@@ -500,15 +625,17 @@ export function evaluateProductionSoak({ state, samples, hostEvidence, routerEvi
     ...samples.flatMap((sample) => sample.problems),
     ...(hostEvidence?.problems ?? []),
     ...(routerEvidence?.problems ?? ["bonded-router evidence is missing"]),
+    ...(state.viewerProbeRequired ? viewerEvidenceProblems(viewerEvidence, state.activeCameras, state.outputConformance) : []),
+    ...outputConformanceProblems(state.outputConformance, state.profiles, state.activeCameras, state.runBinding),
     ...(state.notifications.some((notification) => notification.kind === "FAILURE") ? ["one or more Pushover notifications failed"] : []),
     ...(state.maximumGapMs > SAMPLE_INTERVAL_MS + MAX_SAMPLE_LAG_MS ? [`maximum sample gap was ${state.maximumGapMs}ms`] : []),
     ...(samples.length / Math.max(1, expectedElapsedSamples) < 0.99 ? ["monitor sample coverage was below 99%"] : []),
-    ...aggregateCadenceProblems(samples, state.profiles)
+    ...aggregateCadenceProblems(samples, state.profiles, state.activeCameras)
   ]);
   const durationQualified = observedDurationMs >= minimumDurationMs;
   const classification = problems.length ? "FAIL" : durationQualified ? "PASS" : "INCOMPLETE";
   return {
-    schemaVersion: 1,
+    schemaVersion: 4,
     event: state.event,
     runId: state.runId,
     startedAt: state.startedAt,
@@ -523,10 +650,21 @@ export function evaluateProductionSoak({ state, samples, hostEvidence, routerEvi
     coverageRatio: samples.length / Math.max(1, expectedElapsedSamples),
     maximumGapMs: state.maximumGapMs,
     profiles: state.profiles,
+    runBinding: state.runBinding,
+    venueAdmission: state.venueAdmission,
+    outputConformance: state.outputConformance,
+    normalizers: state.normalizers,
     egress: state.egress,
     notifications: state.notifications,
     hostEvidence,
     routerEvidence,
+    viewerEvidence: {
+      observed: viewerEvidence.length,
+      passed: viewerEvidence.filter((entry) => entry.passed).length,
+      failed: viewerEvidence.filter((entry) => !entry.passed).length,
+      cameras: [...new Set(viewerEvidence.map((entry) => entry.camera))].sort((left, right) => left - right),
+      sha256: sha256(stableJson(viewerEvidence))
+    },
     problems,
     classification,
     passed: classification === "PASS"
@@ -641,12 +779,13 @@ export function evaluateSpeedifyEvidence({ content, startMs, endMs, activeCamera
   };
 }
 
-function aggregateCadenceProblems(samples, profiles) {
+function aggregateCadenceProblems(samples, profiles, activeCameras) {
+  validateActiveCameras(activeCameras);
   if (samples.length < 2) return ["production soak has fewer than two monitor samples"];
   const problems = [];
   const first = samples[0].monitor;
   const last = samples.at(-1).monitor;
-  for (const camera of ACTIVE_CAMERAS) {
+  for (const camera of activeCameras) {
     const before = first.courts.find((entry) => entry.courtNumber === camera)?.browser;
     const after = last.courts.find((entry) => entry.courtNumber === camera)?.browser;
     if (!before || !after || before.pageLoadedAt !== after.pageLoadedAt || before.pageBuildVersion !== after.pageBuildVersion) {
@@ -685,10 +824,34 @@ function inactiveCameraProblems(snapshot, camera, problems) {
   const court = courtByNumber(snapshot, camera, problems);
   if (!court) return;
   if (court.browser) problems.push(`Camera ${camera} unexpectedly has a program browser`);
-  for (const branch of ["raw", "preview", "program"]) {
+  for (const branch of ["raw", "normalized", "preview", "program"]) {
     const path = court.paths?.[branch];
     if (path?.ready || (path?.readerCount ?? 0) !== 0) problems.push(`Camera ${camera} ${branch} is unexpectedly active`);
   }
+  if (court.ffmpeg?.normalizer) problems.push(`Camera ${camera} normalizer is unexpectedly active`);
+}
+
+function normalizerProblems(camera, court, assignment, expectedFps) {
+  const normalized = court.paths?.normalized;
+  const ffmpeg = court.ffmpeg?.normalizer;
+  if (assignment.sourcePathMode !== "isolated-hevc-normalizer") {
+    return normalized?.ready || (normalized?.readerCount ?? 0) !== 0 || ffmpeg
+      ? [`Camera ${camera} direct-H264 path unexpectedly uses the HEVC normalizer`]
+      : [];
+  }
+  const problems = [];
+  if (!normalized?.ready || normalized.frameErrors !== 0 || (normalized.inboundBitrateBps ?? 0) <= 0
+    || normalized.readerCount < 1 || normalized.readerCount > 2 || normalized.videoCodec !== "H264"
+    || normalized.videoWidth !== 1920 || normalized.videoHeight !== 1080 || normalized.audioCodec !== "OPUS"
+    || normalized.audioSampleRateHz !== 48_000 || normalized.audioChannelCount !== 2) {
+    problems.push(`Camera ${camera} normalized browser path is not healthy H264/Opus 1920x1080 with 1-2 readers`);
+  }
+  if (!ffmpeg || !Number.isFinite(ffmpeg.framesPerSecond) || Math.abs(ffmpeg.framesPerSecond - expectedFps) > 2
+    || ffmpeg.droppedFrames !== 0 || ffmpeg.duplicatedFrames !== 0
+    || !Number.isFinite(ffmpeg.speedRatio) || ffmpeg.speedRatio < 0.95 || ffmpeg.speedRatio > 1.05) {
+    problems.push(`Camera ${camera} HEVC normalizer is outside ${expectedFps}fps, real-time, zero-drop bounds`);
+  }
+  return problems;
 }
 
 function cameraOutputProblems(court, stream, broadcast, expectedStreamId, nowMs) {
@@ -696,6 +859,7 @@ function cameraOutputProblems(court, stream, broadcast, expectedStreamId, nowMs)
   if (!court?.paths?.program?.ready || court.paths.program.readerCount !== 1 || court.paths.program.frameErrors !== 0) problems.push("program path is not ready with one reader");
   const browser = court?.browser;
   if (!browser || !freshAge(nowMs - Date.parse(browser.receivedAt)) || browser.video?.state !== "playing" || browser.video?.connectionState !== "connected") problems.push("program browser is not playing");
+  else if (browser.video.networkPath !== "private-vpc") problems.push("program browser is not using the private VPC media path");
   if (stream.streamStatus !== "active" || stream.healthStatus !== "good" || stream.configurationIssues.length !== 0) problems.push("YouTube ingest is not healthy");
   if (broadcast.streamId !== expectedStreamId || broadcast.lifeCycleStatus !== "live" || broadcast.recordingStatus !== "recording" || broadcast.privacyStatus !== "unlisted") problems.push("YouTube broadcast is not live and correctly bound");
   return problems;
@@ -714,9 +878,9 @@ function plainEnglishAlert(problems) {
 class RouterSoakRuntime {
   constructor({ host, runner = runCommand }) { this.host = validateRouterHost(host); this.runner = runner; }
 
-  async preflight() {
+  async preflight({ minimumUploadMbps }) {
     const result = await this.#ssh("test -x /usr/sbin/scorecheck-speedify-soak-recorder && /usr/sbin/scorecheck-speedify-routing status");
-    const problems = productionRouterPreflightProblems(result.stdout);
+    const problems = productionRouterPreflightProblems(result.stdout, minimumUploadMbps);
     if (problems.length) throw new Error(`venue router is not ready: ${problems.join("; ")}`);
     return { healthy: true };
   }
@@ -754,7 +918,7 @@ class RouterSoakRuntime {
   #ssh(command) { return this.runner("ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", this.host, command]); }
 }
 
-export function productionRouterPreflightProblems(raw) {
+export function productionRouterPreflightProblems(raw, minimumUploadMbps) {
   const value = String(raw ?? "").replaceAll("\r", "");
   const problems = [];
   const ingestIp = /^Ingest IP: ((?:\d{1,3}\.){3}\d{1,3})$/m.exec(value)?.[1] ?? null;
@@ -762,6 +926,7 @@ export function productionRouterPreflightProblems(raw) {
   const guardRules = value.split("\n").filter((line) => /\blookup 901$/.test(line));
   const validatedUpload = Number(/^validated_upload_mbps=(\d+)$/m.exec(value)?.[1]);
   const minimumUpload = Number(/^minimum_upload_mbps=(\d+)$/m.exec(value)?.[1]);
+  if (!Number.isFinite(minimumUploadMbps) || minimumUploadMbps <= 0) throw new Error("event minimum bonded upload is required");
 
   if (!/^Enabled: yes$/m.test(value)) problems.push("ScoreCheck camera routing is not enabled");
   if (!/^Speedify state: CONNECTED$/m.test(value)) problems.push("Speedify is not connected");
@@ -773,20 +938,34 @@ export function productionRouterPreflightProblems(raw) {
   if (!/^Guard route table 901:\nblackhole default\b/m.test(value)) problems.push("the fail-closed guard route is missing");
   if (!/^Firewall kill switch: active$/m.test(value)) problems.push("the camera kill switch is not active");
   if (!Number.isFinite(validatedUpload) || !Number.isFinite(minimumUpload) || validatedUpload < minimumUpload) problems.push("the validated bonded upload is below its required minimum");
+  if (Number.isFinite(minimumUpload) && minimumUpload < minimumUploadMbps) problems.push(`the router minimum upload ${minimumUpload} Mbps is below the event requirement ${minimumUploadMbps} Mbps`);
+  if (Number.isFinite(validatedUpload) && validatedUpload < minimumUploadMbps) problems.push(`the router validated upload ${validatedUpload} Mbps is below the event requirement ${minimumUploadMbps} Mbps`);
   if (!ingestIp || !new RegExp(`^ingest_ip=${ingestIp.replaceAll(".", "\\.")}$`, "m").test(value)) problems.push("the validated ingest endpoint does not match routing");
   if (!/^Watchdog lock owner: [1-9]\d*$/m.test(value)) problems.push("the fail-closed routing watchdog is not active");
   return unique(problems);
 }
 
-function createState({ event, evidence, nowMs, minimumDurationMs, maximumDurationMs }) {
+function createState({ event, evidence, nowMs, minimumDurationMs, maximumDurationMs, venue, commentary, renderer, destinations }) {
+  validateVenueRuntime(venue);
   return {
-    schemaVersion: 1,
+    schemaVersion: 5,
     event,
     runId: randomUUID(),
     phase: "ARMED",
     evidence,
-    activeCameras: [...ACTIVE_CAMERAS],
-    inactiveCameras: [...INACTIVE_CAMERAS],
+    activeCameras: [...venue.activeCameras],
+    inactiveCameras: [...venue.inactiveCameras],
+    venueProfileSha256: venue.sha256,
+    commentaryQualificationSha256: commentary.sha256,
+    runBinding: createRunBinding(renderer, destinations, venue.activeCameras),
+    venueAdmission: {
+      reserveFraction: venue.reserveFraction,
+      aggregateMaximumSourceBitrateBps: venue.aggregateMaximumSourceBitrateBps,
+      requiredSustainedUploadMbps: venue.requiredSustainedUploadMbps,
+      validatedSustainedUploadMbps: venue.validatedSustainedUploadMbps,
+      headroomMbps: venue.headroomMbps,
+      passed: venue.passed
+    },
     minimumDurationMs,
     maximumDurationMs,
     armedAt: new Date(nowMs).toISOString(),
@@ -794,6 +973,8 @@ function createState({ event, evidence, nowMs, minimumDurationMs, maximumDuratio
     startedAt: null,
     endedAt: null,
     profiles: {},
+    normalizers: {},
+    outputConformance: {},
     egress: {},
     admission: {},
     sampler: null,
@@ -807,20 +988,95 @@ function createState({ event, evidence, nowMs, minimumDurationMs, maximumDuratio
     consecutiveProblemSamples: 0,
     notificationOpen: false,
     notifications: [],
+    viewerProbeRequired: true,
+    viewerProbe: { nextCameraIndex: 0, completed: 0, passed: 0, failed: 0, lastByCamera: {} },
     classification: null,
     reportSha256: null
   };
 }
 
-function validateInputs({ options, profile, manifest, lifecycleState }) {
-  if (!profile || profile.schemaVersion !== 5) throw new Error("event operator profile contract is invalid");
+function validateInputs({ options, profile, manifest, lifecycleState, venue }) {
+  if (!profile || profile.schemaVersion !== 8) throw new Error("event operator profile contract is invalid");
   if (manifest?.kind !== "production" || !Array.isArray(manifest.droplets) || manifest.droplets.length !== 12) throw new Error("production soak requires the exact 12-host production manifest");
   if (lifecycleState?.event !== manifest.event || !new Set(["ready", "live"]).has(lifecycleState.phase)) throw new Error("production soak requires a matching ready or live lifecycle state");
   if (options.command === "run" && lifecycleState.phase !== "live") throw new Error("production soak run requires lifecycle phase live");
+  validateVenueRuntime(venue);
 }
 
-function validateState(state, event, options) {
-  if (!state || state.schemaVersion !== 1 || state.event !== event || state.evidence !== options.evidence || state.minimumDurationMs !== options.minimumDurationMs || state.maximumDurationMs !== options.maximumDurationMs) throw new Error("production soak state does not match this run");
+function validateState(state, event, options, venue, commentary, renderer, destinations) {
+  const expectedRunBinding = createRunBinding(renderer, destinations, venue.activeCameras);
+  if (!state || state.schemaVersion !== 5 || state.event !== event || state.evidence !== options.evidence || state.minimumDurationMs !== options.minimumDurationMs || state.maximumDurationMs !== options.maximumDurationMs
+    || state.venueProfileSha256 !== venue.sha256 || state.commentaryQualificationSha256 !== commentary.sha256 || stableJson(state.runBinding) !== stableJson(expectedRunBinding)
+    || JSON.stringify(state.activeCameras) !== JSON.stringify(venue.activeCameras) || JSON.stringify(state.inactiveCameras) !== JSON.stringify(venue.inactiveCameras)) throw new Error("production soak state does not match this run");
+}
+
+export function outputConformanceProblems(value, profiles, activeCameras, runBinding) {
+  validateActiveCameras(activeCameras);
+  const problems = [];
+  for (const camera of activeCameras) {
+    const evidence = value?.[camera];
+    const profile = profiles?.[camera]?.profile;
+    const destination = runBinding?.destinations?.[camera];
+    if (!evidence || evidence.status !== "QUALIFIED" || evidence.court !== camera || evidence.profile !== profile) {
+      problems.push(`Camera ${camera} encoded output is not qualified for ${profile ?? "its selected profile"}`);
+      continue;
+    }
+    if (!/^[a-f0-9]{64}$/u.test(evidence.sample?.sha256 ?? "") || !Number.isFinite(evidence.sample?.durationSeconds) || evidence.sample.durationSeconds < 15) problems.push(`Camera ${camera} output qualification sample is invalid`);
+    if (!destination || evidence.destination?.streamId !== destination.streamId || evidence.destination?.broadcastId !== destination.broadcastId) problems.push(`Camera ${camera} output qualification is not bound to its YouTube destination`);
+    if (evidence.renderer?.gitSha !== runBinding?.renderer?.gitSha || evidence.renderer?.deploymentId !== runBinding?.renderer?.deploymentId) problems.push(`Camera ${camera} output qualification is not bound to its renderer`);
+  }
+  return unique(problems);
+}
+
+function createRunBinding(renderer, destinations, activeCameras) {
+  validateActiveCameras(activeCameras);
+  if (!renderer || typeof renderer !== "object" || !/^[a-f0-9]{40}$/u.test(renderer.gitSha ?? "") || !/^dpl_[A-Za-z0-9]+$/u.test(renderer.deploymentId ?? "")) throw new Error("production renderer binding is invalid");
+  const destinationBinding = {};
+  for (const camera of activeCameras) {
+    const streamId = destinations?.streams?.[camera]?.id;
+    const broadcastId = destinations?.broadcasts?.[camera]?.id;
+    if (!streamId || !broadcastId) throw new Error(`Camera ${camera} production destination binding is invalid`);
+    destinationBinding[camera] = { streamId, broadcastId };
+  }
+  return {
+    renderer: {
+      gitSha: renderer.gitSha,
+      deploymentId: renderer.deploymentId,
+      assetNamespace: renderer.assetNamespace,
+      contracts: { ...renderer.contracts }
+    },
+    destinations: destinationBinding
+  };
+}
+
+export function viewerEvidenceProblems(value, activeCameras, outputConformance) {
+  validateActiveCameras(activeCameras);
+  if (!Array.isArray(value)) return ["external viewer evidence is missing"];
+  const problems = [];
+  for (const camera of activeCameras) {
+    const observations = value.filter((entry) => entry?.camera === camera);
+    const expectedBroadcastId = outputConformance?.[camera]?.destination?.broadcastId;
+    if (observations.length === 0) {
+      problems.push(`Camera ${camera} has no external viewer playback evidence`);
+      continue;
+    }
+    if (observations.some((entry) => entry.passed !== true)) problems.push(`Camera ${camera} has a failed external viewer playback observation`);
+    if (observations.some((entry) => entry.broadcastId == null || !Number.isFinite(Date.parse(entry.observedAt)))) problems.push(`Camera ${camera} external viewer evidence identity is invalid`);
+    if (!expectedBroadcastId || observations.some((entry) => entry.broadcastId !== expectedBroadcastId)) problems.push(`Camera ${camera} external viewer evidence does not match its qualified broadcast`);
+  }
+  if (value.some((entry) => !activeCameras.includes(entry?.camera))) problems.push("external viewer evidence contains an inactive camera");
+  return unique(problems);
+}
+
+export function admittedProfileProblems(camera, profile, assignment) {
+  const problems = [];
+  if (!assignment || assignment.cameraNumber !== camera || assignment.cameraIdentity !== `camera-${camera}`) return [`Camera ${camera} has no permanent venue assignment`];
+  if (!profile || profile.profile !== assignment.outputProfile) problems.push(`Camera ${camera} output profile does not match ${assignment.sourceProfile}`);
+  if (profile?.sourcePathMode !== assignment.sourcePathMode) problems.push(`Camera ${camera} source path does not match its venue assignment`);
+  if (profile?.source?.codec !== assignment.sourceCodec) problems.push(`Camera ${camera} source codec does not match its venue assignment`);
+  if (profile?.source?.frameRateMode !== assignment.frameRateMode) problems.push(`Camera ${camera} source frame rate does not match its venue assignment`);
+  if (profile?.browserInput?.codec !== "H264" || profile?.browserInput?.hasBFrames !== 0 || profile?.browserInput?.pixelFormat !== "yuv420p") problems.push(`Camera ${camera} browser input is not H264 yuv420p with zero B-frames`);
+  return unique(problems);
 }
 
 function ingestHost(manifest, lifecycleState) {
@@ -844,6 +1100,16 @@ function courtByNumber(snapshot, camera, problems) {
 }
 
 function freshAge(value) { return Number.isFinite(value) && value >= -5_000 && value <= MAX_MONITOR_AGE_MS; }
+function cameraList(cameras) { return cameras.length === 1 ? `Camera ${cameras[0]}` : `Cameras ${cameras.join(", ")}`; }
+function validateActiveCameras(value) {
+  if (!Array.isArray(value) || value.length < 1 || value.some((camera, index) => !Number.isInteger(camera) || camera < 1 || camera > 8 || (index > 0 && camera <= value[index - 1]))) throw new Error("active camera list is invalid");
+}
+function validateVenueRuntime(value) {
+  validateActiveCameras(value?.activeCameras);
+  if (!Array.isArray(value.inactiveCameras) || new Set([...value.activeCameras, ...value.inactiveCameras]).size !== 8 || [...value.activeCameras, ...value.inactiveCameras].some((camera) => !Number.isInteger(camera) || camera < 1 || camera > 8)) throw new Error("venue active/inactive camera partition is invalid");
+  for (const camera of value.activeCameras) if (!value.assignments?.[camera]) throw new Error(`venue assignment for Camera ${camera} is missing`);
+  if (value.passed !== true || !Number.isFinite(value.requiredSustainedUploadMbps) || value.requiredSustainedUploadMbps <= 0) throw new Error("venue upload admission is invalid");
+}
 function unique(values) { return [...new Set(values)]; }
 function required(value, label) { if (typeof value !== "string" || !value.trim() || /[\r\n\0]/.test(value)) throw new Error(`${label} is required`); return value.trim(); }
 function safeError(value) { return value instanceof Error ? value.message.slice(0, 300) : String(value).slice(0, 300); }
@@ -888,6 +1154,12 @@ async function readSamples(path, runId) {
   return rows;
 }
 
+async function readViewerProbes(path, runId) {
+  const rows = (await readFile(path, "utf8")).split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+  if (rows.some((row, index) => row.runId !== runId || row.sequence !== index)) throw new Error("production viewer-probe continuity is invalid");
+  return rows;
+}
+
 function publicState(state) {
   return {
     status: state.phase,
@@ -899,6 +1171,10 @@ function publicState(state) {
     endedAt: state.endedAt,
     activeCameras: state.activeCameras,
     profiles: state.profiles,
+    runBinding: state.runBinding,
+    normalizers: state.normalizers,
+    viewerProbe: state.viewerProbe,
+    outputConformance: state.outputConformance,
     egress: state.egress,
     observedSamples: state.sampleCount,
     problemCount: state.problemCount,

@@ -3,7 +3,7 @@
 The ingest server owns four operator-facing path classes per camera:
 
 - `courtN_raw`: permanent Mevo/camera publishing identity.
-- `courtN_preview`: clean, normalized, low-latency H.264/Opus for people.
+- `courtN_preview`: clean, browser-safe, low-latency H.264/Opus for people.
 - `courtN_monitor`: on-demand 360p/10 FPS data-saver view for one selected camera.
 - `courtN_program`: clean preview delayed at the SRT receiver for compositing.
 
@@ -52,17 +52,26 @@ and the runner terminates and waits for both FFmpeg and its progress parser
 before exiting. This ownership is required because MediaMTX is PID 1 in the
 container and otherwise adopts unreaped hook descendants.
 
-Every H.264 or HEVC input is normalized to H.264/Opus at 720p30 before
-preview/program distribution. A 1080p60 camera is therefore an ingest stress
-source, not a 60 fps program output. The one-second normalized GOP limits
-decoder recovery time after an upstream loss event.
+The shared ingest does not software-encode production video. A camera may use
+the direct preview/program branch only after the production source gate proves
+1920x1080 progressive H.264 at its exact 29.97/30/59.94/60 mode, `yuv420p`, no
+B-frames, bounded timestamps, and a two-second-or-shorter GOP. The branch
+stream-copies that H.264 video and converts AAC to 48 kHz stereo Opus.
+
+HEVC remains a supported venue-bandwidth source format only when the event
+manifest assigns an isolated HEVC-to-H.264 normalizer and the source probe also
+proves the resulting `courtN_preview` is browser-safe. The current template has
+no qualified HEVC normalizer assignment, so HEVC must fail production admission
+instead of being copied into Linux Chromium WHEP. Monitor and calibration paths
+may encode low-resolution diagnostics, but they never define YouTube output.
 
 The July 13 extended run proved that the four-vCPU MediaMTX host does not have
-production headroom for the final shared normalization load: load remained
+production headroom for shared video normalization: load remained
 above 12 at the endpoint with only three active preview/program pairs, and hook
-zombies grew to 121. MediaMTX remains the raw/derived path relay, but final
-qualification must use camera-side H.264 or an isolated, benchmarked
-normalization tier. Run `test-scorecheck-ffmpeg-runner.sh` before deployment;
+zombies grew to 121. MediaMTX remains the raw/derived path relay. Final
+qualification must use browser-safe camera-side H.264 or an isolated,
+benchmarked normalization tier; final YouTube output remains 1080p30 or
+1080p60. Run `test-scorecheck-ffmpeg-runner.sh` before deployment;
 the live churn gate must then show zero zombie growth across at least 50 branch
 start/stop cycles.
 

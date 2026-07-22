@@ -64,7 +64,7 @@ retry_docker_operation() {
 
 candidate_image="scorecheck-monitoring:candidate-${REVISION:0:12}-$$"
 rollback_image="scorecheck-monitoring:rollback-${REVISION:0:12}-$$"
-monitoring_contract_version=4
+monitoring_contract_version=5
 inhibition_container="scorecheck-alertmanager-preflight-$$"
 backup_dir=""
 rollback_required=0

@@ -6,7 +6,7 @@
 #   ./start-court.sh <court-number> <output-profile>
 #
 #   court-number  1-8; the stream key is read only from COURT_<N>_YOUTUBE_KEY
-#   output-profile  one of: 720p30, 1080p30, 1080p60
+#   output-profile  one of: 1080p30, 1080p60
 # Examples:
 #   ./start-court.sh 1 1080p30
 #
@@ -28,14 +28,18 @@ if (( $# != 2 )); then
 fi
 COURT="$1"
 OUTPUT_PROFILE="$2"
+if ! [[ "$COURT" =~ ^[0-9]+$ ]]; then
+  echo "error: court-number must be an integer, got '$COURT'" >&2
+  exit 1
+fi
 
+load_env
+require_livekit_env
+find_lk
+
+# The selected profile is authoritative. Values left in an old .env must not
+# silently downgrade or otherwise alter the final YouTube output.
 case "$OUTPUT_PROFILE" in
-  720p30)
-    EGRESS_WIDTH=1280
-    EGRESS_HEIGHT=720
-    EGRESS_FRAMERATE=30
-    EGRESS_VIDEO_BITRATE=4000
-    ;;
   1080p30)
     EGRESS_WIDTH=1920
     EGRESS_HEIGHT=1080
@@ -49,18 +53,13 @@ case "$OUTPUT_PROFILE" in
     EGRESS_VIDEO_BITRATE=12000
     ;;
   *)
-    echo "error: output-profile must be 720p30, 1080p30, or 1080p60, got '$OUTPUT_PROFILE'." >&2
+    echo "error: output-profile must be 1080p30 or 1080p60, got '$OUTPUT_PROFILE'." >&2
     exit 1
     ;;
 esac
-if ! [[ "$COURT" =~ ^[0-9]+$ ]]; then
-  echo "error: court-number must be an integer, got '$COURT'" >&2
-  exit 1
-fi
-
-load_env
-require_livekit_env
-find_lk
+EGRESS_AUDIO_BITRATE=128
+EGRESS_AUDIO_FREQUENCY=48000
+EGRESS_KEYFRAME_INTERVAL=2
 
 # Serialize the active-list check and start request. This host is qualified for
 # exactly one web Egress; LiveKit's native can-accept metric has oscillated
@@ -113,12 +112,23 @@ fi
 YOUTUBE_RTMPS_BASE="${YOUTUBE_RTMPS_BASE:-rtmps://a.rtmps.youtube.com/live2}"
 : "${PROGRAM_PAGE_BASE_URL:?set PROGRAM_PAGE_BASE_URL in .env (see .env.example)}"
 : "${PROGRAM_PAGE_TOKEN:?set PROGRAM_PAGE_TOKEN in .env (see .env.example)}"
+: "${PROGRAM_RENDERER_GIT_SHA:?set PROGRAM_RENDERER_GIT_SHA in .env (see .env.example)}"
+: "${PROGRAM_RENDERER_DEPLOYMENT_ID:?set PROGRAM_RENDERER_DEPLOYMENT_ID in .env (see .env.example)}"
+if ! [[ "$PROGRAM_PAGE_BASE_URL" =~ ^https://[a-z0-9-]+\.vercel\.app/program$ ]]; then
+  echo "error: PROGRAM_PAGE_BASE_URL must use the immutable generated Vercel deployment URL ending in /program." >&2
+  exit 1
+fi
+if ! [[ "$PROGRAM_RENDERER_GIT_SHA" =~ ^[a-f0-9]{40}$ ]]; then
+  echo "error: PROGRAM_RENDERER_GIT_SHA must be the exact 40-character renderer commit." >&2
+  exit 1
+fi
+if ! [[ "$PROGRAM_RENDERER_DEPLOYMENT_ID" =~ ^dpl_[A-Za-z0-9]+$ ]]; then
+  echo "error: PROGRAM_RENDERER_DEPLOYMENT_ID is invalid." >&2
+  exit 1
+fi
 
-EGRESS_AUDIO_BITRATE="${EGRESS_AUDIO_BITRATE:-128}"
-EGRESS_AUDIO_FREQUENCY="${EGRESS_AUDIO_FREQUENCY:-48000}"
-EGRESS_KEYFRAME_INTERVAL="${EGRESS_KEYFRAME_INTERVAL:-2}"
-
-PAGE_URL="${PROGRAM_PAGE_BASE_URL}/${COURT}?token=${PROGRAM_PAGE_TOKEN}"
+PROGRAM_TOKEN_FRAGMENT="$(printf '%s' "$PROGRAM_PAGE_TOKEN" | jq -sRr @uri)"
+PAGE_URL="${PROGRAM_PAGE_BASE_URL}/bootstrap?court=${COURT}&build=${PROGRAM_RENDERER_GIT_SHA}&deployment=${PROGRAM_RENDERER_DEPLOYMENT_ID}#token=${PROGRAM_TOKEN_FRAGMENT}"
 RTMP_URL="${YOUTUBE_RTMPS_BASE}/${STREAM_KEY}"
 
 # --- generate the WebEgressRequest (protojson) ----------------------------------
@@ -155,7 +165,7 @@ EOF
 chmod 600 "$REQ_FILE" # contains the stream key
 
 echo "court ${COURT}: starting web egress"
-echo "  page:   ${PROGRAM_PAGE_BASE_URL}/${COURT}?token=<redacted>"
+echo "  page:   ${PROGRAM_PAGE_BASE_URL}/bootstrap?court=${COURT}&build=${PROGRAM_RENDERER_GIT_SHA}&deployment=${PROGRAM_RENDERER_DEPLOYMENT_ID}#token=<redacted>"
 echo "  rtmps:  ${YOUTUBE_RTMPS_BASE}/<key-redacted>"
 echo "  encode: ${OUTPUT_PROFILE} (${EGRESS_WIDTH}x${EGRESS_HEIGHT}@${EGRESS_FRAMERATE} ${EGRESS_VIDEO_BITRATE}kbps), keyframe ${EGRESS_KEYFRAME_INTERVAL}s"
 

@@ -4,7 +4,7 @@ import test from "node:test";
 import { dependencyModeForCommand, materialModeForCommand, validateConfirmation, validateRehearsalProfile } from "./rehearsal-stack.mjs";
 
 const profile = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   manifest: "/protected/rehearsal/manifest.json",
   lifecycleState: "/protected/rehearsal/lifecycle-state.json",
   rehearsalState: "/protected/rehearsal/rehearsal-state.json",
@@ -14,6 +14,7 @@ const profile = {
   credentialsEnv: "/protected/provider.env",
   sshKey: "/protected/scorecheck_do",
   knownHosts: "/protected/rehearsal/known_hosts",
+  venueProfile: "/protected/rehearsal/venue-profile.json",
   ffmpegPath: "/opt/homebrew/bin/ffmpeg",
   git: { repo: "nhicks00/ScoreCheck", repoId: 123, ref: "main", sha: "a".repeat(40) },
   soakDurationSeconds: 1_800

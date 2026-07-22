@@ -24,8 +24,17 @@ chmod 755 "$FIXTURE/bin/flock" "$FIXTURE/bin/lk" "$FIXTURE/start-court.sh"
 printf '%s\n' \
   'LIVEKIT_API_KEY=test-key' \
   'LIVEKIT_API_SECRET=test-secret-long-enough' \
-  'PROGRAM_PAGE_BASE_URL=https://example.test/program/court' \
+  'PROGRAM_PAGE_BASE_URL=https://scorecheck-abc123-test.vercel.app/program' \
   'PROGRAM_PAGE_TOKEN=test-program-token' \
+  'PROGRAM_RENDERER_GIT_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+  'PROGRAM_RENDERER_DEPLOYMENT_ID=dpl_test123' \
+  'EGRESS_WIDTH=1280' \
+  'EGRESS_HEIGHT=720' \
+  'EGRESS_FRAMERATE=25' \
+  'EGRESS_VIDEO_BITRATE=4000' \
+  'EGRESS_AUDIO_BITRATE=64' \
+  'EGRESS_AUDIO_FREQUENCY=44100' \
+  'EGRESS_KEYFRAME_INTERVAL=4' \
   'COURT_1_YOUTUBE_KEY=test-stream-key' >"$FIXTURE/.env"
 
 PATH="$FIXTURE/bin:$PATH" "$FIXTURE/start-court.sh" 1 1080p30 >"$FIXTURE/start.out" 2>&1
@@ -35,6 +44,14 @@ grep -Fq '"width": 1920' "$FIXTURE/requests/court-1.json"
 grep -Fq '"height": 1080' "$FIXTURE/requests/court-1.json"
 grep -Fq '"framerate": 30' "$FIXTURE/requests/court-1.json"
 grep -Fq '"video_bitrate": 10000' "$FIXTURE/requests/court-1.json"
+grep -Fq '"audio_bitrate": 128' "$FIXTURE/requests/court-1.json"
+grep -Fq '"audio_frequency": 48000' "$FIXTURE/requests/court-1.json"
+grep -Fq '"key_frame_interval": 2' "$FIXTURE/requests/court-1.json"
+grep -Fq 'https://scorecheck-abc123-test.vercel.app/program/bootstrap?court=1&build=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&deployment=dpl_test123#token=test-program-token' "$FIXTURE/requests/court-1.json"
+if grep -Fq '?token=' "$FIXTURE/requests/court-1.json"; then
+  printf 'FAIL: program token remained in the request query string\n' >&2
+  exit 1
+fi
 if grep -Fq 'test-stream-key' "$FIXTURE/start.out" || grep -Fq 'test-program-token' "$FIXTURE/start.out"; then
   printf 'FAIL: protected values appeared in start output\n' >&2
   exit 1
@@ -59,6 +76,6 @@ if PATH="$FIXTURE/bin:$PATH" "$FIXTURE/start-court.sh" 1 auto >"$FIXTURE/profile
   printf 'FAIL: unknown output profile was accepted\n' >&2
   exit 1
 fi
-grep -Fq 'output-profile must be 720p30, 1080p30, or 1080p60' "$FIXTURE/profile.out"
+grep -Fq 'output-profile must be 1080p30 or 1080p60' "$FIXTURE/profile.out"
 
 printf 'PASS: Egress starts are serialized, single-job, and credential-safe\n'

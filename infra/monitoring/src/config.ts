@@ -94,6 +94,8 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     MONITOR_SERVICE_BIND: z.string().default("127.0.0.1"),
     MONITOR_SERVICE_PORT: port.default(9110),
     MONITOR_SERVICE_INTERVAL_MS: interval.default(1_000),
+    MONITOR_LOCAL_OUTBOX_PATH: z.string().trim().min(1).max(512).default("/var/lib/scorecheck-monitoring/incident-outbox.json")
+      .refine((value) => value.startsWith("/") && !/[\r\n\0]/.test(value) && !value.split("/").includes("..")),
     MONITOR_COURT_COUNT: z.coerce.number().int().min(1).max(8).default(8),
     HEALTHCHECKS_BASELINE_PING_URL: optionalHttpsUrl,
     HEALTHCHECKS_BASELINE_CHECK_ID: z.preprocess(emptyStringToUndefined, z.string().uuid().optional()),
@@ -146,6 +148,7 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     bind: parsed.MONITOR_SERVICE_BIND,
     port: parsed.MONITOR_SERVICE_PORT,
     intervalMs: parsed.MONITOR_SERVICE_INTERVAL_MS,
+    localOutboxPath: parsed.MONITOR_LOCAL_OUTBOX_PATH,
     courtCount: parsed.MONITOR_COURT_COUNT,
     healthchecksBaselinePingUrl: parsed.HEALTHCHECKS_BASELINE_PING_URL ?? null,
     healthchecksBaselineCheckId: parsed.HEALTHCHECKS_BASELINE_CHECK_ID ?? null,

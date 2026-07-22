@@ -56,12 +56,13 @@ export function buildRehearsalVercelEnvironment({ manifest, material, programOri
   };
 }
 
-export async function renderRehearsalSecretDirectory({ manifest, material, directory, programOrigin, youtubeDestinations, external = {} }) {
-  validateRehearsalInputs({ manifest, material, programOrigin });
+export async function renderRehearsalSecretDirectory({ manifest, material, directory, renderer, youtubeDestinations, external = {} }) {
+  validateRehearsalInputs({ manifest, material, programOrigin: renderer?.origin });
+  validateRenderer(renderer);
   completeAgentSecrets(material, manifest);
   validateYoutubeDestinations(youtubeDestinations);
   const target = resolve(directory);
-  const inputSha256 = sha256(stableJson({ manifest, material, programOrigin, youtubeDestinations, external }));
+  const inputSha256 = sha256(stableJson({ manifest, material, renderer, youtubeDestinations, external }));
   if (await exists(target)) {
     await verifyRenderedDirectory(target, inputSha256);
     return target;
@@ -83,6 +84,7 @@ export async function renderRehearsalSecretDirectory({ manifest, material, direc
       ["MEDIAMTX_PROGRAM_DELAY_MS", "3500"],
       ...COURTS.flatMap((court) => [
         [`MEDIAMTX_COURT_${court}_RAW_SOURCE`, "publisher"],
+        [`MEDIAMTX_COURT_${court}_BROWSER_SOURCE`, "raw"],
         [`MEDIAMTX_COURT_${court}_PUBLISH_USER`, material.publishers[court].user],
         [`MEDIAMTX_COURT_${court}_PUBLISH_PASS`, material.publishers[court].password]
       ])
@@ -92,8 +94,8 @@ export async function renderRehearsalSecretDirectory({ manifest, material, direc
     MONITOR_API_TOKEN: material.monitorApiToken,
     ALERTMANAGER_WEBHOOK_TOKEN: material.alertmanagerWebhookToken,
     MONITOR_BROWSER_HEARTBEAT_SECRET: material.browserHeartbeatSecret,
-    MONITOR_BROWSER_ALLOWED_ORIGINS: programOrigin,
-    MONITOR_DASHBOARD_URL: `${programOrigin}/admin/monitor`,
+    MONITOR_BROWSER_ALLOWED_ORIGINS: renderer.origin,
+    MONITOR_DASHBOARD_URL: `${renderer.origin}/admin/monitor`,
     MONITOR_COURT_COUNT: "8",
     ...(external.pushoverAppToken && external.pushoverUserKey ? {
       PUSHOVER_APP_TOKEN: external.pushoverAppToken,
@@ -118,17 +120,20 @@ export async function renderRehearsalSecretDirectory({ manifest, material, direc
         LIVEKIT_API_KEY: material.compositors[court].apiKey,
         LIVEKIT_API_SECRET: material.compositors[court].apiSecret,
         LIVEKIT_URL: "http://127.0.0.1:7880",
-        PROGRAM_PAGE_BASE_URL: `${programOrigin}/program/court`,
+        PROGRAM_PAGE_BASE_URL: `${renderer.origin}/program`,
         PROGRAM_PAGE_TOKEN: material.programPageToken,
+        PROGRAM_RENDERER_GIT_SHA: renderer.gitSha,
+        PROGRAM_RENDERER_DEPLOYMENT_ID: renderer.deploymentId,
+        CAMERA_NUMBER: String(court),
+        CAMERA_SOURCE_PATH_MODE: "direct-h264",
+        CAMERA_SOURCE_CODEC: "H264",
+        CAMERA_SOURCE_PROFILE: "STANDARD_1080P30",
+        CAMERA_FRAME_RATE_MODE: "30/1",
+        CAMERA_NORMALIZER_ENABLED: "false",
+        CAMERA_NORMALIZER_INPUT_PATH: `court${court}_raw`,
+        CAMERA_NORMALIZER_OUTPUT_PATH: `court${court}_normalized`,
         YOUTUBE_RTMPS_BASE: destination.rtmpsIngestionAddress,
-        [`COURT_${court}_YOUTUBE_KEY`]: destination.streamName,
-        EGRESS_WIDTH: "1280",
-        EGRESS_HEIGHT: "720",
-        EGRESS_FRAMERATE: "30",
-        EGRESS_VIDEO_BITRATE: "4000",
-        EGRESS_AUDIO_BITRATE: "128",
-        EGRESS_AUDIO_FREQUENCY: "48000",
-        EGRESS_KEYFRAME_INTERVAL: "2"
+        [`COURT_${court}_YOUTUBE_KEY`]: destination.streamName
       }));
     }
 
@@ -139,16 +144,11 @@ export async function renderRehearsalSecretDirectory({ manifest, material, direc
       LIVEKIT_API_KEY: spareKeys.apiKey,
       LIVEKIT_API_SECRET: spareKeys.apiSecret,
       LIVEKIT_URL: "http://127.0.0.1:7880",
-      PROGRAM_PAGE_BASE_URL: `${programOrigin}/program/court`,
+      PROGRAM_PAGE_BASE_URL: `${renderer.origin}/program`,
       PROGRAM_PAGE_TOKEN: material.programPageToken,
-      YOUTUBE_RTMPS_BASE: "rtmps://a.rtmps.youtube.com/live2",
-      EGRESS_WIDTH: "1280",
-      EGRESS_HEIGHT: "720",
-      EGRESS_FRAMERATE: "30",
-      EGRESS_VIDEO_BITRATE: "4000",
-      EGRESS_AUDIO_BITRATE: "128",
-      EGRESS_AUDIO_FREQUENCY: "48000",
-      EGRESS_KEYFRAME_INTERVAL: "2"
+      PROGRAM_RENDERER_GIT_SHA: renderer.gitSha,
+      PROGRAM_RENDERER_DEPLOYMENT_ID: renderer.deploymentId,
+      YOUTUBE_RTMPS_BASE: "rtmps://a.rtmps.youtube.com/live2"
     }));
     const files = ["material.json", "agent-tokens.json", "commentary.env", "ingest.env", "observability.env",
       ...manifest.droplets.filter((entry) => ["compositor", "compositor-spare"].includes(entry.role)).map((entry) => `compositors/${entry.name}.env`).sort()];
@@ -200,6 +200,16 @@ function validateRehearsalInputs({ manifest, material, programOrigin }) {
   }
 }
 
+function validateRenderer(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("rehearsal renderer binding is required");
+  const parsed = new URL(value.origin);
+  if (parsed.protocol !== "https:" || !parsed.hostname.endsWith(".vercel.app") || parsed.origin !== value.origin) {
+    throw new Error("rehearsal renderer origin must be an immutable generated Vercel origin");
+  }
+  if (!/^dpl_[A-Za-z0-9]+$/.test(value.deploymentId ?? "")) throw new Error("rehearsal renderer deployment id is invalid");
+  if (!/^[a-f0-9]{40}$/.test(value.gitSha ?? "")) throw new Error("rehearsal renderer Git SHA is invalid");
+}
+
 function validateYoutubeDestinations(values) {
   if (!Array.isArray(values) || values.length !== 8 || new Set(values.map((entry) => entry.court)).size !== 8) {
     throw new Error("rehearsal requires exactly eight persistent YouTube ingest streams");
@@ -207,7 +217,7 @@ function validateYoutubeDestinations(values) {
   for (const destination of values) {
     if (!COURTS.includes(destination.court)
       || destination.mode !== "persistent-youtube-stream-ingest-v1"
-      || destination.title !== `ScoreCheck Court ${destination.court} Test Stream`
+      || destination.title !== `ScoreCheck Production Camera ${destination.court} Auto Stream`
       || destination.isReusable !== true
       || !destination.streamId
       || !destination.streamName

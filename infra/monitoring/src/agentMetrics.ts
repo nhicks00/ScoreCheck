@@ -106,7 +106,7 @@ export class AgentMetrics {
     for (const metric of [this.transportMetricsAvailable, this.transportRtt, this.transportPacketsReceived, this.transportPacketsLost, this.transportPacketsRetransmitted, this.transportPacketsDropped, this.transportReceiveRate, this.transportReceiveBuffer, this.transportConfiguredLatency]) metric.reset();
     if (snapshot.role === "mediamtx") {
       for (let court = 1; court <= 8; court += 1) {
-        for (const branch of ["raw", "preview", "program"] as const) {
+        for (const branch of ["raw", "normalized", "preview", "program"] as const) {
           const labels = { agent: snapshot.agentId, court: String(court), branch };
           this.pathReady.set(labels, 0);
           this.pathReaders.set(labels, 0);

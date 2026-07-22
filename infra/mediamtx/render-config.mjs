@@ -9,13 +9,16 @@ const caddySourcePath = path.join(directory, "Caddyfile.template");
 
 export function renderMediaMtxConfigs({ mediaTemplate, caddyTemplate, environment }) {
   const publicIp = required(environment, "MEDIAMTX_PUBLIC_IP");
+  const privateIp = privateIpv4(required(environment, "MEDIAMTX_PRIVATE_IP"));
   const publicHost = required(environment, "MEDIAMTX_PUBLIC_HOST");
   const acmeEmail = email(required(environment, "MEDIAMTX_ACME_EMAIL"));
   const contentAnalyzerBindings = exactContentAnalyzerBindings(required(environment, "MEDIAMTX_CONTENT_ANALYZER_BINDINGS"));
   const delayMs = integerInRange(environment.MEDIAMTX_PROGRAM_DELAY_MS ?? "3500", 0, 30_000);
+  const browserSources = [];
 
   let mediaConfig = mediaTemplate
     .replaceAll("__PUBLIC_IP__", JSON.stringify(publicIp))
+    .replaceAll("__PRIVATE_IP__", JSON.stringify(privateIp))
     .replaceAll("__PUBLIC_HOST__", JSON.stringify(publicHost))
     .replaceAll("__CONTENT_ANALYZER_USERS__", renderContentAnalyzerUsers(contentAnalyzerBindings))
     .replaceAll("__PROGRAM_DELAY_US__", String(delayMs * 1_000));
@@ -25,11 +28,17 @@ export function renderMediaMtxConfigs({ mediaTemplate, caddyTemplate, environmen
     if (rawSource !== "publisher" && !rawSource.startsWith("srt://")) {
       throw new Error(`MEDIAMTX_COURT_${court}_RAW_SOURCE must be publisher or an srt:// URL.`);
     }
+    const browserSource = environment[`MEDIAMTX_COURT_${court}_BROWSER_SOURCE`]?.trim();
+    if (!new Set(["raw", "normalized"]).has(browserSource)) {
+      throw new Error(`MEDIAMTX_COURT_${court}_BROWSER_SOURCE must be raw or normalized.`);
+    }
+    browserSources.push(browserSource);
     mediaConfig = mediaConfig
       .replaceAll(`__COURT_${court}_RAW_SOURCE__`, JSON.stringify(rawSource))
       .replaceAll(`__COURT_${court}_PUBLISH_USER__`, JSON.stringify(required(environment, `MEDIAMTX_COURT_${court}_PUBLISH_USER`)))
       .replaceAll(`__COURT_${court}_PUBLISH_PASSWORD__`, JSON.stringify(required(environment, `MEDIAMTX_COURT_${court}_PUBLISH_PASS`)));
   }
+  mediaConfig = mediaConfig.replaceAll("__BROWSER_SOURCE_MAP__", browserSources.join(","));
 
   const caddyConfig = caddyTemplate
     .replaceAll("__PUBLIC_HOST__", publicHost)
@@ -86,6 +95,11 @@ function integerInRange(value, min, max) {
   return parsed;
 }
 
+function privateIpv4(value) {
+  if (!isPrivateIpv4(value)) throw new Error("MEDIAMTX_PRIVATE_IP must be a private IPv4 address.");
+  return value;
+}
+
 function exactContentAnalyzerBindings(value) {
   let parsed;
   try {
@@ -134,11 +148,16 @@ function renderContentAnalyzerUsers(bindings) {
     const path = binding.courts.length === 1
       ? `~^court${alternatives}_raw$`
       : `~^court(${alternatives})_raw$`;
+    const normalizedPath = binding.courts.length === 1
+      ? `~^court${alternatives}_normalized$`
+      : `~^court(${alternatives})_normalized$`;
     return `  - user: any
     ips: ${JSON.stringify([binding.ip])}
     permissions:
       - action: read
-        path: ${JSON.stringify(path)}`;
+        path: ${JSON.stringify(path)}
+      - action: publish
+        path: ${JSON.stringify(normalizedPath)}`;
   }).join("\n");
 }
 

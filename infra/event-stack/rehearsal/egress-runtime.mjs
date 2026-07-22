@@ -27,7 +27,7 @@ export class EgressRuntime {
     return { healthy: true, active: 0 };
   }
 
-  async ensureStarted({ host, court, profile = "720p30", expectedId = null }) {
+  async ensureStarted({ host, court, profile = "1080p30", expectedId = null }) {
     validateCourt(court);
     validateProfile(profile);
     if (expectedId !== null) validateEgressId(expectedId);
@@ -51,7 +51,7 @@ export class EgressRuntime {
     throw new Error(`Egress ${id} did not become active on compositor ${host}`);
   }
 
-  async proveSecondStartRejected({ host, court, profile = "720p30", expectedId }) {
+  async proveSecondStartRejected({ host, court, profile = "1080p30", expectedId }) {
     validateCourt(court);
     validateProfile(profile);
     validateEgressId(expectedId);
@@ -129,7 +129,7 @@ function validateCourt(court) {
 }
 
 function validateProfile(value) {
-  if (!new Set(["720p30", "1080p30", "1080p60"]).has(value)) throw new Error("Egress output profile is invalid");
+  if (!new Set(["1080p30", "1080p60"]).has(value)) throw new Error("Egress output profile is invalid");
 }
 
 function validateEgressId(value) {

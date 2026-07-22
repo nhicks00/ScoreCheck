@@ -57,6 +57,31 @@ describe("FFmpeg progress parser", () => {
       speedRatio: 1
     }]);
   });
+
+  it("reads compositor-local HEVC normalizer cadence", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "scorecheck-normalizer-progress-"));
+    temporaryDirectories.push(directory);
+    await writeFile(path.join(directory, "court2_normalizer.progress"), [
+      "frame=3600",
+      "fps=59.94",
+      "bitrate_kbps=12000.0",
+      "out_time_us=60000000",
+      "dup_frames=0",
+      "drop_frames=0",
+      "speed=1.00"
+    ].join("\n"));
+
+    await expect(collectFfmpegProgress(directory)).resolves.toMatchObject([{
+      name: "court2_normalizer",
+      courtNumber: 2,
+      branch: "normalizer",
+      framesPerSecond: 59.94,
+      bitrateBps: 12_000_000,
+      droppedFrames: 0,
+      duplicatedFrames: 0,
+      speedRatio: 1
+    }]);
+  });
 });
 
 describe("FFmpeg speed derivation", () => {

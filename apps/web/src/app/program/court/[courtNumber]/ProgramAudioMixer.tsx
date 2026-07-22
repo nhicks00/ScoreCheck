@@ -152,6 +152,12 @@ export function ProgramAudioMixer({
     const pendingPings = new Map<string, number>();
     const participantTimings = new Map<string, ParticipantTimingState>();
     const context = new AudioContext();
+    const silenceSource = context.createConstantSource();
+    const silenceGain = context.createGain();
+    silenceSource.offset.value = 0;
+    silenceGain.gain.value = 0;
+    silenceSource.connect(silenceGain).connect(context.destination);
+    silenceSource.start();
     const cameraGain = context.createGain();
     const cameraAnalyser = context.createAnalyser();
     cameraAnalyser.fftSize = 1024;
@@ -494,6 +500,9 @@ export function ProgramAudioMixer({
       commentaryGain.disconnect();
       compressor.disconnect();
       commentaryAnalyser.disconnect();
+      silenceSource.stop();
+      silenceSource.disconnect();
+      silenceGain.disconnect();
       void context.close();
       onHealth(EMPTY_PROGRAM_AUDIO_HEALTH);
     };

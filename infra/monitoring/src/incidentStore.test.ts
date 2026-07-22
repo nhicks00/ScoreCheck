@@ -45,6 +45,26 @@ describe("incident episode persistence", () => {
       row: { incident_id: "00000000-0000-4000-8000-000000000101", event_type: "OPENED" }
     });
   });
+
+  it("replays incident events idempotently with the durable outbox event id", async () => {
+    const writes: Array<{ table: string; operation: string; row: unknown; options?: unknown }> = [];
+    const store = storeWith({
+      from: (table: string) => ({
+        upsert: async (row: unknown, options: unknown) => {
+          writes.push({ table, operation: "upsert", row, options });
+          return { error: null };
+        }
+      })
+    });
+    const eventId = "00000000-0000-4000-8000-000000000102";
+    await store.persist({ incident: incident(), eventType: "OPENED" }, eventId);
+    expect(writes[1]).toMatchObject({
+      table: "monitoring_incident_events",
+      operation: "upsert",
+      row: { id: eventId },
+      options: { onConflict: "id", ignoreDuplicates: true }
+    });
+  });
 });
 
 function storeWith(db: object): IncidentStore {

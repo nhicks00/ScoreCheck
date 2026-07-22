@@ -41,6 +41,7 @@ services:
       - ./mediamtx.yml:/mediamtx.yml:ro
       - ./fonts:/fonts:ro
       - ./scorecheck-ffmpeg-runner.sh:/usr/local/bin/scorecheck-ffmpeg-runner:ro
+      - ./scorecheck-preview-runner.sh:/usr/local/bin/scorecheck-preview-runner:ro
       - /var/lib/scorecheck-monitoring/ffmpeg:/monitoring/ffmpeg
 
 volumes:

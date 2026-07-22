@@ -2,6 +2,8 @@ import { z } from "zod";
 
 const API_BASE = "https://volleyballlife-api-dot-net-8.azurewebsites.net";
 const VMIX_BASE = "https://api.volleyballlife.com/api/v1.0/matches";
+export const VBL_FETCH_TIMEOUT_MS = 8_000;
+const VBL_HOSTS = new Set([new URL(API_BASE).hostname, new URL(VMIX_BASE).hostname]);
 
 export type VblUrlParts = {
   tournamentId: number | null;
@@ -40,7 +42,11 @@ export type DiscoveredMatch = {
   sourcePayload: Record<string, unknown>;
 };
 
-const hydrateSchema = z.record(z.string(), z.unknown());
+const recordSchema = z.record(z.string(), z.unknown());
+const hydrateSchema = recordSchema.and(z.object({
+  days: z.array(recordSchema),
+  teams: z.array(recordSchema).default([])
+}));
 
 type TeamLookupEntry = { name: string; seed: string | null; players: string[] };
 
@@ -70,26 +76,67 @@ export function parseVblUrl(url: string): VblUrlParts | null {
   };
 }
 
-export async function discoverMatchesFromUrl(sourceUrl: string): Promise<DiscoveredMatch[]> {
+export async function discoverMatchesFromUrl(sourceUrl: string, fetchImpl: typeof fetch = fetch): Promise<DiscoveredMatch[]> {
   const parts = parseVblUrl(sourceUrl);
   if (!parts) {
     throw new Error("Could not parse VolleyballLife division ID from URL");
   }
 
-  const res = await fetch(`${API_BASE}/division/${parts.divisionId}/hydrate`, {
+  const hydrate = hydrateSchema.parse(await fetchVblJson(`${API_BASE}/division/${parts.divisionId}/hydrate`, {
+    fetchImpl,
+    headers: { referer: "https://volleyballlife.com/" }
+  }));
+  return discoverMatchesFromHydrate(hydrate, sourceUrl, parts);
+}
+
+export async function fetchVblJson(url: string, options: { fetchImpl?: typeof fetch; headers?: Record<string, string>; timeoutMs?: number } = {}) {
+  const parsed = assertSupportedVblApiUrl(url);
+  const response = await (options.fetchImpl ?? fetch)(parsed, {
     headers: {
       accept: "application/json",
-      referer: "https://volleyballlife.com/",
-      "user-agent": "MultiCourtScore Cloud/0.1"
+      "user-agent": "MultiCourtScore Cloud/0.1",
+      ...options.headers
     },
-    cache: "no-store"
+    cache: "no-store",
+    signal: AbortSignal.timeout(options.timeoutMs ?? VBL_FETCH_TIMEOUT_MS)
   });
-  if (!res.ok) {
-    throw new Error(`VolleyballLife hydrate failed: HTTP ${res.status}`);
-  }
+  if (!response.ok) throw new Error(`VolleyballLife API failed: HTTP ${response.status}`);
+  return response.json();
+}
 
-  const hydrate = hydrateSchema.parse(await res.json());
-  return discoverMatchesFromHydrate(hydrate, sourceUrl, parts);
+export function assertSupportedVblApiUrl(value: string) {
+  let url: URL;
+  try { url = new URL(value); }
+  catch { throw new Error("VolleyballLife API URL is invalid"); }
+  if (url.protocol !== "https:" || !VBL_HOSTS.has(url.hostname) || url.username || url.password) {
+    throw new Error("VolleyballLife API URL is outside the approved HTTPS hosts");
+  }
+  return url;
+}
+
+export function assertSupportedVblScorePayload(value: unknown) {
+  if (Array.isArray(value)) {
+    if (value.length < 2 || !value.slice(0, 2).every(isVmixTeamRow)) {
+      throw new Error("VolleyballLife vMix payload schema is unsupported");
+    }
+    return value;
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const score = record.score;
+    const hasKnownEnvelope = typeof record.status === "string"
+      || (score != null && typeof score === "object" && !Array.isArray(score));
+    if (hasKnownEnvelope) return value;
+  }
+  throw new Error("VolleyballLife score payload schema is unsupported");
+}
+
+export function vblRetryDelayMs(failureCount: number, identity: string) {
+  if (!Number.isInteger(failureCount) || failureCount < 1) throw new Error("VolleyballLife failure count must be positive");
+  const base = Math.min(30_000, 1_800 * (2 ** Math.min(failureCount - 1, 5)));
+  let hash = 0;
+  for (const character of `${identity}:${failureCount}`) hash = ((hash * 31) + character.charCodeAt(0)) >>> 0;
+  return Math.min(30_000, base + Math.floor(base * 0.2 * (hash / 0xffff_ffff)));
 }
 
 export function discoverMatchesFromHydrate(rawHydrate: unknown, sourceUrl: string, parsedParts?: VblUrlParts): DiscoveredMatch[] {
@@ -128,6 +175,12 @@ function buildTeamLookup(hydrate: Record<string, unknown>) {
     });
   }
   return lookup;
+}
+
+function isVmixTeamRow(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return ["teamName", "players", "isMatch", "game1", "game2", "game3"].some((key) => Object.hasOwn(record, key));
 }
 
 function extractBracketMatches(

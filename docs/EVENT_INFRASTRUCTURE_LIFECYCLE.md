@@ -299,7 +299,7 @@ operator profile:
 
 ```json
 {
-  "schemaVersion": 5,
+  "schemaVersion": 8,
   "manifest": "/absolute/protected/event/manifest.json",
   "state": "/absolute/protected/event/state.json",
   "anchors": "/absolute/protected/endpoint-anchors.json",
@@ -310,6 +310,9 @@ operator profile:
   "observabilityTlsState": "/absolute/protected/retained-observability-tls/HOSTSET_ID",
   "credentialsEnv": "/absolute/protected/provider.env",
   "lifecycleAttestation": "/absolute/protected/lifecycle-attestation.json",
+  "rendererBinding": "/absolute/protected/event/renderer-binding.json",
+  "venueProfile": "/absolute/protected/event/venue-profile.json",
+  "commentaryQualification": "/absolute/protected/event/commentary-qualification.json",
   "evidence": "/absolute/protected/event/final-evidence",
   "rehearsalEvidence": null
 }
@@ -398,7 +401,10 @@ node infra/event-stack/create-event-bundle.mjs create \
   --attestation /absolute/protected/lifecycle-attestation.json \
   --network-spec /absolute/protected/network/network-contract.json \
   --anchors /absolute/protected/endpoint-anchors.json \
-  --production-source /absolute/protected/production-recovery-source
+  --production-source /absolute/protected/production-recovery-source \
+  --renderer-binding /absolute/protected/renderer-binding.json \
+  --venue-profile /absolute/protected/venue-profile.json \
+  --commentary-qualification /absolute/protected/commentary-qualification.json
 ```
 
 The generator refuses an existing destination, weak input permissions, relative
@@ -408,21 +414,32 @@ network contract in the immutable manifest, writes the exact next command, and
 does not execute it.
 
 This is a hard cutover to event manifest schema v6 and operator profile schema
-v5. Any earlier bundle must be regenerated from the protected recovery source
+v8. Any earlier bundle must be regenerated from the protected recovery source
 and rendered network contract; lifecycle commands reject it before provider
 access.
+
+Migration `030_poller_lease_fencing.sql` is also a hard cutover. Stop every
+poller/worker that can acquire or commit a provider-score lease, apply exactly
+migration 030, deploy the matching web/worker revision, and verify a fresh lease
+returns and commits with its generation before restoring normal polling. Never
+run the old worker against migration 030, and never start the new worker before
+the migration is present.
 
 ## Native 1080 production output
 
 Production YouTube destinations use reusable streams with variable resolution
 and frame-rate admission. At each broadcast start, the runner probes the exact
-camera source and accepts only progressive H.264 or H.265 1920x1080 at
-approximately 30 or 60 fps. It then starts a matching H.264 1080p30 or 1080p60
-scoreboard-overlay Web Egress. Monitoring previews remain independent
-low-bandwidth derivatives; they
-never determine the YouTube output profile. A camera that changes frame rate
-mid-broadcast requires a controlled output restart so one YouTube session never
-silently changes encoder contracts.
+camera source against its event-bound rational frame rate, codec, bitrate,
+identity, model, firmware, GOP, timestamp, scan, pixel, and audio contract.
+Direct browser input is progressive H.264/yuv420p with no B-frames. HEVC remains
+available as a bandwidth-saving camera source only when the venue profile assigns
+that camera to the isolated compositor-local HEVC-to-H.264 normalizer; an HEVC
+camera without that assignment fails admission. It then starts a matching H.264
+1080p30 or 1080p60 scoreboard-overlay Web Egress and retains an actual ffprobe
+output-conformance artifact. Monitoring previews remain independent low-bandwidth
+derivatives and never determine the YouTube output profile. A camera that changes
+frame rate mid-broadcast requires a controlled output restart so one YouTube
+session never silently changes encoder contracts.
 
 Prepare the protected YouTube identities before creating the production
 bundle, then migrate the legacy recovery source once:
@@ -610,6 +627,20 @@ tag metadata is removed individually only after its resource count is zero.
 There is no timer deletion. Tournament schedules and post-event soaks move, so
 a timer is not authorized to decide that coverage is over.
 
+Run the read-only cost sentinel at a bounded cadence, such as every 15 minutes,
+while an event lifecycle exists:
+
+```bash
+node infra/event-stack/cost-reminders.mjs \
+  --profile /absolute/protected/event/operator-profile.json
+```
+
+It deduplicates Pushover reminders for active outputs after close, billed event
+Droplets one hour and twelve hours after close, unused setup compute, and a
+terminal lifecycle whose event Droplets are not zero. It never stops an output,
+closes a broadcast, or deletes infrastructure. A reminder is not teardown
+authorization.
+
 ## Dry run and live canary
 
 The provider-free rehearsal exercises the exact isolated 12-server workflow,
@@ -654,7 +685,7 @@ ordered output cleanup, evidence sealing, and exact infrastructure teardown. A
 failure enters the bounded recovery plan and leaves a protected report; it does
 not silently skip cleanup.
 
-During the full rehearsal, the eight 720p30 synthetic source loops run on the
+During the full rehearsal, the eight 1080p30 synthetic source loops run on the
 single manifest-owned warm-spare compositor. This does not add a thirteenth
 Droplet or alter the production pool shape. The controller encodes fixtures
 locally, pulls one digest-pinned MediaMTX FFmpeg image, and stages the fixtures
@@ -801,13 +832,15 @@ The monitor's commentary heartbeat remains the authoritative program-side audio
 contract and must prove current audio, synchronization lock, bounded timing, and
 zero packet loss before qualification starts and throughout the soak.
 
-The rehearsal YouTube contract is an exact persistent pool named `ScoreCheck
-Court 1 Test Stream` through `ScoreCheck Court 8 Test Stream`. Every member must
-be reusable RTMP, 720p30, idle before admission, unique by provider ID and stream
-key, then active/good with no configuration issues during qualification. The
-controller never creates or deletes these streams. Fresh unlisted broadcasts,
-watch pages, stream binding, recording, and lifecycle transitions are a
-separate once-per-tournament control-plane preflight. That preflight should be
+Production and rehearsal share the exact persistent pool named `ScoreCheck
+Production Camera 1 Auto Stream` through `ScoreCheck Production Camera 8 Auto
+Stream`. Every member must be reusable variable-profile RTMP, idle before
+admission, unique by provider ID and stream key, then active/good with no
+configuration issues during qualification. Production preparation creates a
+missing pool before compute provisioning; the rehearsal controller only adopts
+it and never creates or deletes streams. Fresh unlisted broadcasts, watch pages,
+stream binding, recording, and lifecycle transitions are a separate
+once-per-tournament control-plane preflight. That preflight should be
 completed at least 24 hours before coverage and may use YouTube Studio through
 an authenticated operator session when the API is unavailable. A channel daily
 creation limit applies to both API and Studio and cannot be bypassed by changing

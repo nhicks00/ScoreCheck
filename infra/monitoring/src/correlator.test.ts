@@ -401,7 +401,7 @@ function contentAgentSnapshot(
 
 function browserHeartbeat(observedAt: string, visual: Partial<BrowserHeartbeatSnapshot["visual"]> = {}): BrowserHeartbeatSnapshot {
   const payload = browserHeartbeatPayloadSchema.parse({
-    version: 4,
+    version: 5,
     credentialId: "40000000-0000-4000-8000-000000000001",
     courtNumber: 1,
     heartbeatSeq: 1,
@@ -413,6 +413,7 @@ function browserHeartbeat(observedAt: string, visual: Partial<BrowserHeartbeatSn
       state: "playing",
       transport: "whep",
       connectionState: "connected",
+      networkPath: "private-vpc",
       framesRendered: 900,
       framesPerSecond: 30,
       width: 1280,
@@ -500,7 +501,7 @@ function liveControlPlane(observedAt: string): ControlPlaneSnapshot {
 
 function emptyAgentSnapshot(generatedAt: string): AgentSnapshot {
   return {
-    version: 4,
+    version: 5,
     agentId: "preview",
     role: "mediamtx",
     assignedCourts: [],

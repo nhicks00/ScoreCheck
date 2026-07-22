@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const COURTS = Object.freeze(Array.from({ length: 8 }, (_, index) => index + 1));
 const MARKER = /^scorecheck-rehearsal-[a-zA-Z0-9-]{8,80}-camera-[1-8]$/;
 const FIXTURE_DURATION_SECONDS = 12;
-// Keep the eight 720p30 rehearsal sources at an aggregate 10 Mbps. Their
+// Keep the eight 1080p30 rehearsal sources at an aggregate 10 Mbps. Their
 // fixtures are encoded before qualification and their stream-copy loops run on
 // the manifest-owned warm spare, so operator workstation/Wi-Fi contention
 // cannot masquerade as an ingest/compositor failure. Resolution and cadence
@@ -57,7 +57,7 @@ export function buildSyntheticPublisherConfig({ court, generationId, host, user,
   const tone = 330 + court * 55;
   const fixtureArgs = [
     "-y", "-hide_banner", "-nostdin", "-loglevel", "error",
-    "-f", "lavfi", "-i", `testsrc2=size=1280x720:rate=30,format=yuv420p,hue=h=${hue}`,
+    "-f", "lavfi", "-i", `testsrc2=size=1920x1080:rate=30,format=yuv420p,hue=h=${hue}`,
     "-f", "lavfi", "-i", `sine=frequency=${tone}:sample_rate=48000`,
     "-t", String(FIXTURE_DURATION_SECONDS),
     "-map", "0:v:0", "-map", "1:a:0",

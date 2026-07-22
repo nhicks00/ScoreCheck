@@ -5,6 +5,15 @@ const VALID_PHASES: OverlayPhase[] = ["IDLE", "PREMATCH", "LIVE", "POSTMATCH", "
 export function fallbackOverlayState(courtNumber = 1): OverlayState {
   const safeCourtNumber = numberValue(courtNumber, 1, 1);
   return {
+    projection: {
+      schemaVersion: 1,
+      scoreRevision: 0,
+      authorityEpoch: 0,
+      sourceRevision: null,
+      sourceTimestamp: null,
+      materializedAt: null,
+      bodyChecksum: null
+    },
     eventId: "",
     courtId: "",
     courtNumber: safeCourtNumber,
@@ -52,8 +61,18 @@ export function coerceOverlayState(input: unknown, courtNumber = 1): OverlayStat
   const teamA = recordValue(match?.teamA);
   const teamB = recordValue(match?.teamB);
   const format = recordValue(match?.format);
+  const projection = recordValue(value.projection);
 
   return normalizeFinalOverlayState({
+    projection: {
+      schemaVersion: 1,
+      scoreRevision: nonNegativeInteger(projection?.scoreRevision),
+      authorityEpoch: nonNegativeInteger(projection?.authorityEpoch),
+      sourceRevision: nullableString(projection?.sourceRevision),
+      sourceTimestamp: isoString(projection?.sourceTimestamp),
+      materializedAt: isoString(projection?.materializedAt),
+      bodyChecksum: sha256Value(projection?.bodyChecksum)
+    },
     eventId: stringValue(value.eventId) ?? base.eventId,
     courtId: stringValue(value.courtId) ?? base.courtId,
     courtNumber: numberValue(value.courtNumber, base.courtNumber, 1),
@@ -188,11 +207,32 @@ export function overlayStateUpdatedAtMs(state: OverlayState): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-export function shouldApplyOverlayUpdate(candidate: OverlayState, lastAppliedUpdateMs: number | null): boolean {
-  if (lastAppliedUpdateMs == null) return true;
-  const candidateMs = overlayStateUpdatedAtMs(candidate);
-  if (candidateMs == null) return false;
-  return candidateMs >= lastAppliedUpdateMs;
+export type OverlayApplyCursor = {
+  scope: string;
+  scoreRevision: number;
+  sourceTimestampMs: number | null;
+  updateTimestampMs: number | null;
+};
+
+export function overlayApplyCursor(state: OverlayState): OverlayApplyCursor {
+  return {
+    scope: [state.eventId, state.courtId, state.match.id ?? "no-match"].join(":"),
+    scoreRevision: state.projection.scoreRevision,
+    sourceTimestampMs: timestampMs(state.projection.sourceTimestamp),
+    updateTimestampMs: overlayStateUpdatedAtMs(state)
+  };
+}
+
+export function shouldApplyOverlayUpdate(candidate: OverlayState, lastApplied: OverlayApplyCursor | null): boolean {
+  if (!lastApplied) return true;
+  const next = overlayApplyCursor(candidate);
+  if (next.scope !== lastApplied.scope) return true;
+  if (next.scoreRevision < lastApplied.scoreRevision) return false;
+  if (next.scoreRevision > lastApplied.scoreRevision) return true;
+  const candidateTimestamp = next.sourceTimestampMs ?? next.updateTimestampMs;
+  const appliedTimestamp = lastApplied.sourceTimestampMs ?? lastApplied.updateTimestampMs;
+  if (candidateTimestamp == null) return false;
+  return appliedTimestamp == null || candidateTimestamp >= appliedTimestamp;
 }
 
 function coerceSetScores(value: unknown): SetScore[] {
@@ -210,6 +250,24 @@ function coerceSetScores(value: unknown): SetScore[] {
     })
     .filter((item): item is SetScore => Boolean(item));
   return dedupeSetScores(parsed);
+}
+
+function nonNegativeInteger(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+function isoString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  return Number.isFinite(Date.parse(value)) ? value : null;
+}
+
+function sha256Value(value: unknown): string | null {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value) ? value : null;
+}
+
+function timestampMs(value: string | null): number | null {
+  const parsed = Date.parse(value ?? "");
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function dedupeSetScores(setScores: SetScore[]): SetScore[] {

@@ -79,7 +79,7 @@ runcmd:
   - echo '1c0fecd4ed672573e796a923f883730d97f9222170ef835d5d99b1dd1f301cd4  /tmp/lk.tar.gz' | sha256sum -c -
   - tar -xzf /tmp/lk.tar.gz -C /usr/local/bin lk
   - chmod 0755 /usr/local/bin/lk
-  - mkdir -p /opt/compositor
+  - install -d -m 0700 /opt/compositor /opt/compositor/evidence
   - systemctl daemon-reload
   - systemctl enable compositor.service
   # Starts the stack only when the bundle is already present (snapshot boots);

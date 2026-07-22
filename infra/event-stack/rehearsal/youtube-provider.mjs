@@ -1,5 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 
+import { productionStreamTitle } from "../production-youtube.mjs";
+
 const API = "https://www.googleapis.com/youtube/v3";
 const OAUTH = "https://oauth2.googleapis.com/token";
 const COURT_RANGE = new Set(Array.from({ length: 8 }, (_, index) => index + 1));
@@ -140,12 +142,12 @@ export function rehearsalMarker(generationId, court) {
 
 function normalizePersistentStream(value, expectedCourt = null) {
   const title = value?.snippet?.title;
-  const match = typeof title === "string" ? /^ScoreCheck Court ([1-8]) Test Stream$/.exec(title) : null;
+  const match = typeof title === "string" ? /^ScoreCheck Production Camera ([1-8]) Auto Stream$/.exec(title) : null;
   const court = match ? Number(match[1]) : null;
   if (!value?.id || !court || (expectedCourt !== null && court !== expectedCourt)) {
     throw new Error(`YouTube persistent rehearsal stream identity is invalid${expectedCourt ? ` for Camera ${expectedCourt}` : ""}`);
   }
-  if (value.contentDetails?.isReusable !== true || value.cdn?.ingestionType !== "rtmp" || value.cdn?.resolution !== "720p" || value.cdn?.frameRate !== "30fps") {
+  if (value.contentDetails?.isReusable !== true || value.cdn?.ingestionType !== "rtmp" || value.cdn?.resolution !== "variable" || value.cdn?.frameRate !== "variable") {
     throw new Error(`YouTube rehearsal stream profile is invalid${court ? ` for Camera ${court}` : ""}`);
   }
   const ingestion = value.cdn?.ingestionInfo;
@@ -167,7 +169,7 @@ function normalizePersistentStream(value, expectedCourt = null) {
 
 export function persistentStreamTitle(court) {
   if (!COURT_RANGE.has(court)) throw new Error("YouTube rehearsal court is invalid");
-  return `ScoreCheck Court ${court} Test Stream`;
+  return productionStreamTitle(court);
 }
 
 function validateProviderId(value, label) {

@@ -230,7 +230,7 @@ export class RehearsalVerifier {
     });
     if (!response.ok) throw new Error(`rehearsal monitor snapshot returned HTTP ${response.status}`);
     const snapshot = await response.json();
-    if (!snapshot || snapshot.version !== 4 || !Array.isArray(snapshot.courts) || !Array.isArray(snapshot.agents)) throw new Error("rehearsal monitor snapshot contract is invalid");
+    if (!snapshot || snapshot.version !== 5 || !Array.isArray(snapshot.courts) || !Array.isArray(snapshot.agents)) throw new Error("rehearsal monitor snapshot contract is invalid");
     return snapshot;
   }
 }
@@ -266,9 +266,9 @@ export function rawProblems(snapshot, nowMs = Date.now()) {
     if (path?.frameErrors !== 0) problems.push(`Camera ${court} raw frame errors are nonzero`);
     if (path?.sourceMode !== "PUSH" || path?.sourceProtocol !== protocol) problems.push(`Camera ${court} raw source is not ${protocol} PUSH`);
     if (path?.videoCodec !== "H264" || path?.videoProfile !== "Main" || path?.audioCodec !== "AAC"
-      || path?.videoWidth !== 1280 || path?.videoHeight !== 720
+      || path?.videoWidth !== 1920 || path?.videoHeight !== 1080
       || path?.audioSampleRateHz !== 48_000 || path?.audioChannelCount !== 2) {
-      problems.push(`Camera ${court} raw codec/profile is not the rehearsal H264 Main 720p/AAC 48kHz stereo contract`);
+      problems.push(`Camera ${court} raw codec/profile is not the rehearsal H264 Main 1080p/AAC 48kHz stereo contract`);
     }
   }
   return unique(problems);
@@ -295,6 +295,7 @@ export function programSubscriberProblems(snapshot, nowMs = Date.now(), court) {
     || browser.video?.state !== "playing" || browser.video?.connectionState !== "connected" || browser.video?.transport !== "whep") {
     problems.push(`Camera ${court} program browser heartbeat is not fresh and playing over WHEP`);
   } else {
+    if (browser.video.networkPath !== "private-vpc") problems.push(`Camera ${court} program browser is not using the private VPC media path`);
     if (BROWSER_COUNTER_FIELDS.some((field) => !Number.isFinite(browser.video[field]) || browser.video[field] !== 0)) {
       problems.push(`Camera ${court} program browser quality counters are not clean`);
     }
@@ -346,6 +347,7 @@ function fullProblemsInternal(snapshot, nowMs, requireZeroBrowserHistory) {
     if (!browser || !isFreshTimestampAge(browserAge) || browser.video?.state !== "playing" || browser.video?.connectionState !== "connected" || browser.video?.transport !== "whep") {
       problems.push(`Camera ${court} browser heartbeat is not fresh and playing over WHEP`);
     } else {
+      if (browser.video.networkPath !== "private-vpc") problems.push(`Camera ${court} browser heartbeat is not using the private VPC media path`);
       const countersInvalid = BROWSER_COUNTER_FIELDS.some((field) => !Number.isFinite(browser.video[field]) || browser.video[field] < 0);
       const historyNotClean = requireZeroBrowserHistory && BROWSER_COUNTER_FIELDS.some((field) => browser.video[field] !== 0);
       const pointFpsInvalid = !Number.isFinite(browser.video.framesPerSecond) || browser.video.framesPerSecond < 0 || browser.video.framesPerSecond > 120;
@@ -535,7 +537,7 @@ export function providerProblems(provider) {
     return ["YouTube evidence does not contain the exact persistent eight-stream ingest contract"];
   }
   for (const court of provider.courts) {
-    if (court.title !== `ScoreCheck Court ${court.court} Test Stream`
+    if (court.title !== `ScoreCheck Production Camera ${court.court} Auto Stream`
       || court.isReusable !== true
       || court.streamStatus !== "active"
       || court.healthStatus !== "good"

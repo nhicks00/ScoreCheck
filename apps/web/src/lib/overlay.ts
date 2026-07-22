@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { OverlayLayout, OverlayPhase, OverlayState } from "./types";
 import { coerceOverlayState } from "./overlayState";
 
@@ -41,6 +42,10 @@ type OverlayInput = {
     message: string | null;
     last_api_poll_at: string | null;
     updated_at: string | null;
+    revision?: number | null;
+    authority_epoch?: number | null;
+    state_hash?: string | null;
+    last_score_change_at?: string | null;
   } | null;
 };
 
@@ -49,7 +54,8 @@ export function buildOverlayState(input: OverlayInput): OverlayState {
   const matchFormat = input.match?.format ?? null;
   const rawPointsPerSet = matchFormat?.pointsPerSet;
   const rawSetScores = input.score?.set_scores;
-  return coerceOverlayState({
+  const materializedAt = new Date().toISOString();
+  const semantic = coerceOverlayState({
     eventId: input.court.event_id,
     courtId: input.court.id,
     courtNumber: input.court.court_number,
@@ -99,6 +105,21 @@ export function buildOverlayState(input: OverlayInput): OverlayState {
       message: input.score?.message ?? null
     }
   }, input.court.court_number);
+  const scoreRevision = nonNegativeInteger(input.score?.revision);
+  const authorityEpoch = nonNegativeInteger(input.score?.authority_epoch);
+  const sourceRevision = sourceRevisionValue(input.score?.state_hash, authorityEpoch, scoreRevision);
+  return {
+    ...semantic,
+    projection: {
+      schemaVersion: 1,
+      scoreRevision,
+      authorityEpoch,
+      sourceRevision,
+      sourceTimestamp: validIso(input.score?.last_score_change_at ?? input.score?.updated_at),
+      materializedAt,
+      bodyChecksum: createHash("sha256").update(JSON.stringify(semantic)).digest("hex")
+    }
+  };
 }
 
 function courtLabel(court: OverlayInput["court"]): string {
@@ -141,6 +162,19 @@ function numberValue(value: unknown): number | null {
   if (value == null || value === "") return null;
   const num = Number(value);
   return Number.isFinite(num) ? num : null;
+}
+
+function nonNegativeInteger(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+function sourceRevisionValue(stateHash: unknown, authorityEpoch: number, scoreRevision: number): string | null {
+  if (typeof stateHash === "string" && /^[a-f0-9]{64}$/.test(stateHash)) return stateHash;
+  return scoreRevision > 0 ? `${authorityEpoch}:${scoreRevision}` : null;
+}
+
+function validIso(value: unknown): string | null {
+  return typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : null;
 }
 
 function isMatchFinalStatus(value: unknown) {

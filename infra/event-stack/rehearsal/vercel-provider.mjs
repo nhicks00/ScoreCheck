@@ -112,6 +112,7 @@ export class VercelRehearsalProvider {
         if (!current.aliases.includes(project.origin.slice("https://".length))) {
           throw new Error("Vercel rehearsal deployment is ready without its isolated project alias");
         }
+        if (!current.url) throw new Error("Vercel rehearsal deployment is ready without its immutable generated URL");
         return current;
       }
       if (["ERROR", "CANCELED"].includes(current.state)) throw new Error(`Vercel rehearsal deployment entered ${current.state}`);
@@ -120,15 +121,26 @@ export class VercelRehearsalProvider {
     throw new Error(`Vercel rehearsal deployment did not become ready (last state ${current?.state ?? "unknown"})`);
   }
 
-  async verifyProgramPage({ project, token, timeoutMs = 5 * 60_000, intervalMs = 5_000 }) {
+  async verifyProgramPage({ project, deployment, gitSha, token, timeoutMs = 5 * 60_000, intervalMs = 5_000 }) {
     const normalized = normalizeProject(project, project.name, project.origin, project.repository);
+    const renderer = normalizeDeployment(deployment, normalized, deployment?.marker);
+    if (renderer.state !== "READY" || !renderer.url) throw new Error("Vercel rehearsal Program renderer is not an immutable READY deployment");
+    if (!/^[a-f0-9]{40}$/.test(gitSha ?? "")) throw new Error("Vercel rehearsal Program Git SHA is invalid");
     if (typeof token !== "string" || token.length < 24 || /[\r\n\0]/u.test(token)) throw new Error("Vercel rehearsal Program token is invalid");
-    const pageUrl = `${normalized.origin}/program/court/1?token=${encodeURIComponent(token)}&scene=0`;
-    const invalidUrl = `${normalized.origin}/program/court/1?token=invalid-rehearsal-token&scene=0`;
-    const request = (url) => this.publicFetchImpl(url, {
+    const sessionUrl = `${renderer.url}/api/program/session`;
+    const pageUrl = `${renderer.url}/program/court/1?build=${gitSha}&deployment=${renderer.id}&scene=0`;
+    const sessionRequest = (presentedToken) => this.publicFetchImpl(sessionUrl, {
+      method: "POST",
+      redirect: "error",
+      headers: { "content-type": "application/json", "user-agent": "ScoreCheck-Rehearsal-Preflight/1" },
+      body: JSON.stringify({ token: presentedToken, court: 1, build: gitSha, deployment: renderer.id, scene: "0" }),
+      signal: AbortSignal.timeout(30_000),
+      cache: "no-store"
+    });
+    const pageRequest = (cookie) => this.publicFetchImpl(pageUrl, {
       method: "GET",
       redirect: "error",
-      headers: { "user-agent": "ScoreCheck-Rehearsal-Preflight/1" },
+      headers: { cookie, "user-agent": "ScoreCheck-Rehearsal-Preflight/1" },
       signal: AbortSignal.timeout(30_000),
       cache: "no-store"
     });
@@ -136,7 +148,14 @@ export class VercelRehearsalProvider {
     let accepted;
     while (Date.now() <= deadline) {
       try {
-        accepted = await request(pageUrl);
+        const session = await sessionRequest(token);
+        if (session.status !== 200) {
+          accepted = session;
+        } else {
+          const cookie = session.headers.get("set-cookie")?.split(";", 1)[0] ?? "";
+          if (!cookie.startsWith("scorecheck_program_session=")) throw new Error("Vercel rehearsal Program session cookie is missing");
+          accepted = await pageRequest(cookie);
+        }
       } catch (error) {
         if (!retryableFetchError(error)) throw error;
         accepted = null;
@@ -154,9 +173,16 @@ export class VercelRehearsalProvider {
     }
     const body = await accepted.text();
     if (!body.includes("program-root")) throw new Error("Vercel rehearsal Program page preflight returned the wrong document");
-    const rejected = await request(invalidUrl);
+    const rejected = await sessionRequest("invalid-rehearsal-token");
     if (rejected.status !== 404) throw new Error(`Vercel rehearsal Program token rejection returned HTTP ${rejected.status}`);
-    return { status: "healthy", origin: normalized.origin, acceptedStatus: 200, rejectedStatus: 404 };
+    return {
+      status: "healthy",
+      origin: renderer.url,
+      deploymentId: renderer.id,
+      gitSha,
+      acceptedStatus: 200,
+      rejectedStatus: 404
+    };
   }
 
   async deleteProject(projectId) {
@@ -370,21 +396,34 @@ function normalizeDeployment(value, project, generationId) {
     throw new Error("Vercel rehearsal deployment ownership is invalid");
   }
   validateProviderId(String(value.id ?? value.uid), "deployment id");
-  if (value.meta?.scorecheckRehearsalGeneration !== generationId) throw new Error("Vercel rehearsal deployment marker is invalid");
+  const marker = value.meta?.scorecheckRehearsalGeneration ?? value.marker;
+  if (marker !== generationId) throw new Error("Vercel rehearsal deployment marker is invalid");
   const state = deploymentState(value);
   if (!new Set(["QUEUED", "BUILDING", "INITIALIZING", "READY", "ERROR", "CANCELED"]).has(state)) throw new Error("Vercel rehearsal deployment state is invalid");
-  const aliases = Array.isArray(value.alias) ? value.alias.filter((entry) => typeof entry === "string") : [];
+  const aliases = (Array.isArray(value.alias) ? value.alias : Array.isArray(value.aliases) ? value.aliases : [])
+    .filter((entry) => typeof entry === "string");
   return {
     id: String(value.id ?? value.uid),
     projectId: project.id,
     name: project.name,
     state,
     target: "production",
-    url: typeof value.url === "string" && value.url ? `https://${value.url}` : null,
+    url: deploymentOrigin(value.url),
     aliases,
     marker: generationId,
-    createdAt: Number.isFinite(value.createdAt) ? new Date(value.createdAt).toISOString() : null
+    createdAt: Number.isFinite(value.createdAt)
+      ? new Date(value.createdAt).toISOString()
+      : typeof value.createdAt === "string" ? value.createdAt : null
   };
+}
+
+function deploymentOrigin(value) {
+  if (typeof value !== "string" || !value) return null;
+  const parsed = new URL(value.startsWith("https://") ? value : `https://${value}`);
+  if (parsed.protocol !== "https:" || !parsed.hostname.endsWith(".vercel.app") || parsed.pathname !== "/" || parsed.search || parsed.hash) {
+    throw new Error("Vercel rehearsal generated deployment URL is invalid");
+  }
+  return parsed.origin;
 }
 
 function deploymentState(value) {

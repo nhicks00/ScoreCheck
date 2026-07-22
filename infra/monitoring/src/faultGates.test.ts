@@ -290,7 +290,7 @@ function compositorAgent(agentId: string, assignedCourts: number[]): AgentSnapsh
 
 function agentBase(agentId: string, role: AgentSnapshot["role"]): AgentSnapshot {
   return {
-    version: 4,
+    version: 5,
     agentId,
     role,
     assignedCourts: [],
@@ -327,7 +327,7 @@ function healthyBrowsers(): Map<number, BrowserHeartbeatSnapshot> {
 
 function browser(courtNumber: number, visualPatch: Partial<BrowserHeartbeatSnapshot["visual"]> = {}): BrowserHeartbeatSnapshot {
   const payload = browserHeartbeatPayloadSchema.parse({
-    version: 4,
+    version: 5,
     credentialId: `40000000-0000-4000-8000-${String(courtNumber).padStart(12, "0")}`,
     courtNumber,
     heartbeatSeq: 1,
@@ -335,7 +335,7 @@ function browser(courtNumber: number, visualPatch: Partial<BrowserHeartbeatSnaps
     pageLoadedAt: observedAt,
     pageBuildVersion: "test",
     configurationVersion: "test",
-    video: { state: "playing", transport: "whep", connectionState: "connected", framesRendered: 1_000, framesPerSecond: 30, width: 1280, height: 720, rttMs: 20, jitterBufferMs: 80, packetsLost: 0, packetsReceived: 1_000, framesDropped: 0, bytesReceived: 5_000_000, reconnectCount: 0, reloadCount: 0 },
+    video: { state: "playing", transport: "whep", connectionState: "connected", networkPath: "private-vpc", framesRendered: 1_000, framesPerSecond: 30, width: 1280, height: 720, rttMs: 20, jitterBufferMs: 80, packetsLost: 0, packetsReceived: 1_000, framesDropped: 0, bytesReceived: 5_000_000, reconnectCount: 0, reloadCount: 0 },
     visual: { sampledAt: observedAt, meanLuma: 120, lumaVariance: 900, darkPixelRatio: 0.02, frameDifference: 14, frozenDurationMs: 0, blackDurationMs: 0, ...visualPatch },
     commentary: { configured: false, roomConnected: false, participantCount: 0, audioTrackCount: 0, rmsDb: null, peakDb: null, secondsSinceAudio: null, cameraTrackPresent: true, cameraRmsDb: -24, syncStatus: "fallback", configuredDelayMs: null, targetDelayMs: null, appliedDelayMs: null, clockRttMs: null, syncSampleAgeMs: null },
     scoreRender: { loaded: true, connected: true, stale: false, frozen: false, matchId: `match-${courtNumber}`, phase: "LIVE", sourceSignature: `match-${courtNumber}`, renderedSignature: `match-${courtNumber}`, domMismatchReason: null, stateUpdatedAt: observedAt }

@@ -1,8 +1,37 @@
 import { describe, expect, it } from "vitest";
 import { isAuthoritativeScorePayload, normalizeScorePayload, normalizeVblBracketPayload } from "../lib/scoring";
-import { discoverMatchesFromHydrate, parseVblUrl } from "../lib/vbl";
+import { assertSupportedVblApiUrl, assertSupportedVblScorePayload, discoverMatchesFromHydrate, fetchVblJson, parseVblUrl, vblRetryDelayMs } from "../lib/vbl";
 
 describe("VolleyballLife helpers", () => {
+  it("bounds provider reads and rejects unapproved API hosts", async () => {
+    let signal: AbortSignal | null = null;
+    const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+      signal = init?.signal as AbortSignal;
+      return new Response(JSON.stringify([{ teamName: "A" }, { teamName: "B" }]), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }) as typeof fetch;
+    await expect(fetchVblJson("https://api.volleyballlife.com/api/v1.0/matches/1/vmix", { fetchImpl, timeoutMs: 50 })).resolves.toHaveLength(2);
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(() => assertSupportedVblApiUrl("https://example.com/api/v1.0/matches/1/vmix")).toThrow(/approved HTTPS hosts/);
+  });
+
+  it("fails closed on unknown score payload shapes", () => {
+    expect(assertSupportedVblScorePayload([{ teamName: "A" }, { teamName: "B" }])).toHaveLength(2);
+    expect(assertSupportedVblScorePayload({ status: "Pre-Match", score: { home: 0, away: 0 } })).toBeTruthy();
+    expect(() => assertSupportedVblScorePayload([])).toThrow(/schema is unsupported/);
+    expect(() => assertSupportedVblScorePayload({ unrelated: true })).toThrow(/schema is unsupported/);
+  });
+
+  it("uses bounded deterministic jittered retry delays", () => {
+    const delays = [1, 2, 3, 4, 5, 6].map((failure) => vblRetryDelayMs(failure, "match-1"));
+    expect(delays[0]).toBeGreaterThanOrEqual(1_800);
+    expect(delays[0]).toBeLessThan(2_160);
+    expect(delays.at(-1)).toBeLessThanOrEqual(30_000);
+    expect(delays).toEqual([1, 2, 3, 4, 5, 6].map((failure) => vblRetryDelayMs(failure, "match-1")));
+  });
+
   it("parses division, round, and pool URLs", () => {
     expect(parseVblUrl("https://volleyballlife.com/tournament/123?division=bad")).toBeNull();
     expect(parseVblUrl("https://volleyballlife.com/event/101/division/202/round/303/bracket")).toMatchObject({

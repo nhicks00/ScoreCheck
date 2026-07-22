@@ -190,6 +190,11 @@ export class EventLifecycleController {
       state.coverage.closedAt = this.now().toISOString();
       state.updatedAt = this.now().toISOString();
       await this.store.save(state);
+      await this.#notifyOnce(state, `coverage-closed:${state.event}:${state.generationId}`, {
+        title: "ScoreCheck event coverage ended",
+        message: `${state.event}: complete the broadcasts, stop the exact outputs, capture evidence, and run confirmed teardown. Billing continues until temporary servers are deleted.`,
+        priority: 0
+      });
       return state;
     });
   }

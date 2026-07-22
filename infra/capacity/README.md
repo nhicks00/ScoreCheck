@@ -28,34 +28,40 @@ the observer duration, count, rate, and closure gates.
 
 ## Final-camera profile gate
 
-`camera-profile-gate.mjs` qualifies the source profile before normalization.
+`camera-profile-gate.mjs` qualifies both the camera source and the exact
+browser-facing preview that feeds WHEP.
 It deliberately separates three evidence sources:
 
 - fixed-deadline, sanitized monitor snapshots prove publisher continuity,
   bitrate, frame-error growth, source identity, collector freshness, and the
   absence of incidents or fault gates;
-- a bounded local `ffprobe` reached through an SSH RTSP tunnel proves the
-  actual video frame rate, codec/profile, dimensions, and audio profile;
+- bounded local `ffprobe` metadata and six-second packet traces reached through
+  an SSH RTSP tunnel prove raw and preview codecs, exact rational frame rate,
+  dimensions, progressive scan, pixel format, B-frame count, two-second GOP,
+  monotonic timestamps, and audio profile;
 - the evaluator combines both artifacts into a credential-free mode-`0600`
   PASS/FAIL report.
 
 The sampler skips a missed slot instead of issuing catch-up requests, so
 clustered samples cannot inflate coverage. It never starts camera publishers,
 normalizers, program readers, Egress jobs, or destinations. The probe creates
-one short-lived raw RTSP reader per required court and closes its SSH tunnel on
-success or failure.
+one short-lived raw reader and one short-lived preview reader per required
+camera, sequentially, and closes its SSH tunnel on success or failure.
 
-The checked-in `camera-profiles.example.json` candidate targets the intended
-Camera 3-5 hard cutover: SRT push, H.264 Main 1280x720 at 29-31 fps, and AAC 48
-kHz stereo for every logical stream. Change that manifest only to the intended
-camera configuration before the run. Do not weaken it after observing HEVC or
-another mismatch; a mismatch means that camera still requires an isolated
-normalization assignment.
+The checked-in `camera-profiles.example.json` candidate targets direct H.264,
+1920x1080 progressive, exact 30 fps, yuv420p, zero B-frames, a two-second GOP,
+per-camera bitrate bounds, and AAC 48 kHz stereo. Its firmware values are
+deliberate fail-closed placeholders and must be replaced with the installed
+versions before the run. Do not weaken the manifest after observing HEVC or
+another mismatch. HEVC remains supported only when `sourcePathMode` names an
+isolated, already-qualified normalizer whose preview output passes the H.264
+WHEP contract.
 
 The separate `camera-profiles-eight-court.example.json` manifest is the required
 input for the final endurance qualification. Its output is report schema 2 and
-embeds the exact qualification contract, hashes of both protected source
-artifacts, and sanitized monitor and `ffprobe` profiles. Schema-1 reports and
+embeds qualification schema 2, the exact camera/model/firmware contract, hashes
+of the config and both protected source artifacts, and sanitized monitor and
+`ffprobe` profiles. Older reports and
 reports missing the complete generated check set are rejected; operator
 attestations cannot substitute for this artifact.
 
@@ -78,6 +84,7 @@ node infra/capacity/camera-profile-gate.mjs probe \
   --config infra/capacity/camera-profiles.example.json \
   --ingest-host root@INGEST_HOST \
   --ssh-key "$HOME/.ssh/scorecheck_do" \
+  --known-hosts /protected/event-known-hosts \
   --output "$HOME/.config/scorecheck/camera-profiles/restored-3-5/probes.json"
 
 wait "$sampler_pid"

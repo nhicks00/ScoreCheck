@@ -227,17 +227,23 @@ describe("youtubeWatchUrl", () => {
 
 describe("buildProgramMonitorPath", () => {
   it("returns null when PROGRAM_PAGE_TOKEN is unset/blank or the court is invalid", () => {
-    expect(buildProgramMonitorPath(3, null)).toBeNull();
-    expect(buildProgramMonitorPath(3, undefined)).toBeNull();
-    expect(buildProgramMonitorPath(3, "")).toBeNull();
-    expect(buildProgramMonitorPath(3, "   ")).toBeNull();
-    expect(buildProgramMonitorPath(0, "secret")).toBeNull();
-    expect(buildProgramMonitorPath(100, "secret")).toBeNull();
+    expect(buildProgramMonitorPath(3, null, "a".repeat(40), "dpl_test")).toBeNull();
+    expect(buildProgramMonitorPath(3, undefined, "a".repeat(40), "dpl_test")).toBeNull();
+    expect(buildProgramMonitorPath(3, "", "a".repeat(40), "dpl_test")).toBeNull();
+    expect(buildProgramMonitorPath(3, "   ", "a".repeat(40), "dpl_test")).toBeNull();
+    expect(buildProgramMonitorPath(0, "secret", "a".repeat(40), "dpl_test")).toBeNull();
+    expect(buildProgramMonitorPath(100, "secret", "a".repeat(40), "dpl_test")).toBeNull();
+    expect(buildProgramMonitorPath(1, "secret", "wrong", "dpl_test")).toBeNull();
+    expect(buildProgramMonitorPath(1, "secret", "a".repeat(40), "wrong")).toBeNull();
   });
 
   it("builds the debug program link with an encoded token", () => {
-    expect(buildProgramMonitorPath(3, "egress-secret")).toBe("/program/court/3?token=egress-secret&debug=1");
-    expect(buildProgramMonitorPath(7, "s3cr3t/+= ")).toBe("/program/court/7?token=s3cr3t%2F%2B%3D&debug=1");
+    expect(buildProgramMonitorPath(3, "egress-secret", "a".repeat(40), "dpl_test")).toBe(
+      `/program/bootstrap?court=3&build=${"a".repeat(40)}&deployment=dpl_test&debug=1#token=egress-secret`
+    );
+    expect(buildProgramMonitorPath(7, "s3cr3t/+= ", "b".repeat(40), "dpl_other")).toBe(
+      `/program/bootstrap?court=7&build=${"b".repeat(40)}&deployment=dpl_other&debug=1#token=s3cr3t%2F%2B%3D`
+    );
   });
 });
 

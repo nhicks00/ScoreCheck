@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -204,6 +204,41 @@ test("evaluates exact DigitalOcean host identity, sampler cadence, CPU, shared m
   assert.match(mismatched.problems.join("; "), /provider_identity/);
 });
 
+test("a passing rehearsal seals every protected output-conformance sample and report", async () => {
+  const root = await mkdtemp(join(os.tmpdir(), "scorecheck-rehearsal-output-seal-"));
+  const outputRoot = join(root, "output-conformance");
+  await mkdir(outputRoot, { mode: 0o700 });
+  const manifest = { kind: "rehearsal", event: "gate", droplets: Array(12).fill({}) };
+  const digest = sha(manifest);
+  const courts = {};
+  for (let court = 1; court <= 8; court += 1) {
+    const evidencePath = join(outputRoot, `court-${court}-1080p30.json`);
+    const samplePath = join(outputRoot, `court-${court}-1080p30.mp4`);
+    await writeFile(evidencePath, "{}\n", { mode: 0o600 });
+    await writeFile(samplePath, `sample-${court}`, { mode: 0o600 });
+    courts[court] = {
+      outputConformance: { status: "QUALIFIED", court, profile: "1080p30", evidencePath, samplePath },
+      providerCleanup: { mode: "persistent-youtube-stream-ingest-v1", status: "retained", streamId: `s${court}`, title: `ScoreCheck Production Camera ${court} Auto Stream`, isReusable: true, streamStatus: "inactive" }
+    };
+  }
+  const state = {
+    phase: "cleaned", event: "gate", generationId: "generation-1234", manifestSha256: digest, providerMode: "persistent-youtube-stream-ingest-v1",
+    createdAt: "2026-07-15T12:00:00Z", preparedAt: "2026-07-15T12:01:00Z", startedAt: "2026-07-15T12:02:00Z", stoppedAt: "2026-07-15T12:03:00Z", cleanedAt: "2026-07-15T12:04:00Z",
+    program: { project: { id: "project", status: "deleted" } }, courts,
+    startEvidence: { passed: true }, soakEvidence: { passed: true }, endpointEvidence: { passed: true }, stopEvidence: { passed: true }
+  };
+  await Promise.all([
+    writeFile(join(root, "pool-host-samples.jsonl"), "{}\n", { mode: 0o600 }),
+    writeFile(join(root, "rehearsal-monitor-samples.jsonl"), "{}\n", { mode: 0o600 }),
+    writeFile(join(root, "rehearsal-soak-report.json"), "{}\n", { mode: 0o600 })
+  ]);
+  const marker = await sealRehearsalEvidence({ state, manifest, evidenceDirectory: root });
+  assert.equal(marker.classification, "PASS");
+  const verified = await verifyRehearsalEvidence({ directory: root, event: state.event, generationId: state.generationId, manifestSha256: digest });
+  assert.equal(Object.keys(verified.evidence.artifacts).length, 19);
+  assert.equal(Object.values(verified.evidence.outputConformance).every((entry) => entry.status === "QUALIFIED"), true);
+});
+
 test("seals and verifies failed evidence after ephemeral cleanup and persistent stream retention", async () => {
   const root = await mkdtemp(join(os.tmpdir(), "scorecheck-rehearsal-seal-"));
   const manifest = { kind: "rehearsal", event: "gate", droplets: Array(12).fill({}) };
@@ -213,7 +248,7 @@ test("seals and verifies failed evidence after ephemeral cleanup and persistent 
     createdAt: "2026-07-15T12:00:00Z", preparedAt: "2026-07-15T12:01:00Z", startedAt: "2026-07-15T12:02:00Z", stoppedAt: "2026-07-15T12:03:00Z", cleanedAt: "2026-07-15T12:04:00Z",
     program: { project: { id: "project", status: "deleted" } },
     courts: Object.fromEntries(Array.from({ length: 8 }, (_, index) => [index + 1, {
-      providerCleanup: { mode: "persistent-youtube-stream-ingest-v1", status: "retained", streamId: `s${index}`, title: `ScoreCheck Court ${index + 1} Test Stream`, isReusable: true, streamStatus: "inactive" }
+      providerCleanup: { mode: "persistent-youtube-stream-ingest-v1", status: "retained", streamId: `s${index}`, title: `ScoreCheck Production Camera ${index + 1} Auto Stream`, isReusable: true, streamStatus: "inactive" }
     }])),
     startEvidence: { passed: true }, soakEvidence: { passed: false }, endpointEvidence: { passed: false }, stopEvidence: { passed: true }
   };
@@ -262,7 +297,7 @@ test("classifies a launched workload rejected before soak admission as failed, n
     program: { project: { id: "project", status: "deleted" } },
     courts: Object.fromEntries(Array.from({ length: 8 }, (_, index) => [index + 1, {
       publisher: { marker: `publisher-${index + 1}`, status: "stopped" },
-      providerCleanup: { mode: "persistent-youtube-stream-ingest-v1", status: "retained", streamId: `s${index}`, title: `ScoreCheck Court ${index + 1} Test Stream`, isReusable: true, streamStatus: "inactive" }
+      providerCleanup: { mode: "persistent-youtube-stream-ingest-v1", status: "retained", streamId: `s${index}`, title: `ScoreCheck Production Camera ${index + 1} Auto Stream`, isReusable: true, streamStatus: "inactive" }
     }]))
   };
   await writeFile(state.sampler.output, "{}\n", { mode: 0o600 });

@@ -158,7 +158,7 @@ function snapshot(input: {
     egressHost: "bvm-compositor-a"
   };
   return {
-    version: 4,
+    version: 5,
     generatedAt: "2026-07-13T13:02:10.000Z",
     collector: { state: "HEALTHY", agentsExpected: 6, agentsFresh: 6 },
     controlPlane: { state: "HEALTHY", observedAt: "2026-07-13T13:02:10.000Z", ageMs: 0, worker: { state: "NOT_APPLICABLE", status: null, lastSeenAt: null, ageMs: null } },

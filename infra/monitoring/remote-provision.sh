@@ -44,7 +44,7 @@ retry_docker_operation() {
 
 candidate_image="scorecheck-monitoring:provision-${REVISION:0:12}-$$"
 inhibition_container="scorecheck-alertmanager-provision-$$"
-monitoring_contract_version=4
+monitoring_contract_version=5
 cutover_started=0
 
 cleanup() {

@@ -5,10 +5,11 @@ import {
   coerceOverlayState,
   displayOverlayName,
   fallbackOverlayState,
+  overlayApplyCursor,
   overlayPhaseText,
-  overlayStateUpdatedAtMs,
   scorebugDisplayScores,
-  shouldApplyOverlayUpdate
+  shouldApplyOverlayUpdate,
+  type OverlayApplyCursor
 } from "@/lib/overlayState";
 import {
   createOverlayInvalidationScheduler,
@@ -85,7 +86,8 @@ function OverlayClientInner({ courtNumber, eventId, buildVersion, reloadOnVersio
   const lastReloadAttemptAt = useRef(0);
   const lastInvalidScorebugHealKey = useRef<string | null>(null);
   const lastDomHealKey = useRef<string | null>(null);
-  const lastAppliedUpdateMs = useRef<number | null>(null);
+  const lastApplied = useRef<OverlayApplyCursor | null>(null);
+  const authoritativeEtag = useRef<string | null>(null);
   const mounted = useRef(true);
   const stateUrl = useMemo(() => `/api/overlay/court/${courtNumber}/state${eventId ? `?eventId=${eventId}` : ""}`, [courtNumber, eventId]);
   const realtimeEventId = eventId || state.eventId;
@@ -93,10 +95,11 @@ function OverlayClientInner({ courtNumber, eventId, buildVersion, reloadOnVersio
 
   const applyOverlayState = useCallback((payload: unknown) => {
     const next = coerceOverlayState(payload, courtNumberValue);
-    if (!shouldApplyOverlayUpdate(next, lastAppliedUpdateMs.current)) return;
-    lastAppliedUpdateMs.current = overlayStateUpdatedAtMs(next) ?? lastAppliedUpdateMs.current;
+    if (!shouldApplyOverlayUpdate(next, lastApplied.current)) return false;
+    lastApplied.current = overlayApplyCursor(next);
     setState(next);
     setHasLoadedState(true);
+    return true;
   }, [courtNumberValue]);
 
   useEffect(() => {
@@ -108,10 +111,18 @@ function OverlayClientInner({ courtNumber, eventId, buildVersion, reloadOnVersio
 
   const fetchAuthoritativeState = useCallback(async () => {
     try {
-      const res = await fetch(stateUrl, { cache: "no-store" });
+      const res = await fetch(stateUrl, {
+        cache: "no-store",
+        headers: authoritativeEtag.current ? { "if-none-match": authoritativeEtag.current } : undefined
+      });
+      if (res.status === 304) {
+        if (mounted.current) setConnected(true);
+        return;
+      }
       if (res.status === 204) {
         if (mounted.current) {
-          lastAppliedUpdateMs.current = null;
+          lastApplied.current = null;
+          authoritativeEtag.current = null;
           setState(fallbackOverlayState(courtNumberValue));
           setHasLoadedState(false);
           setConnected(true);
@@ -121,7 +132,7 @@ function OverlayClientInner({ courtNumber, eventId, buildVersion, reloadOnVersio
       if (!res.ok) throw new Error(String(res.status));
       const next = await res.json();
       if (!mounted.current) return;
-      applyOverlayState(next);
+      if (applyOverlayState(next)) authoritativeEtag.current = res.headers.get("etag");
       setConnected(true);
     } catch {
       if (mounted.current) setConnected(false);
