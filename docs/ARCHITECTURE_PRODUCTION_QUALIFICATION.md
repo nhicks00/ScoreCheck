@@ -1,7 +1,7 @@
 # ScoreCheck Architecture Production Qualification
 
 Date: 2026-07-22
-Code baseline: `7824b4b78261defee4eda3c1a5a0d6efc05f08e6`
+Implementation baseline before this gate: `036b88100fba019f53822a9760fa7d84be4959bf`
 Status: implementation and physical qualification in progress
 
 ## Purpose
@@ -97,7 +97,7 @@ The target remains:
 | R-06 | Bounded browser supervisor | `SATISFIED` | `program-supervisor.mjs` acts only when raw/program/Egress remain healthy while the browser is unavailable for six consecutive samples. It preserves event/destination/output-generation/renderer ownership, permits at most two restarts with a ten-minute cooldown, persists a prepared restart before mutation, resumes it safely, and fails closed after exhaustion. Any restart remains visible and fails the qualification run rather than being hidden. | Prove one bounded recovery on the exact immutable renderer during the physical restart gate. |
 | R-07 | Separate renderer deployment blast radius | `DEFERRED` | Admin and program routes currently share the web project. | First prove immutable production deployment pinning. Split the renderer project only if pinning cannot prevent admin deployments from affecting restarted scenes. |
 | R-08 | Fully local renderer bundle | `REJECTED` | It would duplicate hosting/build/runtime concerns before immutable deployment pinning is tested. | Reconsider only if an external renderer outage still prevents the declared recovery objective. |
-| R-09 | Overlay exception does not interrupt program media | `SATISFIED` | The scorebug error boundary now reports failed score-render health, retries only its own subtree once, and then renders transparently. It never navigates or reloads the Program page, so a persistent overlay exception is observable without restarting the video, audio graph, or Egress scene. | No exact Egress-process fault injector exists yet. Inject one bounded render exception in the actual isolated Egress browser and retain media-continuity evidence; a separate inspection browser is not qualifying proof. |
+| R-09 | Overlay exception does not interrupt program media | `SATISFIED` | The scorebug error boundary reports failed score-render health, retries only its own subtree once, and then renders transparently. `overlay-exception-rehearsal.mjs` now prepares a generation-bound debug channel only while the target worker is idle, connects through a loopback SSH tunnel to the exact active Egress Chrome page, installs a dormant exception, restores the ordinary host config before arming, and evaluates same-page media, score-render, peer, Egress, and YouTube continuity. Provider-free command, browser-injection, interruption-recovery, and evidence regressions pass. | Run the attended synthetic gate and retain its protected host artifact. A separate inspection browser, a renderer that starts already faulted, or unit tests alone are not qualifying proof. |
 
 ### Commentary
 
@@ -385,21 +385,69 @@ renderer. No production scoring outage is authorized.
 
 ## Overlay Exception Qualification Boundary
 
-The fail-transparent component and its regressions are implemented, but there
-is not yet a safe host fault adapter for R-09. The qualification exception must
-occur inside the exact Chromium process captured by the active isolated Egress.
-Launching another Program reader and observing that reader while a separate
-Egress remains healthy tests the wrong process and can overwrite the court's
-browser heartbeat. Starting Egress on a renderer that was already changed to
-throw also fails to prove same-page continuity.
+The fail-transparent component and provider-free adapter are implemented. The
+qualification exception must still occur inside the exact Chromium process
+captured by the active isolated Egress. Launching another Program reader tests
+the wrong process and can overwrite the court's browser heartbeat. Starting an
+Egress on a renderer that was already faulted also fails same-page continuity.
 
-Do not add a production query parameter, runtime switch, or feature flag for
-this gate. A future adapter may expose a tightly bounded debugging channel only
-on an isolated rehearsal compositor, bind it to the exact Egress and renderer
-generation, inject one dormant-to-active render exception, and remove the
-channel during cleanup. Until that adapter and attended artifact exist, R-09's
-application implementation remains satisfied but its acceptance-matrix gate is
-pending.
+The adapter does not add a production query parameter, runtime switch, or
+feature flag. LiveKit Egress v1.13.0 accepts `chrome_flags` and applies them to
+the exact captured Chrome process. Preparation preserves the ordinary
+`disable-dev-shm-usage: false` override, adds remote debugging only inside the
+unpublished Egress container network, writes its protected recovery marker
+before swapping config, and recreates only an idle Egress worker. Activation
+requires exactly one owner-matched Egress and restores the ordinary host config
+without restarting that active process. CDP is reachable only through a local
+loopback SSH tunnel and accepts exactly one immutable Program URL matching the
+event camera, renderer Git SHA, and Vercel deployment ID.
+
+Run this as a terminal gate for the selected synthetic output. The bounded
+scorebug exception intentionally remains in that page until the output is
+stopped; the runner never starts or stops publishers, Egress, YouTube, or the
+production soak.
+
+1. Before the selected Egress starts, while its worker is idle:
+
+```text
+node infra/event-stack/overlay-exception-rehearsal.mjs prepare \
+  --profile /protected/event-profile.json \
+  --evidence /protected/overlay-exception-evidence \
+  --camera 1 \
+  --confirm-prepare PREPARE-OVERLAY-DEBUG:EVENT:CAMERA-1
+```
+
+2. Start the ordinary eight-feed synthetic production soak. Once the exact
+   target Egress and unlisted YouTube output are healthy, run:
+
+```text
+node infra/event-stack/overlay-exception-rehearsal.mjs run \
+  --profile /protected/event-profile.json \
+  --soak-evidence /protected/production-soak \
+  --publisher-state /protected/synthetic-publishers.json \
+  --evidence /protected/overlay-exception-evidence \
+  --confirm-arm ARM-OVERLAY-EXCEPTION:EVENT:CAMERA-1 \
+  --confirm-fault FAULT-OVERLAY:EVENT:CAMERA-1
+```
+
+3. Stop that output through the ordinary ordered production-soak cleanup. Only
+   after active Egress count is zero, remove the channel and prove the ordinary
+   worker is healthy with no debug endpoint:
+
+```text
+node infra/event-stack/overlay-exception-rehearsal.mjs cleanup \
+  --profile /protected/event-profile.json \
+  --evidence /protected/overlay-exception-evidence \
+  --confirm-cleanup CLEANUP-OVERLAY-DEBUG:EVENT:CAMERA-1
+```
+
+An attended pass requires six stable baseline and six stable fault samples,
+the same page/build/configuration and exact Egress generation, advancing video
+at the selected aggregate cadence, zero quality/reconnect/reload growth, one
+expected score-render incident, exactly two caught render throws, a transparent
+scorebug, healthy peers and YouTube, then exact post-stop cleanup. Until that
+protected artifact exists, R-09's implementation is satisfied but its live
+acceptance-matrix gate remains pending.
 
 ## Remaining Execution Order
 
@@ -411,9 +459,9 @@ The scoring prerequisite is complete. Checksummed production evidence is under
 2. Run physical H.264 1080p30/60 and compositor-local HEVC 1080p30/60 gates.
    Keep any mode that fails disabled rather than weakening admission.
 3. Run the implemented Vercel renderer-origin loss gate on the eight-feed
-   synthetic soak. Prepare and execute the overlay exception gate only after a
-   bounded adapter can target the exact isolated Egress browser without a
-   production test hook or competing reader. Run Supabase loss only after an
+   synthetic soak. Prepare the implemented overlay exception adapter while the
+   selected worker is idle, execute it as the terminal gate for that synthetic
+   output, then stop the output and clean the adapter exactly. Run Supabase loss only after an
    isolated nonproduction dependency can interrupt both Realtime and
    authoritative server-side repair; a browser-only block is not evidence.
    Then run monitor loss/outbox replay and the exact renderer-restart gate.
