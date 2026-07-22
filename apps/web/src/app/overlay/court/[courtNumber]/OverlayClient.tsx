@@ -15,14 +15,14 @@ import {
   createOverlayInvalidationScheduler,
   invalidationOnlyBroadcastHandler
 } from "@/lib/overlayInvalidation";
-import { overlayBoundaryRetryState, type OverlayBoundaryState } from "@/lib/overlayFailureRecovery";
+import { overlayBoundaryRetryState, overlayFailureHealth, type OverlayBoundaryState } from "@/lib/overlayFailureRecovery";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 
 // A browser-source overlay must NEVER black out the broadcast frame. If the
 // scorebug throws while rendering, fail transparent (render nothing over the
 // video) and retry only this subtree once. Never reload the Program page: its
 // video and audio are higher-priority than the overlay.
-type BoundaryProps = { children: ReactNode };
+type BoundaryProps = { children: ReactNode; onFailure: () => void };
 export type ScorebugDomMismatchReason = "shape-mismatch" | "team-a-sets-mismatch" | "team-b-sets-mismatch" | "board-missing";
 export type OverlayRenderHealth = {
   loaded: boolean;
@@ -45,6 +45,7 @@ class OverlayErrorBoundary extends Component<BoundaryProps, OverlayBoundaryState
   }
 
   componentDidCatch() {
+    this.props.onFailure();
     if (this.retryTimer !== null || !overlayBoundaryRetryState(this.state)) return;
     this.retryTimer = window.setTimeout(() => {
       this.retryTimer = null;
@@ -73,7 +74,7 @@ type OverlayClientProps = {
 
 export function OverlayClient(props: OverlayClientProps) {
   return (
-    <OverlayErrorBoundary>
+    <OverlayErrorBoundary onFailure={() => props.onHealth?.(overlayFailureHealth())}>
       <OverlayClientInner {...props} />
     </OverlayErrorBoundary>
   );

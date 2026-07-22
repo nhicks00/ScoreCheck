@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { overlayBoundaryRetryState } from "../lib/overlayFailureRecovery";
+import { overlayBoundaryRetryState, overlayFailureHealth } from "../lib/overlayFailureRecovery";
 
 describe("overlay failure recovery", () => {
   it("retries the overlay subtree once and then fails transparent", () => {
@@ -25,6 +25,22 @@ describe("overlay failure recovery", () => {
 
     expect(boundary).not.toContain("window.location.reload");
     expect(boundary).not.toContain("window.location.replace");
+    expect(boundary).toContain("this.props.onFailure()");
     expect(boundary).toContain("overlayBoundaryRetryState(state)");
+  });
+
+  it("reports the failed score render without implying a media failure", () => {
+    expect(overlayFailureHealth()).toEqual({
+      loaded: false,
+      connected: false,
+      stale: true,
+      frozen: true,
+      matchId: null,
+      phase: "ERROR",
+      sourceSignature: null,
+      renderedSignature: null,
+      domMismatchReason: null,
+      stateUpdatedAt: null
+    });
   });
 });
