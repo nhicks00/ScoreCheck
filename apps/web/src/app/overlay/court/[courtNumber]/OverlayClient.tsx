@@ -15,14 +15,14 @@ import {
   createOverlayInvalidationScheduler,
   invalidationOnlyBroadcastHandler
 } from "@/lib/overlayInvalidation";
+import { overlayBoundaryRetryState, type OverlayBoundaryState } from "@/lib/overlayFailureRecovery";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 
 // A browser-source overlay must NEVER black out the broadcast frame. If the
 // scorebug throws while rendering, fail transparent (render nothing over the
-// video) and attempt a throttled self-heal reload so it recovers when the
-// underlying state changes — instead of Next's full-frame error page.
+// video) and retry only this subtree once. Never reload the Program page: its
+// video and audio are higher-priority than the overlay.
 type BoundaryProps = { children: ReactNode };
-type BoundaryState = { failed: boolean };
 export type ScorebugDomMismatchReason = "shape-mismatch" | "team-a-sets-mismatch" | "team-b-sets-mismatch" | "board-missing";
 export type OverlayRenderHealth = {
   loaded: boolean;
@@ -36,23 +36,26 @@ export type OverlayRenderHealth = {
   domMismatchReason: ScorebugDomMismatchReason | null;
   stateUpdatedAt: string | null;
 };
-class OverlayErrorBoundary extends Component<BoundaryProps, BoundaryState> {
-  state: BoundaryState = { failed: false };
-  static getDerivedStateFromError(): BoundaryState {
+class OverlayErrorBoundary extends Component<BoundaryProps, OverlayBoundaryState> {
+  state: OverlayBoundaryState = { failed: false, retryCount: 0 };
+  private retryTimer: number | null = null;
+
+  static getDerivedStateFromError(): Partial<OverlayBoundaryState> {
     return { failed: true };
   }
+
   componentDidCatch() {
-    try {
-      const key = "scorecheck-overlay-crash-reload";
-      const last = Number(window.sessionStorage.getItem(key) ?? "0");
-      if (Date.now() - last > 15_000) {
-        window.sessionStorage.setItem(key, String(Date.now()));
-        window.setTimeout(() => window.location.reload(), 2000);
-      }
-    } catch {
-      // sessionStorage may be unavailable in embedded browser sources.
-    }
+    if (this.retryTimer !== null || !overlayBoundaryRetryState(this.state)) return;
+    this.retryTimer = window.setTimeout(() => {
+      this.retryTimer = null;
+      this.setState((state) => overlayBoundaryRetryState(state) ?? state);
+    }, 2000);
   }
+
+  componentWillUnmount() {
+    if (this.retryTimer !== null) window.clearTimeout(this.retryTimer);
+  }
+
   render() {
     if (this.state.failed) return null;
     return this.props.children;
