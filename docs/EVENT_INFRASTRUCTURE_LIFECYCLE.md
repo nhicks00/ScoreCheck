@@ -264,6 +264,16 @@ publisher is already present. Cameras 1-2 use the production RTMP contract and
 Cameras 3-8 use the production SRT contract; credentials remain in protected
 event inputs and are never written to state or command output.
 
+Generate the event-bound synthetic venue profile with the checked-in CLI. It
+uses only pinned FFmpeg fixtures and must never be used as a physical venue
+attestation:
+
+```bash
+node infra/event-stack/synthetic-venue-profilectl.mjs create \
+  --event EVENT \
+  --output /absolute/protected/inputs/EVENT/synthetic-venue-profile.json
+```
+
 This is an attended, paid production-shaped rehearsal. It is not a local unit
 test and does not create, destroy, or automatically clean up infrastructure.
 Run it only after the normal production build and live admission have passed,
