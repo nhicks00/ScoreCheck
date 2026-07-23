@@ -211,12 +211,17 @@ function classifyFrameRate(stream, expectedMode, label) {
 
 function validatePacketTrace(value, { label = "browser input", requireMonotonicPts = true } = {}) {
   if (!Array.isArray(value) || value.length < 30) throw new Error(`${label} packet trace is too short`);
-  const packets = value.map((packet, index) => {
+  const packets = [];
+  for (const [index, packet] of value.entries()) {
     const pts = Number(packet?.pts_time);
     const dts = Number(packet?.dts_time);
-    if (!Number.isFinite(pts) || !Number.isFinite(dts)) throw new Error(`${label} packet ${index + 1} has no finite PTS/DTS`);
-    return { pts, dts, key: String(packet?.flags ?? "").includes("K") };
-  });
+    if (!Number.isFinite(pts) || !Number.isFinite(dts)) {
+      if (packets.length === 0) continue;
+      throw new Error(`${label} packet ${index + 1} has no finite PTS/DTS`);
+    }
+    packets.push({ pts, dts, key: String(packet?.flags ?? "").includes("K") });
+  }
+  if (packets.length < 30) throw new Error(`${label} packet trace has fewer than 30 timestamped packets`);
   for (let index = 1; index < packets.length; index += 1) {
     if (packets[index].dts <= packets[index - 1].dts) throw new Error(`${label} DTS is not strictly monotonic`);
     if (requireMonotonicPts && packets[index].pts < packets[index - 1].pts) throw new Error(`${label} PTS moved backward`);

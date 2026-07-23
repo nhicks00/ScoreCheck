@@ -43,6 +43,12 @@ test("fails closed on direct HEVC, B-frames, unsafe format, scan, cadence, GOP, 
   const backward = probePayload();
   backward.packets[20].dts_time = backward.packets[19].dts_time;
   assert.throws(() => selectProductionOutputProfile(backward, { browserProbe: browser() }), /DTS is not strictly monotonic/);
+  const leadingJoinArtifact = probePayload();
+  leadingJoinArtifact.packets.unshift({ duration_time: "0.033333", flags: "___" });
+  assert.doesNotThrow(() => selectProductionOutputProfile(leadingJoinArtifact, { browserProbe: browser() }));
+  const midstreamMissingTimestamp = probePayload();
+  midstreamMissingTimestamp.packets[20] = { duration_time: "0.033333", flags: "___" };
+  assert.throws(() => selectProductionOutputProfile(midstreamMissingTimestamp, { browserProbe: browser() }), /no finite PTS\/DTS/);
   assert.throws(() => selectProductionOutputProfile({ streams: [], packets: [] }, { browserProbe: browser() }), /exactly one/);
 });
 
