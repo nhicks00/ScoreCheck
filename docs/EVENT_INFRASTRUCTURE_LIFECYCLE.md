@@ -680,6 +680,13 @@ not classify a lower VBR payload for simple or silent content as a target-settin
 failure, and do not waive missing packets, codec drift, channel drift, or sample
 rate drift.
 
+Video bitrate evidence uses the encoder's two-second VBV/GOP contract. The full
+sample must remain within the selected profile window, every rolling two-second
+window must stay within 70-130 percent of target, and every one-second bucket
+must stay within the wider 50-150 percent burst guard. A single keyframe-heavy
+one-second bucket is not independently treated as a CBR failure when the
+surrounding two-second VBV window is bounded.
+
 Every enabled Camera 1-8 entry in venue profile schema v2 also has an explicit
 operational priority independent of source/output quality:
 

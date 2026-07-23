@@ -31,16 +31,15 @@ const RECEIPT = Object.freeze({
   sizeBytes: 100
 });
 
-function fixture({ profile = "1080p30", bitrateScale = 1, keyframeSeconds = 2, audioBitrateBps = 95_243 } = {}) {
+function fixture({ profile = "1080p30", bitrateScale = 1, keyframeSeconds = 2, audioBitrateBps = 95_243, secondBitrateScales = {} } = {}) {
   const fps = profile === "1080p60" ? 60 : 30;
   const target = profile === "1080p60" ? 12_000_000 : 10_000_000;
   const duration = 20;
-  const packetSize = Math.round((target * bitrateScale) / 8 / fps);
   const packets = Array.from({ length: duration * fps }, (_, index) => ({
     pts_time: String(index / fps),
     dts_time: String(index / fps),
     duration_time: String(1 / fps),
-    size: String(packetSize),
+    size: String(Math.round((target * bitrateScale * (secondBitrateScales[Math.floor(index / fps)] ?? 1)) / 8 / fps)),
     flags: index % Math.round(keyframeSeconds * fps) === 0 ? "K__" : "___"
   }));
   const audioPacketDuration = 1_024 / 48_000;
@@ -90,6 +89,10 @@ test("qualifies actual 1080p30 and 1080p60 H.264 High/AAC output", () => {
     assert.equal(evidence.audio.targetBitrateBps, 128_000);
     assert.ok(evidence.audio.measuredBitrateBps > 90_000);
   }
+
+  const boundedVbvBurst = evaluateOutputConformance(fixture({ secondBitrateScales: { 4: 1.345, 5: 0.95 } }));
+  assert.ok(boundedVbvBurst.video.maximumSecondBitrateBps > boundedVbvBurst.video.targetBitrateBps * 1.3);
+  assert.ok(boundedVbvBurst.video.maximumTwoSecondBitrateBps < boundedVbvBurst.video.targetBitrateBps * 1.3);
 });
 
 test("rejects profile, color, GOP, bitrate, and audio drift", () => {
@@ -123,6 +126,15 @@ test("rejects profile, color, GOP, bitrate, and audio drift", () => {
   const audioGap = fixture();
   audioGap.audioPackets.packets[200].dts_time = String(Number(audioGap.audioPackets.packets[199].dts_time) + 0.2);
   assert.throws(() => evaluateOutputConformance(audioGap), /audio packet gap|audio DTS/u);
+
+  assert.throws(
+    () => evaluateOutputConformance(fixture({ secondBitrateScales: { 4: 1.35, 5: 1.35 } })),
+    /not bounded near CBR/u
+  );
+  assert.throws(
+    () => evaluateOutputConformance(fixture({ secondBitrateScales: { 4: 1.55, 5: 0.45 } })),
+    /excessive one-second burst/u
+  );
 });
 
 test("captures, copies, probes, hashes, and writes protected event evidence", async () => {

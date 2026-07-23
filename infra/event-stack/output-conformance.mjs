@@ -254,13 +254,23 @@ function evaluateVideoPackets(value, profile, durationSeconds) {
     const second = Math.floor(packet.dts - packetStart);
     buckets.set(second, (buckets.get(second) ?? 0) + packet.size * 8);
   }
-  const completeSecondBitrates = [...buckets.entries()]
-    .filter(([second]) => second >= 1 && second < Math.floor(packetDurationSeconds) - 1)
-    .map(([, bits]) => bits);
-  if (completeSecondBitrates.length < 10) throw new Error("output sample has too few complete bitrate buckets");
+  const completeSecondBuckets = [...buckets.entries()]
+    .filter(([second]) => second >= 1 && second < Math.floor(packetDurationSeconds) - 1);
+  if (completeSecondBuckets.length < 10) throw new Error("output sample has too few complete bitrate buckets");
+  const completeSecondBitrates = completeSecondBuckets.map(([, bits]) => bits);
   const minimumSecondBitrateBps = Math.min(...completeSecondBitrates);
   const maximumSecondBitrateBps = Math.max(...completeSecondBitrates);
-  if (minimumSecondBitrateBps < profile.videoBitrateBps * 0.7 || maximumSecondBitrateBps > profile.videoBitrateBps * 1.3) {
+  if (minimumSecondBitrateBps < profile.videoBitrateBps * 0.5 || maximumSecondBitrateBps > profile.videoBitrateBps * 1.5) {
+    throw new Error("output video bitrate has an excessive one-second burst");
+  }
+  const rollingTwoSecondBitrates = completeSecondBuckets.slice(1).map(([second, bits], index) => {
+    const [previousSecond, previousBits] = completeSecondBuckets[index];
+    if (second !== previousSecond + 1) throw new Error("output sample has a missing bitrate bucket");
+    return (previousBits + bits) / 2;
+  });
+  const minimumTwoSecondBitrateBps = Math.min(...rollingTwoSecondBitrates);
+  const maximumTwoSecondBitrateBps = Math.max(...rollingTwoSecondBitrates);
+  if (minimumTwoSecondBitrateBps < profile.videoBitrateBps * 0.7 || maximumTwoSecondBitrateBps > profile.videoBitrateBps * 1.3) {
     throw new Error("output video bitrate is not bounded near CBR");
   }
   return {
@@ -270,7 +280,9 @@ function evaluateVideoPackets(value, profile, durationSeconds) {
     maximumKeyframeIntervalSeconds,
     measuredBitrateBps,
     minimumSecondBitrateBps,
-    maximumSecondBitrateBps
+    maximumSecondBitrateBps,
+    minimumTwoSecondBitrateBps,
+    maximumTwoSecondBitrateBps
   };
 }
 
