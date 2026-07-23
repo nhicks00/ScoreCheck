@@ -19,12 +19,12 @@ printf '%s\n' '#!/usr/bin/env bash' \
   '    reads="$(( $(cat "$root/list-count") + 1 ))"' \
   '    printf '\''%s\n'\'' "$reads" >"$root/list-count"' \
   '    if (( reads < 2 )); then' \
-  '      printf '\''[{"egress_id":"EG_sample","status":"EGRESS_STARTING"}]'\''' \
+  '      printf '\''[{"egress_id":"EG_sample","status":0}]'\''' \
   '    else' \
   '      output="$(cat "$root/output-path")"' \
   '      mkdir -p "$(dirname "$output")"' \
   '      printf '\''fake-mp4'\'' >"$output"' \
-  '      printf '\''[{"egress_id":"EG_sample","status":"EGRESS_ACTIVE"}]'\''' \
+  '      printf '\''[{"egress_id":"EG_sample","status":1}]'\''' \
   '    fi' \
   '  else printf '\''null'\''; fi' \
   'elif [[ "$*" == egress\ start\ --type\ web* ]]; then' \
