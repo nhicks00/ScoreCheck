@@ -25,6 +25,7 @@ done
 cd "$REPO_ROOT"
 
 [[ -f infra/monitoring/package-lock.json ]] || die "monitoring package lock is missing"
+[[ -f infra/event-stack/package-lock.json ]] || die "event-stack package lock is missing"
 [[ -f apps/web/package-lock.json ]] || die "web package lock is missing"
 jq -e '.schemaVersion == 1 and .desiredCompositors == 8 and .warmSpares == 1' \
   infra/event-stack/compositor-pool.json >/dev/null \
@@ -55,6 +56,7 @@ expected_shell_tests="$(printf '%s\n' "${reviewed_shell_tests[@]}" | sort)"
   || die "infrastructure shell-test inventory changed; review it and update this validator"
 
 section "Capacity and lifecycle contracts"
+npm --prefix infra/event-stack ci --ignore-scripts --no-audit --no-fund
 node --test infra/event-stack/*.test.mjs infra/event-stack/rehearsal/*.test.mjs infra/capacity/*.test.mjs infra/commentary/*.test.mjs infra/mediamtx/*.test.mjs
 node infra/event-stack/simulate-event-lifecycle.mjs
 for test_script in "${reviewed_shell_tests[@]}"; do

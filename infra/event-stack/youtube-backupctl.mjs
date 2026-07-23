@@ -64,6 +64,7 @@ export async function createRuntime(options, dependencies = {}) {
   }
   const venue = await loadVenueAdmission(profile.venueProfile, manifest.event);
   if (!venue.passed || !venue.activeCameras.includes(options.camera)) throw new Error(`Camera ${options.camera} is not admitted by the live venue profile`);
+  requireTierOneCamera(venue, options.camera);
   const destinations = await readProductionDestinations(options.destinations, { event: manifest.event, activeCameras: venue.activeCameras });
   const soakState = await readProtectedJson(join(options.soakEvidence, "production-soak-state.json"), "production soak state");
   if (soakState.phase !== "RUNNING" || soakState.event !== manifest.event
@@ -116,6 +117,12 @@ export async function createRuntime(options, dependencies = {}) {
       primaryOwner
     }
   };
+}
+
+export function requireTierOneCamera(venue, camera) {
+  const assignment = venue?.assignments?.[camera];
+  if (!assignment || assignment.priorityTier !== "TIER_1") throw new Error(`Camera ${camera} is not a Tier 1 priority court`);
+  return assignment;
 }
 
 function hostFor(manifest, lifecycleState, predicate, label) {

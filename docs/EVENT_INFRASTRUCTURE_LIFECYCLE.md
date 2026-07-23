@@ -640,8 +640,8 @@ configuration, or an unbound manifest. It embeds the normalized effective
 network contract in the immutable manifest, writes the exact next command, and
 does not execute it.
 
-This is a hard cutover to event manifest schema v6 and operator profile schema
-v8. Any earlier bundle must be regenerated from the protected recovery source
+This is a hard cutover to event manifest schema v6, operator profile schema v9,
+and venue profile schema v2. Any earlier bundle must be regenerated from the protected recovery source
 and rendered network contract; lifecycle commands reject it before provider
 access.
 
@@ -670,6 +670,24 @@ output-conformance artifact. Monitoring previews remain independent low-bandwidt
 derivatives and never determine the YouTube output profile. A camera that changes
 frame rate mid-broadcast requires a controlled output restart so one YouTube
 session never silently changes encoder contracts.
+
+Every enabled Camera 1-8 entry in venue profile schema v2 also has an explicit
+operational priority independent of source/output quality:
+
+```json
+{
+  "cameraNumber": 1,
+  "sourceProfile": "STANDARD_1080P30",
+  "priorityTier": "TIER_1"
+}
+```
+
+`TIER_1` is reserved for a featured or finals camera, `TIER_2` for ordinary
+main-draw coverage, and `TIER_3` for secondary coverage. A 1080p30 camera may
+be Tier 1 while a 1080p60 camera is Tier 3. Admission evidence records
+`priorityOrder` and each tier's permanent camera numbers. Tier assignment may
+select backup protection and operator recommendations; it never silently stops
+a camera, bypasses Speedify, or changes a camera-side bitrate.
 
 Prepare the protected YouTube identities before creating the production
 bundle, then migrate the legacy recovery source once:
@@ -739,7 +757,7 @@ protected stream key, but their owner records are explicit schema-2 `primary`
 and `backup` roles and their RTMPS base hosts must differ.
 
 Run this only during an attended synthetic production soak for one selected
-priority court. It does not require a physical camera when the protected
+Tier 1 camera. The runner rejects Tier 2, Tier 3, or missing priority. It does not require a physical camera when the protected
 synthetic publishers are the admitted source:
 
 ```bash

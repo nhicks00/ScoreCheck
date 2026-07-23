@@ -56,6 +56,28 @@ The target remains:
 8. Use hard cutovers. No feature flag is allowed without Nathan explicitly
    saying `NEW FEATURE FLAG APPROVED`.
 
+## Automation-First Operator Ledger
+
+The one-operator target is exception-only intervention, not unattended control
+at any cost. Recovery is divided by consequence: bounded local repair may run
+automatically; ownership or destination changes require synthetic proof before
+automatic use; destructive, ambiguous, or publicly visible actions retain
+operator approval.
+
+| ID | Operator requirement | Status | Checked-in evidence | Boundary / next proof |
+| --- | --- | --- | --- | --- |
+| AF-01 | Recover ordinary local software failures without operator work | `SATISFIED` | WHEP/HLS clients retry with bounds; MediaMTX branches are supervised; the program supervisor reconciles browser/Egress ownership; Docker services have explicit restart policies; overlay repair preserves last-good state; LiveKit handles transient reconnect; scoring leases are fenced. | A restart remains observable and fails a qualification gate rather than being hidden. Repeated or exhausted recovery escalates. |
+| AF-02 | Page only for viewer impact, exhausted recovery, physical work, or a decision | `SATISFIED` | Expected-off state suppresses false incidents, Alertmanager timing filters transients, only critical incidents reach Pushover, episode/receipt dedupe prevents repeat storms, and every page uses operator copy plus a first action. | Prove opening/recovery behavior during the attended synthetic faults; do not page for a single recovered reconnect. |
+| AF-03 | One guided event-day start workflow | `SATISFIED` | `eventctl up` is the day-before zero-to-fleet workflow. Once the protected bundle and fleet are ready, one attended `production-soak.mjs run` session discovers admitted cameras, validates venue/source/output contracts, starts cameras serially, verifies immutable renderer and YouTube viewer delivery, and owns monitoring/evidence. | Provisioning and public output start intentionally remain separate phases so an infrastructure retry cannot start a broadcast. |
+| AF-04 | Fenced spare-compositor takeover | `PARTIAL` | Output generations, primary/backup roles, Egress digests, destination ownership, and the warm spare are fenced. The priority-camera YouTube backup runner proves the required ownership transitions. | Keep takeover operator-confirmed until the paid synthetic gate proves no duplicate publisher and continuous viewer delivery. Only then consider automatic-with-notification use. |
+| AF-05 | Fenced ingest recovery | `PARTIAL` | The dual-role spare recovery controller owns a process lock, generation-bound state, Reserved-IP reconciliation, source/path/output ownership checks, and exact rollback. | Run the paid 12-host rehearsal first. Do not add a thirteenth host or enable automatic takeover unless measured RTO or operational risk proves the simpler topology insufficient. |
+| AF-06 | Operational camera priority independent of output quality | `SATISFIED` | Venue profile schema 2 requires `TIER_1`, `TIER_2`, or `TIER_3` per enabled permanent camera and emits deterministic tier/order evidence. YouTube backup admission now accepts only Tier 1. A Tier 1 1080p30 camera may outrank a Tier 3 1080p60 camera. | Camera-side bitrate changes and camera shutdown remain operator-approved because all camera models are not remotely controllable. Never infer priority from frame rate. |
+| AF-07 | Self-service commentary | `PARTIAL` | Commentators use a passcode, choose a court, receive low-latency return video/audio, publish through LiveKit, and use its transient reconnect path. Protected qualification covers mic activity, headphones, mix-minus, network quality, TURN/TLS, and calibration. | Complete the physical two-commentator preflight/rejoin evidence before calling it unattended. Speaker detection is not reliable enough to enforce automatically. |
+| AF-08 | Fail-transparent autonomous scoring | `SATISFIED` | Authoritative HTTP repair, last-good state, revision/checksum fencing, authority modes, bounded provider polling, and transparent score-render failure keep video live without asking the operator to fix ordinary polling errors. | Authority changes and ambiguous score disputes still require an operator decision. |
+| AF-09 | Phone-first action queue and one selected reader | `SATISFIED` | The monitor puts plain-language action-required incidents ahead of camera/host detail, labels permanent Camera 1-8 identities, offers inspect/acknowledge/bounded-silence actions, and opens only one selected low-bandwidth reader. | Do not expose restart, failover, WAN, score-authority, or shutdown buttons until their server-side fencing gates pass. |
+| AF-10 | Visual and venue-hardware diagnosis | `DEFERRED` | Bounded black/freeze/content heuristics and supported router/Speedify telemetry exist. Unsupported camera battery, temperature, focus, RF, PoE, or scene-geometry claims are not fabricated. | Add only reliable device APIs or calibrated evidence. Avoid computer vision or hardware integrations that create false physical pages. |
+| AF-11 | Automated morning, cautious shutdown | `SATISFIED` | Startup/reconstruction is scripted and evidence-gated. Close/evidence collection are automated, while broadcast completion, ambiguous authority changes, unbonded WAN, stopping a priority camera, credential rotation during coverage, and infrastructure destruction require explicit confirmation. | Never add automatic teardown. |
+
 ## P0 Release Ledger
 
 ### Media Input And Browser Compatibility
@@ -116,7 +138,7 @@ The target remains:
 
 | ID | Review item | Status | Checked-in evidence | Required disposition / proof |
 | --- | --- | --- | --- | --- |
-| V-01 | Manifest-controlled constrained/standard/priority profiles | `SATISFIED` | The protected venue profile defines `CONSTRAINED_1080P30`, `STANDARD_1080P30`, and selected `PRIORITY_1080P60`, with an explicit enabled Camera 1-8 set and source/output assignments. | Use only profiles physically supported by each declared camera model. |
+| V-01 | Manifest-controlled constrained/standard/priority profiles | `SATISFIED` | The protected venue profile defines `CONSTRAINED_1080P30`, `STANDARD_1080P30`, and selected `PRIORITY_1080P60`, with an explicit enabled Camera 1-8 set, source/output assignments, and a separate operational `TIER_1`/`TIER_2`/`TIER_3` priority. | Use only profiles physically supported by each declared camera model. Never infer operational priority from output fps. |
 | V-02 | Aggregate upload admission with reserve | `SATISFIED` | Venue admission sums enabled-camera source caps, applies the 30 percent reserve, and rejects stale or insufficient measured sustained upload. | Refresh the venue measurement before each event. |
 | V-03 | Per-camera source caps/fairness | `SATISFIED` | Each camera has a manifest cap and physical readiness attests router QoS/fairness; capacity gates reject observed maximum violations. | Device/router enforcement remains a venue responsibility and must be observed during soak. |
 | V-04 | Fail-closed bonded routing | `SATISFIED` | Speedify routing, guard table, kill switch, watchdog, and controlled failure gates are documented and tested. | Preserve the event-router preflight and never silently bypass bonding. |
@@ -138,7 +160,7 @@ The target remains:
 | I-06 | One Egress per compositor | `SATISFIED` | `start-court.sh` serializes starts, verifies active count zero, and the agent contract enforces one active request maximum. | Retain multiplicity fault tests. |
 | I-07 | Orphaned Egress reconciliation/idempotency | `SATISFIED` | Every Egress now has a protected atomic owner record binding event, camera, destination, output generation, renderer Git/deployment, output profile, Egress ID, and request digest. Starts, resume, second-admission proof, stop, and supervisor replacement reconcile exact active process plus owner/digest and reject ambiguous or changed ownership. | Retain a production interruption/resume artifact; never manually delete an owner record to force adoption. |
 | I-08 | Dedicated-CPU compositor benchmark | `DEFERRED` | Production-shaped capacity harness exists; current event fleet deliberately uses the declared compositor pool shape. | Compare qualified c-4/c-8 and current shape using p95/p99 CPU, steal, encode speed, frame pacing, `/dev/shm`, memory, cold/warm start, and cost. Do not resize from average CPU. |
-| I-09 | Spare to YouTube backup ingest | `PARTIAL` | Production destination admission requires distinct primary and backup RTMPS ingestion addresses. A protected one-court runner gives primary and backup Egresses explicit ownership roles, stages the shared stream key only on the spare, verifies dual/backup-only/restored/primary-only topology and provider health, restores primary before removing backup on every handled failure path, and removes the temporary assignment. One bounded no-cookie viewer now remains open through the full transition, samples playback every 250 ms, fails on a sample gap over one second or playhead stall over two seconds, verifies reset-safe audio growth and changing nonblank phase frames, and requires the complete ordered transition marker set. Losing that viewer process makes an otherwise safe resumed gate fail rather than inventing continuity. Provider-free regressions pass. | Run the attended gate against one selected synthetic priority court and retain its protected continuous-viewer artifact. Unit tests do not prove live provider continuity. |
+| I-09 | Spare to YouTube backup ingest | `PARTIAL` | Production destination admission requires distinct primary and backup RTMPS ingestion addresses. A protected one-camera runner gives primary and backup Egresses explicit ownership roles, admits only a venue-declared Tier 1 camera, stages the shared stream key only on the spare, verifies dual/backup-only/restored/primary-only topology and provider health, restores primary before removing backup on every handled failure path, and removes the temporary assignment. One bounded no-cookie viewer now remains open through the full transition, samples playback every 250 ms, fails on a sample gap over one second or playhead stall over two seconds, verifies reset-safe audio growth and changing nonblank phase frames, and requires the complete ordered transition marker set. Losing that viewer process makes an otherwise safe resumed gate fail rather than inventing continuity. Provider-free regressions pass. | Run the attended gate against one selected synthetic Tier 1 camera and retain its protected continuous-viewer artifact. Unit tests do not prove live provider continuity. |
 | I-10 | YouTube lifecycle and destination ownership | `SATISFIED` | Production YouTube code validates stream/broadcast IDs, binding, privacy, lifecycle, health, issues, watch page, and distinct primary/backup RTMPS identities. Egress owner schema 2 binds each output to `primary` or `backup`. | Retain output-conformance and exact role ownership evidence. |
 
 ### Monitoring, Evidence, And Paging
@@ -275,7 +297,7 @@ host identities, source/output profile, start/end timestamps, and cleanup state.
 | Renderer restart | Forced compositor/browser restart loads the exact approved deployment and contracts. |
 | Monitoring loss | Media continues; external dead-man pages; restored monitor reconciles without duplicate incident episodes. |
 | Pushover recovery | One opening emergency notification, receipt tracked, repeat acknowledged/cancelled on dependency recovery, one valid recovery notification, no false recovery. |
-| YouTube backup | One selected priority court proves primary loss, backup continuity, no duplicate publisher, and controlled return. |
+| YouTube backup | One venue-declared Tier 1 camera proves primary loss, backup continuity, no duplicate publisher, and controlled return. |
 | External viewer | Remote playhead advances, frame fingerprints change, frame is nonblack, audio is active, expected broadcast/build identity is present, and probe load is bounded. |
 | Teardown | Broadcasts complete, Egresses zero, temporary Droplets/DNS/firewalls are removed, provider-zero audit passes, only intended retained anchors remain, and cost reminder clears. |
 
@@ -581,7 +603,7 @@ The scoring prerequisite is complete. Checksummed production evidence is under
    supplies all eight synthetic feeds and exact evidence gates; no physical
    camera operation is required. Do not substitute unit tests for this
    provider/host transaction evidence.
-5. Run `youtube-backupctl.mjs` against one priority-court synthetic output.
+5. Run `youtube-backupctl.mjs` against one venue-declared Tier 1 synthetic output.
    Capture exact primary/backup ownership and the runner-owned continuous
    external-viewer trace spanning primary stop, backup-only delivery, primary
    restoration, and backup removal. A restarted/lost trace is a failed gate.

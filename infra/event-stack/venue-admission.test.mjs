@@ -16,6 +16,8 @@ test("admits eight standard 1080p30 cameras only with 30 percent bonded-upload r
   const result = evaluateVenueAdmission(profile);
   assert.equal(result.passed, true);
   assert.deepEqual(result.activeCameras, [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.deepEqual(result.priorityOrder, [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.deepEqual(result.priorityTiers, { TIER_1: [1], TIER_2: [2, 3, 4, 5, 6], TIER_3: [7, 8] });
   assert.equal(result.aggregateMaximumSourceBitrateBps, 64_000_000);
   assert.equal(result.requiredSustainedUploadMbps, 83.2);
   assert.equal(result.requiredSustainedUploadMbpsRounded, 84);
@@ -52,8 +54,27 @@ test("keeps permanent identities while allowing an event-specific active camera 
   assert.deepEqual(result.activeCameras, [1, 2, 3, 4, 5, 6]);
   assert.deepEqual(result.inactiveCameras, [7, 8]);
   assert.equal(result.assignments[1].sourceCodec, "H265");
+  assert.equal(result.assignments[1].priorityTier, "TIER_1");
   assert.equal(result.assignments[1].outputProfile, "1080p30");
   assert.equal(result.passed, true);
+});
+
+test("requires an explicit operational priority tier independent of output quality", () => {
+  const profile = createSyntheticRehearsalVenueProfile("priority-tier");
+  profile.cameras[0].sourceProfile = "CONSTRAINED_1080P30";
+  profile.cameras[0].sourceRateCapMbps = 6;
+  profile.cameras[0].priorityTier = "TIER_1";
+  profile.cameras[1].sourceProfile = "PRIORITY_1080P60";
+  profile.cameras[1].frameRateMode = "60/1";
+  profile.cameras[1].sourceRateCapMbps = 12;
+  profile.cameras[1].priorityTier = "TIER_3";
+  const result = evaluateVenueAdmission(profile);
+  assert.equal(result.assignments[1].outputProfile, "1080p30");
+  assert.equal(result.assignments[1].priorityTier, "TIER_1");
+  assert.equal(result.assignments[2].outputProfile, "1080p60");
+  assert.equal(result.assignments[2].priorityTier, "TIER_3");
+  delete profile.cameras[0].priorityTier;
+  assert.throws(() => validateVenueProfile(profile), /priority tier/u);
 });
 
 test("rejects direct HEVC, H264 on a normalizer path, and unapproved plaintext RTMP", () => {

@@ -31,6 +31,8 @@ export const VENUE_SOURCE_PROFILES = Object.freeze({
   })
 });
 
+export const COURT_PRIORITY_TIERS = Object.freeze(["TIER_1", "TIER_2", "TIER_3"]);
+
 const SOURCE_PATH_MODES = new Set(["direct-h264", "isolated-hevc-normalizer"]);
 const SOURCE_PROTOCOLS = new Set(["SRT_ENCRYPTED", "RTMPS", "RTMP_LEGACY_APPROVED"]);
 const VENUE_LINKS = new Set(["WIRED_ETHERNET", "DEDICATED_WIFI"]);
@@ -49,7 +51,7 @@ export async function loadVenueAdmission(path, expectedEvent) {
 }
 
 export function validateVenueProfile(value, expectedEvent = null) {
-  if (!value || value.schemaVersion !== 1) throw new Error("venue profile schemaVersion must be 1");
+  if (!value || value.schemaVersion !== 2) throw new Error("venue profile schemaVersion must be 2");
   if (!EVENT_SLUG.test(value.event ?? "")) throw new Error("venue profile event is invalid");
   if (expectedEvent !== null && value.event !== expectedEvent) throw new Error("venue profile belongs to a different event");
   if (value.reserveFraction !== VENUE_RESERVE_FRACTION) throw new Error(`venue profile reserveFraction must be ${VENUE_RESERVE_FRACTION}`);
@@ -95,6 +97,10 @@ export function evaluateVenueAdmission(profileInput, nowMs = Date.now()) {
   return {
     activeCameras: active.map((camera) => camera.cameraNumber),
     inactiveCameras: inactive.map((camera) => camera.cameraNumber),
+    priorityOrder: active
+      .toSorted((left, right) => priorityRank(left.priorityTier) - priorityRank(right.priorityTier) || left.cameraNumber - right.cameraNumber)
+      .map((camera) => camera.cameraNumber),
+    priorityTiers: Object.fromEntries(COURT_PRIORITY_TIERS.map((tier) => [tier, active.filter((camera) => camera.priorityTier === tier).map((camera) => camera.cameraNumber)])),
     assignments,
     aggregateMaximumSourceBitrateBps,
     requiredSustainedUploadMbps,
@@ -112,7 +118,7 @@ export function evaluateVenueAdmission(profileInput, nowMs = Date.now()) {
 export function createSyntheticRehearsalVenueProfile(event, now = new Date()) {
   const observedAt = now.toISOString();
   const profile = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     event,
     reserveFraction: VENUE_RESERVE_FRACTION,
     uploadMeasurement: {
@@ -136,6 +142,7 @@ export function createSyntheticRehearsalVenueProfile(event, now = new Date()) {
       frameRateMode: "30/1",
       venueLink: "WIRED_ETHERNET",
       sourceRateCapMbps: 8,
+      priorityTier: cameraNumber === 1 ? "TIER_1" : cameraNumber <= 6 ? "TIER_2" : "TIER_3",
       powerProtected: true,
       legacyTransportApproved: false
     })),
@@ -198,6 +205,7 @@ function validateCamera(camera) {
     throw new Error(`Camera ${number} legacy transport approval does not match its source protocol`);
   }
   if (!SOURCE_PATH_MODES.has(camera.sourcePathMode)) throw new Error(`Camera ${number} source path mode is invalid`);
+  if (!COURT_PRIORITY_TIERS.includes(camera.priorityTier)) throw new Error(`Camera ${number} priority tier is invalid`);
   if (camera.sourcePathMode === "direct-h264" && camera.sourceCodec !== "H264") throw new Error(`Camera ${number} direct browser path requires H264`);
   if (camera.sourcePathMode === "isolated-hevc-normalizer" && camera.sourceCodec !== "H265") throw new Error(`Camera ${number} isolated normalizer requires H265 input`);
   const source = VENUE_SOURCE_PROFILES[camera.sourceProfile];
@@ -206,6 +214,12 @@ function validateCamera(camera) {
   if (!VENUE_LINKS.has(camera.venueLink)) throw new Error(`Camera ${number} venue link is invalid`);
   if (!Number.isFinite(camera.sourceRateCapMbps) || camera.sourceRateCapMbps !== source.maximumSourceBitrateBps / 1_000_000) throw new Error(`Camera ${number} source rate cap must match ${camera.sourceProfile}`);
   if (camera.powerProtected !== true) throw new Error(`Camera ${number} power is not protected`);
+}
+
+function priorityRank(tier) {
+  const rank = COURT_PRIORITY_TIERS.indexOf(tier);
+  if (rank === -1) throw new Error("court priority tier is invalid");
+  return rank;
 }
 
 export { CAMERA_NUMBERS };

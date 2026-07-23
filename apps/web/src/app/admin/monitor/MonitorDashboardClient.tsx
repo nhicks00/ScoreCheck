@@ -368,6 +368,62 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
         <div className="monitor-banner" role="alert"><AlertTriangle size={17} /><span>{pollError ?? envelope.monitorError ?? "Monitoring snapshot is stale."}</span></div>
       )}
 
+      <section className="monitor-incidents-band" aria-label="Action required">
+        <div className="monitor-section-heading">
+          <div>
+            <h2>Action required</h2>
+            <p className="monitor-action-summary">{activeIncidents.length ? `${activeIncidents.length} active${activeSilences.length ? ` · ${activeSilences.length} silenced` : ""}` : "No action needed"}</p>
+          </div>
+        </div>
+        {activeIncidents.length > 0 && (
+          <div className="monitor-incident-list">
+            {activeIncidents.map((incident) => {
+              const silence = matchingSilence(incident, activeSilences, nowMs);
+              const incidentCamera = incident.courtNumber;
+              return (
+              <article className="monitor-incident" key={incident.id} data-severity={incident.severity} data-issue-code={incident.issueCode}>
+                <div className="monitor-incident-main">
+                  <div className="monitor-incident-title">
+                    <StateDot state={incident.severity === "critical" ? "CRITICAL" : "DEGRADED"} />
+                    <strong>{incidentCamera ? `Camera ${incidentCamera}` : stageLabel(incident.stage)}</strong>
+                    <span>{incidentCamera ? stageLabel(incident.stage) : incident.rootDependency}</span>
+                  </div>
+                  <p>{incident.summary}</p>
+                  {incident.firstAction && <p className="monitor-first-action"><strong>First action:</strong> {incident.firstAction}</p>}
+                </div>
+                <div className="monitor-incident-actions">
+                  {incidentCamera && (
+                    <button className="monitor-incident-inspect" type="button" onClick={() => inspectCamera(incidentCamera)}>
+                      <Eye size={16} /> Inspect Camera {incidentCamera}
+                    </button>
+                  )}
+                  {incident.status === "open" ? (
+                    <div className="monitor-ack-form">
+                      <input aria-label={`Acknowledgement reason for ${incident.issueCode}`} value={ackReasons[incident.id] ?? ""} onChange={(event) => setAckReasons((current) => ({ ...current, [incident.id]: event.target.value }))} placeholder="Acknowledgement reason" maxLength={300} />
+                      <button type="button" onClick={() => void acknowledge(incident)} disabled={ackBusy === incident.id}><CheckCircle2 size={16} /> Acknowledge</button>
+                      {ackError[incident.id] && <span className="monitor-form-error">{ackError[incident.id]}</span>}
+                    </div>
+                  ) : <span className="status info">Acknowledged by {incident.acknowledgedBy ?? "operator"}</span>}
+                  {silence ? (
+                    <span className="status warning">Paging silenced until {formatTime(silence.expiresAt)} · {silence.reason}</span>
+                  ) : incident.status === "open" && (
+                    <div className="monitor-silence-form">
+                      <input aria-label={`Silence reason for ${incident.issueCode}`} value={silenceReasons[incident.id] ?? ""} onChange={(event) => setSilenceReasons((current) => ({ ...current, [incident.id]: event.target.value }))} placeholder="Planned maintenance reason" maxLength={300} />
+                      <select aria-label={`Silence duration for ${incident.issueCode}`} value={silenceDurations[incident.id] ?? 30} onChange={(event) => setSilenceDurations((current) => ({ ...current, [incident.id]: Number(event.target.value) }))}>
+                        <option value={15}>15 min</option><option value={30}>30 min</option><option value={60}>1 hour</option><option value={120}>2 hours</option>
+                      </select>
+                      <button type="button" onClick={() => void silenceIncident(incident)} disabled={silenceBusy === incident.id}><BellOff size={16} /> Silence</button>
+                      {silenceError[incident.id] && <span className="monitor-form-error">{silenceError[incident.id]}</span>}
+                    </div>
+                  )}
+                </div>
+              </article>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
       <div className="monitor-bandwidth-note">
         <Camera size={17} aria-hidden="true" />
         <div><strong>Low-data overview</strong><span>Camera cards use one 256×144 snapshot every 15 seconds. Live video opens only for the selected camera.</span></div>
@@ -443,46 +499,6 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
         </div>
       </section>
 
-      <section className="monitor-incidents-band" aria-label="Active incidents">
-        <div className="monitor-section-heading"><div><p className="eyebrow">Incident queue</p><h2>{activeIncidents.length ? `${activeIncidents.length} active${activeSilences.length ? ` · ${activeSilences.length} silenced` : ""}` : "No active incidents"}</h2></div></div>
-        {activeIncidents.length > 0 && (
-          <div className="monitor-incident-list">
-            {activeIncidents.map((incident) => {
-              const silence = matchingSilence(incident, activeSilences, nowMs);
-              return (
-              <article className="monitor-incident" key={incident.id} data-severity={incident.severity}>
-                <div className="monitor-incident-main">
-                  <div className="monitor-incident-title"><StateDot state={incident.severity === "critical" ? "CRITICAL" : "DEGRADED"} /><strong>{incident.issueCode}</strong><span>{incident.courtNumber ? `Court ${incident.courtNumber}` : incident.rootDependency}</span></div>
-                  <p>{incident.summary}</p>
-                  {incident.firstAction && <p className="monitor-first-action"><strong>First action:</strong> {incident.firstAction}</p>}
-                </div>
-                <div className="monitor-incident-actions">
-                  {incident.status === "open" ? (
-                    <div className="monitor-ack-form">
-                      <input aria-label={`Acknowledgement reason for ${incident.issueCode}`} value={ackReasons[incident.id] ?? ""} onChange={(event) => setAckReasons((current) => ({ ...current, [incident.id]: event.target.value }))} placeholder="Acknowledgement reason" maxLength={300} />
-                      <button type="button" onClick={() => void acknowledge(incident)} disabled={ackBusy === incident.id}><CheckCircle2 size={16} /> Acknowledge</button>
-                      {ackError[incident.id] && <span className="monitor-form-error">{ackError[incident.id]}</span>}
-                    </div>
-                  ) : <span className="status info">Acknowledged by {incident.acknowledgedBy ?? "operator"}</span>}
-                  {silence ? (
-                    <span className="status warning">Paging silenced until {formatTime(silence.expiresAt)} · {silence.reason}</span>
-                  ) : incident.status === "open" && (
-                    <div className="monitor-silence-form">
-                      <input aria-label={`Silence reason for ${incident.issueCode}`} value={silenceReasons[incident.id] ?? ""} onChange={(event) => setSilenceReasons((current) => ({ ...current, [incident.id]: event.target.value }))} placeholder="Planned maintenance reason" maxLength={300} />
-                      <select aria-label={`Silence duration for ${incident.issueCode}`} value={silenceDurations[incident.id] ?? 30} onChange={(event) => setSilenceDurations((current) => ({ ...current, [incident.id]: Number(event.target.value) }))}>
-                        <option value={15}>15 min</option><option value={30}>30 min</option><option value={60}>1 hour</option><option value={120}>2 hours</option>
-                      </select>
-                      <button type="button" onClick={() => void silenceIncident(incident)} disabled={silenceBusy === incident.id}><BellOff size={16} /> Silence</button>
-                      {silenceError[incident.id] && <span className="monitor-form-error">{silenceError[incident.id]}</span>}
-                    </div>
-                  )}
-                </div>
-              </article>
-              );
-            })}
-          </div>
-        )}
-      </section>
     </div>
   );
 }

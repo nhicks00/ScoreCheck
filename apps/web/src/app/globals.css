@@ -5796,6 +5796,12 @@ body:has(.program-root) {
   margin-top: 10px;
 }
 
+.monitor-action-summary {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+
 .monitor-incident {
   align-items: center;
   background: var(--surface);
@@ -5838,6 +5844,12 @@ body:has(.program-root) {
 .monitor-incident-actions {
   display: grid;
   gap: 7px;
+}
+
+.monitor-incident-inspect {
+  justify-content: center;
+  min-height: 44px;
+  width: 100%;
 }
 
 .monitor-silence-form {
