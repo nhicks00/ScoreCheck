@@ -618,6 +618,38 @@ mode-`0700` event bundle. Existing credentials, SSH identity, canary attestation
 and production anchors remain outside the event directory and are referenced by
 absolute path:
 
+Before the bundle, create the isolated immutable Program renderer. It is the
+only approved event-scoped Vercel project: its production environment has an
+exact Program-route allowlist and explicitly excludes admin and YouTube
+credentials. The renderer's generated deployment origin, Git SHA, deployment
+ID, and browser contracts are captured in the protected output. Never weaken
+the shared application project's Vercel Authentication to make its generated
+deployment URLs usable by Egress.
+
+```bash
+node infra/event-stack/production-renderer.mjs prepare \
+  --event next-event-slug \
+  --git-sha 40_CHARACTER_PUSHED_RELEASE_SHA \
+  --repo GITHUB_OWNER/GITHUB_REPOSITORY \
+  --repo-id NUMERIC_GITHUB_REPOSITORY_ID \
+  --credentials-env /absolute/protected/provider.env \
+  --web-runtime-env /absolute/protected/web-runtime.env \
+  --output /absolute/protected/renderer/next-event-slug
+```
+
+Pass `/absolute/protected/renderer/next-event-slug/renderer-binding.json` to
+the bundle generator. After the matching event lifecycle reaches `destroyed`,
+delete that exact project with the event-scoped confirmation:
+
+```bash
+node infra/event-stack/production-renderer.mjs destroy \
+  --event next-event-slug \
+  --credentials-env /absolute/protected/provider.env \
+  --output /absolute/protected/renderer/next-event-slug \
+  --state /absolute/protected/events/next-event-slug/lifecycle-state.json \
+  --confirm DESTROY-RENDERER:next-event-slug
+```
+
 ```bash
 node infra/event-stack/commentary-qualificationctl.mjs init \
   --event next-event-slug \

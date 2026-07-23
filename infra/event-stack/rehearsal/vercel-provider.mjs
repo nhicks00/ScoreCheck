@@ -8,10 +8,11 @@ const SHA = /^[a-f0-9]{40}$/;
 const ACTIVE_DEPLOYMENT_STATES = new Set(["QUEUED", "INITIALIZING", "BUILDING"]);
 
 export class VercelRehearsalProvider {
-  constructor({ token, teamId, teamSlug = null, fetchImpl = globalThis.fetch, publicFetchImpl = globalThis.fetch, sleep = delay }) {
+  constructor({ token, teamId, teamSlug = null, mode = "rehearsal", fetchImpl = globalThis.fetch, publicFetchImpl = globalThis.fetch, sleep = delay }) {
     this.token = required(token, "Vercel token");
     this.teamId = required(teamId, "Vercel team id");
     this.team = teamSlug === null ? null : normalizeTeam({ id: this.teamId, slug: teamSlug }, this.teamId);
+    this.mode = validateMode(mode);
     this.fetchImpl = fetchImpl;
     this.publicFetchImpl = publicFetchImpl;
     this.sleep = sleep;
@@ -57,7 +58,7 @@ export class VercelRehearsalProvider {
     const normalizedProject = normalizeProject(project, project.name, project.origin, project.repository);
     validateGeneration(generationId);
     validateGitSource({ repoId, ref, sha });
-    validateEnvironment(environment, normalizedProject.origin);
+    validateEnvironment(environment, normalizedProject.origin, this.mode);
     await this.#upsertEnvironment(normalizedProject, environment);
     const existing = await this.#markedDeployment(normalizedProject, generationId);
     if (existing) {
@@ -430,8 +431,10 @@ function deploymentState(value) {
   return String(value?.readyState ?? value?.state ?? "");
 }
 
-function validateEnvironment(value, expectedOrigin) {
+export function validateEnvironment(value, expectedOrigin, mode = "rehearsal") {
   if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length === 0) throw new Error("Vercel rehearsal environment is required");
+  validateMode(mode);
+  if (mode === "production-renderer") return validateProductionRendererEnvironment(value, expectedOrigin);
   if (value.NEXT_PUBLIC_SCORECHECK_REHEARSAL !== "true") throw new Error("Vercel rehearsal environment marker is missing");
   if (Object.keys(value).some((key) => key.startsWith("SUPABASE_") || key.startsWith("NEXT_PUBLIC_SUPABASE_"))) {
     throw new Error("Vercel rehearsal must not use Supabase configuration");
@@ -442,6 +445,38 @@ function validateEnvironment(value, expectedOrigin) {
   for (const [key, raw] of Object.entries(value)) {
     if (!/^[A-Z][A-Z0-9_]*$/.test(key) || typeof raw !== "string" || /[\r\n\0]/.test(raw)) throw new Error("Vercel rehearsal environment is invalid");
   }
+}
+
+function validateProductionRendererEnvironment(value, expectedOrigin) {
+  const expected = [
+    "LIVEKIT_COMMENTARY_API_KEY",
+    "LIVEKIT_COMMENTARY_API_SECRET",
+    "MEDIAMTX_WHEP_BASE_URL",
+    "MONITOR_BROWSER_HEARTBEAT_SECRET",
+    "MONITOR_PUBLIC_URL",
+    "NEXT_PUBLIC_COURT_COUNT",
+    "NEXT_PUBLIC_DEFAULT_TIMEZONE",
+    "NEXT_PUBLIC_LIVEKIT_COMMENTARY_URL",
+    "NEXT_PUBLIC_SITE_URL",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+    "NEXT_PUBLIC_SUPABASE_URL",
+    "PROGRAM_PAGE_TOKEN",
+    "SUPABASE_SERVICE_ROLE_KEY"
+  ].sort();
+  const actual = Object.keys(value).sort();
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error("Vercel production renderer environment must use the exact allowlist");
+  if (value.NEXT_PUBLIC_SITE_URL !== expectedOrigin) throw new Error("Vercel production renderer origin does not match the isolated project");
+  if (value.NEXT_PUBLIC_COURT_COUNT !== "8" || value.NEXT_PUBLIC_DEFAULT_TIMEZONE !== "America/Chicago") {
+    throw new Error("Vercel production renderer public configuration is invalid");
+  }
+  for (const [key, raw] of Object.entries(value)) {
+    if (!/^[A-Z][A-Z0-9_]*$/.test(key) || typeof raw !== "string" || !raw || /[\r\n\0]/.test(raw)) throw new Error("Vercel production renderer environment is invalid");
+  }
+}
+
+function validateMode(value) {
+  if (!new Set(["rehearsal", "production-renderer"]).has(value)) throw new Error("Vercel provider mode is invalid");
+  return value;
 }
 
 function validateGitSource({ repoId, ref, sha }) {
