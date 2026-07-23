@@ -119,7 +119,7 @@ active_count() {
   jq -er 'if . == null then 0 else length end' "$ACTIVE_FILE"
 }
 
-restart_egress_for_cleanup() {
+reset_egress_control_stack_for_cleanup() {
   local id="$1"
   if compgen -G "$REQ_DIR/court-*.owner.json" >/dev/null; then
     echo "error: refusing conformance cleanup restart while a production Egress owner exists." >&2
@@ -129,19 +129,32 @@ restart_egress_for_cleanup() {
     echo "error: refusing conformance cleanup restart without one exact ownerless Egress." >&2
     return 1
   fi
-  if ! docker restart bvm-egress >/dev/null 2>&1; then
-    echo "error: isolated Egress-container cleanup restart failed." >&2
+  if ! docker restart bvm-redis >/dev/null 2>&1; then
+    echo "error: isolated Egress Redis cleanup restart failed." >&2
+    return 1
+  fi
+  for _ in $(seq 1 60); do
+    [[ "$(docker inspect bvm-redis --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null || true)" == healthy ]] && break
+    sleep 1
+  done
+  if [[ "$(docker inspect bvm-redis --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null || true)" != healthy ]]; then
+    echo "error: isolated Egress Redis did not return healthy during cleanup." >&2
+    return 1
+  fi
+  if ! docker restart bvm-livekit bvm-egress >/dev/null 2>&1; then
+    echo "error: isolated Egress control/worker cleanup restart failed." >&2
     return 1
   fi
   for _ in $(seq 1 90); do
     if [[ "$(docker inspect bvm-egress --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null || true)" == healthy ]] \
+      && [[ "$(docker inspect bvm-livekit --format '{{.State.Running}}' 2>/dev/null || true)" == true ]] \
       && refresh_active && [[ "$(active_count)" == 0 ]]; then
-      echo "warning: isolated Egress container restarted to clear the exact stuck conformance job ${id}." >&2
+      echo "warning: isolated Egress control stack restarted to clear the exact stuck conformance job ${id}." >&2
       return 0
     fi
     sleep 1
   done
-  echo "error: isolated Egress-container cleanup restart did not return healthy and idle." >&2
+  echo "error: isolated Egress control-stack cleanup restart did not return healthy and idle." >&2
   return 1
 }
 
@@ -164,7 +177,7 @@ stop_and_prove_idle() {
     if refresh_active && (( $(active_count) == 0 )); then
       return 0
     fi
-    if restart_egress_for_cleanup "$id"; then
+    if reset_egress_control_stack_for_cleanup "$id"; then
       echo "error: exact conformance stop timed out; cleanup recovered but qualification is invalid." >&2
       return 1
     fi
@@ -184,6 +197,10 @@ stop_and_prove_idle() {
     fi
     sleep 1
   done
+  if reset_egress_control_stack_for_cleanup "$id"; then
+    echo "error: exact conformance stop did not reach idle; cleanup recovered but qualification is invalid." >&2
+    return 1
+  fi
   echo "error: compositor did not return to idle after output conformance." >&2
   return 1
 }

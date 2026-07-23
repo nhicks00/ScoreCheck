@@ -13,10 +13,14 @@ ln -s "$(command -v jq)" "$FIXTURE/bin/jq"
 printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
   'root="${MOCK_ROOT:?}"' \
-  'if [[ "$*" == "restart bvm-egress" ]]; then' \
+  'if [[ "$*" == "restart bvm-redis" ]]; then' \
+  '  exit 0' \
+  'elif [[ "$*" == "restart bvm-livekit bvm-egress" ]]; then' \
   '  rm -f "$root/mock-active" "$root/list-count" "$root/output-path" "$root/current-attempt"' \
-  'elif [[ "$*" == "inspect bvm-egress --format {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}" ]]; then' \
+  'elif [[ "$*" == "inspect bvm-redis --format {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}" || "$*" == "inspect bvm-egress --format {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}" ]]; then' \
   '  printf '\''healthy\n'\''' \
+  'elif [[ "$*" == "inspect bvm-livekit --format {{.State.Running}}" ]]; then' \
+  '  printf '\''true\n'\''' \
   'else exit 2; fi' >"$FIXTURE/bin/docker"
 printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
@@ -51,6 +55,7 @@ printf '%s\n' '#!/usr/bin/env bash' \
   '  printf '\''EgressID: EG_sample%s Status: EGRESS_STARTING\n'\'' "$attempt"' \
   'elif [[ "$*" == egress\ stop\ --id\ EG_sample* ]]; then' \
   '  if [[ "${MOCK_STOP_STUCK:-0}" == 1 ]]; then exit 1; fi' \
+  '  if [[ "${MOCK_STOP_STUCK_SUCCESS:-0}" == 1 ]]; then exit 0; fi' \
   '  rm -f "$state" "$root/list-count" "$root/output-path" "$root/current-attempt"' \
   'else' \
   '  exit 2' \
@@ -110,7 +115,17 @@ if MOCK_STALL_ATTEMPTS=1 MOCK_STOP_STUCK=1 PATH="$FIXTURE/bin:$PATH" "$FIXTURE/q
   exit 1
 fi
 grep -Fq 'cleanup recovered but qualification is invalid' "$FIXTURE/cleanup-blocked.err"
-grep -Fq 'isolated Egress container restarted' "$FIXTURE/cleanup-blocked.err"
+grep -Fq 'isolated Egress control stack restarted' "$FIXTURE/cleanup-blocked.err"
+test ! -e "$FIXTURE/mock-active"
+
+# A successful stop response that never reaches idle uses the same bounded cleanup.
+rm -f "$FIXTURE/start-count"
+if MOCK_STALL_ATTEMPTS=1 MOCK_STOP_STUCK_SUCCESS=1 PATH="$FIXTURE/bin:$PATH" "$FIXTURE/qualify-output.sh" 1 1080p30 00000000-0000-4000-8000-000000000005 >"$FIXTURE/cleanup-not-idle.json" 2>"$FIXTURE/cleanup-not-idle.err"; then
+  printf 'FAIL: a successful stop response with an active job was accepted\n' >&2
+  exit 1
+fi
+grep -Fq 'cleanup recovered but qualification is invalid' "$FIXTURE/cleanup-not-idle.err"
+grep -Fq 'isolated Egress control stack restarted' "$FIXTURE/cleanup-not-idle.err"
 test ! -e "$FIXTURE/mock-active"
 
 printf 'PASS: local-only output conformance capture is bounded, retry-safe, and idempotent\n'
