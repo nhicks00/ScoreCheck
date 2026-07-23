@@ -38,7 +38,7 @@ if ! [[ "$COURT" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 for binding in "$EVENT_ID" "$DESTINATION_ID" "$OUTPUT_GENERATION"; do
-  if ! [[ "$binding" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$ ]]; then
+  if ! [[ "$binding" =~ ^[A-Za-z0-9._-]{3,128}$ ]]; then
     echo "error: event, destination id, and output generation must be 3-128 safe identifier characters." >&2
     exit 1
   fi
