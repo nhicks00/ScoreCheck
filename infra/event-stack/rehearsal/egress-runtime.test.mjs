@@ -32,6 +32,7 @@ test("parses null or exact unique active Egress identities", () => {
 
 test("parses an exact immutable Egress ownership record", () => {
   assert.deepEqual(parseEgressOwnership(JSON.stringify(ownership())), ownership());
+  assert.equal(parseEgressOwnership(JSON.stringify({ ...ownership(), destinationId: "_youtube-broadcast" })).destinationId, "_youtube-broadcast");
   assert.throws(() => parseEgressOwnership(JSON.stringify({ ...ownership(), requestSha256: "bad" })), /digest/);
 });
 
