@@ -242,6 +242,9 @@ def classification_map(processes, retained_healthcheck_shims=None):
             classifications[process["identity"]] = monitor_content_classification
 
         workload_classification = {
+            # The pinned LiveKit server starts one `egress run-handler` child
+            # per request and waits on that exact child asynchronously.
+            ("egress", "egress"): "workload.egress-handler",
             ("chrome", "egress"): "workload.egress-chrome",
             ("chrome", "chrome"): "workload.egress-chrome",
             ("pactl", "egress"): "workload.egress-pactl",
@@ -562,6 +565,8 @@ def self_test():
         110: {"pid": 110, "ppid": 100, "identity": "110:11", "command": "pactl", "parentCommand": "egress", "commandLine": b"", "cgroupFingerprint": "egress"},
         111: {"pid": 111, "ppid": 100, "identity": "111:11", "command": "pactl", "parentCommand": "egress", "commandLine": b"", "cgroupFingerprint": None},
         112: {"pid": 112, "ppid": 101, "identity": "112:11", "command": "pactl", "parentCommand": "egress", "commandLine": b"", "cgroupFingerprint": None},
+        113: {"pid": 113, "ppid": 100, "identity": "113:12", "command": "egress", "parentCommand": "egress", "commandLine": b"", "cgroupFingerprint": "egress"},
+        114: {"pid": 114, "ppid": 101, "identity": "114:12", "command": "egress", "parentCommand": "egress", "commandLine": b"", "cgroupFingerprint": "egress"},
         120: {"pid": 120, "ppid": 100, "identity": "120:12", "command": "pactl", "parentCommand": "egress", "commandLine": b"", "cgroupFingerprint": "other"},
         130: {"pid": 130, "ppid": 20, "identity": "130:13", "command": "pactl", "parentCommand": "chrome", "commandLine": b"", "cgroupFingerprint": "egress"},
         140: {"pid": 140, "ppid": 100, "identity": "140:14", "command": "gst-plugin-scan", "parentCommand": "egress", "commandLine": b"gst-plugin-scanner", "cgroupFingerprint": "egress"},
@@ -590,6 +595,8 @@ def self_test():
     assert classifications["110:11"] == "workload.egress-pactl"
     assert classifications["111:11"] == "workload.egress-pactl"
     assert "112:11" not in classifications
+    assert classifications["113:12"] == "workload.egress-handler"
+    assert "114:12" not in classifications
     assert "120:12" not in classifications
     assert "130:13" not in classifications
     assert classifications["140:14"] == "workload.egress-gst-plugin-scan"
