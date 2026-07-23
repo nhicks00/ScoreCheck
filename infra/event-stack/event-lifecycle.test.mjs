@@ -280,6 +280,18 @@ test("still rejects early production teardown", async () => {
   );
 });
 
+test("allows an early production teardown only with a second exact event confirmation", async () => {
+  const setup = fixture({ now: new Date("2026-07-16T12:00:00.000Z") });
+  const evidence = await prepareDestroyableLifecycle(setup, "early-production-override");
+  await assert.rejects(
+    () => setup.controller.destroy(setup.manifest, evidence, "DESTROY:turnkey-test", "DESTROY-NOW:other-event"),
+    /same-day confirmation/
+  );
+  const destroyed = await setup.controller.destroy(setup.manifest, evidence, "DESTROY:turnkey-test", "DESTROY-NOW:turnkey-test");
+  assert.equal(destroyed.phase, "destroyed");
+  assert.equal(setup.cloud.droplets.size, 0);
+});
+
 test("resumes after a definite partial create without duplicates", async () => {
   const cloud = new FakeDigitalOceanProvider();
   cloud.failCreateAt = 5;

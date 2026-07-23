@@ -20,12 +20,12 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const profile = await readProfile(options.profile);
-  const args = buildEventctlInvocation(options.command, profile, options.confirm);
+  const args = buildEventctlInvocation(options.command, profile, options.confirm, options.sameDayConfirm);
   const code = await run(process.execPath, [LIFECYCLE, ...args]);
   if (code !== 0) process.exitCode = code;
 }
 
-export function buildEventctlInvocation(command, profile, confirmation = null) {
+export function buildEventctlInvocation(command, profile, confirmation = null, sameDayConfirm = null) {
   validateProfile(profile);
   if (!COMMANDS.has(command)) throw new Error(`unsupported event operator command ${command}`);
   const args = [command, "--manifest", profile.manifest, "--state", profile.state];
@@ -78,6 +78,10 @@ export function buildEventctlInvocation(command, profile, confirmation = null) {
   } else if (confirmation) {
     throw new Error(`${command} does not accept --confirm`);
   }
+  if (sameDayConfirm !== null) {
+    if (command !== "destroy") throw new Error(`${command} does not accept --same-day-confirm`);
+    args.push("--same-day-confirm", sameDayConfirm);
+  }
   return args;
 }
 
@@ -106,13 +110,14 @@ async function readProfile(path) {
 function parseArgs(argv) {
   const command = argv[0];
   if (!COMMANDS.has(command)) throw new Error("first argument must be plan, up, status, start, close, evidence, destroy, or abort");
-  const options = { command, profile: null, confirm: null };
+  const options = { command, profile: null, confirm: null, sameDayConfirm: null };
   for (let index = 1; index < argv.length; index += 1) {
     const flag = argv[index];
     const value = argv[++index];
     if (!value || value.startsWith("--")) throw new Error(`${flag} requires a value`);
     if (flag === "--profile") options.profile = absolute(value, flag);
     else if (flag === "--confirm") options.confirm = value;
+    else if (flag === "--same-day-confirm") options.sameDayConfirm = value;
     else throw new Error(`unknown event operator option ${flag}`);
   }
   if (!options.profile) throw new Error("--profile is required");

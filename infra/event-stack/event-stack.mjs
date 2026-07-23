@@ -106,7 +106,7 @@ async function main() {
   else if (options.command === "close") result = await runLifecycleTransition("lifecycle close", () => controller.closeCoverage(manifest, requiredOption(options.confirm, "--confirm")));
   else if (options.command === "evidence") result = await runLifecycleTransition("lifecycle evidence", () => controller.captureEvidence(manifest, requiredOption(options.evidence, "--evidence"), options.rehearsalEvidence));
   else if (options.command === "destroy") {
-    result = await runLifecycleTransition("lifecycle destroy", () => controller.destroy(manifest, requiredOption(options.evidence, "--evidence"), requiredOption(options.confirm, "--confirm")));
+    result = await runLifecycleTransition("lifecycle destroy", () => controller.destroy(manifest, requiredOption(options.evidence, "--evidence"), requiredOption(options.confirm, "--confirm"), options.sameDayConfirm));
   } else if (options.command === "abort") {
     result = await runLifecycleTransition("lifecycle abort", () => controller.abort(manifest, requiredOption(options.evidence, "--evidence"), requiredOption(options.confirm, "--confirm"), options.rehearsalEvidence));
   } else throw new Error(`unsupported command ${options.command}`);
@@ -117,7 +117,7 @@ function parseArgs(argv) {
   const command = argv[0];
   if ([undefined, "help", "-h", "--help"].includes(command)) return null;
   if (!new Set(["plan", "up", "status", "start", "close", "evidence", "destroy", "abort"]).has(command)) throw new Error(`unknown lifecycle command ${command}`);
-  const options = { command, manifest: null, state: null, anchors: null, secrets: null, sshKey: null, knownHosts: null, commentaryTlsState: null, ingestTlsState: null, observabilityTlsState: null, credentialsEnv: null, attestation: null, evidence: null, rehearsalEvidence: null, confirm: null };
+  const options = { command, manifest: null, state: null, anchors: null, secrets: null, sshKey: null, knownHosts: null, commentaryTlsState: null, ingestTlsState: null, observabilityTlsState: null, credentialsEnv: null, attestation: null, evidence: null, rehearsalEvidence: null, confirm: null, sameDayConfirm: null };
   for (let index = 1; index < argv.length; index += 1) {
     const flag = argv[index];
     const value = argv[++index];
@@ -125,11 +125,11 @@ function parseArgs(argv) {
     const mapping = new Map([
       ["--manifest", "manifest"], ["--state", "state"], ["--anchors", "anchors"], ["--secrets", "secrets"],
       ["--ssh-key", "sshKey"], ["--known-hosts", "knownHosts"], ["--commentary-tls-state", "commentaryTlsState"], ["--ingest-tls-state", "ingestTlsState"], ["--observability-tls-state", "observabilityTlsState"], ["--credentials-env", "credentialsEnv"],
-      ["--attestation", "attestation"], ["--evidence", "evidence"], ["--rehearsal-evidence", "rehearsalEvidence"], ["--confirm", "confirm"]
+      ["--attestation", "attestation"], ["--evidence", "evidence"], ["--rehearsal-evidence", "rehearsalEvidence"], ["--confirm", "confirm"], ["--same-day-confirm", "sameDayConfirm"]
     ]);
     const key = mapping.get(flag);
     if (!key) throw new Error(`unknown option ${flag}`);
-    options[key] = key === "confirm" ? value : absolute(value, flag);
+    options[key] = new Set(["confirm", "sameDayConfirm"]).has(key) ? value : absolute(value, flag);
   }
   options.manifest = requiredOption(options.manifest, "--manifest");
   options.state = requiredOption(options.state, "--state");
@@ -144,7 +144,7 @@ function usage() {
   node infra/event-stack/event-stack.mjs start --manifest FILE --state FILE --secrets DIR --ssh-key FILE --known-hosts FILE --commentary-tls-state DIR --ingest-tls-state DIR --observability-tls-state DIR --credentials-env FILE --confirm START:EVENT
   node infra/event-stack/event-stack.mjs close --manifest FILE --state FILE --confirm CLOSE:EVENT
   node infra/event-stack/event-stack.mjs evidence --manifest FILE --state FILE --secrets DIR --ssh-key FILE --known-hosts FILE --commentary-tls-state DIR --ingest-tls-state DIR --observability-tls-state DIR --credentials-env FILE --evidence DIR [--rehearsal-evidence DIR]
-  node infra/event-stack/event-stack.mjs destroy --manifest FILE --state FILE --secrets DIR --ssh-key FILE --known-hosts FILE --commentary-tls-state DIR --ingest-tls-state DIR --observability-tls-state DIR --credentials-env FILE --evidence DIR --confirm DESTROY:EVENT
+  node infra/event-stack/event-stack.mjs destroy --manifest FILE --state FILE --secrets DIR --ssh-key FILE --known-hosts FILE --commentary-tls-state DIR --ingest-tls-state DIR --observability-tls-state DIR --credentials-env FILE --evidence DIR --confirm DESTROY:EVENT [--same-day-confirm DESTROY-NOW:EVENT]
   node infra/event-stack/event-stack.mjs abort --manifest FILE --state FILE --secrets DIR --ssh-key FILE --known-hosts FILE --commentary-tls-state DIR --ingest-tls-state DIR --observability-tls-state DIR --credentials-env FILE --evidence DIR --confirm ABORT:EVENT
 \nNo command prints secrets. Destroy is ID-scoped, requires closed coverage, protected evidence, the review date, and exact confirmation. Abort is ID-scoped and is unavailable after coverage starts.\n`);
 }

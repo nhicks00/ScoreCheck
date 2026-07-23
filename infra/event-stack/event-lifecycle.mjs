@@ -275,15 +275,19 @@ export class EventLifecycleController {
     });
   }
 
-  async destroy(manifest, evidenceDirectory, confirmation) {
+  async destroy(manifest, evidenceDirectory, confirmation, sameDayConfirmation = null) {
     requireProtectedAbsolutePath(evidenceDirectory, "evidence directory");
     return this.store.withLock(async () => {
       const state = await this.#requiredState(manifest);
       assertPhase(state, ["closed", "destroying"], "destroy");
       if (confirmation !== `DESTROY:${state.event}`) throw new Error(`confirmation must be exactly DESTROY:${state.event}`);
       const today = this.now().toISOString().slice(0, 10);
-      if (manifest.kind !== "rehearsal" && today < manifest.destroyAfter) {
-        throw new Error(`destroy review date is ${manifest.destroyAfter}; current UTC date is ${today}`);
+      const beforeReviewDate = manifest.kind !== "rehearsal" && today < manifest.destroyAfter;
+      if (beforeReviewDate && sameDayConfirmation !== `DESTROY-NOW:${state.event}`) {
+        throw new Error(`destroy review date is ${manifest.destroyAfter}; current UTC date is ${today}; use exact same-day confirmation to override`);
+      }
+      if (!beforeReviewDate && sameDayConfirmation !== null) {
+        throw new Error("same-day destroy confirmation is only allowed before the review date");
       }
       await verifyEvidenceBundle(state, evidenceDirectory);
       if (state.phase === "closed") {

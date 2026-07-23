@@ -43,6 +43,9 @@ test("expands one operator profile into exact non-shell lifecycle arguments", ()
     "--credentials-env", profile.credentialsEnv, "--evidence", profile.evidence,
     "--confirm", "DESTROY:event"
   ]);
+  assert.deepEqual(buildEventctlInvocation("destroy", profile, "DESTROY:event", "DESTROY-NOW:event").slice(-4), [
+    "--confirm", "DESTROY:event", "--same-day-confirm", "DESTROY-NOW:event"
+  ]);
   assert.deepEqual(buildEventctlInvocation("abort", profile, "ABORT:event"), [
     "abort", "--manifest", profile.manifest, "--state", profile.state,
     "--secrets", profile.secrets, "--ssh-key", profile.sshKey,
@@ -65,6 +68,7 @@ test("never invents destructive confirmations", () => {
     assert.throws(() => buildEventctlInvocation(command, profile), /explicit --confirm/);
   }
   assert.throws(() => buildEventctlInvocation("up", profile, "yes"), /does not accept/);
+  assert.throws(() => buildEventctlInvocation("close", profile, "CLOSE:event", "DESTROY-NOW:event"), /does not accept/);
 });
 
 test("rejects relative, missing, and extra profile fields", () => {
