@@ -137,7 +137,7 @@ function youtubeProblems(snapshot, activeCameras) {
   const problems = [];
   for (const camera of activeCameras) {
     const value = court(snapshot, camera)?.youtube;
-    if (!value || value.state !== "HEALTHY" || value.streamStatus !== "active" || value.healthStatus !== "good" || value.configurationIssues?.length !== 0 || value.broadcastLifecycle !== "live") problems.push(`Camera ${camera} YouTube monitor state changed during the overlay exception`);
+    if (!value || value.state !== "HEALTHY" || value.streamStatus !== "active" || value.healthStatus !== "good" || value.broadcastLifecycle !== "live") problems.push(`Camera ${camera} YouTube monitor state changed during the overlay exception`);
   }
   return problems;
 }

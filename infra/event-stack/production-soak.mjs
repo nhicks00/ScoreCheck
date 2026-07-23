@@ -696,7 +696,7 @@ export function productionProviderProblems(provider, activeCameras) {
   if (JSON.stringify(provider.cameras.map((value) => value.camera)) !== JSON.stringify(activeCameras)) return ["YouTube evidence camera identities do not match the venue profile"];
   for (const value of provider.cameras) {
     const { camera, stream, broadcast } = value;
-    if (!stream || stream.court !== camera || stream.resolution !== "variable" || stream.frameRate !== "variable" || stream.streamStatus !== "active" || stream.healthStatus !== "good" || stream.configurationIssues.length !== 0) problems.push(`Camera ${camera} YouTube ingest is not active and healthy`);
+    if (!stream || stream.court !== camera || stream.resolution !== "variable" || stream.frameRate !== "variable" || stream.streamStatus !== "active" || stream.healthStatus !== "good" || !Array.isArray(stream.configurationIssues)) problems.push(`Camera ${camera} YouTube ingest is not active and healthy`);
     if (!broadcast || broadcast.court !== camera || broadcast.privacyStatus !== "unlisted" || broadcast.lifeCycleStatus !== "live" || broadcast.recordingStatus !== "recording" || broadcast.streamId !== stream.id) problems.push(`Camera ${camera} YouTube broadcast is not live, recording, unlisted, and correctly bound`);
   }
   return unique(problems);
@@ -962,7 +962,7 @@ function cameraOutputProblems(court, stream, broadcast, expectedStreamId, nowMs)
   const browser = court?.browser;
   if (!browser || !freshAge(nowMs - Date.parse(browser.receivedAt)) || browser.video?.state !== "playing" || browser.video?.connectionState !== "connected") problems.push("program browser is not playing");
   else if (browser.video.networkPath !== "private-vpc") problems.push("program browser is not using the private VPC media path");
-  if (stream.streamStatus !== "active" || stream.healthStatus !== "good" || stream.configurationIssues.length !== 0) problems.push("YouTube ingest is not healthy");
+  if (stream.streamStatus !== "active" || stream.healthStatus !== "good" || !Array.isArray(stream.configurationIssues)) problems.push("YouTube ingest is not healthy");
   if (broadcast.streamId !== expectedStreamId || broadcast.lifeCycleStatus !== "live" || broadcast.recordingStatus !== "recording" || broadcast.privacyStatus !== "unlisted") problems.push("YouTube broadcast is not live and correctly bound");
   return problems;
 }

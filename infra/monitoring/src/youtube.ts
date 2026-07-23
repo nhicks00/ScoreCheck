@@ -165,7 +165,9 @@ function assessCourt(
   const hardFailure = ["bad", "noData", "revoked"].includes(healthStatus ?? "")
     || streamState === "error"
     || (expectation === "LIVE" && derivedIssues.length > 0);
-  const degraded = !hardFailure && (configurationIssues.length > 0 || healthStatus === "ok");
+  // YouTube can report informational issues while health remains "good"; only
+  // "ok" and "bad" represent warning- and error-level provider health.
+  const degraded = !hardFailure && (derivedIssues.length > 0 || healthStatus === "ok");
   const knownHealthy = healthStatus === "good" && (expectation !== "LIVE" || (lifecycle === "live" && streamState === "active"));
   const state: HealthState = hardFailure ? "CRITICAL" : degraded ? "DEGRADED" : knownHealthy ? "HEALTHY" : "UNKNOWN";
   return {

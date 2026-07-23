@@ -11,6 +11,14 @@ describe("YouTube health assessment", () => {
     expect(result.healthStatus).toBe("good");
   });
 
+  it("retains informational issues without degrading good ingestion", () => {
+    const result = assessYouTubeCourt(1, "video-1", { id: "video-1", liveStreamingDetails: { actualStartTime: "now" } }, {
+      broadcasts: [{ id: "video-1", status: { lifeCycleStatus: "live" }, contentDetails: { boundStreamId: "stream-1" } }],
+      streams: [{ id: "stream-1", status: { streamStatus: "active", healthStatus: { status: "good", configurationIssues: [{ type: "bitrateHigh" }] } } }]
+    }, "LIVE", 1_000);
+    expect(result).toMatchObject({ state: "HEALTHY", configurationIssues: ["bitrateHigh"] });
+  });
+
   it("treats configuration issues as critical and absent provider data as unknown", () => {
     expect(assessYouTubeCourt(1, "video-1", { id: "video-1" }, {
       broadcasts: [{ id: "video-1", status: { lifeCycleStatus: "testing" }, contentDetails: { boundStreamId: "stream-1" } }],

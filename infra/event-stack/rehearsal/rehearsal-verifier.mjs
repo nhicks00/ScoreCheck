@@ -541,8 +541,7 @@ export function providerProblems(provider) {
       || court.isReusable !== true
       || court.streamStatus !== "active"
       || court.healthStatus !== "good"
-      || !Array.isArray(court.configurationIssues)
-      || court.configurationIssues.length !== 0) {
+      || !Array.isArray(court.configurationIssues)) {
       problems.push(`Camera ${court.court} persistent YouTube ingest stream is not exact, reusable, active, and healthy`);
     }
   }

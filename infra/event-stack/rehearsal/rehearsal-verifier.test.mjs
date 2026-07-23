@@ -376,6 +376,11 @@ test("requires each persistent YouTube stream to be exact, reusable, active, and
     }))
   };
   assert.deepEqual(providerProblems(provider), []);
+  provider.courts[0].configurationIssues = ["bitrateHigh"];
+  assert.deepEqual(providerProblems(provider), []);
+  provider.courts[0].healthStatus = "ok";
+  assert.match(providerProblems(provider).join("; "), /persistent YouTube ingest stream/);
+  provider.courts[0].healthStatus = "good";
   provider.courts[0].title = "wrong";
   assert.match(providerProblems(provider).join("; "), /persistent YouTube ingest stream/);
 });

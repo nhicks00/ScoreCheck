@@ -135,7 +135,9 @@ test("detects source, overlay, browser continuity, and inactive-camera contamina
 test("requires six healthy variable-profile live YouTube broadcasts", () => {
   const provider = providerEvidence();
   assert.deepEqual(productionProviderProblems(provider, venue.activeCameras), []);
-  provider.cameras[2].stream.configurationIssues.push("videoBitrateLow");
+  provider.cameras[2].stream.configurationIssues.push("bitrateHigh");
+  assert.deepEqual(productionProviderProblems(provider, venue.activeCameras), []);
+  provider.cameras[2].stream.healthStatus = "ok";
   provider.cameras[4].broadcast.lifeCycleStatus = "ready";
   const problems = productionProviderProblems(provider, venue.activeCameras);
   assert.ok(problems.includes("Camera 3 YouTube ingest is not active and healthy"));
