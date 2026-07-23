@@ -170,47 +170,53 @@ export class ProductionSoakRuntime {
     }
 
     if (state.phase === "STARTING") {
-      state.sentinel = await this.sentinel.ensure({ manifest: this.manifest, renderer: this.renderer, evidenceDirectory: this.options.evidence });
-      await writeState(statePath, state);
-      state.criticalLogs = await this.criticalLogs.ensure({ manifest: this.manifest, lifecycleState: this.lifecycleState, evidenceDirectory: this.options.evidence });
-      await writeState(statePath, state);
-      for (const camera of this.venue.activeCameras) {
-        const host = compositorHost(this.manifest, this.lifecycleState, camera);
-        const expectedId = state.egress[camera]?.id ?? null;
-        const owner = egressOwner(state, camera);
-        if (!state.outputConformance[camera]) {
-          await this.egress.preflight(host);
-          const evidence = await this.outputConformance.qualify({
-            host,
-            court: camera,
-            profile: state.profiles[camera].profile,
-            evidenceId: state.runId,
-            outputDirectory: join(this.options.evidence, "output-conformance"),
-            renderer: this.renderer
-          });
-          state.outputConformance[camera] = {
-            ...evidence,
-            destination: {
-              streamId: this.destinations.streams[camera].id,
-              broadcastId: this.destinations.broadcasts[camera].id
-            }
-          };
+      try {
+        state.sentinel = await this.sentinel.ensure({ manifest: this.manifest, renderer: this.renderer, evidenceDirectory: this.options.evidence });
+        await writeState(statePath, state);
+        state.criticalLogs = await this.criticalLogs.ensure({ manifest: this.manifest, lifecycleState: this.lifecycleState, evidenceDirectory: this.options.evidence });
+        await writeState(statePath, state);
+        for (const camera of this.venue.activeCameras) {
+          const host = compositorHost(this.manifest, this.lifecycleState, camera);
+          const expectedId = state.egress[camera]?.id ?? null;
+          const owner = egressOwner(state, camera);
+          if (!state.outputConformance[camera]) {
+            await this.egress.preflight(host);
+            const evidence = await this.outputConformance.qualify({
+              host,
+              court: camera,
+              profile: state.profiles[camera].profile,
+              evidenceId: state.runId,
+              outputDirectory: join(this.options.evidence, "output-conformance"),
+              renderer: this.renderer
+            });
+            state.outputConformance[camera] = {
+              ...evidence,
+              destination: {
+                streamId: this.destinations.streams[camera].id,
+                broadcastId: this.destinations.broadcasts[camera].id
+              }
+            };
+            await writeState(statePath, state);
+          }
+          if (!expectedId) await this.egress.preflight(host);
+          const active = await this.egress.ensureStarted({ host, court: camera, profile: state.profiles[camera].profile, owner, expectedId });
+          state.egress[camera] = { ...active, host, profile: state.profiles[camera].profile };
           await writeState(statePath, state);
+          state.admission[camera] = await this.egress.proveSecondStartRejected({ host, court: camera, profile: state.profiles[camera].profile, owner, expectedId: active.id });
+          await writeState(statePath, state);
+          await this.#waitForCameraOutput(camera);
         }
-        if (!expectedId) await this.egress.preflight(host);
-        const active = await this.egress.ensureStarted({ host, court: camera, profile: state.profiles[camera].profile, owner, expectedId });
-        state.egress[camera] = { ...active, host, profile: state.profiles[camera].profile };
+        const accepted = await this.#waitForStableOutput(state.profiles);
+        state.phase = "RUNNING";
+        state.startedAt = accepted.observedAt;
+        state.baseline = accepted.snapshot;
         await writeState(statePath, state);
-        state.admission[camera] = await this.egress.proveSecondStartRejected({ host, court: camera, profile: state.profiles[camera].profile, owner, expectedId: active.id });
+        process.stdout.write(`SOAK_STARTED ${state.startedAt}: ${this.venue.activeCameras.length} native 1080 scoreboard output(s) are live and healthy.\n`);
+      } catch (error) {
+        state.startupCleanup = await this.#stopStartupObservers(state);
         await writeState(statePath, state);
-        await this.#waitForCameraOutput(camera);
+        throw error;
       }
-      const accepted = await this.#waitForStableOutput(state.profiles);
-      state.phase = "RUNNING";
-      state.startedAt = accepted.observedAt;
-      state.baseline = accepted.snapshot;
-      await writeState(statePath, state);
-      process.stdout.write(`SOAK_STARTED ${state.startedAt}: ${this.venue.activeCameras.length} native 1080 scoreboard output(s) are live and healthy.\n`);
     }
 
     if (state.phase !== "RUNNING") {
@@ -435,6 +441,21 @@ export class ProductionSoakRuntime {
       await this.sleep(2_000);
     }
     throw new Error(`${cameraList(this.venue.activeCameras)} did not reach a stable native 1080 raw baseline: ${lastProblems.slice(0, 8).join("; ")}`);
+  }
+
+  async #stopStartupObservers(state) {
+    const stoppedAt = new Date(this.now()).toISOString();
+    const cleanup = { stoppedAt, sampler: null, sentinel: null, criticalLogs: null };
+    for (const [key, runtime] of [["criticalLogs", this.criticalLogs], ["sentinel", this.sentinel], ["sampler", this.sampler]]) {
+      if (!state[key]?.output) continue;
+      try {
+        state[key] = await runtime.stop(state[key]);
+        cleanup[key] = state[key].status;
+      } catch (error) {
+        cleanup[key] = `failed: ${safeError(error)}`;
+      }
+    }
+    return cleanup;
   }
 
   async #probeProfiles() {
