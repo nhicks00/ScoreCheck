@@ -12,6 +12,12 @@ test("maps Cameras 1-2 to RTMP and Cameras 3-8 to SRT", () => {
   for (let court = 3; court <= 8; court += 1) assert.equal(publisherProtocol(court), "SRT");
 });
 
+test("accepts the production camera publisher username length", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "scorecheck-publisher-"));
+  const config = buildSyntheticPublisherConfig({ court: 1, generationId: "generation-1234", host: "preview-test.example.com", user: "camera01", password: "publisher-password-1-long", evidenceDirectory: directory, runtimeDirectory: join(directory, "runtime") });
+  assert.match(config.outputUrl, /camera01/u);
+});
+
 test("builds visibly distinct 1080p30 publishers with a resumable process marker", async () => {
   const directory = await mkdtemp(join(tmpdir(), "scorecheck-publisher-"));
   const config = buildSyntheticPublisherConfig({ court: 8, generationId: "generation-1234", host: "preview-test.example.com", user: "publisher-user-8", password: "publisher-password-8-long", evidenceDirectory: directory, runtimeDirectory: join(directory, "runtime") });

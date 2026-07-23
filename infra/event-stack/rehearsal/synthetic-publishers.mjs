@@ -31,9 +31,8 @@ export function publisherProtocol(court) {
 export function buildSyntheticPublisherConfig({ court, generationId, host, user, password, evidenceDirectory, runtimeDirectory, ffmpegPath = "ffmpeg", nodePath = process.execPath, maxRestarts = 3 }) {
   if (!COURTS.includes(court)) throw new Error("synthetic publisher court is invalid");
   if (!/^[a-zA-Z0-9.-]{1,253}$/.test(host ?? "")) throw new Error("synthetic publisher host is invalid");
-  for (const [label, value] of [["user", user], ["password", password]]) {
-    if (typeof value !== "string" || !/^[a-zA-Z0-9._~+/=-]{12,200}$/.test(value)) throw new Error(`synthetic publisher ${label} is invalid`);
-  }
+  if (typeof user !== "string" || !/^[a-zA-Z0-9._~+/=-]{1,200}$/.test(user)) throw new Error("synthetic publisher user is invalid");
+  if (typeof password !== "string" || !/^[a-zA-Z0-9._~+/=-]{12,200}$/.test(password)) throw new Error("synthetic publisher password is invalid");
   if (typeof ffmpegPath !== "string" || !ffmpegPath || /[\r\n\0]/.test(ffmpegPath)) throw new Error("synthetic publisher FFmpeg path is invalid");
   if (typeof nodePath !== "string" || !nodePath || /[\r\n\0]/.test(nodePath)) throw new Error("synthetic publisher Node.js path is invalid");
   if (!Number.isInteger(maxRestarts) || maxRestarts < 0 || maxRestarts > 60) throw new Error("synthetic publisher restart limit is invalid");
