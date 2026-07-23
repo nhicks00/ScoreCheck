@@ -11,7 +11,7 @@ const FIXTURE_DURATION_SECONDS = 12;
 // each fixture at that floor so synthetic qualification exercises the same
 // bitrate contract as an admitted event source.
 const FIXTURE_VIDEO_BITRATE_KBPS = 5_000;
-const SRT_INPUT_BANDWIDTH_BYTES_PER_SECOND = 200_000;
+const SRT_INPUT_BANDWIDTH_BYTES_PER_SECOND = 800_000;
 const PROGRESS_FRESHNESS_MS = 5_000;
 const SUPERVISOR_FRESHNESS_MS = 5_000;
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));

@@ -41,7 +41,7 @@ test("builds visibly distinct 1080p30 publishers with a resumable process marker
   assert.match(config.outputUrl, /tlpktdrop=1/u);
   assert.match(config.outputUrl, /latency=500000/u);
   assert.match(config.outputUrl, /maxbw=0/u);
-  assert.match(config.outputUrl, /inputbw=200000/u);
+  assert.match(config.outputUrl, /inputbw=800000/u);
   assert.match(config.outputUrl, /oheadbw=50/u);
   assert.match(config.workerPath, /synthetic-publisher-worker\.cjs$/u);
   assert.equal(config.protectedSupervisorConfiguration.ffmpegArgs, config.args);
