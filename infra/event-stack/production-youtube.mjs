@@ -94,6 +94,12 @@ export class ProductionYouTubeProvider {
         enableAutoStop: false
       }
     });
+    const current = normalizeProductionBroadcast(value, event, court, { allowAutoStart: true });
+    if (current.lifeCycleStatus === "created") {
+      await this.request("POST", `/liveBroadcasts/bind?id=${encodeURIComponent(current.id)}&streamId=${encodeURIComponent(streamId)}&part=id,contentDetails`);
+      const broadcast = await this.enforceManualBroadcastLifecycleById(current.id);
+      return { ...broadcast, streamId };
+    }
     const broadcast = await this.enforceManualBroadcastLifecycle(value, event, court);
     await this.request("POST", `/liveBroadcasts/bind?id=${encodeURIComponent(broadcast.id)}&streamId=${encodeURIComponent(streamId)}&part=id,contentDetails`);
     return { ...broadcast, streamId };

@@ -131,6 +131,33 @@ test("converts a ready reusable broadcast from auto-start to the manual lifecycl
   assert.equal(body.contentDetails.monitorStream.enableMonitorStream, false);
 });
 
+test("binds a newly created broadcast before enforcing the ready manual lifecycle contract", async () => {
+  const calls = [];
+  const provider = new ProductionYouTubeProvider({ clientId: "client-id", clientSecret: "client-secret", refreshToken: "refresh-token" });
+  provider.listAll = async () => [];
+  provider.request = async (method, path) => {
+    calls.push(`${method} ${path}`);
+    if (method === "POST" && path.startsWith("/liveBroadcasts?")) {
+      return {
+        id: "broadcast-1",
+        snippet: { title: "ScoreCheck six-camera-soak - Camera 1" },
+        status: { lifeCycleStatus: "created", privacyStatus: "unlisted", recordingStatus: "notRecording" },
+        contentDetails: { enableAutoStart: false, enableAutoStop: false }
+      };
+    }
+    if (method === "POST" && path.startsWith("/liveBroadcasts/bind?")) return {};
+    throw new Error(`unexpected ${method} ${path}`);
+  };
+  provider.enforceManualBroadcastLifecycleById = async (id) => {
+    calls.push(`enforce ${id}`);
+    return broadcast("six-camera-soak", 1, "stream-1");
+  };
+  const result = await provider.prepareBroadcast({ event: "six-camera-soak", court: 1, streamId: "stream-1", scheduledStartTime: "2026-07-23T16:00:00Z" });
+  assert.equal(result.streamId, "stream-1");
+  assert.ok(calls[1].startsWith("POST /liveBroadcasts/bind?"));
+  assert.equal(calls[2], "enforce broadcast-1");
+});
+
 test("rejects duplicate reusable stream identities in a loaded destination contract", () => {
   const value = {
     schemaVersion: 1,
