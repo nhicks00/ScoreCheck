@@ -26,6 +26,9 @@ runcmd:
   # Firmware metadata refresh is unnecessary on ephemeral event hosts and
   # must not run asynchronously during ingest qualification.
   - systemctl mask --now fwupd-refresh.timer fwupd-refresh.service || true
+  # ScoreCheck owns host telemetry during an event. Disable Ubuntu's redundant
+  # sysstat jobs so sadc cannot introduce unowned work during qualification.
+  - systemctl mask --now sysstat-collect.timer sysstat-collect.service sysstat-summary.timer sysstat-summary.service || true
   - install -m 0755 -d /etc/apt/keyrings
   - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
   - chmod a+r /etc/apt/keyrings/docker.asc

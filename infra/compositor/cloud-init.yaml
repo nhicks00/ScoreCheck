@@ -74,6 +74,9 @@ runcmd:
   # Ubuntu's deferred firmware metadata job so it cannot create unowned work
   # or transient systemd children during a qualification window.
   - systemctl mask --now fwupd-refresh.timer fwupd-refresh.service || true
+  # ScoreCheck owns host telemetry during an event. Disable Ubuntu's redundant
+  # sysstat jobs so sadc cannot introduce unowned work during qualification.
+  - systemctl mask --now sysstat-collect.timer sysstat-collect.service sysstat-summary.timer sysstat-summary.service || true
   # Docker Engine + compose plugin via the official convenience script (fine
   # for cattle droplets that live for hours; the snapshot freezes the version).
   - curl -fsSL https://get.docker.com -o /tmp/get-docker.sh

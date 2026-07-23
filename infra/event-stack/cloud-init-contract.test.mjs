@@ -25,6 +25,7 @@ test("every event host disables password SSH and retains key-only root recovery"
     assert.match(source, /LogLevel VERBOSE/);
     assert.match(source, /systemctl reload ssh/);
     assert.match(source, /systemctl mask --now fwupd-refresh\.timer fwupd-refresh\.service \|\| true/, `${name} must suppress deferred firmware metadata refresh`);
+    assert.match(source, /systemctl mask --now sysstat-collect\.timer sysstat-collect\.service sysstat-summary\.timer sysstat-summary\.service \|\| true/, `${name} must suppress redundant sysstat collection`);
     assert.doesNotMatch(source, /PasswordAuthentication yes|PermitRootLogin yes/);
   }
 });
