@@ -7,12 +7,10 @@ import { fileURLToPath } from "node:url";
 const COURTS = Object.freeze(Array.from({ length: 8 }, (_, index) => index + 1));
 const MARKER = /^scorecheck-rehearsal-[a-zA-Z0-9-]{8,80}-camera-[1-8]$/;
 const FIXTURE_DURATION_SECONDS = 12;
-// Keep the eight 1080p30 rehearsal sources at an aggregate 10 Mbps. Their
-// fixtures are encoded before qualification and their stream-copy loops run on
-// the manifest-owned warm spare, so operator workstation/Wi-Fi contention
-// cannot masquerade as an ingest/compositor failure. Resolution and cadence
-// still exercise the complete eight-court decode/Egress path.
-const FIXTURE_VIDEO_BITRATE_KBPS = 1_250;
+// The production source-admission floor is 5 Mbps for STANDARD_1080P30. Encode
+// each fixture at that floor so synthetic qualification exercises the same
+// bitrate contract as an admitted event source.
+const FIXTURE_VIDEO_BITRATE_KBPS = 5_000;
 const SRT_INPUT_BANDWIDTH_BYTES_PER_SECOND = 200_000;
 const PROGRESS_FRESHNESS_MS = 5_000;
 const SUPERVISOR_FRESHNESS_MS = 5_000;
@@ -66,7 +64,7 @@ export function buildSyntheticPublisherConfig({ court, generationId, host, user,
     "-pix_fmt", "yuv420p",
     "-r", "30", "-g", "60", "-keyint_min", "60", "-sc_threshold", "0",
     "-b:v", `${FIXTURE_VIDEO_BITRATE_KBPS}k`, "-minrate", `${FIXTURE_VIDEO_BITRATE_KBPS}k`, "-maxrate", `${FIXTURE_VIDEO_BITRATE_KBPS}k`, "-bufsize", `${FIXTURE_VIDEO_BITRATE_KBPS * 2}k`,
-    "-x264-params", "cabac=1:nal-hrd=cbr:force-cfr=1",
+    "-x264-params", "cabac=1:nal-hrd=cbr:filler=1:force-cfr=1",
     "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
     "-metadata", `comment=${marker}`,
     "-f", "matroska", fixtureTempPath

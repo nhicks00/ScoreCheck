@@ -28,10 +28,11 @@ test("builds visibly distinct 1080p30 publishers with a resumable process marker
   assert.ok(config.fixtureArgs.some((value) => value.includes("size=1920x1080:rate=30")));
   assert.equal(config.fixtureArgs[config.fixtureArgs.indexOf("-profile:v") + 1], "main");
   assert.match(config.fixtureArgs[config.fixtureArgs.indexOf("-x264-params") + 1], /(?:^|:)cabac=1(?:$|:)/);
-  assert.equal(config.fixtureArgs[config.fixtureArgs.indexOf("-b:v") + 1], "1250k");
-  assert.equal(config.fixtureArgs[config.fixtureArgs.indexOf("-minrate") + 1], "1250k");
-  assert.equal(config.fixtureArgs[config.fixtureArgs.indexOf("-maxrate") + 1], "1250k");
-  assert.equal(config.fixtureArgs[config.fixtureArgs.indexOf("-bufsize") + 1], "2500k");
+  assert.equal(config.fixtureArgs[config.fixtureArgs.indexOf("-b:v") + 1], "5000k");
+  assert.equal(config.fixtureArgs[config.fixtureArgs.indexOf("-minrate") + 1], "5000k");
+  assert.equal(config.fixtureArgs[config.fixtureArgs.indexOf("-maxrate") + 1], "5000k");
+  assert.equal(config.fixtureArgs[config.fixtureArgs.indexOf("-bufsize") + 1], "10000k");
+  assert.match(config.fixtureArgs[config.fixtureArgs.indexOf("-x264-params") + 1], /(?:^|:)filler=1(?:$|:)/);
   assert.equal(config.args[config.args.indexOf("-c") + 1], "copy");
   assert.equal(config.args[config.args.indexOf("-stream_loop") + 1], "-1");
   assert.equal(config.args[config.args.indexOf("-rw_timeout") + 1], "10000000");
