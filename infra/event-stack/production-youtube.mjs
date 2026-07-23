@@ -90,13 +90,34 @@ export class ProductionYouTubeProvider {
         enableDvr: true,
         recordFromStart: true,
         latencyPreference: "low",
-        enableAutoStart: true,
+        enableAutoStart: false,
         enableAutoStop: false
       }
     });
-    const broadcast = normalizeProductionBroadcast(value, event, court);
+    const broadcast = await this.enforceManualBroadcastLifecycle(value, event, court);
     await this.request("POST", `/liveBroadcasts/bind?id=${encodeURIComponent(broadcast.id)}&streamId=${encodeURIComponent(streamId)}&part=id,contentDetails`);
     return { ...broadcast, streamId };
+  }
+
+  async enforceManualBroadcastLifecycle(value, event = null, court = null) {
+    const current = normalizeProductionBroadcast(value, event, court, { allowAutoStart: true });
+    if (current.lifeCycleStatus !== "ready") throw new Error(`Camera ${current.court} production YouTube broadcast is not ready for manual lifecycle control`);
+    if (current.autoStart === false) return current;
+    const contentDetails = {
+      ...value.contentDetails,
+      monitorStream: { ...value.contentDetails?.monitorStream, enableMonitorStream: false },
+      enableAutoStart: false,
+      enableAutoStop: false
+    };
+    const updated = await this.request("PUT", "/liveBroadcasts?part=id,contentDetails", { id: current.id, contentDetails });
+    return normalizeProductionBroadcast({ ...value, ...updated, contentDetails: updated?.contentDetails ?? contentDetails }, event, court);
+  }
+
+  async enforceManualBroadcastLifecycleById(id) {
+    validateProviderId(id, "broadcast id");
+    const page = await this.request("GET", `/liveBroadcasts?part=id,snippet,status,contentDetails&id=${encodeURIComponent(id)}`);
+    if (!Array.isArray(page.items) || page.items.length !== 1) throw new Error("production YouTube broadcast was not found");
+    return this.enforceManualBroadcastLifecycle(page.items[0]);
   }
 
   async getStream(id) {
@@ -182,7 +203,19 @@ export async function prepareProductionYouTube({ provider, event, activeCameras,
   validateEvent(event);
   validateActiveCameras(activeCameras);
   const root = normalizedAbsolute(output, "production YouTube output");
-  if (await exists(root)) return readProductionDestinations(join(root, "destinations.json"), { event, activeCameras });
+  if (await exists(root)) {
+    const existing = await readProductionDestinations(join(root, "destinations.json"), { event, activeCameras, allowAutoStart: true });
+    let changed = false;
+    for (const court of activeCameras) {
+      if (existing.broadcasts[court].autoStart === false) continue;
+      const broadcast = await provider.enforceManualBroadcastLifecycleById(existing.broadcasts[court].id);
+      existing.broadcasts[court] = { ...existing.broadcasts[court], ...broadcast, streamId: existing.streams[court].id };
+      changed = true;
+    }
+    const value = validateProductionDestinations(existing, { event, activeCameras });
+    if (changed) await writeDestinationFiles(root, value);
+    return value;
+  }
   await assertProtectedParent(root);
   const temporary = `${root}.preparing-${process.pid}-${randomUUID()}`;
   await mkdir(temporary, { mode: 0o700 });
@@ -200,8 +233,7 @@ export async function prepareProductionYouTube({ provider, event, activeCameras,
       broadcasts
     };
     validateProductionDestinations(value, { event, activeCameras });
-    await writeFile(join(temporary, "destinations.json"), `${JSON.stringify(value, null, 2)}\n`, { flag: "wx", mode: 0o600 });
-    await writeFile(join(temporary, "destinations.redacted.json"), `${JSON.stringify(redactDestinations(value), null, 2)}\n`, { flag: "wx", mode: 0o600 });
+    await writeDestinationFiles(temporary, value);
     await rename(temporary, root);
     await chmod(root, 0o700);
     return value;
@@ -218,7 +250,7 @@ export async function readProductionDestinations(path, expected = {}) {
   return validateProductionDestinations(value, expected);
 }
 
-export function validateProductionDestinations(value, { event = value?.event, activeCameras = value?.activeCameras } = {}) {
+export function validateProductionDestinations(value, { event = value?.event, activeCameras = value?.activeCameras, allowAutoStart = false } = {}) {
   if (!value || value.schemaVersion !== 1 || value.event !== event || !Array.isArray(value.activeCameras)) throw new Error("production YouTube destinations contract is invalid");
   validateEvent(event);
   validateActiveCameras(activeCameras);
@@ -228,11 +260,22 @@ export function validateProductionDestinations(value, { event = value?.event, ac
     throw new Error("production YouTube stream identities are not unique");
   }
   for (const court of activeCameras) {
-    const broadcast = normalizeProductionBroadcast(value.broadcasts?.[court], event, court);
+    const broadcast = normalizeProductionBroadcast(value.broadcasts?.[court], event, court, { allowAutoStart });
     if (broadcast.streamId !== value.streams[court].id) throw new Error(`Camera ${court} broadcast is bound to the wrong production stream`);
   }
   if (Object.keys(value.broadcasts ?? {}).map(Number).some((court) => !activeCameras.includes(court))) throw new Error("production YouTube destinations contain an inactive-camera broadcast");
   return value;
+}
+
+async function writeDestinationFiles(root, value) {
+  await writeProtectedJson(join(root, "destinations.json"), value);
+  await writeProtectedJson(join(root, "destinations.redacted.json"), redactDestinations(value));
+}
+
+async function writeProtectedJson(path, value) {
+  const temporary = `${path}.writing-${process.pid}-${randomUUID()}`;
+  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+  await rename(temporary, path);
 }
 
 export function normalizeProductionStream(value, expectedCourt = null, { requireIdle = false } = {}) {
@@ -262,7 +305,7 @@ export function normalizeProductionStream(value, expectedCourt = null, { require
   };
 }
 
-export function normalizeProductionBroadcast(value, expectedEvent = null, expectedCourt = null) {
+export function normalizeProductionBroadcast(value, expectedEvent = null, expectedCourt = null, { allowAutoStart = false } = {}) {
   const title = value?.title ?? value?.snippet?.title;
   const match = typeof title === "string" ? /^ScoreCheck ([a-z0-9-]+) - Camera ([1-8])$/.exec(title) : null;
   const event = value?.event ?? match?.[1] ?? null;
@@ -271,7 +314,7 @@ export function normalizeProductionBroadcast(value, expectedEvent = null, expect
   const privacyStatus = value.privacyStatus ?? value.status?.privacyStatus ?? null;
   const autoStart = value.autoStart ?? value.contentDetails?.enableAutoStart ?? null;
   const autoStop = value.autoStop ?? value.contentDetails?.enableAutoStop ?? null;
-  if (privacyStatus !== "unlisted" || autoStart !== true || autoStop !== false) throw new Error(`Camera ${court} production YouTube broadcast safety settings are invalid`);
+  if (privacyStatus !== "unlisted" || (!allowAutoStart && autoStart !== false) || autoStop !== false) throw new Error(`Camera ${court} production YouTube broadcast safety settings are invalid`);
   return {
     id: String(value.id), event, court, title, watchUrl: value.watchUrl ?? `https://www.youtube.com/watch?v=${value.id}`,
     privacyStatus, autoStart, autoStop, lifeCycleStatus: value.lifeCycleStatus ?? value.status?.lifeCycleStatus ?? null,

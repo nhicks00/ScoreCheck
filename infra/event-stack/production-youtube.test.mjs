@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -40,7 +40,7 @@ function broadcast(event, court, streamId) {
     title: `ScoreCheck ${event} - Camera ${court}`,
     watchUrl: `https://www.youtube.com/watch?v=broadcast-${court}`,
     privacyStatus: "unlisted",
-    autoStart: true,
+    autoStart: false,
     autoStop: false,
     lifeCycleStatus: "ready",
     recordingStatus: "notRecording",
@@ -88,6 +88,47 @@ test("normalizes only the reusable variable-profile stream and safe unlisted bro
   assert.throws(() => normalizeProductionStream({ ...stream(1), rtmpsBackupIngestionAddress: stream(1).rtmpsIngestionAddress }, 1), /primary\/backup ingestion/);
   assert.throws(() => normalizeProductionStream({ ...stream(1), streamStatus: "active" }, 1, { requireIdle: true }), /not idle/);
   assert.throws(() => normalizeProductionBroadcast({ ...broadcast("six-camera-soak", 1, "stream-1"), privacyStatus: "public" }), /safety settings/);
+  assert.throws(() => normalizeProductionBroadcast({ ...broadcast("six-camera-soak", 1, "stream-1"), autoStart: true }), /safety settings/);
+});
+
+test("converts a ready reusable broadcast from auto-start to the manual lifecycle contract", async () => {
+  const requests = [];
+  const provider = new ProductionYouTubeProvider({
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    refreshToken: "refresh-token",
+    fetchImpl: async (url, options) => {
+      if (url === "https://oauth2.googleapis.com/token") return { ok: true, status: 200, async json() { return { access_token: "token", expires_in: 3600 }; } };
+      requests.push({ url, options });
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            id: "broadcast-1",
+            contentDetails: {
+              monitorStream: { enableMonitorStream: false },
+              enableAutoStart: false,
+              enableAutoStop: false
+            }
+          };
+        }
+      };
+    }
+  });
+  const current = {
+    ...broadcast("six-camera-soak", 1, "stream-1"),
+    autoStart: undefined,
+    contentDetails: { monitorStream: { enableMonitorStream: false }, enableAutoStart: true, enableAutoStop: false }
+  };
+  const result = await provider.enforceManualBroadcastLifecycle(current, "six-camera-soak", 1);
+  assert.equal(result.autoStart, false);
+  assert.equal(requests.length, 1);
+  assert.match(requests[0].url, /liveBroadcasts\?part=id,contentDetails$/);
+  const body = JSON.parse(requests[0].options.body);
+  assert.equal(body.contentDetails.enableAutoStart, false);
+  assert.equal(body.contentDetails.enableAutoStop, false);
+  assert.equal(body.contentDetails.monitorStream.enableMonitorStream, false);
 });
 
 test("rejects duplicate reusable stream identities in a loaded destination contract", () => {
@@ -117,6 +158,29 @@ test("fails closed when an existing destination contract changes", async () => {
       () => prepareProductionYouTube({ provider, event: "six-camera-soak", activeCameras: [1, 2, 3], output }),
       /active camera set changed/
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("hard-cuts a persisted ready destination from auto-start to manual lifecycle control", async () => {
+  const root = await mkdtemp(join(tmpdir(), "scorecheck-youtube-"));
+  const parent = join(root, "protected");
+  const output = join(parent, "destinations");
+  await mkdir(parent, { mode: 0o700 });
+  const provider = {
+    async ensureVariableStreamPool() { return Object.fromEntries(Array.from({ length: 8 }, (_, index) => [index + 1, stream(index + 1)])); },
+    async prepareBroadcast({ event, court, streamId }) { return broadcast(event, court, streamId); },
+    async enforceManualBroadcastLifecycleById() { return broadcast("six-camera-soak", 1, "stream-1"); }
+  };
+  try {
+    const created = await prepareProductionYouTube({ provider, event: "six-camera-soak", activeCameras: [1], output });
+    created.broadcasts[1].autoStart = true;
+    await writeFile(join(output, "destinations.json"), `${JSON.stringify(created)}\n`, { mode: 0o600 });
+    const repaired = await prepareProductionYouTube({ provider, event: "six-camera-soak", activeCameras: [1], output });
+    assert.equal(repaired.broadcasts[1].autoStart, false);
+    const persisted = JSON.parse(await readFile(join(output, "destinations.json"), "utf8"));
+    assert.equal(persisted.broadcasts[1].autoStart, false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
