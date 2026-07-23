@@ -22,7 +22,7 @@ function lifecycleState(phase = "planned") {
   };
 }
 
-function harness({ failPublisherOnce = false, failPreflight = false, failFullEvidence = false, failIdle = false, failSoakOnce = false, orphanedProviderResources = false } = {}) {
+function harness({ failPublisherOnce = false, failPreflight = false, failFullEvidence = false, failIdle = false, failSoakOnce = false, orphanedProviderResources = false, rejectOrphanOwnership = false } = {}) {
   const log = [];
   let publisherFailure = failPublisherOnce;
   let soakFailure = failSoakOnce;
@@ -91,6 +91,12 @@ function harness({ failPublisherOnce = false, failPreflight = false, failFullEvi
     },
     proveSecondStartRejected: async ({ expectedId }) => ({ rejected: true, activeId: expectedId }),
     listActive: async (host) => activeEgress.has(host) ? [activeEgress.get(host)] : [],
+    reconcileOwned: async ({ host, expectedId }) => {
+      if (rejectOrphanOwnership) throw new Error("durable Egress ownership is absent");
+      const active = activeEgress.get(host);
+      if (!active || active.id !== expectedId) throw new Error("active Egress id changed");
+      return { ...active, owner: { egressId: expectedId } };
+    },
     stopExact: async ({ host, court, egressId }) => {
       log.push(`egress-stop:${court}:${egressId}`);
       activeEgress.delete(host);
@@ -325,6 +331,26 @@ test("adopts and stops a lone Egress whose successful start was interrupted befo
   assert.ok(log.includes("egress-stop:1:EG_orphaned"));
   assert.equal(activeEgress.size, 0);
   assert.equal((await store.load()).courts[1].egress.status, "stopped");
+});
+
+test("refuses to adopt or stop an ownerless conformance Egress during rehearsal cleanup", async () => {
+  const { controller, store, log, activeEgress } = harness({ rejectOrphanOwnership: true });
+  const lifecycle = lifecycleState();
+  await controller.plan({ manifest, lifecycleState: lifecycle });
+  await controller.prepare({ manifest, lifecycleState: lifecycle, material, git: { repo: "nhicks00/ScoreCheck", repoId: 1, ref: "branch", sha: "a".repeat(40) }, secretsDirectory: "/tmp/rehearsal-secrets" });
+  const ready = lifecycleState("ready");
+  const interrupted = await store.load();
+  interrupted.phase = "starting";
+  interrupted.courts[1].egress = { status: "starting", id: null };
+  await store.save(interrupted);
+  const host = ready.droplets[manifest.droplets.find((entry) => entry.role === "compositor" && entry.court === 1).name].publicIpv4;
+  activeEgress.set(host, { id: "EG_conformance", status: "starting" });
+
+  await assert.rejects(() => controller.stop({ manifest, lifecycleState: ready }), /durable Egress ownership is absent/);
+
+  assert.equal(activeEgress.get(host).id, "EG_conformance");
+  assert.equal(log.some((entry) => entry.startsWith("egress-stop:1:")), false);
+  assert.equal((await store.load()).phase, "stopping");
 });
 
 function digest(value) { return createHash("sha256").update(stableJson(value)).digest("hex"); }

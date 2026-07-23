@@ -169,6 +169,7 @@ export function evaluateOutputConformance({ receipt, metadata, packets, audioPac
       durationSeconds,
       ffprobeVersion
     },
+    startup: structuredClone(receipt.startup),
     video: {
       codec: "H264",
       profile: video.profile,
@@ -294,11 +295,28 @@ function parseCaptureReceipt(raw, expected = {}) {
   if (!EGRESS_ID.test(value.egressId ?? "") || !requiredPath(value.remotePath, "output conformance remote path") || !SHA256.test(value.sha256 ?? "") || !Number.isInteger(value.sizeBytes) || value.sizeBytes < 1) throw new Error("output conformance capture receipt is incomplete");
   validateRenderer(value.renderer);
   validateCaptureEncoding(value.encoding, profile);
+  validateCaptureStartup(value.startup);
   for (const key of ["evidenceId", "court", "profile"]) {
     if (expected[key] !== undefined && value[key] !== expected[key]) throw new Error(`output conformance capture receipt ${key} changed`);
   }
   if (expected.renderer && (value.renderer.gitSha !== expected.renderer.gitSha || value.renderer.deploymentId !== expected.renderer.deploymentId)) throw new Error("output conformance capture receipt renderer changed");
   return value;
+}
+
+function validateCaptureStartup(value) {
+  if (!value || !Number.isInteger(value.startAttempts) || value.startAttempts < 1 || value.startAttempts > 2 || typeof value.recoveredStartingStall !== "boolean" || !Array.isArray(value.attempts) || value.attempts.length !== value.startAttempts) {
+    throw new Error("output conformance capture startup evidence is invalid");
+  }
+  for (const [index, attempt] of value.attempts.entries()) {
+    if (attempt?.number !== index + 1 || !EGRESS_ID.test(attempt.egressId ?? "") || !Number.isFinite(Date.parse(attempt.observedAt ?? "")) || !new Set(["ACTIVE", "STARTING_TIMEOUT"]).has(attempt.outcome)) {
+      throw new Error("output conformance capture startup attempt is invalid");
+    }
+  }
+  if (value.attempts.at(-1).outcome !== "ACTIVE") throw new Error("output conformance capture did not end active");
+  const expectedRecovery = value.startAttempts === 2 && value.attempts[0].outcome === "STARTING_TIMEOUT";
+  if (value.recoveredStartingStall !== expectedRecovery || (value.startAttempts === 1 && value.attempts[0].outcome !== "ACTIVE")) {
+    throw new Error("output conformance capture startup recovery evidence is inconsistent");
+  }
 }
 
 function validateCaptureEncoding(value, profile) {

@@ -242,24 +242,25 @@ export class RehearsalController {
         for (const court of [...COURTS].reverse()) {
           const courtState = state.courts[court];
           const host = compositorHost(lifecycleState, manifest, court);
+          const owner = {
+            event: state.event,
+            destinationId: courtState.stream.id,
+            destinationRole: "primary",
+            outputGeneration: state.generationId,
+            rendererGitSha: state.program.gitSha,
+            rendererDeploymentId: state.program.deployment.id
+          };
           const active = await this.egress.listActive(host);
           if (active.length > 1) throw new Error(`compositor ${host} retained multiple Egress jobs during cleanup`);
           if (courtState.egress?.id && active.length === 1 && active[0].id !== courtState.egress.id) {
             throw new Error(`compositor ${host} active Egress does not match the recorded rehearsal job`);
           }
           if (!courtState.egress?.id && active.length === 1) {
-            courtState.egress = { status: "active", ...active[0], adoptedDuringStop: true };
+            const adopted = await this.egress.reconcileOwned({ host, court, profile: "1080p30", owner, expectedId: active[0].id });
+            courtState.egress = { status: "active", ...adopted, adoptedDuringStop: true };
             await this.store.save(state);
           }
           if (courtState.egress?.id) {
-            const owner = {
-              event: state.event,
-              destinationId: courtState.stream.id,
-              destinationRole: "primary",
-              outputGeneration: state.generationId,
-              rendererGitSha: state.program.gitSha,
-              rendererDeploymentId: state.program.deployment.id
-            };
             await this.egress.stopExact({ host, court, egressId: courtState.egress.id, profile: "1080p30", owner });
           }
           courtState.egress = { ...(courtState.egress ?? {}), status: "stopped" };

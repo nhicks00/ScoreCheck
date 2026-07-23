@@ -106,19 +106,80 @@ STOP_LOG="$(mktemp "$REQ_DIR/.conformance-stop.XXXXXX")"
 REQ_FILE="$(mktemp "$REQ_DIR/.conformance-request.XXXXXX")"
 EGRESS_ID=""
 stopped=0
+START_ATTEMPTS=0
+STARTING_STALLS=0
+ATTEMPTS_JSON='[]'
+
+refresh_active() {
+  "$LK" egress list --active --json >"$ACTIVE_FILE" 2>/dev/null || return 1
+  jq -e '(. == null) or (type == "array" and all(.[]; (.egress_id | type) == "string"))' "$ACTIVE_FILE" >/dev/null 2>&1
+}
+
+active_count() {
+  jq -er 'if . == null then 0 else length end' "$ACTIVE_FILE"
+}
+
+stop_and_prove_idle() {
+  local id="$1"
+  if ! refresh_active; then
+    echo "error: could not verify active Egress state before conformance cleanup." >&2
+    return 1
+  fi
+  local count
+  count="$(active_count)"
+  if (( count == 0 )); then
+    return 0
+  fi
+  if ! jq -e --arg id "$id" 'type == "array" and any(.[]; .egress_id == $id)' "$ACTIVE_FILE" >/dev/null 2>&1; then
+    echo "error: an unexpected Egress replaced the conformance job during cleanup." >&2
+    return 1
+  fi
+  if ! "$LK" egress stop --id "$id" >>"$STOP_LOG" 2>&1; then
+    if refresh_active && (( $(active_count) == 0 )); then
+      return 0
+    fi
+    echo "error: output-conformance Egress did not accept the exact stop request." >&2
+    return 1
+  fi
+  for _ in $(seq 1 60); do
+    if refresh_active; then
+      count="$(active_count)"
+      if (( count == 0 )); then
+        return 0
+      fi
+      if ! jq -e --arg id "$id" 'type == "array" and any(.[]; .egress_id == $id)' "$ACTIVE_FILE" >/dev/null 2>&1; then
+        echo "error: an unexpected Egress remained after conformance cleanup." >&2
+        return 1
+      fi
+    fi
+    sleep 1
+  done
+  echo "error: compositor did not return to idle after output conformance." >&2
+  return 1
+}
+
 cleanup() {
+  local original_status=$?
+  local cleanup_status=0
+  trap - EXIT
+  set +e
   if [[ -n "$EGRESS_ID" && "$stopped" -eq 0 ]]; then
-    "$LK" egress stop --id "$EGRESS_ID" >>"$STOP_LOG" 2>&1 || true
+    stop_and_prove_idle "$EGRESS_ID" || cleanup_status=1
   fi
   rm -f "$ACTIVE_FILE" "$START_LOG" "$STOP_LOG" "$REQ_FILE"
+  if (( cleanup_status != 0 )); then
+    echo "error: output-conformance cleanup could not prove the compositor idle." >&2
+    exit 1
+  fi
+  exit "$original_status"
 }
 trap cleanup EXIT
 
-if ! "$LK" egress list --active --json >"$ACTIVE_FILE" 2>/dev/null; then
+if ! refresh_active; then
   echo "error: could not verify active Egress count." >&2
   exit 1
 fi
-if ! ACTIVE_COUNT="$(jq -er 'if . == null then 0 elif type == "array" then length else error("invalid") end' "$ACTIVE_FILE")" || (( ACTIVE_COUNT != 0 )); then
+if ! ACTIVE_COUNT="$(active_count)" || (( ACTIVE_COUNT != 0 )); then
   echo "error: compositor is not idle before output conformance." >&2
   exit 1
 fi
@@ -151,47 +212,71 @@ cat >"$REQ_FILE" <<EOF
 EOF
 chmod 600 "$REQ_FILE"
 
-if ! "$LK" egress start --type web "$REQ_FILE" >"$START_LOG" 2>&1; then
-  echo "error: output-conformance Egress did not start." >&2
-  exit 1
-fi
-EGRESS_ID="$(grep -oE 'EG_[A-Za-z0-9]+' "$START_LOG" | head -n1 || true)"
-if ! [[ "$EGRESS_ID" =~ ^EG_[A-Za-z0-9]+$ ]]; then
-  echo "error: output-conformance Egress id is invalid." >&2
-  exit 1
-fi
-
 active_seen=0
-for _ in $(seq 1 60); do
-  "$LK" egress list --active --json >"$ACTIVE_FILE" 2>/dev/null || true
-  if jq -e --arg id "$EGRESS_ID" 'type == "array" and any(.[]; .egress_id == $id and .status == 1)' "$ACTIVE_FILE" >/dev/null 2>&1; then
-    active_seen=1
+for attempt in 1 2; do
+  START_ATTEMPTS="$attempt"
+  : >"$START_LOG"
+  if ! "$LK" egress start --type web "$REQ_FILE" >"$START_LOG" 2>&1; then
+    echo "error: output-conformance Egress did not start on attempt ${attempt}." >&2
+    exit 1
+  fi
+  EGRESS_ID="$(grep -oE 'EG_[A-Za-z0-9]+' "$START_LOG" | head -n1 || true)"
+  if ! [[ "$EGRESS_ID" =~ ^EG_[A-Za-z0-9]+$ ]]; then
+    echo "error: output-conformance Egress id is invalid on attempt ${attempt}." >&2
+    exit 1
+  fi
+  stopped=0
+
+  for _ in $(seq 1 60); do
+    if refresh_active && jq -e --arg id "$EGRESS_ID" 'type == "array" and any(.[]; .egress_id == $id and .status == 1)' "$ACTIVE_FILE" >/dev/null 2>&1; then
+      active_seen=1
+      break
+    fi
+    sleep 1
+  done
+  if (( active_seen == 1 )); then
+    ATTEMPTS_JSON="$(jq -cn --argjson attempts "$ATTEMPTS_JSON" --argjson number "$attempt" --arg id "$EGRESS_ID" --arg observedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '$attempts + [{number:$number,egressId:$id,outcome:"ACTIVE",observedAt:$observedAt}]')"
     break
   fi
-  sleep 1
+
+  if ! refresh_active; then
+    echo "error: could not classify output-conformance Egress attempt ${attempt}." >&2
+    exit 1
+  fi
+  if ! jq -e --arg id "$EGRESS_ID" 'type == "array" and any(.[]; .egress_id == $id)' "$ACTIVE_FILE" >/dev/null 2>&1; then
+    ATTEMPTS_JSON="$(jq -cn --argjson attempts "$ATTEMPTS_JSON" --argjson number "$attempt" --arg id "$EGRESS_ID" --arg observedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '$attempts + [{number:$number,egressId:$id,outcome:"EXITED_BEFORE_ACTIVE",observedAt:$observedAt}]')"
+    echo "error: output-conformance Egress exited before becoming active on attempt ${attempt}." >&2
+    exit 1
+  fi
+
+  STARTING_STALLS=$((STARTING_STALLS + 1))
+  ATTEMPTS_JSON="$(jq -cn --argjson attempts "$ATTEMPTS_JSON" --argjson number "$attempt" --arg id "$EGRESS_ID" --arg observedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '$attempts + [{number:$number,egressId:$id,outcome:"STARTING_TIMEOUT",observedAt:$observedAt}]')"
+  echo "warning: output-conformance Egress attempt ${attempt} remained STARTING; stopping the exact job before retry." >&2
+  if ! stop_and_prove_idle "$EGRESS_ID"; then
+    exit 1
+  fi
+  stopped=1
+  if [[ -e "$HOST_OUTPUT" ]]; then
+    mv "$HOST_OUTPUT" "$HOST_OUTPUT_DIR/court-${COURT}-${OUTPUT_PROFILE}.attempt-${attempt}-starting-timeout.mp4"
+  fi
+  if (( attempt == 2 )); then
+    echo "error: output-conformance Egress remained STARTING on both bounded attempts." >&2
+    exit 1
+  fi
+  EGRESS_ID=""
+  stopped=0
 done
+
 if (( active_seen != 1 )); then
   echo "error: output-conformance Egress did not become active." >&2
   exit 1
 fi
 
 sleep 20
-if ! "$LK" egress stop --id "$EGRESS_ID" >"$STOP_LOG" 2>&1; then
-  echo "error: output-conformance Egress did not stop." >&2
+if ! stop_and_prove_idle "$EGRESS_ID"; then
   exit 1
 fi
 stopped=1
-for _ in $(seq 1 60); do
-  "$LK" egress list --active --json >"$ACTIVE_FILE" 2>/dev/null || true
-  if jq -e '(. == null) or (type == "array" and length == 0)' "$ACTIVE_FILE" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 1
-done
-if ! jq -e '(. == null) or (type == "array" and length == 0)' "$ACTIVE_FILE" >/dev/null 2>&1; then
-  echo "error: compositor did not return to idle after output conformance." >&2
-  exit 1
-fi
 
 for _ in $(seq 1 30); do
   [[ -s "$HOST_OUTPUT" ]] && break
@@ -222,7 +307,10 @@ jq -n \
   --argjson audioSampleRateHz "$EGRESS_AUDIO_FREQUENCY" \
   --argjson videoTargetBitrateKbps "$EGRESS_VIDEO_BITRATE" \
   --argjson keyFrameIntervalSeconds 2 \
+  --argjson startAttempts "$START_ATTEMPTS" \
+  --argjson recoveredStartingStall "$([[ "$STARTING_STALLS" -gt 0 ]] && printf true || printf false)" \
+  --argjson attempts "$ATTEMPTS_JSON" \
   --argjson sizeBytes "$FILE_SIZE" \
-  '{schemaVersion:1,evidenceId:$evidenceId,capturedAt:$capturedAt,court:$court,profile:$profile,egressId:$egressId,renderer:{gitSha:$rendererGitSha,deploymentId:$rendererDeploymentId},encoding:{width:$width,height:$height,framesPerSecond:$framesPerSecond,audioCodec:"AAC",audioTargetBitrateKbps:$audioTargetBitrateKbps,audioSampleRateHz:$audioSampleRateHz,videoCodec:"H264_HIGH",videoTargetBitrateKbps:$videoTargetBitrateKbps,keyFrameIntervalSeconds:$keyFrameIntervalSeconds},remotePath:$remotePath,sha256:$sha256,sizeBytes:$sizeBytes}' >"$REPORT"
+  '{schemaVersion:1,evidenceId:$evidenceId,capturedAt:$capturedAt,court:$court,profile:$profile,egressId:$egressId,renderer:{gitSha:$rendererGitSha,deploymentId:$rendererDeploymentId},encoding:{width:$width,height:$height,framesPerSecond:$framesPerSecond,audioCodec:"AAC",audioTargetBitrateKbps:$audioTargetBitrateKbps,audioSampleRateHz:$audioSampleRateHz,videoCodec:"H264_HIGH",videoTargetBitrateKbps:$videoTargetBitrateKbps,keyFrameIntervalSeconds:$keyFrameIntervalSeconds},startup:{startAttempts:$startAttempts,recoveredStartingStall:$recoveredStartingStall,attempts:$attempts},remotePath:$remotePath,sha256:$sha256,sizeBytes:$sizeBytes}' >"$REPORT"
 chmod 600 "$REPORT"
 cat "$REPORT"

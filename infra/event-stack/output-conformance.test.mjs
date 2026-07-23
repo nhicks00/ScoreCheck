@@ -26,6 +26,11 @@ const RECEIPT = Object.freeze({
     videoTargetBitrateKbps: 10_000,
     keyFrameIntervalSeconds: 2
   },
+  startup: {
+    startAttempts: 1,
+    recoveredStartingStall: false,
+    attempts: [{ number: 1, egressId: "EG_sample", outcome: "ACTIVE", observedAt: "2026-07-21T12:00:20.000Z" }]
+  },
   remotePath: "/opt/compositor/evidence/00000000-0000-4000-8000-000000000001/court-1-1080p30.mp4",
   sha256: "a".repeat(64),
   sizeBytes: 100
@@ -88,6 +93,7 @@ test("qualifies actual 1080p30 and 1080p60 H.264 High/AAC output", () => {
     assert.ok(evidence.video.measuredBitrateBps > evidence.video.targetBitrateBps * 0.99);
     assert.equal(evidence.audio.targetBitrateBps, 128_000);
     assert.ok(evidence.audio.measuredBitrateBps > 90_000);
+    assert.equal(evidence.startup.startAttempts, 1);
   }
 
   const boundedVbvBurst = evaluateOutputConformance(fixture({ secondBitrateScales: { 4: 1.345, 5: 0.95 } }));
@@ -118,6 +124,10 @@ test("rejects profile, color, GOP, bitrate, and audio drift", () => {
   const wrongTarget = fixture();
   wrongTarget.receipt.encoding.audioTargetBitrateKbps = 96;
   assert.throws(() => evaluateOutputConformance(wrongTarget), /audioTargetBitrateKbps/u);
+
+  const inconsistentStartup = fixture();
+  inconsistentStartup.receipt.startup = { ...inconsistentStartup.receipt.startup, recoveredStartingStall: true };
+  assert.throws(() => evaluateOutputConformance(inconsistentStartup), /startup recovery evidence/u);
 
   const missingAudio = fixture();
   missingAudio.audioPackets.packets = missingAudio.audioPackets.packets.slice(0, 20);

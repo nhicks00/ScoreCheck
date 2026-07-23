@@ -16,18 +16,23 @@ printf '%s\n' '#!/usr/bin/env bash' \
   'state="$root/mock-active"' \
   'if [[ "$*" == "egress list --active --json" ]]; then' \
   '  if [[ -f "$state" ]]; then' \
+  '    attempt="$(cat "$root/current-attempt")"' \
+  '    id="EG_sample${attempt}"' \
   '    reads="$(( $(cat "$root/list-count") + 1 ))"' \
   '    printf '\''%s\n'\'' "$reads" >"$root/list-count"' \
-  '    if (( reads < 2 )); then' \
-  '      printf '\''[{"egress_id":"EG_sample","status":0}]'\''' \
+  '    if (( attempt <= ${MOCK_STALL_ATTEMPTS:-0} || reads < 2 )); then' \
+  '      printf '\''[{"egress_id":"%s","status":0}]'\'' "$id"' \
   '    else' \
   '      output="$(cat "$root/output-path")"' \
   '      mkdir -p "$(dirname "$output")"' \
   '      printf '\''fake-mp4'\'' >"$output"' \
-  '      printf '\''[{"egress_id":"EG_sample","status":1}]'\''' \
+  '      printf '\''[{"egress_id":"%s","status":1}]'\'' "$id"' \
   '    fi' \
   '  else printf '\''null'\''; fi' \
   'elif [[ "$*" == egress\ start\ --type\ web* ]]; then' \
+  '  attempt="$(( $(cat "$root/start-count" 2>/dev/null || printf 0) + 1 ))"' \
+  '  printf '\''%s\n'\'' "$attempt" >"$root/start-count"' \
+  '  printf '\''%s\n'\'' "$attempt" >"$root/current-attempt"' \
   '  request="${@: -1}"' \
   '  cp "$request" "$root/captured-request.json"' \
   '  output="$(jq -r '\''.file_outputs[0].filepath'\'' "$request")"' \
@@ -35,9 +40,9 @@ printf '%s\n' '#!/usr/bin/env bash' \
   '  printf '\''%s\n'\'' "$output" >"$root/output-path"' \
   '  printf '\''0\n'\'' >"$root/list-count"' \
   '  touch "$state"' \
-  '  printf '\''EgressID: EG_sample Status: EGRESS_STARTING\n'\''' \
-  'elif [[ "$*" == "egress stop --id EG_sample" ]]; then' \
-  '  rm -f "$state" "$root/list-count" "$root/output-path"' \
+  '  printf '\''EgressID: EG_sample%s Status: EGRESS_STARTING\n'\'' "$attempt"' \
+  'elif [[ "$*" == egress\ stop\ --id\ EG_sample* ]]; then' \
+  '  if [[ "${MOCK_STOP_STUCK:-0}" != 1 ]]; then rm -f "$state" "$root/list-count" "$root/output-path" "$root/current-attempt"; fi' \
   'else' \
   '  exit 2' \
   'fi' >"$FIXTURE/bin/lk"
@@ -53,7 +58,7 @@ printf '%s\n' \
   "MOCK_ROOT=$FIXTURE" >"$FIXTURE/.env"
 
 PATH="$FIXTURE/bin:$PATH" "$FIXTURE/qualify-output.sh" 1 1080p30 00000000-0000-4000-8000-000000000001 >"$FIXTURE/report.json"
-jq -e '.schemaVersion == 1 and .court == 1 and .profile == "1080p30" and .egressId == "EG_sample" and .renderer.gitSha == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" and .renderer.deploymentId == "dpl_test123" and .encoding == {width:1920,height:1080,framesPerSecond:30,audioCodec:"AAC",audioTargetBitrateKbps:128,audioSampleRateHz:48000,videoCodec:"H264_HIGH",videoTargetBitrateKbps:10000,keyFrameIntervalSeconds:2} and .sizeBytes == 8' "$FIXTURE/report.json" >/dev/null
+jq -e '.schemaVersion == 1 and .court == 1 and .profile == "1080p30" and .egressId == "EG_sample1" and .renderer.gitSha == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" and .renderer.deploymentId == "dpl_test123" and .encoding == {width:1920,height:1080,framesPerSecond:30,audioCodec:"AAC",audioTargetBitrateKbps:128,audioSampleRateHz:48000,videoCodec:"H264_HIGH",videoTargetBitrateKbps:10000,keyFrameIntervalSeconds:2} and .startup.startAttempts == 1 and .startup.recoveredStartingStall == false and .startup.attempts[0].outcome == "ACTIVE" and .sizeBytes == 8' "$FIXTURE/report.json" >/dev/null
 test ! -e "$FIXTURE/mock-active"
 grep -Fq '"video_codec": "H264_HIGH"' "$FIXTURE/captured-request.json"
 grep -Fq '"video_bitrate": 10000' "$FIXTURE/captured-request.json"
@@ -71,4 +76,31 @@ test "$MODE" = 770
 PATH="$FIXTURE/bin:$PATH" "$FIXTURE/qualify-output.sh" 1 1080p30 00000000-0000-4000-8000-000000000001 >"$FIXTURE/adopted.json"
 cmp "$FIXTURE/report.json" "$FIXTURE/adopted.json"
 
-printf 'PASS: local-only output conformance capture is bounded and idempotent\n'
+# One STARTING timeout is stopped to proven idle and retried exactly once.
+rm -f "$FIXTURE/start-count"
+MOCK_STALL_ATTEMPTS=1 PATH="$FIXTURE/bin:$PATH" "$FIXTURE/qualify-output.sh" 1 1080p30 00000000-0000-4000-8000-000000000002 >"$FIXTURE/recovered.json" 2>"$FIXTURE/recovered.err"
+jq -e '.egressId == "EG_sample2" and .startup.startAttempts == 2 and .startup.recoveredStartingStall == true and [.startup.attempts[].outcome] == ["STARTING_TIMEOUT", "ACTIVE"]' "$FIXTURE/recovered.json" >/dev/null
+grep -Fq 'remained STARTING; stopping the exact job before retry' "$FIXTURE/recovered.err"
+test ! -e "$FIXTURE/mock-active"
+test "$(cat "$FIXTURE/start-count")" = 2
+
+# A second STARTING timeout fails closed after stopping the exact second job.
+rm -f "$FIXTURE/start-count"
+if MOCK_STALL_ATTEMPTS=2 PATH="$FIXTURE/bin:$PATH" "$FIXTURE/qualify-output.sh" 1 1080p30 00000000-0000-4000-8000-000000000003 >"$FIXTURE/stalled.json" 2>"$FIXTURE/stalled.err"; then
+  printf 'FAIL: a second output-conformance STARTING timeout was accepted\n' >&2
+  exit 1
+fi
+grep -Fq 'remained STARTING on both bounded attempts' "$FIXTURE/stalled.err"
+test ! -e "$FIXTURE/mock-active"
+test "$(cat "$FIXTURE/start-count")" = 2
+
+# Cleanup must fail closed when an exact stop never reaches proven idle.
+rm -f "$FIXTURE/start-count"
+if MOCK_STALL_ATTEMPTS=1 MOCK_STOP_STUCK=1 PATH="$FIXTURE/bin:$PATH" "$FIXTURE/qualify-output.sh" 1 1080p30 00000000-0000-4000-8000-000000000004 >"$FIXTURE/cleanup-blocked.json" 2>"$FIXTURE/cleanup-blocked.err"; then
+  printf 'FAIL: a stuck conformance Egress cleanup was accepted\n' >&2
+  exit 1
+fi
+grep -Fq 'could not prove the compositor idle' "$FIXTURE/cleanup-blocked.err"
+test -e "$FIXTURE/mock-active"
+
+printf 'PASS: local-only output conformance capture is bounded, retry-safe, and idempotent\n'
