@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { buildEventManifest, loadManifestInputs } from "./event-manifest.mjs";
-import { AGENT_DEPLOY_CONCURRENCY, DEPLOYMENT_SCRIPT_TIMEOUT_MS, LocalStackDeployer, buildAgentPlans, clockVerificationCommand, commandFailureMessage, commentaryEndpointHosts, compositorContentAnalyzerBindings, deploymentScriptEnvironment, evaluateClockProbe, isRetryableDeploymentTransportError, loadProtectedEnv, mapWithConcurrency, privateNetworkVerificationPlan, roleConfigBindings, runCommand, runDeploymentScript, serializeAgentTargets, servicePublicIpv4, sshAuditSourcePolicy, verifyProtectedSecretDirectory } from "./stack-deployer.mjs";
+import { AGENT_DEPLOY_CONCURRENCY, DEPLOYMENT_SCRIPT_TIMEOUT_MS, LocalStackDeployer, buildAgentPlans, clockVerificationCommand, commandFailureMessage, commentaryEndpointHosts, compositorContentAnalyzerBindings, compositorRemoteEnvironment, deploymentScriptEnvironment, evaluateClockProbe, isRetryableDeploymentTransportError, loadProtectedEnv, mapWithConcurrency, privateNetworkVerificationPlan, roleConfigBindings, runCommand, runDeploymentScript, serializeAgentTargets, servicePublicIpv4, sshAuditSourcePolicy, verifyProtectedSecretDirectory } from "./stack-deployer.mjs";
 
 const inputs = await loadManifestInputs();
 const manifest = buildEventManifest({ event: "deploy-test", kind: "production", destroyAfter: "2026-08-01", ...inputs });
@@ -279,9 +279,9 @@ test("captures commentary, ingest, and observability TLS state before a healthy 
     commands.push([command, args]);
     return { code: 0, stdout: command === "ssh-keygen" ? "fixture-host-key\n" : "", stderr: "" };
   };
-  const commentary = rehearsalManifest.droplets.find((entry) => entry.role === "commentary");
-  const ingest = rehearsalManifest.droplets.find((entry) => entry.role === "ingest");
-  const observability = rehearsalManifest.droplets.find((entry) => entry.role === "observability");
+  const commentary = manifest.droplets.find((entry) => entry.role === "commentary");
+  const ingest = manifest.droplets.find((entry) => entry.role === "ingest");
+  const observability = manifest.droplets.find((entry) => entry.role === "observability");
   const state = {
     droplets: {
       [commentary.name]: { publicIpv4: "192.0.2.20", status: "active" },
@@ -298,7 +298,7 @@ test("captures commentary, ingest, and observability TLS state before a healthy 
     status: "ready",
     stateSha256: "a".repeat(64),
     fileCount: 4,
-    certificates: Object.fromEntries(Object.values(commentaryEndpointHosts(rehearsalManifest)).map((host) => [host, { validTo: "2026-08-02T00:00:00.000Z", fingerprint256: "AA" }]))
+    certificates: Object.fromEntries(Object.values(commentaryEndpointHosts(manifest)).map((host) => [host, { validTo: "2026-08-02T00:00:00.000Z", fingerprint256: "AA" }]))
   };
   const tlsState = {
     async inspect() { return { status: "missing" }; },
@@ -320,7 +320,7 @@ test("captures commentary, ingest, and observability TLS state before a healthy 
     }
   });
 
-  const result = await deployer.prepareForTeardown({ manifest: rehearsalManifest, state });
+  const result = await deployer.prepareForTeardown({ manifest, state });
   assert.equal(result.healthy, true);
   assert.equal(result.evidence.commentaryTlsState.stateSha256, captured.stateSha256);
   assert.equal(result.evidence.ingestTlsState.stateSha256, captured.stateSha256);
@@ -336,7 +336,47 @@ test("captures commentary, ingest, and observability TLS state before a healthy 
   for (const id of Object.values(monitoring.ids)) assert.equal(providerCalls.some((call) => call.url.includes(id)), true);
 });
 
-test("blocks teardown and restores monitoring services when Healthchecks cannot be paused", async () => {
+test("rehearsal teardown does not require or mutate production Healthchecks", async () => {
+  const root = await mkdtemp(join(tmpdir(), "scorecheck-rehearsal-teardown-"));
+  await chmod(root, 0o700);
+  const sshKey = join(root, "ssh-key");
+  const knownHosts = join(root, "known_hosts");
+  const secretsDirectory = join(root, "secrets");
+  await mkdir(secretsDirectory, { mode: 0o700 });
+  await writeFile(sshKey, "fixture\n", { mode: 0o600 });
+  await writeFile(knownHosts, "fixture\n", { mode: 0o600 });
+  await writeFile(join(secretsDirectory, "observability.env"), 'MONITOR_API_TOKEN="isolated"\n', { mode: 0o600 });
+  const providerCalls = [];
+  const runner = async (command) => ({ code: 0, stdout: command === "ssh-keygen" ? "fixture-host-key\n" : "", stderr: "" });
+  const commentary = rehearsalManifest.droplets.find((entry) => entry.role === "commentary");
+  const ingest = rehearsalManifest.droplets.find((entry) => entry.role === "ingest");
+  const observability = rehearsalManifest.droplets.find((entry) => entry.role === "observability");
+  const state = {
+    droplets: Object.fromEntries([commentary, ingest, observability].map((spec, index) => [spec.name, { publicIpv4: `192.0.2.${20 + index}`, status: "active" }])),
+    deployments: {}
+  };
+  const tlsState = {
+    async inspect() { return { status: "missing" }; },
+    async capture() { return { status: "ready", stateSha256: "a".repeat(64), fileCount: 1, certificates: {} }; }
+  };
+  const deployer = new LocalStackDeployer({
+    repoRoot: "/repo",
+    secretsDirectory,
+    sshPrivateKey: sshKey,
+    knownHostsPath: knownHosts,
+    commentaryTlsStateStore: tlsState,
+    ingestTlsStateStore: tlsState,
+    observabilityTlsStateStore: tlsState,
+    runner,
+    fetchImpl: async (...args) => { providerCalls.push(args); return new Response(null, { status: 500 }); }
+  });
+
+  const result = await deployer.prepareForTeardown({ manifest: rehearsalManifest, state });
+  assert.deepEqual(result.evidence.healthchecks, { status: "not-applicable", checks: [] });
+  assert.equal(providerCalls.length, 0);
+});
+
+test("blocks production teardown and restores monitoring services when Healthchecks cannot be paused", async () => {
   const root = await mkdtemp(join(tmpdir(), "scorecheck-dead-man-teardown-failure-"));
   await chmod(root, 0o700);
   const sshKey = join(root, "ssh-key");
@@ -349,9 +389,9 @@ test("blocks teardown and restores monitoring services when Healthchecks cannot 
     commands.push([command, args]);
     return { code: 0, stdout: command === "ssh-keygen" ? "fixture-host-key\n" : "", stderr: "" };
   };
-  const commentary = rehearsalManifest.droplets.find((entry) => entry.role === "commentary");
-  const ingest = rehearsalManifest.droplets.find((entry) => entry.role === "ingest");
-  const observability = rehearsalManifest.droplets.find((entry) => entry.role === "observability");
+  const commentary = manifest.droplets.find((entry) => entry.role === "commentary");
+  const ingest = manifest.droplets.find((entry) => entry.role === "ingest");
+  const observability = manifest.droplets.find((entry) => entry.role === "observability");
   const state = {
     droplets: {
       [commentary.name]: { publicIpv4: "192.0.2.20", status: "active" },
@@ -381,7 +421,7 @@ test("blocks teardown and restores monitoring services when Healthchecks cannot 
   });
 
   await assert.rejects(
-    () => deployer.prepareForTeardown({ manifest: rehearsalManifest, state }),
+    () => deployer.prepareForTeardown({ manifest, state }),
     /Healthchecks baseline pause failed with HTTP 503/u
   );
   const remoteCommands = commands.filter(([command]) => command === "ssh").map(([, args]) => args.at(-1));
@@ -570,4 +610,11 @@ test("binds each role to exact remote reconstruction config paths", () => {
   assert.ok(observability.some(([local, remote]) => local === "/repo/infra/event-stack/supabase-fault-proxy.mjs" && remote === "/opt/scorecheck-monitoring/fault-gates/supabase-fault-proxy.mjs"));
   assert.ok(observability.some(([local, remote]) => local === "/repo/infra/event-stack/supabase-fault-proxy-service.mjs" && remote === "/opt/scorecheck-monitoring/fault-gates/supabase-fault-proxy-service.mjs"));
   assert.throws(() => roleConfigBindings(repoRoot, secrets, { role: "unknown", name: "unknown" }), /unsupported deployment role/);
+});
+
+test("attests the exact compositor environment after private ingest bindings are appended", () => {
+  const body = compositorRemoteEnvironment('CAMERA_NUMBER="1"\n', "10.120.0.4", "ingest-rehearsal.beachvolleyballmedia.com").toString("utf8");
+  assert.equal(body, 'CAMERA_NUMBER="1"\nMEDIAMTX_PRIVATE_HOST="10.120.0.4"\nMEDIAMTX_PUBLIC_HOST="ingest-rehearsal.beachvolleyballmedia.com"\n');
+  assert.throws(() => compositorRemoteEnvironment('MEDIAMTX_PRIVATE_HOST="10.0.0.1"\n', "10.120.0.4", "ingest.example.com"), /already contains ingest bindings/u);
+  assert.throws(() => compositorRemoteEnvironment("CAMERA_NUMBER=1\n", "203.0.113.2", "ingest.example.com"), /not private/u);
 });

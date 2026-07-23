@@ -217,7 +217,7 @@ export class LocalStackDeployer {
       throw new Error(`unsupported deployment role ${spec.role}`);
     }
     const revision = await gitRevision(this.repoRoot, this.runner);
-    const expectedConfigHashes = await this.#expectedConfigHashes(spec, false);
+    const expectedConfigHashes = await this.#expectedConfigHashes({ manifest, state, spec, includeAgent: false });
     const reconstruction = await collectReconstructionProvenance({
       spec,
       resource,
@@ -280,7 +280,9 @@ export class LocalStackDeployer {
         }
         monitorServiceStopped = stopped.code === 0;
       }
-      const healthchecks = await this.#pauseEventHealthchecks(await loadProtectedEnv(join(this.secretsDirectory, "observability.env")));
+      const healthchecks = manifest.kind === "production"
+        ? await this.#pauseEventHealthchecks(await loadProtectedEnv(join(this.secretsDirectory, "observability.env")))
+        : { status: "not-applicable", checks: [] };
       return {
         healthy: true,
         evidence: {
@@ -402,7 +404,7 @@ export class LocalStackDeployer {
       const reconstruction = await collectReconstructionProvenance({
         spec,
         resource,
-        expectedConfigHashes: await this.#expectedConfigHashes(spec, true),
+        expectedConfigHashes: await this.#expectedConfigHashes({ manifest, state, spec, includeAgent: true }),
         runRemote: (remoteCommand) => this.#ssh(resource.publicIpv4, remoteCommand)
       });
       const sshAudit = await this.#sshAudit({ manifest, state, spec, resource });
@@ -462,7 +464,7 @@ export class LocalStackDeployer {
     await chmod(dirname(this.knownHostsPath), 0o700);
   }
 
-  async #expectedConfigHashes(spec, includeAgent) {
+  async #expectedConfigHashes({ manifest, state, spec, includeAgent }) {
     const bindings = roleConfigBindings(this.repoRoot, this.secretsDirectory, spec);
     const wireguardConfig = join(this.secretsDirectory, "wireguard/camera-lan.conf");
     if (spec.role === "ingest" && await exists(wireguardConfig)) {
@@ -474,7 +476,12 @@ export class LocalStackDeployer {
     );
     const output = {};
     for (const [localPath, remotePath] of bindings) {
-      const body = await readFile(localPath);
+      let body = await readFile(localPath);
+      if (["compositor", "compositor-spare"].includes(spec.role) && remotePath === "/opt/compositor/.env") {
+        const ingestSpec = manifest.droplets.find((entry) => entry.role === "ingest");
+        const ingestPrivateIpv4 = privateIpv4(state.droplets[ingestSpec?.name]?.privateIpv4, "ingest private IPv4");
+        body = compositorRemoteEnvironment(body, ingestPrivateIpv4, endpointForRole(manifest, "ingest"));
+      }
       output[remotePath] = provenanceSha256(body);
     }
     return output;
@@ -907,6 +914,18 @@ export function roleConfigBindings(repoRoot, secretsDirectory, spec) {
     [join(repoRoot, "infra/event-stack/supabase-fault-proxy-service.mjs"), "/opt/scorecheck-monitoring/fault-gates/supabase-fault-proxy-service.mjs"]
   ];
   throw new Error(`unsupported deployment role ${spec.role}`);
+}
+
+export function compositorRemoteEnvironment(source, ingestPrivateIpv4, ingestHost) {
+  const body = Buffer.isBuffer(source) ? source.toString("utf8") : String(source);
+  if (/^MEDIAMTX_(?:PRIVATE_HOST|PUBLIC_HOST)=/mu.test(body)) {
+    throw new Error("compositor source environment already contains ingest bindings");
+  }
+  const privateHost = privateIpv4(ingestPrivateIpv4, "ingest private IPv4");
+  if (typeof ingestHost !== "string" || !/^[a-z0-9.-]+\.[a-z0-9.-]+$/u.test(ingestHost)) {
+    throw new Error("ingest public host is invalid");
+  }
+  return Buffer.from(`${body.endsWith("\n") ? body : `${body}\n`}MEDIAMTX_PRIVATE_HOST="${privateHost}"\nMEDIAMTX_PUBLIC_HOST="${ingestHost}"\n`, "utf8");
 }
 
 function verificationCommand(role) {
