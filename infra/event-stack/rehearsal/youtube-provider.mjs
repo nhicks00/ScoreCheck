@@ -51,21 +51,25 @@ export class YouTubeRehearsalProvider {
     return normalizePersistentStream(page.items[0]);
   }
 
-  async waitForStream({ streamId, streamStatus, timeoutMs = 180_000, intervalMs = 2_000 }) {
+  async waitForStream({ streamId, streamStatuses, timeoutMs = 180_000, intervalMs = 2_000 }) {
     validateProviderId(streamId, "stream id");
-    if (typeof streamStatus !== "string" || !streamStatus) throw new Error("YouTube rehearsal stream status is required");
+    if (!Array.isArray(streamStatuses) || streamStatuses.length === 0
+      || streamStatuses.some((status) => typeof status !== "string" || !status)) {
+      throw new Error("YouTube rehearsal stream statuses are required");
+    }
+    const accepted = new Set(streamStatuses);
     const startedAt = Date.now();
     let last;
     while (Date.now() - startedAt <= timeoutMs) {
       try {
         last = await this.getStream(streamId);
-        if (last.streamStatus === streamStatus) return last;
+        if (accepted.has(last.streamStatus)) return last;
       } catch (error) {
         if (!(error instanceof ProviderNotFoundError)) throw error;
       }
       await this.sleep(intervalMs);
     }
-    throw new Error(`YouTube rehearsal stream status did not converge (stream=${last?.streamStatus ?? "unknown"}, expected=${streamStatus})`);
+    throw new Error(`YouTube rehearsal stream status did not converge (stream=${last?.streamStatus ?? "unknown"}, expected=${streamStatuses.join("|")})`);
   }
 
   async #list(resource, part) {

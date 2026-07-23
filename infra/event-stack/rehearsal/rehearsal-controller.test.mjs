@@ -52,7 +52,8 @@ function harness({ failPublisherOnce = false, failPreflight = false, failFullEvi
         configurationIssues: []
       }];
     })),
-    waitForStream: async ({ streamId, streamStatus }) => {
+    waitForStream: async ({ streamId, streamStatuses }) => {
+      const streamStatus = streamStatuses[0];
       log.push(`youtube-${streamStatus}:${streamId}`);
       const court = Number(streamId.replace("stream", ""));
       return {

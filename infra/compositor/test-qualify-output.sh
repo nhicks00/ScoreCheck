@@ -15,18 +15,29 @@ printf '%s\n' '#!/usr/bin/env bash' \
   'root="${MOCK_ROOT:?}"' \
   'state="$root/mock-active"' \
   'if [[ "$*" == "egress list --active --json" ]]; then' \
-  '  if [[ -f "$state" ]]; then printf '\''[{"egress_id":"EG_sample"}]'\''; else printf '\''null'\''; fi' \
+  '  if [[ -f "$state" ]]; then' \
+  '    reads="$(( $(cat "$root/list-count") + 1 ))"' \
+  '    printf '\''%s\n'\'' "$reads" >"$root/list-count"' \
+  '    if (( reads < 2 )); then' \
+  '      printf '\''[{"egress_id":"EG_sample","status":"EGRESS_STARTING"}]'\''' \
+  '    else' \
+  '      output="$(cat "$root/output-path")"' \
+  '      mkdir -p "$(dirname "$output")"' \
+  '      printf '\''fake-mp4'\'' >"$output"' \
+  '      printf '\''[{"egress_id":"EG_sample","status":"EGRESS_ACTIVE"}]'\''' \
+  '    fi' \
+  '  else printf '\''null'\''; fi' \
   'elif [[ "$*" == egress\ start\ --type\ web* ]]; then' \
   '  request="${@: -1}"' \
   '  cp "$request" "$root/captured-request.json"' \
   '  output="$(jq -r '\''.file_outputs[0].filepath'\'' "$request")"' \
   '  output="$root/evidence${output#/out}"' \
-  '  mkdir -p "$(dirname "$output")"' \
-  '  printf '\''fake-mp4'\'' >"$output"' \
+  '  printf '\''%s\n'\'' "$output" >"$root/output-path"' \
+  '  printf '\''0\n'\'' >"$root/list-count"' \
   '  touch "$state"' \
   '  printf '\''EgressID: EG_sample Status: EGRESS_STARTING\n'\''' \
   'elif [[ "$*" == "egress stop --id EG_sample" ]]; then' \
-  '  rm -f "$state"' \
+  '  rm -f "$state" "$root/list-count" "$root/output-path"' \
   'else' \
   '  exit 2' \
   'fi' >"$FIXTURE/bin/lk"
@@ -53,6 +64,8 @@ if grep -Fq 'stream_outputs' "$FIXTURE/captured-request.json"; then
   exit 1
 fi
 test -f "$FIXTURE/evidence/00000000-0000-4000-8000-000000000001/court-1-1080p30.mp4"
+MODE="$(stat -c '%a' "$FIXTURE/evidence/00000000-0000-4000-8000-000000000001" 2>/dev/null || stat -f '%Lp' "$FIXTURE/evidence/00000000-0000-4000-8000-000000000001")"
+test "$MODE" = 770
 
 # A completed capture is adopted without starting a second Egress.
 PATH="$FIXTURE/bin:$PATH" "$FIXTURE/qualify-output.sh" 1 1080p30 00000000-0000-4000-8000-000000000001 >"$FIXTURE/adopted.json"

@@ -77,7 +77,7 @@ HOST_OUTPUT="$HOST_OUTPUT_DIR/$OUTPUT_NAME"
 CONTAINER_OUTPUT="$CONTAINER_OUTPUT_DIR/$OUTPUT_NAME"
 REPORT="$HOST_OUTPUT_DIR/court-${COURT}-${OUTPUT_PROFILE}.capture.json"
 mkdir -p "$REQ_DIR"
-install -d -m 0700 "$COMPOSITOR_DIR/evidence" "$HOST_OUTPUT_DIR"
+install -d -m 0770 "$COMPOSITOR_DIR/evidence" "$HOST_OUTPUT_DIR"
 
 exec 9>"$REQ_DIR/start.lock"
 flock -n 9 || {
@@ -162,7 +162,7 @@ fi
 active_seen=0
 for _ in $(seq 1 60); do
   "$LK" egress list --active --json >"$ACTIVE_FILE" 2>/dev/null || true
-  if jq -e --arg id "$EGRESS_ID" 'type == "array" and any(.[]; .egress_id == $id)' "$ACTIVE_FILE" >/dev/null 2>&1; then
+  if jq -e --arg id "$EGRESS_ID" 'type == "array" and any(.[]; .egress_id == $id and .status == "EGRESS_ACTIVE")' "$ACTIVE_FILE" >/dev/null 2>&1; then
     active_seen=1
     break
   fi

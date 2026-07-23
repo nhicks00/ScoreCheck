@@ -84,12 +84,29 @@ test("waits for one exact persistent stream to become active", async () => {
     return response(200, { items: [value] });
   }, async (milliseconds) => { sleeps.push(milliseconds); });
 
-  const active = await client.waitForStream({ streamId: "stream3", streamStatus: "active", timeoutMs: 10_000, intervalMs: 250 });
+  const active = await client.waitForStream({ streamId: "stream3", streamStatuses: ["active"], timeoutMs: 10_000, intervalMs: 250 });
 
   assert.equal(active.streamStatus, "active");
   assert.equal(active.healthStatus, "good");
   assert.equal(reads, 3);
   assert.deepEqual(sleeps, [250, 250]);
+});
+
+test("accepts either documented idle status without waiting", async () => {
+  for (const status of ["inactive", "ready"]) {
+    let reads = 0;
+    const client = provider(async (url) => {
+      if (url.includes("oauth2")) return response(200, { access_token: "access" });
+      reads += 1;
+      const value = stream(2);
+      value.status.streamStatus = status;
+      return response(200, { items: [value] });
+    });
+
+    const idle = await client.waitForStream({ streamId: "stream2", streamStatuses: ["inactive", "ready"] });
+    assert.equal(idle.streamStatus, status);
+    assert.equal(reads, 1);
+  }
 });
 
 test("retries only explicit transient YouTube rate limits on reads", async () => {

@@ -178,7 +178,7 @@ export class RehearsalController {
           // Ramp one court end to end before admitting the next. This both
           // bounds startup load and prevents one broken Program chain from
           // occupying every compositor and YouTube destination.
-          const activeStream = await this.youtube.waitForStream({ streamId: courtState.stream.id, streamStatus: "active" });
+          const activeStream = await this.youtube.waitForStream({ streamId: courtState.stream.id, streamStatuses: ["active"] });
           courtState.stream = { ...courtState.stream, ...activeStream };
           await this.store.save(state);
           courtState.programSubscriber = await this.verifier.waitForProgramSubscriber({ court });
@@ -290,7 +290,7 @@ export class RehearsalController {
           const courtState = state.courts[court];
           if (!courtState.stream?.id) continue;
           try {
-            const inactive = await this.youtube.waitForStream({ streamId: courtState.stream.id, streamStatus: "inactive" });
+            const inactive = await this.youtube.waitForStream({ streamId: courtState.stream.id, streamStatuses: ["inactive", "ready"] });
             courtState.stream = { ...courtState.stream, ...inactive };
             courtState.providerRetirement = { passed: true, observedAt: this.now().toISOString(), streamStatus: inactive.streamStatus };
           } catch (error) {
