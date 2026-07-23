@@ -93,7 +93,7 @@ test("renders the exact 12-host production secret contract and strips stale targ
   const agentTokens = Object.fromEntries(manifest.droplets.map((spec, index) => [spec.name, `agent-${index}-abcdefghijklmnopqrstuvwxyz123456`]));
   const files = buildProductionSecretFiles({ manifest, material, monitoringEnvironment: values.monitoringEnvironment, renderer, venueProfile, agentTokens });
   assert.equal(Object.keys(files).filter((name) => name.startsWith("compositors/")).length, 9);
-  assert.match(files["ingest.env"], /MEDIAMTX_COURT_8_RAW_SOURCE="srt:\/\//);
+  assert.match(files["ingest.env"], /MEDIAMTX_COURT_8_RAW_SOURCE="publisher"/);
   assert.match(files["ingest.env"], /MEDIAMTX_COURT_1_BROWSER_SOURCE="raw"/);
   assert.match(files["ingest.env"], /MEDIAMTX_COURT_2_BROWSER_SOURCE="normalized"/);
   assert.doesNotMatch(files["observability.env"], /MONITOR_AGENT_TARGETS/);
@@ -113,6 +113,20 @@ test("renders the exact 12-host production secret contract and strips stale targ
   assert.doesNotMatch(files["compositors/bvm-compositor-h.env"], /COURT_7_YOUTUBE_KEY=/);
   assert.doesNotMatch(files["compositors/bvm-compositor-spare.env"], /COURT_[1-8]_YOUTUBE_KEY=/);
   assert.doesNotMatch(files["compositors/bvm-compositor-spare.env"], /CAMERA_NUMBER=/);
+});
+
+test("uses publisher ingress for each event-enabled camera while preserving inactive recovery pulls", () => {
+  const values = fixture();
+  const material = buildProductionMaterial(values);
+  const agentTokens = Object.fromEntries(manifest.droplets.map((spec, index) => [spec.name, `agent-${index}-abcdefghijklmnopqrstuvwxyz123456`]));
+  const sixCameraProfile = createSyntheticRehearsalVenueProfile(manifest.event);
+  sixCameraProfile.cameras[6] = { cameraNumber: 7, cameraIdentity: "camera-7", publishPath: "court7_raw", enabled: false };
+  sixCameraProfile.cameras[7] = { cameraNumber: 8, cameraIdentity: "camera-8", publishPath: "court8_raw", enabled: false };
+  const files = buildProductionSecretFiles({ manifest, material, monitoringEnvironment: values.monitoringEnvironment, renderer, venueProfile: sixCameraProfile, agentTokens });
+
+  assert.match(files["ingest.env"], /MEDIAMTX_COURT_6_RAW_SOURCE="publisher"/);
+  assert.match(files["ingest.env"], /MEDIAMTX_COURT_7_RAW_SOURCE="srt:\/\//);
+  assert.match(files["ingest.env"], /MEDIAMTX_COURT_8_RAW_SOURCE="srt:\/\//);
 });
 
 test("fails closed on duplicate output ownership, incomplete camera credentials, and Twilio residue", () => {

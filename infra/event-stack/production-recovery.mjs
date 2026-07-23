@@ -469,7 +469,7 @@ export function buildProductionSecretFiles({ manifest, material, monitoringEnvir
     "ingest.env": envFile(Object.fromEntries([
       ["MEDIAMTX_PROGRAM_DELAY_MS", "3500"],
       ...COURTS.flatMap((court) => [
-        [`MEDIAMTX_COURT_${court}_RAW_SOURCE`, material.publishers[court].source],
+        [`MEDIAMTX_COURT_${court}_RAW_SOURCE`, venueAdmission.assignments[court] ? "publisher" : material.publishers[court].source],
         [`MEDIAMTX_COURT_${court}_BROWSER_SOURCE`, venueAdmission.assignments[court]?.sourcePathMode === "isolated-hevc-normalizer" ? "normalized" : "raw"],
         [`MEDIAMTX_COURT_${court}_PUBLISH_USER`, material.publishers[court].user],
         [`MEDIAMTX_COURT_${court}_PUBLISH_PASS`, material.publishers[court].password]
