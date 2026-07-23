@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   createSyntheticRehearsalVenueProfile,
   evaluateVenueAdmission,
+  isSyntheticCloudFixtureVenue,
   loadVenueAdmission,
   validateVenueProfile
 } from "./venue-admission.mjs";
@@ -21,8 +22,15 @@ test("admits eight standard 1080p30 cameras only with 30 percent bonded-upload r
   assert.equal(result.aggregateMaximumSourceBitrateBps, 64_000_000);
   assert.equal(result.requiredSustainedUploadMbps, 83.2);
   assert.equal(result.requiredSustainedUploadMbpsRounded, 84);
+  assert.equal(isSyntheticCloudFixtureVenue(profile), true);
   profile.uploadMeasurement.sustainedUploadMbps = 83.1;
   assert.equal(evaluateVenueAdmission(profile).passed, false);
+});
+
+test("does not treat a physical camera profile as a synthetic cloud fixture", () => {
+  const profile = createSyntheticRehearsalVenueProfile("synthetic-venue");
+  profile.cameras[0].cameraModel = "Mevo Core";
+  assert.equal(isSyntheticCloudFixtureVenue(profile), false);
 });
 
 test("rejects stale or future-dated venue evidence", () => {

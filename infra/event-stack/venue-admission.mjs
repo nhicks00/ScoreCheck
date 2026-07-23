@@ -165,6 +165,20 @@ export function createSyntheticRehearsalVenueProfile(event, now = new Date()) {
   return validateVenueProfile(profile, event);
 }
 
+export function isSyntheticCloudFixtureVenue(profileInput) {
+  const profile = validateVenueProfile(profileInput);
+  return profile.uploadMeasurement.routerIdentity === "isolated-rehearsal-source"
+    && profile.physicalReadiness.operator === "isolated-rehearsal"
+    && profile.cameras.every((camera) => (
+      camera.cameraModel === "Pinned FFmpeg Fixture"
+      && camera.cameraFirmware === "Git Pinned Fixture"
+      && camera.sourceCodec === "H264"
+      && camera.sourcePathMode === "direct-h264"
+      && camera.sourceProtocol === "SRT_ENCRYPTED"
+      && camera.venueLink === "WIRED_ETHERNET"
+    ));
+}
+
 function validateUploadMeasurement(value) {
   if (!value || !ISO_TIMESTAMP.test(value.measuredAt ?? "") || !Number.isFinite(Date.parse(value.measuredAt))) throw new Error("venue upload measurement timestamp is invalid");
   if (!Number.isInteger(value.durationSeconds) || value.durationSeconds < 60) throw new Error("venue upload measurement must run for at least 60 seconds");

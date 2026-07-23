@@ -18,7 +18,7 @@ import { ProductionSourceProbe } from "./production-media-profile.mjs";
 import { ProductionYouTubeProvider, readProductionDestinations } from "./production-youtube.mjs";
 import { loadRendererBinding } from "./renderer-binding.mjs";
 import { loadProtectedEnv } from "./stack-deployer.mjs";
-import { loadVenueAdmission } from "./venue-admission.mjs";
+import { isSyntheticCloudFixtureVenue, loadVenueAdmission } from "./venue-admission.mjs";
 import { YouTubeViewerProbe } from "./youtube-viewer-probe.mjs";
 import { loadCommentaryQualification } from "./commentary-qualification.mjs";
 import { initialProgramSupervisor, programSupervisorStep } from "./program-supervisor.mjs";
@@ -123,7 +123,9 @@ export class ProductionSoakRuntime {
         ...productionProviderIdleProblems(await this.#providerEvidence(), this.venue.activeCameras)
       ];
       if (problems.length) throw new Error(`production soak cannot arm: ${problems.slice(0, 8).join("; ")}`);
-      await this.router.preflight({ minimumUploadMbps: this.venue.requiredSustainedUploadMbpsRounded });
+      if (!isSyntheticCloudFixtureVenue(this.venue.profile)) {
+        await this.router.preflight({ minimumUploadMbps: this.venue.requiredSustainedUploadMbpsRounded });
+      }
       state = createState({
         event: this.manifest.event,
         evidence: this.options.evidence,
@@ -161,7 +163,9 @@ export class ProductionSoakRuntime {
       state.phase = "STARTING";
       state.sampler = await this.sampler.ensure({ manifest: this.manifest, lifecycleState: this.lifecycleState, evidenceDirectory: this.options.evidence });
       await writeState(statePath, state);
-      state.router = await this.router.start({ event: this.manifest.event, durationSeconds: Math.ceil(this.options.maximumDurationMs / 1_000) + 600 });
+      state.router = isSyntheticCloudFixtureVenue(this.venue.profile)
+        ? { status: "NOT_APPLICABLE", reason: "synthetic-cloud-fixture" }
+        : await this.router.start({ event: this.manifest.event, durationSeconds: Math.ceil(this.options.maximumDurationMs / 1_000) + 600 });
       await writeState(statePath, state);
     }
 
@@ -361,7 +365,9 @@ export class ProductionSoakRuntime {
     state.sampler = await this.sampler.stop(state.sampler);
     state.sentinel = await this.sentinel.stop(state.sentinel);
     state.criticalLogs = await this.criticalLogs.stop(state.criticalLogs);
-    state.router = await this.router.stopAndFetch(state.router, join(this.options.evidence, "speedify-soak.tsv"));
+    if (state.router?.status !== "NOT_APPLICABLE") {
+      state.router = await this.router.stopAndFetch(state.router, join(this.options.evidence, "speedify-soak.tsv"));
+    }
     const endedMs = this.now();
     const hostEvidence = await evaluateRehearsalPoolEvidence({
       state,
@@ -373,12 +379,14 @@ export class ProductionSoakRuntime {
     });
     const samples = await readSamples(samplesPath, state.runId);
     const viewerEvidence = await readViewerProbes(viewerPath, state.runId);
-    const routerEvidence = await readAndEvaluateSpeedifyEvidence({
-      path: state.router.localPath,
-      startMs: Date.parse(state.startedAt),
-      endMs: endedMs,
-      activeCameras: this.venue.activeCameras.length
-    });
+    const routerEvidence = state.router?.status === "NOT_APPLICABLE"
+      ? { status: "NOT_APPLICABLE", reason: "synthetic-cloud-fixture", problems: [] }
+      : await readAndEvaluateSpeedifyEvidence({
+        path: state.router.localPath,
+        startMs: Date.parse(state.startedAt),
+        endMs: endedMs,
+        activeCameras: this.venue.activeCameras.length
+      });
     const sentinelEvidence = await evaluatePlatformSentinelEvidence({
       path: state.sentinel.output,
       event: state.event,
