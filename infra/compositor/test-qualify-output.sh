@@ -13,6 +13,14 @@ ln -s "$(command -v jq)" "$FIXTURE/bin/jq"
 printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
   'root="${MOCK_ROOT:?}"' \
+  'if [[ "$*" == "restart bvm-egress" ]]; then' \
+  '  rm -f "$root/mock-active" "$root/list-count" "$root/output-path" "$root/current-attempt"' \
+  'elif [[ "$*" == "inspect bvm-egress --format {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}" ]]; then' \
+  '  printf '\''healthy\n'\''' \
+  'else exit 2; fi' >"$FIXTURE/bin/docker"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'set -euo pipefail' \
+  'root="${MOCK_ROOT:?}"' \
   'state="$root/mock-active"' \
   'if [[ "$*" == "egress list --active --json" ]]; then' \
   '  if [[ -f "$state" ]]; then' \
@@ -42,11 +50,12 @@ printf '%s\n' '#!/usr/bin/env bash' \
   '  touch "$state"' \
   '  printf '\''EgressID: EG_sample%s Status: EGRESS_STARTING\n'\'' "$attempt"' \
   'elif [[ "$*" == egress\ stop\ --id\ EG_sample* ]]; then' \
-  '  if [[ "${MOCK_STOP_STUCK:-0}" != 1 ]]; then rm -f "$state" "$root/list-count" "$root/output-path" "$root/current-attempt"; fi' \
+  '  if [[ "${MOCK_STOP_STUCK:-0}" == 1 ]]; then exit 1; fi' \
+  '  rm -f "$state" "$root/list-count" "$root/output-path" "$root/current-attempt"' \
   'else' \
   '  exit 2' \
   'fi' >"$FIXTURE/bin/lk"
-chmod 755 "$FIXTURE/bin/flock" "$FIXTURE/bin/sleep" "$FIXTURE/bin/lk" "$FIXTURE/qualify-output.sh"
+chmod 755 "$FIXTURE/bin/docker" "$FIXTURE/bin/flock" "$FIXTURE/bin/sleep" "$FIXTURE/bin/lk" "$FIXTURE/qualify-output.sh"
 
 printf '%s\n' \
   'LIVEKIT_API_KEY=test-key' \
@@ -94,13 +103,14 @@ grep -Fq 'remained STARTING on both bounded attempts' "$FIXTURE/stalled.err"
 test ! -e "$FIXTURE/mock-active"
 test "$(cat "$FIXTURE/start-count")" = 2
 
-# Cleanup must fail closed when an exact stop never reaches proven idle.
+# Cleanup must recover the exact ownerless job but keep qualification failed.
 rm -f "$FIXTURE/start-count"
 if MOCK_STALL_ATTEMPTS=1 MOCK_STOP_STUCK=1 PATH="$FIXTURE/bin:$PATH" "$FIXTURE/qualify-output.sh" 1 1080p30 00000000-0000-4000-8000-000000000004 >"$FIXTURE/cleanup-blocked.json" 2>"$FIXTURE/cleanup-blocked.err"; then
   printf 'FAIL: a stuck conformance Egress cleanup was accepted\n' >&2
   exit 1
 fi
-grep -Fq 'could not prove the compositor idle' "$FIXTURE/cleanup-blocked.err"
-test -e "$FIXTURE/mock-active"
+grep -Fq 'cleanup recovered but qualification is invalid' "$FIXTURE/cleanup-blocked.err"
+grep -Fq 'isolated Egress container restarted' "$FIXTURE/cleanup-blocked.err"
+test ! -e "$FIXTURE/mock-active"
 
 printf 'PASS: local-only output conformance capture is bounded, retry-safe, and idempotent\n'

@@ -44,7 +44,7 @@ EGRESS_AUDIO_FREQUENCY=48000
 load_env
 require_livekit_env
 find_lk
-for command in flock jq stat; do
+for command in docker flock jq stat; do
   command -v "$command" >/dev/null 2>&1 || {
     echo "error: $command is required for output conformance." >&2
     exit 1
@@ -119,6 +119,32 @@ active_count() {
   jq -er 'if . == null then 0 else length end' "$ACTIVE_FILE"
 }
 
+restart_egress_for_cleanup() {
+  local id="$1"
+  if compgen -G "$REQ_DIR/court-*.owner.json" >/dev/null; then
+    echo "error: refusing conformance cleanup restart while a production Egress owner exists." >&2
+    return 1
+  fi
+  if ! refresh_active || [[ "$(active_count)" != 1 ]] || ! jq -e --arg id "$id" 'type == "array" and .[0].egress_id == $id' "$ACTIVE_FILE" >/dev/null 2>&1; then
+    echo "error: refusing conformance cleanup restart without one exact ownerless Egress." >&2
+    return 1
+  fi
+  if ! docker restart bvm-egress >/dev/null 2>&1; then
+    echo "error: isolated Egress-container cleanup restart failed." >&2
+    return 1
+  fi
+  for _ in $(seq 1 90); do
+    if [[ "$(docker inspect bvm-egress --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null || true)" == healthy ]] \
+      && refresh_active && [[ "$(active_count)" == 0 ]]; then
+      echo "warning: isolated Egress container restarted to clear the exact stuck conformance job ${id}." >&2
+      return 0
+    fi
+    sleep 1
+  done
+  echo "error: isolated Egress-container cleanup restart did not return healthy and idle." >&2
+  return 1
+}
+
 stop_and_prove_idle() {
   local id="$1"
   if ! refresh_active; then
@@ -137,6 +163,10 @@ stop_and_prove_idle() {
   if ! "$LK" egress stop --id "$id" >>"$STOP_LOG" 2>&1; then
     if refresh_active && (( $(active_count) == 0 )); then
       return 0
+    fi
+    if restart_egress_for_cleanup "$id"; then
+      echo "error: exact conformance stop timed out; cleanup recovered but qualification is invalid." >&2
+      return 1
     fi
     echo "error: output-conformance Egress did not accept the exact stop request." >&2
     return 1
