@@ -9,7 +9,7 @@ const ACTIVE_CAMERA_SET = Object.freeze(Array.from({ length: 8 }, (_, index) => 
 export const COMMENTARY_SYNC_TOLERANCE_MS = 250;
 export const COMMENTARY_OBSERVATION_SECONDS = 120;
 
-export async function loadCommentaryQualification(path, expectedEvent, activeCameras) {
+export async function loadCommentaryQualification(path, expectedEvent, activeCameras, options = {}) {
   const information = await stat(path);
   if (!information.isFile() || (information.mode & 0o077) !== 0) {
     throw new Error("commentary qualification must be a protected file");
@@ -17,6 +17,12 @@ export async function loadCommentaryQualification(path, expectedEvent, activeCam
   await chmod(path, 0o600);
   const content = await readFile(path);
   const qualification = validateCommentaryQualification(JSON.parse(content), expectedEvent, activeCameras);
+  if (options.requireInstalled === true && !qualification.installation) {
+    throw new Error("commentary qualification is not installed for this event generation");
+  }
+  if (options.lifecycleGenerationId !== undefined && qualification.installation?.lifecycleGenerationId !== options.lifecycleGenerationId) {
+    throw new Error("commentary qualification belongs to a different lifecycle generation");
+  }
   return {
     qualification,
     sha256: createHash("sha256").update(content).digest("hex"),
@@ -25,21 +31,33 @@ export async function loadCommentaryQualification(path, expectedEvent, activeCam
 }
 
 export function validateCommentaryQualification(value, expectedEvent = null, activeCameras = null) {
-  if (!value || value.schemaVersion !== 1) throw new Error("commentary qualification schemaVersion must be 1");
+  if (!value || value.schemaVersion !== 2) throw new Error("commentary qualification schemaVersion must be 2");
   if (!EVENT_SLUG.test(value.event ?? "")) throw new Error("commentary qualification event is invalid");
   if (expectedEvent !== null && value.event !== expectedEvent) throw new Error("commentary qualification belongs to a different event");
-  validateTurnTls(value.turnTls);
+  if (!new Set(["PENDING", "QUALIFIED"]).has(value.status)) throw new Error("commentary qualification status is invalid");
   if (!Array.isArray(value.courts)) throw new Error("commentary qualification courts are required");
   const expected = normalizeActiveCameras(activeCameras ?? value.courts.map((entry) => entry?.cameraNumber));
   if (JSON.stringify(value.courts.map((entry) => entry?.cameraNumber)) !== JSON.stringify(expected)) {
     throw new Error("commentary qualification must contain active cameras in order exactly once");
   }
+  if (value.status === "PENDING") {
+    if (value.turnTls !== null || value.installation !== undefined) throw new Error("pending commentary qualification cannot contain observations or installation evidence");
+    for (const court of value.courts) {
+      if (JSON.stringify(Object.keys(court).sort()) !== JSON.stringify(["cameraNumber", "status"]) || court.status !== "PENDING") {
+        throw new Error(`Camera ${court?.cameraNumber ?? "unknown"} pending commentary qualification is invalid`);
+      }
+    }
+    return value;
+  }
+  validateTurnTls(value.turnTls);
   for (const court of value.courts) validateCourt(court);
+  if (value.installation !== undefined) validateInstallation(value.installation);
   return value;
 }
 
 export function evaluateCommentaryQualification(value, activeCameras = null) {
   const qualification = validateCommentaryQualification(value, null, activeCameras);
+  if (qualification.status === "PENDING") return { passed: false, problems: ["commentary qualification is pending"] };
   const problems = [];
   if (qualification.turnTls.connected !== true) problems.push("commentary TURN/TLS fallback did not connect");
   if (qualification.turnTls.observationSeconds < COMMENTARY_OBSERVATION_SECONDS) problems.push("commentary TURN/TLS fallback observation was too short");
@@ -61,8 +79,9 @@ export function createSyntheticCommentaryQualification(event, activeCameras = AC
   const cameras = normalizeActiveCameras(activeCameras);
   const observedAt = "2026-01-01T00:00:00.000Z";
   return validateCommentaryQualification({
-    schemaVersion: 1,
+    schemaVersion: 2,
     event,
+    status: "QUALIFIED",
     turnTls: {
       testedAt: observedAt,
       operator: "isolated-rehearsal",
@@ -115,6 +134,17 @@ export function createSyntheticCommentaryQualification(event, activeCameras = AC
   }, event, cameras);
 }
 
+export function createPendingCommentaryQualification(event, activeCameras = ACTIVE_CAMERA_SET) {
+  const cameras = normalizeActiveCameras(activeCameras);
+  return validateCommentaryQualification({
+    schemaVersion: 2,
+    event,
+    status: "PENDING",
+    turnTls: null,
+    courts: cameras.map((cameraNumber) => ({ cameraNumber, status: "PENDING" }))
+  }, event, cameras);
+}
+
 function validateTurnTls(value) {
   validateObservationIdentity(value, "TURN/TLS");
   if (!SAFE_TEXT.test(value.network ?? "")) throw new Error("commentary TURN/TLS network is invalid");
@@ -152,6 +182,12 @@ function validateObservationIdentity(value, label) {
 
 function validateObservationSeconds(value, label) {
   if (!Number.isInteger(value) || value < 1 || value > 86_400) throw new Error(`${label} observation duration is invalid`);
+}
+
+function validateInstallation(value) {
+  if (!value || !ISO_TIMESTAMP.test(value.installedAt ?? "") || !Number.isFinite(Date.parse(value.installedAt))) throw new Error("commentary qualification installation timestamp is invalid");
+  if (!/^[A-Za-z0-9-]{8,100}$/u.test(value.lifecycleGenerationId ?? "")) throw new Error("commentary qualification lifecycle generation is invalid");
+  if (!/^[a-f0-9]{64}$/u.test(value.sourceSha256 ?? "")) throw new Error("commentary qualification source digest is invalid");
 }
 
 function normalizeActiveCameras(value) {

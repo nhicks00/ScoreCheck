@@ -119,8 +119,14 @@ Calibrate with a real clap in frame:
 4. Change only the persisted commentary baseline unless the camera-to-cloud
    buffer changes materially. The runtime controller handles transport drift.
 
-Production bundle creation also requires a mode-0600 commentary qualification
-for every enabled camera. It records at least 120 seconds of return video and
+Production bundle creation requires a schema-v2 mode-0600 `PENDING` commentary
+record for every enabled camera. This is deliberate: the event's LiveKit,
+preview, and local-only Egress paths do not exist before provisioning, so a
+pre-provision physical pass would be fabricated. After the stack reaches
+`ready`, record a schema-v2 `QUALIFIED` candidate and install it with
+`commentary-qualificationctl.mjs`; the installer binds it to the exact lifecycle
+generation and refuses coverage, an existing soak, a different candidate, or a
+stale bundle. The qualified candidate records at least 120 seconds of return video and
 ambience, a two-commentator mix-minus observation, headphones, late join and
 drop/rejoin continuity, AAC stereo 128 kbps/48 kHz output, left/right centering,
 and clap offsets at the beginning, middle, and end. Each offset must remain
@@ -140,6 +146,6 @@ its latency class cannot change silently.
 - The program remains on `courtN_program`; it never falls back to HLS.
 - Audio-health failures are reported through program heartbeats.
 
-The production gate is not complete until the protected qualification passes
+The production soak cannot arm until the protected qualification is installed and passes
 and a real remote voice remains audible and in sync throughout the event-shaped
 soak.

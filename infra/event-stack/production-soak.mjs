@@ -61,7 +61,10 @@ export class ProductionSoakRuntime {
     const renderer = await loadRendererBinding(profile.rendererBinding);
     const venue = await loadVenueAdmission(profile.venueProfile, manifest.event);
     if (!venue.passed) throw new Error(`venue profile is not admitted: ${venue.problems.join("; ")}`);
-    const commentary = await loadCommentaryQualification(profile.commentaryQualification, manifest.event, venue.activeCameras);
+    const commentary = await loadCommentaryQualification(profile.commentaryQualification, manifest.event, venue.activeCameras, {
+      requireInstalled: true,
+      lifecycleGenerationId: lifecycleState.generationId
+    });
     if (!commentary.passed) throw new Error(`commentary is not qualified: ${commentary.problems.join("; ")}`);
     const destinations = await readProductionDestinations(options.destinations, { event: manifest.event, activeCameras: venue.activeCameras });
     validateInputs({ options, profile, manifest, lifecycleState, venue });

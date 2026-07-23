@@ -7,11 +7,19 @@ import test from "node:test";
 import {
   COMMENTARY_OBSERVATION_SECONDS,
   COMMENTARY_SYNC_TOLERANCE_MS,
+  createPendingCommentaryQualification,
   createSyntheticCommentaryQualification,
   evaluateCommentaryQualification,
   loadCommentaryQualification,
   validateCommentaryQualification
 } from "./commentary-qualification.mjs";
+
+test("represents pre-provision commentary honestly as pending", () => {
+  const value = createPendingCommentaryQualification("commentary-pending", [1, 3]);
+  assert.equal(value.status, "PENDING");
+  assert.equal(evaluateCommentaryQualification(value, [1, 3]).passed, false);
+  assert.deepEqual(value.courts, [{ cameraNumber: 1, status: "PENDING" }, { cameraNumber: 3, status: "PENDING" }]);
+});
 
 test("admits an exact physical commentary return, mix-minus, continuity, audio, sync, and TURN/TLS contract", () => {
   const value = createSyntheticCommentaryQualification("commentary-ready", [1, 3]);
@@ -55,4 +63,26 @@ test("loads only a mode-0600 qualification bound to the event", async () => {
   await assert.rejects(() => loadCommentaryQualification(path, "another-event", [1]), /different event/u);
   await chmod(path, 0o644);
   await assert.rejects(() => loadCommentaryQualification(path, "commentary-protected", [1]), /protected file/u);
+});
+
+test("requires installed commentary evidence from the current lifecycle generation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "scorecheck-commentary-generation-"));
+  const path = join(root, "commentary.json");
+  const qualification = createSyntheticCommentaryQualification("commentary-generation", [1]);
+  qualification.installation = {
+    installedAt: "2026-07-23T14:00:00.000Z",
+    lifecycleGenerationId: "generation-12345678",
+    sourceSha256: "a".repeat(64)
+  };
+  await writeFile(path, `${JSON.stringify(qualification)}\n`, { mode: 0o600 });
+
+  const loaded = await loadCommentaryQualification(path, "commentary-generation", [1], {
+    requireInstalled: true,
+    lifecycleGenerationId: "generation-12345678"
+  });
+  assert.equal(loaded.passed, true);
+  await assert.rejects(() => loadCommentaryQualification(path, "commentary-generation", [1], {
+    requireInstalled: true,
+    lifecycleGenerationId: "generation-different"
+  }), /different lifecycle generation/u);
 });

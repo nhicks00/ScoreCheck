@@ -612,12 +612,18 @@ component cannot become a broadcast failure domain.
 
 ## Protected bundle
 
-Do not hand-author the manifest and operator profiles. Create one immutable,
+Do not hand-author the manifest and operator profiles. First create the honest
+pending commentary contract, then create one immutable,
 mode-`0700` event bundle. Existing credentials, SSH identity, canary attestation,
 and production anchors remain outside the event directory and are referenced by
 absolute path:
 
 ```bash
+node infra/event-stack/commentary-qualificationctl.mjs init \
+  --event next-event-slug \
+  --cameras 1,2,3,4,5,6 \
+  --output /absolute/protected/pending-commentary.json
+
 node infra/event-stack/create-event-bundle.mjs create \
   --event next-event-slug \
   --kind production \
@@ -631,7 +637,7 @@ node infra/event-stack/create-event-bundle.mjs create \
   --production-source /absolute/protected/production-recovery-source \
   --renderer-binding /absolute/protected/renderer-binding.json \
   --venue-profile /absolute/protected/venue-profile.json \
-  --commentary-qualification /absolute/protected/commentary-qualification.json
+  --commentary-qualification /absolute/protected/pending-commentary.json
 ```
 
 The generator refuses an existing destination, weak input permissions, relative
@@ -641,7 +647,8 @@ network contract in the immutable manifest, writes the exact next command, and
 does not execute it.
 
 This is a hard cutover to event manifest schema v6, operator profile schema v9,
-and venue profile schema v2. Any earlier bundle must be regenerated from the protected recovery source
+venue profile schema v2, bundle marker schema v2, and commentary qualification
+schema v2. Any earlier bundle must be regenerated from the protected recovery source
 and rendered network contract; lifecycle commands reject it before provider
 access.
 
@@ -734,12 +741,41 @@ weak permissions, malformed HTTPS, or a pre-existing destination.
 
 The compositor pool uses one SFO2 premium Intel 8-vCPU/16-GiB host per camera
 plus one warm spare. Start no public output merely because the 12-host stack is
-ready. After the router is online and the lifecycle is explicitly live, arm
-the bounded six-camera soak:
+ready. While lifecycle phase is still `ready`, qualify physical camera input,
+the isolated HEVC normalizer where assigned, and actual local-only 1080 output:
+
+```bash
+node infra/event-stack/production-media-prequalification.mjs run \
+  --profile /absolute/protected/events/next-event-slug/event-profile.json \
+  --evidence /absolute/protected/evidence/next-event-slug/media-prequalification \
+  --ffprobe /opt/homebrew/opt/ffmpeg-full/bin/ffprobe
+```
+
+This command starts no RTMP/SRT output and cannot publish to YouTube. It is
+resumable, waits up to five minutes for each declared camera, validates the
+event-bound source and browser-input contracts, proves three consecutive monitor
+samples with inactive-camera isolation, captures one short local MP4 through the
+real 1080p30/60 Egress encoder, ffprobes it, stops that exact temporary Egress,
+and requires the compositor to return idle.
+
+After completing the real return-feed, two-commentator mix-minus, TURN/TLS, audio
+continuity, and clap observations, install the passing candidate before coverage:
+
+```bash
+node infra/event-stack/commentary-qualificationctl.mjs install \
+  --profile /absolute/protected/events/next-event-slug/event-profile.json \
+  --candidate /absolute/protected/evidence/next-event-slug/commentary-physical.json \
+  --receipt /absolute/protected/evidence/next-event-slug/commentary-install.json
+```
+
+The production soak requires installation metadata bound to the current lifecycle
+generation; the separate protected receipt records the full cutover hashes. A pending,
+uninstalled, stale-generation, or prequalified bundle artifact fails closed. After
+the router is online and the lifecycle is explicitly live, arm the bounded six-camera soak:
 
 ```bash
 node infra/event-stack/production-soak.mjs run \
-  --profile /absolute/protected/events/next-event-slug/operator-profile.json \
+  --profile /absolute/protected/events/next-event-slug/event-profile.json \
   --destinations /absolute/protected/youtube/next-event-slug/destinations.json \
   --evidence /absolute/protected/evidence/next-event-slug \
   --ffprobe /opt/homebrew/opt/ffmpeg-full/bin/ffprobe \

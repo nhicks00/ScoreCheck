@@ -7,7 +7,7 @@ import test from "node:test";
 
 import { assertCommentaryBrowserRuntime, assertRehearsalFfmpegRuntime, assertRehearsalGitIdentity, createEventBundle, parseBundleArgs } from "./create-event-bundle.mjs";
 import { createSyntheticRehearsalVenueProfile } from "./venue-admission.mjs";
-import { createSyntheticCommentaryQualification } from "./commentary-qualification.mjs";
+import { createPendingCommentaryQualification, createSyntheticCommentaryQualification } from "./commentary-qualification.mjs";
 
 const createFixtureBundle = (options) => createEventBundle(options, {
   verifyGitIdentity: async () => {},
@@ -48,7 +48,7 @@ async function fixture(kind = "rehearsal") {
   const venueProfile = kind === "production" ? join(parent, "venue-profile.json") : null;
   if (venueProfile) await writeFile(venueProfile, `${JSON.stringify(createSyntheticRehearsalVenueProfile("bundle-production"), null, 2)}\n`, { mode: 0o600 });
   const commentaryQualification = kind === "production" ? join(parent, "commentary-qualification.json") : null;
-  if (commentaryQualification) await writeFile(commentaryQualification, `${JSON.stringify(createSyntheticCommentaryQualification("bundle-production"), null, 2)}\n`, { mode: 0o600 });
+  if (commentaryQualification) await writeFile(commentaryQualification, `${JSON.stringify(createPendingCommentaryQualification("bundle-production"), null, 2)}\n`, { mode: 0o600 });
   return {
     command: "create",
     event: `bundle-${kind}`,
@@ -137,6 +137,9 @@ test("creates a production bundle bound to existing persistent anchors", async (
   assert.equal(profile.rendererBinding, join(options.root, "renderer-binding.json"));
   assert.equal(profile.venueProfile, join(options.root, "venue-profile.json"));
   assert.equal(profile.commentaryQualification, join(options.root, "commentary-qualification.json"));
+  const marker = JSON.parse(await readFile(join(options.root, "BUNDLE.json"), "utf8"));
+  assert.equal(marker.schemaVersion, 2);
+  assert.match(marker.initialCommentaryQualificationSha256, /^[a-f0-9]{64}$/u);
   assert.equal(JSON.parse(await readFile(profile.rendererBinding, "utf8")).deploymentId, "dpl_renderer123");
   assert.equal(profile.rehearsalEvidence, null);
   assert.equal((await stat(profile.secrets)).mode & 0o077, 0);
@@ -149,6 +152,13 @@ test("rejects a production bundle before rendering when venue upload is not admi
   venue.uploadMeasurement.sustainedUploadMbps = 1;
   await writeFile(options.venueProfile, `${JSON.stringify(venue, null, 2)}\n`, { mode: 0o600 });
   await assert.rejects(() => createFixtureBundle(options), /venue profile is not admitted.*below the event requirement/u);
+  await assert.rejects(() => stat(options.root), { code: "ENOENT" });
+});
+
+test("rejects pre-qualified commentary before event infrastructure exists", async () => {
+  const options = await fixture("production");
+  await writeFile(options.commentaryQualification, `${JSON.stringify(createSyntheticCommentaryQualification("bundle-production"), null, 2)}\n`, { mode: 0o600 });
+  await assert.rejects(() => createFixtureBundle(options), /requires a pending commentary qualification/u);
   await assert.rejects(() => stat(options.root), { code: "ENOENT" });
 });
 

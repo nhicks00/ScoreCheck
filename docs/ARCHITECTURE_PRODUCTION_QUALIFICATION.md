@@ -578,9 +578,13 @@ acceptance-matrix gate remains pending.
 The scoring prerequisite is complete. Checksummed production evidence is under
 `~/.config/scorecheck/cutovers/scoring-schema-023-030-20260722T122341Z/`.
 
-1. Capture a real venue profile, renderer binding, commentary qualification,
-   camera H.264/HEVC admission traces, and actual output-conformance artifacts.
-2. Run physical H.264 1080p30/60 and compositor-local HEVC 1080p30/60 gates.
+1. Capture a real venue profile and renderer binding, create an honest pending
+   commentary record, provision the ready event stack, then run the local-only
+   media prequalification. Install a real physical commentary qualification
+   against that exact lifecycle generation before coverage; never prequalify a
+   commentary path that does not yet exist.
+2. Run physical H.264 1080p30/60 and compositor-local HEVC 1080p30/60 gates,
+   retaining their source admission and actual ffprobe output-conformance artifacts.
    Keep any mode that fails disabled rather than weakening admission.
 3. Before starting the eight-feed synthetic soak, prepare both the isolated
    event-scoped Supabase proxy and the overlay exception adapter while every

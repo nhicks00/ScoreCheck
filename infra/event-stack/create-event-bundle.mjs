@@ -111,6 +111,9 @@ export async function createEventBundle(options, {
   const commentaryQualification = options.kind === "production"
     ? (await loadCommentaryQualification(options.commentaryQualification, manifest.event, activeCameras)).qualification
     : createSyntheticCommentaryQualification(manifest.event, activeCameras);
+  if (options.kind === "production" && commentaryQualification.status !== "PENDING") {
+    throw new Error("production bundle requires a pending commentary qualification; install physical evidence after provisioning");
+  }
   const final = bundlePaths(options.root);
   const temporary = `${options.root}.tmp-${process.pid}-${randomUUID()}`;
   await mkdir(temporary, { mode: 0o700 });
@@ -177,7 +180,7 @@ export async function createEventBundle(options, {
     }
 
     const marker = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       event: manifest.event,
       kind: manifest.kind,
       namespace: manifest.namespace,
@@ -187,7 +190,7 @@ export async function createEventBundle(options, {
       eventProfileSha256: sha256(await readFile(temporaryPaths.eventProfile)),
       rendererBindingSha256: renderer ? sha256(await readFile(temporaryPaths.rendererBinding)) : null,
       venueProfileSha256: sha256(await readFile(temporaryPaths.venueProfile)),
-      commentaryQualificationSha256: sha256(await readFile(temporaryPaths.commentaryQualification)),
+      initialCommentaryQualificationSha256: sha256(await readFile(temporaryPaths.commentaryQualification)),
       rehearsalProfileSha256: rehearsalProfile ? sha256(await readFile(temporaryPaths.rehearsalProfile)) : null,
       operator: options.kind === "rehearsal" ? {
         command: process.execPath,
@@ -382,5 +385,5 @@ function normalizeGitHubRemote(value) {
 }
 
 function usage() {
-  process.stdout.write("Usage: node infra/event-stack/create-event-bundle.mjs create --event SLUG --kind production|rehearsal --destroy-after YYYY-MM-DD --root /PROTECTED/DIR --credentials-env FILE --ssh-key FILE --attestation FILE --network-spec /PROTECTED/RENDERED-NETWORK.json [production: --anchors FILE --production-source DIR --renderer-binding FILE --venue-profile FILE --commentary-qualification FILE] [rehearsal: --git-repo OWNER/REPO --git-repo-id ID --git-ref REF --git-sha SHA --ffmpeg FILE --soak-seconds 1800]\n");
+  process.stdout.write("Usage: node infra/event-stack/create-event-bundle.mjs create --event SLUG --kind production|rehearsal --destroy-after YYYY-MM-DD --root /PROTECTED/DIR --credentials-env FILE --ssh-key FILE --attestation FILE --network-spec /PROTECTED/RENDERED-NETWORK.json [production: --anchors FILE --production-source DIR --renderer-binding FILE --venue-profile FILE --commentary-qualification PENDING_FILE] [rehearsal: --git-repo OWNER/REPO --git-repo-id ID --git-ref REF --git-sha SHA --ffmpeg FILE --soak-seconds 1800]\n");
 }
