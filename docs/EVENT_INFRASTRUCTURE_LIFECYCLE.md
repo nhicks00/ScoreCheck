@@ -726,6 +726,7 @@ node infra/event-stack/production-soak.mjs run \
   --profile /absolute/protected/events/next-event-slug/operator-profile.json \
   --destinations /absolute/protected/youtube/next-event-slug/destinations.json \
   --evidence /absolute/protected/evidence/next-event-slug \
+  --ffprobe /opt/homebrew/opt/ffmpeg-full/bin/ffprobe \
   --minimum-hours 4 \
   --maximum-hours 6
 ```

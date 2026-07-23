@@ -58,7 +58,10 @@ export async function createEventBundle(options, {
     ...(options.kind === "production" ? [assertProtectedFile(options.venueProfile, "production venue profile")] : []),
     ...(options.kind === "production" ? [assertProtectedFile(options.commentaryQualification, "production commentary qualification")] : []),
     ...(options.kind === "production" ? [assertProtectedDirectory(options.productionSource, "production recovery source")] : []),
-    ...(options.kind === "rehearsal" ? [assertExecutable(options.ffmpegPath, "FFmpeg")] : [])
+    ...(options.kind === "rehearsal" ? [
+      assertExecutable(options.ffmpegPath, "FFmpeg"),
+      assertExecutable(resolve(dirname(options.ffmpegPath), "ffprobe"), "FFprobe")
+    ] : [])
   ]);
   if (options.kind === "rehearsal") await verifyFfmpegRuntime(options.ffmpegPath);
   const parent = dirname(options.root);

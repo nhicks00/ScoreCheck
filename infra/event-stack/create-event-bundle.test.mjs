@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { assertCommentaryBrowserRuntime, assertRehearsalFfmpegRuntime, assertRehearsalGitIdentity, createEventBundle, parseBundleArgs } from "./create-event-bundle.mjs";
@@ -32,7 +32,7 @@ async function fixture(kind = "rehearsal") {
       }
     }, null, 2)}\n` : "test\n", { mode: 0o600 });
   }
-  for (const name of ["ffmpeg"]) {
+  for (const name of ["ffmpeg", "ffprobe"]) {
     protectedFiles[name] = join(parent, name);
     await writeFile(protectedFiles[name], "#!/bin/sh\n", { mode: 0o700 });
   }
@@ -121,6 +121,11 @@ test("fails before creating a bundle when FFmpeg lacks rehearsal media capabilit
     manager: { preflight: async (path) => { checkedPath = path; } }
   });
   assert.equal(checkedPath, options.ffmpegPath);
+
+  const missingProbe = await fixture();
+  await chmod(join(dirname(missingProbe.ffmpegPath), "ffprobe"), 0o600);
+  await assert.rejects(() => createFixtureBundle(missingProbe), /FFprobe must be an executable file/u);
+  await assert.rejects(() => stat(missingProbe.root), { code: "ENOENT" });
 });
 
 test("creates a production bundle bound to existing persistent anchors", async () => {

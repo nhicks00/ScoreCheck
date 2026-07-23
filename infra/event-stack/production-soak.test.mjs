@@ -61,9 +61,15 @@ const profiles = Object.fromEntries(venue.activeCameras.map((camera) => {
 }));
 
 test("starts through the real CLI entrypoint after module initialization", () => {
-  const result = spawnSync(process.execPath, [fileURLToPath(new URL("./production-soak.mjs", import.meta.url)), "--help"], { encoding: "utf8" });
+  const script = fileURLToPath(new URL("./production-soak.mjs", import.meta.url));
+  const result = spawnSync(process.execPath, [script, "--help"], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /^Usage:/);
+  assert.match(result.stdout, /--ffprobe \/ABSOLUTE\/ffprobe/u);
+
+  const missingProbe = spawnSync(process.execPath, [script, "status", "--profile", "/tmp/profile", "--destinations", "/tmp/destinations", "--evidence", "/tmp/evidence"], { encoding: "utf8" });
+  assert.equal(missingProbe.status, 1);
+  assert.match(missingProbe.stderr, /--ffprobe are required/u);
 });
 
 test("hard-cuts the production soak client to monitoring snapshot contract v5", () => {

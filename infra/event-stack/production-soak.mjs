@@ -55,6 +55,7 @@ async function main() {
 export class ProductionSoakRuntime {
   static async create(options, dependencies = {}) {
     const profile = await readProtectedJson(options.profile, "event operator profile");
+    await assertExecutable(options.ffprobe, "FFprobe");
     const manifest = await readProtectedJson(profile.manifest, "event manifest");
     const lifecycleState = await readProtectedJson(profile.state, "event lifecycle state");
     const renderer = await loadRendererBinding(profile.rendererBinding);
@@ -84,7 +85,7 @@ export class ProductionSoakRuntime {
       options, profile, manifest, lifecycleState, destinations, renderer, venue, commentary, monitorOrigin, monitorToken, youtube, pushover,
       egress: dependencies.egress ?? new EgressRuntime({ sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
       normalizer: dependencies.normalizer ?? new HevcNormalizerRuntime({ sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
-      outputConformance: dependencies.outputConformance ?? new OutputConformanceRuntime({ sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
+      outputConformance: dependencies.outputConformance ?? new OutputConformanceRuntime({ sshKey: profile.sshKey, knownHosts: profile.knownHosts, ffprobePath: options.ffprobe }),
       sourceProbe: dependencies.sourceProbe ?? new ProductionSourceProbe({ sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
       viewerProbe: dependencies.viewerProbe ?? new YouTubeViewerProbe(),
       sampler: dependencies.sampler ?? new PoolSamplerRuntime({ repoRoot: REPO_ROOT, sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
@@ -1328,8 +1329,8 @@ function parseArgs(argv) {
   const command = argv[0];
   if ([undefined, "help", "-h", "--help"].includes(command)) return null;
   if (!new Set(["run", "status"]).has(command)) throw new Error("first argument must be run or status");
-  const options = { command, profile: null, destinations: null, evidence: null, router: "root@192.168.8.1", minimumDurationMs: 4 * 60 * 60_000, maximumDurationMs: 6 * 60 * 60_000 };
-  const mapping = new Map([["--profile", "profile"], ["--destinations", "destinations"], ["--evidence", "evidence"], ["--router", "router"], ["--minimum-hours", "minimumDurationMs"], ["--maximum-hours", "maximumDurationMs"]]);
+  const options = { command, profile: null, destinations: null, evidence: null, ffprobe: null, router: "root@192.168.8.1", minimumDurationMs: 4 * 60 * 60_000, maximumDurationMs: 6 * 60 * 60_000 };
+  const mapping = new Map([["--profile", "profile"], ["--destinations", "destinations"], ["--evidence", "evidence"], ["--ffprobe", "ffprobe"], ["--router", "router"], ["--minimum-hours", "minimumDurationMs"], ["--maximum-hours", "maximumDurationMs"]]);
   for (let index = 1; index < argv.length; index += 1) {
     const flag = argv[index];
     const key = mapping.get(flag);
@@ -1342,7 +1343,7 @@ function parseArgs(argv) {
     } else if (key === "router") options[key] = validateRouterHost(value);
     else options[key] = normalizedAbsolute(value, flag);
   }
-  if (!options.profile || !options.destinations || !options.evidence) throw new Error("--profile, --destinations, and --evidence are required");
+  if (!options.profile || !options.destinations || !options.evidence || !options.ffprobe) throw new Error("--profile, --destinations, --evidence, and --ffprobe are required");
   if (options.minimumDurationMs > options.maximumDurationMs) throw new Error("minimum soak duration cannot exceed maximum duration");
   return options;
 }
@@ -1352,8 +1353,13 @@ function normalizedAbsolute(value, label) {
   return value;
 }
 
+async function assertExecutable(path, label) {
+  const information = await stat(path);
+  if (!information.isFile() || (information.mode & 0o111) === 0) throw new Error(`${label} must be an executable file`);
+}
+
 function usage() {
-  process.stdout.write("Usage:\n  node infra/event-stack/production-soak.mjs run --profile /PROTECTED/operator-profile.json --destinations /PROTECTED/destinations.json --evidence /PROTECTED/EVIDENCE [--router root@192.168.8.1] [--minimum-hours 4] [--maximum-hours 6]\n  node infra/event-stack/production-soak.mjs status --profile /PROTECTED/operator-profile.json --destinations /PROTECTED/destinations.json --evidence /PROTECTED/EVIDENCE\n");
+  process.stdout.write("Usage:\n  node infra/event-stack/production-soak.mjs run --profile /PROTECTED/operator-profile.json --destinations /PROTECTED/destinations.json --evidence /PROTECTED/EVIDENCE --ffprobe /ABSOLUTE/ffprobe [--router root@192.168.8.1] [--minimum-hours 4] [--maximum-hours 6]\n  node infra/event-stack/production-soak.mjs status --profile /PROTECTED/operator-profile.json --destinations /PROTECTED/destinations.json --evidence /PROTECTED/EVIDENCE --ffprobe /ABSOLUTE/ffprobe\n");
 }
 
 async function runCommand(command, args) {

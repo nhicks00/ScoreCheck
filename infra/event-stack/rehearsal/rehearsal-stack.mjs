@@ -94,7 +94,11 @@ function runtimeDependencies({ profile, manifest, lifecycleState, material, envi
   });
   const commentary = new CommentaryClientManager();
   const egress = new EgressRuntime({ sshKey: profile.sshKey, knownHosts: profile.knownHosts });
-  const outputConformance = new OutputConformanceRuntime({ sshKey: profile.sshKey, knownHosts: profile.knownHosts });
+  const outputConformance = new OutputConformanceRuntime({
+    sshKey: profile.sshKey,
+    knownHosts: profile.knownHosts,
+    ffprobePath: resolve(dirname(profile.ffmpegPath), "ffprobe")
+  });
   const sampler = new PoolSamplerRuntime({ repoRoot: REPO_ROOT, sshKey: profile.sshKey, knownHosts: profile.knownHosts });
   const verifier = new RehearsalVerifier({
     monitorOrigin: `https://${endpointForRole(manifest, "observability")}`,

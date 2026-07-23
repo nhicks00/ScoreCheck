@@ -15,9 +15,10 @@ const PROFILES = Object.freeze({
 });
 
 export class OutputConformanceRuntime {
-  constructor({ sshKey, knownHosts, runner = runCommand, sleep = delay, now = () => new Date() }) {
+  constructor({ sshKey, knownHosts, ffprobePath, runner = runCommand, sleep = delay, now = () => new Date() }) {
     this.sshKey = requiredPath(sshKey, "SSH key");
     this.knownHosts = requiredPath(knownHosts, "known_hosts");
+    this.ffprobePath = requiredPath(ffprobePath, "FFprobe");
     this.runner = runner;
     this.sleep = sleep;
     this.now = now;
@@ -47,14 +48,14 @@ export class OutputConformanceRuntime {
     if (localSha256 !== receipt.sha256) throw new Error("copied output conformance sample digest differs from the compositor receipt");
 
     const [version, metadata, packets] = await Promise.all([
-      this.runner("ffprobe", ["-version"]),
-      this.runner("ffprobe", [
+      this.runner(this.ffprobePath, ["-version"]),
+      this.runner(this.ffprobePath, [
         "-v", "error",
         "-show_entries", "stream=index,codec_type,codec_name,profile,width,height,avg_frame_rate,r_frame_rate,field_order,pix_fmt,has_b_frames,sample_aspect_ratio,color_space,color_transfer,color_primaries,sample_rate,channels,channel_layout,bit_rate:format=duration,size,bit_rate,format_name",
         "-of", "json",
         samplePath
       ]),
-      this.runner("ffprobe", [
+      this.runner(this.ffprobePath, [
         "-v", "error",
         "-select_streams", "v:0",
         "-show_packets",

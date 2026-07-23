@@ -95,6 +95,7 @@ test("captures, copies, probes, hashes, and writes protected event evidence", as
   const runtime = new OutputConformanceRuntime({
     sshKey,
     knownHosts,
+    ffprobePath: "/opt/homebrew/opt/ffmpeg-full/bin/ffprobe",
     now: () => new Date("2026-07-21T12:01:00.000Z"),
     runner: async (command, args) => {
       calls.push([command, args]);
@@ -112,7 +113,13 @@ test("captures, copies, probes, hashes, and writes protected event evidence", as
   assert.equal(result.status, "QUALIFIED");
   assert.equal((await statMode(result.evidencePath)) & 0o077, 0);
   assert.equal(JSON.parse(await readFile(result.evidencePath, "utf8")).sample.sha256, sha);
-  assert.deepEqual(calls.map(([command]) => command), ["ssh", "scp", "ffprobe", "ffprobe", "ffprobe"]);
+  assert.deepEqual(calls.map(([command]) => command), [
+    "ssh",
+    "scp",
+    "/opt/homebrew/opt/ffmpeg-full/bin/ffprobe",
+    "/opt/homebrew/opt/ffmpeg-full/bin/ffprobe",
+    "/opt/homebrew/opt/ffmpeg-full/bin/ffprobe"
+  ]);
 });
 
 async function statMode(path) {
