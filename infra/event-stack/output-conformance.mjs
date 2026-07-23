@@ -47,7 +47,7 @@ export class OutputConformanceRuntime {
     const localSha256 = sha256(await readFile(samplePath));
     if (localSha256 !== receipt.sha256) throw new Error("copied output conformance sample digest differs from the compositor receipt");
 
-    const [version, metadata, packets] = await Promise.all([
+    const [version, metadata, packets, audioPackets] = await Promise.all([
       this.runner(this.ffprobePath, ["-version"]),
       this.runner(this.ffprobePath, [
         "-v", "error",
@@ -62,12 +62,21 @@ export class OutputConformanceRuntime {
         "-show_entries", "packet=pts_time,dts_time,duration_time,size,flags",
         "-of", "json",
         samplePath
+      ]),
+      this.runner(this.ffprobePath, [
+        "-v", "error",
+        "-select_streams", "a:0",
+        "-show_packets",
+        "-show_entries", "packet=pts_time,dts_time,duration_time,size",
+        "-of", "json",
+        samplePath
       ])
     ]);
     const evidence = evaluateOutputConformance({
       receipt,
       metadata: parseJson(metadata.stdout, "output metadata"),
       packets: parseJson(packets.stdout, "output packet trace"),
+      audioPackets: parseJson(audioPackets.stdout, "output audio packet trace"),
       ffprobeVersion: firstLine(version.stdout),
       localSha256,
       observedAt: this.now().toISOString()
@@ -109,7 +118,7 @@ export class OutputConformanceRuntime {
   }
 }
 
-export function evaluateOutputConformance({ receipt, metadata, packets, ffprobeVersion, localSha256, observedAt }) {
+export function evaluateOutputConformance({ receipt, metadata, packets, audioPackets, ffprobeVersion, localSha256, observedAt }) {
   const profile = profileContract(receipt?.profile);
   parseCaptureReceipt(JSON.stringify(receipt), receipt);
   if (!SHA256.test(localSha256 ?? "") || localSha256 !== receipt.sha256) throw new Error("output conformance sample digest is invalid");
@@ -132,10 +141,10 @@ export function evaluateOutputConformance({ receipt, metadata, packets, ffprobeV
   const frameRate = parseFrameRate(video.avg_frame_rate) ?? parseFrameRate(video.r_frame_rate);
   if (frameRate === null || Math.abs(frameRate - profile.framesPerSecond) > 0.01) throw new Error("output frame rate does not match the selected profile");
 
-  if (String(audio.codec_name).toLowerCase() !== "aac") throw new Error("output audio must be AAC");
+  if (String(audio.codec_name).toLowerCase() !== "aac" || audio.profile !== "LC") throw new Error("output audio must be AAC-LC");
   if (Number(audio.sample_rate) !== 48_000 || audio.channels !== 2 || audio.channel_layout !== "stereo") throw new Error("output audio must be 48 kHz stereo");
-  const audioBitrateBps = finiteNumber(audio.bit_rate, "output audio bitrate");
-  if (audioBitrateBps < 102_400 || audioBitrateBps > 153_600) throw new Error("output audio bitrate is outside the approved 128 kbps window");
+  const streamReportedBitrateBps = finiteNumber(audio.bit_rate, "output audio bitrate");
+  if (streamReportedBitrateBps <= 0) throw new Error("output audio bitrate must be positive");
 
   const format = metadata?.format;
   const durationSeconds = finiteNumber(format?.duration, "output duration");
@@ -143,6 +152,7 @@ export function evaluateOutputConformance({ receipt, metadata, packets, ffprobeV
   if (!String(format?.format_name ?? "").split(",").some((value) => value === "mp4")) throw new Error("output conformance sample must use an MP4 container");
 
   const packetEvidence = evaluateVideoPackets(packets?.packets, profile, durationSeconds);
+  const audioPacketEvidence = evaluateAudioPackets(audioPackets?.packets, durationSeconds);
   return {
     schemaVersion: 1,
     status: "QUALIFIED",
@@ -180,9 +190,34 @@ export function evaluateOutputConformance({ receipt, metadata, packets, ffprobeV
       sampleRateHz: Number(audio.sample_rate),
       channels: audio.channels,
       channelLayout: audio.channel_layout,
-      bitrateBps: audioBitrateBps
+      targetBitrateBps: receipt.encoding.audioTargetBitrateKbps * 1_000,
+      streamReportedBitrateBps,
+      ...audioPacketEvidence
     }
   };
+}
+
+function evaluateAudioPackets(value, durationSeconds) {
+  if (!Array.isArray(value) || value.length < durationSeconds * 40) throw new Error("output audio packet trace is too short");
+  const packets = value.map((packet, index) => {
+    const pts = finiteNumber(packet?.pts_time, `output audio packet ${index + 1} PTS`);
+    const dts = finiteNumber(packet?.dts_time, `output audio packet ${index + 1} DTS`);
+    const duration = finiteNumber(packet?.duration_time, `output audio packet ${index + 1} duration`);
+    const size = finiteNumber(packet?.size, `output audio packet ${index + 1} size`);
+    if (duration <= 0 || size <= 0) throw new Error("output audio packet duration and size must be positive");
+    return { pts, dts, duration, size };
+  });
+  let maximumPacketGapSeconds = 0;
+  for (let index = 1; index < packets.length; index += 1) {
+    const gap = packets[index].dts - packets[index - 1].dts;
+    if (gap <= 0) throw new Error("output audio DTS is not strictly monotonic");
+    maximumPacketGapSeconds = Math.max(maximumPacketGapSeconds, gap);
+  }
+  if (maximumPacketGapSeconds > 0.1) throw new Error("output audio packet gap exceeds 100 ms");
+  const packetDurationSeconds = packets.at(-1).dts + packets.at(-1).duration - packets[0].dts;
+  if (packetDurationSeconds < 14 || Math.abs(packetDurationSeconds - durationSeconds) > 1) throw new Error("output audio packet timeline does not match the sample duration");
+  const measuredBitrateBps = packets.reduce((total, packet) => total + packet.size * 8, 0) / packetDurationSeconds;
+  return { packetCount: packets.length, packetDurationSeconds, maximumPacketGapSeconds, measuredBitrateBps };
 }
 
 function evaluateVideoPackets(value, profile, durationSeconds) {
@@ -243,14 +278,33 @@ function parseCaptureReceipt(raw, expected = {}) {
   const value = typeof raw === "string" ? parseJson(raw, "output conformance capture receipt") : raw;
   if (!value || value.schemaVersion !== 1 || !EVIDENCE_ID.test(value.evidenceId ?? "") || !Number.isFinite(Date.parse(value.capturedAt))) throw new Error("output conformance capture receipt is invalid");
   validateCourt(value.court);
-  profileContract(value.profile);
+  const profile = profileContract(value.profile);
   if (!EGRESS_ID.test(value.egressId ?? "") || !requiredPath(value.remotePath, "output conformance remote path") || !SHA256.test(value.sha256 ?? "") || !Number.isInteger(value.sizeBytes) || value.sizeBytes < 1) throw new Error("output conformance capture receipt is incomplete");
   validateRenderer(value.renderer);
+  validateCaptureEncoding(value.encoding, profile);
   for (const key of ["evidenceId", "court", "profile"]) {
     if (expected[key] !== undefined && value[key] !== expected[key]) throw new Error(`output conformance capture receipt ${key} changed`);
   }
   if (expected.renderer && (value.renderer.gitSha !== expected.renderer.gitSha || value.renderer.deploymentId !== expected.renderer.deploymentId)) throw new Error("output conformance capture receipt renderer changed");
   return value;
+}
+
+function validateCaptureEncoding(value, profile) {
+  const expected = {
+    width: 1920,
+    height: 1080,
+    framesPerSecond: profile.framesPerSecond,
+    audioCodec: "AAC",
+    audioTargetBitrateKbps: 128,
+    audioSampleRateHz: 48_000,
+    videoCodec: "H264_HIGH",
+    videoTargetBitrateKbps: profile.videoBitrateBps / 1_000,
+    keyFrameIntervalSeconds: 2
+  };
+  if (!value || typeof value !== "object") throw new Error("output conformance capture encoding is missing");
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    if (value[key] !== expectedValue) throw new Error(`output conformance capture encoding ${key} is invalid`);
+  }
 }
 
 function validateRenderer(value) {

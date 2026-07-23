@@ -15,12 +15,23 @@ const RECEIPT = Object.freeze({
   profile: "1080p30",
   egressId: "EG_sample",
   renderer: { gitSha: "b".repeat(40), deploymentId: "dpl_renderer123" },
+  encoding: {
+    width: 1920,
+    height: 1080,
+    framesPerSecond: 30,
+    audioCodec: "AAC",
+    audioTargetBitrateKbps: 128,
+    audioSampleRateHz: 48_000,
+    videoCodec: "H264_HIGH",
+    videoTargetBitrateKbps: 10_000,
+    keyFrameIntervalSeconds: 2
+  },
   remotePath: "/opt/compositor/evidence/00000000-0000-4000-8000-000000000001/court-1-1080p30.mp4",
   sha256: "a".repeat(64),
   sizeBytes: 100
 });
 
-function fixture({ profile = "1080p30", bitrateScale = 1, keyframeSeconds = 2 } = {}) {
+function fixture({ profile = "1080p30", bitrateScale = 1, keyframeSeconds = 2, audioBitrateBps = 95_243 } = {}) {
   const fps = profile === "1080p60" ? 60 : 30;
   const target = profile === "1080p60" ? 12_000_000 : 10_000_000;
   const duration = 20;
@@ -32,8 +43,24 @@ function fixture({ profile = "1080p30", bitrateScale = 1, keyframeSeconds = 2 } 
     size: String(packetSize),
     flags: index % Math.round(keyframeSeconds * fps) === 0 ? "K__" : "___"
   }));
+  const audioPacketDuration = 1_024 / 48_000;
+  const audioPacketSize = Math.round(audioBitrateBps * audioPacketDuration / 8);
+  const audioPackets = Array.from({ length: Math.ceil(duration / audioPacketDuration) }, (_, index) => ({
+    pts_time: String(index * audioPacketDuration),
+    dts_time: String(index * audioPacketDuration),
+    duration_time: String(audioPacketDuration),
+    size: String(audioPacketSize)
+  }));
   return {
-    receipt: { ...RECEIPT, profile },
+    receipt: {
+      ...RECEIPT,
+      profile,
+      encoding: {
+        ...RECEIPT.encoding,
+        framesPerSecond: fps,
+        videoTargetBitrateKbps: target / 1_000
+      }
+    },
     metadata: {
       streams: [
         {
@@ -41,11 +68,12 @@ function fixture({ profile = "1080p30", bitrateScale = 1, keyframeSeconds = 2 } 
           avg_frame_rate: `${fps}/1`, r_frame_rate: `${fps}/1`, field_order: "progressive", pix_fmt: "yuv420p",
           has_b_frames: 2, sample_aspect_ratio: "1:1", color_space: "bt709", color_transfer: "bt709", color_primaries: "bt709"
         },
-        { index: 1, codec_type: "audio", codec_name: "aac", sample_rate: "48000", channels: 2, channel_layout: "stereo", bit_rate: "128000" }
+        { index: 1, codec_type: "audio", codec_name: "aac", profile: "LC", sample_rate: "48000", channels: 2, channel_layout: "stereo", bit_rate: String(audioBitrateBps) }
       ],
-      format: { duration: String(duration), size: "100", bit_rate: String(target + 128_000), format_name: "mov,mp4,m4a,3gp,3g2,mj2" }
+      format: { duration: String(duration), size: "100", bit_rate: String(target + audioBitrateBps), format_name: "mov,mp4,m4a,3gp,3g2,mj2" }
     },
     packets: { packets },
+    audioPackets: { packets: audioPackets },
     ffprobeVersion: "ffprobe version 7.1",
     localSha256: "a".repeat(64),
     observedAt: "2026-07-21T12:01:00.000Z"
@@ -59,6 +87,8 @@ test("qualifies actual 1080p30 and 1080p60 H.264 High/AAC output", () => {
     assert.equal(evidence.profile, profile);
     assert.equal(evidence.video.maximumKeyframeIntervalSeconds, 2);
     assert.ok(evidence.video.measuredBitrateBps > evidence.video.targetBitrateBps * 0.99);
+    assert.equal(evidence.audio.targetBitrateBps, 128_000);
+    assert.ok(evidence.audio.measuredBitrateBps > 90_000);
   }
 });
 
@@ -77,6 +107,22 @@ test("rejects profile, color, GOP, bitrate, and audio drift", () => {
   const wrongAudio = fixture();
   wrongAudio.metadata.streams[1].sample_rate = "44100";
   assert.throws(() => evaluateOutputConformance(wrongAudio), /48 kHz stereo/u);
+
+  const wrongAudioProfile = fixture();
+  wrongAudioProfile.metadata.streams[1].profile = "HE-AAC";
+  assert.throws(() => evaluateOutputConformance(wrongAudioProfile), /AAC-LC/u);
+
+  const wrongTarget = fixture();
+  wrongTarget.receipt.encoding.audioTargetBitrateKbps = 96;
+  assert.throws(() => evaluateOutputConformance(wrongTarget), /audioTargetBitrateKbps/u);
+
+  const missingAudio = fixture();
+  missingAudio.audioPackets.packets = missingAudio.audioPackets.packets.slice(0, 20);
+  assert.throws(() => evaluateOutputConformance(missingAudio), /audio packet trace is too short/u);
+
+  const audioGap = fixture();
+  audioGap.audioPackets.packets[200].dts_time = String(Number(audioGap.audioPackets.packets[199].dts_time) + 0.2);
+  assert.throws(() => evaluateOutputConformance(audioGap), /audio packet gap|audio DTS/u);
 });
 
 test("captures, copies, probes, hashes, and writes protected event evidence", async () => {
@@ -105,6 +151,7 @@ test("captures, copies, probes, hashes, and writes protected event evidence", as
         return { code: 0, stdout: "", stderr: "" };
       }
       if (args[0] === "-version") return { code: 0, stdout: "ffprobe version 7.1\n", stderr: "" };
+      if (args.includes("-show_packets") && args.includes("a:0")) return { code: 0, stdout: JSON.stringify(media.audioPackets), stderr: "" };
       if (args.includes("-show_packets")) return { code: 0, stdout: JSON.stringify(media.packets), stderr: "" };
       return { code: 0, stdout: JSON.stringify(media.metadata), stderr: "" };
     }
@@ -116,6 +163,7 @@ test("captures, copies, probes, hashes, and writes protected event evidence", as
   assert.deepEqual(calls.map(([command]) => command), [
     "ssh",
     "scp",
+    "/opt/homebrew/opt/ffmpeg-full/bin/ffprobe",
     "/opt/homebrew/opt/ffmpeg-full/bin/ffprobe",
     "/opt/homebrew/opt/ffmpeg-full/bin/ffprobe",
     "/opt/homebrew/opt/ffmpeg-full/bin/ffprobe"

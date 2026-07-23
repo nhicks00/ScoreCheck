@@ -671,6 +671,15 @@ derivatives and never determine the YouTube output profile. A camera that change
 frame rate mid-broadcast requires a controlled output restart so one YouTube
 session never silently changes encoder contracts.
 
+Output audio evidence distinguishes encoder intent from encoded payload. The
+pinned LiveKit Egress build configures GStreamer's `faac` encoder with a 128 kbps
+target, while `faac` defaults to content-dependent VBR. The protected capture
+receipt therefore proves the exact AAC/128 kbps/48 kHz request, and ffprobe proves
+AAC-LC stereo, positive measured bitrate, and a continuous packet timeline. Do
+not classify a lower VBR payload for simple or silent content as a target-setting
+failure, and do not waive missing packets, codec drift, channel drift, or sample
+rate drift.
+
 Every enabled Camera 1-8 entry in venue profile schema v2 also has an explicit
 operational priority independent of source/output quality:
 

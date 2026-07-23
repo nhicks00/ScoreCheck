@@ -53,7 +53,7 @@ printf '%s\n' \
   "MOCK_ROOT=$FIXTURE" >"$FIXTURE/.env"
 
 PATH="$FIXTURE/bin:$PATH" "$FIXTURE/qualify-output.sh" 1 1080p30 00000000-0000-4000-8000-000000000001 >"$FIXTURE/report.json"
-jq -e '.schemaVersion == 1 and .court == 1 and .profile == "1080p30" and .egressId == "EG_sample" and .renderer.gitSha == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" and .renderer.deploymentId == "dpl_test123" and .sizeBytes == 8' "$FIXTURE/report.json" >/dev/null
+jq -e '.schemaVersion == 1 and .court == 1 and .profile == "1080p30" and .egressId == "EG_sample" and .renderer.gitSha == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" and .renderer.deploymentId == "dpl_test123" and .encoding == {width:1920,height:1080,framesPerSecond:30,audioCodec:"AAC",audioTargetBitrateKbps:128,audioSampleRateHz:48000,videoCodec:"H264_HIGH",videoTargetBitrateKbps:10000,keyFrameIntervalSeconds:2} and .sizeBytes == 8' "$FIXTURE/report.json" >/dev/null
 test ! -e "$FIXTURE/mock-active"
 grep -Fq '"video_codec": "H264_HIGH"' "$FIXTURE/captured-request.json"
 grep -Fq '"video_bitrate": 10000' "$FIXTURE/captured-request.json"

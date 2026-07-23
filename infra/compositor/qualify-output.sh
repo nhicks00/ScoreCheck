@@ -38,6 +38,8 @@ case "$OUTPUT_PROFILE" in
     exit 1
     ;;
 esac
+EGRESS_AUDIO_BITRATE=128
+EGRESS_AUDIO_FREQUENCY=48000
 
 load_env
 require_livekit_env
@@ -134,8 +136,8 @@ cat >"$REQ_FILE" <<EOF
     "height": 1080,
     "framerate": ${EGRESS_FRAMERATE},
     "audio_codec": "AAC",
-    "audio_bitrate": 128,
-    "audio_frequency": 48000,
+    "audio_bitrate": ${EGRESS_AUDIO_BITRATE},
+    "audio_frequency": ${EGRESS_AUDIO_FREQUENCY},
     "video_codec": "H264_HIGH",
     "video_bitrate": ${EGRESS_VIDEO_BITRATE},
     "key_frame_interval": 2
@@ -213,7 +215,14 @@ jq -n \
   --arg remotePath "$HOST_OUTPUT" \
   --arg sha256 "$FILE_SHA256" \
   --argjson court "$COURT" \
+  --argjson width 1920 \
+  --argjson height 1080 \
+  --argjson framesPerSecond "$EGRESS_FRAMERATE" \
+  --argjson audioTargetBitrateKbps "$EGRESS_AUDIO_BITRATE" \
+  --argjson audioSampleRateHz "$EGRESS_AUDIO_FREQUENCY" \
+  --argjson videoTargetBitrateKbps "$EGRESS_VIDEO_BITRATE" \
+  --argjson keyFrameIntervalSeconds 2 \
   --argjson sizeBytes "$FILE_SIZE" \
-  '{schemaVersion:1,evidenceId:$evidenceId,capturedAt:$capturedAt,court:$court,profile:$profile,egressId:$egressId,renderer:{gitSha:$rendererGitSha,deploymentId:$rendererDeploymentId},remotePath:$remotePath,sha256:$sha256,sizeBytes:$sizeBytes}' >"$REPORT"
+  '{schemaVersion:1,evidenceId:$evidenceId,capturedAt:$capturedAt,court:$court,profile:$profile,egressId:$egressId,renderer:{gitSha:$rendererGitSha,deploymentId:$rendererDeploymentId},encoding:{width:$width,height:$height,framesPerSecond:$framesPerSecond,audioCodec:"AAC",audioTargetBitrateKbps:$audioTargetBitrateKbps,audioSampleRateHz:$audioSampleRateHz,videoCodec:"H264_HIGH",videoTargetBitrateKbps:$videoTargetBitrateKbps,keyFrameIntervalSeconds:$keyFrameIntervalSeconds},remotePath:$remotePath,sha256:$sha256,sizeBytes:$sizeBytes}' >"$REPORT"
 chmod 600 "$REPORT"
 cat "$REPORT"
