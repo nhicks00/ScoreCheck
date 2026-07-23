@@ -82,6 +82,14 @@ test("accepts an idle twelve-host baseline with all cameras off", () => {
   assert.deepEqual(productionIdleProblems(snapshot({ active: false }), venue, startedMs), []);
 });
 
+test("does not mistake an expired browser heartbeat for an active idle-baseline reader", () => {
+  const idle = snapshot({ active: false, sampledMs: startedMs });
+  idle.courts[0].browser = browser(1, startedMs - 60_000, 0);
+  assert.deepEqual(productionIdleProblems(idle, venue, startedMs), []);
+  idle.courts[0].browser.receivedAt = new Date(startedMs).toISOString();
+  assert.ok(productionIdleProblems(idle, venue, startedMs).includes("Camera 1 has a browser before the soak starts"));
+});
+
 test("accepts six native 1080 camera chains and two isolated inactive cameras", () => {
   const before = snapshot({ sampledMs: startedMs, framesMultiplier: 0 });
   const after = snapshot({ sampledMs: startedMs + 5_000, framesMultiplier: 5 });

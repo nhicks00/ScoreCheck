@@ -602,7 +602,7 @@ export function productionIdleProblems(snapshot, venue, nowMs = Date.now()) {
   for (const camera of [...venue.activeCameras, ...venue.inactiveCameras]) {
     const court = courtByNumber(snapshot, camera, problems);
     if (!court) continue;
-    if (court.browser) problems.push(`Camera ${camera} has a browser before the soak starts`);
+    if (court.browser && freshAge(nowMs - Date.parse(court.browser.receivedAt))) problems.push(`Camera ${camera} has a browser before the soak starts`);
     for (const branch of ["raw", "normalized", "preview", "program"]) {
       const path = court.paths?.[branch];
       if (path?.ready || (path?.readerCount ?? 0) !== 0) problems.push(`Camera ${camera} ${branch} is occupied before the soak starts`);
