@@ -46,22 +46,29 @@ export class ProductionSourceProbe {
       "docker exec mediamtx ffprobe",
       "-v error -rtsp_transport tcp -analyzeduration 5000000 -probesize 10000000"
     ];
-    const commands = [
-      [
+    const streamOutput = await this.#runSsh(host, [
+      ...base,
+      "-show_entries stream=index,codec_type,codec_name,profile,width,height,avg_frame_rate,r_frame_rate,field_order,pix_fmt,has_b_frames,sample_rate,channels",
+      `-of json rtsp://127.0.0.1:8554/${path}`
+    ].join(" "));
+    const streamProbe = parseProbe(streamOutput?.stdout);
+    let frames;
+    if (onlyVideoStream(streamProbe, "camera source").field_order !== "progressive") {
+      const frameOutput = await this.#runSsh(host, [
         ...base,
-        "-show_entries stream=index,codec_type,codec_name,profile,width,height,avg_frame_rate,r_frame_rate,field_order,pix_fmt,has_b_frames,sample_rate,channels",
+        "-select_streams v:0 -read_intervals %+3 -show_frames",
+        "-show_entries frame=interlaced_frame,top_field_first",
         `-of json rtsp://127.0.0.1:8554/${path}`
-      ].join(" "),
-      [
-        ...base,
-        "-select_streams v:0 -read_intervals %+6 -show_packets",
-        "-show_entries packet=pts_time,dts_time,duration_time,flags",
-        `-of json rtsp://127.0.0.1:8554/${path}`
-      ].join(" ")
-    ];
-    const outputs = [];
-    for (const command of commands) outputs.push(await this.#runSsh(host, command));
-    return { ...parseProbe(outputs[0]?.stdout), packets: parseProbe(outputs[1]?.stdout).packets };
+      ].join(" "));
+      frames = parseProbe(frameOutput?.stdout).frames;
+    }
+    const packetOutput = await this.#runSsh(host, [
+      ...base,
+      "-select_streams v:0 -read_intervals %+6 -show_packets",
+      "-show_entries packet=pts_time,dts_time,duration_time,flags",
+      `-of json rtsp://127.0.0.1:8554/${path}`
+    ].join(" "));
+    return { ...streamProbe, frames, packets: parseProbe(packetOutput?.stdout).packets };
   }
 
   async #runSsh(host, command) {
@@ -104,7 +111,7 @@ export function selectProductionOutputProfile(value, options = {}) {
   }
   validateRawAudio(rawAudio);
   const sourceRate = classifyFrameRate(rawVideo, options.expectedFrameRateMode ?? null, "camera source");
-  validateVideoGeometry(rawVideo, "camera source");
+  validateVideoGeometry(rawVideo, "camera source", value.frames);
   validateRawVideo(rawVideo, codec);
   const sourcePacketEvidence = validatePacketTrace(value?.packets, { label: "camera source", requireMonotonicPts: codec === "H264" });
 
@@ -173,11 +180,14 @@ function videoCodec(value) {
   throw new Error("camera source must use H.264 or H.265 video");
 }
 
-function validateVideoGeometry(stream, label) {
+function validateVideoGeometry(stream, label, frames = undefined) {
   if (stream.width !== 1920 || stream.height !== 1080) {
     throw new Error(`${label} must be 1920x1080; observed ${stream.width ?? "unknown"}x${stream.height ?? "unknown"}`);
   }
-  if (stream.field_order !== "progressive") throw new Error(`${label} must explicitly report progressive scan`);
+  if (stream.field_order === "progressive") return;
+  if (!new Set([undefined, null, "unknown"]).has(stream.field_order)) throw new Error(`${label} must be progressive`);
+  if (!Array.isArray(frames) || frames.length < 30) throw new Error(`${label} must explicitly report progressive scan or provide at least 30 decoded frame flags`);
+  if (frames.some((frame) => frame?.interlaced_frame !== 0)) throw new Error(`${label} decoded frame sample must be entirely progressive`);
 }
 
 function validateBrowserVideo(stream) {

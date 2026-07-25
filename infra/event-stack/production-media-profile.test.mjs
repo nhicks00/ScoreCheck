@@ -53,7 +53,7 @@ test("fails closed on direct HEVC, B-frames, unsafe format, scan, cadence, GOP, 
 });
 
 test("admits HEVC only when an isolated normalizer produces qualified H.264 and Opus", () => {
-  const raw = probePayload({ codec: "hevc" });
+  const raw = probePayload({ codec: "hevc", fieldOrder: "unknown", frames: progressiveFrames(30) });
   const browser = probePayload({ audioCodec: "opus" });
   const result = selectProductionOutputProfile(raw, {
     sourcePathMode: SOURCE_PATH_MODES.ISOLATED_HEVC_NORMALIZER,
@@ -67,6 +67,14 @@ test("admits HEVC only when an isolated normalizer produces qualified H.264 and 
     sourcePathMode: SOURCE_PATH_MODES.ISOLATED_HEVC_NORMALIZER,
     browserProbe: probePayload({ codec: "hevc", audioCodec: "opus" })
   }), /browser input must be H\.264/);
+  assert.throws(() => selectProductionOutputProfile(probePayload({ codec: "hevc", fieldOrder: "unknown", frames: progressiveFrames(29) }), {
+    sourcePathMode: SOURCE_PATH_MODES.ISOLATED_HEVC_NORMALIZER,
+    browserProbe: browser
+  }), /at least 30 decoded frame flags/);
+  assert.throws(() => selectProductionOutputProfile(probePayload({ codec: "hevc", fieldOrder: "unknown", frames: [...progressiveFrames(29), { interlaced_frame: 1 }] }), {
+    sourcePathMode: SOURCE_PATH_MODES.ISOLATED_HEVC_NORMALIZER,
+    browserProbe: browser
+  }), /entirely progressive/);
 });
 
 test("parses bounded rational frame rates and rejects malformed or zero values", () => {
@@ -77,23 +85,30 @@ test("parses bounded rational frame rates and rejects malformed or zero values",
 
 test("probes the local MediaMTX raw path over protected SSH and returns the admitted profile", async () => {
   const calls = [];
-  const raw = probePayload({ frameRate: "60/1", framesPerSecond: 60 });
+  const raw = probePayload({ codec: "hevc", fieldOrder: "unknown", frames: progressiveFrames(30), frameRate: "60/1", framesPerSecond: 60 });
   const browser = probePayload({ frameRate: "60/1", framesPerSecond: 60, audioCodec: "opus" });
   const probe = new ProductionSourceProbe({
     sshKey: "/tmp/key",
     knownHosts: "/tmp/known_hosts",
     runner: async (command, args) => {
       calls.push([command, args]);
-      const payload = calls.length <= 2 ? raw : browser;
-      return { stdout: JSON.stringify(calls.length % 2 === 1 ? { streams: payload.streams } : { packets: payload.packets }), stderr: "" };
+      const payload = calls.length <= 3 ? raw : browser;
+      const key = calls.length === 1 || calls.length === 4 ? "streams" : calls.length === 2 ? "frames" : "packets";
+      return { stdout: JSON.stringify({ [key]: payload[key] }), stderr: "" };
     }
   });
-  assert.equal((await probe.probe({ host: "198.51.100.10", court: 6, expectedFrameRateMode: "60/1" })).profile, "1080p60");
-  assert.equal(calls.length, 4);
+  assert.equal((await probe.probe({
+    host: "198.51.100.10",
+    court: 6,
+    sourcePathMode: SOURCE_PATH_MODES.ISOLATED_HEVC_NORMALIZER,
+    expectedFrameRateMode: "60/1"
+  })).profile, "1080p60");
+  assert.equal(calls.length, 5);
   assert.equal(calls[0][0], "ssh");
   assert.match(calls[0][1].at(-1), /court6_raw/);
-  assert.match(calls[1][1].at(-1), /show_packets/);
-  assert.match(calls[2][1].at(-1), /court6_preview/);
+  assert.match(calls[1][1].at(-1), /show_frames/);
+  assert.match(calls[2][1].at(-1), /show_packets/);
+  assert.match(calls[3][1].at(-1), /court6_preview/);
   assert.doesNotMatch(calls[0][1].join(" "), /stream key|password/i);
 });
 
@@ -107,7 +122,8 @@ function probePayload({
   fieldOrder = "progressive",
   pixelFormat = "yuv420p",
   hasBFrames = 0,
-  keyframeIntervalSeconds = 2
+  keyframeIntervalSeconds = 2,
+  frames
 } = {}) {
   return {
     streams: [
@@ -118,8 +134,13 @@ function probePayload({
       },
       { index: 1, codec_type: "audio", codec_name: audioCodec, profile: "LC", sample_rate: "48000", channels: 2 }
     ],
-    packets: packetTrace({ framesPerSecond, keyframeIntervalSeconds })
+    packets: packetTrace({ framesPerSecond, keyframeIntervalSeconds }),
+    frames
   };
+}
+
+function progressiveFrames(count) {
+  return Array.from({ length: count }, () => ({ interlaced_frame: 0, top_field_first: 0 }));
 }
 
 function packetTrace({ framesPerSecond, keyframeIntervalSeconds }) {
