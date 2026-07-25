@@ -56,7 +56,7 @@ export function validateVenueProfile(value, expectedEvent = null) {
   if (expectedEvent !== null && value.event !== expectedEvent) throw new Error("venue profile belongs to a different event");
   if (value.reserveFraction !== VENUE_RESERVE_FRACTION) throw new Error(`venue profile reserveFraction must be ${VENUE_RESERVE_FRACTION}`);
   validateUploadMeasurement(value.uploadMeasurement);
-  validatePhysicalReadiness(value.physicalReadiness);
+  if (value.physicalReadiness !== undefined) validatePhysicalReadiness(value.physicalReadiness);
   if (!Array.isArray(value.cameras) || value.cameras.length !== 8) throw new Error("venue profile must contain exactly eight permanent cameras");
   const numbers = value.cameras.map((camera) => camera?.cameraNumber);
   if (JSON.stringify(numbers) !== JSON.stringify(CAMERA_NUMBERS)) throw new Error("venue profile cameras must be ordered Camera 1 through Camera 8 exactly once");
@@ -85,8 +85,7 @@ export function evaluateVenueAdmission(profileInput, nowMs = Date.now()) {
   const validatedSustainedUploadMbps = profile.uploadMeasurement.sustainedUploadMbps;
   const problems = [];
   const uploadMeasuredAtMs = Date.parse(profile.uploadMeasurement.measuredAt);
-  const physicalAssessedAtMs = Date.parse(profile.physicalReadiness.assessedAt);
-  for (const [label, observedAtMs] of [["bonded upload measurement", uploadMeasuredAtMs], ["physical readiness assessment", physicalAssessedAtMs]]) {
+  for (const [label, observedAtMs] of [["bonded upload measurement", uploadMeasuredAtMs]]) {
     const ageMs = nowMs - observedAtMs;
     if (ageMs < -VENUE_CLOCK_SKEW_MS) problems.push(`${label} is more than five minutes in the future`);
     else if (ageMs > VENUE_EVIDENCE_MAX_AGE_MS) problems.push(`${label} is older than 24 hours`);
@@ -107,7 +106,6 @@ export function evaluateVenueAdmission(profileInput, nowMs = Date.now()) {
     requiredSustainedUploadMbpsRounded: Math.ceil(requiredSustainedUploadMbps),
     validatedSustainedUploadMbps,
     uploadMeasurementAgeMs: nowMs - uploadMeasuredAtMs,
-    physicalReadinessAgeMs: nowMs - physicalAssessedAtMs,
     reserveFraction: profile.reserveFraction,
     headroomMbps: validatedSustainedUploadMbps - requiredSustainedUploadMbps,
     problems,
@@ -123,6 +121,16 @@ export function assertFirmwareAttested(profileInput) {
       throw new Error(`Camera ${camera.cameraNumber} firmware must be captured from the installed camera before physical media qualification`);
     }
   }
+  return profile;
+}
+
+export function assertPhysicalReadiness(profileInput, nowMs = Date.now()) {
+  const profile = validateVenueProfile(profileInput);
+  validatePhysicalReadiness(profile.physicalReadiness);
+  const assessedAtMs = Date.parse(profile.physicalReadiness.assessedAt);
+  const ageMs = nowMs - assessedAtMs;
+  if (ageMs < -VENUE_CLOCK_SKEW_MS) throw new Error("physical readiness assessment is more than five minutes in the future");
+  if (ageMs > VENUE_EVIDENCE_MAX_AGE_MS) throw new Error("physical readiness assessment is older than 24 hours");
   return profile;
 }
 
@@ -179,7 +187,7 @@ export function createSyntheticRehearsalVenueProfile(event, now = new Date()) {
 export function isSyntheticCloudFixtureVenue(profileInput) {
   const profile = validateVenueProfile(profileInput);
   return profile.uploadMeasurement.routerIdentity === "isolated-rehearsal-source"
-    && profile.physicalReadiness.operator === "isolated-rehearsal"
+    && profile.physicalReadiness?.operator === "isolated-rehearsal"
     && profile.cameras.every((camera) => (
       camera.cameraModel === "Pinned FFmpeg Fixture"
       && camera.cameraFirmware === "Git Pinned Fixture"

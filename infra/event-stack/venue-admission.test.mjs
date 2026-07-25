@@ -8,6 +8,7 @@ import {
   createSyntheticRehearsalVenueProfile,
   evaluateVenueAdmission,
   assertFirmwareAttested,
+  assertPhysicalReadiness,
   isSyntheticCloudFixtureVenue,
   loadVenueAdmission,
   validateVenueProfile
@@ -34,13 +35,17 @@ test("does not treat a physical camera profile as a synthetic cloud fixture", ()
   assert.equal(isSyntheticCloudFixtureVenue(profile), false);
 });
 
-test("allows cloud admission before firmware inventory but blocks physical media qualification", () => {
+test("allows cloud admission before field attestation but blocks physical media qualification", () => {
   const profile = createSyntheticRehearsalVenueProfile("firmware-inventory");
   delete profile.cameras[0].cameraFirmware;
+  delete profile.physicalReadiness;
   assert.equal(evaluateVenueAdmission(profile).passed, true);
   assert.throws(() => assertFirmwareAttested(profile), /Camera 1 firmware must be captured/u);
+  assert.throws(() => assertPhysicalReadiness(profile), /physical-readiness timestamp is invalid/u);
   profile.cameras[0].cameraFirmware = "v2.7.1";
+  profile.physicalReadiness = createSyntheticRehearsalVenueProfile("firmware-inventory").physicalReadiness;
   assert.doesNotThrow(() => assertFirmwareAttested(profile));
+  assert.doesNotThrow(() => assertPhysicalReadiness(profile));
 });
 
 test("rejects stale or future-dated venue evidence", () => {
@@ -51,7 +56,7 @@ test("rejects stale or future-dated venue evidence", () => {
 
   const future = createSyntheticRehearsalVenueProfile("future-venue", now);
   future.physicalReadiness.assessedAt = "2026-07-21T12:05:00.001Z";
-  assert.match(evaluateVenueAdmission(future, now.getTime()).problems.join("; "), /more than five minutes in the future/u);
+  assert.throws(() => assertPhysicalReadiness(future, now.getTime()), /more than five minutes in the future/u);
 });
 
 test("keeps permanent identities while allowing an event-specific active camera set", () => {

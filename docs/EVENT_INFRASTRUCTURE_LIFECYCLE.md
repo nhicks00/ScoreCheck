@@ -711,9 +711,10 @@ and frame-rate admission. At each broadcast start, the runner probes the exact
 camera source against its event-bound rational frame rate, codec, bitrate,
 identity, model, firmware, GOP, timestamp, scan, pixel, and audio contract.
 Firmware is an operator-captured inventory value, not an instruction to install
-or update firmware. It may be absent while the cloud event stack is prepared,
-but physical media prequalification and the production soak refuse to start
-until every enabled camera has its installed version recorded.
+or update firmware. Firmware and field-readiness evidence may be absent while
+the cloud event stack is prepared, but physical media prequalification and the
+production soak refuse to start until every enabled camera has its installed
+version recorded and the current field readiness is attested.
 Direct browser input is progressive H.264/yuv420p with no B-frames. HEVC remains
 available as a bandwidth-saving camera source only when the venue profile assigns
 that camera to the isolated compositor-local HEVC-to-H.264 normalizer; an HEVC
