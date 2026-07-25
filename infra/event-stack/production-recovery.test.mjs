@@ -115,7 +115,7 @@ test("renders the exact 12-host production secret contract and strips stale targ
   assert.doesNotMatch(files["compositors/bvm-compositor-spare.env"], /CAMERA_NUMBER=/);
 });
 
-test("uses publisher ingress for each event-enabled camera while preserving inactive recovery pulls", () => {
+test("keeps inactive camera ingress idle instead of polling stale recovery pulls", () => {
   const values = fixture();
   const material = buildProductionMaterial(values);
   const agentTokens = Object.fromEntries(manifest.droplets.map((spec, index) => [spec.name, `agent-${index}-abcdefghijklmnopqrstuvwxyz123456`]));
@@ -125,8 +125,8 @@ test("uses publisher ingress for each event-enabled camera while preserving inac
   const files = buildProductionSecretFiles({ manifest, material, monitoringEnvironment: values.monitoringEnvironment, renderer, venueProfile: sixCameraProfile, agentTokens });
 
   assert.match(files["ingest.env"], /MEDIAMTX_COURT_6_RAW_SOURCE="publisher"/);
-  assert.match(files["ingest.env"], /MEDIAMTX_COURT_7_RAW_SOURCE="srt:\/\//);
-  assert.match(files["ingest.env"], /MEDIAMTX_COURT_8_RAW_SOURCE="srt:\/\//);
+  assert.match(files["ingest.env"], /MEDIAMTX_COURT_7_RAW_SOURCE="publisher"/);
+  assert.match(files["ingest.env"], /MEDIAMTX_COURT_8_RAW_SOURCE="publisher"/);
 });
 
 test("fails closed on duplicate output ownership, incomplete camera credentials, and Twilio residue", () => {
