@@ -68,6 +68,15 @@ test("exposes only the explicit local-only run command", () => {
   const help = spawnSync(process.execPath, [script, "--help"], { encoding: "utf8" });
   assert.equal(help.status, 0, help.stderr);
   assert.match(help.stdout, /production-media-prequalification\.mjs run/u);
+  const run = spawnSync(process.execPath, [
+    script, "run",
+    "--profile", "/tmp/scorecheck-missing-event-profile.json",
+    "--evidence", "/tmp/scorecheck-missing-evidence",
+    "--ffprobe", "/tmp/scorecheck-missing-ffprobe"
+  ], { encoding: "utf8" });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /ENOENT/u);
+  assert.doesNotMatch(run.stderr, /before initialization/u);
 });
 
 test("requires browser, branch, and Egress cleanup after local output capture", () => {

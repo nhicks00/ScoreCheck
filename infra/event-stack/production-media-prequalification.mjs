@@ -22,13 +22,6 @@ const SOURCE_WAIT_MS = 5 * 60_000;
 const RAW_STABLE_SAMPLES = 3;
 const RAW_SAMPLE_INTERVAL_MS = 2_000;
 
-if (process.argv[1] && resolve(process.argv[1]) === SCRIPT_PATH) {
-  main().catch((error) => {
-    process.stderr.write(`error: ${error instanceof Error ? error.message : String(error)}\n`);
-    process.exitCode = 1;
-  });
-}
-
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (!options) return usage();
@@ -341,4 +334,11 @@ function stableJson(value) {
 
 function usage() {
   process.stdout.write("Usage:\n  production-media-prequalification.mjs run --profile /PROTECTED/event-profile.json --evidence /PROTECTED/evidence/media-prequalification --ffprobe /ABSOLUTE/ffprobe\n");
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === SCRIPT_PATH) {
+  main().catch((error) => {
+    process.stderr.write(`error: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  });
 }
