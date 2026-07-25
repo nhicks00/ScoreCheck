@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   createSyntheticRehearsalVenueProfile,
   evaluateVenueAdmission,
+  assertFirmwareAttested,
   isSyntheticCloudFixtureVenue,
   loadVenueAdmission,
   validateVenueProfile
@@ -31,6 +32,15 @@ test("does not treat a physical camera profile as a synthetic cloud fixture", ()
   const profile = createSyntheticRehearsalVenueProfile("synthetic-venue");
   profile.cameras[0].cameraModel = "Mevo Core";
   assert.equal(isSyntheticCloudFixtureVenue(profile), false);
+});
+
+test("allows cloud admission before firmware inventory but blocks physical media qualification", () => {
+  const profile = createSyntheticRehearsalVenueProfile("firmware-inventory");
+  delete profile.cameras[0].cameraFirmware;
+  assert.equal(evaluateVenueAdmission(profile).passed, true);
+  assert.throws(() => assertFirmwareAttested(profile), /Camera 1 firmware must be captured/u);
+  profile.cameras[0].cameraFirmware = "v2.7.1";
+  assert.doesNotThrow(() => assertFirmwareAttested(profile));
 });
 
 test("rejects stale or future-dated venue evidence", () => {

@@ -13,7 +13,7 @@ import { admittedProfileProblems, assertProductionMonitorSnapshot, productionRaw
 import { ProductionSourceProbe } from "./production-media-profile.mjs";
 import { loadRendererBinding } from "./renderer-binding.mjs";
 import { loadProtectedEnv } from "./stack-deployer.mjs";
-import { loadVenueAdmission } from "./venue-admission.mjs";
+import { assertFirmwareAttested, loadVenueAdmission } from "./venue-admission.mjs";
 import { loadCommentaryQualification } from "./commentary-qualification.mjs";
 import { validateProfile } from "./eventctl.mjs";
 
@@ -49,6 +49,7 @@ export class ProductionMediaPrequalificationRuntime {
     }
     const venue = await loadVenueAdmission(profile.venueProfile, manifest.event);
     if (!venue.passed) throw new Error(`venue profile is not admitted: ${venue.problems.join("; ")}`);
+    assertFirmwareAttested(venue.profile);
     const commentary = await loadCommentaryQualification(profile.commentaryQualification, manifest.event, venue.activeCameras);
     if (commentary.qualification.status !== "PENDING") throw new Error("media prequalification requires pending commentary evidence");
     const monitorEnvironment = await loadProtectedEnv(join(profile.secrets, "observability.env"));

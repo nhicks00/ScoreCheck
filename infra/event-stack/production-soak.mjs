@@ -18,7 +18,7 @@ import { ProductionSourceProbe } from "./production-media-profile.mjs";
 import { ProductionYouTubeProvider, readProductionDestinations } from "./production-youtube.mjs";
 import { loadRendererBinding } from "./renderer-binding.mjs";
 import { loadProtectedEnv } from "./stack-deployer.mjs";
-import { isSyntheticCloudFixtureVenue, loadVenueAdmission } from "./venue-admission.mjs";
+import { assertFirmwareAttested, isSyntheticCloudFixtureVenue, loadVenueAdmission } from "./venue-admission.mjs";
 import { YouTubeViewerProbe } from "./youtube-viewer-probe.mjs";
 import { loadCommentaryQualification } from "./commentary-qualification.mjs";
 import { initialProgramSupervisor, programSupervisorStep } from "./program-supervisor.mjs";
@@ -61,6 +61,7 @@ export class ProductionSoakRuntime {
     const renderer = await loadRendererBinding(profile.rendererBinding);
     const venue = await loadVenueAdmission(profile.venueProfile, manifest.event);
     if (!venue.passed) throw new Error(`venue profile is not admitted: ${venue.problems.join("; ")}`);
+    assertFirmwareAttested(venue.profile);
     const commentary = await loadCommentaryQualification(profile.commentaryQualification, manifest.event, venue.activeCameras, {
       requireInstalled: true,
       lifecycleGenerationId: lifecycleState.generationId

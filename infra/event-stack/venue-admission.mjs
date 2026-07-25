@@ -115,6 +115,17 @@ export function evaluateVenueAdmission(profileInput, nowMs = Date.now()) {
   };
 }
 
+export function assertFirmwareAttested(profileInput) {
+  const profile = validateVenueProfile(profileInput);
+  for (const camera of profile.cameras) {
+    if (!camera.enabled) continue;
+    if (!isInstalledDeclaration(camera.cameraFirmware)) {
+      throw new Error(`Camera ${camera.cameraNumber} firmware must be captured from the installed camera before physical media qualification`);
+    }
+  }
+  return profile;
+}
+
 export function createSyntheticRehearsalVenueProfile(event, now = new Date()) {
   const observedAt = now.toISOString();
   const profile = {
@@ -211,9 +222,8 @@ function validateCamera(camera) {
     if (JSON.stringify(Object.keys(camera).sort()) !== JSON.stringify(expected)) throw new Error(`disabled Camera ${number} must not carry an active source assignment`);
     return;
   }
-  for (const field of ["cameraModel", "cameraFirmware"]) {
-    if (!SAFE_DECLARATION.test(camera[field] ?? "") || /^(?:unknown|replace|unverified|example)/iu.test(camera[field])) throw new Error(`Camera ${number} ${field} is not an installed value`);
-  }
+  if (!isInstalledDeclaration(camera.cameraModel)) throw new Error(`Camera ${number} cameraModel is not an installed value`);
+  if (camera.cameraFirmware !== undefined && !isInstalledDeclaration(camera.cameraFirmware)) throw new Error(`Camera ${number} cameraFirmware is not an installed value`);
   if (!SOURCE_PROTOCOLS.has(camera.sourceProtocol)) throw new Error(`Camera ${number} source protocol is invalid`);
   if (camera.sourceProtocol === "RTMP_LEGACY_APPROVED" ? camera.legacyTransportApproved !== true : camera.legacyTransportApproved !== false) {
     throw new Error(`Camera ${number} legacy transport approval does not match its source protocol`);
@@ -228,6 +238,10 @@ function validateCamera(camera) {
   if (!VENUE_LINKS.has(camera.venueLink)) throw new Error(`Camera ${number} venue link is invalid`);
   if (!Number.isFinite(camera.sourceRateCapMbps) || camera.sourceRateCapMbps !== source.maximumSourceBitrateBps / 1_000_000) throw new Error(`Camera ${number} source rate cap must match ${camera.sourceProfile}`);
   if (camera.powerProtected !== true) throw new Error(`Camera ${number} power is not protected`);
+}
+
+function isInstalledDeclaration(value) {
+  return SAFE_DECLARATION.test(value ?? "") && !/^(?:unknown|replace|unverified|example)/iu.test(value);
 }
 
 function priorityRank(tier) {
