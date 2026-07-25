@@ -110,10 +110,10 @@ export function selectProductionOutputProfile(value, options = {}) {
       : "isolated HEVC normalization requires an H.265 camera source");
   }
   validateRawAudio(rawAudio);
-  const sourceRate = classifyFrameRate(rawVideo, options.expectedFrameRateMode ?? null, "camera source");
   validateVideoGeometry(rawVideo, "camera source", value.frames);
-  validateRawVideo(rawVideo, codec);
+  validateRawVideo(rawVideo, codec, sourcePathMode);
   const sourcePacketEvidence = validatePacketTrace(value?.packets, { label: "camera source", requireMonotonicPts: codec === "H264" });
+  const sourceRate = classifyFrameRate(rawVideo, options.expectedFrameRateMode ?? null, "camera source", sourcePacketEvidence.packetFramesPerSecond);
 
   const browserProbe = options.browserProbe;
   if (!browserProbe) throw new Error("browser input probe is required");
@@ -121,10 +121,10 @@ export function selectProductionOutputProfile(value, options = {}) {
   const browserAudio = onlyAudioStream(browserProbe, "browser input");
   if (videoCodec(browserProbe) !== "H264") throw new Error("browser input must be H.264; HEVC cannot enter Linux Chromium WHEP");
   validateVideoGeometry(browserVideo, "browser input");
-  const browserRate = classifyFrameRate(browserVideo, sourceRate.id, "browser input");
   validateBrowserVideo(browserVideo);
   validateBrowserAudio(browserAudio);
   const packetEvidence = validatePacketTrace(browserProbe?.packets, { label: "browser input" });
+  const browserRate = classifyFrameRate(browserVideo, sourceRate.id, "browser input", packetEvidence.packetFramesPerSecond);
   const profile = sourceRate.outputProfile;
   return {
     profile,
@@ -195,8 +195,9 @@ function validateBrowserVideo(stream) {
   if (stream.has_b_frames !== 0) throw new Error(`browser input must have zero B-frames; observed ${stream.has_b_frames ?? "unknown"}`);
 }
 
-function validateRawVideo(stream, codec) {
-  if (stream.pix_fmt !== "yuv420p") throw new Error(`camera source pixel format must be yuv420p; observed ${stream.pix_fmt ?? "unknown"}`);
+function validateRawVideo(stream, codec, sourcePathMode) {
+  const normalizedFullRange = codec === "H265" && sourcePathMode === SOURCE_PATH_MODES.ISOLATED_HEVC_NORMALIZER && stream.pix_fmt === "yuvj420p";
+  if (stream.pix_fmt !== "yuv420p" && !normalizedFullRange) throw new Error(`camera source pixel format must be yuv420p, or yuvj420p through the isolated HEVC normalizer; observed ${stream.pix_fmt ?? "unknown"}`);
   if (!Number.isInteger(stream.has_b_frames) || stream.has_b_frames < 0) throw new Error("camera source B-frame metadata is unavailable");
   if (codec === "H264" && stream.has_b_frames !== 0) throw new Error(`direct H.264 camera source must have zero B-frames; observed ${stream.has_b_frames}`);
 }
@@ -211,10 +212,14 @@ function validateBrowserAudio(stream) {
   if (Number(stream.sample_rate) !== 48_000 || stream.channels !== 2) throw new Error("browser input audio must be 48 kHz stereo");
 }
 
-function classifyFrameRate(stream, expectedMode, label) {
-  const measured = preferredFrameRate(stream);
+function classifyFrameRate(stream, expectedMode, label, packetFramesPerSecond = null) {
+  const metadataRates = [parseFrameRate(stream.avg_frame_rate), parseFrameRate(stream.r_frame_rate)].filter((value) => value !== null);
+  const measured = packetFramesPerSecond ?? preferredFrameRate(stream);
   const match = FRAME_RATE_MODES.find((mode) => Math.abs(measured - mode.value) <= 0.001);
   if (!match) throw new Error(`${label} frame rate must be exactly 29.97, 30, 59.94, or 60 fps; observed ${measured.toFixed(3)}`);
+  if (metadataRates.length > 0 && !metadataRates.some((value) => Math.abs(value - match.value) <= 0.001)) {
+    throw new Error(`${label} frame-rate metadata does not match its measured packet cadence`);
+  }
   if (expectedMode && match.id !== expectedMode) throw new Error(`${label} frame rate ${match.id} does not match expected ${expectedMode}`);
   return { ...match, measured };
 }
@@ -242,10 +247,14 @@ function validatePacketTrace(value, { label = "browser input", requireMonotonicP
   const keyframeGaps = keyframes.slice(1).map((value, index) => value - keyframes[index]);
   const maximumKeyframeIntervalSeconds = Math.max(...keyframeGaps);
   if (maximumKeyframeIntervalSeconds > 2.1) throw new Error(`${label} keyframe interval exceeds two seconds (${maximumKeyframeIntervalSeconds.toFixed(3)}s)`);
+  const durationSeconds = packets.at(-1).dts - packets[0].dts;
+  if (durationSeconds <= 0) throw new Error(`${label} packet trace duration is invalid`);
+  const packetFramesPerSecond = (packets.length - 1) / durationSeconds;
   return {
     packetCount: packets.length,
     keyframeCount: keyframes.length,
-    maximumKeyframeIntervalSeconds
+    maximumKeyframeIntervalSeconds,
+    packetFramesPerSecond: Number(packetFramesPerSecond.toFixed(3))
   };
 }
 
