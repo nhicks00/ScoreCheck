@@ -157,14 +157,14 @@ for signal_and_status in TERM:143 HUP:129 TERM:143 HUP:129 TERM:143 HUP:129 TERM
 done
 
 rm -f "$FAKE_FFMPEG_PID_FILE" "$FAKE_FFMPEG_STOP_FILE" "$FAKE_READY_COUNT_FILE"
-sh "$RUNNER" court1_preview --wait-ready court1_raw -- -i ignored -f null - &
+sh "$RUNNER" court1_preview --wait-ready court1_normalized -- -i ignored -f null - &
 RUNNER_PID=$!
 attempt=0
 while [ ! -f "$FAKE_FFMPEG_PID_FILE" ] && [ "$attempt" -lt 200 ]; do
   attempt=$((attempt + 1))
   sleep 0.02
 done
-[ -f "$FAKE_FFMPEG_PID_FILE" ] || fail "runner did not start after the raw path became ready"
+[ -f "$FAKE_FFMPEG_PID_FILE" ] || fail "runner did not start after the normalized path became ready"
 [ "$(cat "$FAKE_READY_COUNT_FILE")" -ge 3 ] \
   || fail "runner bypassed the readiness gate"
 ffmpeg_pid="$(cat "$FAKE_FFMPEG_PID_FILE")"
@@ -175,6 +175,8 @@ RUNNER_PID=""
 [ "$ready_status" -eq 143 ] || fail "readiness-gated runner exited with $ready_status"
 [ ! -e "$FFMPEG_PROGRESS_DIR/court1_preview.progress" ] \
   || fail "readiness-gated runner left stale progress state"
+grep -Fq 'court[1-8]_raw|court[1-8]_normalized)' "$RUNNER" \
+  || fail "runner does not allow both direct and normalized readiness paths"
 
 grep -Fq "trap 'exit_for_signal 130' INT" "$RUNNER" \
   || fail "runner does not install the MediaMTX SIGINT cleanup handler"

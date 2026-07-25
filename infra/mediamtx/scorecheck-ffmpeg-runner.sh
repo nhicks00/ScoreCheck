@@ -73,7 +73,7 @@ if [ "${1:-}" = "--wait-ready" ]; then
   [ "$#" -ge 2 ] || { echo "--wait-ready requires a path" >&2; exit 64; }
   wait_path="$2"
   case "$wait_path" in
-    court[1-8]_raw) ;;
+    court[1-8]_raw|court[1-8]_normalized) ;;
     *) echo "invalid readiness path" >&2; exit 64 ;;
   esac
   shift 2
