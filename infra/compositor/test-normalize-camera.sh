@@ -64,6 +64,8 @@ fi
 
 grep -Fq 'profiles: ["hevc-normalizer"]' "$COMPOSE" || fail "normalizer is not profile scoped"
 grep -Fq 'network_mode: host' "$COMPOSE" || fail "normalizer cannot use the private host route"
+grep -Fq 'entrypoint: ["/usr/local/bin/normalize-camera"]' "$COMPOSE" \
+  || fail "normalizer does not override the MediaMTX image entrypoint"
 grep -Fq 'COMPOSITOR_INGEST_PRIVATE_IP' "$DEPLOY" || fail "deployment does not bind the ingest private IPv4"
 grep -Fq 'COMPOSITOR_INGEST_HOST' "$DEPLOY" || fail "deployment does not bind the ingest TLS hostname"
 grep -Fq 'for optional in normalize-camera.sh rebind-ingest.sh start-normalizer.sh stop-normalizer.sh' "$DEPLOY" \

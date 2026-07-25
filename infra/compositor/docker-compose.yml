@@ -152,4 +152,4 @@ services:
     volumes:
       - ./normalize-camera.sh:/usr/local/bin/normalize-camera:ro
       - /var/lib/scorecheck-monitoring/ffmpeg:/monitoring/ffmpeg
-    command: ["/usr/local/bin/normalize-camera"]
+    entrypoint: ["/usr/local/bin/normalize-camera"]
