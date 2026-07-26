@@ -44,6 +44,9 @@ test("renders an isolated MediaMTX public host and matching TLS health proxy", (
   const previewRule = rendered.mediaConfig.match(/"~\^court\(\[1-8\]\)_preview\$":([\s\S]+?)runOnDemandRestart:/u)?.[1] ?? "";
   assert.match(previewRule, /scorecheck-preview-runner/u);
   assert.doesNotMatch(previewRule, /libx264|scale=|fps=/u);
+  const programRule = rendered.mediaConfig.match(/"~\^court\(\[1-8\]\)_program\$":([\s\S]+?)runOnDemandRestart:/u)?.[1] ?? "";
+  assert.match(programRule, /latency=3500000&rcvbuf=33554432/u);
+  assert.doesNotMatch(programRule, /[?&]ffs=/u);
   assert.doesNotMatch(rendered.mediaConfig, /__[A-Z0-9_]+__/u);
   assert.doesNotMatch(rendered.caddyConfig, /__[A-Z0-9_]+__/u);
 });
