@@ -38,6 +38,7 @@ const BROWSER_COUNTER_FIELDS = Object.freeze(["framesDropped", "freezeCount", "t
 const ROUTER_INTERVAL_MS = 60_000;
 const ROUTER_MAX_GAP_MS = 75_000;
 const ROUTER_MIN_MEMORY_KB = 65_536;
+const MONITOR_READ_RETRY_DELAYS_MS = Object.freeze([1_000, 2_500, 5_000]);
 const ROUTER_COLUMNS = Object.freeze([
   "timestamp", "speedify_state", "srt_route_dev", "rtmp_route_dev", "primary_rule_count", "guard_rule_count", "kill_switch",
   "camera_flow_count", "connectify_rx_bytes", "connectify_tx_bytes", "eth0_rx_bytes", "eth0_tx_bytes", "rmnet_rx_bytes",
@@ -539,13 +540,12 @@ export class ProductionSoakRuntime {
   }
 
   async #snapshot() {
-    const response = await this.fetchImpl(`${this.monitorOrigin}/v1/snapshot`, {
-      headers: { authorization: `Bearer ${this.monitorToken}` },
-      cache: "no-store",
-      signal: AbortSignal.timeout(15_000)
+    return fetchProductionMonitorSnapshot({
+      fetchImpl: this.fetchImpl,
+      monitorOrigin: this.monitorOrigin,
+      monitorToken: this.monitorToken,
+      sleep: this.sleep
     });
-    if (!response.ok) throw new Error(`production monitor snapshot returned HTTP ${response.status}`);
-    return assertProductionMonitorSnapshot(await response.json());
   }
 
   async #providerEvidence() {
@@ -611,6 +611,31 @@ export class ProductionSoakRuntime {
       }
     }
   }
+}
+
+export async function fetchProductionMonitorSnapshot({ fetchImpl, monitorOrigin, monitorToken, sleep = delay }) {
+  let response;
+  for (let attempt = 0; attempt <= MONITOR_READ_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      response = await fetchImpl(`${monitorOrigin}/v1/snapshot`, {
+        headers: { authorization: `Bearer ${monitorToken}` },
+        cache: "no-store",
+        signal: AbortSignal.timeout(15_000)
+      });
+    } catch (error) {
+      if (!retryableMonitorReadError(error) || attempt === MONITOR_READ_RETRY_DELAYS_MS.length) throw error;
+      await sleep(MONITOR_READ_RETRY_DELAYS_MS[attempt]);
+      continue;
+    }
+    if (response.ok) return assertProductionMonitorSnapshot(await response.json());
+    if (response.status < 500 || attempt === MONITOR_READ_RETRY_DELAYS_MS.length) throw new Error(`production monitor snapshot returned HTTP ${response.status}`);
+    await sleep(MONITOR_READ_RETRY_DELAYS_MS[attempt]);
+  }
+  throw new Error("production monitor snapshot retry loop exited unexpectedly");
+}
+
+function retryableMonitorReadError(error) {
+  return error instanceof TypeError || error?.name === "AbortError" || error?.name === "TimeoutError";
 }
 
 export function assertProductionMonitorSnapshot(value) {

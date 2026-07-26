@@ -8,6 +8,7 @@ import {
   assertProductionMonitorSnapshot,
   evaluateProductionSoak,
   evaluateSpeedifyEvidence,
+  fetchProductionMonitorSnapshot,
   outputConformanceProblems,
   persistentOutputProblems,
   productionIdleProblems,
@@ -78,6 +79,34 @@ test("hard-cuts the production soak client to monitoring snapshot contract v5", 
   const current = snapshot({ active: false });
   assert.equal(assertProductionMonitorSnapshot(current), current);
   assert.throws(() => assertProductionMonitorSnapshot({ ...current, version: 4 }), /snapshot contract is invalid/u);
+});
+
+test("retries bounded transient monitor reads but not authentication failures", async () => {
+  const current = snapshot({ active: false });
+  const sleeps = [];
+  let attempts = 0;
+  const result = await fetchProductionMonitorSnapshot({
+    monitorOrigin: "https://monitor.example.test",
+    monitorToken: "token",
+    sleep: async (milliseconds) => { sleeps.push(milliseconds); },
+    fetchImpl: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new TypeError("fetch failed");
+      return { ok: true, status: 200, async json() { return current; } };
+    }
+  });
+  assert.equal(result, current);
+  assert.equal(attempts, 2);
+  assert.deepEqual(sleeps, [1_000]);
+
+  let unauthorizedAttempts = 0;
+  await assert.rejects(() => fetchProductionMonitorSnapshot({
+    monitorOrigin: "https://monitor.example.test",
+    monitorToken: "bad-token",
+    sleep: async () => {},
+    fetchImpl: async () => { unauthorizedAttempts += 1; return { ok: false, status: 401 }; }
+  }), /HTTP 401/u);
+  assert.equal(unauthorizedAttempts, 1);
 });
 
 test("accepts an idle twelve-host baseline with all cameras off", () => {
