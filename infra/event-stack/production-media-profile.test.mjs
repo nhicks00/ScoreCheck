@@ -104,6 +104,21 @@ test("uses measured packet cadence when HEVC average-rate metadata is contradict
   }), /metadata does not match/);
 });
 
+test("allows bounded live packet-cadence variance without changing the exact assigned mode", () => {
+  const raw = probePayload({ codec: "hevc", framesPerSecond: 29.899 });
+  const browser = probePayload({ audioCodec: "opus", framesPerSecond: 29.899 });
+  assert.equal(selectProductionOutputProfile(raw, {
+    sourcePathMode: SOURCE_PATH_MODES.ISOLATED_HEVC_NORMALIZER,
+    expectedFrameRateMode: "30/1",
+    browserProbe: browser
+  }).source.frameRateMode, "30/1");
+  assert.throws(() => selectProductionOutputProfile(probePayload({ codec: "hevc", framesPerSecond: 28.9 }), {
+    sourcePathMode: SOURCE_PATH_MODES.ISOLATED_HEVC_NORMALIZER,
+    expectedFrameRateMode: "30/1",
+    browserProbe: browser
+  }), /measured packet cadence/);
+});
+
 test("probes the local MediaMTX raw path over protected SSH and returns the admitted profile", async () => {
   const calls = [];
   const raw = probePayload({ codec: "hevc", fieldOrder: "unknown", frames: progressiveFrames(30), frameRate: "60/1", framesPerSecond: 60 });

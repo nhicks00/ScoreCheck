@@ -215,8 +215,12 @@ function validateBrowserAudio(stream) {
 function classifyFrameRate(stream, expectedMode, label, packetFramesPerSecond = null) {
   const metadataRates = [parseFrameRate(stream.avg_frame_rate), parseFrameRate(stream.r_frame_rate)].filter((value) => value !== null);
   const measured = packetFramesPerSecond ?? preferredFrameRate(stream);
-  const match = FRAME_RATE_MODES.find((mode) => Math.abs(measured - mode.value) <= 0.001);
+  const match = expectedMode
+    ? FRAME_RATE_MODES.find((mode) => mode.id === expectedMode)
+    : FRAME_RATE_MODES.find((mode) => metadataRates.some((value) => Math.abs(value - mode.value) <= 0.001))
+      ?? FRAME_RATE_MODES.find((mode) => Math.abs(measured - mode.value) <= 0.5);
   if (!match) throw new Error(`${label} frame rate must be exactly 29.97, 30, 59.94, or 60 fps; observed ${measured.toFixed(3)}`);
+  if (Math.abs(measured - match.value) > 0.5) throw new Error(`${label} measured packet cadence does not match ${match.id}; observed ${measured.toFixed(3)} fps`);
   if (metadataRates.length > 0 && !metadataRates.some((value) => Math.abs(value - match.value) <= 0.001)) {
     throw new Error(`${label} frame-rate metadata does not match its measured packet cadence`);
   }
