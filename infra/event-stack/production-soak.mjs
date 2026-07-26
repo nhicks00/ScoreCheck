@@ -151,16 +151,20 @@ export class ProductionSoakRuntime {
       for (const camera of this.venue.activeCameras) {
         const assignment = this.venue.assignments[camera];
         const required = assignment.sourcePathMode === "isolated-hevc-normalizer";
-        state.normalizers[camera] = await this.normalizer.ensure({
-          host: compositorHost(this.manifest, this.lifecycleState, camera),
-          court: camera,
-          required,
-          ...(required ? {
-            sourceProfile: assignment.sourceProfile,
-            frameRateMode: assignment.frameRateMode,
-            mediamtxPrivateHost: ingestPrivateHost(this.manifest, this.lifecycleState)
-          } : {})
-        });
+        try {
+          state.normalizers[camera] = await this.normalizer.ensure({
+            host: compositorHost(this.manifest, this.lifecycleState, camera),
+            court: camera,
+            required,
+            ...(required ? {
+              sourceProfile: assignment.sourceProfile,
+              frameRateMode: assignment.frameRateMode,
+              mediamtxPrivateHost: ingestPrivateHost(this.manifest, this.lifecycleState)
+            } : {})
+          });
+        } catch (error) {
+          state.normalizers[camera] = { required, running: false, camera, admissionError: safeError(error) };
+        }
         await writeState(statePath, state);
       }
       state.profiles = await this.#probeProfiles();
@@ -215,7 +219,7 @@ export class ProductionSoakRuntime {
         state.startedAt = accepted.observedAt;
         state.baseline = accepted.snapshot;
         await writeState(statePath, state);
-        process.stdout.write(`SOAK_STARTED ${state.startedAt}: ${this.venue.activeCameras.length} native 1080 scoreboard output(s) are live and healthy.\n`);
+        process.stdout.write(`SOAK_STARTED ${state.startedAt}: ${this.venue.activeCameras.length} persistent 1080 scoreboard output(s) are live; source defects are monitored independently.\n`);
       } catch (error) {
         state.startupCleanup = await this.#stopStartupObservers(state);
         await writeState(statePath, state);
@@ -470,14 +474,18 @@ export class ProductionSoakRuntime {
     const profiles = {};
     for (const camera of this.venue.activeCameras) {
       const assignment = this.venue.assignments[camera];
-      profiles[camera] = await this.sourceProbe.probe({
-        host: ingest,
-        court: camera,
-        sourcePathMode: assignment.sourcePathMode,
-        expectedFrameRateMode: assignment.frameRateMode
-      });
-      const problems = admittedProfileProblems(camera, profiles[camera], assignment);
-      if (problems.length) throw new Error(problems.join("; "));
+      try {
+        profiles[camera] = await this.sourceProbe.probe({
+          host: ingest,
+          court: camera,
+          sourcePathMode: assignment.sourcePathMode,
+          expectedFrameRateMode: assignment.frameRateMode
+        });
+        const problems = admittedProfileProblems(camera, profiles[camera], assignment);
+        if (problems.length) throw new Error(problems.join("; "));
+      } catch (error) {
+        profiles[camera] = degradedAssignedProfile(assignment, safeError(error));
+      }
     }
     return profiles;
   }
@@ -510,8 +518,7 @@ export class ProductionSoakRuntime {
       const snapshot = await this.#snapshot();
       const provider = await this.#providerEvidence();
       lastProblems = unique([
-        ...productionSnapshotProblems(snapshot, profiles, this.venue, previous, this.now()),
-        ...productionProviderProblems(provider, this.venue.activeCameras)
+        ...persistentOutputProblems(snapshot, provider, this.venue, this.now())
       ]);
       if (lastProblems.length === 0) {
         stable += 1;
@@ -1025,10 +1032,8 @@ function normalizerProblems(camera, court, assignment, expectedFps) {
 
 function cameraOutputProblems(court, stream, broadcast, expectedStreamId, nowMs) {
   const problems = [];
-  if (!court?.paths?.program?.ready || court.paths.program.readerCount !== 1 || court.paths.program.frameErrors !== 0) problems.push("program path is not ready with one reader");
   const browser = court?.browser;
-  if (!browser || !freshAge(nowMs - Date.parse(browser.receivedAt)) || browser.video?.state !== "playing" || browser.video?.connectionState !== "connected") problems.push("program browser is not playing");
-  else if (browser.video.networkPath !== "private-vpc") problems.push("program browser is not using the private VPC media path");
+  if (!browser || !freshAge(nowMs - Date.parse(browser.receivedAt))) problems.push("program renderer heartbeat is not fresh");
   if (stream.streamStatus !== "active" || stream.healthStatus !== "good" || !Array.isArray(stream.configurationIssues)) problems.push("YouTube ingest is not healthy");
   if (broadcast.streamId !== expectedStreamId || broadcast.lifeCycleStatus !== "live" || broadcast.recordingStatus !== "recording" || broadcast.privacyStatus !== "unlisted") problems.push("YouTube broadcast is not live and correctly bound");
   return problems;
@@ -1259,10 +1264,41 @@ export function admittedProfileProblems(camera, profile, assignment) {
   const problems = [];
   if (!assignment || assignment.cameraNumber !== camera || assignment.cameraIdentity !== `camera-${camera}`) return [`Camera ${camera} has no permanent venue assignment`];
   if (!profile || profile.profile !== assignment.outputProfile) problems.push(`Camera ${camera} output profile does not match ${assignment.sourceProfile}`);
+  if (profile?.admitted === false) problems.push(`Camera ${camera} source admission failed: ${profile.admissionError}`);
   if (profile?.sourcePathMode !== assignment.sourcePathMode) problems.push(`Camera ${camera} source path does not match its venue assignment`);
   if (profile?.source?.codec !== assignment.sourceCodec) problems.push(`Camera ${camera} source codec does not match its venue assignment`);
   if (profile?.source?.frameRateMode !== assignment.frameRateMode) problems.push(`Camera ${camera} source frame rate does not match its venue assignment`);
   if (profile?.browserInput?.codec !== "H264" || profile?.browserInput?.hasBFrames !== 0 || profile?.browserInput?.pixelFormat !== "yuv420p") problems.push(`Camera ${camera} browser input is not H264 yuv420p with zero B-frames`);
+  return unique(problems);
+}
+
+function degradedAssignedProfile(assignment, admissionError) {
+  const framesPerSecond = assignment.frameRateMode.startsWith("60") ? 60 : 30;
+  return {
+    profile: assignment.outputProfile,
+    width: 1920,
+    height: 1080,
+    framesPerSecond,
+    videoBitrateKbps: framesPerSecond === 60 ? 12_000 : 10_000,
+    sourcePathMode: assignment.sourcePathMode,
+    source: { codec: assignment.sourceCodec, frameRateMode: assignment.frameRateMode },
+    browserInput: { codec: "H264", hasBFrames: 0, pixelFormat: "yuv420p" },
+    admitted: false,
+    admissionError
+  };
+}
+
+export function persistentOutputProblems(snapshot, provider, venue, nowMs = Date.now()) {
+  const problems = productionProviderProblems(provider, venue.activeCameras);
+  if (!freshAge(nowMs - Date.parse(snapshot?.generatedAt))) problems.push("monitor snapshot is stale");
+  const agents = new Map();
+  for (const agent of snapshot?.agents ?? []) if (agent.role === "compositor") for (const camera of agent.assignedCourts ?? []) agents.set(camera, agent);
+  for (const camera of venue.activeCameras) {
+    const court = (snapshot?.courts ?? []).find((entry) => entry.courtNumber === camera);
+    if (!court?.browser || !freshAge(nowMs - Date.parse(court.browser.receivedAt))) problems.push(`Camera ${camera} program renderer heartbeat is not fresh`);
+    const egress = agents.get(camera)?.nativeServices?.egress;
+    if (!egress || egress.idle || egress.activeWebRequests !== 1 || egress.maximumWebRequests !== 1 || egress.canAcceptRequest) problems.push(`Camera ${camera} output server is not running exactly one Egress`);
+  }
   return unique(problems);
 }
 

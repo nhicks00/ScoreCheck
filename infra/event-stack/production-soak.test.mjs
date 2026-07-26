@@ -9,6 +9,7 @@ import {
   evaluateProductionSoak,
   evaluateSpeedifyEvidence,
   outputConformanceProblems,
+  persistentOutputProblems,
   productionIdleProblems,
   productionProviderIdleProblems,
   productionProviderProblems,
@@ -191,6 +192,15 @@ test("requires six healthy variable-profile live YouTube broadcasts", () => {
   const problems = productionProviderProblems(provider, venue.activeCameras);
   assert.ok(problems.includes("Camera 3 YouTube ingest is not active and healthy"));
   assert.ok(problems.includes("Camera 5 YouTube broadcast is not live, recording, unlisted, and correctly bound"));
+});
+
+test("keeps persistent outputs admitted while a camera renderer shows its interruption slate", () => {
+  const monitored = snapshot({ active: true });
+  monitored.courts[0].paths = {};
+  monitored.courts[0].ffmpeg = {};
+  monitored.courts[0].browser.video.state = "waiting";
+  monitored.courts[0].browser.video.connectionState = "disconnected";
+  assert.deepEqual(persistentOutputProblems(monitored, providerEvidence(), venue, startedMs), []);
 });
 
 test("requires six idle variable-profile destinations before arming", () => {
