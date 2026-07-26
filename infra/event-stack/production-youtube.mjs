@@ -15,6 +15,7 @@ const OAUTH = "https://oauth2.googleapis.com/token";
 const COURTS = Object.freeze(Array.from({ length: 8 }, (_, index) => index + 1));
 const RATE_LIMIT_REASONS = new Set(["rateLimitExceeded", "userRequestsExceedRateLimit"]);
 const RATE_LIMIT_DELAYS_MS = Object.freeze([5_000, 10_000, 20_000, 40_000, 80_000, 120_000, 180_000, 240_000, 300_000]);
+const READ_RETRY_DELAYS_MS = Object.freeze([1_000, 2_500, 5_000]);
 
 if (process.argv[1] && resolve(process.argv[1]) === SCRIPT_PATH) {
   main().catch((error) => {
@@ -164,14 +165,22 @@ export class ProductionYouTubeProvider {
   }
 
   async request(method, path, body = undefined) {
-    for (let attempt = 0; attempt <= RATE_LIMIT_DELAYS_MS.length; attempt += 1) {
+    let rateLimitAttempt = 0;
+    let readAttempt = 0;
+    for (;;) {
       try { return await this.requestOnce(method, path, body); }
       catch (error) {
-        if (!(error instanceof YouTubeProviderError) || !RATE_LIMIT_REASONS.has(error.reason) || attempt === RATE_LIMIT_DELAYS_MS.length) throw error;
-        await this.sleep(RATE_LIMIT_DELAYS_MS[attempt]);
+        if (error instanceof YouTubeProviderError && RATE_LIMIT_REASONS.has(error.reason) && rateLimitAttempt < RATE_LIMIT_DELAYS_MS.length) {
+          await this.sleep(RATE_LIMIT_DELAYS_MS[rateLimitAttempt++]);
+          continue;
+        }
+        if (method === "GET" && retryableReadError(error) && readAttempt < READ_RETRY_DELAYS_MS.length) {
+          await this.sleep(READ_RETRY_DELAYS_MS[readAttempt++]);
+          continue;
+        }
+        throw error;
       }
     }
-    throw new Error("YouTube request retry loop exited unexpectedly");
   }
 
   async requestOnce(method, path, body = undefined) {
@@ -203,6 +212,12 @@ export class ProductionYouTubeProvider {
     this.accessTokenExpiresAt = this.now() + payload.expires_in * 1_000;
     return this.accessToken;
   }
+}
+
+function retryableReadError(error) {
+  return error instanceof YouTubeProviderError
+    ? error.status >= 500
+    : error instanceof TypeError || error?.name === "AbortError" || error?.name === "TimeoutError";
 }
 
 export async function prepareProductionYouTube({ provider, event, activeCameras, output, now = () => Date.now() }) {

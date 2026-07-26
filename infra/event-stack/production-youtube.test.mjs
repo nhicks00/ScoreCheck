@@ -239,3 +239,28 @@ test("refreshes the YouTube access token before it expires during a multi-hour s
   assert.equal(await provider.token(), "token-2");
   assert.equal(tokenRequests, 2);
 });
+
+test("retries bounded read-only YouTube transport failures without replaying mutations", async () => {
+  let getAttempts = 0;
+  const sleeps = [];
+  const provider = new ProductionYouTubeProvider({
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    refreshToken: "refresh-token",
+    sleep: async (milliseconds) => { sleeps.push(milliseconds); },
+    fetchImpl: async (url) => {
+      if (url === "https://oauth2.googleapis.com/token") return { ok: true, status: 200, async json() { return { access_token: "token", expires_in: 3600 }; } };
+      getAttempts += 1;
+      if (getAttempts === 1) throw new TypeError("fetch failed");
+      return { ok: true, status: 200, async json() { return { items: [stream(1)] }; } };
+    }
+  });
+  assert.equal((await provider.request("GET", "/test")).items[0].id, "stream-1");
+  assert.equal(getAttempts, 2);
+  assert.deepEqual(sleeps, [1_000]);
+
+  let postAttempts = 0;
+  provider.requestOnce = async () => { postAttempts += 1; throw new TypeError("fetch failed"); };
+  await assert.rejects(() => provider.transitionBroadcast("broadcast-1", "live"), /fetch failed/u);
+  assert.equal(postAttempts, 1);
+});
