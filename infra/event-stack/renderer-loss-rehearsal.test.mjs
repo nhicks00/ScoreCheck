@@ -346,7 +346,7 @@ function browser(sampledMs, disconnected) {
 }
 
 function path(branch, readerCount) {
-  return { branch, ready: true, readerCount, inboundBitrateBps: 8_000_000, frameErrors: 0, videoCodec: "H264", videoWidth: 1920, videoHeight: 1080, audioCodec: "AAC", audioSampleRateHz: 48_000, audioChannelCount: 2 };
+  return { branch, ready: true, readerCount, inboundBitrateBps: 5_000_000, frameErrors: 0, videoCodec: "H264", videoWidth: 1920, videoHeight: 1080, audioCodec: "AAC", audioSampleRateHz: 48_000, audioChannelCount: 2 };
 }
 
 function ffmpeg(speedRatio) {

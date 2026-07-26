@@ -21,11 +21,11 @@ test("admits eight standard 1080p30 cameras only with 30 percent bonded-upload r
   assert.deepEqual(result.activeCameras, [1, 2, 3, 4, 5, 6, 7, 8]);
   assert.deepEqual(result.priorityOrder, [1, 2, 3, 4, 5, 6, 7, 8]);
   assert.deepEqual(result.priorityTiers, { TIER_1: [1], TIER_2: [2, 3, 4, 5, 6], TIER_3: [7, 8] });
-  assert.equal(result.aggregateMaximumSourceBitrateBps, 64_000_000);
-  assert.equal(result.requiredSustainedUploadMbps, 83.2);
-  assert.equal(result.requiredSustainedUploadMbpsRounded, 84);
+  assert.equal(result.aggregateMaximumSourceBitrateBps, 40_000_000);
+  assert.equal(result.requiredSustainedUploadMbps, 52);
+  assert.equal(result.requiredSustainedUploadMbpsRounded, 52);
   assert.equal(isSyntheticCloudFixtureVenue(profile), true);
-  profile.uploadMeasurement.sustainedUploadMbps = 83.1;
+  profile.uploadMeasurement.sustainedUploadMbps = 51.9;
   assert.equal(evaluateVenueAdmission(profile).passed, false);
 });
 
@@ -68,7 +68,7 @@ test("keeps permanent identities while allowing an event-specific active camera 
     sourcePathMode: "isolated-hevc-normalizer",
     sourceCodec: "H265",
     sourceProfile: "CONSTRAINED_1080P30",
-    sourceRateCapMbps: 6
+    sourceRateCapMbps: 3
   };
   profile.cameras[6] = { cameraNumber: 7, cameraIdentity: "camera-7", publishPath: "court7_raw", enabled: false };
   profile.cameras[7] = { cameraNumber: 8, cameraIdentity: "camera-8", publishPath: "court8_raw", enabled: false };
@@ -85,7 +85,7 @@ test("keeps permanent identities while allowing an event-specific active camera 
 test("requires an explicit operational priority tier independent of output quality", () => {
   const profile = createSyntheticRehearsalVenueProfile("priority-tier");
   profile.cameras[0].sourceProfile = "CONSTRAINED_1080P30";
-  profile.cameras[0].sourceRateCapMbps = 6;
+  profile.cameras[0].sourceRateCapMbps = 3;
   profile.cameras[0].priorityTier = "TIER_1";
   profile.cameras[1].sourceProfile = "PRIORITY_1080P60";
   profile.cameras[1].frameRateMode = "60/1";
@@ -126,7 +126,7 @@ test("rejects missing venue isolation, rate caps, thermal headroom, and protecte
   profile.physicalReadiness.routerTemperatureC = 35;
   profile.cameras[0].sourceRateCapMbps = 25;
   assert.throws(() => validateVenueProfile(profile), /rate cap/u);
-  profile.cameras[0].sourceRateCapMbps = 8;
+  profile.cameras[0].sourceRateCapMbps = 5;
   profile.cameras[0].powerProtected = false;
   assert.throws(() => validateVenueProfile(profile), /power is not protected/u);
 });

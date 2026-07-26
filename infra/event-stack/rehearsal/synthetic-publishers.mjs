@@ -7,9 +7,8 @@ import { fileURLToPath } from "node:url";
 const COURTS = Object.freeze(Array.from({ length: 8 }, (_, index) => index + 1));
 const MARKER = /^scorecheck-rehearsal-[a-zA-Z0-9-]{8,80}-camera-[1-8]$/;
 const FIXTURE_DURATION_SECONDS = 12;
-// The production source-admission floor is 5 Mbps for STANDARD_1080P30. Encode
-// each fixture at that floor so synthetic qualification exercises the same
-// bitrate contract as an admitted event source.
+// Encode at the STANDARD_1080P30 cap so synthetic qualification exercises the
+// complete admitted source-rate window.
 const FIXTURE_VIDEO_BITRATE_KBPS = 5_000;
 const SRT_INPUT_BANDWIDTH_BYTES_PER_SECOND = 800_000;
 const PROGRESS_FRESHNESS_MS = 5_000;

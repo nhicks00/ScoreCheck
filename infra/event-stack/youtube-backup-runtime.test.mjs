@@ -100,7 +100,7 @@ test("owns one continuous viewer session and fails closed when a resumed process
 function fixture({ label, primaryExpected, backupExpected }) {
   const venue = {
     passed: true,
-    requiredSustainedUploadMbps: 62.4,
+    requiredSustainedUploadMbps: 39,
     activeCameras: [1, 2, 3, 4, 5, 6],
     inactiveCameras: [7, 8],
     assignments: Object.fromEntries(Array.from({ length: 6 }, (_, index) => [index + 1, {
@@ -108,8 +108,8 @@ function fixture({ label, primaryExpected, backupExpected }) {
       cameraIdentity: `camera-${index + 1}`,
       sourceProfile: "STANDARD_1080P30",
       outputProfile: "1080p30",
-      minimumSourceBitrateBps: 5_000_000,
-      maximumSourceBitrateBps: 8_000_000,
+      minimumSourceBitrateBps: 4_000_000,
+      maximumSourceBitrateBps: 5_000_000,
       sourceCodec: "H264",
       frameRateMode: "30/1",
       sourcePathMode: "direct-h264"
@@ -168,7 +168,7 @@ function monitorSnapshot({ primaryExpected, backupExpected }) {
 }
 
 function path(readerCount) {
-  return { ready: true, readerCount, inboundBitrateBps: 8_000_000, frameErrors: 0, videoCodec: "H264", videoWidth: 1920, videoHeight: 1080, audioCodec: "AAC", audioSampleRateHz: 48_000, audioChannelCount: 2 };
+  return { ready: true, readerCount, inboundBitrateBps: 5_000_000, frameErrors: 0, videoCodec: "H264", videoWidth: 1920, videoHeight: 1080, audioCodec: "AAC", audioSampleRateHz: 48_000, audioChannelCount: 2 };
 }
 function ffmpeg(speedRatio) { return { framesPerSecond: 30, droppedFrames: 0, duplicatedFrames: 0, speedRatio }; }
 function browser(camera) {

@@ -319,7 +319,7 @@ function snapshot({ active = true, sampledMs = startedMs, framesMultiplier = 0 }
       const fps = profiles[camera]?.framesPerSecond ?? 30;
       return {
         courtNumber: camera,
-        paths: running ? { raw: path("raw", 2), preview: path("preview", 1), program: path("program", 1) } : {},
+        paths: running ? { raw: path("raw", 2, camera <= 2 ? 8_000_000 : 5_000_000), preview: path("preview", 1), program: path("program", 1) } : {},
         ffmpeg: running ? { preview: ffmpeg(fps, null), program: ffmpeg(fps, 1) } : {},
         browser: running ? browser(camera, sampledMs, framesMultiplier * fps) : null
       };
@@ -327,12 +327,12 @@ function snapshot({ active = true, sampledMs = startedMs, framesMultiplier = 0 }
   };
 }
 
-function path(branch, readerCount) {
+function path(branch, readerCount, inboundBitrateBps = 5_000_000) {
   return {
     branch,
     ready: true,
     readerCount,
-    inboundBitrateBps: 8_000_000,
+    inboundBitrateBps,
     frameErrors: 0,
     videoCodec: "H264",
     videoWidth: 1920,

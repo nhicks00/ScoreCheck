@@ -14,14 +14,14 @@ export const VENUE_SOURCE_PROFILES = Object.freeze({
   CONSTRAINED_1080P30: Object.freeze({
     outputProfile: "1080p30",
     frameRateModes: Object.freeze(["30000/1001", "30/1"]),
-    minimumSourceBitrateBps: 3_500_000,
-    maximumSourceBitrateBps: 6_000_000
+    minimumSourceBitrateBps: 2_500_000,
+    maximumSourceBitrateBps: 3_000_000
   }),
   STANDARD_1080P30: Object.freeze({
     outputProfile: "1080p30",
     frameRateModes: Object.freeze(["30000/1001", "30/1"]),
-    minimumSourceBitrateBps: 5_000_000,
-    maximumSourceBitrateBps: 8_000_000
+    minimumSourceBitrateBps: 4_000_000,
+    maximumSourceBitrateBps: 5_000_000
   }),
   PRIORITY_1080P60: Object.freeze({
     outputProfile: "1080p60",
@@ -160,7 +160,7 @@ export function createSyntheticRehearsalVenueProfile(event, now = new Date()) {
       sourceProfile: "STANDARD_1080P30",
       frameRateMode: "30/1",
       venueLink: "WIRED_ETHERNET",
-      sourceRateCapMbps: 8,
+      sourceRateCapMbps: 5,
       priorityTier: cameraNumber === 1 ? "TIER_1" : cameraNumber <= 6 ? "TIER_2" : "TIER_3",
       powerProtected: true,
       legacyTransportApproved: false
