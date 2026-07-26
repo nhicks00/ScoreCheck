@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  assertRendererCleanupLifecycleState,
   buildProductionRendererEnvironment,
   destroyProductionRenderer,
   prepareProductionRenderer,
@@ -81,6 +82,13 @@ test("deletes only the exact renderer project after the caller provides the even
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("allows renderer cleanup after either terminal lifecycle outcome", () => {
+  assertRendererCleanupLifecycleState({ event, phase: "destroyed" }, event);
+  assertRendererCleanupLifecycleState({ event, phase: "aborted" }, event);
+  assert.throws(() => assertRendererCleanupLifecycleState({ event, phase: "ready" }, event), /terminal event lifecycle state/);
+  assert.throws(() => assertRendererCleanupLifecycleState({ event: "other-event", phase: "aborted" }, event), /terminal event lifecycle state/);
 });
 
 function fakeProvider(calls) {

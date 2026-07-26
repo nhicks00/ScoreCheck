@@ -648,8 +648,9 @@ node infra/event-stack/production-renderer.mjs prepare \
 ```
 
 Pass `/absolute/protected/renderer/next-event-slug/renderer-binding.json` to
-the bundle generator. After the matching event lifecycle reaches `destroyed`,
-delete that exact project with the event-scoped confirmation:
+the bundle generator. After the matching event lifecycle reaches a terminal
+`destroyed` or `aborted` state, delete that exact project with the event-scoped
+confirmation:
 
 ```bash
 node infra/event-stack/production-renderer.mjs destroy \

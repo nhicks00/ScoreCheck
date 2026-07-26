@@ -51,7 +51,7 @@ async function main() {
     return;
   }
   const state = JSON.parse(await readFile(options.state, "utf8"));
-  if (state.phase !== "destroyed" || state.event !== options.event) throw new Error("renderer deletion requires the matching destroyed event lifecycle state");
+  assertRendererCleanupLifecycleState(state, options.event);
   const providerEnv = await loadProtectedEnv(options.credentialsEnv);
   const provider = new VercelRehearsalProvider({
     token: required(providerEnv.VERCEL_TOKEN, "VERCEL_TOKEN"),
@@ -131,6 +131,12 @@ export async function destroyProductionRenderer({ event, output, confirmation, p
   const result = { schemaVersion: 1, status: "DESTROYED", event, destroyedAt: now().toISOString(), projectId: state.project.id };
   await writeProtectedJson(join(root, "renderer-destroyed.json"), result);
   return result;
+}
+
+export function assertRendererCleanupLifecycleState(state, event) {
+  if (!new Set(["aborted", "destroyed"]).has(state?.phase) || state?.event !== event) {
+    throw new Error("renderer deletion requires the matching terminal event lifecycle state");
+  }
 }
 
 export function redactRendererState(state) {
