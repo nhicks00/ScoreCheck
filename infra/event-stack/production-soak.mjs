@@ -31,6 +31,8 @@ const SAMPLE_INTERVAL_MS = 5_000;
 const PROVIDER_INTERVAL_MS = 60_000;
 const MAX_SAMPLE_LAG_MS = 1_000;
 const MAX_MONITOR_AGE_MS = 15_000;
+const SOURCE_BITRATE_WINDOW_MS = 60_000;
+const SOURCE_BITRATE_EXTREME_FACTOR = 1.5;
 const BROWSER_IDENTITY_FIELDS = Object.freeze(["pageLoadedAt", "pageBuildVersion"]);
 const BROWSER_COUNTER_FIELDS = Object.freeze(["framesDropped", "freezeCount", "totalFreezesDurationMs", "packetsLost", "reconnectCount", "reloadCount"]);
 const ROUTER_INTERVAL_MS = 60_000;
@@ -291,6 +293,9 @@ export class ProductionSoakRuntime {
         const provider = includeProvider ? await this.#providerEvidence() : null;
         const viewer = await flushViewer();
         const problems = productionSnapshotProblems(snapshot, state.profiles, this.venue, previous, observedMs);
+        const bitrateStep = sourceBitrateWindowStep(state.sourceBitrateWindows, snapshot, this.venue, observedMs);
+        state.sourceBitrateWindows = bitrateStep.windows;
+        problems.push(...bitrateStep.problems);
         if (includeProvider && !(await this.sentinel.inspect(state.sentinel.output))) problems.push("external platform sentinel is not running");
         if (includeProvider && !(await this.criticalLogs.inspect(state.criticalLogs.output))) problems.push("external critical-log exporter is not running");
         const supervisorStep = programSupervisorStep(state.supervisor, snapshot, this.venue.activeCameras, observedMs);
@@ -629,13 +634,41 @@ export function productionRawProblems(snapshot, venue, nowMs = Date.now()) {
     if (!court) continue;
     const raw = court.paths?.raw;
     if (!raw?.ready) problems.push(`Camera ${camera} raw video is not ready`);
-    if ((raw?.inboundBitrateBps ?? 0) < assignment.minimumSourceBitrateBps || (raw?.inboundBitrateBps ?? 0) > assignment.maximumSourceBitrateBps) problems.push(`Camera ${camera} raw bitrate is outside its admitted ${assignment.minimumSourceBitrateBps}-${assignment.maximumSourceBitrateBps} bps range`);
+    if (!Number.isFinite(raw?.inboundBitrateBps) || raw.inboundBitrateBps <= 0) problems.push(`Camera ${camera} raw bitrate is not positive`);
     if (raw?.frameErrors !== 0) problems.push(`Camera ${camera} raw frame errors are nonzero`);
     if (raw?.videoCodec !== assignment.sourceCodec || raw?.videoWidth !== 1920 || raw?.videoHeight !== 1080) problems.push(`Camera ${camera} raw video does not match its admitted ${assignment.sourceCodec} 1920x1080 profile`);
     if (raw?.audioCodec !== "AAC" || raw?.audioSampleRateHz !== 48_000 || raw?.audioChannelCount !== 2) problems.push(`Camera ${camera} raw audio is not AAC 48kHz stereo`);
   }
   for (const camera of venue.inactiveCameras) inactiveCameraProblems(snapshot, camera, problems);
   return unique(problems);
+}
+
+export function sourceBitrateWindowStep(currentWindows, snapshot, venue, nowMs = Date.now()) {
+  validateVenueRuntime(venue);
+  if (!Number.isFinite(nowMs)) throw new Error("source bitrate observation time is invalid");
+  const windows = structuredClone(currentWindows ?? {});
+  const problems = [];
+  for (const camera of venue.activeCameras) {
+    const assignment = venue.assignments[camera];
+    const court = (snapshot?.courts ?? []).find((entry) => entry.courtNumber === camera);
+    const bitrateBps = court?.paths?.raw?.inboundBitrateBps;
+    if (!Number.isFinite(bitrateBps) || bitrateBps <= 0) continue;
+    const previous = Array.isArray(windows[camera]) ? windows[camera] : [];
+    const samples = [...previous, { observedAtMs: nowMs, bitrateBps }]
+      .filter((entry) => Number.isFinite(entry?.observedAtMs) && Number.isFinite(entry?.bitrateBps) && entry.observedAtMs >= nowMs - SOURCE_BITRATE_WINDOW_MS && entry.observedAtMs <= nowMs)
+      .toSorted((left, right) => left.observedAtMs - right.observedAtMs);
+    windows[camera] = samples;
+    const ceiling = assignment.maximumSourceBitrateBps;
+    if (bitrateBps > ceiling * SOURCE_BITRATE_EXTREME_FACTOR) {
+      problems.push(`Camera ${camera} raw bitrate ${Math.round(bitrateBps)} bps is an extreme spike above its ${ceiling} bps observed ceiling`);
+      continue;
+    }
+    const spanMs = samples.length > 1 ? samples.at(-1).observedAtMs - samples[0].observedAtMs : 0;
+    if (spanMs < SOURCE_BITRATE_WINDOW_MS) continue;
+    const average = samples.reduce((sum, entry) => sum + entry.bitrateBps, 0) / samples.length;
+    if (average > ceiling) problems.push(`Camera ${camera} raw bitrate averaged ${Math.round(average)} bps above its ${ceiling} bps observed ceiling for 60 seconds`);
+  }
+  return { windows, problems: unique(problems) };
 }
 
 export function productionSnapshotProblems(snapshot, profiles, venue, previous = null, nowMs = Date.now()) {
@@ -1123,6 +1156,7 @@ function createState({ event, evidence, nowMs, minimumDurationMs, maximumDuratio
     sampleCount: 0,
     problemCount: 0,
     maximumGapMs: 0,
+    sourceBitrateWindows: {},
     consecutiveProblemSamples: 0,
     notificationOpen: false,
     notifications: [],

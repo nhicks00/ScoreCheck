@@ -14,6 +14,7 @@ import {
   productionProviderProblems,
   productionRawProblems,
   productionRouterPreflightProblems,
+  sourceBitrateWindowStep,
   productionSnapshotProblems,
   viewerEvidenceProblems
 } from "./production-soak.mjs";
@@ -106,8 +107,36 @@ test("allows bounded audio and mux overhead above a constrained camera encoder c
   const current = snapshot({ sampledMs: startedMs + 5_000, framesMultiplier: 5 });
   current.courts[2].paths.raw.inboundBitrateBps = 3_225_000;
   assert.deepEqual(productionRawProblems(current, constrainedVenue, startedMs + 5_000), []);
-  current.courts[2].paths.raw.inboundBitrateBps = 3_500_001;
-  assert.ok(productionRawProblems(current, constrainedVenue, startedMs + 5_000).some((entry) => entry.includes("Camera 3 raw bitrate")));
+  current.courts[2].paths.raw.inboundBitrateBps = 0;
+  assert.ok(productionRawProblems(current, constrainedVenue, startedMs + 5_000).some((entry) => entry.includes("Camera 3 raw bitrate is not positive")));
+});
+
+test("treats camera bitrate as VBR and fails only sustained excess or an extreme spike", () => {
+  const constrainedProfile = structuredClone(venueProfile);
+  constrainedProfile.cameras[2].sourceProfile = "CONSTRAINED_1080P30";
+  constrainedProfile.cameras[2].sourceRateCapMbps = 3;
+  const constrainedVenue = { ...evaluateVenueAdmission(constrainedProfile), sha256: "c".repeat(64) };
+  const current = snapshot({ sampledMs: startedMs, framesMultiplier: 5 });
+  let windows = {};
+  for (let seconds = 0; seconds <= 60; seconds += 5) {
+    current.courts[2].paths.raw.inboundBitrateBps = seconds === 25 ? 4_000_000 : seconds === 40 ? 1_000_000 : 3_225_000;
+    const step = sourceBitrateWindowStep(windows, current, constrainedVenue, startedMs + seconds * 1_000);
+    windows = step.windows;
+    assert.deepEqual(step.problems, []);
+  }
+
+  windows = {};
+  for (let seconds = 0; seconds <= 60; seconds += 5) {
+    current.courts[2].paths.raw.inboundBitrateBps = 3_600_000;
+    const step = sourceBitrateWindowStep(windows, current, constrainedVenue, startedMs + seconds * 1_000);
+    windows = step.windows;
+    if (seconds < 60) assert.deepEqual(step.problems, []);
+    else assert.ok(step.problems.some((entry) => entry.includes("averaged 3600000 bps")));
+  }
+
+  current.courts[2].paths.raw.inboundBitrateBps = 5_250_001;
+  const extreme = sourceBitrateWindowStep({}, current, constrainedVenue, startedMs);
+  assert.ok(extreme.problems.some((entry) => entry.includes("extreme spike")));
 });
 
 test("requires an isolated compositor normalizer only for an admitted HEVC camera", () => {
