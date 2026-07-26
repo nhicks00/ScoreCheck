@@ -27,6 +27,7 @@ test("renders an isolated MediaMTX public host and matching TLS health proxy", (
     environment[`MEDIAMTX_COURT_${court}_BROWSER_SOURCE`] = court === 2 ? "normalized" : "raw";
   }
   const rendered = renderMediaMtxConfigs({ mediaTemplate, caddyTemplate, environment });
+  assert.match(rendered.mediaConfig, /writeQueueSize: 1024/u);
   assert.match(rendered.mediaConfig, /webrtcAdditionalHosts: \["192\.0\.2\.20", "preview-rehearsal-1234\.beachvolleyballmedia\.com", "10\.120\.0\.10"\]/u);
   assert.match(rendered.mediaConfig, /rtspAddress: ":8554"/u);
   assert.match(rendered.mediaConfig, /ips: \["10\.120\.0\.11"\][\s\S]+path: "~\^court\(1\|2\|5\|6\)_raw\$"/u);

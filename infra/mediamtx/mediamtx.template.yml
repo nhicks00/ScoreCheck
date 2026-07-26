@@ -7,6 +7,11 @@
 
 logLevel: info
 
+# Normalized HEVC recovery can briefly release a burst of H.264 frames after a
+# damaged source interval. Keep one extra default-sized packet window so those
+# bounded bursts do not repeatedly evict healthy RTSP, SRT, or WHEP readers.
+writeQueueSize: 1024
+
 api: yes
 apiAddress: 127.0.0.1:9997
 metrics: yes
