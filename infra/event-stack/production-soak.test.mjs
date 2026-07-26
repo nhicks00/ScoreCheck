@@ -8,6 +8,7 @@ import {
   assertProductionMonitorSnapshot,
   evaluateProductionSoak,
   evaluateSpeedifyEvidence,
+  ensureStartupObserver,
   fetchProductionMonitorSnapshot,
   outputConformanceProblems,
   persistentOutputProblems,
@@ -107,6 +108,106 @@ test("retries bounded transient monitor reads but not authentication failures", 
     fetchImpl: async () => { unauthorizedAttempts += 1; return { ok: false, status: 401 }; }
   }), /HTTP 401/u);
   assert.equal(unauthorizedAttempts, 1);
+});
+
+test("reconciles a labeled-running startup observer against its actual process", async () => {
+  const state = {
+    runId: "run-1",
+    sampler: { status: "running", pid: 100, output: "/evidence/pool-host-samples.jsonl" }
+  };
+  const writes = [];
+  let starts = 0;
+  const result = await ensureStartupObserver({
+    state,
+    statePath: "/evidence/state.json",
+    key: "sampler",
+    runtime: { inspect: async () => ({ pid: 100 }) },
+    evidenceRoot: "/evidence",
+    start: async () => { starts += 1; },
+    now: () => startedMs,
+    persist: async (_path, value) => { writes.push(structuredClone(value)); }
+  });
+  assert.equal(result.pid, 100);
+  assert.equal(result.adopted, true);
+  assert.equal(starts, 0);
+  assert.equal(writes.at(-1).observerStarts.sampler.status, "running");
+});
+
+test("restarts a dead startup observer in a persisted fresh evidence generation", async () => {
+  const state = {
+    runId: "run-2",
+    criticalLogs: { status: "running", pid: 200, output: "/evidence/critical-logs.jsonl" }
+  };
+  const writes = [];
+  const starts = [];
+  const result = await ensureStartupObserver({
+    state,
+    statePath: "/evidence/state.json",
+    key: "criticalLogs",
+    runtime: { inspect: async () => null },
+    evidenceRoot: "/evidence",
+    start: async (directory) => {
+      starts.push(directory);
+      assert.equal(writes.at(-1).observerStarts.criticalLogs.status, "starting");
+      return { status: "running", pid: 201, output: `${directory}/critical-logs.jsonl` };
+    },
+    now: () => startedMs,
+    persist: async (_path, value) => { writes.push(structuredClone(value)); }
+  });
+  assert.deepEqual(starts, ["/evidence/observer-generations/criticalLogs-000-run-2"]);
+  assert.equal(result.pid, 201);
+  assert.equal(state.observerStarts.criticalLogs.status, "running");
+  assert.equal(writes.at(-1).observerStarts.criticalLogs.output, result.output);
+});
+
+test("adopts an interrupted startup attempt without creating another generation", async () => {
+  const directory = "/evidence/observer-generations/sentinel-003-run-3";
+  const state = {
+    runId: "run-3",
+    sentinel: { status: "running", pid: 300, output: "/evidence/platform-sentinel.jsonl" },
+    observerStarts: {
+      sentinel: { generation: 3, evidenceDirectory: directory, status: "starting", preparedAt: new Date(startedMs).toISOString() }
+    }
+  };
+  const starts = [];
+  const result = await ensureStartupObserver({
+    state,
+    statePath: "/evidence/state.json",
+    key: "sentinel",
+    runtime: { inspect: async () => { throw new Error("the stale owner must not be inspected"); } },
+    evidenceRoot: "/evidence",
+    start: async (value) => {
+      starts.push(value);
+      return { status: "running", pid: 301, output: `${value}/platform-sentinel.jsonl`, adopted: true };
+    },
+    now: () => startedMs,
+    persist: async () => {}
+  });
+  assert.deepEqual(starts, [directory]);
+  assert.equal(result.pid, 301);
+  assert.equal(state.observerStarts.sentinel.generation, 3);
+});
+
+test("increments the startup observer generation after a failed attempt", async () => {
+  const state = {
+    runId: "run-4",
+    sampler: { status: "running", pid: 400, output: "/evidence/pool-host-samples.jsonl" },
+    observerStarts: {
+      sampler: { generation: 2, evidenceDirectory: "/evidence/observer-generations/sampler-002-run-4", status: "failed" }
+    }
+  };
+  const result = await ensureStartupObserver({
+    state,
+    statePath: "/evidence/state.json",
+    key: "sampler",
+    runtime: { inspect: async () => null },
+    evidenceRoot: "/evidence",
+    start: async (directory) => ({ status: "running", pid: 401, output: `${directory}/pool-host-samples.jsonl` }),
+    now: () => startedMs,
+    persist: async () => {}
+  });
+  assert.match(result.output, /sampler-003-run-4/u);
+  assert.equal(state.observerStarts.sampler.generation, 3);
 });
 
 test("accepts an idle twelve-host baseline with all cameras off", () => {

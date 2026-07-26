@@ -24,6 +24,7 @@ import { loadCommentaryQualification } from "./commentary-qualification.mjs";
 import { initialProgramSupervisor, programSupervisorStep } from "./program-supervisor.mjs";
 import { evaluatePlatformSentinelEvidence, PlatformSentinelRuntime } from "./platform-sentinel-runtime.mjs";
 import { CriticalLogRuntime, evaluateCriticalLogEvidence } from "./critical-log-runtime.mjs";
+import { MonitoringExpectationRuntime } from "./monitoring-expectation-runtime.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(SCRIPT_PATH), "../..");
@@ -99,6 +100,10 @@ export class ProductionSoakRuntime {
       sampler: dependencies.sampler ?? new PoolSamplerRuntime({ repoRoot: REPO_ROOT, sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
       sentinel: dependencies.sentinel ?? new PlatformSentinelRuntime({ repoRoot: REPO_ROOT, environment: join(profile.secrets, "observability.env") }),
       criticalLogs: dependencies.criticalLogs ?? new CriticalLogRuntime({ repoRoot: REPO_ROOT, sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
+      expectations: dependencies.expectations ?? new MonitoringExpectationRuntime({
+        supabaseUrl: required(monitorEnvironment.SUPABASE_URL, "Supabase URL"),
+        serviceRoleKey: required(monitorEnvironment.SUPABASE_SERVICE_ROLE_KEY, "Supabase service-role key")
+      }),
       router: dependencies.router ?? new RouterSoakRuntime({ host: options.router }),
       fetchImpl: dependencies.fetchImpl ?? globalThis.fetch,
       sleep: dependencies.sleep ?? delay,
@@ -180,21 +185,52 @@ export class ProductionSoakRuntime {
 
     if (state.phase === "STARTING") {
       try {
-        const observerEvidenceDirectory = state.startupCleanup?.stoppedAt
-          ? join(this.options.evidence, `startup-retry-${state.runId}`)
-          : this.options.evidence;
-        if (state.sampler?.status === "stopped") {
-          state.sampler = await this.sampler.ensure({ manifest: this.manifest, lifecycleState: this.lifecycleState, evidenceDirectory: observerEvidenceDirectory });
-          await writeState(statePath, state);
+        const monitoringBinding = await this.expectations.resolve(this.venue.activeCameras);
+        if (state.monitoringBinding && stableJson(state.monitoringBinding) !== stableJson(monitoringBinding)) {
+          throw new Error("production monitoring active event or camera mapping changed during startup");
         }
-        state.sentinel = await this.sentinel.ensure({ manifest: this.manifest, renderer: this.renderer, evidenceDirectory: observerEvidenceDirectory });
+        state.monitoringBinding = monitoringBinding;
+        state.monitoringExpectations ??= {};
         await writeState(statePath, state);
-        state.criticalLogs = await this.criticalLogs.ensure({ manifest: this.manifest, lifecycleState: this.lifecycleState, evidenceDirectory: observerEvidenceDirectory });
-        await writeState(statePath, state);
+        await ensureStartupObserver({
+          state,
+          statePath,
+          key: "sampler",
+          runtime: this.sampler,
+          evidenceRoot: this.options.evidence,
+          now: this.now,
+          start: (evidenceDirectory) => this.sampler.ensure({ manifest: this.manifest, lifecycleState: this.lifecycleState, evidenceDirectory })
+        });
+        await ensureStartupObserver({
+          state,
+          statePath,
+          key: "sentinel",
+          runtime: this.sentinel,
+          evidenceRoot: this.options.evidence,
+          now: this.now,
+          start: (evidenceDirectory) => this.sentinel.ensure({ manifest: this.manifest, renderer: this.renderer, evidenceDirectory })
+        });
+        await ensureStartupObserver({
+          state,
+          statePath,
+          key: "criticalLogs",
+          runtime: this.criticalLogs,
+          evidenceRoot: this.options.evidence,
+          now: this.now,
+          start: (evidenceDirectory) => this.criticalLogs.ensure({ manifest: this.manifest, lifecycleState: this.lifecycleState, evidenceDirectory })
+        });
         for (const camera of this.venue.activeCameras) {
           const host = compositorHost(this.manifest, this.lifecycleState, camera);
           const expectedId = state.egress[camera]?.id ?? null;
           const owner = egressOwner(state, camera);
+          state.monitoringExpectations[camera] = await this.expectations.set({
+            binding: state.monitoringBinding,
+            camera,
+            phase: "TESTING",
+            commentaryParticipating: this.commentary.qualification.status !== "NOT_PARTICIPATING",
+            runId: state.runId
+          });
+          await writeState(statePath, state);
           if (!state.outputConformance[camera]) {
             await this.egress.preflight(host);
             try {
@@ -237,6 +273,14 @@ export class ProductionSoakRuntime {
           state.admission[camera] = await this.egress.proveSecondStartRejected({ host, court: camera, profile: state.profiles[camera].profile, owner, expectedId: active.id });
           await writeState(statePath, state);
           await this.#waitForCameraOutput(camera);
+          state.monitoringExpectations[camera] = await this.expectations.set({
+            binding: state.monitoringBinding,
+            camera,
+            phase: "LIVE",
+            commentaryParticipating: this.commentary.qualification.status !== "NOT_PARTICIPATING",
+            runId: state.runId
+          });
+          await writeState(statePath, state);
         }
         const accepted = await this.#waitForStableOutput(state.profiles);
         state.phase = "RUNNING";
@@ -610,6 +654,72 @@ export class ProductionSoakRuntime {
         process.stderr.write(`PUSHOVER_WARNING: ${safeError(error)}\n`);
       }
     }
+  }
+}
+
+export async function ensureStartupObserver({ state, statePath, key, runtime, evidenceRoot, start, now = Date.now, persist = writeState }) {
+  if (!state || !state.runId || !["sampler", "sentinel", "criticalLogs"].includes(key)) throw new Error("startup observer state is invalid");
+  if (!runtime || typeof runtime.inspect !== "function" || typeof start !== "function") throw new Error(`startup observer ${key} runtime is invalid`);
+  const current = state[key];
+  const attempt = state.observerStarts?.[key] ?? null;
+
+  if (attempt?.status === "starting") {
+    return finishStartupObserver({ state, statePath, key, attempt, start, now, persist });
+  }
+
+  if (current?.output) {
+    const owner = await runtime.inspect(current.output);
+    if (owner) {
+      state[key] = { ...current, status: "running", ...owner, adopted: true };
+      state.observerStarts ??= {};
+      state.observerStarts[key] = {
+        generation: Number.isInteger(attempt?.generation) ? attempt.generation : -1,
+        evidenceDirectory: dirname(current.output),
+        status: "running",
+        output: current.output,
+        pid: owner.pid,
+        reconciledAt: new Date(now()).toISOString()
+      };
+      await persist(statePath, state);
+      return state[key];
+    }
+  }
+
+  const generation = Number.isInteger(attempt?.generation) ? attempt.generation + 1 : 0;
+  const evidenceDirectory = join(evidenceRoot, "observer-generations", `${key}-${String(generation).padStart(3, "0")}-${state.runId}`);
+  state.observerStarts ??= {};
+  state.observerStarts[key] = {
+    generation,
+    evidenceDirectory,
+    status: "starting",
+    preparedAt: new Date(now()).toISOString()
+  };
+  await persist(statePath, state);
+  return finishStartupObserver({ state, statePath, key, attempt: state.observerStarts[key], start, now, persist });
+}
+
+async function finishStartupObserver({ state, statePath, key, attempt, start, now, persist }) {
+  try {
+    const result = await start(attempt.evidenceDirectory);
+    state[key] = result;
+    state.observerStarts[key] = {
+      ...attempt,
+      status: "running",
+      output: result.output,
+      pid: result.pid,
+      completedAt: new Date(now()).toISOString()
+    };
+    await persist(statePath, state);
+    return result;
+  } catch (error) {
+    state.observerStarts[key] = {
+      ...attempt,
+      status: "failed",
+      failedAt: new Date(now()).toISOString(),
+      error: safeError(error)
+    };
+    await persist(statePath, state);
+    throw error;
   }
 }
 
@@ -1187,6 +1297,8 @@ function createState({ event, evidence, nowMs, minimumDurationMs, maximumDuratio
     sampler: null,
     sentinel: null,
     criticalLogs: null,
+    monitoringBinding: null,
+    monitoringExpectations: {},
     router: null,
     baseline: null,
     lastSnapshot: null,
