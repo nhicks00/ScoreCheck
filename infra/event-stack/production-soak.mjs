@@ -179,9 +179,16 @@ export class ProductionSoakRuntime {
 
     if (state.phase === "STARTING") {
       try {
-        state.sentinel = await this.sentinel.ensure({ manifest: this.manifest, renderer: this.renderer, evidenceDirectory: this.options.evidence });
+        const observerEvidenceDirectory = state.startupCleanup?.stoppedAt
+          ? join(this.options.evidence, `startup-retry-${state.runId}`)
+          : this.options.evidence;
+        if (state.sampler?.status === "stopped") {
+          state.sampler = await this.sampler.ensure({ manifest: this.manifest, lifecycleState: this.lifecycleState, evidenceDirectory: observerEvidenceDirectory });
+          await writeState(statePath, state);
+        }
+        state.sentinel = await this.sentinel.ensure({ manifest: this.manifest, renderer: this.renderer, evidenceDirectory: observerEvidenceDirectory });
         await writeState(statePath, state);
-        state.criticalLogs = await this.criticalLogs.ensure({ manifest: this.manifest, lifecycleState: this.lifecycleState, evidenceDirectory: this.options.evidence });
+        state.criticalLogs = await this.criticalLogs.ensure({ manifest: this.manifest, lifecycleState: this.lifecycleState, evidenceDirectory: observerEvidenceDirectory });
         await writeState(statePath, state);
         for (const camera of this.venue.activeCameras) {
           const host = compositorHost(this.manifest, this.lifecycleState, camera);
@@ -221,7 +228,7 @@ export class ProductionSoakRuntime {
         await writeState(statePath, state);
         process.stdout.write(`SOAK_STARTED ${state.startedAt}: ${this.venue.activeCameras.length} persistent 1080 scoreboard output(s) are live; source defects are monitored independently.\n`);
       } catch (error) {
-        state.startupCleanup = await this.#stopStartupObservers(state);
+        state.startupFailure = { observedAt: new Date(this.now()).toISOString(), error: safeError(error) };
         await writeState(statePath, state);
         throw error;
       }
@@ -452,21 +459,6 @@ export class ProductionSoakRuntime {
       await this.sleep(2_000);
     }
     throw new Error(`${cameraList(this.venue.activeCameras)} did not reach a stable native 1080 raw baseline: ${lastProblems.slice(0, 8).join("; ")}`);
-  }
-
-  async #stopStartupObservers(state) {
-    const stoppedAt = new Date(this.now()).toISOString();
-    const cleanup = { stoppedAt, sampler: null, sentinel: null, criticalLogs: null };
-    for (const [key, runtime] of [["criticalLogs", this.criticalLogs], ["sentinel", this.sentinel], ["sampler", this.sampler]]) {
-      if (!state[key]?.output) continue;
-      try {
-        state[key] = await runtime.stop(state[key]);
-        cleanup[key] = state[key].status;
-      } catch (error) {
-        cleanup[key] = `failed: ${safeError(error)}`;
-      }
-    }
-    return cleanup;
   }
 
   async #probeProfiles() {
