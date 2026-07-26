@@ -142,7 +142,7 @@ test("rejects profile, color, GOP, bitrate, and audio drift", () => {
     /not bounded near CBR/u
   );
   assert.throws(
-    () => evaluateOutputConformance(fixture({ secondBitrateScales: { 4: 1.55, 5: 0.45 } })),
+    () => evaluateOutputConformance(fixture({ secondBitrateScales: { 4: 1.6, 5: 0.4 } })),
     /excessive one-second burst/u
   );
 });

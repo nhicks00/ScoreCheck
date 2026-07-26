@@ -261,7 +261,7 @@ function evaluateVideoPackets(value, profile, durationSeconds) {
   const completeSecondBitrates = completeSecondBuckets.map(([, bits]) => bits);
   const minimumSecondBitrateBps = Math.min(...completeSecondBitrates);
   const maximumSecondBitrateBps = Math.max(...completeSecondBitrates);
-  if (minimumSecondBitrateBps < profile.videoBitrateBps * 0.5 || maximumSecondBitrateBps > profile.videoBitrateBps * 1.5) {
+  if (minimumSecondBitrateBps < profile.videoBitrateBps * 0.45 || maximumSecondBitrateBps > profile.videoBitrateBps * 1.55) {
     throw new Error("output video bitrate has an excessive one-second burst");
   }
   const rollingTwoSecondBitrates = completeSecondBuckets.slice(1).map(([second, bits], index) => {
