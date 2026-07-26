@@ -62,6 +62,7 @@ grep -Fq '"video_bitrate": 10000' "$FIXTURE/requests/court-1.json"
 grep -Fq '"audio_bitrate": 128' "$FIXTURE/requests/court-1.json"
 grep -Fq '"audio_frequency": 48000' "$FIXTURE/requests/court-1.json"
 grep -Fq '"key_frame_interval": 2' "$FIXTURE/requests/court-1.json"
+grep -Fq '"await_start_signal": false' "$FIXTURE/requests/court-1.json"
 grep -Fq 'https://scorecheck-abc123-test.vercel.app/program/bootstrap?court=1&build=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&deployment=dpl_test123#token=test-program-token' "$FIXTURE/requests/court-1.json"
 if grep -Fq '?token=' "$FIXTURE/requests/court-1.json"; then
   printf 'FAIL: program token remained in the request query string\n' >&2

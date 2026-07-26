@@ -238,7 +238,7 @@ cat >"$REQ_FILE" <<EOF
   "url": "${PAGE_URL}",
   "audio_only": false,
   "video_only": false,
-  "await_start_signal": true,
+  "await_start_signal": false,
   "advanced": {
     "width": 1920,
     "height": 1080,

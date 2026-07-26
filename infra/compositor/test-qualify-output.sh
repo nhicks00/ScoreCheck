@@ -77,6 +77,7 @@ test ! -e "$FIXTURE/mock-active"
 grep -Fq '"video_codec": "H264_HIGH"' "$FIXTURE/captured-request.json"
 grep -Fq '"video_bitrate": 10000' "$FIXTURE/captured-request.json"
 grep -Fq '"key_frame_interval": 2' "$FIXTURE/captured-request.json"
+grep -Fq '"await_start_signal": false' "$FIXTURE/captured-request.json"
 grep -Fq '"file_outputs"' "$FIXTURE/captured-request.json"
 if grep -Fq 'stream_outputs' "$FIXTURE/captured-request.json"; then
   printf 'FAIL: conformance capture can publish a stream output\n' >&2

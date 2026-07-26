@@ -167,9 +167,8 @@ PAGE_URL="${PROGRAM_PAGE_BASE_URL}/bootstrap?court=${COURT}&build=${PROGRAM_REND
 RTMP_URL="${YOUTUBE_OUTPUT_RTMPS_BASE}/${STREAM_KEY}"
 
 # --- generate the WebEgressRequest (protojson) ----------------------------------
-# await_start_signal: capture holds until the page console.log()s START_RECORDING,
-# which the program page emits only once its WHEP video + commentary audio are
-# actually up — so we never broadcast a half-loaded scene (plan §3.3).
+# Start the renderer immediately so a missing camera produces the interruption
+# slate instead of preventing the persistent YouTube output from starting.
 # The stream output's protocol is inferred from the rtmps:// URL.
 REQ_FILE="$REQ_DIR/court-${COURT}.json"
 
@@ -178,7 +177,7 @@ cat > "$REQ_FILE" <<EOF
   "url": "${PAGE_URL}",
   "audio_only": false,
   "video_only": false,
-  "await_start_signal": true,
+  "await_start_signal": false,
   "advanced": {
     "width": ${EGRESS_WIDTH},
     "height": ${EGRESS_HEIGHT},
