@@ -44,6 +44,9 @@ grep -Fxq '30000/1001' "$CAPTURE" || fail "normalizer did not preserve 29.97 fps
 grep -Fxq '10000k' "$CAPTURE" || fail "normalizer did not apply the 1080p30 bitrate"
 grep -Fxq 'libopus' "$CAPTURE" || fail "normalizer did not produce browser-safe Opus audio"
 grep -Fq 'bframes=0:keyint=60:min-keyint=60:scenecut=0' "$CAPTURE" || fail "normalizer did not enforce the browser GOP contract"
+if grep -Fxq 'low_delay' "$CAPTURE"; then
+  fail "normalizer forced low-delay decoding on an HEVC source with reference-frame reordering"
+fi
 
 export CAMERA_SOURCE_PROFILE=PRIORITY_1080P60
 export CAMERA_FRAME_RATE_MODE=60000/1001

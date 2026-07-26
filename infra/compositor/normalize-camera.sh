@@ -49,7 +49,7 @@ rm -f "$progress"
 exec "$ffmpeg" \
   -nostdin -hide_banner -loglevel warning \
   -progress "$progress" -stats_period 1 \
-  -fflags +genpts+discardcorrupt -flags low_delay -rtsp_transport tcp \
+  -fflags +genpts+discardcorrupt -rtsp_transport tcp \
   -i "rtsp://${host}:8554/${CAMERA_NORMALIZER_INPUT_PATH}" \
   -map 0:v:0 -map 0:a:0 \
   -vf "format=yuv420p,setfield=prog" -fps_mode cfr \
