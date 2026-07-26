@@ -12,7 +12,6 @@ import { evaluateSshSessionAudit, sshSessionAuditCommand } from "./ssh-session-a
 export const DEPLOYMENT_SCRIPT_TIMEOUT_MS = 10 * 60 * 1_000;
 export const AGENT_DEPLOY_CONCURRENCY = 3;
 export const MAX_CLOCK_OFFSET_MS = 1_000;
-export const MAX_CLOCK_PROBE_RTT_MS = 5_000;
 const HEALTHCHECKS_API = "https://healthchecks.io/api/v3";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
@@ -539,7 +538,7 @@ export class LocalStackDeployer {
 }
 
 export function clockVerificationCommand() {
-  return "sync=$(timedatectl show --property=NTPSynchronized --value) && remote_ms=$(date +%s%3N) && printf '%s %s\\n' \"$sync\" \"$remote_ms\"";
+  return "sync=$(timedatectl show --property=NTPSynchronized --value) && offset=$(timedatectl timesync-status --no-pager | awk '$1 == \"Offset:\" { print $2; exit }') && test -n \"$offset\" && printf '%s %s\\n' \"$sync\" \"$offset\"";
 }
 
 export function evaluateClockProbe({ stdout, startedAtMs, endedAtMs }) {
@@ -547,17 +546,15 @@ export function evaluateClockProbe({ stdout, startedAtMs, endedAtMs }) {
     throw new Error("clock probe timestamps are invalid");
   }
   const roundTripMs = endedAtMs - startedAtMs;
-  if (roundTripMs > MAX_CLOCK_PROBE_RTT_MS) throw new Error(`clock probe round trip ${roundTripMs}ms exceeds ${MAX_CLOCK_PROBE_RTT_MS}ms`);
-  const match = String(stdout ?? "").trim().match(/^(yes|no)\s+(\d{13})$/u);
+  const match = String(stdout ?? "").trim().match(/^(yes|no)\s+([+-]?\d+(?:\.\d+)?)(ns|us|ms|s)$/u);
   if (!match) throw new Error("clock probe response is invalid");
   if (match[1] !== "yes") throw new Error("host clock is not NTP synchronized");
-  const remoteTimeMs = Number(match[2]);
-  const midpointMs = startedAtMs + roundTripMs / 2;
-  const offsetMs = Math.round(remoteTimeMs - midpointMs);
+  const scale = { ns: 1e-6, us: 1e-3, ms: 1, s: 1_000 }[match[3]];
+  const offsetMs = Number(match[2]) * scale;
   if (Math.abs(offsetMs) > MAX_CLOCK_OFFSET_MS) {
     throw new Error(`host clock offset ${offsetMs}ms exceeds ${MAX_CLOCK_OFFSET_MS}ms`);
   }
-  return { status: "synchronized", offsetMs, roundTripMs, remoteTimeMs };
+  return { status: "synchronized", offsetMs, roundTripMs };
 }
 
 export function privateNetworkVerificationPlan({ manifest, state, spec }) {
