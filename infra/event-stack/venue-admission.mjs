@@ -14,18 +14,21 @@ export const VENUE_SOURCE_PROFILES = Object.freeze({
   CONSTRAINED_1080P30: Object.freeze({
     outputProfile: "1080p30",
     frameRateModes: Object.freeze(["30000/1001", "30/1"]),
+    encoderRateCapMbps: 3,
     minimumSourceBitrateBps: 2_500_000,
-    maximumSourceBitrateBps: 3_000_000
+    maximumSourceBitrateBps: 3_500_000
   }),
   STANDARD_1080P30: Object.freeze({
     outputProfile: "1080p30",
     frameRateModes: Object.freeze(["30000/1001", "30/1"]),
+    encoderRateCapMbps: 5,
     minimumSourceBitrateBps: 4_000_000,
-    maximumSourceBitrateBps: 5_000_000
+    maximumSourceBitrateBps: 5_750_000
   }),
   PRIORITY_1080P60: Object.freeze({
     outputProfile: "1080p60",
     frameRateModes: Object.freeze(["60000/1001", "60/1"]),
+    encoderRateCapMbps: 12,
     minimumSourceBitrateBps: 8_000_000,
     maximumSourceBitrateBps: 12_000_000
   })
@@ -244,7 +247,7 @@ function validateCamera(camera) {
   if (!source) throw new Error(`Camera ${number} source profile is invalid`);
   if (!source.frameRateModes.includes(camera.frameRateMode)) throw new Error(`Camera ${number} frame rate does not match ${camera.sourceProfile}`);
   if (!VENUE_LINKS.has(camera.venueLink)) throw new Error(`Camera ${number} venue link is invalid`);
-  if (!Number.isFinite(camera.sourceRateCapMbps) || camera.sourceRateCapMbps !== source.maximumSourceBitrateBps / 1_000_000) throw new Error(`Camera ${number} source rate cap must match ${camera.sourceProfile}`);
+  if (!Number.isFinite(camera.sourceRateCapMbps) || camera.sourceRateCapMbps !== source.encoderRateCapMbps) throw new Error(`Camera ${number} source rate cap must match ${camera.sourceProfile}`);
   if (camera.powerProtected !== true) throw new Error(`Camera ${number} power is not protected`);
 }
 

@@ -98,6 +98,18 @@ test("accepts six native 1080 camera chains and two isolated inactive cameras", 
   assert.deepEqual(browserDeltaProblems(before, after, profiles, venue.activeCameras), []);
 });
 
+test("allows bounded audio and mux overhead above a constrained camera encoder cap", () => {
+  const constrainedProfile = structuredClone(venueProfile);
+  constrainedProfile.cameras[2].sourceProfile = "CONSTRAINED_1080P30";
+  constrainedProfile.cameras[2].sourceRateCapMbps = 3;
+  const constrainedVenue = { ...evaluateVenueAdmission(constrainedProfile), sha256: "d".repeat(64) };
+  const current = snapshot({ sampledMs: startedMs + 5_000, framesMultiplier: 5 });
+  current.courts[2].paths.raw.inboundBitrateBps = 3_225_000;
+  assert.deepEqual(productionRawProblems(current, constrainedVenue, startedMs + 5_000), []);
+  current.courts[2].paths.raw.inboundBitrateBps = 3_500_001;
+  assert.ok(productionRawProblems(current, constrainedVenue, startedMs + 5_000).some((entry) => entry.includes("Camera 3 raw bitrate")));
+});
+
 test("requires an isolated compositor normalizer only for an admitted HEVC camera", () => {
   const hevcProfile = structuredClone(venueProfile);
   hevcProfile.cameras[2].sourcePathMode = "isolated-hevc-normalizer";

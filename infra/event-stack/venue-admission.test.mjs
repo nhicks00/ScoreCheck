@@ -21,9 +21,9 @@ test("admits eight standard 1080p30 cameras only with 30 percent bonded-upload r
   assert.deepEqual(result.activeCameras, [1, 2, 3, 4, 5, 6, 7, 8]);
   assert.deepEqual(result.priorityOrder, [1, 2, 3, 4, 5, 6, 7, 8]);
   assert.deepEqual(result.priorityTiers, { TIER_1: [1], TIER_2: [2, 3, 4, 5, 6], TIER_3: [7, 8] });
-  assert.equal(result.aggregateMaximumSourceBitrateBps, 40_000_000);
-  assert.equal(result.requiredSustainedUploadMbps, 52);
-  assert.equal(result.requiredSustainedUploadMbpsRounded, 52);
+  assert.equal(result.aggregateMaximumSourceBitrateBps, 46_000_000);
+  assert.equal(result.requiredSustainedUploadMbps, 59.8);
+  assert.equal(result.requiredSustainedUploadMbpsRounded, 60);
   assert.equal(isSyntheticCloudFixtureVenue(profile), true);
   profile.uploadMeasurement.sustainedUploadMbps = 51.9;
   assert.equal(evaluateVenueAdmission(profile).passed, false);
@@ -79,6 +79,8 @@ test("keeps permanent identities while allowing an event-specific active camera 
   assert.equal(result.assignments[1].sourceCodec, "H265");
   assert.equal(result.assignments[1].priorityTier, "TIER_1");
   assert.equal(result.assignments[1].outputProfile, "1080p30");
+  assert.equal(result.assignments[1].sourceRateCapMbps, 3);
+  assert.equal(result.assignments[1].maximumSourceBitrateBps, 3_500_000);
   assert.equal(result.passed, true);
 });
 
