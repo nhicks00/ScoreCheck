@@ -6,7 +6,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { createPendingCommentaryQualification, loadCommentaryQualification, validateCommentaryQualification } from "./commentary-qualification.mjs";
+import { createNonparticipatingCommentaryQualification, createPendingCommentaryQualification, loadCommentaryQualification, validateCommentaryQualification } from "./commentary-qualification.mjs";
 import { validateProfile } from "./eventctl.mjs";
 import { loadVenueAdmission } from "./venue-admission.mjs";
 
@@ -22,7 +22,7 @@ if (process.argv[1] && resolve(process.argv[1]) === SCRIPT_PATH) {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (!options) return usage();
-  const result = options.command === "init" ? await initialize(options) : await install(options);
+  const result = options.command === "init" ? await initialize(options) : options.command === "exclude" ? await exclude(options) : await install(options);
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
@@ -31,6 +31,74 @@ export async function initialize({ event, cameras, output }) {
   await assertProtectedParent(output, "commentary qualification output");
   await writeNewProtected(output, qualification);
   return { status: "PENDING", event, cameras, output, sha256: sha256(await readFile(output)) };
+}
+
+export async function exclude({ profile: profilePath, receipt: receiptPath, operator, reason }, { now = () => new Date() } = {}) {
+  await assertProtectedParent(receiptPath, "commentary participation receipt");
+  let existingReceipt = null;
+  try { existingReceipt = await readProtectedJson(receiptPath, "commentary participation receipt"); }
+  catch (error) { if (error?.code !== "ENOENT") throw error; }
+  const profile = validateProfile(await readProtectedJson(profilePath, "event operator profile"));
+  const manifest = await readProtectedJson(profile.manifest, "event manifest");
+  const lifecycle = await readProtectedJson(profile.state, "event lifecycle state");
+  if (manifest.kind !== "production" || manifest.event !== lifecycle.event || lifecycle.phase !== "ready") {
+    throw new Error("commentary participation can be declared only on its ready production event before coverage");
+  }
+  if (!/^[A-Za-z0-9-]{8,100}$/u.test(lifecycle.generationId ?? "")) throw new Error("event lifecycle generation is invalid");
+  const venue = await loadVenueAdmission(profile.venueProfile, manifest.event);
+  if (!venue.passed) throw new Error(`venue profile is not admitted: ${venue.problems.join("; ")}`);
+  await assertAbsent(join(profile.evidence, "production-soak-state.json"), "production soak state already exists");
+
+  const root = dirname(profilePath);
+  if (profile.commentaryQualification !== join(root, "commentary-qualification.json")) throw new Error("commentary qualification is outside its event bundle");
+  const marker = await readProtectedJson(join(root, "BUNDLE.json"), "event bundle marker");
+  if (marker.schemaVersion !== 2 || marker.kind !== "production" || marker.event !== manifest.event || !/^[a-f0-9]{64}$/u.test(marker.initialCommentaryQualificationSha256 ?? "")) {
+    throw new Error("event bundle marker does not support commentary participation declaration");
+  }
+
+  const current = await loadCommentaryQualification(profile.commentaryQualification, manifest.event, venue.activeCameras);
+  let installed = current.qualification;
+  if (installed.status === "PENDING") {
+    if (existingReceipt !== null) throw new Error("commentary participation receipt already exists before declaration");
+    if (current.sha256 !== marker.initialCommentaryQualificationSha256) throw new Error("pending commentary qualification differs from the immutable bundle marker");
+    const declaredAt = now().toISOString();
+    installed = createNonparticipatingCommentaryQualification(manifest.event, venue.activeCameras, {
+      declaredAt, operator, reason
+    }, {
+      installedAt: declaredAt,
+      lifecycleGenerationId: lifecycle.generationId,
+      sourceSha256: current.sha256
+    });
+    await writeProtectedAtomic(profile.commentaryQualification, installed);
+  } else if (installed.status !== "NOT_PARTICIPATING"
+    || installed.declaration?.operator !== operator || installed.declaration?.reason !== reason
+    || installed.installation?.lifecycleGenerationId !== lifecycle.generationId) {
+    throw new Error("a different commentary qualification or participation declaration is already installed");
+  }
+
+  const verified = await loadCommentaryQualification(profile.commentaryQualification, manifest.event, venue.activeCameras, {
+    requireInstalled: true,
+    lifecycleGenerationId: lifecycle.generationId
+  });
+  if (!verified.passed || verified.qualification.status !== "NOT_PARTICIPATING") throw new Error("commentary nonparticipation declaration did not verify");
+  const receipt = {
+    schemaVersion: 1,
+    status: "NOT_PARTICIPATING",
+    event: manifest.event,
+    lifecycleGenerationId: lifecycle.generationId,
+    declaredAt: installed.declaration.declaredAt,
+    operator,
+    reason,
+    initialSha256: marker.initialCommentaryQualificationSha256,
+    installedSha256: verified.sha256,
+    qualification: profile.commentaryQualification
+  };
+  if (existingReceipt !== null) {
+    if (stableJson(existingReceipt) !== stableJson(receipt)) throw new Error("commentary participation receipt records a different declaration");
+    return { ...receipt, receipt: receiptPath, idempotent: true };
+  }
+  await writeNewProtected(receiptPath, receipt);
+  return { ...receipt, receipt: receiptPath, idempotent: false };
 }
 
 export async function install({ profile: profilePath, candidate: candidatePath, receipt: receiptPath }, { now = () => new Date() } = {}) {
@@ -108,11 +176,13 @@ export async function install({ profile: profilePath, candidate: candidatePath, 
 function parseArgs(argv) {
   const command = argv[0];
   if ([undefined, "help", "-h", "--help"].includes(command)) return null;
-  if (!new Set(["init", "install"]).has(command)) throw new Error("first argument must be init or install");
+  if (!new Set(["init", "install", "exclude"]).has(command)) throw new Error("first argument must be init, install, or exclude");
   const values = { command };
   const mapping = command === "init"
     ? new Map([["--event", "event"], ["--cameras", "cameras"], ["--output", "output"]])
-    : new Map([["--profile", "profile"], ["--candidate", "candidate"], ["--receipt", "receipt"]]);
+    : command === "exclude"
+      ? new Map([["--profile", "profile"], ["--receipt", "receipt"], ["--operator", "operator"], ["--reason", "reason"]])
+      : new Map([["--profile", "profile"], ["--candidate", "candidate"], ["--receipt", "receipt"]]);
   for (let index = 1; index < argv.length; index += 1) {
     const flag = argv[index];
     const key = mapping.get(flag);
@@ -174,5 +244,5 @@ function stableJson(value) {
 }
 
 function usage() {
-  process.stdout.write("Usage:\n  commentary-qualificationctl.mjs init --event EVENT --cameras 1,2 --output /PROTECTED/pending.json\n  commentary-qualificationctl.mjs install --profile /PROTECTED/event-profile.json --candidate /PROTECTED/physical-qualification.json --receipt /PROTECTED/evidence/commentary-install.json\n");
+  process.stdout.write("Usage:\n  commentary-qualificationctl.mjs init --event EVENT --cameras 1,2 --output /PROTECTED/pending.json\n  commentary-qualificationctl.mjs install --profile /PROTECTED/event-profile.json --candidate /PROTECTED/physical-qualification.json --receipt /PROTECTED/evidence/commentary-install.json\n  commentary-qualificationctl.mjs exclude --profile /PROTECTED/event-profile.json --receipt /PROTECTED/evidence/commentary-not-participating.json --operator NAME --reason REASON\n");
 }

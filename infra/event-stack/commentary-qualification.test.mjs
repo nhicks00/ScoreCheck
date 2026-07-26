@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   COMMENTARY_OBSERVATION_SECONDS,
   COMMENTARY_SYNC_TOLERANCE_MS,
+  createNonparticipatingCommentaryQualification,
   createPendingCommentaryQualification,
   createSyntheticCommentaryQualification,
   evaluateCommentaryQualification,
@@ -19,6 +20,28 @@ test("represents pre-provision commentary honestly as pending", () => {
   assert.equal(value.status, "PENDING");
   assert.equal(evaluateCommentaryQualification(value, [1, 3]).passed, false);
   assert.deepEqual(value.courts, [{ cameraNumber: 1, status: "PENDING" }, { cameraNumber: 3, status: "PENDING" }]);
+});
+
+test("accepts a generation-bound nonparticipation declaration without commentary observations", async () => {
+  const root = await mkdtemp(join(tmpdir(), "scorecheck-commentary-none-"));
+  const path = join(root, "commentary.json");
+  const value = createNonparticipatingCommentaryQualification("media-only-event", [1, 2], {
+    declaredAt: "2026-07-26T16:00:00.000Z",
+    operator: "Nathan Hicks",
+    reason: "No commentators participating in this dry run"
+  }, {
+    installedAt: "2026-07-26T16:00:00.000Z",
+    lifecycleGenerationId: "generation-12345678",
+    sourceSha256: "a".repeat(64)
+  });
+  await writeFile(path, `${JSON.stringify(value)}\n`, { mode: 0o600 });
+  const loaded = await loadCommentaryQualification(path, "media-only-event", [1, 2], {
+    requireInstalled: true,
+    lifecycleGenerationId: "generation-12345678"
+  });
+  assert.equal(loaded.passed, true);
+  assert.equal(loaded.qualification.status, "NOT_PARTICIPATING");
+  assert.equal(loaded.qualification.turnTls, null);
 });
 
 test("admits an exact physical commentary return, mix-minus, continuity, audio, sync, and TURN/TLS contract", () => {

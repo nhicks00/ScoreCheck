@@ -816,10 +816,25 @@ node infra/event-stack/commentary-qualificationctl.mjs install \
   --receipt /absolute/protected/evidence/next-event-slug/commentary-install.json
 ```
 
+When an event has no commentators, record that operator decision instead of
+fabricating physical qualification evidence or leaving the event pending:
+
+```bash
+node infra/event-stack/commentary-qualificationctl.mjs exclude \
+  --profile /absolute/protected/events/next-event-slug/event-profile.json \
+  --receipt /absolute/protected/evidence/next-event-slug/commentary-not-participating.json \
+  --operator "Nathan Hicks" \
+  --reason "No commentators participating in this dry run"
+```
+
+The declaration is bound to the current ready lifecycle generation and is
+accepted only before soak evidence exists. It does not qualify commentary for a
+later event where commentators participate.
+
 The production soak requires installation metadata bound to the current lifecycle
 generation; the separate protected receipt records the full cutover hashes. A pending,
 uninstalled, stale-generation, or prequalified bundle artifact fails closed. After
-the router is online and the lifecycle is explicitly live, arm the bounded six-camera soak:
+the router is online and the lifecycle is explicitly live, arm the bounded active-camera soak:
 
 ```bash
 node infra/event-stack/production-soak.mjs run \
@@ -832,8 +847,8 @@ node infra/event-stack/production-soak.mjs run \
 ```
 
 The runner first proves an idle 12-host baseline and healthy fail-closed venue
-routing, then prints `ARMED` while every public output remains stopped. Cameras
-1-6 may start only after that line. It probes each source, starts exactly one
+routing, then prints `ARMED` while every public output remains stopped. Declared
+cameras may start only after that line. It probes each source, starts exactly one
 matching output per camera, verifies the scoreboard page and unlisted YouTube
 destination, records five-second end-to-end samples plus host and router
 evidence, and sends deduplicated plain-English Pushover alerts. A separate
@@ -841,8 +856,8 @@ off-VPC sentinel checks monitor, ingest, commentary, and the immutable renderer
 once per minute through its own Healthchecks check. One long-lived Compose log
 stream per Droplet retains redacted critical lifecycle/error evidence on the
 operator machine without repeated SSH polling. Sentinel/log liveness, full-host
-readiness, edge gaps, and coverage are hard acceptance inputs. Cameras 7-8 must
-remain isolated for this six-camera soak.
+readiness, edge gaps, and coverage are hard acceptance inputs. Cameras not
+declared in the event profile must remain isolated.
 
 `HEALTHCHECKS_SENTINEL_PING_URL` is a third protected Healthchecks check. Do not
 reuse the monitor-service baseline or active ping URL: reuse could let one

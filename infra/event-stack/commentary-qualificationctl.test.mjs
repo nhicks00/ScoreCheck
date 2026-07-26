@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { createPendingCommentaryQualification, createSyntheticCommentaryQualification, loadCommentaryQualification } from "./commentary-qualification.mjs";
-import { initialize, install } from "./commentary-qualificationctl.mjs";
+import { exclude, initialize, install } from "./commentary-qualificationctl.mjs";
 import { createSyntheticRehearsalVenueProfile } from "./venue-admission.mjs";
 
 test("initializes a protected pending qualification for exact cameras", async () => {
@@ -15,6 +15,29 @@ test("initializes a protected pending qualification for exact cameras", async ()
   const result = await initialize({ event: "physical-preflight", cameras: [1, 3], output });
   assert.equal(result.status, "PENDING");
   assert.equal((await loadCommentaryQualification(output, "physical-preflight", [1, 3])).passed, false);
+});
+
+test("records an idempotent generation-bound nonparticipation declaration", async () => {
+  const fixture = await installFixture();
+  const receipt = join(fixture.root, "not-participating-receipt.json");
+  const options = {
+    profile: fixture.options.profile,
+    receipt,
+    operator: "Nathan Hicks",
+    reason: "No commentators participating in this dry run"
+  };
+  const now = () => new Date("2026-07-26T16:00:00.000Z");
+  const result = await exclude(options, { now });
+  assert.equal(result.status, "NOT_PARTICIPATING");
+  assert.equal(result.idempotent, false);
+  const loaded = await loadCommentaryQualification(fixture.profile.commentaryQualification, fixture.event, [1], {
+    requireInstalled: true,
+    lifecycleGenerationId: fixture.generationId
+  });
+  assert.equal(loaded.passed, true);
+  assert.equal(loaded.qualification.status, "NOT_PARTICIPATING");
+  const repeated = await exclude(options, { now });
+  assert.equal(repeated.idempotent, true);
 });
 
 test("installs one passed physical qualification only on the ready event generation", async () => {

@@ -34,7 +34,7 @@ export function validateCommentaryQualification(value, expectedEvent = null, act
   if (!value || value.schemaVersion !== 2) throw new Error("commentary qualification schemaVersion must be 2");
   if (!EVENT_SLUG.test(value.event ?? "")) throw new Error("commentary qualification event is invalid");
   if (expectedEvent !== null && value.event !== expectedEvent) throw new Error("commentary qualification belongs to a different event");
-  if (!new Set(["PENDING", "QUALIFIED"]).has(value.status)) throw new Error("commentary qualification status is invalid");
+  if (!new Set(["PENDING", "QUALIFIED", "NOT_PARTICIPATING"]).has(value.status)) throw new Error("commentary qualification status is invalid");
   if (!Array.isArray(value.courts)) throw new Error("commentary qualification courts are required");
   const expected = normalizeActiveCameras(activeCameras ?? value.courts.map((entry) => entry?.cameraNumber));
   if (JSON.stringify(value.courts.map((entry) => entry?.cameraNumber)) !== JSON.stringify(expected)) {
@@ -49,6 +49,17 @@ export function validateCommentaryQualification(value, expectedEvent = null, act
     }
     return value;
   }
+  if (value.status === "NOT_PARTICIPATING") {
+    if (value.turnTls !== null) throw new Error("nonparticipating commentary cannot contain TURN/TLS observations");
+    validateDeclaration(value.declaration);
+    validateInstallation(value.installation);
+    for (const court of value.courts) {
+      if (JSON.stringify(Object.keys(court).sort()) !== JSON.stringify(["cameraNumber", "status"]) || court.status !== "NOT_PARTICIPATING") {
+        throw new Error(`Camera ${court?.cameraNumber ?? "unknown"} nonparticipating commentary declaration is invalid`);
+      }
+    }
+    return value;
+  }
   validateTurnTls(value.turnTls);
   for (const court of value.courts) validateCourt(court);
   if (value.installation !== undefined) validateInstallation(value.installation);
@@ -58,6 +69,7 @@ export function validateCommentaryQualification(value, expectedEvent = null, act
 export function evaluateCommentaryQualification(value, activeCameras = null) {
   const qualification = validateCommentaryQualification(value, null, activeCameras);
   if (qualification.status === "PENDING") return { passed: false, problems: ["commentary qualification is pending"] };
+  if (qualification.status === "NOT_PARTICIPATING") return { passed: true, problems: [] };
   const problems = [];
   if (qualification.turnTls.connected !== true) problems.push("commentary TURN/TLS fallback did not connect");
   if (qualification.turnTls.observationSeconds < COMMENTARY_OBSERVATION_SECONDS) problems.push("commentary TURN/TLS fallback observation was too short");
@@ -145,6 +157,19 @@ export function createPendingCommentaryQualification(event, activeCameras = ACTI
   }, event, cameras);
 }
 
+export function createNonparticipatingCommentaryQualification(event, activeCameras, declaration, installation) {
+  const cameras = normalizeActiveCameras(activeCameras);
+  return validateCommentaryQualification({
+    schemaVersion: 2,
+    event,
+    status: "NOT_PARTICIPATING",
+    turnTls: null,
+    declaration,
+    courts: cameras.map((cameraNumber) => ({ cameraNumber, status: "NOT_PARTICIPATING" })),
+    installation
+  }, event, cameras);
+}
+
 function validateTurnTls(value) {
   validateObservationIdentity(value, "TURN/TLS");
   if (!SAFE_TEXT.test(value.network ?? "")) throw new Error("commentary TURN/TLS network is invalid");
@@ -182,6 +207,12 @@ function validateObservationIdentity(value, label) {
 
 function validateObservationSeconds(value, label) {
   if (!Number.isInteger(value) || value < 1 || value > 86_400) throw new Error(`${label} observation duration is invalid`);
+}
+
+function validateDeclaration(value) {
+  if (!value || !ISO_TIMESTAMP.test(value.declaredAt ?? "") || !Number.isFinite(Date.parse(value.declaredAt))) throw new Error("commentary participation declaration timestamp is invalid");
+  if (!SAFE_TEXT.test(value.operator ?? "")) throw new Error("commentary participation declaration operator is invalid");
+  if (!SAFE_TEXT.test(value.reason ?? "")) throw new Error("commentary participation declaration reason is invalid");
 }
 
 function validateInstallation(value) {
