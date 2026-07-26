@@ -196,21 +196,37 @@ export class ProductionSoakRuntime {
           const owner = egressOwner(state, camera);
           if (!state.outputConformance[camera]) {
             await this.egress.preflight(host);
-            const evidence = await this.outputConformance.qualify({
-              host,
-              court: camera,
-              profile: state.profiles[camera].profile,
-              evidenceId: state.runId,
-              outputDirectory: join(this.options.evidence, "output-conformance"),
-              renderer: this.renderer
-            });
-            state.outputConformance[camera] = {
-              ...evidence,
-              destination: {
-                streamId: this.destinations.streams[camera].id,
-                broadcastId: this.destinations.broadcasts[camera].id
-              }
-            };
+            try {
+              const evidence = await this.outputConformance.qualify({
+                host,
+                court: camera,
+                profile: state.profiles[camera].profile,
+                evidenceId: state.runId,
+                outputDirectory: join(this.options.evidence, "output-conformance"),
+                renderer: this.renderer
+              });
+              state.outputConformance[camera] = {
+                ...evidence,
+                destination: {
+                  streamId: this.destinations.streams[camera].id,
+                  broadcastId: this.destinations.broadcasts[camera].id
+                }
+              };
+            } catch (error) {
+              state.outputConformance[camera] = {
+                schemaVersion: 1,
+                status: "FAILED",
+                observedAt: new Date(this.now()).toISOString(),
+                court: camera,
+                profile: state.profiles[camera].profile,
+                error: safeError(error),
+                renderer: { gitSha: this.renderer.gitSha, deploymentId: this.renderer.deploymentId },
+                destination: {
+                  streamId: this.destinations.streams[camera].id,
+                  broadcastId: this.destinations.broadcasts[camera].id
+                }
+              };
+            }
             await writeState(statePath, state);
           }
           if (!expectedId) await this.egress.preflight(host);
