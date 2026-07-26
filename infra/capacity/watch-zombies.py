@@ -257,6 +257,13 @@ def classification_map(processes, retained_healthcheck_shims=None):
             ("xkbcomp", "sh"): "workload.egress-xkbcomp",
         }.get((process["command"], process.get("parentCommand")))
         if workload_classification is None:
+            runner_cmdline = (parent.get("commandLine") or b"").strip() if parent else b""
+            if (
+                process["command"] in {"ffmpeg", "sleep"}
+                and runner_cmdline.startswith(b"/bin/sh /usr/local/bin/scorecheck-ffmpeg-runner ")
+                and process.get("cgroupFingerprint") == parent.get("cgroupFingerprint")
+            ):
+                classifications[process["identity"]] = f"workload.mediamtx-{process['command']}"
             continue
         for egress_init in egress_inits:
             same_cgroup = process.get("cgroupFingerprint") == egress_init.get("cgroupFingerprint")
@@ -583,6 +590,10 @@ def self_test():
         174: {"pid": 174, "ppid": 100, "identity": "174:25", "command": "Xvfb", "parentCommand": "egress", "commandLine": b"Xvfb :99", "cgroupFingerprint": "egress"},
         175: {"pid": 175, "ppid": 174, "identity": "175:26", "command": "sh", "parentCommand": "Xvfb", "commandLine": b"/bin/sh", "cgroupFingerprint": "egress"},
         176: {"pid": 176, "ppid": 174, "identity": "176:27", "command": "sh", "parentCommand": "Xvfb", "commandLine": b"/bin/sh", "cgroupFingerprint": "other"},
+        180: {"pid": 180, "ppid": 1, "identity": "180:28", "command": "scorecheck-ffmp", "parentCommand": "mediamtx", "commandLine": b"/bin/sh /usr/local/bin/scorecheck-ffmpeg-runner court1_preview -- -i input", "cgroupFingerprint": "mediamtx"},
+        181: {"pid": 181, "ppid": 180, "identity": "181:29", "command": "ffmpeg", "parentCommand": "scorecheck-ffmp", "commandLine": b"ffmpeg -i input", "cgroupFingerprint": "mediamtx"},
+        182: {"pid": 182, "ppid": 180, "identity": "182:30", "command": "sleep", "parentCommand": "scorecheck-ffmp", "commandLine": b"sleep 1", "cgroupFingerprint": "mediamtx"},
+        183: {"pid": 183, "ppid": 180, "identity": "183:31", "command": "ffmpeg", "parentCommand": "scorecheck-ffmp", "commandLine": b"ffmpeg -i input", "cgroupFingerprint": "other"},
     }
     classifications = classification_map(processes)
     assert classifications["20:2"] == "workload.egress-chrome"
@@ -609,6 +620,9 @@ def self_test():
     assert "172:23" not in classifications
     assert "173:24" not in classifications
     assert "176:27" not in classifications
+    assert classifications["181:29"] == "workload.mediamtx-ffmpeg"
+    assert classifications["182:30"] == "workload.mediamtx-sleep"
+    assert "183:31" not in classifications
 
     mediamtx_init = {
         200: {"pid": 200, "ppid": 1, "identity": "200:20", "command": "containerd-shim", "parentCommand": "systemd", "commandLine": b"containerd-shim-runc-v2", "cgroupFingerprint": "host"},
