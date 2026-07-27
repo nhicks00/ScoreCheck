@@ -18,6 +18,8 @@ export const PROGRAM_OVERLAY_CANVAS_HEIGHT = 1080;
 export const PROGRAM_WATCHDOG_TICK_MS = 1000;
 /** Foreground presentation must stall for strictly more than this before acting. */
 export const PROGRAM_WATCHDOG_STALL_MS = 5000;
+export const PROGRAM_WATCHDOG_CADENCE_WINDOW_MS = 10_000;
+export const PROGRAM_WATCHDOG_RECONNECT_COOLDOWN_MS = 60_000;
 export const PROGRAM_HEARTBEAT_INTERVAL_MS = 5000;
 /** How long START_RECORDING waits for the commentary iframe before proceeding. */
 export const PROGRAM_COMMENTARY_WAIT_MS = 10_000;
@@ -29,6 +31,11 @@ export type ProgramWatchdogState = {
   lastInboundFrames: number | null;
   /** Set only while a foreground connected browser presents no frames. */
   renderStallStartedAtMs: number | null;
+  cadenceWindowStartedAtMs: number | null;
+  cadenceWindowPresentedFrames: number | null;
+  cadenceWindowInboundFrames: number | null;
+  cadenceDeficitWindows: number;
+  lastReconnectAtMs: number | null;
 };
 
 export type ProgramWatchdogSample = {
@@ -52,7 +59,16 @@ export type ProgramWatchdogStep = {
 
 export function initialProgramWatchdog(nowMs: number): ProgramWatchdogState {
   void nowMs;
-  return { lastPresentedFrames: null, lastInboundFrames: null, renderStallStartedAtMs: null };
+  return {
+    lastPresentedFrames: null,
+    lastInboundFrames: null,
+    renderStallStartedAtMs: null,
+    cadenceWindowStartedAtMs: null,
+    cadenceWindowPresentedFrames: null,
+    cadenceWindowInboundFrames: null,
+    cadenceDeficitWindows: 0,
+    lastReconnectAtMs: null
+  };
 }
 
 /**
@@ -68,8 +84,9 @@ export function programWatchdogStep(
   sample: ProgramWatchdogSample
 ): ProgramWatchdogStep {
   if (!sample.hasSources || !sample.renderWatchdogEligible || sample.inboundFrames == null) {
+    const reset = initialProgramWatchdog(sample.nowMs);
     return {
-      state: initialProgramWatchdog(sample.nowMs),
+      state: { ...reset, lastReconnectAtMs: state.lastReconnectAtMs },
       action: "none",
       progressed: false
     };
@@ -79,59 +96,93 @@ export function programWatchdogStep(
     || sample.presentedFrames < state.lastPresentedFrames
     || sample.inboundFrames < state.lastInboundFrames) {
     return {
-      state: {
-        lastPresentedFrames: sample.presentedFrames,
-        lastInboundFrames: sample.inboundFrames,
-        renderStallStartedAtMs: null
-      },
+      state: baselineProgramWatchdog(state, sample),
       action: "none",
       progressed: false
     };
   }
 
-  if (sample.presentedFrames > state.lastPresentedFrames) {
+  const presentedProgressed = sample.presentedFrames > state.lastPresentedFrames;
+  const renderStallStartedAtMs = presentedProgressed
+    ? null
+    : (state.renderStallStartedAtMs ?? sample.nowMs);
+  let cadenceWindowStartedAtMs = state.cadenceWindowStartedAtMs ?? sample.nowMs;
+  let cadenceWindowPresentedFrames = state.cadenceWindowPresentedFrames ?? sample.presentedFrames;
+  let cadenceWindowInboundFrames = state.cadenceWindowInboundFrames ?? sample.inboundFrames;
+  let cadenceDeficitWindows = state.cadenceDeficitWindows;
+  let cadenceReconnect = false;
+  const cadenceElapsedMs = sample.nowMs - cadenceWindowStartedAtMs;
+  if (cadenceElapsedMs >= PROGRAM_WATCHDOG_CADENCE_WINDOW_MS) {
+    const inboundDelta = sample.inboundFrames - cadenceWindowInboundFrames;
+    const presentedDelta = sample.presentedFrames - cadenceWindowPresentedFrames;
+    const inboundFps = inboundDelta * 1000 / cadenceElapsedMs;
+    const presentationRatio = inboundDelta > 0 ? presentedDelta / inboundDelta : 1;
+    cadenceDeficitWindows = inboundFps >= 20 && presentationRatio < 0.8
+      ? cadenceDeficitWindows + 1
+      : 0;
+    cadenceWindowStartedAtMs = sample.nowMs;
+    cadenceWindowPresentedFrames = sample.presentedFrames;
+    cadenceWindowInboundFrames = sample.inboundFrames;
+    cadenceReconnect = cadenceDeficitWindows >= 2 && reconnectAllowed(state, sample.nowMs);
+  }
+
+  const nextState: ProgramWatchdogState = {
+    lastPresentedFrames: sample.presentedFrames,
+    lastInboundFrames: sample.inboundFrames,
+    renderStallStartedAtMs,
+    cadenceWindowStartedAtMs,
+    cadenceWindowPresentedFrames,
+    cadenceWindowInboundFrames,
+    cadenceDeficitWindows,
+    lastReconnectAtMs: state.lastReconnectAtMs
+  };
+  if (cadenceReconnect) {
+    const reset = initialProgramWatchdog(sample.nowMs);
     return {
-      state: {
-        lastPresentedFrames: sample.presentedFrames,
-        lastInboundFrames: sample.inboundFrames,
-        renderStallStartedAtMs: null
-      },
-      action: "none",
-      progressed: true
+      state: { ...reset, lastReconnectAtMs: sample.nowMs },
+      action: "reconnect",
+      progressed: false
     };
   }
 
-  const renderStallStartedAtMs = state.renderStallStartedAtMs ?? sample.nowMs;
-  if (sample.nowMs - renderStallStartedAtMs <= PROGRAM_WATCHDOG_STALL_MS) {
-    return {
-      state: {
-        lastPresentedFrames: sample.presentedFrames,
-        lastInboundFrames: sample.inboundFrames,
-        renderStallStartedAtMs
-      },
-      action: "none",
-      progressed: false
-    };
+  if (presentedProgressed) {
+    return { state: nextState, action: "none", progressed: true };
+  }
+
+  const stallStartedAtMs = renderStallStartedAtMs ?? sample.nowMs;
+  if (sample.nowMs - stallStartedAtMs <= PROGRAM_WATCHDOG_STALL_MS) {
+    return { state: nextState, action: "none", progressed: false };
   }
 
   const inboundProgressed = sample.inboundFrames > state.lastInboundFrames;
-  if (!inboundProgressed) {
-    return {
-      state: {
-        lastPresentedFrames: sample.presentedFrames,
-        lastInboundFrames: sample.inboundFrames,
-        renderStallStartedAtMs
-      },
-      action: "stalled",
-      progressed: false
-    };
+  if (!inboundProgressed || !reconnectAllowed(state, sample.nowMs)) {
+    return { state: nextState, action: "stalled", progressed: false };
   }
 
+  const reset = initialProgramWatchdog(sample.nowMs);
   return {
-    state: initialProgramWatchdog(sample.nowMs),
+    state: { ...reset, lastReconnectAtMs: sample.nowMs },
     action: "reconnect",
     progressed: false
   };
+}
+
+function baselineProgramWatchdog(state: ProgramWatchdogState, sample: ProgramWatchdogSample): ProgramWatchdogState {
+  return {
+    lastPresentedFrames: sample.presentedFrames,
+    lastInboundFrames: sample.inboundFrames,
+    renderStallStartedAtMs: null,
+    cadenceWindowStartedAtMs: sample.nowMs,
+    cadenceWindowPresentedFrames: sample.presentedFrames,
+    cadenceWindowInboundFrames: sample.inboundFrames,
+    cadenceDeficitWindows: 0,
+    lastReconnectAtMs: state.lastReconnectAtMs
+  };
+}
+
+function reconnectAllowed(state: ProgramWatchdogState, nowMs: number): boolean {
+  return state.lastReconnectAtMs == null
+    || nowMs - state.lastReconnectAtMs >= PROGRAM_WATCHDOG_RECONNECT_COOLDOWN_MS;
 }
 
 export type ProgramMonitorHeartbeatBody = {

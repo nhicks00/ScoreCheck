@@ -14,6 +14,8 @@ import { createProgramMonitoringConnection } from "../lib/programMonitoring";
 import {
   buildProgramMonitorHeartbeat,
   initialProgramWatchdog,
+  PROGRAM_WATCHDOG_CADENCE_WINDOW_MS,
+  PROGRAM_WATCHDOG_RECONNECT_COOLDOWN_MS,
   PROGRAM_WATCHDOG_STALL_MS,
   programWatchdogStep,
   type ProgramWatchdogSample,
@@ -316,6 +318,58 @@ describe("programWatchdogStep", () => {
     expect(actions).toEqual(["none", "none", "none", "none"]);
     expect(progressedFlags[3]).toBe(true);
     expect(state.renderStallStartedAtMs).toBeNull();
+  });
+
+  it("reconnects after two sustained healthy-inbound presentation-deficit windows", () => {
+    const window = PROGRAM_WATCHDOG_CADENCE_WINDOW_MS;
+    const { actions } = runWatchdog([
+      { atMs: 0, presentedFrames: 0, inboundFrames: 0 },
+      { atMs: window, presentedFrames: 30, inboundFrames: 300 },
+      { atMs: window * 2, presentedFrames: 60, inboundFrames: 600 }
+    ]);
+    expect(actions).toEqual(["none", "none", "reconnect"]);
+  });
+
+  it("does not reconnect for ordinary cadence variation or a slow source", () => {
+    const window = PROGRAM_WATCHDOG_CADENCE_WINDOW_MS;
+    const ordinary = runWatchdog([
+      { atMs: 0, presentedFrames: 0, inboundFrames: 0 },
+      { atMs: window, presentedFrames: 270, inboundFrames: 300 },
+      { atMs: window * 2, presentedFrames: 530, inboundFrames: 600 }
+    ]);
+    const slowSource = runWatchdog([
+      { atMs: 0, presentedFrames: 0, inboundFrames: 0 },
+      { atMs: window, presentedFrames: 50, inboundFrames: 50 },
+      { atMs: window * 2, presentedFrames: 100, inboundFrames: 100 }
+    ]);
+    expect(ordinary.actions).toEqual(["none", "none", "none"]);
+    expect(slowSource.actions).toEqual(["none", "none", "none"]);
+  });
+
+  it("rate-limits repeated cadence recovery attempts", () => {
+    const window = PROGRAM_WATCHDOG_CADENCE_WINDOW_MS;
+    const first = runWatchdog([
+      { atMs: 0, presentedFrames: 0, inboundFrames: 0 },
+      { atMs: window, presentedFrames: 10, inboundFrames: 300 },
+      { atMs: window * 2, presentedFrames: 20, inboundFrames: 600 }
+    ]);
+    expect(first.actions.at(-1)).toBe("reconnect");
+
+    const beforeCooldown = runWatchdog([
+      { atMs: window * 2 + 1, presentedFrames: 0, inboundFrames: 0 },
+      { atMs: window * 3 + 1, presentedFrames: 10, inboundFrames: 300 },
+      { atMs: window * 4 + 1, presentedFrames: 20, inboundFrames: 600 }
+    ], first.state);
+    expect(beforeCooldown.actions).toEqual(["none", "none", "none"]);
+
+    const afterCooldown = programWatchdogStep(beforeCooldown.state, {
+      nowMs: window * 2 + PROGRAM_WATCHDOG_RECONNECT_COOLDOWN_MS,
+      hasSources: true,
+      renderWatchdogEligible: true,
+      presentedFrames: 30,
+      inboundFrames: 1800
+    });
+    expect(afterCooldown.action).toBe("reconnect");
   });
 });
 

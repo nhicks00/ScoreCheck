@@ -250,7 +250,7 @@ export function ProgramClient({
       if (debug) setDebugFrames(frames);
       const stream = streamHealthRef.current;
       const connected = stream?.connectionState === "connected";
-      const inboundFrames = stream?.framesDecoded ?? stream?.framesReceived ?? null;
+      const inboundFrames = stream?.framesReceived ?? stream?.framesDecoded ?? null;
 
       const step = programWatchdogStep(watchdogRef.current, {
         nowMs: Date.now(),
