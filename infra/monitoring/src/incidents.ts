@@ -52,7 +52,7 @@ export class IncidentManager {
       const next: IncidentSnapshot = {
         id: newEpisode ? crypto.randomUUID() : existing.id,
         fingerprint: normalized.fingerprint,
-        eventId: normalized.eventId,
+        eventId: normalized.eventId ?? existing?.eventId ?? null,
         rootDependency: normalized.rootDependency,
         status: !newEpisode && existing.status === "acknowledged" ? "acknowledged" : "open",
         severity: normalized.severity,

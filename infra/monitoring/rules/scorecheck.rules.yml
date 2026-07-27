@@ -216,6 +216,9 @@ groups:
           max by (court) (scorecheck_media_transport_metrics_available{branch="raw",protocol="SRT"} == 1)
           and on() scorecheck_venue_srt_congested
 
+      - record: scorecheck_court_srt_venue_congested_or_recovering
+        expr: max_over_time(scorecheck_court_srt_venue_congested[5m]) == 1
+
       - alert: ScoreCheckVenueSrtCongestion
         expr: scorecheck_venue_srt_congested
         for: 30s
@@ -234,7 +237,7 @@ groups:
             (scorecheck_media_path_inbound_bitrate_bps{branch="raw"} < 500000)
             and on(court) (scorecheck_court_media_required == 1)
           )
-          unless on(court) scorecheck_court_srt_venue_congested
+          unless on(court) scorecheck_court_srt_venue_congested_or_recovering
         for: 30s
         labels:
           severity: warning
@@ -263,7 +266,7 @@ groups:
             (scorecheck_program_browser_frames_per_second < 20)
             and on(court) (scorecheck_program_browser_required == 1)
           )
-          unless on(court) scorecheck_court_srt_venue_congested
+          unless on(court) scorecheck_court_srt_venue_congested_or_recovering
         for: 20s
         labels:
           severity: critical
@@ -287,7 +290,7 @@ groups:
           and on(court) (increase(scorecheck_program_browser_frames_received_total[2m]) >= 900)
           and on(court) (count_over_time(scorecheck_program_browser_frames_received_total[2m]) >= 12)
           and on(court) (scorecheck_program_browser_required == 1)
-          unless on(court) scorecheck_court_srt_venue_congested
+          unless on(court) scorecheck_court_srt_venue_congested_or_recovering
         for: 1m
         labels:
           severity: warning
@@ -304,7 +307,7 @@ groups:
           and on(court) (increase(scorecheck_program_browser_frames_received_total[2m]) >= 900)
           and on(court) (count_over_time(scorecheck_program_browser_frames_received_total[2m]) >= 12)
           and on(court) (scorecheck_program_browser_required == 1)
-          unless on(court) scorecheck_court_srt_venue_congested
+          unless on(court) scorecheck_court_srt_venue_congested_or_recovering
         for: 30s
         labels:
           severity: critical
@@ -323,7 +326,7 @@ groups:
           and on(court) (increase(scorecheck_program_browser_frames_received_total[2m]) >= 900)
           and on(court) (count_over_time(scorecheck_program_browser_frames_received_total[2m]) >= 12)
           and on(court) (scorecheck_program_browser_required == 1)
-          unless on(court) scorecheck_court_srt_venue_congested
+          unless on(court) scorecheck_court_srt_venue_congested_or_recovering
         for: 1m
         labels:
           severity: warning
@@ -340,7 +343,7 @@ groups:
           and on(court) (increase(scorecheck_program_browser_frames_received_total[2m]) >= 900)
           and on(court) (count_over_time(scorecheck_program_browser_frames_received_total[2m]) >= 12)
           and on(court) (scorecheck_program_browser_required == 1)
-          unless on(court) scorecheck_court_srt_venue_congested
+          unless on(court) scorecheck_court_srt_venue_congested_or_recovering
         for: 30s
         labels:
           severity: critical
@@ -641,7 +644,7 @@ groups:
             or min by (court) (scorecheck_ffmpeg_speed_available{branch=~"normalizer|program"}) == 0
           )
           and on(court) (scorecheck_court_broadcast_live == 1)
-          unless on(court) scorecheck_court_srt_venue_congested
+          unless on(court) scorecheck_court_srt_venue_congested_or_recovering
         for: 30s
         labels:
           severity: critical
@@ -657,7 +660,7 @@ groups:
           (scorecheck_ffmpeg_frames_per_second{branch="preview"} < 20)
           and on(agent, court) (scorecheck_media_path_readers{branch="preview"} > 0)
           and on(court) (scorecheck_court_broadcast_live == 1)
-          unless on(court) scorecheck_court_srt_venue_congested
+          unless on(court) scorecheck_court_srt_venue_congested_or_recovering
         for: 20s
         labels:
           severity: warning

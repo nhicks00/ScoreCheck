@@ -983,3 +983,50 @@ tests:
             exp_annotations:
               summary: Camera 3's required Program viewer is dropping many video frames.
               first_action: Inspect the program WHEP decoder and timestamp path immediately; verify upstream preview health before changing source encoding.
+
+  - name: shared SRT congestion recovery waits for browser metrics to age out
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_media_transport_packets_received_total{agent="ingest",court="1",branch="raw",protocol="SRT"}'
+        values: '0+100x120'
+      - series: 'scorecheck_media_transport_packets_lost_total{agent="ingest",court="1",branch="raw",protocol="SRT"}'
+        values: '0+10x12 120+0x108'
+      - series: 'scorecheck_media_transport_packets_retransmitted_total{agent="ingest",court="1",branch="raw",protocol="SRT"}'
+        values: '0+20x12 240+0x108'
+      - series: 'scorecheck_media_transport_metrics_available{agent="ingest",court="1",branch="raw",protocol="SRT"}'
+        values: '1+0x120'
+      - series: 'scorecheck_court_media_required{court="1"}'
+        values: '1+0x120'
+      - series: 'scorecheck_program_browser_frames_received_total{court="1"}'
+        values: '0+150x120'
+      - series: 'scorecheck_program_browser_frames_dropped_total{court="1"}'
+        values: '0+15x120'
+      - series: 'scorecheck_program_browser_required{court="1"}'
+        values: '1+0x120'
+
+      - series: 'scorecheck_media_transport_packets_received_total{agent="ingest",court="2",branch="raw",protocol="SRT"}'
+        values: '0+100x120'
+      - series: 'scorecheck_media_transport_packets_lost_total{agent="ingest",court="2",branch="raw",protocol="SRT"}'
+        values: '0+10x12 120+0x108'
+      - series: 'scorecheck_media_transport_packets_retransmitted_total{agent="ingest",court="2",branch="raw",protocol="SRT"}'
+        values: '0+20x12 240+0x108'
+      - series: 'scorecheck_media_transport_metrics_available{agent="ingest",court="2",branch="raw",protocol="SRT"}'
+        values: '1+0x120'
+      - series: 'scorecheck_court_media_required{court="2"}'
+        values: '1+0x120'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ScoreCheckProgramFrameDropRatioCritical
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: ScoreCheckProgramFrameDropRatioCritical
+        exp_alerts:
+          - exp_labels:
+              court: '1'
+              severity: critical
+              stage: PROGRAM_BROWSER
+              issue_code: PROGRAM_FRAME_DROP_RATIO_CRITICAL
+              root_dependency: program-browser
+            exp_annotations:
+              summary: Camera 1's required Program viewer is dropping many video frames.
+              first_action: Inspect the program WHEP decoder and timestamp path immediately; verify upstream preview health before changing source encoding.

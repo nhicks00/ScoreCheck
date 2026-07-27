@@ -43,7 +43,14 @@ const alerts = [
   alert("score-target", "ScoreCheckSourceAlignmentFailed", { court: "7" }),
   alert("youtube-source", "ScoreCheckYouTubeUnhealthy", { court: "5" }),
   alert("youtube-target", "ScoreCheckYouTubeDegraded", { court: "5" }),
-  alert("youtube-peer", "ScoreCheckYouTubeDegraded", { court: "7" })
+  alert("youtube-peer", "ScoreCheckYouTubeDegraded", { court: "7" }),
+  alert("quality-critical-drop-source", "ScoreCheckProgramFrameDropRatioCritical", { court: "2" }),
+  alert("quality-critical-freeze-target", "ScoreCheckProgramFreezeRatioCritical", { court: "2" }),
+  alert("quality-critical-freeze-source", "ScoreCheckProgramFreezeRatioCritical", { court: "3" }),
+  alert("quality-high-drop-target", "ScoreCheckProgramFrameDropRatioHigh", { court: "3" }),
+  alert("quality-high-drop-source", "ScoreCheckProgramFrameDropRatioHigh", { court: "4" }),
+  alert("quality-high-freeze-target", "ScoreCheckProgramFreezeRatioHigh", { court: "4" }),
+  alert("quality-peer-freeze", "ScoreCheckProgramFreezeRatioHigh", { court: "5" })
 ];
 
 const accepted = await fetch(`${baseUrl}/api/v2/alerts`, {
@@ -87,7 +94,14 @@ const expected = new Map([
   ["score-target", "suppressed"],
   ["youtube-source", "active"],
   ["youtube-target", "suppressed"],
-  ["youtube-peer", "active"]
+  ["youtube-peer", "active"],
+  ["quality-critical-drop-source", "active"],
+  ["quality-critical-freeze-target", "suppressed"],
+  ["quality-critical-freeze-source", "active"],
+  ["quality-high-drop-target", "suppressed"],
+  ["quality-high-drop-source", "active"],
+  ["quality-high-freeze-target", "suppressed"],
+  ["quality-peer-freeze", "active"]
 ]);
 
 let latest = new Map();

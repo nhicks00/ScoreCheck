@@ -92,6 +92,18 @@ describe("incident manager", () => {
     expect(continued?.incident.openedAt).toBe(first?.incident.openedAt);
   });
 
+  it("retains an enriched event id when continuing alerts omit it", () => {
+    const manager = new IncidentManager();
+    const firing = firingAlert("2026-07-12T12:00:00Z");
+    const [opened] = manager.applyWebhook(firing, new Date("2026-07-12T12:00:05Z"));
+    const eventId = "00000000-0000-4000-8000-000000000111";
+    manager.hydrate([{ ...opened!.incident, eventId }]);
+
+    const [continued] = manager.applyWebhook(firing, new Date("2026-07-12T12:00:30Z"));
+
+    expect(continued?.incident.eventId).toBe(eventId);
+  });
+
   it("reconciles a missed resolved webhook from the authoritative active set", () => {
     const manager = new IncidentManager();
     manager.applyWebhook({
