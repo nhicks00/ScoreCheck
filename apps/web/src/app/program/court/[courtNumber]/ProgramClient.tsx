@@ -77,7 +77,6 @@ export function ProgramClient({
   const watchdogRef = useRef(initialProgramWatchdog(0));
   const startLoggedRef = useRef(false);
   const endLoggedRef = useRef(false);
-  const audioBlockedRef = useRef(false);
   const framesRef = useRef(0);
   const reconnectsRef = useRef(0);
   const reloadCountRef = useRef(0);
@@ -184,16 +183,6 @@ export function ProgramClient({
     }
   }, [courtNumber]);
 
-  /* A human previewing the page can click to lift an autoplay-policy mute;
-     egress Chrome never blocks autoplay, so this is a no-op there. */
-  useEffect(() => {
-    const onPointerDown = () => {
-      audioBlockedRef.current = false;
-    };
-    window.addEventListener("pointerdown", onPointerDown);
-    return () => window.removeEventListener("pointerdown", onPointerDown);
-  }, []);
-
   /* requestVideoFrameCallback advances only when a frame is actually presented.
      currentTime and decoded-frame counters can advance through some frozen or
      repeated-frame failures, so the watchdog uses this compositor-grade clock. */
@@ -247,14 +236,15 @@ export function ProgramClient({
     };
   }, [cameraElement]);
 
-  /* StreamPlayer owns normal source/transport recovery. This watchdog remounts
-     only a foreground connected player that presents no frames past the grace
-     window, including a nominally connected but inbound-stalled peer. */
+  /* StreamPlayer owns source/transport recovery. This watchdog remounts only a
+     foreground connected player whose inbound frames advance while rendering
+     does not. A full source stall stays mounted and shows the interruption
+     slate instead of creating a WHEP retry loop. */
   useEffect(() => {
     if (!hasSources) return;
     const id = window.setInterval(() => {
       const video = videoWrapRef.current?.querySelector("video");
-      if (video) ensureProgramPlayback(video, audioBlockedRef);
+      if (video) ensureProgramPlayback(video);
       const frames = presentedFramesRef.current;
       framesRef.current = frames;
       if (debug) setDebugFrames(frames);
@@ -293,6 +283,10 @@ export function ProgramClient({
         setVideoState("reconnecting");
         recordReconnect();
         setPlayerEpoch((current) => current + 1);
+      } else if (step.action === "stalled") {
+        stableFrameTicksRef.current = 0;
+        setFramesFlowing(false);
+        setVideoState("stalled");
       }
     }, PROGRAM_WATCHDOG_TICK_MS);
     return () => window.clearInterval(id);
@@ -548,28 +542,16 @@ function formatMs(value: number | null): string {
 }
 
 /**
- * Keeps the captured feed unmuted and running. If the browser's autoplay
- * policy rejects unmuted playback (human preview without a gesture), fall
- * back to muted playback so the watchdog sees frames instead of a fake stall;
- * egress Chrome allows autoplay, so the fallback never engages there.
+ * Keeps the camera element muted and running. ProgramAudioMixer is the sole
+ * owner of camera audio; allowing the element to play audio as well would add
+ * a second copy of the same track to the captured page mix.
  */
-function ensureProgramPlayback(video: HTMLVideoElement, audioBlockedRef: { current: boolean }) {
-  if (!audioBlockedRef.current && (video.muted || video.volume !== 1)) {
-    video.muted = false;
-    video.volume = 1;
-  }
+function ensureProgramPlayback(video: HTMLVideoElement) {
+  video.muted = true;
+  video.volume = 0;
   if (video.paused && (video.srcObject || video.currentSrc)) {
-    void video.play().catch((error: unknown) => {
-      // Only a NotAllowedError means the autoplay policy blocked unmuted
-      // playback. Anything else (AbortError from reconnect teardown races,
-      // NotSupportedError from a dead source) must NOT trip the muted
-      // fallback, or a transient glitch would silence the broadcast forever.
-      if (!(error instanceof DOMException) || error.name !== "NotAllowedError") return;
-      audioBlockedRef.current = true;
-      video.muted = true;
-      void video.play().catch(() => {
-        // Still blocked; the watchdog will keep retrying next tick.
-      });
+    void video.play().catch(() => {
+      // The watchdog will keep retrying next tick.
     });
   }
 }

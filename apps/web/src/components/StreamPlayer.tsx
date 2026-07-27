@@ -112,7 +112,7 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
   const [loadRevision, setLoadRevision] = useState(0);
   const [status, setStatus] = useState("Loading stream...");
   const [error, setError] = useState<string | null>(null);
-  const [muted, setMuted] = useState(mode !== "program");
+  const [muted, setMuted] = useState(true);
   const qualificationKeyRef = useRef("");
   // Depend on the primitive URLs so a parent re-render with an identical
   // sources object never tears down a healthy connection.

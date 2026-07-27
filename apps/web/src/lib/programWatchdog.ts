@@ -22,7 +22,7 @@ export const PROGRAM_HEARTBEAT_INTERVAL_MS = 5000;
 /** How long START_RECORDING waits for the commentary iframe before proceeding. */
 export const PROGRAM_COMMENTARY_WAIT_MS = 10_000;
 
-export type ProgramWatchdogAction = "none" | "reconnect";
+export type ProgramWatchdogAction = "none" | "stalled" | "reconnect";
 
 export type ProgramWatchdogState = {
   lastPresentedFrames: number | null;
@@ -57,10 +57,11 @@ export function initialProgramWatchdog(nowMs: number): ProgramWatchdogState {
 
 /**
  * One watchdog tick: given the previous state and a fresh sample, decide
- * whether to leave the player alone or remount it. A reconnect is justified
- * only when a foreground, connected viewer presents no frames. This also
- * unsticks a peer connection that remains nominally connected after inbound
- * media stops. Recovery must never become a full-page reload.
+ * whether to leave the player alone, show the interruption slate, or remount
+ * it. A reconnect is justified only when inbound frames continue while a
+ * foreground, connected viewer presents none. If both clocks stop, the source
+ * is unavailable and remounting the same WHEP path would only create retry
+ * churn. Recovery must never become a full-page reload.
  */
 export function programWatchdogStep(
   state: ProgramWatchdogState,
@@ -109,6 +110,19 @@ export function programWatchdogStep(
         renderStallStartedAtMs
       },
       action: "none",
+      progressed: false
+    };
+  }
+
+  const inboundProgressed = sample.inboundFrames > state.lastInboundFrames;
+  if (!inboundProgressed) {
+    return {
+      state: {
+        lastPresentedFrames: sample.presentedFrames,
+        lastInboundFrames: sample.inboundFrames,
+        renderStallStartedAtMs
+      },
+      action: "stalled",
       progressed: false
     };
   }

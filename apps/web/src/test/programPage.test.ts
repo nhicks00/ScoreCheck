@@ -247,15 +247,35 @@ describe("programWatchdogStep", () => {
     expect(actions).toEqual(["none", "none", "none", "none", "reconnect"]);
   });
 
-  it("remounts a stuck connected transport without escalating to a page reload", () => {
+  it("shows a stable interruption state when inbound and rendered frames both stop", () => {
     const { actions } = runWatchdog([
       { atMs: 0, presentedFrames: 50, inboundFrames: 50 },
       { atMs: 1000, presentedFrames: 80, inboundFrames: 80 },
       { atMs: 2000, presentedFrames: 80, inboundFrames: 80 },
       { atMs: 2000 + PROGRAM_WATCHDOG_STALL_MS, presentedFrames: 80, inboundFrames: 80 },
+      { atMs: 2001 + PROGRAM_WATCHDOG_STALL_MS, presentedFrames: 80, inboundFrames: 80 },
+      { atMs: 8000 + PROGRAM_WATCHDOG_STALL_MS, presentedFrames: 80, inboundFrames: 80 }
+    ]);
+    expect(actions).toEqual(["none", "none", "none", "none", "stalled", "stalled"]);
+  });
+
+  it("reconnects if inbound media resumes while presentation remains stalled", () => {
+    const afterSourceStall = runWatchdog([
+      { atMs: 0, presentedFrames: 50, inboundFrames: 50 },
+      { atMs: 1000, presentedFrames: 80, inboundFrames: 80 },
+      { atMs: 2000, presentedFrames: 80, inboundFrames: 80 },
       { atMs: 2001 + PROGRAM_WATCHDOG_STALL_MS, presentedFrames: 80, inboundFrames: 80 }
     ]);
-    expect(actions).toEqual(["none", "none", "none", "none", "reconnect"]);
+    expect(afterSourceStall.actions.at(-1)).toBe("stalled");
+
+    const resumed = programWatchdogStep(afterSourceStall.state, {
+      nowMs: 3001 + PROGRAM_WATCHDOG_STALL_MS,
+      hasSources: true,
+      renderWatchdogEligible: true,
+      presentedFrames: 80,
+      inboundFrames: 110
+    });
+    expect(resumed.action).toBe("reconnect");
   });
 
   it("never acts in a hidden tab or before transport stats are eligible", () => {
