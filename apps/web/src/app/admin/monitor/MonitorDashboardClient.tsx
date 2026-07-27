@@ -6,16 +6,19 @@ import {
   Bell,
   BellOff,
   Camera,
+  Cable,
   CheckCircle2,
   Clock3,
   Eye,
   Gauge,
   Headphones,
+  Network,
   Radio,
   RefreshCw,
   Server,
   ShieldAlert,
   Signal,
+  Smartphone,
   VideoOff,
   WifiOff,
   X,
@@ -27,11 +30,21 @@ import { deriveMonitorBrowserLiveness, type MonitorBrowserLiveness } from "@/lib
 import { deriveMonitorDeadManReadiness } from "@/lib/monitorDeadManReadiness";
 import { deriveMonitorPagingReadiness } from "@/lib/monitorPagingReadiness";
 import { deriveMonitorSystemState } from "@/lib/monitorSystemState";
-import type { MonitorCourt, MonitorCourtPipelineRange, MonitorHealthState, MonitorIncident, MonitorMediaPath, MonitorSilence, MonitorSnapshotEnvelope, MonitorStage } from "@/lib/monitoringTypes";
+import type { MonitorCourt, MonitorCourtPipelineRange, MonitorHealthState, MonitorIncident, MonitorMediaPath, MonitorRouter, MonitorSilence, MonitorSnapshotEnvelope, MonitorStage } from "@/lib/monitoringTypes";
 import { PacingComparator } from "./PacingComparator";
 
 const POLL_INTERVAL_MS = 5_000;
 const STATE_RANK: Record<MonitorHealthState, number> = { CRITICAL: 9, UNKNOWN: 8, DEGRADED: 7, RECOVERING: 6, STARTING: 5, HEALTHY: 4, MAINTENANCE: 3, EXPECTED_OFF: 2, NOT_APPLICABLE: 1 };
+const ROUTER_UNAVAILABLE: MonitorRouter = {
+  state: "UNKNOWN",
+  sampledAt: null,
+  receivedAt: null,
+  ageMs: null,
+  speedify: null,
+  routing: null,
+  host: null,
+  uplinks: []
+};
 
 export function MonitorDashboardClient({ initial, configured }: { initial: MonitorSnapshotEnvelope | null; configured: boolean }) {
   const [envelope, setEnvelope] = useState(initial);
@@ -283,13 +296,14 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
   }
 
   const snapshot = envelope.snapshot;
+  const router = snapshot.router ?? ROUTER_UNAVAILABLE;
   const snapshotAgeMs = Math.max(0, nowMs - Date.parse(snapshot.generatedAt));
   const stale = envelope.source === "checkpoint" || snapshotAgeMs > 15_000;
   const pagingReadiness = deriveMonitorPagingReadiness(snapshot.notifications);
   const deadManReadiness = deriveMonitorDeadManReadiness(snapshot.deadMan);
   const overall = deriveMonitorSystemState({
     courtStates: snapshot.courts.map(effectiveCourtState),
-    globalStates: [snapshot.collector.state, snapshot.controlPlane.state, snapshot.youtube.state, pagingReadiness.state, deadManReadiness.state],
+    globalStates: [snapshot.collector.state, snapshot.controlPlane.state, snapshot.youtube.state, router.state, pagingReadiness.state, deadManReadiness.state],
     hasCriticalIncident: snapshot.incidents.some((incident) => incident.status !== "resolved" && incident.severity === "critical"),
     stale
   });
@@ -367,6 +381,8 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
       {(pollError || envelope.monitorError || stale) && (
         <div className="monitor-banner" role="alert"><AlertTriangle size={17} /><span>{pollError ?? envelope.monitorError ?? "Monitoring snapshot is stale."}</span></div>
       )}
+
+      <RouterBand router={router} nowMs={nowMs} />
 
       <section className="monitor-incidents-band" aria-label="Action required">
         <div className="monitor-section-heading">
@@ -543,7 +559,10 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
   const loss = browserLost != null && browserReceived != null
     ? percent(browserLost, browserLost + browserReceived)
     : transportLoss(raw);
-  const rttMs = liveBrowser?.video.rttMs ?? raw?.transport?.rttMs;
+  const browserUsesHls = liveBrowser?.video.transport === "hls";
+  const delayMs = browserUsesHls
+    ? liveBrowser.video.playoutDelayMs
+    : liveBrowser?.video.rttMs ?? raw?.transport?.rttMs;
   const rawTrend = history?.rawBitrate ?? [];
   const fpsTrend = history?.programFps.length ? history.programFps : history?.previewFps ?? [];
   return (
@@ -569,7 +588,7 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
         <Metric label="Preview speed" value={formatFps(preview?.framesPerSecond)} />
         <Metric label="Rendered speed" value={formatFps(liveBrowser?.video.framesPerSecond)} />
         <Metric label="Picture size" value={liveBrowser?.video.width && liveBrowser.video.height ? `${liveBrowser.video.width}×${liveBrowser.video.height}` : "--"} />
-        <Metric label="Network delay" value={formatMs(rttMs)} />
+        <Metric label={browserUsesHls ? "Playback buffer" : "Network delay"} value={formatMs(delayMs)} />
         <Metric label="Packet loss" value={loss} />
       </div>
       <div className="monitor-trends" aria-label="Five minute trends">
@@ -595,6 +614,61 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
       </div>
       {issue?.issueCode && <div className="monitor-court-alert"><AlertTriangle size={14} /><span>{issue.summary}</span></div>}
     </article>
+  );
+}
+
+function RouterBand({ router, nowMs }: { router: MonitorRouter; nowMs: number }) {
+  const speedify = router.speedify;
+  const routing = router.routing;
+  const ageMs = router.receivedAt ? Math.max(0, nowMs - Date.parse(router.receivedAt)) : null;
+  const routeReady = routing?.srtDevice === "connectify0"
+    && routing.rtmpDevice === "connectify0"
+    && routing.primaryRuleCount === 2
+    && routing.guardRuleCount === 2
+    && routing.killSwitchActive;
+  return (
+    <section className="monitor-router-band" aria-label="Venue network">
+      <div className="monitor-router-heading">
+        <div><Network size={19} aria-hidden="true" /><div><h2>Venue network</h2><p>Speedify bonded upload and fail-closed camera routing</p></div></div>
+        <StateBadge state={router.state} label={routerStateLabel(router.state)} />
+      </div>
+      <div className="monitor-router-summary">
+        <Metric label="Sending now" value={formatBitrate(speedify?.sendBps)} />
+        <Metric label="Estimated capacity" value={formatBitrate(speedify?.estimatedUploadBps)} />
+        <Metric label="Estimated headroom" value={formatBitrate(speedify?.uploadHeadroomBps)} />
+        <Metric label="Bonded delay" value={formatMs(speedify?.latencyMs)} />
+        <Metric label="Queue" value={speedify?.readQueuePackets == null ? "--" : `${speedify.readQueuePackets} packets`} />
+        <Metric label="Camera sessions" value={routing ? String(routing.cameraFlowCount) : "--"} />
+      </div>
+      <div className="monitor-router-status-line">
+        <span data-ok={speedify?.state === "CONNECTED"}>{speedify?.state === "CONNECTED" ? "Speedify connected" : "Speedify not connected"}</span>
+        <span data-ok={routeReady}>{routeReady ? "Camera traffic protected" : "Camera route protection needs attention"}</span>
+        <span data-ok={ageMs != null && ageMs <= 20_000}>{ageMs == null ? "No router status received" : `Updated ${formatDuration(ageMs)} ago`}</span>
+        {speedify?.failoverCount != null && <span data-ok="true">{speedify.failoverCount} failovers this session</span>}
+      </div>
+      <div className="monitor-uplink-grid">
+        {router.uplinks.length ? router.uplinks.map((uplink) => {
+          const Icon = uplink.type === "cellular" ? Smartphone : uplink.type === "wifi" ? Signal : Cable;
+          const pressure = uplink.inFlightBytes != null && uplink.inFlightWindowBytes
+            ? uplink.inFlightBytes / uplink.inFlightWindowBytes
+            : null;
+          const degraded = !uplink.connected || uplink.uploadCongested || uplink.poorConnection || uplink.slowConnection;
+          return (
+            <article className="monitor-uplink" key={uplink.id} data-degraded={degraded}>
+              <div className="monitor-uplink-heading"><Icon size={17} aria-hidden="true" /><div><strong>{uplinkName(uplink.id, uplink.type)}</strong><span>{uplink.isp ?? "Provider not identified"} · {friendlyState(uplink.priority)}</span></div><StateDot state={degraded ? "DEGRADED" : "HEALTHY"} /></div>
+              <div className="monitor-uplink-metrics">
+                <Metric label="Contribution" value={formatBitrate(uplink.sendBps)} />
+                <Metric label="Available estimate" value={formatBitrate(uplink.estimatedUploadBps)} />
+                <Metric label="Delay" value={formatMs(uplink.latencyMs)} />
+                <Metric label="Jitter" value={formatMs(uplink.jitterMs)} />
+                <Metric label="Packet loss" value={uplink.lossSendRatio == null ? "--" : formatQualityRatio(uplink.lossSendRatio)} />
+                <Metric label="Queue pressure" value={pressure == null ? "--" : formatQualityRatio(pressure)} />
+              </div>
+            </article>
+          );
+        }) : <p className="monitor-uplink-empty">Router connection details are not available yet.</p>}
+      </div>
+    </section>
   );
 }
 
@@ -692,6 +766,22 @@ function systemStateLabel(state: MonitorHealthState): string {
   if (state === "DEGRADED" || state === "UNKNOWN") return "Check system";
   if (state === "EXPECTED_OFF" || state === "NOT_APPLICABLE") return "Idle";
   return friendlyState(state);
+}
+
+function routerStateLabel(state: MonitorHealthState): string {
+  if (state === "HEALTHY") return "Connections healthy";
+  if (state === "CRITICAL") return "Camera internet at risk";
+  if (state === "DEGRADED") return "Connection under pressure";
+  if (state === "UNKNOWN") return "Router status unavailable";
+  return friendlyState(state);
+}
+
+function uplinkName(id: string, type: MonitorRouter["uplinks"][number]["type"]): string {
+  if (type === "cellular") return "Cellular connection";
+  if (type === "wifi") return "Wi-Fi connection";
+  if (id === "eth0") return "Primary wired connection";
+  if (type === "ethernet") return "Wired connection";
+  return id;
 }
 
 function friendlyState(state: string): string {

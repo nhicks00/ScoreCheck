@@ -87,9 +87,9 @@ node.
 `courts.program_video_delay_ms` records the coarse program-video target. The
 MediaMTX Gate 1 deployment currently renders that target as a 3500 ms SRT
 receiver buffer. `courts.commentary_delay_ms` is the 0-10000 ms
-human-calibrated baseline inside the browser audio graph. It accounts for the
-commentator reacting to the low-latency preview; software cannot infer that
-semantic reaction time from network packets alone.
+human-calibrated fallback inside the browser audio graph. The program renderer
+adds the buffered HLS target to that fallback and may report up to 30000 ms in
+runtime heartbeat telemetry.
 
 After the baseline is established, the program mixer automatically holds sync:
 
@@ -97,18 +97,19 @@ After the baseline is established, the program mixer automatically holds sync:
    RTT once per second.
 2. Program and commentator participants run an NTP-style four-timestamp clock
    exchange over their court-scoped LiveKit data channel.
-3. The program samples its own WHEP transport and each incoming commentary
-   track's audio jitter buffer.
-4. Eight valid observations establish a transport baseline. Subsequent changes
-   steer each track's DelayNode independently, capped at +/-500 ms from the
-   persisted baseline and slewed by at most 25 ms per second.
+3. The program measures its buffered HLS playout delay and each incoming
+   commentary track's audio jitter buffer.
+4. Eight valid observations establish a stable lock. Subsequent observations
+   steer each track's DelayNode toward the measured program-minus-preview-minus-
+   commentary transport offset, clamped to 0-30000 ms and slewed by at most
+   50 ms per second.
 5. Missing, stale, malformed, or high-RTT telemetry freezes the last safe value
    and reports `fallback`; it never removes the persisted delay.
 
 Browser `mediaTime` and RTP timestamp offsets are deliberately not compared
-across preview and program sessions. MediaMTX/WebRTC rebase those independent
-sessions, so treating either value as a shared source clock would create false
-corrections.
+across the WHEP commentary preview and buffered HLS program sessions. They are
+independent timelines, so treating either value as a shared source clock would
+create false corrections.
 
 Calibrate with a real clap in frame:
 
@@ -135,15 +136,17 @@ of commentary over TURN/TLS TCP 443 from a network where UDP is blocked. A
 synthetic rehearsal exercises the contract shape only; it is not physical
 production proof.
 
-Never switch the program page to HLS to fix sync. Program mode is WHEP-only so
-its latency class cannot change silently.
+Program mode is buffered HLS-only. Commentary and scoreboard state are delayed
+to the measured program-video timeline; do not switch the program renderer back
+to WHEP to reduce latency during coverage.
 
 ## Failure behavior
 
 - LiveKit initial connection failures retry with exponential backoff.
 - Established rooms use LiveKit reconnect handling.
 - Camera loss leaves the scorebug and commentary alive over a controlled slate.
-- The program remains on `courtN_program`; it never falls back to HLS.
+- The program remains on buffered HLS for `courtN_program`; it never falls back
+  to WHEP.
 - Audio-health failures are reported through program heartbeats.
 
 The production soak cannot arm until the protected qualification is installed and passes

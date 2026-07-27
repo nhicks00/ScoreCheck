@@ -74,6 +74,6 @@ function snapshot({ browser = healthyBrowser(), rawReady = true, programReady = 
 function healthyBrowser() {
   return {
     receivedAt: new Date(startedMs + 20_000).toISOString(),
-    video: { state: "playing", connectionState: "connected", transport: "whep" }
+    video: { state: "playing", connectionState: "connected", transport: "hls" }
   };
 }

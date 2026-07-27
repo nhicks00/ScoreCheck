@@ -15,6 +15,8 @@ ssh "$ROUTER" "mkdir -p '$REMOTE_TMP'"
 scp -O \
   "$SCRIPT_DIR/scorecheck-speedify-routing.sh" \
   "$SCRIPT_DIR/scorecheck-speedify-soak-recorder.sh" \
+  "$SCRIPT_DIR/scorecheck-router-heartbeat.sh" \
+  "$SCRIPT_DIR/scorecheck-router-heartbeat.init" \
   "$SCRIPT_DIR/scorecheck-speedify-watchdog.init" \
   "$ROUTER:$REMOTE_TMP/"
 
@@ -23,10 +25,14 @@ set -eu
 
 cp "$REMOTE_TMP/scorecheck-speedify-routing.sh" /usr/sbin/scorecheck-speedify-routing
 cp "$REMOTE_TMP/scorecheck-speedify-soak-recorder.sh" /usr/sbin/scorecheck-speedify-soak-recorder
+cp "$REMOTE_TMP/scorecheck-router-heartbeat.sh" /usr/sbin/scorecheck-router-heartbeat
+cp "$REMOTE_TMP/scorecheck-router-heartbeat.init" /etc/init.d/scorecheck-router-heartbeat
 cp "$REMOTE_TMP/scorecheck-speedify-watchdog.init" /etc/init.d/scorecheck-speedify-watchdog
 chmod 0755 \
   /usr/sbin/scorecheck-speedify-routing \
   /usr/sbin/scorecheck-speedify-soak-recorder \
+  /usr/sbin/scorecheck-router-heartbeat \
+  /etc/init.d/scorecheck-router-heartbeat \
   /etc/init.d/scorecheck-speedify-watchdog
 
 # Remove the obsolete fail-open tool so its old reset command cannot be used.
@@ -50,6 +56,11 @@ mv "$temporary" "$firewall_file"
 /etc/init.d/scorecheck-speedify-watchdog enable
 /etc/init.d/scorecheck-speedify-watchdog restart
 /usr/sbin/scorecheck-speedify-routing guard-if-enabled
+if [ -s /etc/scorecheck-monitoring-router-token ]; then
+  chmod 0600 /etc/scorecheck-monitoring-router-token
+  /etc/init.d/scorecheck-router-heartbeat enable
+  /etc/init.d/scorecheck-router-heartbeat restart
+fi
 REMOTE
 
 printf '%s\n' "Installed fail-closed Speedify routing on $ROUTER."

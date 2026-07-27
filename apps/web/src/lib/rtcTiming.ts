@@ -3,6 +3,7 @@ export const STREAM_TIMING_INTERVAL_MS = 1000;
 export type StreamTimingSample = {
   version: 1;
   sampledAtMonotonicMs: number;
+  playoutDelayMs: number | null;
   jitterBufferMs: number | null;
   jitterBufferTargetMs: number | null;
   rttMs: number | null;
@@ -49,6 +50,8 @@ export function intervalJitterSample(
 
 export function streamTransportDelayMs(sample: StreamTimingSample | null | undefined): number | null {
   if (!sample) return null;
+  const measuredPlayout = finiteNonNegative(sample.playoutDelayMs);
+  if (measuredPlayout != null) return measuredPlayout;
   const playout = finiteNonNegative(sample.jitterBufferTargetMs)
     ?? finiteNonNegative(sample.jitterBufferMs);
   const network = finiteNonNegative(sample.rttMs);

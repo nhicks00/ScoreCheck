@@ -41,6 +41,7 @@ const REQUIRED_MONITORING_KEYS = Object.freeze([
   "HEALTHCHECKS_BASELINE_PING_URL",
   "HEALTHCHECKS_SENTINEL_PING_URL",
   "MONITOR_API_TOKEN",
+  "MONITOR_ROUTER_HEARTBEAT_TOKEN",
   "MONITOR_BROWSER_ALLOWED_ORIGINS",
   "MONITOR_BROWSER_HEARTBEAT_SECRET",
   "MONITOR_DASHBOARD_URL",
@@ -557,6 +558,7 @@ function buildRecoveryWebEnvironment({ webEnvironment, monitoringEnvironment, ma
   const output = { ...webEnvironment };
   output.PROGRAM_PAGE_TOKEN = material.programPageToken;
   output.MONITOR_API_TOKEN = required(monitoringEnvironment, "MONITOR_API_TOKEN");
+  output.MONITOR_ROUTER_HEARTBEAT_TOKEN = required(monitoringEnvironment, "MONITOR_ROUTER_HEARTBEAT_TOKEN");
   output.MONITOR_BROWSER_HEARTBEAT_SECRET = required(monitoringEnvironment, "MONITOR_BROWSER_HEARTBEAT_SECRET");
   output.MONITOR_PUBLIC_URL = `https://${required(monitoringEnvironment, "MONITOR_PUBLIC_HOST")}`;
   output.MEDIAMTX_RTMP_INGEST_BASE = output.MEDIAMTX_RTMP_INGEST_BASE

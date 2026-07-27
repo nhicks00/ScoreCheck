@@ -588,7 +588,7 @@ export function privateNetworkVerificationPlan({ manifest, state, spec }) {
         status: "verified",
         targets: [
           { purpose: "normalizer-rtsp", address: `${ingestPrivateIpv4}:8554` },
-          { purpose: "program-whep-tls", address: `${ingestHost}->${ingestPrivateIpv4}:443` }
+          { purpose: "program-hls-tls", address: `${ingestHost}->${ingestPrivateIpv4}:443` }
         ]
       }
     };

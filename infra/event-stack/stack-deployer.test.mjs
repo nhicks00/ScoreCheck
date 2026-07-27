@@ -221,7 +221,7 @@ test("requires synchronized event-host clocks with a bounded measured offset", (
   );
 });
 
-test("proves compositor WHEP and observability agent traffic use exact private targets", () => {
+test("proves compositor HLS and observability agent traffic use exact private targets", () => {
   const state = stateFixture();
   const compositor = manifest.droplets.find((entry) => entry.name === "bvm-compositor-a");
   const compositorPlan = privateNetworkVerificationPlan({ manifest, state, spec: compositor });
@@ -229,7 +229,7 @@ test("proves compositor WHEP and observability agent traffic use exact private t
   assert.match(compositorPlan.command, /10\.20\.0\.3\/8554/u);
   assert.match(compositorPlan.command, /bvm-egress/u);
   assert.match(compositorPlan.command, /preview\.beachvolleyballmedia\.com\/healthz/u);
-  assert.deepEqual(compositorPlan.evidence.targets.map((entry) => entry.purpose), ["normalizer-rtsp", "program-whep-tls"]);
+  assert.deepEqual(compositorPlan.evidence.targets.map((entry) => entry.purpose), ["normalizer-rtsp", "program-hls-tls"]);
 
   const observer = manifest.droplets.find((entry) => entry.role === "observability");
   const observerPlan = privateNetworkVerificationPlan({ manifest, state, spec: observer });

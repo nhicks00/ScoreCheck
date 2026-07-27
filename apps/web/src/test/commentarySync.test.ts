@@ -16,6 +16,7 @@ import { classifyRtcNetworkPath, intervalJitterSample, streamTransportDelayMs, t
 const timing = (overrides: Partial<StreamTimingSample> = {}): StreamTimingSample => ({
   version: 1,
   sampledAtMonotonicMs: 10_000,
+  playoutDelayMs: null,
   jitterBufferMs: 50,
   jitterBufferTargetMs: 60,
   rttMs: 40,
@@ -85,23 +86,24 @@ describe("RTC timing", () => {
 
   it("combines playout buffering with half the measured RTT", () => {
     expect(streamTransportDelayMs(timing())).toBe(80);
+    expect(streamTransportDelayMs(timing({ playoutDelayMs: 15_500 }))).toBe(15_500);
   });
 });
 
 describe("commentary sync controller", () => {
   it("locks a baseline then applies bounded, slew-limited transport correction", () => {
     let state = initialCommentarySyncController(3000);
-    const baseline = { programTransportMs: 100, previewTransportMs: 60, commentaryTransportMs: 90 };
-    expect(observationOffsetMs(baseline)).toBe(-50);
+    const baseline = { programTransportMs: 15_500, previewTransportMs: 60, commentaryTransportMs: 90 };
+    expect(observationOffsetMs(baseline)).toBe(15_350);
     for (let index = 0; index < 8; index += 1) state = commentarySyncStep(state, baseline);
     expect(state.status).toBe("locked");
-    expect(state.baselineOffsetMs).toBe(-50);
+    expect(state.baselineOffsetMs).toBe(15_350);
 
-    const shifted = { programTransportMs: 180, previewTransportMs: 60, commentaryTransportMs: 90 };
+    const shifted = { programTransportMs: 16_000, previewTransportMs: 60, commentaryTransportMs: 90 };
     for (let index = 0; index < 5; index += 1) state = commentarySyncStep(state, shifted);
-    expect(state.targetDelayMs).toBe(3080);
+    expect(state.targetDelayMs).toBe(15_850);
     expect(state.appliedDelayMs).toBeGreaterThan(3000);
-    expect(state.appliedDelayMs).toBeLessThanOrEqual(3080);
+    expect(state.appliedDelayMs).toBeLessThanOrEqual(15_850);
   });
 
   it("builds observations only when all three transport legs are measured", () => {

@@ -177,7 +177,7 @@ function browser(camera) {
     receivedAt: new Date(nowMs).toISOString(),
     pageLoadedAt: "2026-07-22T11:59:00Z",
     pageBuildVersion: "build",
-    video: { state: "playing", connectionState: "connected", transport: "whep", networkPath: "private-vpc", width: 1920, height: 1080, framesRendered: 1_000, framesDropped: 0, freezeCount: 0, totalFreezesDurationMs: 0, packetsLost: 0, reconnectCount: 0, reloadCount: 0 },
+    video: { state: "playing", connectionState: "connected", transport: "hls", networkPath: null, width: 1920, height: 1080, framesRendered: 1_000, framesDropped: 0, freezeCount: 0, totalFreezesDurationMs: 0, packetsLost: null, playoutDelayMs: 12_000, reconnectCount: 0, reloadCount: 0 },
     commentary: { cameraTrackPresent: true },
     scoreRender: { loaded: true, connected: true, stale: false, frozen: false, domMismatchReason: null, camera }
   };

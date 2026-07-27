@@ -85,6 +85,7 @@ export type AgentTarget = {
 export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
   const schema = z.object({
     MONITOR_API_TOKEN: z.string().min(24),
+    MONITOR_ROUTER_HEARTBEAT_TOKEN: z.string().min(24),
     ALERTMANAGER_WEBHOOK_TOKEN: z.string().min(24),
     ALERTMANAGER_INTERNAL_URL: safeHttpUrl.default("http://alertmanager:9093"),
     PROMETHEUS_INTERNAL_URL: safeHttpUrl.default("http://prometheus:9090"),
@@ -139,6 +140,7 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
   }
   return {
     token: parsed.MONITOR_API_TOKEN,
+    routerHeartbeatToken: parsed.MONITOR_ROUTER_HEARTBEAT_TOKEN,
     alertmanagerWebhookToken: parsed.ALERTMANAGER_WEBHOOK_TOKEN,
     alertmanagerInternalUrl: parsed.ALERTMANAGER_INTERNAL_URL.replace(/\/+$/, ""),
     prometheusInternalUrl: parsed.PROMETHEUS_INTERNAL_URL.replace(/\/+$/, ""),

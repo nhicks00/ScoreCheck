@@ -35,7 +35,7 @@ PROGRAM
 Capacity-qualified event-day compositor pool
   current safe baseline: one c-4 per active court
   two courts per larger host only after a measured admission test
-  program WHEP + DOM scorebug + LiveKit tracks
+  buffered program HLS + DOM scorebug + LiveKit tracks
   Web Audio gain/delay/compression/meters
   controlled signal-loss slate
   LiveKit Web Egress -> YouTube RTMPS
@@ -49,7 +49,8 @@ Supabase desired/observed state -> outbound controller reconciler
 
 - Separate `preview_stream_path` and `program_stream_path` court fields.
 - Program-video delay, camera gain, commentary gain, and commentary delay fields.
-- Program mode is WHEP-only and never falls back to HLS.
+- Program mode is buffered HLS-only; WHEP remains the low-latency commentary and
+  selected-inspection transport.
 - Real presented-frame watchdog via `requestVideoFrameCallback`.
 - Controlled video-loss slate while scorebug and audio continue.
 - Self-hosted LiveKit commentary node with TURN/TLS and pinned images.
@@ -60,7 +61,8 @@ Supabase desired/observed state -> outbound controller reconciler
 - MediaMTX `courtN_raw`, `courtN_preview`, and delayed `courtN_program` paths.
 - Pinned MediaMTX, LiveKit Server, Egress, Redis, and Caddy images.
 - LiveKit Chrome sandbox seccomp profile instead of broad `SYS_ADMIN`.
-- Explicit YouTube 720p30/4 Mbps/2 second keyframe/AAC RTMPS request.
+- Explicit YouTube 1080p30 or 1080p60 H.264/AAC RTMPS request, selected by the
+  event manifest and never silently reduced to 720p.
 
 ## Implemented unified monitoring foundation
 

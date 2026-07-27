@@ -446,7 +446,7 @@ describe("buildProgramMonitorHeartbeat", () => {
       syncStatus: "fallback",
       configuredDelayMs: 0,
       targetDelayMs: null,
-      appliedDelayMs: 10_000,
+      appliedDelayMs: 30_000,
       clockRttMs: 60,
       syncSampleAgeMs: null
     });
@@ -490,6 +490,7 @@ function base(overrides: Partial<Parameters<typeof buildProgramMonitorHeartbeat>
       rttMs: 20,
       jitterMs: 4,
       jitterBufferMs: 80,
+      playoutDelayMs: null,
       packetsLost: 0,
       packetsReceived: 1_000,
       framesReceived: 900,

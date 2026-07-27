@@ -8,6 +8,11 @@ import type { ProgramMonitoringConnection } from "@/lib/programMonitoring";
 import { incrementProgramReconnect, recordProgramPageLoad } from "@/lib/programDiagnostics";
 import type { StreamTimingSample } from "@/lib/rtcTiming";
 import {
+  PROGRAM_HLS_TARGET_LATENCY_MS,
+  PROGRAM_MAX_TIMELINE_DELAY_MS,
+  programTimelineDelayMs
+} from "@/lib/programTimeline";
+import {
   analyzeVisualFrame,
   EMPTY_PROGRAM_VISUAL_HEALTH,
   initialVisualAnalysisState,
@@ -46,6 +51,7 @@ type ProgramClientProps = {
   cameraGainDb: number;
   commentaryGainDb: number;
   commentaryDelayMs: number;
+  programVideoDelayMs: number;
   debug: boolean;
   buildVersion: string;
   configurationVersion: string;
@@ -65,6 +71,7 @@ export function ProgramClient({
   cameraGainDb,
   commentaryGainDb,
   commentaryDelayMs,
+  programVideoDelayMs,
   debug,
   buildVersion,
   configurationVersion,
@@ -103,6 +110,7 @@ export function ProgramClient({
   const [audioHealth, setAudioHealth] = useState<ProgramAudioHealth>(EMPTY_PROGRAM_AUDIO_HEALTH);
   const [commentaryWaitExpired, setCommentaryWaitExpired] = useState(false);
   const [heartbeatState, setHeartbeatState] = useState<"disabled" | "waiting" | "ok" | "error">(monitoring ? "waiting" : "disabled");
+  const [timelineDelayMs, setTimelineDelayMs] = useState(() => programTimelineDelayMs(programVideoDelayMs, null));
 
   const setVideoState = useCallback((next: string) => {
     videoStateRef.current = next;
@@ -124,8 +132,14 @@ export function ProgramClient({
     setAudioHealth(next);
   }, []);
   const updateProgramTiming = useCallback((sample: StreamTimingSample | null) => {
-    programTimingRef.current = sample;
-  }, []);
+    if (!sample) {
+      programTimingRef.current = null;
+      return;
+    }
+    const totalDelayMs = programTimelineDelayMs(programVideoDelayMs, sample.playoutDelayMs);
+    programTimingRef.current = { ...sample, playoutDelayMs: totalDelayMs };
+    setTimelineDelayMs((current) => Math.abs(current - totalDelayMs) >= 250 ? totalDelayMs : current);
+  }, [programVideoDelayMs]);
   const updateStreamHealth = useCallback((health: StreamConnectionHealth | null) => {
     streamHealthRef.current = health;
   }, []);
@@ -468,6 +482,7 @@ export function ProgramClient({
             theme="default"
             buildVersion={buildVersion}
             reloadOnVersionChange={false}
+            timelineDelayMs={timelineDelayMs}
             onHealth={updateOverlayHealth}
           />
         </div>
@@ -478,7 +493,7 @@ export function ProgramClient({
           commentary={commentary}
           cameraGainDb={cameraGainDb}
           commentaryGainDb={commentaryGainDb}
-          commentaryDelayMs={commentaryDelayMs}
+          commentaryDelayMs={Math.min(PROGRAM_MAX_TIMELINE_DELAY_MS, commentaryDelayMs + PROGRAM_HLS_TARGET_LATENCY_MS)}
           onHealth={updateAudioHealth}
         />
       </div>

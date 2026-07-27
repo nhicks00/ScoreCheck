@@ -35,7 +35,8 @@ const MAX_MONITOR_AGE_MS = 15_000;
 const SOURCE_BITRATE_WINDOW_MS = 60_000;
 const SOURCE_BITRATE_EXTREME_FACTOR = 1.5;
 const BROWSER_IDENTITY_FIELDS = Object.freeze(["pageLoadedAt", "pageBuildVersion"]);
-const BROWSER_COUNTER_FIELDS = Object.freeze(["framesDropped", "freezeCount", "totalFreezesDurationMs", "packetsLost", "reconnectCount", "reloadCount"]);
+const BROWSER_COUNTER_FIELDS = Object.freeze(["framesDropped", "freezeCount", "totalFreezesDurationMs", "reconnectCount", "reloadCount"]);
+const WHEP_COUNTER_FIELDS = Object.freeze([...BROWSER_COUNTER_FIELDS, "packetsLost"]);
 const ROUTER_INTERVAL_MS = 60_000;
 const ROUTER_MAX_GAP_MS = 75_000;
 const ROUTER_MIN_MEMORY_KB = 65_536;
@@ -855,14 +856,14 @@ export function productionSnapshotProblems(snapshot, profiles, venue, previous =
     }
     const browser = court.browser;
     const age = browser ? nowMs - Date.parse(browser.receivedAt) : Infinity;
-    if (!browser || !freshAge(age) || browser.video?.state !== "playing" || browser.video?.connectionState !== "connected" || browser.video?.transport !== "whep") {
-      problems.push(`Camera ${camera} program browser is not fresh and playing`);
+    if (!browser || !freshAge(age) || browser.video?.state !== "playing" || browser.video?.connectionState !== "connected" || browser.video?.transport !== "hls") {
+      problems.push(`Camera ${camera} program browser is not fresh and playing buffered HLS`);
     } else {
-      if (browser.video.networkPath !== "private-vpc") problems.push(`Camera ${camera} program browser is not using the private VPC media path`);
+      if (!Number.isFinite(browser.video.playoutDelayMs) || browser.video.playoutDelayMs < 0 || browser.video.playoutDelayMs > 24_000) problems.push(`Camera ${camera} program HLS playout delay is outside the 0-24 second bound`);
       if (browser.video.width !== 1920 || browser.video.height !== 1080) problems.push(`Camera ${camera} program browser is not rendering 1920x1080`);
       if (!browser.scoreRender?.loaded || !browser.scoreRender.connected || browser.scoreRender.stale || browser.scoreRender.frozen || browser.scoreRender.domMismatchReason) problems.push(`Camera ${camera} scoreboard overlay is not loaded, connected, and current`);
       if (!browser.commentary?.cameraTrackPresent) problems.push(`Camera ${camera} program browser has no camera audio track`);
-      if (BROWSER_COUNTER_FIELDS.some((field) => !Number.isFinite(browser.video[field]) || browser.video[field] < 0)) problems.push(`Camera ${camera} browser quality counters are invalid`);
+      if (browserCounterFields(browser.video).some((field) => !Number.isFinite(browser.video[field]) || browser.video[field] < 0)) problems.push(`Camera ${camera} browser quality counters are invalid`);
     }
     const agent = assignments.get(camera);
     const egress = agent?.nativeServices?.egress;
@@ -891,7 +892,7 @@ export function browserDeltaProblems(previous, current, profiles, activeCameras)
     if (!Number.isInteger(after.heartbeatSeq) || after.heartbeatSeq <= before.heartbeatSeq) problems.push(`Camera ${camera} browser heartbeat did not advance`);
     if (Date.parse(after.receivedAt) <= Date.parse(before.receivedAt)) problems.push(`Camera ${camera} browser receipt did not advance`);
     if (!Number.isInteger(after.video?.framesRendered) || after.video.framesRendered <= before.video?.framesRendered) problems.push(`Camera ${camera} rendered frames did not advance`);
-    for (const field of BROWSER_COUNTER_FIELDS) {
+    for (const field of browserCounterFields(after.video)) {
       const left = before.video?.[field];
       const right = after.video?.[field];
       if (!Number.isFinite(left) || !Number.isFinite(right) || right !== left) problems.push(`Camera ${camera} browser ${field} changed`);
@@ -905,6 +906,10 @@ export function browserDeltaProblems(previous, current, profiles, activeCameras)
     }
   }
   return unique(problems);
+}
+
+export function browserCounterFields(video) {
+  return video?.transport === "whep" ? WHEP_COUNTER_FIELDS : BROWSER_COUNTER_FIELDS;
 }
 
 export function productionProviderProblems(provider, activeCameras) {

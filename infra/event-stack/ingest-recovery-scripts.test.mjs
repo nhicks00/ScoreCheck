@@ -110,6 +110,10 @@ exec /usr/bin/install -m "$mode" "$@"
   await executable(join(bin, "chown"), "#!/bin/sh\nexit 0\n");
   await executable(join(bin, "curl"), "#!/bin/sh\nexit 0\n");
   await executable(join(bin, "docker"), `#!/bin/sh
+if [ "$1" = exec ] && [ "$3" = sha256sum ]; then
+  sha256sum .generated/prometheus.yml
+  exit 0
+fi
 if [ "$1" = inspect ]; then
   case "$*" in
     *State.Running*) echo true ;;

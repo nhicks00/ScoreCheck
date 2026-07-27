@@ -326,8 +326,9 @@ function browser(sampledMs, disconnected) {
     pageBuildVersion: renderer.gitSha,
     configurationVersion: "configuration-1234",
     video: {
-      state: "playing", connectionState: "connected", transport: "whep", networkPath: "private-vpc", width: 1920, height: 1080,
-      framesRendered, framesDropped: 0, freezeCount: 0, totalFreezesDurationMs: 0, packetsLost: 0, reconnectCount: 0, reloadCount: 0
+      state: "playing", connectionState: "connected", transport: "hls", networkPath: null, width: 1920, height: 1080,
+      framesRendered, framesDropped: 0, freezeCount: 0, totalFreezesDurationMs: 0, packetsLost: null,
+      playoutDelayMs: 12_000, reconnectCount: 0, reloadCount: 0
     },
     commentary: { cameraTrackPresent: true },
     scoreRender: {

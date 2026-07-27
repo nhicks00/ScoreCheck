@@ -2,7 +2,7 @@
 #
 # Phase 2 of docs/PRODUCTION_PLATFORM_PLAN.md ("program page as scene"): headless
 # Chrome inside the egress container renders the ScoreCheck program page
-# (/program/court/N — delayed WHEP video + scorebug DOM + LiveKit audio),
+# (/program/court/N — buffered HLS video + scorebug DOM + LiveKit audio),
 # GStreamer/x264 encodes it, and the result is pushed to YouTube RTMP.
 #
 # No LiveKit rooms are ever used. livekit-server exists purely as the Egress

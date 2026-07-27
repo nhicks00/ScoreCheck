@@ -21,6 +21,11 @@ import {
   type RtcJitterTotals,
   type StreamTimingSample
 } from "@/lib/rtcTiming";
+import {
+  PROGRAM_HLS_BUFFER_LENGTH_SECONDS,
+  PROGRAM_HLS_MAX_LATENCY_MS,
+  PROGRAM_HLS_TARGET_LATENCY_MS
+} from "@/lib/programTimeline";
 
 type StreamPlayerProps = {
   courtNumber: number;
@@ -62,6 +67,7 @@ export type StreamConnectionHealth = {
   rttMs: number | null;
   jitterMs: number | null;
   jitterBufferMs: number | null;
+  playoutDelayMs: number | null;
   packetsLost: number | null;
   packetsReceived: number | null;
   framesReceived: number | null;
@@ -87,6 +93,7 @@ type HlsInstance = {
   attachMedia: (element: HTMLVideoElement) => void;
   on: (event: string, callback: (event: string, data: { fatal?: boolean }) => void) => void;
   destroy: () => void;
+  latency: number;
 };
 
 const MAX_RETRY_DELAY_MS = 15_000;
@@ -261,9 +268,25 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
     let hlsPresentedFrames = 0;
     let previousHlsPresentedFrames = 0;
     let previousHlsSampledAtMs = 0;
+    let hlsFreezeCount = 0;
+    let hlsFreezeDurationMs = 0;
+    let hlsFreezeStartedAtMs: number | null = null;
+
+    const startHlsFreeze = () => {
+      const state = playbackEvidenceStateRef.current;
+      if (state.transport !== "hls" || state.connectionState !== "connected" || hlsFreezeStartedAtMs != null) return;
+      hlsFreezeCount += 1;
+      hlsFreezeStartedAtMs = performance.now();
+    };
+    const endHlsFreeze = () => {
+      if (hlsFreezeStartedAtMs == null) return;
+      hlsFreezeDurationMs += Math.max(0, performance.now() - hlsFreezeStartedAtMs);
+      hlsFreezeStartedAtMs = null;
+    };
 
     const onPlaying = () => {
       if (cancelled) return;
+      endHlsFreeze();
       setError(null);
       setStatus(pc ? "Live — low latency" : "Live — HLS");
       const state = playbackEvidenceStateRef.current;
@@ -278,8 +301,14 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
       }
     };
     const onPause = () => updatePlaybackEvidenceState({ paused: true });
-    const onWaiting = () => updatePlaybackEvidenceState({ stalled: true });
-    const onStalled = () => updatePlaybackEvidenceState({ stalled: true });
+    const onWaiting = () => {
+      startHlsFreeze();
+      updatePlaybackEvidenceState({ stalled: true });
+    };
+    const onStalled = () => {
+      startHlsFreeze();
+      updatePlaybackEvidenceState({ stalled: true });
+    };
     const onEmptied = () => updatePlaybackEvidenceState({
       paused: true,
       stalled: false,
@@ -368,16 +397,33 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
       const quality = typeof video.getVideoPlaybackQuality === "function"
         ? video.getVideoPlaybackQuality()
         : null;
+      const latencyMs = hls && Number.isFinite(hls.latency)
+        ? Math.max(0, hls.latency * 1000)
+        : null;
+      const activeFreezeDurationMs = hlsFreezeStartedAtMs == null
+        ? 0
+        : Math.max(0, performance.now() - hlsFreezeStartedAtMs);
       onConnectionHealth?.({
         ...emptyConnectionHealth(),
         transport: "hls",
         connectionState: video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA ? "connected" : "connecting",
+        playoutDelayMs: latencyMs,
         framesPerSecond: elapsedMs > 0 ? presentedDelta * 1000 / elapsedMs : null,
         width: video.videoWidth || null,
         height: video.videoHeight || null,
         framesReceived: quality?.totalVideoFrames ?? null,
         framesDecoded: quality?.totalVideoFrames ?? null,
-        framesDropped: quality?.droppedVideoFrames ?? null
+        framesDropped: quality?.droppedVideoFrames ?? null,
+        freezeCount: hlsFreezeCount,
+        totalFreezesDurationMs: hlsFreezeDurationMs + activeFreezeDurationMs
+      });
+      onTimingSample?.({
+        version: 1,
+        sampledAtMonotonicMs: monotonicEpochMs(),
+        playoutDelayMs: latencyMs,
+        jitterBufferMs: null,
+        jitterBufferTargetMs: null,
+        rttMs: null
       });
       previousHlsPresentedFrames = hlsPresentedFrames;
       previousHlsSampledAtMs = nowMs;
@@ -564,7 +610,15 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
           setError("Stream video is not available in this browser.");
           return;
         }
-        const instance = new Hls({ lowLatencyMode: true, backBufferLength: 0 }) as unknown as HlsInstance;
+        const instance = new Hls({
+          lowLatencyMode: false,
+          backBufferLength: PROGRAM_HLS_BUFFER_LENGTH_SECONDS,
+          maxBufferLength: PROGRAM_HLS_BUFFER_LENGTH_SECONDS,
+          liveSyncDuration: PROGRAM_HLS_TARGET_LATENCY_MS / 1000,
+          liveMaxLatencyDuration: PROGRAM_HLS_MAX_LATENCY_MS / 1000,
+          maxLiveSyncPlaybackRate: 1,
+          startOnSegmentBoundary: true
+        }) as unknown as HlsInstance;
         hls = instance;
         instance.on(Hls.Events.ERROR, (_event, data) => {
           if (cancelled || hls !== instance) return;
@@ -731,6 +785,7 @@ function extractTimingSample(
     sample: {
       version: 1,
       sampledAtMonotonicMs: monotonicEpochMs(),
+      playoutDelayMs: null,
       jitterBufferMs: jitter.jitterBufferMs,
       jitterBufferTargetMs: jitter.jitterBufferTargetMs,
       rttMs
@@ -744,6 +799,7 @@ function extractTimingSample(
       rttMs,
       jitterMs,
       jitterBufferMs: jitter.jitterBufferTargetMs ?? jitter.jitterBufferMs,
+      playoutDelayMs: null,
       packetsLost,
       packetsReceived,
       framesReceived,
@@ -781,6 +837,7 @@ function emptyConnectionHealth(): StreamConnectionHealth {
     rttMs: null,
     jitterMs: null,
     jitterBufferMs: null,
+    playoutDelayMs: null,
     packetsLost: null,
     packetsReceived: null,
     framesReceived: null,

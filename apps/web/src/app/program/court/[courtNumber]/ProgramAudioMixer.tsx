@@ -15,6 +15,7 @@ import {
   commentarySyncStep,
   COMMENTARY_SYNC_CLOCK_TOPIC,
   COMMENTARY_SYNC_INTERVAL_MS,
+  COMMENTARY_SYNC_MAX_DELAY_MS,
   COMMENTARY_SYNC_PING_INTERVAL_MS,
   COMMENTARY_SYNC_PREVIEW_TOPIC,
   COMMENTARY_SYNC_SAMPLE_MAX_AGE_MS,
@@ -212,8 +213,8 @@ export function ProgramAudioMixer({
       document.body.appendChild(playbackElement);
       track.attach(playbackElement);
       const source = context.createMediaStreamSource(new MediaStream([track.mediaStreamTrack]));
-      const delay = context.createDelay(10);
-      const configuredDelay = clamp(commentaryDelayMs, 0, 10_000);
+      const delay = context.createDelay(COMMENTARY_SYNC_MAX_DELAY_MS / 1000);
+      const configuredDelay = clamp(commentaryDelayMs, 0, COMMENTARY_SYNC_MAX_DELAY_MS);
       delay.delayTime.value = configuredDelay / 1000;
       source.connect(delay).connect(commentaryGain);
       commentarySources.set(track.mediaStreamTrack.id, {
@@ -452,7 +453,7 @@ export function ProgramAudioMixer({
         cameraClippedSampleRatio: cameraTrackPresent ? cameraLevels.clippedSampleRatio : null,
         secondsSinceCameraAudio: cameraAudioReferenceMs == null ? null : Math.max(0, (nowMs - cameraAudioReferenceMs) / 1000),
         commentarySyncStatus: syncStatus,
-        commentaryDelayConfiguredMs: commentarySources.size > 0 ? clamp(commentaryDelayMs, 0, 10_000) : null,
+        commentaryDelayConfiguredMs: commentarySources.size > 0 ? clamp(commentaryDelayMs, 0, COMMENTARY_SYNC_MAX_DELAY_MS) : null,
         commentaryDelayTargetMs: syncTargetDelayMs,
         commentaryDelayAppliedMs: syncAppliedDelayMs,
         commentarySyncRttMs: syncRttMs,

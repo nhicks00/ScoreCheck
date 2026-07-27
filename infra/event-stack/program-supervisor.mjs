@@ -65,7 +65,7 @@ function cameraStatus(snapshot, camera, nowMs) {
     && ageMs <= MAX_BROWSER_AGE_MS
     && browser.video?.state === "playing"
     && browser.video?.connectionState === "connected"
-    && browser.video?.transport === "whep";
+    && browser.video?.transport === "hls";
   return browserHealthy ? "healthy" : "browser-failed";
 }
 

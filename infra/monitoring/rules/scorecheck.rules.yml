@@ -231,6 +231,30 @@ groups:
           summary: "The venue upload is overloaded, so multiple SRT cameras are retransmitting video."
           first_action: "Do not restart the cameras. Add upload capacity or lower total camera bitrate until this alert clears."
 
+      - alert: ScoreCheckVenueRouterHeartbeatMissing
+        expr: (scorecheck_router_heartbeat_fresh == 0) and on() (sum(scorecheck_court_media_required) > 0)
+        for: 30s
+        labels:
+          severity: critical
+          stage: VENUE
+          issue_code: VENUE_ROUTER_STATUS_MISSING
+          root_dependency: venue-router
+        annotations:
+          summary: "The venue router stopped reporting its internet and routing status."
+          first_action: "Keep the cameras streaming. Check that the venue router is powered on and connected to the internet."
+
+      - alert: ScoreCheckVenueCameraRouteUnprotected
+        expr: (scorecheck_router_camera_route_healthy == 0) and on() (sum(scorecheck_court_media_required) > 0)
+        for: 10s
+        labels:
+          severity: critical
+          stage: VENUE
+          issue_code: VENUE_CAMERA_ROUTE_UNPROTECTED
+          root_dependency: venue-router
+        annotations:
+          summary: "Camera traffic is not protected by the bonded fail-closed route."
+          first_action: "Keep the cameras streaming and contact the technical operator. Do not change camera settings."
+
       - alert: ScoreCheckProgramBrowserMissing
         expr: (scorecheck_program_browser_heartbeat_fresh == 0) and on(court) (scorecheck_program_browser_required == 1)
         for: 15s
@@ -305,7 +329,7 @@ groups:
           root_dependency: program-browser
         annotations:
           summary: "Camera {{ $labels.court }}'s required Program viewer is dropping many video frames."
-          first_action: "Inspect the program WHEP decoder and timestamp path immediately; verify upstream preview health before changing source encoding."
+          first_action: "Inspect the buffered HLS decoder, segment freshness, and program timeline immediately; verify upstream preview health before changing source encoding."
 
       - alert: ScoreCheckProgramFreezeRatioHigh
         expr: |
@@ -343,7 +367,7 @@ groups:
           root_dependency: program-browser
         annotations:
           summary: "Camera {{ $labels.court }}'s required Program viewer is repeatedly freezing."
-          first_action: "Inspect the program WHEP decoder and timestamp path immediately; verify upstream preview health before changing source encoding."
+          first_action: "Inspect the buffered HLS decoder, segment freshness, and program timeline immediately; verify upstream preview health before changing source encoding."
 
       - alert: ScoreCheckCommentaryDisconnected
         expr: (scorecheck_program_commentary_room_connected == 0) and on(court) (scorecheck_court_commentary_required == 1)

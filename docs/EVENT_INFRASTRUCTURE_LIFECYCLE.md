@@ -612,7 +612,7 @@ and ICMP while ingress stays role-scoped. Required outbound purposes are:
 | Every host during provisioning | DNS, NTP, Ubuntu and container registries; public TLS roles also require ACME |
 | Ingest | Camera return traffic, private compositor/monitor traffic, and certificate issuance |
 | Commentary | LiveKit ICE/TURN traffic, private monitoring, and certificate issuance |
-| Compositor | Private ingest WHEP/RTSP, pinned renderer and Supabase HTTPS/WSS, monitoring, LiveKit commentary, and YouTube RTMPS |
+| Compositor | Private ingest HLS/RTSP, pinned renderer and Supabase HTTPS/WSS, monitoring, LiveKit commentary, and YouTube RTMPS |
 | Observability | Private agent collection plus Supabase, Pushover, Healthchecks, YouTube API/watch probes, and bounded public sentinels |
 
 This is an explicit reliability tradeoff, not an assertion that unrestricted
@@ -635,6 +635,11 @@ credentials. The renderer's generated deployment origin, Git SHA, deployment
 ID, and browser contracts are captured in the protected output. Never weaken
 the shared application project's Vercel Authentication to make its generated
 deployment URLs usable by Egress.
+
+Apply migration `031_buffered_program_commentary_timing.sql` before deploying
+the buffered-HLS renderer. It widens only program-heartbeat timing evidence to
+the same 30000 ms bound as the browser DelayNode; the persisted human
+commentary fallback remains constrained to 0-10000 ms.
 
 ```bash
 node infra/event-stack/production-renderer.mjs prepare \

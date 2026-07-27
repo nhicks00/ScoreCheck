@@ -127,7 +127,11 @@ function validateExpectedProfile(profile, court) {
     throw new Error(`expectedProfiles.${court} bitrate range is invalid`);
   }
   if (profile.videoFieldOrder !== "progressive") throw new Error(`expectedProfiles.${court}.videoFieldOrder must be progressive`);
-  if (profile.videoPixelFormat !== "yuv420p") throw new Error(`expectedProfiles.${court}.videoPixelFormat must be yuv420p`);
+  const browserNormalizerPixelFormat = profile.sourcePathMode === "isolated-browser-normalizer"
+    && profile.videoPixelFormat === "yuvj420p";
+  if (profile.videoPixelFormat !== "yuv420p" && !browserNormalizerPixelFormat) {
+    throw new Error(`expectedProfiles.${court}.videoPixelFormat must be yuv420p, or yuvj420p through the isolated browser normalizer`);
+  }
   if (profile.videoWidth !== 1920 || profile.videoHeight !== 1080) throw new Error(`expectedProfiles.${court} must require 1920x1080`);
   if (profile.audioCodec.toUpperCase() !== "AAC" || profile.audioSampleRateHz !== 48_000 || profile.audioChannelCount !== 2) {
     throw new Error(`expectedProfiles.${court} must require AAC 48 kHz stereo camera audio`);

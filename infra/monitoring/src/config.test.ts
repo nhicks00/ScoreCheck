@@ -37,6 +37,7 @@ describe("monitoring configuration", () => {
 
     const service = loadServiceConfig({
       MONITOR_API_TOKEN: "abcdefghijklmnopqrstuvwxyz",
+      MONITOR_ROUTER_HEARTBEAT_TOKEN: "router-heartbeat-token-long-enough",
       ALERTMANAGER_WEBHOOK_TOKEN: "zyxwvutsrqponmlkjihgfedcba",
       MONITOR_BROWSER_HEARTBEAT_SECRET: "browser-heartbeat-secret-that-is-long-enough",
       MONITOR_PUBLIC_HOST: "monitor.example.test",
@@ -61,6 +62,7 @@ describe("monitoring configuration", () => {
   it("requires the complete Healthchecks lifecycle and channel-audit configuration as one unit", () => {
     const base = {
       MONITOR_API_TOKEN: "abcdefghijklmnopqrstuvwxyz",
+      MONITOR_ROUTER_HEARTBEAT_TOKEN: "router-heartbeat-token-long-enough",
       ALERTMANAGER_WEBHOOK_TOKEN: "zyxwvutsrqponmlkjihgfedcba",
       MONITOR_BROWSER_HEARTBEAT_SECRET: "browser-heartbeat-secret-that-is-long-enough",
       MONITOR_PUBLIC_HOST: "monitor.example.test"

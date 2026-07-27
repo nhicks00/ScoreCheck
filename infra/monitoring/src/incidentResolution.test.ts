@@ -183,6 +183,7 @@ function snapshot(input: {
       active: { configured: true, mode: "PAUSED", lastSuccessAt: null, lastFailureAt: null },
       phoneChannel: { configured: true, state: "HEALTHY", baselineAttached: true, activeAttached: true, lastSuccessAt: null, lastFailureAt: null }
     },
+    router: { state: "UNKNOWN", sampledAt: null, receivedAt: null, ageMs: null, speedify: null, routing: null, host: null, uplinks: [] },
     courts: [court],
     agents: [],
     incidents: [],

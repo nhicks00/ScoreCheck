@@ -3,7 +3,7 @@ import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/pro
 import { join, resolve } from "node:path";
 
 const COURTS = Object.freeze(Array.from({ length: 8 }, (_, index) => index + 1));
-const SECRET_SCHEMA_VERSION = 2;
+const SECRET_SCHEMA_VERSION = 3;
 
 export function createRehearsalSecretMaterial({ random = randomBytes } = {}) {
   const secret = (bytes = 32) => random(bytes).toString("base64url");
@@ -13,6 +13,7 @@ export function createRehearsalSecretMaterial({ random = randomBytes } = {}) {
     adminSecret: secret(),
     commentatorPasscode: secret(18),
     monitorApiToken: secret(),
+    routerHeartbeatToken: secret(),
     alertmanagerWebhookToken: secret(),
     browserHeartbeatSecret: secret(),
     commentary: { apiKey: `SC${secret(12)}`, apiSecret: secret(36), roomPrefix: `scorecheck-rehearsal-${secret(6)}-` },
@@ -93,6 +94,7 @@ export async function renderRehearsalSecretDirectory({ manifest, material, direc
 
   const observer = {
     MONITOR_API_TOKEN: material.monitorApiToken,
+    MONITOR_ROUTER_HEARTBEAT_TOKEN: material.routerHeartbeatToken,
     ALERTMANAGER_WEBHOOK_TOKEN: material.alertmanagerWebhookToken,
     MONITOR_BROWSER_HEARTBEAT_SECRET: material.browserHeartbeatSecret,
     MONITOR_BROWSER_ALLOWED_ORIGINS: renderer.origin,
@@ -178,7 +180,7 @@ export async function loadProtectedSecretMaterial(path) {
 
 export function validateSecretMaterial(value) {
   if (!value || value.schemaVersion !== SECRET_SCHEMA_VERSION) throw new Error("rehearsal secret material schema is invalid");
-  for (const key of ["programPageToken", "adminSecret", "commentatorPasscode", "monitorApiToken", "alertmanagerWebhookToken", "browserHeartbeatSecret"]) requireSecret(value[key], key);
+  for (const key of ["programPageToken", "adminSecret", "commentatorPasscode", "monitorApiToken", "routerHeartbeatToken", "alertmanagerWebhookToken", "browserHeartbeatSecret"]) requireSecret(value[key], key);
   requireSecret(value.commentary?.apiKey, "commentary api key", 12);
   requireSecret(value.commentary?.apiSecret, "commentary api secret");
   requireSecret(value.commentary?.roomPrefix, "commentary room prefix", 12);

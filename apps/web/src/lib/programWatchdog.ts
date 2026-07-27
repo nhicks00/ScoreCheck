@@ -206,6 +206,7 @@ export type ProgramMonitorHeartbeatBody = {
     rttMs: number | null;
     jitterMs: number | null;
     jitterBufferMs: number | null;
+    playoutDelayMs: number | null;
     packetsLost: number | null;
     packetsReceived: number | null;
     framesReceived: number | null;
@@ -296,6 +297,7 @@ export function buildProgramMonitorHeartbeat(input: {
     rttMs: number | null;
     jitterMs: number | null;
     jitterBufferMs: number | null;
+    playoutDelayMs: number | null;
     packetsLost: number | null;
     packetsReceived: number | null;
     framesReceived: number | null;
@@ -371,6 +373,7 @@ export function buildProgramMonitorHeartbeat(input: {
       rttMs: clampOptionalRange(stream?.rttMs, 0, 60_000),
       jitterMs: clampOptionalRange(stream?.jitterMs, 0, 60_000),
       jitterBufferMs: clampOptionalRange(stream?.jitterBufferMs, 0, 60_000),
+      playoutDelayMs: clampOptionalRange(stream?.playoutDelayMs, 0, 60_000),
       packetsLost: clampOptionalInteger(stream?.packetsLost, 0, Number.MAX_SAFE_INTEGER),
       packetsReceived: clampOptionalInteger(stream?.packetsReceived, 0, Number.MAX_SAFE_INTEGER),
       framesReceived: clampOptionalInteger(stream?.framesReceived, 0, Number.MAX_SAFE_INTEGER),
@@ -415,9 +418,9 @@ export function buildProgramMonitorHeartbeat(input: {
       cameraClippedSampleRatio: clampOptionalRange(input.cameraAudioClippedSampleRatio, 0, 1),
       secondsSinceCameraAudio: clampOptionalRange(input.secondsSinceCameraAudio, 0, 86_400),
       syncStatus: clampSyncStatus(input.commentarySyncStatus),
-      configuredDelayMs: clampOptionalMs(input.commentaryDelayConfiguredMs, 10_000),
-      targetDelayMs: clampOptionalMs(input.commentaryDelayTargetMs, 10_000),
-      appliedDelayMs: clampOptionalMs(input.commentaryDelayAppliedMs, 10_000),
+      configuredDelayMs: clampOptionalMs(input.commentaryDelayConfiguredMs, 30_000),
+      targetDelayMs: clampOptionalMs(input.commentaryDelayTargetMs, 30_000),
+      appliedDelayMs: clampOptionalMs(input.commentaryDelayAppliedMs, 30_000),
       clockRttMs: clampOptionalMs(input.commentarySyncRttMs, 60_000),
       syncSampleAgeMs: clampOptionalMs(input.commentarySyncSampleAgeMs, 60_000)
     },

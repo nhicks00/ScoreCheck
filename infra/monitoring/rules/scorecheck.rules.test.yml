@@ -724,7 +724,7 @@ tests:
               root_dependency: program-browser
             exp_annotations:
               summary: Camera 2's required Program viewer is dropping many video frames.
-              first_action: Inspect the program WHEP decoder and timestamp path immediately; verify upstream preview health before changing source encoding.
+              first_action: Inspect the buffered HLS decoder, segment freshness, and program timeline immediately; verify upstream preview health before changing source encoding.
 
   - name: sustained browser freeze time is required-only and severity-banded
     interval: 5s
@@ -785,7 +785,7 @@ tests:
               root_dependency: program-browser
             exp_annotations:
               summary: Camera 5's required Program viewer is repeatedly freezing.
-              first_action: Inspect the program WHEP decoder and timestamp path immediately; verify upstream preview health before changing source encoding.
+              first_action: Inspect the buffered HLS decoder, segment freshness, and program timeline immediately; verify upstream preview health before changing source encoding.
 
   - name: browser quality alerts wait for a meaningful sample
     interval: 5s
@@ -968,7 +968,40 @@ tests:
               root_dependency: program-browser
             exp_annotations:
               summary: Camera 3's required Program viewer is dropping many video frames.
-              first_action: Inspect the program WHEP decoder and timestamp path immediately; verify upstream preview health before changing source encoding.
+              first_action: Inspect the buffered HLS decoder, segment freshness, and program timeline immediately; verify upstream preview health before changing source encoding.
+
+  - name: venue router status and fail-closed route page only while cameras are required
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_router_heartbeat_fresh'
+        values: '0+0x20'
+      - series: 'scorecheck_router_camera_route_healthy'
+        values: '0+0x20'
+      - series: 'scorecheck_court_media_required{court="1"}'
+        values: '1+0x20'
+    alert_rule_test:
+      - eval_time: 45s
+        alertname: ScoreCheckVenueRouterHeartbeatMissing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              stage: VENUE
+              issue_code: VENUE_ROUTER_STATUS_MISSING
+              root_dependency: venue-router
+            exp_annotations:
+              summary: The venue router stopped reporting its internet and routing status.
+              first_action: Keep the cameras streaming. Check that the venue router is powered on and connected to the internet.
+      - eval_time: 20s
+        alertname: ScoreCheckVenueCameraRouteUnprotected
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              stage: VENUE
+              issue_code: VENUE_CAMERA_ROUTE_UNPROTECTED
+              root_dependency: venue-router
+            exp_annotations:
+              summary: Camera traffic is not protected by the bonded fail-closed route.
+              first_action: Keep the cameras streaming and contact the technical operator. Do not change camera settings.
 
   - name: shared SRT congestion recovery waits for browser metrics to age out
     interval: 5s
@@ -1015,7 +1048,7 @@ tests:
               root_dependency: program-browser
             exp_annotations:
               summary: Camera 1's required Program viewer is dropping many video frames.
-              first_action: Inspect the program WHEP decoder and timestamp path immediately; verify upstream preview health before changing source encoding.
+              first_action: Inspect the buffered HLS decoder, segment freshness, and program timeline immediately; verify upstream preview health before changing source encoding.
 
   - name: same-camera browser drop and freeze symptoms produce one alert
     interval: 5s
@@ -1075,7 +1108,7 @@ tests:
               root_dependency: program-browser
             exp_annotations:
               summary: Camera 1's required Program viewer is dropping many video frames.
-              first_action: Inspect the program WHEP decoder and timestamp path immediately; verify upstream preview health before changing source encoding.
+              first_action: Inspect the buffered HLS decoder, segment freshness, and program timeline immediately; verify upstream preview health before changing source encoding.
       - eval_time: 4m
         alertname: ScoreCheckProgramFrameDropRatioHigh
         exp_alerts:
@@ -1099,7 +1132,7 @@ tests:
               root_dependency: program-browser
             exp_annotations:
               summary: Camera 2's required Program viewer is repeatedly freezing.
-              first_action: Inspect the program WHEP decoder and timestamp path immediately; verify upstream preview health before changing source encoding.
+              first_action: Inspect the buffered HLS decoder, segment freshness, and program timeline immediately; verify upstream preview health before changing source encoding.
       - eval_time: 4m
         alertname: ScoreCheckProgramFreezeRatioHigh
         exp_alerts:

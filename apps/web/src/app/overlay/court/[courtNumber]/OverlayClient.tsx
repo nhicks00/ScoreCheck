@@ -17,6 +17,7 @@ import {
 } from "@/lib/overlayInvalidation";
 import { overlayBoundaryRetryState, overlayConnectionStale, overlayFailureHealth, type OverlayBoundaryState } from "@/lib/overlayFailureRecovery";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
+import { programOverlayApplyAtMs } from "@/lib/programTimeline";
 
 // A browser-source overlay must NEVER black out the broadcast frame. If the
 // scorebug throws while rendering, fail transparent (render nothing over the
@@ -69,6 +70,7 @@ type OverlayClientProps = {
   theme: string;
   buildVersion: string;
   reloadOnVersionChange?: boolean;
+  timelineDelayMs?: number;
   onHealth?: (health: OverlayRenderHealth) => void;
 };
 
@@ -80,7 +82,7 @@ export function OverlayClient(props: OverlayClientProps) {
   );
 }
 
-function OverlayClientInner({ courtNumber, eventId, buildVersion, reloadOnVersionChange = true, onHealth }: OverlayClientProps) {
+function OverlayClientInner({ courtNumber, eventId, buildVersion, reloadOnVersionChange = true, timelineDelayMs = 0, onHealth }: OverlayClientProps) {
   const courtNumberValue = Number(courtNumber) || 1;
   const [state, setState] = useState(() => fallbackOverlayState(courtNumberValue));
   const [hasLoadedState, setHasLoadedState] = useState(false);
@@ -90,7 +92,12 @@ function OverlayClientInner({ courtNumber, eventId, buildVersion, reloadOnVersio
   const lastReloadAttemptAt = useRef(0);
   const lastInvalidScorebugHealKey = useRef<string | null>(null);
   const lastDomHealKey = useRef<string | null>(null);
-  const lastApplied = useRef<OverlayApplyCursor | null>(null);
+  const lastAccepted = useRef<OverlayApplyCursor | null>(null);
+  const queuedStates = useRef<Array<{ state: ReturnType<typeof coerceOverlayState>; materializedAt: string | null; applyAtMs: number }>>([]);
+  const queueTimer = useRef<number | null>(null);
+  const flushQueue = useRef<() => void>(() => undefined);
+  const timelineDelayRef = useRef(timelineDelayMs);
+  timelineDelayRef.current = timelineDelayMs;
   const authoritativeEtag = useRef<string | null>(null);
   const mounted = useRef(true);
   const stateUrl = useMemo(() => `/api/overlay/court/${courtNumber}/state${eventId ? `?eventId=${eventId}` : ""}`, [courtNumber, eventId]);
@@ -99,19 +106,50 @@ function OverlayClientInner({ courtNumber, eventId, buildVersion, reloadOnVersio
 
   const applyOverlayState = useCallback((payload: unknown) => {
     const next = coerceOverlayState(payload, courtNumberValue);
-    if (!shouldApplyOverlayUpdate(next, lastApplied.current)) return false;
-    lastApplied.current = overlayApplyCursor(next);
-    setState(next);
-    setHasLoadedState(true);
+    if (!shouldApplyOverlayUpdate(next, lastAccepted.current)) return false;
+    lastAccepted.current = overlayApplyCursor(next);
+    queuedStates.current.push({
+      state: next,
+      materializedAt: next.projection.materializedAt,
+      applyAtMs: programOverlayApplyAtMs(next.projection.materializedAt, timelineDelayRef.current, Date.now())
+    });
+    queuedStates.current.sort((left, right) => left.applyAtMs - right.applyAtMs);
+    flushQueue.current();
     return true;
   }, [courtNumberValue]);
 
   useEffect(() => {
     mounted.current = true;
+    flushQueue.current = () => {
+      if (queueTimer.current != null) window.clearTimeout(queueTimer.current);
+      queueTimer.current = null;
+      const nowMs = Date.now();
+      let latest: ReturnType<typeof coerceOverlayState> | null = null;
+      while (queuedStates.current[0]?.applyAtMs <= nowMs) latest = queuedStates.current.shift()!.state;
+      if (latest && mounted.current) {
+        setState(latest);
+        setHasLoadedState(true);
+      }
+      const next = queuedStates.current[0];
+      if (next) queueTimer.current = window.setTimeout(() => flushQueue.current(), Math.max(0, next.applyAtMs - Date.now()));
+    };
     return () => {
       mounted.current = false;
+      if (queueTimer.current != null) window.clearTimeout(queueTimer.current);
+      queuedStates.current = [];
     };
   }, []);
+
+  useEffect(() => {
+    const nowMs = Date.now();
+    queuedStates.current = queuedStates.current
+      .map((entry) => ({
+        ...entry,
+        applyAtMs: programOverlayApplyAtMs(entry.materializedAt, timelineDelayMs, nowMs)
+      }))
+      .sort((left, right) => left.applyAtMs - right.applyAtMs);
+    flushQueue.current();
+  }, [timelineDelayMs]);
 
   const fetchAuthoritativeState = useCallback(async () => {
     try {
@@ -125,7 +163,10 @@ function OverlayClientInner({ courtNumber, eventId, buildVersion, reloadOnVersio
       }
       if (res.status === 204) {
         if (mounted.current) {
-          lastApplied.current = null;
+          lastAccepted.current = null;
+          queuedStates.current = [];
+          if (queueTimer.current != null) window.clearTimeout(queueTimer.current);
+          queueTimer.current = null;
           authoritativeEtag.current = null;
           setState(fallbackOverlayState(courtNumberValue));
           setHasLoadedState(false);

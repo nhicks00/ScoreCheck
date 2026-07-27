@@ -191,6 +191,7 @@ export const browserHeartbeatPayloadSchema = z.object({
     rttMs: z.number().nonnegative().max(60_000).nullable(),
     jitterMs: z.number().nonnegative().max(60_000).nullable().default(null),
     jitterBufferMs: z.number().nonnegative().max(60_000).nullable(),
+    playoutDelayMs: z.number().nonnegative().max(60_000).nullable().default(null),
     packetsLost: z.number().int().nonnegative().nullable(),
     packetsReceived: z.number().int().nonnegative().nullable(),
     framesReceived: z.number().int().nonnegative().nullable().default(null),
@@ -243,9 +244,9 @@ export const browserHeartbeatPayloadSchema = z.object({
     cameraClippedSampleRatio: z.number().min(0).max(1).nullable().default(null),
     secondsSinceCameraAudio: z.number().nonnegative().max(86_400).nullable().default(null),
     syncStatus: z.enum(["fallback", "calibrating", "locked"]),
-    configuredDelayMs: z.number().nonnegative().max(10_000).nullable(),
-    targetDelayMs: z.number().nonnegative().max(10_000).nullable(),
-    appliedDelayMs: z.number().nonnegative().max(10_000).nullable(),
+    configuredDelayMs: z.number().nonnegative().max(30_000).nullable(),
+    targetDelayMs: z.number().nonnegative().max(30_000).nullable(),
+    appliedDelayMs: z.number().nonnegative().max(30_000).nullable(),
     clockRttMs: z.number().nonnegative().max(60_000).nullable(),
     syncSampleAgeMs: z.number().nonnegative().max(60_000).nullable()
   }).strict(),
@@ -508,6 +509,68 @@ export type MonitoringFaultGate = {
   expiresAt: string;
 };
 
+export type RouterUplinkSnapshot = {
+  id: string;
+  isp: string | null;
+  type: "ethernet" | "wifi" | "cellular" | "other";
+  connected: boolean;
+  priority: "always" | "secondary" | "backup" | "never" | "unknown";
+  sendBps: number;
+  receiveBps: number;
+  estimatedUploadBps: number | null;
+  latencyMs: number | null;
+  jitterMs: number | null;
+  lossSendRatio: number | null;
+  lossReceiveRatio: number | null;
+  inFlightBytes: number | null;
+  inFlightWindowBytes: number | null;
+  uploadCongested: boolean;
+  poorConnection: boolean;
+  slowConnection: boolean;
+};
+
+export type RouterMonitorSnapshot = {
+  state: HealthState;
+  sampledAt: string | null;
+  receivedAt: string | null;
+  ageMs: number | null;
+  speedify: {
+    state: "CONNECTED" | "LOGGED_IN" | "DISCONNECTED" | "UNKNOWN";
+    bondingMode: "speed" | "streaming" | "redundant" | "unknown";
+    transportMode: "udp" | "tcp" | "tcp-multi" | "https" | "auto" | "unknown";
+    sendBps: number;
+    receiveBps: number;
+    estimatedUploadBps: number | null;
+    uploadHeadroomBps: number | null;
+    latencyMs: number | null;
+    jitterMs: number | null;
+    lossSendRatio: number | null;
+    lossReceiveRatio: number | null;
+    uploadCongested: boolean;
+    badCpu: boolean;
+    badLatency: boolean;
+    badLoss: boolean;
+    badMemory: boolean;
+    readQueuePackets: number | null;
+    failoverCount: number | null;
+  } | null;
+  routing: {
+    srtDevice: string;
+    rtmpDevice: string;
+    primaryRuleCount: number;
+    guardRuleCount: number;
+    killSwitchActive: boolean;
+    cameraFlowCount: number;
+  } | null;
+  host: {
+    load1: number;
+    memoryAvailableBytes: number;
+    speedifyRssBytes: number;
+    streamingStatsProcessCount: number;
+  } | null;
+  uplinks: RouterUplinkSnapshot[];
+};
+
 export type MonitorSnapshot = {
   version: typeof MONITORING_CONTRACT_VERSION;
   generatedAt: string;
@@ -526,6 +589,7 @@ export type MonitorSnapshot = {
   youtube: { state: HealthState; observedAt: string | null; ageMs: number | null };
   notifications: NotificationHealth;
   deadMan: DeadManHealth;
+  router: RouterMonitorSnapshot;
   courts: CourtMonitorSnapshot[];
   agents: Array<{
     agentId: string;

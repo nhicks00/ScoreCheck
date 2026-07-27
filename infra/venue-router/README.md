@@ -113,10 +113,11 @@ unbounded diagnostic command, `speedify_cli -s stats`, was left in a pipeline
 that removed newlines and caused roughly 100 MB of buffering on a router with
 about 491 MB RAM. Speedify itself used roughly another 101 MB at the time.
 
-Never invoke `speedify_cli -s stats` from a monitor. It is a continuous stream,
-not a one-shot query. Production scripts use only bounded
-`speedify_cli -s state`. The recorder also tracks available memory, Speedify
-RSS, and any accidental streaming-stats process count.
+Never invoke `speedify_cli -s stats` without both a finite sample duration and
+an outer process timeout. The unqualified form is a continuous stream, not a
+one-shot query. The recorder uses bounded state queries; the router heartbeat
+uses the finite `stats 1 current` form with a three-second timeout. Both track
+available memory, Speedify RSS, and any accidental streaming-stats process.
 
 The watchdog is still required even after fixing this monitor defect. Any
 long-running process can restart because of a software fault, router reboot, or
@@ -142,6 +143,14 @@ Speedify state, protocol-specific route devices, primary and guard rule counts,
 kill-switch state, camera flow counts, interface counters, WireGuard handshake
 age, load, available memory, Speedify RSS, and streaming-stats leak count. It
 does not collect credentials or media payloads.
+
+The router also sends one bounded telemetry heartbeat every ten seconds to the
+monitor service. It uses a dedicated write-only bearer token stored as mode
+`0600` at `/etc/scorecheck-monitoring-router-token`; never install the dashboard
+read token on the router. Each sample runs `speedify_cli -s stats 1 current`
+with a three-second process timeout and verifies that no stats process remains.
+The payload contains only aggregate/link quality, route guards, resource use,
+and flow counts. It never contains WAN addresses, camera credentials, or media.
 
 For a detached OpenWrt run, export the duration, interval, and log path, then
 launch the recorder with `start-stop-daemon`; this router image does not include

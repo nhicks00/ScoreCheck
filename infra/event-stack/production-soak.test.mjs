@@ -537,8 +537,9 @@ function browser(camera, sampledMs, framesRendered) {
     video: {
       state: "playing",
       connectionState: "connected",
-      transport: "whep",
-      networkPath: "private-vpc",
+      transport: "hls",
+      networkPath: "unknown",
+      playoutDelayMs: 12_000,
       width: 1920,
       height: 1080,
       framesRendered,

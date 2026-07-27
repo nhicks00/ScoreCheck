@@ -29,7 +29,9 @@ srtAddress: :8890
 
 hls: yes
 hlsAddress: :8888
-hlsVariant: lowLatency
+hlsVariant: fmp4
+hlsSegmentCount: 15
+hlsSegmentDuration: 2s
 hlsAlwaysRemux: no
 
 # ScoreCheck does not use Media-over-QUIC. Keep the unused public listeners

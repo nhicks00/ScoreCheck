@@ -1,4 +1,5 @@
-import { MONITORING_CONTRACT_VERSION, worstHealthState, type AgentSnapshot, type BrowserHeartbeatSnapshot, type BrowserThumbnailMetadata, type CameraContentSnapshot, type ControlPlaneSnapshot, type CourtExpectation, type DeadManHealth, type FfmpegBranchSnapshot, type HealthState, type IncidentSnapshot, type MediaPathSnapshot, type MonitoringFaultGate, type MonitoringSilence, type MonitorSnapshot, type MonitoringStage, type NotificationHealth, type StageHealth, type YouTubeMonitorSnapshot } from "./contracts.js";
+import { MONITORING_CONTRACT_VERSION, worstHealthState, type AgentSnapshot, type BrowserHeartbeatSnapshot, type BrowserThumbnailMetadata, type CameraContentSnapshot, type ControlPlaneSnapshot, type CourtExpectation, type DeadManHealth, type FfmpegBranchSnapshot, type HealthState, type IncidentSnapshot, type MediaPathSnapshot, type MonitoringFaultGate, type MonitoringSilence, type MonitorSnapshot, type MonitoringStage, type NotificationHealth, type RouterMonitorSnapshot, type StageHealth, type YouTubeMonitorSnapshot } from "./contracts.js";
+import { emptyRouterSnapshot } from "./routerHeartbeats.js";
 import type { AgentTarget } from "./config.js";
 import { faultGateExpectation, programBrowserIsRequired } from "./faultGateControl.js";
 
@@ -27,7 +28,8 @@ export function buildMonitorSnapshot(
   deadMan: DeadManHealth = OFF_DEAD_MAN_HEALTH,
   thumbnails = new Map<number, BrowserThumbnailMetadata>(),
   silences: MonitoringSilence[] = [],
-  faultGates: MonitoringFaultGate[] = []
+  faultGates: MonitoringFaultGate[] = [],
+  router: RouterMonitorSnapshot = emptyRouterSnapshot()
 ): MonitorSnapshot {
   const agents = targets.map((target) => {
     const runtime = runtimes.get(target.id);
@@ -135,6 +137,7 @@ export function buildMonitorSnapshot(
     youtube: { state: youtubeState, observedAt: youtubeMonitor?.observedAt ?? null, ageMs: youtubeAgeMs },
     notifications,
     deadMan,
+    router,
     courts,
     agents,
     incidents,
@@ -307,7 +310,7 @@ function programBrowserStage(browser: BrowserHeartbeatSnapshot | null, nowMs: nu
     severity: critical ? "critical" : degraded ? "warning" : "info",
     issueCode: critical ? "PROGRAM_FRAMES_STALLED" : degraded ? "PROGRAM_NOT_STABLE" : null,
     summary: critical ? "Program browser frames are not flowing." : degraded ? `Program browser is ${video.state}.` : "Program browser frames are flowing.",
-    firstAction: critical ? "Check the program path, WHEP connection, and compositor browser." : degraded ? "Inspect the browser transport and reconnect state." : null,
+    firstAction: critical ? "Check the program path, buffered playback, and compositor browser." : degraded ? "Inspect the browser transport and reconnect state." : null,
     confidence: "high",
     observedAt: browser.sampledAt,
     ageMs: timing.ageMs,
@@ -322,6 +325,7 @@ function programBrowserStage(browser: BrowserHeartbeatSnapshot | null, nowMs: nu
       rttMs: video.rttMs,
       jitterMs: video.jitterMs,
       jitterBufferMs: video.jitterBufferMs,
+      playoutDelayMs: video.playoutDelayMs,
       packetsLost: video.packetsLost,
       packetsReceived: video.packetsReceived,
       framesReceived: video.framesReceived,
