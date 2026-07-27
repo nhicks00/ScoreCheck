@@ -19,6 +19,7 @@ export const alertmanagerWebhookSchema = z.object({
 const alertmanagerApiAlertsSchema = z.array(z.object({
   labels: z.record(z.string(), z.string()).default({}),
   annotations: z.record(z.string(), z.string()).default({}),
+  status: z.object({ state: z.enum(["active", "suppressed", "unprocessed"]) }).passthrough(),
   startsAt: z.string().optional(),
   endsAt: z.string().optional()
 }).passthrough()).max(500);
@@ -79,7 +80,8 @@ export class IncidentManager {
   }
 
   reconcileActiveAlerts(input: unknown, now = new Date()): IncidentChange[] {
-    const alerts = alertmanagerApiAlertsSchema.parse(input);
+    const alerts = alertmanagerApiAlertsSchema.parse(input)
+      .filter((alert) => alert.status.state === "active");
     const payload = {
       status: "firing" as const,
       alerts: alerts.map((alert) => ({ ...alert, status: "firing" as const }))

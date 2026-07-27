@@ -117,9 +117,23 @@ describe("incident manager", () => {
 
   it("does not emit database churn while an active alert is unchanged", () => {
     const manager = new IncidentManager();
-    const alert = { labels: { alertname: "AgentMissing", stage: "MONITORING" }, annotations: {} };
+    const alert = activeApiAlert({ alertname: "AgentMissing", stage: "MONITORING" });
     manager.reconcileActiveAlerts([alert], new Date("2026-07-12T12:00:00Z"));
     expect(manager.reconcileActiveAlerts([alert], new Date("2026-07-12T12:00:30Z"))).toEqual([]);
+  });
+
+  it("excludes Alertmanager-suppressed alerts from the authoritative active set", () => {
+    const manager = new IncidentManager();
+    const alert = activeApiAlert({ alertname: "ProgramBranchMissing", stage: "PROGRAM_PATH", court: "5" });
+    manager.reconcileActiveAlerts([alert], new Date("2026-07-12T12:00:00Z"));
+
+    const changes = manager.reconcileActiveAlerts([{
+      ...alert,
+      status: { state: "suppressed" as const }
+    }], new Date("2026-07-12T12:00:30Z"));
+
+    expect(changes.map((change) => change.eventType)).toEqual(["RESOLVED"]);
+    expect(manager.active()).toHaveLength(0);
   });
 
   it("records a sanitized acknowledgement reason", () => {
@@ -148,6 +162,14 @@ function firingAlert(startsAt: string) {
       annotations: { summary: "Camera 1 is offline." },
       startsAt
     }]
+  };
+}
+
+function activeApiAlert(labels: Record<string, string>) {
+  return {
+    labels,
+    annotations: {},
+    status: { state: "active" as const }
   };
 }
 
