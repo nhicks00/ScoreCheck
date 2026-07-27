@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { buildEventManifest, loadManifestInputs } from "./event-manifest.mjs";
-import { AGENT_DEPLOY_CONCURRENCY, DEPLOYMENT_SCRIPT_TIMEOUT_MS, LocalStackDeployer, buildAgentPlans, clockVerificationCommand, commandFailureMessage, commentaryEndpointHosts, compositorContentAnalyzerBindings, compositorRemoteEnvironment, deploymentScriptEnvironment, evaluateClockProbe, isRetryableDeploymentTransportError, loadProtectedEnv, mapWithConcurrency, privateNetworkVerificationPlan, roleConfigBindings, runCommand, runDeploymentScript, serializeAgentTargets, servicePublicIpv4, sshAuditSourcePolicy, verifyProtectedSecretDirectory } from "./stack-deployer.mjs";
+import { AGENT_DEPLOY_CONCURRENCY, DEPLOYMENT_SCRIPT_TIMEOUT_MS, LocalStackDeployer, agentRoleEnvironment, buildAgentPlans, clockVerificationCommand, commandFailureMessage, commentaryEndpointHosts, compositorContentAnalyzerBindings, compositorRemoteEnvironment, deploymentScriptEnvironment, evaluateClockProbe, isRetryableDeploymentTransportError, loadProtectedEnv, mapWithConcurrency, privateNetworkVerificationPlan, roleConfigBindings, runCommand, runDeploymentScript, serializeAgentTargets, servicePublicIpv4, sshAuditSourcePolicy, verifyProtectedSecretDirectory } from "./stack-deployer.mjs";
 
 const inputs = await loadManifestInputs();
 const manifest = buildEventManifest({ event: "deploy-test", kind: "production", destroyAfter: "2026-08-01", ...inputs });
@@ -615,6 +615,11 @@ test("binds each role to exact remote reconstruction config paths", () => {
   assert.ok(observability.some(([local, remote]) => local === "/repo/infra/event-stack/supabase-fault-proxy.mjs" && remote === "/opt/scorecheck-monitoring/fault-gates/supabase-fault-proxy.mjs"));
   assert.ok(observability.some(([local, remote]) => local === "/repo/infra/event-stack/supabase-fault-proxy-service.mjs" && remote === "/opt/scorecheck-monitoring/fault-gates/supabase-fault-proxy-service.mjs"));
   assert.throws(() => roleConfigBindings(repoRoot, secrets, { role: "unknown", name: "unknown" }), /unsupported deployment role/);
+});
+
+test("renders compositor agents with local normalizer progress collection", () => {
+  const environment = agentRoleEnvironment("compositor");
+  assert.equal(environment.FFMPEG_PROGRESS_DIR, "/monitoring/ffmpeg");
 });
 
 test("attests the exact compositor environment after private ingest bindings are appended", () => {

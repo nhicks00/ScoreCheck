@@ -852,7 +852,7 @@ function agentRole(role) {
   return role;
 }
 
-function agentRoleEnvironment(role) {
+export function agentRoleEnvironment(role) {
   if (role === "ingest") return {
     MONITOR_AGENT_CONTAINERS: "mediamtx",
     FFMPEG_PROGRESS_DIR: "/monitoring/ffmpeg",
@@ -861,6 +861,7 @@ function agentRoleEnvironment(role) {
   };
   if (["compositor", "compositor-spare"].includes(role)) return {
     MONITOR_AGENT_CONTAINERS: "bvm-redis,bvm-livekit,bvm-egress",
+    FFMPEG_PROGRESS_DIR: "/monitoring/ffmpeg",
     EGRESS_METRICS_URL: "http://127.0.0.1:9090/metrics",
     EGRESS_HEALTH_URL: "http://127.0.0.1:9091/",
     MONITOR_EGRESS_MAX_WEB_REQUESTS: "1"
