@@ -13,6 +13,10 @@ LEGACY_PRIMARY_RULE_PREFS="${SCORECHECK_SPEEDIFY_LEGACY_RULE_PREFS:-702 703 704}
 SRT_GUARD_PREF="${SCORECHECK_SPEEDIFY_SRT_GUARD_PREF:-710}"
 RTMP_GUARD_PREF="${SCORECHECK_SPEEDIFY_RTMP_GUARD_PREF:-711}"
 MIN_UPLOAD_MBPS="${SCORECHECK_MIN_BONDED_UPLOAD_MBPS:-75}"
+SPEEDIFY_FIXED_DELAY_MS="${SCORECHECK_SPEEDIFY_FIXED_DELAY_MS:-75}"
+SPEEDIFY_PACKET_POOL="${SCORECHECK_SPEEDIFY_PACKET_POOL:-default}"
+CAMERA_WIFI_DEVICE="${SCORECHECK_CAMERA_WIFI_DEVICE:-mt798112}"
+CAMERA_WIFI_HTMODE="${SCORECHECK_CAMERA_WIFI_HTMODE:-HE80}"
 ENABLED_FILE="${SCORECHECK_SPEEDIFY_ENABLED_FILE:-/etc/scorecheck-speedify.enabled}"
 RUNTIME_DIR="${SCORECHECK_SPEEDIFY_RUNTIME_DIR:-/var/run/scorecheck-speedify}"
 LOCK_FILE="$RUNTIME_DIR/reconcile.lock"
@@ -72,6 +76,12 @@ validate_capacity() {
   validate_positive_integer "validated upload" "$capacity"
   [ "$capacity" -ge "$MIN_UPLOAD_MBPS" ] || die \
     "validated bonded upload is ${capacity} Mbps; at least ${MIN_UPLOAD_MBPS} Mbps is required"
+}
+
+validate_camera_radio() {
+  configured_htmode="$(uci -q get "wireless.$CAMERA_WIFI_DEVICE.htmode" 2>/dev/null || true)"
+  [ "$configured_htmode" = "$CAMERA_WIFI_HTMODE" ] || die \
+    "camera radio $CAMERA_WIFI_DEVICE uses ${configured_htmode:-no htmode}; $CAMERA_WIFI_HTMODE is required"
 }
 
 speedify_state() {
@@ -269,6 +279,8 @@ configure_speedify() {
   speedify_cli streaming ports set 8890/udp 1935/tcp >/dev/null
   speedify_cli mode streaming >/dev/null
   speedify_cli transport udp >/dev/null
+  speedify_cli fixeddelay "$SPEEDIFY_FIXED_DELAY_MS" >/dev/null
+  speedify_cli packetpool "$SPEEDIFY_PACKET_POOL" >/dev/null
   speedify_cli targetconnections 0 0 >/dev/null
   speedify_cli pep on >/dev/null
 }
@@ -330,9 +342,10 @@ guard_if_enabled() {
 
 preflight() {
   validate_capacity "${1:-}"
-  for command in speedify_cli conntrack ip iptables flock; do
+  for command in speedify_cli conntrack ip iptables flock uci; do
     require_command "$command"
   done
+  validate_camera_radio
   assert_rule_slot_available "$SRT_RULE_PREF" "$PRIMARY_TABLE"
   assert_rule_slot_available "$RTMP_RULE_PREF" "$PRIMARY_TABLE"
   for pref in $LEGACY_PRIMARY_RULE_PREFS; do
@@ -343,7 +356,7 @@ preflight() {
   speedify_is_logged_in || die "Speedify is not logged in"
   validate_positive_integer "watch interval" "$WATCH_INTERVAL_SECONDS"
   validate_positive_integer "connect retry interval" "$CONNECT_RETRY_SECONDS"
-  log "preflight passed with ${1} Mbps validated bonded upload"
+  log "preflight passed with ${1} Mbps validated bonded upload and $CAMERA_WIFI_HTMODE camera radio"
 }
 
 enable_routes_locked() {

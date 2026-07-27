@@ -78,8 +78,10 @@ is no emergency fail-open or `reset` command.
 
 ## Required Speedify settings
 
-- Mode: Speed.
+- Mode: Streaming.
 - Transport: UDP.
+- Fixed delay: 75 ms.
+- Packet pool: Default.
 - Default route: Off.
 - PEP: On for RTMP.
 - Target connections: Automatic.
@@ -88,6 +90,20 @@ Do not use Auto transport for this production path. In the July 12 test it
 selected TCP and caused severe loss inside the nested camera-LAN tunnel.
 Multi-TCP carried the five direct publishers but made the WireGuard handshake
 stale and dropped listener-camera paths, so it is also rejected.
+
+The camera 5 GHz radio must use `HE80`; router preflight rejects narrower AP
+configuration. In the July 27 eight-camera test, `HE20` left several AVKANS
+stations negotiated at only 8-17 Mbps. After the `HE80` reassociation, all
+eight stations negotiated at 229-286 Mbps and SRT loss fell materially. Clients
+may still report a 20 MHz client channel width; the acceptance signal is the
+negotiated station rate and clean media, not that field alone.
+
+Every Speedify adapter admitted for an event must represent a physically
+independent WAN. Do not admit both Ethernet and Wi-Fi repeater interfaces when
+they lead to the same modem or ISP gateway; that duplicates one failure domain
+and can amplify its queueing. This remains an operator-verified topology check
+because matching ISP names alone cannot distinguish duplicate paths from two
+independent circuits from the same carrier.
 
 ## July 13 OOM incident
 

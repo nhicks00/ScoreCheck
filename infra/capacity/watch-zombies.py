@@ -166,7 +166,10 @@ def container_healthcheck_classification(process):
     cmdline = (process.get("commandLine") or b"").strip()
     if cmdline == b"caddy run --config /etc/caddy/Caddyfile --adapter caddyfile":
         return "healthcheck.caddy"
-    if cmdline == b"npm run start:agent":
+    if cmdline in {
+        b"npm run start:agent",
+        b"/sbin/docker-init -- docker-entrypoint.sh npm run start:agent",
+    }:
         return "healthcheck.monitor-agent"
     if cmdline in {b"/mediamtx", b"/sbin/docker-init -- /mediamtx"}:
         return "healthcheck.mediamtx"
@@ -567,6 +570,7 @@ def self_test():
     assert direct_classification({"command": "sshd", "parentCommand": "systemd", "commandLine": b""}) == "observer.capacity-ssh"
     assert direct_classification({"command": "sshd", "parentCommand": "bash", "commandLine": b"sshd"}) is None
     assert container_healthcheck_classification({"commandLine": b"npm run start:agent"}) == "healthcheck.monitor-agent"
+    assert container_healthcheck_classification({"commandLine": b"/sbin/docker-init -- docker-entrypoint.sh npm run start:agent"}) == "healthcheck.monitor-agent"
     assert container_healthcheck_classification({"commandLine": b"caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"}) == "healthcheck.caddy"
     assert container_healthcheck_classification({"commandLine": b"/mediamtx"}) == "healthcheck.mediamtx"
     assert container_healthcheck_classification({"commandLine": b"/sbin/docker-init -- /mediamtx"}) == "healthcheck.mediamtx"
@@ -668,6 +672,18 @@ def self_test():
         220: runc_exit_race[220],
     }
     assert "220:22" not in classification_map(replaced_shim, retained)
+
+    monitor_agent_init = {
+        300: {"pid": 300, "ppid": 1, "identity": "300:30", "command": "containerd-shim", "parentCommand": "systemd", "commandLine": b"containerd-shim-runc-v2", "cgroupFingerprint": "host"},
+        310: {"pid": 310, "ppid": 300, "identity": "310:31", "command": "docker-init", "parentCommand": "containerd-shim", "commandLine": b"/sbin/docker-init -- docker-entrypoint.sh npm run start:agent", "cgroupFingerprint": "monitor-agent"},
+    }
+    retained = healthcheck_shim_map(monitor_agent_init)
+    assert retained["300:30"]["classification"] == "healthcheck.monitor-agent"
+    monitor_healthcheck_exit = {
+        300: monitor_agent_init[300],
+        320: {"pid": 320, "ppid": 300, "identity": "320:32", "command": "runc", "parentCommand": "containerd-shim", "commandLine": b"", "cgroupFingerprint": "runtime"},
+    }
+    assert classification_map(monitor_healthcheck_exit, retained)["320:32"] == "healthcheck.monitor-agent.runtime"
 
 
 def parse_args():

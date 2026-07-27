@@ -201,6 +201,14 @@ cat >"$MOCK_BIN/logger" <<'MOCK'
 exit 0
 MOCK
 
+cat >"$MOCK_BIN/uci" <<'MOCK'
+#!/bin/sh
+set -eu
+[ "${1:-}" = "-q" ] && [ "${2:-}" = "get" ] || exit 64
+[ "${3:-}" = "wireless.mt798112.htmode" ] || exit 1
+cat "$MOCK_STATE/wifi.htmode"
+MOCK
+
 cat >"$MOCK_BIN/flock" <<'MOCK'
 #!/bin/sh
 # The router provides util-linux flock. Unit tests are single-process, so the
@@ -219,6 +227,14 @@ export SCORECHECK_SPEEDIFY_WATCH_LOCK_FILE="$MOCK_STATE/watch.lock"
 export SCORECHECK_SPEEDIFY_WATCH_PID_FILE="$MOCK_STATE/watch.pid"
 export SCORECHECK_SPEEDIFY_CONNECT_RETRY_SECONDS=15
 printf 'validated_upload_mbps=85\n' >"$SCORECHECK_SPEEDIFY_ENABLED_FILE"
+printf 'HE80\n' >"$MOCK_STATE/wifi.htmode"
+
+"$ROUTING_TOOL" preflight 85 >/dev/null
+printf 'HE20\n' >"$MOCK_STATE/wifi.htmode"
+if "$ROUTING_TOOL" preflight 85 >/dev/null 2>&1; then
+  fail "preflight accepted the low-throughput camera radio mode"
+fi
+printf 'HE80\n' >"$MOCK_STATE/wifi.htmode"
 
 # A disconnected router installs both independent fail-closed controls.
 "$ROUTING_TOOL" guard-if-enabled
@@ -247,6 +263,8 @@ assert_rule_count 900 0
 assert_rule_count 901 2
 assert_contains "$MOCK_STATE/speedify.log" '^streaming ports set 8890/udp 1935/tcp$'
 assert_contains "$MOCK_STATE/speedify.log" '^mode streaming$'
+assert_contains "$MOCK_STATE/speedify.log" '^fixeddelay 75$'
+assert_contains "$MOCK_STATE/speedify.log" '^packetpool default$'
 if ip route get "$INGEST_IP" ipproto udp dport 8890 >/dev/null 2>&1; then
   fail "SRT resolved to a direct route while Speedify was unavailable"
 fi
