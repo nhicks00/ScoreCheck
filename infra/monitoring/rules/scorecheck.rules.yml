@@ -290,6 +290,12 @@ groups:
           and on(court) (increase(scorecheck_program_browser_frames_received_total[2m]) >= 900)
           and on(court) (count_over_time(scorecheck_program_browser_frames_received_total[2m]) >= 12)
           and on(court) (scorecheck_program_browser_required == 1)
+          unless on(court) (
+            (scorecheck_program_browser_freeze_time_ratio_2m > 0.10)
+            and on(court) (increase(scorecheck_program_browser_frames_received_total[2m]) >= 900)
+            and on(court) (count_over_time(scorecheck_program_browser_frames_received_total[2m]) >= 12)
+            and on(court) (scorecheck_program_browser_required == 1)
+          )
           unless on(court) scorecheck_court_srt_venue_congested_or_recovering
         for: 1m
         labels:
@@ -326,6 +332,7 @@ groups:
           and on(court) (increase(scorecheck_program_browser_frames_received_total[2m]) >= 900)
           and on(court) (count_over_time(scorecheck_program_browser_frames_received_total[2m]) >= 12)
           and on(court) (scorecheck_program_browser_required == 1)
+          unless on(court) (scorecheck_program_browser_frame_drop_ratio_2m > 0.005)
           unless on(court) scorecheck_court_srt_venue_congested_or_recovering
         for: 1m
         labels:
@@ -343,6 +350,7 @@ groups:
           and on(court) (increase(scorecheck_program_browser_frames_received_total[2m]) >= 900)
           and on(court) (count_over_time(scorecheck_program_browser_frames_received_total[2m]) >= 12)
           and on(court) (scorecheck_program_browser_required == 1)
+          unless on(court) (scorecheck_program_browser_frame_drop_ratio_2m > 0.05)
           unless on(court) scorecheck_court_srt_venue_congested_or_recovering
         for: 30s
         labels:

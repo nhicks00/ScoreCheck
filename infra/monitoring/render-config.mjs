@@ -104,21 +104,6 @@ inhibit_rules:
       - 'alertname=~"ScoreCheckRenderedScoreMismatch|ScoreCheckYouTubeUnhealthy|ScoreCheckYouTubeDegraded"'
     equal: [court]
   - source_matchers:
-      - 'alertname="ScoreCheckProgramFrameDropRatioCritical"'
-    target_matchers:
-      - 'alertname=~"ScoreCheckProgramFreezeRatioHigh|ScoreCheckProgramFreezeRatioCritical"'
-    equal: [court]
-  - source_matchers:
-      - 'alertname="ScoreCheckProgramFreezeRatioCritical"'
-    target_matchers:
-      - 'alertname="ScoreCheckProgramFrameDropRatioHigh"'
-    equal: [court]
-  - source_matchers:
-      - 'alertname="ScoreCheckProgramFrameDropRatioHigh"'
-    target_matchers:
-      - 'alertname="ScoreCheckProgramFreezeRatioHigh"'
-    equal: [court]
-  - source_matchers:
       - 'alertname="ScoreCheckEgressWorkerUnavailable"'
     target_matchers:
       - 'alertname=~"ScoreCheckEgressExpectationExceedsCapacity|ScoreCheckEgressOutputMissing"'
