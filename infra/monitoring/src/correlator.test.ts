@@ -139,6 +139,62 @@ describe("monitor correlator", () => {
     expect(result.courts[0]?.stages.find((stage) => stage.stage === "SCORE_SOURCE")?.state).toBe("HEALTHY");
   });
 
+  it("keeps an idle on-demand preview optional during active media coverage", () => {
+    const generatedAt = "2026-07-12T12:00:00.000Z";
+    const snapshot = rawAgentSnapshot(generatedAt);
+    const controlPlane = liveControlPlane(generatedAt);
+    controlPlane.courts[0]!.expectation.coveragePhase = "WARMUP";
+    const runtimes = new Map<string, AgentRuntime>([[target.id, { target, snapshot, lastSeenAt: generatedAt, lastErrorAt: null }]]);
+    const result = buildMonitorSnapshot(
+      [target],
+      runtimes,
+      1,
+      Date.parse(generatedAt) + 1_000,
+      [],
+      new Map(),
+      controlPlane
+    );
+
+    expect(result.courts[0]?.stages.find((stage) => stage.stage === "RAW_INGEST")?.state).toBe("HEALTHY");
+    expect(result.courts[0]?.stages.find((stage) => stage.stage === "PREVIEW")?.state).toBe("EXPECTED_OFF");
+  });
+
+  it("does not evaluate score rendering when scoring is disabled during a live broadcast", () => {
+    const generatedAt = "2026-07-12T12:00:00.000Z";
+    const browser = browserHeartbeat(generatedAt);
+    const controlPlane = liveControlPlane(generatedAt);
+    controlPlane.courts[0]!.expectation = {
+      coveragePhase: "WARMUP",
+      mediaExpectation: "REQUIRED",
+      broadcastExpectation: "LIVE",
+      commentaryExpectation: "NONE",
+      scoringExpectation: "NONE",
+      overrideExpiresAt: null
+    };
+    const mismatchedBrowser: BrowserHeartbeatSnapshot = {
+      ...browser,
+      scoreRender: {
+        ...browser.scoreRender,
+        loaded: false,
+        sourceSignature: "source",
+        renderedSignature: "rendered",
+        domMismatchReason: "board-missing"
+      }
+    };
+    const result = buildMonitorSnapshot(
+      [],
+      new Map(),
+      1,
+      Date.parse(generatedAt) + 1_000,
+      [],
+      new Map([[1, mismatchedBrowser]]),
+      controlPlane
+    );
+
+    expect(result.courts[0]?.stages.find((stage) => stage.stage === "PROGRAM_BROWSER")?.state).toBe("HEALTHY");
+    expect(result.courts[0]?.stages.find((stage) => stage.stage === "SCORE_RENDER")?.state).toBe("NOT_APPLICABLE");
+  });
+
   it("projects durable court incidents onto the matching pipeline stage", () => {
     const generatedAt = "2026-07-12T12:00:00.000Z";
     const snapshot: AgentSnapshot = {
@@ -193,6 +249,56 @@ describe("monitor correlator", () => {
     expect(preview?.issueCode).toBe("PREVIEW_BRANCH_FPS_LOW");
     expect(preview?.evidence.incidentId).toBe(incident.id);
     expect(result.courts[0]?.overallState).toBe("CRITICAL");
+  });
+
+  it("projects a shared venue-uplink incident onto each affected SRT camera", () => {
+    const generatedAt = "2026-07-12T12:00:00.000Z";
+    const snapshot: AgentSnapshot = {
+      ...rawAgentSnapshot(generatedAt),
+      mediaPaths: rawAgentSnapshot(generatedAt).mediaPaths.map((path) => ({
+        ...path,
+        sourceProtocol: "SRT",
+        transport: {
+          rttMs: 250,
+          packetsReceived: 10_000,
+          packetsLost: 2_000,
+          packetsRetransmitted: 1_500,
+          packetsDropped: 100,
+          receiveRateBps: 2_000_000,
+          receiveBufferMs: 0,
+          configuredLatencyMs: 2_500
+        }
+      }))
+    };
+    const incident: IncidentSnapshot = {
+      id: "30000000-0000-4000-8000-000000000002",
+      fingerprint: "event|VENUE-UPLINK|RAW_INGEST|shared|VENUE_SRT_CONGESTION",
+      eventId: "10000000-0000-4000-8000-000000000001",
+      rootDependency: "VENUE-UPLINK",
+      status: "open",
+      severity: "critical",
+      stage: "RAW_INGEST",
+      issueCode: "VENUE_SRT_CONGESTION",
+      courtNumber: null,
+      host: null,
+      summary: "The venue upload is overloaded.",
+      firstAction: "Add upload capacity or lower total camera bitrate.",
+      evidence: {},
+      openedAt: generatedAt,
+      lastObservedAt: generatedAt,
+      acknowledgedAt: null,
+      acknowledgedBy: null,
+      resolvedAt: null
+    };
+    const controlPlane = liveControlPlane(generatedAt);
+    controlPlane.courts[0]!.expectation.coveragePhase = "WARMUP";
+    const runtimes = new Map<string, AgentRuntime>([[target.id, { target, snapshot, lastSeenAt: generatedAt, lastErrorAt: null }]]);
+    const result = buildMonitorSnapshot([target], runtimes, 1, Date.parse(generatedAt) + 1_000, [incident], new Map(), controlPlane);
+    const raw = result.courts[0]?.stages.find((stage) => stage.stage === "RAW_INGEST");
+
+    expect(raw?.state).toBe("CRITICAL");
+    expect(raw?.issueCode).toBe("VENUE_SRT_CONGESTION");
+    expect(raw?.evidence.incidentId).toBe(incident.id);
   });
 
   it("maps each court to its assigned compositor and treats a busy Egress worker as healthy", () => {

@@ -12,23 +12,26 @@ export const INCIDENT_RESOLUTION_KINDS = [
 export type IncidentResolutionKind = typeof INCIDENT_RESOLUTION_KINDS[number];
 
 export function enrichIncidentChange(change: IncidentChange, snapshot: MonitorSnapshot): IncidentChange {
-  const court = change.incident.courtNumber == null
+  const incident = change.incident.eventId == null && snapshot.event?.id
+    ? { ...change.incident, eventId: snapshot.event.id }
+    : change.incident;
+  const court = incident.courtNumber == null
     ? null
-    : snapshot.courts.find((entry) => entry.courtNumber === change.incident.courtNumber) ?? null;
-  const context = courtContext(change.incident, court);
+    : snapshot.courts.find((entry) => entry.courtNumber === incident.courtNumber) ?? null;
+  const context = courtContext(incident, court);
 
   if (change.eventType !== "RESOLVED") {
     return {
       ...change,
-      incident: { ...change.incident, evidence: { ...change.incident.evidence, ...context } },
+      incident: { ...incident, evidence: { ...incident.evidence, ...context } },
       detail: { ...(change.detail ?? {}), ...context }
     };
   }
 
-  const resolution = classifyResolution(change.incident, court, context);
+  const resolution = classifyResolution(incident, court, context);
   return {
     ...change,
-    incident: { ...change.incident, evidence: { ...change.incident.evidence, ...context, ...resolution } },
+    incident: { ...incident, evidence: { ...incident.evidence, ...context, ...resolution } },
     detail: { ...(change.detail ?? {}), ...context, ...resolution }
   };
 }

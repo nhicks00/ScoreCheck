@@ -78,7 +78,10 @@ export function buildMonitorSnapshot(
         expectation,
         nowMs
       ),
-      pathStage("PREVIEW", "preview", byBranch.preview ?? null, nowMs, productionExpectation),
+      pathStage("PREVIEW", "preview", byBranch.preview ?? null, nowMs, {
+        ...productionExpectation,
+        mediaExpectation: "OFF"
+      }),
       pathStage("PROGRAM_PATH", "program", byBranch.program ?? null, nowMs, productionExpectation),
       programBrowserStage(browser, nowMs, programBrowserIsRequired(productionExpectation, faultGate)),
       commentaryStage(browser, nowMs, productionExpectation),
@@ -87,7 +90,7 @@ export function buildMonitorSnapshot(
       egressStage(egressAgent, productionExpectation, expectedEgressRequests, browser, nowMs),
       youtubeStage(youtube, youtubeMonitor, nowMs, productionExpectation)
     ];
-    const stages = applyCourtIncidents(observedStages, incidents, courtNumber, egressAgent?.agentId ?? null, nowMs);
+    const stages = applyCourtIncidents(observedStages, incidents, courtNumber, egressAgent?.agentId ?? null, byBranch.raw?.sourceProtocol ?? null, nowMs);
     return {
       courtNumber,
       overallState: worstHealthState(stages.map((stage) => stage.state)),
@@ -140,10 +143,18 @@ export function buildMonitorSnapshot(
   };
 }
 
-function applyCourtIncidents(stages: StageHealth[], incidents: IncidentSnapshot[], courtNumber: number, egressHost: string | null, nowMs: number): StageHealth[] {
+function applyCourtIncidents(
+  stages: StageHealth[],
+  incidents: IncidentSnapshot[],
+  courtNumber: number,
+  egressHost: string | null,
+  rawSourceProtocol: string | null,
+  nowMs: number
+): StageHealth[] {
   const active = incidents.filter((incident) => incident.status !== "resolved" && (
     incident.courtNumber === courtNumber
     || (incident.courtNumber == null && incident.stage === "EGRESS" && incident.rootDependency === egressHost)
+    || (incident.courtNumber == null && incident.stage === "RAW_INGEST" && incident.rootDependency === "VENUE-UPLINK" && rawSourceProtocol === "SRT")
   ));
   if (active.length === 0) return stages;
   return stages.map((stageHealth) => {
@@ -474,7 +485,7 @@ function contentEvidence(content: CameraContentSnapshot, browser: BrowserHeartbe
 
 function scoreRenderStage(browser: BrowserHeartbeatSnapshot | null, nowMs: number, expectation: CourtExpectation): StageHealth {
   const timing = browserTiming(browser, nowMs);
-  if (expectation.scoringExpectation === "NONE" && expectation.broadcastExpectation === "OFF") {
+  if (expectation.scoringExpectation === "NONE") {
     return stage("SCORE_RENDER", "NOT_APPLICABLE", "info", null, "Score rendering is not expected.", null, null, timing.ageMs, {});
   }
   if (!browser || timing.stale) {

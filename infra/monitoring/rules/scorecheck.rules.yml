@@ -197,8 +197,44 @@ groups:
           summary: '{{ if eq $labels.expectation_source "fault_gate" }}[INTENTIONAL FAULT GATE] {{ end }}Required camera ingest is missing on court {{ $labels.court }}.'
           first_action: '{{ if eq $labels.expectation_source "fault_gate" }}Restore the isolated test feed, verify raw readiness, then disarm the monitoring fault gate.{{ else }}Check camera power, venue uplink, encoder publish status, and the MediaMTX raw path.{{ end }}'
 
+      - record: scorecheck_venue_srt_congested
+        expr: |
+          (
+            sum(rate(scorecheck_media_transport_packets_lost_total{branch="raw",protocol="SRT"}[2m]))
+            / clamp_min(sum(rate(scorecheck_media_transport_packets_received_total{branch="raw",protocol="SRT"}[2m])), 0.001)
+            > 0.02
+            or
+            sum(rate(scorecheck_media_transport_packets_retransmitted_total{branch="raw",protocol="SRT"}[2m]))
+            / clamp_min(sum(rate(scorecheck_media_transport_packets_received_total{branch="raw",protocol="SRT"}[2m])), 0.001)
+            > 0.10
+          )
+          and (sum(scorecheck_court_media_required) >= 2)
+          and (count(scorecheck_media_transport_metrics_available{branch="raw",protocol="SRT"} == 1) >= 2)
+
+      - record: scorecheck_court_srt_venue_congested
+        expr: |
+          max by (court) (scorecheck_media_transport_metrics_available{branch="raw",protocol="SRT"} == 1)
+          and on() scorecheck_venue_srt_congested
+
+      - alert: ScoreCheckVenueSrtCongestion
+        expr: scorecheck_venue_srt_congested
+        for: 30s
+        labels:
+          severity: critical
+          stage: RAW_INGEST
+          issue_code: VENUE_SRT_CONGESTION
+          root_dependency: venue-uplink
+        annotations:
+          summary: "The venue upload is overloaded, so multiple SRT cameras are retransmitting video."
+          first_action: "Do not restart the cameras. Add upload capacity or lower total camera bitrate until this alert clears."
+
       - alert: ScoreCheckRequiredRawBitrateLow
-        expr: (scorecheck_media_path_inbound_bitrate_bps{branch="raw"} < 500000) and on(court) (scorecheck_court_media_required == 1)
+        expr: |
+          (
+            (scorecheck_media_path_inbound_bitrate_bps{branch="raw"} < 500000)
+            and on(court) (scorecheck_court_media_required == 1)
+          )
+          unless on(court) scorecheck_court_srt_venue_congested
         for: 30s
         labels:
           severity: warning
@@ -222,7 +258,12 @@ groups:
           first_action: "Check the streaming computer first, then reopen Camera {{ $labels.court }}'s Program page if it is closed."
 
       - alert: ScoreCheckProgramFpsLow
-        expr: (scorecheck_program_browser_frames_per_second < 20) and on(court) (scorecheck_program_browser_required == 1)
+        expr: |
+          (
+            (scorecheck_program_browser_frames_per_second < 20)
+            and on(court) (scorecheck_program_browser_required == 1)
+          )
+          unless on(court) scorecheck_court_srt_venue_congested
         for: 20s
         labels:
           severity: critical
@@ -246,6 +287,7 @@ groups:
           and on(court) (increase(scorecheck_program_browser_frames_received_total[2m]) >= 900)
           and on(court) (count_over_time(scorecheck_program_browser_frames_received_total[2m]) >= 12)
           and on(court) (scorecheck_program_browser_required == 1)
+          unless on(court) scorecheck_court_srt_venue_congested
         for: 1m
         labels:
           severity: warning
@@ -262,6 +304,7 @@ groups:
           and on(court) (increase(scorecheck_program_browser_frames_received_total[2m]) >= 900)
           and on(court) (count_over_time(scorecheck_program_browser_frames_received_total[2m]) >= 12)
           and on(court) (scorecheck_program_browser_required == 1)
+          unless on(court) scorecheck_court_srt_venue_congested
         for: 30s
         labels:
           severity: critical
@@ -280,6 +323,7 @@ groups:
           and on(court) (increase(scorecheck_program_browser_frames_received_total[2m]) >= 900)
           and on(court) (count_over_time(scorecheck_program_browser_frames_received_total[2m]) >= 12)
           and on(court) (scorecheck_program_browser_required == 1)
+          unless on(court) scorecheck_court_srt_venue_congested
         for: 1m
         labels:
           severity: warning
@@ -296,6 +340,7 @@ groups:
           and on(court) (increase(scorecheck_program_browser_frames_received_total[2m]) >= 900)
           and on(court) (count_over_time(scorecheck_program_browser_frames_received_total[2m]) >= 12)
           and on(court) (scorecheck_program_browser_required == 1)
+          unless on(court) scorecheck_court_srt_venue_congested
         for: 30s
         labels:
           severity: critical
@@ -596,6 +641,7 @@ groups:
             or min by (court) (scorecheck_ffmpeg_speed_available{branch=~"normalizer|program"}) == 0
           )
           and on(court) (scorecheck_court_broadcast_live == 1)
+          unless on(court) scorecheck_court_srt_venue_congested
         for: 30s
         labels:
           severity: critical
@@ -607,16 +653,20 @@ groups:
           first_action: "Leave the broadcast running and check the camera source profile and connection before restarting any output."
 
       - alert: ScoreCheckPreviewBranchFpsLow
-        expr: (scorecheck_ffmpeg_frames_per_second{branch="preview"} < 20) and on(court) (scorecheck_court_broadcast_live == 1)
+        expr: |
+          (scorecheck_ffmpeg_frames_per_second{branch="preview"} < 20)
+          and on(agent, court) (scorecheck_media_path_readers{branch="preview"} > 0)
+          and on(court) (scorecheck_court_broadcast_live == 1)
+          unless on(court) scorecheck_court_srt_venue_congested
         for: 20s
         labels:
-          severity: critical
+          severity: warning
           stage: PREVIEW
           issue_code: PREVIEW_BRANCH_FPS_LOW
           root_dependency: mediamtx-ffmpeg
         annotations:
-          summary: "Preview normalization FPS is below 20 on live court {{ $labels.court }}."
-          first_action: "Compare raw ingest continuity and host CPU before changing encoder settings."
+          summary: "Camera {{ $labels.court }}'s selected inspection preview is visibly lagging."
+          first_action: "Close and reopen that inspection preview; the public stream is monitored separately."
 
       - alert: ScoreCheckYouTubeUnhealthy
         expr: (scorecheck_youtube_healthy == 0) and on(court) (scorecheck_court_broadcast_live == 1)

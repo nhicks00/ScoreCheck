@@ -869,3 +869,117 @@ tests:
             exp_annotations:
               summary: Camera 3 video is not reaching its Program output at a usable real-time rate.
               first_action: Leave the broadcast running and check the camera source profile and connection before restarting any output.
+
+  - name: preview cadence is checked only while an inspection reader is active
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_ffmpeg_frames_per_second{agent="ingest",court="1",branch="preview"}'
+        values: '0+0x8'
+      - series: 'scorecheck_media_path_readers{agent="ingest",court="1",branch="preview"}'
+        values: '0+0x8'
+      - series: 'scorecheck_court_broadcast_live{court="1"}'
+        values: '1+0x8'
+
+      - series: 'scorecheck_ffmpeg_frames_per_second{agent="ingest",court="2",branch="preview"}'
+        values: '10+0x8'
+      - series: 'scorecheck_media_path_readers{agent="ingest",court="2",branch="preview"}'
+        values: '1+0x8'
+      - series: 'scorecheck_court_broadcast_live{court="2"}'
+        values: '1+0x8'
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: ScoreCheckPreviewBranchFpsLow
+        exp_alerts:
+          - exp_labels:
+              agent: ingest
+              branch: preview
+              court: '2'
+              severity: warning
+              stage: PREVIEW
+              issue_code: PREVIEW_BRANCH_FPS_LOW
+              root_dependency: mediamtx-ffmpeg
+            exp_annotations:
+              summary: Camera 2's selected inspection preview is visibly lagging.
+              first_action: Close and reopen that inspection preview; the public stream is monitored separately.
+
+  - name: shared SRT congestion is one active-event root cause
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_media_transport_packets_received_total{agent="ingest",court="1",branch="raw",protocol="SRT"}'
+        values: '0+100x48'
+      - series: 'scorecheck_media_transport_packets_lost_total{agent="ingest",court="1",branch="raw",protocol="SRT"}'
+        values: '0+10x48'
+      - series: 'scorecheck_media_transport_packets_retransmitted_total{agent="ingest",court="1",branch="raw",protocol="SRT"}'
+        values: '0+20x48'
+      - series: 'scorecheck_media_transport_metrics_available{agent="ingest",court="1",branch="raw",protocol="SRT"}'
+        values: '1+0x48'
+      - series: 'scorecheck_court_media_required{court="1"}'
+        values: '1+0x48'
+      - series: 'scorecheck_media_path_inbound_bitrate_bps{agent="ingest",court="1",branch="raw"}'
+        values: '100000+0x48'
+      - series: 'scorecheck_program_browser_frames_received_total{court="1"}'
+        values: '0+100x48'
+      - series: 'scorecheck_program_browser_frames_dropped_total{court="1"}'
+        values: '0+20x48'
+      - series: 'scorecheck_program_browser_required{court="1"}'
+        values: '1+0x48'
+
+      - series: 'scorecheck_media_transport_packets_received_total{agent="ingest",court="2",branch="raw",protocol="SRT"}'
+        values: '0+100x48'
+      - series: 'scorecheck_media_transport_packets_lost_total{agent="ingest",court="2",branch="raw",protocol="SRT"}'
+        values: '0+10x48'
+      - series: 'scorecheck_media_transport_packets_retransmitted_total{agent="ingest",court="2",branch="raw",protocol="SRT"}'
+        values: '0+20x48'
+      - series: 'scorecheck_media_transport_metrics_available{agent="ingest",court="2",branch="raw",protocol="SRT"}'
+        values: '1+0x48'
+      - series: 'scorecheck_court_media_required{court="2"}'
+        values: '1+0x48'
+
+      - series: 'scorecheck_media_path_inbound_bitrate_bps{agent="ingest",court="3",branch="raw"}'
+        values: '100000+0x48'
+      - series: 'scorecheck_court_media_required{court="3"}'
+        values: '1+0x48'
+      - series: 'scorecheck_program_browser_frames_received_total{court="3"}'
+        values: '0+100x48'
+      - series: 'scorecheck_program_browser_frames_dropped_total{court="3"}'
+        values: '0+20x48'
+      - series: 'scorecheck_program_browser_required{court="3"}'
+        values: '1+0x48'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ScoreCheckVenueSrtCongestion
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              stage: RAW_INGEST
+              issue_code: VENUE_SRT_CONGESTION
+              root_dependency: venue-uplink
+            exp_annotations:
+              summary: The venue upload is overloaded, so multiple SRT cameras are retransmitting video.
+              first_action: Do not restart the cameras. Add upload capacity or lower total camera bitrate until this alert clears.
+      - eval_time: 3m
+        alertname: ScoreCheckRequiredRawBitrateLow
+        exp_alerts:
+          - exp_labels:
+              agent: ingest
+              branch: raw
+              court: '3'
+              severity: warning
+              stage: RAW_INGEST
+              issue_code: RAW_BITRATE_LOW
+              root_dependency: venue-uplink
+            exp_annotations:
+              summary: Raw ingest bitrate is below 500 kbps on court 3.
+              first_action: Compare camera encoder bitrate, venue uplink quality, packet loss, and reconnect counters.
+      - eval_time: 3m
+        alertname: ScoreCheckProgramFrameDropRatioCritical
+        exp_alerts:
+          - exp_labels:
+              court: '3'
+              severity: critical
+              stage: PROGRAM_BROWSER
+              issue_code: PROGRAM_FRAME_DROP_RATIO_CRITICAL
+              root_dependency: program-browser
+            exp_annotations:
+              summary: Camera 3's required Program viewer is dropping many video frames.
+              first_action: Inspect the program WHEP decoder and timestamp path immediately; verify upstream preview health before changing source encoding.

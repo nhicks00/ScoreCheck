@@ -61,6 +61,18 @@ describe("incident resolution semantics", () => {
       faultGateActive: false
     });
   });
+
+  it("binds an alert episode to the active control-plane event", () => {
+    const current = snapshot({ rawReady: true, gate: null, expectationRequired: true });
+    current.event = { id: "10000000-0000-4000-8000-000000000001", name: "Dry Run", status: "active", eventDate: "2026-07-13" };
+    const opened = resolvedIncident().incident;
+    opened.status = "open";
+    opened.resolvedAt = null;
+
+    const change = enrichIncidentChange({ incident: opened, eventType: "OPENED" }, current);
+
+    expect(change.incident.eventId).toBe(current.event.id);
+  });
 });
 
 function resolvedIncident(patch: Partial<IncidentSnapshot> = {}) {
