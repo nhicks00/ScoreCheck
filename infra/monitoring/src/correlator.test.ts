@@ -139,6 +139,34 @@ describe("monitor correlator", () => {
     expect(result.courts[0]?.stages.find((stage) => stage.stage === "SCORE_SOURCE")?.state).toBe("HEALTHY");
   });
 
+  it("escalates an advertised but unready raw path when media is required", () => {
+    const generatedAt = "2026-07-12T12:00:00.000Z";
+    const snapshot = rawAgentSnapshot(generatedAt);
+    snapshot.mediaPaths[0] = {
+      ...snapshot.mediaPaths[0]!,
+      ready: false,
+      readySince: null,
+      inboundBitrateBps: 0,
+      readerCount: 0
+    };
+    const runtimes = new Map<string, AgentRuntime>([[target.id, { target, snapshot, lastSeenAt: generatedAt, lastErrorAt: null }]]);
+    const result = buildMonitorSnapshot(
+      [target],
+      runtimes,
+      1,
+      Date.parse(generatedAt) + 1_000,
+      [],
+      new Map(),
+      liveControlPlane(generatedAt)
+    );
+    const raw = result.courts[0]?.stages.find((stage) => stage.stage === "RAW_INGEST");
+
+    expect(raw?.state).toBe("CRITICAL");
+    expect(raw?.severity).toBe("critical");
+    expect(raw?.issueCode).toBe("REQUIRED_PATH_MISSING");
+    expect(raw?.summary).toBe("Required raw path is not ready.");
+  });
+
   it("keeps an idle on-demand preview optional during active media coverage", () => {
     const generatedAt = "2026-07-12T12:00:00.000Z";
     const snapshot = rawAgentSnapshot(generatedAt);

@@ -663,8 +663,8 @@ function pathStage(stage: MonitoringStage, branch: MediaPathSnapshot["branch"], 
   if (expectation.mediaExpectation === "OFF" && !path?.ready) {
     return expectedOffStage(stage, `${branch} path is not expected.`);
   }
+  const required = expectation.mediaExpectation === "REQUIRED";
   if (!path) {
-    const required = expectation.mediaExpectation === "REQUIRED";
     return {
       stage,
       state: required ? "CRITICAL" : "UNKNOWN",
@@ -680,11 +680,11 @@ function pathStage(stage: MonitoringStage, branch: MediaPathSnapshot["branch"], 
   }
   return {
     stage,
-    state: path.ready ? "HEALTHY" : "UNKNOWN",
-    severity: path.ready ? "info" : "warning",
-    issueCode: path.ready ? null : "PATH_NOT_READY_EXPECTATION_UNKNOWN",
-    summary: path.ready ? `${branch} path ready.` : `${branch} path is not ready; expectation has not been loaded yet.`,
-    firstAction: path.ready ? null : "Check coverage expectation before treating this as an outage.",
+    state: path.ready ? "HEALTHY" : required ? "CRITICAL" : "UNKNOWN",
+    severity: path.ready ? "info" : required ? "critical" : "warning",
+    issueCode: path.ready ? null : required ? "REQUIRED_PATH_MISSING" : "PATH_NOT_READY_EXPECTATION_UNKNOWN",
+    summary: path.ready ? `${branch} path ready.` : required ? `Required ${branch} path is not ready.` : `${branch} path is not ready; expectation has not been loaded yet.`,
+    firstAction: path.ready ? null : required ? "Check that the camera is powered on, connected, and still streaming." : "Check coverage expectation before treating this as an outage.",
     confidence: "high",
     observedAt: new Date(nowMs).toISOString(),
     ageMs: 0,
