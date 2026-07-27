@@ -118,7 +118,6 @@ function dependencyRecoveredAtResolution(incident: IncidentSnapshot, court: Cour
     const raw = court.paths.raw;
     if (!raw?.ready || !raw.readySince || !Number.isFinite(resolvedAtMs)) return false;
     if (Date.parse(raw.readySince) > resolvedAtMs) return false;
-    if (incident.issueCode === "RAW_BITRATE_LOW") return (raw.inboundBitrateBps ?? 0) >= 500_000;
     return true;
   }
   return court.stages.find((stage) => stage.stage === incident.stage)?.state === "HEALTHY";

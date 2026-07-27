@@ -958,20 +958,6 @@ tests:
               summary: The venue upload is overloaded, so multiple SRT cameras are retransmitting video.
               first_action: Do not restart the cameras. Add upload capacity or lower total camera bitrate until this alert clears.
       - eval_time: 3m
-        alertname: ScoreCheckRequiredRawBitrateLow
-        exp_alerts:
-          - exp_labels:
-              agent: ingest
-              branch: raw
-              court: '3'
-              severity: warning
-              stage: RAW_INGEST
-              issue_code: RAW_BITRATE_LOW
-              root_dependency: venue-uplink
-            exp_annotations:
-              summary: Raw ingest bitrate is below 500 kbps on court 3.
-              first_action: Compare camera encoder bitrate, venue uplink quality, packet loss, and reconnect counters.
-      - eval_time: 3m
         alertname: ScoreCheckProgramFrameDropRatioCritical
         exp_alerts:
           - exp_labels:
