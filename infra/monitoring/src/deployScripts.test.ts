@@ -178,6 +178,8 @@ describe("staged observability deployment", () => {
     expect(remoteDeploy).toContain('"$old_health" == "healthy" && "$old_restarts" == "0"');
     expect(remoteDeploy).toContain('docker tag "$running_image_id" scorecheck-monitoring:local');
     expect(remoteDeploy).toContain('"$old_image_id" != "$running_image_id"');
+    expect(remoteDeploy).toContain("2>/dev/null || true");
+    expect(remoteDeploy).toContain('"$old_revision" != "$old_image_revision"');
   });
 
   it("deploys Supabase fault tooling atomically and blocks releases during an active gate", () => {

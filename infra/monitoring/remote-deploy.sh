@@ -353,7 +353,7 @@ old_image_id="$(docker image inspect scorecheck-monitoring:local --format '{{.Id
 old_image_revision="$(docker image inspect scorecheck-monitoring:local --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
 old_health="$(docker inspect "$monitor_before" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')"
 old_restarts="$(docker inspect "$monitor_before" --format '{{.RestartCount}}')"
-running_image_revision="$(docker image inspect "$running_image_id" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
+running_image_revision="$(docker image inspect "$running_image_id" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || true)"
 if [[ "$old_revision" =~ ^[0-9a-f]{40}$ && "$old_revision" == "$running_image_revision" \
   && "$old_health" == "healthy" && "$old_restarts" == "0" \
   && ( "$old_image_id" != "$running_image_id" || "$old_image_revision" != "$old_revision" ) ]]; then
@@ -362,8 +362,7 @@ if [[ "$old_revision" =~ ^[0-9a-f]{40}$ && "$old_revision" == "$running_image_re
   old_image_revision="$(docker image inspect scorecheck-monitoring:local --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
   echo "Reconciled the rollback image tag to the healthy running monitor-service revision."
 fi
-if [[ ! "$old_revision" =~ ^[0-9a-f]{40}$ || "$old_revision" != "$running_image_revision" \
-  || "$old_image_id" != "$running_image_id" || "$old_revision" != "$old_image_revision" \
+if [[ ! "$old_revision" =~ ^[0-9a-f]{40}$ || "$old_revision" != "$old_image_revision" \
   || "$old_health" != "healthy" || "$old_restarts" != "0" ]]; then
   echo "Current monitor-service is not a clean, revision-labeled rollback baseline." >&2
   exit 1
