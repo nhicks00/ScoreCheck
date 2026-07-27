@@ -245,6 +245,8 @@ rm -f "$MOCK_STATE/interface-up"
 "$ROUTING_TOOL" reconcile-once || true
 assert_rule_count 900 0
 assert_rule_count 901 2
+assert_contains "$MOCK_STATE/speedify.log" '^streaming ports set 8890/udp 1935/tcp$'
+assert_contains "$MOCK_STATE/speedify.log" '^mode streaming$'
 if ip route get "$INGEST_IP" ipproto udp dport 8890 >/dev/null 2>&1; then
   fail "SRT resolved to a direct route while Speedify was unavailable"
 fi
