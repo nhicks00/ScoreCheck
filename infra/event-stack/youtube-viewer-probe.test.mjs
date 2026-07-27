@@ -64,6 +64,39 @@ test("closes the temporary browser and returns a bounded failure instead of thro
   assert.match(result.problems[0], /viewer probe failed/u);
 });
 
+test("hard-stops a viewer probe whose browser startup never settles", async () => {
+  let closed = false;
+  const probe = new YouTubeViewerProbe({
+    browserType: { launch: async () => ({
+      newContext: async () => new Promise(() => {}),
+      close: async () => { closed = true; }
+    }) },
+    maximumDurationMs: 10
+  });
+  const result = await probe.probe({ camera: 3, broadcastId: "broadcast_3" });
+  assert.equal(result.passed, false);
+  assert.equal(closed, true);
+  assert.match(result.problems[0], /exceeded 10 ms/u);
+});
+
+test("reports YouTube's sign-in challenge without waiting for playback", async () => {
+  let closed = false;
+  const probe = new YouTubeViewerProbe({
+    browserType: { launch: async () => ({
+      newContext: async () => ({ newPage: async () => ({
+        goto: async () => {},
+        waitForFunction: async () => ({ jsonValue: async () => "challenge", dispose: async () => {} })
+      }) }),
+      close: async () => { closed = true; }
+    }) },
+    sleep: async () => {}
+  });
+  const result = await probe.probe({ camera: 3, broadcastId: "broadcast_3" });
+  assert.equal(result.passed, false);
+  assert.equal(closed, true);
+  assert.match(result.problems[0], /sign-in challenge/u);
+});
+
 test("calculates bounded frame luma without retaining pixels", () => {
   const result = analyzePng(frame([100, 120, 140]));
   assert.match(result.sha256, /^[a-f0-9]{64}$/u);
