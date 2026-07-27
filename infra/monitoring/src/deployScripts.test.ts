@@ -171,6 +171,15 @@ describe("staged observability deployment", () => {
     expect(remoteDeploy).toContain("Automatic rollback requires operator attention.");
   });
 
+  it("repairs only an exact healthy running-image rollback tag drift", () => {
+    expect(remoteDeploy).toContain('running_image_id="$(docker inspect "$monitor_before" --format \'{{.Image}}\')"');
+    expect(remoteDeploy).toContain('running_image_revision="$(docker image inspect "$running_image_id"');
+    expect(remoteDeploy).toContain('"$old_revision" == "$running_image_revision"');
+    expect(remoteDeploy).toContain('"$old_health" == "healthy" && "$old_restarts" == "0"');
+    expect(remoteDeploy).toContain('docker tag "$running_image_id" scorecheck-monitoring:local');
+    expect(remoteDeploy).toContain('"$old_image_id" != "$running_image_id"');
+  });
+
   it("deploys Supabase fault tooling atomically and blocks releases during an active gate", () => {
     expect(deploy).toContain("'$candidate_dir/fault-gates'");
     expect(deploy).toContain('infra/event-stack/supabase-fault-proxy.mjs');
