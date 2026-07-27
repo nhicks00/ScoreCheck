@@ -19,8 +19,11 @@ for _ in $(seq 1 120); do
   running="$(docker inspect bvm-normalizer --format '{{.State.Running}}' 2>/dev/null || true)"
   restarts="$(docker inspect bvm-normalizer --format '{{.RestartCount}}' 2>/dev/null || true)"
   if [[ "$running" == "true" && "$restarts" == "0" && -s "$progress" ]]; then
-    age=$(( $(date +%s) - $(stat -c %Y "$progress") ))
-    if (( age <= 5 )) && grep -Eq '^frame=[1-9][0-9]*$' "$progress" && grep -Eq '^fps=[1-9][0-9]*(\.[0-9]+)?$' "$progress"; then
+    modified="$(stat -c %Y "$progress" 2>/dev/null || true)"
+    if [[ "$modified" =~ ^[0-9]+$ ]] \
+      && (( $(date +%s) - modified <= 5 )) \
+      && grep -Eq '^frame=[1-9][0-9]*$' "$progress" \
+      && grep -Eq '^fps=[1-9][0-9]*(\.[0-9]+)?$' "$progress"; then
       echo "Camera ${CAMERA_NUMBER} browser normalizer is healthy."
       exit 0
     fi
