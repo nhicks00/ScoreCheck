@@ -76,6 +76,14 @@ export function operatorNotificationCopy(incident: IncidentSnapshot): OperatorNo
       recovery: capacity ? "Broadcast capacity is available again. No action is needed." : `${camera ?? "The camera"}'s broadcast output is working again. No action is needed.`
     };
   }
+  if (issue === "PROGRAM_SOURCE_CADENCE_LOW") {
+    return {
+      ...base,
+      problem: `${camera ?? "A camera"}'s video is arriving too slowly and may stutter.`,
+      action: `Leave the broadcast running. Check that ${camera ?? "the camera"} is still streaming with its assigned video settings and a stable connection.`,
+      recovery: `${camera ?? "The camera"}'s video is flowing normally again. No action is needed.`
+    };
+  }
   if (incident.stage === "PREVIEW" || incident.stage === "PROGRAM_PATH" || incident.stage === "PROGRAM_BROWSER") {
     return { ...base, problem: `${camera ?? "A camera"}'s broadcast picture is stuttering or frozen.`, action: `Leave ${camera ?? "the camera"} streaming. Open it in ScoreCheck and restart only its broadcast output.`, recovery: `${camera ?? "The camera"}'s broadcast picture is moving normally again. No action is needed.` };
   }

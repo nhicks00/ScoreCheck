@@ -588,6 +588,24 @@ groups:
           summary: "Program FFmpeg branch progress is missing on live court {{ $labels.court }}."
           first_action: "Check the raw and preview paths, on-demand reader, and MediaMTX branch process."
 
+      - alert: ScoreCheckProgramSourceCadenceLow
+        expr: |
+          (
+            min by (court) (scorecheck_ffmpeg_frames_per_second{branch=~"normalizer|program"}) < 25
+            or min by (court) (scorecheck_ffmpeg_speed_ratio{branch=~"normalizer|program"}) < 0.83
+            or min by (court) (scorecheck_ffmpeg_speed_available{branch=~"normalizer|program"}) == 0
+          )
+          and on(court) (scorecheck_court_broadcast_live == 1)
+        for: 30s
+        labels:
+          severity: critical
+          stage: PROGRAM_PATH
+          issue_code: PROGRAM_SOURCE_CADENCE_LOW
+          root_dependency: camera-media-cadence
+        annotations:
+          summary: "Camera {{ $labels.court }} video is not reaching its Program output at a usable real-time rate."
+          first_action: "Leave the broadcast running and check the camera source profile and connection before restarting any output."
+
       - alert: ScoreCheckPreviewBranchFpsLow
         expr: (scorecheck_ffmpeg_frames_per_second{branch="preview"} < 20) and on(court) (scorecheck_court_broadcast_live == 1)
         for: 20s

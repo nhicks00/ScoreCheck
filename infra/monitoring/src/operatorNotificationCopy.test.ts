@@ -43,6 +43,20 @@ describe("operator notification copy", () => {
     expect(copy.action).toContain("check mute and microphone settings");
   });
 
+  it("keeps a slow source-to-program pipeline running while directing a camera check", () => {
+    const copy = operatorNotificationCopy(incident({
+      stage: "PROGRAM_PATH",
+      issueCode: "PROGRAM_SOURCE_CADENCE_LOW",
+      courtNumber: 6
+    }));
+    expect(copy).toMatchObject({
+      problem: "Camera 6's video is arriving too slowly and may stutter.",
+      action: "Leave the broadcast running. Check that Camera 6 is still streaming with its assigned video settings and a stable connection.",
+      recovery: "Camera 6's video is flowing normally again. No action is needed."
+    });
+    expect(copy.action).not.toMatch(/restart/i);
+  });
+
   it("routes an unknown issue to the first red dashboard item", () => {
     const copy = operatorNotificationCopy(incident({ stage: "CONTROL", issueCode: "UNRECOGNIZED_FAILURE", courtNumber: null }));
     expect(copy.title).toBe("ScoreCheck needs attention");

@@ -809,3 +809,63 @@ tests:
       - eval_time: 45s
         alertname: ScoreCheckProgramFreezeRatioCritical
         exp_alerts: []
+
+  - name: sustained source-to-program cadence loss is court-scoped and live-only
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_ffmpeg_frames_per_second{agent="comp-a",court="1",branch="normalizer"}'
+        values: '30+0x10'
+      - series: 'scorecheck_ffmpeg_speed_ratio{agent="comp-a",court="1",branch="normalizer"}'
+        values: '1+0x10'
+      - series: 'scorecheck_ffmpeg_speed_available{agent="comp-a",court="1",branch="normalizer"}'
+        values: '1+0x10'
+      - series: 'scorecheck_court_broadcast_live{court="1"}'
+        values: '1+0x10'
+
+      - series: 'scorecheck_ffmpeg_frames_per_second{agent="comp-b",court="2",branch="normalizer"}'
+        values: '19+0x10'
+      - series: 'scorecheck_ffmpeg_speed_ratio{agent="comp-b",court="2",branch="normalizer"}'
+        values: '0.63+0x10'
+      - series: 'scorecheck_ffmpeg_speed_available{agent="comp-b",court="2",branch="normalizer"}'
+        values: '1+0x10'
+      - series: 'scorecheck_court_broadcast_live{court="2"}'
+        values: '1+0x10'
+
+      - series: 'scorecheck_ffmpeg_speed_available{agent="comp-c",court="3",branch="normalizer"}'
+        values: '0+0x10'
+      - series: 'scorecheck_court_broadcast_live{court="3"}'
+        values: '1+0x10'
+
+      - series: 'scorecheck_ffmpeg_frames_per_second{agent="comp-d",court="4",branch="program"}'
+        values: '12+0x10'
+      - series: 'scorecheck_ffmpeg_speed_ratio{agent="comp-d",court="4",branch="program"}'
+        values: '0.4+0x10'
+      - series: 'scorecheck_ffmpeg_speed_available{agent="comp-d",court="4",branch="program"}'
+        values: '1+0x10'
+      - series: 'scorecheck_court_broadcast_live{court="4"}'
+        values: '0+0x10'
+    alert_rule_test:
+      - eval_time: 25s
+        alertname: ScoreCheckProgramSourceCadenceLow
+        exp_alerts: []
+      - eval_time: 40s
+        alertname: ScoreCheckProgramSourceCadenceLow
+        exp_alerts:
+          - exp_labels:
+              court: '2'
+              severity: critical
+              stage: PROGRAM_PATH
+              issue_code: PROGRAM_SOURCE_CADENCE_LOW
+              root_dependency: camera-media-cadence
+            exp_annotations:
+              summary: Camera 2 video is not reaching its Program output at a usable real-time rate.
+              first_action: Leave the broadcast running and check the camera source profile and connection before restarting any output.
+          - exp_labels:
+              court: '3'
+              severity: critical
+              stage: PROGRAM_PATH
+              issue_code: PROGRAM_SOURCE_CADENCE_LOW
+              root_dependency: camera-media-cadence
+            exp_annotations:
+              summary: Camera 3 video is not reaching its Program output at a usable real-time rate.
+              first_action: Leave the broadcast running and check the camera source profile and connection before restarting any output.
