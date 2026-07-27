@@ -281,6 +281,12 @@ for path in docker-compose.yml Caddyfile .generated/alertmanager.yml; do
     exit 1
   fi
 done
+live_agent_targets="$(grep -m1 '^MONITOR_AGENT_TARGETS=' "$REMOTE_DIR/.env" || true)"
+candidate_agent_targets="$(grep -m1 '^MONITOR_AGENT_TARGETS=' "$CANDIDATE_DIR/.env" || true)"
+if [[ -z "$live_agent_targets" || "$live_agent_targets" != "$candidate_agent_targets" ]]; then
+  echo "Routine deployment rejected dynamic monitoring target changes; use replace-agent-targets.sh." >&2
+  exit 1
+fi
 
 # The incoming root is mode 0700, so these files remain host-private. Grant the
 # isolated validation containers read access without evaluating or copying any

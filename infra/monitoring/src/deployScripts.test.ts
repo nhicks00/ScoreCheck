@@ -94,13 +94,18 @@ describe("staged observability deployment", () => {
 
   it("rejects topology changes before any image build or runtime cutover", () => {
     const topologyGate = remoteDeploy.indexOf("Routine deployment rejected infrastructure change");
+    const agentTargetGate = remoteDeploy.indexOf("Routine deployment rejected dynamic monitoring target changes");
     const imageBuild = remoteDeploy.indexOf("docker build --pull --label");
     const cutover = remoteDeploy.indexOf("rollback_required=1");
 
     expect(topologyGate).toBeGreaterThan(0);
-    expect(imageBuild).toBeGreaterThan(topologyGate);
+    expect(agentTargetGate).toBeGreaterThan(topologyGate);
+    expect(imageBuild).toBeGreaterThan(agentTargetGate);
     expect(cutover).toBeGreaterThan(imageBuild);
     expect(remoteDeploy).toContain("docker-compose.yml Caddyfile .generated/alertmanager.yml");
+    expect(remoteDeploy).toContain("live_agent_targets");
+    expect(remoteDeploy).toContain("candidate_agent_targets");
+    expect(remoteDeploy).toContain("use replace-agent-targets.sh");
     expect(remoteDeploy).toContain('chmod 0444 \\\n  "$CANDIDATE_DIR/.generated/prometheus.yml"');
   });
 
