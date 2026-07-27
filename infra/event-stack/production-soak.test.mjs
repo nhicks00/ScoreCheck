@@ -270,13 +270,13 @@ test("treats camera bitrate as VBR and fails only sustained excess or an extreme
   assert.ok(extreme.problems.some((entry) => entry.includes("extreme spike")));
 });
 
-test("requires an isolated compositor normalizer only for an admitted HEVC camera", () => {
+test("requires an isolated compositor normalizer for an admitted browser-unsafe camera", () => {
   const hevcProfile = structuredClone(venueProfile);
-  hevcProfile.cameras[2].sourcePathMode = "isolated-hevc-normalizer";
+  hevcProfile.cameras[2].sourcePathMode = "isolated-browser-normalizer";
   hevcProfile.cameras[2].sourceCodec = "H265";
   const hevcVenue = { ...evaluateVenueAdmission(hevcProfile), sha256: "e".repeat(64) };
   const hevcProfiles = structuredClone(profiles);
-  hevcProfiles[3].sourcePathMode = "isolated-hevc-normalizer";
+  hevcProfiles[3].sourcePathMode = "isolated-browser-normalizer";
   hevcProfiles[3].source.codec = "H265";
   const before = snapshot({ sampledMs: startedMs, framesMultiplier: 0 });
   const after = snapshot({ sampledMs: startedMs + 5_000, framesMultiplier: 5 });
@@ -285,7 +285,7 @@ test("requires an isolated compositor normalizer only for an admitted HEVC camer
     court.paths.raw.videoCodec = "H265";
     court.paths.normalized = {
       ...path("normalized", 1),
-      audioCodec: "OPUS"
+      audioCodec: "AAC"
     };
     court.ffmpeg.normalizer = ffmpeg(30, 1);
   }
@@ -293,8 +293,8 @@ test("requires an isolated compositor normalizer only for an admitted HEVC camer
 
   delete after.courts[2].paths.normalized;
   assert.ok(productionSnapshotProblems(after, hevcProfiles, hevcVenue, before, startedMs + 5_000).some((entry) => entry.includes("normalized browser path")));
-  after.courts[2].paths.normalized = { ...path("normalized", 1), audioCodec: "OPUS" };
-  after.courts[0].paths.normalized = { ...path("normalized", 1), audioCodec: "OPUS" };
+  after.courts[2].paths.normalized = { ...path("normalized", 1), audioCodec: "AAC" };
+  after.courts[0].paths.normalized = { ...path("normalized", 1), audioCodec: "AAC" };
   assert.ok(productionSnapshotProblems(after, hevcProfiles, hevcVenue, before, startedMs + 5_000).some((entry) => entry.includes("Camera 1 direct-H264")));
 });
 

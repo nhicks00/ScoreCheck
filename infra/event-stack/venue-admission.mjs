@@ -36,7 +36,8 @@ export const VENUE_SOURCE_PROFILES = Object.freeze({
 
 export const COURT_PRIORITY_TIERS = Object.freeze(["TIER_1", "TIER_2", "TIER_3"]);
 
-const SOURCE_PATH_MODES = new Set(["direct-h264", "isolated-hevc-normalizer"]);
+const SOURCE_PATH_MODES = new Set(["direct-h264", "isolated-browser-normalizer"]);
+const SOURCE_CODECS = new Set(["H264", "H265"]);
 const SOURCE_PROTOCOLS = new Set(["SRT_ENCRYPTED", "RTMPS", "RTMP_LEGACY_APPROVED"]);
 const VENUE_LINKS = new Set(["WIRED_ETHERNET", "DEDICATED_WIFI"]);
 
@@ -240,9 +241,9 @@ function validateCamera(camera) {
     throw new Error(`Camera ${number} legacy transport approval does not match its source protocol`);
   }
   if (!SOURCE_PATH_MODES.has(camera.sourcePathMode)) throw new Error(`Camera ${number} source path mode is invalid`);
+  if (!SOURCE_CODECS.has(camera.sourceCodec)) throw new Error(`Camera ${number} source codec is invalid`);
   if (!COURT_PRIORITY_TIERS.includes(camera.priorityTier)) throw new Error(`Camera ${number} priority tier is invalid`);
   if (camera.sourcePathMode === "direct-h264" && camera.sourceCodec !== "H264") throw new Error(`Camera ${number} direct browser path requires H264`);
-  if (camera.sourcePathMode === "isolated-hevc-normalizer" && camera.sourceCodec !== "H265") throw new Error(`Camera ${number} isolated normalizer requires H265 input`);
   const source = VENUE_SOURCE_PROFILES[camera.sourceProfile];
   if (!source) throw new Error(`Camera ${number} source profile is invalid`);
   if (!source.frameRateModes.includes(camera.frameRateMode)) throw new Error(`Camera ${number} frame rate does not match ${camera.sourceProfile}`);

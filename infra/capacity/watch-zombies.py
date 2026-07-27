@@ -26,6 +26,10 @@ MONITOR_CONTENT_WORKLOAD_COMMANDS = {
     "ffprobe": "workload.monitor-content-probe",
     "ffmpeg": "workload.monitor-content-analyzer",
 }
+MEDIAMTX_RUNNER_COMMAND_PREFIXES = (
+    b"/bin/sh /usr/local/bin/scorecheck-ffmpeg-runner ",
+    b"/bin/sh /tmp/scorecheck-rtmp-alias-runner ",
+)
 
 
 def utc_now():
@@ -173,6 +177,10 @@ def container_healthcheck_classification(process):
     return None
 
 
+def mediamtx_runner_command_line(value):
+    return any(value.startswith(prefix) for prefix in MEDIAMTX_RUNNER_COMMAND_PREFIXES)
+
+
 def healthcheck_shim_map(processes):
     healthcheck_shims = {}
     for process in processes.values():
@@ -259,11 +267,12 @@ def classification_map(processes, retained_healthcheck_shims=None):
         if workload_classification is None:
             runner_cmdline = (parent.get("commandLine") or b"").strip() if parent else b""
             if (
-                process["command"] in {"ffmpeg", "sleep"}
-                and runner_cmdline.startswith(b"/bin/sh /usr/local/bin/scorecheck-ffmpeg-runner ")
+                process["command"] in {"ffmpeg", "sh", "sleep"}
+                and mediamtx_runner_command_line(runner_cmdline)
                 and process.get("cgroupFingerprint") == parent.get("cgroupFingerprint")
             ):
-                classifications[process["identity"]] = f"workload.mediamtx-{process['command']}"
+                suffix = "progress-parser" if process["command"] == "sh" else process["command"]
+                classifications[process["identity"]] = f"workload.mediamtx-{suffix}"
             continue
         for egress_init in egress_inits:
             same_cgroup = process.get("cgroupFingerprint") == egress_init.get("cgroupFingerprint")
@@ -555,6 +564,9 @@ def self_test():
     assert container_healthcheck_classification({"commandLine": b"/tini -- egress"}) == "healthcheck.egress"
     assert container_healthcheck_classification({"commandLine": b"redis-server *:6379"}) == "healthcheck.redis"
     assert container_healthcheck_classification({"commandLine": b"npm run dev"}) is None
+    assert mediamtx_runner_command_line(b"/bin/sh /usr/local/bin/scorecheck-ffmpeg-runner court1_program --")
+    assert mediamtx_runner_command_line(b"/bin/sh /tmp/scorecheck-rtmp-alias-runner court3_ingest --")
+    assert not mediamtx_runner_command_line(b"/bin/sh /tmp/unapproved-runner court3_ingest --")
 
     processes = {
         10: {"pid": 10, "ppid": 1, "identity": "10:1", "command": "tini", "parentCommand": "containerd-shim", "commandLine": b"/tini -- egress", "cgroupFingerprint": "egress"},
@@ -594,6 +606,8 @@ def self_test():
         181: {"pid": 181, "ppid": 180, "identity": "181:29", "command": "ffmpeg", "parentCommand": "scorecheck-ffmp", "commandLine": b"ffmpeg -i input", "cgroupFingerprint": "mediamtx"},
         182: {"pid": 182, "ppid": 180, "identity": "182:30", "command": "sleep", "parentCommand": "scorecheck-ffmp", "commandLine": b"sleep 1", "cgroupFingerprint": "mediamtx"},
         183: {"pid": 183, "ppid": 180, "identity": "183:31", "command": "ffmpeg", "parentCommand": "scorecheck-ffmp", "commandLine": b"ffmpeg -i input", "cgroupFingerprint": "other"},
+        184: {"pid": 184, "ppid": 180, "identity": "184:32", "command": "sh", "parentCommand": "scorecheck-ffmp", "commandLine": b"", "cgroupFingerprint": "mediamtx"},
+        185: {"pid": 185, "ppid": 180, "identity": "185:33", "command": "sh", "parentCommand": "scorecheck-ffmp", "commandLine": b"", "cgroupFingerprint": "other"},
     }
     classifications = classification_map(processes)
     assert classifications["20:2"] == "workload.egress-chrome"
@@ -622,7 +636,9 @@ def self_test():
     assert "176:27" not in classifications
     assert classifications["181:29"] == "workload.mediamtx-ffmpeg"
     assert classifications["182:30"] == "workload.mediamtx-sleep"
+    assert classifications["184:32"] == "workload.mediamtx-progress-parser"
     assert "183:31" not in classifications
+    assert "185:33" not in classifications
 
     mediamtx_init = {
         200: {"pid": 200, "ppid": 1, "identity": "200:20", "command": "containerd-shim", "parentCommand": "systemd", "commandLine": b"containerd-shim-runc-v2", "cgroupFingerprint": "host"},

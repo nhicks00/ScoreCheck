@@ -3,6 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FFMPEG_RUNNER="$SCRIPT_DIR/../mediamtx/scorecheck-ffmpeg-runner.sh"
 SSH_HOST="${COMPOSITOR_SSH_HOST:?COMPOSITOR_SSH_HOST is required}"
 SSH_KEY="${COMPOSITOR_SSH_KEY:-$HOME/.ssh/scorecheck_do}"
 REMOTE_DIR="${COMPOSITOR_REMOTE_DIR:-/opt/compositor}"
@@ -21,6 +22,7 @@ for command in rsync ssh stat; do
 done
 [[ -r "$SSH_KEY" ]] || { echo "error: compositor SSH key is not readable" >&2; exit 1; }
 [[ -f "$ENV_FILE" ]] || { echo "error: compositor environment file is missing" >&2; exit 1; }
+[[ -x "$FFMPEG_RUNNER" ]] || { echo "error: monitored FFmpeg runner is missing" >&2; exit 1; }
 permissions="$(stat -f '%Lp' "$ENV_FILE" 2>/dev/null || stat -c '%a' "$ENV_FILE")"
 (( (8#$permissions & 8#077) == 0 )) || { echo "error: compositor environment file must be mode 0600 or stricter" >&2; exit 1; }
 
@@ -37,6 +39,7 @@ rsync -a --delete -e "$rsync_shell" \
   "$SCRIPT_DIR/lib.sh" \
   "$SCRIPT_DIR/list-egress.sh" \
   "$SCRIPT_DIR/normalize-camera.sh" \
+  "$FFMPEG_RUNNER" \
   "$SCRIPT_DIR/qualify-output.sh" \
   "$SCRIPT_DIR/rebind-ingest.sh" \
   "$SCRIPT_DIR/start-court.sh" \
@@ -73,7 +76,7 @@ if [[ -f docker-compose.yml && -f .env ]]; then
   backup_files=(docker-compose.yml livekit.yaml egress.yaml headless_shell
     chrome-sandboxing-seccomp-profile.json lib.sh list-egress.sh
     qualify-output.sh start-court.sh stop-court.sh .env)
-  for optional in normalize-camera.sh rebind-ingest.sh start-normalizer.sh stop-normalizer.sh; do
+  for optional in normalize-camera.sh scorecheck-ffmpeg-runner.sh rebind-ingest.sh start-normalizer.sh stop-normalizer.sh; do
     [[ -f "$optional" ]] && backup_files+=("$optional")
   done
   tar -czf "backups/compositor-$timestamp.tar.gz" "${backup_files[@]}"
@@ -83,7 +86,7 @@ fi
 for file in docker-compose.yml livekit.yaml egress.yaml chrome-sandboxing-seccomp-profile.json; do
   install -m 0644 ".incoming/$file" "$file"
 done
-for file in headless_shell lib.sh list-egress.sh normalize-camera.sh qualify-output.sh rebind-ingest.sh start-court.sh start-normalizer.sh stop-normalizer.sh stop-court.sh; do
+for file in headless_shell lib.sh list-egress.sh normalize-camera.sh scorecheck-ffmpeg-runner.sh qualify-output.sh rebind-ingest.sh start-court.sh start-normalizer.sh stop-normalizer.sh stop-court.sh; do
   install -m 0755 ".incoming/$file" "$file"
 done
 install -d -m 0700 evidence
@@ -97,8 +100,8 @@ printf 'MEDIAMTX_PRIVATE_HOST="%s"\n' "$MEDIAMTX_PRIVATE_HOST" >>.env
 printf 'MEDIAMTX_PUBLIC_HOST="%s"\n' "$MEDIAMTX_PUBLIC_HOST" >>.env
 docker compose config -q
 retry_docker_operation docker compose pull --quiet
-retry_docker_operation docker compose --profile hevc-normalizer pull --quiet normalizer
-docker compose --profile hevc-normalizer rm -sf normalizer >/dev/null 2>&1 || true
+retry_docker_operation docker compose --profile browser-normalizer pull --quiet normalizer
+docker compose --profile browser-normalizer rm -sf normalizer >/dev/null 2>&1 || true
 
 if ! docker compose up -d --remove-orphans; then
   if [[ "$had_previous" -eq 1 ]]; then

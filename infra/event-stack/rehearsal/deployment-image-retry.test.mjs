@@ -28,7 +28,8 @@ test("remote deployments retry only idempotent Docker acquisition before runtime
   assert.match(commentary, /retry_docker_operation docker compose .* pull --quiet/u);
   assert.match(compositor, /retry_docker_operation docker compose pull --quiet/u);
   assert.doesNotMatch(compositor, /up -d --pull always/u);
-  assert.match(media, /retry_docker_operation docker compose pull --quiet "\$\{services\[@\]\}"/u);
+  assert.match(media, /retry_docker_operation docker compose build --pull mediamtx/u);
+  assert.match(media, /retry_docker_operation docker compose pull --quiet "\$\{pull_services\[@\]\}"/u);
   assert.match(agent, /retry_docker_operation compose .* pull --quiet docker-proxy/u);
   assert.match(agent, /retry_docker_operation compose .* build --pull monitor-agent/u);
   assert.match(agent, /up -d --no-build --remove-orphans/u);

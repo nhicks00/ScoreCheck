@@ -790,7 +790,8 @@ weak permissions, malformed HTTPS, or a pre-existing destination.
 The compositor pool uses one SFO2 premium Intel 8-vCPU/16-GiB host per camera
 plus one warm spare. Start no public output merely because the 12-host stack is
 ready. While lifecycle phase is still `ready`, qualify physical camera input,
-the isolated HEVC normalizer where assigned, and actual local-only 1080 output:
+the isolated browser normalizer where assigned, and actual local-only 1080
+output:
 
 ```bash
 node infra/event-stack/production-media-prequalification.mjs run \

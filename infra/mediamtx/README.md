@@ -66,11 +66,12 @@ B-frames, bounded timestamps, and a two-second-or-shorter GOP. The branch
 stream-copies that H.264 video and converts AAC to 48 kHz stereo Opus.
 
 HEVC remains a supported venue-bandwidth source format only when the event
-manifest assigns an isolated HEVC-to-H.264 normalizer and the source probe also
-proves the resulting `courtN_preview` is browser-safe. The current template has
-no qualified HEVC normalizer assignment, so HEVC must fail production admission
-instead of being copied into Linux Chromium WHEP. Monitor and calibration paths
-may encode low-resolution diagnostics, but they never define YouTube output.
+manifest assigns an isolated browser normalizer and the source probe also proves
+the resulting `courtN_preview` is browser-safe. H.264 with B-frames or another
+browser-unsafe source property uses the same isolated normalizer. Unsupported
+sources fail production admission instead of being copied into Linux Chromium
+WHEP. Monitor and calibration paths may encode low-resolution diagnostics, but
+they never define YouTube output.
 
 The July 13 extended run proved that the four-vCPU MediaMTX host does not have
 production headroom for shared video normalization: load remained

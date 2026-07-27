@@ -884,6 +884,7 @@ export function roleConfigBindings(repoRoot, secretsDirectory, spec) {
     [join(repoRoot, "infra/mediamtx/.generated/Caddyfile"), "/opt/mediamtx/Caddyfile"],
     [join(repoRoot, "infra/mediamtx/scorecheck-ffmpeg-runner.sh"), "/opt/mediamtx/scorecheck-ffmpeg-runner.sh"],
     [join(repoRoot, "infra/mediamtx/scorecheck-preview-runner.sh"), "/opt/mediamtx/scorecheck-preview-runner.sh"],
+    [join(repoRoot, "infra/mediamtx/scorecheck-program-runner.sh"), "/opt/mediamtx/scorecheck-program-runner.sh"],
     [join(repoRoot, "infra/mediamtx/recovery-role.sh"), "/opt/mediamtx/recovery-role.sh"]
   ];
   if (["compositor", "compositor-spare"].includes(spec.role)) return [
@@ -892,6 +893,7 @@ export function roleConfigBindings(repoRoot, secretsDirectory, spec) {
     [join(repoRoot, "infra/compositor/egress.yaml"), "/opt/compositor/egress.yaml"],
     [join(secretsDirectory, "compositors", `${spec.name}.env`), "/opt/compositor/.env"],
     [join(repoRoot, "infra/compositor/normalize-camera.sh"), "/opt/compositor/normalize-camera.sh"],
+    [join(repoRoot, "infra/mediamtx/scorecheck-ffmpeg-runner.sh"), "/opt/compositor/scorecheck-ffmpeg-runner.sh"],
     [join(repoRoot, "infra/compositor/qualify-output.sh"), "/opt/compositor/qualify-output.sh"],
     [join(repoRoot, "infra/compositor/rebind-ingest.sh"), "/opt/compositor/rebind-ingest.sh"],
     [join(repoRoot, "infra/compositor/start-court.sh"), "/opt/compositor/start-court.sh"],

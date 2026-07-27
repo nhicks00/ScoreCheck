@@ -43,11 +43,12 @@ The target remains:
    from direct WHEP admission. Linux Chromium must receive H.264 with no
    B-frames. The normalizer location will be selected by a production-shaped
    benchmark, not by assumption.
-4. Do not put eight software HEVC normalizers on the shared four-vCPU ingest
-   host. Prior evidence already showed inadequate headroom there.
+4. Do not put eight software browser-compatibility normalizers on the shared
+   four-vCPU ingest host. Prior evidence already showed inadequate headroom
+   there.
 5. Do not add a dedicated normalizer Droplet per camera. That cannot fit the
-   15-Droplet account ceiling. The only viable HEVC candidate is compositor-local
-   normalization, or camera-side H.264 when local normalization cannot qualify.
+   15-Droplet account ceiling. The viable normalization candidate is
+   compositor-local, with qualified camera-side H.264 taking the direct path.
 6. Do not add a thirteenth warm-ingest host by default. First rehearse the
    existing warm compositor spare as an ingest replacement. A thirteenth host is
    admitted only if the simpler dual-role recovery cannot meet the declared RTO.
@@ -84,7 +85,7 @@ operator approval.
 
 | ID | Review item | Status | Checked-in evidence | Required disposition / proof |
 | --- | --- | --- | --- | --- |
-| M-01 | Do not copy HEVC directly into Linux Chromium WHEP | `SATISFIED` | Venue admission permits only `direct-h264` or `isolated-hevc-normalizer`. MediaMTX exposes `courtN_normalized`; the preview runner selects raw H.264 or normalized H.264, and the compositor normalizer fails closed unless HEVC is explicitly assigned. | Physical HEVC use remains prohibited until M-12 passes. |
+| M-01 | Do not copy HEVC directly into Linux Chromium WHEP | `SATISFIED` | Venue admission permits only `direct-h264` or `isolated-browser-normalizer`. MediaMTX exposes `courtN_normalized`; the preview runner selects raw H.264 or normalized H.264, and the compositor normalizer fails closed unless HEVC is explicitly assigned. | Physical HEVC use remains prohibited until M-12 passes. |
 | M-02 | Correct MediaMTX documentation | `SATISFIED` | MediaMTX documentation and runner tests now describe the exact direct-H.264 versus isolated-HEVC topology and keep monitor renditions separate from final 1080 output. | Keep documentation synchronized with runner changes. |
 | M-03 | H.264 entering WHEP has no B-frames | `SATISFIED` | Both production profile and capacity gates inspect `has_b_frames`; direct H.264 and normalized browser input require zero. | Retain physical camera fixtures. |
 | M-04 | Browser-safe pixel format and progressive scan | `SATISFIED` | Browser input requires explicit `yuv420p` and progressive scan; missing or incompatible metadata fails closed. | No permissive `unknown` production path remains. |

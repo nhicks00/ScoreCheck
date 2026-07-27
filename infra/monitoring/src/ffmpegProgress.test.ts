@@ -58,7 +58,7 @@ describe("FFmpeg progress parser", () => {
     }]);
   });
 
-  it("reads compositor-local HEVC normalizer cadence", async () => {
+  it("reads compositor-local browser normalizer cadence", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "scorecheck-normalizer-progress-"));
     temporaryDirectories.push(directory);
     await writeFile(path.join(directory, "court2_normalizer.progress"), [

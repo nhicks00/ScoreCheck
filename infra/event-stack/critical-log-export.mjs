@@ -122,6 +122,7 @@ export function sanitizeCriticalLogLine(value) {
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/gu, "[REDACTED_JWT]")
     .replace(/(rtmps?:\/\/[^\s/]+\/live2\/)[^\s?]+/giu, "$1[REDACTED]")
     .replace(/([?#&](?:token|jwt|key|secret|password|passphrase|signature|sig|auth)=)[^&\s]+/giu, "$1[REDACTED]")
+    .replace(/\bsc[1-8]-[A-Za-z0-9_-]{43}\b/gu, "[REDACTED_RTMP_PATH]")
     .replace(/(["']?(?:token|jwt|secret|password|passphrase|api[_-]?key|stream[_-]?key|authorization)["']?\s*:\s*["'])[^"']+/giu, "$1[REDACTED]")
     .replace(/\b((?:PROGRAM_PAGE_TOKEN|MONITOR_API_TOKEN|LIVEKIT_API_SECRET|PUSHOVER_APP_TOKEN|PUSHOVER_USER_KEY|SUPABASE_SERVICE_ROLE_KEY|YOUTUBE_(?:KEY|STREAM_KEY))\s*[=:]\s*)\S+/giu, "$1[REDACTED]")
     .replace(/\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSPHRASE|STREAM_KEY|YOUTUBE_KEY)\s*[=:]\s*)\S+/gu, "$1[REDACTED]")

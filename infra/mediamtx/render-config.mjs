@@ -3,6 +3,8 @@ import { isIP } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { opaqueRtmpKey } from "./opaque-rtmp-key.mjs";
+
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const mediaSourcePath = path.join(directory, "mediamtx.template.yml");
 const caddySourcePath = path.join(directory, "Caddyfile.template");
@@ -15,6 +17,7 @@ export function renderMediaMtxConfigs({ mediaTemplate, caddyTemplate, environmen
   const contentAnalyzerBindings = exactContentAnalyzerBindings(required(environment, "MEDIAMTX_CONTENT_ANALYZER_BINDINGS"));
   const delayMs = integerInRange(environment.MEDIAMTX_PROGRAM_DELAY_MS ?? "3500", 0, 30_000);
   const browserSources = [];
+  const opaqueRtmpAliases = [];
 
   let mediaConfig = mediaTemplate
     .replaceAll("__PUBLIC_IP__", JSON.stringify(publicIp))
@@ -33,12 +36,24 @@ export function renderMediaMtxConfigs({ mediaTemplate, caddyTemplate, environmen
       throw new Error(`MEDIAMTX_COURT_${court}_BROWSER_SOURCE must be raw or normalized.`);
     }
     browserSources.push(browserSource);
+    const alias = environment[`MEDIAMTX_COURT_${court}_RTMP_PUBLISH_KEY`]?.trim();
+    if (alias) {
+      const application = environment[`MEDIAMTX_COURT_${court}_RTMP_APPLICATION`]?.trim() || "live";
+      if (!new Set(["root", "live"]).has(application)) {
+        throw new Error(`MEDIAMTX_COURT_${court}_RTMP_APPLICATION must be root or live.`);
+      }
+      const key = opaqueRtmpKey(alias, court);
+      opaqueRtmpAliases.push({ court, path: application === "root" ? key : `live/${key}` });
+    }
     mediaConfig = mediaConfig
       .replaceAll(`__COURT_${court}_RAW_SOURCE__`, JSON.stringify(rawSource))
       .replaceAll(`__COURT_${court}_PUBLISH_USER__`, JSON.stringify(required(environment, `MEDIAMTX_COURT_${court}_PUBLISH_USER`)))
       .replaceAll(`__COURT_${court}_PUBLISH_PASSWORD__`, JSON.stringify(required(environment, `MEDIAMTX_COURT_${court}_PUBLISH_PASS`)));
   }
-  mediaConfig = mediaConfig.replaceAll("__BROWSER_SOURCE_MAP__", browserSources.join(","));
+  mediaConfig = mediaConfig
+    .replaceAll("__BROWSER_SOURCE_MAP__", browserSources.join(","))
+    .replaceAll("__OPAQUE_RTMP_PUBLISH_PERMISSIONS__", renderOpaqueRtmpPermissions(opaqueRtmpAliases))
+    .replaceAll("__OPAQUE_RTMP_ALIAS_PATHS__", renderOpaqueRtmpPaths(opaqueRtmpAliases));
 
   const caddyConfig = caddyTemplate
     .replaceAll("__PUBLIC_HOST__", publicHost)
@@ -50,9 +65,26 @@ export function renderMediaMtxConfigs({ mediaTemplate, caddyTemplate, environmen
     mediaConfig,
     caddyConfig,
     delayMs,
+    opaqueRtmpAliasCount: opaqueRtmpAliases.length,
     contentAnalyzerBindingCount: contentAnalyzerBindings.length,
     contentAnalyzerCourtCount: contentAnalyzerBindings.reduce((total, binding) => total + binding.courts.length, 0)
   };
+}
+
+function renderOpaqueRtmpPermissions(aliases) {
+  return aliases.map(({ path }) => `      - action: publish\n        path: ${JSON.stringify(path)}`).join("\n");
+}
+
+function renderOpaqueRtmpPaths(aliases) {
+  return aliases.map(({ court, path }) => `  ${JSON.stringify(path)}:
+    runOnReady: >
+      /usr/local/bin/scorecheck-ffmpeg-runner "court${court}_ingest" --
+      -nostdin -hide_banner -loglevel warning
+      -fflags nobuffer -flags low_delay -rtsp_transport tcp
+      -i "rtsp://127.0.0.1:\${RTSP_PORT}/\${MTX_PATH}"
+      -map 0:v:0 -map 0:a:0? -c copy
+      -f flv "rtmp://127.0.0.1:1935/court${court}_raw"
+    runOnReadyRestart: yes`).join("\n");
 }
 
 async function main() {

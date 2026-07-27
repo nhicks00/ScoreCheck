@@ -89,6 +89,7 @@ test("fails sparse, restarted, malformed, and degraded camera evidence", () => {
   evidence.samples[1].courts[0].raw.bytesReceived = 900;
   const probes = healthyProbes();
   probes.courts[0].raw.streams[0].avg_frame_rate = "25/1";
+  probes.courts[0].raw.streams[0].r_frame_rate = "25/1";
   const report = evaluateCameraProfileGate(gateConfig, evidence, probes, sourceEvidence());
   assert.equal(report.verdict, "FAIL");
   const failed = new Set(report.checks.filter((check) => !check.pass).map((check) => check.id));

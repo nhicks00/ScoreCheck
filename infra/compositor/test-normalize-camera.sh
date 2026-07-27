@@ -19,11 +19,18 @@ fail() {
   exit 1
 }
 
-printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$@" >"$NORMALIZER_ARGUMENT_CAPTURE"' >"$TEST_ROOT/fake-ffmpeg"
-chmod 0755 "$TEST_ROOT/fake-ffmpeg"
+cat >"$TEST_ROOT/fake-runner" <<'EOF'
+#!/bin/sh
+[ "$1" = "court${CAMERA_NUMBER}_normalizer" ] || exit 64
+shift
+[ "$1" = "--" ] || exit 64
+shift
+printf '%s\n' "$@" >"$NORMALIZER_ARGUMENT_CAPTURE"
+EOF
+chmod 0755 "$TEST_ROOT/fake-runner"
 
 export CAMERA_NORMALIZER_ENABLED=true
-export CAMERA_SOURCE_PATH_MODE=isolated-hevc-normalizer
+export CAMERA_SOURCE_PATH_MODE=isolated-browser-normalizer
 export CAMERA_SOURCE_CODEC=H265
 export CAMERA_NUMBER=2
 export CAMERA_NORMALIZER_INPUT_PATH=court2_raw
@@ -31,7 +38,7 @@ export CAMERA_NORMALIZER_OUTPUT_PATH=court2_normalized
 export CAMERA_SOURCE_PROFILE=STANDARD_1080P30
 export CAMERA_FRAME_RATE_MODE=30000/1001
 export MEDIAMTX_PRIVATE_HOST=10.20.0.3
-export NORMALIZER_FFMPEG_BIN="$TEST_ROOT/fake-ffmpeg"
+export NORMALIZER_FFMPEG_RUNNER="$TEST_ROOT/fake-runner"
 export NORMALIZER_ARGUMENT_CAPTURE="$CAPTURE"
 export NORMALIZER_PROGRESS_DIR="$TEST_ROOT"
 
@@ -40,18 +47,38 @@ grep -Fxq 'rtsp://10.20.0.3:8554/court2_raw' "$CAPTURE" || fail "normalizer did 
 grep -Fxq 'rtsp://10.20.0.3:8554/court2_normalized' "$CAPTURE" || fail "normalizer did not publish the private normalized output"
 grep -Fxq 'libx264' "$CAPTURE" || fail "normalizer did not encode H264"
 grep -Fxq 'high' "$CAPTURE" || fail "normalizer did not select H264 High profile"
-grep -Fxq '30000/1001' "$CAPTURE" || fail "normalizer did not preserve 29.97 fps mode"
+grep -Fq 'setpts=N/(30000/1001*TB)' "$CAPTURE" || fail "normalizer did not preserve 29.97 fps mode"
 grep -Fxq '10000k' "$CAPTURE" || fail "normalizer did not apply the 1080p30 bitrate"
-grep -Fxq 'libopus' "$CAPTURE" || fail "normalizer did not produce browser-safe Opus audio"
+grep -Fxq 'aac' "$CAPTURE" || fail "normalizer did not produce MPEG-TS-safe transport audio"
+if grep -Fxq 'libopus' "$CAPTURE"; then
+  fail "normalizer retained nonstandard Opus-over-MPEG-TS transport audio"
+fi
 grep -Fq 'bframes=0:keyint=60:min-keyint=60:scenecut=0' "$CAPTURE" || fail "normalizer did not enforce the browser GOP contract"
+grep -Fq 'setpts=N/(30000/1001*TB),format=yuv420p,setfield=prog' "$CAPTURE" || fail "normalizer did not replace defective source video timestamps"
+grep -Fq 'asetpts=N/SR/TB,aresample=async=1:first_pts=0' "$CAPTURE" || fail "normalizer did not replace defective source audio timestamps"
+grep -Fxq 'passthrough' "$CAPTURE" || fail "normalizer can still duplicate frames to catch up"
+if grep -Fxq 'cfr' "$CAPTURE"; then
+  fail "normalizer still applies timestamp-driven CFR duplication"
+fi
+if grep -Fxq -- '-readrate' "$CAPTURE"; then
+  fail "normalizer throttles the live MediaMTX reader"
+fi
+if grep -Fxq -- '-copyts' "$CAPTURE" || grep -Fxq -- '-use_wallclock_as_timestamps' "$CAPTURE"; then
+  fail "normalizer overrides MediaMTX timestamp mapping"
+fi
 if grep -Fxq 'low_delay' "$CAPTURE"; then
   fail "normalizer forced low-delay decoding on an HEVC source with reference-frame reordering"
 fi
 
+export CAMERA_SOURCE_CODEC=H264
+sh "$NORMALIZER"
+grep -Fxq 'libx264' "$CAPTURE" || fail "normalizer did not accept unsafe H264 input"
+export CAMERA_SOURCE_CODEC=H265
+
 export CAMERA_SOURCE_PROFILE=PRIORITY_1080P60
 export CAMERA_FRAME_RATE_MODE=60000/1001
 sh "$NORMALIZER"
-grep -Fxq '60000/1001' "$CAPTURE" || fail "normalizer did not preserve 59.94 fps mode"
+grep -Fq 'setpts=N/(60000/1001*TB)' "$CAPTURE" || fail "normalizer did not preserve 59.94 fps mode"
 grep -Fxq '12000k' "$CAPTURE" || fail "normalizer did not apply the 1080p60 bitrate"
 grep -Fq 'bframes=0:keyint=120:min-keyint=120:scenecut=0' "$CAPTURE" || fail "normalizer did not apply the 60 fps GOP"
 
@@ -65,15 +92,17 @@ if sh "$NORMALIZER" >/dev/null 2>&1; then
   fail "normalizer accepted a direct-H264 assignment"
 fi
 
-grep -Fq 'profiles: ["hevc-normalizer"]' "$COMPOSE" || fail "normalizer is not profile scoped"
+grep -Fq 'profiles: ["browser-normalizer"]' "$COMPOSE" || fail "normalizer is not profile scoped"
 grep -Fq 'network_mode: host' "$COMPOSE" || fail "normalizer cannot use the private host route"
 grep -Fq 'entrypoint: ["/usr/local/bin/normalize-camera"]' "$COMPOSE" \
   || fail "normalizer does not override the MediaMTX image entrypoint"
+grep -Fq './scorecheck-ffmpeg-runner.sh:/usr/local/bin/scorecheck-ffmpeg-runner:ro' "$COMPOSE" \
+  || fail "normalizer does not mount the bounded FFmpeg progress runner"
 grep -Fq 'COMPOSITOR_INGEST_PRIVATE_IP' "$DEPLOY" || fail "deployment does not bind the ingest private IPv4"
 grep -Fq 'COMPOSITOR_INGEST_HOST' "$DEPLOY" || fail "deployment does not bind the ingest TLS hostname"
-grep -Fq 'for optional in normalize-camera.sh rebind-ingest.sh start-normalizer.sh stop-normalizer.sh' "$DEPLOY" \
+grep -Fq 'for optional in normalize-camera.sh scorecheck-ffmpeg-runner.sh rebind-ingest.sh start-normalizer.sh stop-normalizer.sh' "$DEPLOY" \
   || fail "deployment does not treat the new recovery helper as optional in legacy backups"
 grep -Fq 'extra_hosts:' "$COMPOSE" || fail "Egress does not route the ingest TLS hostname over the VPC"
 grep -Fq 'MEDIAMTX_PUBLIC_HOST' "$COMPOSE" || fail "Egress VPC binding omits the ingest TLS hostname"
 
-printf 'PASS: isolated HEVC normalization is private, profile-scoped, and browser-safe\n'
+printf 'PASS: isolated browser normalization is private, profile-scoped, and browser-safe\n'

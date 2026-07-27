@@ -63,7 +63,7 @@ fi
 
 name="${1:-}"
 case "$name" in
-  court[1-8]_preview|court[1-8]_program|court[1-8]_calibration|court[1-8]_monitor) ;;
+  court[1-8]_ingest|court[1-8]_normalizer|court[1-8]_preview|court[1-8]_program|court[1-8]_calibration|court[1-8]_monitor) ;;
   *) echo "invalid monitored FFmpeg branch" >&2; exit 64 ;;
 esac
 shift

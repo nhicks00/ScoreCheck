@@ -3,8 +3,11 @@
 set -eu
 
 [ "${CAMERA_NORMALIZER_ENABLED:-}" = "true" ] || { echo "error: Camera normalizer is not enabled for this host" >&2; exit 64; }
-[ "${CAMERA_SOURCE_PATH_MODE:-}" = "isolated-hevc-normalizer" ] || { echo "error: Camera source path is not assigned to the isolated normalizer" >&2; exit 64; }
-[ "${CAMERA_SOURCE_CODEC:-}" = "H265" ] || { echo "error: Camera normalizer requires H265 input" >&2; exit 64; }
+[ "${CAMERA_SOURCE_PATH_MODE:-}" = "isolated-browser-normalizer" ] || { echo "error: Camera source path is not assigned to the browser normalizer" >&2; exit 64; }
+case "${CAMERA_SOURCE_CODEC:-}" in
+  H264|H265) ;;
+  *) echo "error: Camera browser normalizer requires H264 or H265 input" >&2; exit 64 ;;
+esac
 
 court=${CAMERA_NUMBER:-}
 case "$court" in [1-8]) ;; *) echo "error: CAMERA_NUMBER must be 1-8" >&2; exit 64 ;; esac
@@ -39,24 +42,22 @@ case "${CAMERA_SOURCE_PROFILE:-}:${CAMERA_FRAME_RATE_MODE:-}" in
   *) echo "error: source profile and frame-rate assignment do not match" >&2; exit 64 ;;
 esac
 
-ffmpeg=${NORMALIZER_FFMPEG_BIN:-ffmpeg}
-command -v "$ffmpeg" >/dev/null 2>&1 || { echo "error: FFmpeg is unavailable" >&2; exit 69; }
 progress_dir=${NORMALIZER_PROGRESS_DIR:-/monitoring/ffmpeg}
 [ -d "$progress_dir" ] && [ -w "$progress_dir" ] || { echo "error: normalizer progress directory is unavailable" >&2; exit 73; }
-progress="${progress_dir}/court${court}_normalizer.progress"
-rm -f "$progress"
+runner=${NORMALIZER_FFMPEG_RUNNER:-/usr/local/bin/scorecheck-ffmpeg-runner}
+[ -x "$runner" ] || { echo "error: monitored FFmpeg runner is unavailable" >&2; exit 69; }
+export FFMPEG_PROGRESS_DIR="$progress_dir"
 
-exec "$ffmpeg" \
-  -nostdin -hide_banner -loglevel warning \
-  -progress "$progress" -stats_period 1 \
+exec "$runner" "court${court}_normalizer" -- \
+  -nostdin -hide_banner -loglevel warning -stats_period 1 \
   -fflags +genpts+discardcorrupt -rtsp_transport tcp \
   -i "rtsp://${host}:8554/${CAMERA_NORMALIZER_INPUT_PATH}" \
   -map 0:v:0 -map 0:a:0 \
-  -vf "format=yuv420p,setfield=prog" -fps_mode cfr \
+  -vf "setpts=N/(${fps}*TB),format=yuv420p,setfield=prog" -fps_mode passthrough \
   -c:v libx264 -preset veryfast -tune zerolatency -profile:v high -level:v 4.2 \
-  -r "$fps" -g "$gop" -keyint_min "$gop" -sc_threshold 0 -bf 0 \
+  -g "$gop" -keyint_min "$gop" -sc_threshold 0 -bf 0 \
   -b:v "${video_kbps}k" -minrate "${video_kbps}k" -maxrate "${video_kbps}k" -bufsize "$((video_kbps * 2))k" \
   -x264-params "nal-hrd=cbr:force-cfr=1:bframes=0:keyint=${gop}:min-keyint=${gop}:scenecut=0" \
   -color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv \
-  -c:a libopus -b:a 128k -ar 48000 -ac 2 -af "aresample=async=1:first_pts=0" \
+  -c:a aac -b:a 128k -ar 48000 -ac 2 -af "asetpts=N/SR/TB,aresample=async=1:first_pts=0" \
   -f rtsp -rtsp_transport tcp "rtsp://${host}:8554/${CAMERA_NORMALIZER_OUTPUT_PATH}"

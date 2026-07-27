@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { buildEventManifest, loadManifestInputs } from "./event-manifest.mjs";
+import { deriveOpaqueRtmpKey } from "../mediamtx/opaque-rtmp-key.mjs";
 import { buildProductionMaterial, buildProductionSecretFiles, migrateMonitoringEnvironment, migrateProductionMaterial } from "./production-recovery.mjs";
 import { createSyntheticRehearsalVenueProfile } from "./venue-admission.mjs";
 
@@ -10,8 +11,13 @@ const manifest = buildEventManifest({ event: "production-recovery-test", kind: "
 const venueProfile = createSyntheticRehearsalVenueProfile(manifest.event);
 venueProfile.cameras[1] = {
   ...venueProfile.cameras[1],
-  sourcePathMode: "isolated-hevc-normalizer",
+  sourcePathMode: "isolated-browser-normalizer",
   sourceCodec: "H265"
+};
+venueProfile.cameras[2] = {
+  ...venueProfile.cameras[2],
+  sourceProtocol: "RTMP_LEGACY_APPROVED",
+  legacyTransportApproved: true
 };
 const renderer = {
   schemaVersion: 1,
@@ -96,6 +102,13 @@ test("renders the exact 12-host production secret contract and strips stale targ
   assert.match(files["ingest.env"], /MEDIAMTX_COURT_8_RAW_SOURCE="publisher"/);
   assert.match(files["ingest.env"], /MEDIAMTX_COURT_1_BROWSER_SOURCE="raw"/);
   assert.match(files["ingest.env"], /MEDIAMTX_COURT_2_BROWSER_SOURCE="normalized"/);
+  const expectedCamera3Key = deriveOpaqueRtmpKey({
+    court: 3,
+    user: material.publishers[3].user,
+    password: material.publishers[3].password
+  });
+  assert.match(files["ingest.env"], new RegExp(`^MEDIAMTX_COURT_3_RTMP_PUBLISH_KEY="${expectedCamera3Key}"$`, "mu"));
+  assert.doesNotMatch(files["ingest.env"], /MEDIAMTX_COURT_(?:1|2|4|5|6|7|8)_RTMP_PUBLISH_KEY/u);
   assert.doesNotMatch(files["observability.env"], /MONITOR_AGENT_TARGETS/);
   assert.doesNotMatch(files["observability.env"], /TWILIO_/);
   assert.match(files["compositors/bvm-compositor-h.env"], /COURT_8_YOUTUBE_KEY=/);

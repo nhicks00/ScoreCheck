@@ -128,11 +128,10 @@ services:
         condition: service_started
 
   normalizer:
-    # HEVC remains an allowed venue transport codec, but Linux Chromium does
-    # not consume it directly through WHEP. Only a compositor explicitly bound
-    # to an HEVC camera starts this profile-scoped normalizer. Direct-H264
-    # cameras and the spare never run it.
-    profiles: ["hevc-normalizer"]
+    # Linux Chromium WHEP requires browser-safe H.264. A compositor assigned an
+    # HEVC source or unsafe H.264 source starts this profile-scoped normalizer;
+    # qualified direct-H264 cameras and the spare never run it.
+    profiles: ["browser-normalizer"]
     image: bluenviron/mediamtx:1.19.2-ffmpeg@sha256:08c837deb7bac85d509e2a4c2737308e5a34f8f084a46a0d8793cdb0579a6e5d
     container_name: bvm-normalizer
     restart: unless-stopped
@@ -151,5 +150,6 @@ services:
       MEDIAMTX_PRIVATE_HOST: "${MEDIAMTX_PRIVATE_HOST:-}"
     volumes:
       - ./normalize-camera.sh:/usr/local/bin/normalize-camera:ro
+      - ./scorecheck-ffmpeg-runner.sh:/usr/local/bin/scorecheck-ffmpeg-runner:ro
       - /var/lib/scorecheck-monitoring/ffmpeg:/monitoring/ffmpeg
     entrypoint: ["/usr/local/bin/normalize-camera"]

@@ -13,7 +13,7 @@ import { OutputConformanceRuntime } from "./output-conformance.mjs";
 import { PoolSamplerRuntime } from "./rehearsal/pool-sampler-runtime.mjs";
 import { evaluateRehearsalPoolEvidence } from "./rehearsal/rehearsal-evidence.mjs";
 import { PushoverNotifier } from "./providers.mjs";
-import { HevcNormalizerRuntime } from "./hevc-normalizer-runtime.mjs";
+import { BrowserNormalizerRuntime } from "./browser-normalizer-runtime.mjs";
 import { ProductionSourceProbe } from "./production-media-profile.mjs";
 import { ProductionYouTubeProvider, readProductionDestinations } from "./production-youtube.mjs";
 import { loadRendererBinding } from "./renderer-binding.mjs";
@@ -93,7 +93,7 @@ export class ProductionSoakRuntime {
       ...dependencies,
       options, profile, manifest, lifecycleState, destinations, renderer, venue, commentary, monitorOrigin, monitorToken, youtube, pushover,
       egress: dependencies.egress ?? new EgressRuntime({ sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
-      normalizer: dependencies.normalizer ?? new HevcNormalizerRuntime({ sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
+      normalizer: dependencies.normalizer ?? new BrowserNormalizerRuntime({ sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
       outputConformance: dependencies.outputConformance ?? new OutputConformanceRuntime({ sshKey: profile.sshKey, knownHosts: profile.knownHosts, ffprobePath: options.ffprobe }),
       sourceProbe: dependencies.sourceProbe ?? new ProductionSourceProbe({ sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
       viewerProbe: dependencies.viewerProbe ?? new YouTubeViewerProbe(),
@@ -156,13 +156,14 @@ export class ProductionSoakRuntime {
       state.rawReadyAt = raw.observedAt;
       for (const camera of this.venue.activeCameras) {
         const assignment = this.venue.assignments[camera];
-        const required = assignment.sourcePathMode === "isolated-hevc-normalizer";
+        const required = assignment.sourcePathMode === "isolated-browser-normalizer";
         try {
           state.normalizers[camera] = await this.normalizer.ensure({
             host: compositorHost(this.manifest, this.lifecycleState, camera),
             court: camera,
             required,
             ...(required ? {
+              sourceCodec: assignment.sourceCodec,
               sourceProfile: assignment.sourceProfile,
               frameRateMode: assignment.frameRateMode,
               mediamtxPrivateHost: ingestPrivateHost(this.manifest, this.lifecycleState)
@@ -1153,22 +1154,22 @@ function inactiveCameraProblems(snapshot, camera, problems) {
 function normalizerProblems(camera, court, assignment, expectedFps) {
   const normalized = court.paths?.normalized;
   const ffmpeg = court.ffmpeg?.normalizer;
-  if (assignment.sourcePathMode !== "isolated-hevc-normalizer") {
+  if (assignment.sourcePathMode !== "isolated-browser-normalizer") {
     return normalized?.ready || (normalized?.readerCount ?? 0) !== 0 || ffmpeg
-      ? [`Camera ${camera} direct-H264 path unexpectedly uses the HEVC normalizer`]
+      ? [`Camera ${camera} direct-H264 path unexpectedly uses the browser normalizer`]
       : [];
   }
   const problems = [];
   if (!normalized?.ready || normalized.frameErrors !== 0 || (normalized.inboundBitrateBps ?? 0) <= 0
     || normalized.readerCount < 1 || normalized.readerCount > 2 || normalized.videoCodec !== "H264"
-    || normalized.videoWidth !== 1920 || normalized.videoHeight !== 1080 || normalized.audioCodec !== "OPUS"
+    || normalized.videoWidth !== 1920 || normalized.videoHeight !== 1080 || normalized.audioCodec !== "AAC"
     || normalized.audioSampleRateHz !== 48_000 || normalized.audioChannelCount !== 2) {
-    problems.push(`Camera ${camera} normalized browser path is not healthy H264/Opus 1920x1080 with 1-2 readers`);
+    problems.push(`Camera ${camera} normalized browser path is not healthy H264/AAC 1920x1080 with 1-2 readers`);
   }
   if (!ffmpeg || !Number.isFinite(ffmpeg.framesPerSecond) || Math.abs(ffmpeg.framesPerSecond - expectedFps) > 2
     || ffmpeg.droppedFrames !== 0 || ffmpeg.duplicatedFrames !== 0
     || !Number.isFinite(ffmpeg.speedRatio) || ffmpeg.speedRatio < 0.95 || ffmpeg.speedRatio > 1.05) {
-    problems.push(`Camera ${camera} HEVC normalizer is outside ${expectedFps}fps, real-time, zero-drop bounds`);
+    problems.push(`Camera ${camera} browser normalizer is outside ${expectedFps}fps, real-time, zero-drop bounds`);
   }
   return problems;
 }

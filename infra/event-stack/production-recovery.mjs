@@ -6,6 +6,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+import { deriveOpaqueRtmpKey } from "../mediamtx/opaque-rtmp-key.mjs";
 import { loadProtectedEnv } from "./stack-deployer.mjs";
 import { readProductionDestinations } from "./production-youtube.mjs";
 import { validateRendererBinding } from "./renderer-binding.mjs";
@@ -470,9 +471,13 @@ export function buildProductionSecretFiles({ manifest, material, monitoringEnvir
       ["MEDIAMTX_PROGRAM_DELAY_MS", "3500"],
       ...COURTS.flatMap((court) => [
         [`MEDIAMTX_COURT_${court}_RAW_SOURCE`, "publisher"],
-        [`MEDIAMTX_COURT_${court}_BROWSER_SOURCE`, venueAdmission.assignments[court]?.sourcePathMode === "isolated-hevc-normalizer" ? "normalized" : "raw"],
+        [`MEDIAMTX_COURT_${court}_BROWSER_SOURCE`, venueAdmission.assignments[court]?.sourcePathMode === "isolated-browser-normalizer" ? "normalized" : "raw"],
         [`MEDIAMTX_COURT_${court}_PUBLISH_USER`, material.publishers[court].user],
-        [`MEDIAMTX_COURT_${court}_PUBLISH_PASS`, material.publishers[court].password]
+        [`MEDIAMTX_COURT_${court}_PUBLISH_PASS`, material.publishers[court].password],
+        ...(venueAdmission.assignments[court]?.sourceProtocol === "RTMP_LEGACY_APPROVED" ? [[
+          `MEDIAMTX_COURT_${court}_RTMP_PUBLISH_KEY`,
+          deriveOpaqueRtmpKey({ court, user: material.publishers[court].user, password: material.publishers[court].password })
+        ]] : [])
       ])
     ])),
     "observability.env": envFile(observer),
@@ -593,7 +598,7 @@ function legacyEncodingProfile(value) {
 }
 
 function compositorEnvironment({ court, compositor, programPageToken, renderer, assignment }) {
-  const normalizerEnabled = assignment?.sourcePathMode === "isolated-hevc-normalizer";
+  const normalizerEnabled = assignment?.sourcePathMode === "isolated-browser-normalizer";
   const values = {
     LIVEKIT_API_KEY: compositor.apiKey,
     LIVEKIT_API_SECRET: compositor.apiSecret,
