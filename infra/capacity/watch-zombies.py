@@ -168,7 +168,7 @@ def container_healthcheck_classification(process):
         return "healthcheck.caddy"
     if cmdline == b"npm run start:agent":
         return "healthcheck.monitor-agent"
-    if cmdline == b"/mediamtx":
+    if cmdline in {b"/mediamtx", b"/sbin/docker-init -- /mediamtx"}:
         return "healthcheck.mediamtx"
     if cmdline == b"/tini -- egress":
         return "healthcheck.egress"
@@ -561,6 +561,7 @@ def self_test():
     assert container_healthcheck_classification({"commandLine": b"npm run start:agent"}) == "healthcheck.monitor-agent"
     assert container_healthcheck_classification({"commandLine": b"caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"}) == "healthcheck.caddy"
     assert container_healthcheck_classification({"commandLine": b"/mediamtx"}) == "healthcheck.mediamtx"
+    assert container_healthcheck_classification({"commandLine": b"/sbin/docker-init -- /mediamtx"}) == "healthcheck.mediamtx"
     assert container_healthcheck_classification({"commandLine": b"/tini -- egress"}) == "healthcheck.egress"
     assert container_healthcheck_classification({"commandLine": b"redis-server *:6379"}) == "healthcheck.redis"
     assert container_healthcheck_classification({"commandLine": b"npm run dev"}) is None
@@ -642,7 +643,8 @@ def self_test():
 
     mediamtx_init = {
         200: {"pid": 200, "ppid": 1, "identity": "200:20", "command": "containerd-shim", "parentCommand": "systemd", "commandLine": b"containerd-shim-runc-v2", "cgroupFingerprint": "host"},
-        210: {"pid": 210, "ppid": 200, "identity": "210:21", "command": "mediamtx", "parentCommand": "containerd-shim", "commandLine": b"/mediamtx", "cgroupFingerprint": "mediamtx"},
+        210: {"pid": 210, "ppid": 200, "identity": "210:21", "command": "docker-init", "parentCommand": "containerd-shim", "commandLine": b"/sbin/docker-init -- /mediamtx", "cgroupFingerprint": "mediamtx"},
+        211: {"pid": 211, "ppid": 210, "identity": "211:22", "command": "mediamtx", "parentCommand": "docker-init", "commandLine": b"/mediamtx", "cgroupFingerprint": "mediamtx"},
     }
     retained = healthcheck_shim_map(mediamtx_init)
     assert retained["200:20"]["classification"] == "healthcheck.mediamtx"
