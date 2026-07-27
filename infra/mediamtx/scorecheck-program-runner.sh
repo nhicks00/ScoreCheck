@@ -34,12 +34,17 @@ done
 [ -n "$source_kind" ] || { echo "browser source map has no Camera $court assignment" >&2; exit 64; }
 
 source_path="court${court}_${source_kind}"
+readrate_args=""
+if [ "$source_kind" = "normalized" ]; then
+  readrate_args="-readrate 1"
+fi
 runner=${SCORECHECK_FFMPEG_RUNNER:-/usr/local/bin/scorecheck-ffmpeg-runner}
 [ -x "$runner" ] || { echo "FFmpeg branch runner is unavailable" >&2; exit 69; }
 
 exec "$runner" "$branch" --wait-ready "$source_path" -- \
   -nostdin -hide_banner -loglevel warning \
   -fflags +genpts+discardcorrupt \
+  $readrate_args \
   -i "srt://127.0.0.1:${SRT_PORT:?SRT_PORT is required}?streamid=read:${source_path}&latency=${delay_us}&rcvbuf=33554432&timeout=60000000" \
   -map 0:v:0 -map 0:a:0? \
   -c:v copy \
