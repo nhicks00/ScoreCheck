@@ -37,6 +37,9 @@ test("renders an isolated MediaMTX public host and matching TLS health proxy", (
   environment.MEDIAMTX_COURT_3_RTMP_PUBLISH_KEY = deriveOpaqueRtmpKey({ court: 3, user: "court3", password: "pass-3" });
   const rendered = renderMediaMtxConfigs({ mediaTemplate, caddyTemplate, environment });
   assert.match(rendered.mediaConfig, /writeQueueSize: 1024/u);
+  assert.match(rendered.mediaConfig, /hls: yes/u);
+  assert.match(rendered.mediaConfig, /hlsVariant: lowLatency/u);
+  assert.match(rendered.mediaConfig, /hlsAlwaysRemux: no/u);
   assert.match(rendered.mediaConfig, /webrtcAdditionalHosts: \["192\.0\.2\.20", "preview-rehearsal-1234\.beachvolleyballmedia\.com", "10\.120\.0\.10"\]/u);
   assert.match(rendered.mediaConfig, /rtspAddress: ":8554"/u);
   assert.match(rendered.mediaConfig, /ips: \["10\.120\.0\.11"\][\s\S]+path: "~\^court\(1\|2\|5\|6\)_raw\$"/u);
@@ -57,6 +60,8 @@ test("renders an isolated MediaMTX public host and matching TLS health proxy", (
   assert.match(rendered.caddyConfig, /acme-v02\.api\.letsencrypt\.org\/directory/u);
   assert.match(rendered.caddyConfig, /operations@example\.com/u);
   assert.match(rendered.caddyConfig, /handle \/healthz/u);
+  assert.match(rendered.caddyConfig, /\^\/court\[1-8\]_program\/\.\*\$/u);
+  assert.match(rendered.caddyConfig, /reverse_proxy 127\.0\.0\.1:8888/u);
   assert.match(rendered.caddyConfig, /reverse_proxy 127\.0\.0\.1:8889/u);
   const previewRule = rendered.mediaConfig.match(/"~\^court\(\[1-8\]\)_preview\$":([\s\S]+?)runOnDemandRestart:/u)?.[1] ?? "";
   assert.match(previewRule, /scorecheck-preview-runner/u);

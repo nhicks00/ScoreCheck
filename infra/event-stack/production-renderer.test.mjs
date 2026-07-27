@@ -20,6 +20,7 @@ const deploymentOrigin = "https://scorecheck-rehearsal-physical-qualification-te
 const webEnv = {
   LIVEKIT_COMMENTARY_API_KEY: "livekit-key",
   LIVEKIT_COMMENTARY_API_SECRET: "livekit-secret",
+  MEDIAMTX_HLS_BASE_URL: "https://preview.example.test",
   MEDIAMTX_WHEP_BASE_URL: "https://preview.example.test",
   MONITOR_BROWSER_HEARTBEAT_SECRET: "monitor-secret",
   MONITOR_PUBLIC_URL: "https://monitor.example.test",

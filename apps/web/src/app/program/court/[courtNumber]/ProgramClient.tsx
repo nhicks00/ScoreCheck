@@ -70,7 +70,7 @@ export function ProgramClient({
   configurationVersion,
   monitoring
 }: ProgramClientProps) {
-  const hasSources = Boolean(sources.whepUrl);
+  const hasSources = Boolean(sources.hlsUrl);
 
   const rootRef = useRef<HTMLDivElement | null>(null);
   const videoWrapRef = useRef<HTMLDivElement | null>(null);
@@ -236,21 +236,23 @@ export function ProgramClient({
     };
   }, [cameraElement]);
 
-  /* StreamPlayer owns source/transport recovery. This watchdog remounts only a
-     foreground connected player whose inbound frames advance while rendering
-     does not. A full source stall stays mounted and shows the interruption
-     slate instead of creating a WHEP retry loop. */
+  /* StreamPlayer owns source/transport recovery. WHEP can prove a decoder-only
+     stall from independent inbound counters. HLS has no RTP counter, so its
+     presentation clock is also its source-progress clock: a stopped source
+     stays mounted behind the interruption slate instead of reload-looping. */
   useEffect(() => {
     if (!hasSources) return;
     const id = window.setInterval(() => {
       const video = videoWrapRef.current?.querySelector("video");
-      if (video) ensureProgramPlayback(video);
+      const stream = streamHealthRef.current;
+      if (video) ensureProgramPlayback(video, stream?.transport ?? null);
       const frames = presentedFramesRef.current;
       framesRef.current = frames;
       if (debug) setDebugFrames(frames);
-      const stream = streamHealthRef.current;
       const connected = stream?.connectionState === "connected";
-      const inboundFrames = stream?.framesReceived ?? stream?.framesDecoded ?? null;
+      const inboundFrames = stream?.transport === "hls"
+        ? frames
+        : stream?.framesReceived ?? stream?.framesDecoded ?? null;
 
       const step = programWatchdogStep(watchdogRef.current, {
         nowMs: Date.now(),
@@ -542,13 +544,13 @@ function formatMs(value: number | null): string {
 }
 
 /**
- * Keeps the camera element muted and running. ProgramAudioMixer is the sole
- * owner of camera audio; allowing the element to play audio as well would add
- * a second copy of the same track to the captured page mix.
+ * HLS camera audio is unmuted into its MediaElementAudioSourceNode; that node
+ * reroutes the element into ProgramAudioMixer, so no direct duplicate reaches
+ * the captured page mix. Other transports remain muted.
  */
-function ensureProgramPlayback(video: HTMLVideoElement) {
-  video.muted = true;
-  video.volume = 0;
+function ensureProgramPlayback(video: HTMLVideoElement, transport: StreamConnectionHealth["transport"] | null) {
+  video.muted = transport !== "hls";
+  video.volume = transport === "hls" ? 1 : 0;
   if (video.paused && (video.srcObject || video.currentSrc)) {
     void video.play().catch(() => {
       // The watchdog will keep retrying next tick.

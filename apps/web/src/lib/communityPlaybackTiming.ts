@@ -97,7 +97,7 @@ export function initialPlaybackEvidenceState(): PlaybackEvidenceState {
 }
 
 export function playbackModeAllowsHls(mode: PlaybackMode): boolean {
-  return mode === "preview";
+  return mode === "program";
 }
 
 export function brokeredScoringSessionId(resourceUrl: string | null, pageUrl: string): string | null {

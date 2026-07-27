@@ -10,13 +10,22 @@ const streamPlayer = readFileSync(
   join(process.cwd(), "src/components/StreamPlayer.tsx"),
   "utf8"
 );
+const programAudioMixer = readFileSync(
+  join(process.cwd(), "src/app/program/court/[courtNumber]/ProgramAudioMixer.tsx"),
+  "utf8"
+);
 
 describe("program camera audio ownership", () => {
-  it("keeps the camera element muted so only ProgramAudioMixer reaches the captured output", () => {
-    expect(programClient).toContain("video.muted = true");
-    expect(programClient).toContain("video.volume = 0");
-    expect(programClient).not.toContain("video.muted = false");
+  it("routes HLS camera audio through ProgramAudioMixer without a direct duplicate", () => {
+    expect(programClient).toContain('video.muted = transport !== "hls"');
+    expect(programClient).toContain('video.volume = transport === "hls" ? 1 : 0');
+    expect(programClient).toContain("Boolean(sources.hlsUrl)");
+    expect(programClient).toContain('stream?.transport === "hls"');
     expect(streamPlayer).toContain("const [muted, setMuted] = useState(true)");
-    expect(streamPlayer).not.toContain('useState(mode !== "program")');
+    expect(streamPlayer).toContain("if (playbackModeAllowsHls(mode))");
+    expect(streamPlayer).toContain('video.crossOrigin = "anonymous"');
+    expect(programAudioMixer).toContain("context.createMediaElementSource(cameraElement)");
+    expect(programAudioMixer).toContain("CaptureStreamVideoElement");
+    expect(programAudioMixer).toContain(".captureStream?.()");
   });
 });

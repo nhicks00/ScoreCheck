@@ -44,6 +44,7 @@ export function buildRehearsalVercelEnvironment({ manifest, material, programOri
     PROGRAM_PAGE_TOKEN: material.programPageToken,
     ADMIN_SECRET: material.adminSecret,
     COMMENTATOR_PASSCODE: material.commentatorPasscode,
+    MEDIAMTX_HLS_BASE_URL: `https://${ingestHost}`,
     MEDIAMTX_WHEP_BASE_URL: `https://${ingestHost}`,
     MONITOR_PUBLIC_URL: `https://${monitorHost}`,
     MONITOR_BROWSER_HEARTBEAT_SECRET: material.browserHeartbeatSecret,

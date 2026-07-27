@@ -27,7 +27,10 @@ rtmpAddress: :1935
 srt: yes
 srtAddress: :8890
 
-hls: no
+hls: yes
+hlsAddress: :8888
+hlsVariant: lowLatency
+hlsAlwaysRemux: no
 
 # ScoreCheck does not use Media-over-QUIC. Keep the unused public listeners
 # closed instead of inheriting new server defaults on upgrade.

@@ -57,11 +57,14 @@ function programContentSecurityPolicy(nonce: string): string {
   const connect = new Set(["'self'"]);
   for (const value of [
     process.env.MEDIAMTX_WHEP_BASE_URL,
+    process.env.MEDIAMTX_HLS_BASE_URL,
     process.env.NEXT_PUBLIC_LIVEKIT_COMMENTARY_URL,
     process.env.MONITOR_PUBLIC_URL,
     process.env.NEXT_PUBLIC_SUPABASE_URL
   ]) addOrigin(connect, value);
   const supabase = safeUrl(process.env.NEXT_PUBLIC_SUPABASE_URL);
+  const media = new Set(["'self'", "blob:"]);
+  addOrigin(media, process.env.MEDIAMTX_HLS_BASE_URL);
   if (supabase?.protocol === "https:") connect.add(`wss://${supabase.host}`);
   const script = [`'nonce-${nonce}'`, "'strict-dynamic'", ...(process.env.NODE_ENV === "production" ? [] : ["'unsafe-eval'"])];
   return [
@@ -71,7 +74,7 @@ function programContentSecurityPolicy(nonce: string): string {
     "img-src 'self' data: blob:",
     "font-src 'self'",
     `connect-src ${[...connect].join(" ")}`,
-    "media-src 'self' blob:",
+    `media-src ${[...media].join(" ")}`,
     "worker-src 'self' blob:",
     "base-uri 'none'",
     "form-action 'self'",

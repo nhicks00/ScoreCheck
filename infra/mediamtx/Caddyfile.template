@@ -14,5 +14,10 @@ __PUBLIC_HOST__ {
         respond "ok" 200
     }
 
+    @programHls path_regexp program_hls ^/court[1-8]_program/.*$
+    handle @programHls {
+        reverse_proxy 127.0.0.1:8888
+    }
+
     reverse_proxy 127.0.0.1:8889
 }
