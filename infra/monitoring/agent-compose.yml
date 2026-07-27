@@ -35,6 +35,7 @@ services:
       dockerfile: Dockerfile
       target: agent
     image: scorecheck-monitoring:local
+    init: true
     command: ["npm", "run", "start:agent"]
     restart: unless-stopped
     network_mode: host

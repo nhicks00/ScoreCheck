@@ -7,6 +7,7 @@ const deployPath = fileURLToPath(new URL("../deploy.sh", import.meta.url));
 const remoteDeployPath = fileURLToPath(new URL("../remote-deploy.sh", import.meta.url));
 const remoteProvisionPath = fileURLToPath(new URL("../remote-provision.sh", import.meta.url));
 const contractsPath = fileURLToPath(new URL("./contracts.ts", import.meta.url));
+const agentComposePath = fileURLToPath(new URL("../agent-compose.yml", import.meta.url));
 const dockerignorePath = fileURLToPath(new URL("../.dockerignore", import.meta.url));
 const testFeedDockerfilePath = fileURLToPath(new URL("../Dockerfile.test-feed", import.meta.url));
 const testFeedRunnerPath = fileURLToPath(new URL("../run-test-feed-container.sh", import.meta.url));
@@ -14,6 +15,7 @@ const deploy = readFileSync(deployPath, "utf8");
 const remoteDeploy = readFileSync(remoteDeployPath, "utf8");
 const remoteProvision = readFileSync(remoteProvisionPath, "utf8");
 const contracts = readFileSync(contractsPath, "utf8");
+const agentCompose = readFileSync(agentComposePath, "utf8");
 const dockerignore = readFileSync(dockerignorePath, "utf8");
 const testFeedDockerfile = readFileSync(testFeedDockerfilePath, "utf8");
 const testFeedRunner = readFileSync(testFeedRunnerPath, "utf8");
@@ -24,6 +26,10 @@ describe("staged observability deployment", () => {
       const result = spawnSync("bash", ["-n", path], { encoding: "utf8" });
       expect(result.status, result.stderr).toBe(0);
     }
+  });
+
+  it("uses an init process to reap monitor-agent healthcheck children", () => {
+    expect(agentCompose).toMatch(/monitor-agent:[\s\S]*?\n\s+init: true\n/);
   });
 
   it("selects a guarded first-provision transaction only for an empty live baseline", () => {
