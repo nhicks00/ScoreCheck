@@ -60,9 +60,12 @@ grep -Fxq 'passthrough' "$CAPTURE" || fail "normalizer can still duplicate frame
 if grep -Fxq 'cfr' "$CAPTURE"; then
   fail "normalizer still applies timestamp-driven CFR duplication"
 fi
-if grep -Fxq -- '-readrate' "$CAPTURE"; then
-  fail "normalizer throttles the live MediaMTX reader"
-fi
+readrate_line=$(grep -nFx -- '-readrate' "$CAPTURE" | cut -d: -f1)
+input_line=$(grep -nFx -- '-i' "$CAPTURE" | cut -d: -f1)
+[ -n "$readrate_line" ] && [ "$readrate_line" -lt "$input_line" ] \
+  || fail "normalizer does not pace bursty hardware input before decoding"
+[ "$(sed -n "$((readrate_line + 1))p" "$CAPTURE")" = "1" ] \
+  || fail "normalizer does not read input at real-time cadence"
 if grep -Fxq -- '-copyts' "$CAPTURE" || grep -Fxq -- '-use_wallclock_as_timestamps' "$CAPTURE"; then
   fail "normalizer overrides MediaMTX timestamp mapping"
 fi
@@ -73,6 +76,7 @@ fi
 export CAMERA_SOURCE_CODEC=H264
 sh "$NORMALIZER"
 grep -Fxq 'libx264' "$CAPTURE" || fail "normalizer did not accept unsafe H264 input"
+grep -Fxq -- '-readrate' "$CAPTURE" || fail "unsafe H264 normalization does not pace bursty input"
 export CAMERA_SOURCE_CODEC=H265
 
 export CAMERA_SOURCE_PROFILE=PRIORITY_1080P60

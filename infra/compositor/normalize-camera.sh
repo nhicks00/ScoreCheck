@@ -50,7 +50,7 @@ export FFMPEG_PROGRESS_DIR="$progress_dir"
 
 exec "$runner" "court${court}_normalizer" -- \
   -nostdin -hide_banner -loglevel warning -stats_period 1 \
-  -fflags +genpts+discardcorrupt -rtsp_transport tcp \
+  -readrate 1 -fflags +genpts+discardcorrupt -rtsp_transport tcp \
   -i "rtsp://${host}:8554/${CAMERA_NORMALIZER_INPUT_PATH}" \
   -map 0:v:0 -map 0:a:0 \
   -vf "setpts=N/(${fps}*TB),format=yuv420p,setfield=prog" -fps_mode passthrough \
