@@ -27,10 +27,26 @@ mediamtx_count="$(awk -F, '{count=0; for (i=1; i<=NF; i++) {split($i, fields, "\
 cd "$REMOTE_DIR"
 [[ -f .env && -f docker-compose.yml && -f .generated/prometheus.yml ]] || { echo "error: monitoring deployment is incomplete" >&2; exit 1; }
 [[ "$(grep -c '^MONITOR_AGENT_TARGETS=' .env || true)" == "1" ]] || { echo "error: monitoring target environment is ambiguous" >&2; exit 1; }
+prometheus_before="$(docker compose ps -q prometheus)"
+[[ -n "$prometheus_before" && "$(docker inspect "$prometheus_before" --format '{{.State.Running}}' 2>/dev/null || true)" == "true" ]] \
+  || { echo "error: Prometheus is not a running rollback baseline" >&2; exit 1; }
+
+replace_file_contents() {
+  command dd if="$1" of="$2" status=none
+}
+
+assert_prometheus_config_visible() {
+  local expected actual
+  expected="$(sha256sum "$1" | cut -d' ' -f1)"
+  actual="$(docker exec "$2" sha256sum /etc/prometheus/prometheus.yml | cut -d' ' -f1)"
+  [[ -n "$expected" && "$actual" == "$expected" ]]
+}
+
 current_line="$(grep '^MONITOR_AGENT_TARGETS=' .env)"
 current="$(printf '%s' "${current_line#MONITOR_AGENT_TARGETS=}" | jq -erR fromjson)"
 if [[ "$current" == "$targets" ]] \
   && cmp -s "$PROMETHEUS_FILE" .generated/prometheus.yml \
+  && assert_prometheus_config_visible "$PROMETHEUS_FILE" "$prometheus_before" \
   && curl -fsS --max-time 5 http://127.0.0.1:9090/-/ready >/dev/null \
   && [[ "$(docker inspect scorecheck-monitor-service --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null || true)" == "healthy" ]]; then
   rm -f "$TARGET_FILE" "$PROMETHEUS_FILE"
@@ -44,9 +60,6 @@ prometheus_backup="backups/recovery-prometheus-$timestamp.yml"
 mkdir -p backups
 cp .env "$backup"
 cp .generated/prometheus.yml "$prometheus_backup"
-prometheus_before="$(docker compose ps -q prometheus)"
-[[ -n "$prometheus_before" && "$(docker inspect "$prometheus_before" --format '{{.State.Running}}' 2>/dev/null || true)" == "true" ]] \
-  || { echo "error: Prometheus is not a running rollback baseline" >&2; exit 1; }
 encoded="$(jq -Rn --arg value "$targets" '$value')"
 temporary=".env.recovery-targets.$$"
 awk -v replacement="MONITOR_AGENT_TARGETS=$encoded" '
@@ -58,10 +71,11 @@ chmod 600 "$temporary"
 docker compose stop monitor-service
 mv "$temporary" .env
 chmod 0600 .generated/prometheus.yml
-command cp "$PROMETHEUS_FILE" .generated/prometheus.yml
+replace_file_contents "$PROMETHEUS_FILE" .generated/prometheus.yml
 chown 65534:65534 .generated/prometheus.yml
 chmod 0400 .generated/prometheus.yml
 if docker compose config -q \
+  && assert_prometheus_config_visible "$PROMETHEUS_FILE" "$prometheus_before" \
   && docker compose exec -T prometheus promtool check config /etc/prometheus/prometheus.yml >/dev/null \
   && docker compose up -d --force-recreate monitor-service; then
   for _ in $(seq 1 60); do
@@ -81,9 +95,10 @@ fi
 docker compose stop monitor-service >/dev/null 2>&1 || true
 cp "$backup" .env
 chmod 0600 .generated/prometheus.yml
-command cp "$prometheus_backup" .generated/prometheus.yml
+replace_file_contents "$prometheus_backup" .generated/prometheus.yml
 chown 65534:65534 .generated/prometheus.yml
 chmod 0400 .generated/prometheus.yml
+assert_prometheus_config_visible "$prometheus_backup" "$prometheus_before" || true
 docker compose up -d --force-recreate monitor-service >/dev/null 2>&1 || true
 curl -fsS --max-time 5 -X POST http://127.0.0.1:9090/-/reload >/dev/null 2>&1 || true
 echo "error: monitoring target replacement failed; previous environment and Prometheus config restored" >&2

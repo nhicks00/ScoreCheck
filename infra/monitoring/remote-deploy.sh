@@ -19,7 +19,7 @@ case "$CANDIDATE_DIR" in
     ;;
 esac
 
-for command in cmp curl cut diff docker flock grep install jq rsync seq; do
+for command in cmp curl cut dd diff docker flock grep install jq rsync seq sha256sum; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "Required deployment command is missing: $command." >&2
     exit 1
@@ -114,6 +114,24 @@ assert_static_container_ids() {
       return 1
     fi
   done
+}
+
+replace_file_contents() {
+  local source="$1"
+  local destination="$2"
+  command dd if="$source" of="$destination" status=none
+}
+
+assert_prometheus_config_visible() {
+  local source="$1"
+  local container="$2"
+  local expected actual
+  expected="$(sha256sum "$source" | cut -d' ' -f1)"
+  actual="$(docker exec "$container" sha256sum /etc/prometheus/prometheus.yml | cut -d' ' -f1)"
+  if [[ -z "$expected" || "$actual" != "$expected" ]]; then
+    echo "Prometheus is not reading the current host scrape configuration." >&2
+    return 1
+  fi
 }
 
 read_json_env_value() {
@@ -213,9 +231,10 @@ restore_previous() {
   local failed=0
   install -m 0600 "$backup_dir/.env" "$REMOTE_DIR/.env" || failed=1
   rsync -a --delete "$backup_dir/rules/" "$REMOTE_DIR/rules/" || failed=1
-  command cp "$backup_dir/.generated/prometheus.yml" "$REMOTE_DIR/.generated/prometheus.yml" || failed=1
+  replace_file_contents "$backup_dir/.generated/prometheus.yml" "$REMOTE_DIR/.generated/prometheus.yml" || failed=1
   chown 65534:65534 "$REMOTE_DIR/.generated/prometheus.yml" || failed=1
   chmod 0400 "$REMOTE_DIR/.generated/prometheus.yml" || failed=1
+  assert_prometheus_config_visible "$backup_dir/.generated/prometheus.yml" "$prometheus_before" || failed=1
   restore_provenance || failed=1
   docker tag "$rollback_image" scorecheck-monitoring:local || failed=1
   compose up -d --no-deps --force-recreate --no-build monitor-service || failed=1
@@ -352,6 +371,7 @@ for value in "$monitor_before" "$prometheus_before" "$alertmanager_before" "$cad
     exit 1
   fi
 done
+assert_prometheus_config_visible "$REMOTE_DIR/.generated/prometheus.yml" "$prometheus_before"
 
 old_revision="$(docker inspect "$monitor_before" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
 running_image_id="$(docker inspect "$monitor_before" --format '{{.Image}}')"
@@ -417,11 +437,12 @@ wait_for_public_health
 
 # Only after the new service is healthy may matching rules and scrape config go live.
 rsync -a --delete "$CANDIDATE_DIR/rules/" "$REMOTE_DIR/rules/"
-command cp "$CANDIDATE_DIR/.generated/prometheus.yml" "$REMOTE_DIR/.generated/prometheus.yml"
+replace_file_contents "$CANDIDATE_DIR/.generated/prometheus.yml" "$REMOTE_DIR/.generated/prometheus.yml"
 chown 65534:65534 "$REMOTE_DIR/.generated/prometheus.yml"
 chmod 0400 "$REMOTE_DIR/.generated/prometheus.yml"
 diff -qr "$CANDIDATE_DIR/rules" "$REMOTE_DIR/rules" >/dev/null
 cmp -s "$CANDIDATE_DIR/.generated/prometheus.yml" "$REMOTE_DIR/.generated/prometheus.yml"
+assert_prometheus_config_visible "$CANDIDATE_DIR/.generated/prometheus.yml" "$prometheus_before"
 curl --fail --silent --show-error --max-time 10 \
   -X POST http://127.0.0.1:9090/-/reload >/dev/null
 curl --fail --silent --show-error --max-time 10 \

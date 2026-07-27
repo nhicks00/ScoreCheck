@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 const deployPath = fileURLToPath(new URL("../deploy.sh", import.meta.url));
 const remoteDeployPath = fileURLToPath(new URL("../remote-deploy.sh", import.meta.url));
 const remoteProvisionPath = fileURLToPath(new URL("../remote-provision.sh", import.meta.url));
+const replaceAgentTargetsPath = fileURLToPath(new URL("../replace-agent-targets.sh", import.meta.url));
 const contractsPath = fileURLToPath(new URL("./contracts.ts", import.meta.url));
 const agentComposePath = fileURLToPath(new URL("../agent-compose.yml", import.meta.url));
 const dockerignorePath = fileURLToPath(new URL("../.dockerignore", import.meta.url));
@@ -14,6 +15,7 @@ const testFeedRunnerPath = fileURLToPath(new URL("../run-test-feed-container.sh"
 const deploy = readFileSync(deployPath, "utf8");
 const remoteDeploy = readFileSync(remoteDeployPath, "utf8");
 const remoteProvision = readFileSync(remoteProvisionPath, "utf8");
+const replaceAgentTargets = readFileSync(replaceAgentTargetsPath, "utf8");
 const contracts = readFileSync(contractsPath, "utf8");
 const agentCompose = readFileSync(agentComposePath, "utf8");
 const dockerignore = readFileSync(dockerignorePath, "utf8");
@@ -22,7 +24,7 @@ const testFeedRunner = readFileSync(testFeedRunnerPath, "utf8");
 
 describe("staged observability deployment", () => {
   it("keeps both shell entrypoints syntactically valid", () => {
-    for (const path of [deployPath, remoteDeployPath, remoteProvisionPath]) {
+    for (const path of [deployPath, remoteDeployPath, remoteProvisionPath, replaceAgentTargetsPath]) {
       const result = spawnSync("bash", ["-n", path], { encoding: "utf8" });
       expect(result.status, result.stderr).toBe(0);
     }
@@ -127,6 +129,16 @@ describe("staged observability deployment", () => {
     expect(publicHealth).toBeGreaterThan(candidateWait);
     expect(rulesCutover).toBeGreaterThan(publicHealth);
     expect(prometheusReload).toBeGreaterThan(rulesCutover);
+  });
+
+  it("updates the mounted Prometheus config without replacing its bind-mount inode", () => {
+    for (const source of [remoteDeploy, replaceAgentTargets]) {
+      expect(source).toMatch(/command dd if="\$(?:source|1)" of="\$(?:destination|2)" status=none/);
+      expect(source).toContain("assert_prometheus_config_visible");
+      expect(source).toContain("docker exec");
+      expect(source).toContain("sha256sum /etc/prometheus/prometheus.yml");
+      expect(source).not.toMatch(/command cp[^\n]*prometheus\.yml[^\n]*\.generated\/prometheus\.yml/);
+    }
   });
 
   it("requires public health to match the current monitoring contract", () => {
