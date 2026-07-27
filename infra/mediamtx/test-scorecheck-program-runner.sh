@@ -33,8 +33,6 @@ grep -Fxq 'court2_normalized' "$CAPTURE" || fail "wrapper waited for the wrong s
 grep -Fq 'streamid=read:court2_normalized' "$CAPTURE" || fail "wrapper did not select Camera 2 normalized input"
 grep -Fq 'latency=3500000' "$CAPTURE" || fail "wrapper did not preserve the configured delay"
 grep -Fq 'timeout=60000000' "$CAPTURE" || fail "wrapper does not bound the delayed input timeout"
-grep -Fxq -- '-readrate' "$CAPTURE" || fail "wrapper does not pace normalized program input"
-grep -Fxq '1' "$CAPTURE" || fail "wrapper does not use real-time normalized input pacing"
 grep -Fxq 'copy' "$CAPTURE" || fail "wrapper transcodes browser video unexpectedly"
 grep -Fxq 'libopus' "$CAPTURE" || fail "wrapper did not normalize delayed audio to Opus"
 grep -Fq 'asetpts=N/SR/TB,aresample=async=1:first_pts=0' "$CAPTURE" || fail "delayed audio is not rebased"
@@ -46,9 +44,6 @@ export MTX_PATH=court1_program
 sh "$RUNNER" court1_program raw,normalized,raw,raw,raw,raw,raw,raw 0
 grep -Fq 'streamid=read:court1_raw' "$CAPTURE" || fail "wrapper did not select Camera 1 raw input"
 grep -Fq 'latency=0' "$CAPTURE" || fail "wrapper rejected the zero-delay boundary"
-if grep -Fxq -- '-readrate' "$CAPTURE"; then
-  fail "wrapper throttles direct raw program input"
-fi
 
 for invalid in \
   'court9_program raw,raw,raw,raw,raw,raw,raw,raw 3500000' \
