@@ -237,6 +237,14 @@ def classification_map(processes, retained_healthcheck_shims=None):
 
     for process in processes.values():
         parent = processes.get(process["ppid"])
+        if (
+            mediamtx_runner_command_line((process.get("commandLine") or b"").strip())
+            and parent is not None
+            and parent["command"] == "mediamtx"
+            and process.get("cgroupFingerprint") == parent.get("cgroupFingerprint")
+        ):
+            classifications[process["identity"]] = "workload.mediamtx-runner"
+
         monitor_content_classification = MONITOR_CONTENT_WORKLOAD_COMMANDS.get(
             process["command"]
         )
@@ -603,7 +611,8 @@ def self_test():
         174: {"pid": 174, "ppid": 100, "identity": "174:25", "command": "Xvfb", "parentCommand": "egress", "commandLine": b"Xvfb :99", "cgroupFingerprint": "egress"},
         175: {"pid": 175, "ppid": 174, "identity": "175:26", "command": "sh", "parentCommand": "Xvfb", "commandLine": b"/bin/sh", "cgroupFingerprint": "egress"},
         176: {"pid": 176, "ppid": 174, "identity": "176:27", "command": "sh", "parentCommand": "Xvfb", "commandLine": b"/bin/sh", "cgroupFingerprint": "other"},
-        180: {"pid": 180, "ppid": 1, "identity": "180:28", "command": "scorecheck-ffmp", "parentCommand": "mediamtx", "commandLine": b"/bin/sh /usr/local/bin/scorecheck-ffmpeg-runner court1_preview -- -i input", "cgroupFingerprint": "mediamtx"},
+        179: {"pid": 179, "ppid": 1, "identity": "179:27", "command": "mediamtx", "parentCommand": "docker-init", "commandLine": b"/mediamtx", "cgroupFingerprint": "mediamtx"},
+        180: {"pid": 180, "ppid": 179, "identity": "180:28", "command": "scorecheck-ffmp", "parentCommand": "mediamtx", "commandLine": b"/bin/sh /usr/local/bin/scorecheck-ffmpeg-runner court1_preview -- -i input", "cgroupFingerprint": "mediamtx"},
         181: {"pid": 181, "ppid": 180, "identity": "181:29", "command": "ffmpeg", "parentCommand": "scorecheck-ffmp", "commandLine": b"ffmpeg -i input", "cgroupFingerprint": "mediamtx"},
         182: {"pid": 182, "ppid": 180, "identity": "182:30", "command": "sleep", "parentCommand": "scorecheck-ffmp", "commandLine": b"sleep 1", "cgroupFingerprint": "mediamtx"},
         183: {"pid": 183, "ppid": 180, "identity": "183:31", "command": "ffmpeg", "parentCommand": "scorecheck-ffmp", "commandLine": b"ffmpeg -i input", "cgroupFingerprint": "other"},
@@ -638,6 +647,7 @@ def self_test():
     assert classifications["181:29"] == "workload.mediamtx-ffmpeg"
     assert classifications["182:30"] == "workload.mediamtx-sleep"
     assert classifications["184:32"] == "workload.mediamtx-progress-parser"
+    assert classifications["180:28"] == "workload.mediamtx-runner"
     assert "183:31" not in classifications
     assert "185:33" not in classifications
 

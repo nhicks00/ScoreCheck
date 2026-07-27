@@ -125,7 +125,7 @@ test("rejects malformed, unsafe, or over-broad event data", () => {
   assert.throws(() => parseZombieEventLine(JSON.stringify({ ...started, providerResourceId: "0" })), /providerResourceId/);
   assert.throws(() => parseZombieEventLine(JSON.stringify({ ...started, providerHostname: "bad hostname" })), /providerHostname/);
   assert.equal(parseZombieEventLine(JSON.stringify(valid)).initialObservation, false);
-  for (const classification of ["workload.egress-xkbcomp", "workload.mediamtx-ffmpeg", "workload.mediamtx-progress-parser", "workload.mediamtx-sleep", "workload.monitor-content-probe", "workload.monitor-content-analyzer"]) {
+  for (const classification of ["workload.egress-xkbcomp", "workload.mediamtx-ffmpeg", "workload.mediamtx-progress-parser", "workload.mediamtx-runner", "workload.mediamtx-sleep", "workload.monitor-content-probe", "workload.monitor-content-analyzer"]) {
     assert.equal(parseZombieEventLine(JSON.stringify({ ...valid, classification })).classification, classification);
   }
   assert.throws(() => parseZombieEventLine(JSON.stringify({ ...valid, initialObservation: undefined })), /initialObservation/);

@@ -8,7 +8,7 @@ const EVENTS = new Set([
   "zombie_observation_end",
   "watcher_stopped"
 ]);
-const CLASSIFICATION = /^(?:unclassified|observer\.capacity-ssh|healthcheck\.(?:caddy|monitor-agent|egress|mediamtx|redis)(?:\.runtime)?|workload\.(?:egress-(?:chrome|handler|pactl|gst-plugin-scan|xkbcomp|xvfb-shell)|mediamtx-(?:ffmpeg|progress-parser|sleep)|monitor-content-(?:probe|analyzer)))$/;
+const CLASSIFICATION = /^(?:unclassified|observer\.capacity-ssh|healthcheck\.(?:caddy|monitor-agent|egress|mediamtx|redis)(?:\.runtime)?|workload\.(?:egress-(?:chrome|handler|pactl|gst-plugin-scan|xkbcomp|xvfb-shell)|mediamtx-(?:ffmpeg|progress-parser|runner|sleep)|monitor-content-(?:probe|analyzer)))$/;
 const FINGERPRINT = /^[a-f0-9]{16}$/;
 const IDENTITY = /^\d+:\d+$/;
 const PROVIDER_RESOURCE_ID = /^[1-9]\d{0,19}$/;
