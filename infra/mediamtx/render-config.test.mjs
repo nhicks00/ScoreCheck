@@ -11,6 +11,10 @@ const caddyTemplate = await readFile(fileURLToPath(new URL("./Caddyfile.template
 const deployScript = await readFile(fileURLToPath(new URL("./deploy.sh", import.meta.url)), "utf8");
 const compose = await readFile(fileURLToPath(new URL("./docker-compose.yml", import.meta.url)), "utf8");
 
+test("runs MediaMTX under Docker init so adopted hook and probe children are reaped", () => {
+  assert.match(compose, /container_name: mediamtx\n\s+init: true\n/u);
+});
+
 test("renders an isolated MediaMTX public host and matching TLS health proxy", () => {
   const environment = {
     MEDIAMTX_PUBLIC_IP: "192.0.2.20",

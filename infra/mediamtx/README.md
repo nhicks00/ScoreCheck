@@ -56,8 +56,8 @@ On-demand branches poll local path readiness every two seconds and start FFmpeg
 only after their upstream exists, so an open offline preview cannot create a
 process or log storm. The hook command directly `exec`s the monitored runner,
 and the runner terminates and waits for both FFmpeg and its progress parser
-before exiting. This ownership is required because MediaMTX is PID 1 in the
-container and otherwise adopts unreaped hook descendants.
+before exiting. Docker's built-in init remains PID 1 and reaps any descendant
+or bounded in-container probe that is orphaned despite that direct ownership.
 
 The shared ingest does not software-encode production video. A camera may use
 the direct preview/program branch only after the production source gate proves

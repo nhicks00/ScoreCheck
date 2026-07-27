@@ -31,6 +31,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: mediamtx
+    init: true
     restart: unless-stopped
     network_mode: host
     environment:
