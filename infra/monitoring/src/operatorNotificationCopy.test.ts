@@ -19,6 +19,22 @@ describe("operator notification copy", () => {
     });
   });
 
+  it("does not tell the operator to restart cameras for shared SRT congestion", () => {
+    const copy = operatorNotificationCopy(incident({
+      stage: "RAW_INGEST",
+      issueCode: "VENUE_SRT_CONGESTION",
+      courtNumber: null,
+      rootDependency: "VENUE-UPLINK"
+    }));
+    expect(copy).toEqual({
+      title: "Venue internet needs attention",
+      problem: "The venue upload is overloaded, so several camera streams may stutter.",
+      action: "Do not restart the cameras. Add upload capacity or lower the total camera bitrate.",
+      recoveryTitle: "Venue internet is back to normal",
+      recovery: "The venue upload is keeping up with the camera streams again. No action is needed."
+    });
+  });
+
   it("describes a broadcast-output failure without infrastructure jargon", () => {
     const copy = operatorNotificationCopy(incident({ stage: "EGRESS", issueCode: "EGRESS_WORKER_UNAVAILABLE" }));
     expect(copy.problem).toBe("Camera 4's broadcast output stopped.");

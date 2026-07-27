@@ -48,6 +48,15 @@ export function operatorNotificationCopy(incident: IncidentSnapshot): OperatorNo
   if (issue === "CAMERA_AUDIO_CLIPPING") {
     return { ...base, problem: `${camera ?? "A camera"}'s sound is distorted.`, action: `Lower ${camera ?? "the camera"}'s audio input level and listen again.`, recovery: `${camera ?? "The camera"}'s sound level is normal again. No action is needed.` };
   }
+  if (issue === "VENUE_SRT_CONGESTION") {
+    return {
+      title: "Venue internet needs attention",
+      problem: "The venue upload is overloaded, so several camera streams may stutter.",
+      action: "Do not restart the cameras. Add upload capacity or lower the total camera bitrate.",
+      recoveryTitle: "Venue internet is back to normal",
+      recovery: "The venue upload is keeping up with the camera streams again. No action is needed."
+    };
+  }
   if (incident.stage === "RAW_INGEST" || matches(issue, ["REQUIRED_RAW_PATH_MISSING", "REQUIRED_PATH_MISSING", "RAW_BITRATE_LOW", "NO_PATH_OBSERVATION", "PATH_NOT_READY_EXPECTATION_UNKNOWN", "MEDIA_FRAME_ERRORS"])) {
     return { ...base, problem: `${camera ?? "A camera"} stopped sending usable video.`, action: `Check that ${camera ?? "the camera"} is powered on, connected to the internet, and still streaming.`, recovery: `${camera ?? "The camera"} is sending video again. No action is needed.` };
   }
