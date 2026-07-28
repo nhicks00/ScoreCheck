@@ -70,6 +70,7 @@ printf '%s\n' '#!/usr/bin/env bash' \
   '  exit 2' \
   'fi' >"$FIXTURE/bin/lk"
 chmod 755 "$FIXTURE/bin/curl" "$FIXTURE/bin/docker" "$FIXTURE/bin/flock" "$FIXTURE/bin/sleep" "$FIXTURE/bin/lk" "$FIXTURE/qualify-output.sh"
+grep -Fq 'flock -w 10 9' "$FIXTURE/qualify-output.sh"
 
 printf '%s\n' \
   'LIVEKIT_API_KEY=test-key' \
