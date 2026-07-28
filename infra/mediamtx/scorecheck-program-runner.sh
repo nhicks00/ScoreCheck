@@ -43,5 +43,5 @@ exec "$runner" "$branch" --wait-ready "$source_path" -- \
   -i "srt://127.0.0.1:${SRT_PORT:?SRT_PORT is required}?streamid=read:${source_path}&latency=${delay_us}&rcvbuf=33554432&timeout=60000000" \
   -map 0:v:0 -map 0:a:0? \
   -c:v copy \
-  -c:a libopus -b:a 128k -ar 48000 -ac 2 -af "asetpts=N/SR/TB,aresample=async=1:first_pts=0" \
+  -c:a aac -b:a 128k -ar 48000 -ac 2 -af "asetpts=N/SR/TB,aresample=async=1:first_pts=0" \
   -f rtsp -rtsp_transport tcp "rtsp://127.0.0.1:${RTSP_PORT:?RTSP_PORT is required}/${MTX_PATH:?MTX_PATH is required}"

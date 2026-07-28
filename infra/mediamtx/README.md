@@ -65,7 +65,7 @@ The shared ingest does not software-encode production video. A camera may use
 the direct preview/program branch only after the production source gate proves
 1920x1080 progressive H.264 at its exact 29.97/30/59.94/60 mode, `yuv420p`, no
 B-frames, bounded timestamps, and a two-second-or-shorter GOP. The branch
-stream-copies that H.264 video and converts AAC to 48 kHz stereo Opus.
+stream-copies that H.264 video and encodes 48 kHz stereo AAC for fMP4 HLS.
 
 HEVC remains a supported venue-bandwidth source format only when the event
 manifest assigns an isolated browser normalizer and the source probe also proves
