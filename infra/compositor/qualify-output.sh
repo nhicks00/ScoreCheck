@@ -119,6 +119,7 @@ STOP_LOG="$(mktemp "$REQ_DIR/.conformance-stop.XXXXXX")"
 REQ_FILE="$(mktemp "$REQ_DIR/.conformance-request.XXXXXX")"
 RENDERER_BINDING_FILE="$(mktemp "$REQ_DIR/.renderer-binding.XXXXXX")"
 EGRESS_ID=""
+CAPTURE_SLEEP_PID=""
 stopped=0
 START_ATTEMPTS=0
 STARTING_STALLS=0
@@ -224,6 +225,10 @@ cleanup() {
   local cleanup_status=0
   trap - EXIT
   set +e
+  if [[ -n "$CAPTURE_SLEEP_PID" ]] && kill -0 "$CAPTURE_SLEEP_PID" 2>/dev/null; then
+    kill -TERM "$CAPTURE_SLEEP_PID" 2>/dev/null || true
+    wait "$CAPTURE_SLEEP_PID" 2>/dev/null || true
+  fi
   if [[ -n "$EGRESS_ID" && "$stopped" -eq 0 ]]; then
     stop_and_prove_idle "$EGRESS_ID" || cleanup_status=1
   fi
@@ -353,7 +358,10 @@ if (( active_seen != 1 )); then
   exit 1
 fi
 
-sleep "$CAPTURE_SECONDS"
+sleep "$CAPTURE_SECONDS" 9>&- &
+CAPTURE_SLEEP_PID=$!
+wait "$CAPTURE_SLEEP_PID"
+CAPTURE_SLEEP_PID=""
 if ! stop_and_prove_idle "$EGRESS_ID"; then
   exit 1
 fi
