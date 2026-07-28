@@ -5,7 +5,7 @@ const now = new Date("2026-07-27T22:00:10.000Z");
 
 function heartbeat(overrides: Record<string, unknown> = {}) {
   return {
-    version: 2,
+    version: 3,
     sessionId: "120650f2-ed19-479c-933e-b0df1246ba81",
     sequence: 1,
     sampledAt: "2026-07-27T22:00:09.000Z",
@@ -38,6 +38,11 @@ function heartbeat(overrides: Record<string, unknown> = {}) {
       guardRuleCount: 2,
       killSwitchActive: true,
       cameraFlowCount: 8
+    },
+    cameraWifi: {
+      interface: "rax0",
+      associatedClientCount: 8,
+      minimumSignalDbm: -68
     },
     host: {
       load1: 1.2,
@@ -89,6 +94,7 @@ describe("router heartbeat manager", () => {
       state: "HEALTHY",
       speedify: { uploadHeadroomBps: 16_000_000 },
       routing: { cameraFlowCount: 8 },
+      cameraWifi: { associatedClientCount: 8, minimumSignalDbm: -68 },
       uplinks: [{ id: "eth0" }, { id: "rmnet_mhi0" }]
     });
   });

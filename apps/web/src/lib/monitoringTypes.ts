@@ -306,6 +306,11 @@ export type MonitorRouter = {
     killSwitchActive: boolean;
     cameraFlowCount: number;
   } | null;
+  cameraWifi: {
+    interface: string;
+    associatedClientCount: number | null;
+    minimumSignalDbm: number | null;
+  } | null;
   host: {
     load1: number;
     memoryAvailableBytes: number;

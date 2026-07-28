@@ -28,7 +28,7 @@ const uplinkSchema = z.object({
 }).strict();
 
 export const routerHeartbeatSchema = z.object({
-  version: z.literal(2),
+  version: z.literal(3),
   sessionId: z.string().uuid(),
   sequence: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   sampledAt: isoDate,
@@ -61,6 +61,11 @@ export const routerHeartbeatSchema = z.object({
     guardRuleCount: z.number().int().nonnegative().max(32),
     killSwitchActive: z.boolean(),
     cameraFlowCount: z.number().int().nonnegative().max(64)
+  }).strict(),
+  cameraWifi: z.object({
+    interface: safeId,
+    associatedClientCount: z.number().int().nonnegative().max(64).nullable(),
+    minimumSignalDbm: z.number().int().min(-150).max(0).nullable()
   }).strict(),
   host: z.object({
     load1: z.number().nonnegative().max(10_000),
@@ -107,6 +112,7 @@ export class RouterHeartbeatManager {
       ageMs,
       speedify: { ...heartbeat.speedify, uploadHeadroomBps },
       routing: heartbeat.routing,
+      cameraWifi: heartbeat.cameraWifi,
       host: heartbeat.host,
       uplinks: heartbeat.uplinks
     };
@@ -121,6 +127,7 @@ export function emptyRouterSnapshot(): RouterMonitorSnapshot {
     ageMs: null,
     speedify: null,
     routing: null,
+    cameraWifi: null,
     host: null,
     uplinks: []
   };

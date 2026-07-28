@@ -112,6 +112,11 @@ heartbeat reports both values, and active-event monitoring pages if any saved
 policy drifts from `automatic`. A temporary diagnostic change must be restored
 before the diagnostic ends.
 
+The router heartbeat also reports the number of devices associated with the
+dedicated camera Wi-Fi interface and its weakest client signal. This is
+diagnostic telemetry only: it distinguishes a camera that left the venue AP
+from an ingest failure without changing camera or Speedify configuration.
+
 ## July 13 OOM incident
 
 The overnight Speedify reconnect was not evidence that eight streams exceeded
