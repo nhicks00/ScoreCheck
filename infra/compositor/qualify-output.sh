@@ -363,7 +363,7 @@ if [[ ! -s "$HOST_OUTPUT" ]]; then
   exit 1
 fi
 chmod 600 "$HOST_OUTPUT"
-if ! docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+if ! docker run --rm --network none --read-only --user 0:0 --cap-drop ALL --security-opt no-new-privileges:true \
   -v "$HOST_OUTPUT_DIR:/evidence:ro" \
   --entrypoint ffprobe "$FFPROBE_IMAGE" \
   -v error -print_format json \
