@@ -105,6 +105,8 @@ run_once() {
 run_start generation-one
 run_once
 jq -e '.status == "HEALTHY" and .recoveryAttempts == 0' "$FIXTURE/state/state.json" >/dev/null
+export_mode="$(stat -c '%a' "$FIXTURE/export/state.json" 2>/dev/null || stat -f '%Lp' "$FIXTURE/export/state.json")"
+[[ "$export_mode" == "644" ]]
 
 printf 'null\n' >"$FIXTURE/mock/active.json"
 run_once
