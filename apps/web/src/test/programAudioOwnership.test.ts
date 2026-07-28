@@ -24,6 +24,9 @@ describe("program camera audio ownership", () => {
     expect(streamPlayer).toContain("const [muted, setMuted] = useState(true)");
     expect(streamPlayer).toContain("if (playbackModeAllowsHls(mode))");
     expect(streamPlayer).toContain('video.crossOrigin = "anonymous"');
+    expect(streamPlayer.indexOf("if (Hls.isSupported())")).toBeLessThan(
+      streamPlayer.indexOf('if (video.canPlayType("application/vnd.apple.mpegurl"))')
+    );
     expect(programAudioMixer).toContain("context.createMediaElementSource(cameraElement)");
     expect(programAudioMixer).toContain("CaptureStreamVideoElement");
     expect(programAudioMixer).toContain(".captureStream?.()");

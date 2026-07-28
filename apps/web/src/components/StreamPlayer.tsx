@@ -592,6 +592,29 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
       setStatus("Connecting stream...");
       try {
         startHlsHealthSampling();
+        const mod = await import("hls.js");
+        const Hls = mod.default;
+        if (cancelled) return;
+        if (Hls.isSupported()) {
+          const instance = new Hls({
+            lowLatencyMode: false,
+            backBufferLength: PROGRAM_HLS_BUFFER_LENGTH_SECONDS,
+            maxBufferLength: PROGRAM_HLS_BUFFER_LENGTH_SECONDS,
+            liveSyncDuration: PROGRAM_HLS_TARGET_LATENCY_MS / 1000,
+            liveMaxLatencyDuration: PROGRAM_HLS_MAX_LATENCY_MS / 1000,
+            maxLiveSyncPlaybackRate: 1,
+            startOnSegmentBoundary: true
+          }) as unknown as HlsInstance;
+          hls = instance;
+          instance.on(Hls.Events.ERROR, (_event, data) => {
+            if (cancelled || hls !== instance) return;
+            if (data.fatal) failHls();
+          });
+          instance.loadSource(hlsUrl);
+          instance.attachMedia(video);
+          void video.play().catch(() => setStatus("Tap play to start the stream."));
+          return;
+        }
         if (video.canPlayType("application/vnd.apple.mpegurl")) {
           const onVideoError = () => {
             video.removeEventListener("error", onVideoError);
@@ -602,31 +625,8 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
           void video.play().catch(() => setStatus("Tap play to start the stream."));
           return;
         }
-        const mod = await import("hls.js");
-        const Hls = mod.default;
-        if (cancelled) return;
-        if (!Hls.isSupported()) {
-          setStatus("Stream video is not available in this browser.");
-          setError("Stream video is not available in this browser.");
-          return;
-        }
-        const instance = new Hls({
-          lowLatencyMode: false,
-          backBufferLength: PROGRAM_HLS_BUFFER_LENGTH_SECONDS,
-          maxBufferLength: PROGRAM_HLS_BUFFER_LENGTH_SECONDS,
-          liveSyncDuration: PROGRAM_HLS_TARGET_LATENCY_MS / 1000,
-          liveMaxLatencyDuration: PROGRAM_HLS_MAX_LATENCY_MS / 1000,
-          maxLiveSyncPlaybackRate: 1,
-          startOnSegmentBoundary: true
-        }) as unknown as HlsInstance;
-        hls = instance;
-        instance.on(Hls.Events.ERROR, (_event, data) => {
-          if (cancelled || hls !== instance) return;
-          if (data.fatal) failHls();
-        });
-        instance.loadSource(hlsUrl);
-        instance.attachMedia(video);
-        void video.play().catch(() => setStatus("Tap play to start the stream."));
+        setStatus("Stream video is not available in this browser.");
+        setError("Stream video is not available in this browser.");
       } catch {
         if (!cancelled) failHls();
       }
