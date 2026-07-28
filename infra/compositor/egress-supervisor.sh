@@ -57,7 +57,9 @@ write_state() {
     >"$output"
   chmod 600 "$output"
   mv "$output" "$STATE_FILE"
-  install -m 0600 "$STATE_FILE" "$exported"
+  # The export contains operational status only and is mounted read-only by the
+  # unprivileged monitoring agent.
+  install -m 0644 "$STATE_FILE" "$exported"
   mv "$exported" "$EXPORT_FILE"
   printf '%s: %s\n' "$status" "$detail"
 }

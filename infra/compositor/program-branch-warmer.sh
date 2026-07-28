@@ -22,7 +22,9 @@ write_state() {
   temporary="$state_file.tmp.$$"
   printf '{"schemaVersion":1,"court":%s,"status":"%s","ffmpegPid":%s,"restartCount":%s,"observedAt":"%s"}\n' \
     "${court:-null}" "$status" "$pid" "$restart_count" "$observed_at" >"$temporary"
-  chmod 600 "$temporary"
+  # This file contains operational status only and is mounted read-only by the
+  # unprivileged monitoring agent.
+  chmod 644 "$temporary"
   mv "$temporary" "$state_file"
 }
 

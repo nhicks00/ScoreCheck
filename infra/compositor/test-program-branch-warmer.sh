@@ -34,6 +34,8 @@ for _ in $(seq 1 30); do
   sleep 0.1
 done
 grep -q '"status":"IDLE"' "$TEST_ROOT/state/state.json"
+state_mode="$(stat -c '%a' "$TEST_ROOT/state/state.json" 2>/dev/null || stat -f '%Lp' "$TEST_ROOT/state/state.json")"
+[[ "$state_mode" == "644" ]]
 
 printf '{}\n' >"$TEST_ROOT/requests/court-3.owner.json"
 for _ in $(seq 1 50); do
