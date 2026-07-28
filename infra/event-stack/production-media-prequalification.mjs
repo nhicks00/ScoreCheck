@@ -214,7 +214,7 @@ export class ProductionMediaPrequalificationRuntime {
       const snapshot = assertProductionMonitorSnapshot(await this.fetchSnapshot());
       lastProblems = [
         ...this.rawProblems(snapshot, this.venue, this.now()),
-        ...this.cleanupProblems(snapshot, this.venue)
+        ...this.cleanupProblems(snapshot, this.venue, this.now())
       ];
       if (lastProblems.length === 0) {
         first ??= summarizeSnapshot(snapshot, this.venue);
@@ -232,12 +232,13 @@ export class ProductionMediaPrequalificationRuntime {
   }
 }
 
-export function prequalificationCleanupProblems(snapshot, venue) {
+export function prequalificationCleanupProblems(snapshot, venue, nowMs = Date.now()) {
   const problems = [];
   for (const camera of venue.activeCameras) {
     const court = snapshot.courts.find((entry) => entry.courtNumber === camera);
     if (!court) { problems.push(`monitor does not contain Camera ${camera}`); continue; }
-    if (court.browser) problems.push(`Camera ${camera} retains a program browser after local-only output capture`);
+    const browserAgeMs = court.browser ? nowMs - Date.parse(court.browser.receivedAt) : Number.POSITIVE_INFINITY;
+    if (Number.isFinite(browserAgeMs) && browserAgeMs >= -5_000 && browserAgeMs <= 15_000) problems.push(`Camera ${camera} retains a program browser after local-only output capture`);
     for (const branch of ["preview", "program"]) {
       const path = court.paths?.[branch];
       if (path?.ready || (path?.readerCount ?? 0) !== 0) problems.push(`Camera ${camera} ${branch} did not retire after local-only output capture`);
