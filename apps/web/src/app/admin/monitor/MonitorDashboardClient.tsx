@@ -42,6 +42,7 @@ const ROUTER_UNAVAILABLE: MonitorRouter = {
   ageMs: null,
   speedify: null,
   routing: null,
+  cameraWifi: null,
   host: null,
   uplinks: []
 };
@@ -620,6 +621,7 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
 function RouterBand({ router, nowMs }: { router: MonitorRouter; nowMs: number }) {
   const speedify = router.speedify;
   const routing = router.routing;
+  const cameraWifi = router.cameraWifi;
   const ageMs = router.receivedAt ? Math.max(0, nowMs - Date.parse(router.receivedAt)) : null;
   const routeReady = routing?.srtDevice === "connectify0"
     && routing.rtmpDevice === "connectify0"
@@ -639,6 +641,8 @@ function RouterBand({ router, nowMs }: { router: MonitorRouter; nowMs: number })
         <Metric label="Bonded delay" value={formatMs(speedify?.latencyMs)} />
         <Metric label="Queue" value={speedify?.readQueuePackets == null ? "--" : `${speedify.readQueuePackets} packets`} />
         <Metric label="Camera sessions" value={routing ? String(routing.cameraFlowCount) : "--"} />
+        <Metric label="Camera Wi-Fi devices" value={cameraWifi?.associatedClientCount == null ? "--" : String(cameraWifi.associatedClientCount)} />
+        <Metric label="Weakest camera signal" value={cameraWifi?.minimumSignalDbm == null ? "--" : `${cameraWifi.minimumSignalDbm} dBm`} />
       </div>
       <div className="monitor-router-status-line">
         <span data-ok={speedify?.state === "CONNECTED"}>{speedify?.state === "CONNECTED" ? "Speedify connected" : "Speedify not connected"}</span>

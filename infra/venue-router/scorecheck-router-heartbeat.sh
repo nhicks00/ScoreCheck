@@ -9,6 +9,7 @@ INGEST_IP="${SCORECHECK_INGEST_IP:-138.197.236.201}"
 PRIMARY_TABLE="${SCORECHECK_SPEEDIFY_ROUTE_TABLE:-900}"
 GUARD_TABLE="${SCORECHECK_SPEEDIFY_GUARD_TABLE:-901}"
 FIREWALL_CHAIN="${SCORECHECK_SPEEDIFY_FIREWALL_CHAIN:-SCORECHECK_CAMERA_EGRESS}"
+CAMERA_WIFI_INTERFACE="${SCORECHECK_CAMERA_WIFI_INTERFACE:-rax0}"
 MODE="${1:-run}"
 
 case "$INTERVAL_SECONDS" in
@@ -17,6 +18,7 @@ esac
 [ "$INTERVAL_SECONDS" -ge 5 ] && [ "$INTERVAL_SECONDS" -le 60 ] \
   || { echo "heartbeat interval must be between 5 and 60 seconds" >&2; exit 64; }
 case "$MODE" in run|print-once) ;; *) echo "usage: $0 [print-once]" >&2; exit 64 ;; esac
+case "$CAMERA_WIFI_INTERFACE" in ''|*[!A-Za-z0-9_.:-]*) echo "camera Wi-Fi interface is invalid" >&2; exit 64 ;; esac
 [ "$MODE" = print-once ] || [ -r "$TOKEN_FILE" ] \
   || { echo "router heartbeat token file is unavailable" >&2; exit 78; }
 
@@ -65,6 +67,23 @@ speedify_rss_bytes() {
 
 streaming_stats_process_count() {
   ps w 2>/dev/null | grep 'speedify_cli -s [s]tats' | wc -l | tr -d ' '
+}
+
+camera_wifi_snapshot() {
+  if ! command -v iwinfo >/dev/null 2>&1; then
+    printf '{"interface":"%s","associatedClientCount":null,"minimumSignalDbm":null}' \
+      "$(json_string "$CAMERA_WIFI_INTERFACE")"
+    return
+  fi
+  associations="$(iwinfo "$CAMERA_WIFI_INTERFACE" assoclist 2>/dev/null)" || {
+    printf '{"interface":"%s","associatedClientCount":null,"minimumSignalDbm":null}' \
+      "$(json_string "$CAMERA_WIFI_INTERFACE")"
+    return
+  }
+  associated_count="$(printf '%s\n' "$associations" | awk '/^[0-9A-Fa-f][0-9A-Fa-f]:/{count++} END {print count + 0}')"
+  minimum_signal="$(printf '%s\n' "$associations" | awk '/^[0-9A-Fa-f][0-9A-Fa-f]:/ && $2 ~ /^-[0-9]+$/ {if (!found || $2 < minimum) minimum=$2; found=1} END {if (found) print minimum; else print "null"}')"
+  printf '{"interface":"%s","associatedClientCount":%s,"minimumSignalDbm":%s}' \
+    "$(json_string "$CAMERA_WIFI_INTERFACE")" "$associated_count" "$minimum_signal"
 }
 
 uplink_type() {
@@ -178,6 +197,7 @@ send_heartbeat() {
   software_version="${version_major}.${version_minor}.${version_bug}-${version_build}"
 
   uplinks="$(build_uplinks "$connection_stats" "$adapters")"
+  camera_wifi="$(camera_wifi_snapshot)"
   kill_switch=false
   kill_switch_active && kill_switch=true
   now="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -186,7 +206,7 @@ send_heartbeat() {
   failover_count="$(json_value "$session_stats" '@.current.numFailovers' 'null')"
   read_queue="$(json_value "$session_stats" '@.current.tun.readQueue' 'null')"
 
-  body="$(printf '{"version":2,"sessionId":"%s","sequence":%s,"sampledAt":"%s","speedify":{"state":"%s","softwareVersion":"%s","bondingMode":"%s","transportMode":"%s","adapterCount":%s,"automaticAdapterCount":%s,"sendBps":%s,"receiveBps":%s,"estimatedUploadBps":%s,"latencyMs":%s,"jitterMs":%s,"lossSendRatio":%s,"lossReceiveRatio":%s,"uploadCongested":%s,"badCpu":%s,"badLatency":%s,"badLoss":%s,"badMemory":%s,"readQueuePackets":%s,"failoverCount":%s},"routing":{"srtDevice":"%s","rtmpDevice":"%s","primaryRuleCount":%s,"guardRuleCount":%s,"killSwitchActive":%s,"cameraFlowCount":%s},"host":{"load1":%s,"memoryAvailableBytes":%s,"speedifyRssBytes":%s,"streamingStatsProcessCount":%s},"uplinks":%s}' \
+  body="$(printf '{"version":3,"sessionId":"%s","sequence":%s,"sampledAt":"%s","speedify":{"state":"%s","softwareVersion":"%s","bondingMode":"%s","transportMode":"%s","adapterCount":%s,"automaticAdapterCount":%s,"sendBps":%s,"receiveBps":%s,"estimatedUploadBps":%s,"latencyMs":%s,"jitterMs":%s,"lossSendRatio":%s,"lossReceiveRatio":%s,"uploadCongested":%s,"badCpu":%s,"badLatency":%s,"badLoss":%s,"badMemory":%s,"readQueuePackets":%s,"failoverCount":%s},"routing":{"srtDevice":"%s","rtmpDevice":"%s","primaryRuleCount":%s,"guardRuleCount":%s,"killSwitchActive":%s,"cameraFlowCount":%s},"cameraWifi":%s,"host":{"load1":%s,"memoryAvailableBytes":%s,"speedifyRssBytes":%s,"streamingStatsProcessCount":%s},"uplinks":%s}' \
     "$SESSION_ID" "$SEQUENCE" "$now" "$state" "$software_version" "$bonding" "$transport" \
     "$adapter_count" "$automatic_adapter_count" \
     "$(json_value "$speedify_connection" '@.sendBps' '0')" \
@@ -205,6 +225,7 @@ send_heartbeat() {
     "$(route_dev udp 8890)" "$(route_dev tcp 1935)" \
     "$(rule_count "$PRIMARY_TABLE")" "$(rule_count "$GUARD_TABLE")" "$kill_switch" \
     "$(conntrack -L -d "$INGEST_IP" 2>/dev/null | grep -Ec 'dport=(1935|8890)' || true)" \
+    "$camera_wifi" \
     "$(awk '{print $1}' /proc/loadavg)" "$mem_available_bytes" "$(speedify_rss_bytes)" \
     "$(streaming_stats_process_count)" "$uplinks")"
 
