@@ -375,6 +375,8 @@ if ! docker run --rm --network none --read-only --user 0:0 --cap-drop ALL --secu
 fi
 chmod 600 "$HOST_OUTPUT"
 chmod 600 "$PROBE_REPORT"
+# LiveKit FileOutput MP4 bitrate is content-dependent. Enforce positive bounded
+# output here; production RTMP CBR is verified by the provider gate.
 if ! jq -e \
   --argjson expectedFps "$EGRESS_FRAMERATE" \
   --argjson targetVideoKbps "$EGRESS_VIDEO_BITRATE" '
@@ -414,9 +416,9 @@ if ! jq -e \
         or .pixelFormat != "yuv420p" or .fieldOrder != "progressive"
         or .colorSpace != "bt709" or .colorTransfer != "bt709" or .colorPrimaries != "bt709"
         or ((.framesPerSecond - $expectedFps) | fabs) > 0.5
-        or .videoBitrateKbps < ($targetVideoKbps * 0.6) or .videoBitrateKbps > ($targetVideoKbps * 1.25)
+        or .videoBitrateKbps <= 0 or .videoBitrateKbps > ($targetVideoKbps * 1.25)
         or .audioCodec != "aac" or .audioChannels != 2 or .audioSampleRateHz != 48000
-        or .audioBitrateKbps < 64 or .audioBitrateKbps > 192
+        or .audioBitrateKbps <= 0 or .audioBitrateKbps > 192
         or .durationSeconds < 15
         or .keyFrameCount < 5 or .maximumKeyFrameGapSeconds > 2.25
       then error("actual output does not satisfy the 1080p YouTube conformance contract")

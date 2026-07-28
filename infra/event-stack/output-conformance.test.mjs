@@ -8,14 +8,14 @@ import test from "node:test";
 import { evaluateOutputConformance, OutputConformanceRuntime } from "./output-conformance.mjs";
 
 const RECEIPT = Object.freeze({
-  schemaVersion: 1,
+  schemaVersion: 2,
   evidenceId: "00000000-0000-4000-8000-000000000001",
   capturedAt: "2026-07-21T12:00:00.000Z",
   court: 1,
   profile: "1080p30",
   egressId: "EG_sample",
   renderer: { gitSha: "b".repeat(40), deploymentId: "dpl_renderer123" },
-  encoding: {
+  requestedEncoding: {
     width: 1920,
     height: 1080,
     framesPerSecond: 30,
@@ -26,6 +26,7 @@ const RECEIPT = Object.freeze({
     videoTargetBitrateKbps: 10_000,
     keyFrameIntervalSeconds: 2
   },
+  actualEncoding: { videoCodec: "h264", audioCodec: "aac" },
   startup: {
     startAttempts: 1,
     recoveredStartingStall: false,
@@ -59,8 +60,8 @@ function fixture({ profile = "1080p30", bitrateScale = 1, keyframeSeconds = 2, a
     receipt: {
       ...RECEIPT,
       profile,
-      encoding: {
-        ...RECEIPT.encoding,
+      requestedEncoding: {
+        ...RECEIPT.requestedEncoding,
         framesPerSecond: fps,
         videoTargetBitrateKbps: target / 1_000
       }
@@ -84,7 +85,7 @@ function fixture({ profile = "1080p30", bitrateScale = 1, keyframeSeconds = 2, a
   };
 }
 
-test("qualifies actual 1080p30 and 1080p60 H.264 High/AAC output", () => {
+test("qualifies structural 1080p30 and 1080p60 H.264 High/AAC MP4 output", () => {
   for (const profile of ["1080p30", "1080p60"]) {
     const evidence = evaluateOutputConformance(fixture({ profile }));
     assert.equal(evidence.status, "QUALIFIED");
@@ -99,6 +100,10 @@ test("qualifies actual 1080p30 and 1080p60 H.264 High/AAC output", () => {
   const boundedVbvBurst = evaluateOutputConformance(fixture({ secondBitrateScales: { 4: 1.345, 5: 0.95 } }));
   assert.ok(boundedVbvBurst.video.maximumSecondBitrateBps > boundedVbvBurst.video.targetBitrateBps * 1.3);
   assert.ok(boundedVbvBurst.video.maximumTwoSecondBitrateBps < boundedVbvBurst.video.targetBitrateBps * 1.3);
+
+  const contentDependent = evaluateOutputConformance(fixture({ bitrateScale: 0.02575, audioBitrateBps: 5_630 }));
+  assert.ok(contentDependent.video.measuredBitrateBps < 300_000);
+  assert.ok(contentDependent.audio.measuredBitrateBps < 6_000);
 });
 
 test("rejects profile, color, GOP, bitrate, and audio drift", () => {
@@ -111,7 +116,7 @@ test("rejects profile, color, GOP, bitrate, and audio drift", () => {
   assert.throws(() => evaluateOutputConformance(wrongColor), /color_space/u);
 
   assert.throws(() => evaluateOutputConformance(fixture({ keyframeSeconds: 4 })), /keyframes|keyframe interval/u);
-  assert.throws(() => evaluateOutputConformance(fixture({ bitrateScale: 0.5 })), /bitrate/u);
+  assert.throws(() => evaluateOutputConformance(fixture({ bitrateScale: 1.2 })), /bitrate/u);
 
   const wrongAudio = fixture();
   wrongAudio.metadata.streams[1].sample_rate = "44100";
@@ -122,7 +127,7 @@ test("rejects profile, color, GOP, bitrate, and audio drift", () => {
   assert.throws(() => evaluateOutputConformance(wrongAudioProfile), /AAC-LC/u);
 
   const wrongTarget = fixture();
-  wrongTarget.receipt.encoding.audioTargetBitrateKbps = 96;
+  wrongTarget.receipt.requestedEncoding.audioTargetBitrateKbps = 96;
   assert.throws(() => evaluateOutputConformance(wrongTarget), /audioTargetBitrateKbps/u);
 
   const inconsistentStartup = fixture();
@@ -137,9 +142,12 @@ test("rejects profile, color, GOP, bitrate, and audio drift", () => {
   audioGap.audioPackets.packets[200].dts_time = String(Number(audioGap.audioPackets.packets[199].dts_time) + 0.2);
   assert.throws(() => evaluateOutputConformance(audioGap), /audio packet gap|audio DTS/u);
 
+  const excessiveAudio = fixture({ audioBitrateBps: 200_000 });
+  assert.throws(() => evaluateOutputConformance(excessiveAudio), /audio bitrate/u);
+
   assert.throws(
     () => evaluateOutputConformance(fixture({ secondBitrateScales: { 4: 1.35, 5: 1.35 } })),
-    /not bounded near CBR/u
+    /two-second profile ceiling/u
   );
   assert.throws(
     () => evaluateOutputConformance(fixture({ secondBitrateScales: { 4: 1.6, 5: 0.4 } })),
