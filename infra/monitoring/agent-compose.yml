@@ -35,6 +35,7 @@ services:
       dockerfile: Dockerfile
       target: agent
     image: scorecheck-monitoring:local
+    init: true
     command: ["npm", "run", "start:agent"]
     restart: unless-stopped
     network_mode: host
@@ -46,6 +47,8 @@ services:
     read_only: true
     volumes:
       - /var/lib/scorecheck-monitoring/ffmpeg:/monitoring/ffmpeg:ro
+      - /var/lib/scorecheck-monitoring/egress-supervisor:/monitoring/egress-supervisor:ro
+      - /var/lib/scorecheck-monitoring/program-warmer:/monitoring/program-warmer:ro
     tmpfs:
       - /tmp
     cap_drop:

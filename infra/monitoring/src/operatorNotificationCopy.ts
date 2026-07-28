@@ -48,6 +48,15 @@ export function operatorNotificationCopy(incident: IncidentSnapshot): OperatorNo
   if (issue === "CAMERA_AUDIO_CLIPPING") {
     return { ...base, problem: `${camera ?? "A camera"}'s sound is distorted.`, action: `Lower ${camera ?? "the camera"}'s audio input level and listen again.`, recovery: `${camera ?? "The camera"}'s sound level is normal again. No action is needed.` };
   }
+  if (issue === "VENUE_SRT_CONGESTION") {
+    return {
+      title: "Venue internet needs attention",
+      problem: "The venue upload is overloaded, so several camera streams may stutter.",
+      action: "Do not restart the cameras. Add upload capacity or lower the total camera bitrate.",
+      recoveryTitle: "Venue internet is back to normal",
+      recovery: "The venue upload is keeping up with the camera streams again. No action is needed."
+    };
+  }
   if (incident.stage === "RAW_INGEST" || matches(issue, ["REQUIRED_RAW_PATH_MISSING", "REQUIRED_PATH_MISSING", "RAW_BITRATE_LOW", "NO_PATH_OBSERVATION", "PATH_NOT_READY_EXPECTATION_UNKNOWN", "MEDIA_FRAME_ERRORS"])) {
     return { ...base, problem: `${camera ?? "A camera"} stopped sending usable video.`, action: `Check that ${camera ?? "the camera"} is powered on, connected to the internet, and still streaming.`, recovery: `${camera ?? "The camera"} is sending video again. No action is needed.` };
   }
@@ -68,12 +77,44 @@ export function operatorNotificationCopy(incident: IncidentSnapshot): OperatorNo
     return { ...base, problem: `YouTube reports a problem with ${camera ?? "a ScoreCheck"} broadcast.`, action: `Open YouTube Live Control Room and check that the broadcast is receiving video and sound.`, recovery: `YouTube reports that ${camera ?? "the broadcast"} is healthy again. No action is needed.` };
   }
   if (incident.stage === "EGRESS" || issue.startsWith("EGRESS_")) {
+    if (issue === "PROGRAM_BRANCH_WARMER_UNAVAILABLE") {
+      return {
+        ...base,
+        problem: `ScoreCheck may not recover ${camera ?? "a camera"}'s broadcast smoothly after an interruption.`,
+        action: "Leave the camera streaming and contact the technical operator. Do not stop the YouTube broadcast.",
+        recovery: `${camera ?? "The camera"}'s automatic stream recovery is ready again. No action is needed.`
+      };
+    }
+    if (issue === "EGRESS_RECOVERING") {
+      return {
+        ...base,
+        problem: `ScoreCheck is automatically restarting ${camera ?? "a camera"}'s broadcast output.`,
+        action: "Leave the camera streaming and wait one minute. Contact the technical operator only if no recovery message arrives.",
+        recovery: `${camera ?? "The camera"}'s broadcast output restarted successfully. No action is needed.`
+      };
+    }
+    if (["EGRESS_SUPERVISOR_UNAVAILABLE", "EGRESS_SUPERVISOR_FAILED"].includes(issue)) {
+      return {
+        ...base,
+        problem: `ScoreCheck cannot automatically restart ${camera ?? "a camera"}'s broadcast output.`,
+        action: "Leave the camera streaming and contact the technical operator. Do not restart the camera for this alert.",
+        recovery: `Automatic broadcast recovery for ${camera ?? "the camera"} is working again. No action is needed.`
+      };
+    }
     const capacity = issue.includes("CAPACITY");
     return {
       ...base,
       problem: capacity ? "ScoreCheck does not have room to start another broadcast." : `${camera ?? "A camera"}'s broadcast output stopped.`,
       action: capacity ? "Do not start another broadcast until an unused output is stopped or more capacity is available." : `Leave ${camera ?? "the camera"} streaming, then restart its broadcast output in ScoreCheck.`,
       recovery: capacity ? "Broadcast capacity is available again. No action is needed." : `${camera ?? "The camera"}'s broadcast output is working again. No action is needed.`
+    };
+  }
+  if (issue === "PROGRAM_SOURCE_CADENCE_LOW") {
+    return {
+      ...base,
+      problem: `${camera ?? "A camera"}'s video is arriving too slowly and may stutter.`,
+      action: `Leave the broadcast running. Check that ${camera ?? "the camera"} is still streaming with its assigned video settings and a stable connection.`,
+      recovery: `${camera ?? "The camera"}'s video is flowing normally again. No action is needed.`
     };
   }
   if (incident.stage === "PREVIEW" || incident.stage === "PROGRAM_PATH" || incident.stage === "PROGRAM_BROWSER") {

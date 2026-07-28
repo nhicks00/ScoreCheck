@@ -78,6 +78,29 @@ test("passes bounded stable camera profile evidence", () => {
   assert.equal(report.observedCourts[3].probeProfile.browserInput.hasBFrames, 0);
 });
 
+test("accepts Mevo HEVC full-range input only through the isolated browser normalizer", () => {
+  const gateConfig = config();
+  Object.assign(gateConfig.expectedProfiles["3"], {
+    sourcePathMode: "isolated-browser-normalizer",
+    videoCodec: "H265",
+    videoPixelFormat: "yuvj420p"
+  });
+  const evidence = healthyEvidence();
+  for (const sample of evidence.samples) {
+    sample.courts[0].raw.videoCodec = "H265";
+  }
+  const probes = healthyProbes();
+  Object.assign(probes.courts[0].raw.streams[0], {
+    codec_name: "hevc",
+    pix_fmt: "yuvj420p"
+  });
+
+  const report = evaluateCameraProfileGate(gateConfig, evidence, probes, sourceEvidence());
+  assert.equal(report.verdict, "PASS");
+  assert.equal(report.observedCourts[3].probeProfile.source.codec, "H265");
+  assert.equal(report.observedCourts[3].probeProfile.browserInput.codec, "H264");
+});
+
 test("fails sparse, restarted, malformed, and degraded camera evidence", () => {
   const gateConfig = config();
   const evidence = healthyEvidence();
@@ -89,6 +112,7 @@ test("fails sparse, restarted, malformed, and degraded camera evidence", () => {
   evidence.samples[1].courts[0].raw.bytesReceived = 900;
   const probes = healthyProbes();
   probes.courts[0].raw.streams[0].avg_frame_rate = "25/1";
+  probes.courts[0].raw.streams[0].r_frame_rate = "25/1";
   const report = evaluateCameraProfileGate(gateConfig, evidence, probes, sourceEvidence());
   assert.equal(report.verdict, "FAIL");
   const failed = new Set(report.checks.filter((check) => !check.pass).map((check) => check.id));

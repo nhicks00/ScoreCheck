@@ -12,6 +12,7 @@ await waitForReady();
 const alerts = [
   alert("raw-source", "ScoreCheckRequiredRawPathMissing", { court: "1" }),
   alert("raw-target", "ScoreCheckProgramBrowserMissing", { court: "1" }),
+  alert("raw-cadence-target", "ScoreCheckProgramSourceCadenceLow", { court: "1" }),
   alert("raw-egress-target", "ScoreCheckEgressOutputMissing", { agent: "compositor-z", court: "1" }),
   alert("raw-analyzer-target", "ScoreCheckCameraContentAnalyzerUnavailable", { agent: "compositor-a", court: "1" }),
   alert("raw-visual-target", "ScoreCheckCameraVisualFreeze", { agent: "compositor-a", court: "1" }),
@@ -56,6 +57,7 @@ if (!accepted.ok) throw new Error(`Alertmanager rejected inhibition fixtures wit
 const expected = new Map([
   ["raw-source", "active"],
   ["raw-target", "suppressed"],
+  ["raw-cadence-target", "suppressed"],
   ["raw-egress-target", "suppressed"],
   ["raw-analyzer-target", "suppressed"],
   ["raw-visual-target", "suppressed"],

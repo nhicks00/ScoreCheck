@@ -8,6 +8,11 @@ import type { ProgramMonitoringConnection } from "@/lib/programMonitoring";
 import { incrementProgramReconnect, recordProgramPageLoad } from "@/lib/programDiagnostics";
 import type { StreamTimingSample } from "@/lib/rtcTiming";
 import {
+  PROGRAM_HLS_TARGET_LATENCY_MS,
+  PROGRAM_MAX_TIMELINE_DELAY_MS,
+  programTimelineDelayMs
+} from "@/lib/programTimeline";
+import {
   analyzeVisualFrame,
   EMPTY_PROGRAM_VISUAL_HEALTH,
   initialVisualAnalysisState,
@@ -46,6 +51,7 @@ type ProgramClientProps = {
   cameraGainDb: number;
   commentaryGainDb: number;
   commentaryDelayMs: number;
+  programVideoDelayMs: number;
   debug: boolean;
   buildVersion: string;
   configurationVersion: string;
@@ -65,19 +71,19 @@ export function ProgramClient({
   cameraGainDb,
   commentaryGainDb,
   commentaryDelayMs,
+  programVideoDelayMs,
   debug,
   buildVersion,
   configurationVersion,
   monitoring
 }: ProgramClientProps) {
-  const hasSources = Boolean(sources.whepUrl);
+  const hasSources = Boolean(sources.hlsUrl);
 
   const rootRef = useRef<HTMLDivElement | null>(null);
   const videoWrapRef = useRef<HTMLDivElement | null>(null);
   const watchdogRef = useRef(initialProgramWatchdog(0));
   const startLoggedRef = useRef(false);
   const endLoggedRef = useRef(false);
-  const audioBlockedRef = useRef(false);
   const framesRef = useRef(0);
   const reconnectsRef = useRef(0);
   const reloadCountRef = useRef(0);
@@ -104,6 +110,7 @@ export function ProgramClient({
   const [audioHealth, setAudioHealth] = useState<ProgramAudioHealth>(EMPTY_PROGRAM_AUDIO_HEALTH);
   const [commentaryWaitExpired, setCommentaryWaitExpired] = useState(false);
   const [heartbeatState, setHeartbeatState] = useState<"disabled" | "waiting" | "ok" | "error">(monitoring ? "waiting" : "disabled");
+  const [timelineDelayMs, setTimelineDelayMs] = useState(() => programTimelineDelayMs(programVideoDelayMs, null));
 
   const setVideoState = useCallback((next: string) => {
     videoStateRef.current = next;
@@ -125,8 +132,14 @@ export function ProgramClient({
     setAudioHealth(next);
   }, []);
   const updateProgramTiming = useCallback((sample: StreamTimingSample | null) => {
-    programTimingRef.current = sample;
-  }, []);
+    if (!sample) {
+      programTimingRef.current = null;
+      return;
+    }
+    const totalDelayMs = programTimelineDelayMs(programVideoDelayMs, sample.playoutDelayMs);
+    programTimingRef.current = { ...sample, playoutDelayMs: totalDelayMs };
+    setTimelineDelayMs((current) => Math.abs(current - totalDelayMs) >= 250 ? totalDelayMs : current);
+  }, [programVideoDelayMs]);
   const updateStreamHealth = useCallback((health: StreamConnectionHealth | null) => {
     streamHealthRef.current = health;
   }, []);
@@ -184,16 +197,6 @@ export function ProgramClient({
     }
   }, [courtNumber]);
 
-  /* A human previewing the page can click to lift an autoplay-policy mute;
-     egress Chrome never blocks autoplay, so this is a no-op there. */
-  useEffect(() => {
-    const onPointerDown = () => {
-      audioBlockedRef.current = false;
-    };
-    window.addEventListener("pointerdown", onPointerDown);
-    return () => window.removeEventListener("pointerdown", onPointerDown);
-  }, []);
-
   /* requestVideoFrameCallback advances only when a frame is actually presented.
      currentTime and decoded-frame counters can advance through some frozen or
      repeated-frame failures, so the watchdog uses this compositor-grade clock. */
@@ -247,20 +250,23 @@ export function ProgramClient({
     };
   }, [cameraElement]);
 
-  /* StreamPlayer owns normal source/transport recovery. This watchdog remounts
-     only a foreground connected player that presents no frames past the grace
-     window, including a nominally connected but inbound-stalled peer. */
+  /* StreamPlayer owns source/transport recovery. WHEP can prove a decoder-only
+     stall from independent inbound counters. HLS has no RTP counter, so its
+     presentation clock is also its source-progress clock: a stopped source
+     stays mounted behind the interruption slate instead of reload-looping. */
   useEffect(() => {
     if (!hasSources) return;
     const id = window.setInterval(() => {
       const video = videoWrapRef.current?.querySelector("video");
-      if (video) ensureProgramPlayback(video, audioBlockedRef);
+      const stream = streamHealthRef.current;
+      if (video) ensureProgramPlayback(video, stream?.transport ?? null);
       const frames = presentedFramesRef.current;
       framesRef.current = frames;
       if (debug) setDebugFrames(frames);
-      const stream = streamHealthRef.current;
       const connected = stream?.connectionState === "connected";
-      const inboundFrames = stream?.framesDecoded ?? stream?.framesReceived ?? null;
+      const inboundFrames = stream?.transport === "hls"
+        ? frames
+        : stream?.framesReceived ?? stream?.framesDecoded ?? null;
 
       const step = programWatchdogStep(watchdogRef.current, {
         nowMs: Date.now(),
@@ -293,6 +299,10 @@ export function ProgramClient({
         setVideoState("reconnecting");
         recordReconnect();
         setPlayerEpoch((current) => current + 1);
+      } else if (step.action === "stalled") {
+        stableFrameTicksRef.current = 0;
+        setFramesFlowing(false);
+        setVideoState("stalled");
       }
     }, PROGRAM_WATCHDOG_TICK_MS);
     return () => window.clearInterval(id);
@@ -472,6 +482,7 @@ export function ProgramClient({
             theme="default"
             buildVersion={buildVersion}
             reloadOnVersionChange={false}
+            timelineDelayMs={timelineDelayMs}
             onHealth={updateOverlayHealth}
           />
         </div>
@@ -482,7 +493,7 @@ export function ProgramClient({
           commentary={commentary}
           cameraGainDb={cameraGainDb}
           commentaryGainDb={commentaryGainDb}
-          commentaryDelayMs={commentaryDelayMs}
+          commentaryDelayMs={Math.min(PROGRAM_MAX_TIMELINE_DELAY_MS, commentaryDelayMs + PROGRAM_HLS_TARGET_LATENCY_MS)}
           onHealth={updateAudioHealth}
         />
       </div>
@@ -548,28 +559,16 @@ function formatMs(value: number | null): string {
 }
 
 /**
- * Keeps the captured feed unmuted and running. If the browser's autoplay
- * policy rejects unmuted playback (human preview without a gesture), fall
- * back to muted playback so the watchdog sees frames instead of a fake stall;
- * egress Chrome allows autoplay, so the fallback never engages there.
+ * HLS camera audio is unmuted into its MediaElementAudioSourceNode; that node
+ * reroutes the element into ProgramAudioMixer, so no direct duplicate reaches
+ * the captured page mix. Other transports remain muted.
  */
-function ensureProgramPlayback(video: HTMLVideoElement, audioBlockedRef: { current: boolean }) {
-  if (!audioBlockedRef.current && (video.muted || video.volume !== 1)) {
-    video.muted = false;
-    video.volume = 1;
-  }
+function ensureProgramPlayback(video: HTMLVideoElement, transport: StreamConnectionHealth["transport"] | null) {
+  video.muted = transport !== "hls";
+  video.volume = transport === "hls" ? 1 : 0;
   if (video.paused && (video.srcObject || video.currentSrc)) {
-    void video.play().catch((error: unknown) => {
-      // Only a NotAllowedError means the autoplay policy blocked unmuted
-      // playback. Anything else (AbortError from reconnect teardown races,
-      // NotSupportedError from a dead source) must NOT trip the muted
-      // fallback, or a transient glitch would silence the broadcast forever.
-      if (!(error instanceof DOMException) || error.name !== "NotAllowedError") return;
-      audioBlockedRef.current = true;
-      video.muted = true;
-      void video.play().catch(() => {
-        // Still blocked; the watchdog will keep retrying next tick.
-      });
+    void video.play().catch(() => {
+      // The watchdog will keep retrying next tick.
     });
   }
 }

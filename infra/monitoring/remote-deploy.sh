@@ -19,7 +19,7 @@ case "$CANDIDATE_DIR" in
     ;;
 esac
 
-for command in cmp curl cut diff docker flock grep install jq rsync seq; do
+for command in cmp curl cut dd diff docker flock grep install jq rsync seq sha256sum; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "Required deployment command is missing: $command." >&2
     exit 1
@@ -64,7 +64,7 @@ retry_docker_operation() {
 
 candidate_image="scorecheck-monitoring:candidate-${REVISION:0:12}-$$"
 rollback_image="scorecheck-monitoring:rollback-${REVISION:0:12}-$$"
-monitoring_contract_version=5
+monitoring_contract_version=6
 inhibition_container="scorecheck-alertmanager-preflight-$$"
 backup_dir=""
 rollback_required=0
@@ -114,6 +114,24 @@ assert_static_container_ids() {
       return 1
     fi
   done
+}
+
+replace_file_contents() {
+  local source="$1"
+  local destination="$2"
+  command dd if="$source" of="$destination" status=none
+}
+
+assert_prometheus_config_visible() {
+  local source="$1"
+  local container="$2"
+  local expected actual
+  expected="$(sha256sum "$source" | cut -d' ' -f1)"
+  actual="$(docker exec "$container" sha256sum /etc/prometheus/prometheus.yml | cut -d' ' -f1)"
+  if [[ -z "$expected" || "$actual" != "$expected" ]]; then
+    echo "Prometheus is not reading the current host scrape configuration." >&2
+    return 1
+  fi
 }
 
 read_json_env_value() {
@@ -213,9 +231,10 @@ restore_previous() {
   local failed=0
   install -m 0600 "$backup_dir/.env" "$REMOTE_DIR/.env" || failed=1
   rsync -a --delete "$backup_dir/rules/" "$REMOTE_DIR/rules/" || failed=1
-  command cp "$backup_dir/.generated/prometheus.yml" "$REMOTE_DIR/.generated/prometheus.yml" || failed=1
+  replace_file_contents "$backup_dir/.generated/prometheus.yml" "$REMOTE_DIR/.generated/prometheus.yml" || failed=1
   chown 65534:65534 "$REMOTE_DIR/.generated/prometheus.yml" || failed=1
   chmod 0400 "$REMOTE_DIR/.generated/prometheus.yml" || failed=1
+  assert_prometheus_config_visible "$backup_dir/.generated/prometheus.yml" "$prometheus_before" || failed=1
   restore_provenance || failed=1
   docker tag "$rollback_image" scorecheck-monitoring:local || failed=1
   compose up -d --no-deps --force-recreate --no-build monitor-service || failed=1
@@ -281,6 +300,12 @@ for path in docker-compose.yml Caddyfile .generated/alertmanager.yml; do
     exit 1
   fi
 done
+live_agent_targets="$(grep -m1 '^MONITOR_AGENT_TARGETS=' "$REMOTE_DIR/.env" || true)"
+candidate_agent_targets="$(grep -m1 '^MONITOR_AGENT_TARGETS=' "$CANDIDATE_DIR/.env" || true)"
+if [[ -z "$live_agent_targets" || "$live_agent_targets" != "$candidate_agent_targets" ]]; then
+  echo "Routine deployment rejected dynamic monitoring target changes; use replace-agent-targets.sh." >&2
+  exit 1
+fi
 
 # The incoming root is mode 0700, so these files remain host-private. Grant the
 # isolated validation containers read access without evaluating or copying any
@@ -346,11 +371,23 @@ for value in "$monitor_before" "$prometheus_before" "$alertmanager_before" "$cad
     exit 1
   fi
 done
+assert_prometheus_config_visible "$REMOTE_DIR/.generated/prometheus.yml" "$prometheus_before"
 
 old_revision="$(docker inspect "$monitor_before" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
+running_image_id="$(docker inspect "$monitor_before" --format '{{.Image}}')"
+old_image_id="$(docker image inspect scorecheck-monitoring:local --format '{{.Id}}')"
 old_image_revision="$(docker image inspect scorecheck-monitoring:local --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
 old_health="$(docker inspect "$monitor_before" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')"
 old_restarts="$(docker inspect "$monitor_before" --format '{{.RestartCount}}')"
+running_image_revision="$(docker image inspect "$running_image_id" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || true)"
+if [[ "$old_revision" =~ ^[0-9a-f]{40}$ && "$old_revision" == "$running_image_revision" \
+  && "$old_health" == "healthy" && "$old_restarts" == "0" \
+  && ( "$old_image_id" != "$running_image_id" || "$old_image_revision" != "$old_revision" ) ]]; then
+  docker tag "$running_image_id" scorecheck-monitoring:local
+  old_image_id="$(docker image inspect scorecheck-monitoring:local --format '{{.Id}}')"
+  old_image_revision="$(docker image inspect scorecheck-monitoring:local --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
+  echo "Reconciled the rollback image tag to the healthy running monitor-service revision."
+fi
 if [[ ! "$old_revision" =~ ^[0-9a-f]{40}$ || "$old_revision" != "$old_image_revision" \
   || "$old_health" != "healthy" || "$old_restarts" != "0" ]]; then
   echo "Current monitor-service is not a clean, revision-labeled rollback baseline." >&2
@@ -400,11 +437,12 @@ wait_for_public_health
 
 # Only after the new service is healthy may matching rules and scrape config go live.
 rsync -a --delete "$CANDIDATE_DIR/rules/" "$REMOTE_DIR/rules/"
-command cp "$CANDIDATE_DIR/.generated/prometheus.yml" "$REMOTE_DIR/.generated/prometheus.yml"
+replace_file_contents "$CANDIDATE_DIR/.generated/prometheus.yml" "$REMOTE_DIR/.generated/prometheus.yml"
 chown 65534:65534 "$REMOTE_DIR/.generated/prometheus.yml"
 chmod 0400 "$REMOTE_DIR/.generated/prometheus.yml"
 diff -qr "$CANDIDATE_DIR/rules" "$REMOTE_DIR/rules" >/dev/null
 cmp -s "$CANDIDATE_DIR/.generated/prometheus.yml" "$REMOTE_DIR/.generated/prometheus.yml"
+assert_prometheus_config_visible "$CANDIDATE_DIR/.generated/prometheus.yml" "$prometheus_before"
 curl --fail --silent --show-error --max-time 10 \
   -X POST http://127.0.0.1:9090/-/reload >/dev/null
 curl --fail --silent --show-error --max-time 10 \

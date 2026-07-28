@@ -14,6 +14,8 @@ import { createProgramMonitoringConnection } from "../lib/programMonitoring";
 import {
   buildProgramMonitorHeartbeat,
   initialProgramWatchdog,
+  PROGRAM_WATCHDOG_CADENCE_WINDOW_MS,
+  PROGRAM_WATCHDOG_RECONNECT_COOLDOWN_MS,
   PROGRAM_WATCHDOG_STALL_MS,
   programWatchdogStep,
   type ProgramWatchdogSample,
@@ -172,7 +174,7 @@ describe("createProgramMonitoringConnection", () => {
       heartbeatUrl: "https://monitor.example.test/v1/browser-heartbeats",
       thumbnailUrl: "https://monitor.example.test/v1/browser-thumbnails",
       credentialId: "10000000-0000-4000-8000-000000000001",
-      credential: "eyJ2Ijo1LCJjaWQiOiIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJjb3VydCI6MywiaWF0IjoxMDAwLCJleHAiOjY0ODAxMDAwfQ.5eVqGVhQwp4yCHe4SGmOwfKNvV9Pw5JX8ILpQvh0ScI"
+      credential: "eyJ2Ijo2LCJjaWQiOiIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJjb3VydCI6MywiaWF0IjoxMDAwLCJleHAiOjY0ODAxMDAwfQ.EvRWsebeAdOJPgSwgWRyWDcIxdLlYvH7Cq4DT3qN7SY"
     });
   });
 
@@ -247,15 +249,35 @@ describe("programWatchdogStep", () => {
     expect(actions).toEqual(["none", "none", "none", "none", "reconnect"]);
   });
 
-  it("remounts a stuck connected transport without escalating to a page reload", () => {
+  it("shows a stable interruption state when inbound and rendered frames both stop", () => {
     const { actions } = runWatchdog([
       { atMs: 0, presentedFrames: 50, inboundFrames: 50 },
       { atMs: 1000, presentedFrames: 80, inboundFrames: 80 },
       { atMs: 2000, presentedFrames: 80, inboundFrames: 80 },
       { atMs: 2000 + PROGRAM_WATCHDOG_STALL_MS, presentedFrames: 80, inboundFrames: 80 },
+      { atMs: 2001 + PROGRAM_WATCHDOG_STALL_MS, presentedFrames: 80, inboundFrames: 80 },
+      { atMs: 8000 + PROGRAM_WATCHDOG_STALL_MS, presentedFrames: 80, inboundFrames: 80 }
+    ]);
+    expect(actions).toEqual(["none", "none", "none", "none", "stalled", "stalled"]);
+  });
+
+  it("reconnects if inbound media resumes while presentation remains stalled", () => {
+    const afterSourceStall = runWatchdog([
+      { atMs: 0, presentedFrames: 50, inboundFrames: 50 },
+      { atMs: 1000, presentedFrames: 80, inboundFrames: 80 },
+      { atMs: 2000, presentedFrames: 80, inboundFrames: 80 },
       { atMs: 2001 + PROGRAM_WATCHDOG_STALL_MS, presentedFrames: 80, inboundFrames: 80 }
     ]);
-    expect(actions).toEqual(["none", "none", "none", "none", "reconnect"]);
+    expect(afterSourceStall.actions.at(-1)).toBe("stalled");
+
+    const resumed = programWatchdogStep(afterSourceStall.state, {
+      nowMs: 3001 + PROGRAM_WATCHDOG_STALL_MS,
+      hasSources: true,
+      renderWatchdogEligible: true,
+      presentedFrames: 80,
+      inboundFrames: 110
+    });
+    expect(resumed.action).toBe("reconnect");
   });
 
   it("never acts in a hidden tab or before transport stats are eligible", () => {
@@ -297,6 +319,58 @@ describe("programWatchdogStep", () => {
     expect(progressedFlags[3]).toBe(true);
     expect(state.renderStallStartedAtMs).toBeNull();
   });
+
+  it("reconnects after two sustained healthy-inbound presentation-deficit windows", () => {
+    const window = PROGRAM_WATCHDOG_CADENCE_WINDOW_MS;
+    const { actions } = runWatchdog([
+      { atMs: 0, presentedFrames: 0, inboundFrames: 0 },
+      { atMs: window, presentedFrames: 30, inboundFrames: 300 },
+      { atMs: window * 2, presentedFrames: 60, inboundFrames: 600 }
+    ]);
+    expect(actions).toEqual(["none", "none", "reconnect"]);
+  });
+
+  it("does not reconnect for ordinary cadence variation or a slow source", () => {
+    const window = PROGRAM_WATCHDOG_CADENCE_WINDOW_MS;
+    const ordinary = runWatchdog([
+      { atMs: 0, presentedFrames: 0, inboundFrames: 0 },
+      { atMs: window, presentedFrames: 270, inboundFrames: 300 },
+      { atMs: window * 2, presentedFrames: 530, inboundFrames: 600 }
+    ]);
+    const slowSource = runWatchdog([
+      { atMs: 0, presentedFrames: 0, inboundFrames: 0 },
+      { atMs: window, presentedFrames: 50, inboundFrames: 50 },
+      { atMs: window * 2, presentedFrames: 100, inboundFrames: 100 }
+    ]);
+    expect(ordinary.actions).toEqual(["none", "none", "none"]);
+    expect(slowSource.actions).toEqual(["none", "none", "none"]);
+  });
+
+  it("rate-limits repeated cadence recovery attempts", () => {
+    const window = PROGRAM_WATCHDOG_CADENCE_WINDOW_MS;
+    const first = runWatchdog([
+      { atMs: 0, presentedFrames: 0, inboundFrames: 0 },
+      { atMs: window, presentedFrames: 10, inboundFrames: 300 },
+      { atMs: window * 2, presentedFrames: 20, inboundFrames: 600 }
+    ]);
+    expect(first.actions.at(-1)).toBe("reconnect");
+
+    const beforeCooldown = runWatchdog([
+      { atMs: window * 2 + 1, presentedFrames: 0, inboundFrames: 0 },
+      { atMs: window * 3 + 1, presentedFrames: 10, inboundFrames: 300 },
+      { atMs: window * 4 + 1, presentedFrames: 20, inboundFrames: 600 }
+    ], first.state);
+    expect(beforeCooldown.actions).toEqual(["none", "none", "none"]);
+
+    const afterCooldown = programWatchdogStep(beforeCooldown.state, {
+      nowMs: window * 2 + PROGRAM_WATCHDOG_RECONNECT_COOLDOWN_MS,
+      hasSources: true,
+      renderWatchdogEligible: true,
+      presentedFrames: 30,
+      inboundFrames: 1800
+    });
+    expect(afterCooldown.action).toBe("reconnect");
+  });
 });
 
 describe("buildProgramMonitorHeartbeat", () => {
@@ -318,7 +392,7 @@ describe("buildProgramMonitorHeartbeat", () => {
       commentarySyncRttMs: 54.8,
       commentarySyncSampleAgeMs: 210.2
     }));
-    expect(body.version).toBe(5);
+    expect(body.version).toBe(6);
     expect(body.video).toMatchObject({ state: "playing", framesRendered: 5400, framesPerSecond: 30, transport: "whep", networkPath: "private-vpc" });
     expect(body.commentary).toMatchObject({
       roomConnected: true,
@@ -372,7 +446,7 @@ describe("buildProgramMonitorHeartbeat", () => {
       syncStatus: "fallback",
       configuredDelayMs: 0,
       targetDelayMs: null,
-      appliedDelayMs: 10_000,
+      appliedDelayMs: 30_000,
       clockRttMs: 60,
       syncSampleAgeMs: null
     });
@@ -416,6 +490,7 @@ function base(overrides: Partial<Parameters<typeof buildProgramMonitorHeartbeat>
       rttMs: 20,
       jitterMs: 4,
       jitterBufferMs: 80,
+      playoutDelayMs: null,
       packetsLost: 0,
       packetsReceived: 1_000,
       framesReceived: 900,
@@ -428,7 +503,13 @@ function base(overrides: Partial<Parameters<typeof buildProgramMonitorHeartbeat>
       lastPacketAgeMs: 12,
       nackCount: 2,
       pliCount: 1,
-      firCount: 0
+      firCount: 0,
+      bufferedAheadMs: null,
+      bufferedRangeCount: null,
+      hlsCreatedInstances: null,
+      hlsDestroyedInstances: null,
+      hlsActiveInstances: null,
+      jsHeapUsedBytes: 64_000_000
     },
     visualHealth: {
       sampledAt: "2026-07-12T18:29:59.000Z",

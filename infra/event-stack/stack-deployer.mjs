@@ -20,6 +20,8 @@ const REQUIRED_DEPLOYMENT_SECRET_FILES = Object.freeze([
   "commentary.env",
   "ingest.env",
   "observability.env",
+  "renderer.env",
+  "renderer/local-renderer.tar.gz",
   ...["a", "b", "c", "d", "e", "f", "g", "h"].map((suffix) => `compositors/bvm-compositor-${suffix}.env`),
   "compositors/bvm-compositor-spare.env"
 ]);
@@ -170,7 +172,11 @@ export class LocalStackDeployer {
       };
     } else if (["compositor", "compositor-spare"].includes(spec.role)) {
       const environmentPath = join(this.secretsDirectory, "compositors", `${spec.name}.env`);
+      const rendererEnvironmentPath = join(this.secretsDirectory, "renderer.env");
+      const rendererBundlePath = join(this.secretsDirectory, "renderer/local-renderer.tar.gz");
       await assertProtectedFile(environmentPath, `${spec.name} environment`);
+      await assertProtectedFile(rendererEnvironmentPath, "local renderer environment");
+      await assertProtectedFile(rendererBundlePath, "local renderer bundle");
       const ingestSpec = manifest.droplets.find((entry) => entry.role === "ingest");
       const ingestPrivateIpv4 = ingestSpec ? state.droplets[ingestSpec.name]?.privateIpv4 : null;
       if (!ingestPrivateIpv4) throw new Error("compositor deployment requires the ingest private IPv4 address");
@@ -179,6 +185,8 @@ export class LocalStackDeployer {
         COMPOSITOR_SSH_HOST: `root@${resource.publicIpv4}`,
         COMPOSITOR_SSH_KEY: this.sshPrivateKey,
         COMPOSITOR_ENV_FILE: environmentPath,
+        COMPOSITOR_RENDERER_ENV_FILE: rendererEnvironmentPath,
+        COMPOSITOR_RENDERER_BUNDLE: rendererBundlePath,
         COMPOSITOR_INGEST_PRIVATE_IP: ingestPrivateIpv4,
         COMPOSITOR_INGEST_HOST: endpointForRole(manifest, "ingest")
       });
@@ -588,7 +596,7 @@ export function privateNetworkVerificationPlan({ manifest, state, spec }) {
         status: "verified",
         targets: [
           { purpose: "normalizer-rtsp", address: `${ingestPrivateIpv4}:8554` },
-          { purpose: "program-whep-tls", address: `${ingestHost}->${ingestPrivateIpv4}:443` }
+          { purpose: "program-hls-tls", address: `${ingestHost}->${ingestPrivateIpv4}:443` }
         ]
       }
     };
@@ -852,7 +860,7 @@ function agentRole(role) {
   return role;
 }
 
-function agentRoleEnvironment(role) {
+export function agentRoleEnvironment(role) {
   if (role === "ingest") return {
     MONITOR_AGENT_CONTAINERS: "mediamtx",
     FFMPEG_PROGRESS_DIR: "/monitoring/ffmpeg",
@@ -860,9 +868,12 @@ function agentRoleEnvironment(role) {
     MEDIAMTX_METRICS_URL: "http://127.0.0.1:9998/metrics"
   };
   if (["compositor", "compositor-spare"].includes(role)) return {
-    MONITOR_AGENT_CONTAINERS: "bvm-redis,bvm-livekit,bvm-egress",
+    MONITOR_AGENT_CONTAINERS: "bvm-redis,bvm-livekit,bvm-renderer,bvm-program-warmer,bvm-egress",
+    FFMPEG_PROGRESS_DIR: "/monitoring/ffmpeg",
     EGRESS_METRICS_URL: "http://127.0.0.1:9090/metrics",
     EGRESS_HEALTH_URL: "http://127.0.0.1:9091/",
+    EGRESS_SUPERVISOR_STATE_PATH: "/monitoring/egress-supervisor/state.json",
+    PROGRAM_WARMER_STATE_PATH: "/monitoring/program-warmer/state.json",
     MONITOR_EGRESS_MAX_WEB_REQUESTS: "1"
   };
   if (role === "commentary") return {
@@ -884,14 +895,21 @@ export function roleConfigBindings(repoRoot, secretsDirectory, spec) {
     [join(repoRoot, "infra/mediamtx/.generated/Caddyfile"), "/opt/mediamtx/Caddyfile"],
     [join(repoRoot, "infra/mediamtx/scorecheck-ffmpeg-runner.sh"), "/opt/mediamtx/scorecheck-ffmpeg-runner.sh"],
     [join(repoRoot, "infra/mediamtx/scorecheck-preview-runner.sh"), "/opt/mediamtx/scorecheck-preview-runner.sh"],
+    [join(repoRoot, "infra/mediamtx/scorecheck-program-runner.sh"), "/opt/mediamtx/scorecheck-program-runner.sh"],
     [join(repoRoot, "infra/mediamtx/recovery-role.sh"), "/opt/mediamtx/recovery-role.sh"]
   ];
   if (["compositor", "compositor-spare"].includes(spec.role)) return [
     [join(repoRoot, "infra/compositor/docker-compose.yml"), "/opt/compositor/docker-compose.yml"],
     [join(repoRoot, "infra/compositor/livekit.yaml"), "/opt/compositor/livekit.yaml"],
     [join(repoRoot, "infra/compositor/egress.yaml"), "/opt/compositor/egress.yaml"],
+    [join(repoRoot, "infra/compositor/scorecheck-egress-supervisor.service"), "/etc/systemd/system/scorecheck-egress-supervisor.service"],
     [join(secretsDirectory, "compositors", `${spec.name}.env`), "/opt/compositor/.env"],
+    [join(secretsDirectory, "renderer.env"), "/opt/compositor/renderer.env"],
+    [join(secretsDirectory, "renderer/local-renderer.tar.gz"), "/opt/compositor/local-renderer.tar.gz"],
+    [join(repoRoot, "infra/compositor/egress-supervisor.sh"), "/opt/compositor/egress-supervisor.sh"],
+    [join(repoRoot, "infra/compositor/program-branch-warmer.sh"), "/opt/compositor/program-branch-warmer.sh"],
     [join(repoRoot, "infra/compositor/normalize-camera.sh"), "/opt/compositor/normalize-camera.sh"],
+    [join(repoRoot, "infra/mediamtx/scorecheck-ffmpeg-runner.sh"), "/opt/compositor/scorecheck-ffmpeg-runner.sh"],
     [join(repoRoot, "infra/compositor/qualify-output.sh"), "/opt/compositor/qualify-output.sh"],
     [join(repoRoot, "infra/compositor/rebind-ingest.sh"), "/opt/compositor/rebind-ingest.sh"],
     [join(repoRoot, "infra/compositor/start-court.sh"), "/opt/compositor/start-court.sh"],
@@ -930,7 +948,7 @@ function verificationCommand(role) {
   if (role === "ingest") return `${agent} && curl -fsS http://127.0.0.1:9997/v3/config/global/get >/dev/null && if test -f /etc/wireguard/camera-lan.conf; then wg show camera-lan >/dev/null && ip -4 address show dev camera-lan | grep -q '10\\.89\\.0\\.1/24' && ip route show 192.168.8.0/24 | grep -q 'dev camera-lan'; fi`;
   if (role === "commentary") return `${agent} && curl -fsS http://127.0.0.1:7880/ >/dev/null && curl -fsS http://127.0.0.1:6789/metrics >/dev/null`;
   if (["compositor", "compositor-spare"].includes(role)) {
-    return `${agent} && test \"$(docker inspect bvm-egress --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')\" = healthy && curl -fsS http://127.0.0.1:9090/metrics >/dev/null`;
+    return `${agent} && test \"$(docker inspect bvm-renderer --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')\" = healthy && curl -fsS http://127.0.0.1:3000/api/program/renderer-binding >/dev/null && test \"$(docker inspect bvm-program-warmer --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')\" = healthy && test -s /var/lib/scorecheck-monitoring/program-warmer/state.json && test \"$(docker inspect bvm-egress --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')\" = healthy && curl -fsS http://127.0.0.1:9090/metrics >/dev/null`;
   }
   if (role === "observability") return `${agent} && cd /opt/scorecheck-monitoring && docker compose ps --status running --quiet | grep -q .`;
   throw new Error(`unsupported verification role ${role}`);

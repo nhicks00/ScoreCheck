@@ -6,6 +6,7 @@ const directory = path.dirname(fileURLToPath(import.meta.url));
 const outputDirectory = path.join(directory, ".generated");
 const requiredNames = [
   "MONITOR_API_TOKEN",
+  "MONITOR_ROUTER_HEARTBEAT_TOKEN",
   "ALERTMANAGER_WEBHOOK_TOKEN",
   "MONITOR_BROWSER_HEARTBEAT_SECRET",
   "MONITOR_AGENT_TARGETS",

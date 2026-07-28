@@ -2,7 +2,7 @@
 #
 # Phase 2 of docs/PRODUCTION_PLATFORM_PLAN.md ("program page as scene"): headless
 # Chrome inside the egress container renders the ScoreCheck program page
-# (/program/court/N — delayed WHEP video + scorebug DOM + LiveKit audio),
+# (/program/court/N — buffered HLS video + scorebug DOM + LiveKit audio),
 # GStreamer/x264 encodes it, and the result is pushed to YouTube RTMP.
 #
 # No LiveKit rooms are ever used. livekit-server exists purely as the Egress
@@ -74,6 +74,64 @@ services:
       redis:
         condition: service_healthy
 
+  renderer:
+    # Event-pinned standalone Next.js renderer. The release is built once from
+    # the admitted Git SHA, integrity-bound to the event bundle, and runs on
+    # every compositor so an external Vercel outage cannot interrupt a live
+    # program scene or its local restart.
+    image: node:22.23.1-alpine3.24@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2
+    container_name: bvm-renderer
+    restart: unless-stopped
+    init: true
+    working_dir: /app
+    command: ["node", "server.js"]
+    env_file:
+      - ./renderer.env
+    extra_hosts:
+      - "${MEDIAMTX_PUBLIC_HOST:?MEDIAMTX_PUBLIC_HOST is required}:${MEDIAMTX_PRIVATE_HOST:?MEDIAMTX_PRIVATE_HOST is required}"
+    volumes:
+      - ./renderer:/app:ro
+      - ./renderer-cache:/var/lib/scorecheck-renderer
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    ports:
+      - "127.0.0.1:3000:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/program/renderer-binding',{cache:'no-store'}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 15s
+    logging: *default-logging
+
+  program-warmer:
+    # An exact output owner keeps its MediaMTX HLS branch warm independently of
+    # Chromium and the Egress worker. It packet-copies to the null muxer; there
+    # is no decode, encode, or additional venue upload.
+    image: bluenviron/mediamtx:1.19.2-ffmpeg@sha256:08c837deb7bac85d509e2a4c2737308e5a34f8f084a46a0d8793cdb0579a6e5d
+    container_name: bvm-program-warmer
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ./renderer.env
+    environment:
+      CAMERA_NUMBER: "${CAMERA_NUMBER:-}"
+    extra_hosts:
+      - "${MEDIAMTX_PUBLIC_HOST:?MEDIAMTX_PUBLIC_HOST is required}:${MEDIAMTX_PRIVATE_HOST:?MEDIAMTX_PRIVATE_HOST is required}"
+    volumes:
+      - ./program-branch-warmer.sh:/usr/local/bin/program-branch-warmer:ro
+      - ./requests:/requests:ro
+      - /var/lib/scorecheck-monitoring/program-warmer:/monitoring/program-warmer
+    entrypoint: ["/usr/local/bin/program-branch-warmer"]
+    healthcheck:
+      test: ["CMD", "test", "-s", "/monitoring/program-warmer/state.json"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    logging: *default-logging
+
   egress:
     # The compositor itself: headless Chrome (+ Xvfb + PulseAudio) renders the
     # program page; GStreamer encodes x264 and muxes/pushes RTMP. This c-4 is
@@ -126,13 +184,14 @@ services:
         # livekit image has no shell/curl for a healthcheck; egress retries its
         # redis/ws connections on boot, so started-ordering is sufficient.
         condition: service_started
+      renderer:
+        condition: service_healthy
 
   normalizer:
-    # HEVC remains an allowed venue transport codec, but Linux Chromium does
-    # not consume it directly through WHEP. Only a compositor explicitly bound
-    # to an HEVC camera starts this profile-scoped normalizer. Direct-H264
-    # cameras and the spare never run it.
-    profiles: ["hevc-normalizer"]
+    # Linux Chromium WHEP requires browser-safe H.264. A compositor assigned an
+    # HEVC source or unsafe H.264 source starts this profile-scoped normalizer;
+    # qualified direct-H264 cameras and the spare never run it.
+    profiles: ["browser-normalizer"]
     image: bluenviron/mediamtx:1.19.2-ffmpeg@sha256:08c837deb7bac85d509e2a4c2737308e5a34f8f084a46a0d8793cdb0579a6e5d
     container_name: bvm-normalizer
     restart: unless-stopped
@@ -151,5 +210,6 @@ services:
       MEDIAMTX_PRIVATE_HOST: "${MEDIAMTX_PRIVATE_HOST:-}"
     volumes:
       - ./normalize-camera.sh:/usr/local/bin/normalize-camera:ro
+      - ./scorecheck-ffmpeg-runner.sh:/usr/local/bin/scorecheck-ffmpeg-runner:ro
       - /var/lib/scorecheck-monitoring/ffmpeg:/monitoring/ffmpeg
     entrypoint: ["/usr/local/bin/normalize-camera"]

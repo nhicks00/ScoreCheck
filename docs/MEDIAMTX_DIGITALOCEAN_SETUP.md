@@ -10,10 +10,10 @@ Each camera has one permanent publishing identity and three consumer branches:
 
 | Path | Purpose |
 |---|---|
-| `courtN_raw` | Mevo/camera H.264 + AAC input |
-| `courtN_preview` | Clean, undelayed 720p H.264 + Opus WHEP preview |
+| `courtN_raw` | Permanent camera SRT input: Mevo HEVC or AVKANS H.264, plus AAC |
+| `courtN_preview` | Clean, undelayed 1080p H.264 + Opus WHEP commentary/inspection preview |
 | `courtN_monitor` | On-demand 360p/10 FPS low-bandwidth operator view |
-| `courtN_program` | Clean preview held by the program SRT delay |
+| `courtN_program` | Clean 1080p source held by the program SRT delay and consumed as buffered fMP4 HLS |
 | `courtN_calibration` | On-demand UTC-burned engineering view only |
 
 The program path stream-copies the normalized preview after the SRT receiver
@@ -31,26 +31,32 @@ Stream key:  court1_raw?user=streamrun&pass=<publish password>
 Change only the court number for courts 2 through 8. The publish password is in
 the existing gitignored local credentials, never in this document.
 
-Recommended starting camera profile:
+Production camera profiles:
 
 ```text
-1280x720, 30 fps
-H.264, 4 Mbps CBR or closest supported setting
-2 second keyframe interval
-AAC, 48 kHz, 128 kbps
+Mevo Core 1-2: encrypted SRT, HEVC, 1920x1080 at manifest-selected 30 or 60 fps
+AVKANS GO 3-8: encrypted SRT, H.264, 1920x1080 at 30 fps
+All cameras: progressive, square pixels, bounded two-second GOP, AAC 48 kHz stereo
 ```
+
+The admission gate verifies the resulting browser-safe source before coverage.
+Mevo HEVC is accepted only through its assigned isolated HEVC-to-H.264
+normalizer. AVKANS H.264 must be decodable and report valid geometry/profile;
+an H.264 label alone is not sufficient.
 
 ## Browser playback
 
 ```text
 Preview: https://preview.beachvolleyballmedia.com/court1_preview/whep
 Monitor: https://preview.beachvolleyballmedia.com/court1_monitor/whep
-Program: https://preview.beachvolleyballmedia.com/court1_program/whep
+Program: https://preview.beachvolleyballmedia.com/court1_program/index.m3u8
 ```
 
 The ScoreCheck application constructs these URLs from each active event's court
 rows. Commentary pages consume only preview paths; compositor pages consume only
-program paths.
+buffered program HLS paths. Program HLS keeps 15 two-second fMP4 segments and
+targets a 12-second live offset because continuity is more important than
+latency.
 
 ## Deployment
 

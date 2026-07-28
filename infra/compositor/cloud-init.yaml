@@ -74,6 +74,10 @@ runcmd:
   # Ubuntu's deferred firmware metadata job so it cannot create unowned work
   # or transient systemd children during a qualification window.
   - systemctl mask --now fwupd-refresh.timer fwupd-refresh.service || true
+  # Provisioning has already installed the event image's packages. Prevent
+  # unattended APT and PackageKit work from consuming CPU or creating transient
+  # children while this replaceable host is carrying live media.
+  - systemctl mask --now apt-daily.timer apt-daily.service apt-daily-upgrade.timer apt-daily-upgrade.service update-notifier-download.timer update-notifier-download.service packagekit.service apt-news.service esm-cache.service || true
   # ScoreCheck owns host telemetry during an event. Disable Ubuntu's redundant
   # sysstat jobs so sadc cannot introduce unowned work during qualification.
   - systemctl mask --now sysstat-collect.timer sysstat-collect.service sysstat-summary.timer sysstat-summary.service || true

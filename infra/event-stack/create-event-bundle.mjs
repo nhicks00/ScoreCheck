@@ -101,6 +101,10 @@ export async function createEventBundle(options, {
       };
   validateAnchorConfig(anchorConfig, manifest);
   const renderer = options.kind === "production" ? await loadRendererBinding(options.rendererBinding) : null;
+  const localRendererBundle = options.kind === "production"
+    ? join(dirname(options.rendererBinding), "local-renderer.tar.gz")
+    : null;
+  if (localRendererBundle) await assertProtectedFile(localRendererBundle, "local renderer bundle");
   const rehearsalVenueProfile = options.kind === "rehearsal" ? createSyntheticRehearsalVenueProfile(manifest.event) : null;
   const venueAdmission = options.kind === "production"
     ? await loadVenueAdmission(options.venueProfile, manifest.event)
@@ -132,6 +136,7 @@ export async function createEventBundle(options, {
         sourceDirectory: options.productionSource,
         directory: temporaryPaths.secrets,
         renderer,
+        localRendererBundle,
         venueProfile
       });
     }
@@ -189,6 +194,7 @@ export async function createEventBundle(options, {
       manifestSha256: sha256(await readFile(temporaryPaths.manifest)),
       eventProfileSha256: sha256(await readFile(temporaryPaths.eventProfile)),
       rendererBindingSha256: renderer ? sha256(await readFile(temporaryPaths.rendererBinding)) : null,
+      localRendererSha256: localRendererBundle ? sha256(await readFile(localRendererBundle)) : null,
       venueProfileSha256: sha256(await readFile(temporaryPaths.venueProfile)),
       initialCommentaryQualificationSha256: sha256(await readFile(temporaryPaths.commentaryQualification)),
       rehearsalProfileSha256: rehearsalProfile ? sha256(await readFile(temporaryPaths.rehearsalProfile)) : null,

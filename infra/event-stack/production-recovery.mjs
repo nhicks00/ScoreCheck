@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { chmod, copyFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+import { deriveOpaqueRtmpKey } from "../mediamtx/opaque-rtmp-key.mjs";
 import { loadProtectedEnv } from "./stack-deployer.mjs";
 import { readProductionDestinations } from "./production-youtube.mjs";
 import { validateRendererBinding } from "./renderer-binding.mjs";
@@ -18,6 +19,21 @@ const MATERIAL_SCHEMA_VERSION = 2;
 const LEGACY_SOURCE_SCHEMA_VERSION = 1;
 const LEGACY_MATERIAL_SCHEMA_VERSION = 1;
 const PRODUCTION_OUTPUT_PROFILES = Object.freeze(["1080p30", "1080p60"]);
+const LOCAL_RENDERER_ORIGIN = "http://renderer:3000";
+const LOCAL_RENDERER_RUNTIME_KEYS = Object.freeze([
+  "LIVEKIT_COMMENTARY_API_KEY",
+  "LIVEKIT_COMMENTARY_API_SECRET",
+  "MEDIAMTX_HLS_BASE_URL",
+  "MEDIAMTX_WHEP_BASE_URL",
+  "MONITOR_BROWSER_HEARTBEAT_SECRET",
+  "MONITOR_PUBLIC_URL",
+  "NEXT_PUBLIC_LIVEKIT_COMMENTARY_URL",
+  "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+  "NEXT_PUBLIC_SUPABASE_URL",
+  "PROGRAM_PAGE_TOKEN",
+  "SUPABASE_SERVICE_ROLE_KEY"
+]);
+const PRE_HLS_LOCAL_RENDERER_RUNTIME_KEYS = Object.freeze(LOCAL_RENDERER_RUNTIME_KEYS.filter((key) => key !== "MEDIAMTX_HLS_BASE_URL"));
 const SOURCE_FILES = Object.freeze([
   "material.json",
   "monitoring.env",
@@ -40,6 +56,7 @@ const REQUIRED_MONITORING_KEYS = Object.freeze([
   "HEALTHCHECKS_BASELINE_PING_URL",
   "HEALTHCHECKS_SENTINEL_PING_URL",
   "MONITOR_API_TOKEN",
+  "MONITOR_ROUTER_HEARTBEAT_TOKEN",
   "MONITOR_BROWSER_ALLOWED_ORIGINS",
   "MONITOR_BROWSER_HEARTBEAT_SECRET",
   "MONITOR_DASHBOARD_URL",
@@ -76,6 +93,11 @@ async function main() {
   }
   if (options.command === "refresh-monitoring") {
     const result = await refreshProductionRecoveryMonitoring(options);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+  if (options.command === "refresh-web-runtime") {
+    const result = await refreshProductionRecoveryWebRuntime(options);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
   }
@@ -238,6 +260,47 @@ export async function refreshProductionRecoveryMonitoring({ source, monitoringEn
   }
 }
 
+export async function refreshProductionRecoveryWebRuntime({ source, output }) {
+  const previous = await loadPreHlsProductionRecoverySource(source);
+  const refreshedWebRuntime = migrateWebRuntimeEnvironment(previous.webEnvironment);
+  const target = normalizedAbsolute(output, "production recovery source");
+  await assertProtectedParent(target);
+  await assertAbsent(target, "production recovery source");
+  const temporary = `${target}.rendering-${process.pid}`;
+  await rm(temporary, { recursive: true, force: true });
+  await mkdir(join(temporary, "wireguard"), { recursive: true, mode: 0o700 });
+  await chmod(temporary, 0o700);
+  await chmod(join(temporary, "wireguard"), 0o700);
+  try {
+    for (const name of SOURCE_FILES.filter((entry) => entry !== "web-runtime.env")) {
+      await copyFile(join(previous.root, name), join(temporary, name));
+      await chmod(join(temporary, name), 0o600);
+    }
+    await writeProtected(join(temporary, "web-runtime.env"), envFile(refreshedWebRuntime));
+    const marker = {
+      ...previous.marker,
+      createdAt: new Date().toISOString(),
+      webRuntimeMigratedFromSourceSha256: previous.sourceSha256,
+      hlsOriginSha256: sha256(Buffer.from(refreshedWebRuntime.MEDIAMTX_HLS_BASE_URL, "utf8")),
+      files: await hashesForFiles(temporary, SOURCE_FILES)
+    };
+    await writeProtected(join(temporary, "SOURCE_COMPLETE.json"), `${JSON.stringify(marker, null, 2)}\n`);
+    await rename(temporary, target);
+    await chmod(target, 0o700);
+    const loaded = await loadProductionRecoverySource(target);
+    return {
+      status: "PASS",
+      source: target,
+      schemaVersion: loaded.marker.schemaVersion,
+      fileCount: Object.keys(loaded.marker.files).length,
+      sourceSha256: loaded.sourceSha256
+    };
+  } catch (error) {
+    await rm(temporary, { recursive: true, force: true });
+    throw error;
+  }
+}
+
 export function migrateMonitoringEnvironment({ sourceEnvironment, currentEnvironment }) {
   requireEnvironment(sourceEnvironment, PRE_SENTINEL_MONITORING_KEYS);
   rejectTwilio(sourceEnvironment);
@@ -251,6 +314,19 @@ export function migrateMonitoringEnvironment({ sourceEnvironment, currentEnviron
     throw new Error("Healthchecks sentinel ping URL must not reuse a monitor dead-man URL");
   }
   return filterMonitoringEnvironment({ ...sourceEnvironment, HEALTHCHECKS_SENTINEL_PING_URL: sentinel });
+}
+
+export function migrateWebRuntimeEnvironment(sourceEnvironment) {
+  requireEnvironment(sourceEnvironment, PRE_HLS_LOCAL_RENDERER_RUNTIME_KEYS);
+  if (sourceEnvironment.MEDIAMTX_HLS_BASE_URL?.trim()) {
+    throw new Error("production recovery source already contains the HLS media origin");
+  }
+  const whep = new URL(required(sourceEnvironment, "MEDIAMTX_WHEP_BASE_URL"));
+  if (whep.protocol !== "https:" || whep.origin !== whep.href.replace(/\/$/u, "")) {
+    throw new Error("MEDIAMTX_WHEP_BASE_URL must be an exact HTTPS origin");
+  }
+  return Object.fromEntries(Object.entries({ ...sourceEnvironment, MEDIAMTX_HLS_BASE_URL: whep.origin })
+    .sort(([left], [right]) => left.localeCompare(right)));
 }
 
 export function migrateProductionMaterial({ legacyMaterial, destinations }) {
@@ -356,7 +432,15 @@ async function loadPreSentinelProductionRecoverySource(sourceDirectory) {
   return source;
 }
 
-async function loadProductionRecoverySourceWithKeys(sourceDirectory, monitoringKeys) {
+async function loadPreHlsProductionRecoverySource(sourceDirectory) {
+  const source = await loadProductionRecoverySourceWithKeys(sourceDirectory, REQUIRED_MONITORING_KEYS, PRE_HLS_LOCAL_RENDERER_RUNTIME_KEYS);
+  if (source.webEnvironment.MEDIAMTX_HLS_BASE_URL?.trim()) {
+    throw new Error("production recovery source already contains the HLS media origin");
+  }
+  return source;
+}
+
+async function loadProductionRecoverySourceWithKeys(sourceDirectory, monitoringKeys, webKeys = LOCAL_RENDERER_RUNTIME_KEYS) {
   const root = normalizedAbsolute(sourceDirectory, "production recovery source");
   await assertProtectedDirectory(root, "production recovery source");
   const marker = await readProtectedJson(join(root, "SOURCE_COMPLETE.json"), "production recovery marker");
@@ -380,7 +464,9 @@ async function loadProductionRecoverySourceWithKeys(sourceDirectory, monitoringK
   requireEnvironment(monitoringEnvironment, monitoringKeys);
   rejectTwilio(monitoringEnvironment);
   const sourceSha256 = sha256(Buffer.from(stableJson({ captureSha256: marker.captureSha256, files: marker.files }), "utf8"));
-  return { root, marker, material, monitoringEnvironment, sourceSha256 };
+  const webEnvironment = await loadProtectedEnv(join(root, "web-runtime.env"));
+  requireEnvironment(webEnvironment, webKeys);
+  return { root, marker, material, monitoringEnvironment, webEnvironment, sourceSha256 };
 }
 
 async function loadLegacyProductionRecoverySource(sourceDirectory) {
@@ -408,15 +494,32 @@ async function loadLegacyProductionRecoverySource(sourceDirectory) {
   return { root, marker, material, monitoringEnvironment, sourceSha256 };
 }
 
-export async function renderProductionSecretDirectory({ manifest, sourceDirectory, directory, renderer, venueProfile, random = randomBytes }) {
+export async function renderProductionSecretDirectory({
+  manifest,
+  sourceDirectory,
+  directory,
+  renderer,
+  localRendererBundle,
+  venueProfile,
+  random = randomBytes
+}) {
   if (manifest?.kind !== "production" || !Array.isArray(manifest.droplets) || manifest.droplets.length !== 12) {
     throw new Error("production secrets require the exact 12-Droplet production manifest");
   }
   const rendererBinding = validateRendererBinding(renderer);
+  const localBundle = normalizedAbsolute(localRendererBundle, "local renderer bundle");
+  await assertProtectedFile(localBundle, "local renderer bundle");
+  const localRendererSha256 = sha256(await readFile(localBundle));
   validateVenueProfile(venueProfile, manifest.event);
   const source = await loadProductionRecoverySource(sourceDirectory);
   const target = normalizedAbsolute(directory, "production secret directory");
-  const inputSha256 = sha256(Buffer.from(stableJson({ manifest, renderer: rendererBinding, venueProfile, sourceSha256: source.sourceSha256 }), "utf8"));
+  const inputSha256 = sha256(Buffer.from(stableJson({
+    manifest,
+    renderer: rendererBinding,
+    localRendererSha256,
+    venueProfile,
+    sourceSha256: source.sourceSha256
+  }), "utf8"));
   if (await exists(target)) {
     await verifyRenderedDirectory(target, inputSha256);
     return target;
@@ -424,17 +527,29 @@ export async function renderProductionSecretDirectory({ manifest, sourceDirector
   const root = `${target}.rendering`;
   await rm(root, { recursive: true, force: true });
   await mkdir(join(root, "compositors"), { recursive: true, mode: 0o700 });
+  await mkdir(join(root, "renderer"), { recursive: true, mode: 0o700 });
   await mkdir(join(root, "wireguard"), { recursive: true, mode: 0o700 });
   await chmod(root, 0o700);
   const agentTokens = Object.fromEntries(manifest.droplets.map((spec) => [spec.name, random(32).toString("base64url")]));
-  const files = buildProductionSecretFiles({ manifest, material: source.material, monitoringEnvironment: source.monitoringEnvironment, renderer: rendererBinding, venueProfile, agentTokens });
+  const files = buildProductionSecretFiles({
+    manifest,
+    material: source.material,
+    monitoringEnvironment: source.monitoringEnvironment,
+    webEnvironment: source.webEnvironment,
+    renderer: rendererBinding,
+    localRendererSha256,
+    venueProfile,
+    agentTokens
+  });
   try {
     for (const [name, body] of Object.entries(files)) await writeProtected(join(root, name), body);
+    await copyFile(localBundle, join(root, "renderer/local-renderer.tar.gz"));
+    await chmod(join(root, "renderer/local-renderer.tar.gz"), 0o600);
     for (const name of ["camera-lan.conf", "camera-lan.key", "camera-lan.pub"]) {
       await copyFile(join(source.root, "wireguard", name), join(root, "wireguard", name));
       await chmod(join(root, "wireguard", name), 0o600);
     }
-    const names = [...Object.keys(files), "wireguard/camera-lan.conf", "wireguard/camera-lan.key", "wireguard/camera-lan.pub"].sort();
+    const names = [...Object.keys(files), "renderer/local-renderer.tar.gz", "wireguard/camera-lan.conf", "wireguard/camera-lan.key", "wireguard/camera-lan.pub"].sort();
     const marker = { schemaVersion: 1, inputSha256, sourceSha256: source.sourceSha256, files: await hashesForFiles(root, names) };
     await writeProtected(join(root, "RENDER_COMPLETE.json"), `${JSON.stringify(marker, null, 2)}\n`);
     await rename(root, target);
@@ -447,32 +562,51 @@ export async function renderProductionSecretDirectory({ manifest, sourceDirector
   }
 }
 
-export function buildProductionSecretFiles({ manifest, material, monitoringEnvironment, renderer, venueProfile, agentTokens }) {
+export function buildProductionSecretFiles({
+  manifest,
+  material,
+  monitoringEnvironment,
+  webEnvironment,
+  renderer,
+  localRendererSha256,
+  venueProfile,
+  agentTokens
+}) {
   validateProductionMaterial(material);
   const rendererBinding = validateRendererBinding(renderer);
   const validatedVenueProfile = validateVenueProfile(venueProfile, manifest.event);
   const venueAdmission = evaluateVenueAdmission(validatedVenueProfile);
   if (!venueAdmission.passed) throw new Error(`production venue profile is not admitted: ${venueAdmission.problems.join("; ")}`);
   requireEnvironment(monitoringEnvironment, REQUIRED_MONITORING_KEYS);
+  requireEnvironment(webEnvironment, LOCAL_RENDERER_RUNTIME_KEYS);
+  if (!/^[a-f0-9]{64}$/u.test(localRendererSha256 ?? "")) throw new Error("local renderer bundle digest is invalid");
   rejectTwilio(monitoringEnvironment);
   const expectedNames = manifest.droplets.map((entry) => entry.name).sort();
   if (JSON.stringify(Object.keys(agentTokens ?? {}).sort()) !== JSON.stringify(expectedNames)) throw new Error("production agent tokens must exactly match the manifest");
   for (const [name, token] of Object.entries(agentTokens)) requireSecret(token, `${name} agent token`, 24);
   const observer = filterMonitoringEnvironment(monitoringEnvironment);
-  observer.MONITOR_BROWSER_ALLOWED_ORIGINS = rendererBinding.origin;
+  const mediaReader = derivedMediaReadCredentials(material.programPageToken);
+  observer.MONITOR_BROWSER_ALLOWED_ORIGINS = `${rendererBinding.origin},${LOCAL_RENDERER_ORIGIN}`;
   const output = {
     "agent-tokens.json": `${JSON.stringify({ schemaVersion: 1, tokens: agentTokens }, null, 2)}\n`,
     "commentary.env": envFile({
       LIVEKIT_COMMENTARY_API_KEY: material.commentary.apiKey,
       LIVEKIT_COMMENTARY_API_SECRET: material.commentary.apiSecret
     }),
+    "renderer.env": envFile(localRendererEnvironment(webEnvironment, rendererBinding, material.programPageToken)),
     "ingest.env": envFile(Object.fromEntries([
       ["MEDIAMTX_PROGRAM_DELAY_MS", "3500"],
+      ["MEDIAMTX_READ_USER", mediaReader.user],
+      ["MEDIAMTX_READ_PASS", mediaReader.password],
       ...COURTS.flatMap((court) => [
         [`MEDIAMTX_COURT_${court}_RAW_SOURCE`, "publisher"],
-        [`MEDIAMTX_COURT_${court}_BROWSER_SOURCE`, venueAdmission.assignments[court]?.sourcePathMode === "isolated-hevc-normalizer" ? "normalized" : "raw"],
+        [`MEDIAMTX_COURT_${court}_BROWSER_SOURCE`, venueAdmission.assignments[court]?.sourcePathMode === "isolated-browser-normalizer" ? "normalized" : "raw"],
         [`MEDIAMTX_COURT_${court}_PUBLISH_USER`, material.publishers[court].user],
-        [`MEDIAMTX_COURT_${court}_PUBLISH_PASS`, material.publishers[court].password]
+        [`MEDIAMTX_COURT_${court}_PUBLISH_PASS`, material.publishers[court].password],
+        ...(venueAdmission.assignments[court]?.sourceProtocol === "RTMP_LEGACY_APPROVED" ? [[
+          `MEDIAMTX_COURT_${court}_RTMP_PUBLISH_KEY`,
+          deriveOpaqueRtmpKey({ court, user: material.publishers[court].user, password: material.publishers[court].password })
+        ]] : [])
       ])
     ])),
     "observability.env": envFile(observer),
@@ -493,12 +627,20 @@ export function buildProductionSecretFiles({ manifest, material, monitoringEnvir
       compositor,
       programPageToken: material.programPageToken,
       renderer: rendererBinding,
+      localRendererSha256,
       assignment: venueAdmission.assignments[court] ?? null
     });
   }
   const spare = manifest.droplets.find((entry) => entry.role === "compositor-spare");
   if (!spare) throw new Error("production manifest has no warm spare");
-  output[`compositors/${spare.name}.env`] = compositorEnvironment({ court: null, compositor: material.compositors[1], programPageToken: material.programPageToken, renderer: rendererBinding, assignment: null });
+  output[`compositors/${spare.name}.env`] = compositorEnvironment({
+    court: null,
+    compositor: material.compositors[1],
+    programPageToken: material.programPageToken,
+    renderer: rendererBinding,
+    localRendererSha256,
+    assignment: null
+  });
   return output;
 }
 
@@ -550,12 +692,16 @@ function validateLegacyProductionMaterial(value) {
 
 function buildRecoveryWebEnvironment({ webEnvironment, monitoringEnvironment, material }) {
   const output = { ...webEnvironment };
+  const mediaReader = derivedMediaReadCredentials(material.programPageToken);
   output.PROGRAM_PAGE_TOKEN = material.programPageToken;
   output.MONITOR_API_TOKEN = required(monitoringEnvironment, "MONITOR_API_TOKEN");
+  output.MONITOR_ROUTER_HEARTBEAT_TOKEN = required(monitoringEnvironment, "MONITOR_ROUTER_HEARTBEAT_TOKEN");
   output.MONITOR_BROWSER_HEARTBEAT_SECRET = required(monitoringEnvironment, "MONITOR_BROWSER_HEARTBEAT_SECRET");
   output.MONITOR_PUBLIC_URL = `https://${required(monitoringEnvironment, "MONITOR_PUBLIC_HOST")}`;
   output.MEDIAMTX_RTMP_INGEST_BASE = output.MEDIAMTX_RTMP_INGEST_BASE
     || required(output, "MEDIAMTX_WHEP_BASE_URL").replace(/^https:/, "rtmp:");
+  output.MEDIAMTX_READ_USER = mediaReader.user;
+  output.MEDIAMTX_READ_PASS = mediaReader.password;
   output.LIVEKIT_COMMENTARY_API_KEY = material.commentary.apiKey;
   output.LIVEKIT_COMMENTARY_API_SECRET = material.commentary.apiSecret;
   return Object.fromEntries(Object.entries(output).sort(([left], [right]) => left.localeCompare(right)));
@@ -592,16 +738,21 @@ function legacyEncodingProfile(value) {
   return profile;
 }
 
-function compositorEnvironment({ court, compositor, programPageToken, renderer, assignment }) {
-  const normalizerEnabled = assignment?.sourcePathMode === "isolated-hevc-normalizer";
+function compositorEnvironment({ court, compositor, programPageToken, renderer, localRendererSha256, assignment }) {
+  const normalizerEnabled = assignment?.sourcePathMode === "isolated-browser-normalizer";
+  const mediaReader = derivedMediaReadCredentials(programPageToken);
   const values = {
     LIVEKIT_API_KEY: compositor.apiKey,
     LIVEKIT_API_SECRET: compositor.apiSecret,
     LIVEKIT_URL: "http://127.0.0.1:7880",
-    PROGRAM_PAGE_BASE_URL: `${renderer.origin}/program`,
+    PROGRAM_PAGE_BASE_URL: `${LOCAL_RENDERER_ORIGIN}/program`,
     PROGRAM_PAGE_TOKEN: programPageToken,
+    PROGRAM_RENDERER_RELEASE_ORIGIN: renderer.origin,
+    PROGRAM_RENDERER_BUNDLE_SHA256: localRendererSha256,
     PROGRAM_RENDERER_GIT_SHA: renderer.gitSha,
     PROGRAM_RENDERER_DEPLOYMENT_ID: renderer.deploymentId,
+    MEDIAMTX_READ_USER: mediaReader.user,
+    MEDIAMTX_READ_PASS: mediaReader.password,
     YOUTUBE_RTMPS_BASE: compositor.rtmpsBase,
     YOUTUBE_STREAM_RESOLUTION: compositor.youtubeResolution,
     YOUTUBE_STREAM_FRAME_RATE: compositor.youtubeFrameRate,
@@ -620,6 +771,34 @@ function compositorEnvironment({ court, compositor, programPageToken, renderer, 
     } : {})
   };
   return envFile(values);
+}
+
+export function derivedMediaReadCredentials(programPageToken) {
+  const token = requireSecret(programPageToken, "program-page token", 24);
+  return {
+    user: "scorecheck_event_reader",
+    password: createHmac("sha256", token).update("scorecheck-derived-media-v1", "utf8").digest("base64url")
+  };
+}
+
+function localRendererEnvironment(webEnvironment, renderer, programPageToken) {
+  const selected = Object.fromEntries(LOCAL_RENDERER_RUNTIME_KEYS.map((key) => [key, required(webEnvironment, key)]));
+  const mediaReader = derivedMediaReadCredentials(programPageToken);
+  return {
+    ...selected,
+    MEDIAMTX_READ_USER: mediaReader.user,
+    MEDIAMTX_READ_PASS: mediaReader.password,
+    HOSTNAME: "0.0.0.0",
+    PORT: "3000",
+    NODE_ENV: "production",
+    SCORECHECK_LOCAL_RENDERER: "true",
+    SCORECHECK_PROGRAM_CACHE_DIR: "/var/lib/scorecheck-renderer",
+    VERCEL_GIT_COMMIT_SHA: renderer.gitSha,
+    NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA: renderer.gitSha,
+    VERCEL_DEPLOYMENT_ID: renderer.deploymentId,
+    VERCEL_URL: new URL(renderer.origin).hostname,
+    NEXT_PUBLIC_VERCEL_URL: new URL(renderer.origin).hostname
+  };
 }
 
 async function verifyProtectedCapture(rootValue) {
@@ -699,7 +878,7 @@ async function assertAbsent(path, label) {
 function parseArgs(argv) {
   const command = argv[0];
   if ([undefined, "help", "-h", "--help"].includes(command)) return null;
-  if (!new Set(["capture", "migrate-youtube", "refresh-monitoring", "verify"]).has(command)) throw new Error("command must be capture, migrate-youtube, refresh-monitoring, or verify");
+  if (!new Set(["capture", "migrate-youtube", "refresh-monitoring", "refresh-web-runtime", "verify"]).has(command)) throw new Error("command must be capture, migrate-youtube, refresh-monitoring, refresh-web-runtime, or verify");
   const options = { command, captureRoot: null, output: null, source: null, destinations: null, monitoringEnvironment: null };
   const mapping = new Map([["--capture-root", "captureRoot"], ["--output", "output"], ["--source", "source"], ["--destinations", "destinations"], ["--monitoring-env", "monitoringEnvironment"]]);
   for (let index = 1; index < argv.length; index += 1) {
@@ -712,12 +891,13 @@ function parseArgs(argv) {
   if (command === "capture" && (!options.captureRoot || !options.output || options.source || options.destinations || options.monitoringEnvironment)) throw new Error("capture requires --capture-root and --output");
   if (command === "migrate-youtube" && (!options.source || !options.destinations || !options.output || options.captureRoot || options.monitoringEnvironment)) throw new Error("migrate-youtube requires --source, --destinations, and --output");
   if (command === "refresh-monitoring" && (!options.source || !options.monitoringEnvironment || !options.output || options.captureRoot || options.destinations)) throw new Error("refresh-monitoring requires --source, --monitoring-env, and --output");
+  if (command === "refresh-web-runtime" && (!options.source || !options.output || options.captureRoot || options.destinations || options.monitoringEnvironment)) throw new Error("refresh-web-runtime requires --source and --output");
   if (command === "verify" && (!options.source || options.captureRoot || options.output || options.destinations || options.monitoringEnvironment)) throw new Error("verify requires --source");
   return options;
 }
 
 function usage() {
-  process.stdout.write("Usage:\n  node infra/event-stack/production-recovery.mjs capture --capture-root /PROTECTED/CAPTURE --output /PROTECTED/SOURCE\n  node infra/event-stack/production-recovery.mjs migrate-youtube --source /PROTECTED/V1-SOURCE --destinations /PROTECTED/destinations.json --output /PROTECTED/V2-SOURCE\n  node infra/event-stack/production-recovery.mjs refresh-monitoring --source /PROTECTED/V2-SOURCE --monitoring-env /PROTECTED/monitoring.env --output /PROTECTED/REFRESHED-SOURCE\n  node infra/event-stack/production-recovery.mjs verify --source /PROTECTED/SOURCE\n");
+  process.stdout.write("Usage:\n  node infra/event-stack/production-recovery.mjs capture --capture-root /PROTECTED/CAPTURE --output /PROTECTED/SOURCE\n  node infra/event-stack/production-recovery.mjs migrate-youtube --source /PROTECTED/V1-SOURCE --destinations /PROTECTED/destinations.json --output /PROTECTED/V2-SOURCE\n  node infra/event-stack/production-recovery.mjs refresh-monitoring --source /PROTECTED/V2-SOURCE --monitoring-env /PROTECTED/monitoring.env --output /PROTECTED/REFRESHED-SOURCE\n  node infra/event-stack/production-recovery.mjs refresh-web-runtime --source /PROTECTED/PRE-HLS-SOURCE --output /PROTECTED/REFRESHED-SOURCE\n  node infra/event-stack/production-recovery.mjs verify --source /PROTECTED/SOURCE\n");
 }
 
 function envFile(values) {

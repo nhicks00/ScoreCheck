@@ -229,7 +229,7 @@ async function productionSourceFixture(parent) {
   };
   const requiredMonitoring = [
     "ALERTMANAGER_WEBHOOK_TOKEN", "HEALTHCHECKS_ACTIVE_CHECK_ID", "HEALTHCHECKS_ACTIVE_PING_URL", "HEALTHCHECKS_API_KEY",
-    "HEALTHCHECKS_BASELINE_CHECK_ID", "HEALTHCHECKS_BASELINE_PING_URL", "HEALTHCHECKS_SENTINEL_PING_URL", "MONITOR_API_TOKEN", "MONITOR_BROWSER_ALLOWED_ORIGINS",
+    "HEALTHCHECKS_BASELINE_CHECK_ID", "HEALTHCHECKS_BASELINE_PING_URL", "HEALTHCHECKS_SENTINEL_PING_URL", "MONITOR_API_TOKEN", "MONITOR_ROUTER_HEARTBEAT_TOKEN", "MONITOR_BROWSER_ALLOWED_ORIGINS",
     "MONITOR_BROWSER_HEARTBEAT_SECRET", "MONITOR_DASHBOARD_URL", "MONITOR_PUBLIC_HOST", "PUSHOVER_APP_TOKEN", "PUSHOVER_USER_KEY",
     "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_URL", "YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_REFRESH_TOKEN"
   ];
@@ -237,7 +237,19 @@ async function productionSourceFixture(parent) {
   const files = {
     "material.json": `${JSON.stringify(material, null, 2)}\n`,
     "monitoring.env": monitoring,
-    "web-runtime.env": "PROGRAM_PAGE_TOKEN=\"program-page-token-abcdefghijklmnopqrstuvwxyz\"\n",
+    "web-runtime.env": [
+      'LIVEKIT_COMMENTARY_API_KEY="commentary-key-123"',
+      'LIVEKIT_COMMENTARY_API_SECRET="commentary-secret-abcdefghijklmnopqrstuvwxyz"',
+      'MEDIAMTX_HLS_BASE_URL="https://preview.example.test"',
+      'MEDIAMTX_WHEP_BASE_URL="https://preview.example.test"',
+      'MONITOR_BROWSER_HEARTBEAT_SECRET="monitor-browser-secret-abcdefghijklmnopqrstuvwxyz"',
+      'MONITOR_PUBLIC_URL="https://monitor.example.test"',
+      'NEXT_PUBLIC_LIVEKIT_COMMENTARY_URL="wss://rtc.example.test"',
+      'NEXT_PUBLIC_SUPABASE_ANON_KEY="anon-key-abcdefghijklmnopqrstuvwxyz"',
+      'NEXT_PUBLIC_SUPABASE_URL="https://project.supabase.co"',
+      'PROGRAM_PAGE_TOKEN="program-page-token-abcdefghijklmnopqrstuvwxyz"',
+      'SUPABASE_SERVICE_ROLE_KEY="service-role-abcdefghijklmnopqrstuvwxyz"'
+    ].join("\n") + "\n",
     "wireguard/camera-lan.conf": "[Interface]\nAddress = 10.89.0.1/24\nListenPort = 51820\nPrivateKey = protected\n\n[Peer]\nPublicKey = protected\nAllowedIPs = 10.89.0.2/32, 192.168.8.0/24\n",
     "wireguard/camera-lan.key": "protected-private-key\n",
     "wireguard/camera-lan.pub": "protected-public-key\n"
@@ -266,8 +278,9 @@ async function rendererBindingFixture(parent) {
       programSession: "program-session-v1",
       overlayState: "overlay-state-v1",
       commentary: "commentary-v1",
-      browserHeartbeat: "browser-heartbeat-v5"
+      browserHeartbeat: "browser-heartbeat-v6"
     }
   }, null, 2)}\n`, { mode: 0o600 });
+  await writeFile(join(parent, "local-renderer.tar.gz"), "local renderer fixture\n", { mode: 0o600 });
   return path;
 }

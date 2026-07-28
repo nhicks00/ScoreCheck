@@ -451,6 +451,7 @@ function validateProductionRendererEnvironment(value, expectedOrigin) {
   const expected = [
     "LIVEKIT_COMMENTARY_API_KEY",
     "LIVEKIT_COMMENTARY_API_SECRET",
+    "MEDIAMTX_HLS_BASE_URL",
     "MEDIAMTX_WHEP_BASE_URL",
     "MONITOR_BROWSER_HEARTBEAT_SECRET",
     "MONITOR_PUBLIC_URL",

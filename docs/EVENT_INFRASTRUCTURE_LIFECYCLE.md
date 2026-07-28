@@ -612,7 +612,7 @@ and ICMP while ingress stays role-scoped. Required outbound purposes are:
 | Every host during provisioning | DNS, NTP, Ubuntu and container registries; public TLS roles also require ACME |
 | Ingest | Camera return traffic, private compositor/monitor traffic, and certificate issuance |
 | Commentary | LiveKit ICE/TURN traffic, private monitoring, and certificate issuance |
-| Compositor | Private ingest WHEP/RTSP, pinned renderer and Supabase HTTPS/WSS, monitoring, LiveKit commentary, and YouTube RTMPS |
+| Compositor | Private ingest HLS/RTSP, pinned renderer and Supabase HTTPS/WSS, monitoring, LiveKit commentary, and YouTube RTMPS |
 | Observability | Private agent collection plus Supabase, Pushover, Healthchecks, YouTube API/watch probes, and bounded public sentinels |
 
 This is an explicit reliability tradeoff, not an assertion that unrestricted
@@ -635,6 +635,25 @@ credentials. The renderer's generated deployment origin, Git SHA, deployment
 ID, and browser contracts are captured in the protected output. Never weaken
 the shared application project's Vercel Authentication to make its generated
 deployment URLs usable by Egress.
+
+Recovery sources captured before buffered HLS do not contain the required HLS
+origin. Migrate such a source once, while provider compute is zero, rather than
+editing protected environment files or checksum markers by hand:
+
+```bash
+node infra/event-stack/production-recovery.mjs refresh-web-runtime \
+  --source /absolute/protected/pre-hls-production-source \
+  --output /absolute/protected/current-production-source
+```
+
+The command derives the HLS origin from the already protected exact HTTPS WHEP
+origin, copies every other protected input unchanged, rewrites the integrity
+marker, and verifies the complete current recovery contract.
+
+Apply migration `031_buffered_program_commentary_timing.sql` before deploying
+the buffered-HLS renderer. It widens only program-heartbeat timing evidence to
+the same 30000 ms bound as the browser DelayNode; the persisted human
+commentary fallback remains constrained to 0-10000 ms.
 
 ```bash
 node infra/event-stack/production-renderer.mjs prepare \
@@ -790,7 +809,8 @@ weak permissions, malformed HTTPS, or a pre-existing destination.
 The compositor pool uses one SFO2 premium Intel 8-vCPU/16-GiB host per camera
 plus one warm spare. Start no public output merely because the 12-host stack is
 ready. While lifecycle phase is still `ready`, qualify physical camera input,
-the isolated HEVC normalizer where assigned, and actual local-only 1080 output:
+the isolated browser normalizer where assigned, and actual local-only 1080
+output:
 
 ```bash
 node infra/event-stack/production-media-prequalification.mjs run \

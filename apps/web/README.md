@@ -32,7 +32,10 @@ MediaMTX preview video requires (see `../../docs/MEDIAMTX_DIGITALOCEAN_SETUP.md`
 - optional `MEDIAMTX_RTMP_INGEST_BASE` for setup scripts and StreamRun paste sheets
 - explicit per-court `preview_stream_path` and `program_stream_path` values in Supabase; defaults are `court{n}_preview` and `court{n}_program`
 
-Players connect over WHEP (sub-second WebRTC) first and fall back to LL-HLS. Because the production site is https, the MediaMTX base URLs must be https in production or browsers will block them as mixed content.
+Commentary and selected inspection players use WHEP. The long-running program
+renderer uses conservative buffered HLS only; it does not fall back to WHEP.
+Because the production site is HTTPS, the MediaMTX base URLs must be HTTPS in
+production or browsers will block them as mixed content.
 
 ## Setup
 

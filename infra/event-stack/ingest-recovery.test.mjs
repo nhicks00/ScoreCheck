@@ -334,7 +334,7 @@ function passingPlatform(calls) {
 
 function outputOwner(camera) {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     event: "recovery-event",
     court: camera,
     destinationId: `broadcast-${camera}`,
@@ -343,6 +343,9 @@ function outputOwner(camera) {
     outputProfile: "1080p30",
     rendererGitSha: "a".repeat(40),
     rendererDeploymentId: "dpl_test123",
+    rendererRuntimeOrigin: "http://renderer:3000",
+    rendererReleaseOrigin: "https://scorecheck-test.vercel.app",
+    rendererBundleSha256: "c".repeat(64),
     egressId: `EG_test${camera}`,
     requestSha256: "b".repeat(64),
     startedAt: "2026-07-21T11:59:00.000Z"

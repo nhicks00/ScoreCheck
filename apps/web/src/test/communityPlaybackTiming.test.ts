@@ -92,9 +92,9 @@ describe("community playback timing evidence", () => {
     expect(evidence.qualification.blockedReason).toBe("media_not_ready");
   });
 
-  it("permits HLS only for non-authoritative preview mode", () => {
-    expect(playbackModeAllowsHls("preview")).toBe(true);
-    expect(playbackModeAllowsHls("program")).toBe(false);
+  it("permits HLS only for program while keeping preview and scoring on WHEP", () => {
+    expect(playbackModeAllowsHls("preview")).toBe(false);
+    expect(playbackModeAllowsHls("program")).toBe(true);
     expect(playbackModeAllowsHls("scoring")).toBe(false);
   });
 

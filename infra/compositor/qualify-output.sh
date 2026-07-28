@@ -40,11 +40,12 @@ case "$OUTPUT_PROFILE" in
 esac
 EGRESS_AUDIO_BITRATE=128
 EGRESS_AUDIO_FREQUENCY=48000
+FFPROBE_IMAGE="bluenviron/mediamtx:1.19.2-ffmpeg@sha256:08c837deb7bac85d509e2a4c2737308e5a34f8f084a46a0d8793cdb0579a6e5d"
 
 load_env
 require_livekit_env
 find_lk
-for command in docker flock jq stat; do
+for command in curl docker flock jq stat; do
   command -v "$command" >/dev/null 2>&1 || {
     echo "error: $command is required for output conformance." >&2
     exit 1
@@ -60,13 +61,18 @@ else
 fi
 : "${PROGRAM_PAGE_BASE_URL:?set PROGRAM_PAGE_BASE_URL in .env}"
 : "${PROGRAM_PAGE_TOKEN:?set PROGRAM_PAGE_TOKEN in .env}"
+: "${PROGRAM_RENDERER_RELEASE_ORIGIN:?set PROGRAM_RENDERER_RELEASE_ORIGIN in .env}"
+: "${PROGRAM_RENDERER_BUNDLE_SHA256:?set PROGRAM_RENDERER_BUNDLE_SHA256 in .env}"
 : "${PROGRAM_RENDERER_GIT_SHA:?set PROGRAM_RENDERER_GIT_SHA in .env}"
 : "${PROGRAM_RENDERER_DEPLOYMENT_ID:?set PROGRAM_RENDERER_DEPLOYMENT_ID in .env}"
-if ! [[ "$PROGRAM_PAGE_BASE_URL" =~ ^https://[a-z0-9-]+\.vercel\.app/program$ ]]; then
-  echo "error: PROGRAM_PAGE_BASE_URL must use the immutable generated Vercel deployment URL ending in /program." >&2
+if [[ "$PROGRAM_PAGE_BASE_URL" != "http://renderer:3000/program" ]]; then
+  echo "error: PROGRAM_PAGE_BASE_URL must use the event-local renderer service." >&2
   exit 1
 fi
-if ! [[ "$PROGRAM_RENDERER_GIT_SHA" =~ ^[a-f0-9]{40}$ ]] || ! [[ "$PROGRAM_RENDERER_DEPLOYMENT_ID" =~ ^dpl_[A-Za-z0-9]+$ ]]; then
+if ! [[ "$PROGRAM_RENDERER_RELEASE_ORIGIN" =~ ^https://[a-z0-9-]+\.vercel\.app$ ]] \
+  || ! [[ "$PROGRAM_RENDERER_BUNDLE_SHA256" =~ ^[a-f0-9]{64}$ ]] \
+  || ! [[ "$PROGRAM_RENDERER_GIT_SHA" =~ ^[a-f0-9]{40}$ ]] \
+  || ! [[ "$PROGRAM_RENDERER_DEPLOYMENT_ID" =~ ^dpl_[A-Za-z0-9]+$ ]]; then
   echo "error: renderer identity is invalid." >&2
   exit 1
 fi
@@ -78,6 +84,8 @@ OUTPUT_NAME="court-${COURT}-${OUTPUT_PROFILE}.mp4"
 HOST_OUTPUT="$HOST_OUTPUT_DIR/$OUTPUT_NAME"
 CONTAINER_OUTPUT="$CONTAINER_OUTPUT_DIR/$OUTPUT_NAME"
 REPORT="$HOST_OUTPUT_DIR/court-${COURT}-${OUTPUT_PROFILE}.capture.json"
+PROBE_REPORT="$HOST_OUTPUT_DIR/court-${COURT}-${OUTPUT_PROFILE}.ffprobe.json"
+PROBE_SUMMARY="$HOST_OUTPUT_DIR/court-${COURT}-${OUTPUT_PROFILE}.conformance.json"
 mkdir -p "$REQ_DIR"
 install -d -m 0770 "$COMPOSITOR_DIR/evidence" "$HOST_OUTPUT_DIR"
 
@@ -104,6 +112,7 @@ ACTIVE_FILE="$(mktemp "$REQ_DIR/.active-egress.XXXXXX")"
 START_LOG="$(mktemp "$REQ_DIR/.conformance-start.XXXXXX")"
 STOP_LOG="$(mktemp "$REQ_DIR/.conformance-stop.XXXXXX")"
 REQ_FILE="$(mktemp "$REQ_DIR/.conformance-request.XXXXXX")"
+RENDERER_BINDING_FILE="$(mktemp "$REQ_DIR/.renderer-binding.XXXXXX")"
 EGRESS_ID=""
 stopped=0
 START_ATTEMPTS=0
@@ -213,7 +222,7 @@ cleanup() {
   if [[ -n "$EGRESS_ID" && "$stopped" -eq 0 ]]; then
     stop_and_prove_idle "$EGRESS_ID" || cleanup_status=1
   fi
-  rm -f "$ACTIVE_FILE" "$START_LOG" "$STOP_LOG" "$REQ_FILE"
+  rm -f "$ACTIVE_FILE" "$START_LOG" "$STOP_LOG" "$REQ_FILE" "$RENDERER_BINDING_FILE"
   if (( cleanup_status != 0 )); then
     echo "error: output-conformance cleanup could not prove the compositor idle." >&2
     exit 1
@@ -221,6 +230,26 @@ cleanup() {
   exit "$original_status"
 }
 trap cleanup EXIT
+
+if ! curl -fsS --max-time 5 http://127.0.0.1:3000/api/program/renderer-binding >"$RENDERER_BINDING_FILE" \
+  || ! jq -e \
+    --arg origin "$PROGRAM_RENDERER_RELEASE_ORIGIN" \
+    --arg gitSha "$PROGRAM_RENDERER_GIT_SHA" \
+    --arg deploymentId "$PROGRAM_RENDERER_DEPLOYMENT_ID" '
+      .schemaVersion == 1
+      and .provider == "vercel"
+      and .origin == $origin
+      and .gitSha == $gitSha
+      and .deploymentId == $deploymentId
+      and .assetNamespace == $deploymentId
+      and .contracts.programSession == "program-session-v1"
+      and .contracts.overlayState == "overlay-state-v1"
+      and .contracts.commentary == "commentary-v1"
+      and .contracts.browserHeartbeat == "browser-heartbeat-v6"
+    ' "$RENDERER_BINDING_FILE" >/dev/null; then
+  echo "error: event-local renderer binding does not match the admitted artifact." >&2
+  exit 1
+fi
 
 if ! refresh_active; then
   echo "error: could not verify active Egress count." >&2
@@ -334,6 +363,68 @@ if [[ ! -s "$HOST_OUTPUT" ]]; then
   exit 1
 fi
 chmod 600 "$HOST_OUTPUT"
+if ! docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+  -v "$HOST_OUTPUT_DIR:/evidence:ro" \
+  --entrypoint ffprobe "$FFPROBE_IMAGE" \
+  -v error -print_format json \
+  -show_entries 'stream=index,codec_type,codec_name,profile,width,height,pix_fmt,field_order,color_space,color_transfer,color_primaries,avg_frame_rate,bit_rate,sample_rate,channels:format=duration,bit_rate:frame=stream_index,key_frame,best_effort_timestamp_time' \
+  -show_streams -show_format -show_frames "/evidence/$OUTPUT_NAME" >"$PROBE_REPORT"; then
+  echo "error: actual output sample could not be inspected." >&2
+  exit 1
+fi
+chmod 600 "$PROBE_REPORT"
+if ! jq -e \
+  --argjson expectedFps "$EGRESS_FRAMERATE" \
+  --argjson targetVideoKbps "$EGRESS_VIDEO_BITRATE" '
+    def ratio:
+      split("/") as $parts
+      | ($parts[0] | tonumber) / ($parts[1] | tonumber);
+    (.streams | map(select(.codec_type == "video"))) as $videos
+    | (.streams | map(select(.codec_type == "audio"))) as $audios
+    | ($videos[0]) as $video
+    | ($audios[0]) as $audio
+    | ([.frames[]? | select(.stream_index == $video.index and .key_frame == 1) | .best_effort_timestamp_time | tonumber]) as $keyframes
+    | ([range(1; $keyframes | length) | $keyframes[.] - $keyframes[.-1]]) as $keyframeGaps
+    | {
+        videoCodec: $video.codec_name,
+        videoProfile: $video.profile,
+        width: $video.width,
+        height: $video.height,
+        pixelFormat: $video.pix_fmt,
+        fieldOrder: $video.field_order,
+        colorSpace: $video.color_space,
+        colorTransfer: $video.color_transfer,
+        colorPrimaries: $video.color_primaries,
+        framesPerSecond: ($video.avg_frame_rate | ratio),
+        videoBitrateKbps: (($video.bit_rate | tonumber) / 1000),
+        audioCodec: $audio.codec_name,
+        audioChannels: $audio.channels,
+        audioSampleRateHz: ($audio.sample_rate | tonumber),
+        audioBitrateKbps: (($audio.bit_rate | tonumber) / 1000),
+        durationSeconds: (.format.duration | tonumber),
+        keyFrameCount: ($keyframes | length),
+        maximumKeyFrameGapSeconds: ($keyframeGaps | max // 0)
+      }
+    | . as $summary
+    | if ($videos | length) != 1 or ($audios | length) != 1
+        or .videoCodec != "h264" or .videoProfile != "High"
+        or .width != 1920 or .height != 1080
+        or .pixelFormat != "yuv420p" or .fieldOrder != "progressive"
+        or .colorSpace != "bt709" or .colorTransfer != "bt709" or .colorPrimaries != "bt709"
+        or ((.framesPerSecond - $expectedFps) | fabs) > 0.5
+        or .videoBitrateKbps < ($targetVideoKbps * 0.6) or .videoBitrateKbps > ($targetVideoKbps * 1.25)
+        or .audioCodec != "aac" or .audioChannels != 2 or .audioSampleRateHz != 48000
+        or .audioBitrateKbps < 64 or .audioBitrateKbps > 192
+        or .durationSeconds < 15
+        or .keyFrameCount < 5 or .maximumKeyFrameGapSeconds > 2.25
+      then error("actual output does not satisfy the 1080p YouTube conformance contract")
+      else $summary end
+  ' "$PROBE_REPORT" >"$PROBE_SUMMARY"; then
+  chmod 600 "$PROBE_SUMMARY" 2>/dev/null || true
+  echo "error: actual output sample failed conformance; preserve the ffprobe evidence." >&2
+  exit 1
+fi
+chmod 600 "$PROBE_SUMMARY"
 FILE_SHA256="$("${SHA256_COMMAND[@]}" "$HOST_OUTPUT" | awk '{print $1}')"
 FILE_SIZE="$(stat -c '%s' "$HOST_OUTPUT" 2>/dev/null || stat -f '%z' "$HOST_OUTPUT")"
 CAPTURED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -358,6 +449,7 @@ jq -n \
   --argjson recoveredStartingStall "$([[ "$STARTING_STALLS" -gt 0 ]] && printf true || printf false)" \
   --argjson attempts "$ATTEMPTS_JSON" \
   --argjson sizeBytes "$FILE_SIZE" \
-  '{schemaVersion:1,evidenceId:$evidenceId,capturedAt:$capturedAt,court:$court,profile:$profile,egressId:$egressId,renderer:{gitSha:$rendererGitSha,deploymentId:$rendererDeploymentId},encoding:{width:$width,height:$height,framesPerSecond:$framesPerSecond,audioCodec:"AAC",audioTargetBitrateKbps:$audioTargetBitrateKbps,audioSampleRateHz:$audioSampleRateHz,videoCodec:"H264_HIGH",videoTargetBitrateKbps:$videoTargetBitrateKbps,keyFrameIntervalSeconds:$keyFrameIntervalSeconds},startup:{startAttempts:$startAttempts,recoveredStartingStall:$recoveredStartingStall,attempts:$attempts},remotePath:$remotePath,sha256:$sha256,sizeBytes:$sizeBytes}' >"$REPORT"
+  --slurpfile actual "$PROBE_SUMMARY" \
+  '{schemaVersion:2,evidenceId:$evidenceId,capturedAt:$capturedAt,court:$court,profile:$profile,egressId:$egressId,renderer:{gitSha:$rendererGitSha,deploymentId:$rendererDeploymentId},requestedEncoding:{width:$width,height:$height,framesPerSecond:$framesPerSecond,audioCodec:"AAC",audioTargetBitrateKbps:$audioTargetBitrateKbps,audioSampleRateHz:$audioSampleRateHz,videoCodec:"H264_HIGH",videoTargetBitrateKbps:$videoTargetBitrateKbps,keyFrameIntervalSeconds:$keyFrameIntervalSeconds},actualEncoding:$actual[0],startup:{startAttempts:$startAttempts,recoveredStartingStall:$recoveredStartingStall,attempts:$attempts},remotePath:$remotePath,sha256:$sha256,sizeBytes:$sizeBytes}' >"$REPORT"
 chmod 600 "$REPORT"
 cat "$REPORT"

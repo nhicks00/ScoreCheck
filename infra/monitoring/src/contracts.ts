@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const MONITORING_CONTRACT_VERSION = 5 as const;
+export const MONITORING_CONTRACT_VERSION = 6 as const;
 
 export const AGENT_ROLES = [
   "mediamtx",
@@ -170,6 +170,55 @@ export const nativeServiceSnapshotSchema = z.object({
 }).strict();
 export type NativeServiceSnapshot = z.infer<typeof nativeServiceSnapshotSchema>;
 
+export const EGRESS_SUPERVISOR_STATUSES = [
+  "BUSY",
+  "STOP_INTENT",
+  "CONTROL_UNAVAILABLE",
+  "IDLE",
+  "OWNERLESS_ACTIVE",
+  "AMBIGUOUS_OWNER",
+  "INVALID_OWNER",
+  "HEALTHY",
+  "AMBIGUOUS_ACTIVE",
+  "MISSING_PENDING",
+  "RECOVERY_EXHAUSTED",
+  "RECOVERING",
+  "RECOVERY_FAILED",
+  "RECOVERED"
+] as const;
+
+export const egressSupervisorSnapshotSchema = z.object({
+  schemaVersion: z.literal(1),
+  generationKey: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
+  missingCount: z.number().int().nonnegative().max(1_000),
+  recoveryAttempts: z.number().int().nonnegative().max(1_000),
+  status: z.enum(EGRESS_SUPERVISOR_STATUSES),
+  detail: z.string().min(1).max(240),
+  court: z.number().int().min(1).max(8).nullable(),
+  egressId: z.string().regex(/^EG_[A-Za-z0-9]+$/).nullable(),
+  observedAt: isoDate
+}).strict();
+export type EgressSupervisorSnapshot = z.infer<typeof egressSupervisorSnapshotSchema>;
+
+export const PROGRAM_WARMER_STATUSES = ["IDLE", "WARM", "WAITING", "STOPPED"] as const;
+
+export const programWarmerSnapshotSchema = z.object({
+  schemaVersion: z.literal(1),
+  court: z.number().int().min(1).max(8).nullable(),
+  status: z.enum(PROGRAM_WARMER_STATUSES),
+  ffmpegPid: z.number().int().positive().nullable(),
+  restartCount: z.number().int().nonnegative().max(1_000_000),
+  observedAt: isoDate
+}).strict().superRefine((value, context) => {
+  if (value.status === "WARM" && value.ffmpegPid === null) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["ffmpegPid"], message: "A warm branch requires its FFmpeg process id." });
+  }
+  if (value.status !== "WARM" && value.ffmpegPid !== null) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["ffmpegPid"], message: "Only a warm branch may report an FFmpeg process id." });
+  }
+});
+export type ProgramWarmerSnapshot = z.infer<typeof programWarmerSnapshotSchema>;
+
 export const browserHeartbeatPayloadSchema = z.object({
   version: z.literal(MONITORING_CONTRACT_VERSION),
   credentialId: z.string().uuid(),
@@ -191,6 +240,7 @@ export const browserHeartbeatPayloadSchema = z.object({
     rttMs: z.number().nonnegative().max(60_000).nullable(),
     jitterMs: z.number().nonnegative().max(60_000).nullable().default(null),
     jitterBufferMs: z.number().nonnegative().max(60_000).nullable(),
+    playoutDelayMs: z.number().nonnegative().max(60_000).nullable().default(null),
     packetsLost: z.number().int().nonnegative().nullable(),
     packetsReceived: z.number().int().nonnegative().nullable(),
     framesReceived: z.number().int().nonnegative().nullable().default(null),
@@ -204,6 +254,12 @@ export const browserHeartbeatPayloadSchema = z.object({
     nackCount: z.number().int().nonnegative().nullable().default(null),
     pliCount: z.number().int().nonnegative().nullable().default(null),
     firCount: z.number().int().nonnegative().nullable().default(null),
+    bufferedAheadMs: z.number().nonnegative().max(60_000).nullable(),
+    bufferedRangeCount: z.number().int().nonnegative().max(1_024).nullable(),
+    hlsCreatedInstances: z.number().int().nonnegative().nullable(),
+    hlsDestroyedInstances: z.number().int().nonnegative().nullable(),
+    hlsActiveInstances: z.number().int().nonnegative().max(1_024).nullable(),
+    jsHeapUsedBytes: z.number().int().nonnegative().nullable(),
     reconnectCount: z.number().int().nonnegative(),
     reloadCount: z.number().int().nonnegative()
   }).strict(),
@@ -243,9 +299,9 @@ export const browserHeartbeatPayloadSchema = z.object({
     cameraClippedSampleRatio: z.number().min(0).max(1).nullable().default(null),
     secondsSinceCameraAudio: z.number().nonnegative().max(86_400).nullable().default(null),
     syncStatus: z.enum(["fallback", "calibrating", "locked"]),
-    configuredDelayMs: z.number().nonnegative().max(10_000).nullable(),
-    targetDelayMs: z.number().nonnegative().max(10_000).nullable(),
-    appliedDelayMs: z.number().nonnegative().max(10_000).nullable(),
+    configuredDelayMs: z.number().nonnegative().max(30_000).nullable(),
+    targetDelayMs: z.number().nonnegative().max(30_000).nullable(),
+    appliedDelayMs: z.number().nonnegative().max(30_000).nullable(),
     clockRttMs: z.number().nonnegative().max(60_000).nullable(),
     syncSampleAgeMs: z.number().nonnegative().max(60_000).nullable()
   }).strict(),
@@ -418,6 +474,8 @@ export const agentSnapshotSchema = z.object({
     "FFMPEG_PROGRESS_UNAVAILABLE",
     "LIVEKIT_METRICS_UNAVAILABLE",
     "EGRESS_METRICS_UNAVAILABLE",
+    "EGRESS_SUPERVISOR_UNAVAILABLE",
+    "PROGRAM_WARMER_UNAVAILABLE",
     "DOCKER_UNAVAILABLE",
     "HOST_DISK_UNAVAILABLE"
   ])).max(12),
@@ -433,6 +491,8 @@ export const agentSnapshotSchema = z.object({
   mediaPaths: z.array(mediaPathSnapshotSchema).max(48),
   ffmpegBranches: z.array(ffmpegBranchSnapshotSchema).max(40).default([]),
   contentAnalysis: z.array(cameraContentSnapshotSchema).max(8).default([]),
+  egressSupervisor: egressSupervisorSnapshotSchema.nullable().default(null),
+  programWarmer: programWarmerSnapshotSchema.nullable().default(null),
   nativeServices: nativeServiceSnapshotSchema.default({ endpoints: [], livekit: null, egress: null })
 }).strict();
 export type AgentSnapshot = z.infer<typeof agentSnapshotSchema>;
@@ -508,6 +568,68 @@ export type MonitoringFaultGate = {
   expiresAt: string;
 };
 
+export type RouterUplinkSnapshot = {
+  id: string;
+  isp: string | null;
+  type: "ethernet" | "wifi" | "cellular" | "other";
+  connected: boolean;
+  priority: "always" | "secondary" | "backup" | "never" | "unknown";
+  sendBps: number;
+  receiveBps: number;
+  estimatedUploadBps: number | null;
+  latencyMs: number | null;
+  jitterMs: number | null;
+  lossSendRatio: number | null;
+  lossReceiveRatio: number | null;
+  inFlightBytes: number | null;
+  inFlightWindowBytes: number | null;
+  uploadCongested: boolean;
+  poorConnection: boolean;
+  slowConnection: boolean;
+};
+
+export type RouterMonitorSnapshot = {
+  state: HealthState;
+  sampledAt: string | null;
+  receivedAt: string | null;
+  ageMs: number | null;
+  speedify: {
+    state: "CONNECTED" | "LOGGED_IN" | "DISCONNECTED" | "UNKNOWN";
+    bondingMode: "speed" | "streaming" | "redundant" | "unknown";
+    transportMode: "udp" | "tcp" | "tcp-multi" | "https" | "auto" | "unknown";
+    sendBps: number;
+    receiveBps: number;
+    estimatedUploadBps: number | null;
+    uploadHeadroomBps: number | null;
+    latencyMs: number | null;
+    jitterMs: number | null;
+    lossSendRatio: number | null;
+    lossReceiveRatio: number | null;
+    uploadCongested: boolean;
+    badCpu: boolean;
+    badLatency: boolean;
+    badLoss: boolean;
+    badMemory: boolean;
+    readQueuePackets: number | null;
+    failoverCount: number | null;
+  } | null;
+  routing: {
+    srtDevice: string;
+    rtmpDevice: string;
+    primaryRuleCount: number;
+    guardRuleCount: number;
+    killSwitchActive: boolean;
+    cameraFlowCount: number;
+  } | null;
+  host: {
+    load1: number;
+    memoryAvailableBytes: number;
+    speedifyRssBytes: number;
+    streamingStatsProcessCount: number;
+  } | null;
+  uplinks: RouterUplinkSnapshot[];
+};
+
 export type MonitorSnapshot = {
   version: typeof MONITORING_CONTRACT_VERSION;
   generatedAt: string;
@@ -526,6 +648,7 @@ export type MonitorSnapshot = {
   youtube: { state: HealthState; observedAt: string | null; ageMs: number | null };
   notifications: NotificationHealth;
   deadMan: DeadManHealth;
+  router: RouterMonitorSnapshot;
   courts: CourtMonitorSnapshot[];
   agents: Array<{
     agentId: string;
@@ -536,6 +659,8 @@ export type MonitorSnapshot = {
     ageMs: number | null;
     host: AgentSnapshot["host"] | null;
     services: ServiceSnapshot[];
+    egressSupervisor: EgressSupervisorSnapshot | null;
+    programWarmer: ProgramWarmerSnapshot | null;
     nativeServices: NativeServiceSnapshot | null;
   }>;
   incidents: IncidentSnapshot[];

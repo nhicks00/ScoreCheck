@@ -22,6 +22,7 @@ import { BrowserCounterAccumulator } from "./browserCounterAccumulator.js";
 import { incrementCourtCounter } from "./prometheusCounter.js";
 import { LocalIncidentOutbox } from "./localIncidentOutbox.js";
 import { replayDurableOutbox } from "./durableOutboxReplay.js";
+import { RouterHeartbeatManager } from "./routerHeartbeats.js";
 
 const config = loadServiceConfig();
 const app = express();
@@ -43,6 +44,12 @@ const browserFramesDropped = new Gauge({ name: "scorecheck_program_browser_frame
 const browserFreezeDuration = new Gauge({ name: "scorecheck_program_browser_freeze_duration_seconds", help: "Program browser cumulative WebRTC freeze duration for the current page connection.", labelNames: ["court"], registers: [registry] });
 const browserReconnects = new Gauge({ name: "scorecheck_program_browser_reconnects", help: "Program browser reconnect count for the current tab lineage.", labelNames: ["court"], registers: [registry] });
 const browserReloads = new Gauge({ name: "scorecheck_program_browser_reloads", help: "Program browser reload count for the current tab lineage.", labelNames: ["court"], registers: [registry] });
+const browserHlsBufferedAhead = new Gauge({ name: "scorecheck_program_hls_buffered_ahead_seconds", help: "Program browser HLS media buffered ahead of the current playhead.", labelNames: ["court"], registers: [registry] });
+const browserHlsBufferedRanges = new Gauge({ name: "scorecheck_program_hls_buffered_ranges", help: "Program browser HLS buffered time ranges.", labelNames: ["court"], registers: [registry] });
+const browserHlsInstancesCreated = new Gauge({ name: "scorecheck_program_hls_instances_created", help: "HLS.js instances created during the current Program page session.", labelNames: ["court"], registers: [registry] });
+const browserHlsInstancesDestroyed = new Gauge({ name: "scorecheck_program_hls_instances_destroyed", help: "HLS.js instances destroyed during the current Program page session.", labelNames: ["court"], registers: [registry] });
+const browserHlsInstancesActive = new Gauge({ name: "scorecheck_program_hls_instances_active", help: "HLS.js instances currently owned by the Program page.", labelNames: ["court"], registers: [registry] });
+const browserJsHeap = new Gauge({ name: "scorecheck_program_browser_js_heap_bytes", help: "Program renderer JavaScript heap currently used when Chromium exposes the measurement.", labelNames: ["court"], registers: [registry] });
 const browserFramesReceivedTotal = new Counter({ name: "scorecheck_program_browser_frames_received_total", help: "Reset-safe program browser video frames received.", labelNames: ["court"], registers: [registry] });
 const browserFramesDecodedTotal = new Counter({ name: "scorecheck_program_browser_frames_decoded_total", help: "Reset-safe program browser video frames decoded.", labelNames: ["court"], registers: [registry] });
 const browserFramesDroppedTotal = new Counter({ name: "scorecheck_program_browser_frames_dropped_total", help: "Reset-safe program browser video frames dropped before presentation.", labelNames: ["court"], registers: [registry] });
@@ -82,6 +89,15 @@ const deadManTestGateActive = new Gauge({ name: "scorecheck_external_dead_man_te
 const deadManTestGateExpires = new Gauge({ name: "scorecheck_external_dead_man_test_gate_expires_timestamp_seconds", help: "Expiry time of the bounded external dead-man test gate, or zero when inactive.", labelNames: ["check"], registers: [registry] });
 const activeIncidents = new Gauge({ name: "scorecheck_active_incidents", help: "Current unresolved monitoring incident count, including acknowledged incidents.", registers: [registry] });
 const activeFaultGates = new Gauge({ name: "scorecheck_active_fault_gates", help: "Current bounded monitoring fault-gate count.", registers: [registry] });
+const routerHeartbeatFresh = new Gauge({ name: "scorecheck_router_heartbeat_fresh", help: "Whether venue-router telemetry was received within twenty seconds.", registers: [registry] });
+const routerConnected = new Gauge({ name: "scorecheck_router_speedify_connected", help: "Whether the venue Speedify tunnel is connected.", registers: [registry] });
+const routerRouteHealthy = new Gauge({ name: "scorecheck_router_camera_route_healthy", help: "Whether SRT and RTMP camera routes and fail-closed guards are correct.", registers: [registry] });
+const routerSendBps = new Gauge({ name: "scorecheck_router_bonded_upload_bits_per_second", help: "Current bonded upload throughput.", registers: [registry] });
+const routerEstimatedUploadBps = new Gauge({ name: "scorecheck_router_estimated_upload_capacity_bits_per_second", help: "Current Speedify aggregate upload estimate.", registers: [registry] });
+const routerUploadHeadroomBps = new Gauge({ name: "scorecheck_router_upload_headroom_bits_per_second", help: "Estimated bonded upload capacity minus current upload throughput.", registers: [registry] });
+const routerUplinkSendBps = new Gauge({ name: "scorecheck_router_uplink_upload_bits_per_second", help: "Current upload throughput by venue uplink.", labelNames: ["uplink", "type", "priority"], registers: [registry] });
+const routerUplinkLatency = new Gauge({ name: "scorecheck_router_uplink_latency_ms", help: "Current tunnel latency by venue uplink.", labelNames: ["uplink", "type", "priority"], registers: [registry] });
+const routerUplinkLoss = new Gauge({ name: "scorecheck_router_uplink_send_loss_ratio", help: "Current send loss ratio by venue uplink.", labelNames: ["uplink", "type", "priority"], registers: [registry] });
 const runtimes = new Map<string, AgentRuntime>(config.targets.map((target) => [target.id, {
   target,
   snapshot: null,
@@ -106,6 +122,7 @@ const notificationDispatcher = new NotificationDispatcher(config, localIncidentO
 const externalDeadMan = new ExternalDeadMan(config);
 const faultGateControl = new FaultGateControl();
 const browserCounterAccumulator = new BrowserCounterAccumulator();
+const routerHeartbeats = new RouterHeartbeatManager();
 let deadManMaintenanceRunning = false;
 let agentPollRunning = false;
 let outboxFlushRunning = false;
@@ -145,6 +162,15 @@ app.get("/metrics", bearerAuth(config.token), async (_req, res) => {
   res.type(registry.contentType).send(await registry.metrics());
 });
 app.get("/v1/snapshot", bearerAuth(config.token), (_req, res) => res.json(snapshot));
+app.post("/v1/router-heartbeats", bearerAuth(config.routerHeartbeatToken), (req, res) => {
+  try {
+    routerHeartbeats.accept(req.body);
+    snapshot = currentSnapshot();
+    res.sendStatus(202);
+  } catch {
+    res.status(400).json({ error: "Invalid router heartbeat." });
+  }
+});
 app.get("/v1/dead-man-test-gate", bearerAuth(config.token), (_req, res) => {
   res.setHeader("cache-control", "private, no-store");
   res.json({ testGate: externalDeadMan.testGate() });
@@ -459,6 +485,27 @@ async function pollAllOnce() {
   notificationProviderHealthy.set({ provider: "pushover" }, providerMetric(notificationHealth.pushover));
   activeIncidents.set(snapshot.incidents.length);
   activeFaultGates.set(faultGateControl.active().length);
+  const router = snapshot.router;
+  routerHeartbeatFresh.set(router.ageMs != null && router.ageMs <= 20_000 ? 1 : 0);
+  routerConnected.set(router.speedify?.state === "CONNECTED" ? 1 : 0);
+  routerRouteHealthy.set(router.routing
+    && router.routing.srtDevice === "connectify0"
+    && router.routing.rtmpDevice === "connectify0"
+    && router.routing.primaryRuleCount === 2
+    && router.routing.guardRuleCount === 2
+    && router.routing.killSwitchActive ? 1 : 0);
+  setOptionalGauge(routerSendBps, {}, router.speedify?.sendBps ?? null);
+  setOptionalGauge(routerEstimatedUploadBps, {}, router.speedify?.estimatedUploadBps ?? null);
+  setOptionalGauge(routerUploadHeadroomBps, {}, router.speedify?.uploadHeadroomBps ?? null);
+  routerUplinkSendBps.reset();
+  routerUplinkLatency.reset();
+  routerUplinkLoss.reset();
+  for (const uplink of router.uplinks) {
+    const labels = { uplink: uplink.id, type: uplink.type, priority: uplink.priority };
+    routerUplinkSendBps.set(labels, uplink.sendBps);
+    setOptionalGauge(routerUplinkLatency, labels, uplink.latencyMs);
+    setOptionalGauge(routerUplinkLoss, labels, uplink.lossSendRatio);
+  }
   for (const court of snapshot.courts) {
     const labels = { court: String(court.courtNumber) };
     const browser = court.browser;
@@ -487,6 +534,12 @@ async function pollAllOnce() {
     setOptionalGauge(browserFreezeDuration, labels, browser.video.totalFreezesDurationMs == null ? null : browser.video.totalFreezesDurationMs / 1_000);
     browserReconnects.set(labels, browser.video.reconnectCount);
     browserReloads.set(labels, browser.video.reloadCount);
+    setOptionalGauge(browserHlsBufferedAhead, labels, browser.video.bufferedAheadMs == null ? null : browser.video.bufferedAheadMs / 1_000);
+    setOptionalGauge(browserHlsBufferedRanges, labels, browser.video.bufferedRangeCount);
+    setOptionalGauge(browserHlsInstancesCreated, labels, browser.video.hlsCreatedInstances);
+    setOptionalGauge(browserHlsInstancesDestroyed, labels, browser.video.hlsDestroyedInstances);
+    setOptionalGauge(browserHlsInstancesActive, labels, browser.video.hlsActiveInstances);
+    setOptionalGauge(browserJsHeap, labels, browser.video.jsHeapUsedBytes);
     const browserDeltas = browserCounterAccumulator.observe(court.courtNumber, {
       pageLoadedAt: browser.pageLoadedAt,
       framesReceived: browser.video.framesReceived,
@@ -538,7 +591,8 @@ function currentSnapshot(): MonitorSnapshot {
     externalDeadMan.health(),
     browserThumbnails.metadata(),
     silences,
-    faultGateControl.active()
+    faultGateControl.active(),
+    routerHeartbeats.current()
   );
 }
 
@@ -563,7 +617,7 @@ function bearerToken(header: string | undefined): string {
   return header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
 }
 
-function setOptionalGauge(gauge: Gauge, labels: { court: string }, value: number | null) {
+function setOptionalGauge(gauge: Gauge, labels: Record<string, string>, value: number | null) {
   if (value != null && Number.isFinite(value)) gauge.set(labels, value);
 }
 

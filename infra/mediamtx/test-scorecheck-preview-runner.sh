@@ -31,12 +31,21 @@ grep -Fxq 'court2_normalized' "$CAPTURE" || fail "wrapper did not select Camera 
 grep -Fxq 'rtsp://127.0.0.1:8554/court2_normalized' "$CAPTURE" || fail "wrapper did not read the normalized path"
 grep -Fxq -- '-c:v' "$CAPTURE" || fail "wrapper did not configure video copy"
 grep -Fxq 'copy' "$CAPTURE" || fail "wrapper transcodes browser video unexpectedly"
-grep -Fxq 'libopus' "$CAPTURE" || fail "wrapper did not normalize browser audio to Opus"
+grep -Fxq 'libopus' "$CAPTURE" || fail "wrapper did not normalize transport audio to browser-safe Opus"
+grep -Fq 'asetpts=N/SR/TB,aresample=async=1:first_pts=0' "$CAPTURE" || fail "normalized audio is not rebased"
+if grep -Fxq -- '-readrate' "$CAPTURE"; then
+  fail "wrapper throttles the live MediaMTX reader"
+fi
+if grep -Fxq -- '-copyts' "$CAPTURE" || grep -Fxq -- '-use_wallclock_as_timestamps' "$CAPTURE"; then
+  fail "wrapper overrides MediaMTX timestamp mapping"
+fi
 
 export MTX_PATH=court1_preview
 sh "$RUNNER" court1_preview raw,normalized,raw,raw,raw,raw,raw,raw
 grep -Fxq 'court1_raw' "$CAPTURE" || fail "wrapper did not select Camera 1 raw input"
 grep -Fxq 'rtsp://127.0.0.1:8554/court1_raw' "$CAPTURE" || fail "wrapper did not read the direct H264 path"
+grep -Fxq 'libopus' "$CAPTURE" || fail "wrapper did not normalize raw AAC audio to Opus"
+grep -Fq 'asetpts=N/SR/TB,aresample=async=1:first_pts=0' "$CAPTURE" || fail "raw audio normalization is not rebased"
 
 for invalid in \
   'court9_preview raw,raw,raw,raw,raw,raw,raw,raw' \

@@ -4,7 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { isRetryableDeploymentTransportError } from "./stack-deployer.mjs";
 
-export class HevcNormalizerRuntime {
+export class BrowserNormalizerRuntime {
   constructor({ sshKey, knownHosts, runner = runCommand, sleep = delay }) {
     this.sshKey = requiredPath(sshKey, "SSH key");
     this.knownHosts = requiredPath(knownHosts, "known_hosts");
@@ -12,7 +12,7 @@ export class HevcNormalizerRuntime {
     this.sleep = sleep;
   }
 
-  async ensure({ host, court, required, sourceProfile, frameRateMode, mediamtxPrivateHost }) {
+  async ensure({ host, court, required, sourceCodec, sourceProfile, frameRateMode, mediamtxPrivateHost }) {
     validateCourt(court);
     if (typeof required !== "boolean") throw new Error("normalizer requirement must be boolean");
     let state = await this.#status(host);
@@ -24,12 +24,13 @@ export class HevcNormalizerRuntime {
       await this.#remote(host, "cd /opt/compositor && ./start-normalizer.sh");
       state = await this.#status(host);
     }
-    validateAssignment({ sourceProfile, frameRateMode, mediamtxPrivateHost });
-    validateRunningState(state, court, { sourceProfile, frameRateMode, mediamtxPrivateHost });
+    validateAssignment({ sourceCodec, sourceProfile, frameRateMode, mediamtxPrivateHost });
+    validateRunningState(state, court, { sourceCodec, sourceProfile, frameRateMode, mediamtxPrivateHost });
     return {
       required: true,
       running: true,
       camera: court,
+      sourceCodec,
       sourceProfile,
       frameRateMode,
       mediamtxPrivateHost,
@@ -83,8 +84,8 @@ export function parseNormalizerInspect(raw) {
 }
 
 function validateRunningState(value, court, assignment) {
-  if (!value?.State?.Running) throw new Error(`Camera ${court} HEVC normalizer is not running`);
-  if (value.RestartCount !== 0) throw new Error(`Camera ${court} HEVC normalizer restarted ${value.RestartCount} time(s)`);
+  if (!value?.State?.Running) throw new Error(`Camera ${court} browser normalizer is not running`);
+  if (value.RestartCount !== 0) throw new Error(`Camera ${court} browser normalizer restarted ${value.RestartCount} time(s)`);
   const environment = Object.fromEntries(value.Config.Env.map((entry) => {
     const separator = entry.indexOf("=");
     return separator < 1 ? [entry, ""] : [entry.slice(0, separator), entry.slice(separator + 1)];
@@ -92,8 +93,8 @@ function validateRunningState(value, court, assignment) {
   const expected = {
     CAMERA_NUMBER: String(court),
     CAMERA_NORMALIZER_ENABLED: "true",
-    CAMERA_SOURCE_PATH_MODE: "isolated-hevc-normalizer",
-    CAMERA_SOURCE_CODEC: "H265",
+    CAMERA_SOURCE_PATH_MODE: "isolated-browser-normalizer",
+    CAMERA_SOURCE_CODEC: assignment.sourceCodec,
     CAMERA_SOURCE_PROFILE: assignment.sourceProfile,
     CAMERA_FRAME_RATE_MODE: assignment.frameRateMode,
     CAMERA_NORMALIZER_INPUT_PATH: `court${court}_raw`,
@@ -105,7 +106,8 @@ function validateRunningState(value, court, assignment) {
   }
 }
 
-function validateAssignment({ sourceProfile, frameRateMode, mediamtxPrivateHost }) {
+function validateAssignment({ sourceCodec, sourceProfile, frameRateMode, mediamtxPrivateHost }) {
+  if (!["H264", "H265"].includes(sourceCodec)) throw new Error("normalizer source codec is invalid");
   const validFrameRates = sourceProfile === "PRIORITY_1080P60"
     ? new Set(["60000/1001", "60/1"])
     : new Set(["30000/1001", "30/1"]);

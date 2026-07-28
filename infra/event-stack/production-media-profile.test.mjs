@@ -32,7 +32,7 @@ test("admits browser-safe H.264 1080p30 and 1080p60 sources into exact YouTube p
 
 test("fails closed on direct HEVC, B-frames, unsafe format, scan, cadence, GOP, and timestamps", () => {
   const browser = () => probePayload({ audioCodec: "opus" });
-  assert.throws(() => selectProductionOutputProfile(probePayload({ codec: "hevc" }), { browserProbe: browser() }), /requires an assigned isolated normalizer/);
+  assert.throws(() => selectProductionOutputProfile(probePayload({ codec: "hevc" }), { browserProbe: browser() }), /requires an assigned browser normalizer/);
   assert.throws(() => selectProductionOutputProfile(probePayload({ hasBFrames: 2 }), { browserProbe: browser() }), /direct H\.264 camera source must have zero B-frames/);
   assert.throws(() => selectProductionOutputProfile(probePayload({ pixelFormat: "yuv420p10le" }), { browserProbe: browser() }), /camera source pixel format/);
   assert.throws(() => selectProductionOutputProfile(probePayload(), { browserProbe: probePayload({ hasBFrames: 2, audioCodec: "opus" }) }), /zero B-frames/);
@@ -52,11 +52,11 @@ test("fails closed on direct HEVC, B-frames, unsafe format, scan, cadence, GOP, 
   assert.throws(() => selectProductionOutputProfile({ streams: [], packets: [] }, { browserProbe: browser() }), /exactly one/);
 });
 
-test("admits HEVC only when an isolated normalizer produces qualified H.264 and Opus", () => {
+test("admits HEVC or unsafe H264 only when an isolated normalizer produces qualified H.264 and Opus", () => {
   const raw = probePayload({ codec: "hevc", fieldOrder: "unknown", frames: progressiveFrames(30), pixelFormat: "yuvj420p" });
   const browser = probePayload({ audioCodec: "opus" });
   const result = selectProductionOutputProfile(raw, {
-    sourcePathMode: SOURCE_PATH_MODES.ISOLATED_HEVC_NORMALIZER,
+    sourcePathMode: SOURCE_PATH_MODES.ISOLATED_BROWSER_NORMALIZER,
     expectedFrameRateMode: "30/1",
     browserProbe: browser
   });
@@ -64,19 +64,25 @@ test("admits HEVC only when an isolated normalizer produces qualified H.264 and 
   assert.equal(result.source.pixelFormat, "yuvj420p");
   assert.equal(result.browserInput.codec, "H264");
   assert.equal(result.browserInput.audioCodec, "OPUS");
+  const normalizedH264 = selectProductionOutputProfile(probePayload({ hasBFrames: 2 }), {
+    sourcePathMode: SOURCE_PATH_MODES.ISOLATED_BROWSER_NORMALIZER,
+    browserProbe: browser
+  });
+  assert.equal(normalizedH264.source.codec, "H264");
+  assert.equal(normalizedH264.source.hasBFrames, 2);
   assert.throws(() => selectProductionOutputProfile(raw, {
-    sourcePathMode: SOURCE_PATH_MODES.ISOLATED_HEVC_NORMALIZER,
+    sourcePathMode: SOURCE_PATH_MODES.ISOLATED_BROWSER_NORMALIZER,
     browserProbe: probePayload({ codec: "hevc", audioCodec: "opus" })
   }), /browser input must be H\.264/);
   assert.throws(() => selectProductionOutputProfile(probePayload({ pixelFormat: "yuvj420p" }), {
     browserProbe: browser
-  }), /isolated HEVC normalizer/);
+  }), /isolated browser normalizer/);
   assert.throws(() => selectProductionOutputProfile(probePayload({ codec: "hevc", fieldOrder: "unknown", frames: progressiveFrames(29) }), {
-    sourcePathMode: SOURCE_PATH_MODES.ISOLATED_HEVC_NORMALIZER,
+    sourcePathMode: SOURCE_PATH_MODES.ISOLATED_BROWSER_NORMALIZER,
     browserProbe: browser
   }), /at least 30 decoded frame flags/);
   assert.throws(() => selectProductionOutputProfile(probePayload({ codec: "hevc", fieldOrder: "unknown", frames: [...progressiveFrames(29), { interlaced_frame: 1 }] }), {
-    sourcePathMode: SOURCE_PATH_MODES.ISOLATED_HEVC_NORMALIZER,
+    sourcePathMode: SOURCE_PATH_MODES.ISOLATED_BROWSER_NORMALIZER,
     browserProbe: browser
   }), /entirely progressive/);
 });
@@ -91,14 +97,14 @@ test("uses measured packet cadence when HEVC average-rate metadata is contradict
   const raw = probePayload({ codec: "hevc", averageFrameRate: "60/1" });
   const browser = probePayload({ audioCodec: "opus" });
   const result = selectProductionOutputProfile(raw, {
-    sourcePathMode: SOURCE_PATH_MODES.ISOLATED_HEVC_NORMALIZER,
+    sourcePathMode: SOURCE_PATH_MODES.ISOLATED_BROWSER_NORMALIZER,
     expectedFrameRateMode: "30/1",
     browserProbe: browser
   });
   assert.equal(result.source.frameRateMode, "30/1");
   assert.equal(result.source.packetFramesPerSecond, 30);
   assert.throws(() => selectProductionOutputProfile(probePayload({ codec: "hevc", averageFrameRate: "60/1", frameRate: "60/1" }), {
-    sourcePathMode: SOURCE_PATH_MODES.ISOLATED_HEVC_NORMALIZER,
+    sourcePathMode: SOURCE_PATH_MODES.ISOLATED_BROWSER_NORMALIZER,
     expectedFrameRateMode: "30/1",
     browserProbe: browser
   }), /metadata does not match/);
@@ -108,12 +114,12 @@ test("allows bounded live packet-cadence variance without changing the exact ass
   const raw = probePayload({ codec: "hevc", framesPerSecond: 29.899 });
   const browser = probePayload({ audioCodec: "opus", framesPerSecond: 29.899 });
   assert.equal(selectProductionOutputProfile(raw, {
-    sourcePathMode: SOURCE_PATH_MODES.ISOLATED_HEVC_NORMALIZER,
+    sourcePathMode: SOURCE_PATH_MODES.ISOLATED_BROWSER_NORMALIZER,
     expectedFrameRateMode: "30/1",
     browserProbe: browser
   }).source.frameRateMode, "30/1");
   assert.throws(() => selectProductionOutputProfile(probePayload({ codec: "hevc", framesPerSecond: 28.9 }), {
-    sourcePathMode: SOURCE_PATH_MODES.ISOLATED_HEVC_NORMALIZER,
+    sourcePathMode: SOURCE_PATH_MODES.ISOLATED_BROWSER_NORMALIZER,
     expectedFrameRateMode: "30/1",
     browserProbe: browser
   }), /measured packet cadence/);
@@ -136,7 +142,7 @@ test("probes the local MediaMTX raw path over protected SSH and returns the admi
   assert.equal((await probe.probe({
     host: "198.51.100.10",
     court: 6,
-    sourcePathMode: SOURCE_PATH_MODES.ISOLATED_HEVC_NORMALIZER,
+    sourcePathMode: SOURCE_PATH_MODES.ISOLATED_BROWSER_NORMALIZER,
     expectedFrameRateMode: "60/1"
   })).profile, "1080p60");
   assert.equal(calls.length, 5);

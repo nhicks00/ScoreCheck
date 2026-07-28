@@ -187,7 +187,10 @@ function createState(context, now) {
       destinationRole: "backup",
       outputGeneration: `backup-${context.camera}-${rehearsalId.slice(-36)}`,
       rendererGitSha: context.primaryOwner.rendererGitSha,
-      rendererDeploymentId: context.primaryOwner.rendererDeploymentId
+      rendererDeploymentId: context.primaryOwner.rendererDeploymentId,
+      rendererRuntimeOrigin: context.primaryOwner.rendererRuntimeOrigin,
+      rendererReleaseOrigin: context.primaryOwner.rendererReleaseOrigin,
+      rendererBundleSha256: context.primaryOwner.rendererBundleSha256
     },
     primaryEgressId: context.primaryOwner.egressId,
     backupEgressId: null,
@@ -214,9 +217,12 @@ function validateContext(value) {
 }
 
 function validateOwner(value, role) {
-  if (!value || value.schemaVersion !== undefined && value.schemaVersion !== 2) throw new Error(`YouTube backup ${role} owner is invalid`);
+  if (!value || value.schemaVersion !== undefined && value.schemaVersion !== 3) throw new Error(`YouTube backup ${role} owner is invalid`);
   for (const field of ["event", "destinationId", "outputGeneration"]) validateIdentifier(value[field], `${role} owner ${field}`);
-  if (value.destinationRole !== role || !/^[a-f0-9]{40}$/u.test(value.rendererGitSha ?? "") || !/^dpl_[A-Za-z0-9]+$/u.test(value.rendererDeploymentId ?? "")) throw new Error(`YouTube backup ${role} owner is invalid`);
+  if (value.destinationRole !== role || !/^[a-f0-9]{40}$/u.test(value.rendererGitSha ?? "") || !/^dpl_[A-Za-z0-9]+$/u.test(value.rendererDeploymentId ?? "")
+    || value.rendererRuntimeOrigin !== "http://renderer:3000"
+    || !/^https:\/\/[a-z0-9-]+[.]vercel[.]app$/u.test(value.rendererReleaseOrigin ?? "")
+    || !/^[a-f0-9]{64}$/u.test(value.rendererBundleSha256 ?? "")) throw new Error(`YouTube backup ${role} owner is invalid`);
   if (role === "primary" && (!Number.isInteger(value.court) || !/^EG_[A-Za-z0-9]+$/u.test(value.egressId ?? ""))) throw new Error("YouTube backup primary owner is invalid");
 }
 

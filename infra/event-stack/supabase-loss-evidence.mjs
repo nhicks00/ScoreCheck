@@ -1,8 +1,7 @@
-import { productionSnapshotProblems } from "./production-soak.mjs";
+import { browserCounterFields, productionSnapshotProblems } from "./production-soak.mjs";
 import { validateRendererBinding } from "./renderer-binding.mjs";
 
 const MAX_TRANSITION_MS = 60_000;
-const QUALITY_FIELDS = Object.freeze(["framesDropped", "freezeCount", "totalFreezesDurationMs", "packetsLost", "reconnectCount", "reloadCount"]);
 
 export function supabaseLossSnapshotProblems({ phase, snapshot, dependency, previous = null, baseline = null, baselineDependency = null, profiles, venue, camera, renderer, nowMs = Date.now() }) {
   if (!new Set(["baseline", "outage", "recovery"]).has(phase)) throw new Error("Supabase-loss phase is invalid");
@@ -26,7 +25,7 @@ export function supabaseLossSnapshotProblems({ phase, snapshot, dependency, prev
       if (browser.pageLoadedAt !== expectedBrowser.pageLoadedAt || browser.pageBuildVersion !== expectedBrowser.pageBuildVersion || browser.configurationVersion !== expectedBrowser.configurationVersion) {
         problems.push(`Camera ${camera} Supabase-loss browser identity changed`);
       }
-      for (const field of QUALITY_FIELDS) if (browser.video?.[field] !== expectedBrowser.video?.[field]) problems.push(`Camera ${camera} Supabase-loss browser ${field} changed`);
+      for (const field of browserCounterFields(expectedBrowser.video)) if (browser.video?.[field] !== expectedBrowser.video?.[field]) problems.push(`Camera ${camera} Supabase-loss browser ${field} changed`);
       if (phase === "outage") problems.push(...lastGoodScoreProblems(expectedBrowser.scoreRender, browser.scoreRender, camera));
     }
   }
@@ -58,7 +57,7 @@ export function evaluateSupabaseLossRehearsal({ event, generationId, camera, ren
   else {
     for (const current of [outageBrowser, recoveryBrowser]) {
       if (current.pageLoadedAt !== baselineBrowser.pageLoadedAt || current.pageBuildVersion !== baselineBrowser.pageBuildVersion || current.configurationVersion !== baselineBrowser.configurationVersion) problems.push("Supabase-loss browser identity changed end to end");
-      for (const field of QUALITY_FIELDS) if (!Number.isFinite(baselineBrowser.video[field]) || current.video[field] !== baselineBrowser.video[field]) problems.push(`Supabase-loss browser ${field} changed end to end`);
+      for (const field of browserCounterFields(baselineBrowser.video)) if (!Number.isFinite(baselineBrowser.video[field]) || current.video[field] !== baselineBrowser.video[field]) problems.push(`Supabase-loss browser ${field} changed end to end`);
     }
     const elapsedMs = Date.parse(recoveryBrowser.receivedAt) - Date.parse(baselineBrowser.receivedAt);
     const frameDelta = recoveryBrowser.video.framesRendered - baselineBrowser.video.framesRendered;

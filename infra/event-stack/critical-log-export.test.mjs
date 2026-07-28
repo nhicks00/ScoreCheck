@@ -16,6 +16,11 @@ test("redacts protected media and application credentials", () => {
   assert.match(sanitized, /\[REDACTED\]/u);
 });
 
+test("redacts opaque RTMP publish paths", () => {
+  const line = "path 'sc3-abcdefghijklmnopqrstuvwxyzABCDEFGH123456789': publisher started";
+  assert.equal(sanitizeCriticalLogLine(line), "path '[REDACTED_RTMP_PATH]': publisher started");
+});
+
 test("maps only the four production host roles to fixed deployment roots", () => {
   assert.equal(roleDirectory("ingest"), "/opt/mediamtx");
   assert.equal(roleDirectory("commentary"), "/opt/livekit");

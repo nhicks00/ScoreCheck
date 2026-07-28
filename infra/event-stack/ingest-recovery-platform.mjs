@@ -454,7 +454,10 @@ export function ownerForRestart(generation) {
     destinationRole: generation.destinationRole,
     outputGeneration: generation.outputGeneration,
     rendererGitSha: generation.rendererGitSha,
-    rendererDeploymentId: generation.rendererDeploymentId
+    rendererDeploymentId: generation.rendererDeploymentId,
+    rendererRuntimeOrigin: generation.rendererRuntimeOrigin,
+    rendererReleaseOrigin: generation.rendererReleaseOrigin,
+    rendererBundleSha256: generation.rendererBundleSha256
   };
 }
 

@@ -25,6 +25,7 @@ test("every event host disables password SSH and retains key-only root recovery"
     assert.match(source, /LogLevel VERBOSE/);
     assert.match(source, /systemctl reload ssh/);
     assert.match(source, /systemctl mask --now fwupd-refresh\.timer fwupd-refresh\.service \|\| true/, `${name} must suppress deferred firmware metadata refresh`);
+    assert.match(source, /systemctl mask --now apt-daily\.timer apt-daily\.service apt-daily-upgrade\.timer apt-daily-upgrade\.service update-notifier-download\.timer update-notifier-download\.service packagekit\.service apt-news\.service esm-cache\.service \|\| true/, `${name} must suppress unattended package maintenance`);
     assert.match(source, /systemctl mask --now sysstat-collect\.timer sysstat-collect\.service sysstat-summary\.timer sysstat-summary\.service \|\| true/, `${name} must suppress redundant sysstat collection`);
     assert.doesNotMatch(source, /PasswordAuthentication yes|PermitRootLogin yes/);
   }
@@ -84,6 +85,14 @@ test("host firewalls mirror public role exposure and keep agent telemetry privat
     assert.match(source, /ufw default deny incoming/);
     assert.match(source, /ufw --force enable/);
   }
+});
+
+test("ingest provisioning admits the configured SRT socket buffers", async () => {
+  const ingest = await readFile(profiles.ingest, "utf8");
+  assert.match(ingest, /net\.core\.rmem_max = 67108864/);
+  assert.match(ingest, /net\.core\.wmem_max = 67108864/);
+  assert.match(ingest, /net\.core\.netdev_max_backlog = 250000/);
+  assert.match(ingest, /^  - sysctl --system$/m);
 });
 
 function escapeRegexp(value) {

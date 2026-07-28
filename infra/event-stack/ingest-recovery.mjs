@@ -305,7 +305,7 @@ function validateOutputGenerations(value, compositors, event) {
   if (JSON.stringify(Object.keys(value).sort((left, right) => Number(left) - Number(right))) !== JSON.stringify(cameras)) throw new Error("ingest recovery output generations do not match the compositor set");
   for (const camera of cameras) {
     const generation = value[camera];
-    if (!generation || generation.schemaVersion !== 2 || generation.court !== Number(camera) || generation.destinationRole !== "primary") throw new Error(`Camera ${camera} output generation is invalid`);
+    if (!generation || generation.schemaVersion !== 3 || generation.court !== Number(camera) || generation.destinationRole !== "primary") throw new Error(`Camera ${camera} output generation is invalid`);
     if (generation.event !== event) throw new Error(`Camera ${camera} output generation belongs to a different event`);
     for (const field of ["event", "destinationId", "outputGeneration"]) {
       if (typeof generation[field] !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$/u.test(generation[field])) throw new Error(`Camera ${camera} output generation is invalid`);
@@ -313,6 +313,9 @@ function validateOutputGenerations(value, compositors, event) {
     if (!new Set(["1080p30", "1080p60"]).has(generation.outputProfile)
       || !/^[a-f0-9]{40}$/u.test(generation.rendererGitSha ?? "")
       || !/^dpl_[A-Za-z0-9]+$/u.test(generation.rendererDeploymentId ?? "")
+      || generation.rendererRuntimeOrigin !== "http://renderer:3000"
+      || !/^https:\/\/[a-z0-9-]+[.]vercel[.]app$/u.test(generation.rendererReleaseOrigin ?? "")
+      || !/^[a-f0-9]{64}$/u.test(generation.rendererBundleSha256 ?? "")
       || !/^EG_[A-Za-z0-9]+$/u.test(generation.egressId ?? "")
       || !/^[a-f0-9]{64}$/u.test(generation.requestSha256 ?? "")
       || !Number.isFinite(Date.parse(generation.startedAt ?? ""))) {

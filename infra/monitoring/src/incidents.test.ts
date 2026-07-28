@@ -92,6 +92,18 @@ describe("incident manager", () => {
     expect(continued?.incident.openedAt).toBe(first?.incident.openedAt);
   });
 
+  it("retains an enriched event id when continuing alerts omit it", () => {
+    const manager = new IncidentManager();
+    const firing = firingAlert("2026-07-12T12:00:00Z");
+    const [opened] = manager.applyWebhook(firing, new Date("2026-07-12T12:00:05Z"));
+    const eventId = "00000000-0000-4000-8000-000000000111";
+    manager.hydrate([{ ...opened!.incident, eventId }]);
+
+    const [continued] = manager.applyWebhook(firing, new Date("2026-07-12T12:00:30Z"));
+
+    expect(continued?.incident.eventId).toBe(eventId);
+  });
+
   it("reconciles a missed resolved webhook from the authoritative active set", () => {
     const manager = new IncidentManager();
     manager.applyWebhook({
@@ -105,9 +117,23 @@ describe("incident manager", () => {
 
   it("does not emit database churn while an active alert is unchanged", () => {
     const manager = new IncidentManager();
-    const alert = { labels: { alertname: "AgentMissing", stage: "MONITORING" }, annotations: {} };
+    const alert = activeApiAlert({ alertname: "AgentMissing", stage: "MONITORING" });
     manager.reconcileActiveAlerts([alert], new Date("2026-07-12T12:00:00Z"));
     expect(manager.reconcileActiveAlerts([alert], new Date("2026-07-12T12:00:30Z"))).toEqual([]);
+  });
+
+  it("excludes Alertmanager-suppressed alerts from the authoritative active set", () => {
+    const manager = new IncidentManager();
+    const alert = activeApiAlert({ alertname: "ProgramBranchMissing", stage: "PROGRAM_PATH", court: "5" });
+    manager.reconcileActiveAlerts([alert], new Date("2026-07-12T12:00:00Z"));
+
+    const changes = manager.reconcileActiveAlerts([{
+      ...alert,
+      status: { state: "suppressed" as const }
+    }], new Date("2026-07-12T12:00:30Z"));
+
+    expect(changes.map((change) => change.eventType)).toEqual(["RESOLVED"]);
+    expect(manager.active()).toHaveLength(0);
   });
 
   it("records a sanitized acknowledgement reason", () => {
@@ -136,6 +162,14 @@ function firingAlert(startsAt: string) {
       annotations: { summary: "Camera 1 is offline." },
       startsAt
     }]
+  };
+}
+
+function activeApiAlert(labels: Record<string, string>) {
+  return {
+    labels,
+    annotations: {},
+    status: { state: "active" as const }
   };
 }
 

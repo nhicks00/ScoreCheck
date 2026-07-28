@@ -7,6 +7,11 @@
 
 logLevel: info
 
+# Normalized HEVC recovery can briefly release a burst of H.264 frames after a
+# damaged source interval. Keep one extra default-sized packet window so those
+# bounded bursts do not repeatedly evict healthy RTSP, SRT, or WHEP readers.
+writeQueueSize: 1024
+
 api: yes
 apiAddress: 127.0.0.1:9997
 metrics: yes
@@ -22,7 +27,12 @@ rtmpAddress: :1935
 srt: yes
 srtAddress: :8890
 
-hls: no
+hls: yes
+hlsAddress: :8888
+hlsVariant: fmp4
+hlsSegmentCount: 15
+hlsSegmentDuration: 2s
+hlsAlwaysRemux: no
 
 # ScoreCheck does not use Media-over-QUIC. Keep the unused public listeners
 # closed instead of inheriting new server defaults on upgrade.
@@ -35,14 +45,16 @@ webrtcAdditionalHosts: [__PUBLIC_IP__, __PUBLIC_HOST__, __PRIVATE_IP__]
 webrtcIPsFromInterfaces: no
 
 authInternalUsers:
-  # The browser-facing preview/program outputs are intentionally public during
-  # Gate 1. Raw camera paths are not readable from outside the server.
+  # Public HTTP signaling and HLS are authenticated by Caddy before they reach
+  # this loopback proxy permission. Raw camera paths remain unreadable from
+  # outside the host, and the event-scoped read credential has no publish right.
   - user: any
     permissions:
       - action: read
         path: "~^court[1-8]_(preview|program|monitor|calibration)$"
       - action: playback
         path: "~^court[1-8]_(preview|program|monitor|calibration)$"
+__OPAQUE_RTMP_PUBLISH_PERMISSIONS__
 
   # Each assigned compositor analyzes only its owned raw camera feed and may
   # publish only its owned browser-safe normalization path. Exact source-IP/path
@@ -108,6 +120,12 @@ pathDefaults:
   overridePublisher: true
 
 paths:
+  # Some hardware RTMP clients reject MediaMTX's required query-string
+  # credentials before opening a socket. A per-camera opaque path is the
+  # credential for those explicitly admitted clients. It is not readable from
+  # outside the host and is stream-copied into the permanent courtN_raw path.
+__OPAQUE_RTMP_ALIAS_PATHS__
+
   # A raw court can be supplied by a direct publisher or pulled from a private
   # camera listener. Exact paths make the hardware assignment explicit and let
   # the same downstream preview/program rules serve both ingest modes.
@@ -128,10 +146,10 @@ paths:
   court8_raw:
     source: __COURT_8_RAW_SOURCE__
 
-  # HEVC camera assignments are normalized on their owning compositors and
-  # published back over the private VPC. Direct-H264 assignments leave these
-  # paths idle. Per-compositor source-IP authorization prevents cross-camera
-  # publication.
+  # Browser-unsafe camera assignments are normalized on their owning
+  # compositors and published back over the private VPC. Qualified direct-H264
+  # assignments leave these paths idle. Per-compositor source-IP authorization
+  # prevents cross-camera publication.
   court1_normalized:
   court2_normalized:
   court3_normalized:
@@ -174,19 +192,15 @@ paths:
     runOnDemandStartTimeout: 20s
     runOnDemandCloseAfter: 15s
 
-  # Program-only path. SRT receiver latency deliberately holds both video and
-  # ambient audio for the configured coarse delay, then stream-copies the
-  # admitted browser-safe codecs into a distinct WHEP path. Opening the preview
-  # input triggers its on-demand direct branch; polling for preview readiness here
-  # would deadlock when no separate preview reader is connected. Commentary
-  # gets fine delay in the program page's Web Audio graph.
+  # Program-only path. Read the admitted raw/normalized source directly: an
+  # extra RTSP stream-copy through preview can time out during recoverable
+  # decoder gaps and unnecessarily retire the program. SRT receiver latency
+  # holds video and ambient audio together, then audio is normalized to Opus
+  # for WHEP while H.264 remains stream-copy. Commentary gets fine delay in the
+  # program page's Web Audio graph.
   "~^court([1-8])_program$":
     runOnDemand: >
-      /usr/local/bin/scorecheck-ffmpeg-runner "court${G1}_program" --
-      -nostdin -hide_banner -loglevel warning
-      -i "srt://127.0.0.1:8890?streamid=read:court${G1}_preview&latency=__PROGRAM_DELAY_US__"
-      -map 0:v:0 -map 0:a:0? -c copy
-      -f rtsp -rtsp_transport tcp "rtsp://127.0.0.1:${RTSP_PORT}/${MTX_PATH}"
+      /usr/local/bin/scorecheck-program-runner "court${G1}_program" "__BROWSER_SOURCE_MAP__" "__PROGRAM_DELAY_US__"
     runOnDemandRestart: yes
     runOnDemandStartTimeout: 25s
     runOnDemandCloseAfter: 90s

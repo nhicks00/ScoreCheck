@@ -86,7 +86,7 @@ inhibit_rules:
   - source_matchers:
       - 'alertname="ScoreCheckRequiredRawPathMissing"'
     target_matchers:
-      - 'alertname=~"ScoreCheckCameraContentAnalyzerUnavailable|ScoreCheckCameraVisualFreeze|ScoreCheckCameraBlackPicture|ScoreCheckCameraAudioTrackMissing|ScoreCheckCameraAudioSilent|ScoreCheckCameraAudioClipping|ScoreCheckProgramBranchProgressMissing|ScoreCheckPreviewBranchFpsLow|ScoreCheckEgressOutputMissing|ScoreCheckProgramBrowserMissing|ScoreCheckProgramFpsLow|ScoreCheckYouTubeUnhealthy|ScoreCheckYouTubeDegraded"'
+      - 'alertname=~"ScoreCheckCameraContentAnalyzerUnavailable|ScoreCheckCameraVisualFreeze|ScoreCheckCameraBlackPicture|ScoreCheckCameraAudioTrackMissing|ScoreCheckCameraAudioSilent|ScoreCheckCameraAudioClipping|ScoreCheckProgramBranchProgressMissing|ScoreCheckProgramSourceCadenceLow|ScoreCheckPreviewBranchFpsLow|ScoreCheckEgressOutputMissing|ScoreCheckProgramBrowserMissing|ScoreCheckProgramFpsLow|ScoreCheckYouTubeUnhealthy|ScoreCheckYouTubeDegraded"'
     equal: [court]
   - source_matchers:
       - 'alertname=~"ScoreCheckCameraContentAnalyzerUnassigned|ScoreCheckCameraContentAnalyzerConflict|ScoreCheckCameraContentAnalyzerUnavailable"'

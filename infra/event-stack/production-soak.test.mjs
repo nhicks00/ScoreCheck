@@ -7,7 +7,9 @@ import {
   browserDeltaProblems,
   assertProductionMonitorSnapshot,
   evaluateProductionSoak,
+  evaluateHlsRuntimeEvidence,
   evaluateSpeedifyEvidence,
+  ensureStartupObserver,
   fetchProductionMonitorSnapshot,
   outputConformanceProblems,
   persistentOutputProblems,
@@ -41,7 +43,7 @@ const runBinding = {
       programSession: "program-session-v1",
       overlayState: "overlay-state-v1",
       commentary: "commentary-v1",
-      browserHeartbeat: "browser-heartbeat-v5"
+      browserHeartbeat: "browser-heartbeat-v6"
     }
   },
   destinations: Object.fromEntries(Array.from({ length: 6 }, (_, index) => {
@@ -75,7 +77,7 @@ test("starts through the real CLI entrypoint after module initialization", () =>
   assert.match(missingProbe.stderr, /--ffprobe are required/u);
 });
 
-test("hard-cuts the production soak client to monitoring snapshot contract v5", () => {
+test("hard-cuts the production soak client to monitoring snapshot contract v6", () => {
   const current = snapshot({ active: false });
   assert.equal(assertProductionMonitorSnapshot(current), current);
   assert.throws(() => assertProductionMonitorSnapshot({ ...current, version: 4 }), /snapshot contract is invalid/u);
@@ -107,6 +109,106 @@ test("retries bounded transient monitor reads but not authentication failures", 
     fetchImpl: async () => { unauthorizedAttempts += 1; return { ok: false, status: 401 }; }
   }), /HTTP 401/u);
   assert.equal(unauthorizedAttempts, 1);
+});
+
+test("reconciles a labeled-running startup observer against its actual process", async () => {
+  const state = {
+    runId: "run-1",
+    sampler: { status: "running", pid: 100, output: "/evidence/pool-host-samples.jsonl" }
+  };
+  const writes = [];
+  let starts = 0;
+  const result = await ensureStartupObserver({
+    state,
+    statePath: "/evidence/state.json",
+    key: "sampler",
+    runtime: { inspect: async () => ({ pid: 100 }) },
+    evidenceRoot: "/evidence",
+    start: async () => { starts += 1; },
+    now: () => startedMs,
+    persist: async (_path, value) => { writes.push(structuredClone(value)); }
+  });
+  assert.equal(result.pid, 100);
+  assert.equal(result.adopted, true);
+  assert.equal(starts, 0);
+  assert.equal(writes.at(-1).observerStarts.sampler.status, "running");
+});
+
+test("restarts a dead startup observer in a persisted fresh evidence generation", async () => {
+  const state = {
+    runId: "run-2",
+    criticalLogs: { status: "running", pid: 200, output: "/evidence/critical-logs.jsonl" }
+  };
+  const writes = [];
+  const starts = [];
+  const result = await ensureStartupObserver({
+    state,
+    statePath: "/evidence/state.json",
+    key: "criticalLogs",
+    runtime: { inspect: async () => null },
+    evidenceRoot: "/evidence",
+    start: async (directory) => {
+      starts.push(directory);
+      assert.equal(writes.at(-1).observerStarts.criticalLogs.status, "starting");
+      return { status: "running", pid: 201, output: `${directory}/critical-logs.jsonl` };
+    },
+    now: () => startedMs,
+    persist: async (_path, value) => { writes.push(structuredClone(value)); }
+  });
+  assert.deepEqual(starts, ["/evidence/observer-generations/criticalLogs-000-run-2"]);
+  assert.equal(result.pid, 201);
+  assert.equal(state.observerStarts.criticalLogs.status, "running");
+  assert.equal(writes.at(-1).observerStarts.criticalLogs.output, result.output);
+});
+
+test("adopts an interrupted startup attempt without creating another generation", async () => {
+  const directory = "/evidence/observer-generations/sentinel-003-run-3";
+  const state = {
+    runId: "run-3",
+    sentinel: { status: "running", pid: 300, output: "/evidence/platform-sentinel.jsonl" },
+    observerStarts: {
+      sentinel: { generation: 3, evidenceDirectory: directory, status: "starting", preparedAt: new Date(startedMs).toISOString() }
+    }
+  };
+  const starts = [];
+  const result = await ensureStartupObserver({
+    state,
+    statePath: "/evidence/state.json",
+    key: "sentinel",
+    runtime: { inspect: async () => { throw new Error("the stale owner must not be inspected"); } },
+    evidenceRoot: "/evidence",
+    start: async (value) => {
+      starts.push(value);
+      return { status: "running", pid: 301, output: `${value}/platform-sentinel.jsonl`, adopted: true };
+    },
+    now: () => startedMs,
+    persist: async () => {}
+  });
+  assert.deepEqual(starts, [directory]);
+  assert.equal(result.pid, 301);
+  assert.equal(state.observerStarts.sentinel.generation, 3);
+});
+
+test("increments the startup observer generation after a failed attempt", async () => {
+  const state = {
+    runId: "run-4",
+    sampler: { status: "running", pid: 400, output: "/evidence/pool-host-samples.jsonl" },
+    observerStarts: {
+      sampler: { generation: 2, evidenceDirectory: "/evidence/observer-generations/sampler-002-run-4", status: "failed" }
+    }
+  };
+  const result = await ensureStartupObserver({
+    state,
+    statePath: "/evidence/state.json",
+    key: "sampler",
+    runtime: { inspect: async () => null },
+    evidenceRoot: "/evidence",
+    start: async (directory) => ({ status: "running", pid: 401, output: `${directory}/pool-host-samples.jsonl` }),
+    now: () => startedMs,
+    persist: async () => {}
+  });
+  assert.match(result.output, /sampler-003-run-4/u);
+  assert.equal(state.observerStarts.sampler.generation, 3);
 });
 
 test("accepts an idle twelve-host baseline with all cameras off", () => {
@@ -169,13 +271,13 @@ test("treats camera bitrate as VBR and fails only sustained excess or an extreme
   assert.ok(extreme.problems.some((entry) => entry.includes("extreme spike")));
 });
 
-test("requires an isolated compositor normalizer only for an admitted HEVC camera", () => {
+test("requires an isolated compositor normalizer for an admitted browser-unsafe camera", () => {
   const hevcProfile = structuredClone(venueProfile);
-  hevcProfile.cameras[2].sourcePathMode = "isolated-hevc-normalizer";
+  hevcProfile.cameras[2].sourcePathMode = "isolated-browser-normalizer";
   hevcProfile.cameras[2].sourceCodec = "H265";
   const hevcVenue = { ...evaluateVenueAdmission(hevcProfile), sha256: "e".repeat(64) };
   const hevcProfiles = structuredClone(profiles);
-  hevcProfiles[3].sourcePathMode = "isolated-hevc-normalizer";
+  hevcProfiles[3].sourcePathMode = "isolated-browser-normalizer";
   hevcProfiles[3].source.codec = "H265";
   const before = snapshot({ sampledMs: startedMs, framesMultiplier: 0 });
   const after = snapshot({ sampledMs: startedMs + 5_000, framesMultiplier: 5 });
@@ -184,7 +286,7 @@ test("requires an isolated compositor normalizer only for an admitted HEVC camer
     court.paths.raw.videoCodec = "H265";
     court.paths.normalized = {
       ...path("normalized", 1),
-      audioCodec: "OPUS"
+      audioCodec: "AAC"
     };
     court.ffmpeg.normalizer = ffmpeg(30, 1);
   }
@@ -192,8 +294,8 @@ test("requires an isolated compositor normalizer only for an admitted HEVC camer
 
   delete after.courts[2].paths.normalized;
   assert.ok(productionSnapshotProblems(after, hevcProfiles, hevcVenue, before, startedMs + 5_000).some((entry) => entry.includes("normalized browser path")));
-  after.courts[2].paths.normalized = { ...path("normalized", 1), audioCodec: "OPUS" };
-  after.courts[0].paths.normalized = { ...path("normalized", 1), audioCodec: "OPUS" };
+  after.courts[2].paths.normalized = { ...path("normalized", 1), audioCodec: "AAC" };
+  after.courts[0].paths.normalized = { ...path("normalized", 1), audioCodec: "AAC" };
   assert.ok(productionSnapshotProblems(after, hevcProfiles, hevcVenue, before, startedMs + 5_000).some((entry) => entry.includes("Camera 1 direct-H264")));
 });
 
@@ -298,6 +400,27 @@ test("fails qualification when an operator notification could not be delivered",
   assert.ok(report.problems.includes("one or more Pushover notifications failed"));
 });
 
+test("records bounded HLS runtime evidence and rejects buffer or instance fan-out", () => {
+  const samples = [
+    { monitor: snapshot({ sampledMs: startedMs, framesMultiplier: 0 }) },
+    { monitor: snapshot({ sampledMs: startedMs + 5_000, framesMultiplier: 5 }) }
+  ];
+  const accepted = evaluateHlsRuntimeEvidence(samples, venue.activeCameras);
+  assert.equal(accepted.passed, true);
+  assert.equal(accepted.cameras[0].maximumBufferedAheadMs, 12_000);
+  assert.ok(Number.isFinite(accepted.cameras[0].retainedHeapGrowthBytes));
+
+  const broken = structuredClone(samples);
+  const video = broken[1].monitor.courts[0].browser.video;
+  video.bufferedAheadMs = 30_000;
+  video.hlsCreatedInstances = 2;
+  video.hlsActiveInstances = 2;
+  const rejected = evaluateHlsRuntimeEvidence(broken, venue.activeCameras);
+  assert.equal(rejected.passed, false);
+  assert.ok(rejected.problems.some((problem) => problem.includes("Camera 1 HLS runtime evidence exceeded")));
+  assert.ok(rejected.problems.some((problem) => problem.includes("Camera 1 HLS instance generation changed")));
+});
+
 test("qualifies continuous fail-closed Speedify evidence and rejects route drift", () => {
   const good = evaluateSpeedifyEvidence({ content: routerEvidence(), startMs: startedMs, endMs: startedMs + 5_000, activeCameras: 6, intervalMs: 1_000 });
   assert.equal(good.passed, true);
@@ -382,11 +505,11 @@ Watchdog lock owner: 19180
 });
 
 function snapshot({ active = true, sampledMs = startedMs, framesMultiplier = 0 } = {}) {
-  const fixed = ["commentary", "observability", "ingest"].map((role) => agent(`bvm-${role}`, role));
-  const compositors = Array.from({ length: 8 }, (_, index) => agent(`bvm-compositor-${index + 1}`, "compositor", index + 1, active && index < 6));
-  const spare = agent("bvm-compositor-spare", "worker", null, false);
+  const fixed = ["commentary", "observability", "ingest"].map((role) => agent(`bvm-${role}`, role, null, false, sampledMs));
+  const compositors = Array.from({ length: 8 }, (_, index) => agent(`bvm-compositor-${index + 1}`, "compositor", index + 1, active && index < 6, sampledMs));
+  const spare = agent("bvm-compositor-spare", "worker", null, false, sampledMs);
   return {
-    version: 5,
+    version: 6,
     generatedAt: new Date(sampledMs).toISOString(),
     collector: { state: "HEALTHY", agentsExpected: 12, agentsFresh: 12 },
     notifications: { pushover: { configured: true } },
@@ -436,8 +559,9 @@ function browser(camera, sampledMs, framesRendered) {
     video: {
       state: "playing",
       connectionState: "connected",
-      transport: "whep",
-      networkPath: "private-vpc",
+      transport: "hls",
+      networkPath: "unknown",
+      playoutDelayMs: 12_000,
       width: 1920,
       height: 1080,
       framesRendered,
@@ -445,6 +569,12 @@ function browser(camera, sampledMs, framesRendered) {
       freezeCount: 0,
       totalFreezesDurationMs: 0,
       packetsLost: 0,
+      bufferedAheadMs: 12_000,
+      bufferedRangeCount: 1,
+      hlsCreatedInstances: 1,
+      hlsDestroyedInstances: 0,
+      hlsActiveInstances: 1,
+      jsHeapUsedBytes: 64_000_000 + framesRendered,
       reconnectCount: 0,
       reloadCount: 0
     },
@@ -453,7 +583,7 @@ function browser(camera, sampledMs, framesRendered) {
   };
 }
 
-function agent(agentId, role, assignedCourt = null, outputActive = false) {
+function agent(agentId, role, assignedCourt = null, outputActive = false, sampledMs = startedMs) {
   return {
     agentId,
     role,
@@ -461,6 +591,17 @@ function agent(agentId, role, assignedCourt = null, outputActive = false) {
     state: "HEALTHY",
     host: { memoryTotalBytes: 8_000_000_000, memoryAvailableBytes: 6_000_000_000, diskTotalBytes: 100_000_000_000, diskFreeBytes: 80_000_000_000 },
     services: [],
+    egressSupervisor: ["compositor", "worker"].includes(role) ? {
+      schemaVersion: 1,
+      generationKey: outputActive ? "a".repeat(64) : null,
+      missingCount: 0,
+      recoveryAttempts: 0,
+      status: outputActive ? "HEALTHY" : "IDLE",
+      detail: outputActive ? "The exact owned Egress is active." : "No owned or active Egress exists.",
+      court: outputActive ? assignedCourt : null,
+      egressId: outputActive ? `EG_Camera${assignedCourt}` : null,
+      observedAt: new Date(sampledMs).toISOString()
+    } : null,
     nativeServices: ["compositor", "worker"].includes(role) ? {
       egress: {
         idle: !outputActive,

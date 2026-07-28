@@ -7,7 +7,7 @@ import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
-import { HevcNormalizerRuntime } from "./hevc-normalizer-runtime.mjs";
+import { BrowserNormalizerRuntime } from "./browser-normalizer-runtime.mjs";
 import { OutputConformanceRuntime } from "./output-conformance.mjs";
 import { admittedProfileProblems, assertProductionMonitorSnapshot, productionRawProblems } from "./production-soak.mjs";
 import { ProductionSourceProbe } from "./production-media-profile.mjs";
@@ -55,7 +55,7 @@ export class ProductionMediaPrequalificationRuntime {
       options, profile, manifest, lifecycle, renderer, venue,
       monitorOrigin: `https://${monitorEndpoint.hostname}`,
       monitorToken: monitorEnvironment.MONITOR_API_TOKEN,
-      normalizer: dependencies.normalizer ?? new HevcNormalizerRuntime({ sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
+      normalizer: dependencies.normalizer ?? new BrowserNormalizerRuntime({ sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
       sourceProbe: dependencies.sourceProbe ?? new ProductionSourceProbe({ sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
       outputConformance: dependencies.outputConformance ?? new OutputConformanceRuntime({ sshKey: profile.sshKey, knownHosts: profile.knownHosts, ffprobePath: options.ffprobe }),
       fetchSnapshot: dependencies.fetchSnapshot ?? (() => fetchMonitorSnapshot(`https://${monitorEndpoint.hostname}`, monitorEnvironment.MONITOR_API_TOKEN)),
@@ -98,8 +98,9 @@ export class ProductionMediaPrequalificationRuntime {
         court.normalizer = await this.normalizer.ensure({
           host: compositorHost(this.manifest, this.lifecycle, camera),
           court: camera,
-          required: assignment.sourcePathMode === "isolated-hevc-normalizer",
-          ...(assignment.sourcePathMode === "isolated-hevc-normalizer" ? {
+          required: assignment.sourcePathMode === "isolated-browser-normalizer",
+          ...(assignment.sourcePathMode === "isolated-browser-normalizer" ? {
+            sourceCodec: assignment.sourceCodec,
             sourceProfile: assignment.sourceProfile,
             frameRateMode: assignment.frameRateMode,
             mediamtxPrivateHost: ingestPrivateHost(this.manifest, this.lifecycle)

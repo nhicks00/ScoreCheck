@@ -9,12 +9,15 @@ const owner = Object.freeze({
   destinationRole: "primary",
   outputGeneration: "generation-test",
   rendererGitSha: "a".repeat(40),
-  rendererDeploymentId: "dpl_test123"
+  rendererDeploymentId: "dpl_test123",
+  rendererRuntimeOrigin: "http://renderer:3000",
+  rendererReleaseOrigin: "https://scorecheck-test.vercel.app",
+  rendererBundleSha256: "c".repeat(64)
 });
 
 function ownership(egressId = "EG_started") {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     ...owner,
     court: 1,
     outputProfile: "1080p30",

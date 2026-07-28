@@ -23,6 +23,8 @@ for court in $(seq 1 8); do
   [[ -n "${!pass_var:-}" ]] || { echo "error: $pass_var is required" >&2; exit 1; }
 done
 : "${MEDIAMTX_PUBLIC_HOST:?MEDIAMTX_PUBLIC_HOST is required}"
+: "${MEDIAMTX_READ_USER:?MEDIAMTX_READ_USER is required}"
+: "${MEDIAMTX_READ_PASS:?MEDIAMTX_READ_PASS is required}"
 : "${MEDIAMTX_CONTENT_ANALYZER_BINDINGS:?MEDIAMTX_CONTENT_ANALYZER_BINDINGS is required}"
 export MEDIAMTX_PUBLIC_IP="${MEDIAMTX_PUBLIC_IP:-${SSH_HOST#*@}}"
 
@@ -31,10 +33,13 @@ node "$SCRIPT_DIR/render-config.mjs"
 ssh_options=(-i "$SSH_KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS")
 rsync_shell="ssh -i $SSH_KEY -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS"
 
-ssh "${ssh_options[@]}" "$SSH_HOST" "mkdir -p '$REMOTE_DIR/.incoming' '$REMOTE_DIR/fonts' && install -d -m 0700 '$REMOTE_DIR/caddy_data' && install -d -m 0755 /var/lib/scorecheck-monitoring/ffmpeg"
+ssh "${ssh_options[@]}" "$SSH_HOST" "mkdir -p '$REMOTE_DIR/.incoming/patches' '$REMOTE_DIR/patches' '$REMOTE_DIR/fonts' && install -d -m 0700 '$REMOTE_DIR/caddy_data' && install -d -m 0755 /var/lib/scorecheck-monitoring/ffmpeg"
 rsync -a -e "$rsync_shell" \
-  "$SCRIPT_DIR/docker-compose.yml" "$SCRIPT_DIR/scorecheck-ffmpeg-runner.sh" "$SCRIPT_DIR/scorecheck-preview-runner.sh" "$SCRIPT_DIR/recovery-role.sh" "$GENERATED" "$GENERATED_CADDY" \
+  "$SCRIPT_DIR/docker-compose.yml" "$SCRIPT_DIR/Dockerfile" "$SCRIPT_DIR/.dockerignore" "$SCRIPT_DIR/scorecheck-ffmpeg-runner.sh" "$SCRIPT_DIR/scorecheck-preview-runner.sh" "$SCRIPT_DIR/scorecheck-program-runner.sh" "$SCRIPT_DIR/recovery-role.sh" "$GENERATED" "$GENERATED_CADDY" \
   "$SSH_HOST:$REMOTE_DIR/.incoming/"
+rsync -a -e "$rsync_shell" \
+  "$SCRIPT_DIR/patches/gortmplib-avkans-adts-aac.patch" \
+  "$SSH_HOST:$REMOTE_DIR/.incoming/patches/"
 
 ssh "${ssh_options[@]}" "$SSH_HOST" "REMOTE_DIR='$REMOTE_DIR' DEPLOY_MODE='$DEPLOY_MODE' bash -s" <<'REMOTE'
 set -euo pipefail
@@ -59,7 +64,10 @@ retry_docker_operation() {
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p backups
 had_previous=0
+had_previous_build_sources=0
+had_previous_program_runner=0
 compose_changed=1
+caddy_service_changed=1
 caddy_changed=1
 installed_files=(docker-compose.yml mediamtx.yml Caddyfile scorecheck-ffmpeg-runner.sh scorecheck-preview-runner.sh)
 existing_files=0
@@ -72,10 +80,29 @@ if [[ "$existing_files" -ne 0 && "$existing_files" -ne "${#installed_files[@]}" 
 fi
 if [[ "$existing_files" -eq "${#installed_files[@]}" ]]; then
   cp docker-compose.yml "backups/docker-compose.$timestamp.yml"
+  build_source_files=(Dockerfile .dockerignore patches/gortmplib-avkans-adts-aac.patch)
+  existing_build_sources=0
+  for path in "${build_source_files[@]}"; do
+    [[ -f "$path" ]] && existing_build_sources=$((existing_build_sources + 1))
+  done
+  if [[ "$existing_build_sources" -ne 0 && "$existing_build_sources" -ne "${#build_source_files[@]}" ]]; then
+    echo "MediaMTX deployment directory contains incomplete image build sources." >&2
+    exit 1
+  fi
+  if [[ "$existing_build_sources" -eq "${#build_source_files[@]}" ]]; then
+    cp Dockerfile "backups/Dockerfile.$timestamp"
+    cp .dockerignore "backups/dockerignore.$timestamp"
+    cp patches/gortmplib-avkans-adts-aac.patch "backups/gortmplib-avkans-adts-aac.$timestamp.patch"
+    had_previous_build_sources=1
+  fi
   cp mediamtx.yml "backups/mediamtx.$timestamp.yml"
   cp Caddyfile "backups/Caddyfile.$timestamp"
   cp scorecheck-ffmpeg-runner.sh "backups/scorecheck-ffmpeg-runner.$timestamp.sh"
   cp scorecheck-preview-runner.sh "backups/scorecheck-preview-runner.$timestamp.sh"
+  if [[ -f scorecheck-program-runner.sh ]]; then
+    cp scorecheck-program-runner.sh "backups/scorecheck-program-runner.$timestamp.sh"
+    had_previous_program_runner=1
+  fi
   if [[ -f recovery-role.sh ]]; then
     cp recovery-role.sh "backups/recovery-role.$timestamp.sh"
     had_previous_recovery_role=1
@@ -83,16 +110,33 @@ if [[ "$existing_files" -eq "${#installed_files[@]}" ]]; then
     had_previous_recovery_role=0
   fi
   cmp -s docker-compose.yml .incoming/docker-compose.yml && compose_changed=0
+  caddy_service_before="$(docker compose --project-directory "$REMOTE_DIR" -f docker-compose.yml config --hash caddy 2>/dev/null | awk '$1 == "caddy" { print $2 }')"
+  caddy_service_after="$(docker compose --project-directory "$REMOTE_DIR" -f .incoming/docker-compose.yml config --hash caddy 2>/dev/null | awk '$1 == "caddy" { print $2 }')"
+  if [[ -n "$caddy_service_before" && "$caddy_service_before" == "$caddy_service_after" ]]; then
+    caddy_service_changed=0
+  fi
   cmp -s Caddyfile .incoming/Caddyfile && caddy_changed=0
   had_previous=1
 fi
 
 restore_previous() {
   cp "backups/docker-compose.$timestamp.yml" docker-compose.yml
+  if [[ "$had_previous_build_sources" -eq 1 ]]; then
+    cp "backups/Dockerfile.$timestamp" Dockerfile
+    cp "backups/dockerignore.$timestamp" .dockerignore
+    cp "backups/gortmplib-avkans-adts-aac.$timestamp.patch" patches/gortmplib-avkans-adts-aac.patch
+  else
+    rm -f Dockerfile .dockerignore patches/gortmplib-avkans-adts-aac.patch
+  fi
   cp "backups/mediamtx.$timestamp.yml" mediamtx.yml
   cp "backups/Caddyfile.$timestamp" Caddyfile
   cp "backups/scorecheck-ffmpeg-runner.$timestamp.sh" scorecheck-ffmpeg-runner.sh
   cp "backups/scorecheck-preview-runner.$timestamp.sh" scorecheck-preview-runner.sh
+  if [[ "$had_previous_program_runner" -eq 1 ]]; then
+    cp "backups/scorecheck-program-runner.$timestamp.sh" scorecheck-program-runner.sh
+  else
+    rm -f scorecheck-program-runner.sh
+  fi
   if [[ "$had_previous_recovery_role" -eq 1 ]]; then
     cp "backups/recovery-role.$timestamp.sh" recovery-role.sh
   else
@@ -101,10 +145,14 @@ restore_previous() {
 }
 
 install -m 0644 .incoming/docker-compose.yml docker-compose.yml
+install -m 0644 .incoming/Dockerfile Dockerfile
+install -m 0644 .incoming/.dockerignore .dockerignore
+install -m 0644 .incoming/patches/gortmplib-avkans-adts-aac.patch patches/gortmplib-avkans-adts-aac.patch
 install -m 0600 .incoming/mediamtx.yml mediamtx.yml
-install -m 0644 .incoming/Caddyfile Caddyfile
+install -m 0600 .incoming/Caddyfile Caddyfile
 install -m 0755 .incoming/scorecheck-ffmpeg-runner.sh scorecheck-ffmpeg-runner.sh
 install -m 0755 .incoming/scorecheck-preview-runner.sh scorecheck-preview-runner.sh
+install -m 0755 .incoming/scorecheck-program-runner.sh scorecheck-program-runner.sh
 install -m 0755 .incoming/recovery-role.sh recovery-role.sh
 if ! docker compose config -q; then
   if [[ "$had_previous" -eq 1 ]]; then restore_previous; fi
@@ -113,7 +161,7 @@ if ! docker compose config -q; then
 fi
 
 services=(mediamtx)
-if [[ "$DEPLOY_MODE" == "staged" || "$had_previous" -eq 0 || "$compose_changed" -eq 1 || "$caddy_changed" -eq 1 ]]; then
+if [[ "$DEPLOY_MODE" == "staged" || "$had_previous" -eq 0 || "$caddy_service_changed" -eq 1 || "$caddy_changed" -eq 1 ]]; then
   services+=(caddy)
 fi
 caddy_before="$(docker inspect bvm-mediamtx-caddy --format '{{.Id}}' 2>/dev/null || true)"
@@ -123,7 +171,14 @@ if [[ "$DEPLOY_MODE" == "active" && "$had_previous" -eq 1 && -z "$caddy_before" 
   exit 1
 fi
 
-retry_docker_operation docker compose pull --quiet "${services[@]}"
+retry_docker_operation docker compose build --pull mediamtx
+pull_services=()
+for service in "${services[@]}"; do
+  [[ "$service" == "mediamtx" ]] || pull_services+=("$service")
+done
+if [[ "${#pull_services[@]}" -gt 0 ]]; then
+  retry_docker_operation docker compose pull --quiet "${pull_services[@]}"
+fi
 if [[ "$DEPLOY_MODE" == "staged" ]]; then
   for container in mediamtx bvm-mediamtx-caddy; do
     if [[ "$(docker inspect "$container" --format '{{.State.Running}}' 2>/dev/null || true)" == "true" ]]; then
@@ -164,7 +219,7 @@ for attempt in $(seq 1 30); do
   if docker inspect mediamtx --format '{{.State.Running}}' 2>/dev/null | grep -qx true \
     && docker inspect bvm-mediamtx-caddy --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null | grep -qx healthy \
     && curl -fsS http://127.0.0.1:9997/v3/config/global/get >/dev/null; then
-    if [[ "$had_previous" -eq 1 && "$compose_changed" -eq 0 && "$caddy_changed" -eq 0 ]]; then
+    if [[ "$had_previous" -eq 1 && "$caddy_service_changed" -eq 0 && "$caddy_changed" -eq 0 ]]; then
       caddy_after="$(docker inspect bvm-mediamtx-caddy --format '{{.Id}}' 2>/dev/null || true)"
       if [[ "$caddy_after" != "$caddy_before" ]]; then
         echo "Caddy identity changed during a MediaMTX-only deployment." >&2

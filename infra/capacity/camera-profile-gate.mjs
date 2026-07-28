@@ -14,7 +14,7 @@ const SAFE_ID = /^[a-zA-Z0-9_.:-]{1,80}$/;
 const SAFE_DECLARATION = /^[a-zA-Z0-9][a-zA-Z0-9 ._()+/-]{0,79}$/;
 const SAFE_HOST = /^[a-zA-Z0-9_.:@-]{1,255}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
-const SOURCE_PATH_MODES = new Set(["direct-h264", "isolated-hevc-normalizer"]);
+const SOURCE_PATH_MODES = new Set(["direct-h264", "isolated-browser-normalizer"]);
 const FRAME_RATE_MODES = new Set(["30000/1001", "30/1", "60000/1001", "60/1"]);
 const PROFILE_FIELDS = [
   "sourceProtocol",
@@ -127,7 +127,11 @@ function validateExpectedProfile(profile, court) {
     throw new Error(`expectedProfiles.${court} bitrate range is invalid`);
   }
   if (profile.videoFieldOrder !== "progressive") throw new Error(`expectedProfiles.${court}.videoFieldOrder must be progressive`);
-  if (profile.videoPixelFormat !== "yuv420p") throw new Error(`expectedProfiles.${court}.videoPixelFormat must be yuv420p`);
+  const browserNormalizerPixelFormat = profile.sourcePathMode === "isolated-browser-normalizer"
+    && profile.videoPixelFormat === "yuvj420p";
+  if (profile.videoPixelFormat !== "yuv420p" && !browserNormalizerPixelFormat) {
+    throw new Error(`expectedProfiles.${court}.videoPixelFormat must be yuv420p, or yuvj420p through the isolated browser normalizer`);
+  }
   if (profile.videoWidth !== 1920 || profile.videoHeight !== 1080) throw new Error(`expectedProfiles.${court} must require 1920x1080`);
   if (profile.audioCodec.toUpperCase() !== "AAC" || profile.audioSampleRateHz !== 48_000 || profile.audioChannelCount !== 2) {
     throw new Error(`expectedProfiles.${court} must require AAC 48 kHz stereo camera audio`);
@@ -135,8 +139,8 @@ function validateExpectedProfile(profile, court) {
   if (profile.sourcePathMode === "direct-h264" && (profile.videoCodec.toUpperCase() !== "H264" || profile.videoHasBFrames !== 0)) {
     throw new Error(`expectedProfiles.${court} direct-h264 requires H264 with zero B-frames`);
   }
-  if (profile.sourcePathMode === "isolated-hevc-normalizer" && profile.videoCodec.toUpperCase() !== "H265") {
-    throw new Error(`expectedProfiles.${court} isolated-hevc-normalizer requires H265`);
+  if (profile.sourcePathMode === "isolated-browser-normalizer" && !new Set(["H264", "H265"]).has(profile.videoCodec.toUpperCase())) {
+    throw new Error(`expectedProfiles.${court} isolated-browser-normalizer requires H264 or H265`);
   }
   if (profile.maximumGopSeconds !== 2) throw new Error(`expectedProfiles.${court}.maximumGopSeconds must be 2`);
 }

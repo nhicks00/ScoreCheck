@@ -287,7 +287,7 @@ class MonitorSnapshotRuntime {
     const response = await this.fetchImpl(`${this.origin}/v1/snapshot`, { headers: { authorization: `Bearer ${this.token}` }, cache: "no-store", signal: AbortSignal.timeout(15_000) });
     if (!response.ok) throw new Error(`monitor snapshot returned HTTP ${response.status}`);
     const value = await response.json();
-    if (value?.version !== 5 || !Array.isArray(value.courts) || !Array.isArray(value.agents)) throw new Error("monitor snapshot contract is invalid");
+    if (value?.version !== 6 || !Array.isArray(value.courts) || !Array.isArray(value.agents)) throw new Error("monitor snapshot contract is invalid");
     return value;
   }
 }

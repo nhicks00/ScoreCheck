@@ -7,8 +7,8 @@ export const COMMENTARY_SYNC_PING_INTERVAL_MS = 3000;
 export const COMMENTARY_SYNC_SAMPLE_MAX_AGE_MS = 5000;
 export const COMMENTARY_SYNC_BASELINE_SAMPLES = 8;
 export const COMMENTARY_SYNC_MISSING_OBSERVATION_GRACE_SAMPLES = 5;
-export const COMMENTARY_SYNC_MAX_CORRECTION_MS = 500;
-export const COMMENTARY_SYNC_SLEW_MS_PER_TICK = 25;
+export const COMMENTARY_SYNC_SLEW_MS_PER_TICK = 50;
+export const COMMENTARY_SYNC_MAX_DELAY_MS = 30_000;
 
 export type SyncClockPing = {
   version: 1;
@@ -126,7 +126,7 @@ export function observationOffsetMs(observation: SyncObservation): number {
 }
 
 export function initialCommentarySyncController(configuredDelayMs: number): CommentarySyncController {
-  const safeDelay = clamp(Math.round(configuredDelayMs), 0, 10_000);
+  const safeDelay = clamp(Math.round(configuredDelayMs), 0, COMMENTARY_SYNC_MAX_DELAY_MS);
   return {
     status: "fallback",
     configuredDelayMs: safeDelay,
@@ -172,15 +172,10 @@ export function commentarySyncStep(
   }
 
   const recentOffsetsMs = [...state.recentOffsetsMs, offset].slice(-5);
-  const correctionMs = clamp(
-    median(recentOffsetsMs) - state.baselineOffsetMs,
-    -COMMENTARY_SYNC_MAX_CORRECTION_MS,
-    COMMENTARY_SYNC_MAX_CORRECTION_MS
-  );
   const targetDelayMs = clamp(
-    Math.round(state.configuredDelayMs + correctionMs),
-    Math.max(0, state.configuredDelayMs - COMMENTARY_SYNC_MAX_CORRECTION_MS),
-    Math.min(10_000, state.configuredDelayMs + COMMENTARY_SYNC_MAX_CORRECTION_MS)
+    Math.round(median(recentOffsetsMs)),
+    0,
+    COMMENTARY_SYNC_MAX_DELAY_MS
   );
   const appliedDelayMs = slew(
     state.appliedDelayMs,
@@ -228,11 +223,12 @@ function parseMessage(value: unknown): CommentarySyncMessage | null {
 
 function parseTiming(value: unknown): StreamTimingSample | null {
   if (!isRecord(value) || value.version !== 1 || !finite(value.sampledAtMonotonicMs)) return null;
-  const jitterBufferMs = nullableNonNegative(value.jitterBufferMs);
-  const jitterBufferTargetMs = nullableNonNegative(value.jitterBufferTargetMs);
-  const rttMs = nullableNonNegative(value.rttMs);
-  if (jitterBufferMs === undefined || jitterBufferTargetMs === undefined || rttMs === undefined) return null;
-  return { version: 1, sampledAtMonotonicMs: value.sampledAtMonotonicMs, jitterBufferMs, jitterBufferTargetMs, rttMs };
+  const jitterBufferMs = nullableNonNegative(value.jitterBufferMs, 10_000);
+  const jitterBufferTargetMs = nullableNonNegative(value.jitterBufferTargetMs, 10_000);
+  const rttMs = nullableNonNegative(value.rttMs, 60_000);
+  const playoutDelayMs = nullableNonNegative(value.playoutDelayMs, 60_000);
+  if (playoutDelayMs === undefined || jitterBufferMs === undefined || jitterBufferTargetMs === undefined || rttMs === undefined) return null;
+  return { version: 1, sampledAtMonotonicMs: value.sampledAtMonotonicMs, playoutDelayMs, jitterBufferMs, jitterBufferTargetMs, rttMs };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -243,9 +239,9 @@ function finite(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
-function nullableNonNegative(value: unknown): number | null | undefined {
+function nullableNonNegative(value: unknown, maximum: number): number | null | undefined {
   if (value === null) return null;
-  return finite(value) && value >= 0 && value <= 10_000 ? value : undefined;
+  return finite(value) && value >= 0 && value <= maximum ? value : undefined;
 }
 
 function validId(value: unknown): value is string {

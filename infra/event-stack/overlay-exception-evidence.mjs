@@ -1,7 +1,5 @@
-import { productionSnapshotProblems } from "./production-soak.mjs";
+import { browserCounterFields, productionSnapshotProblems } from "./production-soak.mjs";
 import { validateRendererBinding } from "./renderer-binding.mjs";
-
-const QUALITY_COUNTERS = ["framesDropped", "freezeCount", "totalFreezesDurationMs", "packetsLost", "reconnectCount", "reloadCount"];
 
 export function overlayExceptionSnapshotProblems({ phase, snapshot, page, previous = null, baseline = null, profiles, venue, camera, renderer, nowMs = Date.now() }) {
   if (!new Set(["baseline", "fault"]).has(phase)) throw new Error("overlay-exception phase is invalid");
@@ -54,7 +52,7 @@ export function evaluateOverlayExceptionRehearsal({ event, generationId, camera,
     problems.push("overlay-exception endpoint evidence is incomplete");
   } else {
     if (faultBrowser.pageLoadedAt !== baselineBrowser.pageLoadedAt || faultBrowser.pageBuildVersion !== baselineBrowser.pageBuildVersion || faultBrowser.configurationVersion !== baselineBrowser.configurationVersion) problems.push("overlay-exception browser identity changed end to end");
-    for (const field of QUALITY_COUNTERS) {
+    for (const field of browserCounterFields(baselineBrowser.video)) {
       if (!Number.isFinite(baselineBrowser.video?.[field]) || faultBrowser.video?.[field] !== baselineBrowser.video[field]) problems.push(`overlay-exception browser ${field} changed end to end`);
     }
     const elapsedMs = Date.parse(faultBrowser.receivedAt) - Date.parse(baselineBrowser.receivedAt);

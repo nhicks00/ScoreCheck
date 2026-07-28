@@ -15,6 +15,7 @@ import {
   commentarySyncStep,
   COMMENTARY_SYNC_CLOCK_TOPIC,
   COMMENTARY_SYNC_INTERVAL_MS,
+  COMMENTARY_SYNC_MAX_DELAY_MS,
   COMMENTARY_SYNC_PING_INTERVAL_MS,
   COMMENTARY_SYNC_PREVIEW_TOPIC,
   COMMENTARY_SYNC_SAMPLE_MAX_AGE_MS,
@@ -102,6 +103,10 @@ type ParticipantTimingState = {
   clockEstimates: ClockEstimate[];
 };
 
+type CaptureStreamVideoElement = HTMLVideoElement & {
+  captureStream?: () => MediaStream;
+};
+
 type CommentarySourceState = {
   source: MediaStreamAudioSourceNode;
   delay: DelayNode;
@@ -132,8 +137,6 @@ export function ProgramAudioMixer({
     let reconnectTimer: number | null = null;
     let reconnectAttempt = 0;
     let connecting = false;
-    let cameraSource: MediaStreamAudioSourceNode | null = null;
-    let attachedCameraStream: MediaStream | null = null;
     let lastNonSilenceAtMs: number | null = null;
     let lastCameraNonSilenceAtMs: number | null = null;
     let commentaryTrackObservedAtMs: number | null = null;
@@ -152,6 +155,8 @@ export function ProgramAudioMixer({
     const pendingPings = new Map<string, number>();
     const participantTimings = new Map<string, ParticipantTimingState>();
     const context = new AudioContext();
+    const cameraSource = context.createMediaElementSource(cameraElement);
+    const capturedCameraStream = (cameraElement as CaptureStreamVideoElement).captureStream?.() ?? null;
     const silenceSource = context.createConstantSource();
     const silenceGain = context.createGain();
     silenceSource.offset.value = 0;
@@ -163,32 +168,9 @@ export function ProgramAudioMixer({
     cameraAnalyser.fftSize = 1024;
     cameraGain.gain.value = dbToGain(cameraGainDb);
     cameraGain.connect(cameraAnalyser).connect(context.destination);
-
-    // WHEP assigns a MediaStream to video.srcObject after the element mounts.
-    // MediaElementAudioSourceNode is silent for this Chromium/WebRTC shape, so
-    // attach the actual stream and repeat whenever a reconnect replaces it.
-    const attachCameraStream = () => {
-      const stream = cameraElement.srcObject;
-      if (!(stream instanceof MediaStream)) {
-        cameraSource?.disconnect();
-        cameraSource = null;
-        attachedCameraStream = null;
-        lastCameraNonSilenceAtMs = null;
-        cameraTrackObservedAtMs = null;
-        return;
-      }
-      if (stream === attachedCameraStream) return;
-      cameraSource?.disconnect();
-      cameraSource = null;
-      attachedCameraStream = stream;
-      lastCameraNonSilenceAtMs = null;
-      cameraTrackObservedAtMs = null;
-      if (stream.getAudioTracks().length === 0) return;
-      cameraSource = context.createMediaStreamSource(stream);
-      cameraSource.connect(cameraGain);
-    };
-    attachCameraStream();
-    const cameraAttachTimer = window.setInterval(attachCameraStream, 500);
+    // Program video is HLS. Routing its media element through Web Audio gives
+    // the mixer sole ownership of camera sound; captureStream is health-only.
+    cameraSource.connect(cameraGain);
 
     const commentaryGain = context.createGain();
     const compressor = context.createDynamicsCompressor();
@@ -231,8 +213,8 @@ export function ProgramAudioMixer({
       document.body.appendChild(playbackElement);
       track.attach(playbackElement);
       const source = context.createMediaStreamSource(new MediaStream([track.mediaStreamTrack]));
-      const delay = context.createDelay(10);
-      const configuredDelay = clamp(commentaryDelayMs, 0, 10_000);
+      const delay = context.createDelay(COMMENTARY_SYNC_MAX_DELAY_MS / 1000);
+      const configuredDelay = clamp(commentaryDelayMs, 0, COMMENTARY_SYNC_MAX_DELAY_MS);
       delay.delayTime.value = configuredDelay / 1000;
       source.connect(delay).connect(commentaryGain);
       commentarySources.set(track.mediaStreamTrack.id, {
@@ -440,7 +422,7 @@ export function ProgramAudioMixer({
       const cameraLevels = analyserLevels(cameraAnalyser);
       peakDb = Math.max(commentaryLevels.peakDb, peakDb - 2);
       cameraPeakDb = Math.max(cameraLevels.peakDb, cameraPeakDb - 2);
-      const cameraTrackPresent = attachedCameraStream?.getAudioTracks().some((track) => track.readyState === "live") ?? false;
+      const cameraTrackPresent = capturedCameraStream?.getAudioTracks().some((track) => track.readyState === "live") ?? false;
       const mutedAudioTrackCount = [...commentarySources.values()].filter((state) => state.track.isMuted).length;
       if (commentarySources.size > 0 && commentaryTrackObservedAtMs == null) commentaryTrackObservedAtMs = nowMs;
       if (commentarySources.size === 0) commentaryTrackObservedAtMs = null;
@@ -471,7 +453,7 @@ export function ProgramAudioMixer({
         cameraClippedSampleRatio: cameraTrackPresent ? cameraLevels.clippedSampleRatio : null,
         secondsSinceCameraAudio: cameraAudioReferenceMs == null ? null : Math.max(0, (nowMs - cameraAudioReferenceMs) / 1000),
         commentarySyncStatus: syncStatus,
-        commentaryDelayConfiguredMs: commentarySources.size > 0 ? clamp(commentaryDelayMs, 0, 10_000) : null,
+        commentaryDelayConfiguredMs: commentarySources.size > 0 ? clamp(commentaryDelayMs, 0, COMMENTARY_SYNC_MAX_DELAY_MS) : null,
         commentaryDelayTargetMs: syncTargetDelayMs,
         commentaryDelayAppliedMs: syncAppliedDelayMs,
         commentarySyncRttMs: syncRttMs,
@@ -482,7 +464,6 @@ export function ProgramAudioMixer({
     return () => {
       cancelled = true;
       window.clearInterval(meter);
-      window.clearInterval(cameraAttachTimer);
       window.clearInterval(clockTimer);
       window.clearInterval(syncTimer);
       if (reconnectTimer != null) window.clearTimeout(reconnectTimer);
@@ -494,7 +475,7 @@ export function ProgramAudioMixer({
       }
       commentarySources.clear();
       room?.disconnect();
-      cameraSource?.disconnect();
+      cameraSource.disconnect();
       cameraGain.disconnect();
       cameraAnalyser.disconnect();
       commentaryGain.disconnect();

@@ -33,10 +33,13 @@ describe("monitoring configuration", () => {
     });
     expect(agent.livekitMetricsUrl).toBeNull();
     expect(agent.egressMetricsUrl).toBeNull();
+    expect(agent.egressSupervisorStatePath).toBeNull();
+    expect(agent.programWarmerStatePath).toBeNull();
     expect(agent.egressMaxWebRequests).toBe(1);
 
     const service = loadServiceConfig({
       MONITOR_API_TOKEN: "abcdefghijklmnopqrstuvwxyz",
+      MONITOR_ROUTER_HEARTBEAT_TOKEN: "router-heartbeat-token-long-enough",
       ALERTMANAGER_WEBHOOK_TOKEN: "zyxwvutsrqponmlkjihgfedcba",
       MONITOR_BROWSER_HEARTBEAT_SECRET: "browser-heartbeat-secret-that-is-long-enough",
       MONITOR_PUBLIC_HOST: "monitor.example.test",
@@ -61,6 +64,7 @@ describe("monitoring configuration", () => {
   it("requires the complete Healthchecks lifecycle and channel-audit configuration as one unit", () => {
     const base = {
       MONITOR_API_TOKEN: "abcdefghijklmnopqrstuvwxyz",
+      MONITOR_ROUTER_HEARTBEAT_TOKEN: "router-heartbeat-token-long-enough",
       ALERTMANAGER_WEBHOOK_TOKEN: "zyxwvutsrqponmlkjihgfedcba",
       MONITOR_BROWSER_HEARTBEAT_SECRET: "browser-heartbeat-secret-that-is-long-enough",
       MONITOR_PUBLIC_HOST: "monitor.example.test"
@@ -137,5 +141,20 @@ describe("monitoring configuration", () => {
     };
     expect(loadAgentConfig({ ...base, MONITOR_EGRESS_MAX_WEB_REQUESTS: "2" }).egressMaxWebRequests).toBe(2);
     expect(() => loadAgentConfig({ ...base, MONITOR_EGRESS_MAX_WEB_REQUESTS: "0" })).toThrow();
+  });
+
+  it("accepts only a bounded absolute Egress supervisor state path", () => {
+    const base = {
+      MONITOR_AGENT_ID: "compositor-a",
+      MONITOR_AGENT_ROLE: "compositor",
+      MONITOR_AGENT_TOKEN: "abcdefghijklmnopqrstuvwxyz"
+    };
+    expect(loadAgentConfig({ ...base, EGRESS_SUPERVISOR_STATE_PATH: "/monitoring/egress-supervisor/state.json" }).egressSupervisorStatePath)
+      .toBe("/monitoring/egress-supervisor/state.json");
+    expect(() => loadAgentConfig({ ...base, EGRESS_SUPERVISOR_STATE_PATH: "relative/state.json" })).toThrow();
+    expect(() => loadAgentConfig({ ...base, EGRESS_SUPERVISOR_STATE_PATH: "/monitoring/../state.json" })).toThrow();
+    expect(loadAgentConfig({ ...base, PROGRAM_WARMER_STATE_PATH: "/monitoring/program-warmer/state.json" }).programWarmerStatePath)
+      .toBe("/monitoring/program-warmer/state.json");
+    expect(() => loadAgentConfig({ ...base, PROGRAM_WARMER_STATE_PATH: "relative/state.json" })).toThrow();
   });
 });

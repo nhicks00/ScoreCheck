@@ -26,6 +26,10 @@ MONITOR_CONTENT_WORKLOAD_COMMANDS = {
     "ffprobe": "workload.monitor-content-probe",
     "ffmpeg": "workload.monitor-content-analyzer",
 }
+MEDIAMTX_RUNNER_COMMAND_PREFIXES = (
+    b"/bin/sh /usr/local/bin/scorecheck-ffmpeg-runner ",
+    b"/bin/sh /tmp/scorecheck-rtmp-alias-runner ",
+)
 
 
 def utc_now():
@@ -162,15 +166,22 @@ def container_healthcheck_classification(process):
     cmdline = (process.get("commandLine") or b"").strip()
     if cmdline == b"caddy run --config /etc/caddy/Caddyfile --adapter caddyfile":
         return "healthcheck.caddy"
-    if cmdline == b"npm run start:agent":
+    if cmdline in {
+        b"npm run start:agent",
+        b"/sbin/docker-init -- docker-entrypoint.sh npm run start:agent",
+    }:
         return "healthcheck.monitor-agent"
-    if cmdline == b"/mediamtx":
+    if cmdline in {b"/mediamtx", b"/sbin/docker-init -- /mediamtx"}:
         return "healthcheck.mediamtx"
     if cmdline == b"/tini -- egress":
         return "healthcheck.egress"
     if cmdline == b"redis-server *:6379":
         return "healthcheck.redis"
     return None
+
+
+def mediamtx_runner_command_line(value):
+    return any(value.startswith(prefix) for prefix in MEDIAMTX_RUNNER_COMMAND_PREFIXES)
 
 
 def healthcheck_shim_map(processes):
@@ -229,6 +240,14 @@ def classification_map(processes, retained_healthcheck_shims=None):
 
     for process in processes.values():
         parent = processes.get(process["ppid"])
+        if (
+            mediamtx_runner_command_line((process.get("commandLine") or b"").strip())
+            and parent is not None
+            and parent["command"] == "mediamtx"
+            and process.get("cgroupFingerprint") == parent.get("cgroupFingerprint")
+        ):
+            classifications[process["identity"]] = "workload.mediamtx-runner"
+
         monitor_content_classification = MONITOR_CONTENT_WORKLOAD_COMMANDS.get(
             process["command"]
         )
@@ -259,11 +278,12 @@ def classification_map(processes, retained_healthcheck_shims=None):
         if workload_classification is None:
             runner_cmdline = (parent.get("commandLine") or b"").strip() if parent else b""
             if (
-                process["command"] in {"ffmpeg", "sleep"}
-                and runner_cmdline.startswith(b"/bin/sh /usr/local/bin/scorecheck-ffmpeg-runner ")
+                process["command"] in {"ffmpeg", "sh", "sleep"}
+                and mediamtx_runner_command_line(runner_cmdline)
                 and process.get("cgroupFingerprint") == parent.get("cgroupFingerprint")
             ):
-                classifications[process["identity"]] = f"workload.mediamtx-{process['command']}"
+                suffix = "progress-parser" if process["command"] == "sh" else process["command"]
+                classifications[process["identity"]] = f"workload.mediamtx-{suffix}"
             continue
         for egress_init in egress_inits:
             same_cgroup = process.get("cgroupFingerprint") == egress_init.get("cgroupFingerprint")
@@ -550,11 +570,16 @@ def self_test():
     assert direct_classification({"command": "sshd", "parentCommand": "systemd", "commandLine": b""}) == "observer.capacity-ssh"
     assert direct_classification({"command": "sshd", "parentCommand": "bash", "commandLine": b"sshd"}) is None
     assert container_healthcheck_classification({"commandLine": b"npm run start:agent"}) == "healthcheck.monitor-agent"
+    assert container_healthcheck_classification({"commandLine": b"/sbin/docker-init -- docker-entrypoint.sh npm run start:agent"}) == "healthcheck.monitor-agent"
     assert container_healthcheck_classification({"commandLine": b"caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"}) == "healthcheck.caddy"
     assert container_healthcheck_classification({"commandLine": b"/mediamtx"}) == "healthcheck.mediamtx"
+    assert container_healthcheck_classification({"commandLine": b"/sbin/docker-init -- /mediamtx"}) == "healthcheck.mediamtx"
     assert container_healthcheck_classification({"commandLine": b"/tini -- egress"}) == "healthcheck.egress"
     assert container_healthcheck_classification({"commandLine": b"redis-server *:6379"}) == "healthcheck.redis"
     assert container_healthcheck_classification({"commandLine": b"npm run dev"}) is None
+    assert mediamtx_runner_command_line(b"/bin/sh /usr/local/bin/scorecheck-ffmpeg-runner court1_program --")
+    assert mediamtx_runner_command_line(b"/bin/sh /tmp/scorecheck-rtmp-alias-runner court3_ingest --")
+    assert not mediamtx_runner_command_line(b"/bin/sh /tmp/unapproved-runner court3_ingest --")
 
     processes = {
         10: {"pid": 10, "ppid": 1, "identity": "10:1", "command": "tini", "parentCommand": "containerd-shim", "commandLine": b"/tini -- egress", "cgroupFingerprint": "egress"},
@@ -590,10 +615,13 @@ def self_test():
         174: {"pid": 174, "ppid": 100, "identity": "174:25", "command": "Xvfb", "parentCommand": "egress", "commandLine": b"Xvfb :99", "cgroupFingerprint": "egress"},
         175: {"pid": 175, "ppid": 174, "identity": "175:26", "command": "sh", "parentCommand": "Xvfb", "commandLine": b"/bin/sh", "cgroupFingerprint": "egress"},
         176: {"pid": 176, "ppid": 174, "identity": "176:27", "command": "sh", "parentCommand": "Xvfb", "commandLine": b"/bin/sh", "cgroupFingerprint": "other"},
-        180: {"pid": 180, "ppid": 1, "identity": "180:28", "command": "scorecheck-ffmp", "parentCommand": "mediamtx", "commandLine": b"/bin/sh /usr/local/bin/scorecheck-ffmpeg-runner court1_preview -- -i input", "cgroupFingerprint": "mediamtx"},
+        179: {"pid": 179, "ppid": 1, "identity": "179:27", "command": "mediamtx", "parentCommand": "docker-init", "commandLine": b"/mediamtx", "cgroupFingerprint": "mediamtx"},
+        180: {"pid": 180, "ppid": 179, "identity": "180:28", "command": "scorecheck-ffmp", "parentCommand": "mediamtx", "commandLine": b"/bin/sh /usr/local/bin/scorecheck-ffmpeg-runner court1_preview -- -i input", "cgroupFingerprint": "mediamtx"},
         181: {"pid": 181, "ppid": 180, "identity": "181:29", "command": "ffmpeg", "parentCommand": "scorecheck-ffmp", "commandLine": b"ffmpeg -i input", "cgroupFingerprint": "mediamtx"},
         182: {"pid": 182, "ppid": 180, "identity": "182:30", "command": "sleep", "parentCommand": "scorecheck-ffmp", "commandLine": b"sleep 1", "cgroupFingerprint": "mediamtx"},
         183: {"pid": 183, "ppid": 180, "identity": "183:31", "command": "ffmpeg", "parentCommand": "scorecheck-ffmp", "commandLine": b"ffmpeg -i input", "cgroupFingerprint": "other"},
+        184: {"pid": 184, "ppid": 180, "identity": "184:32", "command": "sh", "parentCommand": "scorecheck-ffmp", "commandLine": b"", "cgroupFingerprint": "mediamtx"},
+        185: {"pid": 185, "ppid": 180, "identity": "185:33", "command": "sh", "parentCommand": "scorecheck-ffmp", "commandLine": b"", "cgroupFingerprint": "other"},
     }
     classifications = classification_map(processes)
     assert classifications["20:2"] == "workload.egress-chrome"
@@ -622,11 +650,15 @@ def self_test():
     assert "176:27" not in classifications
     assert classifications["181:29"] == "workload.mediamtx-ffmpeg"
     assert classifications["182:30"] == "workload.mediamtx-sleep"
+    assert classifications["184:32"] == "workload.mediamtx-progress-parser"
+    assert classifications["180:28"] == "workload.mediamtx-runner"
     assert "183:31" not in classifications
+    assert "185:33" not in classifications
 
     mediamtx_init = {
         200: {"pid": 200, "ppid": 1, "identity": "200:20", "command": "containerd-shim", "parentCommand": "systemd", "commandLine": b"containerd-shim-runc-v2", "cgroupFingerprint": "host"},
-        210: {"pid": 210, "ppid": 200, "identity": "210:21", "command": "mediamtx", "parentCommand": "containerd-shim", "commandLine": b"/mediamtx", "cgroupFingerprint": "mediamtx"},
+        210: {"pid": 210, "ppid": 200, "identity": "210:21", "command": "docker-init", "parentCommand": "containerd-shim", "commandLine": b"/sbin/docker-init -- /mediamtx", "cgroupFingerprint": "mediamtx"},
+        211: {"pid": 211, "ppid": 210, "identity": "211:22", "command": "mediamtx", "parentCommand": "docker-init", "commandLine": b"/mediamtx", "cgroupFingerprint": "mediamtx"},
     }
     retained = healthcheck_shim_map(mediamtx_init)
     assert retained["200:20"]["classification"] == "healthcheck.mediamtx"
@@ -640,6 +672,18 @@ def self_test():
         220: runc_exit_race[220],
     }
     assert "220:22" not in classification_map(replaced_shim, retained)
+
+    monitor_agent_init = {
+        300: {"pid": 300, "ppid": 1, "identity": "300:30", "command": "containerd-shim", "parentCommand": "systemd", "commandLine": b"containerd-shim-runc-v2", "cgroupFingerprint": "host"},
+        310: {"pid": 310, "ppid": 300, "identity": "310:31", "command": "docker-init", "parentCommand": "containerd-shim", "commandLine": b"/sbin/docker-init -- docker-entrypoint.sh npm run start:agent", "cgroupFingerprint": "monitor-agent"},
+    }
+    retained = healthcheck_shim_map(monitor_agent_init)
+    assert retained["300:30"]["classification"] == "healthcheck.monitor-agent"
+    monitor_healthcheck_exit = {
+        300: monitor_agent_init[300],
+        320: {"pid": 320, "ppid": 300, "identity": "320:32", "command": "runc", "parentCommand": "containerd-shim", "commandLine": b"", "cgroupFingerprint": "runtime"},
+    }
+    assert classification_map(monitor_healthcheck_exit, retained)["320:32"] == "healthcheck.monitor-agent.runtime"
 
 
 def parse_args():

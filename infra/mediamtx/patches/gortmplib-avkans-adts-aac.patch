@@ -1,0 +1,162 @@
+diff --git a/pkg/message/msg_audio.go b/pkg/message/msg_audio.go
+index 0292bd6..a0ad7ff 100644
+--- a/pkg/message/msg_audio.go
++++ b/pkg/message/msg_audio.go
+@@ -76,6 +76,26 @@ func (m *Audio) unmarshal(raw *rawmessage.Message) error {
+ 	}
+ 
+ 	m.Codec = raw.Body[0] >> 4
++	if m.Codec == 15 && raw.Body[0] == 0xff {
++		var packets mpeg4audio.ADTSPackets
++		err := packets.Unmarshal(raw.Body[1:])
++		if err == nil && len(packets) == 1 {
++			packet := packets[0]
++			m.Codec = CodecMPEG4Audio
++			m.Rate = AudioRate44100
++			m.Depth = AudioDepth16
++			m.IsStereo = packet.ChannelCount == 2
++			m.AACType = AudioAACTypeAU
++			m.AACConfig = &mpeg4audio.AudioSpecificConfig{
++				Type:          packet.Type,
++				SampleRate:    packet.SampleRate,
++				ChannelConfig: packet.ChannelConfig,
++				ChannelCount:  packet.ChannelCount,
++			}
++			m.AU = packet.AU
++			return nil
++		}
++	}
+ 	switch m.Codec {
+ 	case CodecMPEG4Audio, CodecMPEG1Audio, CodecPCMA, CodecPCMU, CodecLPCM:
+ 	default:
+diff --git a/pkg/message/msg_audio_compat_test.go b/pkg/message/msg_audio_compat_test.go
+new file mode 100644
+index 0000000..2d60b01
+--- /dev/null
++++ b/pkg/message/msg_audio_compat_test.go
+@@ -0,0 +1,39 @@
++package message
++
++import (
++	"testing"
++	"time"
++
++	"github.com/bluenviron/gortmplib/pkg/rawmessage"
++	"github.com/stretchr/testify/require"
++)
++
++func TestAudioUnmarshalADTSWrappedAAC(t *testing.T) {
++	raw := &rawmessage.Message{
++		ChunkStreamID:   AudioChunkStreamID,
++		Timestamp:       14 * time.Millisecond,
++		Type:            uint8(TypeAudio),
++		MessageStreamID: 1,
++		Body: []byte{
++			0xff,
++			0xff, 0xf1, 0x4c, 0x80, 0x01, 0x3f, 0xfc,
++			0x01, 0x02,
++		},
++	}
++
++	var actual Audio
++	require.NoError(t, actual.unmarshal(raw))
++	require.Equal(t, uint8(CodecMPEG4Audio), actual.Codec)
++	require.Equal(t, AudioAACTypeAU, actual.AACType)
++	require.Equal(t, 48000, actual.AACConfig.SampleRate)
++	require.Equal(t, 2, actual.AACConfig.ChannelCount)
++	require.Equal(t, []byte{0x01, 0x02}, actual.AU)
++}
++
++func TestAudioUnmarshalRejectsOtherCodec15(t *testing.T) {
++	raw := &rawmessage.Message{Body: []byte{0xff, 0x01}}
++
++	var actual Audio
++	err := actual.unmarshal(raw)
++	require.EqualError(t, err, "unsupported audio codec: 15")
++}
+diff --git a/reader.go b/reader.go
+index 5cb1f04..ff75dab 100644
+--- a/reader.go
++++ b/reader.go
+@@ -439,12 +439,10 @@ func (r *Reader) readTracks() (map[uint8]*Track, map[uint8]*Track, error) {
+ 
+ 			if audioTracks[0] == nil {
+ 				if msg.Codec == message.CodecMPEG4Audio {
+-					if msg.AACType == message.AudioAACTypeConfig {
+-						if msg.AACConfig != nil {
+-							audioTracks[0] = &Track{Codec: &codecs.MPEG4Audio{
+-								Config: msg.AACConfig,
+-							}}
+-						}
++					if msg.AACConfig != nil {
++						audioTracks[0] = &Track{Codec: &codecs.MPEG4Audio{
++							Config: msg.AACConfig,
++						}}
+ 					}
+ 				} else {
+ 					audioTracks[0], err = audioTrackFromData(msg)
+diff --git a/reader_adts_compat_test.go b/reader_adts_compat_test.go
+new file mode 100644
+index 0000000..73d368b
+--- /dev/null
++++ b/reader_adts_compat_test.go
+@@ -0,0 +1,59 @@
++package gortmplib
++
++import (
++	"io"
++	"testing"
++	"time"
++
++	"github.com/bluenviron/mediacommon/v2/pkg/codecs/mpeg4audio"
++	"github.com/stretchr/testify/require"
++
++	"github.com/bluenviron/gortmplib/pkg/codecs"
++	"github.com/bluenviron/gortmplib/pkg/message"
++)
++
++type adtsCompatConn struct {
++	messages []message.Message
++	position int
++}
++
++func (*adtsCompatConn) BytesReceived() uint64       { return 0 }
++func (*adtsCompatConn) BytesSent() uint64           { return 0 }
++func (*adtsCompatConn) Write(message.Message) error { return nil }
++
++func (c *adtsCompatConn) Read() (message.Message, error) {
++	if c.position >= len(c.messages) {
++		return nil, io.EOF
++	}
++	value := c.messages[c.position]
++	c.position++
++	return value, nil
++}
++
++func TestReaderAcceptsAACConfigOnAccessUnit(t *testing.T) {
++	config := &mpeg4audio.AudioSpecificConfig{
++		Type:          2,
++		SampleRate:    48000,
++		ChannelConfig: 2,
++		ChannelCount:  2,
++	}
++	conn := &adtsCompatConn{messages: []message.Message{
++		&message.Audio{Codec: message.CodecMPEG4Audio, AACType: message.AudioAACTypeAU, AACConfig: config, AU: []byte{0x01, 0x02}},
++		&message.Audio{DTS: 2 * time.Second, Codec: message.CodecMPEG4Audio, AACType: message.AudioAACTypeAU, AACConfig: config, AU: []byte{0x03, 0x04}},
++	}}
++	reader := &Reader{Conn: conn}
++	require.NoError(t, reader.Initialize())
++
++	tracks := reader.Tracks()
++	require.Len(t, tracks, 1)
++	audio, ok := tracks[0].Codec.(*codecs.MPEG4Audio)
++	require.True(t, ok)
++	require.Equal(t, config, audio.Config)
++
++	var received []byte
++	reader.OnDataMPEG4Audio(tracks[0], func(_ time.Duration, accessUnit []byte) {
++		received = append([]byte(nil), accessUnit...)
++	})
++	require.NoError(t, reader.Read())
++	require.Equal(t, []byte{0x01, 0x02}, received)
++}

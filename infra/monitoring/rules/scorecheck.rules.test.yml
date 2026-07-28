@@ -724,7 +724,7 @@ tests:
               root_dependency: program-browser
             exp_annotations:
               summary: Camera 2's required Program viewer is dropping many video frames.
-              first_action: Inspect the program WHEP decoder and timestamp path immediately; verify upstream preview health before changing source encoding.
+              first_action: Inspect the buffered HLS decoder, segment freshness, and program timeline immediately; verify upstream preview health before changing source encoding.
 
   - name: sustained browser freeze time is required-only and severity-banded
     interval: 5s
@@ -774,6 +774,123 @@ tests:
             exp_annotations:
               summary: Camera 4's required Program viewer is intermittently freezing.
               first_action: Compare Chrome freeze, frame-drop, jitter-buffer, preview, and host-load telemetry to isolate the affected stage.
+
+  - name: output-owned program warmer is mandatory only for a live broadcast
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_compositor_court_assignment{agent="warmer-a",court="1"}'
+        values: '1 1 1 1 1 1 1'
+      - series: 'scorecheck_court_broadcast_live{court="1"}'
+        values: '1 1 1 1 1 1 1'
+      - series: 'scorecheck_program_warmer_present{agent="warmer-a"}'
+        values: '0 0 0 0 0 0 0'
+      - series: 'scorecheck_program_warmer_fresh{agent="warmer-a"}'
+        values: '0 0 0 0 0 0 0'
+
+      - series: 'scorecheck_compositor_court_assignment{agent="warmer-idle",court="2"}'
+        values: '1 1 1 1 1 1 1'
+      - series: 'scorecheck_court_broadcast_live{court="2"}'
+        values: '1 1 1 1 1 1 1'
+      - series: 'scorecheck_program_warmer_present{agent="warmer-idle"}'
+        values: '1 1 1 1 1 1 1'
+      - series: 'scorecheck_program_warmer_fresh{agent="warmer-idle"}'
+        values: '1 1 1 1 1 1 1'
+      - series: 'scorecheck_program_warmer_state{agent="warmer-idle",status="IDLE"}'
+        values: '1 1 1 1 1 1 1'
+
+      - series: 'scorecheck_compositor_court_assignment{agent="warmer-off",court="3"}'
+        values: '1 1 1 1 1 1 1'
+      - series: 'scorecheck_court_broadcast_live{court="3"}'
+        values: '0 0 0 0 0 0 0'
+      - series: 'scorecheck_program_warmer_present{agent="warmer-off"}'
+        values: '0 0 0 0 0 0 0'
+      - series: 'scorecheck_program_warmer_fresh{agent="warmer-off"}'
+        values: '0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 25s
+        alertname: ScoreCheckProgramWarmerUnavailable
+        exp_alerts:
+          - exp_labels:
+              agent: warmer-a
+              severity: critical
+              stage: EGRESS
+              issue_code: PROGRAM_BRANCH_WARMER_UNAVAILABLE
+              root_dependency: warmer-a
+            exp_annotations:
+              summary: The output-owned program branch is not ready for recovery on warmer-a.
+              first_action: Leave the camera streaming and inspect the program-warmer service without stopping YouTube.
+          - exp_labels:
+              agent: warmer-idle
+              severity: critical
+              stage: EGRESS
+              issue_code: PROGRAM_BRANCH_WARMER_UNAVAILABLE
+              root_dependency: warmer-idle
+            exp_annotations:
+              summary: The output-owned program branch is not ready for recovery on warmer-idle.
+              first_action: Leave the camera streaming and inspect the program-warmer service without stopping YouTube.
+
+  - name: Egress supervisor availability recovery and terminal failure are durable
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_compositor_court_assignment{agent="supervisor-a",court="1"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_court_broadcast_live{court="1"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_egress_supervisor_present{agent="supervisor-a"}'
+        values: '0 0 0 0 0 0 0 0'
+      - series: 'scorecheck_egress_supervisor_fresh{agent="supervisor-a"}'
+        values: '0 0 0 0 0 0 0 0'
+
+      - series: 'scorecheck_compositor_court_assignment{agent="supervisor-b",court="2"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_court_broadcast_live{court="2"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_egress_supervisor_state{agent="supervisor-b",status="RECOVERY_EXHAUSTED"}'
+        values: '1 1 1 1 1 1 1 1'
+
+      - series: 'scorecheck_compositor_court_assignment{agent="supervisor-c",court="3"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_court_broadcast_live{court="3"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_egress_supervisor_state{agent="supervisor-c",status="RECOVERING"}'
+        values: '1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 25s
+        alertname: ScoreCheckEgressSupervisorUnavailable
+        exp_alerts:
+          - exp_labels:
+              agent: supervisor-a
+              severity: critical
+              stage: EGRESS
+              issue_code: EGRESS_SUPERVISOR_UNAVAILABLE
+              root_dependency: supervisor-a
+            exp_annotations:
+              summary: Automatic output recovery is unavailable on supervisor-a.
+              first_action: Inspect the Egress supervisor service before relying on automatic output recovery.
+      - eval_time: 10s
+        alertname: ScoreCheckEgressSupervisorFailed
+        exp_alerts:
+          - exp_labels:
+              agent: supervisor-b
+              severity: critical
+              stage: EGRESS
+              issue_code: EGRESS_SUPERVISOR_FAILED
+              root_dependency: supervisor-b
+            exp_annotations:
+              summary: Automatic output recovery cannot prove one owned stream on supervisor-b.
+              first_action: Inspect the compositor owner state and restore exactly one verified output.
+      - eval_time: 20s
+        alertname: ScoreCheckEgressRecovering
+        exp_alerts:
+          - exp_labels:
+              agent: supervisor-c
+              severity: warning
+              stage: EGRESS
+              issue_code: EGRESS_RECOVERING
+              root_dependency: supervisor-c
+            exp_annotations:
+              summary: Automatic output recovery is running on supervisor-c.
+              first_action: Watch for bounded recovery; intervene if the supervisor exhausts its two attempts.
       - eval_time: 4m
         alertname: ScoreCheckProgramFreezeRatioCritical
         exp_alerts:
@@ -785,7 +902,7 @@ tests:
               root_dependency: program-browser
             exp_annotations:
               summary: Camera 5's required Program viewer is repeatedly freezing.
-              first_action: Inspect the program WHEP decoder and timestamp path immediately; verify upstream preview health before changing source encoding.
+              first_action: Inspect the buffered HLS decoder, segment freshness, and program timeline immediately; verify upstream preview health before changing source encoding.
 
   - name: browser quality alerts wait for a meaningful sample
     interval: 5s
@@ -809,3 +926,339 @@ tests:
       - eval_time: 45s
         alertname: ScoreCheckProgramFreezeRatioCritical
         exp_alerts: []
+
+  - name: sustained source-to-program cadence loss is court-scoped and live-only
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_ffmpeg_frames_per_second{agent="comp-a",court="1",branch="normalizer"}'
+        values: '30+0x10'
+      - series: 'scorecheck_ffmpeg_speed_ratio{agent="comp-a",court="1",branch="normalizer"}'
+        values: '1+0x10'
+      - series: 'scorecheck_ffmpeg_speed_available{agent="comp-a",court="1",branch="normalizer"}'
+        values: '1+0x10'
+      - series: 'scorecheck_court_broadcast_live{court="1"}'
+        values: '1+0x10'
+
+      - series: 'scorecheck_ffmpeg_frames_per_second{agent="comp-b",court="2",branch="normalizer"}'
+        values: '19+0x10'
+      - series: 'scorecheck_ffmpeg_speed_ratio{agent="comp-b",court="2",branch="normalizer"}'
+        values: '0.63+0x10'
+      - series: 'scorecheck_ffmpeg_speed_available{agent="comp-b",court="2",branch="normalizer"}'
+        values: '1+0x10'
+      - series: 'scorecheck_court_broadcast_live{court="2"}'
+        values: '1+0x10'
+
+      - series: 'scorecheck_ffmpeg_speed_available{agent="comp-c",court="3",branch="normalizer"}'
+        values: '0+0x10'
+      - series: 'scorecheck_court_broadcast_live{court="3"}'
+        values: '1+0x10'
+
+      - series: 'scorecheck_ffmpeg_frames_per_second{agent="comp-d",court="4",branch="program"}'
+        values: '12+0x10'
+      - series: 'scorecheck_ffmpeg_speed_ratio{agent="comp-d",court="4",branch="program"}'
+        values: '0.4+0x10'
+      - series: 'scorecheck_ffmpeg_speed_available{agent="comp-d",court="4",branch="program"}'
+        values: '1+0x10'
+      - series: 'scorecheck_court_broadcast_live{court="4"}'
+        values: '0+0x10'
+    alert_rule_test:
+      - eval_time: 25s
+        alertname: ScoreCheckProgramSourceCadenceLow
+        exp_alerts: []
+      - eval_time: 40s
+        alertname: ScoreCheckProgramSourceCadenceLow
+        exp_alerts:
+          - exp_labels:
+              court: '2'
+              severity: critical
+              stage: PROGRAM_PATH
+              issue_code: PROGRAM_SOURCE_CADENCE_LOW
+              root_dependency: camera-media-cadence
+            exp_annotations:
+              summary: Camera 2 video is not reaching its Program output at a usable real-time rate.
+              first_action: Leave the broadcast running and check the camera source profile and connection before restarting any output.
+          - exp_labels:
+              court: '3'
+              severity: critical
+              stage: PROGRAM_PATH
+              issue_code: PROGRAM_SOURCE_CADENCE_LOW
+              root_dependency: camera-media-cadence
+            exp_annotations:
+              summary: Camera 3 video is not reaching its Program output at a usable real-time rate.
+              first_action: Leave the broadcast running and check the camera source profile and connection before restarting any output.
+
+  - name: preview cadence is checked only while an inspection reader is active
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_ffmpeg_frames_per_second{agent="ingest",court="1",branch="preview"}'
+        values: '0+0x8'
+      - series: 'scorecheck_media_path_readers{agent="ingest",court="1",branch="preview"}'
+        values: '0+0x8'
+      - series: 'scorecheck_court_broadcast_live{court="1"}'
+        values: '1+0x8'
+
+      - series: 'scorecheck_ffmpeg_frames_per_second{agent="ingest",court="2",branch="preview"}'
+        values: '10+0x8'
+      - series: 'scorecheck_media_path_readers{agent="ingest",court="2",branch="preview"}'
+        values: '1+0x8'
+      - series: 'scorecheck_court_broadcast_live{court="2"}'
+        values: '1+0x8'
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: ScoreCheckPreviewBranchFpsLow
+        exp_alerts:
+          - exp_labels:
+              agent: ingest
+              branch: preview
+              court: '2'
+              severity: warning
+              stage: PREVIEW
+              issue_code: PREVIEW_BRANCH_FPS_LOW
+              root_dependency: mediamtx-ffmpeg
+            exp_annotations:
+              summary: Camera 2's selected inspection preview is visibly lagging.
+              first_action: Close and reopen that inspection preview; the public stream is monitored separately.
+
+  - name: shared SRT congestion is one active-event root cause
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_media_transport_packets_received_total{agent="ingest",court="1",branch="raw",protocol="SRT"}'
+        values: '0+100x48'
+      - series: 'scorecheck_media_transport_packets_lost_total{agent="ingest",court="1",branch="raw",protocol="SRT"}'
+        values: '0+10x48'
+      - series: 'scorecheck_media_transport_packets_retransmitted_total{agent="ingest",court="1",branch="raw",protocol="SRT"}'
+        values: '0+20x48'
+      - series: 'scorecheck_media_transport_metrics_available{agent="ingest",court="1",branch="raw",protocol="SRT"}'
+        values: '1+0x48'
+      - series: 'scorecheck_court_media_required{court="1"}'
+        values: '1+0x48'
+      - series: 'scorecheck_media_path_inbound_bitrate_bps{agent="ingest",court="1",branch="raw"}'
+        values: '100000+0x48'
+      - series: 'scorecheck_program_browser_frames_received_total{court="1"}'
+        values: '0+100x48'
+      - series: 'scorecheck_program_browser_frames_dropped_total{court="1"}'
+        values: '0+20x48'
+      - series: 'scorecheck_program_browser_required{court="1"}'
+        values: '1+0x48'
+
+      - series: 'scorecheck_media_transport_packets_received_total{agent="ingest",court="2",branch="raw",protocol="SRT"}'
+        values: '0+100x48'
+      - series: 'scorecheck_media_transport_packets_lost_total{agent="ingest",court="2",branch="raw",protocol="SRT"}'
+        values: '0+10x48'
+      - series: 'scorecheck_media_transport_packets_retransmitted_total{agent="ingest",court="2",branch="raw",protocol="SRT"}'
+        values: '0+20x48'
+      - series: 'scorecheck_media_transport_metrics_available{agent="ingest",court="2",branch="raw",protocol="SRT"}'
+        values: '1+0x48'
+      - series: 'scorecheck_court_media_required{court="2"}'
+        values: '1+0x48'
+
+      - series: 'scorecheck_media_path_inbound_bitrate_bps{agent="ingest",court="3",branch="raw"}'
+        values: '100000+0x48'
+      - series: 'scorecheck_court_media_required{court="3"}'
+        values: '1+0x48'
+      - series: 'scorecheck_program_browser_frames_received_total{court="3"}'
+        values: '0+100x48'
+      - series: 'scorecheck_program_browser_frames_dropped_total{court="3"}'
+        values: '0+20x48'
+      - series: 'scorecheck_program_browser_required{court="3"}'
+        values: '1+0x48'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ScoreCheckVenueSrtCongestion
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              stage: RAW_INGEST
+              issue_code: VENUE_SRT_CONGESTION
+              root_dependency: venue-uplink
+            exp_annotations:
+              summary: The venue upload is overloaded, so multiple SRT cameras are retransmitting video.
+              first_action: Do not restart the cameras. Add upload capacity or lower total camera bitrate until this alert clears.
+      - eval_time: 3m
+        alertname: ScoreCheckProgramFrameDropRatioCritical
+        exp_alerts:
+          - exp_labels:
+              court: '3'
+              severity: critical
+              stage: PROGRAM_BROWSER
+              issue_code: PROGRAM_FRAME_DROP_RATIO_CRITICAL
+              root_dependency: program-browser
+            exp_annotations:
+              summary: Camera 3's required Program viewer is dropping many video frames.
+              first_action: Inspect the buffered HLS decoder, segment freshness, and program timeline immediately; verify upstream preview health before changing source encoding.
+
+  - name: venue router status and fail-closed route page only while cameras are required
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_router_heartbeat_fresh'
+        values: '0+0x20'
+      - series: 'scorecheck_router_camera_route_healthy'
+        values: '0+0x20'
+      - series: 'scorecheck_court_media_required{court="1"}'
+        values: '1+0x20'
+    alert_rule_test:
+      - eval_time: 45s
+        alertname: ScoreCheckVenueRouterHeartbeatMissing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              stage: VENUE
+              issue_code: VENUE_ROUTER_STATUS_MISSING
+              root_dependency: venue-router
+            exp_annotations:
+              summary: The venue router stopped reporting its internet and routing status.
+              first_action: Keep the cameras streaming. Check that the venue router is powered on and connected to the internet.
+      - eval_time: 20s
+        alertname: ScoreCheckVenueCameraRouteUnprotected
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              stage: VENUE
+              issue_code: VENUE_CAMERA_ROUTE_UNPROTECTED
+              root_dependency: venue-router
+            exp_annotations:
+              summary: Camera traffic is not protected by the bonded fail-closed route.
+              first_action: Keep the cameras streaming and contact the technical operator. Do not change camera settings.
+
+  - name: shared SRT congestion recovery waits for browser metrics to age out
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_media_transport_packets_received_total{agent="ingest",court="1",branch="raw",protocol="SRT"}'
+        values: '0+100x120'
+      - series: 'scorecheck_media_transport_packets_lost_total{agent="ingest",court="1",branch="raw",protocol="SRT"}'
+        values: '0+10x12 120+0x108'
+      - series: 'scorecheck_media_transport_packets_retransmitted_total{agent="ingest",court="1",branch="raw",protocol="SRT"}'
+        values: '0+20x12 240+0x108'
+      - series: 'scorecheck_media_transport_metrics_available{agent="ingest",court="1",branch="raw",protocol="SRT"}'
+        values: '1+0x120'
+      - series: 'scorecheck_court_media_required{court="1"}'
+        values: '1+0x120'
+      - series: 'scorecheck_program_browser_frames_received_total{court="1"}'
+        values: '0+150x120'
+      - series: 'scorecheck_program_browser_frames_dropped_total{court="1"}'
+        values: '0+15x120'
+      - series: 'scorecheck_program_browser_required{court="1"}'
+        values: '1+0x120'
+
+      - series: 'scorecheck_media_transport_packets_received_total{agent="ingest",court="2",branch="raw",protocol="SRT"}'
+        values: '0+100x120'
+      - series: 'scorecheck_media_transport_packets_lost_total{agent="ingest",court="2",branch="raw",protocol="SRT"}'
+        values: '0+10x12 120+0x108'
+      - series: 'scorecheck_media_transport_packets_retransmitted_total{agent="ingest",court="2",branch="raw",protocol="SRT"}'
+        values: '0+20x12 240+0x108'
+      - series: 'scorecheck_media_transport_metrics_available{agent="ingest",court="2",branch="raw",protocol="SRT"}'
+        values: '1+0x120'
+      - series: 'scorecheck_court_media_required{court="2"}'
+        values: '1+0x120'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ScoreCheckProgramFrameDropRatioCritical
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: ScoreCheckProgramFrameDropRatioCritical
+        exp_alerts:
+          - exp_labels:
+              court: '1'
+              severity: critical
+              stage: PROGRAM_BROWSER
+              issue_code: PROGRAM_FRAME_DROP_RATIO_CRITICAL
+              root_dependency: program-browser
+            exp_annotations:
+              summary: Camera 1's required Program viewer is dropping many video frames.
+              first_action: Inspect the buffered HLS decoder, segment freshness, and program timeline immediately; verify upstream preview health before changing source encoding.
+
+  - name: same-camera browser drop and freeze symptoms produce one alert
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_program_browser_frames_received_total{court="1"}'
+        values: '0+150x72'
+      - series: 'scorecheck_program_browser_frames_dropped_total{court="1"}'
+        values: '0+15x72'
+      - series: 'scorecheck_program_browser_freezes_total{court="1"}'
+        values: '0+1x72'
+      - series: 'scorecheck_program_browser_freeze_duration_seconds_total{court="1"}'
+        values: '0+1x72'
+      - series: 'scorecheck_program_browser_required{court="1"}'
+        values: '1+0x72'
+
+      - series: 'scorecheck_program_browser_frames_received_total{court="2"}'
+        values: '0+150x72'
+      - series: 'scorecheck_program_browser_frames_dropped_total{court="2"}'
+        values: '0+2x72'
+      - series: 'scorecheck_program_browser_freezes_total{court="2"}'
+        values: '0+1x72'
+      - series: 'scorecheck_program_browser_freeze_duration_seconds_total{court="2"}'
+        values: '0+1x72'
+      - series: 'scorecheck_program_browser_required{court="2"}'
+        values: '1+0x72'
+
+      - series: 'scorecheck_program_browser_frames_received_total{court="3"}'
+        values: '0+150x72'
+      - series: 'scorecheck_program_browser_frames_dropped_total{court="3"}'
+        values: '0+2x72'
+      - series: 'scorecheck_program_browser_freezes_total{court="3"}'
+        values: '0+1x72'
+      - series: 'scorecheck_program_browser_freeze_duration_seconds_total{court="3"}'
+        values: '0+0.1x72'
+      - series: 'scorecheck_program_browser_required{court="3"}'
+        values: '1+0x72'
+
+      - series: 'scorecheck_program_browser_frames_received_total{court="4"}'
+        values: '0+150x72'
+      - series: 'scorecheck_program_browser_frames_dropped_total{court="4"}'
+        values: '0+0x72'
+      - series: 'scorecheck_program_browser_freezes_total{court="4"}'
+        values: '0+1x72'
+      - series: 'scorecheck_program_browser_freeze_duration_seconds_total{court="4"}'
+        values: '0+0.1x72'
+      - series: 'scorecheck_program_browser_required{court="4"}'
+        values: '1+0x72'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ScoreCheckProgramFrameDropRatioCritical
+        exp_alerts:
+          - exp_labels:
+              court: '1'
+              severity: critical
+              stage: PROGRAM_BROWSER
+              issue_code: PROGRAM_FRAME_DROP_RATIO_CRITICAL
+              root_dependency: program-browser
+            exp_annotations:
+              summary: Camera 1's required Program viewer is dropping many video frames.
+              first_action: Inspect the buffered HLS decoder, segment freshness, and program timeline immediately; verify upstream preview health before changing source encoding.
+      - eval_time: 4m
+        alertname: ScoreCheckProgramFrameDropRatioHigh
+        exp_alerts:
+          - exp_labels:
+              court: '3'
+              severity: warning
+              stage: PROGRAM_BROWSER
+              issue_code: PROGRAM_FRAME_DROP_RATIO_HIGH
+              root_dependency: program-browser
+            exp_annotations:
+              summary: Camera 3's required Program viewer is dropping some video frames.
+              first_action: Compare received, decoded, dropped, jitter-buffer, preview, and host-load telemetry before changing the camera or compositor.
+      - eval_time: 4m
+        alertname: ScoreCheckProgramFreezeRatioCritical
+        exp_alerts:
+          - exp_labels:
+              court: '2'
+              severity: critical
+              stage: PROGRAM_BROWSER
+              issue_code: PROGRAM_FREEZE_RATIO_CRITICAL
+              root_dependency: program-browser
+            exp_annotations:
+              summary: Camera 2's required Program viewer is repeatedly freezing.
+              first_action: Inspect the buffered HLS decoder, segment freshness, and program timeline immediately; verify upstream preview health before changing source encoding.
+      - eval_time: 4m
+        alertname: ScoreCheckProgramFreezeRatioHigh
+        exp_alerts:
+          - exp_labels:
+              court: '4'
+              severity: warning
+              stage: PROGRAM_BROWSER
+              issue_code: PROGRAM_FREEZE_RATIO_HIGH
+              root_dependency: program-browser
+            exp_annotations:
+              summary: Camera 4's required Program viewer is intermittently freezing.
+              first_action: Compare Chrome freeze, frame-drop, jitter-buffer, preview, and host-load telemetry to isolate the affected stage.

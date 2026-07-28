@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { buildEventManifest, loadManifestInputs } from "./event-manifest.mjs";
-import { buildProductionMaterial, buildProductionSecretFiles, migrateMonitoringEnvironment, migrateProductionMaterial } from "./production-recovery.mjs";
+import { deriveOpaqueRtmpKey } from "../mediamtx/opaque-rtmp-key.mjs";
+import { buildProductionMaterial, buildProductionSecretFiles, derivedMediaReadCredentials, migrateMonitoringEnvironment, migrateProductionMaterial, migrateWebRuntimeEnvironment } from "./production-recovery.mjs";
 import { createSyntheticRehearsalVenueProfile } from "./venue-admission.mjs";
 
 const inputs = await loadManifestInputs();
@@ -10,8 +11,13 @@ const manifest = buildEventManifest({ event: "production-recovery-test", kind: "
 const venueProfile = createSyntheticRehearsalVenueProfile(manifest.event);
 venueProfile.cameras[1] = {
   ...venueProfile.cameras[1],
-  sourcePathMode: "isolated-hevc-normalizer",
+  sourcePathMode: "isolated-browser-normalizer",
   sourceCodec: "H265"
+};
+venueProfile.cameras[2] = {
+  ...venueProfile.cameras[2],
+  sourceProtocol: "RTMP_LEGACY_APPROVED",
+  legacyTransportApproved: true
 };
 const renderer = {
   schemaVersion: 1,
@@ -24,7 +30,7 @@ const renderer = {
     programSession: "program-session-v1",
     overlayState: "overlay-state-v1",
     commentary: "commentary-v1",
-    browserHeartbeat: "browser-heartbeat-v5"
+    browserHeartbeat: "browser-heartbeat-v6"
   }
 };
 
@@ -44,11 +50,20 @@ function fixture() {
   };
   const webEnvironment = {
     LIVEKIT_COMMENTARY_API_KEY: "commentary-key-123",
-    LIVEKIT_COMMENTARY_API_SECRET: "commentary-secret-abcdefghijklmnopqrstuvwxyz"
+    LIVEKIT_COMMENTARY_API_SECRET: "commentary-secret-abcdefghijklmnopqrstuvwxyz",
+    MEDIAMTX_HLS_BASE_URL: "https://preview.example.test",
+    MEDIAMTX_WHEP_BASE_URL: "https://preview.example.test",
+    MONITOR_BROWSER_HEARTBEAT_SECRET: "monitor-browser-secret-abcdefghijklmnopqrstuvwxyz",
+    MONITOR_PUBLIC_URL: "https://monitor.example.test",
+    NEXT_PUBLIC_LIVEKIT_COMMENTARY_URL: "wss://rtc.example.test",
+    NEXT_PUBLIC_SUPABASE_ANON_KEY: "anon-key-abcdefghijklmnopqrstuvwxyz",
+    NEXT_PUBLIC_SUPABASE_URL: "https://project.supabase.co",
+    PROGRAM_PAGE_TOKEN: "program-page-token-abcdefghijklmnopqrstuvwxyz",
+    SUPABASE_SERVICE_ROLE_KEY: "service-role-abcdefghijklmnopqrstuvwxyz"
   };
   const monitoringEnvironment = Object.fromEntries([
     "ALERTMANAGER_WEBHOOK_TOKEN", "HEALTHCHECKS_ACTIVE_CHECK_ID", "HEALTHCHECKS_ACTIVE_PING_URL", "HEALTHCHECKS_API_KEY",
-    "HEALTHCHECKS_BASELINE_CHECK_ID", "HEALTHCHECKS_BASELINE_PING_URL", "HEALTHCHECKS_SENTINEL_PING_URL", "MONITOR_API_TOKEN", "MONITOR_BROWSER_ALLOWED_ORIGINS",
+    "HEALTHCHECKS_BASELINE_CHECK_ID", "HEALTHCHECKS_BASELINE_PING_URL", "HEALTHCHECKS_SENTINEL_PING_URL", "MONITOR_API_TOKEN", "MONITOR_ROUTER_HEARTBEAT_TOKEN", "MONITOR_BROWSER_ALLOWED_ORIGINS",
     "MONITOR_BROWSER_HEARTBEAT_SECRET", "MONITOR_DASHBOARD_URL", "MONITOR_PUBLIC_HOST", "PUSHOVER_APP_TOKEN", "PUSHOVER_USER_KEY",
     "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_URL", "YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_REFRESH_TOKEN"
   ].map((key) => [key, `${key.toLowerCase()}-abcdefghijklmnopqrstuvwxyz`]));
@@ -91,23 +106,49 @@ test("renders the exact 12-host production secret contract and strips stale targ
   const values = fixture();
   const material = buildProductionMaterial(values);
   const agentTokens = Object.fromEntries(manifest.droplets.map((spec, index) => [spec.name, `agent-${index}-abcdefghijklmnopqrstuvwxyz123456`]));
-  const files = buildProductionSecretFiles({ manifest, material, monitoringEnvironment: values.monitoringEnvironment, renderer, venueProfile, agentTokens });
+  const files = buildProductionSecretFiles({
+    manifest,
+    material,
+    monitoringEnvironment: values.monitoringEnvironment,
+    webEnvironment: values.webEnvironment,
+    renderer,
+    localRendererSha256: "c".repeat(64),
+    venueProfile,
+    agentTokens
+  });
   assert.equal(Object.keys(files).filter((name) => name.startsWith("compositors/")).length, 9);
   assert.match(files["ingest.env"], /MEDIAMTX_COURT_8_RAW_SOURCE="publisher"/);
   assert.match(files["ingest.env"], /MEDIAMTX_COURT_1_BROWSER_SOURCE="raw"/);
   assert.match(files["ingest.env"], /MEDIAMTX_COURT_2_BROWSER_SOURCE="normalized"/);
+  const expectedCamera3Key = deriveOpaqueRtmpKey({
+    court: 3,
+    user: material.publishers[3].user,
+    password: material.publishers[3].password
+  });
+  assert.match(files["ingest.env"], new RegExp(`^MEDIAMTX_COURT_3_RTMP_PUBLISH_KEY="${expectedCamera3Key}"$`, "mu"));
+  assert.doesNotMatch(files["ingest.env"], /MEDIAMTX_COURT_(?:1|2|4|5|6|7|8)_RTMP_PUBLISH_KEY/u);
   assert.doesNotMatch(files["observability.env"], /MONITOR_AGENT_TARGETS/);
   assert.doesNotMatch(files["observability.env"], /TWILIO_/);
+  assert.match(files["observability.env"], /MONITOR_ROUTER_HEARTBEAT_TOKEN=/);
   assert.match(files["compositors/bvm-compositor-h.env"], /COURT_8_YOUTUBE_KEY=/);
   assert.match(files["compositors/bvm-compositor-h.env"], /COURT_8_YOUTUBE_STREAM_ID=/);
   assert.match(files["compositors/bvm-compositor-h.env"], /YOUTUBE_STREAM_RESOLUTION="variable"/);
   assert.match(files["compositors/bvm-compositor-h.env"], /PRODUCTION_OUTPUT_PROFILES="1080p30,1080p60"/);
-  assert.match(files["compositors/bvm-compositor-h.env"], /PROGRAM_PAGE_BASE_URL="https:\/\/scorecheck-abc123-team\.vercel\.app\/program"/);
+  assert.match(files["compositors/bvm-compositor-h.env"], /PROGRAM_PAGE_BASE_URL="http:\/\/renderer:3000\/program"/);
+  assert.match(files["compositors/bvm-compositor-h.env"], /PROGRAM_RENDERER_RELEASE_ORIGIN="https:\/\/scorecheck-abc123-team\.vercel\.app"/);
+  assert.match(files["compositors/bvm-compositor-h.env"], /PROGRAM_RENDERER_BUNDLE_SHA256="c{64}"/);
   assert.match(files["compositors/bvm-compositor-h.env"], /PROGRAM_RENDERER_DEPLOYMENT_ID="dpl_renderer123"/);
   assert.match(files["compositors/bvm-compositor-b.env"], /CAMERA_NORMALIZER_ENABLED="true"/);
   assert.match(files["compositors/bvm-compositor-b.env"], /CAMERA_SOURCE_CODEC="H265"/);
   assert.match(files["compositors/bvm-compositor-a.env"], /CAMERA_NORMALIZER_ENABLED="false"/);
-  assert.match(files["observability.env"], /MONITOR_BROWSER_ALLOWED_ORIGINS="https:\/\/scorecheck-abc123-team\.vercel\.app"/);
+  assert.match(files["observability.env"], /MONITOR_BROWSER_ALLOWED_ORIGINS="https:\/\/scorecheck-abc123-team\.vercel\.app,http:\/\/renderer:3000"/);
+  assert.match(files["renderer.env"], /SCORECHECK_LOCAL_RENDERER="true"/);
+  assert.match(files["renderer.env"], /SCORECHECK_PROGRAM_CACHE_DIR="\/var\/lib\/scorecheck-renderer"/);
+  const mediaReader = derivedMediaReadCredentials(material.programPageToken);
+  for (const path of ["ingest.env", "renderer.env", "compositors/bvm-compositor-a.env", "compositors/bvm-compositor-spare.env"]) {
+    assert.match(files[path], new RegExp(`^MEDIAMTX_READ_USER="${mediaReader.user}"$`, "mu"));
+    assert.match(files[path], new RegExp(`^MEDIAMTX_READ_PASS="${mediaReader.password}"$`, "mu"));
+  }
   assert.match(files["observability.env"], /HEALTHCHECKS_SENTINEL_PING_URL=/);
   assert.doesNotMatch(files["compositors/bvm-compositor-h.env"], /EGRESS_(WIDTH|HEIGHT|FRAMERATE|VIDEO_BITRATE)/);
   assert.doesNotMatch(files["compositors/bvm-compositor-h.env"], /COURT_7_YOUTUBE_KEY=/);
@@ -122,7 +163,16 @@ test("keeps inactive camera ingress idle instead of polling stale recovery pulls
   const sixCameraProfile = createSyntheticRehearsalVenueProfile(manifest.event);
   sixCameraProfile.cameras[6] = { cameraNumber: 7, cameraIdentity: "camera-7", publishPath: "court7_raw", enabled: false };
   sixCameraProfile.cameras[7] = { cameraNumber: 8, cameraIdentity: "camera-8", publishPath: "court8_raw", enabled: false };
-  const files = buildProductionSecretFiles({ manifest, material, monitoringEnvironment: values.monitoringEnvironment, renderer, venueProfile: sixCameraProfile, agentTokens });
+  const files = buildProductionSecretFiles({
+    manifest,
+    material,
+    monitoringEnvironment: values.monitoringEnvironment,
+    webEnvironment: values.webEnvironment,
+    renderer,
+    localRendererSha256: "c".repeat(64),
+    venueProfile: sixCameraProfile,
+    agentTokens
+  });
 
   assert.match(files["ingest.env"], /MEDIAMTX_COURT_6_RAW_SOURCE="publisher"/);
   assert.match(files["ingest.env"], /MEDIAMTX_COURT_7_RAW_SOURCE="publisher"/);
@@ -214,4 +264,20 @@ test("rejects an existing sentinel, dead-man reuse, malformed URLs, and Twilio r
     sourceEnvironment,
     currentEnvironment: { HEALTHCHECKS_SENTINEL_PING_URL: "https://hc-ping.com/platform-sentinel" }
   }), /must not contain Twilio credentials/);
+});
+
+test("adds the buffered HLS origin to a pre-HLS production recovery runtime", () => {
+  const sourceEnvironment = fixture().webEnvironment;
+  delete sourceEnvironment.MEDIAMTX_HLS_BASE_URL;
+  const migrated = migrateWebRuntimeEnvironment(sourceEnvironment);
+  assert.equal(migrated.MEDIAMTX_HLS_BASE_URL, sourceEnvironment.MEDIAMTX_WHEP_BASE_URL);
+  assert.equal(migrated.PROGRAM_PAGE_TOKEN, sourceEnvironment.PROGRAM_PAGE_TOKEN);
+});
+
+test("rejects an existing or non-origin HLS runtime migration", () => {
+  assert.throws(() => migrateWebRuntimeEnvironment(fixture().webEnvironment), /already contains/);
+  const sourceEnvironment = fixture().webEnvironment;
+  delete sourceEnvironment.MEDIAMTX_HLS_BASE_URL;
+  sourceEnvironment.MEDIAMTX_WHEP_BASE_URL = "https://preview.example.test/whep";
+  assert.throws(() => migrateWebRuntimeEnvironment(sourceEnvironment), /exact HTTPS origin/);
 });

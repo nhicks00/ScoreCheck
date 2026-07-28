@@ -28,6 +28,9 @@ runcmd:
   # Firmware metadata refresh is unnecessary on ephemeral event hosts and
   # must not run asynchronously during monitoring qualification.
   - systemctl mask --now fwupd-refresh.timer fwupd-refresh.service || true
+  # Package installation is complete before runcmd. Keep unattended APT and
+  # PackageKit work out of the live monitoring window.
+  - systemctl mask --now apt-daily.timer apt-daily.service apt-daily-upgrade.timer apt-daily-upgrade.service update-notifier-download.timer update-notifier-download.service packagekit.service apt-news.service esm-cache.service || true
   # ScoreCheck owns host telemetry during an event. Disable Ubuntu's redundant
   # sysstat jobs so sadc cannot introduce unowned work during qualification.
   - systemctl mask --now sysstat-collect.timer sysstat-collect.service sysstat-summary.timer sysstat-summary.service || true

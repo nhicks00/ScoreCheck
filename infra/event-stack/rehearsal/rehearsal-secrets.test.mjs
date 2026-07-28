@@ -19,6 +19,7 @@ const renderer = {
 test("generates isolated Vercel configuration without Supabase", () => {
   const material = createRehearsalSecretMaterial({ random: deterministic });
   const environment = buildRehearsalVercelEnvironment({ manifest, material, programOrigin: "https://scorecheck-rehearsal-test.vercel.app" });
+  assert.equal(environment.MEDIAMTX_HLS_BASE_URL, `https://${manifest.endpoints.find((entry) => entry.role === "ingest").hostname}`);
   assert.equal(environment.MEDIAMTX_WHEP_BASE_URL, `https://${manifest.endpoints.find((entry) => entry.role === "ingest").hostname}`);
   assert.equal(Object.keys(environment).some((key) => key.startsWith("SUPABASE_")), false);
   assert.equal(environment.SCORECHECK_REHEARSAL_ORIGIN, "https://scorecheck-rehearsal-test.vercel.app");

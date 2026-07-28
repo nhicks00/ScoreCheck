@@ -13,7 +13,7 @@ import { OutputConformanceRuntime } from "./output-conformance.mjs";
 import { PoolSamplerRuntime } from "./rehearsal/pool-sampler-runtime.mjs";
 import { evaluateRehearsalPoolEvidence } from "./rehearsal/rehearsal-evidence.mjs";
 import { PushoverNotifier } from "./providers.mjs";
-import { HevcNormalizerRuntime } from "./hevc-normalizer-runtime.mjs";
+import { BrowserNormalizerRuntime } from "./browser-normalizer-runtime.mjs";
 import { ProductionSourceProbe } from "./production-media-profile.mjs";
 import { ProductionYouTubeProvider, readProductionDestinations } from "./production-youtube.mjs";
 import { loadRendererBinding } from "./renderer-binding.mjs";
@@ -24,6 +24,7 @@ import { loadCommentaryQualification } from "./commentary-qualification.mjs";
 import { initialProgramSupervisor, programSupervisorStep } from "./program-supervisor.mjs";
 import { evaluatePlatformSentinelEvidence, PlatformSentinelRuntime } from "./platform-sentinel-runtime.mjs";
 import { CriticalLogRuntime, evaluateCriticalLogEvidence } from "./critical-log-runtime.mjs";
+import { MonitoringExpectationRuntime } from "./monitoring-expectation-runtime.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(SCRIPT_PATH), "../..");
@@ -34,7 +35,8 @@ const MAX_MONITOR_AGE_MS = 15_000;
 const SOURCE_BITRATE_WINDOW_MS = 60_000;
 const SOURCE_BITRATE_EXTREME_FACTOR = 1.5;
 const BROWSER_IDENTITY_FIELDS = Object.freeze(["pageLoadedAt", "pageBuildVersion"]);
-const BROWSER_COUNTER_FIELDS = Object.freeze(["framesDropped", "freezeCount", "totalFreezesDurationMs", "packetsLost", "reconnectCount", "reloadCount"]);
+const BROWSER_COUNTER_FIELDS = Object.freeze(["framesDropped", "freezeCount", "totalFreezesDurationMs", "reconnectCount", "reloadCount"]);
+const WHEP_COUNTER_FIELDS = Object.freeze([...BROWSER_COUNTER_FIELDS, "packetsLost"]);
 const ROUTER_INTERVAL_MS = 60_000;
 const ROUTER_MAX_GAP_MS = 75_000;
 const ROUTER_MIN_MEMORY_KB = 65_536;
@@ -92,13 +94,17 @@ export class ProductionSoakRuntime {
       ...dependencies,
       options, profile, manifest, lifecycleState, destinations, renderer, venue, commentary, monitorOrigin, monitorToken, youtube, pushover,
       egress: dependencies.egress ?? new EgressRuntime({ sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
-      normalizer: dependencies.normalizer ?? new HevcNormalizerRuntime({ sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
+      normalizer: dependencies.normalizer ?? new BrowserNormalizerRuntime({ sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
       outputConformance: dependencies.outputConformance ?? new OutputConformanceRuntime({ sshKey: profile.sshKey, knownHosts: profile.knownHosts, ffprobePath: options.ffprobe }),
       sourceProbe: dependencies.sourceProbe ?? new ProductionSourceProbe({ sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
       viewerProbe: dependencies.viewerProbe ?? new YouTubeViewerProbe(),
       sampler: dependencies.sampler ?? new PoolSamplerRuntime({ repoRoot: REPO_ROOT, sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
       sentinel: dependencies.sentinel ?? new PlatformSentinelRuntime({ repoRoot: REPO_ROOT, environment: join(profile.secrets, "observability.env") }),
       criticalLogs: dependencies.criticalLogs ?? new CriticalLogRuntime({ repoRoot: REPO_ROOT, sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
+      expectations: dependencies.expectations ?? new MonitoringExpectationRuntime({
+        supabaseUrl: required(monitorEnvironment.SUPABASE_URL, "Supabase URL"),
+        serviceRoleKey: required(monitorEnvironment.SUPABASE_SERVICE_ROLE_KEY, "Supabase service-role key")
+      }),
       router: dependencies.router ?? new RouterSoakRuntime({ host: options.router }),
       fetchImpl: dependencies.fetchImpl ?? globalThis.fetch,
       sleep: dependencies.sleep ?? delay,
@@ -151,13 +157,14 @@ export class ProductionSoakRuntime {
       state.rawReadyAt = raw.observedAt;
       for (const camera of this.venue.activeCameras) {
         const assignment = this.venue.assignments[camera];
-        const required = assignment.sourcePathMode === "isolated-hevc-normalizer";
+        const required = assignment.sourcePathMode === "isolated-browser-normalizer";
         try {
           state.normalizers[camera] = await this.normalizer.ensure({
             host: compositorHost(this.manifest, this.lifecycleState, camera),
             court: camera,
             required,
             ...(required ? {
+              sourceCodec: assignment.sourceCodec,
               sourceProfile: assignment.sourceProfile,
               frameRateMode: assignment.frameRateMode,
               mediamtxPrivateHost: ingestPrivateHost(this.manifest, this.lifecycleState)
@@ -180,21 +187,52 @@ export class ProductionSoakRuntime {
 
     if (state.phase === "STARTING") {
       try {
-        const observerEvidenceDirectory = state.startupCleanup?.stoppedAt
-          ? join(this.options.evidence, `startup-retry-${state.runId}`)
-          : this.options.evidence;
-        if (state.sampler?.status === "stopped") {
-          state.sampler = await this.sampler.ensure({ manifest: this.manifest, lifecycleState: this.lifecycleState, evidenceDirectory: observerEvidenceDirectory });
-          await writeState(statePath, state);
+        const monitoringBinding = await this.expectations.resolve(this.venue.activeCameras);
+        if (state.monitoringBinding && stableJson(state.monitoringBinding) !== stableJson(monitoringBinding)) {
+          throw new Error("production monitoring active event or camera mapping changed during startup");
         }
-        state.sentinel = await this.sentinel.ensure({ manifest: this.manifest, renderer: this.renderer, evidenceDirectory: observerEvidenceDirectory });
+        state.monitoringBinding = monitoringBinding;
+        state.monitoringExpectations ??= {};
         await writeState(statePath, state);
-        state.criticalLogs = await this.criticalLogs.ensure({ manifest: this.manifest, lifecycleState: this.lifecycleState, evidenceDirectory: observerEvidenceDirectory });
-        await writeState(statePath, state);
+        await ensureStartupObserver({
+          state,
+          statePath,
+          key: "sampler",
+          runtime: this.sampler,
+          evidenceRoot: this.options.evidence,
+          now: this.now,
+          start: (evidenceDirectory) => this.sampler.ensure({ manifest: this.manifest, lifecycleState: this.lifecycleState, evidenceDirectory })
+        });
+        await ensureStartupObserver({
+          state,
+          statePath,
+          key: "sentinel",
+          runtime: this.sentinel,
+          evidenceRoot: this.options.evidence,
+          now: this.now,
+          start: (evidenceDirectory) => this.sentinel.ensure({ manifest: this.manifest, renderer: this.renderer, evidenceDirectory })
+        });
+        await ensureStartupObserver({
+          state,
+          statePath,
+          key: "criticalLogs",
+          runtime: this.criticalLogs,
+          evidenceRoot: this.options.evidence,
+          now: this.now,
+          start: (evidenceDirectory) => this.criticalLogs.ensure({ manifest: this.manifest, lifecycleState: this.lifecycleState, evidenceDirectory })
+        });
         for (const camera of this.venue.activeCameras) {
           const host = compositorHost(this.manifest, this.lifecycleState, camera);
           const expectedId = state.egress[camera]?.id ?? null;
           const owner = egressOwner(state, camera);
+          state.monitoringExpectations[camera] = await this.expectations.set({
+            binding: state.monitoringBinding,
+            camera,
+            phase: "TESTING",
+            commentaryParticipating: this.commentary.qualification.status !== "NOT_PARTICIPATING",
+            runId: state.runId
+          });
+          await writeState(statePath, state);
           if (!state.outputConformance[camera]) {
             await this.egress.preflight(host);
             try {
@@ -237,6 +275,14 @@ export class ProductionSoakRuntime {
           state.admission[camera] = await this.egress.proveSecondStartRejected({ host, court: camera, profile: state.profiles[camera].profile, owner, expectedId: active.id });
           await writeState(statePath, state);
           await this.#waitForCameraOutput(camera);
+          state.monitoringExpectations[camera] = await this.expectations.set({
+            binding: state.monitoringBinding,
+            camera,
+            phase: "LIVE",
+            commentaryParticipating: this.commentary.qualification.status !== "NOT_PARTICIPATING",
+            runId: state.runId
+          });
+          await writeState(statePath, state);
         }
         const accepted = await this.#waitForStableOutput(state.profiles);
         state.phase = "RUNNING";
@@ -613,6 +659,72 @@ export class ProductionSoakRuntime {
   }
 }
 
+export async function ensureStartupObserver({ state, statePath, key, runtime, evidenceRoot, start, now = Date.now, persist = writeState }) {
+  if (!state || !state.runId || !["sampler", "sentinel", "criticalLogs"].includes(key)) throw new Error("startup observer state is invalid");
+  if (!runtime || typeof runtime.inspect !== "function" || typeof start !== "function") throw new Error(`startup observer ${key} runtime is invalid`);
+  const current = state[key];
+  const attempt = state.observerStarts?.[key] ?? null;
+
+  if (attempt?.status === "starting") {
+    return finishStartupObserver({ state, statePath, key, attempt, start, now, persist });
+  }
+
+  if (current?.output) {
+    const owner = await runtime.inspect(current.output);
+    if (owner) {
+      state[key] = { ...current, status: "running", ...owner, adopted: true };
+      state.observerStarts ??= {};
+      state.observerStarts[key] = {
+        generation: Number.isInteger(attempt?.generation) ? attempt.generation : -1,
+        evidenceDirectory: dirname(current.output),
+        status: "running",
+        output: current.output,
+        pid: owner.pid,
+        reconciledAt: new Date(now()).toISOString()
+      };
+      await persist(statePath, state);
+      return state[key];
+    }
+  }
+
+  const generation = Number.isInteger(attempt?.generation) ? attempt.generation + 1 : 0;
+  const evidenceDirectory = join(evidenceRoot, "observer-generations", `${key}-${String(generation).padStart(3, "0")}-${state.runId}`);
+  state.observerStarts ??= {};
+  state.observerStarts[key] = {
+    generation,
+    evidenceDirectory,
+    status: "starting",
+    preparedAt: new Date(now()).toISOString()
+  };
+  await persist(statePath, state);
+  return finishStartupObserver({ state, statePath, key, attempt: state.observerStarts[key], start, now, persist });
+}
+
+async function finishStartupObserver({ state, statePath, key, attempt, start, now, persist }) {
+  try {
+    const result = await start(attempt.evidenceDirectory);
+    state[key] = result;
+    state.observerStarts[key] = {
+      ...attempt,
+      status: "running",
+      output: result.output,
+      pid: result.pid,
+      completedAt: new Date(now()).toISOString()
+    };
+    await persist(statePath, state);
+    return result;
+  } catch (error) {
+    state.observerStarts[key] = {
+      ...attempt,
+      status: "failed",
+      failedAt: new Date(now()).toISOString(),
+      error: safeError(error)
+    };
+    await persist(statePath, state);
+    throw error;
+  }
+}
+
 export async function fetchProductionMonitorSnapshot({ fetchImpl, monitorOrigin, monitorToken, sleep = delay }) {
   let response;
   for (let attempt = 0; attempt <= MONITOR_READ_RETRY_DELAYS_MS.length; attempt += 1) {
@@ -639,7 +751,7 @@ function retryableMonitorReadError(error) {
 }
 
 export function assertProductionMonitorSnapshot(value) {
-  if (!value || value.version !== 5 || !Array.isArray(value.courts) || !Array.isArray(value.agents)) throw new Error("production monitor snapshot contract is invalid");
+  if (!value || value.version !== 6 || !Array.isArray(value.courts) || !Array.isArray(value.agents)) throw new Error("production monitor snapshot contract is invalid");
   return value;
 }
 
@@ -660,6 +772,7 @@ export function productionIdleProblems(snapshot, venue, nowMs = Date.now()) {
     if (["compositor", "worker"].includes(agent.role)) {
       const egress = agent.nativeServices?.egress;
       if (!egress?.idle || egress.activeWebRequests !== 0 || egress.maximumWebRequests !== 1 || !egress.canAcceptRequest) problems.push(`${agent.agentId} is not idle and admission-ready`);
+      if (!freshSupervisor(agent.egressSupervisor, nowMs) || agent.egressSupervisor.status !== "IDLE") problems.push(`${agent.agentId} Egress supervisor is not fresh and idle`);
     }
   }
   return unique(problems);
@@ -744,29 +857,46 @@ export function productionSnapshotProblems(snapshot, profiles, venue, previous =
     }
     const browser = court.browser;
     const age = browser ? nowMs - Date.parse(browser.receivedAt) : Infinity;
-    if (!browser || !freshAge(age) || browser.video?.state !== "playing" || browser.video?.connectionState !== "connected" || browser.video?.transport !== "whep") {
-      problems.push(`Camera ${camera} program browser is not fresh and playing`);
+    if (!browser || !freshAge(age) || browser.video?.state !== "playing" || browser.video?.connectionState !== "connected" || browser.video?.transport !== "hls") {
+      problems.push(`Camera ${camera} program browser is not fresh and playing buffered HLS`);
     } else {
-      if (browser.video.networkPath !== "private-vpc") problems.push(`Camera ${camera} program browser is not using the private VPC media path`);
+      if (!Number.isFinite(browser.video.playoutDelayMs) || browser.video.playoutDelayMs < 0 || browser.video.playoutDelayMs > 24_000) problems.push(`Camera ${camera} program HLS playout delay is outside the 0-24 second bound`);
+      if (!Number.isFinite(browser.video.bufferedAheadMs) || browser.video.bufferedAheadMs < 0 || browser.video.bufferedAheadMs > 24_000) problems.push(`Camera ${camera} program HLS forward buffer is outside the 0-24 second bound`);
+      if (!Number.isInteger(browser.video.bufferedRangeCount) || browser.video.bufferedRangeCount < 1 || browser.video.bufferedRangeCount > 2) problems.push(`Camera ${camera} program HLS buffered ranges are not bounded to one or two`);
+      if (!Number.isInteger(browser.video.hlsCreatedInstances) || !Number.isInteger(browser.video.hlsDestroyedInstances)
+        || browser.video.hlsCreatedInstances < 1 || browser.video.hlsDestroyedInstances < 0
+        || browser.video.hlsActiveInstances !== 1
+        || browser.video.hlsCreatedInstances - browser.video.hlsDestroyedInstances !== 1) problems.push(`Camera ${camera} program HLS instance ownership is not exactly one`);
+      if (!Number.isInteger(browser.video.jsHeapUsedBytes) || browser.video.jsHeapUsedBytes <= 0) problems.push(`Camera ${camera} program renderer JavaScript heap is unavailable`);
       if (browser.video.width !== 1920 || browser.video.height !== 1080) problems.push(`Camera ${camera} program browser is not rendering 1920x1080`);
       if (!browser.scoreRender?.loaded || !browser.scoreRender.connected || browser.scoreRender.stale || browser.scoreRender.frozen || browser.scoreRender.domMismatchReason) problems.push(`Camera ${camera} scoreboard overlay is not loaded, connected, and current`);
       if (!browser.commentary?.cameraTrackPresent) problems.push(`Camera ${camera} program browser has no camera audio track`);
-      if (BROWSER_COUNTER_FIELDS.some((field) => !Number.isFinite(browser.video[field]) || browser.video[field] < 0)) problems.push(`Camera ${camera} browser quality counters are invalid`);
+      if (browserCounterFields(browser.video).some((field) => !Number.isFinite(browser.video[field]) || browser.video[field] < 0)) problems.push(`Camera ${camera} browser quality counters are invalid`);
     }
     const agent = assignments.get(camera);
     const egress = agent?.nativeServices?.egress;
     if (!agent || agent.state !== "HEALTHY" || !egress || egress.idle || egress.activeWebRequests !== 1 || egress.maximumWebRequests !== 1 || egress.canAcceptRequest
       || (egress.cpuLoadRatio ?? 1) >= 0.85 || (egress.memoryLoadRatio ?? 1) >= 0.85) problems.push(`Camera ${camera} output server is not running exactly one healthy Egress with headroom`);
+    const supervisor = agent?.egressSupervisor;
+    if (!freshSupervisor(supervisor, nowMs) || !["HEALTHY", "RECOVERED"].includes(supervisor?.status)
+      || supervisor.court !== camera || !supervisor.generationKey || !supervisor.egressId) problems.push(`Camera ${camera} Egress supervisor does not own one fresh healthy output generation`);
   }
   for (const camera of venue.inactiveCameras) {
     const agent = assignments.get(camera);
     const egress = agent?.nativeServices?.egress;
     if (!agent || agent.state !== "HEALTHY" || !egress?.idle || egress.activeWebRequests !== 0 || !egress.canAcceptRequest) problems.push(`Camera ${camera} output server is not healthy and idle`);
+    if (!freshSupervisor(agent?.egressSupervisor, nowMs) || agent.egressSupervisor.status !== "IDLE") problems.push(`Camera ${camera} Egress supervisor is not fresh and idle`);
   }
   const spare = (snapshot.agents ?? []).find((agent) => agent.role === "worker");
   if (!spare || spare.state !== "HEALTHY" || !spare.nativeServices?.egress?.idle || spare.nativeServices.egress.activeWebRequests !== 0 || !spare.nativeServices.egress.canAcceptRequest) problems.push("warm spare is not healthy and idle");
+  if (!freshSupervisor(spare?.egressSupervisor, nowMs) || spare.egressSupervisor.status !== "IDLE") problems.push("warm spare Egress supervisor is not fresh and idle");
   if (previous) problems.push(...browserDeltaProblems(previous, snapshot, profiles, venue.activeCameras));
   return unique(problems);
+}
+
+function freshSupervisor(supervisor, nowMs) {
+  const observedAtMs = Date.parse(supervisor?.observedAt ?? "");
+  return Number.isFinite(observedAtMs) && Math.abs(nowMs - observedAtMs) <= 20_000;
 }
 
 export function browserDeltaProblems(previous, current, profiles, activeCameras) {
@@ -780,7 +910,7 @@ export function browserDeltaProblems(previous, current, profiles, activeCameras)
     if (!Number.isInteger(after.heartbeatSeq) || after.heartbeatSeq <= before.heartbeatSeq) problems.push(`Camera ${camera} browser heartbeat did not advance`);
     if (Date.parse(after.receivedAt) <= Date.parse(before.receivedAt)) problems.push(`Camera ${camera} browser receipt did not advance`);
     if (!Number.isInteger(after.video?.framesRendered) || after.video.framesRendered <= before.video?.framesRendered) problems.push(`Camera ${camera} rendered frames did not advance`);
-    for (const field of BROWSER_COUNTER_FIELDS) {
+    for (const field of browserCounterFields(after.video)) {
       const left = before.video?.[field];
       const right = after.video?.[field];
       if (!Number.isFinite(left) || !Number.isFinite(right) || right !== left) problems.push(`Camera ${camera} browser ${field} changed`);
@@ -794,6 +924,59 @@ export function browserDeltaProblems(previous, current, profiles, activeCameras)
     }
   }
   return unique(problems);
+}
+
+export function browserCounterFields(video) {
+  return video?.transport === "whep" ? WHEP_COUNTER_FIELDS : BROWSER_COUNTER_FIELDS;
+}
+
+export function evaluateHlsRuntimeEvidence(samples, activeCameras) {
+  validateActiveCameras(activeCameras);
+  const problems = [];
+  const cameras = [];
+  for (const camera of activeCameras) {
+    const videos = samples.map((sample) => sample?.monitor?.courts?.find((court) => court.courtNumber === camera)?.browser?.video ?? null);
+    if (videos.length === 0 || videos.some((video) => !video)) {
+      problems.push(`Camera ${camera} HLS runtime evidence is incomplete`);
+      cameras.push({ camera, observedSamples: videos.filter(Boolean).length });
+      continue;
+    }
+    const values = videos;
+    const buffers = values.map((video) => video.bufferedAheadMs).filter(Number.isFinite);
+    const heaps = values.map((video) => video.jsHeapUsedBytes).filter(Number.isFinite);
+    if (values.some((video) => video.transport !== "hls"
+      || !Number.isFinite(video.bufferedAheadMs) || video.bufferedAheadMs < 0 || video.bufferedAheadMs > 24_000
+      || !Number.isInteger(video.bufferedRangeCount) || video.bufferedRangeCount < 1 || video.bufferedRangeCount > 2
+      || !Number.isInteger(video.hlsCreatedInstances) || video.hlsCreatedInstances < 1
+      || !Number.isInteger(video.hlsDestroyedInstances) || video.hlsDestroyedInstances < 0
+      || video.hlsActiveInstances !== 1
+      || video.hlsCreatedInstances - video.hlsDestroyedInstances !== 1
+      || !Number.isInteger(video.jsHeapUsedBytes) || video.jsHeapUsedBytes <= 0)) {
+      problems.push(`Camera ${camera} HLS runtime evidence exceeded its buffer, ownership, or memory contract`);
+    }
+    const first = values[0];
+    const last = values.at(-1);
+    if (last.hlsCreatedInstances !== first.hlsCreatedInstances || last.hlsDestroyedInstances !== first.hlsDestroyedInstances) {
+      problems.push(`Camera ${camera} HLS instance generation changed during the soak`);
+    }
+    const edgeCount = Math.max(1, Math.ceil(values.length * 0.1));
+    const initialHeapFloorBytes = heaps.length ? Math.min(...heaps.slice(0, edgeCount)) : null;
+    const finalHeapFloorBytes = heaps.length ? Math.min(...heaps.slice(-edgeCount)) : null;
+    cameras.push({
+      camera,
+      observedSamples: values.length,
+      maximumBufferedAheadMs: buffers.length ? Math.max(...buffers) : null,
+      maximumBufferedRangeCount: Math.max(...values.map((video) => video.bufferedRangeCount)),
+      hlsCreatedInstances: last.hlsCreatedInstances,
+      hlsDestroyedInstances: last.hlsDestroyedInstances,
+      hlsActiveInstances: last.hlsActiveInstances,
+      initialHeapFloorBytes,
+      finalHeapFloorBytes,
+      retainedHeapGrowthBytes: initialHeapFloorBytes == null || finalHeapFloorBytes == null ? null : finalHeapFloorBytes - initialHeapFloorBytes,
+      peakHeapBytes: heaps.length ? Math.max(...heaps) : null
+    });
+  }
+  return { passed: problems.length === 0, problems: unique(problems), cameras };
 }
 
 export function productionProviderProblems(provider, activeCameras) {
@@ -826,6 +1009,7 @@ export function evaluateProductionSoak({ state, samples, hostEvidence, routerEvi
   const startedMs = Date.parse(state.startedAt);
   const observedDurationMs = Math.max(0, endedMs - startedMs);
   const expectedElapsedSamples = Math.floor(observedDurationMs / SAMPLE_INTERVAL_MS) + 1;
+  const hlsRuntime = evaluateHlsRuntimeEvidence(samples, state.activeCameras);
   const problems = unique([
     ...samples.flatMap((sample) => sample.problems),
     ...(hostEvidence?.problems ?? []),
@@ -837,12 +1021,13 @@ export function evaluateProductionSoak({ state, samples, hostEvidence, routerEvi
     ...(state.notifications.some((notification) => notification.kind === "FAILURE") ? ["one or more Pushover notifications failed"] : []),
     ...(state.maximumGapMs > SAMPLE_INTERVAL_MS + MAX_SAMPLE_LAG_MS ? [`maximum sample gap was ${state.maximumGapMs}ms`] : []),
     ...(samples.length / Math.max(1, expectedElapsedSamples) < 0.99 ? ["monitor sample coverage was below 99%"] : []),
-    ...aggregateCadenceProblems(samples, state.profiles, state.activeCameras)
+    ...aggregateCadenceProblems(samples, state.profiles, state.activeCameras),
+    ...hlsRuntime.problems
   ]);
   const durationQualified = observedDurationMs >= minimumDurationMs;
   const classification = problems.length ? "FAIL" : durationQualified ? "PASS" : "INCOMPLETE";
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     event: state.event,
     runId: state.runId,
     startedAt: state.startedAt,
@@ -867,6 +1052,7 @@ export function evaluateProductionSoak({ state, samples, hostEvidence, routerEvi
     routerEvidence,
     sentinelEvidence,
     criticalLogEvidence,
+    hlsRuntime,
     viewerEvidence: {
       observed: viewerEvidence.length,
       passed: viewerEvidence.filter((entry) => entry.passed).length,
@@ -1043,22 +1229,22 @@ function inactiveCameraProblems(snapshot, camera, problems) {
 function normalizerProblems(camera, court, assignment, expectedFps) {
   const normalized = court.paths?.normalized;
   const ffmpeg = court.ffmpeg?.normalizer;
-  if (assignment.sourcePathMode !== "isolated-hevc-normalizer") {
+  if (assignment.sourcePathMode !== "isolated-browser-normalizer") {
     return normalized?.ready || (normalized?.readerCount ?? 0) !== 0 || ffmpeg
-      ? [`Camera ${camera} direct-H264 path unexpectedly uses the HEVC normalizer`]
+      ? [`Camera ${camera} direct-H264 path unexpectedly uses the browser normalizer`]
       : [];
   }
   const problems = [];
   if (!normalized?.ready || normalized.frameErrors !== 0 || (normalized.inboundBitrateBps ?? 0) <= 0
     || normalized.readerCount < 1 || normalized.readerCount > 2 || normalized.videoCodec !== "H264"
-    || normalized.videoWidth !== 1920 || normalized.videoHeight !== 1080 || normalized.audioCodec !== "OPUS"
+    || normalized.videoWidth !== 1920 || normalized.videoHeight !== 1080 || normalized.audioCodec !== "AAC"
     || normalized.audioSampleRateHz !== 48_000 || normalized.audioChannelCount !== 2) {
-    problems.push(`Camera ${camera} normalized browser path is not healthy H264/Opus 1920x1080 with 1-2 readers`);
+    problems.push(`Camera ${camera} normalized browser path is not healthy H264/AAC 1920x1080 with 1-2 readers`);
   }
   if (!ffmpeg || !Number.isFinite(ffmpeg.framesPerSecond) || Math.abs(ffmpeg.framesPerSecond - expectedFps) > 2
     || ffmpeg.droppedFrames !== 0 || ffmpeg.duplicatedFrames !== 0
     || !Number.isFinite(ffmpeg.speedRatio) || ffmpeg.speedRatio < 0.95 || ffmpeg.speedRatio > 1.05) {
-    problems.push(`Camera ${camera} HEVC normalizer is outside ${expectedFps}fps, real-time, zero-drop bounds`);
+    problems.push(`Camera ${camera} browser normalizer is outside ${expectedFps}fps, real-time, zero-drop bounds`);
   }
   return problems;
 }
@@ -1187,6 +1373,8 @@ function createState({ event, evidence, nowMs, minimumDurationMs, maximumDuratio
     sampler: null,
     sentinel: null,
     criticalLogs: null,
+    monitoringBinding: null,
+    monitoringExpectations: {},
     router: null,
     baseline: null,
     lastSnapshot: null,

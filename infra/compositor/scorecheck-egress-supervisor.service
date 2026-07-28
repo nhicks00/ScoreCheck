@@ -1,0 +1,18 @@
+[Unit]
+Description=ScoreCheck exact-owner Egress supervisor
+Requires=docker.service compositor.service
+After=docker.service network-online.target compositor.service
+Wants=network-online.target
+PartOf=compositor.service
+ConditionPathExists=/opt/compositor/docker-compose.yml
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/compositor
+ExecStart=/opt/compositor/egress-supervisor.sh watch
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

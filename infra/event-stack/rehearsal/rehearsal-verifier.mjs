@@ -2,7 +2,8 @@ import { setTimeout as delay } from "node:timers/promises";
 
 const COURTS = Object.freeze(Array.from({ length: 8 }, (_, index) => index + 1));
 const BROWSER_IDENTITY_FIELDS = Object.freeze(["credentialId", "pageLoadedAt", "pageBuildVersion", "configurationVersion"]);
-const BROWSER_COUNTER_FIELDS = Object.freeze(["framesDropped", "freezeCount", "totalFreezesDurationMs", "packetsLost", "reconnectCount", "reloadCount"]);
+const BROWSER_COUNTER_FIELDS = Object.freeze(["framesDropped", "freezeCount", "totalFreezesDurationMs", "reconnectCount", "reloadCount"]);
+const WHEP_COUNTER_FIELDS = Object.freeze([...BROWSER_COUNTER_FIELDS, "packetsLost"]);
 const MAX_FUTURE_CLOCK_SKEW_MS = 5_000;
 const MAX_MONITOR_AGE_MS = 15_000;
 
@@ -230,7 +231,7 @@ export class RehearsalVerifier {
     });
     if (!response.ok) throw new Error(`rehearsal monitor snapshot returned HTTP ${response.status}`);
     const snapshot = await response.json();
-    if (!snapshot || snapshot.version !== 5 || !Array.isArray(snapshot.courts) || !Array.isArray(snapshot.agents)) throw new Error("rehearsal monitor snapshot contract is invalid");
+    if (!snapshot || snapshot.version !== 6 || !Array.isArray(snapshot.courts) || !Array.isArray(snapshot.agents)) throw new Error("rehearsal monitor snapshot contract is invalid");
     return snapshot;
   }
 }
@@ -292,11 +293,11 @@ export function programSubscriberProblems(snapshot, nowMs = Date.now(), court) {
   const browser = value.browser;
   const browserAge = browser ? nowMs - Date.parse(browser.receivedAt) : Infinity;
   if (!browser || !isFreshTimestampAge(browserAge)
-    || browser.video?.state !== "playing" || browser.video?.connectionState !== "connected" || browser.video?.transport !== "whep") {
-    problems.push(`Camera ${court} program browser heartbeat is not fresh and playing over WHEP`);
+    || browser.video?.state !== "playing" || browser.video?.connectionState !== "connected" || browser.video?.transport !== "hls") {
+    problems.push(`Camera ${court} program browser heartbeat is not fresh and playing buffered HLS`);
   } else {
-    if (browser.video.networkPath !== "private-vpc") problems.push(`Camera ${court} program browser is not using the private VPC media path`);
-    if (BROWSER_COUNTER_FIELDS.some((field) => !Number.isFinite(browser.video[field]) || browser.video[field] !== 0)) {
+    if (!Number.isFinite(browser.video.playoutDelayMs) || browser.video.playoutDelayMs < 0 || browser.video.playoutDelayMs > 24_000) problems.push(`Camera ${court} program HLS playout delay is outside the 0-24 second bound`);
+    if (browserCounterFields(browser.video).some((field) => !Number.isFinite(browser.video[field]) || browser.video[field] !== 0)) {
       problems.push(`Camera ${court} program browser quality counters are not clean`);
     }
     if (!browser.commentary?.configured || !browser.commentary.roomConnected || !browser.commentary.cameraTrackPresent) {
@@ -344,12 +345,13 @@ function fullProblemsInternal(snapshot, nowMs, requireZeroBrowserHistory) {
     }
     const browser = value.browser;
     const browserAge = browser ? nowMs - Date.parse(browser.receivedAt) : Infinity;
-    if (!browser || !isFreshTimestampAge(browserAge) || browser.video?.state !== "playing" || browser.video?.connectionState !== "connected" || browser.video?.transport !== "whep") {
-      problems.push(`Camera ${court} browser heartbeat is not fresh and playing over WHEP`);
+    if (!browser || !isFreshTimestampAge(browserAge) || browser.video?.state !== "playing" || browser.video?.connectionState !== "connected" || browser.video?.transport !== "hls") {
+      problems.push(`Camera ${court} browser heartbeat is not fresh and playing buffered HLS`);
     } else {
-      if (browser.video.networkPath !== "private-vpc") problems.push(`Camera ${court} browser heartbeat is not using the private VPC media path`);
-      const countersInvalid = BROWSER_COUNTER_FIELDS.some((field) => !Number.isFinite(browser.video[field]) || browser.video[field] < 0);
-      const historyNotClean = requireZeroBrowserHistory && BROWSER_COUNTER_FIELDS.some((field) => browser.video[field] !== 0);
+      if (!Number.isFinite(browser.video.playoutDelayMs) || browser.video.playoutDelayMs < 0 || browser.video.playoutDelayMs > 24_000) problems.push(`Camera ${court} HLS playout delay is outside the 0-24 second bound`);
+      const counters = browserCounterFields(browser.video);
+      const countersInvalid = counters.some((field) => !Number.isFinite(browser.video[field]) || browser.video[field] < 0);
+      const historyNotClean = requireZeroBrowserHistory && counters.some((field) => browser.video[field] !== 0);
       const pointFpsInvalid = !Number.isFinite(browser.video.framesPerSecond) || browser.video.framesPerSecond < 0 || browser.video.framesPerSecond > 120;
       if (pointFpsInvalid || countersInvalid || historyNotClean) problems.push(`Camera ${court} browser quality counters are not clean`);
       const commentary = browser.commentary;
@@ -399,7 +401,7 @@ export function browserQualityDeltaProblems(previous, current, { requireProgress
       const aggregateFps = ((afterFramesRendered - beforeFramesRendered) * 1_000) / (afterReceivedAt - beforeReceivedAt);
       if (aggregateFps < 25 || aggregateFps > 35) problems.push(`Camera ${court} aggregate rendered cadence is outside 25-35fps (${aggregateFps.toFixed(2)}fps)`);
     }
-    for (const field of BROWSER_COUNTER_FIELDS) {
+    for (const field of browserCounterFields(after.video)) {
       const beforeValue = before.video?.[field];
       const afterValue = after.video?.[field];
       if (!Number.isFinite(beforeValue) || !Number.isFinite(afterValue)) problems.push(`Camera ${court} browser ${field} is unavailable`);
@@ -472,7 +474,7 @@ function hasCompleteBrowserSet(snapshot) {
     return browser && BROWSER_IDENTITY_FIELDS.every((field) => browser[field])
       && Number.isInteger(browser.heartbeatSeq)
       && Number.isInteger(browser.video?.framesRendered)
-      && BROWSER_COUNTER_FIELDS.every((field) => Number.isFinite(browser.video?.[field]))
+      && browserCounterFields(browser.video).every((field) => Number.isFinite(browser.video?.[field]))
       && Number.isFinite(browser.commentary?.packetsLost);
   });
 }
@@ -490,6 +492,10 @@ function browserQualityEvidence(snapshot) {
     commentaryPacketsLost: court.browser?.commentary?.packetsLost ?? null,
     ...Object.fromEntries(BROWSER_COUNTER_FIELDS.map((field) => [field, court.browser?.video?.[field] ?? null]))
   }));
+}
+
+function browserCounterFields(video) {
+  return video?.transport === "whep" ? WHEP_COUNTER_FIELDS : BROWSER_COUNTER_FIELDS;
 }
 
 function sanitizeSnapshotEvidence(snapshot) {

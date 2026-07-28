@@ -104,6 +104,7 @@ export type MonitorBrowser = {
     rttMs: number | null;
     jitterMs: number | null;
     jitterBufferMs: number | null;
+    playoutDelayMs: number | null;
     packetsLost: number | null;
     packetsReceived: number | null;
     framesReceived: number | null;
@@ -117,6 +118,12 @@ export type MonitorBrowser = {
     nackCount: number | null;
     pliCount: number | null;
     firCount: number | null;
+    bufferedAheadMs: number | null;
+    bufferedRangeCount: number | null;
+    hlsCreatedInstances: number | null;
+    hlsDestroyedInstances: number | null;
+    hlsActiveInstances: number | null;
+    jsHeapUsedBytes: number | null;
     reconnectCount: number;
     reloadCount: number;
   };
@@ -263,6 +270,66 @@ export type MonitorAgent = {
   } | null;
 };
 
+export type MonitorRouter = {
+  state: MonitorHealthState;
+  sampledAt: string | null;
+  receivedAt: string | null;
+  ageMs: number | null;
+  speedify: {
+    state: "CONNECTED" | "LOGGED_IN" | "DISCONNECTED" | "UNKNOWN";
+    bondingMode: "speed" | "streaming" | "redundant" | "unknown";
+    transportMode: "udp" | "tcp" | "tcp-multi" | "https" | "auto" | "unknown";
+    sendBps: number;
+    receiveBps: number;
+    estimatedUploadBps: number | null;
+    uploadHeadroomBps: number | null;
+    latencyMs: number | null;
+    jitterMs: number | null;
+    lossSendRatio: number | null;
+    lossReceiveRatio: number | null;
+    uploadCongested: boolean;
+    badCpu: boolean;
+    badLatency: boolean;
+    badLoss: boolean;
+    badMemory: boolean;
+    readQueuePackets: number | null;
+    failoverCount: number | null;
+  } | null;
+  routing: {
+    srtDevice: string;
+    rtmpDevice: string;
+    primaryRuleCount: number;
+    guardRuleCount: number;
+    killSwitchActive: boolean;
+    cameraFlowCount: number;
+  } | null;
+  host: {
+    load1: number;
+    memoryAvailableBytes: number;
+    speedifyRssBytes: number;
+    streamingStatsProcessCount: number;
+  } | null;
+  uplinks: Array<{
+    id: string;
+    isp: string | null;
+    type: "ethernet" | "wifi" | "cellular" | "other";
+    connected: boolean;
+    priority: "always" | "secondary" | "backup" | "never" | "unknown";
+    sendBps: number;
+    receiveBps: number;
+    estimatedUploadBps: number | null;
+    latencyMs: number | null;
+    jitterMs: number | null;
+    lossSendRatio: number | null;
+    lossReceiveRatio: number | null;
+    inFlightBytes: number | null;
+    inFlightWindowBytes: number | null;
+    uploadCongested: boolean;
+    poorConnection: boolean;
+    slowConnection: boolean;
+  }>;
+};
+
 export type MonitorSnapshot = {
   version: typeof MONITORING_CONTRACT_VERSION;
   generatedAt: string;
@@ -284,6 +351,7 @@ export type MonitorSnapshot = {
       lastFailureAt: string | null;
     };
   };
+  router: MonitorRouter;
   courts: MonitorCourt[];
   agents: MonitorAgent[];
   incidents: MonitorIncident[];

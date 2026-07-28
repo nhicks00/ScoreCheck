@@ -10,7 +10,7 @@ const OUTPUT_PROFILES = Object.freeze({
 });
 const SOURCE_PATH_MODES = Object.freeze({
   DIRECT_H264: "direct-h264",
-  ISOLATED_HEVC_NORMALIZER: "isolated-hevc-normalizer"
+  ISOLATED_BROWSER_NORMALIZER: "isolated-browser-normalizer"
 });
 const FRAME_RATE_MODES = Object.freeze([
   Object.freeze({ id: "30000/1001", value: 30_000 / 1_001, outputProfile: "1080p30" }),
@@ -103,11 +103,8 @@ export function selectProductionOutputProfile(value, options = {}) {
   const rawVideo = onlyVideoStream(value, "camera source");
   const rawAudio = onlyAudioStream(value, "camera source");
   const codec = videoCodec(value);
-  const expectedRawCodec = sourcePathMode === SOURCE_PATH_MODES.DIRECT_H264 ? "H264" : "H265";
-  if (codec !== expectedRawCodec) {
-    throw new Error(sourcePathMode === SOURCE_PATH_MODES.DIRECT_H264
-      ? "camera source must use H.264 for direct WHEP; HEVC requires an assigned isolated normalizer"
-      : "isolated HEVC normalization requires an H.265 camera source");
+  if (sourcePathMode === SOURCE_PATH_MODES.DIRECT_H264 && codec !== "H264") {
+    throw new Error("camera source must use H.264 for direct WHEP; HEVC requires an assigned browser normalizer");
   }
   validateRawAudio(rawAudio);
   validateVideoGeometry(rawVideo, "camera source", value.frames);
@@ -196,10 +193,10 @@ function validateBrowserVideo(stream) {
 }
 
 function validateRawVideo(stream, codec, sourcePathMode) {
-  const normalizedFullRange = codec === "H265" && sourcePathMode === SOURCE_PATH_MODES.ISOLATED_HEVC_NORMALIZER && stream.pix_fmt === "yuvj420p";
-  if (stream.pix_fmt !== "yuv420p" && !normalizedFullRange) throw new Error(`camera source pixel format must be yuv420p, or yuvj420p through the isolated HEVC normalizer; observed ${stream.pix_fmt ?? "unknown"}`);
+  const normalizedFullRange = sourcePathMode === SOURCE_PATH_MODES.ISOLATED_BROWSER_NORMALIZER && stream.pix_fmt === "yuvj420p";
+  if (stream.pix_fmt !== "yuv420p" && !normalizedFullRange) throw new Error(`camera source pixel format must be yuv420p, or yuvj420p through the isolated browser normalizer; observed ${stream.pix_fmt ?? "unknown"}`);
   if (!Number.isInteger(stream.has_b_frames) || stream.has_b_frames < 0) throw new Error("camera source B-frame metadata is unavailable");
-  if (codec === "H264" && stream.has_b_frames !== 0) throw new Error(`direct H.264 camera source must have zero B-frames; observed ${stream.has_b_frames}`);
+  if (codec === "H264" && sourcePathMode === SOURCE_PATH_MODES.DIRECT_H264 && stream.has_b_frames !== 0) throw new Error(`direct H.264 camera source must have zero B-frames; observed ${stream.has_b_frames}`);
 }
 
 function validateRawAudio(stream) {

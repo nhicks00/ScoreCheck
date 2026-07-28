@@ -141,9 +141,9 @@ function fixture({ label, primaryExpected, backupExpected }) {
 function monitorSnapshot({ primaryExpected, backupExpected }) {
   const fixed = ["commentary", "observability", "ingest"].map((role) => agent(`bvm-${role}`, role));
   const compositors = Array.from({ length: 8 }, (_, index) => agent(`bvm-compositor-${index + 1}`, "compositor", index + 1, index === 0 ? primaryExpected : index < 6));
-  const spare = agent("bvm-compositor-spare", "worker", null, backupExpected);
+  const spare = agent("bvm-compositor-spare", "worker", null, backupExpected, 1);
   return {
-    version: 5,
+    version: 6,
     generatedAt: new Date(nowMs).toISOString(),
     collector: { agentsExpected: 12, agentsFresh: 12 },
     notifications: { pushover: { configured: true } },
@@ -177,16 +177,27 @@ function browser(camera) {
     receivedAt: new Date(nowMs).toISOString(),
     pageLoadedAt: "2026-07-22T11:59:00Z",
     pageBuildVersion: "build",
-    video: { state: "playing", connectionState: "connected", transport: "whep", networkPath: "private-vpc", width: 1920, height: 1080, framesRendered: 1_000, framesDropped: 0, freezeCount: 0, totalFreezesDurationMs: 0, packetsLost: 0, reconnectCount: 0, reloadCount: 0 },
+    video: { state: "playing", connectionState: "connected", transport: "hls", networkPath: null, width: 1920, height: 1080, framesRendered: 1_000, framesDropped: 0, freezeCount: 0, totalFreezesDurationMs: 0, packetsLost: null, playoutDelayMs: 12_000, bufferedAheadMs: 12_000, bufferedRangeCount: 1, hlsCreatedInstances: 1, hlsDestroyedInstances: 0, hlsActiveInstances: 1, jsHeapUsedBytes: 50_000_000, reconnectCount: 0, reloadCount: 0 },
     commentary: { cameraTrackPresent: true },
     scoreRender: { loaded: true, connected: true, stale: false, frozen: false, domMismatchReason: null, camera }
   };
 }
-function agent(agentId, role, assignedCourt = null, active = false) {
+function agent(agentId, role, assignedCourt = null, active = false, activeCourt = assignedCourt) {
   return {
     agentId, role, assignedCourts: assignedCourt === null ? [] : [assignedCourt], state: "HEALTHY",
     host: { memoryTotalBytes: 8e9, memoryAvailableBytes: 6e9, diskTotalBytes: 1e11, diskFreeBytes: 8e10 }, services: [],
-    nativeServices: ["compositor", "worker"].includes(role) ? { egress: { idle: !active, activeWebRequests: active ? 1 : 0, maximumWebRequests: 1, canAcceptRequest: !active, cpuLoadRatio: active ? 0.35 : 0.02, memoryLoadRatio: active ? 0.25 : 0.02 } } : null
+    nativeServices: ["compositor", "worker"].includes(role) ? { egress: { idle: !active, activeWebRequests: active ? 1 : 0, maximumWebRequests: 1, canAcceptRequest: !active, cpuLoadRatio: active ? 0.35 : 0.02, memoryLoadRatio: active ? 0.25 : 0.02 } } : null,
+    egressSupervisor: ["compositor", "worker"].includes(role) ? {
+      schemaVersion: 1,
+      generationKey: active ? "d".repeat(64) : null,
+      missingCount: 0,
+      recoveryAttempts: 0,
+      status: active ? "HEALTHY" : "IDLE",
+      detail: active ? "owned" : "idle",
+      court: active ? activeCourt : null,
+      egressId: active ? `EG_${agentId.replaceAll("-", "")}` : null,
+      observedAt: new Date(nowMs).toISOString()
+    } : null
   };
 }
 function providerEvidence() {
@@ -196,7 +207,7 @@ function context() {
   return {
     event: "event-test", generation: "generation-test", camera: 1, primaryHost: "198.51.100.1", spareHost: "198.51.100.12", profile: "1080p30",
     stream: { id: "stream-1", court: 1, streamName: "protected-key-1", rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2", rtmpsBackupIngestionAddress: "rtmps://b.rtmps.youtube.com/live2" },
-    primaryOwner: { event: "event-test", court: 1, destinationId: "broadcast-1", destinationRole: "primary", outputGeneration: "generation-test", rendererGitSha: "a".repeat(40), rendererDeploymentId: "dpl_test123", egressId: "EG_primary" },
-    backupOwner: { event: "event-test", destinationId: "broadcast-1", destinationRole: "backup", outputGeneration: "generation-test-backup-1", rendererGitSha: "a".repeat(40), rendererDeploymentId: "dpl_test123" }
+    primaryOwner: { event: "event-test", court: 1, destinationId: "broadcast-1", destinationRole: "primary", outputGeneration: "generation-test", rendererGitSha: "a".repeat(40), rendererDeploymentId: "dpl_test123", rendererRuntimeOrigin: "http://renderer:3000", rendererReleaseOrigin: "https://scorecheck-test.vercel.app", rendererBundleSha256: "c".repeat(64), egressId: "EG_primary" },
+    backupOwner: { event: "event-test", destinationId: "broadcast-1", destinationRole: "backup", outputGeneration: "generation-test-backup-1", rendererGitSha: "a".repeat(40), rendererDeploymentId: "dpl_test123", rendererRuntimeOrigin: "http://renderer:3000", rendererReleaseOrigin: "https://scorecheck-test.vercel.app", rendererBundleSha256: "c".repeat(64) }
   };
 }

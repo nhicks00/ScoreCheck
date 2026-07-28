@@ -139,6 +139,90 @@ describe("monitor correlator", () => {
     expect(result.courts[0]?.stages.find((stage) => stage.stage === "SCORE_SOURCE")?.state).toBe("HEALTHY");
   });
 
+  it("escalates an advertised but unready raw path when media is required", () => {
+    const generatedAt = "2026-07-12T12:00:00.000Z";
+    const snapshot = rawAgentSnapshot(generatedAt);
+    snapshot.mediaPaths[0] = {
+      ...snapshot.mediaPaths[0]!,
+      ready: false,
+      readySince: null,
+      inboundBitrateBps: 0,
+      readerCount: 0
+    };
+    const runtimes = new Map<string, AgentRuntime>([[target.id, { target, snapshot, lastSeenAt: generatedAt, lastErrorAt: null }]]);
+    const result = buildMonitorSnapshot(
+      [target],
+      runtimes,
+      1,
+      Date.parse(generatedAt) + 1_000,
+      [],
+      new Map(),
+      liveControlPlane(generatedAt)
+    );
+    const raw = result.courts[0]?.stages.find((stage) => stage.stage === "RAW_INGEST");
+
+    expect(raw?.state).toBe("CRITICAL");
+    expect(raw?.severity).toBe("critical");
+    expect(raw?.issueCode).toBe("REQUIRED_PATH_MISSING");
+    expect(raw?.summary).toBe("Required raw path is not ready.");
+  });
+
+  it("keeps an idle on-demand preview optional during active media coverage", () => {
+    const generatedAt = "2026-07-12T12:00:00.000Z";
+    const snapshot = rawAgentSnapshot(generatedAt);
+    const controlPlane = liveControlPlane(generatedAt);
+    controlPlane.courts[0]!.expectation.coveragePhase = "WARMUP";
+    const runtimes = new Map<string, AgentRuntime>([[target.id, { target, snapshot, lastSeenAt: generatedAt, lastErrorAt: null }]]);
+    const result = buildMonitorSnapshot(
+      [target],
+      runtimes,
+      1,
+      Date.parse(generatedAt) + 1_000,
+      [],
+      new Map(),
+      controlPlane
+    );
+
+    expect(result.courts[0]?.stages.find((stage) => stage.stage === "RAW_INGEST")?.state).toBe("HEALTHY");
+    expect(result.courts[0]?.stages.find((stage) => stage.stage === "PREVIEW")?.state).toBe("EXPECTED_OFF");
+  });
+
+  it("does not evaluate score rendering when scoring is disabled during a live broadcast", () => {
+    const generatedAt = "2026-07-12T12:00:00.000Z";
+    const browser = browserHeartbeat(generatedAt);
+    const controlPlane = liveControlPlane(generatedAt);
+    controlPlane.courts[0]!.expectation = {
+      coveragePhase: "WARMUP",
+      mediaExpectation: "REQUIRED",
+      broadcastExpectation: "LIVE",
+      commentaryExpectation: "NONE",
+      scoringExpectation: "NONE",
+      overrideExpiresAt: null
+    };
+    const mismatchedBrowser: BrowserHeartbeatSnapshot = {
+      ...browser,
+      scoreRender: {
+        ...browser.scoreRender,
+        loaded: false,
+        sourceSignature: "source",
+        renderedSignature: "rendered",
+        domMismatchReason: "board-missing"
+      }
+    };
+    const result = buildMonitorSnapshot(
+      [],
+      new Map(),
+      1,
+      Date.parse(generatedAt) + 1_000,
+      [],
+      new Map([[1, mismatchedBrowser]]),
+      controlPlane
+    );
+
+    expect(result.courts[0]?.stages.find((stage) => stage.stage === "PROGRAM_BROWSER")?.state).toBe("HEALTHY");
+    expect(result.courts[0]?.stages.find((stage) => stage.stage === "SCORE_RENDER")?.state).toBe("NOT_APPLICABLE");
+  });
+
   it("projects durable court incidents onto the matching pipeline stage", () => {
     const generatedAt = "2026-07-12T12:00:00.000Z";
     const snapshot: AgentSnapshot = {
@@ -195,6 +279,56 @@ describe("monitor correlator", () => {
     expect(result.courts[0]?.overallState).toBe("CRITICAL");
   });
 
+  it("projects a shared venue-uplink incident onto each affected SRT camera", () => {
+    const generatedAt = "2026-07-12T12:00:00.000Z";
+    const snapshot: AgentSnapshot = {
+      ...rawAgentSnapshot(generatedAt),
+      mediaPaths: rawAgentSnapshot(generatedAt).mediaPaths.map((path) => ({
+        ...path,
+        sourceProtocol: "SRT",
+        transport: {
+          rttMs: 250,
+          packetsReceived: 10_000,
+          packetsLost: 2_000,
+          packetsRetransmitted: 1_500,
+          packetsDropped: 100,
+          receiveRateBps: 2_000_000,
+          receiveBufferMs: 0,
+          configuredLatencyMs: 2_500
+        }
+      }))
+    };
+    const incident: IncidentSnapshot = {
+      id: "30000000-0000-4000-8000-000000000002",
+      fingerprint: "event|VENUE-UPLINK|RAW_INGEST|shared|VENUE_SRT_CONGESTION",
+      eventId: "10000000-0000-4000-8000-000000000001",
+      rootDependency: "VENUE-UPLINK",
+      status: "open",
+      severity: "critical",
+      stage: "RAW_INGEST",
+      issueCode: "VENUE_SRT_CONGESTION",
+      courtNumber: null,
+      host: null,
+      summary: "The venue upload is overloaded.",
+      firstAction: "Add upload capacity or lower total camera bitrate.",
+      evidence: {},
+      openedAt: generatedAt,
+      lastObservedAt: generatedAt,
+      acknowledgedAt: null,
+      acknowledgedBy: null,
+      resolvedAt: null
+    };
+    const controlPlane = liveControlPlane(generatedAt);
+    controlPlane.courts[0]!.expectation.coveragePhase = "WARMUP";
+    const runtimes = new Map<string, AgentRuntime>([[target.id, { target, snapshot, lastSeenAt: generatedAt, lastErrorAt: null }]]);
+    const result = buildMonitorSnapshot([target], runtimes, 1, Date.parse(generatedAt) + 1_000, [incident], new Map(), controlPlane);
+    const raw = result.courts[0]?.stages.find((stage) => stage.stage === "RAW_INGEST");
+
+    expect(raw?.state).toBe("CRITICAL");
+    expect(raw?.issueCode).toBe("VENUE_SRT_CONGESTION");
+    expect(raw?.evidence.incidentId).toBe(incident.id);
+  });
+
   it("maps each court to its assigned compositor and treats a busy Egress worker as healthy", () => {
     const generatedAt = "2026-07-12T12:00:00.000Z";
     const compositor = {
@@ -202,6 +336,8 @@ describe("monitor correlator", () => {
       agentId: compositorTarget.id,
       role: "compositor" as const,
       assignedCourts: [1, 2],
+      egressSupervisor: healthySupervisor(generatedAt, 1),
+      programWarmer: healthyWarmer(generatedAt, 1),
       nativeServices: {
         endpoints: [{ service: "egress-metrics" as const, up: true }, { service: "egress-health" as const, up: true }],
         livekit: null,
@@ -216,6 +352,30 @@ describe("monitor correlator", () => {
     expect(egress?.summary).toContain("processing output");
     expect(egress?.evidence.idle).toBe(false);
     expect(egress?.evidence.host).toBe(compositorTarget.id);
+  });
+
+  it("fails the exact output when its owned program warmer is missing", () => {
+    const generatedAt = "2026-07-12T12:00:00.000Z";
+    const compositor = {
+      ...emptyAgentSnapshot(generatedAt),
+      agentId: compositorTarget.id,
+      role: "compositor" as const,
+      assignedCourts: [1],
+      egressSupervisor: healthySupervisor(generatedAt, 1),
+      programWarmer: null,
+      nativeServices: {
+        endpoints: [{ service: "egress-metrics" as const, up: true }, { service: "egress-health" as const, up: true }],
+        livekit: null,
+        egress: { idle: false, canAcceptRequest: false, nativeCanAcceptRequest: true, activeWebRequests: 1, maximumWebRequests: 1, cgroupMemoryBytes: 700_000_000, cpuLoadRatio: 0.4, memoryLoadRatio: 0.2 }
+      }
+    };
+    const runtimes = new Map<string, AgentRuntime>([[compositorTarget.id, { target: compositorTarget, snapshot: compositor, lastSeenAt: generatedAt, lastErrorAt: null }]]);
+
+    const result = buildMonitorSnapshot([compositorTarget], runtimes, 1, Date.parse(generatedAt) + 1_000, [], new Map(), liveControlPlane(generatedAt));
+    const egress = result.courts[0]?.stages.find((stage) => stage.stage === "EGRESS");
+
+    expect(egress?.state).toBe("CRITICAL");
+    expect(egress?.issueCode).toBe("PROGRAM_BRANCH_WARMER_UNAVAILABLE");
   });
 
   it("classifies configured Egress admission states without paging normal capacity", () => {
@@ -233,6 +393,8 @@ describe("monitor correlator", () => {
         agentId: compositorTarget.id,
         role: "compositor" as const,
         assignedCourts: [1, 2],
+        egressSupervisor: healthySupervisor(generatedAt, 1),
+        programWarmer: healthyWarmer(generatedAt, 1),
         nativeServices: {
           endpoints: [{ service: "egress-metrics" as const, up: true }, { service: "egress-health" as const, up: true }],
           livekit: null,
@@ -401,7 +563,7 @@ function contentAgentSnapshot(
 
 function browserHeartbeat(observedAt: string, visual: Partial<BrowserHeartbeatSnapshot["visual"]> = {}): BrowserHeartbeatSnapshot {
   const payload = browserHeartbeatPayloadSchema.parse({
-    version: 5,
+    version: 6,
     credentialId: "40000000-0000-4000-8000-000000000001",
     courtNumber: 1,
     heartbeatSeq: 1,
@@ -424,6 +586,12 @@ function browserHeartbeat(observedAt: string, visual: Partial<BrowserHeartbeatSn
       packetsReceived: 1_000,
       framesDropped: 0,
       bytesReceived: 5_000_000,
+      bufferedAheadMs: null,
+      bufferedRangeCount: null,
+      hlsCreatedInstances: null,
+      hlsDestroyedInstances: null,
+      hlsActiveInstances: null,
+      jsHeapUsedBytes: 64_000_000,
       reconnectCount: 0,
       reloadCount: 0
     },
@@ -501,7 +669,7 @@ function liveControlPlane(observedAt: string): ControlPlaneSnapshot {
 
 function emptyAgentSnapshot(generatedAt: string): AgentSnapshot {
   return {
-    version: 5,
+    version: 6,
     agentId: "preview",
     role: "mediamtx",
     assignedCourts: [],
@@ -513,6 +681,33 @@ function emptyAgentSnapshot(generatedAt: string): AgentSnapshot {
     mediaPaths: [],
     ffmpegBranches: [],
     contentAnalysis: [],
+    egressSupervisor: null,
+    programWarmer: null,
     nativeServices: { endpoints: [], livekit: null, egress: null }
+  };
+}
+
+function healthySupervisor(observedAt: string, court: number) {
+  return {
+    schemaVersion: 1 as const,
+    generationKey: "a".repeat(64),
+    missingCount: 0,
+    recoveryAttempts: 0,
+    status: "HEALTHY" as const,
+    detail: "The exact owned Egress is active.",
+    court,
+    egressId: "EG_Test123",
+    observedAt
+  };
+}
+
+function healthyWarmer(observedAt: string, court: number) {
+  return {
+    schemaVersion: 1 as const,
+    court,
+    status: "WARM" as const,
+    ffmpegPid: 1234,
+    restartCount: 1,
+    observedAt
   };
 }

@@ -17,7 +17,7 @@ const binding = {
     programSession: "program-session-v1",
     overlayState: "overlay-state-v1",
     commentary: "commentary-v1",
-    browserHeartbeat: "browser-heartbeat-v5"
+    browserHeartbeat: "browser-heartbeat-v6"
   }
 };
 

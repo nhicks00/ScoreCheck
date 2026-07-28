@@ -19,6 +19,22 @@ describe("operator notification copy", () => {
     });
   });
 
+  it("does not tell the operator to restart cameras for shared SRT congestion", () => {
+    const copy = operatorNotificationCopy(incident({
+      stage: "RAW_INGEST",
+      issueCode: "VENUE_SRT_CONGESTION",
+      courtNumber: null,
+      rootDependency: "VENUE-UPLINK"
+    }));
+    expect(copy).toEqual({
+      title: "Venue internet needs attention",
+      problem: "The venue upload is overloaded, so several camera streams may stutter.",
+      action: "Do not restart the cameras. Add upload capacity or lower the total camera bitrate.",
+      recoveryTitle: "Venue internet is back to normal",
+      recovery: "The venue upload is keeping up with the camera streams again. No action is needed."
+    });
+  });
+
   it("describes a broadcast-output failure without infrastructure jargon", () => {
     const copy = operatorNotificationCopy(incident({ stage: "EGRESS", issueCode: "EGRESS_WORKER_UNAVAILABLE" }));
     expect(copy.problem).toBe("Camera 4's broadcast output stopped.");
@@ -37,10 +53,40 @@ describe("operator notification copy", () => {
     expect(JSON.stringify(copy)).not.toMatch(/egress|worker|web request|compositor/i);
   });
 
+  it("explains automatic output recovery without telling the operator to restart a camera", () => {
+    const recovering = operatorNotificationCopy(incident({ stage: "EGRESS", issueCode: "EGRESS_RECOVERING" }));
+    expect(recovering.problem).toBe("ScoreCheck is automatically restarting Camera 4's broadcast output.");
+    expect(recovering.action).toContain("Leave the camera streaming");
+
+    const failed = operatorNotificationCopy(incident({ stage: "EGRESS", issueCode: "EGRESS_SUPERVISOR_FAILED" }));
+    expect(failed.problem).toBe("ScoreCheck cannot automatically restart Camera 4's broadcast output.");
+    expect(failed.action).toBe("Leave the camera streaming and contact the technical operator. Do not restart the camera for this alert.");
+    expect(JSON.stringify(failed)).not.toMatch(/egress|supervisor|redis|worker/i);
+
+    const warmer = operatorNotificationCopy(incident({ stage: "EGRESS", issueCode: "PROGRAM_BRANCH_WARMER_UNAVAILABLE" }));
+    expect(warmer.problem).toBe("ScoreCheck may not recover Camera 4's broadcast smoothly after an interruption.");
+    expect(warmer.action).toContain("Do not stop the YouTube broadcast");
+    expect(JSON.stringify(warmer)).not.toMatch(/egress|warmer|branch|ffmpeg/i);
+  });
+
   it("gives a commentator a concrete reconnect action", () => {
     const copy = operatorNotificationCopy(incident({ stage: "COMMENTARY", issueCode: "COMMENTARY_TRACK_MUTED" }));
     expect(copy.problem).toBe("Commentator sound is missing for Camera 4.");
     expect(copy.action).toContain("check mute and microphone settings");
+  });
+
+  it("keeps a slow source-to-program pipeline running while directing a camera check", () => {
+    const copy = operatorNotificationCopy(incident({
+      stage: "PROGRAM_PATH",
+      issueCode: "PROGRAM_SOURCE_CADENCE_LOW",
+      courtNumber: 6
+    }));
+    expect(copy).toMatchObject({
+      problem: "Camera 6's video is arriving too slowly and may stutter.",
+      action: "Leave the broadcast running. Check that Camera 6 is still streaming with its assigned video settings and a stable connection.",
+      recovery: "Camera 6's video is flowing normally again. No action is needed."
+    });
+    expect(copy.action).not.toMatch(/restart/i);
   });
 
   it("routes an unknown issue to the first red dashboard item", () => {

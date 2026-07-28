@@ -22,7 +22,7 @@ const renderer = {
     programSession: "program-session-v1",
     overlayState: "overlay-state-v1",
     commentary: "commentary-v1",
-    browserHeartbeat: "browser-heartbeat-v5"
+    browserHeartbeat: "browser-heartbeat-v6"
   }
 };
 const venueProfile = createSyntheticRehearsalVenueProfile("renderer-loss-event");
@@ -292,11 +292,11 @@ function snapshot(sampledMs, { disconnectedCamera = null, incident = false } = {
     agent("bvm-commentary", "commentary"),
     agent("bvm-observability", "observability"),
     agent("bvm-ingest", "ingest"),
-    ...Array.from({ length: 8 }, (_, index) => agent(`bvm-compositor-${index + 1}`, "compositor", index + 1, true)),
-    agent("bvm-compositor-spare", "worker")
+    ...Array.from({ length: 8 }, (_, index) => agent(`bvm-compositor-${index + 1}`, "compositor", index + 1, true, sampledMs)),
+    agent("bvm-compositor-spare", "worker", null, false, sampledMs)
   ];
   return {
-    version: 5,
+    version: 6,
     generatedAt: new Date(sampledMs).toISOString(),
     collector: { state: "HEALTHY", agentsExpected: 12, agentsFresh: 12 },
     notifications: { pushover: { configured: true } },
@@ -326,8 +326,11 @@ function browser(sampledMs, disconnected) {
     pageBuildVersion: renderer.gitSha,
     configurationVersion: "configuration-1234",
     video: {
-      state: "playing", connectionState: "connected", transport: "whep", networkPath: "private-vpc", width: 1920, height: 1080,
-      framesRendered, framesDropped: 0, freezeCount: 0, totalFreezesDurationMs: 0, packetsLost: 0, reconnectCount: 0, reloadCount: 0
+      state: "playing", connectionState: "connected", transport: "hls", networkPath: null, width: 1920, height: 1080,
+      framesRendered, framesDropped: 0, freezeCount: 0, totalFreezesDurationMs: 0, packetsLost: null,
+      playoutDelayMs: 12_000, bufferedAheadMs: 12_000, bufferedRangeCount: 1,
+      hlsCreatedInstances: 1, hlsDestroyedInstances: 0, hlsActiveInstances: 1,
+      jsHeapUsedBytes: 64_000_000, reconnectCount: 0, reloadCount: 0
     },
     commentary: { cameraTrackPresent: true },
     scoreRender: {
@@ -353,7 +356,7 @@ function ffmpeg(speedRatio) {
   return { framesPerSecond: 30, droppedFrames: 0, duplicatedFrames: 0, speedRatio };
 }
 
-function agent(agentId, role, assignedCourt = null, outputActive = false) {
+function agent(agentId, role, assignedCourt = null, outputActive = false, sampledMs = startedMs) {
   return {
     agentId,
     role,
@@ -361,6 +364,17 @@ function agent(agentId, role, assignedCourt = null, outputActive = false) {
     state: "HEALTHY",
     host: { memoryTotalBytes: 8_000_000_000, memoryAvailableBytes: 6_000_000_000, diskTotalBytes: 100_000_000_000, diskFreeBytes: 80_000_000_000 },
     services: [],
+    egressSupervisor: ["compositor", "worker"].includes(role) ? {
+      schemaVersion: 1,
+      generationKey: outputActive ? "a".repeat(64) : null,
+      missingCount: 0,
+      recoveryAttempts: 0,
+      status: outputActive ? "HEALTHY" : "IDLE",
+      detail: outputActive ? "The exact owned Egress is active." : "No owned or active Egress exists.",
+      court: outputActive ? assignedCourt : null,
+      egressId: outputActive ? `EG_Camera${assignedCourt}` : null,
+      observedAt: new Date(sampledMs).toISOString()
+    } : null,
     nativeServices: ["compositor", "worker"].includes(role) ? {
       egress: { idle: !outputActive, activeWebRequests: outputActive ? 1 : 0, maximumWebRequests: 1, canAcceptRequest: !outputActive, cpuLoadRatio: outputActive ? 0.35 : 0.02, memoryLoadRatio: outputActive ? 0.25 : 0.02 }
     } : null

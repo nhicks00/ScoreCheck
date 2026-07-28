@@ -177,6 +177,8 @@ RUNNER_PID=""
   || fail "readiness-gated runner left stale progress state"
 grep -Fq 'court[1-8]_raw|court[1-8]_normalized)' "$RUNNER" \
   || fail "runner does not allow both direct and normalized readiness paths"
+grep -Fq 'court[1-8]_ingest|court[1-8]_normalizer|court[1-8]_preview' "$RUNNER" \
+  || fail "runner does not accept compositor normalizer branches"
 
 grep -Fq "trap 'exit_for_signal 130' INT" "$RUNNER" \
   || fail "runner does not install the MediaMTX SIGINT cleanup handler"
@@ -200,13 +202,15 @@ unset FAKE_FFMPEG_EXIT_EARLY
   || fail "early FFmpeg failure left stale progress state"
 
 direct_runner_count="$(grep -c '^[[:space:]]*/usr/local/bin/scorecheck-ffmpeg-runner ' "$TEMPLATE")"
-[ "$direct_runner_count" -eq 3 ] \
-  || fail "expected three direct MediaMTX runner commands plus the preview wrapper, found $direct_runner_count"
+[ "$direct_runner_count" -eq 2 ] \
+  || fail "expected two direct MediaMTX runner commands plus the source-selecting wrappers, found $direct_runner_count"
 wait_ready_count="$(grep -c -- '--wait-ready "court${G1}_raw"' "$TEMPLATE")"
 [ "$wait_ready_count" -eq 1 ] \
   || fail "expected only monitor to use the direct raw readiness gate"
 grep -q 'scorecheck-preview-runner "court${G1}_preview"' "$TEMPLATE" \
   || fail "preview does not use the source-selecting wrapper"
+grep -q 'scorecheck-program-runner "court${G1}_program"' "$TEMPLATE" \
+  || fail "program does not use the direct source-selecting wrapper"
 if grep -q '/bin/sh -c' "$TEMPLATE"; then
   fail "MediaMTX hooks still contain a nested shell that can orphan the runner"
 fi

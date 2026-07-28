@@ -65,7 +65,7 @@ test("keeps permanent identities while allowing an event-specific active camera 
     ...profile.cameras[0],
     cameraModel: "AVKANS Go",
     cameraFirmware: "v2.7.1",
-    sourcePathMode: "isolated-hevc-normalizer",
+    sourcePathMode: "isolated-browser-normalizer",
     sourceCodec: "H265",
     sourceProfile: "CONSTRAINED_1080P30",
     sourceRateCapMbps: 3
@@ -102,14 +102,16 @@ test("requires an explicit operational priority tier independent of output quali
   assert.throws(() => validateVenueProfile(profile), /priority tier/u);
 });
 
-test("rejects direct HEVC, H264 on a normalizer path, and unapproved plaintext RTMP", () => {
+test("rejects direct HEVC and unapproved codecs or plaintext RTMP", () => {
   const directHevc = createSyntheticRehearsalVenueProfile("direct-hevc");
   directHevc.cameras[0].sourceCodec = "H265";
   assert.throws(() => validateVenueProfile(directHevc), /requires H264/);
 
   const normalizedH264 = createSyntheticRehearsalVenueProfile("normalized-h264");
-  normalizedH264.cameras[0].sourcePathMode = "isolated-hevc-normalizer";
-  assert.throws(() => validateVenueProfile(normalizedH264), /requires H265/);
+  normalizedH264.cameras[0].sourcePathMode = "isolated-browser-normalizer";
+  assert.doesNotThrow(() => validateVenueProfile(normalizedH264));
+  normalizedH264.cameras[0].sourceCodec = "VP9";
+  assert.throws(() => validateVenueProfile(normalizedH264), /source codec/u);
 
   const plaintext = createSyntheticRehearsalVenueProfile("plaintext-rtmp");
   plaintext.cameras[0].sourceProtocol = "RTMP_LEGACY_APPROVED";

@@ -39,6 +39,7 @@ done
 source_path="court${court}_${source_kind}"
 runner=${SCORECHECK_FFMPEG_RUNNER:-/usr/local/bin/scorecheck-ffmpeg-runner}
 [ -x "$runner" ] || { echo "FFmpeg branch runner is unavailable" >&2; exit 69; }
+
 exec "$runner" "$branch" \
   --wait-ready "$source_path" -- \
   -nostdin -hide_banner -loglevel warning \
@@ -46,5 +47,5 @@ exec "$runner" "$branch" \
   -i "rtsp://127.0.0.1:${RTSP_PORT:?RTSP_PORT is required}/${source_path}" \
   -map 0:v:0 -map 0:a:0? \
   -c:v copy \
-  -c:a libopus -b:a 96k -ar 48000 -ac 2 -af "aresample=async=1:first_pts=0" \
+  -c:a libopus -b:a 96k -ar 48000 -ac 2 -af "asetpts=N/SR/TB,aresample=async=1:first_pts=0" \
   -f rtsp -rtsp_transport tcp "rtsp://127.0.0.1:${RTSP_PORT}/${MTX_PATH:?MTX_PATH is required}"

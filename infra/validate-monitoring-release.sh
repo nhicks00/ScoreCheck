@@ -48,6 +48,7 @@ reviewed_shell_tests=(
   infra/compositor/test-start-court.sh
   infra/mediamtx/test-scorecheck-ffmpeg-runner.sh
   infra/mediamtx/test-scorecheck-preview-runner.sh
+  infra/mediamtx/test-scorecheck-program-runner.sh
   infra/venue-router/test-scorecheck-speedify-routing.sh
 )
 discovered_shell_tests="$(rg --files infra | rg '(^|/)(test[^/]*\.sh|[^/]*test\.sh)$' | sort)"

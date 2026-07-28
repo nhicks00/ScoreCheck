@@ -11,6 +11,8 @@ import { chromium } from "playwright";
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const BROADCAST_ID = /^[A-Za-z0-9_-]{6,32}$/u;
 const PROBE_REFERER = "https://monitor.beachvolleyballmedia.com/";
+const PROBE_MAXIMUM_DURATION_MS = 120_000;
+const BROWSER_CLOSE_TIMEOUT_MS = 5_000;
 const CONTINUITY_SAMPLE_INTERVAL_MS = 250;
 const CONTINUITY_MAX_SAMPLES = 2_400;
 const CONTINUITY_MINIMUM_DURATION_MS = 15_000;
@@ -33,10 +35,11 @@ const CONTINUITY_MARKERS = [
 ];
 
 export class YouTubeViewerProbe {
-  constructor({ browserType = chromium, sleep = delay, sampleDelayMs = 8_000 } = {}) {
+  constructor({ browserType = chromium, sleep = delay, sampleDelayMs = 8_000, maximumDurationMs = PROBE_MAXIMUM_DURATION_MS } = {}) {
     this.browserType = browserType;
     this.sleep = sleep;
     this.sampleDelayMs = sampleDelayMs;
+    this.maximumDurationMs = maximumDurationMs;
   }
 
   async probe({ camera, broadcastId }) {
@@ -44,15 +47,27 @@ export class YouTubeViewerProbe {
     if (!BROADCAST_ID.test(broadcastId ?? "")) throw new Error("YouTube broadcast id is invalid");
     const observedAt = new Date().toISOString();
     let viewer;
+    let browser;
+    let timeout;
     try {
-      viewer = await openViewer({ browserType: this.browserType, broadcastId });
-      await this.sleep(2_000);
-      const first = await sampleVideo(viewer.video);
-      const firstFrame = await viewer.video.screenshot({ type: "png" });
-      await this.sleep(this.sampleDelayMs);
-      const second = await sampleVideo(viewer.video);
-      const secondFrame = await viewer.video.screenshot({ type: "png" });
-      return evaluateViewerProbe({ camera, broadcastId, observedAt, first, second, firstFrame, secondFrame, elapsedMs: this.sampleDelayMs });
+      return await Promise.race([
+        (async () => {
+          viewer = await openViewer({ browserType: this.browserType, broadcastId, onBrowser: (value) => { browser = value; } });
+          await this.sleep(2_000);
+          const first = await sampleVideo(viewer.video);
+          const firstFrame = await viewer.video.screenshot({ type: "png" });
+          await this.sleep(this.sampleDelayMs);
+          const second = await sampleVideo(viewer.video);
+          const secondFrame = await viewer.video.screenshot({ type: "png" });
+          return evaluateViewerProbe({ camera, broadcastId, observedAt, first, second, firstFrame, secondFrame, elapsedMs: this.sampleDelayMs });
+        })(),
+        new Promise((_, reject) => {
+          timeout = setTimeout(() => {
+            void browser?.close().catch(() => {});
+            reject(new Error(`viewer probe exceeded ${this.maximumDurationMs} ms`));
+          }, this.maximumDurationMs);
+        })
+      ]);
     } catch (error) {
       return {
         schemaVersion: 1,
@@ -63,7 +78,8 @@ export class YouTubeViewerProbe {
         problems: [`viewer probe failed: ${safeError(error)}`]
       };
     } finally {
-      await viewer?.browser.close().catch(() => {});
+      clearTimeout(timeout);
+      await closeBrowser(viewer?.browser ?? browser);
     }
   }
 
@@ -86,7 +102,7 @@ export class YouTubeViewerProbe {
       await session.mark("baseline-ready");
       return session;
     } catch (error) {
-      await viewer?.browser.close().catch(() => {});
+      await closeBrowser(viewer?.browser);
       throw new Error(`continuous viewer could not start: ${safeError(error)}`);
     }
   }
@@ -151,8 +167,7 @@ export class YouTubeViewerContinuitySession {
   async close() {
     if (this.closed) return;
     this.closed = true;
-    await this.page.evaluate(() => window.__scorecheckYoutubeContinuity?.stop?.()).catch(() => {});
-    await this.browser.close().catch(() => {});
+    await closeBrowser(this.browser);
   }
 }
 
@@ -245,8 +260,9 @@ export function evaluateViewerContinuityTrace({ camera, broadcastId, traceId, st
   };
 }
 
-async function openViewer({ browserType, broadcastId }) {
-  const browser = await browserType.launch({ headless: true, args: ["--autoplay-policy=no-user-gesture-required"] });
+async function openViewer({ browserType, broadcastId, onBrowser = () => {} }) {
+  const browser = await browserType.launch({ headless: true, args: ["--autoplay-policy=no-user-gesture-required"], timeout: 30_000 });
+  onBrowser(browser);
   try {
     const context = await browser.newContext({
       viewport: { width: 1280, height: 720 },
@@ -258,25 +274,46 @@ async function openViewer({ browserType, broadcastId }) {
       waitUntil: "domcontentloaded",
       timeout: 30_000
     });
+    const attached = await page.waitForFunction(() => {
+      const text = document.body?.innerText.toLowerCase() ?? "";
+      if (text.includes("sign in to confirm") && text.includes("not a bot")) return "challenge";
+      return document.querySelector("video") instanceof HTMLVideoElement ? "video" : false;
+    }, null, { timeout: 30_000 });
+    const attachedState = await attached.jsonValue();
+    await attached.dispose();
+    if (attachedState === "challenge") throw new Error("YouTube synthetic viewer was blocked by a sign-in challenge");
     const video = page.locator("video").first();
-    await video.waitFor({ state: "attached", timeout: 30_000 });
     await video.evaluate(async (element) => {
       if (!element.paused) return;
-      try {
-        await element.play();
-      } catch (error) {
+      const play = element.play().catch((error) => {
         if (!(error instanceof DOMException) || error.name !== "AbortError") throw error;
-      }
+      });
+      await Promise.race([play, new Promise((resolve) => window.setTimeout(resolve, 3_000))]);
     });
-    await page.waitForFunction(() => {
+    const ready = await page.waitForFunction(() => {
+      const text = document.body?.innerText.toLowerCase() ?? "";
+      if (text.includes("sign in to confirm") && text.includes("not a bot")) return "challenge";
       const element = document.querySelector("video");
-      return element instanceof HTMLVideoElement && element.readyState >= 3 && !element.paused && element.currentTime > 0;
+      return element instanceof HTMLVideoElement && element.readyState >= 3 && !element.paused && element.currentTime > 0 ? "ready" : false;
     }, null, { timeout: 30_000 });
+    const readyState = await ready.jsonValue();
+    await ready.dispose();
+    if (readyState === "challenge") throw new Error("YouTube synthetic viewer was blocked by a sign-in challenge");
     return { browser, context, page, video };
   } catch (error) {
     await browser.close().catch(() => {});
     throw error;
   }
+}
+
+async function closeBrowser(browser) {
+  if (!browser) return;
+  let timeout;
+  await Promise.race([
+    browser.close().catch(() => {}),
+    new Promise((resolve) => { timeout = setTimeout(resolve, BROWSER_CLOSE_TIMEOUT_MS); })
+  ]);
+  clearTimeout(timeout);
 }
 
 async function installContinuityCollector(page) {

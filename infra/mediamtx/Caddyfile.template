@@ -14,5 +14,26 @@ __PUBLIC_HOST__ {
         respond "ok" 200
     }
 
-    reverse_proxy 127.0.0.1:8889
+    @authorizedDerivedWhep {
+        path_regexp derived_whep ^/court[1-8]_(preview|program|monitor|calibration)/whep(/.*)?$
+        query user=__DERIVED_READ_USER__ pass=__DERIVED_READ_PASS__
+    }
+    handle @authorizedDerivedWhep {
+        reverse_proxy 127.0.0.1:8889
+    }
+
+    @authorizedDerivedHls {
+        path_regexp derived_hls ^/court[1-8]_(preview|program|monitor|calibration)/.*$
+        query user=__DERIVED_READ_USER__ pass=__DERIVED_READ_PASS__
+    }
+    handle @authorizedDerivedHls {
+        reverse_proxy 127.0.0.1:8888
+    }
+
+    @protectedMedia path_regexp protected_media ^/court[1-8]_(raw|normalized|preview|program|monitor|calibration)/.*$
+    handle @protectedMedia {
+        respond "unauthorized" 401
+    }
+
+    respond "not found" 404
 }

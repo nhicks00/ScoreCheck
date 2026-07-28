@@ -1,4 +1,4 @@
-import { productionSnapshotProblems } from "./production-soak.mjs";
+import { browserCounterFields, productionSnapshotProblems } from "./production-soak.mjs";
 import { validateRendererBinding } from "./renderer-binding.mjs";
 
 const MAX_TRANSITION_MS = 60_000;
@@ -52,7 +52,7 @@ export function evaluateRendererLossRehearsal({ event, generationId, camera, ren
   else {
     for (const current of [outageBrowser, recoveryBrowser]) {
       if (current.pageLoadedAt !== baselineBrowser.pageLoadedAt || current.pageBuildVersion !== baselineBrowser.pageBuildVersion || current.configurationVersion !== baselineBrowser.configurationVersion) problems.push("renderer-loss browser identity changed end to end");
-      for (const field of ["framesDropped", "freezeCount", "totalFreezesDurationMs", "packetsLost", "reconnectCount", "reloadCount"]) {
+      for (const field of browserCounterFields(baselineBrowser.video)) {
         if (!Number.isFinite(baselineBrowser.video[field]) || current.video[field] !== baselineBrowser.video[field]) problems.push(`renderer-loss browser ${field} changed end to end`);
       }
     }

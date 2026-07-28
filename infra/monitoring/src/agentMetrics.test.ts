@@ -16,6 +16,12 @@ describe("agent metrics", () => {
     expect(output).toContain('scorecheck_egress_native_can_accept_request{agent="bvm-compositor-a"} 1');
     expect(output).toContain('scorecheck_egress_active_web_requests{agent="bvm-compositor-a"} 1');
     expect(output).toContain('scorecheck_egress_maximum_web_requests{agent="bvm-compositor-a"} 2');
+    expect(output).toContain('scorecheck_egress_supervisor_present{agent="bvm-compositor-a"} 1');
+    expect(output).toContain('scorecheck_egress_supervisor_fresh{agent="bvm-compositor-a"} 1');
+    expect(output).toContain('scorecheck_egress_supervisor_state{agent="bvm-compositor-a",status="HEALTHY"} 1');
+    expect(output).toContain('scorecheck_program_warmer_present{agent="bvm-compositor-a"} 1');
+    expect(output).toContain('scorecheck_program_warmer_fresh{agent="bvm-compositor-a"} 1');
+    expect(output).toContain('scorecheck_program_warmer_state{agent="bvm-compositor-a",status="WARM"} 1');
     expect(output).not.toContain("scorecheck_egress_available");
   });
 
@@ -28,6 +34,30 @@ describe("agent metrics", () => {
 
     expect(output).toContain('scorecheck_egress_metrics_valid{agent="bvm-compositor-a"} 0');
     expect(output).not.toContain('scorecheck_egress_idle{agent="bvm-compositor-a"}');
+  });
+
+  it("marks missing Egress supervisor state unavailable", async () => {
+    const metrics = new AgentMetrics();
+    const snapshot = compositorSnapshot({ idle: true, canAcceptRequest: true });
+    snapshot.egressSupervisor = null;
+    metrics.update(snapshot);
+    const output = await metrics.registry.metrics();
+
+    expect(output).toContain('scorecheck_egress_supervisor_present{agent="bvm-compositor-a"} 0');
+    expect(output).toContain('scorecheck_egress_supervisor_fresh{agent="bvm-compositor-a"} 0');
+    expect(output).not.toContain('scorecheck_egress_supervisor_state{agent="bvm-compositor-a"');
+  });
+
+  it("marks missing program-warmer state unavailable", async () => {
+    const metrics = new AgentMetrics();
+    const snapshot = compositorSnapshot({ idle: false, canAcceptRequest: false });
+    snapshot.programWarmer = null;
+    metrics.update(snapshot);
+    const output = await metrics.registry.metrics();
+
+    expect(output).toContain('scorecheck_program_warmer_present{agent="bvm-compositor-a"} 0');
+    expect(output).toContain('scorecheck_program_warmer_fresh{agent="bvm-compositor-a"} 0');
+    expect(output).not.toContain('scorecheck_program_warmer_state{agent="bvm-compositor-a"');
   });
 
   it("exports host-local camera content without requiring a full host recollection", async () => {
@@ -187,7 +217,7 @@ function mediamtxSnapshot(): AgentSnapshot {
 
 function compositorSnapshot(egress: { idle: boolean; canAcceptRequest: boolean }): AgentSnapshot {
   return {
-    version: 5,
+    version: 6,
     agentId: "bvm-compositor-a",
     role: "compositor",
     assignedCourts: [1, 2],
@@ -206,6 +236,32 @@ function compositorSnapshot(egress: { idle: boolean; canAcceptRequest: boolean }
     mediaPaths: [],
     ffmpegBranches: [],
     contentAnalysis: [],
+    egressSupervisor: {
+      schemaVersion: 1,
+      generationKey: "a".repeat(64),
+      missingCount: 0,
+      recoveryAttempts: 0,
+      status: egress.idle ? "IDLE" : "HEALTHY",
+      detail: egress.idle ? "No owned or active Egress exists." : "The exact owned Egress is active.",
+      court: egress.idle ? null : 1,
+      egressId: egress.idle ? null : "EG_Test123",
+      observedAt: "2026-07-12T18:00:00.000Z"
+    },
+    programWarmer: egress.idle ? {
+      schemaVersion: 1,
+      court: 1,
+      status: "IDLE",
+      ffmpegPid: null,
+      restartCount: 0,
+      observedAt: "2026-07-12T18:00:00.000Z"
+    } : {
+      schemaVersion: 1,
+      court: 1,
+      status: "WARM",
+      ffmpegPid: 1234,
+      restartCount: 1,
+      observedAt: "2026-07-12T18:00:00.000Z"
+    },
     nativeServices: {
       endpoints: [{ service: "egress-metrics", up: true }, { service: "egress-health", up: true }],
       livekit: null,

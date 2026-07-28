@@ -21,6 +21,16 @@ import {
   type RtcJitterTotals,
   type StreamTimingSample
 } from "@/lib/rtcTiming";
+import {
+  PROGRAM_HLS_BACK_BUFFER_SECONDS,
+  PROGRAM_HLS_BUFFER_LENGTH_SECONDS,
+  PROGRAM_HLS_INITIAL_SEGMENT_COUNT,
+  PROGRAM_HLS_MAX_LATENCY_MS,
+  PROGRAM_HLS_MAX_BUFFER_BYTES,
+  PROGRAM_HLS_STARTUP_BUFFER_SECONDS,
+  PROGRAM_HLS_TARGET_LATENCY_MS
+} from "@/lib/programTimeline";
+import { inheritMediaAuthorization, whepResourceUrl } from "@/lib/mediaAuthorization";
 
 type StreamPlayerProps = {
   courtNumber: number;
@@ -31,7 +41,7 @@ type StreamPlayerProps = {
   sources?: { whepUrl: string | null; hlsUrl: string | null };
   /** Hides all player chrome (status chip, buttons, error fallback, native controls) for capture surfaces like /program. */
   chromeless?: boolean;
-  /** Program capture and scoring must never change latency classes by falling back to HLS. */
+  /** Program capture uses HLS for stable Chromium pacing; scoring remains authoritative WHEP only. */
   mode?: PlaybackMode;
   /** Gives the program mixer access to the camera media element. */
   onVideoElement?: (element: HTMLVideoElement | null) => void;
@@ -62,6 +72,7 @@ export type StreamConnectionHealth = {
   rttMs: number | null;
   jitterMs: number | null;
   jitterBufferMs: number | null;
+  playoutDelayMs: number | null;
   packetsLost: number | null;
   packetsReceived: number | null;
   framesReceived: number | null;
@@ -75,6 +86,12 @@ export type StreamConnectionHealth = {
   nackCount: number | null;
   pliCount: number | null;
   firCount: number | null;
+  bufferedAheadMs: number | null;
+  bufferedRangeCount: number | null;
+  hlsCreatedInstances: number | null;
+  hlsDestroyedInstances: number | null;
+  hlsActiveInstances: number | null;
+  jsHeapUsedBytes: number | null;
 };
 
 type StreamSources = {
@@ -87,9 +104,9 @@ type HlsInstance = {
   attachMedia: (element: HTMLVideoElement) => void;
   on: (event: string, callback: (event: string, data: { fatal?: boolean }) => void) => void;
   destroy: () => void;
+  latency: number;
 };
 
-const WHEP_FAILURES_BEFORE_HLS = 3;
 const MAX_RETRY_DELAY_MS = 15_000;
 const OFFLINE_MESSAGE = "Stream offline — retrying";
 
@@ -112,8 +129,10 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
   const [loadRevision, setLoadRevision] = useState(0);
   const [status, setStatus] = useState("Loading stream...");
   const [error, setError] = useState<string | null>(null);
-  const [muted, setMuted] = useState(mode !== "program");
+  const [muted, setMuted] = useState(true);
   const qualificationKeyRef = useRef("");
+  const hlsCreatedInstancesRef = useRef(0);
+  const hlsDestroyedInstancesRef = useRef(0);
   // Depend on the primitive URLs so a parent re-render with an identical
   // sources object never tears down a healthy connection.
   const hasProvidedSources = providedSources != null;
@@ -257,9 +276,31 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
     let previousTimingTotals: RtcJitterTotals | null = null;
     let whepFailures = 0;
     let hlsFailures = 0;
+    let hlsFrameCallbackId: number | null = null;
+    let hlsHealthTimer: number | null = null;
+    let hlsStartupTimer: number | null = null;
+    let hlsPresentedFrames = 0;
+    let previousHlsPresentedFrames = 0;
+    let previousHlsSampledAtMs = 0;
+    let hlsFreezeCount = 0;
+    let hlsFreezeDurationMs = 0;
+    let hlsFreezeStartedAtMs: number | null = null;
+
+    const startHlsFreeze = () => {
+      const state = playbackEvidenceStateRef.current;
+      if (state.transport !== "hls" || state.connectionState !== "connected" || hlsFreezeStartedAtMs != null) return;
+      hlsFreezeCount += 1;
+      hlsFreezeStartedAtMs = performance.now();
+    };
+    const endHlsFreeze = () => {
+      if (hlsFreezeStartedAtMs == null) return;
+      hlsFreezeDurationMs += Math.max(0, performance.now() - hlsFreezeStartedAtMs);
+      hlsFreezeStartedAtMs = null;
+    };
 
     const onPlaying = () => {
       if (cancelled) return;
+      endHlsFreeze();
       setError(null);
       setStatus(pc ? "Live — low latency" : "Live — HLS");
       const state = playbackEvidenceStateRef.current;
@@ -270,12 +311,18 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
       });
       if (!pc) {
         updatePlaybackEvidenceState({ connectionState: "connected", reconnecting: false });
-        onConnectionHealth?.({ ...emptyConnectionHealth(), transport: "hls", connectionState: "connected" });
+        reportHlsHealth();
       }
     };
     const onPause = () => updatePlaybackEvidenceState({ paused: true });
-    const onWaiting = () => updatePlaybackEvidenceState({ stalled: true });
-    const onStalled = () => updatePlaybackEvidenceState({ stalled: true });
+    const onWaiting = () => {
+      startHlsFreeze();
+      updatePlaybackEvidenceState({ stalled: true });
+    };
+    const onStalled = () => {
+      startHlsFreeze();
+      updatePlaybackEvidenceState({ stalled: true });
+    };
     const onEmptied = () => updatePlaybackEvidenceState({
       paused: true,
       stalled: false,
@@ -293,6 +340,17 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
       whepFetchController = null;
       if (timingTimer != null) window.clearInterval(timingTimer);
       timingTimer = null;
+      if (hlsHealthTimer != null) window.clearInterval(hlsHealthTimer);
+      hlsHealthTimer = null;
+      if (hlsStartupTimer != null) window.clearInterval(hlsStartupTimer);
+      hlsStartupTimer = null;
+      if (hlsFrameCallbackId != null && typeof video.cancelVideoFrameCallback === "function") {
+        video.cancelVideoFrameCallback(hlsFrameCallbackId);
+      }
+      hlsFrameCallbackId = null;
+      hlsPresentedFrames = 0;
+      previousHlsPresentedFrames = 0;
+      previousHlsSampledAtMs = 0;
       previousTimingTotals = null;
       onTimingSample?.(null);
       onConnectionHealth?.(null);
@@ -301,8 +359,11 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
       closingConnection?.close();
       if (whepSessionUrl) releaseWhepSession(whepSessionUrl);
       whepSessionUrl = null;
-      hls?.destroy();
-      hls = null;
+      if (hls) {
+        hls.destroy();
+        hls = null;
+        hlsDestroyedInstancesRef.current += 1;
+      }
       video.srcObject = null;
       video.removeAttribute("src");
       updatePlaybackEvidenceState(initialPlaybackEvidenceState());
@@ -328,10 +389,6 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
       });
       onReconnect?.();
       setStatus(offline ? OFFLINE_MESSAGE : "Reconnecting stream...");
-      if (playbackModeAllowsHls(mode) && whepFailures >= WHEP_FAILURES_BEFORE_HLS && sources?.hlsUrl) {
-        scheduleRetry(() => void startHls(), 0);
-        return;
-      }
       scheduleRetry(() => void startWhep(), whepFailures);
     }
 
@@ -345,8 +402,84 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
         connectionState: "failed",
         reconnecting: true
       });
+      onReconnect?.();
       setStatus(OFFLINE_MESSAGE);
       scheduleRetry(() => void start(), hlsFailures);
+    }
+
+    function reportHlsHealth() {
+      const nowMs = performance.now();
+      const elapsedMs = previousHlsSampledAtMs > 0 ? nowMs - previousHlsSampledAtMs : 0;
+      const presentedDelta = hlsPresentedFrames >= previousHlsPresentedFrames
+        ? hlsPresentedFrames - previousHlsPresentedFrames
+        : 0;
+      const quality = typeof video.getVideoPlaybackQuality === "function"
+        ? video.getVideoPlaybackQuality()
+        : null;
+      const latencyMs = hls && Number.isFinite(hls.latency)
+        ? Math.max(0, hls.latency * 1000)
+        : null;
+      const activeFreezeDurationMs = hlsFreezeStartedAtMs == null
+        ? 0
+        : Math.max(0, performance.now() - hlsFreezeStartedAtMs);
+      const bufferedAheadMs = currentForwardBufferSeconds(video) * 1000;
+      onConnectionHealth?.({
+        ...emptyConnectionHealth(),
+        transport: "hls",
+        connectionState: video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA ? "connected" : "connecting",
+        playoutDelayMs: latencyMs,
+        framesPerSecond: elapsedMs > 0 ? presentedDelta * 1000 / elapsedMs : null,
+        width: video.videoWidth || null,
+        height: video.videoHeight || null,
+        framesReceived: quality?.totalVideoFrames ?? null,
+        framesDecoded: quality?.totalVideoFrames ?? null,
+        framesDropped: quality?.droppedVideoFrames ?? null,
+        freezeCount: hlsFreezeCount,
+        totalFreezesDurationMs: hlsFreezeDurationMs + activeFreezeDurationMs,
+        bufferedAheadMs,
+        bufferedRangeCount: video.buffered.length,
+        hlsCreatedInstances: hlsCreatedInstancesRef.current,
+        hlsDestroyedInstances: hlsDestroyedInstancesRef.current,
+        hlsActiveInstances: hlsCreatedInstancesRef.current - hlsDestroyedInstancesRef.current,
+        jsHeapUsedBytes: chromeJsHeapUsedBytes()
+      });
+      onTimingSample?.({
+        version: 1,
+        sampledAtMonotonicMs: monotonicEpochMs(),
+        playoutDelayMs: latencyMs,
+        jitterBufferMs: null,
+        jitterBufferTargetMs: null,
+        rttMs: null
+      });
+      previousHlsPresentedFrames = hlsPresentedFrames;
+      previousHlsSampledAtMs = nowMs;
+    }
+
+    function startHlsHealthSampling() {
+      if (hlsHealthTimer != null || hlsFrameCallbackId != null) return;
+      const sampleFrame = (_now: number, metadata: VideoFrameCallbackMetadata) => {
+        if (cancelled) return;
+        hlsPresentedFrames = metadata.presentedFrames;
+        hlsFrameCallbackId = video.requestVideoFrameCallback(sampleFrame);
+      };
+      hlsFrameCallbackId = video.requestVideoFrameCallback(sampleFrame);
+      reportHlsHealth();
+      hlsHealthTimer = window.setInterval(reportHlsHealth, STREAM_TIMING_INTERVAL_MS);
+    }
+
+    function playHlsWhenBuffered() {
+      if (hlsStartupTimer != null) return;
+      const attemptPlayback = () => {
+        if (cancelled) return;
+        const forwardBufferSeconds = currentForwardBufferSeconds(video);
+        if (forwardBufferSeconds < PROGRAM_HLS_STARTUP_BUFFER_SECONDS) return;
+        if (hlsStartupTimer != null) window.clearInterval(hlsStartupTimer);
+        hlsStartupTimer = null;
+        void video.play().catch(() => setStatus("Tap play to start the stream."));
+      };
+      attemptPlayback();
+      if (!video.paused) return;
+      hlsStartupTimer = window.setInterval(attemptPlayback, 250);
     }
 
     async function startWhep() {
@@ -487,6 +620,7 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
         if (!cancelled) failHls();
         return;
       }
+      video.crossOrigin = "anonymous";
       updatePlaybackEvidenceState({
         transport: "hls",
         sessionId: createPlaybackSessionId("hls"),
@@ -498,6 +632,38 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
       });
       setStatus("Connecting stream...");
       try {
+        startHlsHealthSampling();
+        const mod = await import("hls.js");
+        const Hls = mod.default;
+        if (cancelled) return;
+        if (Hls.isSupported()) {
+          const instance = new Hls({
+            lowLatencyMode: false,
+            initialLiveManifestSize: PROGRAM_HLS_INITIAL_SEGMENT_COUNT,
+            backBufferLength: PROGRAM_HLS_BACK_BUFFER_SECONDS,
+            maxBufferLength: PROGRAM_HLS_BUFFER_LENGTH_SECONDS,
+            maxMaxBufferLength: PROGRAM_HLS_BUFFER_LENGTH_SECONDS,
+            maxBufferSize: PROGRAM_HLS_MAX_BUFFER_BYTES,
+            frontBufferFlushThreshold: PROGRAM_HLS_BUFFER_LENGTH_SECONDS,
+            liveSyncDuration: PROGRAM_HLS_TARGET_LATENCY_MS / 1000,
+            liveMaxLatencyDuration: PROGRAM_HLS_MAX_LATENCY_MS / 1000,
+            maxLiveSyncPlaybackRate: 1,
+            startOnSegmentBoundary: true,
+            xhrSetup: (xhr: XMLHttpRequest, requestUrl: string) => {
+              xhr.open("GET", inheritMediaAuthorization(requestUrl, hlsUrl), true);
+            }
+          }) as unknown as HlsInstance;
+          hls = instance;
+          hlsCreatedInstancesRef.current += 1;
+          instance.on(Hls.Events.ERROR, (_event, data) => {
+            if (cancelled || hls !== instance) return;
+            if (data.fatal) failHls();
+          });
+          instance.on(Hls.Events.BUFFER_APPENDED, () => playHlsWhenBuffered());
+          instance.loadSource(hlsUrl);
+          instance.attachMedia(video);
+          return;
+        }
         if (video.canPlayType("application/vnd.apple.mpegurl")) {
           const onVideoError = () => {
             video.removeEventListener("error", onVideoError);
@@ -508,35 +674,25 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
           void video.play().catch(() => setStatus("Tap play to start the stream."));
           return;
         }
-        const mod = await import("hls.js");
-        const Hls = mod.default;
-        if (cancelled) return;
-        if (!Hls.isSupported()) {
-          setStatus("Stream video is not available in this browser.");
-          setError("Stream video is not available in this browser.");
-          return;
-        }
-        const instance = new Hls({ lowLatencyMode: true }) as unknown as HlsInstance;
-        hls = instance;
-        instance.on(Hls.Events.ERROR, (_event, data) => {
-          if (cancelled || hls !== instance) return;
-          if (data.fatal) failHls();
-        });
-        instance.loadSource(hlsUrl);
-        instance.attachMedia(video);
-        void video.play().catch(() => setStatus("Tap play to start the stream."));
+        setStatus("Stream video is not available in this browser.");
+        setError("Stream video is not available in this browser.");
       } catch {
         if (!cancelled) failHls();
       }
     }
 
     async function start() {
-      if (sources?.whepUrl) {
-        await startWhep();
+      if (playbackModeAllowsHls(mode)) {
+        if (sources?.hlsUrl) await startHls();
+        else {
+          updatePlaybackEvidenceState(initialPlaybackEvidenceState());
+          setStatus("Live stream is not available yet.");
+          setError("Live stream is not available yet.");
+        }
         return;
       }
-      if (playbackModeAllowsHls(mode) && sources?.hlsUrl) {
-        await startHls();
+      if (sources?.whepUrl) {
+        await startWhep();
         return;
       }
       updatePlaybackEvidenceState(initialPlaybackEvidenceState());
@@ -678,6 +834,7 @@ function extractTimingSample(
     sample: {
       version: 1,
       sampledAtMonotonicMs: monotonicEpochMs(),
+      playoutDelayMs: null,
       jitterBufferMs: jitter.jitterBufferMs,
       jitterBufferTargetMs: jitter.jitterBufferTargetMs,
       rttMs
@@ -691,6 +848,7 @@ function extractTimingSample(
       rttMs,
       jitterMs,
       jitterBufferMs: jitter.jitterBufferTargetMs ?? jitter.jitterBufferMs,
+      playoutDelayMs: null,
       packetsLost,
       packetsReceived,
       framesReceived,
@@ -703,7 +861,13 @@ function extractTimingSample(
       lastPacketAgeMs,
       nackCount,
       pliCount,
-      firCount
+      firCount,
+      bufferedAheadMs: null,
+      bufferedRangeCount: null,
+      hlsCreatedInstances: null,
+      hlsDestroyedInstances: null,
+      hlsActiveInstances: null,
+      jsHeapUsedBytes: chromeJsHeapUsedBytes()
     }
   };
 }
@@ -728,6 +892,7 @@ function emptyConnectionHealth(): StreamConnectionHealth {
     rttMs: null,
     jitterMs: null,
     jitterBufferMs: null,
+    playoutDelayMs: null,
     packetsLost: null,
     packetsReceived: null,
     framesReceived: null,
@@ -740,8 +905,30 @@ function emptyConnectionHealth(): StreamConnectionHealth {
     lastPacketAgeMs: null,
     nackCount: null,
     pliCount: null,
-    firCount: null
+    firCount: null,
+    bufferedAheadMs: null,
+    bufferedRangeCount: null,
+    hlsCreatedInstances: null,
+    hlsDestroyedInstances: null,
+    hlsActiveInstances: null,
+    jsHeapUsedBytes: chromeJsHeapUsedBytes()
   };
+}
+
+function currentForwardBufferSeconds(video: HTMLVideoElement): number {
+  for (let index = 0; index < video.buffered.length; index += 1) {
+    if (video.currentTime >= video.buffered.start(index) - 0.1
+      && video.currentTime <= video.buffered.end(index) + 0.1) {
+      return Math.max(0, video.buffered.end(index) - video.currentTime);
+    }
+  }
+  return 0;
+}
+
+function chromeJsHeapUsedBytes(): number | null {
+  if (typeof performance === "undefined") return null;
+  const memory = (performance as Performance & { memory?: { usedJSHeapSize?: unknown } }).memory;
+  return finiteInteger(memory?.usedJSHeapSize);
 }
 
 function packetAgeMs(value: unknown): number | null {
@@ -757,16 +944,6 @@ function normalizeConnectionState(value: RTCPeerConnectionState): StreamConnecti
   return ["new", "connecting", "connected", "disconnected", "failed", "closed"].includes(value)
     ? value as StreamConnectionHealth["connectionState"]
     : "unknown";
-}
-
-function whepResourceUrl(location: string | null, requestUrl: string): string | null {
-  if (!location) return null;
-  try {
-    const pageUrl = typeof window === "undefined" ? "http://localhost/" : window.location.href;
-    return new URL(location, new URL(requestUrl, pageUrl)).toString();
-  } catch {
-    return null;
-  }
 }
 
 function releaseWhepSession(url: string) {

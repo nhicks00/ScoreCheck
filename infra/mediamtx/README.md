@@ -3,9 +3,11 @@
 The ingest server owns four operator-facing path classes per camera:
 
 - `courtN_raw`: permanent Mevo/camera publishing identity.
-- `courtN_preview`: clean, browser-safe, low-latency H.264/Opus for people.
+- `courtN_preview`: clean, browser-safe, low-latency H.264/Opus for commentary
+  and selected inspection.
 - `courtN_monitor`: on-demand 360p/10 FPS data-saver view for one selected camera.
-- `courtN_program`: clean preview delayed at the SRT receiver for compositing.
+- `courtN_program`: clean source delayed at the SRT receiver and exposed as
+  conservative fMP4 HLS for the long-running compositor.
 
 The SRT listener accepts caller-mode venue-camera publishers and also carries
 the internal delayed-program read on loopback. Camera publishers authenticate
@@ -56,21 +58,28 @@ On-demand branches poll local path readiness every two seconds and start FFmpeg
 only after their upstream exists, so an open offline preview cannot create a
 process or log storm. The hook command directly `exec`s the monitored runner,
 and the runner terminates and waits for both FFmpeg and its progress parser
-before exiting. This ownership is required because MediaMTX is PID 1 in the
-container and otherwise adopts unreaped hook descendants.
+before exiting. Docker's built-in init remains PID 1 and reaps any descendant
+or bounded in-container probe that is orphaned despite that direct ownership.
 
 The shared ingest does not software-encode production video. A camera may use
 the direct preview/program branch only after the production source gate proves
 1920x1080 progressive H.264 at its exact 29.97/30/59.94/60 mode, `yuv420p`, no
 B-frames, bounded timestamps, and a two-second-or-shorter GOP. The branch
-stream-copies that H.264 video and converts AAC to 48 kHz stereo Opus.
+stream-copies that H.264 video and encodes 48 kHz stereo AAC for fMP4 HLS.
 
 HEVC remains a supported venue-bandwidth source format only when the event
-manifest assigns an isolated HEVC-to-H.264 normalizer and the source probe also
-proves the resulting `courtN_preview` is browser-safe. The current template has
-no qualified HEVC normalizer assignment, so HEVC must fail production admission
-instead of being copied into Linux Chromium WHEP. Monitor and calibration paths
-may encode low-resolution diagnostics, but they never define YouTube output.
+manifest assigns an isolated browser normalizer and the source probe also proves
+the resulting `courtN_preview` is browser-safe. H.264 with B-frames or another
+browser-unsafe source property uses the same isolated normalizer. Unsupported
+sources fail production admission instead of being copied into a browser
+transport. Monitor and calibration paths may encode low-resolution diagnostics, but
+they never define YouTube output.
+
+The compositor reads `courtN_program` through fMP4 HLS with 15 two-second
+segments, a 12-second target live offset, and a 24-second maximum live offset.
+That buffer is intentional: viewer continuity outranks latency. Scoreboard and
+commentary state follow the measured program timeline. WHEP remains available
+for the undelayed commentary preview and one selected operator inspection only.
 
 The July 13 extended run proved that the four-vCPU MediaMTX host does not have
 production headroom for shared video normalization: load remained

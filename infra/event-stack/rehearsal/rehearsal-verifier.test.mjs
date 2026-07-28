@@ -19,7 +19,7 @@ function snapshot(mode) {
     agent({ agentId: "spare", role: "worker", assignedCourts: [], state: "HEALTHY", nativeServices: { egress: { idle: true, canAcceptRequest: true, activeWebRequests: 0, maximumWebRequests: 1, cpuLoadRatio: 0, memoryLoadRatio: 0 } } })
   ];
   return {
-    version: 5,
+    version: 6,
     generatedAt: new Date(now).toISOString(),
     collector: { agentsExpected: 12, agentsFresh: 12 },
     event: null,
@@ -40,7 +40,7 @@ function snapshot(mode) {
           pageLoadedAt: new Date(now - 60_000).toISOString(),
           pageBuildVersion: "rehearsal-build",
           configurationVersion: "rehearsal-config",
-          video: { state: "playing", connectionState: "connected", transport: "whep", networkPath: "private-vpc", width: 1920, height: 1080, framesRendered: 1_800, framesPerSecond: 30, framesDropped: 0, freezeCount: 0, totalFreezesDurationMs: 0, packetsLost: 0, reconnectCount: 0, reloadCount: 0 },
+          video: { state: "playing", connectionState: "connected", transport: "hls", networkPath: "unknown", playoutDelayMs: 12_000, width: 1920, height: 1080, framesRendered: 1_800, framesPerSecond: 30, framesDropped: 0, freezeCount: 0, totalFreezesDurationMs: 0, packetsLost: null, reconnectCount: 0, reloadCount: 0 },
           commentary: {
             configured: true, roomConnected: true, participantCount: 1, audioTrackCount: 1, mutedAudioTrackCount: 0,
             rmsDb: -20, clippedSampleRatio: 0, secondsSinceAudio: 0, packetsLost: 0, cameraTrackPresent: true,

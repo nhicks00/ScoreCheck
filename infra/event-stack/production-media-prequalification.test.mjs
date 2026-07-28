@@ -40,6 +40,7 @@ test("runs resumable local-only HEVC source and 1080 output qualification", asyn
   assert.equal(calls.output.length, 1);
   assert.equal(calls.output[0].profile, "1080p30");
   assert.equal(calls.normalizer[0].mediamtxPrivateHost, "10.10.0.10");
+  assert.equal(calls.normalizer[0].sourceCodec, "H265");
 
   const repeated = await runtime.run();
   assert.equal(repeated.runId, report.runId);
@@ -131,7 +132,7 @@ function venue() {
         cameraIdentity: "camera-1",
         publishPath: "court1_raw",
         sourceCodec: "H265",
-        sourcePathMode: "isolated-hevc-normalizer",
+        sourcePathMode: "isolated-browser-normalizer",
         sourceProfile: "CONSTRAINED_1080P30",
         outputProfile: "1080p30",
         frameRateMode: "30/1"
@@ -143,7 +144,7 @@ function venue() {
 function sourceProfile() {
   return {
     profile: "1080p30",
-    sourcePathMode: "isolated-hevc-normalizer",
+    sourcePathMode: "isolated-browser-normalizer",
     source: { codec: "H265", frameRateMode: "30/1" },
     browserInput: { codec: "H264", hasBFrames: 0, pixelFormat: "yuv420p" }
   };
@@ -175,7 +176,7 @@ function renderer() {
 
 function snapshot(nowMs) {
   return {
-    version: 5,
+    version: 6,
     generatedAt: new Date(nowMs).toISOString(),
     collector: {},
     courts: Array.from({ length: 8 }, (_, index) => ({ courtNumber: index + 1, overallState: index === 0 ? "HEALTHY" : "EXPECTED_OFF", paths: {} })),
