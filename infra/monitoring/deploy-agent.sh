@@ -50,7 +50,7 @@ retry_docker_operation() {
   done
 }
 install -d -m 0755 /var/lib/scorecheck-monitoring/ffmpeg
-install -d -m 0700 /var/lib/scorecheck-monitoring/egress-supervisor
+install -d -m 0755 /var/lib/scorecheck-monitoring/egress-supervisor
 if docker compose version >/dev/null 2>&1; then
   compose() { docker compose "$@"; }
 elif command -v docker-compose >/dev/null 2>&1; then

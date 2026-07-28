@@ -36,7 +36,10 @@ for command in curl docker flock jq openssl; do
 done
 
 mkdir -p "$REQ_DIR" "$STATE_DIR" "$EXPORT_DIR"
-chmod 700 "$REQ_DIR" "$STATE_DIR" "$EXPORT_DIR"
+chmod 700 "$REQ_DIR" "$STATE_DIR"
+# The exported status directory is mounted read-only by the unprivileged
+# monitoring agent and contains no credentials or request payloads.
+chmod 755 "$EXPORT_DIR"
 load_env
 require_livekit_env
 find_lk
