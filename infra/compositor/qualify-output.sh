@@ -90,8 +90,8 @@ mkdir -p "$REQ_DIR"
 install -d -m 0770 "$COMPOSITOR_DIR/evidence" "$HOST_OUTPUT_DIR"
 
 exec 9>"$REQ_DIR/start.lock"
-flock -n 9 || {
-  echo "error: another Egress start is already in progress." >&2
+flock -w 10 9 || {
+  echo "error: Egress admission did not become idle within ten seconds." >&2
   exit 1
 }
 
