@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -20,6 +20,11 @@ test("binds the local build to the immutable renderer identity", () => {
   assert.equal(environment.VERCEL_GIT_COMMIT_SHA, gitSha);
   assert.equal(environment.VERCEL_DEPLOYMENT_ID, deploymentId);
   assert.equal(environment.VERCEL_URL, "scorecheck-renderer-abc-team.vercel.app");
+});
+
+test("installs build dependencies for the production renderer compilation", async () => {
+  const source = await readFile(new URL("./local-renderer-bundle.mjs", import.meta.url), "utf8");
+  assert.match(source, /runner\("npm", \["ci", "--include=dev"\]/u);
 });
 
 test("validates artifact identity and digest", () => {

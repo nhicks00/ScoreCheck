@@ -70,7 +70,7 @@ export async function buildLocalRendererBundle({
     deploymentId,
     rendererOrigin: origin
   });
-  await runner("npm", ["ci"], { cwd: webRoot, env: buildEnvironment });
+  await runner("npm", ["ci", "--include=dev"], { cwd: webRoot, env: buildEnvironment });
   await runner("npm", ["run", "build"], { cwd: webRoot, env: buildEnvironment });
 
   const standalone = join(webRoot, ".next/standalone");
