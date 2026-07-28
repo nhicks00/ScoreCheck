@@ -774,6 +774,18 @@ tests:
             exp_annotations:
               summary: Camera 4's required Program viewer is intermittently freezing.
               first_action: Compare Chrome freeze, frame-drop, jitter-buffer, preview, and host-load telemetry to isolate the affected stage.
+      - eval_time: 4m
+        alertname: ScoreCheckProgramFreezeRatioCritical
+        exp_alerts:
+          - exp_labels:
+              court: '5'
+              severity: critical
+              stage: PROGRAM_BROWSER
+              issue_code: PROGRAM_FREEZE_RATIO_CRITICAL
+              root_dependency: program-browser
+            exp_annotations:
+              summary: Camera 5's required Program viewer is repeatedly freezing.
+              first_action: Inspect the buffered HLS decoder, segment freshness, and program timeline immediately; verify upstream preview health before changing source encoding.
 
   - name: output-owned program warmer is mandatory only for a live broadcast
     interval: 5s
@@ -891,19 +903,6 @@ tests:
             exp_annotations:
               summary: Automatic output recovery is running on supervisor-c.
               first_action: Watch for bounded recovery; intervene if the supervisor exhausts its two attempts.
-      - eval_time: 4m
-        alertname: ScoreCheckProgramFreezeRatioCritical
-        exp_alerts:
-          - exp_labels:
-              court: '5'
-              severity: critical
-              stage: PROGRAM_BROWSER
-              issue_code: PROGRAM_FREEZE_RATIO_CRITICAL
-              root_dependency: program-browser
-            exp_annotations:
-              summary: Camera 5's required Program viewer is repeatedly freezing.
-              first_action: Inspect the buffered HLS decoder, segment freshness, and program timeline immediately; verify upstream preview health before changing source encoding.
-
   - name: browser quality alerts wait for a meaningful sample
     interval: 5s
     input_series:
