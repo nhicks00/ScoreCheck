@@ -144,7 +144,7 @@ export function evaluateOutputConformance({ receipt, metadata, packets, audioPac
   if (String(audio.codec_name).toLowerCase() !== "aac" || audio.profile !== "LC") throw new Error("output audio must be AAC-LC");
   if (Number(audio.sample_rate) !== 48_000 || audio.channels !== 2 || audio.channel_layout !== "stereo") throw new Error("output audio must be 48 kHz stereo");
   const streamReportedBitrateBps = finiteNumber(audio.bit_rate, "output audio bitrate");
-  if (streamReportedBitrateBps <= 0) throw new Error("output audio bitrate must be positive");
+  if (streamReportedBitrateBps <= 0 || streamReportedBitrateBps > 192_000) throw new Error("output audio bitrate must be positive and no greater than 192 kbps");
 
   const format = metadata?.format;
   const durationSeconds = finiteNumber(format?.duration, "output duration");
@@ -191,7 +191,7 @@ export function evaluateOutputConformance({ receipt, metadata, packets, audioPac
       sampleRateHz: Number(audio.sample_rate),
       channels: audio.channels,
       channelLayout: audio.channel_layout,
-      targetBitrateBps: receipt.encoding.audioTargetBitrateKbps * 1_000,
+      targetBitrateBps: receipt.requestedEncoding.audioTargetBitrateKbps * 1_000,
       streamReportedBitrateBps,
       ...audioPacketEvidence
     }
@@ -218,6 +218,7 @@ function evaluateAudioPackets(value, durationSeconds) {
   const packetDurationSeconds = packets.at(-1).dts + packets.at(-1).duration - packets[0].dts;
   if (packetDurationSeconds < 14 || Math.abs(packetDurationSeconds - durationSeconds) > 1) throw new Error("output audio packet timeline does not match the sample duration");
   const measuredBitrateBps = packets.reduce((total, packet) => total + packet.size * 8, 0) / packetDurationSeconds;
+  if (measuredBitrateBps > 192_000) throw new Error("output audio bitrate exceeds 192 kbps");
   return { packetCount: packets.length, packetDurationSeconds, maximumPacketGapSeconds, measuredBitrateBps };
 }
 
@@ -247,8 +248,9 @@ function evaluateVideoPackets(value, profile, durationSeconds) {
   const packetDurationSeconds = packetEnd - packetStart;
   if (packetDurationSeconds < 14 || Math.abs(packetDurationSeconds - durationSeconds) > 3) throw new Error("output packet timeline does not match the sample duration");
   const measuredBitrateBps = packets.reduce((total, packet) => total + packet.size * 8, 0) / packetDurationSeconds;
-  if (measuredBitrateBps < profile.videoBitrateBps * 0.85 || measuredBitrateBps > profile.videoBitrateBps * 1.15) {
-    throw new Error("output video bitrate is outside the selected profile window");
+  // FileOutput MP4 is content-dependent; RTMP CBR is enforced at the provider gate.
+  if (measuredBitrateBps > profile.videoBitrateBps * 1.15) {
+    throw new Error("output video bitrate exceeds the selected profile ceiling");
   }
   const buckets = new Map();
   for (const packet of packets) {
@@ -261,7 +263,7 @@ function evaluateVideoPackets(value, profile, durationSeconds) {
   const completeSecondBitrates = completeSecondBuckets.map(([, bits]) => bits);
   const minimumSecondBitrateBps = Math.min(...completeSecondBitrates);
   const maximumSecondBitrateBps = Math.max(...completeSecondBitrates);
-  if (minimumSecondBitrateBps < profile.videoBitrateBps * 0.45 || maximumSecondBitrateBps > profile.videoBitrateBps * 1.55) {
+  if (maximumSecondBitrateBps > profile.videoBitrateBps * 1.55) {
     throw new Error("output video bitrate has an excessive one-second burst");
   }
   const rollingTwoSecondBitrates = completeSecondBuckets.slice(1).map(([second, bits], index) => {
@@ -271,8 +273,8 @@ function evaluateVideoPackets(value, profile, durationSeconds) {
   });
   const minimumTwoSecondBitrateBps = Math.min(...rollingTwoSecondBitrates);
   const maximumTwoSecondBitrateBps = Math.max(...rollingTwoSecondBitrates);
-  if (minimumTwoSecondBitrateBps < profile.videoBitrateBps * 0.7 || maximumTwoSecondBitrateBps > profile.videoBitrateBps * 1.3) {
-    throw new Error("output video bitrate is not bounded near CBR");
+  if (maximumTwoSecondBitrateBps > profile.videoBitrateBps * 1.3) {
+    throw new Error("output video bitrate exceeds the two-second profile ceiling");
   }
   return {
     packetCount: packets.length,
@@ -289,12 +291,13 @@ function evaluateVideoPackets(value, profile, durationSeconds) {
 
 function parseCaptureReceipt(raw, expected = {}) {
   const value = typeof raw === "string" ? parseJson(raw, "output conformance capture receipt") : raw;
-  if (!value || value.schemaVersion !== 1 || !EVIDENCE_ID.test(value.evidenceId ?? "") || !Number.isFinite(Date.parse(value.capturedAt))) throw new Error("output conformance capture receipt is invalid");
+  if (!value || value.schemaVersion !== 2 || !EVIDENCE_ID.test(value.evidenceId ?? "") || !Number.isFinite(Date.parse(value.capturedAt))) throw new Error("output conformance capture receipt is invalid");
   validateCourt(value.court);
   const profile = profileContract(value.profile);
   if (!EGRESS_ID.test(value.egressId ?? "") || !requiredPath(value.remotePath, "output conformance remote path") || !SHA256.test(value.sha256 ?? "") || !Number.isInteger(value.sizeBytes) || value.sizeBytes < 1) throw new Error("output conformance capture receipt is incomplete");
   validateRenderer(value.renderer);
-  validateCaptureEncoding(value.encoding, profile);
+  validateCaptureEncoding(value.requestedEncoding, profile);
+  if (!value.actualEncoding || typeof value.actualEncoding !== "object") throw new Error("output conformance capture actual encoding is missing");
   validateCaptureStartup(value.startup);
   for (const key of ["evidenceId", "court", "profile"]) {
     if (expected[key] !== undefined && value[key] !== expected[key]) throw new Error(`output conformance capture receipt ${key} changed`);
