@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const deployPath = fileURLToPath(new URL("../deploy.sh", import.meta.url));
+const deployAgentPath = fileURLToPath(new URL("../deploy-agent.sh", import.meta.url));
 const remoteDeployPath = fileURLToPath(new URL("../remote-deploy.sh", import.meta.url));
 const remoteProvisionPath = fileURLToPath(new URL("../remote-provision.sh", import.meta.url));
 const replaceAgentTargetsPath = fileURLToPath(new URL("../replace-agent-targets.sh", import.meta.url));
@@ -13,6 +14,7 @@ const dockerignorePath = fileURLToPath(new URL("../.dockerignore", import.meta.u
 const testFeedDockerfilePath = fileURLToPath(new URL("../Dockerfile.test-feed", import.meta.url));
 const testFeedRunnerPath = fileURLToPath(new URL("../run-test-feed-container.sh", import.meta.url));
 const deploy = readFileSync(deployPath, "utf8");
+const deployAgent = readFileSync(deployAgentPath, "utf8");
 const remoteDeploy = readFileSync(remoteDeployPath, "utf8");
 const remoteProvision = readFileSync(remoteProvisionPath, "utf8");
 const replaceAgentTargets = readFileSync(replaceAgentTargetsPath, "utf8");
@@ -32,6 +34,12 @@ describe("staged observability deployment", () => {
 
   it("uses an init process to reap monitor-agent healthcheck children", () => {
     expect(agentCompose).toMatch(/monitor-agent:[\s\S]*?\n\s+init: true\n/);
+  });
+
+  it("keeps exported compositor status traversable by the unprivileged agent", () => {
+    const syntax = spawnSync("bash", ["-n", deployAgentPath], { encoding: "utf8" });
+    expect(syntax.status, syntax.stderr).toBe(0);
+    expect(deployAgent).toContain("install -d -m 0755 /var/lib/scorecheck-monitoring/egress-supervisor");
   });
 
   it("selects a guarded first-provision transaction only for an empty live baseline", () => {

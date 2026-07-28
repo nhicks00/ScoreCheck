@@ -167,7 +167,7 @@ retry_docker_operation docker compose pull --quiet
 retry_docker_operation docker compose --profile browser-normalizer pull --quiet normalizer
 docker compose --profile browser-normalizer rm -sf normalizer >/dev/null 2>&1 || true
 
-if ! docker compose up -d --remove-orphans --force-recreate renderer \
+if ! docker compose up -d --remove-orphans --force-recreate renderer program-warmer \
   || ! docker compose up -d --remove-orphans; then
   if [[ "$had_previous" -eq 1 ]]; then
     rm -rf renderer renderer.env local-renderer.tar.gz

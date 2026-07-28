@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEST_ROOT="$(mktemp -d)"
 trap 'kill "${WARMER_PID:-}" 2>/dev/null || true; wait "${WARMER_PID:-}" 2>/dev/null || true; rm -rf "$TEST_ROOT"' EXIT
 mkdir -p "$TEST_ROOT/bin" "$TEST_ROOT/requests" "$TEST_ROOT/state"
+grep -Fq -- '--force-recreate renderer program-warmer' "$SCRIPT_DIR/deploy.sh"
 
 cat >"$TEST_ROOT/bin/ffmpeg" <<'MOCK'
 #!/bin/sh
