@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Capture one short, local-only Web Egress sample for actual encoder inspection.
+# Capture one bounded, local-only Web Egress sample for encoder or HLS-runtime inspection.
 # No RTMP/SRT destination is configured, so this cannot publish a broadcast.
 
 set -euo pipefail
@@ -40,6 +40,11 @@ case "$OUTPUT_PROFILE" in
 esac
 EGRESS_AUDIO_BITRATE=128
 EGRESS_AUDIO_FREQUENCY=48000
+CAPTURE_SECONDS="${SCORECHECK_OUTPUT_QUALIFICATION_CAPTURE_SECONDS:-20}"
+if ! [[ "$CAPTURE_SECONDS" =~ ^[0-9]+$ ]] || (( CAPTURE_SECONDS < 15 || CAPTURE_SECONDS > 64800 )); then
+  echo "error: SCORECHECK_OUTPUT_QUALIFICATION_CAPTURE_SECONDS must be from 15 through 64800 seconds." >&2
+  exit 1
+fi
 FFPROBE_IMAGE="bluenviron/mediamtx:1.19.2-ffmpeg@sha256:08c837deb7bac85d509e2a4c2737308e5a34f8f084a46a0d8793cdb0579a6e5d"
 
 load_env
@@ -348,7 +353,7 @@ if (( active_seen != 1 )); then
   exit 1
 fi
 
-sleep 20
+sleep "$CAPTURE_SECONDS"
 if ! stop_and_prove_idle "$EGRESS_ID"; then
   exit 1
 fi
@@ -449,11 +454,12 @@ jq -n \
   --argjson audioSampleRateHz "$EGRESS_AUDIO_FREQUENCY" \
   --argjson videoTargetBitrateKbps "$EGRESS_VIDEO_BITRATE" \
   --argjson keyFrameIntervalSeconds 2 \
+  --argjson requestedDurationSeconds "$CAPTURE_SECONDS" \
   --argjson startAttempts "$START_ATTEMPTS" \
   --argjson recoveredStartingStall "$([[ "$STARTING_STALLS" -gt 0 ]] && printf true || printf false)" \
   --argjson attempts "$ATTEMPTS_JSON" \
   --argjson sizeBytes "$FILE_SIZE" \
   --slurpfile actual "$PROBE_SUMMARY" \
-  '{schemaVersion:2,evidenceId:$evidenceId,capturedAt:$capturedAt,court:$court,profile:$profile,egressId:$egressId,renderer:{gitSha:$rendererGitSha,deploymentId:$rendererDeploymentId},requestedEncoding:{width:$width,height:$height,framesPerSecond:$framesPerSecond,audioCodec:"AAC",audioTargetBitrateKbps:$audioTargetBitrateKbps,audioSampleRateHz:$audioSampleRateHz,videoCodec:"H264_HIGH",videoTargetBitrateKbps:$videoTargetBitrateKbps,keyFrameIntervalSeconds:$keyFrameIntervalSeconds},actualEncoding:$actual[0],startup:{startAttempts:$startAttempts,recoveredStartingStall:$recoveredStartingStall,attempts:$attempts},remotePath:$remotePath,sha256:$sha256,sizeBytes:$sizeBytes}' >"$REPORT"
+  '{schemaVersion:2,evidenceId:$evidenceId,capturedAt:$capturedAt,court:$court,profile:$profile,egressId:$egressId,renderer:{gitSha:$rendererGitSha,deploymentId:$rendererDeploymentId},requestedDurationSeconds:$requestedDurationSeconds,requestedEncoding:{width:$width,height:$height,framesPerSecond:$framesPerSecond,audioCodec:"AAC",audioTargetBitrateKbps:$audioTargetBitrateKbps,audioSampleRateHz:$audioSampleRateHz,videoCodec:"H264_HIGH",videoTargetBitrateKbps:$videoTargetBitrateKbps,keyFrameIntervalSeconds:$keyFrameIntervalSeconds},actualEncoding:$actual[0],startup:{startAttempts:$startAttempts,recoveredStartingStall:$recoveredStartingStall,attempts:$attempts},remotePath:$remotePath,sha256:$sha256,sizeBytes:$sizeBytes}' >"$REPORT"
 chmod 600 "$REPORT"
 cat "$REPORT"

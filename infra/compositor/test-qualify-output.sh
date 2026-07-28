@@ -76,6 +76,14 @@ grep -Fq 'chmod 640 "$HOST_OUTPUT"' "$FIXTURE/qualify-output.sh"
 grep -Fq 'or .videoBitrateKbps <= 0 or .videoBitrateKbps >' "$FIXTURE/qualify-output.sh"
 grep -Fq 'or .audioBitrateKbps <= 0 or .audioBitrateKbps > 192' "$FIXTURE/qualify-output.sh"
 
+if SCORECHECK_OUTPUT_QUALIFICATION_CAPTURE_SECONDS=14 PATH="$FIXTURE/bin:$PATH" \
+  "$FIXTURE/qualify-output.sh" 1 1080p30 00000000-0000-4000-8000-000000000000 \
+  >"$FIXTURE/invalid-duration.json" 2>"$FIXTURE/invalid-duration.err"; then
+  printf 'FAIL: an out-of-range output qualification duration was accepted\n' >&2
+  exit 1
+fi
+grep -Fq 'must be from 15 through 64800 seconds' "$FIXTURE/invalid-duration.err"
+
 printf '%s\n' \
   'LIVEKIT_API_KEY=test-key' \
   'LIVEKIT_API_SECRET=test-secret' \
@@ -88,7 +96,7 @@ printf '%s\n' \
   "MOCK_ROOT=$FIXTURE" >"$FIXTURE/.env"
 
 PATH="$FIXTURE/bin:$PATH" "$FIXTURE/qualify-output.sh" 1 1080p30 00000000-0000-4000-8000-000000000001 >"$FIXTURE/report.json"
-jq -e '.schemaVersion == 2 and .court == 1 and .profile == "1080p30" and .egressId == "EG_sample1" and .renderer.gitSha == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" and .renderer.deploymentId == "dpl_test123" and .requestedEncoding == {width:1920,height:1080,framesPerSecond:30,audioCodec:"AAC",audioTargetBitrateKbps:128,audioSampleRateHz:48000,videoCodec:"H264_HIGH",videoTargetBitrateKbps:10000,keyFrameIntervalSeconds:2} and .actualEncoding.videoCodec == "h264" and .actualEncoding.videoProfile == "High" and .actualEncoding.videoBitrateKbps == 257.482 and .actualEncoding.audioBitrateKbps == 5.63 and .actualEncoding.maximumKeyFrameGapSeconds == 2 and .startup.startAttempts == 1 and .startup.recoveredStartingStall == false and .startup.attempts[0].outcome == "ACTIVE" and .sizeBytes == 8' "$FIXTURE/report.json" >/dev/null
+jq -e '.schemaVersion == 2 and .court == 1 and .profile == "1080p30" and .egressId == "EG_sample1" and .renderer.gitSha == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" and .renderer.deploymentId == "dpl_test123" and .requestedDurationSeconds == 20 and .requestedEncoding == {width:1920,height:1080,framesPerSecond:30,audioCodec:"AAC",audioTargetBitrateKbps:128,audioSampleRateHz:48000,videoCodec:"H264_HIGH",videoTargetBitrateKbps:10000,keyFrameIntervalSeconds:2} and .actualEncoding.videoCodec == "h264" and .actualEncoding.videoProfile == "High" and .actualEncoding.videoBitrateKbps == 257.482 and .actualEncoding.audioBitrateKbps == 5.63 and .actualEncoding.maximumKeyFrameGapSeconds == 2 and .startup.startAttempts == 1 and .startup.recoveredStartingStall == false and .startup.attempts[0].outcome == "ACTIVE" and .sizeBytes == 8' "$FIXTURE/report.json" >/dev/null
 test ! -e "$FIXTURE/mock-active"
 grep -Fq '"video_codec": "H264_HIGH"' "$FIXTURE/captured-request.json"
 grep -Fq '"video_bitrate": 10000' "$FIXTURE/captured-request.json"
