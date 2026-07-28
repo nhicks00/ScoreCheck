@@ -76,8 +76,27 @@ uplink_type() {
   esac
 }
 
-priority_value() {
+working_priority_value() {
   case "$1" in always|secondary|backup|never) printf '%s' "$1" ;; *) printf unknown ;; esac
+}
+
+saved_priority_value() {
+  case "$1" in automatic|always|secondary|backup|never) printf '%s' "$1" ;; *) printf unknown ;; esac
+}
+
+physical_connection() {
+  stats_line="$1"
+  adapter_id="$2"
+  jsonfilter -s "$stats_line" -e "@[1].connections[@.adapterID=\"$adapter_id\"]" 2>/dev/null \
+    | while IFS= read -r connection; do
+        protocol="$(json_value "$connection" '@.protocol' 'unknown')"
+        case "$protocol" in
+          udp|tcp|tcp-multi|https)
+            printf '%s\n' "$connection"
+            break
+            ;;
+        esac
+      done
 }
 
 build_uplinks() {
@@ -85,23 +104,23 @@ build_uplinks() {
   adapters="$2"
   first=1
   printf '['
-  jsonfilter -s "$stats_line" -e '@[1].connections[@.protocol="udp"]' 2>/dev/null | while IFS= read -r connection; do
-    id="$(json_value "$connection" '@.adapterID' '')"
-    [ -n "$id" ] || continue
+  for id in $(jsonfilter -s "$adapters" -e '@[*].adapterID' 2>/dev/null || true); do
     adapter="$(jsonfilter -s "$adapters" -e "@[@.adapterID=\"$id\"]" 2>/dev/null | sed -n '1p' || true)"
     [ -n "$adapter" ] || continue
+    connection="$(physical_connection "$stats_line" "$id" | sed -n '1p' || true)"
     [ "$first" -eq 1 ] || printf ','
     first=0
     isp="$(json_value "$adapter" '@.isp' '')"
     type="$(uplink_type "$id" "$(json_value "$adapter" '@.type' '')")"
-    priority="$(priority_value "$(json_value "$adapter" '@.workingPriority' 'unknown')")"
+    priority="$(working_priority_value "$(json_value "$adapter" '@.workingPriority' 'unknown')")"
+    saved_priority="$(saved_priority_value "$(json_value "$adapter" '@.priority' 'unknown')")"
     connected="$(bool_value "$(json_value "$connection" '@.connected' 'false')")"
     estimated_mbps="$(json_value "$connection" '@.sendEstimateMbps' 'null')"
     if [ "$estimated_mbps" = null ]; then estimated_bps=null; else estimated_bps="$(awk -v value="$estimated_mbps" 'BEGIN {printf "%.0f", value * 1000000}')"; fi
-    printf '{"id":"%s","isp":%s,"type":"%s","connected":%s,"priority":"%s","sendBps":%s,"receiveBps":%s,"estimatedUploadBps":%s,"latencyMs":%s,"jitterMs":%s,"lossSendRatio":%s,"lossReceiveRatio":%s,"inFlightBytes":%s,"inFlightWindowBytes":%s,"uploadCongested":%s,"poorConnection":%s,"slowConnection":%s}' \
+    printf '{"id":"%s","isp":%s,"type":"%s","connected":%s,"priority":"%s","savedPriority":"%s","sendBps":%s,"receiveBps":%s,"estimatedUploadBps":%s,"latencyMs":%s,"jitterMs":%s,"lossSendRatio":%s,"lossReceiveRatio":%s,"inFlightBytes":%s,"inFlightWindowBytes":%s,"uploadCongested":%s,"poorConnection":%s,"slowConnection":%s}' \
       "$(json_string "$id")" \
       "$([ -n "$isp" ] && printf '"%s"' "$(json_string "$isp")" || printf null)" \
-      "$type" "$connected" "$priority" \
+      "$type" "$connected" "$priority" "$saved_priority" \
       "$(json_value "$connection" '@.sendBps' '0')" \
       "$(json_value "$connection" '@.receiveBps' '0')" \
       "$estimated_bps" \
@@ -127,6 +146,7 @@ send_heartbeat() {
   streaming_stats="$(speedify_cli -s stats streaming 2>/dev/null || printf '{}')"
   settings="$(speedify_cli -s show settings 2>/dev/null || printf '{}')"
   adapters="$(speedify_cli -s show adapters 2>/dev/null || printf '[]')"
+  version_info="$(speedify_cli version 2>/dev/null || printf '{}')"
   speedify_connection="$(jsonfilter -s "$connection_stats" -e '@[1].connections[@.protocol="auto"]' 2>/dev/null | sed -n '1p' || true)"
   [ -n "$speedify_connection" ] || return 1
 
@@ -139,11 +159,23 @@ send_heartbeat() {
 
   estimated_upload_bps=0
   has_estimate=0
-  for value in $(jsonfilter -s "$connection_stats" -e '@[1].connections[@.protocol="udp"].sendEstimateMbps' 2>/dev/null || true); do
+  for adapter_id in $(jsonfilter -s "$adapters" -e '@[*].adapterID' 2>/dev/null || true); do
+    connection="$(physical_connection "$connection_stats" "$adapter_id" | sed -n '1p' || true)"
+    value="$(json_value "$connection" '@.sendEstimateMbps' 'null')"
+    [ "$value" != null ] || continue
     estimated_upload_bps="$(awk -v total="$estimated_upload_bps" -v item="$value" 'BEGIN {printf "%.0f", total + item * 1000000}')"
     has_estimate=1
   done
   [ "$has_estimate" -eq 1 ] || estimated_upload_bps=null
+
+  adapter_count="$(jsonfilter -s "$adapters" -e '@[*].adapterID' 2>/dev/null | wc -l | tr -d ' ')"
+  automatic_adapter_count="$(jsonfilter -s "$adapters" -e '@[*].priority' 2>/dev/null \
+    | awk '$0 == "automatic" {count++} END {print count + 0}')"
+  version_major="$(json_value "$version_info" '@.maj' 'unknown')"
+  version_minor="$(json_value "$version_info" '@.min' 'unknown')"
+  version_bug="$(json_value "$version_info" '@.bug' 'unknown')"
+  version_build="$(json_value "$version_info" '@.build' 'unknown')"
+  software_version="${version_major}.${version_minor}.${version_bug}-${version_build}"
 
   uplinks="$(build_uplinks "$connection_stats" "$adapters")"
   kill_switch=false
@@ -154,8 +186,9 @@ send_heartbeat() {
   failover_count="$(json_value "$session_stats" '@.current.numFailovers' 'null')"
   read_queue="$(json_value "$session_stats" '@.current.tun.readQueue' 'null')"
 
-  body="$(printf '{"version":1,"sessionId":"%s","sequence":%s,"sampledAt":"%s","speedify":{"state":"%s","bondingMode":"%s","transportMode":"%s","sendBps":%s,"receiveBps":%s,"estimatedUploadBps":%s,"latencyMs":%s,"jitterMs":%s,"lossSendRatio":%s,"lossReceiveRatio":%s,"uploadCongested":%s,"badCpu":%s,"badLatency":%s,"badLoss":%s,"badMemory":%s,"readQueuePackets":%s,"failoverCount":%s},"routing":{"srtDevice":"%s","rtmpDevice":"%s","primaryRuleCount":%s,"guardRuleCount":%s,"killSwitchActive":%s,"cameraFlowCount":%s},"host":{"load1":%s,"memoryAvailableBytes":%s,"speedifyRssBytes":%s,"streamingStatsProcessCount":%s},"uplinks":%s}' \
-    "$SESSION_ID" "$SEQUENCE" "$now" "$state" "$bonding" "$transport" \
+  body="$(printf '{"version":2,"sessionId":"%s","sequence":%s,"sampledAt":"%s","speedify":{"state":"%s","softwareVersion":"%s","bondingMode":"%s","transportMode":"%s","adapterCount":%s,"automaticAdapterCount":%s,"sendBps":%s,"receiveBps":%s,"estimatedUploadBps":%s,"latencyMs":%s,"jitterMs":%s,"lossSendRatio":%s,"lossReceiveRatio":%s,"uploadCongested":%s,"badCpu":%s,"badLatency":%s,"badLoss":%s,"badMemory":%s,"readQueuePackets":%s,"failoverCount":%s},"routing":{"srtDevice":"%s","rtmpDevice":"%s","primaryRuleCount":%s,"guardRuleCount":%s,"killSwitchActive":%s,"cameraFlowCount":%s},"host":{"load1":%s,"memoryAvailableBytes":%s,"speedifyRssBytes":%s,"streamingStatsProcessCount":%s},"uplinks":%s}' \
+    "$SESSION_ID" "$SEQUENCE" "$now" "$state" "$software_version" "$bonding" "$transport" \
+    "$adapter_count" "$automatic_adapter_count" \
     "$(json_value "$speedify_connection" '@.sendBps' '0')" \
     "$(json_value "$speedify_connection" '@.receiveBps' '0')" \
     "$estimated_upload_bps" \

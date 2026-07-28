@@ -277,8 +277,11 @@ export type MonitorRouter = {
   ageMs: number | null;
   speedify: {
     state: "CONNECTED" | "LOGGED_IN" | "DISCONNECTED" | "UNKNOWN";
+    softwareVersion: string;
     bondingMode: "speed" | "streaming" | "redundant" | "unknown";
     transportMode: "udp" | "tcp" | "tcp-multi" | "https" | "auto" | "unknown";
+    adapterCount: number;
+    automaticAdapterCount: number;
     sendBps: number;
     receiveBps: number;
     estimatedUploadBps: number | null;
@@ -315,6 +318,7 @@ export type MonitorRouter = {
     type: "ethernet" | "wifi" | "cellular" | "other";
     connected: boolean;
     priority: "always" | "secondary" | "backup" | "never" | "unknown";
+    savedPriority: "automatic" | "always" | "secondary" | "backup" | "never" | "unknown";
     sendBps: number;
     receiveBps: number;
     estimatedUploadBps: number | null;

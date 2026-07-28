@@ -12,6 +12,7 @@ const uplinkSchema = z.object({
   type: z.enum(["ethernet", "wifi", "cellular", "other"]),
   connected: z.boolean(),
   priority: z.enum(["always", "secondary", "backup", "never", "unknown"]),
+  savedPriority: z.enum(["automatic", "always", "secondary", "backup", "never", "unknown"]),
   sendBps: boundedNumber,
   receiveBps: boundedNumber,
   estimatedUploadBps: boundedNumber.nullable(),
@@ -27,14 +28,17 @@ const uplinkSchema = z.object({
 }).strict();
 
 export const routerHeartbeatSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(2),
   sessionId: z.string().uuid(),
   sequence: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   sampledAt: isoDate,
   speedify: z.object({
     state: z.enum(["CONNECTED", "LOGGED_IN", "DISCONNECTED", "UNKNOWN"]),
+    softwareVersion: z.string().regex(/^\d+\.\d+\.\d+-\d+$/),
     bondingMode: z.enum(["speed", "streaming", "redundant", "unknown"]),
     transportMode: z.enum(["udp", "tcp", "tcp-multi", "https", "auto", "unknown"]),
+    adapterCount: z.number().int().nonnegative().max(16),
+    automaticAdapterCount: z.number().int().nonnegative().max(16),
     sendBps: boundedNumber,
     receiveBps: boundedNumber,
     estimatedUploadBps: boundedNumber.nullable(),
@@ -130,9 +134,12 @@ function routerState(heartbeat: RouterHeartbeat, ageMs: number): HealthState {
     || routing.rtmpDevice !== "connectify0"
     || routing.primaryRuleCount !== 2
     || routing.guardRuleCount !== 2
-    || !routing.killSwitchActive) return "CRITICAL";
+    || !routing.killSwitchActive
+    || heartbeat.uplinks.some((uplink) => uplink.savedPriority === "never")) return "CRITICAL";
   const activeUplinks = heartbeat.uplinks.filter((uplink) => uplink.connected && uplink.priority !== "never");
   if (activeUplinks.length < 2
+    || heartbeat.speedify.adapterCount === 0
+    || heartbeat.speedify.automaticAdapterCount !== heartbeat.speedify.adapterCount
     || heartbeat.speedify.uploadCongested
     || heartbeat.speedify.badCpu
     || heartbeat.speedify.badLatency
