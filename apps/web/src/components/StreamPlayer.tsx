@@ -23,6 +23,7 @@ import {
 } from "@/lib/rtcTiming";
 import {
   PROGRAM_HLS_BUFFER_LENGTH_SECONDS,
+  PROGRAM_HLS_INITIAL_SEGMENT_COUNT,
   PROGRAM_HLS_MAX_LATENCY_MS,
   PROGRAM_HLS_TARGET_LATENCY_MS
 } from "@/lib/programTimeline";
@@ -598,6 +599,7 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
         if (Hls.isSupported()) {
           const instance = new Hls({
             lowLatencyMode: false,
+            initialLiveManifestSize: PROGRAM_HLS_INITIAL_SEGMENT_COUNT,
             backBufferLength: PROGRAM_HLS_BUFFER_LENGTH_SECONDS,
             maxBufferLength: PROGRAM_HLS_BUFFER_LENGTH_SECONDS,
             liveSyncDuration: PROGRAM_HLS_TARGET_LATENCY_MS / 1000,

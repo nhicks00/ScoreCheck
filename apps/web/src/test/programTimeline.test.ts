@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  PROGRAM_HLS_INITIAL_SEGMENT_COUNT,
   PROGRAM_HLS_TARGET_LATENCY_MS,
   programOverlayApplyAtMs,
   programTimelineDelayMs
@@ -7,6 +8,7 @@ import {
 
 describe("program timeline", () => {
   it("uses the conservative HLS target until measured playout delay is available", () => {
+    expect(PROGRAM_HLS_INITIAL_SEGMENT_COUNT).toBe(6);
     expect(programTimelineDelayMs(3_500, null)).toBe(3_500 + PROGRAM_HLS_TARGET_LATENCY_MS);
     expect(programTimelineDelayMs(3_500, 14_250)).toBe(17_750);
   });

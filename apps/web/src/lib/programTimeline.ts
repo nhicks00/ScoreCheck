@@ -1,6 +1,7 @@
 export const PROGRAM_HLS_TARGET_LATENCY_MS = 12_000;
 export const PROGRAM_HLS_MAX_LATENCY_MS = 24_000;
 export const PROGRAM_HLS_BUFFER_LENGTH_SECONDS = 30;
+export const PROGRAM_HLS_INITIAL_SEGMENT_COUNT = 6;
 export const PROGRAM_MAX_TIMELINE_DELAY_MS = 30_000;
 
 export function programTimelineDelayMs(programVideoDelayMs: number, hlsLatencyMs: number | null | undefined): number {
