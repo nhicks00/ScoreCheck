@@ -201,6 +201,28 @@ test("closes coverage even when the non-blocking cost reminder cannot be deliver
   assert.match(notification.error, /injected notification failure/);
 });
 
+test("records failed final stack evidence without stranding billed compute", async () => {
+  const setup = fixture();
+  await setup.controller.up(setup.manifest, setup.anchors);
+  await setup.controller.beginCoverage(setup.manifest, "START:turnkey-test");
+  await setup.controller.closeCoverage(setup.manifest, "CLOSE:turnkey-test");
+  setup.deployer.verifyStack = async () => {
+    throw new Error("injected final attestation mismatch");
+  };
+  const evidence = await protectedEvidencePath("failed-final-stack-evidence");
+
+  const captured = await setup.controller.captureEvidence(setup.manifest, evidence);
+  const stackHealth = JSON.parse(await readFile(join(evidence, "stack-health.json"), "utf8"));
+
+  assert.equal(stackHealth.healthy, false);
+  assert.equal(stackHealth.evidence.status, "final-evidence-capture-failed");
+  assert.match(stackHealth.evidence.error, /injected final attestation mismatch/);
+  const destroyed = await setup.controller.destroy(setup.manifest, evidence, "DESTROY:turnkey-test");
+  assert.equal(captured.phase, "closed");
+  assert.equal(destroyed.phase, "destroyed");
+  assert.equal(setup.cloud.droplets.size, 0);
+});
+
 test("bounds an unresolved stack finalization and preserves a retryable provisioning state", async () => {
   const deployer = new FakeStackDeployer();
   deployer.finalizeStack = async () => new Promise(() => {});
