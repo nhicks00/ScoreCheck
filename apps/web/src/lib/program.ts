@@ -21,7 +21,7 @@ const VERCEL_DEPLOYMENT_ID = /^dpl_[A-Za-z0-9]+$/;
 export const PROGRAM_SESSION_COOKIE = "scorecheck_program_session";
 export const programSessionCookieOptions = {
   httpOnly: true,
-  secure: process.env.NODE_ENV === "production",
+  secure: process.env.NODE_ENV === "production" && process.env.SCORECHECK_LOCAL_RENDERER !== "true",
   sameSite: "strict" as const,
   path: "/program",
   maxAge: PROGRAM_SESSION_SECONDS
@@ -51,7 +51,7 @@ export const PROGRAM_RENDERER_CONTRACTS = Object.freeze({
   programSession: "program-session-v1",
   overlayState: "overlay-state-v1",
   commentary: "commentary-v1",
-  browserHeartbeat: "browser-heartbeat-v5"
+  browserHeartbeat: "browser-heartbeat-v6"
 });
 
 /** The immutable renderer identity exposed by Vercel (or an explicit local host). */

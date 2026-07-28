@@ -1,7 +1,7 @@
 import os from "node:os";
-import { statfs } from "node:fs/promises";
+import { lstat, readFile, statfs } from "node:fs/promises";
 import type { AgentConfig } from "./config.js";
-import { agentSnapshotSchema, MONITORING_CONTRACT_VERSION, type AgentSnapshot, type CameraContentSnapshot, type MediaPathSnapshot } from "./contracts.js";
+import { agentSnapshotSchema, egressSupervisorSnapshotSchema, MONITORING_CONTRACT_VERSION, programWarmerSnapshotSchema, type AgentSnapshot, type CameraContentSnapshot, type MediaPathSnapshot } from "./contracts.js";
 import { collectDockerServices } from "./docker.js";
 import { MediaPathDetailCache, parseMediaPath, parseSrtTransports, type ByteSample, type MediaPathApiRow } from "./media.js";
 import { collectFfmpegProgress, FfmpegSpeedDeriver } from "./ffmpegProgress.js";
@@ -41,10 +41,12 @@ export class AgentCollector {
       })
     ]);
 
-    const [livekit, egress, egressHealthUp] = await Promise.all([
+    const [livekit, egress, egressHealthUp, egressSupervisor, programWarmer] = await Promise.all([
       collectLiveKit(this.config.livekitMetricsUrl, errors),
       collectEgress(this.config.egressMetricsUrl, this.config.egressMaxWebRequests, errors),
-      probeEndpoint(this.config.egressHealthUrl, "EGRESS_METRICS_UNAVAILABLE", errors, false)
+      probeEndpoint(this.config.egressHealthUrl, "EGRESS_METRICS_UNAVAILABLE", errors, false),
+      collectEgressSupervisor(this.config.egressSupervisorStatePath, errors),
+      collectProgramWarmer(this.config.programWarmerStatePath, errors)
     ]);
     const endpoints = [
       this.config.livekitMetricsUrl ? { service: "livekit" as const, up: livekit !== null } : null,
@@ -77,6 +79,8 @@ export class AgentCollector {
       mediaPaths: pathsWithErrors,
       ffmpegBranches: this.ffmpegSpeed.update(ffmpegBranches),
       contentAnalysis: this.contentSnapshots(),
+      egressSupervisor,
+      programWarmer,
       nativeServices: { endpoints, livekit, egress }
     });
   }
@@ -124,6 +128,30 @@ export class AgentCollector {
       errors.add("MEDIAMTX_METRICS_UNAVAILABLE");
       return new Map();
     }
+  }
+}
+
+async function collectEgressSupervisor(path: string | null, errors: Set<CollectionError>) {
+  if (!path) return null;
+  try {
+    const metadata = await lstat(path);
+    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > 16_384) throw new Error("Invalid supervisor state file.");
+    return egressSupervisorSnapshotSchema.parse(JSON.parse(await readFile(path, "utf8")));
+  } catch {
+    errors.add("EGRESS_SUPERVISOR_UNAVAILABLE");
+    return null;
+  }
+}
+
+async function collectProgramWarmer(path: string | null, errors: Set<CollectionError>) {
+  if (!path) return null;
+  try {
+    const metadata = await lstat(path);
+    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > 16_384) throw new Error("Invalid program-warmer state file.");
+    return programWarmerSnapshotSchema.parse(JSON.parse(await readFile(path, "utf8")));
+  } catch {
+    errors.add("PROGRAM_WARMER_UNAVAILABLE");
+    return null;
   }
 }
 

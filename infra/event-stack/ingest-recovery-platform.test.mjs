@@ -279,6 +279,7 @@ async function createProtectedInputs(manifest) {
   const ingestTlsStateDirectory = join(root, "tls");
   await mkdir(join(secretsDirectory, "wireguard"), { recursive: true, mode: 0o700 });
   await mkdir(join(secretsDirectory, "compositors"), { recursive: true, mode: 0o700 });
+  await mkdir(join(secretsDirectory, "renderer"), { recursive: true, mode: 0o700 });
   await mkdir(ingestTlsStateDirectory, { mode: 0o700 });
   const sshPrivateKey = join(root, "ssh-key");
   const knownHostsPath = join(root, "known-hosts");
@@ -294,6 +295,8 @@ async function createProtectedInputs(manifest) {
     "commentary.env": "COMMENTARY_TEST=1\n",
     "ingest.env": "INGEST_TEST=1\n",
     "observability.env": "MONITOR_API_TOKEN=monitor-test-token\n",
+    "renderer.env": "RENDERER_TEST=1\n",
+    "renderer/local-renderer.tar.gz": "renderer-test-bundle\n",
     ...Object.fromEntries([..."abcdefgh"].map((suffix) => [`compositors/bvm-compositor-${suffix}.env`, "COMPOSITOR_TEST=1\n"])),
     "compositors/bvm-compositor-spare.env": "COMPOSITOR_TEST=1\n"
   };
@@ -309,7 +312,7 @@ async function createProtectedInputs(manifest) {
 
 function outputOwner(camera) {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     event: "recovery-event",
     court: camera,
     destinationId: `broadcast-${camera}`,
@@ -318,6 +321,9 @@ function outputOwner(camera) {
     outputProfile: "1080p30",
     rendererGitSha: "a".repeat(40),
     rendererDeploymentId: "dpl_test123",
+    rendererRuntimeOrigin: "http://renderer:3000",
+    rendererReleaseOrigin: "https://scorecheck-test.vercel.app",
+    rendererBundleSha256: "c".repeat(64),
     egressId: `EG_test${camera}`,
     requestSha256: "b".repeat(64),
     startedAt: "2026-07-21T11:59:00.000Z"

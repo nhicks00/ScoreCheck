@@ -11,7 +11,7 @@ const CONTRACTS = Object.freeze({
   programSession: "program-session-v1",
   overlayState: "overlay-state-v1",
   commentary: "commentary-v1",
-  browserHeartbeat: "browser-heartbeat-v5"
+  browserHeartbeat: "browser-heartbeat-v6"
 });
 
 if (process.argv[1] && resolve(process.argv[1]) === SCRIPT_PATH) {

@@ -158,7 +158,7 @@ function OverlayClientInner({ courtNumber, eventId, buildVersion, reloadOnVersio
         headers: authoritativeEtag.current ? { "if-none-match": authoritativeEtag.current } : undefined
       });
       if (res.status === 304) {
-        if (mounted.current) setConnected(true);
+        if (mounted.current) setConnected(res.headers.get("x-scorecheck-overlay-source") !== "local-cache");
         return;
       }
       if (res.status === 204) {
@@ -178,7 +178,7 @@ function OverlayClientInner({ courtNumber, eventId, buildVersion, reloadOnVersio
       const next = await res.json();
       if (!mounted.current) return;
       if (applyOverlayState(next)) authoritativeEtag.current = res.headers.get("etag");
-      setConnected(true);
+      setConnected(res.headers.get("x-scorecheck-overlay-source") !== "local-cache");
     } catch {
       if (mounted.current) setConnected(false);
     }

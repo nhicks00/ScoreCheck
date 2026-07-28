@@ -220,6 +220,12 @@ export type ProgramMonitorHeartbeatBody = {
     nackCount: number | null;
     pliCount: number | null;
     firCount: number | null;
+    bufferedAheadMs: number | null;
+    bufferedRangeCount: number | null;
+    hlsCreatedInstances: number | null;
+    hlsDestroyedInstances: number | null;
+    hlsActiveInstances: number | null;
+    jsHeapUsedBytes: number | null;
     reconnectCount: number;
     reloadCount: number;
   };
@@ -311,6 +317,12 @@ export function buildProgramMonitorHeartbeat(input: {
     nackCount: number | null;
     pliCount: number | null;
     firCount: number | null;
+    bufferedAheadMs: number | null;
+    bufferedRangeCount: number | null;
+    hlsCreatedInstances: number | null;
+    hlsDestroyedInstances: number | null;
+    hlsActiveInstances: number | null;
+    jsHeapUsedBytes: number | null;
   } | null;
   visualHealth: ProgramVisualHealth;
   reconnectCount: number;
@@ -387,6 +399,12 @@ export function buildProgramMonitorHeartbeat(input: {
       nackCount: clampOptionalInteger(stream?.nackCount, 0, Number.MAX_SAFE_INTEGER),
       pliCount: clampOptionalInteger(stream?.pliCount, 0, Number.MAX_SAFE_INTEGER),
       firCount: clampOptionalInteger(stream?.firCount, 0, Number.MAX_SAFE_INTEGER),
+      bufferedAheadMs: clampOptionalRange(stream?.bufferedAheadMs, 0, 60_000),
+      bufferedRangeCount: clampOptionalInteger(stream?.bufferedRangeCount, 0, 1_024),
+      hlsCreatedInstances: clampOptionalInteger(stream?.hlsCreatedInstances, 0, Number.MAX_SAFE_INTEGER),
+      hlsDestroyedInstances: clampOptionalInteger(stream?.hlsDestroyedInstances, 0, Number.MAX_SAFE_INTEGER),
+      hlsActiveInstances: clampOptionalInteger(stream?.hlsActiveInstances, 0, 1_024),
+      jsHeapUsedBytes: clampOptionalInteger(stream?.jsHeapUsedBytes, 0, Number.MAX_SAFE_INTEGER),
       reconnectCount: clampCount(input.reconnectCount),
       reloadCount: clampCount(input.reloadCount)
     },

@@ -33,6 +33,8 @@ describe("monitoring configuration", () => {
     });
     expect(agent.livekitMetricsUrl).toBeNull();
     expect(agent.egressMetricsUrl).toBeNull();
+    expect(agent.egressSupervisorStatePath).toBeNull();
+    expect(agent.programWarmerStatePath).toBeNull();
     expect(agent.egressMaxWebRequests).toBe(1);
 
     const service = loadServiceConfig({
@@ -139,5 +141,20 @@ describe("monitoring configuration", () => {
     };
     expect(loadAgentConfig({ ...base, MONITOR_EGRESS_MAX_WEB_REQUESTS: "2" }).egressMaxWebRequests).toBe(2);
     expect(() => loadAgentConfig({ ...base, MONITOR_EGRESS_MAX_WEB_REQUESTS: "0" })).toThrow();
+  });
+
+  it("accepts only a bounded absolute Egress supervisor state path", () => {
+    const base = {
+      MONITOR_AGENT_ID: "compositor-a",
+      MONITOR_AGENT_ROLE: "compositor",
+      MONITOR_AGENT_TOKEN: "abcdefghijklmnopqrstuvwxyz"
+    };
+    expect(loadAgentConfig({ ...base, EGRESS_SUPERVISOR_STATE_PATH: "/monitoring/egress-supervisor/state.json" }).egressSupervisorStatePath)
+      .toBe("/monitoring/egress-supervisor/state.json");
+    expect(() => loadAgentConfig({ ...base, EGRESS_SUPERVISOR_STATE_PATH: "relative/state.json" })).toThrow();
+    expect(() => loadAgentConfig({ ...base, EGRESS_SUPERVISOR_STATE_PATH: "/monitoring/../state.json" })).toThrow();
+    expect(loadAgentConfig({ ...base, PROGRAM_WARMER_STATE_PATH: "/monitoring/program-warmer/state.json" }).programWarmerStatePath)
+      .toBe("/monitoring/program-warmer/state.json");
+    expect(() => loadAgentConfig({ ...base, PROGRAM_WARMER_STATE_PATH: "relative/state.json" })).toThrow();
   });
 });

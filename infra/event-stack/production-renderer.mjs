@@ -6,6 +6,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { captureRendererBinding, loadRendererBinding } from "./renderer-binding.mjs";
+import { buildLocalRendererBundle, validateLocalRendererArtifact } from "./local-renderer-bundle.mjs";
 import { loadProtectedEnv } from "./stack-deployer.mjs";
 import { rehearsalProjectName, VercelRehearsalProvider } from "./rehearsal/vercel-provider.mjs";
 
@@ -15,6 +16,7 @@ const SHA = /^[a-f0-9]{40}$/u;
 const PROVIDER_ID = /^prj_[A-Za-z0-9]+$/u;
 const STATE_FILE = "renderer-state.json";
 const BINDING_FILE = "renderer-binding.json";
+const LOCAL_RENDERER_FILE = "local-renderer.tar.gz";
 const ALLOWED_WEB_KEYS = Object.freeze([
   "LIVEKIT_COMMENTARY_API_KEY",
   "LIVEKIT_COMMENTARY_API_SECRET",
@@ -73,7 +75,18 @@ export function buildProductionRendererEnvironment(webEnv, origin) {
   };
 }
 
-export async function prepareProductionRenderer({ event, gitSha, repo, repoId, output, provider, webEnv, now = () => new Date(), capture = captureRendererBinding }) {
+export async function prepareProductionRenderer({
+  event,
+  gitSha,
+  repo,
+  repoId,
+  output,
+  provider,
+  webEnv,
+  now = () => new Date(),
+  capture = captureRendererBinding,
+  buildLocalRenderer = buildLocalRendererBundle
+}) {
   validateEvent(event);
   validateSha(gitSha);
   validateRepository(repo, repoId);
@@ -99,8 +112,16 @@ export async function prepareProductionRenderer({ event, gitSha, repo, repoId, o
     if (binding.gitSha !== gitSha || binding.deploymentId !== ready.id || binding.origin !== ready.url) {
       throw new Error("renderer binding does not match the admitted deployment");
     }
+    const localRenderer = validateLocalRendererArtifact(await buildLocalRenderer({
+      repoRoot: resolve(dirname(SCRIPT_PATH), "../.."),
+      gitSha,
+      deploymentId: ready.id,
+      rendererOrigin: ready.url,
+      environment,
+      output: join(temporary, LOCAL_RENDERER_FILE)
+    }), { gitSha, deploymentId: ready.id });
     const state = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       status: "READY",
       event,
       preparedAt: now().toISOString(),
@@ -110,6 +131,14 @@ export async function prepareProductionRenderer({ event, gitSha, repo, repoId, o
       project: { id: project.id, name: project.name, origin: project.origin },
       deployment: { id: ready.id, origin: ready.url, generationId },
       binding: { path: join(root, BINDING_FILE), sha256: captured.sha256 },
+      localRenderer: {
+        schemaVersion: 1,
+        path: join(root, LOCAL_RENDERER_FILE),
+        sha256: localRenderer.sha256,
+        bytes: localRenderer.bytes,
+        gitSha: localRenderer.gitSha,
+        deploymentId: localRenderer.deploymentId
+      },
       environmentKeys: Object.keys(environment).sort()
     };
     await writeProtectedJson(join(temporary, STATE_FILE), state);
@@ -148,6 +177,7 @@ export function redactRendererState(state) {
     project: state.project,
     deployment: state.deployment,
     binding: state.binding,
+    localRenderer: state.localRenderer,
     environmentKeys: state.environmentKeys
   };
 }
@@ -170,7 +200,7 @@ async function readRendererState(root) {
 }
 
 function validateRendererState(value) {
-  if (!value || value.schemaVersion !== 1 || value.status !== "READY") throw new Error("renderer state is invalid");
+  if (!value || value.schemaVersion !== 2 || value.status !== "READY") throw new Error("renderer state is invalid");
   validateEvent(value.event);
   validateSha(value.gitSha);
   validateRepository(value.repo, value.repoId);
@@ -179,6 +209,7 @@ function validateRendererState(value) {
   if (!/^dpl_[A-Za-z0-9]+$/u.test(value.deployment?.id ?? "") || typeof value.deployment?.generationId !== "string") throw new Error("renderer deployment state is invalid");
   validOrigin(value.deployment.origin);
   if (typeof value.binding?.path !== "string" || !/^[a-f0-9]{64}$/u.test(value.binding?.sha256 ?? "")) throw new Error("renderer binding state is invalid");
+  validateLocalRendererArtifact(value.localRenderer, { gitSha: value.gitSha, deploymentId: value.deployment.id });
   if (!Array.isArray(value.environmentKeys) || JSON.stringify(value.environmentKeys) !== JSON.stringify([...value.environmentKeys].sort())) throw new Error("renderer environment state is invalid");
   return value;
 }

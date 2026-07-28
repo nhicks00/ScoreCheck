@@ -25,6 +25,8 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv = process.env) {
     LIVEKIT_METRICS_URL: optionalHttpUrl,
     EGRESS_METRICS_URL: optionalHttpUrl,
     EGRESS_HEALTH_URL: optionalHttpUrl,
+    EGRESS_SUPERVISOR_STATE_PATH: optionalAbsolutePath,
+    PROGRAM_WARMER_STATE_PATH: optionalAbsolutePath,
     MONITOR_EGRESS_MAX_WEB_REQUESTS: z.coerce.number().int().min(1).max(32).default(1),
     MONITOR_CONTENT_ANALYZER_COURTS: z.string().default(""),
     MONITOR_CONTENT_ANALYZER_RTSP_BASE_URL: optionalRtspUrl,
@@ -60,6 +62,8 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv = process.env) {
     livekitMetricsUrl: parsed.LIVEKIT_METRICS_URL ?? null,
     egressMetricsUrl: parsed.EGRESS_METRICS_URL ?? null,
     egressHealthUrl: parsed.EGRESS_HEALTH_URL ?? null,
+    egressSupervisorStatePath: parsed.EGRESS_SUPERVISOR_STATE_PATH ?? null,
+    programWarmerStatePath: parsed.PROGRAM_WARMER_STATE_PATH ?? null,
     egressMaxWebRequests: parsed.MONITOR_EGRESS_MAX_WEB_REQUESTS,
     contentAnalyzerCourts,
     contentAnalyzerRtspBaseUrl: parsed.MONITOR_CONTENT_ANALYZER_RTSP_BASE_URL?.replace(/\/+$/, "") ?? null,
@@ -190,6 +194,9 @@ const optionalRtspUrl = z.preprocess(emptyStringToUndefined, z.string().url().tr
 }).optional());
 
 const safeExecutablePath = z.string().trim().min(1).max(512).refine((value) => !/[\r\n\0]/.test(value));
+const optionalAbsolutePath = z.preprocess(emptyStringToUndefined, z.string().trim().min(1).max(512)
+  .refine((value) => value.startsWith("/") && !/[\r\n\0]/.test(value) && !value.split("/").includes(".."))
+  .optional());
 
 export function parseAgentTargets(raw: string): AgentTarget[] {
   if (!raw.trim()) return [];

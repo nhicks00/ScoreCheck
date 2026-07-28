@@ -192,7 +192,7 @@ export class EventLifecycleController {
       await this.store.save(state);
       await this.#notifyOnce(state, `coverage-closed:${state.event}:${state.generationId}`, {
         title: "ScoreCheck event coverage ended",
-        message: `${state.event}: complete the broadcasts, stop the exact outputs, capture evidence, and run confirmed teardown. Billing continues until temporary servers are deleted.`,
+        message: `${state.event}: stop and disarm the exact outputs, complete the broadcasts, capture evidence, and run confirmed teardown. Billing continues until temporary servers are deleted.`,
         priority: 0
       });
       return state;

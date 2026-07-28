@@ -174,7 +174,7 @@ describe("createProgramMonitoringConnection", () => {
       heartbeatUrl: "https://monitor.example.test/v1/browser-heartbeats",
       thumbnailUrl: "https://monitor.example.test/v1/browser-thumbnails",
       credentialId: "10000000-0000-4000-8000-000000000001",
-      credential: "eyJ2Ijo1LCJjaWQiOiIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJjb3VydCI6MywiaWF0IjoxMDAwLCJleHAiOjY0ODAxMDAwfQ.5eVqGVhQwp4yCHe4SGmOwfKNvV9Pw5JX8ILpQvh0ScI"
+      credential: "eyJ2Ijo2LCJjaWQiOiIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJjb3VydCI6MywiaWF0IjoxMDAwLCJleHAiOjY0ODAxMDAwfQ.EvRWsebeAdOJPgSwgWRyWDcIxdLlYvH7Cq4DT3qN7SY"
     });
   });
 
@@ -392,7 +392,7 @@ describe("buildProgramMonitorHeartbeat", () => {
       commentarySyncRttMs: 54.8,
       commentarySyncSampleAgeMs: 210.2
     }));
-    expect(body.version).toBe(5);
+    expect(body.version).toBe(6);
     expect(body.video).toMatchObject({ state: "playing", framesRendered: 5400, framesPerSecond: 30, transport: "whep", networkPath: "private-vpc" });
     expect(body.commentary).toMatchObject({
       roomConnected: true,
@@ -503,7 +503,13 @@ function base(overrides: Partial<Parameters<typeof buildProgramMonitorHeartbeat>
       lastPacketAgeMs: 12,
       nackCount: 2,
       pliCount: 1,
-      firCount: 0
+      firCount: 0,
+      bufferedAheadMs: null,
+      bufferedRangeCount: null,
+      hlsCreatedInstances: null,
+      hlsDestroyedInstances: null,
+      hlsActiveInstances: null,
+      jsHeapUsedBytes: 64_000_000
     },
     visualHealth: {
       sampledAt: "2026-07-12T18:29:59.000Z",

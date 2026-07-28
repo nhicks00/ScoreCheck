@@ -87,7 +87,7 @@ EGRESS_AUDIO_BITRATE=128
 EGRESS_AUDIO_FREQUENCY=48000
 EGRESS_KEYFRAME_INTERVAL=2
 
-# Serialize the active-list check and start request. This host is qualified for
+# Serialize every start, deliberate stop, and supervised recovery. This host is qualified for
 # exactly one web Egress; LiveKit's native can-accept metric has oscillated
 # under load, so operator starts also enforce the hard ceiling locally.
 REQ_DIR="$COMPOSITOR_DIR/requests"
@@ -106,12 +106,16 @@ command -v openssl >/dev/null 2>&1 || {
 }
 exec 9>"$REQ_DIR/start.lock"
 flock -n 9 || {
-  echo "error: another Egress start is already in progress." >&2
+  echo "error: another Egress lifecycle operation is already in progress." >&2
   exit 1
 }
+if compgen -G "$REQ_DIR/court-*.stop-intent" >/dev/null; then
+  echo "error: a deliberate Egress stop is pending; start rejected." >&2
+  exit 1
+fi
 ACTIVE_FILE="$(mktemp "$REQ_DIR/.active-egress.XXXXXX")"
 ACTIVE_ERROR="$(mktemp "$REQ_DIR/.active-egress-error.XXXXXX")"
-trap 'rm -f "$ACTIVE_FILE" "$ACTIVE_ERROR"' EXIT
+trap 'rm -f "$ACTIVE_FILE" "$ACTIVE_ERROR" "${RENDERER_BINDING_FILE:-}"' EXIT
 if ! "$LK" egress list --active --json >"$ACTIVE_FILE" 2>"$ACTIVE_ERROR"; then
   echo "error: could not verify the active Egress count; start rejected." >&2
   exit 1
@@ -147,10 +151,20 @@ else
 fi
 : "${PROGRAM_PAGE_BASE_URL:?set PROGRAM_PAGE_BASE_URL in .env (see .env.example)}"
 : "${PROGRAM_PAGE_TOKEN:?set PROGRAM_PAGE_TOKEN in .env (see .env.example)}"
+: "${PROGRAM_RENDERER_RELEASE_ORIGIN:?set PROGRAM_RENDERER_RELEASE_ORIGIN in .env}"
+: "${PROGRAM_RENDERER_BUNDLE_SHA256:?set PROGRAM_RENDERER_BUNDLE_SHA256 in .env}"
 : "${PROGRAM_RENDERER_GIT_SHA:?set PROGRAM_RENDERER_GIT_SHA in .env (see .env.example)}"
 : "${PROGRAM_RENDERER_DEPLOYMENT_ID:?set PROGRAM_RENDERER_DEPLOYMENT_ID in .env (see .env.example)}"
-if ! [[ "$PROGRAM_PAGE_BASE_URL" =~ ^https://[a-z0-9-]+\.vercel\.app/program$ ]]; then
-  echo "error: PROGRAM_PAGE_BASE_URL must use the immutable generated Vercel deployment URL ending in /program." >&2
+if [[ "$PROGRAM_PAGE_BASE_URL" != "http://renderer:3000/program" ]]; then
+  echo "error: PROGRAM_PAGE_BASE_URL must use the event-local renderer service." >&2
+  exit 1
+fi
+if ! [[ "$PROGRAM_RENDERER_RELEASE_ORIGIN" =~ ^https://[a-z0-9-]+\.vercel\.app$ ]]; then
+  echo "error: PROGRAM_RENDERER_RELEASE_ORIGIN must identify the immutable generated Vercel release." >&2
+  exit 1
+fi
+if ! [[ "$PROGRAM_RENDERER_BUNDLE_SHA256" =~ ^[a-f0-9]{64}$ ]]; then
+  echo "error: PROGRAM_RENDERER_BUNDLE_SHA256 must identify the admitted local renderer artifact." >&2
   exit 1
 fi
 if ! [[ "$PROGRAM_RENDERER_GIT_SHA" =~ ^[a-f0-9]{40}$ ]]; then
@@ -161,6 +175,30 @@ if ! [[ "$PROGRAM_RENDERER_DEPLOYMENT_ID" =~ ^dpl_[A-Za-z0-9]+$ ]]; then
   echo "error: PROGRAM_RENDERER_DEPLOYMENT_ID is invalid." >&2
   exit 1
 fi
+
+RENDERER_BINDING_FILE="$(mktemp "$REQ_DIR/.renderer-binding.XXXXXX")"
+if ! curl -fsS --max-time 5 http://127.0.0.1:3000/api/program/renderer-binding >"$RENDERER_BINDING_FILE" \
+  || ! jq -e \
+    --arg origin "$PROGRAM_RENDERER_RELEASE_ORIGIN" \
+    --arg gitSha "$PROGRAM_RENDERER_GIT_SHA" \
+    --arg deploymentId "$PROGRAM_RENDERER_DEPLOYMENT_ID" '
+      .schemaVersion == 1
+      and .provider == "vercel"
+      and .origin == $origin
+      and .gitSha == $gitSha
+      and .deploymentId == $deploymentId
+      and .assetNamespace == $deploymentId
+      and .contracts == {
+        programSession: "program-session-v1",
+        overlayState: "overlay-state-v1",
+        commentary: "commentary-v1",
+        browserHeartbeat: "browser-heartbeat-v6"
+      }
+    ' "$RENDERER_BINDING_FILE" >/dev/null; then
+  echo "error: event-local renderer identity or contracts do not match the admitted release." >&2
+  exit 1
+fi
+rm -f "$RENDERER_BINDING_FILE"
 
 PROGRAM_TOKEN_FRAGMENT="$(printf '%s' "$PROGRAM_PAGE_TOKEN" | jq -sRr @uri)"
 PAGE_URL="${PROGRAM_PAGE_BASE_URL}/bootstrap?court=${COURT}&build=${PROGRAM_RENDERER_GIT_SHA}&deployment=${PROGRAM_RENDERER_DEPLOYMENT_ID}#token=${PROGRAM_TOKEN_FRAGMENT}"
@@ -228,11 +266,14 @@ if [[ -n "$EGRESS_ID" ]]; then
     --arg outputProfile "$OUTPUT_PROFILE" \
     --arg rendererGitSha "$PROGRAM_RENDERER_GIT_SHA" \
     --arg rendererDeploymentId "$PROGRAM_RENDERER_DEPLOYMENT_ID" \
+    --arg rendererRuntimeOrigin "http://renderer:3000" \
+    --arg rendererReleaseOrigin "$PROGRAM_RENDERER_RELEASE_ORIGIN" \
+    --arg rendererBundleSha256 "$PROGRAM_RENDERER_BUNDLE_SHA256" \
     --arg egressId "$EGRESS_ID" \
     --arg requestSha256 "$REQUEST_SHA256" \
     --arg startedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg destinationRole "$DESTINATION_ROLE" \
-    '{schemaVersion: 2, event: $event, court: $court, destinationId: $destinationId, destinationRole: $destinationRole, outputGeneration: $outputGeneration, outputProfile: $outputProfile, rendererGitSha: $rendererGitSha, rendererDeploymentId: $rendererDeploymentId, egressId: $egressId, requestSha256: $requestSha256, startedAt: $startedAt}' \
+    '{schemaVersion: 3, event: $event, court: $court, destinationId: $destinationId, destinationRole: $destinationRole, outputGeneration: $outputGeneration, outputProfile: $outputProfile, rendererGitSha: $rendererGitSha, rendererDeploymentId: $rendererDeploymentId, rendererRuntimeOrigin: $rendererRuntimeOrigin, rendererReleaseOrigin: $rendererReleaseOrigin, rendererBundleSha256: $rendererBundleSha256, egressId: $egressId, requestSha256: $requestSha256, startedAt: $startedAt}' \
     >"${OWNER_FILE}.tmp"
   chmod 600 "${ID_FILE}.tmp" "${OWNER_FILE}.tmp"
   mv "${OWNER_FILE}.tmp" "$OWNER_FILE"

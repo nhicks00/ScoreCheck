@@ -10,6 +10,7 @@ import {
   programCommentaryBufferMs,
   verifyProgramSession
 } from "@/lib/program";
+import { readCachedProgramCourt, writeCachedProgramCourt } from "@/lib/programLocalCache";
 import { createProgramMonitoringConnection } from "@/lib/programMonitoring";
 import { supabaseAdmin } from "@/lib/supabase";
 import { courtProgramStreamPath, courtStreamSources, videoConfigured } from "@/lib/video";
@@ -99,28 +100,36 @@ const EMPTY_PROGRAM_COURT: ProgramCourtConfig = {
 };
 
 async function loadCourt(courtNumber: number): Promise<ProgramCourtConfig> {
+  const cached = await readCachedProgramCourt(courtNumber);
   const env = getEnv();
-  if (!env.supabaseUrl || !env.supabaseServiceRoleKey) return EMPTY_PROGRAM_COURT;
+  if (!env.supabaseUrl || !env.supabaseServiceRoleKey) return cached ?? EMPTY_PROGRAM_COURT;
 
-  const db = supabaseAdmin();
-  const event = await getActiveEvent(db);
-  if (!event) return EMPTY_PROGRAM_COURT;
+  try {
+    const db = supabaseAdmin();
+    const event = await getActiveEvent(db);
+    if (!event) return cached ?? EMPTY_PROGRAM_COURT;
 
-  const { data: court } = await db
-    .from("courts")
-    .select("id,updated_at,program_stream_path,camera_audio_gain_db,commentary_gain_db,commentary_delay_ms,program_video_delay_ms")
-    .eq("event_id", event.id)
-    .eq("court_number", courtNumber)
-    .maybeSingle();
+    const { data: court, error } = await db
+      .from("courts")
+      .select("id,updated_at,program_stream_path,camera_audio_gain_db,commentary_gain_db,commentary_delay_ms,program_video_delay_ms")
+      .eq("event_id", event.id)
+      .eq("court_number", courtNumber)
+      .maybeSingle();
+    if (error) throw error;
 
-  return {
-    programStreamPath: court?.program_stream_path ?? null,
-    cameraGainDb: finiteNumber(court?.camera_audio_gain_db),
-    commentaryGainDb: finiteNumber(court?.commentary_gain_db),
-    commentaryDelayMs: Math.max(0, finiteNumber(court?.commentary_delay_ms)),
-    programVideoDelayMs: Math.max(0, finiteNumber(court?.program_video_delay_ms)),
-    configurationVersion: configurationVersion(court?.id, court?.updated_at)
-  };
+    const current = {
+      programStreamPath: court?.program_stream_path ?? null,
+      cameraGainDb: finiteNumber(court?.camera_audio_gain_db),
+      commentaryGainDb: finiteNumber(court?.commentary_gain_db),
+      commentaryDelayMs: Math.max(0, finiteNumber(court?.commentary_delay_ms)),
+      programVideoDelayMs: Math.max(0, finiteNumber(court?.program_video_delay_ms)),
+      configurationVersion: configurationVersion(court?.id, court?.updated_at)
+    };
+    await writeCachedProgramCourt(courtNumber, current).catch(() => undefined);
+    return current;
+  } catch {
+    return cached ?? EMPTY_PROGRAM_COURT;
+  }
 }
 
 function configurationVersion(courtId: unknown, updatedAt: unknown): string {

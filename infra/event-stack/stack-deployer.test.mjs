@@ -568,8 +568,9 @@ test("requires an intact protected secret render before deployment", async () =>
   const root = await mkdtemp(join(tmpdir(), "scorecheck-secrets-test-"));
   await chmod(root, 0o700);
   await mkdir(join(root, "compositors"), { mode: 0o700 });
+  await mkdir(join(root, "renderer"), { mode: 0o700 });
   const names = [
-    "agent-tokens.json", "commentary.env", "ingest.env", "observability.env",
+    "agent-tokens.json", "commentary.env", "ingest.env", "observability.env", "renderer.env", "renderer/local-renderer.tar.gz",
     ...["a", "b", "c", "d", "e", "f", "g", "h"].map((suffix) => `compositors/bvm-compositor-${suffix}.env`),
     "compositors/bvm-compositor-spare.env"
   ];
@@ -607,7 +608,9 @@ test("binds each role to exact remote reconstruction config paths", () => {
   ]);
   const compositor = roleConfigBindings(repoRoot, secrets, { role: "compositor", name: "bvm-compositor-a" });
   assert.ok(compositor.some(([local, remote]) => local === "/secrets/compositors/bvm-compositor-a.env" && remote === "/opt/compositor/.env"));
-  for (const remote of ["/opt/compositor/normalize-camera.sh", "/opt/compositor/scorecheck-ffmpeg-runner.sh", "/opt/compositor/qualify-output.sh", "/opt/compositor/rebind-ingest.sh", "/opt/compositor/start-normalizer.sh", "/opt/compositor/stop-normalizer.sh"]) {
+  assert.ok(compositor.some(([local, remote]) => local === "/secrets/renderer.env" && remote === "/opt/compositor/renderer.env"));
+  assert.ok(compositor.some(([local, remote]) => local === "/secrets/renderer/local-renderer.tar.gz" && remote === "/opt/compositor/local-renderer.tar.gz"));
+  for (const remote of ["/etc/systemd/system/scorecheck-egress-supervisor.service", "/opt/compositor/egress-supervisor.sh", "/opt/compositor/normalize-camera.sh", "/opt/compositor/scorecheck-ffmpeg-runner.sh", "/opt/compositor/qualify-output.sh", "/opt/compositor/rebind-ingest.sh", "/opt/compositor/start-normalizer.sh", "/opt/compositor/stop-normalizer.sh"]) {
     assert.ok(compositor.some(([, candidate]) => candidate === remote));
   }
   const observability = roleConfigBindings(repoRoot, secrets, { role: "observability", name: "bvm-observability-01" });
@@ -620,6 +623,8 @@ test("binds each role to exact remote reconstruction config paths", () => {
 test("renders compositor agents with local normalizer progress collection", () => {
   const environment = agentRoleEnvironment("compositor");
   assert.equal(environment.FFMPEG_PROGRESS_DIR, "/monitoring/ffmpeg");
+  assert.equal(environment.EGRESS_SUPERVISOR_STATE_PATH, "/monitoring/egress-supervisor/state.json");
+  assert.match(environment.MONITOR_AGENT_CONTAINERS, /bvm-renderer/u);
 });
 
 test("attests the exact compositor environment after private ingest bindings are appended", () => {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { chmod, copyFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import process from "node:process";
@@ -19,6 +19,20 @@ const MATERIAL_SCHEMA_VERSION = 2;
 const LEGACY_SOURCE_SCHEMA_VERSION = 1;
 const LEGACY_MATERIAL_SCHEMA_VERSION = 1;
 const PRODUCTION_OUTPUT_PROFILES = Object.freeze(["1080p30", "1080p60"]);
+const LOCAL_RENDERER_ORIGIN = "http://renderer:3000";
+const LOCAL_RENDERER_RUNTIME_KEYS = Object.freeze([
+  "LIVEKIT_COMMENTARY_API_KEY",
+  "LIVEKIT_COMMENTARY_API_SECRET",
+  "MEDIAMTX_HLS_BASE_URL",
+  "MEDIAMTX_WHEP_BASE_URL",
+  "MONITOR_BROWSER_HEARTBEAT_SECRET",
+  "MONITOR_PUBLIC_URL",
+  "NEXT_PUBLIC_LIVEKIT_COMMENTARY_URL",
+  "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+  "NEXT_PUBLIC_SUPABASE_URL",
+  "PROGRAM_PAGE_TOKEN",
+  "SUPABASE_SERVICE_ROLE_KEY"
+]);
 const SOURCE_FILES = Object.freeze([
   "material.json",
   "monitoring.env",
@@ -382,7 +396,9 @@ async function loadProductionRecoverySourceWithKeys(sourceDirectory, monitoringK
   requireEnvironment(monitoringEnvironment, monitoringKeys);
   rejectTwilio(monitoringEnvironment);
   const sourceSha256 = sha256(Buffer.from(stableJson({ captureSha256: marker.captureSha256, files: marker.files }), "utf8"));
-  return { root, marker, material, monitoringEnvironment, sourceSha256 };
+  const webEnvironment = await loadProtectedEnv(join(root, "web-runtime.env"));
+  requireEnvironment(webEnvironment, LOCAL_RENDERER_RUNTIME_KEYS);
+  return { root, marker, material, monitoringEnvironment, webEnvironment, sourceSha256 };
 }
 
 async function loadLegacyProductionRecoverySource(sourceDirectory) {
@@ -410,15 +426,32 @@ async function loadLegacyProductionRecoverySource(sourceDirectory) {
   return { root, marker, material, monitoringEnvironment, sourceSha256 };
 }
 
-export async function renderProductionSecretDirectory({ manifest, sourceDirectory, directory, renderer, venueProfile, random = randomBytes }) {
+export async function renderProductionSecretDirectory({
+  manifest,
+  sourceDirectory,
+  directory,
+  renderer,
+  localRendererBundle,
+  venueProfile,
+  random = randomBytes
+}) {
   if (manifest?.kind !== "production" || !Array.isArray(manifest.droplets) || manifest.droplets.length !== 12) {
     throw new Error("production secrets require the exact 12-Droplet production manifest");
   }
   const rendererBinding = validateRendererBinding(renderer);
+  const localBundle = normalizedAbsolute(localRendererBundle, "local renderer bundle");
+  await assertProtectedFile(localBundle, "local renderer bundle");
+  const localRendererSha256 = sha256(await readFile(localBundle));
   validateVenueProfile(venueProfile, manifest.event);
   const source = await loadProductionRecoverySource(sourceDirectory);
   const target = normalizedAbsolute(directory, "production secret directory");
-  const inputSha256 = sha256(Buffer.from(stableJson({ manifest, renderer: rendererBinding, venueProfile, sourceSha256: source.sourceSha256 }), "utf8"));
+  const inputSha256 = sha256(Buffer.from(stableJson({
+    manifest,
+    renderer: rendererBinding,
+    localRendererSha256,
+    venueProfile,
+    sourceSha256: source.sourceSha256
+  }), "utf8"));
   if (await exists(target)) {
     await verifyRenderedDirectory(target, inputSha256);
     return target;
@@ -426,17 +459,29 @@ export async function renderProductionSecretDirectory({ manifest, sourceDirector
   const root = `${target}.rendering`;
   await rm(root, { recursive: true, force: true });
   await mkdir(join(root, "compositors"), { recursive: true, mode: 0o700 });
+  await mkdir(join(root, "renderer"), { recursive: true, mode: 0o700 });
   await mkdir(join(root, "wireguard"), { recursive: true, mode: 0o700 });
   await chmod(root, 0o700);
   const agentTokens = Object.fromEntries(manifest.droplets.map((spec) => [spec.name, random(32).toString("base64url")]));
-  const files = buildProductionSecretFiles({ manifest, material: source.material, monitoringEnvironment: source.monitoringEnvironment, renderer: rendererBinding, venueProfile, agentTokens });
+  const files = buildProductionSecretFiles({
+    manifest,
+    material: source.material,
+    monitoringEnvironment: source.monitoringEnvironment,
+    webEnvironment: source.webEnvironment,
+    renderer: rendererBinding,
+    localRendererSha256,
+    venueProfile,
+    agentTokens
+  });
   try {
     for (const [name, body] of Object.entries(files)) await writeProtected(join(root, name), body);
+    await copyFile(localBundle, join(root, "renderer/local-renderer.tar.gz"));
+    await chmod(join(root, "renderer/local-renderer.tar.gz"), 0o600);
     for (const name of ["camera-lan.conf", "camera-lan.key", "camera-lan.pub"]) {
       await copyFile(join(source.root, "wireguard", name), join(root, "wireguard", name));
       await chmod(join(root, "wireguard", name), 0o600);
     }
-    const names = [...Object.keys(files), "wireguard/camera-lan.conf", "wireguard/camera-lan.key", "wireguard/camera-lan.pub"].sort();
+    const names = [...Object.keys(files), "renderer/local-renderer.tar.gz", "wireguard/camera-lan.conf", "wireguard/camera-lan.key", "wireguard/camera-lan.pub"].sort();
     const marker = { schemaVersion: 1, inputSha256, sourceSha256: source.sourceSha256, files: await hashesForFiles(root, names) };
     await writeProtected(join(root, "RENDER_COMPLETE.json"), `${JSON.stringify(marker, null, 2)}\n`);
     await rename(root, target);
@@ -449,27 +494,42 @@ export async function renderProductionSecretDirectory({ manifest, sourceDirector
   }
 }
 
-export function buildProductionSecretFiles({ manifest, material, monitoringEnvironment, renderer, venueProfile, agentTokens }) {
+export function buildProductionSecretFiles({
+  manifest,
+  material,
+  monitoringEnvironment,
+  webEnvironment,
+  renderer,
+  localRendererSha256,
+  venueProfile,
+  agentTokens
+}) {
   validateProductionMaterial(material);
   const rendererBinding = validateRendererBinding(renderer);
   const validatedVenueProfile = validateVenueProfile(venueProfile, manifest.event);
   const venueAdmission = evaluateVenueAdmission(validatedVenueProfile);
   if (!venueAdmission.passed) throw new Error(`production venue profile is not admitted: ${venueAdmission.problems.join("; ")}`);
   requireEnvironment(monitoringEnvironment, REQUIRED_MONITORING_KEYS);
+  requireEnvironment(webEnvironment, LOCAL_RENDERER_RUNTIME_KEYS);
+  if (!/^[a-f0-9]{64}$/u.test(localRendererSha256 ?? "")) throw new Error("local renderer bundle digest is invalid");
   rejectTwilio(monitoringEnvironment);
   const expectedNames = manifest.droplets.map((entry) => entry.name).sort();
   if (JSON.stringify(Object.keys(agentTokens ?? {}).sort()) !== JSON.stringify(expectedNames)) throw new Error("production agent tokens must exactly match the manifest");
   for (const [name, token] of Object.entries(agentTokens)) requireSecret(token, `${name} agent token`, 24);
   const observer = filterMonitoringEnvironment(monitoringEnvironment);
-  observer.MONITOR_BROWSER_ALLOWED_ORIGINS = rendererBinding.origin;
+  const mediaReader = derivedMediaReadCredentials(material.programPageToken);
+  observer.MONITOR_BROWSER_ALLOWED_ORIGINS = `${rendererBinding.origin},${LOCAL_RENDERER_ORIGIN}`;
   const output = {
     "agent-tokens.json": `${JSON.stringify({ schemaVersion: 1, tokens: agentTokens }, null, 2)}\n`,
     "commentary.env": envFile({
       LIVEKIT_COMMENTARY_API_KEY: material.commentary.apiKey,
       LIVEKIT_COMMENTARY_API_SECRET: material.commentary.apiSecret
     }),
+    "renderer.env": envFile(localRendererEnvironment(webEnvironment, rendererBinding, material.programPageToken)),
     "ingest.env": envFile(Object.fromEntries([
       ["MEDIAMTX_PROGRAM_DELAY_MS", "3500"],
+      ["MEDIAMTX_READ_USER", mediaReader.user],
+      ["MEDIAMTX_READ_PASS", mediaReader.password],
       ...COURTS.flatMap((court) => [
         [`MEDIAMTX_COURT_${court}_RAW_SOURCE`, "publisher"],
         [`MEDIAMTX_COURT_${court}_BROWSER_SOURCE`, venueAdmission.assignments[court]?.sourcePathMode === "isolated-browser-normalizer" ? "normalized" : "raw"],
@@ -499,12 +559,20 @@ export function buildProductionSecretFiles({ manifest, material, monitoringEnvir
       compositor,
       programPageToken: material.programPageToken,
       renderer: rendererBinding,
+      localRendererSha256,
       assignment: venueAdmission.assignments[court] ?? null
     });
   }
   const spare = manifest.droplets.find((entry) => entry.role === "compositor-spare");
   if (!spare) throw new Error("production manifest has no warm spare");
-  output[`compositors/${spare.name}.env`] = compositorEnvironment({ court: null, compositor: material.compositors[1], programPageToken: material.programPageToken, renderer: rendererBinding, assignment: null });
+  output[`compositors/${spare.name}.env`] = compositorEnvironment({
+    court: null,
+    compositor: material.compositors[1],
+    programPageToken: material.programPageToken,
+    renderer: rendererBinding,
+    localRendererSha256,
+    assignment: null
+  });
   return output;
 }
 
@@ -556,6 +624,7 @@ function validateLegacyProductionMaterial(value) {
 
 function buildRecoveryWebEnvironment({ webEnvironment, monitoringEnvironment, material }) {
   const output = { ...webEnvironment };
+  const mediaReader = derivedMediaReadCredentials(material.programPageToken);
   output.PROGRAM_PAGE_TOKEN = material.programPageToken;
   output.MONITOR_API_TOKEN = required(monitoringEnvironment, "MONITOR_API_TOKEN");
   output.MONITOR_ROUTER_HEARTBEAT_TOKEN = required(monitoringEnvironment, "MONITOR_ROUTER_HEARTBEAT_TOKEN");
@@ -563,6 +632,8 @@ function buildRecoveryWebEnvironment({ webEnvironment, monitoringEnvironment, ma
   output.MONITOR_PUBLIC_URL = `https://${required(monitoringEnvironment, "MONITOR_PUBLIC_HOST")}`;
   output.MEDIAMTX_RTMP_INGEST_BASE = output.MEDIAMTX_RTMP_INGEST_BASE
     || required(output, "MEDIAMTX_WHEP_BASE_URL").replace(/^https:/, "rtmp:");
+  output.MEDIAMTX_READ_USER = mediaReader.user;
+  output.MEDIAMTX_READ_PASS = mediaReader.password;
   output.LIVEKIT_COMMENTARY_API_KEY = material.commentary.apiKey;
   output.LIVEKIT_COMMENTARY_API_SECRET = material.commentary.apiSecret;
   return Object.fromEntries(Object.entries(output).sort(([left], [right]) => left.localeCompare(right)));
@@ -599,16 +670,21 @@ function legacyEncodingProfile(value) {
   return profile;
 }
 
-function compositorEnvironment({ court, compositor, programPageToken, renderer, assignment }) {
+function compositorEnvironment({ court, compositor, programPageToken, renderer, localRendererSha256, assignment }) {
   const normalizerEnabled = assignment?.sourcePathMode === "isolated-browser-normalizer";
+  const mediaReader = derivedMediaReadCredentials(programPageToken);
   const values = {
     LIVEKIT_API_KEY: compositor.apiKey,
     LIVEKIT_API_SECRET: compositor.apiSecret,
     LIVEKIT_URL: "http://127.0.0.1:7880",
-    PROGRAM_PAGE_BASE_URL: `${renderer.origin}/program`,
+    PROGRAM_PAGE_BASE_URL: `${LOCAL_RENDERER_ORIGIN}/program`,
     PROGRAM_PAGE_TOKEN: programPageToken,
+    PROGRAM_RENDERER_RELEASE_ORIGIN: renderer.origin,
+    PROGRAM_RENDERER_BUNDLE_SHA256: localRendererSha256,
     PROGRAM_RENDERER_GIT_SHA: renderer.gitSha,
     PROGRAM_RENDERER_DEPLOYMENT_ID: renderer.deploymentId,
+    MEDIAMTX_READ_USER: mediaReader.user,
+    MEDIAMTX_READ_PASS: mediaReader.password,
     YOUTUBE_RTMPS_BASE: compositor.rtmpsBase,
     YOUTUBE_STREAM_RESOLUTION: compositor.youtubeResolution,
     YOUTUBE_STREAM_FRAME_RATE: compositor.youtubeFrameRate,
@@ -627,6 +703,34 @@ function compositorEnvironment({ court, compositor, programPageToken, renderer, 
     } : {})
   };
   return envFile(values);
+}
+
+export function derivedMediaReadCredentials(programPageToken) {
+  const token = requireSecret(programPageToken, "program-page token", 24);
+  return {
+    user: "scorecheck_event_reader",
+    password: createHmac("sha256", token).update("scorecheck-derived-media-v1", "utf8").digest("base64url")
+  };
+}
+
+function localRendererEnvironment(webEnvironment, renderer, programPageToken) {
+  const selected = Object.fromEntries(LOCAL_RENDERER_RUNTIME_KEYS.map((key) => [key, required(webEnvironment, key)]));
+  const mediaReader = derivedMediaReadCredentials(programPageToken);
+  return {
+    ...selected,
+    MEDIAMTX_READ_USER: mediaReader.user,
+    MEDIAMTX_READ_PASS: mediaReader.password,
+    HOSTNAME: "0.0.0.0",
+    PORT: "3000",
+    NODE_ENV: "production",
+    SCORECHECK_LOCAL_RENDERER: "true",
+    SCORECHECK_PROGRAM_CACHE_DIR: "/var/lib/scorecheck-renderer",
+    VERCEL_GIT_COMMIT_SHA: renderer.gitSha,
+    NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA: renderer.gitSha,
+    VERCEL_DEPLOYMENT_ID: renderer.deploymentId,
+    VERCEL_URL: new URL(renderer.origin).hostname,
+    NEXT_PUBLIC_VERCEL_URL: new URL(renderer.origin).hostname
+  };
 }
 
 async function verifyProtectedCapture(rootValue) {

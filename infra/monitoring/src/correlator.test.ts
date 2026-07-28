@@ -336,6 +336,8 @@ describe("monitor correlator", () => {
       agentId: compositorTarget.id,
       role: "compositor" as const,
       assignedCourts: [1, 2],
+      egressSupervisor: healthySupervisor(generatedAt, 1),
+      programWarmer: healthyWarmer(generatedAt, 1),
       nativeServices: {
         endpoints: [{ service: "egress-metrics" as const, up: true }, { service: "egress-health" as const, up: true }],
         livekit: null,
@@ -350,6 +352,30 @@ describe("monitor correlator", () => {
     expect(egress?.summary).toContain("processing output");
     expect(egress?.evidence.idle).toBe(false);
     expect(egress?.evidence.host).toBe(compositorTarget.id);
+  });
+
+  it("fails the exact output when its owned program warmer is missing", () => {
+    const generatedAt = "2026-07-12T12:00:00.000Z";
+    const compositor = {
+      ...emptyAgentSnapshot(generatedAt),
+      agentId: compositorTarget.id,
+      role: "compositor" as const,
+      assignedCourts: [1],
+      egressSupervisor: healthySupervisor(generatedAt, 1),
+      programWarmer: null,
+      nativeServices: {
+        endpoints: [{ service: "egress-metrics" as const, up: true }, { service: "egress-health" as const, up: true }],
+        livekit: null,
+        egress: { idle: false, canAcceptRequest: false, nativeCanAcceptRequest: true, activeWebRequests: 1, maximumWebRequests: 1, cgroupMemoryBytes: 700_000_000, cpuLoadRatio: 0.4, memoryLoadRatio: 0.2 }
+      }
+    };
+    const runtimes = new Map<string, AgentRuntime>([[compositorTarget.id, { target: compositorTarget, snapshot: compositor, lastSeenAt: generatedAt, lastErrorAt: null }]]);
+
+    const result = buildMonitorSnapshot([compositorTarget], runtimes, 1, Date.parse(generatedAt) + 1_000, [], new Map(), liveControlPlane(generatedAt));
+    const egress = result.courts[0]?.stages.find((stage) => stage.stage === "EGRESS");
+
+    expect(egress?.state).toBe("CRITICAL");
+    expect(egress?.issueCode).toBe("PROGRAM_BRANCH_WARMER_UNAVAILABLE");
   });
 
   it("classifies configured Egress admission states without paging normal capacity", () => {
@@ -367,6 +393,8 @@ describe("monitor correlator", () => {
         agentId: compositorTarget.id,
         role: "compositor" as const,
         assignedCourts: [1, 2],
+        egressSupervisor: healthySupervisor(generatedAt, 1),
+        programWarmer: healthyWarmer(generatedAt, 1),
         nativeServices: {
           endpoints: [{ service: "egress-metrics" as const, up: true }, { service: "egress-health" as const, up: true }],
           livekit: null,
@@ -535,7 +563,7 @@ function contentAgentSnapshot(
 
 function browserHeartbeat(observedAt: string, visual: Partial<BrowserHeartbeatSnapshot["visual"]> = {}): BrowserHeartbeatSnapshot {
   const payload = browserHeartbeatPayloadSchema.parse({
-    version: 5,
+    version: 6,
     credentialId: "40000000-0000-4000-8000-000000000001",
     courtNumber: 1,
     heartbeatSeq: 1,
@@ -558,6 +586,12 @@ function browserHeartbeat(observedAt: string, visual: Partial<BrowserHeartbeatSn
       packetsReceived: 1_000,
       framesDropped: 0,
       bytesReceived: 5_000_000,
+      bufferedAheadMs: null,
+      bufferedRangeCount: null,
+      hlsCreatedInstances: null,
+      hlsDestroyedInstances: null,
+      hlsActiveInstances: null,
+      jsHeapUsedBytes: 64_000_000,
       reconnectCount: 0,
       reloadCount: 0
     },
@@ -635,7 +669,7 @@ function liveControlPlane(observedAt: string): ControlPlaneSnapshot {
 
 function emptyAgentSnapshot(generatedAt: string): AgentSnapshot {
   return {
-    version: 5,
+    version: 6,
     agentId: "preview",
     role: "mediamtx",
     assignedCourts: [],
@@ -647,6 +681,33 @@ function emptyAgentSnapshot(generatedAt: string): AgentSnapshot {
     mediaPaths: [],
     ffmpegBranches: [],
     contentAnalysis: [],
+    egressSupervisor: null,
+    programWarmer: null,
     nativeServices: { endpoints: [], livekit: null, egress: null }
+  };
+}
+
+function healthySupervisor(observedAt: string, court: number) {
+  return {
+    schemaVersion: 1 as const,
+    generationKey: "a".repeat(64),
+    missingCount: 0,
+    recoveryAttempts: 0,
+    status: "HEALTHY" as const,
+    detail: "The exact owned Egress is active.",
+    court,
+    egressId: "EG_Test123",
+    observedAt
+  };
+}
+
+function healthyWarmer(observedAt: string, court: number) {
+  return {
+    schemaVersion: 1 as const,
+    court,
+    status: "WARM" as const,
+    ffmpegPid: 1234,
+    restartCount: 1,
+    observedAt
   };
 }

@@ -43,6 +43,8 @@ export function buildMonitorSnapshot(
       ageMs,
       host: runtime?.snapshot?.host ?? null,
       services: runtime?.snapshot?.services ?? [],
+      egressSupervisor: runtime?.snapshot?.egressSupervisor ?? null,
+      programWarmer: runtime?.snapshot?.programWarmer ?? null,
       nativeServices: runtime?.snapshot?.nativeServices ?? null
     };
   });
@@ -89,7 +91,7 @@ export function buildMonitorSnapshot(
       commentaryStage(browser, nowMs, productionExpectation),
       scoreSourceStage(competition, controlPlane, nowMs, productionExpectation),
       scoreRenderStage(browser, nowMs, productionExpectation),
-      egressStage(egressAgent, productionExpectation, expectedEgressRequests, browser, nowMs),
+      egressStage(egressAgent, courtNumber, productionExpectation, expectedEgressRequests, Boolean(byBranch.program?.ready), browser, nowMs),
       youtubeStage(youtube, youtubeMonitor, nowMs, productionExpectation)
     ];
     const stages = applyCourtIncidents(observedStages, incidents, courtNumber, egressAgent?.agentId ?? null, byBranch.raw?.sourceProtocol ?? null, nowMs);
@@ -183,8 +185,10 @@ function applyCourtIncidents(
 
 function egressStage(
   agent: MonitorSnapshot["agents"][number] | null,
+  courtNumber: number,
   expectation: CourtExpectation,
   expectedRequestCount: number,
+  programPathReady: boolean,
   browser: BrowserHeartbeatSnapshot | null,
   nowMs: number
 ): StageHealth {
@@ -200,25 +204,79 @@ function egressStage(
   if (!egress || endpointDown) {
     return stage("EGRESS", "CRITICAL", "critical", "EGRESS_WORKER_UNAVAILABLE", `Egress worker ${agent.agentId} is unavailable.`, "Inspect Egress health, Redis and LiveKit control connectivity on the assigned compositor.", agent.lastSeenAt, agent.ageMs, { host: agent.agentId, endpointDown });
   }
-  const multiplicity = egress.activeWebRequests > egress.maximumWebRequests;
-  const expectationExceedsCapacity = expectedRequestCount > egress.maximumWebRequests;
+  if (egress.activeWebRequests > egress.maximumWebRequests || expectedRequestCount > egress.maximumWebRequests) {
+    const multiplicity = egress.activeWebRequests > egress.maximumWebRequests;
+    return stage(
+      "EGRESS",
+      "CRITICAL",
+      "critical",
+      multiplicity ? "EGRESS_REQUEST_MULTIPLICITY" : "EGRESS_EXPECTATION_EXCEEDS_CAPACITY",
+      multiplicity
+        ? `Egress worker ${agent.agentId} is running ${egress.activeWebRequests} web requests above its configured maximum of ${egress.maximumWebRequests}.`
+        : `Egress worker ${agent.agentId} has ${expectedRequestCount} expected court outputs but capacity for ${egress.maximumWebRequests}.`,
+      multiplicity
+        ? "Stop the unintended extra Egress request and verify the compositor admission lock."
+        : "Move an expected court to a qualified compositor before going live.",
+      agent.lastSeenAt,
+      agent.ageMs,
+      { host: agent.agentId, activeWebRequests: egress.activeWebRequests, maximumWebRequests: egress.maximumWebRequests, expectedRequestCount }
+    );
+  }
+  const supervisor = agent.egressSupervisor;
+  const supervisorAgeMs = age(supervisor?.observedAt ?? null, nowMs);
+  if (!supervisor || supervisorAgeMs == null || supervisorAgeMs > 20_000) {
+    return stage("EGRESS", "CRITICAL", "critical", "EGRESS_SUPERVISOR_UNAVAILABLE", `Egress recovery supervision on ${agent.agentId} is unavailable or stale.`, "Inspect the Egress supervisor service before relying on automatic output recovery.", supervisor?.observedAt ?? agent.lastSeenAt, supervisorAgeMs ?? agent.ageMs, { host: agent.agentId });
+  }
+  const supervisorEvidence = {
+    host: agent.agentId,
+    supervisorStatus: supervisor.status,
+    supervisorAgeMs,
+    recoveryAttempts: supervisor.recoveryAttempts,
+    missingCount: supervisor.missingCount,
+    supervisorCourt: supervisor.court
+  };
+  if (["BUSY", "STOP_INTENT"].includes(supervisor.status)) {
+    return stage("EGRESS", "DEGRADED", "warning", "EGRESS_SUPERVISOR_BUSY", `Egress recovery supervision on ${agent.agentId} is paused for a bounded lifecycle operation.`, "Wait for the current start or stop operation to finish, then verify one owned output remains.", supervisor.observedAt, supervisorAgeMs, supervisorEvidence);
+  }
+  const invalidOwnership = !supervisor.generationKey || supervisor.court !== courtNumber || !supervisor.egressId;
+  const failedSupervisorStates = new Set(["CONTROL_UNAVAILABLE", "IDLE", "OWNERLESS_ACTIVE", "AMBIGUOUS_OWNER", "INVALID_OWNER", "AMBIGUOUS_ACTIVE", "RECOVERY_EXHAUSTED", "RECOVERY_FAILED"]);
+  if (invalidOwnership || failedSupervisorStates.has(supervisor.status)) {
+    return stage("EGRESS", "CRITICAL", "critical", "EGRESS_SUPERVISOR_FAILED", `Egress recovery supervision on ${agent.agentId} cannot prove one owned output.`, "Inspect the compositor owner state and restore exactly one verified output.", supervisor.observedAt, supervisorAgeMs, supervisorEvidence);
+  }
+  if (["MISSING_PENDING", "RECOVERING"].includes(supervisor.status)) {
+    return stage("EGRESS", "RECOVERING", "warning", "EGRESS_RECOVERING", `Egress recovery supervision on ${agent.agentId} is restoring this output.`, "Watch for bounded automatic recovery; intervene if it exhausts its two attempts.", supervisor.observedAt, supervisorAgeMs, supervisorEvidence);
+  }
+  const warmer = agent.programWarmer;
+  const warmerAgeMs = age(warmer?.observedAt ?? null, nowMs);
+  const warmerUnavailable = !warmer || warmerAgeMs == null || warmerAgeMs > 20_000;
+  const warmerInvalid = warmer != null && (
+    warmer.court !== courtNumber
+    || ["IDLE", "STOPPED"].includes(warmer.status)
+    || (warmer.status === "WAITING" && programPathReady)
+  );
+  if (warmerUnavailable || warmerInvalid) {
+    return stage(
+      "EGRESS",
+      "CRITICAL",
+      "critical",
+      "PROGRAM_BRANCH_WARMER_UNAVAILABLE",
+      `The output-owned program branch on ${agent.agentId} is not being kept ready for recovery.`,
+      "Contact the technical operator. Leave the camera streaming and do not stop the YouTube broadcast.",
+      warmer?.observedAt ?? agent.lastSeenAt,
+      warmerAgeMs ?? agent.ageMs,
+      { host: agent.agentId, warmerStatus: warmer?.status ?? null, warmerCourt: warmer?.court ?? null, programPathReady }
+    );
+  }
   const requestDeficit = Math.max(0, expectedRequestCount - egress.activeWebRequests);
   const browserStale = browserTiming(browser, nowMs).stale;
   const outputMissing = requestDeficit > 0 && browserStale;
   const idleAdmissionBlocked = egress.activeWebRequests === 0 && !egress.canAcceptRequest;
-  const critical = multiplicity || expectationExceedsCapacity || outputMissing;
+  const critical = outputMissing;
   const degraded = !critical && idleAdmissionBlocked;
   const egressState: HealthState = critical ? "CRITICAL" : degraded ? "DEGRADED" : "HEALTHY";
   const severity = critical ? "critical" : degraded ? "warning" : "info";
-  const issueCode = multiplicity ? "EGRESS_REQUEST_MULTIPLICITY"
-    : expectationExceedsCapacity ? "EGRESS_EXPECTATION_EXCEEDS_CAPACITY"
-      : outputMissing ? "EGRESS_OUTPUT_MISSING"
-        : idleAdmissionBlocked ? "EGRESS_ADMISSION_BLOCKED" : null;
-  const summary = multiplicity
-    ? `Egress worker ${agent.agentId} is running ${egress.activeWebRequests} web requests above its configured maximum of ${egress.maximumWebRequests}.`
-    : expectationExceedsCapacity
-      ? `Egress worker ${agent.agentId} has ${expectedRequestCount} expected court outputs but capacity for ${egress.maximumWebRequests}.`
-      : outputMissing
+  const issueCode = outputMissing ? "EGRESS_OUTPUT_MISSING" : idleAdmissionBlocked ? "EGRESS_ADMISSION_BLOCKED" : null;
+  const summary = outputMissing
         ? `This court's Egress output is missing while ${agent.agentId} has ${requestDeficit} fewer active requests than expected.`
         : idleAdmissionBlocked
           ? `Idle Egress worker ${agent.agentId} cannot admit a court.`
@@ -231,11 +289,7 @@ function egressStage(
     severity,
     issueCode,
     summary,
-    multiplicity
-      ? "Stop the unintended extra Egress request and verify the compositor admission lock."
-      : expectationExceedsCapacity
-        ? "Move an expected court to a qualified compositor or increase only proven Egress capacity before going live."
-        : outputMissing
+    outputMissing
           ? "Restart this court's Egress output and confirm the program browser heartbeat returns."
           : idleAdmissionBlocked
             ? "Inspect Egress availability and resource admission before starting coverage."
@@ -243,7 +297,6 @@ function egressStage(
     agent.lastSeenAt,
     agent.ageMs,
     {
-      host: agent.agentId,
       idle: egress.idle,
       canAcceptRequest: egress.canAcceptRequest,
       nativeCanAcceptRequest: egress.nativeCanAcceptRequest,
@@ -253,7 +306,8 @@ function egressStage(
       requestDeficit,
       cpuLoadRatio: egress.cpuLoadRatio,
       memoryLoadRatio: egress.memoryLoadRatio,
-      cgroupMemoryBytes: egress.cgroupMemoryBytes
+      cgroupMemoryBytes: egress.cgroupMemoryBytes,
+      ...supervisorEvidence
     }
   );
 }

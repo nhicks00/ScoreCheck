@@ -11,6 +11,11 @@ printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$FIXTURE/bin/flock"
 ln -s "$(command -v jq)" "$FIXTURE/bin/jq"
 printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
+  'if [[ "$*" == *"/api/program/renderer-binding"* ]]; then' \
+  '  printf '\''%s\n'\'' '\''{"schemaVersion":1,"provider":"vercel","origin":"https://scorecheck-abc123-test.vercel.app","deploymentId":"dpl_test123","gitSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","assetNamespace":"dpl_test123","contracts":{"programSession":"program-session-v1","overlayState":"overlay-state-v1","commentary":"commentary-v1","browserHeartbeat":"browser-heartbeat-v6"}}'\''' \
+  'else exit 2; fi' >"$FIXTURE/bin/curl"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'set -euo pipefail' \
   'if [[ "$*" == "egress list --active --json" ]]; then' \
   '  printf '\''Using protected LiveKit credentials\n'\'' >&2' \
   '  if [[ "${MOCK_ACTIVE:-0}" == 1 ]]; then printf '\''[{"egress_id":"EG_existing"}]'\''; else printf '\''null'\''; fi' \
@@ -21,13 +26,15 @@ printf '%s\n' '#!/usr/bin/env bash' \
   'else' \
   '  exit 2' \
   'fi' >"$FIXTURE/bin/lk"
-chmod 755 "$FIXTURE/bin/flock" "$FIXTURE/bin/lk" "$FIXTURE/start-court.sh" "$FIXTURE/stop-court.sh"
+chmod 755 "$FIXTURE/bin/curl" "$FIXTURE/bin/flock" "$FIXTURE/bin/lk" "$FIXTURE/start-court.sh" "$FIXTURE/stop-court.sh"
 
 printf '%s\n' \
   'LIVEKIT_API_KEY=test-key' \
   'LIVEKIT_API_SECRET=test-secret-long-enough' \
-  'PROGRAM_PAGE_BASE_URL=https://scorecheck-abc123-test.vercel.app/program' \
+  'PROGRAM_PAGE_BASE_URL=http://renderer:3000/program' \
   'PROGRAM_PAGE_TOKEN=test-program-token' \
+  'PROGRAM_RENDERER_RELEASE_ORIGIN=https://scorecheck-abc123-test.vercel.app' \
+  'PROGRAM_RENDERER_BUNDLE_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' \
   'PROGRAM_RENDERER_GIT_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
   'PROGRAM_RENDERER_DEPLOYMENT_ID=dpl_test123' \
   'EGRESS_WIDTH=1280' \
@@ -42,7 +49,7 @@ printf '%s\n' \
 PATH="$FIXTURE/bin:$PATH" "$FIXTURE/start-court.sh" 1 1080p30 event-test broadcast-test generation-test primary >"$FIXTURE/start.out" 2>&1
 grep -Fxq 'EG_new' "$FIXTURE/requests/court-1.egress-id"
 jq -e '
-  .schemaVersion == 2
+  .schemaVersion == 3
   and .event == "event-test"
   and .court == 1
   and .destinationId == "broadcast-test"
@@ -51,6 +58,9 @@ jq -e '
   and .outputProfile == "1080p30"
   and .rendererGitSha == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   and .rendererDeploymentId == "dpl_test123"
+  and .rendererRuntimeOrigin == "http://renderer:3000"
+  and .rendererReleaseOrigin == "https://scorecheck-abc123-test.vercel.app"
+  and .rendererBundleSha256 == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   and .egressId == "EG_new"
   and (.requestSha256 | test("^[a-f0-9]{64}$"))
 ' "$FIXTURE/requests/court-1.owner.json" >/dev/null
@@ -63,7 +73,7 @@ grep -Fq '"audio_bitrate": 128' "$FIXTURE/requests/court-1.json"
 grep -Fq '"audio_frequency": 48000' "$FIXTURE/requests/court-1.json"
 grep -Fq '"key_frame_interval": 2' "$FIXTURE/requests/court-1.json"
 grep -Fq '"await_start_signal": false' "$FIXTURE/requests/court-1.json"
-grep -Fq 'https://scorecheck-abc123-test.vercel.app/program/bootstrap?court=1&build=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&deployment=dpl_test123#token=test-program-token' "$FIXTURE/requests/court-1.json"
+grep -Fq 'http://renderer:3000/program/bootstrap?court=1&build=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&deployment=dpl_test123#token=test-program-token' "$FIXTURE/requests/court-1.json"
 if grep -Fq '?token=' "$FIXTURE/requests/court-1.json"; then
   printf 'FAIL: program token remained in the request query string\n' >&2
   exit 1
@@ -83,7 +93,7 @@ printf '%s\n' \
   'COURT_1_YOUTUBE_KEY=test-stream-key' >"$FIXTURE/requests/court-1.backup.env"
 chmod 600 "$FIXTURE/requests/court-1.backup.env"
 PATH="$FIXTURE/bin:$PATH" "$FIXTURE/start-court.sh" 1 1080p30 event-test broadcast-test backup-generation backup >"$FIXTURE/backup.out" 2>&1
-jq -e '.schemaVersion == 2 and .destinationRole == "backup" and .outputGeneration == "backup-generation"' "$FIXTURE/requests/court-1.owner.json" >/dev/null
+jq -e '.schemaVersion == 3 and .destinationRole == "backup" and .outputGeneration == "backup-generation"' "$FIXTURE/requests/court-1.owner.json" >/dev/null
 grep -Fq 'rtmps://b.rtmps.youtube.com/live2/test-stream-key' "$FIXTURE/requests/court-1.json"
 PATH="$FIXTURE/bin:$PATH" "$FIXTURE/stop-court.sh" 1 EG_new >"$FIXTURE/backup-stop.out" 2>&1
 

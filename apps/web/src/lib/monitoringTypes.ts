@@ -118,6 +118,12 @@ export type MonitorBrowser = {
     nackCount: number | null;
     pliCount: number | null;
     firCount: number | null;
+    bufferedAheadMs: number | null;
+    bufferedRangeCount: number | null;
+    hlsCreatedInstances: number | null;
+    hlsDestroyedInstances: number | null;
+    hlsActiveInstances: number | null;
+    jsHeapUsedBytes: number | null;
     reconnectCount: number;
     reloadCount: number;
   };

@@ -1,3 +1,4 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -67,5 +68,113 @@ describe("agent collector telemetry failures", () => {
 
     expect(snapshot.ffmpegBranches).toEqual([]);
     expect(snapshot.collectionErrors).toContain("FFMPEG_PROGRESS_UNAVAILABLE");
+  });
+
+  it("collects a strict host-exported Egress supervisor state", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "scorecheck-egress-supervisor-"));
+    const statePath = path.join(directory, "state.json");
+    try {
+      await writeFile(statePath, JSON.stringify({
+        schemaVersion: 1,
+        generationKey: "a".repeat(64),
+        missingCount: 0,
+        recoveryAttempts: 1,
+        status: "HEALTHY",
+        detail: "The exact owned Egress is active.",
+        court: 1,
+        egressId: "EG_Test123",
+        observedAt: "2026-07-12T18:00:00.000Z"
+      }));
+      const config = loadAgentConfig({
+        MONITOR_AGENT_ID: "compositor-a",
+        MONITOR_AGENT_ROLE: "compositor",
+        MONITOR_AGENT_TOKEN: "x".repeat(24),
+        EGRESS_SUPERVISOR_STATE_PATH: statePath
+      });
+
+      const snapshot = await new AgentCollector(config).collect();
+
+      expect(snapshot.egressSupervisor).toMatchObject({ status: "HEALTHY", court: 1, egressId: "EG_Test123", recoveryAttempts: 1 });
+      expect(snapshot.collectionErrors).not.toContain("EGRESS_SUPERVISOR_UNAVAILABLE");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed on malformed Egress supervisor state", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "scorecheck-egress-supervisor-"));
+    const statePath = path.join(directory, "state.json");
+    try {
+      await writeFile(statePath, '{"schemaVersion":1,"status":"HEALTHY"}');
+      const config = loadAgentConfig({
+        MONITOR_AGENT_ID: "compositor-a",
+        MONITOR_AGENT_ROLE: "compositor",
+        MONITOR_AGENT_TOKEN: "x".repeat(24),
+        EGRESS_SUPERVISOR_STATE_PATH: statePath
+      });
+
+      const snapshot = await new AgentCollector(config).collect();
+
+      expect(snapshot.egressSupervisor).toBeNull();
+      expect(snapshot.collectionErrors).toContain("EGRESS_SUPERVISOR_UNAVAILABLE");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("collects strict output-owned program-warmer state", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "scorecheck-program-warmer-"));
+    const statePath = path.join(directory, "state.json");
+    try {
+      await writeFile(statePath, JSON.stringify({
+        schemaVersion: 1,
+        court: 1,
+        status: "WARM",
+        ffmpegPid: 1234,
+        restartCount: 2,
+        observedAt: "2026-07-12T18:00:00.000Z"
+      }));
+      const config = loadAgentConfig({
+        MONITOR_AGENT_ID: "compositor-a",
+        MONITOR_AGENT_ROLE: "compositor",
+        MONITOR_AGENT_TOKEN: "x".repeat(24),
+        PROGRAM_WARMER_STATE_PATH: statePath
+      });
+
+      const snapshot = await new AgentCollector(config).collect();
+
+      expect(snapshot.programWarmer).toMatchObject({ status: "WARM", court: 1, ffmpegPid: 1234, restartCount: 2 });
+      expect(snapshot.collectionErrors).not.toContain("PROGRAM_WARMER_UNAVAILABLE");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed on semantically malformed program-warmer state", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "scorecheck-program-warmer-"));
+    const statePath = path.join(directory, "state.json");
+    try {
+      await writeFile(statePath, JSON.stringify({
+        schemaVersion: 1,
+        court: 1,
+        status: "WARM",
+        ffmpegPid: null,
+        restartCount: 2,
+        observedAt: "2026-07-12T18:00:00.000Z"
+      }));
+      const config = loadAgentConfig({
+        MONITOR_AGENT_ID: "compositor-a",
+        MONITOR_AGENT_ROLE: "compositor",
+        MONITOR_AGENT_TOKEN: "x".repeat(24),
+        PROGRAM_WARMER_STATE_PATH: statePath
+      });
+
+      const snapshot = await new AgentCollector(config).collect();
+
+      expect(snapshot.programWarmer).toBeNull();
+      expect(snapshot.collectionErrors).toContain("PROGRAM_WARMER_UNAVAILABLE");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

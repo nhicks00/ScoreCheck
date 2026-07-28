@@ -53,6 +53,22 @@ describe("operator notification copy", () => {
     expect(JSON.stringify(copy)).not.toMatch(/egress|worker|web request|compositor/i);
   });
 
+  it("explains automatic output recovery without telling the operator to restart a camera", () => {
+    const recovering = operatorNotificationCopy(incident({ stage: "EGRESS", issueCode: "EGRESS_RECOVERING" }));
+    expect(recovering.problem).toBe("ScoreCheck is automatically restarting Camera 4's broadcast output.");
+    expect(recovering.action).toContain("Leave the camera streaming");
+
+    const failed = operatorNotificationCopy(incident({ stage: "EGRESS", issueCode: "EGRESS_SUPERVISOR_FAILED" }));
+    expect(failed.problem).toBe("ScoreCheck cannot automatically restart Camera 4's broadcast output.");
+    expect(failed.action).toBe("Leave the camera streaming and contact the technical operator. Do not restart the camera for this alert.");
+    expect(JSON.stringify(failed)).not.toMatch(/egress|supervisor|redis|worker/i);
+
+    const warmer = operatorNotificationCopy(incident({ stage: "EGRESS", issueCode: "PROGRAM_BRANCH_WARMER_UNAVAILABLE" }));
+    expect(warmer.problem).toBe("ScoreCheck may not recover Camera 4's broadcast smoothly after an interruption.");
+    expect(warmer.action).toContain("Do not stop the YouTube broadcast");
+    expect(JSON.stringify(warmer)).not.toMatch(/egress|warmer|branch|ffmpeg/i);
+  });
+
   it("gives a commentator a concrete reconnect action", () => {
     const copy = operatorNotificationCopy(incident({ stage: "COMMENTARY", issueCode: "COMMENTARY_TRACK_MUTED" }));
     expect(copy.problem).toBe("Commentator sound is missing for Camera 4.");

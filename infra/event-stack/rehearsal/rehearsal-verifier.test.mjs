@@ -19,7 +19,7 @@ function snapshot(mode) {
     agent({ agentId: "spare", role: "worker", assignedCourts: [], state: "HEALTHY", nativeServices: { egress: { idle: true, canAcceptRequest: true, activeWebRequests: 0, maximumWebRequests: 1, cpuLoadRatio: 0, memoryLoadRatio: 0 } } })
   ];
   return {
-    version: 5,
+    version: 6,
     generatedAt: new Date(now).toISOString(),
     collector: { agentsExpected: 12, agentsFresh: 12 },
     event: null,

@@ -142,7 +142,7 @@ function context() {
     },
     broadcastId: "broadcast-1",
     primaryOwner: {
-      schemaVersion: 2,
+      schemaVersion: 3,
       event: "event-test",
       court: 1,
       destinationId: "broadcast-1",
@@ -151,6 +151,9 @@ function context() {
       outputProfile: "1080p30",
       rendererGitSha: "a".repeat(40),
       rendererDeploymentId: "dpl_test123",
+      rendererRuntimeOrigin: "http://renderer:3000",
+      rendererReleaseOrigin: "https://scorecheck-test.vercel.app",
+      rendererBundleSha256: "c".repeat(64),
       egressId: "EG_primary1",
       requestSha256: "b".repeat(64),
       startedAt: "2026-07-22T00:00:00Z"

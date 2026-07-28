@@ -774,6 +774,123 @@ tests:
             exp_annotations:
               summary: Camera 4's required Program viewer is intermittently freezing.
               first_action: Compare Chrome freeze, frame-drop, jitter-buffer, preview, and host-load telemetry to isolate the affected stage.
+
+  - name: output-owned program warmer is mandatory only for a live broadcast
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_compositor_court_assignment{agent="warmer-a",court="1"}'
+        values: '1 1 1 1 1 1 1'
+      - series: 'scorecheck_court_broadcast_live{court="1"}'
+        values: '1 1 1 1 1 1 1'
+      - series: 'scorecheck_program_warmer_present{agent="warmer-a"}'
+        values: '0 0 0 0 0 0 0'
+      - series: 'scorecheck_program_warmer_fresh{agent="warmer-a"}'
+        values: '0 0 0 0 0 0 0'
+
+      - series: 'scorecheck_compositor_court_assignment{agent="warmer-idle",court="2"}'
+        values: '1 1 1 1 1 1 1'
+      - series: 'scorecheck_court_broadcast_live{court="2"}'
+        values: '1 1 1 1 1 1 1'
+      - series: 'scorecheck_program_warmer_present{agent="warmer-idle"}'
+        values: '1 1 1 1 1 1 1'
+      - series: 'scorecheck_program_warmer_fresh{agent="warmer-idle"}'
+        values: '1 1 1 1 1 1 1'
+      - series: 'scorecheck_program_warmer_state{agent="warmer-idle",status="IDLE"}'
+        values: '1 1 1 1 1 1 1'
+
+      - series: 'scorecheck_compositor_court_assignment{agent="warmer-off",court="3"}'
+        values: '1 1 1 1 1 1 1'
+      - series: 'scorecheck_court_broadcast_live{court="3"}'
+        values: '0 0 0 0 0 0 0'
+      - series: 'scorecheck_program_warmer_present{agent="warmer-off"}'
+        values: '0 0 0 0 0 0 0'
+      - series: 'scorecheck_program_warmer_fresh{agent="warmer-off"}'
+        values: '0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 25s
+        alertname: ScoreCheckProgramWarmerUnavailable
+        exp_alerts:
+          - exp_labels:
+              agent: warmer-a
+              severity: critical
+              stage: EGRESS
+              issue_code: PROGRAM_BRANCH_WARMER_UNAVAILABLE
+              root_dependency: warmer-a
+            exp_annotations:
+              summary: The output-owned program branch is not ready for recovery on warmer-a.
+              first_action: Leave the camera streaming and inspect the program-warmer service without stopping YouTube.
+          - exp_labels:
+              agent: warmer-idle
+              severity: critical
+              stage: EGRESS
+              issue_code: PROGRAM_BRANCH_WARMER_UNAVAILABLE
+              root_dependency: warmer-idle
+            exp_annotations:
+              summary: The output-owned program branch is not ready for recovery on warmer-idle.
+              first_action: Leave the camera streaming and inspect the program-warmer service without stopping YouTube.
+
+  - name: Egress supervisor availability recovery and terminal failure are durable
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_compositor_court_assignment{agent="supervisor-a",court="1"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_court_broadcast_live{court="1"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_egress_supervisor_present{agent="supervisor-a"}'
+        values: '0 0 0 0 0 0 0 0'
+      - series: 'scorecheck_egress_supervisor_fresh{agent="supervisor-a"}'
+        values: '0 0 0 0 0 0 0 0'
+
+      - series: 'scorecheck_compositor_court_assignment{agent="supervisor-b",court="2"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_court_broadcast_live{court="2"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_egress_supervisor_state{agent="supervisor-b",status="RECOVERY_EXHAUSTED"}'
+        values: '1 1 1 1 1 1 1 1'
+
+      - series: 'scorecheck_compositor_court_assignment{agent="supervisor-c",court="3"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_court_broadcast_live{court="3"}'
+        values: '1 1 1 1 1 1 1 1'
+      - series: 'scorecheck_egress_supervisor_state{agent="supervisor-c",status="RECOVERING"}'
+        values: '1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 25s
+        alertname: ScoreCheckEgressSupervisorUnavailable
+        exp_alerts:
+          - exp_labels:
+              agent: supervisor-a
+              severity: critical
+              stage: EGRESS
+              issue_code: EGRESS_SUPERVISOR_UNAVAILABLE
+              root_dependency: supervisor-a
+            exp_annotations:
+              summary: Automatic output recovery is unavailable on supervisor-a.
+              first_action: Inspect the Egress supervisor service before relying on automatic output recovery.
+      - eval_time: 10s
+        alertname: ScoreCheckEgressSupervisorFailed
+        exp_alerts:
+          - exp_labels:
+              agent: supervisor-b
+              severity: critical
+              stage: EGRESS
+              issue_code: EGRESS_SUPERVISOR_FAILED
+              root_dependency: supervisor-b
+            exp_annotations:
+              summary: Automatic output recovery cannot prove one owned stream on supervisor-b.
+              first_action: Inspect the compositor owner state and restore exactly one verified output.
+      - eval_time: 20s
+        alertname: ScoreCheckEgressRecovering
+        exp_alerts:
+          - exp_labels:
+              agent: supervisor-c
+              severity: warning
+              stage: EGRESS
+              issue_code: EGRESS_RECOVERING
+              root_dependency: supervisor-c
+            exp_annotations:
+              summary: Automatic output recovery is running on supervisor-c.
+              first_action: Watch for bounded recovery; intervene if the supervisor exhausts its two attempts.
       - eval_time: 4m
         alertname: ScoreCheckProgramFreezeRatioCritical
         exp_alerts:

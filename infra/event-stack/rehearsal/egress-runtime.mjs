@@ -166,7 +166,7 @@ export function parseActiveEgress(raw) {
 export function parseEgressOwnership(raw) {
   let value;
   try { value = JSON.parse(raw.trim()); } catch { throw new Error("Egress ownership is invalid JSON"); }
-  if (!value || value.schemaVersion !== 2 || !Number.isInteger(value.court) || value.court < 1 || value.court > 8) throw new Error("Egress ownership is invalid");
+  if (!value || value.schemaVersion !== 3 || !Number.isInteger(value.court) || value.court < 1 || value.court > 8) throw new Error("Egress ownership is invalid");
   validateIdentifier(value.event, "event");
   validateIdentifier(value.destinationId, "destination id");
   validateDestinationRole(value.destinationRole);
@@ -174,6 +174,7 @@ export function parseEgressOwnership(raw) {
   validateProfile(value.outputProfile);
   if (!/^[a-f0-9]{40}$/.test(value.rendererGitSha ?? "")) throw new Error("Egress ownership renderer Git SHA is invalid");
   if (!/^dpl_[A-Za-z0-9]+$/.test(value.rendererDeploymentId ?? "")) throw new Error("Egress ownership renderer deployment id is invalid");
+  validateRendererRuntime(value);
   validateEgressId(value.egressId);
   if (!/^[a-f0-9]{64}$/.test(value.requestSha256 ?? "")) throw new Error("Egress ownership request digest is invalid");
   if (!Number.isFinite(Date.parse(value.startedAt ?? ""))) throw new Error("Egress ownership start timestamp is invalid");
@@ -196,14 +197,26 @@ function validateExpectedOwner(value) {
   validateIdentifier(value.outputGeneration, "output generation");
   if (!/^[a-f0-9]{40}$/.test(value.rendererGitSha ?? "")) throw new Error("Egress owner renderer Git SHA is invalid");
   if (!/^dpl_[A-Za-z0-9]+$/.test(value.rendererDeploymentId ?? "")) throw new Error("Egress owner renderer deployment id is invalid");
+  validateRendererRuntime(value);
   return {
     event: value.event,
     destinationId: value.destinationId,
     destinationRole: value.destinationRole,
     outputGeneration: value.outputGeneration,
     rendererGitSha: value.rendererGitSha,
-    rendererDeploymentId: value.rendererDeploymentId
+    rendererDeploymentId: value.rendererDeploymentId,
+    rendererRuntimeOrigin: value.rendererRuntimeOrigin,
+    rendererReleaseOrigin: value.rendererReleaseOrigin,
+    rendererBundleSha256: value.rendererBundleSha256
   };
+}
+
+function validateRendererRuntime(value) {
+  if (value.rendererRuntimeOrigin !== "http://renderer:3000"
+    || !/^https:\/\/[a-z0-9-]+[.]vercel[.]app$/.test(value.rendererReleaseOrigin ?? "")
+    || !/^[a-f0-9]{64}$/.test(value.rendererBundleSha256 ?? "")) {
+    throw new Error("Egress owner local renderer binding is invalid");
+  }
 }
 
 function validateDestinationRole(value) {

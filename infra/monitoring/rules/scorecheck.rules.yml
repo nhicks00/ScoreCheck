@@ -627,6 +627,101 @@ groups:
           summary: "Egress worker {{ $labels.agent }} has more active web requests than its configured maximum."
           first_action: "Stop the unintended extra Egress request and verify the compositor admission lock."
 
+      - alert: ScoreCheckEgressSupervisorUnavailable
+        expr: |
+          (
+            (scorecheck_egress_supervisor_present == 0)
+            or on (agent) (scorecheck_egress_supervisor_fresh == 0)
+          )
+          and on (agent)
+          (
+            max by (agent) (
+              scorecheck_compositor_court_assignment
+              * on (court) group_left scorecheck_court_broadcast_live
+            ) == 1
+          )
+        for: 20s
+        labels:
+          severity: critical
+          stage: EGRESS
+          issue_code: EGRESS_SUPERVISOR_UNAVAILABLE
+          root_dependency: "{{ $labels.agent }}"
+        annotations:
+          summary: "Automatic output recovery is unavailable on {{ $labels.agent }}."
+          first_action: "Inspect the Egress supervisor service before relying on automatic output recovery."
+
+      - alert: ScoreCheckEgressSupervisorFailed
+        expr: |
+          (
+            max by (agent) (
+              scorecheck_egress_supervisor_state{status=~"CONTROL_UNAVAILABLE|IDLE|OWNERLESS_ACTIVE|AMBIGUOUS_OWNER|INVALID_OWNER|AMBIGUOUS_ACTIVE|RECOVERY_EXHAUSTED|RECOVERY_FAILED"}
+            ) == 1
+          )
+          and on (agent)
+          (
+            max by (agent) (
+              scorecheck_compositor_court_assignment
+              * on (court) group_left scorecheck_court_broadcast_live
+            ) == 1
+          )
+        for: 5s
+        labels:
+          severity: critical
+          stage: EGRESS
+          issue_code: EGRESS_SUPERVISOR_FAILED
+          root_dependency: "{{ $labels.agent }}"
+        annotations:
+          summary: "Automatic output recovery cannot prove one owned stream on {{ $labels.agent }}."
+          first_action: "Inspect the compositor owner state and restore exactly one verified output."
+
+      - alert: ScoreCheckProgramWarmerUnavailable
+        expr: |
+          (
+            (scorecheck_program_warmer_present == 0)
+            or on (agent) (scorecheck_program_warmer_fresh == 0)
+            or on (agent) (max by (agent) (scorecheck_program_warmer_state{status=~"IDLE|STOPPED"}) == 1)
+          )
+          and on (agent)
+          (
+            max by (agent) (
+              scorecheck_compositor_court_assignment
+              * on (court) group_left scorecheck_court_broadcast_live
+            ) == 1
+          )
+        for: 20s
+        labels:
+          severity: critical
+          stage: EGRESS
+          issue_code: PROGRAM_BRANCH_WARMER_UNAVAILABLE
+          root_dependency: "{{ $labels.agent }}"
+        annotations:
+          summary: "The output-owned program branch is not ready for recovery on {{ $labels.agent }}."
+          first_action: "Leave the camera streaming and inspect the program-warmer service without stopping YouTube."
+
+      - alert: ScoreCheckEgressRecovering
+        expr: |
+          (
+            max by (agent) (
+              scorecheck_egress_supervisor_state{status=~"MISSING_PENDING|RECOVERING"}
+            ) == 1
+          )
+          and on (agent)
+          (
+            max by (agent) (
+              scorecheck_compositor_court_assignment
+              * on (court) group_left scorecheck_court_broadcast_live
+            ) == 1
+          )
+        for: 15s
+        labels:
+          severity: warning
+          stage: EGRESS
+          issue_code: EGRESS_RECOVERING
+          root_dependency: "{{ $labels.agent }}"
+        annotations:
+          summary: "Automatic output recovery is running on {{ $labels.agent }}."
+          first_action: "Watch for bounded recovery; intervene if the supervisor exhausts its two attempts."
+
       - alert: ScoreCheckLiveKitPacketDrops
         expr: increase(scorecheck_livekit_packets_dropped[1m]) > 10
         for: 15s

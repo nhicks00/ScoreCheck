@@ -77,6 +77,30 @@ export function operatorNotificationCopy(incident: IncidentSnapshot): OperatorNo
     return { ...base, problem: `YouTube reports a problem with ${camera ?? "a ScoreCheck"} broadcast.`, action: `Open YouTube Live Control Room and check that the broadcast is receiving video and sound.`, recovery: `YouTube reports that ${camera ?? "the broadcast"} is healthy again. No action is needed.` };
   }
   if (incident.stage === "EGRESS" || issue.startsWith("EGRESS_")) {
+    if (issue === "PROGRAM_BRANCH_WARMER_UNAVAILABLE") {
+      return {
+        ...base,
+        problem: `ScoreCheck may not recover ${camera ?? "a camera"}'s broadcast smoothly after an interruption.`,
+        action: "Leave the camera streaming and contact the technical operator. Do not stop the YouTube broadcast.",
+        recovery: `${camera ?? "The camera"}'s automatic stream recovery is ready again. No action is needed.`
+      };
+    }
+    if (issue === "EGRESS_RECOVERING") {
+      return {
+        ...base,
+        problem: `ScoreCheck is automatically restarting ${camera ?? "a camera"}'s broadcast output.`,
+        action: "Leave the camera streaming and wait one minute. Contact the technical operator only if no recovery message arrives.",
+        recovery: `${camera ?? "The camera"}'s broadcast output restarted successfully. No action is needed.`
+      };
+    }
+    if (["EGRESS_SUPERVISOR_UNAVAILABLE", "EGRESS_SUPERVISOR_FAILED"].includes(issue)) {
+      return {
+        ...base,
+        problem: `ScoreCheck cannot automatically restart ${camera ?? "a camera"}'s broadcast output.`,
+        action: "Leave the camera streaming and contact the technical operator. Do not restart the camera for this alert.",
+        recovery: `Automatic broadcast recovery for ${camera ?? "the camera"} is working again. No action is needed.`
+      };
+    }
     const capacity = issue.includes("CAPACITY");
     return {
       ...base,

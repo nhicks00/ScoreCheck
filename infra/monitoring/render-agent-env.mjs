@@ -33,6 +33,8 @@ const values = {
   LIVEKIT_METRICS_URL: optionalHttpUrl("LIVEKIT_METRICS_URL"),
   EGRESS_METRICS_URL: optionalHttpUrl("EGRESS_METRICS_URL"),
   EGRESS_HEALTH_URL: optionalHttpUrl("EGRESS_HEALTH_URL"),
+  EGRESS_SUPERVISOR_STATE_PATH: optionalAbsolutePath("EGRESS_SUPERVISOR_STATE_PATH"),
+  PROGRAM_WARMER_STATE_PATH: optionalAbsolutePath("PROGRAM_WARMER_STATE_PATH"),
   MONITOR_EGRESS_MAX_WEB_REQUESTS: integer(process.env.MONITOR_EGRESS_MAX_WEB_REQUESTS ?? "1", 1, 32),
   MONITOR_CONTENT_ANALYZER_COURTS: contentAnalyzerCourts.join(","),
   MONITOR_CONTENT_ANALYZER_RTSP_BASE_URL: contentAnalyzerRtspBaseUrl,
@@ -88,6 +90,15 @@ function optionalRtspOrigin(name) {
     throw new Error(`${name} must be a credential-free RTSP origin.`);
   }
   return parsed.toString().replace(/\/+$/, "");
+}
+
+function optionalAbsolutePath(name) {
+  const value = process.env[name]?.trim();
+  if (!value) return "";
+  if (!value.startsWith("/") || value.length > 512 || /[\r\n\0]/.test(value) || value.split("/").includes("..")) {
+    throw new Error(`${name} must be an absolute path without traversal.`);
+  }
+  return value;
 }
 
 function executablePath(value) {

@@ -44,6 +44,12 @@ const browserFramesDropped = new Gauge({ name: "scorecheck_program_browser_frame
 const browserFreezeDuration = new Gauge({ name: "scorecheck_program_browser_freeze_duration_seconds", help: "Program browser cumulative WebRTC freeze duration for the current page connection.", labelNames: ["court"], registers: [registry] });
 const browserReconnects = new Gauge({ name: "scorecheck_program_browser_reconnects", help: "Program browser reconnect count for the current tab lineage.", labelNames: ["court"], registers: [registry] });
 const browserReloads = new Gauge({ name: "scorecheck_program_browser_reloads", help: "Program browser reload count for the current tab lineage.", labelNames: ["court"], registers: [registry] });
+const browserHlsBufferedAhead = new Gauge({ name: "scorecheck_program_hls_buffered_ahead_seconds", help: "Program browser HLS media buffered ahead of the current playhead.", labelNames: ["court"], registers: [registry] });
+const browserHlsBufferedRanges = new Gauge({ name: "scorecheck_program_hls_buffered_ranges", help: "Program browser HLS buffered time ranges.", labelNames: ["court"], registers: [registry] });
+const browserHlsInstancesCreated = new Gauge({ name: "scorecheck_program_hls_instances_created", help: "HLS.js instances created during the current Program page session.", labelNames: ["court"], registers: [registry] });
+const browserHlsInstancesDestroyed = new Gauge({ name: "scorecheck_program_hls_instances_destroyed", help: "HLS.js instances destroyed during the current Program page session.", labelNames: ["court"], registers: [registry] });
+const browserHlsInstancesActive = new Gauge({ name: "scorecheck_program_hls_instances_active", help: "HLS.js instances currently owned by the Program page.", labelNames: ["court"], registers: [registry] });
+const browserJsHeap = new Gauge({ name: "scorecheck_program_browser_js_heap_bytes", help: "Program renderer JavaScript heap currently used when Chromium exposes the measurement.", labelNames: ["court"], registers: [registry] });
 const browserFramesReceivedTotal = new Counter({ name: "scorecheck_program_browser_frames_received_total", help: "Reset-safe program browser video frames received.", labelNames: ["court"], registers: [registry] });
 const browserFramesDecodedTotal = new Counter({ name: "scorecheck_program_browser_frames_decoded_total", help: "Reset-safe program browser video frames decoded.", labelNames: ["court"], registers: [registry] });
 const browserFramesDroppedTotal = new Counter({ name: "scorecheck_program_browser_frames_dropped_total", help: "Reset-safe program browser video frames dropped before presentation.", labelNames: ["court"], registers: [registry] });
@@ -528,6 +534,12 @@ async function pollAllOnce() {
     setOptionalGauge(browserFreezeDuration, labels, browser.video.totalFreezesDurationMs == null ? null : browser.video.totalFreezesDurationMs / 1_000);
     browserReconnects.set(labels, browser.video.reconnectCount);
     browserReloads.set(labels, browser.video.reloadCount);
+    setOptionalGauge(browserHlsBufferedAhead, labels, browser.video.bufferedAheadMs == null ? null : browser.video.bufferedAheadMs / 1_000);
+    setOptionalGauge(browserHlsBufferedRanges, labels, browser.video.bufferedRangeCount);
+    setOptionalGauge(browserHlsInstancesCreated, labels, browser.video.hlsCreatedInstances);
+    setOptionalGauge(browserHlsInstancesDestroyed, labels, browser.video.hlsDestroyedInstances);
+    setOptionalGauge(browserHlsInstancesActive, labels, browser.video.hlsActiveInstances);
+    setOptionalGauge(browserJsHeap, labels, browser.video.jsHeapUsedBytes);
     const browserDeltas = browserCounterAccumulator.observe(court.courtNumber, {
       pageLoadedAt: browser.pageLoadedAt,
       framesReceived: browser.video.framesReceived,

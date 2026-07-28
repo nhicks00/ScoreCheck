@@ -13,12 +13,13 @@ import { IncidentManager } from "./incidents.js";
 const observedAt = "2026-07-12T18:00:00.000Z";
 const nowMs = Date.parse(observedAt) + 1_000;
 const mediaTarget: AgentTarget = { id: "bvm-preview-01", role: "mediamtx", url: "http://media", token: "abcdefghijklmnopqrstuvwxyz", assignedCourts: [] };
-const compositorTargets: AgentTarget[] = [
-  { id: "bvm-compositor-a", role: "compositor", url: "http://a", token: "abcdefghijklmnopqrstuvwxyz", assignedCourts: [1, 2] },
-  { id: "bvm-compositor-b", role: "compositor", url: "http://b", token: "abcdefghijklmnopqrstuvwxyz", assignedCourts: [3, 4] },
-  { id: "bvm-compositor-c", role: "compositor", url: "http://c", token: "abcdefghijklmnopqrstuvwxyz", assignedCourts: [5, 6] },
-  { id: "bvm-compositor-d", role: "compositor", url: "http://d", token: "abcdefghijklmnopqrstuvwxyz", assignedCourts: [7, 8] }
-];
+const compositorTargets: AgentTarget[] = Array.from({ length: 8 }, (_, index) => ({
+  id: `bvm-compositor-${index + 1}`,
+  role: "compositor",
+  url: `http://compositor-${index + 1}`,
+  token: "abcdefghijklmnopqrstuvwxyz",
+  assignedCourts: [index + 1]
+}));
 const targets = [mediaTarget, ...compositorTargets];
 
 describe("deterministic eight-court fault gate", () => {
@@ -57,35 +58,67 @@ describe("deterministic eight-court fault gate", () => {
     expect(stage(snapshot, 2, "PROGRAM_BROWSER")?.state).toBe("HEALTHY");
   });
 
-  it("attributes a stopped Egress output to the stale court while its paired court remains healthy", () => {
+  it("attributes a stopped Egress output to its court while peers remain healthy", () => {
     const runtimes = healthyRuntimes(mediaAgent());
-    const compositor = runtimes.get("bvm-compositor-b")?.snapshot;
+    const compositor = runtimes.get("bvm-compositor-3")?.snapshot;
     if (!compositor?.nativeServices.egress) throw new Error("Missing compositor fixture.");
     compositor.nativeServices.egress.activeWebRequests = 1;
     compositor.nativeServices.egress.idle = false;
     compositor.nativeServices.egress.canAcceptRequest = true;
+    if (!compositor.egressSupervisor) throw new Error("Missing supervisor fixture.");
+    compositor.egressSupervisor.status = "MISSING_PENDING";
+    compositor.egressSupervisor.missingCount = 1;
     const browsers = healthyBrowsers();
     browsers.delete(3);
     const snapshot = buildMonitorSnapshot(targets, runtimes, 8, nowMs, [], browsers, controlPlane(), youtube());
     expect(criticalCourts(snapshot)).toEqual([3]);
-    expect(stage(snapshot, 3, "EGRESS")?.issueCode).toBe("EGRESS_OUTPUT_MISSING");
+    expect(stage(snapshot, 3, "EGRESS")?.issueCode).toBe("EGRESS_RECOVERING");
     expect(stage(snapshot, 4, "EGRESS")?.state).toBe("HEALTHY");
     expect(stage(snapshot, 4, "PROGRAM_BROWSER")?.state).toBe("HEALTHY");
   });
 
   it("fails closed when two expected court outputs exceed a compositor's qualified capacity", () => {
     const runtimes = healthyRuntimes(mediaAgent());
-    const compositor = runtimes.get("bvm-compositor-b")?.snapshot;
+    const overloadedTarget = { ...compositorTargets[2]!, assignedCourts: [3, 4] };
+    const compositor = runtimes.get(overloadedTarget.id)?.snapshot;
     if (!compositor?.nativeServices.egress) throw new Error("Missing compositor fixture.");
+    compositor.assignedCourts = [3, 4];
+    runtimes.set(overloadedTarget.id, { target: overloadedTarget, snapshot: compositor, lastSeenAt: observedAt, lastErrorAt: null });
+    const overloadedTargets = targets.map((target) => target.id === overloadedTarget.id ? overloadedTarget : target).filter((target) => target.id !== "bvm-compositor-4");
+    runtimes.delete("bvm-compositor-4");
     compositor.nativeServices.egress.activeWebRequests = 1;
     compositor.nativeServices.egress.maximumWebRequests = 1;
     compositor.nativeServices.egress.idle = false;
     compositor.nativeServices.egress.canAcceptRequest = false;
-    const snapshot = buildMonitorSnapshot(targets, runtimes, 8, nowMs, [], healthyBrowsers(), controlPlane(), youtube());
+    const snapshot = buildMonitorSnapshot(overloadedTargets, runtimes, 8, nowMs, [], healthyBrowsers(), controlPlane(), youtube());
     expect(criticalCourts(snapshot)).toEqual([3, 4]);
     expect(stage(snapshot, 3, "EGRESS")?.issueCode).toBe("EGRESS_EXPECTATION_EXCEEDS_CAPACITY");
     expect(stage(snapshot, 4, "EGRESS")?.issueCode).toBe("EGRESS_EXPECTATION_EXCEEDS_CAPACITY");
     expect(stage(snapshot, 2, "EGRESS")?.state).toBe("HEALTHY");
+  });
+
+  it.each([
+    ["RECOVERY_EXHAUSTED", "EGRESS_SUPERVISOR_FAILED"],
+    ["AMBIGUOUS_ACTIVE", "EGRESS_SUPERVISOR_FAILED"]
+  ] as const)("fails the exact court when its Egress supervisor reports %s", (status, issueCode) => {
+    const runtimes = healthyRuntimes(mediaAgent());
+    const compositor = runtimes.get("bvm-compositor-1")?.snapshot;
+    if (!compositor?.egressSupervisor) throw new Error("Missing supervisor fixture.");
+    compositor.egressSupervisor.status = status;
+    const snapshot = buildMonitorSnapshot(targets, runtimes, 8, nowMs, [], healthyBrowsers(), controlPlane(), youtube());
+    expect(criticalCourts(snapshot)).toEqual([1]);
+    expect(stage(snapshot, 1, "EGRESS")?.issueCode).toBe(issueCode);
+    expect(stage(snapshot, 2, "EGRESS")?.state).toBe("HEALTHY");
+  });
+
+  it("fails the exact court when its Egress supervisor state is stale", () => {
+    const runtimes = healthyRuntimes(mediaAgent());
+    const compositor = runtimes.get("bvm-compositor-1")?.snapshot;
+    if (!compositor?.egressSupervisor) throw new Error("Missing supervisor fixture.");
+    compositor.egressSupervisor.observedAt = "2026-07-12T17:59:00.000Z";
+    const snapshot = buildMonitorSnapshot(targets, runtimes, 8, nowMs, [], healthyBrowsers(), controlPlane(), youtube());
+    expect(criticalCourts(snapshot)).toEqual([1]);
+    expect(stage(snapshot, 1, "EGRESS")?.issueCode).toBe("EGRESS_SUPERVISOR_UNAVAILABLE");
   });
 
   it("keeps a missing program browser isolated when Egress request counts remain correct", () => {
@@ -164,16 +197,15 @@ describe("deterministic eight-court fault gate", () => {
     expect(stage(snapshot, 3, "YOUTUBE")?.state).toBe("HEALTHY");
   });
 
-  it("limits a compositor failure to its assigned court pair", () => {
+  it("limits a compositor failure to its assigned court", () => {
     const runtimes = healthyRuntimes(mediaAgent());
     const failed = compositorTargets[1]!;
     runtimes.set(failed.id, { target: failed, snapshot: null, lastSeenAt: null, lastErrorAt: observedAt });
     const snapshot = buildMonitorSnapshot(targets, runtimes, 8, nowMs, [], healthyBrowsers(), controlPlane(), youtube());
-    expect(criticalCourts(snapshot)).toEqual([3, 4]);
-    expect(stage(snapshot, 3, "EGRESS")?.issueCode).toBe("EGRESS_HOST_UNREACHABLE");
-    expect(stage(snapshot, 4, "EGRESS")?.issueCode).toBe("EGRESS_HOST_UNREACHABLE");
-    expect(stage(snapshot, 2, "EGRESS")?.state).toBe("HEALTHY");
-    expect(stage(snapshot, 5, "EGRESS")?.state).toBe("HEALTHY");
+    expect(criticalCourts(snapshot)).toEqual([2]);
+    expect(stage(snapshot, 2, "EGRESS")?.issueCode).toBe("EGRESS_HOST_UNREACHABLE");
+    expect(stage(snapshot, 1, "EGRESS")?.state).toBe("HEALTHY");
+    expect(stage(snapshot, 3, "EGRESS")?.state).toBe("HEALTHY");
   });
 
   it("keeps a wrong rendered score identity isolated from score source and other courts", () => {
@@ -225,11 +257,10 @@ function build(media: AgentSnapshot, browsers: Map<number, BrowserHeartbeatSnaps
 
 function healthyRuntimes(media: AgentSnapshot): Map<string, AgentRuntime> {
   const runtimes = new Map<string, AgentRuntime>([[mediaTarget.id, { target: mediaTarget, snapshot: media, lastSeenAt: observedAt, lastErrorAt: null }]]);
-  compositorTargets.forEach((target, index) => {
-    const firstCourt = index * 2 + 1;
+  compositorTargets.forEach((target) => {
     runtimes.set(target.id, {
       target,
-      snapshot: compositorAgent(target.id, [firstCourt, firstCourt + 1]),
+      snapshot: compositorAgent(target.id, target.assignedCourts),
       lastSeenAt: observedAt,
       lastErrorAt: null
     });
@@ -283,14 +314,33 @@ function compositorAgent(agentId: string, assignedCourts: number[]): AgentSnapsh
     nativeServices: {
       endpoints: [{ service: "egress-metrics", up: true }, { service: "egress-health", up: true }],
       livekit: null,
-      egress: { idle: false, canAcceptRequest: false, nativeCanAcceptRequest: true, activeWebRequests: 2, maximumWebRequests: 2, cgroupMemoryBytes: 750_000_000, cpuLoadRatio: 0.3, memoryLoadRatio: 0.2 }
+      egress: { idle: false, canAcceptRequest: false, nativeCanAcceptRequest: true, activeWebRequests: 1, maximumWebRequests: 1, cgroupMemoryBytes: 750_000_000, cpuLoadRatio: 0.3, memoryLoadRatio: 0.2 }
+    },
+    egressSupervisor: {
+      schemaVersion: 1,
+      generationKey: "a".repeat(64),
+      missingCount: 0,
+      recoveryAttempts: 0,
+      status: "HEALTHY",
+      detail: "The exact owned Egress is active.",
+      court: assignedCourts[0]!,
+      egressId: `EG_Court${assignedCourts[0]}`,
+      observedAt
+    },
+    programWarmer: {
+      schemaVersion: 1,
+      court: assignedCourts[0]!,
+      status: "WARM",
+      ffmpegPid: 1234,
+      restartCount: 1,
+      observedAt
     }
   };
 }
 
 function agentBase(agentId: string, role: AgentSnapshot["role"]): AgentSnapshot {
   return {
-    version: 5,
+    version: 6,
     agentId,
     role,
     assignedCourts: [],
@@ -302,6 +352,8 @@ function agentBase(agentId: string, role: AgentSnapshot["role"]): AgentSnapshot 
     mediaPaths: [],
     ffmpegBranches: [],
     contentAnalysis: [],
+    egressSupervisor: null,
+    programWarmer: null,
     nativeServices: { endpoints: [], livekit: null, egress: null }
   };
 }
@@ -327,7 +379,7 @@ function healthyBrowsers(): Map<number, BrowserHeartbeatSnapshot> {
 
 function browser(courtNumber: number, visualPatch: Partial<BrowserHeartbeatSnapshot["visual"]> = {}): BrowserHeartbeatSnapshot {
   const payload = browserHeartbeatPayloadSchema.parse({
-    version: 5,
+    version: 6,
     credentialId: `40000000-0000-4000-8000-${String(courtNumber).padStart(12, "0")}`,
     courtNumber,
     heartbeatSeq: 1,
@@ -335,7 +387,7 @@ function browser(courtNumber: number, visualPatch: Partial<BrowserHeartbeatSnaps
     pageLoadedAt: observedAt,
     pageBuildVersion: "test",
     configurationVersion: "test",
-    video: { state: "playing", transport: "whep", connectionState: "connected", networkPath: "private-vpc", framesRendered: 1_000, framesPerSecond: 30, width: 1280, height: 720, rttMs: 20, jitterBufferMs: 80, packetsLost: 0, packetsReceived: 1_000, framesDropped: 0, bytesReceived: 5_000_000, reconnectCount: 0, reloadCount: 0 },
+    video: { state: "playing", transport: "whep", connectionState: "connected", networkPath: "private-vpc", framesRendered: 1_000, framesPerSecond: 30, width: 1280, height: 720, rttMs: 20, jitterBufferMs: 80, packetsLost: 0, packetsReceived: 1_000, framesDropped: 0, bytesReceived: 5_000_000, bufferedAheadMs: null, bufferedRangeCount: null, hlsCreatedInstances: null, hlsDestroyedInstances: null, hlsActiveInstances: null, jsHeapUsedBytes: 64_000_000, reconnectCount: 0, reloadCount: 0 },
     visual: { sampledAt: observedAt, meanLuma: 120, lumaVariance: 900, darkPixelRatio: 0.02, frameDifference: 14, frozenDurationMs: 0, blackDurationMs: 0, ...visualPatch },
     commentary: { configured: false, roomConnected: false, participantCount: 0, audioTrackCount: 0, rmsDb: null, peakDb: null, secondsSinceAudio: null, cameraTrackPresent: true, cameraRmsDb: -24, syncStatus: "fallback", configuredDelayMs: null, targetDelayMs: null, appliedDelayMs: null, clockRttMs: null, syncSampleAgeMs: null },
     scoreRender: { loaded: true, connected: true, stale: false, frozen: false, matchId: `match-${courtNumber}`, phase: "LIVE", sourceSignature: `match-${courtNumber}`, renderedSignature: `match-${courtNumber}`, domMismatchReason: null, stateUpdatedAt: observedAt }

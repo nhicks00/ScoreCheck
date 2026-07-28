@@ -30,6 +30,7 @@ import {
   PROGRAM_HLS_STARTUP_BUFFER_SECONDS,
   PROGRAM_HLS_TARGET_LATENCY_MS
 } from "@/lib/programTimeline";
+import { inheritMediaAuthorization, whepResourceUrl } from "@/lib/mediaAuthorization";
 
 type StreamPlayerProps = {
   courtNumber: number;
@@ -85,6 +86,12 @@ export type StreamConnectionHealth = {
   nackCount: number | null;
   pliCount: number | null;
   firCount: number | null;
+  bufferedAheadMs: number | null;
+  bufferedRangeCount: number | null;
+  hlsCreatedInstances: number | null;
+  hlsDestroyedInstances: number | null;
+  hlsActiveInstances: number | null;
+  jsHeapUsedBytes: number | null;
 };
 
 type StreamSources = {
@@ -124,6 +131,8 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
   const [error, setError] = useState<string | null>(null);
   const [muted, setMuted] = useState(true);
   const qualificationKeyRef = useRef("");
+  const hlsCreatedInstancesRef = useRef(0);
+  const hlsDestroyedInstancesRef = useRef(0);
   // Depend on the primitive URLs so a parent re-render with an identical
   // sources object never tears down a healthy connection.
   const hasProvidedSources = providedSources != null;
@@ -350,8 +359,11 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
       closingConnection?.close();
       if (whepSessionUrl) releaseWhepSession(whepSessionUrl);
       whepSessionUrl = null;
-      hls?.destroy();
-      hls = null;
+      if (hls) {
+        hls.destroy();
+        hls = null;
+        hlsDestroyedInstancesRef.current += 1;
+      }
       video.srcObject = null;
       video.removeAttribute("src");
       updatePlaybackEvidenceState(initialPlaybackEvidenceState());
@@ -410,6 +422,7 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
       const activeFreezeDurationMs = hlsFreezeStartedAtMs == null
         ? 0
         : Math.max(0, performance.now() - hlsFreezeStartedAtMs);
+      const bufferedAheadMs = currentForwardBufferSeconds(video) * 1000;
       onConnectionHealth?.({
         ...emptyConnectionHealth(),
         transport: "hls",
@@ -422,7 +435,13 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
         framesDecoded: quality?.totalVideoFrames ?? null,
         framesDropped: quality?.droppedVideoFrames ?? null,
         freezeCount: hlsFreezeCount,
-        totalFreezesDurationMs: hlsFreezeDurationMs + activeFreezeDurationMs
+        totalFreezesDurationMs: hlsFreezeDurationMs + activeFreezeDurationMs,
+        bufferedAheadMs,
+        bufferedRangeCount: video.buffered.length,
+        hlsCreatedInstances: hlsCreatedInstancesRef.current,
+        hlsDestroyedInstances: hlsDestroyedInstancesRef.current,
+        hlsActiveInstances: hlsCreatedInstancesRef.current - hlsDestroyedInstancesRef.current,
+        jsHeapUsedBytes: chromeJsHeapUsedBytes()
       });
       onTimingSample?.({
         version: 1,
@@ -452,14 +471,7 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
       if (hlsStartupTimer != null) return;
       const attemptPlayback = () => {
         if (cancelled) return;
-        let forwardBufferSeconds = 0;
-        for (let index = 0; index < video.buffered.length; index += 1) {
-          if (video.currentTime >= video.buffered.start(index) - 0.1
-            && video.currentTime <= video.buffered.end(index) + 0.1) {
-            forwardBufferSeconds = Math.max(0, video.buffered.end(index) - video.currentTime);
-            break;
-          }
-        }
+        const forwardBufferSeconds = currentForwardBufferSeconds(video);
         if (forwardBufferSeconds < PROGRAM_HLS_STARTUP_BUFFER_SECONDS) return;
         if (hlsStartupTimer != null) window.clearInterval(hlsStartupTimer);
         hlsStartupTimer = null;
@@ -636,9 +648,13 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
             liveSyncDuration: PROGRAM_HLS_TARGET_LATENCY_MS / 1000,
             liveMaxLatencyDuration: PROGRAM_HLS_MAX_LATENCY_MS / 1000,
             maxLiveSyncPlaybackRate: 1,
-            startOnSegmentBoundary: true
+            startOnSegmentBoundary: true,
+            xhrSetup: (xhr: XMLHttpRequest, requestUrl: string) => {
+              xhr.open("GET", inheritMediaAuthorization(requestUrl, hlsUrl), true);
+            }
           }) as unknown as HlsInstance;
           hls = instance;
+          hlsCreatedInstancesRef.current += 1;
           instance.on(Hls.Events.ERROR, (_event, data) => {
             if (cancelled || hls !== instance) return;
             if (data.fatal) failHls();
@@ -845,7 +861,13 @@ function extractTimingSample(
       lastPacketAgeMs,
       nackCount,
       pliCount,
-      firCount
+      firCount,
+      bufferedAheadMs: null,
+      bufferedRangeCount: null,
+      hlsCreatedInstances: null,
+      hlsDestroyedInstances: null,
+      hlsActiveInstances: null,
+      jsHeapUsedBytes: chromeJsHeapUsedBytes()
     }
   };
 }
@@ -883,8 +905,30 @@ function emptyConnectionHealth(): StreamConnectionHealth {
     lastPacketAgeMs: null,
     nackCount: null,
     pliCount: null,
-    firCount: null
+    firCount: null,
+    bufferedAheadMs: null,
+    bufferedRangeCount: null,
+    hlsCreatedInstances: null,
+    hlsDestroyedInstances: null,
+    hlsActiveInstances: null,
+    jsHeapUsedBytes: chromeJsHeapUsedBytes()
   };
+}
+
+function currentForwardBufferSeconds(video: HTMLVideoElement): number {
+  for (let index = 0; index < video.buffered.length; index += 1) {
+    if (video.currentTime >= video.buffered.start(index) - 0.1
+      && video.currentTime <= video.buffered.end(index) + 0.1) {
+      return Math.max(0, video.buffered.end(index) - video.currentTime);
+    }
+  }
+  return 0;
+}
+
+function chromeJsHeapUsedBytes(): number | null {
+  if (typeof performance === "undefined") return null;
+  const memory = (performance as Performance & { memory?: { usedJSHeapSize?: unknown } }).memory;
+  return finiteInteger(memory?.usedJSHeapSize);
 }
 
 function packetAgeMs(value: unknown): number | null {
@@ -900,16 +944,6 @@ function normalizeConnectionState(value: RTCPeerConnectionState): StreamConnecti
   return ["new", "connecting", "connected", "disconnected", "failed", "closed"].includes(value)
     ? value as StreamConnectionHealth["connectionState"]
     : "unknown";
-}
-
-function whepResourceUrl(location: string | null, requestUrl: string): string | null {
-  if (!location) return null;
-  try {
-    const pageUrl = typeof window === "undefined" ? "http://localhost/" : window.location.href;
-    return new URL(location, new URL(requestUrl, pageUrl)).toString();
-  } catch {
-    return null;
-  }
 }
 
 function releaseWhepSession(url: string) {

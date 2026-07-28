@@ -10,6 +10,7 @@ const mediaTemplate = await readFile(fileURLToPath(new URL("./mediamtx.template.
 const caddyTemplate = await readFile(fileURLToPath(new URL("./Caddyfile.template", import.meta.url)), "utf8");
 const deployScript = await readFile(fileURLToPath(new URL("./deploy.sh", import.meta.url)), "utf8");
 const compose = await readFile(fileURLToPath(new URL("./docker-compose.yml", import.meta.url)), "utf8");
+const derivedAccess = { MEDIAMTX_READ_USER: "event_reader", MEDIAMTX_READ_PASS: "x".repeat(32) };
 
 test("runs MediaMTX under Docker init so adopted hook and probe children are reaped", () => {
   assert.match(compose, /container_name: mediamtx\n\s+init: true\n/u);
@@ -17,6 +18,7 @@ test("runs MediaMTX under Docker init so adopted hook and probe children are rea
 
 test("renders an isolated MediaMTX public host and matching TLS health proxy", () => {
   const environment = {
+    ...derivedAccess,
     MEDIAMTX_PUBLIC_IP: "192.0.2.20",
     MEDIAMTX_PRIVATE_IP: "10.120.0.10",
     MEDIAMTX_PUBLIC_HOST: "preview-rehearsal-1234.beachvolleyballmedia.com",
@@ -62,9 +64,20 @@ test("renders an isolated MediaMTX public host and matching TLS health proxy", (
   assert.match(rendered.caddyConfig, /acme-v02\.api\.letsencrypt\.org\/directory/u);
   assert.match(rendered.caddyConfig, /operations@example\.com/u);
   assert.match(rendered.caddyConfig, /handle \/healthz/u);
-  assert.match(rendered.caddyConfig, /\^\/court\[1-8\]_program\/\.\*\$/u);
+  assert.match(rendered.caddyConfig, /\^\/court\[1-8\]_\(preview\|program\|monitor\|calibration\)\/whep/u);
+  assert.match(rendered.caddyConfig, /\^\/court\[1-8\]_\(preview\|program\|monitor\|calibration\)\/\.\*\$/u);
+  assert.match(rendered.caddyConfig, /query user="event_reader"/u);
+  assert.match(rendered.caddyConfig, new RegExp(`pass="${"x".repeat(32)}"`, "u"));
+  assert.match(rendered.caddyConfig, /\^\/court\[1-8\]_\(raw\|normalized\|preview\|program\|monitor\|calibration\)\/\.\*\$/u);
+  assert.match(rendered.caddyConfig, /respond "unauthorized" 401/u);
   assert.match(rendered.caddyConfig, /reverse_proxy 127\.0\.0\.1:8888/u);
   assert.match(rendered.caddyConfig, /reverse_proxy 127\.0\.0\.1:8889/u);
+  assert.match(rendered.caddyConfig, /respond "not found" 404/u);
+  assert.ok(
+    rendered.caddyConfig.indexOf("handle @authorizedDerivedWhep")
+      < rendered.caddyConfig.indexOf("handle @authorizedDerivedHls"),
+    "WHEP must route before the broader derived-media HLS matcher"
+  );
   const previewRule = rendered.mediaConfig.match(/"~\^court\(\[1-8\]\)_preview\$":([\s\S]+?)runOnDemandRestart:/u)?.[1] ?? "";
   assert.match(previewRule, /scorecheck-preview-runner/u);
   assert.doesNotMatch(previewRule, /libx264|scale=|fps=/u);
@@ -79,6 +92,7 @@ test("renders an isolated MediaMTX public host and matching TLS health proxy", (
 
 test("rejects a malformed or cross-camera opaque RTMP key", () => {
   const environment = {
+    ...derivedAccess,
     MEDIAMTX_PUBLIC_IP: "192.0.2.20",
     MEDIAMTX_PRIVATE_IP: "10.120.0.10",
     MEDIAMTX_PUBLIC_HOST: "preview.example.com",
@@ -96,6 +110,7 @@ test("rejects a malformed or cross-camera opaque RTMP key", () => {
 
 test("rejects an unsupported opaque RTMP application", () => {
   const environment = {
+    ...derivedAccess,
     MEDIAMTX_PUBLIC_IP: "192.0.2.20",
     MEDIAMTX_PRIVATE_IP: "10.120.0.10",
     MEDIAMTX_PUBLIC_HOST: "preview.example.com",
@@ -125,6 +140,7 @@ test("fails closed instead of defaulting a missing public hostname to production
 
 test("fails closed on absent, malformed, public, duplicated, or incomplete analyzer bindings", () => {
   const base = {
+    ...derivedAccess,
     MEDIAMTX_PUBLIC_IP: "192.0.2.20",
     MEDIAMTX_PRIVATE_IP: "10.120.0.10",
     MEDIAMTX_PUBLIC_HOST: "preview.example.com",
@@ -163,6 +179,19 @@ test("fails closed on an absent or malformed ACME contact", () => {
       /MEDIAMTX_ACME_EMAIL/u
     );
   }
+});
+
+test("fails closed on absent or URL-unsafe derived-media credentials", () => {
+  const base = {
+    MEDIAMTX_PUBLIC_IP: "192.0.2.20",
+    MEDIAMTX_PRIVATE_IP: "10.120.0.10",
+    MEDIAMTX_PUBLIC_HOST: "preview.example.com",
+    MEDIAMTX_ACME_EMAIL: "operations@example.com",
+    MEDIAMTX_CONTENT_ANALYZER_BINDINGS: JSON.stringify([{ ip: "10.120.0.11", courts: [1, 2, 3, 4, 5, 6, 7, 8] }])
+  };
+  assert.throws(() => renderMediaMtxConfigs({ mediaTemplate, caddyTemplate, environment: base }), /MEDIAMTX_READ_USER/u);
+  assert.throws(() => renderMediaMtxConfigs({ mediaTemplate, caddyTemplate, environment: { ...base, MEDIAMTX_READ_USER: "event reader", MEDIAMTX_READ_PASS: "x".repeat(32) } }), /MEDIAMTX_READ_USER/u);
+  assert.throws(() => renderMediaMtxConfigs({ mediaTemplate, caddyTemplate, environment: { ...base, MEDIAMTX_READ_USER: "event_reader", MEDIAMTX_READ_PASS: "too-short" } }), /MEDIAMTX_READ_PASS/u);
 });
 
 test("fails closed when the ingest ICE candidate is not private", () => {

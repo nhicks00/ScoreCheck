@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -48,7 +48,7 @@ test("prepares one protected immutable renderer binding and reuses it only for t
   const calls = [];
   const provider = fakeProvider(calls);
   try {
-    const first = await prepareProductionRenderer({ event, gitSha, repo: "nhicks00/ScoreCheck", repoId: "1130613388", output, provider, webEnv, now: () => new Date("2026-07-23T14:00:00.000Z"), capture: fakeCapture });
+    const first = await prepareProductionRenderer({ event, gitSha, repo: "nhicks00/ScoreCheck", repoId: "1130613388", output, provider, webEnv, now: () => new Date("2026-07-23T14:00:00.000Z"), capture: fakeCapture, buildLocalRenderer: fakeLocalRenderer });
     assert.equal(first.status, "READY");
     assert.equal(first.deployment.id, "dpl_renderer123");
     assert.ok(calls.includes("ensureProject"));
@@ -56,12 +56,14 @@ test("prepares one protected immutable renderer binding and reuses it only for t
     const binding = JSON.parse(await readFile(join(output, "renderer-binding.json"), "utf8"));
     assert.equal(binding.gitSha, gitSha);
     assert.equal(binding.deploymentId, "dpl_renderer123");
+    assert.equal(first.localRenderer.sha256, "b".repeat(64));
+    assert.equal((await stat(join(output, "local-renderer.tar.gz"))).isFile(), true);
     assert.equal(redactRendererState(first).environmentKeys.includes("SUPABASE_SERVICE_ROLE_KEY"), true);
-    const second = await prepareProductionRenderer({ event, gitSha, repo: "nhicks00/ScoreCheck", repoId: "1130613388", output, provider, webEnv, capture: fakeCapture });
+    const second = await prepareProductionRenderer({ event, gitSha, repo: "nhicks00/ScoreCheck", repoId: "1130613388", output, provider, webEnv, capture: fakeCapture, buildLocalRenderer: fakeLocalRenderer });
     assert.deepEqual(second, first);
     assert.equal(calls.filter((call) => call === "ensureProject").length, 1);
     await assert.rejects(
-      () => prepareProductionRenderer({ event, gitSha: "b".repeat(40), repo: "nhicks00/ScoreCheck", repoId: "1130613388", output, provider, webEnv, capture: fakeCapture }),
+      () => prepareProductionRenderer({ event, gitSha: "b".repeat(40), repo: "nhicks00/ScoreCheck", repoId: "1130613388", output, provider, webEnv, capture: fakeCapture, buildLocalRenderer: fakeLocalRenderer }),
       /different event or release/
     );
   } finally {
@@ -75,7 +77,7 @@ test("deletes only the exact renderer project after the caller provides the even
   const calls = [];
   const provider = fakeProvider(calls);
   try {
-    await prepareProductionRenderer({ event, gitSha, repo: "nhicks00/ScoreCheck", repoId: "1130613388", output, provider, webEnv, capture: fakeCapture });
+    await prepareProductionRenderer({ event, gitSha, repo: "nhicks00/ScoreCheck", repoId: "1130613388", output, provider, webEnv, capture: fakeCapture, buildLocalRenderer: fakeLocalRenderer });
     await assert.rejects(() => destroyProductionRenderer({ event, output, confirmation: "wrong", provider }), /confirmation/);
     const result = await destroyProductionRenderer({ event, output, confirmation: `DESTROY-RENDERER:${event}`, provider, now: () => new Date("2026-07-23T14:05:00.000Z") });
     assert.equal(result.status, "DESTROYED");
@@ -116,12 +118,25 @@ async function fakeCapture({ origin: captureOrigin, output }) {
       programSession: "program-session-v1",
       overlayState: "overlay-state-v1",
       commentary: "commentary-v1",
-      browserHeartbeat: "browser-heartbeat-v5"
+      browserHeartbeat: "browser-heartbeat-v6"
     }
   };
   await writeFile(output, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   await chmod(output, 0o600);
   return { sha256: "a".repeat(64) };
+}
+
+async function fakeLocalRenderer({ output, gitSha: rendererGitSha, deploymentId }) {
+  await writeFile(output, "local-renderer", { mode: 0o600 });
+  await chmod(output, 0o600);
+  return {
+    schemaVersion: 1,
+    path: output,
+    sha256: "b".repeat(64),
+    bytes: 14,
+    gitSha: rendererGitSha,
+    deploymentId
+  };
 }
 
 async function mkdirProtectedRoot() {

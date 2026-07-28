@@ -225,8 +225,10 @@ export class YoutubeBackupObserver {
 export function evaluateYoutubeBackupSample({ label, camera, primaryExpected, backupExpected, primary, backup, snapshot, provider, profiles, venue, nowMs }) {
   const problems = productionSnapshotProblems(snapshot, profiles, venue, null, nowMs).filter((problem) => {
     if (problem === "warm spare is not healthy and idle") return false;
+    if (problem === "warm spare Egress supervisor is not fresh and idle") return false;
     if (problem === `Camera ${camera} program path is not healthy with 1 reader(s)`) return false;
     if (!primaryExpected && problem === `Camera ${camera} output server is not running exactly one healthy Egress with headroom`) return false;
+    if (!primaryExpected && problem === `Camera ${camera} Egress supervisor does not own one fresh healthy output generation`) return false;
     return true;
   });
   problems.push(...productionProviderProblems(provider, venue.activeCameras));
@@ -245,6 +247,13 @@ export function evaluateYoutubeBackupSample({ label, camera, primaryExpected, ba
     || spareEgress.idle !== !backupExpected || spareEgress.canAcceptRequest !== !backupExpected) {
     problems.push(`warm spare does not match the expected ${backupExpected ? "active backup" : "idle"} state`);
   }
+  const primaryAgent = snapshot.agents.find((agent) => agent.role === "compositor" && agent.assignedCourts?.includes(camera));
+  if (!expectedSupervisor(primaryAgent?.egressSupervisor, { active: primaryExpected, camera, nowMs })) {
+    problems.push(`primary compositor supervisor does not match the expected ${primaryExpected ? "active" : "idle"} output state`);
+  }
+  if (!expectedSupervisor(spare?.egressSupervisor, { active: backupExpected, camera, nowMs })) {
+    problems.push(`warm spare supervisor does not match the expected ${backupExpected ? "active backup" : "idle"} output state`);
+  }
   return {
     schemaVersion: 1,
     label,
@@ -255,4 +264,14 @@ export function evaluateYoutubeBackupSample({ label, camera, primaryExpected, ba
     problems: [...new Set(problems)],
     passed: problems.length === 0
   };
+}
+
+function expectedSupervisor(value, { active, camera, nowMs }) {
+  const observedAtMs = Date.parse(value?.observedAt ?? "");
+  if (!Number.isFinite(observedAtMs) || Math.abs(nowMs - observedAtMs) > 20_000) return false;
+  if (!active) return value.status === "IDLE" && value.court === null && value.egressId === null;
+  return ["HEALTHY", "RECOVERED"].includes(value.status)
+    && value.court === camera
+    && typeof value.generationKey === "string" && value.generationKey.length > 0
+    && typeof value.egressId === "string" && value.egressId.length > 0;
 }

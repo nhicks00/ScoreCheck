@@ -45,8 +45,9 @@ webrtcAdditionalHosts: [__PUBLIC_IP__, __PUBLIC_HOST__, __PRIVATE_IP__]
 webrtcIPsFromInterfaces: no
 
 authInternalUsers:
-  # The browser-facing preview/program outputs are intentionally public during
-  # Gate 1. Raw camera paths are not readable from outside the server.
+  # Public HTTP signaling and HLS are authenticated by Caddy before they reach
+  # this loopback proxy permission. Raw camera paths remain unreadable from
+  # outside the host, and the event-scoped read credential has no publish right.
   - user: any
     permissions:
       - action: read

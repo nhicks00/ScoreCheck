@@ -70,6 +70,15 @@ export class AgentMetrics {
   private readonly egressCgroupMemory = new Gauge({ name: "scorecheck_egress_cgroup_memory_bytes", help: "Egress worker cgroup memory usage.", labelNames: ["agent"], registers: [this.registry] });
   private readonly egressCpuLoad = new Gauge({ name: "scorecheck_egress_cpu_load_ratio", help: "Egress worker CPU admission load ratio.", labelNames: ["agent"], registers: [this.registry] });
   private readonly egressMemoryLoad = new Gauge({ name: "scorecheck_egress_memory_load_ratio", help: "Egress worker memory admission load ratio.", labelNames: ["agent"], registers: [this.registry] });
+  private readonly egressSupervisorPresent = new Gauge({ name: "scorecheck_egress_supervisor_present", help: "Whether bounded Egress supervisor state is available.", labelNames: ["agent"], registers: [this.registry] });
+  private readonly egressSupervisorFresh = new Gauge({ name: "scorecheck_egress_supervisor_fresh", help: "Whether Egress supervisor state is at most twenty seconds old.", labelNames: ["agent"], registers: [this.registry] });
+  private readonly egressSupervisorState = new Gauge({ name: "scorecheck_egress_supervisor_state", help: "Current bounded Egress supervisor state.", labelNames: ["agent", "status"], registers: [this.registry] });
+  private readonly egressSupervisorMissingPolls = new Gauge({ name: "scorecheck_egress_supervisor_missing_polls", help: "Consecutive missing owned-Egress observations.", labelNames: ["agent"], registers: [this.registry] });
+  private readonly egressSupervisorRecoveryAttempts = new Gauge({ name: "scorecheck_egress_supervisor_recovery_attempts", help: "Bounded recovery attempts for the current output generation.", labelNames: ["agent"], registers: [this.registry] });
+  private readonly programWarmerPresent = new Gauge({ name: "scorecheck_program_warmer_present", help: "Whether output-owned program-branch warmer state is available.", labelNames: ["agent"], registers: [this.registry] });
+  private readonly programWarmerFresh = new Gauge({ name: "scorecheck_program_warmer_fresh", help: "Whether program-branch warmer state is at most twenty seconds old.", labelNames: ["agent"], registers: [this.registry] });
+  private readonly programWarmerState = new Gauge({ name: "scorecheck_program_warmer_state", help: "Current output-owned program-branch warmer state.", labelNames: ["agent", "status"], registers: [this.registry] });
+  private readonly programWarmerRestarts = new Gauge({ name: "scorecheck_program_warmer_restarts_total", help: "Program-branch reader starts since the warmer process began.", labelNames: ["agent"], registers: [this.registry] });
   private previousErrors = new Set<string>();
   private readonly ffmpegSpeedSamples = new Map<string, { sampledAtMs: number; outputTimeMs: number; speedRatio: number | null }>();
 
@@ -211,6 +220,27 @@ export class AgentMetrics {
       if (snapshot.nativeServices.egress.cgroupMemoryBytes != null) this.egressCgroupMemory.set(labels, snapshot.nativeServices.egress.cgroupMemoryBytes);
       if (snapshot.nativeServices.egress.cpuLoadRatio != null) this.egressCpuLoad.set(labels, snapshot.nativeServices.egress.cpuLoadRatio);
       if (snapshot.nativeServices.egress.memoryLoadRatio != null) this.egressMemoryLoad.set(labels, snapshot.nativeServices.egress.memoryLoadRatio);
+    }
+    for (const metric of [this.egressSupervisorPresent, this.egressSupervisorFresh, this.egressSupervisorState, this.egressSupervisorMissingPolls, this.egressSupervisorRecoveryAttempts]) metric.reset();
+    if (["compositor", "worker"].includes(snapshot.role)) {
+      const labels = { agent: snapshot.agentId };
+      this.egressSupervisorPresent.set(labels, snapshot.egressSupervisor ? 1 : 0);
+      this.egressSupervisorFresh.set(labels, snapshot.egressSupervisor && Math.abs(Date.parse(snapshot.generatedAt) - Date.parse(snapshot.egressSupervisor.observedAt)) <= 20_000 ? 1 : 0);
+      if (snapshot.egressSupervisor) {
+        this.egressSupervisorState.set({ ...labels, status: snapshot.egressSupervisor.status }, 1);
+        this.egressSupervisorMissingPolls.set(labels, snapshot.egressSupervisor.missingCount);
+        this.egressSupervisorRecoveryAttempts.set(labels, snapshot.egressSupervisor.recoveryAttempts);
+      }
+    }
+    for (const metric of [this.programWarmerPresent, this.programWarmerFresh, this.programWarmerState, this.programWarmerRestarts]) metric.reset();
+    if (["compositor", "worker"].includes(snapshot.role)) {
+      const labels = { agent: snapshot.agentId };
+      this.programWarmerPresent.set(labels, snapshot.programWarmer ? 1 : 0);
+      this.programWarmerFresh.set(labels, snapshot.programWarmer && Math.abs(Date.parse(snapshot.generatedAt) - Date.parse(snapshot.programWarmer.observedAt)) <= 20_000 ? 1 : 0);
+      if (snapshot.programWarmer) {
+        this.programWarmerState.set({ ...labels, status: snapshot.programWarmer.status }, 1);
+        this.programWarmerRestarts.set(labels, snapshot.programWarmer.restartCount);
+      }
     }
   }
 

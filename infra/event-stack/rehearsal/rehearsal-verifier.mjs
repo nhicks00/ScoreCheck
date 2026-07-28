@@ -231,7 +231,7 @@ export class RehearsalVerifier {
     });
     if (!response.ok) throw new Error(`rehearsal monitor snapshot returned HTTP ${response.status}`);
     const snapshot = await response.json();
-    if (!snapshot || snapshot.version !== 5 || !Array.isArray(snapshot.courts) || !Array.isArray(snapshot.agents)) throw new Error("rehearsal monitor snapshot contract is invalid");
+    if (!snapshot || snapshot.version !== 6 || !Array.isArray(snapshot.courts) || !Array.isArray(snapshot.agents)) throw new Error("rehearsal monitor snapshot contract is invalid");
     return snapshot;
   }
 }

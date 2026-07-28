@@ -5,54 +5,75 @@ import { coerceOverlayState, fallbackOverlayState } from "@/lib/overlayState";
 import { ifNoneMatchContains, overlayEntityTag } from "@/lib/overlayHttp";
 import { scoreForCurrentMatch } from "@/lib/scoreState";
 import { supabaseAdmin } from "@/lib/supabase";
+import {
+  readCachedOverlayState,
+  staleCachedOverlayState,
+  writeCachedOverlayState
+} from "@/lib/programLocalCache";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ courtNumber: string }> }) {
   const { courtNumber } = await params;
-  if (missingEnvKeys().some((key) => key.startsWith("NEXT_PUBLIC_SUPABASE") || key === "SUPABASE_SERVICE_ROLE_KEY")) {
-    return overlayResponse(req, coerceOverlayState(envFallbackOverlayState(Number(courtNumber)), Number(courtNumber)));
-  }
-
   const eventId = req.nextUrl.searchParams.get("eventId");
   const courtNumberValue = Number(courtNumber);
-  const persisted = await loadPersistedOverlay(courtNumberValue, eventId);
-  if (persisted.error) return NextResponse.json({ error: persisted.error.message }, { status: 500 });
-  if (persisted.data?.payload) {
-    return overlayResponse(req, coercePersistedOverlay(persisted.data, courtNumberValue));
+  if (missingEnvKeys().some((key) => key.startsWith("NEXT_PUBLIC_SUPABASE") || key === "SUPABASE_SERVICE_ROLE_KEY")) {
+    return (await cachedOverlayResponse(req, courtNumberValue, eventId))
+      ?? overlayResponse(req, coerceOverlayState(envFallbackOverlayState(courtNumberValue), courtNumberValue), true);
   }
 
-  // Only newly-created or partially-migrated courts should need this repair
-  // path. Normal overlay polling reads the already-materialized payload rather
-  // than rejoining courts, events, matches, and scores every five seconds.
-  const { court, error } = await loadOverlayCourt(courtNumberValue, eventId);
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  if (!court) {
-    if (eventId) return NextResponse.json({ error: "Court not found" }, { status: 404 });
-    return new NextResponse(null, { status: 204, headers: { "cache-control": "no-store" } });
-  }
+  try {
+    const persisted = await loadPersistedOverlay(courtNumberValue, eventId);
+    if (persisted.error) throw persisted.error;
+    if (persisted.data?.payload) {
+      const state = coercePersistedOverlay(persisted.data, courtNumberValue);
+      await writeCachedOverlayState(courtNumberValue, state).catch(() => undefined);
+      return overlayResponse(req, state);
+    }
 
-  const match = Array.isArray(court.matches) ? court.matches[0] : court.matches;
-  const score = scoreForCurrentMatch(court.score_states, match?.id);
-  return overlayResponse(req, withOverlayLayout(buildOverlayState({
-    event: { id: court.event_id, settings: eventSettings(court) },
-    court,
-    match: match ?? null,
-    score: score ?? null
-  }), court));
+    // Only newly-created or partially-migrated courts should need this repair
+    // path. Normal overlay polling reads the already-materialized payload rather
+    // than rejoining courts, events, matches, and scores every five seconds.
+    const { court, error } = await loadOverlayCourt(courtNumberValue, eventId);
+    if (error) throw error;
+    if (!court) {
+      if (eventId) return NextResponse.json({ error: "Court not found" }, { status: 404 });
+      return new NextResponse(null, { status: 204, headers: { "cache-control": "no-store" } });
+    }
+
+    const match = Array.isArray(court.matches) ? court.matches[0] : court.matches;
+    const score = scoreForCurrentMatch(court.score_states, match?.id);
+    const state = withOverlayLayout(buildOverlayState({
+      event: { id: court.event_id, settings: eventSettings(court) },
+      court,
+      match: match ?? null,
+      score: score ?? null
+    }), court);
+    await writeCachedOverlayState(courtNumberValue, state).catch(() => undefined);
+    return overlayResponse(req, state);
+  } catch {
+    return (await cachedOverlayResponse(req, courtNumberValue, eventId))
+      ?? NextResponse.json({ error: "Score state is temporarily unavailable" }, { status: 503 });
+  }
 }
 
-function overlayResponse(req: NextRequest, state: ReturnType<typeof coerceOverlayState>) {
+function overlayResponse(req: NextRequest, state: ReturnType<typeof coerceOverlayState>, localCache = false) {
   const etag = overlayEntityTag(state);
   const headers = {
     "cache-control": "private, no-cache, must-revalidate",
-    etag
+    etag,
+    ...(localCache ? { "x-scorecheck-overlay-source": "local-cache" } : {})
   };
   if (ifNoneMatchContains(req.headers.get("if-none-match"), etag)) {
     return new NextResponse(null, { status: 304, headers });
   }
   return NextResponse.json(state, { headers });
+}
+
+async function cachedOverlayResponse(req: NextRequest, courtNumber: number, eventId: string | null) {
+  const cached = await readCachedOverlayState(courtNumber, eventId);
+  return cached ? overlayResponse(req, staleCachedOverlayState(cached), true) : null;
 }
 
 async function loadPersistedOverlay(courtNumber: number, eventId: string | null) {

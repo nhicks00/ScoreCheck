@@ -208,7 +208,7 @@ async function assertRawPathsIdle(context, fetchImpl) {
   });
   if (!response.ok) throw new Error(`monitor snapshot returned HTTP ${response.status}`);
   const snapshot = await response.json();
-  if (snapshot?.version !== 5 || !Array.isArray(snapshot.courts)) throw new Error("monitor snapshot contract is invalid");
+  if (snapshot?.version !== 6 || !Array.isArray(snapshot.courts)) throw new Error("monitor snapshot contract is invalid");
   const occupied = snapshot.courts.filter((court) => court?.paths?.raw?.ready === true || Number(court?.paths?.raw?.inboundBitrateBps ?? 0) > 0).map((court) => court.courtNumber);
   if (occupied.length) throw new Error(`physical or unknown publishers already occupy Camera ${occupied.join(", ")} raw paths`);
 }

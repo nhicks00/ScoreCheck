@@ -23,6 +23,8 @@ for court in $(seq 1 8); do
   [[ -n "${!pass_var:-}" ]] || { echo "error: $pass_var is required" >&2; exit 1; }
 done
 : "${MEDIAMTX_PUBLIC_HOST:?MEDIAMTX_PUBLIC_HOST is required}"
+: "${MEDIAMTX_READ_USER:?MEDIAMTX_READ_USER is required}"
+: "${MEDIAMTX_READ_PASS:?MEDIAMTX_READ_PASS is required}"
 : "${MEDIAMTX_CONTENT_ANALYZER_BINDINGS:?MEDIAMTX_CONTENT_ANALYZER_BINDINGS is required}"
 export MEDIAMTX_PUBLIC_IP="${MEDIAMTX_PUBLIC_IP:-${SSH_HOST#*@}}"
 
@@ -147,7 +149,7 @@ install -m 0644 .incoming/Dockerfile Dockerfile
 install -m 0644 .incoming/.dockerignore .dockerignore
 install -m 0644 .incoming/patches/gortmplib-avkans-adts-aac.patch patches/gortmplib-avkans-adts-aac.patch
 install -m 0600 .incoming/mediamtx.yml mediamtx.yml
-install -m 0644 .incoming/Caddyfile Caddyfile
+install -m 0600 .incoming/Caddyfile Caddyfile
 install -m 0755 .incoming/scorecheck-ffmpeg-runner.sh scorecheck-ffmpeg-runner.sh
 install -m 0755 .incoming/scorecheck-preview-runner.sh scorecheck-preview-runner.sh
 install -m 0755 .incoming/scorecheck-program-runner.sh scorecheck-program-runner.sh

@@ -14,6 +14,8 @@ export function renderMediaMtxConfigs({ mediaTemplate, caddyTemplate, environmen
   const privateIp = privateIpv4(required(environment, "MEDIAMTX_PRIVATE_IP"));
   const publicHost = required(environment, "MEDIAMTX_PUBLIC_HOST");
   const acmeEmail = email(required(environment, "MEDIAMTX_ACME_EMAIL"));
+  const derivedReadUser = credential(required(environment, "MEDIAMTX_READ_USER"), "MEDIAMTX_READ_USER", 4, 64);
+  const derivedReadPass = credential(required(environment, "MEDIAMTX_READ_PASS"), "MEDIAMTX_READ_PASS", 24, 128);
   const contentAnalyzerBindings = exactContentAnalyzerBindings(required(environment, "MEDIAMTX_CONTENT_ANALYZER_BINDINGS"));
   const delayMs = integerInRange(environment.MEDIAMTX_PROGRAM_DELAY_MS ?? "3500", 0, 30_000);
   const browserSources = [];
@@ -57,7 +59,9 @@ export function renderMediaMtxConfigs({ mediaTemplate, caddyTemplate, environmen
 
   const caddyConfig = caddyTemplate
     .replaceAll("__PUBLIC_HOST__", publicHost)
-    .replaceAll("__ACME_EMAIL__", acmeEmail);
+    .replaceAll("__ACME_EMAIL__", acmeEmail)
+    .replaceAll("__DERIVED_READ_USER__", JSON.stringify(derivedReadUser))
+    .replaceAll("__DERIVED_READ_PASS__", JSON.stringify(derivedReadPass));
   for (const [name, value] of Object.entries({ mediaConfig, caddyConfig })) {
     if (/__[A-Z0-9_]+__/u.test(value)) throw new Error(`${name} still contains an unresolved placeholder.`);
   }
@@ -102,9 +106,9 @@ async function main() {
   await mkdir(path.dirname(mediaOutputPath), { recursive: true });
   await mkdir(path.dirname(caddyOutputPath), { recursive: true });
   await writeFile(mediaOutputPath, rendered.mediaConfig, { encoding: "utf8", mode: 0o600 });
-  await writeFile(caddyOutputPath, rendered.caddyConfig, { encoding: "utf8", mode: 0o644 });
+  await writeFile(caddyOutputPath, rendered.caddyConfig, { encoding: "utf8", mode: 0o600 });
   await chmod(mediaOutputPath, 0o600);
-  await chmod(caddyOutputPath, 0o644);
+  await chmod(caddyOutputPath, 0o600);
   console.log(`Rendered MediaMTX and TLS proxy configuration (${rendered.delayMs} ms program delay).`);
 }
 
@@ -116,6 +120,13 @@ function required(environment, name) {
 
 function email(value) {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value)) throw new Error("MEDIAMTX_ACME_EMAIL must be a valid email address.");
+  return value;
+}
+
+function credential(value, name, minimumLength, maximumLength) {
+  if (value.length < minimumLength || value.length > maximumLength || !/^[A-Za-z0-9_-]+$/u.test(value)) {
+    throw new Error(`${name} must contain ${minimumLength}-${maximumLength} URL-safe characters.`);
+  }
   return value;
 }
 

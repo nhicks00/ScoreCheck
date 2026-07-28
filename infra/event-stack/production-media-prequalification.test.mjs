@@ -176,7 +176,7 @@ function renderer() {
 
 function snapshot(nowMs) {
   return {
-    version: 5,
+    version: 6,
     generatedAt: new Date(nowMs).toISOString(),
     collector: {},
     courts: Array.from({ length: 8 }, (_, index) => ({ courtNumber: index + 1, overallState: index === 0 ? "HEALTHY" : "EXPECTED_OFF", paths: {} })),

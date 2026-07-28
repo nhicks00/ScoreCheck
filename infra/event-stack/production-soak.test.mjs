@@ -7,6 +7,7 @@ import {
   browserDeltaProblems,
   assertProductionMonitorSnapshot,
   evaluateProductionSoak,
+  evaluateHlsRuntimeEvidence,
   evaluateSpeedifyEvidence,
   ensureStartupObserver,
   fetchProductionMonitorSnapshot,
@@ -42,7 +43,7 @@ const runBinding = {
       programSession: "program-session-v1",
       overlayState: "overlay-state-v1",
       commentary: "commentary-v1",
-      browserHeartbeat: "browser-heartbeat-v5"
+      browserHeartbeat: "browser-heartbeat-v6"
     }
   },
   destinations: Object.fromEntries(Array.from({ length: 6 }, (_, index) => {
@@ -76,7 +77,7 @@ test("starts through the real CLI entrypoint after module initialization", () =>
   assert.match(missingProbe.stderr, /--ffprobe are required/u);
 });
 
-test("hard-cuts the production soak client to monitoring snapshot contract v5", () => {
+test("hard-cuts the production soak client to monitoring snapshot contract v6", () => {
   const current = snapshot({ active: false });
   assert.equal(assertProductionMonitorSnapshot(current), current);
   assert.throws(() => assertProductionMonitorSnapshot({ ...current, version: 4 }), /snapshot contract is invalid/u);
@@ -399,6 +400,27 @@ test("fails qualification when an operator notification could not be delivered",
   assert.ok(report.problems.includes("one or more Pushover notifications failed"));
 });
 
+test("records bounded HLS runtime evidence and rejects buffer or instance fan-out", () => {
+  const samples = [
+    { monitor: snapshot({ sampledMs: startedMs, framesMultiplier: 0 }) },
+    { monitor: snapshot({ sampledMs: startedMs + 5_000, framesMultiplier: 5 }) }
+  ];
+  const accepted = evaluateHlsRuntimeEvidence(samples, venue.activeCameras);
+  assert.equal(accepted.passed, true);
+  assert.equal(accepted.cameras[0].maximumBufferedAheadMs, 12_000);
+  assert.ok(Number.isFinite(accepted.cameras[0].retainedHeapGrowthBytes));
+
+  const broken = structuredClone(samples);
+  const video = broken[1].monitor.courts[0].browser.video;
+  video.bufferedAheadMs = 30_000;
+  video.hlsCreatedInstances = 2;
+  video.hlsActiveInstances = 2;
+  const rejected = evaluateHlsRuntimeEvidence(broken, venue.activeCameras);
+  assert.equal(rejected.passed, false);
+  assert.ok(rejected.problems.some((problem) => problem.includes("Camera 1 HLS runtime evidence exceeded")));
+  assert.ok(rejected.problems.some((problem) => problem.includes("Camera 1 HLS instance generation changed")));
+});
+
 test("qualifies continuous fail-closed Speedify evidence and rejects route drift", () => {
   const good = evaluateSpeedifyEvidence({ content: routerEvidence(), startMs: startedMs, endMs: startedMs + 5_000, activeCameras: 6, intervalMs: 1_000 });
   assert.equal(good.passed, true);
@@ -483,11 +505,11 @@ Watchdog lock owner: 19180
 });
 
 function snapshot({ active = true, sampledMs = startedMs, framesMultiplier = 0 } = {}) {
-  const fixed = ["commentary", "observability", "ingest"].map((role) => agent(`bvm-${role}`, role));
-  const compositors = Array.from({ length: 8 }, (_, index) => agent(`bvm-compositor-${index + 1}`, "compositor", index + 1, active && index < 6));
-  const spare = agent("bvm-compositor-spare", "worker", null, false);
+  const fixed = ["commentary", "observability", "ingest"].map((role) => agent(`bvm-${role}`, role, null, false, sampledMs));
+  const compositors = Array.from({ length: 8 }, (_, index) => agent(`bvm-compositor-${index + 1}`, "compositor", index + 1, active && index < 6, sampledMs));
+  const spare = agent("bvm-compositor-spare", "worker", null, false, sampledMs);
   return {
-    version: 5,
+    version: 6,
     generatedAt: new Date(sampledMs).toISOString(),
     collector: { state: "HEALTHY", agentsExpected: 12, agentsFresh: 12 },
     notifications: { pushover: { configured: true } },
@@ -547,6 +569,12 @@ function browser(camera, sampledMs, framesRendered) {
       freezeCount: 0,
       totalFreezesDurationMs: 0,
       packetsLost: 0,
+      bufferedAheadMs: 12_000,
+      bufferedRangeCount: 1,
+      hlsCreatedInstances: 1,
+      hlsDestroyedInstances: 0,
+      hlsActiveInstances: 1,
+      jsHeapUsedBytes: 64_000_000 + framesRendered,
       reconnectCount: 0,
       reloadCount: 0
     },
@@ -555,7 +583,7 @@ function browser(camera, sampledMs, framesRendered) {
   };
 }
 
-function agent(agentId, role, assignedCourt = null, outputActive = false) {
+function agent(agentId, role, assignedCourt = null, outputActive = false, sampledMs = startedMs) {
   return {
     agentId,
     role,
@@ -563,6 +591,17 @@ function agent(agentId, role, assignedCourt = null, outputActive = false) {
     state: "HEALTHY",
     host: { memoryTotalBytes: 8_000_000_000, memoryAvailableBytes: 6_000_000_000, diskTotalBytes: 100_000_000_000, diskFreeBytes: 80_000_000_000 },
     services: [],
+    egressSupervisor: ["compositor", "worker"].includes(role) ? {
+      schemaVersion: 1,
+      generationKey: outputActive ? "a".repeat(64) : null,
+      missingCount: 0,
+      recoveryAttempts: 0,
+      status: outputActive ? "HEALTHY" : "IDLE",
+      detail: outputActive ? "The exact owned Egress is active." : "No owned or active Egress exists.",
+      court: outputActive ? assignedCourt : null,
+      egressId: outputActive ? `EG_Camera${assignedCourt}` : null,
+      observedAt: new Date(sampledMs).toISOString()
+    } : null,
     nativeServices: ["compositor", "worker"].includes(role) ? {
       egress: {
         idle: !outputActive,

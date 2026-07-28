@@ -217,7 +217,7 @@ function evidenceInput() {
   const outputGenerations = Object.fromEntries(Array.from({ length: 8 }, (_, index) => {
     const court = index + 1;
     return [court, {
-      schemaVersion: 2,
+      schemaVersion: 3,
       court,
       destinationRole: "primary",
       event: "event-test",
@@ -226,6 +226,9 @@ function evidenceInput() {
       outputProfile: "1080p30",
       rendererGitSha: "a".repeat(40),
       rendererDeploymentId: "dpl_renderer123",
+      rendererRuntimeOrigin: "http://renderer:3000",
+      rendererReleaseOrigin: "https://scorecheck-test.vercel.app",
+      rendererBundleSha256: "c".repeat(64),
       egressId: `EG_output${court}`,
       requestSha256: "b".repeat(64),
       startedAt: "2026-07-22T11:55:00Z"
