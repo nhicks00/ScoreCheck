@@ -84,7 +84,7 @@ test("requires browser, branch, and Egress cleanup after local output capture", 
   const monitored = snapshot(0);
   monitored.courts[0] = {
     courtNumber: 1,
-    browser: { state: "playing" },
+    browser: { receivedAt: new Date(0).toISOString(), state: "playing" },
     paths: {
       preview: { ready: true, readerCount: 1 },
       program: { ready: false, readerCount: 1 }
@@ -96,7 +96,7 @@ test("requires browser, branch, and Egress cleanup after local output capture", 
     nativeServices: { egress: { idle: false, activeWebRequests: 1, maximumWebRequests: 1, canAcceptRequest: false } }
   }];
 
-  assert.deepEqual(prequalificationCleanupProblems(monitored, venue()), [
+  assert.deepEqual(prequalificationCleanupProblems(monitored, venue(), 0), [
     "Camera 1 retains a program browser after local-only output capture",
     "Camera 1 preview did not retire after local-only output capture",
     "Camera 1 program did not retire after local-only output capture",
@@ -121,6 +121,25 @@ test("accepts fully drained branches and idle one-request Egress agents", () => 
   }];
 
   assert.deepEqual(prequalificationCleanupProblems(monitored, venue()), []);
+});
+
+test("accepts a retained stale browser heartbeat after the local reader drained", () => {
+  const monitored = snapshot(20_000);
+  monitored.courts[0] = {
+    courtNumber: 1,
+    browser: { receivedAt: new Date(0).toISOString(), state: "playing" },
+    paths: {
+      preview: { ready: false, readerCount: 0 },
+      program: { ready: false, readerCount: 0 }
+    }
+  };
+  monitored.agents = [{
+    agentId: "bvm-compositor-a",
+    role: "compositor",
+    nativeServices: { egress: { idle: true, activeWebRequests: 0, maximumWebRequests: 1, canAcceptRequest: true } }
+  }];
+
+  assert.deepEqual(prequalificationCleanupProblems(monitored, venue(), 20_000), []);
 });
 
 function venue() {
