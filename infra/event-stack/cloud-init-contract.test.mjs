@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -93,6 +93,11 @@ test("ingest provisioning admits the configured SRT socket buffers", async () =>
   assert.match(ingest, /net\.core\.wmem_max = 67108864/);
   assert.match(ingest, /net\.core\.netdev_max_backlog = 250000/);
   assert.match(ingest, /^  - sysctl --system$/m);
+});
+
+test("shared compositor deployment runners remain executable in the release tree", async () => {
+  const runner = await stat(resolve(root, "infra/mediamtx/scorecheck-ffmpeg-runner.sh"));
+  assert.notEqual(runner.mode & 0o111, 0, "the monitored FFmpeg runner must be executable before compositor deployment");
 });
 
 function escapeRegexp(value) {
