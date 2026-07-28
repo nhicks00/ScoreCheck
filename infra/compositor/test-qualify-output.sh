@@ -72,6 +72,7 @@ printf '%s\n' '#!/usr/bin/env bash' \
 chmod 755 "$FIXTURE/bin/curl" "$FIXTURE/bin/docker" "$FIXTURE/bin/flock" "$FIXTURE/bin/sleep" "$FIXTURE/bin/lk" "$FIXTURE/qualify-output.sh"
 grep -Fq 'flock -w 10 9' "$FIXTURE/qualify-output.sh"
 grep -Fq -- '--network none --read-only --user 0:0 --cap-drop ALL' "$FIXTURE/qualify-output.sh"
+grep -Fq 'chmod 640 "$HOST_OUTPUT"' "$FIXTURE/qualify-output.sh"
 
 printf '%s\n' \
   'LIVEKIT_API_KEY=test-key' \

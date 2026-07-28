@@ -362,16 +362,18 @@ if [[ ! -s "$HOST_OUTPUT" ]]; then
   echo "error: output-conformance sample was not finalized." >&2
   exit 1
 fi
-chmod 600 "$HOST_OUTPUT"
+chmod 640 "$HOST_OUTPUT"
 if ! docker run --rm --network none --read-only --user 0:0 --cap-drop ALL --security-opt no-new-privileges:true \
   -v "$HOST_OUTPUT_DIR:/evidence:ro" \
   --entrypoint ffprobe "$FFPROBE_IMAGE" \
   -v error -print_format json \
   -show_entries 'stream=index,codec_type,codec_name,profile,width,height,pix_fmt,field_order,color_space,color_transfer,color_primaries,avg_frame_rate,bit_rate,sample_rate,channels:format=duration,bit_rate:frame=stream_index,key_frame,best_effort_timestamp_time' \
   -show_streams -show_format -show_frames "/evidence/$OUTPUT_NAME" >"$PROBE_REPORT"; then
+  chmod 600 "$HOST_OUTPUT"
   echo "error: actual output sample could not be inspected." >&2
   exit 1
 fi
+chmod 600 "$HOST_OUTPUT"
 chmod 600 "$PROBE_REPORT"
 if ! jq -e \
   --argjson expectedFps "$EGRESS_FRAMERATE" \
