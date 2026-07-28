@@ -224,7 +224,18 @@ export class EventLifecycleController {
         : null;
       const networkContract = await this.#requireNetworkContract(state, manifest);
       const inventory = await this.#assertExactEventInventory(state, manifest);
-      const health = await this.deployer.verifyStack({ manifest, state: structuredClone(state), finalEvidence: true });
+      let health;
+      try {
+        health = await this.deployer.verifyStack({ manifest, state: structuredClone(state), finalEvidence: true });
+      } catch (error) {
+        health = {
+          healthy: false,
+          evidence: {
+            status: "final-evidence-capture-failed",
+            error: safeError(error, this.now()).message
+          }
+        };
+      }
       const evidence = {
         schemaVersion: 1,
         event: state.event,
