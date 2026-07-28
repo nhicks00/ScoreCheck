@@ -83,6 +83,7 @@ export async function prepareProductionRenderer({
   output,
   provider,
   webEnv,
+  executionPath = process.env.PATH,
   now = () => new Date(),
   capture = captureRendererBinding,
   buildLocalRenderer = buildLocalRendererBundle
@@ -117,7 +118,7 @@ export async function prepareProductionRenderer({
       gitSha,
       deploymentId: ready.id,
       rendererOrigin: ready.url,
-      environment,
+      environment: { PATH: required(executionPath, "PATH"), ...environment },
       output: join(temporary, LOCAL_RENDERER_FILE)
     }), { gitSha, deploymentId: ready.id });
     const state = {

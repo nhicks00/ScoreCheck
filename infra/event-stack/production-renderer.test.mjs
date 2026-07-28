@@ -47,8 +47,13 @@ test("prepares one protected immutable renderer binding and reuses it only for t
   const output = join(root, "renderer");
   const calls = [];
   const provider = fakeProvider(calls);
+  let localBuildEnvironment;
+  const captureLocalRendererEnvironment = async (input) => {
+    localBuildEnvironment = input.environment;
+    return fakeLocalRenderer(input);
+  };
   try {
-    const first = await prepareProductionRenderer({ event, gitSha, repo: "nhicks00/ScoreCheck", repoId: "1130613388", output, provider, webEnv, now: () => new Date("2026-07-23T14:00:00.000Z"), capture: fakeCapture, buildLocalRenderer: fakeLocalRenderer });
+    const first = await prepareProductionRenderer({ event, gitSha, repo: "nhicks00/ScoreCheck", repoId: "1130613388", output, provider, webEnv, executionPath: "/usr/local/bin:/usr/bin:/bin", now: () => new Date("2026-07-23T14:00:00.000Z"), capture: fakeCapture, buildLocalRenderer: captureLocalRendererEnvironment });
     assert.equal(first.status, "READY");
     assert.equal(first.deployment.id, "dpl_renderer123");
     assert.ok(calls.includes("ensureProject"));
@@ -59,6 +64,8 @@ test("prepares one protected immutable renderer binding and reuses it only for t
     assert.equal(first.localRenderer.sha256, "b".repeat(64));
     assert.equal((await stat(join(output, "local-renderer.tar.gz"))).isFile(), true);
     assert.equal(redactRendererState(first).environmentKeys.includes("SUPABASE_SERVICE_ROLE_KEY"), true);
+    assert.equal(localBuildEnvironment.PATH, "/usr/local/bin:/usr/bin:/bin");
+    assert.equal(first.environmentKeys.includes("PATH"), false);
     const second = await prepareProductionRenderer({ event, gitSha, repo: "nhicks00/ScoreCheck", repoId: "1130613388", output, provider, webEnv, capture: fakeCapture, buildLocalRenderer: fakeLocalRenderer });
     assert.deepEqual(second, first);
     assert.equal(calls.filter((call) => call === "ensureProject").length, 1);
