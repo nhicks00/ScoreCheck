@@ -40,6 +40,106 @@ This document distinguishes four states:
 
 The architecture is implemented and substantially exercised. It is not fully qualified. The most important open gates are HLS memory stability, persistent Egress ownership recovery, final eight-camera source admission, end-to-end audio quality, and venue upload reserve.
 
+### 1.1 ScoreCheck is five integrated products
+
+The infrastructure exists to operate five connected products, not merely to relay camera video. They share Camera 1-8 identity, event/court/match state, Supabase authority, the browser program scene, and one operator control surface.
+
+| Product | Primary user | What it delivers | Main implementation |
+| --- | --- | --- | --- |
+| Broadcast production and delivery | producer and YouTube viewer | Camera video, ambient audio, scorebug, optional commentary, interruption slate, and one persistent 1080p output per Camera | venue router, MediaMTX, HLS/WHEP, immutable Next.js program scene, LiveKit Egress, YouTube |
+| Scoring and scoreboard overlays | official scorer, organizer, community witness, and viewer | canonical match score, score authority, set/match progression, synchronized scorebug, and last-good fallback | Supabase Postgres/RPCs, server-side scoring APIs, VolleyballLife poller, overlay materialization, Realtime invalidation, HTTP repair |
+| Remote commentary | remote commentator and producer | low-latency court return, microphone publication, other-commentator return, mix-minus behavior, measured timing, and program audio mix | LiveKit, TURN/TLS, commentary web client, Web Audio, clock exchange, browser telemetry |
+| Monitoring and incident response | on-site operator | one-page desktop/mobile diagnosis from venue uplink through viewer delivery, plus plain-English paging | host agents, router heartbeat, browser heartbeat, Prometheus, Alertmanager, monitor-service, Supabase incidents, Pushover, Healthchecks.io |
+| Turnkey event infrastructure | producer and lifecycle operator | repeatable zero-to-12 startup, readiness/admission, event operation, evidence capture, and provider-zero teardown | DigitalOcean API, protected event manifests, lifecycle controllers, cloud-init, Docker Compose, Reserved IPv4 anchors, runbooks |
+
+These products are intentionally coupled by contracts rather than by process ownership:
+
+- the broadcast can continue when scoring, commentary, monitoring, Vercel APIs, or Supabase are temporarily unavailable;
+- the score system can accept official, manual, designated, or community evidence without allowing each browser to mutate the broadcast score directly;
+- remote commentary can join or leave without restarting the Camera video or Egress job;
+- monitoring observes every product but is not permitted to stop the media path; and
+- lifecycle tooling provisions all required roles from versioned configuration instead of relying on unique state inside a Droplet.
+
+### 1.2 Integrated product flow
+
+```mermaid
+flowchart LR
+  CAM["Permanent Camera identity"] --> MEDIA["Broadcast media pipeline"]
+  MEDIA --> SCENE["Immutable program scene"]
+  OFFICIAL["VolleyballLife / organizer / designated scorer"] --> SCORE["Canonical score authority"]
+  FAN["Community witnesses\nassignment-bound preview + semantic actions"] --> SCORE
+  SCORE --> OVERLAY["Revisioned overlay projection"]
+  OVERLAY --> SCENE
+  COMMENTATOR["Remote commentator\npreview + microphone + timing"] --> MIX["LiveKit + Web Audio mix"]
+  MIX --> SCENE
+  SCENE --> EGRESS["Per-Camera 1080p Egress"]
+  EGRESS --> YOUTUBE["Persistent unlisted YouTube broadcast"]
+  ROUTER["Venue router + Speedify"] -. telemetry .-> MONITOR["Stage-correlated monitor"]
+  MEDIA -. telemetry .-> MONITOR
+  SCORE -. telemetry .-> MONITOR
+  MIX -. telemetry .-> MONITOR
+  EGRESS -. telemetry .-> MONITOR
+  YOUTUBE -. provider/viewer state .-> MONITOR
+  MONITOR --> OPERATOR["Dashboard + Pushover"]
+```
+
+### 1.3 Broadcast production product
+
+For each permanent Camera identity, the production system builds one independent program:
+
+1. the Camera publishes through the fail-closed bonded venue router;
+2. MediaMTX authenticates the source and exposes raw, normalized, preview, program, monitor, and calibration path classes;
+3. the compositor reads buffered HLS for the long-running program and WHEP only where low latency is operationally useful;
+4. the immutable program page renders video, ambient audio, the delayed scorebug, optional commentary, and interruption graphics;
+5. one LiveKit Web Egress job captures that browser scene at 1920x1080; and
+6. the encoded H.264/AAC output publishes to one Camera-owned YouTube stream/broadcast.
+
+The output is designed to outlive a Camera interruption. Source loss changes the scene to an interruption slate; it does not grant permission to stop Egress or complete the YouTube broadcast.
+
+### 1.4 Scoring and scoreboard product
+
+The scoring product has three responsibilities that remain distinct:
+
+- **observation:** accept what an official source, organizer, designated scorer, or community witness reports;
+- **authority:** decide which source is currently permitted to advance the canonical match score; and
+- **presentation:** materialize a revisioned overlay and align its display with buffered program video.
+
+The public `/score` portal discovers the current event and presents its courts. A participant joins a match-scoped assignment and receives an HttpOnly session rather than database credentials. Ordinary fan taps are immutable evidence. A designated scorer or eligible verified consensus can advance the canonical score through transactional server-side RPCs. Organizers can promote/revoke assignments, issue match-scoped invitations, resolve disputes, freeze a court, correct a score, or transition a match through authenticated admin APIs.
+
+Every canonical change carries an authority epoch, expected revision, source identity, state hash, immutable event, and retryable outbox item. The overlay worker publishes only after rechecking that the same court, match, and revision are still current. This prevents a delayed result from an old match from appearing on a newly assigned court.
+
+### 1.5 Remote commentary product
+
+The commentary product gives a remote participant a Camera-scoped browser room rather than access to production infrastructure. The participant:
+
+1. opens `/commentary/court/N` and obtains a short-lived server-issued LiveKit token;
+2. watches the low-latency Camera preview rather than delayed YouTube;
+3. publishes one microphone track to the deterministic Camera room;
+4. hears ambience and remote peer tracks, but never receives their own locally published track back; and
+5. emits preview-timing and clock-exchange samples used by the program mixer.
+
+The program page subscribes to commentary tracks and adds them to a stable Web Audio graph containing per-source delay, gain, dynamics processing, metering, and silence continuity. Commentary failure is therefore an optional audio degradation, not a video or output lifecycle event.
+
+### 1.6 Monitoring and incident-response product
+
+The monitoring product answers an operator question in operational language: **where is the earliest proven failure, which Cameras are affected, and what should I do first?** It combines:
+
+- router and Speedify link/queue/route state;
+- source transport, codec, bitrate, frame, loss, and publisher identity;
+- branch and normalizer progress;
+- browser rendering, HLS delay, freezes, audio, score, commentary, reconnect, and build identity;
+- Egress ownership, health, CPU, memory, and `/dev/shm`;
+- YouTube lifecycle, binding, stream health, issues, and viewer checks; and
+- explicit event expectations so intentionally idle Cameras do not page.
+
+The dashboard is a low-bandwidth diagnostic client. Its overview opens no live media readers, while a selected Camera can open one bounded data-saver or detail reader. Durable incident episodes and Pushover continue to work when the dashboard is closed.
+
+### 1.7 Turnkey event-infrastructure product
+
+The lifecycle product makes the media system disposable without making it improvised. A protected event manifest pins Droplet roles, images, renderer revision, Camera profiles, YouTube ownership, Reserved IPv4 assignments, DNS, monitoring contracts, and evidence locations. Startup creates and qualifies the stack in bounded stages. Teardown first completes/stops event-owned outputs as explicitly directed, exports evidence, then deletes temporary compute and audits provider-zero state.
+
+This product is what allows ScoreCheck to avoid paying for idle Droplets between tournaments while still rebuilding the same tested architecture the day before an event.
+
 ## 2. System Invariants
 
 The design is organized around these non-negotiable properties:
@@ -497,12 +597,17 @@ It is deployed on Vercel. The active implementation root is `apps/web`.
 | `/admin/production` | output start/stop/status controls |
 | `/admin/monitor` | mobile/desktop camera pipeline dashboard |
 | `/admin/commentary` | commentary administration |
+| `/admin/events/[eventId]/fan-scoring` | community assignments, invitations, authority, disputes, and court coverage |
 | `/program/bootstrap` | one-time program credential exchange |
 | `/program/court/N` | immutable browser scene captured by Egress |
 | `/overlay/court/N` | scorebug rendering |
 | `/commentary/court/N` | commentator return video and audio client |
 | `/score` and `/score/session` | official/community scoring surfaces |
 | `/api/overlay/court/N/state` | authoritative overlay repair response |
+| `/api/courts/[courtId]/*` | authenticated match assignment, score correction, freeze, and transition controls |
+| `/api/community/*` | community join, session, evidence, command, heartbeat, media, and release broker |
+| `/api/admin/fan-scoring/*` | assignment promotion/revocation, invitations, authority, and dispute resolution |
+| `/api/commentary/*` | commentator login, token issuance, and scoring-role promotion |
 | `/api/admin/monitor/*` | authenticated sanitized monitoring proxy |
 
 ### 10.3 Immutable renderer binding
@@ -588,6 +693,83 @@ The overlay follows the buffered media timeline. Score changes are applied after
 
 If Supabase or overlay rendering fails, the last valid score remains visible or the scorebug fails transparent. Camera video and YouTube output continue.
 
+### 11.4 Official, manual, and provider scoring
+
+ScoreCheck can obtain an authoritative score from:
+
+- a bounded VolleyballLife poller when the provider is available and healthy;
+- an authenticated organizer using the court admin score and match controls;
+- a designated scorer assigned to the active match; or
+- verified community consensus when that authority mode is explicitly active.
+
+Provider liveness is stored separately from score changes. Repeated identical provider payloads refresh source health without manufacturing score revisions. Poller leases and fencing prevent two workers from owning one source generation. Schema validation, poller errors, and manual fallback preserve operator control when the external provider changes or fails.
+
+Manual controls operate on semantic commands such as adding/removing a point, changing the current set, correcting a score, assigning/advancing a match, freezing/unfreezing a court, or forcing the next match. Browsers never write `score_states` directly.
+
+### 11.5 Live fan and community scoring
+
+Community scoring is a match-scoped evidence system, not a group of browsers competing to overwrite a court row.
+
+The public flow is:
+
+1. `/score` resolves the current event and shows active courts, current match context, scoring coverage, and which court needs help;
+2. a participant joins through `/api/community/join`, receiving a secure HttpOnly device/session cookie and one active assignment for that match;
+3. the session page presents the owned Camera preview, actual team names, set context, canonical score, and explicit Add/Remove controls;
+4. an ordinary witness submits one immutable, idempotent observation for the current base revision;
+5. the participant receives a truthful personal receipt such as recorded, confirmed, differed, late, corrected, or review-triggering; and
+6. the canonical score changes only when the currently authorized source commits or a qualified verified quorum reaches consensus.
+
+The responsive scorer supports phone portrait, tablet portrait, desktop split view, and a contained fullscreen/focus mode. Side switching and control placement are local display preferences; they never swap canonical Team A/Team B request identity.
+
+### 11.6 Community authority, consensus, and disputes
+
+Authority is explicit and epoch-scoped, in descending precedence:
+
+1. `ADMIN_LOCKED`;
+2. `PROVIDER_PRIMARY`;
+3. `DESIGNATED_PRIMARY`;
+4. `VERIFIED_CONSENSUS`; and
+5. `PAUSED_DISPUTE`.
+
+Commands include both the expected canonical revision and authority epoch. A stale browser cannot write through a provider recovery, admin correction, scorer reassignment, or match transition.
+
+Ordinary witnesses contribute evidence but cannot directly own the broadcast. Verified courtside consensus requires at least three eligible witnesses and a two-thirds exact action/team majority. Five eligible votes without a two-thirds result can pause the match for review. Anonymous dissent after an authoritative score remains visible to that participant but does not page the operator; a global post-canonical review requires two active verified-courtside dissenters.
+
+The organizer dashboard can inspect active designated/verified assignments, bounded ordinary-observer summaries, collective coverage, and open disputes. It can promote, verify, end, or revoke an assignment; issue an expiring match-scoped grant; change authority; and apply or dismiss a dispute proposal. Every operation is attributable and revisioned.
+
+### 11.7 Community media and command timing
+
+Fan scoring uses the low-latency `courtN_preview` WHEP path, not the delayed public YouTube player. Direct MediaMTX credentials and stream paths are never returned to the browser. A same-origin media broker:
+
+- derives the Camera path from the HttpOnly assignment;
+- reserves and activates one resource per assignment within court/global capacity limits;
+- retains read-edge credentials and affinity server-side;
+- exposes only an opaque same-origin WHEP resource and DELETE lifecycle;
+- renews a short media lease; and
+- closes resources on release, revocation, match transition, expiry, or lost browser heartbeat.
+
+Remote designated commands fail closed without a fresh brokered frame. Their diagnostic evidence includes WHEP session identity, frame age, media time, connection state, score revision, and command ID. That evidence helps investigation and rejects stale remote taps, but is not falsely presented as cryptographic proof of the physical rally. A verified organizer physically at the court can use the explicit direct-sight exemption.
+
+Ordinary contributions use bounded idempotent retry with one stable client action ID. An uncertain remote authoritative point is not submitted later against a newer rally: reconnect checks whether the original command committed and otherwise requires fresh live entry.
+
+### 11.8 Score-to-program synchronization
+
+The score path from action to viewer is:
+
+```mermaid
+flowchart LR
+  INPUT["Provider / admin / designated scorer / verified quorum"] --> RPC["Transactional command RPC"]
+  RPC --> EVENT["Immutable canonical event"]
+  EVENT --> STATE["Match score projection\nrevision + epoch + hash"]
+  EVENT --> OUTBOX["Retryable overlay outbox"]
+  OUTBOX --> FINALIZER["Court + match + revision recheck"]
+  FINALIZER --> HTTP["Allowlisted HTTP overlay projection\nETag + checksum"]
+  HTTP --> TIMELINE["Program timeline delay"]
+  TIMELINE --> SCOREBUG["Fail-transparent scorebug"]
+```
+
+The overlay client keeps its last valid generation, discards stale or mismatched invalidations, repairs through the authoritative HTTP endpoint, and applies the projection according to the current buffered media timeline. This separates fast score entry from when the viewer should see the update.
+
 ## 12. Commentary and Audio
 
 ### 12.1 Commentary host
@@ -636,6 +818,42 @@ The system therefore still needs:
 - TURN/TLS qualification from a restrictive external network.
 
 Commentary was intentionally absent from the July dry run and did not block output.
+
+### 12.4 Commentator workflow and trust boundary
+
+The commentator application is Camera-scoped:
+
+1. the participant authenticates through the commentary login flow;
+2. the server issues a short-lived token for one deterministic `scorecheck-court-N` LiveKit room;
+3. the browser starts the low-latency Camera return and requests microphone permission;
+4. the participant joins with adaptive receive behavior and publishes one mono microphone track;
+5. a local meter must show speech before the room is considered broadcast-ready; and
+6. the participant may mute, leave, reconnect, or be promoted into a trusted scoring assignment without receiving service credentials.
+
+The client receives remote tracks from other participants but not its own local publication. This provides the mix-minus property for commentary return. Headphones are an operating requirement so camera ambience or peer audio is not acoustically fed back into the microphone.
+
+Commentary failure is isolated by design. A token error, TURN failure, microphone denial, muted track, silent participant, or room disconnect raises commentary state and telemetry; it does not replace the Camera picture or terminate Egress.
+
+### 12.5 Synchronization model
+
+The commentator client reports the presentation time of its low-latency preview and participates in a monotonic clock ping/pong exchange. The program mixer combines those samples with current HLS program timing to estimate how much later the commentary track should be presented.
+
+Each remote audio track owns a bounded `DelayNode` and a controller that moves toward a safe target rather than making an abrupt jump. The configured fallback delay remains active when timing samples are stale or clock quality is insufficient. The browser heartbeat exposes configured, target, and applied delay; clock RTT; sample age; and locked/fallback status.
+
+This transport math is not accepted as proof of semantic lip sync. Event readiness still requires a visible clap/flash and audible observation through the final YouTube program, repeated after a meaningful network or commentary-path change.
+
+### 12.6 Stable program audio graph
+
+The program scene creates one long-lived audio graph for the Egress session:
+
+- HLS Camera audio enters through a `MediaElementAudioSourceNode` and Camera gain;
+- each LiveKit commentary track enters through its own delay node;
+- commentary tracks share gain, compressor, and metering stages;
+- Camera and commentary audio remain separately measurable;
+- an inaudible constant source keeps the graph alive when a source disappears; and
+- audio joins/leaves change nodes without replacing the browser scene or output job.
+
+Health telemetry includes RMS, peak, clipped-sample ratio, silence age, packet loss/receipt, jitter-buffer delay, participant count, published/available track count, and mute state. The final Egress contract remains stereo AAC at 128 kbps/48 kHz; commentary sources are centered in the stereo program.
 
 ## 13. Compositor and Egress Architecture
 
@@ -843,6 +1061,43 @@ Bandwidth controls are deliberate:
 
 The dashboard cannot submit arbitrary PromQL or receive raw provider credentials.
 
+### 15.8 What the monitor must tell the operator
+
+For every permanent Camera identity, the operator view is intended to answer these questions without reading infrastructure jargon:
+
+| Question | Evidence presented |
+| --- | --- |
+| Is the Camera reaching the cloud? | raw-path readiness, publisher identity, transport, codec/profile, resolution, bitrate, fps, bytes, frame errors, and source loss |
+| Is the media being prepared correctly? | normalizer/branch running state, FFmpeg fps/speed/drop/dup, preview/program readiness, and reader counts |
+| Is the actual browser scene moving? | fresh heartbeat, state, rendered fps, HLS delay, reset-safe drops/freezes, reloads/reconnects, black/frozen-frame analysis, and renderer SHA |
+| Is audio usable? | Camera/commentary RMS, peaks, clipping, silence age, room/track state, packet loss, and sync state |
+| Is the scoreboard current? | score source, canonical/render revision, checksum/generation alignment, last update, and stale/error state |
+| Is the final encoder healthy? | exact Egress ID/owner, active count, error, CPU, memory, `/dev/shm`, restart, and admission state |
+| Is YouTube receiving and serving it? | expected stream/broadcast binding, lifecycle, ingestion status, provider health/issues, privacy, and watch/viewer probe |
+| What should Nathan do first? | the earliest correlated incident, affected Cameras, plain-English cause, and one first action |
+
+The page labels streams by permanent Camera number rather than venue court name because the stream credentials follow the hardware across events. Event court labels remain contextual metadata.
+
+### 15.9 Router and Speedify monitoring
+
+The router is a first-class stage in the same dashboard. Its panel includes:
+
+- router heartbeat freshness, CPU, memory, temperature where available, and Speedify process RSS;
+- Speedify connected/disconnected state and active exit identity;
+- each WAN link's availability, mode, latency, loss, throughput contribution, and reconnect transitions;
+- aggregate sent/received rate, packet retransmission/loss, queued bytes, and queue delay;
+- fail-closed policy-rule/table/kill-switch integrity;
+- Camera conntrack/publisher-flow count; and
+- current admission profile versus measured bonded upload reserve.
+
+The router data prevents a healthy Camera from being blamed for a shared bonded-uplink event. It also prevents the opposite error: total bandwidth is not declared the cause unless synchronized link, queue, flow, and media evidence support it.
+
+### 15.10 Notifications and unattended operation
+
+Pushover messages are intentionally short and nontechnical. A page names the Camera or shared dependency, says what viewers are likely experiencing, and tells Nathan the first physical or operator action. Incident deduplication prevents one dependency failure from producing repeated pages for every downstream stage.
+
+Healthchecks.io monitors whether the monitoring system itself is still executing. During active coverage, the external checks can notify Nathan even when the laptop dashboard is closed. Between events they are paused so provider-zero is treated as intentional rather than as an outage.
+
 ## 16. Network and Security Boundaries
 
 ### 16.1 DigitalOcean VPC
@@ -992,6 +1247,12 @@ If final attestation is unhealthy, that failure is preserved in evidence but mus
 | Delivery | YouTube RTMPS, separate stream/broadcast per Camera |
 | Application database | Supabase Postgres, RLS, RPCs, Realtime invalidation |
 | Web application | Next.js 15, React 19, TypeScript, Zod |
+| Official/manual scoring | server-authorized semantic APIs, canonical score projection, provider poller, leases and fencing |
+| Live fan scoring | Community Witness assignments, immutable observations, verified consensus, disputes, receipts, bounded retry |
+| Fan scoring media | assignment-bound same-origin WHEP broker with per-court/global capacity and cleanup leases |
+| Scoreboard overlay | revisioned Supabase projection, transactional outbox, HTTP/ETag repair, Realtime invalidation, buffered timeline alignment |
+| Commentary client | Camera-scoped Next.js client, low-latency preview, LiveKit microphone/peer audio, monotonic timing exchange |
+| Program audio mix | Web Audio media source, per-track delay, gain, compressor, silence continuity, RMS/peak/clipping telemetry |
 | Metrics | Prometheus, node-exporter, custom host agents |
 | Alert grouping | Alertmanager |
 | Incident service | Node.js 22, Express 5, Supabase, local WAL/outbox |
@@ -1091,6 +1352,12 @@ If final attestation is unhealthy, that failure is preserved in evidence but mus
 - `apps/web/src/components/StreamPlayer.tsx`
 - `apps/web/src/lib/programTimeline.ts`
 - `apps/web/src/app/overlay/court/[courtNumber]/OverlayClient.tsx`
+- `apps/web/src/lib/overlayState.ts`
+- `apps/web/src/lib/overlayHttp.ts`
+- `apps/web/src/lib/overlayInvalidation.ts`
+- `apps/web/src/app/commentary/court/[courtNumber]/CommentaryAudioClient.tsx`
+- `apps/web/src/lib/commentary.ts`
+- `apps/web/src/lib/commentarySync.ts`
 
 ### Monitoring
 
@@ -1116,6 +1383,23 @@ If final attestation is unhealthy, that failure is preserved in evidence but mus
 - `apps/web/src/lib/overlayState.ts`
 - `apps/web/src/lib/poller.ts`
 - `apps/web/src/lib/manualScoring.ts`
+
+### Live fan and community scoring
+
+- `apps/web/docs/community-witness-architecture.md`
+- `apps/web/src/app/score/ScorePortalClient.tsx`
+- `apps/web/src/app/score/session/CommunityWitnessSessionClient.tsx`
+- `apps/web/src/app/score/session/CommunityWitnessScorer.tsx`
+- `apps/web/src/app/score/session/CommunityWatchAndScore.tsx`
+- `apps/web/src/app/score/session/CommunityScoreOverlay.tsx`
+- `apps/web/src/lib/communityWitness.ts`
+- `apps/web/src/lib/communityMedia.ts`
+- `apps/web/src/lib/communityPlaybackTiming.ts`
+- `apps/web/src/app/api/community/join/route.ts`
+- `apps/web/src/app/api/community/session/observations/route.ts`
+- `apps/web/src/app/api/community/session/commands/route.ts`
+- `apps/web/src/app/api/community/session/media/whep/route.ts`
+- `apps/web/src/app/admin/events/[eventId]/fan-scoring/page.tsx`
 
 ## 22. Evidence and Related Documents
 
@@ -1148,6 +1432,8 @@ ScoreCheck is a three-plane system:
 - the **media plane** moves each Camera through fail-closed bonded venue routing, MediaMTX, optional isolated normalization, buffered HLS, one dedicated browser compositor, and one persistent YouTube output;
 - the **control plane** uses Vercel and Supabase for event configuration, immutable program scenes, scoring, commentary authorization, production ownership, and operator actions; and
 - the **observability plane** uses read-only host agents, router heartbeats, browser telemetry, Prometheus, Alertmanager, durable incident episodes, Pushover, Healthchecks.io, and a mobile monitor dashboard.
+
+Those planes deliver five integrated products: per-Camera broadcast production, authoritative and community-assisted scoring with synchronized scoreboard overlays, remote commentary with measured audio timing, stage-correlated operator monitoring, and a turnkey temporary event fleet. The products share event/Camera identity and explicit contracts, but each optional subsystem fails without taking the core YouTube picture down.
 
 The architecture's strongest properties are permanent Camera identity, one-camera compositor isolation, persistent YouTube output, control-plane failure tolerance, detailed stage correlation, and reproducible zero-to-12-to-zero infrastructure.
 
