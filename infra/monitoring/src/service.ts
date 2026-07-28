@@ -92,6 +92,7 @@ const activeFaultGates = new Gauge({ name: "scorecheck_active_fault_gates", help
 const routerHeartbeatFresh = new Gauge({ name: "scorecheck_router_heartbeat_fresh", help: "Whether venue-router telemetry was received within twenty seconds.", registers: [registry] });
 const routerConnected = new Gauge({ name: "scorecheck_router_speedify_connected", help: "Whether the venue Speedify tunnel is connected.", registers: [registry] });
 const routerRouteHealthy = new Gauge({ name: "scorecheck_router_camera_route_healthy", help: "Whether SRT and RTMP camera routes and fail-closed guards are correct.", registers: [registry] });
+const routerAdapterPolicyAutomatic = new Gauge({ name: "scorecheck_router_speedify_adapter_policy_automatic", help: "Whether every discovered Speedify input has saved policy Automatic.", registers: [registry] });
 const routerSendBps = new Gauge({ name: "scorecheck_router_bonded_upload_bits_per_second", help: "Current bonded upload throughput.", registers: [registry] });
 const routerEstimatedUploadBps = new Gauge({ name: "scorecheck_router_estimated_upload_capacity_bits_per_second", help: "Current Speedify aggregate upload estimate.", registers: [registry] });
 const routerUploadHeadroomBps = new Gauge({ name: "scorecheck_router_upload_headroom_bits_per_second", help: "Estimated bonded upload capacity minus current upload throughput.", registers: [registry] });
@@ -494,6 +495,9 @@ async function pollAllOnce() {
     && router.routing.primaryRuleCount === 2
     && router.routing.guardRuleCount === 2
     && router.routing.killSwitchActive ? 1 : 0);
+  routerAdapterPolicyAutomatic.set(router.speedify
+    && router.speedify.adapterCount > 0
+    && router.speedify.automaticAdapterCount === router.speedify.adapterCount ? 1 : 0);
   setOptionalGauge(routerSendBps, {}, router.speedify?.sendBps ?? null);
   setOptionalGauge(routerEstimatedUploadBps, {}, router.speedify?.estimatedUploadBps ?? null);
   setOptionalGauge(routerUploadHeadroomBps, {}, router.speedify?.uploadHeadroomBps ?? null);

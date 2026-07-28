@@ -642,6 +642,7 @@ function RouterBand({ router, nowMs }: { router: MonitorRouter; nowMs: number })
       </div>
       <div className="monitor-router-status-line">
         <span data-ok={speedify?.state === "CONNECTED"}>{speedify?.state === "CONNECTED" ? "Speedify connected" : "Speedify not connected"}</span>
+        <span data-ok={Boolean(speedify?.adapterCount) && speedify?.automaticAdapterCount === speedify?.adapterCount}>{speedify ? `${speedify.automaticAdapterCount}/${speedify.adapterCount} inputs set to Automatic` : "Input policy unavailable"}</span>
         <span data-ok={routeReady}>{routeReady ? "Camera traffic protected" : "Camera route protection needs attention"}</span>
         <span data-ok={ageMs != null && ageMs <= 20_000}>{ageMs == null ? "No router status received" : `Updated ${formatDuration(ageMs)} ago`}</span>
         {speedify?.failoverCount != null && <span data-ok="true">{speedify.failoverCount} failovers this session</span>}
@@ -652,10 +653,10 @@ function RouterBand({ router, nowMs }: { router: MonitorRouter; nowMs: number })
           const pressure = uplink.inFlightBytes != null && uplink.inFlightWindowBytes
             ? uplink.inFlightBytes / uplink.inFlightWindowBytes
             : null;
-          const degraded = !uplink.connected || uplink.uploadCongested || uplink.poorConnection || uplink.slowConnection;
+          const degraded = uplink.savedPriority !== "automatic" || !uplink.connected || uplink.uploadCongested || uplink.poorConnection || uplink.slowConnection;
           return (
             <article className="monitor-uplink" key={uplink.id} data-degraded={degraded}>
-              <div className="monitor-uplink-heading"><Icon size={17} aria-hidden="true" /><div><strong>{uplinkName(uplink.id, uplink.type)}</strong><span>{uplink.isp ?? "Provider not identified"} · {friendlyState(uplink.priority)}</span></div><StateDot state={degraded ? "DEGRADED" : "HEALTHY"} /></div>
+              <div className="monitor-uplink-heading"><Icon size={17} aria-hidden="true" /><div><strong>{uplinkName(uplink.id, uplink.type)}</strong><span>{uplink.isp ?? "Provider not identified"} · {uplink.savedPriority === "automatic" ? "Automatic" : `Saved ${friendlyState(uplink.savedPriority)}`} · currently {friendlyState(uplink.priority)}</span></div><StateDot state={degraded ? "DEGRADED" : "HEALTHY"} /></div>
               <div className="monitor-uplink-metrics">
                 <Metric label="Contribution" value={formatBitrate(uplink.sendBps)} />
                 <Metric label="Available estimate" value={formatBitrate(uplink.estimatedUploadBps)} />

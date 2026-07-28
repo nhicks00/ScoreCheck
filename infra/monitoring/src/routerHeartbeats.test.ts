@@ -5,14 +5,17 @@ const now = new Date("2026-07-27T22:00:10.000Z");
 
 function heartbeat(overrides: Record<string, unknown> = {}) {
   return {
-    version: 1,
+    version: 2,
     sessionId: "120650f2-ed19-479c-933e-b0df1246ba81",
     sequence: 1,
     sampledAt: "2026-07-27T22:00:09.000Z",
     speedify: {
       state: "CONNECTED",
+      softwareVersion: "17.0.4-12943",
       bondingMode: "streaming",
       transportMode: "udp",
+      adapterCount: 2,
+      automaticAdapterCount: 2,
       sendBps: 24_000_000,
       receiveBps: 300_000,
       estimatedUploadBps: 40_000_000,
@@ -50,13 +53,20 @@ function heartbeat(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function uplink(id: string, type: "ethernet" | "cellular", priority: "always" | "secondary", sendBps: number) {
+function uplink(
+  id: string,
+  type: "ethernet" | "cellular",
+  priority: "always" | "secondary",
+  sendBps: number,
+  savedPriority: "automatic" | "always" | "secondary" | "backup" | "never" | "unknown" = "automatic"
+) {
   return {
     id,
     isp: id === "eth0" ? "Venue broadband" : "Venue cellular",
     type,
     connected: true,
     priority,
+    savedPriority,
     sendBps,
     receiveBps: 100_000,
     estimatedUploadBps: 20_000_000,
@@ -97,6 +107,18 @@ describe("router heartbeat manager", () => {
     manager.accept(input, now);
     expect(manager.current(now.getTime()).state).toBe("DEGRADED");
     expect(manager.current(now.getTime() + 20_001).state).toBe("UNKNOWN");
+  });
+
+  it("surfaces saved adapter-policy drift separately from the working role", () => {
+    const warning = heartbeat();
+    warning.speedify.automaticAdapterCount = 1;
+    warning.uplinks[1]!.savedPriority = "secondary";
+    expect(new RouterHeartbeatManager().accept(warning, now).state).toBe("DEGRADED");
+
+    const disabled = heartbeat();
+    disabled.speedify.automaticAdapterCount = 1;
+    disabled.uplinks[1]!.savedPriority = "never";
+    expect(new RouterHeartbeatManager().accept(disabled, now).state).toBe("CRITICAL");
   });
 
   it("rejects replayed sequences, stale samples, and unbounded payload fields", () => {

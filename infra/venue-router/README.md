@@ -105,6 +105,13 @@ and can amplify its queueing. This remains an operator-verified topology check
 because matching ISP names alone cannot distinguish duplicate paths from two
 independent circuits from the same carrier.
 
+Every discovered Speedify input must keep its saved priority set to `automatic`.
+Speedify may independently report a working role such as `always` or
+`secondary`; that is scheduler state, not an operator policy change. The router
+heartbeat reports both values, and active-event monitoring pages if any saved
+policy drifts from `automatic`. A temporary diagnostic change must be restored
+before the diagnostic ends.
+
 ## July 13 OOM incident
 
 The overnight Speedify reconnect was not evidence that eight streams exceeded

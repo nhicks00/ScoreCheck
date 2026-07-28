@@ -255,6 +255,18 @@ groups:
           summary: "Camera traffic is not protected by the bonded fail-closed route."
           first_action: "Keep the cameras streaming and contact the technical operator. Do not change camera settings."
 
+      - alert: ScoreCheckVenueSpeedifyInputPolicyChanged
+        expr: (scorecheck_router_speedify_adapter_policy_automatic == 0) and on() (sum(scorecheck_court_media_required) > 0)
+        for: 10s
+        labels:
+          severity: critical
+          stage: VENUE
+          issue_code: VENUE_SPEEDIFY_INPUT_POLICY_CHANGED
+          root_dependency: venue-router
+        annotations:
+          summary: "One or more venue internet connections are no longer set to Automatic."
+          first_action: "Keep the cameras streaming. In Speedify, set every Ethernet, Wi-Fi, cellular, tethered, and Starlink connection to Automatic."
+
       - alert: ScoreCheckProgramBrowserMissing
         expr: (scorecheck_program_browser_heartbeat_fresh == 0) and on(court) (scorecheck_program_browser_required == 1)
         for: 15s

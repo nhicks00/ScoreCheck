@@ -1093,6 +1093,8 @@ tests:
         values: '0+0x20'
       - series: 'scorecheck_router_camera_route_healthy'
         values: '0+0x20'
+      - series: 'scorecheck_router_speedify_adapter_policy_automatic'
+        values: '0+0x20'
       - series: 'scorecheck_court_media_required{court="1"}'
         values: '1+0x20'
     alert_rule_test:
@@ -1118,6 +1120,17 @@ tests:
             exp_annotations:
               summary: Camera traffic is not protected by the bonded fail-closed route.
               first_action: Keep the cameras streaming and contact the technical operator. Do not change camera settings.
+      - eval_time: 20s
+        alertname: ScoreCheckVenueSpeedifyInputPolicyChanged
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              stage: VENUE
+              issue_code: VENUE_SPEEDIFY_INPUT_POLICY_CHANGED
+              root_dependency: venue-router
+            exp_annotations:
+              summary: One or more venue internet connections are no longer set to Automatic.
+              first_action: Keep the cameras streaming. In Speedify, set every Ethernet, Wi-Fi, cellular, tethered, and Starlink connection to Automatic.
 
   - name: shared SRT congestion recovery waits for browser metrics to age out
     interval: 5s
