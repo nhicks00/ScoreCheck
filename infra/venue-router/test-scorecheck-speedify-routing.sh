@@ -171,6 +171,10 @@ printf '%s\n' "$*" >>"$state/speedify.log"
 if [ "${1:-}" = "-s" ] && [ "${2:-}" = "state" ]; then
   value="$(cat "$state/speedify.state" 2>/dev/null || printf 'LOGGED_IN')"
   printf '{"state":"%s"}\n' "$value"
+elif [ "${1:-}" = "show" ] && [ "${2:-}" = "adapters" ]; then
+  if [ "${MOCK_SPEEDIFY_NO_ADAPTERS:-0}" -ne 1 ]; then
+    printf '[{"adapterID":"apcli0"},{"adapterID":"eth0"},{"adapterID":"rmnet_mhi0"},{"adapterID":"eth2"}]\n'
+  fi
 elif [ "${1:-}" = "connect" ]; then
   if [ "${MOCK_SPEEDIFY_AUTO_CONNECT:-0}" -eq 1 ]; then
     printf 'CONNECTED\n' >"$state/speedify.state"
@@ -182,6 +186,15 @@ elif [ "${1:-}" = "disconnect" ]; then
 else
   exit 0
 fi
+MOCK
+
+cat >"$MOCK_BIN/jsonfilter" <<'MOCK'
+#!/bin/sh
+set -eu
+payload="$(cat)"
+[ "${1:-}" = "-e" ] && [ "${2:-}" = "@[*].adapterID" ] || exit 64
+[ -n "$payload" ] || exit 0
+printf '%s\n' apcli0 eth0 rmnet_mhi0 eth2
 MOCK
 
 cat >"$MOCK_BIN/conntrack" <<'MOCK'
@@ -262,11 +275,25 @@ rm -f "$MOCK_STATE/interface-up"
 assert_rule_count 900 0
 assert_rule_count 901 2
 assert_contains "$MOCK_STATE/speedify.log" '^streaming ports set 8890/udp 1935/tcp$'
-assert_contains "$MOCK_STATE/speedify.log" '^mode streaming$'
+assert_contains "$MOCK_STATE/speedify.log" '^adapter priority apcli0 automatic$'
+assert_contains "$MOCK_STATE/speedify.log" '^adapter priority eth0 automatic$'
+assert_contains "$MOCK_STATE/speedify.log" '^adapter priority rmnet_mhi0 automatic$'
+assert_contains "$MOCK_STATE/speedify.log" '^adapter priority eth2 automatic$'
+assert_contains "$MOCK_STATE/speedify.log" '^mode speed$'
 assert_contains "$MOCK_STATE/speedify.log" '^fixeddelay 75$'
 assert_contains "$MOCK_STATE/speedify.log" '^packetpool default$'
 if ip route get "$INGEST_IP" ipproto udp dport 8890 >/dev/null 2>&1; then
   fail "SRT resolved to a direct route while Speedify was unavailable"
+fi
+
+# Reconnect remains fail-closed if uplinks cannot be enumerated and normalized.
+rm -f "$MOCK_STATE/runtime/last-connect-at"
+: >"$MOCK_STATE/speedify.log"
+if MOCK_SPEEDIFY_NO_ADAPTERS=1 "$ROUTING_TOOL" reconcile-once >/dev/null 2>&1; then
+  fail "reconcile accepted an empty Speedify adapter inventory"
+fi
+if grep -q '^connect last$' "$MOCK_STATE/speedify.log"; then
+  fail "reconcile connected before proving automatic uplink priorities"
 fi
 
 # Event teardown requires both explicit confirmation and zero active flows.
