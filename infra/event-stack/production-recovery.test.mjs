@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { buildEventManifest, loadManifestInputs } from "./event-manifest.mjs";
 import { deriveOpaqueRtmpKey } from "../mediamtx/opaque-rtmp-key.mjs";
-import { buildProductionMaterial, buildProductionSecretFiles, derivedMediaReadCredentials, migrateMonitoringEnvironment, migrateProductionMaterial } from "./production-recovery.mjs";
+import { buildProductionMaterial, buildProductionSecretFiles, derivedMediaReadCredentials, migrateMonitoringEnvironment, migrateProductionMaterial, migrateWebRuntimeEnvironment } from "./production-recovery.mjs";
 import { createSyntheticRehearsalVenueProfile } from "./venue-admission.mjs";
 
 const inputs = await loadManifestInputs();
@@ -264,4 +264,20 @@ test("rejects an existing sentinel, dead-man reuse, malformed URLs, and Twilio r
     sourceEnvironment,
     currentEnvironment: { HEALTHCHECKS_SENTINEL_PING_URL: "https://hc-ping.com/platform-sentinel" }
   }), /must not contain Twilio credentials/);
+});
+
+test("adds the buffered HLS origin to a pre-HLS production recovery runtime", () => {
+  const sourceEnvironment = fixture().webEnvironment;
+  delete sourceEnvironment.MEDIAMTX_HLS_BASE_URL;
+  const migrated = migrateWebRuntimeEnvironment(sourceEnvironment);
+  assert.equal(migrated.MEDIAMTX_HLS_BASE_URL, sourceEnvironment.MEDIAMTX_WHEP_BASE_URL);
+  assert.equal(migrated.PROGRAM_PAGE_TOKEN, sourceEnvironment.PROGRAM_PAGE_TOKEN);
+});
+
+test("rejects an existing or non-origin HLS runtime migration", () => {
+  assert.throws(() => migrateWebRuntimeEnvironment(fixture().webEnvironment), /already contains/);
+  const sourceEnvironment = fixture().webEnvironment;
+  delete sourceEnvironment.MEDIAMTX_HLS_BASE_URL;
+  sourceEnvironment.MEDIAMTX_WHEP_BASE_URL = "https://preview.example.test/whep";
+  assert.throws(() => migrateWebRuntimeEnvironment(sourceEnvironment), /exact HTTPS origin/);
 });

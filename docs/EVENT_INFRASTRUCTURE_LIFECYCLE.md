@@ -636,6 +636,20 @@ ID, and browser contracts are captured in the protected output. Never weaken
 the shared application project's Vercel Authentication to make its generated
 deployment URLs usable by Egress.
 
+Recovery sources captured before buffered HLS do not contain the required HLS
+origin. Migrate such a source once, while provider compute is zero, rather than
+editing protected environment files or checksum markers by hand:
+
+```bash
+node infra/event-stack/production-recovery.mjs refresh-web-runtime \
+  --source /absolute/protected/pre-hls-production-source \
+  --output /absolute/protected/current-production-source
+```
+
+The command derives the HLS origin from the already protected exact HTTPS WHEP
+origin, copies every other protected input unchanged, rewrites the integrity
+marker, and verifies the complete current recovery contract.
+
 Apply migration `031_buffered_program_commentary_timing.sql` before deploying
 the buffered-HLS renderer. It widens only program-heartbeat timing evidence to
 the same 30000 ms bound as the browser DelayNode; the persisted human

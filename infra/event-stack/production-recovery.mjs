@@ -33,6 +33,7 @@ const LOCAL_RENDERER_RUNTIME_KEYS = Object.freeze([
   "PROGRAM_PAGE_TOKEN",
   "SUPABASE_SERVICE_ROLE_KEY"
 ]);
+const PRE_HLS_LOCAL_RENDERER_RUNTIME_KEYS = Object.freeze(LOCAL_RENDERER_RUNTIME_KEYS.filter((key) => key !== "MEDIAMTX_HLS_BASE_URL"));
 const SOURCE_FILES = Object.freeze([
   "material.json",
   "monitoring.env",
@@ -92,6 +93,11 @@ async function main() {
   }
   if (options.command === "refresh-monitoring") {
     const result = await refreshProductionRecoveryMonitoring(options);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+  if (options.command === "refresh-web-runtime") {
+    const result = await refreshProductionRecoveryWebRuntime(options);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
   }
@@ -254,6 +260,47 @@ export async function refreshProductionRecoveryMonitoring({ source, monitoringEn
   }
 }
 
+export async function refreshProductionRecoveryWebRuntime({ source, output }) {
+  const previous = await loadPreHlsProductionRecoverySource(source);
+  const refreshedWebRuntime = migrateWebRuntimeEnvironment(previous.webEnvironment);
+  const target = normalizedAbsolute(output, "production recovery source");
+  await assertProtectedParent(target);
+  await assertAbsent(target, "production recovery source");
+  const temporary = `${target}.rendering-${process.pid}`;
+  await rm(temporary, { recursive: true, force: true });
+  await mkdir(join(temporary, "wireguard"), { recursive: true, mode: 0o700 });
+  await chmod(temporary, 0o700);
+  await chmod(join(temporary, "wireguard"), 0o700);
+  try {
+    for (const name of SOURCE_FILES.filter((entry) => entry !== "web-runtime.env")) {
+      await copyFile(join(previous.root, name), join(temporary, name));
+      await chmod(join(temporary, name), 0o600);
+    }
+    await writeProtected(join(temporary, "web-runtime.env"), envFile(refreshedWebRuntime));
+    const marker = {
+      ...previous.marker,
+      createdAt: new Date().toISOString(),
+      webRuntimeMigratedFromSourceSha256: previous.sourceSha256,
+      hlsOriginSha256: sha256(Buffer.from(refreshedWebRuntime.MEDIAMTX_HLS_BASE_URL, "utf8")),
+      files: await hashesForFiles(temporary, SOURCE_FILES)
+    };
+    await writeProtected(join(temporary, "SOURCE_COMPLETE.json"), `${JSON.stringify(marker, null, 2)}\n`);
+    await rename(temporary, target);
+    await chmod(target, 0o700);
+    const loaded = await loadProductionRecoverySource(target);
+    return {
+      status: "PASS",
+      source: target,
+      schemaVersion: loaded.marker.schemaVersion,
+      fileCount: Object.keys(loaded.marker.files).length,
+      sourceSha256: loaded.sourceSha256
+    };
+  } catch (error) {
+    await rm(temporary, { recursive: true, force: true });
+    throw error;
+  }
+}
+
 export function migrateMonitoringEnvironment({ sourceEnvironment, currentEnvironment }) {
   requireEnvironment(sourceEnvironment, PRE_SENTINEL_MONITORING_KEYS);
   rejectTwilio(sourceEnvironment);
@@ -267,6 +314,19 @@ export function migrateMonitoringEnvironment({ sourceEnvironment, currentEnviron
     throw new Error("Healthchecks sentinel ping URL must not reuse a monitor dead-man URL");
   }
   return filterMonitoringEnvironment({ ...sourceEnvironment, HEALTHCHECKS_SENTINEL_PING_URL: sentinel });
+}
+
+export function migrateWebRuntimeEnvironment(sourceEnvironment) {
+  requireEnvironment(sourceEnvironment, PRE_HLS_LOCAL_RENDERER_RUNTIME_KEYS);
+  if (sourceEnvironment.MEDIAMTX_HLS_BASE_URL?.trim()) {
+    throw new Error("production recovery source already contains the HLS media origin");
+  }
+  const whep = new URL(required(sourceEnvironment, "MEDIAMTX_WHEP_BASE_URL"));
+  if (whep.protocol !== "https:" || whep.origin !== whep.href.replace(/\/$/u, "")) {
+    throw new Error("MEDIAMTX_WHEP_BASE_URL must be an exact HTTPS origin");
+  }
+  return Object.fromEntries(Object.entries({ ...sourceEnvironment, MEDIAMTX_HLS_BASE_URL: whep.origin })
+    .sort(([left], [right]) => left.localeCompare(right)));
 }
 
 export function migrateProductionMaterial({ legacyMaterial, destinations }) {
@@ -372,7 +432,15 @@ async function loadPreSentinelProductionRecoverySource(sourceDirectory) {
   return source;
 }
 
-async function loadProductionRecoverySourceWithKeys(sourceDirectory, monitoringKeys) {
+async function loadPreHlsProductionRecoverySource(sourceDirectory) {
+  const source = await loadProductionRecoverySourceWithKeys(sourceDirectory, REQUIRED_MONITORING_KEYS, PRE_HLS_LOCAL_RENDERER_RUNTIME_KEYS);
+  if (source.webEnvironment.MEDIAMTX_HLS_BASE_URL?.trim()) {
+    throw new Error("production recovery source already contains the HLS media origin");
+  }
+  return source;
+}
+
+async function loadProductionRecoverySourceWithKeys(sourceDirectory, monitoringKeys, webKeys = LOCAL_RENDERER_RUNTIME_KEYS) {
   const root = normalizedAbsolute(sourceDirectory, "production recovery source");
   await assertProtectedDirectory(root, "production recovery source");
   const marker = await readProtectedJson(join(root, "SOURCE_COMPLETE.json"), "production recovery marker");
@@ -397,7 +465,7 @@ async function loadProductionRecoverySourceWithKeys(sourceDirectory, monitoringK
   rejectTwilio(monitoringEnvironment);
   const sourceSha256 = sha256(Buffer.from(stableJson({ captureSha256: marker.captureSha256, files: marker.files }), "utf8"));
   const webEnvironment = await loadProtectedEnv(join(root, "web-runtime.env"));
-  requireEnvironment(webEnvironment, LOCAL_RENDERER_RUNTIME_KEYS);
+  requireEnvironment(webEnvironment, webKeys);
   return { root, marker, material, monitoringEnvironment, webEnvironment, sourceSha256 };
 }
 
@@ -810,7 +878,7 @@ async function assertAbsent(path, label) {
 function parseArgs(argv) {
   const command = argv[0];
   if ([undefined, "help", "-h", "--help"].includes(command)) return null;
-  if (!new Set(["capture", "migrate-youtube", "refresh-monitoring", "verify"]).has(command)) throw new Error("command must be capture, migrate-youtube, refresh-monitoring, or verify");
+  if (!new Set(["capture", "migrate-youtube", "refresh-monitoring", "refresh-web-runtime", "verify"]).has(command)) throw new Error("command must be capture, migrate-youtube, refresh-monitoring, refresh-web-runtime, or verify");
   const options = { command, captureRoot: null, output: null, source: null, destinations: null, monitoringEnvironment: null };
   const mapping = new Map([["--capture-root", "captureRoot"], ["--output", "output"], ["--source", "source"], ["--destinations", "destinations"], ["--monitoring-env", "monitoringEnvironment"]]);
   for (let index = 1; index < argv.length; index += 1) {
@@ -823,12 +891,13 @@ function parseArgs(argv) {
   if (command === "capture" && (!options.captureRoot || !options.output || options.source || options.destinations || options.monitoringEnvironment)) throw new Error("capture requires --capture-root and --output");
   if (command === "migrate-youtube" && (!options.source || !options.destinations || !options.output || options.captureRoot || options.monitoringEnvironment)) throw new Error("migrate-youtube requires --source, --destinations, and --output");
   if (command === "refresh-monitoring" && (!options.source || !options.monitoringEnvironment || !options.output || options.captureRoot || options.destinations)) throw new Error("refresh-monitoring requires --source, --monitoring-env, and --output");
+  if (command === "refresh-web-runtime" && (!options.source || !options.output || options.captureRoot || options.destinations || options.monitoringEnvironment)) throw new Error("refresh-web-runtime requires --source and --output");
   if (command === "verify" && (!options.source || options.captureRoot || options.output || options.destinations || options.monitoringEnvironment)) throw new Error("verify requires --source");
   return options;
 }
 
 function usage() {
-  process.stdout.write("Usage:\n  node infra/event-stack/production-recovery.mjs capture --capture-root /PROTECTED/CAPTURE --output /PROTECTED/SOURCE\n  node infra/event-stack/production-recovery.mjs migrate-youtube --source /PROTECTED/V1-SOURCE --destinations /PROTECTED/destinations.json --output /PROTECTED/V2-SOURCE\n  node infra/event-stack/production-recovery.mjs refresh-monitoring --source /PROTECTED/V2-SOURCE --monitoring-env /PROTECTED/monitoring.env --output /PROTECTED/REFRESHED-SOURCE\n  node infra/event-stack/production-recovery.mjs verify --source /PROTECTED/SOURCE\n");
+  process.stdout.write("Usage:\n  node infra/event-stack/production-recovery.mjs capture --capture-root /PROTECTED/CAPTURE --output /PROTECTED/SOURCE\n  node infra/event-stack/production-recovery.mjs migrate-youtube --source /PROTECTED/V1-SOURCE --destinations /PROTECTED/destinations.json --output /PROTECTED/V2-SOURCE\n  node infra/event-stack/production-recovery.mjs refresh-monitoring --source /PROTECTED/V2-SOURCE --monitoring-env /PROTECTED/monitoring.env --output /PROTECTED/REFRESHED-SOURCE\n  node infra/event-stack/production-recovery.mjs refresh-web-runtime --source /PROTECTED/PRE-HLS-SOURCE --output /PROTECTED/REFRESHED-SOURCE\n  node infra/event-stack/production-recovery.mjs verify --source /PROTECTED/SOURCE\n");
 }
 
 function envFile(values) {
