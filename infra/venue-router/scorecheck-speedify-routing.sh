@@ -275,9 +275,17 @@ ensure_primary_routes() {
 }
 
 configure_speedify() {
+  adapter_ids="$(speedify_cli show adapters | jsonfilter -e '@[*].adapterID')" || return 1
+  if [ -z "$adapter_ids" ]; then
+    log "Speedify reported no uplink adapters; refusing to reconnect"
+    return 1
+  fi
+  for adapter_id in $adapter_ids; do
+    speedify_cli adapter priority "$adapter_id" automatic >/dev/null
+  done
   speedify_cli route default off >/dev/null
   speedify_cli streaming ports set 8890/udp 1935/tcp >/dev/null
-  speedify_cli mode streaming >/dev/null
+  speedify_cli mode speed >/dev/null
   speedify_cli transport udp >/dev/null
   speedify_cli fixeddelay "$SPEEDIFY_FIXED_DELAY_MS" >/dev/null
   speedify_cli packetpool "$SPEEDIFY_PACKET_POOL" >/dev/null
@@ -303,7 +311,10 @@ connect_if_due() {
     return 0
   fi
   printf '%s\n' "$now" >"$LAST_CONNECT_FILE"
-  configure_speedify || true
+  if ! configure_speedify; then
+    log "Speedify configuration failed; camera traffic remains blocked"
+    return 1
+  fi
   speedify_cli connect last >/dev/null 2>&1 || true
   log "requested Speedify reconnect; camera traffic remains blocked until the tunnel is healthy"
 }
@@ -342,7 +353,7 @@ guard_if_enabled() {
 
 preflight() {
   validate_capacity "${1:-}"
-  for command in speedify_cli conntrack ip iptables flock uci; do
+  for command in speedify_cli jsonfilter conntrack ip iptables flock uci; do
     require_command "$command"
   done
   validate_camera_radio
