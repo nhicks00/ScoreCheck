@@ -60,8 +60,8 @@ export function renderMediaMtxConfigs({ mediaTemplate, caddyTemplate, environmen
   const caddyConfig = caddyTemplate
     .replaceAll("__PUBLIC_HOST__", publicHost)
     .replaceAll("__ACME_EMAIL__", acmeEmail)
-    .replaceAll("__DERIVED_READ_USER__", JSON.stringify(derivedReadUser))
-    .replaceAll("__DERIVED_READ_PASS__", JSON.stringify(derivedReadPass));
+    .replaceAll("__DERIVED_READ_USER__", derivedReadUser)
+    .replaceAll("__DERIVED_READ_PASS__", derivedReadPass);
   for (const [name, value] of Object.entries({ mediaConfig, caddyConfig })) {
     if (/__[A-Z0-9_]+__/u.test(value)) throw new Error(`${name} still contains an unresolved placeholder.`);
   }

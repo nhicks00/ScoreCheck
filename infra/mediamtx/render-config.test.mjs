@@ -66,8 +66,9 @@ test("renders an isolated MediaMTX public host and matching TLS health proxy", (
   assert.match(rendered.caddyConfig, /handle \/healthz/u);
   assert.match(rendered.caddyConfig, /\^\/court\[1-8\]_\(preview\|program\|monitor\|calibration\)\/whep/u);
   assert.match(rendered.caddyConfig, /\^\/court\[1-8\]_\(preview\|program\|monitor\|calibration\)\/\.\*\$/u);
-  assert.match(rendered.caddyConfig, /query user="event_reader"/u);
-  assert.match(rendered.caddyConfig, new RegExp(`pass="${"x".repeat(32)}"`, "u"));
+  assert.match(rendered.caddyConfig, /query user=event_reader/u);
+  assert.match(rendered.caddyConfig, new RegExp(`pass=${"x".repeat(32)}`, "u"));
+  assert.doesNotMatch(rendered.caddyConfig, /query user="|pass="/u);
   assert.match(rendered.caddyConfig, /\^\/court\[1-8\]_\(raw\|normalized\|preview\|program\|monitor\|calibration\)\/\.\*\$/u);
   assert.match(rendered.caddyConfig, /respond "unauthorized" 401/u);
   assert.match(rendered.caddyConfig, /reverse_proxy 127\.0\.0\.1:8888/u);
