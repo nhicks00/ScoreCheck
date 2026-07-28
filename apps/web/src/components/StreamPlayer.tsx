@@ -22,9 +22,12 @@ import {
   type StreamTimingSample
 } from "@/lib/rtcTiming";
 import {
+  PROGRAM_HLS_BACK_BUFFER_SECONDS,
   PROGRAM_HLS_BUFFER_LENGTH_SECONDS,
   PROGRAM_HLS_INITIAL_SEGMENT_COUNT,
   PROGRAM_HLS_MAX_LATENCY_MS,
+  PROGRAM_HLS_MAX_BUFFER_BYTES,
+  PROGRAM_HLS_STARTUP_BUFFER_SECONDS,
   PROGRAM_HLS_TARGET_LATENCY_MS
 } from "@/lib/programTimeline";
 
@@ -266,6 +269,7 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
     let hlsFailures = 0;
     let hlsFrameCallbackId: number | null = null;
     let hlsHealthTimer: number | null = null;
+    let hlsStartupTimer: number | null = null;
     let hlsPresentedFrames = 0;
     let previousHlsPresentedFrames = 0;
     let previousHlsSampledAtMs = 0;
@@ -329,6 +333,8 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
       timingTimer = null;
       if (hlsHealthTimer != null) window.clearInterval(hlsHealthTimer);
       hlsHealthTimer = null;
+      if (hlsStartupTimer != null) window.clearInterval(hlsStartupTimer);
+      hlsStartupTimer = null;
       if (hlsFrameCallbackId != null && typeof video.cancelVideoFrameCallback === "function") {
         video.cancelVideoFrameCallback(hlsFrameCallbackId);
       }
@@ -440,6 +446,28 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
       hlsFrameCallbackId = video.requestVideoFrameCallback(sampleFrame);
       reportHlsHealth();
       hlsHealthTimer = window.setInterval(reportHlsHealth, STREAM_TIMING_INTERVAL_MS);
+    }
+
+    function playHlsWhenBuffered() {
+      if (hlsStartupTimer != null) return;
+      const attemptPlayback = () => {
+        if (cancelled) return;
+        let forwardBufferSeconds = 0;
+        for (let index = 0; index < video.buffered.length; index += 1) {
+          if (video.currentTime >= video.buffered.start(index) - 0.1
+            && video.currentTime <= video.buffered.end(index) + 0.1) {
+            forwardBufferSeconds = Math.max(0, video.buffered.end(index) - video.currentTime);
+            break;
+          }
+        }
+        if (forwardBufferSeconds < PROGRAM_HLS_STARTUP_BUFFER_SECONDS) return;
+        if (hlsStartupTimer != null) window.clearInterval(hlsStartupTimer);
+        hlsStartupTimer = null;
+        void video.play().catch(() => setStatus("Tap play to start the stream."));
+      };
+      attemptPlayback();
+      if (!video.paused) return;
+      hlsStartupTimer = window.setInterval(attemptPlayback, 250);
     }
 
     async function startWhep() {
@@ -600,8 +628,11 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
           const instance = new Hls({
             lowLatencyMode: false,
             initialLiveManifestSize: PROGRAM_HLS_INITIAL_SEGMENT_COUNT,
-            backBufferLength: PROGRAM_HLS_BUFFER_LENGTH_SECONDS,
+            backBufferLength: PROGRAM_HLS_BACK_BUFFER_SECONDS,
             maxBufferLength: PROGRAM_HLS_BUFFER_LENGTH_SECONDS,
+            maxMaxBufferLength: PROGRAM_HLS_BUFFER_LENGTH_SECONDS,
+            maxBufferSize: PROGRAM_HLS_MAX_BUFFER_BYTES,
+            frontBufferFlushThreshold: PROGRAM_HLS_BUFFER_LENGTH_SECONDS,
             liveSyncDuration: PROGRAM_HLS_TARGET_LATENCY_MS / 1000,
             liveMaxLatencyDuration: PROGRAM_HLS_MAX_LATENCY_MS / 1000,
             maxLiveSyncPlaybackRate: 1,
@@ -612,9 +643,9 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
             if (cancelled || hls !== instance) return;
             if (data.fatal) failHls();
           });
+          instance.on(Hls.Events.BUFFER_APPENDED, () => playHlsWhenBuffered());
           instance.loadSource(hlsUrl);
           instance.attachMedia(video);
-          void video.play().catch(() => setStatus("Tap play to start the stream."));
           return;
         }
         if (video.canPlayType("application/vnd.apple.mpegurl")) {
