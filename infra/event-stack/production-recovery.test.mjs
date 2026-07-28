@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { buildEventManifest, loadManifestInputs } from "./event-manifest.mjs";
 import { deriveOpaqueRtmpKey } from "../mediamtx/opaque-rtmp-key.mjs";
-import { buildProductionMaterial, buildProductionSecretFiles, derivedMediaReadCredentials, migrateMonitoringEnvironment, migrateProductionMaterial, migrateWebRuntimeEnvironment } from "./production-recovery.mjs";
+import { buildProductionMaterial, buildProductionSecretFiles, derivedMediaReadCredentials, migrateMonitoringEnvironment, migrateProductionMaterial, migrateWebRuntimeEnvironment, replaceProductionDestinations } from "./production-recovery.mjs";
 import { createSyntheticRehearsalVenueProfile } from "./venue-admission.mjs";
 
 const inputs = await loadManifestInputs();
@@ -88,6 +88,24 @@ function fixture() {
     };
   });
   return { globalConfig, pathConfig, webEnvironment, monitoringEnvironment, compositorEnvironments };
+}
+
+function destinationFixture(prefix = "production") {
+  return {
+    schemaVersion: 1,
+    streams: Object.fromEntries(Array.from({ length: 8 }, (_, index) => {
+      const court = index + 1;
+      return [court, {
+        id: `${prefix}-stream-${court}`,
+        court,
+        resolution: "variable",
+        frameRate: "variable",
+        streamName: `${prefix}-stream-key-${court}`,
+        rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2",
+        rtmpsBackupIngestionAddress: "rtmps://b.rtmps.youtube.com/live2"
+      }];
+    }))
+  };
 }
 
 test("normalizes all eight stable camera and output identities without a live Droplet dependency", () => {
@@ -210,27 +228,40 @@ test("migrates the qualified legacy 720 material to reusable variable YouTube st
       encoding: { width: "1280", height: "720", framerate: "30", videoBitrate: "4000", audioBitrate: "128", audioFrequency: "48000", keyframeInterval: "2" }
     }]))
   };
-  const destinations = {
-    schemaVersion: 1,
-    streams: Object.fromEntries(Array.from({ length: 8 }, (_, index) => {
-      const court = index + 1;
-      return [court, {
-        id: `production-stream-${court}`,
-        court,
-        resolution: "variable",
-        frameRate: "variable",
-        streamName: `production-stream-key-${court}`,
-        rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2",
-        rtmpsBackupIngestionAddress: "rtmps://b.rtmps.youtube.com/live2"
-      }];
-    }))
-  };
+  const destinations = destinationFixture();
   const migrated = migrateProductionMaterial({ legacyMaterial, destinations });
   assert.equal(migrated.schemaVersion, 2);
   assert.equal(migrated.compositors[1].streamId, "production-stream-1");
   assert.equal(migrated.compositors[1].youtubeResolution, "variable");
   assert.deepEqual(migrated.compositors[1].outputProfiles, ["1080p30", "1080p60"]);
   assert.equal("encoding" in migrated.compositors[1], false);
+});
+
+test("rotates reusable YouTube destinations on current material without changing camera, renderer, or commentary ownership", () => {
+  const current = buildProductionMaterial(fixture());
+  const rotated = replaceProductionDestinations({ material: current, destinations: destinationFixture("rotated") });
+
+  assert.equal(rotated.compositors[1].streamId, "rotated-stream-1");
+  assert.equal(rotated.compositors[8].streamKey, "rotated-stream-key-8");
+  assert.deepEqual(rotated.publishers, current.publishers);
+  assert.deepEqual(rotated.commentary, current.commentary);
+  assert.equal(rotated.programPageToken, current.programPageToken);
+  for (let court = 1; court <= 8; court += 1) {
+    assert.equal(rotated.compositors[court].apiKey, current.compositors[court].apiKey);
+    assert.equal(rotated.compositors[court].apiSecret, current.compositors[court].apiSecret);
+    assert.deepEqual(rotated.compositors[court].outputProfiles, ["1080p30", "1080p60"]);
+  }
+});
+
+test("fails closed when current destination rotation receives malformed or duplicate provider ownership", () => {
+  const current = buildProductionMaterial(fixture());
+  const malformed = destinationFixture("malformed");
+  malformed.streams[4].resolution = "1080p";
+  assert.throws(() => replaceProductionDestinations({ material: current, destinations: malformed }), /Camera 4 production YouTube destination is invalid/);
+
+  const duplicate = destinationFixture("duplicate");
+  duplicate.streams[8].id = duplicate.streams[7].id;
+  assert.throws(() => replaceProductionDestinations({ material: current, destinations: duplicate }), /stream identities are not unique/);
 });
 
 test("adds only a distinct dedicated Healthchecks sentinel to a pre-sentinel recovery environment", () => {

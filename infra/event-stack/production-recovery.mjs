@@ -171,9 +171,11 @@ export async function createProductionRecoverySource({ captureRoot, output }) {
 }
 
 export async function migrateProductionRecoverySource({ source, destinations, output }) {
-  const legacy = await loadLegacyProductionRecoverySource(source);
+  const previous = await loadYouTubeMigrationSource(source);
   const youtube = await readProductionDestinations(destinations);
-  const material = migrateProductionMaterial({ legacyMaterial: legacy.material, destinations: youtube });
+  const material = previous.sourceSchemaVersion === LEGACY_SOURCE_SCHEMA_VERSION
+    ? migrateProductionMaterial({ legacyMaterial: previous.material, destinations: youtube })
+    : replaceProductionDestinations({ material: previous.material, destinations: youtube });
   const target = normalizedAbsolute(output, "production recovery source");
   await assertProtectedParent(target);
   await assertAbsent(target, "production recovery source");
@@ -185,7 +187,7 @@ export async function migrateProductionRecoverySource({ source, destinations, ou
   try {
     await writeProtected(join(temporary, "material.json"), `${JSON.stringify(material, null, 2)}\n`);
     for (const name of SOURCE_FILES.filter((entry) => entry !== "material.json")) {
-      const sourcePath = join(legacy.root, name);
+      const sourcePath = join(previous.root, name);
       const targetPath = join(temporary, name);
       await copyFile(sourcePath, targetPath);
       await chmod(targetPath, 0o600);
@@ -193,8 +195,9 @@ export async function migrateProductionRecoverySource({ source, destinations, ou
     const marker = {
       schemaVersion: SOURCE_SCHEMA_VERSION,
       createdAt: new Date().toISOString(),
-      captureSha256: legacy.marker.captureSha256,
-      migratedFromSourceSha256: legacy.sourceSha256,
+      captureSha256: previous.marker.captureSha256,
+      migratedFromSourceSha256: previous.sourceSha256,
+      migratedFromSourceSchemaVersion: previous.sourceSchemaVersion,
       youtubeDestinationsSha256: sha256(await readFile(destinations)),
       files: await hashesForFiles(temporary, SOURCE_FILES)
     };
@@ -331,10 +334,19 @@ export function migrateWebRuntimeEnvironment(sourceEnvironment) {
 
 export function migrateProductionMaterial({ legacyMaterial, destinations }) {
   validateLegacyProductionMaterial(legacyMaterial);
+  return productionMaterialWithDestinations({ sourceMaterial: legacyMaterial, destinations });
+}
+
+export function replaceProductionDestinations({ material, destinations }) {
+  validateProductionMaterial(material);
+  return productionMaterialWithDestinations({ sourceMaterial: material, destinations });
+}
+
+function productionMaterialWithDestinations({ sourceMaterial, destinations }) {
   if (!destinations || destinations.schemaVersion !== 1 || !destinations.streams) throw new Error("production YouTube destinations are invalid");
   const compositors = {};
   for (const court of COURTS) {
-    const legacy = legacyMaterial.compositors[court];
+    const source = sourceMaterial.compositors[court];
     const stream = destinations.streams[court];
     if (!stream || stream.court !== court || stream.resolution !== "variable" || stream.frameRate !== "variable") {
       throw new Error(`Camera ${court} production YouTube destination is invalid`);
@@ -343,8 +355,8 @@ export function migrateProductionMaterial({ legacyMaterial, destinations }) {
     const backupRtmpsBase = requireRtmps(stream.rtmpsBackupIngestionAddress, `Camera ${court} YouTube backup RTMPS base`);
     if (backupRtmpsBase === primaryRtmpsBase) throw new Error(`Camera ${court} YouTube primary and backup RTMPS bases must differ`);
     compositors[court] = {
-      apiKey: legacy.apiKey,
-      apiSecret: legacy.apiSecret,
+      apiKey: source.apiKey,
+      apiSecret: source.apiSecret,
       rtmpsBase: primaryRtmpsBase,
       streamKey: requireSecret(stream.streamName, `Camera ${court} YouTube stream key`, 8),
       streamId: requireProviderId(stream.id, `Camera ${court} YouTube stream id`),
@@ -355,9 +367,9 @@ export function migrateProductionMaterial({ legacyMaterial, destinations }) {
   }
   const material = {
     schemaVersion: MATERIAL_SCHEMA_VERSION,
-    programPageToken: legacyMaterial.programPageToken,
-    commentary: { ...legacyMaterial.commentary },
-    publishers: structuredClone(legacyMaterial.publishers),
+    programPageToken: sourceMaterial.programPageToken,
+    commentary: { ...sourceMaterial.commentary },
+    publishers: structuredClone(sourceMaterial.publishers),
     compositors
   };
   return validateProductionMaterial(material);
@@ -492,6 +504,19 @@ async function loadLegacyProductionRecoverySource(sourceDirectory) {
   rejectTwilio(monitoringEnvironment);
   const sourceSha256 = sha256(Buffer.from(stableJson({ captureSha256: marker.captureSha256, files: marker.files }), "utf8"));
   return { root, marker, material, monitoringEnvironment, sourceSha256 };
+}
+
+async function loadYouTubeMigrationSource(sourceDirectory) {
+  const root = normalizedAbsolute(sourceDirectory, "production recovery source");
+  await assertProtectedDirectory(root, "production recovery source");
+  const marker = await readProtectedJson(join(root, "SOURCE_COMPLETE.json"), "production recovery marker");
+  if (marker.schemaVersion === LEGACY_SOURCE_SCHEMA_VERSION) {
+    return { ...await loadLegacyProductionRecoverySource(root), sourceSchemaVersion: LEGACY_SOURCE_SCHEMA_VERSION };
+  }
+  if (marker.schemaVersion === SOURCE_SCHEMA_VERSION) {
+    return { ...await loadProductionRecoverySource(root), sourceSchemaVersion: SOURCE_SCHEMA_VERSION };
+  }
+  throw new Error("production recovery source schema cannot be migrated");
 }
 
 export async function renderProductionSecretDirectory({
@@ -897,7 +922,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-  process.stdout.write("Usage:\n  node infra/event-stack/production-recovery.mjs capture --capture-root /PROTECTED/CAPTURE --output /PROTECTED/SOURCE\n  node infra/event-stack/production-recovery.mjs migrate-youtube --source /PROTECTED/V1-SOURCE --destinations /PROTECTED/destinations.json --output /PROTECTED/V2-SOURCE\n  node infra/event-stack/production-recovery.mjs refresh-monitoring --source /PROTECTED/V2-SOURCE --monitoring-env /PROTECTED/monitoring.env --output /PROTECTED/REFRESHED-SOURCE\n  node infra/event-stack/production-recovery.mjs refresh-web-runtime --source /PROTECTED/PRE-HLS-SOURCE --output /PROTECTED/REFRESHED-SOURCE\n  node infra/event-stack/production-recovery.mjs verify --source /PROTECTED/SOURCE\n");
+  process.stdout.write("Usage:\n  node infra/event-stack/production-recovery.mjs capture --capture-root /PROTECTED/CAPTURE --output /PROTECTED/SOURCE\n  node infra/event-stack/production-recovery.mjs migrate-youtube --source /PROTECTED/SOURCE --destinations /PROTECTED/destinations.json --output /PROTECTED/ROTATED-SOURCE\n  node infra/event-stack/production-recovery.mjs refresh-monitoring --source /PROTECTED/PRE-SENTINEL-SOURCE --monitoring-env /PROTECTED/monitoring.env --output /PROTECTED/REFRESHED-SOURCE\n  node infra/event-stack/production-recovery.mjs refresh-web-runtime --source /PROTECTED/PRE-HLS-SOURCE --output /PROTECTED/REFRESHED-SOURCE\n  node infra/event-stack/production-recovery.mjs verify --source /PROTECTED/SOURCE\n");
 }
 
 function envFile(values) {
