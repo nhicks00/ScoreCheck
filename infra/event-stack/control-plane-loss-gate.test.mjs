@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { coldBrowserProblems, healthySnapshotProblems, parseArgs } from "./control-plane-loss-gate.mjs";
+import { browserQualityCountersStable, coldBrowserProblems, healthySnapshotProblems, parseArgs } from "./control-plane-loss-gate.mjs";
 
 const now = new Date().toISOString();
 const owner = {
@@ -12,9 +12,25 @@ const owner = {
 
 test("accepts a fresh, exact Camera 5 control-plane baseline", () => {
   assert.deepEqual(healthySnapshotProblems(snapshot(), { camera: 5, owner, requireControlPlane: true }), []);
+  const settledStartup = snapshot();
+  settledStartup.courts[0].browser.video.framesDropped = 1;
+  assert.deepEqual(healthySnapshotProblems(settledStartup, { camera: 5, owner, requireControlPlane: true }), []);
   const degraded = snapshot();
   degraded.courts[0].browser.scoreRender.stale = true;
   assert.match(healthySnapshotProblems(degraded, { camera: 5, owner, requireControlPlane: true }).join("; "), /control plane is not current/u);
+});
+
+test("requires browser quality counters to remain reset-safe and unchanged", () => {
+  const before = snapshot().courts[0].browser;
+  before.video.framesDropped = 1;
+  const stable = structuredClone(before);
+  const growing = structuredClone(before);
+  growing.video.freezeCount += 1;
+
+  assert.equal(browserQualityCountersStable(before, stable), true);
+  assert.equal(browserQualityCountersStable(before, growing), false);
+  stable.video.framesDropped = -1;
+  assert.match(healthySnapshotProblems(snapshotWithBrowser(stable), { camera: 5, owner, requireControlPlane: true }).join("; "), /browser is not fresh/u);
 });
 
 test("accepts a cold local-renderer browser only with cached score continuity", () => {
@@ -99,4 +115,10 @@ function snapshot({ credentialId = "baseline-browser", pageLoadedAt = "2026-07-2
       { courtNumber: 8, overallState: "EXPECTED_OFF" }
     ]
   };
+}
+
+function snapshotWithBrowser(browser) {
+  const value = snapshot();
+  value.courts[0].browser = browser;
+  return value;
 }

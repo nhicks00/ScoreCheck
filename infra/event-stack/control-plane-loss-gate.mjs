@@ -199,9 +199,9 @@ export function healthySnapshotProblems(snapshot, { camera, owner, requireContro
   const browserAgeMs = browser ? Date.now() - Date.parse(browser.receivedAt) : Infinity;
   if (!browser || !Number.isFinite(browserAgeMs) || browserAgeMs < 0 || browserAgeMs > 15_000
     || browser.pageBuildVersion !== owner.rendererGitSha || browser.video?.state !== "playing" || browser.video?.connectionState !== "connected"
-    || browser.video?.transport !== "hls" || browser.video?.framesDropped !== 0 || browser.video?.freezeCount !== 0
-    || browser.video?.totalFreezesDurationMs !== 0 || browser.video?.hlsActiveInstances !== 1 || browser.scoreRender?.loaded !== true) {
-    problems.push(`Camera ${camera} browser is not fresh, pinned, and loss-free`);
+    || browser.video?.transport !== "hls" || !validBrowserQualityCounters(browser)
+    || browser.video?.hlsActiveInstances !== 1 || browser.scoreRender?.loaded !== true) {
+    problems.push(`Camera ${camera} browser is not fresh, pinned, and quality-valid`);
   }
   if (requireControlPlane && (browser?.scoreRender?.connected !== true || browser?.scoreRender?.stale !== false)) problems.push(`Camera ${camera} score control plane is not current`);
   if (court.youtube?.videoId !== owner.destinationId || court.youtube?.streamStatus !== "active" || court.youtube?.healthStatus !== "good"
@@ -221,7 +221,7 @@ export function coldBrowserProblems(snapshot, { camera, baseline, owner }) {
   if (browser.credentialId === baselineBrowser.credentialId || browser.pageLoadedAt === baselineBrowser.pageLoadedAt) problems.push("replacement browser did not cold-start a new page identity");
   if (browser.pageBuildVersion !== owner.rendererGitSha || browser.configurationVersion !== baselineBrowser.configurationVersion) problems.push("replacement browser build or configuration changed");
   if (browser.video?.state !== "playing" || browser.video?.connectionState !== "connected" || browser.video?.transport !== "hls"
-    || browser.video?.framesDropped !== 0 || browser.video?.freezeCount !== 0 || browser.video?.totalFreezesDurationMs !== 0 || browser.video?.hlsActiveInstances !== 1) problems.push("replacement browser media is not clean");
+    || !validBrowserQualityCounters(browser) || browser.video?.hlsActiveInstances !== 1) problems.push("replacement browser media is not clean");
   if (browser.scoreRender?.loaded !== true || browser.scoreRender?.connected !== false || browser.scoreRender?.stale !== true
     || browser.scoreRender?.renderedSignature !== baselineBrowser.scoreRender?.renderedSignature) problems.push("replacement browser did not retain the last-good score from local cache");
   for (const branch of ["raw", "program"]) {
@@ -273,7 +273,9 @@ async function waitForColdBrowser({ monitor, camera, baseline, owner, sleep = de
         const before = first.courts.find((entry) => entry.courtNumber === camera).browser;
         const elapsedMs = Date.parse(browser.receivedAt) - Date.parse(before.receivedAt);
         const frames = browser.video.framesRendered - before.video.framesRendered;
-        if (elapsedMs >= 5_000 && frames >= elapsedMs / 1_000 * 25) return { first, final: snapshot, elapsedMs, frames, aggregateFps: frames / (elapsedMs / 1_000) };
+        if (elapsedMs >= 5_000 && frames >= elapsedMs / 1_000 * 25 && browserQualityCountersStable(before, browser)) {
+          return { first, final: snapshot, elapsedMs, frames, aggregateFps: frames / (elapsedMs / 1_000) };
+        }
       }
     } else first = null;
     await sleep(1_000);
@@ -296,7 +298,9 @@ async function waitForRecoveredBrowser({ monitor, camera, cold, owner, sleep = d
         const before = first.courts.find((entry) => entry.courtNumber === camera).browser;
         const elapsedMs = Date.parse(browser.receivedAt) - Date.parse(before.receivedAt);
         const frames = browser.video.framesRendered - before.video.framesRendered;
-        if (elapsedMs >= 10_000 && frames >= elapsedMs / 1_000 * 25) return { first, final: snapshot, elapsedMs, frames, aggregateFps: frames / (elapsedMs / 1_000) };
+        if (elapsedMs >= 10_000 && frames >= elapsedMs / 1_000 * 25 && browserQualityCountersStable(before, browser)) {
+          return { first, final: snapshot, elapsedMs, frames, aggregateFps: frames / (elapsedMs / 1_000) };
+        }
       }
     } else first = null;
     await sleep(1_000);
@@ -312,6 +316,19 @@ function commonSnapshotProblems(snapshot, { allowIncidents = false } = {}) {
   if (!allowIncidents && (snapshot?.incidents ?? []).some((entry) => entry.status !== "resolved")) problems.push("an active incident exists");
   if ((snapshot?.faultGates ?? []).length) problems.push("a monitoring fault gate is active");
   return problems;
+}
+
+function validBrowserQualityCounters(browser) {
+  return [browser?.video?.framesDropped, browser?.video?.freezeCount, browser?.video?.totalFreezesDurationMs]
+    .every((value) => Number.isFinite(value) && value >= 0);
+}
+
+export function browserQualityCountersStable(before, after) {
+  return validBrowserQualityCounters(before)
+    && validBrowserQualityCounters(after)
+    && after.video.framesDropped === before.video.framesDropped
+    && after.video.freezeCount === before.video.freezeCount
+    && after.video.totalFreezesDurationMs === before.video.totalFreezesDurationMs;
 }
 
 async function createContext(options) {
