@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { resolve4 } from "node:dns/promises";
 import { isAbsolute, resolve } from "node:path";
 
 import { parseEgressOwnership } from "./rehearsal/egress-runtime.mjs";
@@ -11,13 +10,11 @@ const NETWORK = "bvm-compositor_default";
 const CONTAINERS = ["bvm-renderer", "bvm-egress"];
 
 export class ControlPlaneLossFaultRuntime {
-  constructor({ sshKey, knownHosts, runner = runCommand, resolver = resolve4 } = {}) {
+  constructor({ sshKey, knownHosts, runner = runCommand } = {}) {
     this.sshKey = protectedAbsolute(sshKey, "SSH private key");
     this.knownHosts = protectedAbsolute(knownHosts, "known_hosts path");
     if (typeof runner !== "function") throw new Error("control-plane-loss runner is invalid");
-    if (typeof resolver !== "function") throw new Error("control-plane-loss resolver is invalid");
     this.runner = runner;
-    this.resolver = resolver;
   }
 
   async plan({ host, event, camera, gateId, renderer, supabaseOrigin, egressOwner }) {
@@ -26,13 +23,11 @@ export class ControlPlaneLossFaultRuntime {
       { role: "renderer", origin: identity.renderer.origin },
       { role: "supabase", origin: identity.supabaseOrigin }
     ];
-    const endpoints = [];
-    for (const endpoint of endpointInputs) {
-      const destinations = uniqueIpv4(await this.resolver(new URL(endpoint.origin).hostname));
-      if (destinations.length === 0 || destinations.length > 16) throw new Error(`${endpoint.role} origin must resolve to 1-16 IPv4 destinations`);
-      endpoints.push({ ...endpoint, destinations });
-    }
     const discovered = parseDiscovery((await this.#ssh(identity.host, discoveryCommand(identity))).stdout);
+    const endpoints = endpointInputs.map((endpoint) => ({
+      ...endpoint,
+      destinations: discovered.endpoints.find((entry) => entry.role === endpoint.role).destinations
+    }));
     const target = validateTarget({
       schemaVersion: 1,
       ...identity,
@@ -52,11 +47,11 @@ export class ControlPlaneLossFaultRuntime {
 
   async verifyDns(target) {
     const value = validateTarget(target);
-    const endpoints = [];
-    for (const endpoint of value.endpoints) {
-      const current = uniqueIpv4(await this.resolver(new URL(endpoint.origin).hostname));
-      endpoints.push({ role: endpoint.role, expected: endpoint.destinations, current, passed: JSON.stringify(current) === JSON.stringify(endpoint.destinations) });
-    }
+    const currentResolution = parseResolution((await this.#ssh(value.host, resolutionCommand(value))).stdout);
+    const endpoints = value.endpoints.map((endpoint) => {
+      const current = currentResolution.find((entry) => entry.role === endpoint.role).destinations;
+      return { role: endpoint.role, expected: endpoint.destinations, current, passed: JSON.stringify(current) === JSON.stringify(endpoint.destinations) };
+    });
     return { checkedAt: new Date().toISOString(), passed: endpoints.every((entry) => entry.passed), endpoints };
   }
 
@@ -158,8 +153,23 @@ export function discoveryCommand(input) {
     "for container in bvm-renderer bvm-egress; do",
     "  test \"$(docker inspect \"$container\" --format '{{range $name, $network := .NetworkSettings.Networks}}{{if eq $name \"bvm-compositor_default\"}}yes{{end}}{{end}}')\" = yes",
     "done",
+    ...resolutionLines(value),
     ...connectivityAssertions(value, true),
-    "jq -n --arg dockerSubnet \"$docker_subnet\" --arg rendererContainerId \"$renderer_id\" --arg egressContainerId \"$egress_id\" '{schemaVersion:1,dockerSubnet:$dockerSubnet,rendererContainerId:$rendererContainerId,egressContainerId:$egressContainerId}'"
+    "jq -n --arg dockerSubnet \"$docker_subnet\" --arg rendererContainerId \"$renderer_id\" --arg egressContainerId \"$egress_id\" --arg rendererDestinations \"$renderer_destinations\" --arg supabaseDestinations \"$supabase_destinations\" '{schemaVersion:1,dockerSubnet:$dockerSubnet,rendererContainerId:$rendererContainerId,egressContainerId:$egressContainerId,endpoints:[{role:\"renderer\",destinations:($rendererDestinations|split(\" \")|map(select(length>0)))},{role:\"supabase\",destinations:($supabaseDestinations|split(\" \")|map(select(length>0)))}]}'"
+  ].flat().join("\n");
+}
+
+export function resolutionCommand(input) {
+  const value = validateIdentity(input);
+  return [
+    "scorecheck_control_plane_loss_resolution=1",
+    "set -eu",
+    "cd /opt/compositor",
+    `owner=${shellQuote(`requests/court-${value.camera}.owner.json`)}`,
+    ownerAssertions(value),
+    rendererAssertions(value),
+    ...resolutionLines(value),
+    "jq -n --arg rendererDestinations \"$renderer_destinations\" --arg supabaseDestinations \"$supabase_destinations\" '{schemaVersion:1,endpoints:[{role:\"renderer\",destinations:($rendererDestinations|split(\" \")|map(select(length>0)))},{role:\"supabase\",destinations:($supabaseDestinations|split(\" \")|map(select(length>0)))}]}'"
   ].flat().join("\n");
 }
 
@@ -358,6 +368,23 @@ function rendererAssertions(value) {
   ];
 }
 
+function resolutionLines(value) {
+  const rendererHostname = new URL(value.renderer.origin).hostname;
+  const supabaseHostname = new URL(value.supabaseOrigin).hostname;
+  return [
+    `renderer_hostname=${shellQuote(rendererHostname)}`,
+    `supabase_hostname=${shellQuote(supabaseHostname)}`,
+    "renderer_destinations=$(docker exec bvm-renderer getent ahostsv4 \"$renderer_hostname\" | awk '{print $1}' | sort -u | tr '\\n' ' ')",
+    "renderer_egress_destinations=$(docker exec bvm-egress getent ahostsv4 \"$renderer_hostname\" | awk '{print $1}' | sort -u | tr '\\n' ' ')",
+    "supabase_destinations=$(docker exec bvm-renderer getent ahostsv4 \"$supabase_hostname\" | awk '{print $1}' | sort -u | tr '\\n' ' ')",
+    "supabase_egress_destinations=$(docker exec bvm-egress getent ahostsv4 \"$supabase_hostname\" | awk '{print $1}' | sort -u | tr '\\n' ' ')",
+    "test -n \"$renderer_destinations\" && test \"$renderer_destinations\" = \"$renderer_egress_destinations\"",
+    "test -n \"$supabase_destinations\" && test \"$supabase_destinations\" = \"$supabase_egress_destinations\"",
+    "set -- $renderer_destinations; test \"$#\" -ge 1 && test \"$#\" -le 16",
+    "set -- $supabase_destinations; test \"$#\" -ge 1 && test \"$#\" -le 16"
+  ];
+}
+
 function connectivityAssertions(value, expectedReachable) {
   const lines = [];
   for (const endpoint of [{ origin: value.renderer.origin }, { origin: value.supabaseOrigin }]) {
@@ -375,7 +402,25 @@ function parseDiscovery(raw) {
     || !/^[a-f0-9]{64}$/u.test(value.rendererContainerId ?? "") || !/^[a-f0-9]{64}$/u.test(value.egressContainerId ?? "")) {
     throw new Error("control-plane-loss discovery response is invalid");
   }
-  return value;
+  return { ...value, endpoints: parseResolutionValue(value) };
+}
+
+function parseResolution(raw) {
+  let value;
+  try { value = JSON.parse(raw.trim()); } catch { throw new Error("control-plane-loss resolution response is invalid JSON"); }
+  return parseResolutionValue(value);
+}
+
+function parseResolutionValue(value) {
+  if (!value || value.schemaVersion !== 1 || !Array.isArray(value.endpoints) || value.endpoints.length !== 2
+    || value.endpoints[0]?.role !== "renderer" || value.endpoints[1]?.role !== "supabase") {
+    throw new Error("control-plane-loss resolution response is invalid");
+  }
+  return value.endpoints.map((entry) => {
+    const destinations = uniqueIpv4(entry.destinations);
+    if (destinations.length === 0 || destinations.length > 16) throw new Error(`control-plane-loss ${entry.role} origin must resolve to 1-16 IPv4 destinations`);
+    return { role: entry.role, destinations };
+  });
 }
 
 function validateSupabaseOrigin(value) {

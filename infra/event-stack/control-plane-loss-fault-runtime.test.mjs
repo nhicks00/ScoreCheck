@@ -9,6 +9,7 @@ import {
   injectCommand,
   inspectCommand,
   recycleEgressCommand,
+  resolutionCommand,
   restoreCommand,
   validateTarget
 } from "./control-plane-loss-fault-runtime.mjs";
@@ -51,7 +52,6 @@ test("control-plane fault scopes provider denial to one compositor Docker subnet
   const runtime = new ControlPlaneLossFaultRuntime({
     sshKey: "/tmp/key",
     knownHosts: "/tmp/known_hosts",
-    resolver: async (hostname) => hostname.endsWith("supabase.co") ? ["203.0.113.20"] : ["203.0.113.10"],
     runner: async (_command, args) => {
       const remote = args.at(-1);
       commands.push(remote);
@@ -65,6 +65,7 @@ test("control-plane fault scopes provider denial to one compositor Docker subnet
   });
   const target = await runtime.plan(planInput());
   assert.equal(target.dockerSubnet, "172.18.0.0/16");
+  assert.deepEqual(target.endpoints.map(({ role, destinations }) => ({ role, destinations })), resolution().endpoints);
   const fault = await runtime.inject({ target, confirmation: "FAULT-CONTROL-PLANE:control-plane-event:CAMERA-5" });
   assert.equal(fault.status, "FAULTED");
   assert.ok(Object.values(fault.connectivity.results).every((value) => value === false));
@@ -89,7 +90,6 @@ test("control-plane fault cleans a partial injection before returning failure", 
   const runtime = new ControlPlaneLossFaultRuntime({
     sshKey: "/tmp/key",
     knownHosts: "/tmp/known_hosts",
-    resolver: async (hostname) => hostname.endsWith("supabase.co") ? ["203.0.113.20"] : ["203.0.113.10"],
     runner: async (_command, args) => {
       const remote = args.at(-1);
       if (remote.includes("scorecheck_control_plane_loss_discovery=1")) return { stdout: JSON.stringify(discovery()), stderr: "" };
@@ -118,17 +118,13 @@ test("control-plane target rejects broad networks, owner drift, duplicate provid
     ...target,
     endpoints: target.endpoints.map((entry) => ({ ...entry, destinations: ["203.0.113.10"] }))
   }), /destinations overlap/u);
-  const changed = new ControlPlaneLossFaultRuntime({
-    sshKey: "/tmp/key",
-    knownHosts: "/tmp/known_hosts",
-    resolver: async (hostname) => hostname.endsWith("supabase.co") ? ["203.0.113.21"] : ["203.0.113.11"]
-  });
+  const changed = runtimeForPlan({ rendererDestinations: ["203.0.113.11"], supabaseDestinations: ["203.0.113.21"] });
   assert.equal((await changed.verifyDns(target)).passed, false);
 });
 
 test("control-plane remote programs are valid POSIX shell", async () => {
   const target = await runtimeForPlan().plan(planInput());
-  for (const command of [discoveryCommand(planInput()), inspectCommand(target), connectivityCommand(target), injectCommand(target), recycleEgressCommand(target), restoreCommand(target)]) {
+  for (const command of [discoveryCommand(planInput()), resolutionCommand(target), inspectCommand(target), connectivityCommand(target), injectCommand(target), recycleEgressCommand(target), restoreCommand(target)]) {
     const result = spawnSync("sh", ["-n"], { input: command, encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr);
   }
@@ -150,14 +146,14 @@ test("control-plane iptables reference counters execute with the host awk", asyn
   }
 });
 
-function runtimeForPlan() {
+function runtimeForPlan({ rendererDestinations = ["203.0.113.10"], supabaseDestinations = ["203.0.113.20"] } = {}) {
   return new ControlPlaneLossFaultRuntime({
     sshKey: "/tmp/key",
     knownHosts: "/tmp/known_hosts",
-    resolver: async (hostname) => hostname.endsWith("supabase.co") ? ["203.0.113.20"] : ["203.0.113.10"],
     runner: async (_command, args) => {
       const remote = args.at(-1);
-      if (remote.includes("scorecheck_control_plane_loss_discovery=1")) return { stdout: JSON.stringify(discovery()), stderr: "" };
+      if (remote.includes("scorecheck_control_plane_loss_discovery=1")) return { stdout: JSON.stringify(discovery({ rendererDestinations, supabaseDestinations })), stderr: "" };
+      if (remote.includes("scorecheck_control_plane_loss_resolution=1")) return { stdout: JSON.stringify(resolution({ rendererDestinations, supabaseDestinations })), stderr: "" };
       if (remote.includes("scorecheck_control_plane_loss_inspect=1")) return { stdout: "HEALTHY\n", stderr: "" };
       if (remote.includes("scorecheck_control_plane_loss_connectivity=1")) return { stdout: JSON.stringify(connectivity(true)), stderr: "" };
       return { stdout: "", stderr: "" };
@@ -177,12 +173,23 @@ function planInput() {
   };
 }
 
-function discovery() {
+function discovery({ rendererDestinations = ["203.0.113.10"], supabaseDestinations = ["203.0.113.20"] } = {}) {
   return {
     schemaVersion: 1,
     dockerSubnet: "172.18.0.0/16",
     rendererContainerId: "d".repeat(64),
-    egressContainerId: "e".repeat(64)
+    egressContainerId: "e".repeat(64),
+    endpoints: resolution({ rendererDestinations, supabaseDestinations }).endpoints
+  };
+}
+
+function resolution({ rendererDestinations = ["203.0.113.10"], supabaseDestinations = ["203.0.113.20"] } = {}) {
+  return {
+    schemaVersion: 1,
+    endpoints: [
+      { role: "renderer", destinations: rendererDestinations },
+      { role: "supabase", destinations: supabaseDestinations }
+    ]
   };
 }
 
