@@ -35,6 +35,7 @@ services:
     restart: unless-stopped
     network_mode: host
     environment:
+      RTSP_PORT: "8554"
       SRT_PORT: "8890"
     logging: *default-logging
     healthcheck:

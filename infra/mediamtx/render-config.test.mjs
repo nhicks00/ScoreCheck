@@ -235,7 +235,7 @@ test("recreates only changed MediaMTX services and preserves a complete rollback
   assert.match(deployScript, /caddy_after.*!=.*caddy_before/u);
   assert.match(deployScript, /docker compose up -d --force-recreate "\$\{services\[@\]\}"/u);
   assert.doesNotMatch(deployScript, /docker compose up -d --force-recreate\s*(?:;|\n)/u);
-  assert.match(compose, /environment:\s+SRT_PORT: "8890"/u);
+  assert.match(compose, /environment:\s+RTSP_PORT: "8554"\s+SRT_PORT: "8890"/u);
   assert.match(deployScript, /--retry 60[\s\S]*--retry-max-time 300/u);
   assert.match(deployScript, /docker compose logs --tail=120 caddy/u);
   assert.match(deployScript, /install -m 0644 \.incoming\/patches\/gohlslib-h264-discontinuity-recovery\.patch patches\/gohlslib-h264-discontinuity-recovery\.patch/u);
