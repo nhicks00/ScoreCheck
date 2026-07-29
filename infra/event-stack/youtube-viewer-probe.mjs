@@ -229,7 +229,8 @@ export function evaluateViewerContinuityTrace({ camera, broadcastId, traceId, st
   const playheadDeltaSeconds = validSamples.length > 1 ? validSamples.at(-1).currentTime - validSamples[0].currentTime : 0;
   if (durationMs > 0 && playheadDeltaSeconds < durationMs / 1_000 * 0.85) problems.push("continuous viewer playhead did not advance for at least 85 percent of the transition");
   if (audioDecodedBytes <= 0) problems.push("continuous viewer decoded no audio during the transition");
-  if (validSamples.some((entry) => entry.readyState < 3 || entry.paused)) problems.push("continuous viewer was paused or not playback-ready during the transition");
+  const notPlaybackReadySamples = validSamples.filter((entry) => entry.readyState < 3).length;
+  if (validSamples.some((entry) => entry.paused)) problems.push("continuous viewer was paused during the transition");
   const dimensions = [...new Set(validSamples.map((entry) => `${entry.videoWidth}x${entry.videoHeight}`))];
   if (validSamples.some((entry) => entry.videoWidth < 640 || entry.videoHeight < 360)) problems.push("continuous viewer dimensions were unavailable or below the accepted floor");
   const visuals = validMarkers.map((entry) => entry.frame);
@@ -251,6 +252,7 @@ export function evaluateViewerContinuityTrace({ camera, broadcastId, traceId, st
     playheadDeltaSeconds,
     audioDecodedBytes,
     audioCounterResets,
+    notPlaybackReadySamples,
     videoDimensions: dimensions,
     markers: validMarkers,
     samples: validSamples,

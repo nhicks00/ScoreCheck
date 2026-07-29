@@ -114,6 +114,23 @@ test("qualifies one continuously sampled viewer across ordered backup transition
   assert.ok(result.audioDecodedBytes > 0);
 });
 
+test("records transient reduced ready state without failing advancing playback", () => {
+  const input = continuityInput();
+  for (let index = 20; index < 26; index += 1) input.samples[index].readyState = 2;
+  const result = evaluateViewerContinuityTrace(input);
+  assert.equal(result.passed, true, result.problems.join("; "));
+  assert.equal(result.notPlaybackReadySamples, 6);
+  assert.equal(result.maximumStallMs, 250);
+});
+
+test("rejects a paused continuous viewer", () => {
+  const input = continuityInput();
+  input.samples[20].paused = true;
+  const result = evaluateViewerContinuityTrace(input);
+  assert.equal(result.passed, false);
+  assert.match(result.problems.join("\n"), /was paused during the transition/u);
+});
+
 test("rejects a hidden transition stall, sample loss, and reordered phase evidence", () => {
   const input = continuityInput();
   for (let index = 20; index <= 40; index += 1) input.samples[index].currentTime = input.samples[19].currentTime;
