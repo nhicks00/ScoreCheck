@@ -1,4 +1,54 @@
-# Venue Router Speedify Routing
+# Venue Router Operations
+
+## Peplink MAX BR1 Pro 5G remote management
+
+The active Peplink router is managed through Peplink's supported APIs, not a
+public SSH port. An InControl OAuth client obtains a short-lived token, and the
+same bearer token reaches the router API through its stable Remote Web Admin
+hostname. This remains reachable when venue WAN addresses change or use carrier
+NAT.
+
+The protected client credential is stored outside Git at:
+
+```text
+~/.config/scorecheck/peplink/incontrol-client.json
+```
+
+The file must be mode `0600`. Use the dependency-free client for bounded reads:
+
+```sh
+node infra/venue-router/peplinkctl.mjs status
+node infra/venue-router/peplinkctl.mjs get status.client
+node infra/venue-router/peplinkctl.mjs get config.ssid.profile
+```
+
+Command output automatically redacts known modem, SIM, and credential fields so
+routine diagnostics can be retained safely.
+
+Configuration calls are supported only as an explicit write with a local JSON
+body and confirmation marker:
+
+```sh
+node infra/venue-router/peplinkctl.mjs post config.ssid.profile \
+  --body /absolute/path/request.json \
+  --confirm-write
+```
+
+Before a write, use the matching `get` endpoint and preserve the response as
+the rollback record. Use only endpoints documented by Peplink for the installed
+firmware. InControl Web CLI remains available for vendor diagnostics that have
+no documented API endpoint.
+
+Do not enable WAN SSH or add a router port forward. It does not solve changing
+WAN addresses or carrier NAT, and it adds an unnecessary management surface.
+The embedded camera network is `BeachVolleyballMedia.com`; after any router
+replacement, verify that Wi-Fi AP is `ON`, both radios advertise the saved SSID,
+and the AP controller reports exactly one online access point.
+
+## Legacy GL-XE3000 Speedify routing
+
+The scripts below apply only to the retired OpenWrt GL-XE3000 plus Speedify
+topology. Do not deploy them to a Peplink router.
 
 Production camera traffic is fail-closed through Speedify. It must never fall
 back to one venue WAN. Ordinary laptops, camera-control pages, and other venue
