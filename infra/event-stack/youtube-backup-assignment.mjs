@@ -89,7 +89,7 @@ export function createYoutubeBackupAssignment({ event, generation, court, stream
     throw new Error("YouTube backup stream identity is invalid");
   }
   const primary = validateRtmps(stream.rtmpsIngestionAddress, "primary RTMPS address");
-  const backup = validateRtmps(stream.rtmpsBackupIngestionAddress, "backup RTMPS address");
+  const backup = validateRtmps(stream.rtmpsBackupIngestionAddress, "backup RTMPS address", { allowBackupQuery: true });
   if (primary === backup) throw new Error("YouTube primary and backup RTMPS addresses must differ");
   const content = `YOUTUBE_BACKUP_RTMPS_BASE=${backup}\nCOURT_${court}_YOUTUBE_KEY=${stream.streamName}\n`;
   const sha256 = createHash("sha256").update(content).digest("hex");
@@ -124,10 +124,11 @@ function validatePublicAssignment(value) {
   return value;
 }
 
-function validateRtmps(value, label) {
+function validateRtmps(value, label, { allowBackupQuery = false } = {}) {
   let parsed;
   try { parsed = new URL(value); } catch { throw new Error(`YouTube ${label} is invalid`); }
-  if (parsed.protocol !== "rtmps:" || !parsed.hostname || parsed.username || parsed.password || parsed.search || parsed.hash) throw new Error(`YouTube ${label} is invalid`);
+  const searchIsValid = !parsed.search || (allowBackupQuery && parsed.search === "?backup=1");
+  if (parsed.protocol !== "rtmps:" || !parsed.hostname || parsed.username || parsed.password || !searchIsValid || parsed.hash) throw new Error(`YouTube ${label} is invalid`);
   return parsed.toString().replace(/\/$/u, "");
 }
 

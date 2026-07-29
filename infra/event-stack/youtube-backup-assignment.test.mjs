@@ -9,7 +9,7 @@ function stream(overrides = {}) {
     court: 1,
     streamName: "protected-stream-key-1",
     rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2",
-    rtmpsBackupIngestionAddress: "rtmps://b.rtmps.youtube.com/live2",
+    rtmpsBackupIngestionAddress: "rtmps://b.rtmps.youtube.com/live2?backup=1",
     ...overrides
   };
 }
@@ -17,7 +17,7 @@ function stream(overrides = {}) {
 test("builds one court-scoped backup assignment without exposing its key in public state", () => {
   const assignment = createYoutubeBackupAssignment({ event: "event-test", generation: "generation-test", court: 1, stream: stream() });
   assert.equal(assignment.remotePath, "requests/court-1.backup.env");
-  assert.match(assignment.content, /^YOUTUBE_BACKUP_RTMPS_BASE=rtmps:\/\/b\.rtmps\.youtube\.com\/live2\nCOURT_1_YOUTUBE_KEY=protected-stream-key-1\n$/u);
+  assert.match(assignment.content, /^YOUTUBE_BACKUP_RTMPS_BASE=rtmps:\/\/b\.rtmps\.youtube\.com\/live2\?backup=1\nCOURT_1_YOUTUBE_KEY=protected-stream-key-1\n$/u);
   assert.match(assignment.sha256, /^[a-f0-9]{64}$/u);
   assert.notEqual(assignment.id, assignment.sha256);
 });
@@ -27,6 +27,10 @@ test("rejects missing, duplicate, or credential-bearing backup addresses", () =>
   assert.throws(() => createYoutubeBackupAssignment({ ...input, stream: stream({ rtmpsBackupIngestionAddress: null }) }), /backup RTMPS/u);
   assert.throws(() => createYoutubeBackupAssignment({ ...input, stream: stream({ rtmpsBackupIngestionAddress: stream().rtmpsIngestionAddress }) }), /must differ/u);
   assert.throws(() => createYoutubeBackupAssignment({ ...input, stream: stream({ rtmpsBackupIngestionAddress: "rtmps://user:secret@b.rtmps.youtube.com/live2" }) }), /backup RTMPS/u);
+  assert.throws(() => createYoutubeBackupAssignment({ ...input, stream: stream({ rtmpsIngestionAddress: "rtmps://a.rtmps.youtube.com/live2?backup=1" }) }), /primary RTMPS/u);
+  assert.throws(() => createYoutubeBackupAssignment({ ...input, stream: stream({ rtmpsBackupIngestionAddress: "rtmps://b.rtmps.youtube.com/live2?backup=0" }) }), /backup RTMPS/u);
+  assert.throws(() => createYoutubeBackupAssignment({ ...input, stream: stream({ rtmpsBackupIngestionAddress: "rtmps://b.rtmps.youtube.com/live2?backup=1&extra=1" }) }), /backup RTMPS/u);
+  assert.throws(() => createYoutubeBackupAssignment({ ...input, stream: stream({ rtmpsBackupIngestionAddress: "rtmps://b.rtmps.youtube.com/live2?backup=1#fragment" }) }), /backup RTMPS/u);
 });
 
 test("stages, verifies, and removes only the exact protected remote assignment", async () => {

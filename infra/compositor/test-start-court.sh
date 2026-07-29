@@ -101,12 +101,12 @@ grep -Fxq '0' "$FIXTURE/stop-drain-polls"
 grep -Fq 'court 1: stopped (ownership files cleared)' "$FIXTURE/stop.out"
 
 printf '%s\n' \
-  'YOUTUBE_BACKUP_RTMPS_BASE=rtmps://b.rtmps.youtube.com/live2' \
+  'YOUTUBE_BACKUP_RTMPS_BASE=rtmps://b.rtmps.youtube.com/live2?backup=1' \
   'COURT_1_YOUTUBE_KEY=test-stream-key' >"$FIXTURE/requests/court-1.backup.env"
 chmod 600 "$FIXTURE/requests/court-1.backup.env"
 PATH="$FIXTURE/bin:$PATH" "$FIXTURE/start-court.sh" 1 1080p30 event-test broadcast-test backup-generation backup >"$FIXTURE/backup.out" 2>&1
 jq -e '.schemaVersion == 3 and .destinationRole == "backup" and .outputGeneration == "backup-generation"' "$FIXTURE/requests/court-1.owner.json" >/dev/null
-grep -Fq 'rtmps://b.rtmps.youtube.com/live2/test-stream-key' "$FIXTURE/requests/court-1.json"
+grep -Fq 'rtmps://b.rtmps.youtube.com/live2?backup=1/test-stream-key' "$FIXTURE/requests/court-1.json"
 PATH="$FIXTURE/bin:$PATH" "$FIXTURE/stop-court.sh" 1 EG_new >"$FIXTURE/backup-stop.out" 2>&1
 
 printf '%s\n' 'MOCK_ACTIVE=1' >>"$FIXTURE/.env"
