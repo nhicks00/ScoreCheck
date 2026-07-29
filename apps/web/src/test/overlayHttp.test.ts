@@ -16,6 +16,22 @@ describe("overlay conditional repair", () => {
     expect(overlayEntityTag(advanced)).not.toBe(overlayEntityTag(state));
   });
 
+  it("changes the entity tag when cached health becomes authoritative", () => {
+    const current = coerceOverlayState({
+      eventId: "event-1",
+      courtId: "court-1",
+      match: { id: "match-1" },
+      projection: { scoreRevision: 7, bodyChecksum: "a".repeat(64) },
+      health: { apiOnline: true, stale: false, message: null }
+    });
+    const cached = coerceOverlayState({
+      ...current,
+      health: { ...current.health, apiOnline: false, stale: true, message: "Showing the last confirmed score while scoring is unavailable" }
+    });
+
+    expect(overlayEntityTag(cached)).not.toBe(overlayEntityTag(current));
+  });
+
   it("matches strong, weak, wildcard, and comma-separated validators", () => {
     const etag = '"overlay-test"';
     expect(ifNoneMatchContains(etag, etag)).toBe(true);

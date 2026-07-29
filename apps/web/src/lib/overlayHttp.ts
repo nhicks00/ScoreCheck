@@ -8,7 +8,10 @@ export function overlayEntityTag(state: OverlayState): string {
     state.courtId,
     state.match.id ?? "no-match",
     state.projection.scoreRevision,
-    state.projection.bodyChecksum ?? createHash("sha256").update(JSON.stringify(state)).digest("hex")
+    state.projection.bodyChecksum ?? createHash("sha256").update(JSON.stringify(state)).digest("hex"),
+    state.health.apiOnline ? "online" : "offline",
+    state.health.stale ? "stale" : "current",
+    state.health.message ?? "no-message"
   ].join(":");
   return `W/"overlay-${createHash("sha256").update(scope).digest("hex")}"`;
 }
