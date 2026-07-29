@@ -20,11 +20,11 @@ export default async function AdminStreamPreviewPage({ params }: { params: Promi
           <div>
             <span>Admin video check</span>
             <h1>Court {courtNumber} private preview</h1>
-            <p>Uses the admin cookie to fetch MediaMTX playback sources. WHEP first, HLS fallback.</p>
+            <p>Uses the admin cookie to fetch a buffered MediaMTX inspection stream.</p>
           </div>
           <strong>LIVE</strong>
         </section>
-        <StreamPlayer courtNumber={courtNumber} />
+        <StreamPlayer courtNumber={courtNumber} mode="inspection" />
       </div>
     </main>
   );

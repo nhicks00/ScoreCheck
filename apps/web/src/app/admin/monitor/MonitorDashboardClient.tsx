@@ -484,7 +484,7 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
           </div>
           <div className="monitor-inspection-grid">
             <div className="monitor-live-player">
-              {pacingOpen ? <div className="monitor-preview-paused"><Gauge size={18} /><span>Live video paused for isolated path test</span></div> : previewEnabled ? <StreamPlayer key={`${selected.courtNumber}-${activeInspectionQuality}`} courtNumber={selected.courtNumber} adminQuality={activeInspectionQuality} enabled /> : (
+              {pacingOpen ? <div className="monitor-preview-paused"><Gauge size={18} /><span>Live video paused for isolated path test</span></div> : previewEnabled ? <StreamPlayer key={`${selected.courtNumber}-${activeInspectionQuality}`} courtNumber={selected.courtNumber} adminQuality={activeInspectionQuality} enabled mode="inspection" /> : (
                 <button className="monitor-preview-start" type="button" onClick={() => setPreviewEnabled(true)}><Eye size={18} /> Open live video</button>
               )}
             </div>

@@ -92,8 +92,9 @@ describe("community playback timing evidence", () => {
     expect(evidence.qualification.blockedReason).toBe("media_not_ready");
   });
 
-  it("permits HLS only for program while keeping preview and scoring on WHEP", () => {
+  it("uses buffered HLS for operator inspection and program while keeping timing-sensitive modes on WHEP", () => {
     expect(playbackModeAllowsHls("preview")).toBe(false);
+    expect(playbackModeAllowsHls("inspection")).toBe(true);
     expect(playbackModeAllowsHls("program")).toBe(true);
     expect(playbackModeAllowsHls("scoring")).toBe(false);
   });

@@ -355,7 +355,7 @@ export function ProductionConsoleClient({
                       <span>Video not configured — set MEDIAMTX_WHEP_BASE_URL / MEDIAMTX_HLS_BASE_URL.</span>
                     </div>
                   ) : monitorOn ? (
-                    <StreamPlayer courtNumber={court.courtNumber} sources={config.sources} chromeless />
+                    <StreamPlayer courtNumber={court.courtNumber} sources={config.sources} mode="inspection" chromeless />
                   ) : (
                     <button
                       type="button"

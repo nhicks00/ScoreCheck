@@ -15,7 +15,7 @@ export type PlaybackConnectionState =
   | "closed"
   | "unknown";
 
-export type PlaybackMode = "preview" | "program" | "scoring";
+export type PlaybackMode = "preview" | "inspection" | "program" | "scoring";
 
 export type PlaybackFrameObservation = {
   source: "video-frame-callback";
@@ -97,7 +97,7 @@ export function initialPlaybackEvidenceState(): PlaybackEvidenceState {
 }
 
 export function playbackModeAllowsHls(mode: PlaybackMode): boolean {
-  return mode === "program";
+  return mode === "inspection" || mode === "program";
 }
 
 export function brokeredScoringSessionId(resourceUrl: string | null, pageUrl: string): string | null {
