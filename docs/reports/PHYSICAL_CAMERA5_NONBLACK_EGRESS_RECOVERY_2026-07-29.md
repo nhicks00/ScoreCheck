@@ -78,6 +78,8 @@ That maintenance rotation exposed a separate lifecycle defect:
 
 The stop path is now hardened to retain ownership and stop intent until LiveKit reports an empty active set. It fails closed on control errors, malformed responses, an unexpected active identity, or a 30-second drain timeout. The regression fixture covers a stop that remains active for multiple polls.
 
+The hardened script was then atomically installed on compositors A-H and the warm spare without restarting any service or container. All nine deployed SHA-256 values matched `7c3300c16104d11709f329dcfc1209efd4d4ec177fd62d734562f5ea1ff11c86`; all supervisors remained active; every Egress worker container ID remained unchanged; and Camera 5 retained exact active Egress `EG_RGyTYWLV8aBe`. Protected deployment evidence is under `qualification-evidence/stop-drain-hardcut-20260729T092834Z`.
+
 After the bounded maintenance rotation:
 
 - the new generation was healthy with recovery attempts `0`;
@@ -98,6 +100,6 @@ The bundle includes the continuous viewer trace, pre/post viewer probes, 0.5-sec
 
 - Keep the two-second/two-observation exact-owner supervisor timing.
 - Require normal-latency YouTube destinations for production.
-- Deploy the stop-drain ownership fix before the next deliberate output stop.
+- Keep the fleet-deployed stop-drain ownership fix.
 - Do not classify persistent-output recovery as fully production-qualified yet.
 - Repeat the exact fault once against a fresh normal-latency destination using a clearly nonblack physical source. Require a viewer stall no longer than two seconds, continuous audio, exact one-publisher ownership, and no stop-drain or peer-camera incident.
