@@ -31,7 +31,11 @@ grep -Fxq -- '--wait-ready' "$CAPTURE" || fail "wrapper did not wait for its sel
 grep -Fxq 'court2_normalized' "$CAPTURE" || fail "wrapper waited for the wrong source"
 grep -Fxq 'rtsp://127.0.0.1:8554/court2_normalized' "$CAPTURE" || fail "wrapper did not select Camera 2 normalized input"
 grep -Fxq 'tcp' "$CAPTURE" || fail "wrapper did not require reliable loopback RTSP transport"
+grep -Fxq -- '-timeout' "$CAPTURE" || fail "wrapper did not use the supported RTSP socket timeout"
 grep -Fxq '60000000' "$CAPTURE" || fail "wrapper does not bound the source read timeout"
+if grep -Fq -- '-rw_timeout' "$CAPTURE"; then
+  fail "wrapper uses an unsupported generic timeout option"
+fi
 grep -Fxq 'copy' "$CAPTURE" || fail "wrapper transcodes browser video unexpectedly"
 grep -Fxq 'aac' "$CAPTURE" || fail "wrapper did not normalize program audio to HLS-safe AAC"
 grep -Fq 'asetpts=N/SR/TB,aresample=async=1:first_pts=0' "$CAPTURE" || fail "program audio is not rebased"

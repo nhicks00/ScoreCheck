@@ -36,7 +36,7 @@ runner=${SCORECHECK_FFMPEG_RUNNER:-/usr/local/bin/scorecheck-ffmpeg-runner}
 exec "$runner" "$branch" --wait-ready "$source_path" -- \
   -nostdin -hide_banner -loglevel warning \
   -fflags +genpts+discardcorrupt \
-  -rtsp_transport tcp -rw_timeout 60000000 \
+  -rtsp_transport tcp -timeout 60000000 \
   -i "rtsp://127.0.0.1:${RTSP_PORT:?RTSP_PORT is required}/${source_path}" \
   -map 0:v:0 -map 0:a:0? \
   -c:v copy \
