@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { browserQualityCountersStable, coldBrowserProblems, healthySnapshotProblems, parseArgs } from "./control-plane-loss-gate.mjs";
+import {
+  browserQualityCountersStable,
+  coldBrowserProblems,
+  healthySnapshotProblems,
+  NORMAL_LATENCY_VIEWER_WARMUP_MS,
+  parseArgs,
+  VIEWER_MARKERS,
+  warmViewerSession
+} from "./control-plane-loss-gate.mjs";
 
 const now = new Date().toISOString();
 const owner = {
@@ -56,6 +64,15 @@ test("requires normalized protected paths and exact run arguments", () => {
     confirm: "CONTROL-PLANE-LOSS:event:CAMERA-5"
   });
   assert.throws(() => parseArgs(["run", "--profile", "relative.json", "--evidence", "/tmp/evidence", "--camera", "5", "--confirm", "x"]), /normalized absolute path/u);
+});
+
+test("warms a normal-latency viewer before the control-plane fault", async () => {
+  const actions = [];
+  await warmViewerSession({ mark: async (marker) => actions.push(["mark", marker]) }, async (durationMs) => actions.push(["sleep", durationMs]));
+
+  assert.equal(NORMAL_LATENCY_VIEWER_WARMUP_MS, 90_000);
+  assert.deepEqual(actions, [["sleep", 90_000], ["mark", "viewer-buffered"]]);
+  assert.ok(VIEWER_MARKERS.indexOf("viewer-buffered") < VIEWER_MARKERS.indexOf("control-plane-faulted"));
 });
 
 function snapshot({ credentialId = "baseline-browser", pageLoadedAt = "2026-07-29T10:00:00Z", connected = true, stale = false } = {}) {

@@ -16,9 +16,11 @@ import { YouTubeViewerProbe } from "./youtube-viewer-probe.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const CAMERA_STATES = new Set(["HEALTHY", "EXPECTED_OFF"]);
-const VIEWER_MARKERS = [
+export const NORMAL_LATENCY_VIEWER_WARMUP_MS = 90_000;
+export const VIEWER_MARKERS = [
   "baseline-start",
   "baseline-ready",
+  "viewer-buffered",
   "control-plane-faulted",
   "worker-recycle-requested",
   "replacement-active",
@@ -70,14 +72,14 @@ async function main() {
 }
 
 export async function runGate(context) {
-  const { options, manifest, lifecycleState, host, monitor, egress, fault, youtube, viewer, renderer, supabaseOrigin, statePath } = context;
+  const { options, manifest, lifecycleState, host, monitor, egress, fault, youtube, viewer, renderer, supabaseOrigin, statePath, sleep = delay } = context;
   const existing = await readOptionalJson(statePath);
   if (existing) throw new Error("control-plane-loss evidence directory already contains state");
   const owner = await egress.readOwnership(host, options.camera);
   if (owner.event !== lifecycleState.event || owner.court !== options.camera || owner.destinationRole !== "primary") throw new Error("Camera Egress owner is not the expected primary event output");
   await egress.reconcileOwned({ host, court: options.camera, profile: owner.outputProfile, owner, expectedId: owner.egressId });
   const providerBaseline = await providerState(youtube, owner.destinationId, options.camera, lifecycleState.event);
-  const baseline = await monitor.snapshot();
+  let baseline = await monitor.snapshot();
   const baselineProblems = healthySnapshotProblems(baseline, { camera: options.camera, owner, requireControlPlane: true });
   if (baselineProblems.length) throw new Error(`control-plane-loss baseline is not healthy: ${baselineProblems.join("; ")}`);
 
@@ -93,36 +95,46 @@ export async function runGate(context) {
   let cold = null;
   let recovery = null;
   let viewerEvidence = null;
+  let providerBuffered = null;
   let failure = null;
   await writeProtected(statePath, stateRecord({ phase, lifecycleState, options, target, baseline, providerBaseline }));
 
   try {
+    await warmViewerSession(viewerSession, sleep);
+    const bufferedBaseline = await monitor.snapshot();
+    const bufferedProblems = healthySnapshotProblems(bufferedBaseline, { camera: options.camera, owner, requireControlPlane: true });
+    if (bufferedProblems.length) throw new Error(`control-plane-loss buffered viewer baseline is not healthy: ${bufferedProblems.join("; ")}`);
+    providerBuffered = await providerState(youtube, owner.destinationId, options.camera, lifecycleState.event);
+    baseline = bufferedBaseline;
+    phase = "VIEWER_BUFFERED";
+    await writeProtected(statePath, stateRecord({ phase, lifecycleState, options, target, baseline, providerBaseline, providerBuffered }));
+
     faultEvidence = await fault.inject({ target, confirmation: `FAULT-CONTROL-PLANE:${target.event}:CAMERA-${target.camera}` });
     phase = "CONTROL_PLANE_FAULTED";
     await viewerSession.mark("control-plane-faulted");
     const dnsDuringFault = await fault.verifyDns(target);
     if (!dnsDuringFault.passed) throw new Error("provider DNS changed during the control-plane-loss fault");
-    await writeProtected(statePath, stateRecord({ phase, lifecycleState, options, target, baseline, providerBaseline, faultEvidence, dnsDuringFault }));
+    await writeProtected(statePath, stateRecord({ phase, lifecycleState, options, target, baseline, providerBaseline, providerBuffered, faultEvidence, dnsDuringFault }));
 
     recycle = await fault.recycleEgress({ target, confirmation: `RECYCLE-EGRESS:${target.event}:CAMERA-${target.camera}` });
     phase = "WORKER_RECYCLE_REQUESTED";
     await viewerSession.mark("worker-recycle-requested");
-    await writeProtected(statePath, stateRecord({ phase, lifecycleState, options, target, baseline, providerBaseline, faultEvidence, recycle }));
+    await writeProtected(statePath, stateRecord({ phase, lifecycleState, options, target, baseline, providerBaseline, providerBuffered, faultEvidence, recycle }));
 
     replacement = await waitForReplacement({ egress, monitor, fault, host, camera: options.camera, target, baseline });
     phase = "REPLACEMENT_ACTIVE";
     await viewerSession.mark("replacement-active");
-    await writeProtected(statePath, stateRecord({ phase, lifecycleState, options, target, baseline, providerBaseline, faultEvidence, recycle, replacement }));
+    await writeProtected(statePath, stateRecord({ phase, lifecycleState, options, target, baseline, providerBaseline, providerBuffered, faultEvidence, recycle, replacement }));
 
     cold = await waitForColdBrowser({ monitor, camera: options.camera, baseline, owner: replacement.owner });
     phase = "COLD_BROWSER_HEALTHY";
     await viewerSession.mark("cold-browser-healthy");
-    await writeProtected(statePath, stateRecord({ phase, lifecycleState, options, target, baseline, providerBaseline, faultEvidence, recycle, replacement, cold }));
+    await writeProtected(statePath, stateRecord({ phase, lifecycleState, options, target, baseline, providerBaseline, providerBuffered, faultEvidence, recycle, replacement, cold }));
 
     restoration = await fault.restore({ target, confirmation: `RESTORE-CONTROL-PLANE:${target.event}:CAMERA-${target.camera}` });
     phase = "CONTROL_PLANE_RESTORED";
     await viewerSession.mark("control-plane-restored");
-    await writeProtected(statePath, stateRecord({ phase, lifecycleState, options, target, baseline, providerBaseline, faultEvidence, recycle, replacement, cold, restoration }));
+    await writeProtected(statePath, stateRecord({ phase, lifecycleState, options, target, baseline, providerBaseline, providerBuffered, faultEvidence, recycle, replacement, cold, restoration }));
 
     recovery = await waitForRecoveredBrowser({ monitor, camera: options.camera, cold, owner: replacement.owner });
     const providerFinal = await providerState(youtube, owner.destinationId, options.camera, lifecycleState.event);
@@ -147,6 +159,7 @@ export async function runGate(context) {
       replacementEgressId: replacement.owner.egressId,
       renderer: { gitSha: renderer.gitSha, deploymentId: renderer.deploymentId, origin: renderer.origin },
       providerBaseline,
+      providerBuffered,
       providerFinal,
       fault: faultEvidence,
       recycle,
@@ -175,7 +188,7 @@ export async function runGate(context) {
     }
     if (failure) {
       const failed = {
-        ...stateRecord({ phase: "FAILED", lifecycleState, options, target, baseline, providerBaseline, faultEvidence, recycle, replacement, cold, restoration, recovery }),
+        ...stateRecord({ phase: "FAILED", lifecycleState, options, target, baseline, providerBaseline, providerBuffered, faultEvidence, recycle, replacement, cold, restoration, recovery }),
         failure,
         viewer: viewerEvidence ? viewerSummary(viewerEvidence) : null,
         updatedAt: new Date().toISOString()
@@ -184,6 +197,11 @@ export async function runGate(context) {
       await writeProtected(join(options.evidence, "control-plane-loss-report.json"), { schemaVersion: 1, event: lifecycleState.event, camera: options.camera, classification: "FAIL", completedAt: new Date().toISOString(), problems: [failure], viewer: failed.viewer }).catch(() => undefined);
     }
   }
+}
+
+export async function warmViewerSession(viewerSession, sleep = delay) {
+  await sleep(NORMAL_LATENCY_VIEWER_WARMUP_MS);
+  await viewerSession.mark("viewer-buffered");
 }
 
 export function healthySnapshotProblems(snapshot, { camera, owner, requireControlPlane }) {
