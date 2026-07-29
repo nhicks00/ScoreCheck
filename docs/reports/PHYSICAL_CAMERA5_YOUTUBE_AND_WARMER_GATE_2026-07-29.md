@@ -78,6 +78,32 @@ The active row was corrected and the monitor converged to HEALTHY. Commit `cc48b
 3. The runtime branch is pushed but not merged into the release branch. Integration must preserve commits `cc48b0de3` and `8b4816861`.
 4. A full multi-camera YouTube endurance gate remains required after the router capacity decision.
 
+## One-Hour Post-Gate Checkpoint
+
+The same Camera 5 page and Egress remained active through
+`2026-07-29T07:04:22.680Z`, more than one hour after page load:
+
+- 113,375 additional rendered frames at 29.993 aggregate fps;
+- zero browser drops, freezes, freeze-duration growth, reconnects, or reloads;
+- one created HLS instance, zero destroyed instances, and one active instance;
+- bounded buffered-ahead time with a 12.106-second maximum;
+- post-fix JavaScript heap cycling between approximately 8.6 MB and 18.5 MB
+  rather than increasing linearly;
+- exactly two program readers in every sample after `06:30Z`: one HLS browser
+  and one RTSP warmer; and
+- a fresh actual YouTube viewer probe with advancing playhead and audio.
+
+The provider API returned `provider-unavailable` once near `06:56:19Z`. The
+external viewer continued playing during that interval, and the next provider
+observation returned live/active/good with no issues. This is a provider/API
+read transient, not a delivery outage.
+
+The same interval included the matched plain-Speed versus Enhanced Streaming
+comparison documented in
+`PHYSICAL_SPEEDIFY_ENHANCED_STREAMING_COMPARISON_2026-07-29.md`. Neither mode
+caused a viewer defect; plain Speed retained lower SRT loss/drop rates and was
+restored.
+
 ## Protected Evidence
 
 Evidence is stored outside Git at:
