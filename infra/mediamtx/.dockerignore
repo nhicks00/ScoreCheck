@@ -3,3 +3,4 @@
 !patches/
 !patches/gohlslib-h264-discontinuity-recovery.patch
 !patches/gortmplib-avkans-adts-aac.patch
+!patches/mediamtx-srt-receiver-latency.patch

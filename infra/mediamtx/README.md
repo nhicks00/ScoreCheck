@@ -81,6 +81,11 @@ That buffer is intentional: viewer continuity outranks latency. Scoreboard and
 commentary state follow the measured program timeline. WHEP remains available
 for the undelayed commentary preview and one selected operator inspection only.
 
+The custom SRT listener requests an 8-second receiver latency floor. Cameras
+remain configured at 2.5 seconds; SRT negotiates the larger receiver value so
+the ingest has more time to recover packets across bonded-uplink variation.
+This applies only to incoming SRT delivery and does not change RTMP behavior.
+
 The July 13 extended run proved that the four-vCPU MediaMTX host does not have
 production headroom for shared video normalization: load remained
 above 12 at the endpoint with only three active preview/program pairs, and hook

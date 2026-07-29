@@ -4,12 +4,13 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const directory = fileURLToPath(new URL(".", import.meta.url));
-const [dockerfile, compose, dockerignore, audioPatch, hlsPatch] = await Promise.all([
+const [dockerfile, compose, dockerignore, audioPatch, hlsPatch, srtPatch] = await Promise.all([
   readFile(new URL("./Dockerfile", import.meta.url), "utf8"),
   readFile(new URL("./docker-compose.yml", import.meta.url), "utf8"),
   readFile(new URL("./.dockerignore", import.meta.url), "utf8"),
   readFile(new URL("./patches/gortmplib-avkans-adts-aac.patch", import.meta.url), "utf8"),
-  readFile(new URL("./patches/gohlslib-h264-discontinuity-recovery.patch", import.meta.url), "utf8")
+  readFile(new URL("./patches/gohlslib-h264-discontinuity-recovery.patch", import.meta.url), "utf8"),
+  readFile(new URL("./patches/mediamtx-srt-receiver-latency.patch", import.meta.url), "utf8")
 ]);
 
 test("builds the MediaMTX compatibility image from pinned and tested upstream revisions", () => {
@@ -20,10 +21,11 @@ test("builds the MediaMTX compatibility image from pinned and tested upstream re
   assert.match(dockerfile, /7eb5d30075ae68a36c07c3f1231af04a0e49f804/u);
   assert.match(dockerfile, /git -C \/src\/gohlslib apply --check/u);
   assert.match(dockerfile, /git -C \/src\/gortmplib apply --check/u);
+  assert.match(dockerfile, /git -C \/src\/mediamtx apply --check/u);
   assert.match(dockerfile, /go test \.\/\.\.\./u);
   assert.match(dockerfile, /go generate \.\/\.\.\./u);
-  assert.match(dockerfile, /go test \.\/internal\/servers\/rtmp/u);
-  assert.match(compose, /image: scorecheck\/mediamtx:1\.19\.2-avkans-adts-gop2/u);
+  assert.match(dockerfile, /go test \.\/internal\/servers\/rtmp \.\/internal\/servers\/srt/u);
+  assert.match(compose, /image: scorecheck\/mediamtx:1\.19\.2-avkans-adts-gop2-srt8s/u);
   assert.match(compose, /build:\n\s+context: \.\n\s+dockerfile: Dockerfile/u);
 });
 
@@ -42,8 +44,14 @@ test("recovers H264 HLS from a damaged GOP without retiring the muxer", () => {
   assert.match(hlsPatch, /track\.h264DTSExtractor = nil/u);
 });
 
+test("requests an eight-second SRT receiver recovery window", () => {
+  assert.match(srtPatch, /conf\.ReceiverLatency = 8 \* time\.Second/u);
+  assert.doesNotMatch(srtPatch, /conf\.PeerLatency\s*=/u);
+});
+
 test("excludes runtime configuration and secrets from the image build context", () => {
   assert.equal(dockerignore,
     "*\n!Dockerfile\n!patches/\n!patches/gohlslib-h264-discontinuity-recovery.patch\n" +
-      "!patches/gortmplib-avkans-adts-aac.patch\n");
+      "!patches/gortmplib-avkans-adts-aac.patch\n" +
+      "!patches/mediamtx-srt-receiver-latency.patch\n");
 });

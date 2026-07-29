@@ -26,11 +26,15 @@ RUN git clone https://github.com/bluenviron/mediamtx.git /src/mediamtx \
     && git -C /src/mediamtx checkout --detach 7eb5d30075ae68a36c07c3f1231af04a0e49f804 \
     && test "$(git -C /src/mediamtx rev-parse HEAD)" = "7eb5d30075ae68a36c07c3f1231af04a0e49f804"
 
+COPY patches/mediamtx-srt-receiver-latency.patch /tmp/mediamtx-srt-receiver-latency.patch
+RUN git -C /src/mediamtx apply --check /tmp/mediamtx-srt-receiver-latency.patch \
+    && git -C /src/mediamtx apply /tmp/mediamtx-srt-receiver-latency.patch
+
 RUN cd /src/mediamtx \
     && go mod edit -replace github.com/bluenviron/gohlslib/v2=/src/gohlslib \
     && go mod edit -replace github.com/bluenviron/gortmplib=/src/gortmplib \
     && go generate ./... \
-    && go test ./internal/servers/rtmp \
+    && go test ./internal/servers/rtmp ./internal/servers/srt \
     && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /out/mediamtx .
 
 FROM bluenviron/mediamtx:1.19.2-ffmpeg@sha256:08c837deb7bac85d509e2a4c2737308e5a34f8f084a46a0d8793cdb0579a6e5d
@@ -39,6 +43,6 @@ LABEL org.opencontainers.image.source="https://github.com/bluenviron/mediamtx" \
       org.opencontainers.image.revision="7eb5d30075ae68a36c07c3f1231af04a0e49f804" \
       com.scorecheck.gohlslib.revision="7f399d73c6877dcf98099e90c177a83f0dfc2497" \
       com.scorecheck.gortmplib.revision="c9c2ddd362aa155e0c8e35b6713f7ebdd731f7aa" \
-      com.scorecheck.compatibility="avkans-adts-aac-h264-gop-recovery-v2"
+      com.scorecheck.compatibility="avkans-adts-aac-h264-gop-recovery-srt8s-v3"
 
 COPY --from=build /out/mediamtx /mediamtx

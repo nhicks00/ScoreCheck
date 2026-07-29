@@ -1,0 +1,14 @@
+diff --git a/internal/servers/srt/server.go b/internal/servers/srt/server.go
+index 34e3f44..8cb2ec8 100644
+--- a/internal/servers/srt/server.go
++++ b/internal/servers/srt/server.go
+@@ -107,6 +107,9 @@ type Server struct {
+ // Initialize initializes the server.
+ func (s *Server) Initialize() error {
+ 	conf := srt.DefaultConfig()
++	// ScoreCheck values continuity above latency. Request enough receiver delay
++	// for bonded-uplink retransmissions even when a camera advertises less.
++	conf.ReceiverLatency = 8 * time.Second
+ 	conf.ConnectionTimeout = time.Duration(s.ReadTimeout)
+ 	conf.PeerIdleTimeout = time.Duration(s.ReadTimeout)
+ 	conf.PayloadSize = uint32(srtMaxPayloadSize(s.UDPMaxPayloadSize))

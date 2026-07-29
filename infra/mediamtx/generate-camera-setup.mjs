@@ -57,7 +57,7 @@ for (let court = 1; court <= 8; court += 1) {
     lines.push("Video bitrate: 3000 kbps CBR");
     lines.push("Input bandwidth: 3000 kbps");
     lines.push("Recovery overhead: 25%");
-    lines.push("Latency: 2500 ms");
+    lines.push("Camera latency: 2500 ms (ingest negotiates an 8000 ms receiver floor)");
     lines.push("Packet size / payload size: 1316 bytes");
     lines.push("TSBPD / timestamp delivery: On");
     lines.push("Too-late packet drop: On");
@@ -73,7 +73,7 @@ for (let court = 1; court <= 8; court += 1) {
 
 lines.push("SRT NOTES");
 lines.push("All cameras publish directly in Caller mode using their permanent Camera 1-8 Stream ID.");
-lines.push("Use 2500 ms SRT latency and the camera's reconnect/auto-start behavior.");
+lines.push("Keep the camera at 2500 ms SRT latency; ingest negotiates an 8000 ms receiver floor for retransmission headroom.");
 lines.push("Use the event manifest's encryption/passphrase assignment; never downgrade it implicitly.");
 lines.push("");
 lines.push("Do not start changing fields after a camera connects. Report which stream is online and leave it running.");
