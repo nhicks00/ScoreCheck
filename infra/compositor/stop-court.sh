@@ -62,14 +62,39 @@ echo "court ${COURT}: stopping egress ${EGRESS_ID}"
 printf '%s\n' "$EGRESS_ID" >"${STOP_INTENT}.tmp"
 chmod 600 "${STOP_INTENT}.tmp"
 mv "${STOP_INTENT}.tmp" "$STOP_INTENT"
-if ! "$LK" egress stop --id "$EGRESS_ID"; then
-  ACTIVE_FILE="$(mktemp "$REQ_DIR/.stop-active.XXXXXX")"
-  if ! "$LK" egress list --active --json >"$ACTIVE_FILE" 2>/dev/null \
-    || ! jq -e --arg id "$EGRESS_ID" '(. // []) as $items | ($items | type) == "array" and ([$items[]? | select(.egress_id == $id)] | length == 0)' "$ACTIVE_FILE" >/dev/null; then
-    echo "error: stop failed and the owned Egress may still be active; stop intent retained." >&2
+"$LK" egress stop --id "$EGRESS_ID" || true
+
+# LiveKit can acknowledge a stop before the job leaves the active list. Keep
+# ownership and stop intent until the host is actually empty so a replacement
+# cannot race the retiring publisher or appear ownerless to the supervisor.
+ACTIVE_FILE="$(mktemp "$REQ_DIR/.stop-active.XXXXXX")"
+trap 'rm -f "$ACTIVE_FILE"' EXIT
+for (( attempt = 1; attempt <= 30; attempt += 1 )); do
+  if ! "$LK" egress list --active --json >"$ACTIVE_FILE" 2>/dev/null; then
+    echo "error: could not verify Egress drainage; stop intent retained." >&2
     exit 1
   fi
-fi
+  if ! jq -e '
+    . == null
+    or (type == "array" and all(.[]; (.egress_id | type) == "string"))
+  ' "$ACTIVE_FILE" >/dev/null; then
+    echo "error: active Egress response was malformed; stop intent retained." >&2
+    exit 1
+  fi
+  ACTIVE_IDS="$(jq -r '(. // []) | map(.egress_id) | join(" ")' "$ACTIVE_FILE")"
+  if [[ -z "$ACTIVE_IDS" ]]; then
+    break
+  fi
+  if [[ "$ACTIVE_IDS" != "$EGRESS_ID" ]]; then
+    echo "error: active Egress ownership changed while stopping; stop intent retained." >&2
+    exit 1
+  fi
+  if (( attempt == 30 )); then
+    echo "error: owned Egress did not drain within 30 seconds; stop intent retained." >&2
+    exit 1
+  fi
+  sleep 1
+done
 
 rm -f "$ID_FILE" "$OWNER_FILE" "$REQUEST_FILE" "$STOP_INTENT"
 echo "court ${COURT}: stopped (ownership files cleared)"

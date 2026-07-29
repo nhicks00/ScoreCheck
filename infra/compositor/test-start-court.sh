@@ -8,6 +8,7 @@ mkdir -p "$FIXTURE/bin"
 cp "$SCRIPT_DIR/start-court.sh" "$SCRIPT_DIR/stop-court.sh" "$SCRIPT_DIR/lib.sh" "$FIXTURE/"
 
 printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$FIXTURE/bin/flock"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$FIXTURE/bin/sleep"
 ln -s "$(command -v jq)" "$FIXTURE/bin/jq"
 printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
@@ -18,6 +19,14 @@ printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
   'if [[ "$*" == "egress list --active --json" ]]; then' \
   '  printf '\''Using protected LiveKit credentials\n'\'' >&2' \
+  '  if [[ -n "${MOCK_STOP_DRAIN_POLLS_FILE:-}" && -f "$MOCK_STOP_DRAIN_POLLS_FILE" ]]; then' \
+  '    polls="$(<"$MOCK_STOP_DRAIN_POLLS_FILE")"' \
+  '    if (( polls > 0 )); then' \
+  '      printf '\''%s\n'\'' "$((polls - 1))" >"$MOCK_STOP_DRAIN_POLLS_FILE"' \
+  '      printf '\''[{"egress_id":"EG_new"}]'\''' \
+  '      exit 0' \
+  '    fi' \
+  '  fi' \
   '  if [[ "${MOCK_ACTIVE:-0}" == 1 ]]; then printf '\''[{"egress_id":"EG_existing"}]'\''; else printf '\''null'\''; fi' \
   'elif [[ "$*" == egress\ start\ --type\ web* ]]; then' \
   '  printf '\''EgressID: EG_new Status: EGRESS_STARTING\n'\''' \
@@ -26,7 +35,7 @@ printf '%s\n' '#!/usr/bin/env bash' \
   'else' \
   '  exit 2' \
   'fi' >"$FIXTURE/bin/lk"
-chmod 755 "$FIXTURE/bin/curl" "$FIXTURE/bin/flock" "$FIXTURE/bin/lk" "$FIXTURE/start-court.sh" "$FIXTURE/stop-court.sh"
+chmod 755 "$FIXTURE/bin/curl" "$FIXTURE/bin/flock" "$FIXTURE/bin/lk" "$FIXTURE/bin/sleep" "$FIXTURE/start-court.sh" "$FIXTURE/stop-court.sh"
 
 printf '%s\n' \
   'LIVEKIT_API_KEY=test-key' \
@@ -83,9 +92,12 @@ if grep -Fq 'test-stream-key' "$FIXTURE/start.out" || grep -Fq 'test-program-tok
   exit 1
 fi
 
+printf '2\n' >"$FIXTURE/stop-drain-polls"
+printf '%s\n' "MOCK_STOP_DRAIN_POLLS_FILE=$FIXTURE/stop-drain-polls" >>"$FIXTURE/.env"
 rm -f "$FIXTURE/requests/court-1.egress-id"
 PATH="$FIXTURE/bin:$PATH" "$FIXTURE/stop-court.sh" 1 >"$FIXTURE/stop.out" 2>&1
 test ! -e "$FIXTURE/requests/court-1.owner.json"
+grep -Fxq '0' "$FIXTURE/stop-drain-polls"
 grep -Fq 'court 1: stopped (ownership files cleared)' "$FIXTURE/stop.out"
 
 printf '%s\n' \
