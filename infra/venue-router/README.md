@@ -119,9 +119,11 @@ heartbeat reports both values, and active-event monitoring pages if any saved
 policy drifts from `automatic`. A temporary diagnostic change must be restored
 before the diagnostic ends.
 
-The checked-in event profile uses Enhanced Streaming (`mode streaming`) with
-SRT `8890/udp` and RTMP `1935/tcp` explicitly prioritized. This lets Speedify
-apply stream-aware redundancy while preserving Automatic adapter selection.
+The checked-in event profile uses plain Speed mode with SRT `8890/udp` and RTMP
+`1935/tcp` explicitly marked as stream traffic. A matched six-camera physical
+comparison on July 29 found no viewer improvement from Enhanced Streaming and
+higher SRT loss/drop rates on Cameras 2-6, so Enhanced Streaming is not the
+default. Every adapter remained Automatic throughout the comparison.
 
 The router heartbeat also reports the number of devices associated with the
 dedicated camera Wi-Fi interface and its weakest client signal. This is
