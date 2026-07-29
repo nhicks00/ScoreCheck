@@ -7,6 +7,7 @@ trap 'rm -rf "$FIXTURE"' EXIT
 mkdir -p "$FIXTURE/bin" "$FIXTURE/mock" "$FIXTURE/state" "$FIXTURE/export"
 cp "$SCRIPT_DIR/egress-supervisor.sh" "$SCRIPT_DIR/start-court.sh" "$SCRIPT_DIR/stop-court.sh" "$SCRIPT_DIR/lib.sh" "$FIXTURE/"
 printf 'services: {}\n' >"$FIXTURE/docker-compose.yml"
+grep -Fq 'reconcile_once() (' "$FIXTURE/egress-supervisor.sh"
 
 printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$FIXTURE/bin/flock"
 ln -s "$(command -v jq)" "$FIXTURE/bin/jq"

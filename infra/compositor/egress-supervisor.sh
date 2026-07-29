@@ -169,7 +169,9 @@ adopt_single_started_id() {
   return 1
 }
 
-reconcile_once() {
+# Run each reconciliation in a subshell so descriptor 9, and therefore the
+# lifecycle lock, is released before the watch loop sleeps.
+reconcile_once() (
   local owners=() stop_intents=() owner_file request_file id_file court owner_id request_sha generation_key
   local renderer_git_sha renderer_deployment_id renderer_release_origin renderer_binding_file
   local counts missing_count recovery_attempts old_container_id start_log start_status new_id owner_tmp id_tmp
@@ -340,7 +342,7 @@ reconcile_once() {
   mv "$id_tmp" "$id_file"
   rm -f "$start_log"
   write_state "$generation_key" 0 "$recovery_attempts" "RECOVERED" "The worker was recycled and one exact owned Egress was restarted." "$court" "$new_id"
-}
+)
 
 if [[ "$MODE" == "once" ]]; then
   reconcile_once
