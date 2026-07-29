@@ -19,12 +19,13 @@ comparisons. Camera traffic remained fail-closed through Speedify, with the
 primary route, blackhole guard table, firewall kill switch, and routing
 watchdog active.
 
-The test compared four real router/runtime combinations:
+The test compared five real router/runtime combinations:
 
 1. Speed mode with single TCP transport;
 2. Enhanced Streaming mode with UDP transport;
 3. Speed mode with UDP transport;
-4. Speed mode with Multi-TCP transport.
+4. Speed mode with Multi-TCP transport;
+5. Enhanced Streaming mode with Multi-TCP transport.
 
 The gate also tested an official GL.iNet/Speedify recommendation to disable
 GL.iNet Network Acceleration. That experiment did not improve the physical
@@ -65,6 +66,7 @@ generation, branch continuity, and browser evidence remain required.
 | Enhanced Streaming + UDP | The tunnel reconnected with every saved input still Automatic. | Queue reached 20,220 packets; C4 and C7 were not ready; several AVKANS streams delivered near-zero bitrate; RTT reached 1,878 ms. | FAIL |
 | Speed + UDP | Queue fell briefly after the mode change. | Queue remained 13,475 at the endpoint; AVKANS bitrates stayed severely reduced; RTT reached 2,359 ms. | FAIL |
 | Speed + Multi-TCP | Strong warmup: eight ready paths, 27.45 Mbps aggregate send, 68.13 Mbps estimated upload, queue 66, AVKANS RTT 86-106 ms. | After about ten minutes, send fell to 8.43 Mbps, queue reached 9,695, router health became unknown, AVKANS bitrate collapsed, and analyzer restarts resumed. | FAIL |
+| Enhanced Streaming + Multi-TCP | After a controlled camera-radio cycle, all eight paths were ready at expected bitrate with queue 75. | In about 92 seconds, router CPU reached 98.4%, queue reached 18,609 before ending at 7,835, and four AVKANS feeds collapsed below 252 kbps. | FAIL |
 
 ### Speed + single TCP control
 
@@ -104,12 +106,10 @@ path. A later A/B step left the router and checked-in watchdog on Speed plus
 Multi-TCP, but that mode also failed endurance and is not a qualified
 production selection.
 
-Enhanced Streaming with Multi-TCP has not yet been tested. The router reached
-0% idle CPU in the strongest sustained profile, so another mode permutation
-is not justified until the router-capacity constraint is addressed. Once the
-tunnel runs on hardware with measured headroom, Enhanced plus Multi-TCP should
-be compared against plain Speed plus Multi-TCP with the same eight physical
-cameras and all saved inputs Automatic.
+Enhanced Streaming with Multi-TCP was subsequently tested and also failed; see
+the dedicated section below. The result does not reject Enhanced Streaming as
+a feature on capable hardware. It rejects another eight-camera permutation on
+this saturated dual-core router.
 
 ### Speed + UDP
 
@@ -164,6 +164,41 @@ service lacked raw upload capacity. The same window reported approximately
 Mbps. The leading proven bottleneck is the GL-XE3000's processing of the
 encrypted bonded tunnel and packet workload.
 
+### Enhanced Streaming + Multi-TCP
+
+The remaining requested pairing was tested from exact Git candidate
+`d5b4f0beb` and then reverted as `970d4a4ba` after failure. All four saved
+Speedify inputs remained `automatic`, and the two primary rules, two guard
+rules, kill switch, and single watchdog remained intact.
+
+Changing mode retired the server-side SRT sessions, but the AVKANS cameras did
+not open fresh handshakes while their Wi-Fi association remained continuous.
+Clearing only SRT conntrack and a bounded ICMP rejection pulse did not recover
+them. A controlled five-second cycle of the dedicated camera access-point
+interface caused all eight physical publishers to reconnect. This was a
+camera-radio interruption only; no Speedify input was disabled.
+
+At the formal baseline (`04:38:28.502Z`):
+
+- all eight raw paths were ready with zero frame errors;
+- Cameras 3-8 delivered approximately 3.16-3.47 Mbps;
+- router CPU was already 86.4%;
+- queue was 75 packets;
+- aggregate send was 21.67 Mbps against a 77.54 Mbps estimate;
+- AVKANS RTT was approximately 155-287 ms.
+
+The pairing failed in approximately 92 seconds. CPU reached 98.4%, queue
+peaked at 18,609 packets and ended at 7,835, and the final endpoint had
+Cameras 5-7 at only approximately 18-37 kbps. AVKANS RTT reached 708-1,329
+ms. This was a faster collapse than plain Speed plus Multi-TCP and confirms
+that Enhanced Streaming cannot create CPU headroom that the router does not
+have.
+
+The router was restored to the checked-in Speed plus Multi-TCP residue with
+script SHA
+`0fdabda5b7c0cc0c981de953d4d1c7be2efa31a86d3d30f0ff71fd6553c4612b`,
+all four saved inputs Automatic, and every fail-closed invariant verified.
+
 ## Network Acceleration Experiment
 
 Speedify documents a possible interaction between its PEP support and GL.iNet
@@ -208,11 +243,48 @@ The restoration reboot exposed a separate camera-firmware behavior:
 - ingest, Speedify, route guards, and the two Mevo flows were healthy.
 
 This localizes the immediate post-reboot loss to AVKANS publisher recovery,
-not MediaMTX listener availability or aggregate bandwidth. Cameras 3-8 need a
-physical streaming restart before the eight-camera gate can continue. A
-plain-English Pushover request was delivered to the operator. This behavior
-must be included in event operations unless a camera firmware/configuration
-change proves autonomous reconnect.
+not MediaMTX listener availability or aggregate bandwidth. A later controlled
+camera access-point cycle caused Cameras 3-8 to reconnect without changing any
+camera setting. In the capacity staircase, Cameras 5-7 also reconnected on
+their own within approximately 12 seconds after a bounded per-camera ICMP
+rejection was removed. Recovery therefore depends on the failure shape: a
+fresh negative network signal can trigger retry, while a Speedify exit change
+can leave the AVKANS publisher sending an obsolete SRT session indefinitely.
+The event runbook must retain an operator-visible camera reconnect action until
+camera firmware proves autonomous recovery across the exact tunnel-restart
+case.
+
+## Physical Camera-Count Staircase
+
+After restoring Speed plus Multi-TCP, the router's sustainable count was
+measured with the same physical cameras. Runtime-only firewall rules blocked
+selected camera SRT flows before Speedify; all cameras remained associated,
+all four Speedify inputs stayed Automatic, and no synthetic source was used.
+Each admitted step was held for five minutes with 15-second synchronized
+samples.
+
+| Active cameras | CPU average / maximum | Maximum queue | Media result | Classification |
+| ---: | ---: | ---: | --- | --- |
+| 4 | 53.8% / 57.0% | 14 | All ready; C3-C4 added only 2/0 lost packets, no drops, frame errors, or analyzer restarts. | PASS |
+| 6 | 72.0% / 74.6% | 114 | All ready at expected bitrate; AVKANS RTT stayed below 158 ms, with no frame errors or analyzer restarts. | PASS for this bounded static-scene gate |
+| 7 | 80.1% / 83.8% | 159 | All ready and full-rate, but AVKANS loss reached 1,950-2,360 packets per camera and RTT reached 472 ms. | FUNCTIONAL, NOT PRODUCTION-QUALIFIED |
+| 8 | 98%+ during repeated profile tests | 9,695-20,220 | Repeated bitrate collapse and analyzer restarts across every tested transport pairing. | FAIL |
+
+The six-camera result identifies the highest clean bounded step, not an
+eight-camera production solution. Cameras 1-2 were viewing mostly static dark
+scenes and delivered only approximately 0.6-2.0 Mbps during the staircase. At
+an event, motion can raise both Mevo streams toward their configured ceiling,
+consuming much of the apparent six-camera CPU reserve. Four active cameras are
+the only measured step with approximately 30% or greater whole-router CPU
+reserve.
+
+The seven-camera step is not accepted merely because every path remained
+`ready`: continuity is the priority, and its reduced CPU reserve plus rising
+transport recovery work predicts poor behavior during WAN rejoin or camera
+motion. The current GL-XE3000 therefore does not qualify as the sole bonded
+router for eight 1080p cameras at the intended profiles. The next meaningful
+comparison is the same eight-camera gate on stronger dedicated Speedify
+hardware, not another software-mode permutation on this device.
 
 ## Monitoring Contract Cutover
 
@@ -251,6 +323,10 @@ incident.
 | Enhanced Streaming + UDP sustained quality | FAIL |
 | Speed + UDP sustained quality | FAIL |
 | Speed + Multi-TCP sustained quality | FAIL after strong warmup |
+| Enhanced Streaming + Multi-TCP sustained quality | FAIL within approximately 92 seconds |
+| Four-camera capacity step | PASS |
+| Six-camera capacity step | PASS for bounded static-scene load |
+| Seven-camera capacity step | FUNCTIONAL, insufficient production reserve |
 | Router fail-closed controls | PASS |
 | All Speedify saved inputs Automatic | PASS |
 | Network Acceleration disabled | FAIL / reverted |
@@ -263,18 +339,20 @@ incident.
 Do not start eight YouTube outputs or expand the program path while the source
 transport is failing.
 
-The next physical test should measure the current router's sustainable camera
-count as a capacity staircase, or move the Speedify tunnel to a stronger
-dedicated router/host and repeat the exact eight-camera gate. The MacBook
-should remain off the event data path; a stronger dedicated Speedify device is
-the cleaner production comparison. On hardware with headroom, compare
-Enhanced plus Multi-TCP with Speed plus Multi-TCP before selecting the event
-default. Another permutation on the same saturated dual-core router is lower
-value than addressing the proven compute limit.
+The capacity staircase is complete enough to reject this router as the sole
+eight-camera production tunnel. Move Speedify to stronger dedicated hardware
+and repeat the exact eight-camera gate. The MacBook should remain off the
+event data path; a stronger dedicated Speedify device is the cleaner
+production comparison. On hardware with headroom, compare Enhanced plus
+Multi-TCP with Speed plus Multi-TCP before selecting the event default.
+Another permutation on the same saturated dual-core router is lower value than
+addressing the proven compute limit.
 
-The AVKANS reconnect failure should be retested independently after Cameras
-3-8 are manually restarted. It is a separate release risk even if the router
-is replaced.
+The AVKANS reconnect failure remains a separate release risk even if the
+router is replaced. The access-point cycle and bounded rejection tests prove
+that a new network signal can recover the publishers, but the exact
+Speedify-exit-change case still requires an automatic camera-side retry or a
+documented operator action.
 
 ## Protected Evidence
 
@@ -284,6 +362,8 @@ Protected root:
 ~/.config/scorecheck/event-stack/events/weekend-dry-run-20260726/
   final-evidence/diagnostic-20260726T2301Z/
   srt8s-transport-gate-20260729T030837Z/
+  enhanced-multitcp-gate-20260729T043004Z/
+  router-capacity-staircase-20260729T044519Z/
 ```
 
 Representative artifact hashes:
@@ -296,6 +376,11 @@ Representative artifact hashes:
 | `monitor-multitcp-start.json` | `edc663e84471d3be161951288d9c92a4f54060b3a9cc802b56370690c7b6cb5b` |
 | `monitor-multitcp-end-direct.json` | `dd51b02fb56b79952e9b6688bffb90f13dd8d1c27efa87d5342c9c28d1a8292b` |
 | Network Acceleration evidence manifest | `c8f1db429bb8e0ac89f0bb29c7c852dceec26c5fe8cd694cc2664457ea2843c6` |
+| Enhanced + Multi-TCP formal start | `a4da43ed98b684dcc0b105cecb5e2f67a62dbf3bdaa13503e69c6e2f07c6b546` |
+| Enhanced + Multi-TCP failure endpoint | `a96f8c7d8e5719994109085d5d7a88d52ed4129589496c3fa9e5d8a5aa011a45` |
+| Four-camera five-minute summary | `4fa78e20954286ae65844b8d78d0d6e21775a9885d168d245b8a0611da228b65` |
+| Six-camera five-minute summary | `a17eb64f692ca255a8e0ab09857fc6ee738d908a7ba2004785b785d9d7051eb9` |
+| Seven-camera five-minute summary | `fac17b12036051351c7561c63166e6f30f31a925ebfa8c4285bcd1ffda804c3a` |
 
 The continuous 15-second monitor recorder and 60-second router recorder remain
 under the parent diagnostic evidence directory. Raw event evidence is
