@@ -11,13 +11,14 @@ Each camera has one permanent publishing identity and three consumer branches:
 | Path | Purpose |
 |---|---|
 | `courtN_raw` | Permanent camera SRT input: Mevo HEVC or AVKANS H.264, plus AAC |
-| `courtN_preview` | Clean, undelayed 1080p H.264 + Opus WHEP commentary/inspection preview |
-| `courtN_monitor` | On-demand 360p/10 FPS low-bandwidth operator view |
-| `courtN_program` | Clean 1080p source held by the program SRT delay and consumed as buffered fMP4 HLS |
+| `courtN_preview` | Clean, undelayed 1080p H.264 + Opus WHEP commentary/scoring preview |
+| `courtN_monitor` | On-demand 360p/10 FPS H.264 + AAC low-bandwidth operator HLS view |
+| `courtN_program` | Clean 1080p source with AAC consumed as buffered fMP4 HLS by the compositor and detailed operator inspection |
 | `courtN_calibration` | On-demand UTC-burned engineering view only |
 
-The program path stream-copies the normalized preview after the SRT receiver
-buffer. It does not run a second H.264 encoder.
+The program path reads the admitted raw or normalized source over reliable
+loopback RTSP/TCP. It stream-copies H.264 video and normalizes audio to AAC; it
+does not run a second H.264 encoder.
 
 ## Mevo publishing
 
@@ -48,13 +49,14 @@ an H.264 label alone is not sufficient.
 
 ```text
 Preview: https://preview.beachvolleyballmedia.com/court1_preview/whep
-Monitor: https://preview.beachvolleyballmedia.com/court1_monitor/whep
+Monitor: https://preview.beachvolleyballmedia.com/court1_monitor/index.m3u8
 Program: https://preview.beachvolleyballmedia.com/court1_program/index.m3u8
 ```
 
 The ScoreCheck application constructs these URLs from each active event's court
-rows. Commentary pages consume only preview paths; compositor pages consume only
-buffered program HLS paths. Program HLS keeps 15 two-second fMP4 segments and
+rows. Commentary and scoring pages consume only preview WHEP paths; compositor
+and detailed operator pages consume buffered program HLS, while data-saver
+inspection consumes monitor HLS. Program HLS keeps 15 two-second fMP4 segments and
 targets a 12-second live offset because continuity is more important than
 latency.
 
@@ -88,10 +90,10 @@ docker stats --no-stream mediamtx
 docker logs --tail=100 mediamtx
 ```
 
-Path readiness is demand-driven. `courtN_preview` starts when a human or the
-program branch reads it. `courtN_monitor` starts only for the selected dashboard
+Path readiness is demand-driven. `courtN_preview` starts when commentary,
+scoring, or an explicit path test reads it. `courtN_monitor` starts only for the selected dashboard
 camera and closes after 15 seconds without a reader. `courtN_program` starts
-when a compositor reads it.
+when a compositor, coverage warmer, or selected detailed inspection reads it.
 
 ## Capacity boundary
 

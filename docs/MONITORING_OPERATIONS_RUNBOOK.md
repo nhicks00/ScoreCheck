@@ -65,7 +65,7 @@ that final allowlist to the full VPC or all raw paths.
    healthy incoming camera look offline.
 4. Read its first issue and first action. This is the correlated upstream cause,
    not merely the most visible downstream symptom.
-5. Select the camera to open its live WHEP inspection and all stage evidence.
+5. Select the camera to open its buffered HLS inspection and all stage evidence.
 6. Check the assigned compositor and shared host cards for capacity or restart evidence.
 7. Use acknowledgement only after an operator owns the response.
 8. Use a timed silence only for planned work. A silence suppresses paging; it
@@ -73,10 +73,10 @@ that final allowlist to the full VPC or all raw paths.
 
 The overview is a fixed two-column grid. Its images are 256x144 JPEG snapshots
 captured every 15 seconds, not eight extra video readers. Only a camera the
-operator explicitly opens uses a live WHEP player. New alerts select the affected
+operator explicitly opens uses a buffered HLS player. New alerts select the affected
 camera without starting video. `Data saver` uses the on-demand
-360p/10 FPS `courtN_monitor` rendition at roughly 0.4 Mbps. `Detail` uses the
-existing 720p/30 FPS preview at roughly 2.6 Mbps. Switching cameras or using
+360p/10 FPS H.264/AAC `courtN_monitor` rendition at roughly 0.4 Mbps. `Detail`
+uses the 1080p/30 FPS AAC `courtN_program` rendition at the Camera source bitrate. Switching cameras or using
 `Close video` releases the prior reader; the monitor rendition closes after
 15 seconds without a reader. This selected-reader limit controls venue download
 bandwidth, not ingest CPU. On the current central 4-vCPU host, keep `Data saver`
@@ -86,6 +86,7 @@ when a camera has a live broadcast expectation, inspection uses the existing
 `Detail` path and the `Data saver` option is unavailable. The authenticated
 stream-source API enforces the same rule and fails closed when the expectation
 cannot be loaded; the disabled dashboard option is not the capacity boundary.
+Timing-sensitive commentary and scoring retain the separate WHEP preview path.
 
 ## Expected-state lifecycle
 

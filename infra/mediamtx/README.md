@@ -4,8 +4,8 @@ The ingest server owns four operator-facing path classes per camera:
 
 - `courtN_raw`: permanent Mevo/camera publishing identity.
 - `courtN_preview`: clean, browser-safe, low-latency H.264/Opus for commentary
-  and selected inspection.
-- `courtN_monitor`: on-demand 360p/10 FPS data-saver view for one selected camera.
+  and scoring.
+- `courtN_monitor`: on-demand 360p/10 FPS H.264/AAC data-saver view for one selected camera.
 - `courtN_program`: admitted source copied over loopback RTSP/TCP and exposed
   as conservative fMP4 HLS for the long-running compositor.
 
@@ -75,11 +75,11 @@ sources fail production admission instead of being copied into a browser
 transport. Monitor and calibration paths may encode low-resolution diagnostics, but
 they never define YouTube output.
 
-The compositor reads `courtN_program` through fMP4 HLS with 15 two-second
+The compositor and selected detailed operator inspection read `courtN_program` through fMP4 HLS with 15 two-second
 segments, a 12-second target live offset, and a 24-second maximum live offset.
 That buffer is intentional: viewer continuity outranks latency. Scoreboard and
 commentary state follow the measured program timeline. WHEP remains available
-for the undelayed commentary preview and one selected operator inspection only.
+for the undelayed commentary/scoring preview and explicit path diagnostics only.
 
 The custom SRT listener requests an 8-second receiver latency floor. Cameras
 remain configured at 2.5 seconds; SRT negotiates the larger receiver value so
@@ -97,5 +97,5 @@ the live churn gate must then show zero zombie growth across at least 50 branch
 start/stop cycles.
 
 The monitor rendition is also demand-driven and closes 15 seconds after its
-last reader. The dashboard opens at most one monitor or preview reader at a
+last reader. The dashboard opens at most one monitor or program-HLS reader at a
 time; the eight-camera overview uses JPEG snapshots instead of eight decoders.

@@ -27,7 +27,7 @@ The system's operating priorities are:
 4. predictable recovery and one-camera isolation; and
 5. latency only after the preceding requirements are satisfied.
 
-The July dry run changed one major architectural choice: the long-running program renderer now uses buffered HLS instead of WHEP. WHEP remains appropriate for low-latency previews and scoring views, but its Chrome presentation behavior was not reliable enough for the final program renderer.
+The July dry run changed one major architectural choice: the long-running program renderer and ordinary operator inspection now use buffered HLS instead of WHEP. WHEP remains appropriate for timing-sensitive commentary, scoring, and explicit path diagnostics, but its external reachability and Chrome presentation behavior were not reliable enough for the final program renderer or the default operator view.
 
 This document distinguishes four states:
 
@@ -132,7 +132,7 @@ The monitoring product answers an operator question in operational language: **w
 - YouTube lifecycle, binding, stream health, issues, and viewer checks; and
 - explicit event expectations so intentionally idle Cameras do not page.
 
-The dashboard is a low-bandwidth diagnostic client. Its overview opens no live media readers, while a selected Camera can open one bounded data-saver or detail reader. Durable incident episodes and Pushover continue to work when the dashboard is closed.
+The dashboard is a low-bandwidth diagnostic client. Its overview opens no live media readers, while a selected Camera can open one bounded 360p data-saver or 1080p buffered-HLS detail reader. Durable incident episodes and Pushover continue to work when the dashboard is closed.
 
 ### 1.7 Turnkey event-infrastructure product
 
@@ -195,7 +195,8 @@ flowchart LR
 
   ER -->|"SRT UDP 8890\nRTMP TCP 1935 compatibility"| ING
   ING -->|"HLS program media over private VPC"| CA
-  ING -->|"WHEP preview/monitor media"| WEB
+  ING -->|"buffered HLS operator inspection"| WEB
+  ING -->|"WHEP commentary/scoring diagnostics"| WEB
   WEB -->|"immutable token-gated program page"| CA
   COM -->|"commentary WebRTC audio"| CA
   CA -->|"1080p H.264/AAC RTMPS"| YT
@@ -477,13 +478,13 @@ For each Camera `N`, MediaMTX defines:
 | `courtN_raw` | authenticated camera input | source native | source AAC | admission, normalization, branch runners |
 | `courtN_normalized` | browser-safe output for assigned unsafe source | HEVC/unsafe H.264 to H.264 | normalized | preview/program branch runner |
 | `courtN_preview` | low-latency preview/scoring/commentary return | stream-copy H.264 | AAC to Opus | WHEP browser |
-| `courtN_program` | final program media before browser composition | stream-copy H.264 | AAC 128 kbps/48 kHz | HLS program browser |
-| `courtN_monitor` | selected low-bandwidth admin inspection | 360p, 10 fps, 350-450 kbps H.264 | Opus mono | one admin inspection reader |
+| `courtN_program` | final program media before browser composition and 1080p operator detail inspection | stream-copy H.264 | AAC 128 kbps/48 kHz | HLS program or selected admin browser |
+| `courtN_monitor` | selected low-bandwidth admin inspection | 360p, 10 fps, 350-450 kbps H.264 | AAC mono | one HLS admin inspection reader |
 | `courtN_calibration` | temporary sync qualification | timecoded H.264 | copied | attended calibration only |
 
 Raw paths are not publicly readable. Each camera credential may publish only its own raw path. Each assigned compositor may publish only its own normalized path from its private source address.
 
-The current checked-in MediaMTX template still grants anonymous read/playback permission to the derived preview, program, monitor, and calibration path classes. The Vercel application controls normal URL discovery, and raw publishing remains protected, but obscurity and application routing are not equivalent to media-path authorization. Before tournament acceptance, derived paths need purpose-scoped read authorization or an equivalently strict edge control, plus bounded reader-count enforcement. This document does not represent the current Gate 1 permission as already hardened.
+Derived preview, program, monitor, and calibration reads are protected by an event-scoped credential generated outside browser-visible configuration. Caddy admits only exact derived WHEP/HLS path classes with that credential; raw paths remain publish-only. The July 29 physical Camera 3 gate proved anonymous denial, HLS child-object credential inheritance, private-VPC WHEP creation and deletion, and no exact credential in sanitized runtime logs or monitor telemetry. MediaMTX's iOS HLS cookie handshake is retained through credentialed `hls.js` requests; native HLS uses the AAC program/monitor renditions.
 
 ### 8.3 On-demand branch lifecycle
 
@@ -1069,8 +1070,9 @@ Bandwidth controls are deliberate:
 - the overview does not open eight live readers;
 - thumbnails come from program-browser heartbeats;
 - only one selected Camera inspection can open a monitor reader;
-- data-saver inspection uses the 360p/10 fps branch;
-- detail inspection is explicit; and
+- data-saver inspection uses the 360p/10 fps H.264/AAC branch when explicitly admitted;
+- detail inspection is explicit and uses the 1080p AAC program HLS rendition;
+- low-latency WHEP is opened only by the explicit path test or timing-sensitive commentary/scoring surfaces; and
 - range history uses fixed server-side PromQL and a bounded refresh cadence.
 
 The dashboard cannot submit arbitrary PromQL or receive raw provider credentials.
@@ -1253,8 +1255,8 @@ If final attestation is unhealthy, that failure is preserved in evidence but mus
 | Cloud provider | DigitalOcean temporary Droplets and Reserved IPv4 anchors |
 | Ingest/router | MediaMTX 1.19.2 |
 | Media transforms | FFmpeg, x264, Opus, AAC |
-| Program transport | fMP4 HLS via MediaMTX and `hls.js` |
-| Low-latency preview | WHEP/WebRTC via MediaMTX |
+| Program and operator-detail transport | credentialed fMP4 HLS via MediaMTX and `hls.js` |
+| Low-latency commentary/scoring preview | WHEP/WebRTC via MediaMTX |
 | Program renderer | Next.js/React browser scene on immutable Vercel deployment |
 | Commentary | LiveKit, TURN/TLS, Redis, Web Audio |
 | Final encoder | LiveKit Web Egress, Chromium, GStreamer/x264 |
@@ -1315,8 +1317,7 @@ If final attestation is unhealthy, that failure is preserved in evidence but mus
 7. Rehearse Starlink/link rejoin without stale Speedify queue growth.
 8. Live-qualify warm-spare ingest recovery and, separately, priority-camera YouTube backup.
 9. Integrate rebuild-day Tailscale/router management authorization into the operator runbook.
-10. Replace anonymous derived-media reads with purpose-scoped authorization or an equivalent strict edge contract.
-11. Pass the complete physical eight-camera endurance and terminal provider-zero matrix.
+10. Pass the complete physical eight-camera endurance and terminal provider-zero matrix.
 
 ## 21. Repository Source Map
 
