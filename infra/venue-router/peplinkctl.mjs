@@ -9,6 +9,18 @@ import { fileURLToPath } from "node:url";
 const DEFAULT_CREDENTIALS = `${homedir()}/.config/scorecheck/peplink/incontrol-client.json`;
 const REQUEST_TIMEOUT_MS = 10_000;
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
+const STATUS_ENDPOINTS = ["info.firmware", "status.wan.connection", "status.pepvpn"];
+export const SNAPSHOT_ENDPOINTS = [
+  ...STATUS_ENDPOINTS,
+  "status.wan.connection.allowance",
+  "status.lan.profile",
+  "status.client",
+  "config.wan.connection",
+  "config.port",
+  "config.ssid.profile",
+  "config.speedfusionConnectProtect",
+  "config.snmp.info"
+];
 
 if (process.argv[1] && resolve(process.argv[1]) === SCRIPT_PATH) {
   main().catch((error) => {
@@ -22,13 +34,10 @@ async function main() {
   const credentials = await loadCredentials(options.credentials);
   const accessToken = await grantAccessToken({ credentials, fetchImpl: globalThis.fetch });
 
-  if (options.command === "status") {
-    const endpoints = ["info.firmware", "status.wan.connection", "status.pepvpn"];
-    const responses = await Promise.all(endpoints.map(async (endpoint) => [
-      endpoint,
-      await routerRequest({ credentials, accessToken, endpoint, method: "GET", fetchImpl: globalThis.fetch })
-    ]));
-    process.stdout.write(`${JSON.stringify(redactSensitive(Object.fromEntries(responses)), null, 2)}\n`);
+  if (options.command === "status" || options.command === "snapshot") {
+    const endpoints = options.command === "snapshot" ? SNAPSHOT_ENDPOINTS : STATUS_ENDPOINTS;
+    const responses = await collectRouterEndpoints({ credentials, accessToken, endpoints, fetchImpl: globalThis.fetch });
+    process.stdout.write(`${JSON.stringify(redactSensitive(responses), null, 2)}\n`);
     return;
   }
 
@@ -51,7 +60,7 @@ async function main() {
 
 export function parseArgs(args) {
   const command = args[0];
-  if (!new Set(["status", "get", "post"]).has(command)) throw new Error(usage());
+  if (!new Set(["status", "snapshot", "get", "post"]).has(command)) throw new Error(usage());
   let credentials = DEFAULT_CREDENTIALS;
   let body;
   let confirmWrite = false;
@@ -73,7 +82,7 @@ export function parseArgs(args) {
     }
   }
 
-  if (command === "status") {
+  if (command === "status" || command === "snapshot") {
     if (positional.length || body || confirmWrite) throw new Error(usage());
     return { command, credentials };
   }
@@ -113,7 +122,7 @@ export async function grantAccessToken({ credentials, fetchImpl }) {
     }),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
   });
-  const payload = await response.json();
+  const payload = await readJsonResponse(response, "InControl token grant");
   if (!response.ok || !/^[A-Za-z0-9._~-]{24,}$/.test(payload.access_token ?? "")) throw new Error(`InControl token grant failed with HTTP ${response.status}`);
   return payload.access_token;
 }
@@ -133,9 +142,17 @@ export async function routerRequest({ credentials, accessToken, endpoint, method
     ...(validatedMethod === "POST" ? { body: JSON.stringify(body) } : {}),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
   });
-  const payload = await response.json();
+  const payload = await readJsonResponse(response, `Peplink ${validatedMethod} ${endpoint}`);
   if (!response.ok || payload.stat !== "ok") throw new Error(`Peplink ${validatedMethod} ${endpoint} failed: ${payload.message ?? `HTTP ${response.status}`}`);
   return payload.response ?? null;
+}
+
+export async function collectRouterEndpoints({ credentials, accessToken, endpoints, fetchImpl }) {
+  const responses = {};
+  for (const endpoint of endpoints) {
+    responses[endpoint] = await routerRequest({ credentials, accessToken, endpoint, method: "GET", fetchImpl });
+  }
+  return responses;
 }
 
 export function remoteAdminBase(serial) {
@@ -174,7 +191,20 @@ function usage() {
   return [
     "usage:",
     "  peplinkctl.mjs status [--credentials /absolute/client.json]",
+    "  peplinkctl.mjs snapshot [--credentials /absolute/client.json]",
     "  peplinkctl.mjs get API_ENDPOINT [--credentials /absolute/client.json]",
     "  peplinkctl.mjs post API_ENDPOINT --body /absolute/request.json --confirm-write [--credentials /absolute/client.json]"
   ].join("\n");
+}
+
+async function readJsonResponse(response, label) {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().includes("application/json")) {
+    throw new Error(`${label} returned HTTP ${response.status} with content-type ${contentType || "unknown"}`);
+  }
+  try {
+    return await response.json();
+  } catch {
+    throw new Error(`${label} returned invalid JSON with HTTP ${response.status}`);
+  }
 }

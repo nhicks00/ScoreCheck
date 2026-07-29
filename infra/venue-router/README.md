@@ -18,12 +18,22 @@ The file must be mode `0600`. Use the dependency-free client for bounded reads:
 
 ```sh
 node infra/venue-router/peplinkctl.mjs status
+node infra/venue-router/peplinkctl.mjs snapshot
 node infra/venue-router/peplinkctl.mjs get status.client
 node infra/venue-router/peplinkctl.mjs get config.ssid.profile
 ```
 
 Command output automatically redacts known modem, SIM, and credential fields so
 routine diagnostics can be retained safely.
+
+Use `snapshot` for routine monitoring and preflight. It obtains one short-lived
+token and reads the supported router endpoints sequentially. Do not launch one
+CLI process per endpoint: firmware 8.6 invalidates older Remote Web Admin
+sessions when overlapping OAuth grants are created. The snapshot includes WAN,
+SpeedFusion, LAN, connected-client, SSID, port, allowance, and SNMP state so
+event checks do not require the Web Admin interface. The Ubiquiti APs are not
+Peplink-managed mesh devices; collect their radio health through their own
+management interface when that hardware is connected.
 
 Configuration calls are supported only as an explicit write with a local JSON
 body and confirmation marker:
@@ -36,14 +46,58 @@ node infra/venue-router/peplinkctl.mjs post config.ssid.profile \
 
 Before a write, use the matching `get` endpoint and preserve the response as
 the rollback record. Use only endpoints documented by Peplink for the installed
-firmware. InControl Web CLI remains available for vendor diagnostics that have
-no documented API endpoint.
+firmware. Some router controls, including the SpeedFusion Cloud profile editor,
+are not present in the supported Router API. Treat those as bounded console-only
+commissioning changes rather than reverse-engineering an unsupported endpoint;
+normal event preflight and monitoring must continue through `snapshot`.
 
 Do not enable WAN SSH or add a router port forward. It does not solve changing
 WAN addresses or carrier NAT, and it adds an unnecessary management surface.
 The embedded camera network is `BeachVolleyballMedia.com`; after any router
 replacement, verify that Wi-Fi AP is `ON`, both radios advertise the saved SSID,
 and the AP controller reports exactly one online access point.
+
+## Peplink production profile
+
+The event topology is intentionally narrow:
+
+- `WAN` is the wired Starlink input and is Priority 1.
+- `Cellular` is the internal modem and is Priority 1.
+- Wi-Fi WAN on both radios and VLAN WAN are disabled.
+- One LAN port connects to the PoE switch. Never connect both LAN ports to the
+  same switch unless loop prevention has been deliberately configured.
+- The switch feeds the three external Ubiquiti Swiss Army Knife Ultra access
+  points. The Peplink AP remains an operator/fallback network, not the primary
+  camera radio layer.
+- The flat event network remains `BVM LAN` at `192.168.50.0/24` until the
+  switch and all three APs are present for a measured VLAN qualification.
+
+Only media publishing traffic is sent through SpeedFusion Connect. The applied
+outbound rules are:
+
+| Rule | Destination | Protocol | Route | No-tunnel behavior |
+| --- | --- | --- | --- | --- |
+| `ScoreCheck SRT` | persistent ingest Reserved IPv4 | UDP `8890` | Enforced `SFC` | Drop |
+| `ScoreCheck RTMP` | persistent ingest Reserved IPv4 | TCP `1935` | Enforced `SFC` | Drop |
+
+All other traffic retains the router's normal automatic policy. The
+SpeedFusion link-failure detector is `Faster` (approximately two seconds).
+The SFC profile uses Dynamic Weighted Bonding. Leave WAN Smoothing off until a
+physical two-WAN gate proves that its up-to-2x packet duplication fits the event
+upload reserve. Adaptive FEC is the preferred first loss-recovery candidate,
+but must be applied and verified through the authenticated SFC profile editor
+because firmware 8.6 does not expose that profile in the supported Router API.
+
+The WAN bandwidth fields are ceilings, not measured capacity evidence. Do not
+replace them with a speed-test peak or use them as admission proof. Event
+preflight must record sustained Starlink and cellular upload separately, then
+prove the combined camera payload retains the configured reserve.
+
+Keep Remote Web Admin over InControl, HTTPS redirect, LAN-only local Web Admin,
+disabled SSH/console, disabled UPnP/NAT-PMP, and an empty port-forward table.
+The production preflight still requires the real Starlink terminal, active SIM,
+PoE switch, all three APs, and camera associations; router-only setup cannot
+truthfully certify those physical dependencies.
 
 ## Legacy GL-XE3000 Speedify routing
 

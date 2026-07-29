@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { grantAccessToken, loadCredentials, parseArgs, redactSensitive, remoteAdminBase, routerRequest } from "./peplinkctl.mjs";
+import { collectRouterEndpoints, grantAccessToken, loadCredentials, parseArgs, redactSensitive, remoteAdminBase, routerRequest, SNAPSHOT_ENDPOINTS } from "./peplinkctl.mjs";
 
 const credentials = {
   clientId: "a".repeat(32),
@@ -53,6 +53,55 @@ test("requires an explicit body and confirmation for configuration writes", () =
     endpoint: "config.wan.connection",
     body: "/tmp/request.json"
   });
+});
+
+test("accepts a complete read-only snapshot command", () => {
+  assert.deepEqual(parseArgs(["snapshot"]), {
+    command: "snapshot",
+    credentials: `${process.env.HOME}/.config/scorecheck/peplink/incontrol-client.json`
+  });
+  assert.ok(SNAPSHOT_ENDPOINTS.includes("config.wan.connection"));
+  assert.ok(SNAPSHOT_ENDPOINTS.includes("config.speedfusionConnectProtect"));
+  assert.ok(SNAPSHOT_ENDPOINTS.includes("status.client"));
+  assert.ok(SNAPSHOT_ENDPOINTS.includes("status.wan.connection.allowance"));
+});
+
+test("collects router endpoints sequentially with one access token", async () => {
+  const calls = [];
+  let active = 0;
+  let maximumActive = 0;
+  const fetchImpl = async (url, options) => {
+    active += 1;
+    maximumActive = Math.max(maximumActive, active);
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    calls.push({ url: String(url), authorization: options.headers.authorization });
+    active -= 1;
+    return new Response(JSON.stringify({ stat: "ok", response: { path: new URL(url).pathname } }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  };
+  const accessToken = "t".repeat(32);
+  const result = await collectRouterEndpoints({
+    credentials,
+    accessToken,
+    endpoints: ["info.firmware", "status.wan.connection"],
+    fetchImpl
+  });
+  assert.equal(maximumActive, 1);
+  assert.deepEqual(Object.keys(result), ["info.firmware", "status.wan.connection"]);
+  assert.deepEqual(calls.map(({ authorization }) => authorization), [`Bearer ${accessToken}`, `Bearer ${accessToken}`]);
+});
+
+test("rejects an expired HTML router session without echoing the response body", async () => {
+  const fetchImpl = async () => new Response("<html>login</html>", {
+    status: 200,
+    headers: { "content-type": "text/html" }
+  });
+  await assert.rejects(
+    routerRequest({ credentials, accessToken: "t".repeat(32), endpoint: "status.wan.connection", method: "GET", fetchImpl }),
+    /returned HTTP 200 with content-type text\/html/u
+  );
 });
 
 test("redacts modem and credential identifiers from command output", () => {
