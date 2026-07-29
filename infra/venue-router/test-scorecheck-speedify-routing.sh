@@ -279,7 +279,7 @@ assert_contains "$MOCK_STATE/speedify.log" '^adapter priority apcli0 automatic$'
 assert_contains "$MOCK_STATE/speedify.log" '^adapter priority eth0 automatic$'
 assert_contains "$MOCK_STATE/speedify.log" '^adapter priority rmnet_mhi0 automatic$'
 assert_contains "$MOCK_STATE/speedify.log" '^adapter priority eth2 automatic$'
-assert_contains "$MOCK_STATE/speedify.log" '^mode speed$'
+assert_contains "$MOCK_STATE/speedify.log" '^mode streaming$'
 assert_contains "$MOCK_STATE/speedify.log" '^fixeddelay 75$'
 assert_contains "$MOCK_STATE/speedify.log" '^packetpool default$'
 if ip route get "$INGEST_IP" ipproto udp dport 8890 >/dev/null 2>&1; then

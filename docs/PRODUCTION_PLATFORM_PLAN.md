@@ -201,7 +201,7 @@ before Gate 2 can pass. The temporary MAKI assignments do not alter the final
 AVKANS hardware target.
 
 Venue camera routing is selective rather than router-wide. Speedify runs in
-Speed mode over UDP with its default route disabled; only MediaMTX RTMP/SRT
+Streaming mode over UDP with its default route disabled; only MediaMTX RTMP/SRT
 ingest ports enter the bonded tunnel. This keeps operator and camera-control
 traffic independent and prevents the ingest-IP host route that bypassed
 Speedify during the July 12 test. Production camera traffic is fail-closed:
