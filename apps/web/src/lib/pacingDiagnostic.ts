@@ -111,19 +111,19 @@ export function comparePacingPhases(
   if (!previewADegraded && !programDegraded && !previewBDegraded) {
     return {
       classification: "HEALTHY",
-      summary: "Neither preview nor delayed program crossed the browser pacing warning bands."
+      summary: "Neither preview nor buffered program crossed the browser pacing warning bands."
     };
   }
   if (!previewADegraded && programDegraded && !previewBDegraded) {
     return {
       classification: "PROGRAM_PATH",
-      summary: "Only the delayed program phase crossed a pacing warning band; investigate the delay/remux path before the shared source or client."
+      summary: "Only the buffered program phase crossed a pacing warning band; investigate the program remux and HLS path before the shared source or client."
     };
   }
   if (previewADegraded && programDegraded && previewBDegraded) {
     return {
       classification: "SHARED",
-      summary: "All three phases crossed a pacing warning band; the evidence does not isolate the delayed program branch."
+      summary: "All three phases crossed a pacing warning band; the evidence does not isolate the buffered program branch."
     };
   }
   return {

@@ -192,15 +192,14 @@ __OPAQUE_RTMP_ALIAS_PATHS__
     runOnDemandStartTimeout: 20s
     runOnDemandCloseAfter: 15s
 
-  # Program-only path. Read the admitted raw/normalized source directly: an
-  # extra RTSP stream-copy through preview can time out during recoverable
-  # decoder gaps and unnecessarily retire the program. SRT receiver latency
-  # holds video and ambient audio together, then audio is normalized to Opus
-  # for WHEP while H.264 remains stream-copy. Commentary gets fine delay in the
-  # program page's Web Audio graph.
+  # Program-only path. Read the admitted raw/normalized source directly over
+  # reliable loopback RTSP/TCP. The conservative HLS player owns the program
+  # buffer; a second loopback SRT/MPEG-TS hop can reject damaged-but-recoverable
+  # source bursts and unnecessarily retire the program. H.264 remains
+  # stream-copy while audio is normalized to HLS-safe AAC.
   "~^court([1-8])_program$":
     runOnDemand: >
-      /usr/local/bin/scorecheck-program-runner "court${G1}_program" "__BROWSER_SOURCE_MAP__" "__PROGRAM_DELAY_US__"
+      /usr/local/bin/scorecheck-program-runner "court${G1}_program" "__BROWSER_SOURCE_MAP__"
     runOnDemandRestart: yes
     runOnDemandStartTimeout: 25s
     runOnDemandCloseAfter: 90s

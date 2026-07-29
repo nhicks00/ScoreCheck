@@ -84,12 +84,11 @@ node.
 
 ## Sync calibration
 
-`courts.program_video_delay_ms` records the coarse program-video target. The
-MediaMTX Gate 1 deployment currently renders that target as a 3500 ms SRT
-receiver buffer. `courts.commentary_delay_ms` is the 0-10000 ms
-human-calibrated fallback inside the browser audio graph. The program renderer
-adds the buffered HLS target to that fallback and may report up to 30000 ms in
-runtime heartbeat telemetry.
+`courts.program_video_delay_ms` records only additional delay before measured
+HLS playout. Direct loopback RTSP/TCP program transport sets it to 0 ms.
+`courts.commentary_delay_ms` is the 0-10000 ms human-calibrated fallback inside
+the browser audio graph. The program renderer adds the buffered HLS target to
+that fallback and may report up to 30000 ms in runtime heartbeat telemetry.
 
 After the baseline is established, the program mixer automatically holds sync:
 
@@ -113,8 +112,9 @@ create false corrections.
 
 Calibrate with a real clap in frame:
 
-1. Start with `commentary_delay_ms` approximately 500 ms below the configured
-   program-video buffer; for the Gate 1 path that is 3000 ms.
+1. Start with the persisted `commentary_delay_ms` calibration for the venue;
+   the renderer adds the conservative HLS target and then measures actual
+   program, preview, commentary, and clock transport.
 2. Record a local Mevo clap and a remote commentator repeating the clap.
 3. Inspect the unlisted YouTube archive at the beginning, middle, and end.
 4. Change only the persisted commentary baseline unless the camera-to-cloud

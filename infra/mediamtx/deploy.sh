@@ -38,6 +38,7 @@ rsync -a -e "$rsync_shell" \
   "$SCRIPT_DIR/docker-compose.yml" "$SCRIPT_DIR/Dockerfile" "$SCRIPT_DIR/.dockerignore" "$SCRIPT_DIR/scorecheck-ffmpeg-runner.sh" "$SCRIPT_DIR/scorecheck-preview-runner.sh" "$SCRIPT_DIR/scorecheck-program-runner.sh" "$SCRIPT_DIR/recovery-role.sh" "$GENERATED" "$GENERATED_CADDY" \
   "$SSH_HOST:$REMOTE_DIR/.incoming/"
 rsync -a -e "$rsync_shell" \
+  "$SCRIPT_DIR/patches/gohlslib-h264-discontinuity-recovery.patch" \
   "$SCRIPT_DIR/patches/gortmplib-avkans-adts-aac.patch" \
   "$SSH_HOST:$REMOTE_DIR/.incoming/patches/"
 
@@ -65,6 +66,7 @@ timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p backups
 had_previous=0
 had_previous_build_sources=0
+had_previous_hls_patch=0
 had_previous_program_runner=0
 compose_changed=1
 caddy_service_changed=1
@@ -89,9 +91,17 @@ if [[ "$existing_files" -eq "${#installed_files[@]}" ]]; then
     echo "MediaMTX deployment directory contains incomplete image build sources." >&2
     exit 1
   fi
+  if [[ "$existing_build_sources" -eq 0 && -f patches/gohlslib-h264-discontinuity-recovery.patch ]]; then
+    echo "MediaMTX deployment directory contains an orphaned HLS recovery patch." >&2
+    exit 1
+  fi
   if [[ "$existing_build_sources" -eq "${#build_source_files[@]}" ]]; then
     cp Dockerfile "backups/Dockerfile.$timestamp"
     cp .dockerignore "backups/dockerignore.$timestamp"
+    if [[ -f patches/gohlslib-h264-discontinuity-recovery.patch ]]; then
+      cp patches/gohlslib-h264-discontinuity-recovery.patch "backups/gohlslib-h264-discontinuity-recovery.$timestamp.patch"
+      had_previous_hls_patch=1
+    fi
     cp patches/gortmplib-avkans-adts-aac.patch "backups/gortmplib-avkans-adts-aac.$timestamp.patch"
     had_previous_build_sources=1
   fi
@@ -124,9 +134,14 @@ restore_previous() {
   if [[ "$had_previous_build_sources" -eq 1 ]]; then
     cp "backups/Dockerfile.$timestamp" Dockerfile
     cp "backups/dockerignore.$timestamp" .dockerignore
+    if [[ "$had_previous_hls_patch" -eq 1 ]]; then
+      cp "backups/gohlslib-h264-discontinuity-recovery.$timestamp.patch" patches/gohlslib-h264-discontinuity-recovery.patch
+    else
+      rm -f patches/gohlslib-h264-discontinuity-recovery.patch
+    fi
     cp "backups/gortmplib-avkans-adts-aac.$timestamp.patch" patches/gortmplib-avkans-adts-aac.patch
   else
-    rm -f Dockerfile .dockerignore patches/gortmplib-avkans-adts-aac.patch
+    rm -f Dockerfile .dockerignore patches/gohlslib-h264-discontinuity-recovery.patch patches/gortmplib-avkans-adts-aac.patch
   fi
   cp "backups/mediamtx.$timestamp.yml" mediamtx.yml
   cp "backups/Caddyfile.$timestamp" Caddyfile
@@ -147,6 +162,7 @@ restore_previous() {
 install -m 0644 .incoming/docker-compose.yml docker-compose.yml
 install -m 0644 .incoming/Dockerfile Dockerfile
 install -m 0644 .incoming/.dockerignore .dockerignore
+install -m 0644 .incoming/patches/gohlslib-h264-discontinuity-recovery.patch patches/gohlslib-h264-discontinuity-recovery.patch
 install -m 0644 .incoming/patches/gortmplib-avkans-adts-aac.patch patches/gortmplib-avkans-adts-aac.patch
 install -m 0600 .incoming/mediamtx.yml mediamtx.yml
 install -m 0600 .incoming/Caddyfile Caddyfile

@@ -40,10 +40,10 @@ describe("summarizePacingSamples", () => {
 });
 
 describe("comparePacingPhases", () => {
-  it("isolates a delayed-program pacing defect when both preview controls are healthy", () => {
+  it("isolates a buffered-program pacing defect when both preview controls are healthy", () => {
     expect(comparePacingPhases(summary(), summary({ frameDropRatio: 0.02 }), summary())).toEqual({
       classification: "PROGRAM_PATH",
-      summary: "Only the delayed program phase crossed a pacing warning band; investigate the delay/remux path before the shared source or client."
+      summary: "Only the buffered program phase crossed a pacing warning band; investigate the program remux and HLS path before the shared source or client."
     });
   });
 

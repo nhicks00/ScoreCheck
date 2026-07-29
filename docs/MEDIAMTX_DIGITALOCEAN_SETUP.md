@@ -65,7 +65,7 @@ cd infra/mediamtx
 set -a
 source ../../apps/web/.env.setup.local
 set +a
-MEDIAMTX_PROGRAM_DELAY_MS=3500 ./deploy.sh
+./deploy.sh
 ```
 
 The script:

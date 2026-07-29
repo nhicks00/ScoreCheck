@@ -6,13 +6,13 @@ The ingest server owns four operator-facing path classes per camera:
 - `courtN_preview`: clean, browser-safe, low-latency H.264/Opus for commentary
   and selected inspection.
 - `courtN_monitor`: on-demand 360p/10 FPS data-saver view for one selected camera.
-- `courtN_program`: clean source delayed at the SRT receiver and exposed as
-  conservative fMP4 HLS for the long-running compositor.
+- `courtN_program`: admitted source copied over loopback RTSP/TCP and exposed
+  as conservative fMP4 HLS for the long-running compositor.
 
-The SRT listener accepts caller-mode venue-camera publishers and also carries
-the internal delayed-program read on loopback. Camera publishers authenticate
-with a court-scoped SRT stream ID; the loopback reader is separately authorized
-by IP. Listener-only cameras are configured as private `srt://` raw sources, so
+The SRT listener accepts caller-mode venue-camera publishers. Camera publishers
+authenticate with a court-scoped SRT stream ID. Program remuxing stays inside
+MediaMTX over loopback RTSP/TCP so source damage cannot trigger a second SRT
+reorder failure. Listener-only cameras are configured as private `srt://` raw sources, so
 MediaMTX owns their caller connection and reconnect lifecycle directly.
 
 Both UFW and the DigitalOcean `bvm-preview-firewall` allow only SSH, HTTP/TLS,
@@ -35,7 +35,7 @@ Render and deploy without printing the publish credential:
 set -a
 source ../../apps/web/.env.setup.local
 set +a
-MEDIAMTX_PROGRAM_DELAY_MS=3500 ./deploy.sh
+./deploy.sh
 ```
 
 Each `MEDIAMTX_COURT_N_RAW_SOURCE` defaults to `publisher`. Set it to a private

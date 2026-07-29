@@ -26,8 +26,7 @@ test("renders an isolated MediaMTX public host and matching TLS health proxy", (
     MEDIAMTX_CONTENT_ANALYZER_BINDINGS: JSON.stringify([
       { ip: "10.120.0.12", courts: [3, 4, 7, 8] },
       { ip: "10.120.0.11", courts: [1, 2, 5, 6] }
-    ]),
-    MEDIAMTX_PROGRAM_DELAY_MS: "3500"
+    ])
   };
   for (let court = 1; court <= 8; court += 1) {
     environment[`MEDIAMTX_COURT_${court}_PUBLISH_USER`] = `court${court}`;
@@ -50,7 +49,7 @@ test("renders an isolated MediaMTX public host and matching TLS health proxy", (
   assert.match(rendered.mediaConfig, /ips: \["10\.120\.0\.12"\][\s\S]+path: "~\^court\(3\|4\|7\|8\)_raw\$"/u);
   assert.match(rendered.mediaConfig, /action: publish\n\s+path: "~\^court\(1\|2\|5\|6\)_normalized\$"/u);
   assert.match(rendered.mediaConfig, /scorecheck-preview-runner "court\$\{G1\}_preview" "raw,normalized,raw,raw,raw,raw,raw,raw"/u);
-  assert.match(rendered.mediaConfig, /scorecheck-program-runner "court\$\{G1\}_program" "raw,normalized,raw,raw,raw,raw,raw,raw" "3500000"/u);
+  assert.match(rendered.mediaConfig, /scorecheck-program-runner "court\$\{G1\}_program" "raw,normalized,raw,raw,raw,raw,raw,raw"/u);
   assert.equal(rendered.contentAnalyzerBindingCount, 2);
   assert.equal(rendered.contentAnalyzerCourtCount, 8);
   assert.equal(rendered.opaqueRtmpAliasCount, 2);
@@ -84,6 +83,7 @@ test("renders an isolated MediaMTX public host and matching TLS health proxy", (
   assert.doesNotMatch(previewRule, /libx264|scale=|fps=/u);
   const programRule = rendered.mediaConfig.match(/"~\^court\(\[1-8\]\)_program\$":([\s\S]+?)runOnDemandRestart:/u)?.[1] ?? "";
   assert.match(programRule, /scorecheck-program-runner/u);
+  assert.doesNotMatch(programRule, /srt:\/\//u);
   assert.doesNotMatch(programRule, /court\$\{G1\}_preview/u);
   assert.doesNotMatch(programRule, /-readrate|-copyts|-use_wallclock_as_timestamps|-start_at_zero/u);
   assert.doesNotMatch(programRule, /[?&]ffs=/u);
@@ -216,9 +216,12 @@ test("recreates only changed MediaMTX services and preserves a complete rollback
   assert.match(deployScript, /installed_files=\(docker-compose\.yml mediamtx\.yml Caddyfile scorecheck-ffmpeg-runner\.sh scorecheck-preview-runner\.sh\)/u);
   assert.match(deployScript, /cp scorecheck-ffmpeg-runner\.sh "backups\/scorecheck-ffmpeg-runner\.\$timestamp\.sh"/u);
   assert.match(deployScript, /cp scorecheck-preview-runner\.sh "backups\/scorecheck-preview-runner\.\$timestamp\.sh"/u);
+  assert.match(deployScript, /cp patches\/gohlslib-h264-discontinuity-recovery\.patch "backups\/gohlslib-h264-discontinuity-recovery\.\$timestamp\.patch"/u);
+  assert.match(deployScript, /had_previous_hls_patch=1/u);
   assert.match(deployScript, /if \[\[ -f scorecheck-program-runner\.sh \]\]; then[\s\S]*had_previous_program_runner=1/u);
   assert.match(deployScript, /if \[\[ -f recovery-role\.sh \]\]; then[\s\S]*had_previous_recovery_role=1[\s\S]*had_previous_recovery_role=0/u);
   assert.match(deployScript, /cp "backups\/scorecheck-ffmpeg-runner\.\$timestamp\.sh" scorecheck-ffmpeg-runner\.sh/u);
+  assert.match(deployScript, /if \[\[ "\$had_previous_hls_patch" -eq 1 \]\]; then[\s\S]*cp "backups\/gohlslib-h264-discontinuity-recovery\.\$timestamp\.patch" patches\/gohlslib-h264-discontinuity-recovery\.patch[\s\S]*else[\s\S]*rm -f patches\/gohlslib-h264-discontinuity-recovery\.patch/u);
   assert.match(deployScript, /if \[\[ "\$had_previous_program_runner" -eq 1 \]\]; then[\s\S]*else[\s\S]*rm -f scorecheck-program-runner\.sh/u);
   assert.match(deployScript, /if \[\[ "\$had_previous_recovery_role" -eq 1 \]\]; then[\s\S]*else[\s\S]*rm -f recovery-role\.sh/u);
   assert.match(deployScript, /services=\(mediamtx\)/u);
@@ -235,4 +238,5 @@ test("recreates only changed MediaMTX services and preserves a complete rollback
   assert.match(compose, /environment:\s+SRT_PORT: "8890"/u);
   assert.match(deployScript, /--retry 60[\s\S]*--retry-max-time 300/u);
   assert.match(deployScript, /docker compose logs --tail=120 caddy/u);
+  assert.match(deployScript, /install -m 0644 \.incoming\/patches\/gohlslib-h264-discontinuity-recovery\.patch patches\/gohlslib-h264-discontinuity-recovery\.patch/u);
 });

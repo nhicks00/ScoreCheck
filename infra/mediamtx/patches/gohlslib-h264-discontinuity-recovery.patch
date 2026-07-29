@@ -1,0 +1,99 @@
+diff --git a/muxer_segmenter.go b/muxer_segmenter.go
+index 45688fe..b6b5566 100644
+--- a/muxer_segmenter.go
++++ b/muxer_segmenter.go
+@@ -314,7 +314,13 @@ func (s *muxerSegmenter) writeH264(
+ 
+ 	dts, err := track.h264DTSExtractor.Extract(au, pts)
+ 	if err != nil {
+-		return fmt.Errorf("unable to extract DTS: %w", err)
++		// A damaged GOP can make POC-based DTS extraction impossible after
++		// transport loss. Drop the remainder of that GOP and resume from the
++		// next random-access frame instead of retiring the entire HLS muxer.
++		track.stream.onEncodeError(fmt.Errorf("H264 timestamp discontinuity, dropping until next IDR: %w", err))
++		track.firstRandomAccessReceived = false
++		track.h264DTSExtractor = nil
++		return nil
+ 	}
+ 
+ 	if s.variant == MuxerVariantMPEGTS {
+diff --git a/muxer_h264_discontinuity_test.go b/muxer_h264_discontinuity_test.go
+new file mode 100644
+index 0000000..7605c9f
+--- /dev/null
++++ b/muxer_h264_discontinuity_test.go
+@@ -0,0 +1,74 @@
++package gohlslib
++
++import (
++	"testing"
++	"time"
++
++	"github.com/bluenviron/mediacommon/v2/pkg/codecs/h264"
++	"github.com/stretchr/testify/require"
++
++	"github.com/bluenviron/gohlslib/v2/pkg/codecs"
++)
++
++func TestMuxerH264DTSDiscontinuityRecovery(t *testing.T) {
++	pocSPS := []byte{
++		0x67, 0x64, 0x00, 0x28, 0xac, 0xd9, 0x40, 0x78,
++		0x02, 0x27, 0xe5, 0x84, 0x00, 0x00, 0x03, 0x00,
++		0x04, 0x00, 0x00, 0x03, 0x00, 0xf0, 0x3c, 0x60,
++		0xc6, 0x58,
++	}
++	idr := []byte{0x65, 0x88, 0x84, 0x00, 0x33, 0xff}
++	damagedPOC := []byte{0x41, 0x9a, 0x06, 0x80, 0xe1, 0x0f}
++
++	extractor := h264.NewDTSExtractor()
++	_, err := extractor.Extract([][]byte{pocSPS, idr}, 0)
++	require.NoError(t, err)
++	_, err = extractor.Extract([][]byte{damagedPOC}, 3000)
++	require.EqualError(t, err, "too many reordered frames (11)")
++
++	track := &Track{
++		Codec: &codecs.H264{
++			SPS: pocSPS,
++			PPS: []byte{0x08},
++		},
++		ClockRate: 90000,
++	}
++
++	encodeErrors := 0
++	muxer := &Muxer{
++		Variant:            MuxerVariantFMP4,
++		SegmentCount:       3,
++		SegmentMinDuration: time.Second,
++		Tracks:             []*Track{track},
++		OnEncodeError: func(err error) {
++			encodeErrors++
++			require.EqualError(t, err,
++				"H264 timestamp discontinuity, dropping until next IDR: too many reordered frames (11)")
++		},
++	}
++	require.NoError(t, muxer.Start())
++	defer muxer.Close()
++
++	require.NoError(t, muxer.WriteH264(track, testTime, 0, [][]byte{pocSPS, {0x08}, idr}))
++	muxerTrack := muxer.mtracksByTrack[track]
++	require.True(t, muxerTrack.firstRandomAccessReceived)
++	require.NotNil(t, muxerTrack.h264DTSExtractor)
++
++	// A POC discontinuity after transport loss would normally retire the HLS
++	// muxer. It now drops the damaged GOP and waits for a fresh IDR.
++	require.NoError(t, muxer.WriteH264(track, testTime.Add(time.Second), 3000,
++		[][]byte{damagedPOC}))
++	require.False(t, muxerTrack.firstRandomAccessReceived)
++	require.Nil(t, muxerTrack.h264DTSExtractor)
++	require.Equal(t, 1, encodeErrors)
++
++	require.NoError(t, muxer.WriteH264(track, testTime.Add(2*time.Second), 6000,
++		[][]byte{{0x41, 0x9a, 0x21, 0x6c, 0x45, 0xff}}))
++	require.False(t, muxerTrack.firstRandomAccessReceived)
++	require.Nil(t, muxerTrack.h264DTSExtractor)
++
++	require.NoError(t, muxer.WriteH264(track, testTime.Add(3*time.Second), 9000,
++		[][]byte{pocSPS, {0x08}, idr}))
++	require.True(t, muxerTrack.firstRandomAccessReceived)
++	require.NotNil(t, muxerTrack.h264DTSExtractor)
++}

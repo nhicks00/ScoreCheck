@@ -83,7 +83,6 @@ export async function renderRehearsalSecretDirectory({ manifest, material, direc
       LIVEKIT_COMMENTARY_API_SECRET: material.commentary.apiSecret
     }));
     await writeProtected(join(root, "ingest.env"), envFile(Object.fromEntries([
-      ["MEDIAMTX_PROGRAM_DELAY_MS", "3500"],
       ...COURTS.flatMap((court) => [
         [`MEDIAMTX_COURT_${court}_RAW_SOURCE`, "publisher"],
         [`MEDIAMTX_COURT_${court}_BROWSER_SOURCE`, "raw"],

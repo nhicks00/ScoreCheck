@@ -620,7 +620,6 @@ export function buildProductionSecretFiles({
     }),
     "renderer.env": envFile(localRendererEnvironment(webEnvironment, rendererBinding, material.programPageToken)),
     "ingest.env": envFile(Object.fromEntries([
-      ["MEDIAMTX_PROGRAM_DELAY_MS", "3500"],
       ["MEDIAMTX_READ_USER", mediaReader.user],
       ["MEDIAMTX_READ_PASS", mediaReader.password],
       ...COURTS.flatMap((court) => [

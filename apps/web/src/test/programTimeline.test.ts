@@ -17,8 +17,9 @@ describe("program timeline", () => {
     expect(PROGRAM_HLS_BUFFER_LENGTH_SECONDS).toBe(18);
     expect(PROGRAM_HLS_BACK_BUFFER_SECONDS).toBe(4);
     expect(PROGRAM_HLS_MAX_BUFFER_BYTES).toBe(32_000_000);
-    expect(programTimelineDelayMs(3_500, null)).toBe(3_500 + PROGRAM_HLS_TARGET_LATENCY_MS);
-    expect(programTimelineDelayMs(3_500, 14_250)).toBe(17_750);
+    expect(programTimelineDelayMs(0, null)).toBe(PROGRAM_HLS_TARGET_LATENCY_MS);
+    expect(programTimelineDelayMs(0, 14_250)).toBe(14_250);
+    expect(programTimelineDelayMs(500, 14_250)).toBe(14_750);
   });
 
   it("applies a fresh score after the program delay and restores old state immediately", () => {

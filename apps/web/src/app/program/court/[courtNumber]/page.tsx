@@ -95,7 +95,7 @@ const EMPTY_PROGRAM_COURT: ProgramCourtConfig = {
   cameraGainDb: 0,
   commentaryGainDb: 0,
   commentaryDelayMs: 0,
-  programVideoDelayMs: 3500,
+  programVideoDelayMs: 0,
   configurationVersion: "unknown"
 };
 

@@ -138,6 +138,7 @@ test("renders the exact 12-host production secret contract and strips stale targ
   assert.match(files["ingest.env"], /MEDIAMTX_COURT_8_RAW_SOURCE="publisher"/);
   assert.match(files["ingest.env"], /MEDIAMTX_COURT_1_BROWSER_SOURCE="raw"/);
   assert.match(files["ingest.env"], /MEDIAMTX_COURT_2_BROWSER_SOURCE="normalized"/);
+  assert.doesNotMatch(files["ingest.env"], /MEDIAMTX_PROGRAM_DELAY_MS/u);
   const expectedCamera3Key = deriveOpaqueRtmpKey({
     court: 3,
     user: material.publishers[3].user,

@@ -53,6 +53,7 @@ test("renders protected all-publisher, eight-compositor secrets with no producti
     assert.match(ingest, new RegExp(`MEDIAMTX_COURT_${court}_RAW_SOURCE="publisher"`));
     assert.match(ingest, new RegExp(`MEDIAMTX_COURT_${court}_BROWSER_SOURCE="raw"`));
   }
+  assert.doesNotMatch(ingest, /MEDIAMTX_PROGRAM_DELAY_MS/u);
   const observer = await readFile(join(target, "observability.env"), "utf8");
   assert.doesNotMatch(observer, /SUPABASE_|HEALTHCHECKS_/);
   const compositor = await readFile(join(target, "compositors", "bvm-compositor-a.env"), "utf8");
