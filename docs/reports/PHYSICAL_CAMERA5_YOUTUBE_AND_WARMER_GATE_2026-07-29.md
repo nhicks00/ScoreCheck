@@ -73,10 +73,9 @@ The active row was corrected and the monitor converged to HEALTHY. Commit `cc48b
 
 ## Remaining Limits
 
-1. The standard lifecycle runner still refuses to start because immutable reconstruction attestation detects configuration drift on the active observability host. The direct gate was owner-safe and evidence-backed, but lifecycle truthfulness remains unresolved.
-2. The venue router has passed six simultaneous publishers only. Seven leaves insufficient reserve; eight has failed under the current router CPU profile. Cameras 7-8 remain intentionally isolated for this controlled result.
-3. The runtime branch is pushed but not merged into the release branch. Integration must preserve commits `cc48b0de3` and `8b4816861`.
-4. A full multi-camera YouTube endurance gate remains required after the router capacity decision.
+1. The venue router has passed six simultaneous publishers only. Seven leaves insufficient reserve; eight has failed under the current router CPU profile. Cameras 7-8 remain intentionally isolated for this controlled result.
+2. The runtime branch is pushed but not merged into the release branch. Integration must preserve commits `cc48b0de3` and `8b4816861`.
+3. A full multi-camera YouTube endurance gate remains required after the router capacity decision.
 
 ## One-Hour Post-Gate Checkpoint
 
@@ -104,6 +103,27 @@ comparison documented in
 caused a viewer defect; plain Speed retained lower SRT loss/drop rates and was
 restored.
 
+## Lifecycle Attestation Repair
+
+The earlier lifecycle-start refusal was reproduced with the exact production
+reconstruction verifier. A complete hash-only fleet audit isolated the drift to
+the idle warm spare; every active host already matched the current release.
+`bvm-compositor-spare` was missing the committed program-warmer RTSP binding and
+the current Egress-supervisor and program-warmer scripts.
+
+The spare had zero active Egress requests and an `IDLE` supervisor before the
+cutover. Only that host was updated. Camera 5 remained live throughout at 30 fps
+with zero drops, freezes, reconnects, or reloads, while Egress and YouTube stayed
+healthy and no incident opened. The authoritative 12-host verification then
+passed at `2026-07-29T07:19:49.304Z`, including exact config hashes, clocks,
+private-network bindings, containers, agents, and public endpoints.
+
+The event intentionally remains in lifecycle phase `ready`: this direct bounded
+gate did not claim standard whole-event coverage ownership. The controller now
+persists the fresh reconstruction evidence used by a successful future coverage
+start and leaves the previous healthy evidence unchanged when admission fails.
+The full event-stack regression suite passes 454/454 tests.
+
 ## Protected Evidence
 
 Evidence is stored outside Git at:
@@ -111,3 +131,7 @@ Evidence is stored outside Git at:
 `~/.config/scorecheck/event-stack/events/reliability-physical-20260728/qualification-evidence/camera5-youtube-gate-20260729T055428Z`
 
 Important evidence includes the 181-sample gate trace and summary, five viewer probes, before/after HLS session attribution, compositor container identity checks, deployment backups and hashes, and fleet convergence results.
+
+The lifecycle repair evidence is stored separately at:
+
+`~/.config/scorecheck/event-stack/events/reliability-physical-20260728/qualification-evidence/lifecycle-attestation-reconcile-20260729T071738Z`

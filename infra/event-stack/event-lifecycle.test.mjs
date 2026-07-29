@@ -201,6 +201,39 @@ test("closes coverage even when the non-blocking cost reminder cannot be deliver
   assert.match(notification.error, /injected notification failure/);
 });
 
+test("persists the fresh reconstruction attestation used to admit coverage", async () => {
+  const setup = fixture();
+  let verification = 0;
+  setup.deployer.verifyStack = async () => ({
+    healthy: true,
+    evidence: { verification: ++verification }
+  });
+
+  const ready = await setup.controller.up(setup.manifest, setup.anchors);
+  assert.equal(ready.stackHealth.evidence.verification, 1);
+
+  const live = await setup.controller.beginCoverage(setup.manifest, "START:turnkey-test");
+
+  assert.equal(live.phase, "live");
+  assert.equal(live.stackHealth.status, "healthy");
+  assert.equal(live.stackHealth.evidence.verification, 2);
+});
+
+test("does not replace the last healthy attestation when coverage admission fails", async () => {
+  const setup = fixture();
+  const ready = await setup.controller.up(setup.manifest, setup.anchors);
+  setup.deployer.stackHealthy = false;
+
+  await assert.rejects(
+    () => setup.controller.beginCoverage(setup.manifest, "START:turnkey-test"),
+    /event stack is not healthy enough to start coverage/
+  );
+
+  const unchanged = await setup.store.load();
+  assert.equal(unchanged.phase, "ready");
+  assert.deepEqual(unchanged.stackHealth, ready.stackHealth);
+});
+
 test("records failed final stack evidence without stranding billed compute", async () => {
   const setup = fixture();
   await setup.controller.up(setup.manifest, setup.anchors);

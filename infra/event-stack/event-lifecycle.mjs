@@ -173,6 +173,11 @@ export class EventLifecycleController {
       await this.#requireNetworkContract(state, manifest);
       const health = await this.deployer.verifyStack({ manifest, state: structuredClone(state) });
       if (health?.healthy !== true) throw new Error("event stack is not healthy enough to start coverage");
+      state.stackHealth = {
+        status: "healthy",
+        checkedAt: this.now().toISOString(),
+        evidence: health.evidence ?? null
+      };
       state.phase = "live";
       state.coverage = { startedAt: this.now().toISOString(), closedAt: null };
       state.updatedAt = this.now().toISOString();
