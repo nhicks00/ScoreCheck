@@ -5,7 +5,7 @@ const now = new Date("2026-07-27T22:00:10.000Z");
 
 function heartbeat(overrides: Record<string, unknown> = {}) {
   return {
-    version: 3,
+    version: 4,
     sessionId: "120650f2-ed19-479c-933e-b0df1246ba81",
     sequence: 1,
     sampledAt: "2026-07-27T22:00:09.000Z",
@@ -46,6 +46,7 @@ function heartbeat(overrides: Record<string, unknown> = {}) {
     },
     host: {
       load1: 1.2,
+      cpuUsageRatio: 0.42,
       memoryAvailableBytes: 180_000_000,
       speedifyRssBytes: 48_000_000,
       streamingStatsProcessCount: 0
@@ -70,6 +71,7 @@ function uplink(
     isp: id === "eth0" ? "Venue broadband" : "Venue cellular",
     type,
     connected: true,
+    transportProtocol: "tcp-multi",
     priority,
     savedPriority,
     sendBps,
@@ -95,7 +97,8 @@ describe("router heartbeat manager", () => {
       speedify: { uploadHeadroomBps: 16_000_000 },
       routing: { cameraFlowCount: 8 },
       cameraWifi: { associatedClientCount: 8, minimumSignalDbm: -68 },
-      uplinks: [{ id: "eth0" }, { id: "rmnet_mhi0" }]
+      host: { cpuUsageRatio: 0.42 },
+      uplinks: [{ id: "eth0", transportProtocol: "tcp-multi" }, { id: "rmnet_mhi0", transportProtocol: "tcp-multi" }]
     });
   });
 
@@ -113,6 +116,12 @@ describe("router heartbeat manager", () => {
     manager.accept(input, now);
     expect(manager.current(now.getTime()).state).toBe("DEGRADED");
     expect(manager.current(now.getTime() + 20_001).state).toBe("UNKNOWN");
+  });
+
+  it("marks measured CPU saturation degraded even when Speedify does not", () => {
+    const input = heartbeat();
+    input.host.cpuUsageRatio = 0.95;
+    expect(new RouterHeartbeatManager().accept(input, now).state).toBe("DEGRADED");
   });
 
   it("surfaces saved adapter-policy drift separately from the working role", () => {

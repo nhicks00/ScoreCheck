@@ -640,6 +640,7 @@ function RouterBand({ router, nowMs }: { router: MonitorRouter; nowMs: number })
         <Metric label="Estimated headroom" value={formatBitrate(speedify?.uploadHeadroomBps)} />
         <Metric label="Bonded delay" value={formatMs(speedify?.latencyMs)} />
         <Metric label="Queue" value={speedify?.readQueuePackets == null ? "--" : `${speedify.readQueuePackets} packets`} />
+        <Metric label="Router CPU" value={formatPercentRatio(router.host?.cpuUsageRatio ?? null)} />
         <Metric label="Camera sessions" value={routing ? String(routing.cameraFlowCount) : "--"} />
         <Metric label="Camera Wi-Fi devices" value={cameraWifi?.associatedClientCount == null ? "--" : String(cameraWifi.associatedClientCount)} />
         <Metric label="Weakest camera signal" value={cameraWifi?.minimumSignalDbm == null ? "--" : `${cameraWifi.minimumSignalDbm} dBm`} />
@@ -660,7 +661,7 @@ function RouterBand({ router, nowMs }: { router: MonitorRouter; nowMs: number })
           const degraded = uplink.savedPriority !== "automatic" || !uplink.connected || uplink.uploadCongested || uplink.poorConnection || uplink.slowConnection;
           return (
             <article className="monitor-uplink" key={uplink.id} data-degraded={degraded}>
-              <div className="monitor-uplink-heading"><Icon size={17} aria-hidden="true" /><div><strong>{uplinkName(uplink.id, uplink.type)}</strong><span>{uplink.isp ?? "Provider not identified"} · {uplink.savedPriority === "automatic" ? "Automatic" : `Saved ${friendlyState(uplink.savedPriority)}`} · currently {friendlyState(uplink.priority)}</span></div><StateDot state={degraded ? "DEGRADED" : "HEALTHY"} /></div>
+              <div className="monitor-uplink-heading"><Icon size={17} aria-hidden="true" /><div><strong>{uplinkName(uplink.id, uplink.type)}</strong><span>{uplink.isp ?? "Provider not identified"} · {uplink.savedPriority === "automatic" ? "Automatic" : `Saved ${friendlyState(uplink.savedPriority)}`} · currently {friendlyState(uplink.priority)} · {uplink.transportProtocol === "unknown" ? "not connected" : `${transportProtocolLabel(uplink.transportProtocol)} tunnel`}</span></div><StateDot state={degraded ? "DEGRADED" : "HEALTHY"} /></div>
               <div className="monitor-uplink-metrics">
                 <Metric label="Contribution" value={formatBitrate(uplink.sendBps)} />
                 <Metric label="Available estimate" value={formatBitrate(uplink.estimatedUploadBps)} />
@@ -787,6 +788,11 @@ function uplinkName(id: string, type: MonitorRouter["uplinks"][number]["type"]):
   if (id === "eth0") return "Primary wired connection";
   if (type === "ethernet") return "Wired connection";
   return id;
+}
+
+function transportProtocolLabel(protocol: MonitorRouter["uplinks"][number]["transportProtocol"]): string {
+  if (protocol === "tcp-multi") return "Multi-TCP";
+  return protocol.toUpperCase();
 }
 
 function friendlyState(state: string): string {

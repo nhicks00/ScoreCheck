@@ -1095,6 +1095,8 @@ tests:
         values: '0+0x20'
       - series: 'scorecheck_router_speedify_adapter_policy_automatic'
         values: '0+0x20'
+      - series: 'scorecheck_router_cpu_usage_ratio'
+        values: '0.95+0x20'
       - series: 'scorecheck_court_media_required{court="1"}'
         values: '1+0x20'
     alert_rule_test:
@@ -1131,6 +1133,17 @@ tests:
             exp_annotations:
               summary: One or more venue internet connections are no longer set to Automatic.
               first_action: Keep the cameras streaming. In Speedify, set every Ethernet, Wi-Fi, cellular, tethered, and Starlink connection to Automatic.
+      - eval_time: 45s
+        alertname: ScoreCheckVenueRouterCpuSaturated
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              stage: VENUE
+              issue_code: VENUE_ROUTER_CPU_SATURATED
+              root_dependency: venue-router
+            exp_annotations:
+              summary: The venue router is overloaded and camera video may break up.
+              first_action: Keep the cameras streaming. Check router cooling, then move Speedify to the approved higher-capacity router if overload continues.
 
   - name: shared SRT congestion recovery waits for browser metrics to age out
     interval: 5s

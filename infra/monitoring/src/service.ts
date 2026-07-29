@@ -96,9 +96,10 @@ const routerAdapterPolicyAutomatic = new Gauge({ name: "scorecheck_router_speedi
 const routerSendBps = new Gauge({ name: "scorecheck_router_bonded_upload_bits_per_second", help: "Current bonded upload throughput.", registers: [registry] });
 const routerEstimatedUploadBps = new Gauge({ name: "scorecheck_router_estimated_upload_capacity_bits_per_second", help: "Current Speedify aggregate upload estimate.", registers: [registry] });
 const routerUploadHeadroomBps = new Gauge({ name: "scorecheck_router_upload_headroom_bits_per_second", help: "Estimated bonded upload capacity minus current upload throughput.", registers: [registry] });
-const routerUplinkSendBps = new Gauge({ name: "scorecheck_router_uplink_upload_bits_per_second", help: "Current upload throughput by venue uplink.", labelNames: ["uplink", "type", "priority"], registers: [registry] });
-const routerUplinkLatency = new Gauge({ name: "scorecheck_router_uplink_latency_ms", help: "Current tunnel latency by venue uplink.", labelNames: ["uplink", "type", "priority"], registers: [registry] });
-const routerUplinkLoss = new Gauge({ name: "scorecheck_router_uplink_send_loss_ratio", help: "Current send loss ratio by venue uplink.", labelNames: ["uplink", "type", "priority"], registers: [registry] });
+const routerCpuUsage = new Gauge({ name: "scorecheck_router_cpu_usage_ratio", help: "Measured venue-router CPU usage over the heartbeat interval.", registers: [registry] });
+const routerUplinkSendBps = new Gauge({ name: "scorecheck_router_uplink_upload_bits_per_second", help: "Current upload throughput by venue uplink.", labelNames: ["uplink", "type", "priority", "protocol"], registers: [registry] });
+const routerUplinkLatency = new Gauge({ name: "scorecheck_router_uplink_latency_ms", help: "Current tunnel latency by venue uplink.", labelNames: ["uplink", "type", "priority", "protocol"], registers: [registry] });
+const routerUplinkLoss = new Gauge({ name: "scorecheck_router_uplink_send_loss_ratio", help: "Current send loss ratio by venue uplink.", labelNames: ["uplink", "type", "priority", "protocol"], registers: [registry] });
 const runtimes = new Map<string, AgentRuntime>(config.targets.map((target) => [target.id, {
   target,
   snapshot: null,
@@ -501,11 +502,12 @@ async function pollAllOnce() {
   setOptionalGauge(routerSendBps, {}, router.speedify?.sendBps ?? null);
   setOptionalGauge(routerEstimatedUploadBps, {}, router.speedify?.estimatedUploadBps ?? null);
   setOptionalGauge(routerUploadHeadroomBps, {}, router.speedify?.uploadHeadroomBps ?? null);
+  setOptionalGauge(routerCpuUsage, {}, router.host?.cpuUsageRatio ?? null);
   routerUplinkSendBps.reset();
   routerUplinkLatency.reset();
   routerUplinkLoss.reset();
   for (const uplink of router.uplinks) {
-    const labels = { uplink: uplink.id, type: uplink.type, priority: uplink.priority };
+    const labels = { uplink: uplink.id, type: uplink.type, priority: uplink.priority, protocol: uplink.transportProtocol };
     routerUplinkSendBps.set(labels, uplink.sendBps);
     setOptionalGauge(routerUplinkLatency, labels, uplink.latencyMs);
     setOptionalGauge(routerUplinkLoss, labels, uplink.lossSendRatio);

@@ -11,6 +11,7 @@ const uplinkSchema = z.object({
   isp: z.string().trim().min(1).max(120).nullable(),
   type: z.enum(["ethernet", "wifi", "cellular", "other"]),
   connected: z.boolean(),
+  transportProtocol: z.enum(["udp", "tcp", "tcp-multi", "https", "unknown"]),
   priority: z.enum(["always", "secondary", "backup", "never", "unknown"]),
   savedPriority: z.enum(["automatic", "always", "secondary", "backup", "never", "unknown"]),
   sendBps: boundedNumber,
@@ -28,7 +29,7 @@ const uplinkSchema = z.object({
 }).strict();
 
 export const routerHeartbeatSchema = z.object({
-  version: z.literal(3),
+  version: z.literal(4),
   sessionId: z.string().uuid(),
   sequence: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   sampledAt: isoDate,
@@ -69,6 +70,7 @@ export const routerHeartbeatSchema = z.object({
   }).strict(),
   host: z.object({
     load1: z.number().nonnegative().max(10_000),
+    cpuUsageRatio: ratio,
     memoryAvailableBytes: boundedNumber,
     speedifyRssBytes: boundedNumber,
     streamingStatsProcessCount: z.number().int().nonnegative().max(64)
@@ -153,6 +155,7 @@ function routerState(heartbeat: RouterHeartbeat, ageMs: number): HealthState {
     || heartbeat.speedify.badLoss
     || heartbeat.speedify.badMemory
     || heartbeat.host.streamingStatsProcessCount > 0
+    || (heartbeat.host.cpuUsageRatio != null && heartbeat.host.cpuUsageRatio >= 0.9)
     || heartbeat.host.memoryAvailableBytes < 64 * 1024 * 1024
     || activeUplinks.some((uplink) => uplink.poorConnection || uplink.slowConnection)) return "DEGRADED";
   return "HEALTHY";

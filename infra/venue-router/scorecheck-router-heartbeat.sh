@@ -25,6 +25,8 @@ case "$CAMERA_WIFI_INTERFACE" in ''|*[!A-Za-z0-9_.:-]*) echo "camera Wi-Fi inter
 SESSION_ID="$(cat /proc/sys/kernel/random/uuid)"
 SEQUENCE=0
 LAST_STATUS=""
+PREVIOUS_CPU_TOTAL=""
+PREVIOUS_CPU_IDLE=""
 
 json_value() {
   value="$(jsonfilter -s "$1" -e "$2" 2>/dev/null | sed -n '1p' || true)"
@@ -131,15 +133,17 @@ build_uplinks() {
     first=0
     isp="$(json_value "$adapter" '@.isp' '')"
     type="$(uplink_type "$id" "$(json_value "$adapter" '@.type' '')")"
+    protocol="$(json_value "$connection" '@.protocol' 'unknown')"
+    case "$protocol" in udp|tcp|tcp-multi|https) ;; *) protocol=unknown ;; esac
     priority="$(working_priority_value "$(json_value "$adapter" '@.workingPriority' 'unknown')")"
     saved_priority="$(saved_priority_value "$(json_value "$adapter" '@.priority' 'unknown')")"
     connected="$(bool_value "$(json_value "$connection" '@.connected' 'false')")"
     estimated_mbps="$(json_value "$connection" '@.sendEstimateMbps' 'null')"
     if [ "$estimated_mbps" = null ]; then estimated_bps=null; else estimated_bps="$(awk -v value="$estimated_mbps" 'BEGIN {printf "%.0f", value * 1000000}')"; fi
-    printf '{"id":"%s","isp":%s,"type":"%s","connected":%s,"priority":"%s","savedPriority":"%s","sendBps":%s,"receiveBps":%s,"estimatedUploadBps":%s,"latencyMs":%s,"jitterMs":%s,"lossSendRatio":%s,"lossReceiveRatio":%s,"inFlightBytes":%s,"inFlightWindowBytes":%s,"uploadCongested":%s,"poorConnection":%s,"slowConnection":%s}' \
+    printf '{"id":"%s","isp":%s,"type":"%s","connected":%s,"transportProtocol":"%s","priority":"%s","savedPriority":"%s","sendBps":%s,"receiveBps":%s,"estimatedUploadBps":%s,"latencyMs":%s,"jitterMs":%s,"lossSendRatio":%s,"lossReceiveRatio":%s,"inFlightBytes":%s,"inFlightWindowBytes":%s,"uploadCongested":%s,"poorConnection":%s,"slowConnection":%s}' \
       "$(json_string "$id")" \
       "$([ -n "$isp" ] && printf '"%s"' "$(json_string "$isp")" || printf null)" \
-      "$type" "$connected" "$priority" "$saved_priority" \
+      "$type" "$connected" "$protocol" "$priority" "$saved_priority" \
       "$(json_value "$connection" '@.sendBps' '0')" \
       "$(json_value "$connection" '@.receiveBps' '0')" \
       "$estimated_bps" \
@@ -205,8 +209,17 @@ send_heartbeat() {
   [ -n "$mem_available_bytes" ] || mem_available_bytes=0
   failover_count="$(json_value "$session_stats" '@.current.numFailovers' 'null')"
   read_queue="$(json_value "$session_stats" '@.current.tun.readQueue' 'null')"
+  cpu_sample="$(awk '/^cpu / {total=0; for (field=2; field<=NF; field++) total += $field; printf "%.0f %.0f", total, $5 + $6; exit}' /proc/stat)"
+  cpu_total="${cpu_sample%% *}"
+  cpu_idle="${cpu_sample#* }"
+  cpu_usage_ratio=null
+  if [ -n "$PREVIOUS_CPU_TOTAL" ] && [ "$cpu_total" -gt "$PREVIOUS_CPU_TOTAL" ]; then
+    cpu_usage_ratio="$(awk -v total="$cpu_total" -v idle="$cpu_idle" -v previous_total="$PREVIOUS_CPU_TOTAL" -v previous_idle="$PREVIOUS_CPU_IDLE" 'BEGIN {delta=total-previous_total; value=1-((idle-previous_idle)/delta); if (value < 0) value=0; if (value > 1) value=1; printf "%.6f", value}')"
+  fi
+  PREVIOUS_CPU_TOTAL="$cpu_total"
+  PREVIOUS_CPU_IDLE="$cpu_idle"
 
-  body="$(printf '{"version":3,"sessionId":"%s","sequence":%s,"sampledAt":"%s","speedify":{"state":"%s","softwareVersion":"%s","bondingMode":"%s","transportMode":"%s","adapterCount":%s,"automaticAdapterCount":%s,"sendBps":%s,"receiveBps":%s,"estimatedUploadBps":%s,"latencyMs":%s,"jitterMs":%s,"lossSendRatio":%s,"lossReceiveRatio":%s,"uploadCongested":%s,"badCpu":%s,"badLatency":%s,"badLoss":%s,"badMemory":%s,"readQueuePackets":%s,"failoverCount":%s},"routing":{"srtDevice":"%s","rtmpDevice":"%s","primaryRuleCount":%s,"guardRuleCount":%s,"killSwitchActive":%s,"cameraFlowCount":%s},"cameraWifi":%s,"host":{"load1":%s,"memoryAvailableBytes":%s,"speedifyRssBytes":%s,"streamingStatsProcessCount":%s},"uplinks":%s}' \
+  body="$(printf '{"version":4,"sessionId":"%s","sequence":%s,"sampledAt":"%s","speedify":{"state":"%s","softwareVersion":"%s","bondingMode":"%s","transportMode":"%s","adapterCount":%s,"automaticAdapterCount":%s,"sendBps":%s,"receiveBps":%s,"estimatedUploadBps":%s,"latencyMs":%s,"jitterMs":%s,"lossSendRatio":%s,"lossReceiveRatio":%s,"uploadCongested":%s,"badCpu":%s,"badLatency":%s,"badLoss":%s,"badMemory":%s,"readQueuePackets":%s,"failoverCount":%s},"routing":{"srtDevice":"%s","rtmpDevice":"%s","primaryRuleCount":%s,"guardRuleCount":%s,"killSwitchActive":%s,"cameraFlowCount":%s},"cameraWifi":%s,"host":{"load1":%s,"cpuUsageRatio":%s,"memoryAvailableBytes":%s,"speedifyRssBytes":%s,"streamingStatsProcessCount":%s},"uplinks":%s}' \
     "$SESSION_ID" "$SEQUENCE" "$now" "$state" "$software_version" "$bonding" "$transport" \
     "$adapter_count" "$automatic_adapter_count" \
     "$(json_value "$speedify_connection" '@.sendBps' '0')" \
@@ -226,7 +239,7 @@ send_heartbeat() {
     "$(rule_count "$PRIMARY_TABLE")" "$(rule_count "$GUARD_TABLE")" "$kill_switch" \
     "$(conntrack -L -d "$INGEST_IP" 2>/dev/null | grep -Ec 'dport=(1935|8890)' || true)" \
     "$camera_wifi" \
-    "$(awk '{print $1}' /proc/loadavg)" "$mem_available_bytes" "$(speedify_rss_bytes)" \
+    "$(awk '{print $1}' /proc/loadavg)" "$cpu_usage_ratio" "$mem_available_bytes" "$(speedify_rss_bytes)" \
     "$(streaming_stats_process_count)" "$uplinks")"
 
   if [ "$MODE" = print-once ]; then

@@ -313,6 +313,7 @@ export type MonitorRouter = {
   } | null;
   host: {
     load1: number;
+    cpuUsageRatio: number | null;
     memoryAvailableBytes: number;
     speedifyRssBytes: number;
     streamingStatsProcessCount: number;
@@ -322,6 +323,7 @@ export type MonitorRouter = {
     isp: string | null;
     type: "ethernet" | "wifi" | "cellular" | "other";
     connected: boolean;
+    transportProtocol: "udp" | "tcp" | "tcp-multi" | "https" | "unknown";
     priority: "always" | "secondary" | "backup" | "never" | "unknown";
     savedPriority: "automatic" | "always" | "secondary" | "backup" | "never" | "unknown";
     sendBps: number;

@@ -267,6 +267,18 @@ groups:
           summary: "One or more venue internet connections are no longer set to Automatic."
           first_action: "Keep the cameras streaming. In Speedify, set every Ethernet, Wi-Fi, cellular, tethered, and Starlink connection to Automatic."
 
+      - alert: ScoreCheckVenueRouterCpuSaturated
+        expr: (scorecheck_router_cpu_usage_ratio >= 0.90) and on() (sum(scorecheck_court_media_required) > 0)
+        for: 30s
+        labels:
+          severity: critical
+          stage: VENUE
+          issue_code: VENUE_ROUTER_CPU_SATURATED
+          root_dependency: venue-router
+        annotations:
+          summary: "The venue router is overloaded and camera video may break up."
+          first_action: "Keep the cameras streaming. Check router cooling, then move Speedify to the approved higher-capacity router if overload continues."
+
       - alert: ScoreCheckProgramBrowserMissing
         expr: (scorecheck_program_browser_heartbeat_fresh == 0) and on(court) (scorecheck_program_browser_required == 1)
         for: 15s
