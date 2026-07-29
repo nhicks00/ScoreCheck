@@ -38,16 +38,25 @@ MOCK
 cat >"$FIXTURE/bin/docker" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "$1" == inspect && "$4" == *'.Id'* ]]; then
+if [[ "$1" == inspect && "$4" == *'.State.Running'* ]]; then
+  if [[ -e "$MOCK_DIR/worker-unavailable" ]]; then printf 'false\n'; else printf 'true\n'; fi
+elif [[ "$1" == inspect && "$4" == *'.Id'* ]]; then
   cat "$MOCK_DIR/container-id"
 elif [[ "$1" == inspect && "$4" == *Health* ]]; then
-  printf 'healthy\n'
+  if [[ -e "$MOCK_DIR/worker-unavailable" ]]; then printf 'none\n'; else printf 'healthy\n'; fi
 elif [[ "$1" == compose ]]; then
-  count="$(cat "$MOCK_DIR/recreate-count")"
-  count=$((count + 1))
-  printf '%s\n' "$count" >"$MOCK_DIR/recreate-count"
-  [[ ! -e "$MOCK_DIR/recreate-fail" ]] || exit 1
-  printf 'container-%s\n' "$count" >"$MOCK_DIR/container-id"
+  printf '%s\n' "$*" >>"$MOCK_DIR/compose.log"
+  if [[ "$*" == *' up '* ]]; then
+    count="$(cat "$MOCK_DIR/recreate-count")"
+    count=$((count + 1))
+    printf '%s\n' "$count" >"$MOCK_DIR/recreate-count"
+    [[ ! -e "$MOCK_DIR/recreate-fail" ]] || exit 1
+    printf 'container-%s\n' "$count" >"$MOCK_DIR/container-id"
+    if [[ "$*" == *' redis livekit egress'* ]]; then
+      printf 'null\n' >"$MOCK_DIR/active.json"
+      rm -f "$MOCK_DIR/worker-unavailable"
+    fi
+  fi
 else
   exit 2
 fi
@@ -80,6 +89,7 @@ chmod 755 "$FIXTURE/bin/flock" "$FIXTURE/bin/lk" "$FIXTURE/bin/docker" "$FIXTURE
 printf 'null\n' >"$FIXTURE/mock/active.json"
 printf '0\n' >"$FIXTURE/mock/start-count"
 printf '0\n' >"$FIXTURE/mock/recreate-count"
+: >"$FIXTURE/mock/compose.log"
 printf 'container-original\n' >"$FIXTURE/mock/container-id"
 printf '%s\n' \
   "MOCK_DIR=$FIXTURE/mock" \
@@ -111,7 +121,7 @@ export_mode="$(stat -c '%a' "$FIXTURE/export/state.json" 2>/dev/null || stat -f 
 export_directory_mode="$(stat -c '%a' "$FIXTURE/export" 2>/dev/null || stat -f '%Lp' "$FIXTURE/export")"
 [[ "$export_directory_mode" == "755" ]]
 
-printf 'null\n' >"$FIXTURE/mock/active.json"
+touch "$FIXTURE/mock/worker-unavailable"
 run_once
 jq -e '.status == "MISSING_PENDING" and .missingCount == 1' "$FIXTURE/state/state.json" >/dev/null
 run_once
@@ -121,6 +131,8 @@ jq -e '.schemaVersion == 3 and .rendererRuntimeOrigin == "http://renderer:3000" 
 grep -Fxq 'EG_test2' "$FIXTURE/requests/court-1.egress-id"
 grep -Fq 'EG_test2' "$FIXTURE/mock/active.json"
 grep -Fxq '1' "$FIXTURE/mock/recreate-count"
+grep -Fq ' stop egress livekit redis' "$FIXTURE/mock/compose.log"
+grep -Fq ' up -d --force-recreate redis livekit egress' "$FIXTURE/mock/compose.log"
 run_once
 grep -Fxq '1' "$FIXTURE/mock/recreate-count"
 

@@ -154,6 +154,11 @@ wait_for_recycled_worker() {
   return 1
 }
 
+egress_worker_ready() {
+  [[ "$(docker inspect bvm-egress --format '{{.State.Running}}' 2>/dev/null || true)" == "true" ]] \
+    && [[ "$(docker inspect bvm-egress --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null || true)" == "healthy" ]]
+}
+
 adopt_single_started_id() {
   local start_log="$1" parsed_id=""
   parsed_id="$(grep -oE 'EG_[A-Za-z0-9]+' "$start_log" | sort -u | head -n2 || true)"
@@ -174,7 +179,7 @@ adopt_single_started_id() {
 reconcile_once() (
   local owners=() stop_intents=() owner_file request_file id_file court owner_id request_sha generation_key
   local renderer_git_sha renderer_deployment_id renderer_release_origin renderer_binding_file
-  local counts missing_count recovery_attempts old_container_id start_log start_status new_id owner_tmp id_tmp
+  local counts missing_count recovery_attempts old_container_id start_log start_status new_id owner_tmp id_tmp stale_owned_active=0
 
   exec 9>"$REQ_DIR/start.lock"
   if ! flock -n 9; then
@@ -256,17 +261,24 @@ reconcile_once() (
     return
   fi
   if (( ${#ACTIVE_IDS[@]} == 1 )) && [[ "${ACTIVE_IDS[0]}" == "$owner_id" ]]; then
-    write_state "$generation_key" 0 "$recovery_attempts" "HEALTHY" "The exact owned Egress is active." "$court" "$owner_id"
-    return
+    if egress_worker_ready; then
+      write_state "$generation_key" 0 "$recovery_attempts" "HEALTHY" "The exact owned Egress is active." "$court" "$owner_id"
+      return
+    fi
+    stale_owned_active=1
   fi
-  if (( ${#ACTIVE_IDS[@]} > 0 )); then
+  if (( ${#ACTIVE_IDS[@]} > 0 )) && (( stale_owned_active == 0 )); then
     write_state "$generation_key" "$missing_count" "$recovery_attempts" "AMBIGUOUS_ACTIVE" "The active Egress set does not match the owner; no mutation was attempted." "$court" "$owner_id"
     return
   fi
 
   missing_count=$((missing_count + 1))
   if (( missing_count < MISSING_POLLS_REQUIRED )); then
-    write_state "$generation_key" "$missing_count" "$recovery_attempts" "MISSING_PENDING" "The owned Egress is absent; waiting for repeated confirmation." "$court" "$owner_id"
+    if (( stale_owned_active == 1 )); then
+      write_state "$generation_key" "$missing_count" "$recovery_attempts" "MISSING_PENDING" "The owned Egress is listed active but its local worker is unavailable; waiting for repeated confirmation." "$court" "$owner_id"
+    else
+      write_state "$generation_key" "$missing_count" "$recovery_attempts" "MISSING_PENDING" "The owned Egress is absent; waiting for repeated confirmation." "$court" "$owner_id"
+    fi
     return
   fi
   if (( recovery_attempts >= MAX_RECOVERY_ATTEMPTS )); then
@@ -300,11 +312,20 @@ reconcile_once() (
   rm -f "$renderer_binding_file"
 
   recovery_attempts=$((recovery_attempts + 1))
-  write_state "$generation_key" "$missing_count" "$recovery_attempts" "RECOVERING" "Recycling the Egress worker before exact request replay." "$court" "$owner_id"
   old_container_id="$(docker inspect bvm-egress --format '{{.Id}}' 2>/dev/null || true)"
-  if ! docker compose -f "$COMPOSITOR_DIR/docker-compose.yml" --project-directory "$COMPOSITOR_DIR" up -d --force-recreate egress >/dev/null; then
-    write_state "$generation_key" "$missing_count" "$recovery_attempts" "RECOVERY_FAILED" "The Egress worker could not be recreated." "$court" "$owner_id"
-    return
+  if (( stale_owned_active == 1 )); then
+    write_state "$generation_key" "$missing_count" "$recovery_attempts" "RECOVERING" "Resetting the disposable local Egress control plane before exact request replay." "$court" "$owner_id"
+    if ! docker compose -f "$COMPOSITOR_DIR/docker-compose.yml" --project-directory "$COMPOSITOR_DIR" stop egress livekit redis >/dev/null \
+      || ! docker compose -f "$COMPOSITOR_DIR/docker-compose.yml" --project-directory "$COMPOSITOR_DIR" up -d --force-recreate redis livekit egress >/dev/null; then
+      write_state "$generation_key" "$missing_count" "$recovery_attempts" "RECOVERY_FAILED" "The stale local Egress control plane could not be reset." "$court" "$owner_id"
+      return
+    fi
+  else
+    write_state "$generation_key" "$missing_count" "$recovery_attempts" "RECOVERING" "Recycling the Egress worker before exact request replay." "$court" "$owner_id"
+    if ! docker compose -f "$COMPOSITOR_DIR/docker-compose.yml" --project-directory "$COMPOSITOR_DIR" up -d --force-recreate egress >/dev/null; then
+      write_state "$generation_key" "$missing_count" "$recovery_attempts" "RECOVERY_FAILED" "The Egress worker could not be recreated." "$court" "$owner_id"
+      return
+    fi
   fi
   if ! wait_for_recycled_worker "$old_container_id"; then
     write_state "$generation_key" "$missing_count" "$recovery_attempts" "RECOVERY_FAILED" "The recycled worker did not become idle, admissible, and PulseAudio-capable." "$court" "$owner_id"
