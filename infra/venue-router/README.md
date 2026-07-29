@@ -1,5 +1,11 @@
 # Venue Router Operations
 
+The replacement-router intake, exact HW3 settings, phased commissioning, and
+physical acceptance gates are defined in
+[`docs/PEPLINK_BR1_PRO_5GK_HW3_COMMISSIONING_PLAN.md`](../../docs/PEPLINK_BR1_PRO_5GK_HW3_COMMISSIONING_PLAN.md).
+Do not import a full binary configuration from a different product code or
+hardware revision into the incoming `MAX-BR1-PRO-5GK-T-PRM` HW3 router.
+
 ## Peplink MAX BR1 Pro 5G remote management
 
 The active Peplink router is managed through Peplink's supported APIs, not a
