@@ -15,6 +15,7 @@ RTMP_GUARD_PREF="${SCORECHECK_SPEEDIFY_RTMP_GUARD_PREF:-711}"
 MIN_UPLOAD_MBPS="${SCORECHECK_MIN_BONDED_UPLOAD_MBPS:-75}"
 SPEEDIFY_FIXED_DELAY_MS="${SCORECHECK_SPEEDIFY_FIXED_DELAY_MS:-75}"
 SPEEDIFY_PACKET_POOL="${SCORECHECK_SPEEDIFY_PACKET_POOL:-default}"
+NETWORK_ACCELERATION_INIT="${SCORECHECK_NETWORK_ACCELERATION_INIT:-/etc/init.d/shortcut-fe}"
 CAMERA_WIFI_DEVICE="${SCORECHECK_CAMERA_WIFI_DEVICE:-mt798112}"
 CAMERA_WIFI_HTMODE="${SCORECHECK_CAMERA_WIFI_HTMODE:-HE80}"
 ENABLED_FILE="${SCORECHECK_SPEEDIFY_ENABLED_FILE:-/etc/scorecheck-speedify.enabled}"
@@ -275,6 +276,10 @@ ensure_primary_routes() {
 }
 
 configure_speedify() {
+  if [ -x "$NETWORK_ACCELERATION_INIT" ]; then
+    "$NETWORK_ACCELERATION_INIT" disable >/dev/null || return 1
+    "$NETWORK_ACCELERATION_INIT" stop >/dev/null || return 1
+  fi
   adapter_ids="$(speedify_cli show adapters | jsonfilter -e '@[*].adapterID')" || return 1
   if [ -z "$adapter_ids" ]; then
     log "Speedify reported no uplink adapters; refusing to reconnect"

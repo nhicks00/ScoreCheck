@@ -214,6 +214,13 @@ cat >"$MOCK_BIN/logger" <<'MOCK'
 exit 0
 MOCK
 
+cat >"$MOCK_STATE/shortcut-fe" <<'MOCK'
+#!/bin/sh
+set -eu
+printf '%s\n' "$*" >>"$MOCK_STATE/network-acceleration.log"
+[ "${MOCK_NETWORK_ACCELERATION_FAIL:-0}" -eq 0 ]
+MOCK
+
 cat >"$MOCK_BIN/uci" <<'MOCK'
 #!/bin/sh
 set -eu
@@ -230,7 +237,7 @@ cat >"$MOCK_BIN/flock" <<'MOCK'
 exit 0
 MOCK
 
-chmod 0755 "$MOCK_BIN"/*
+chmod 0755 "$MOCK_BIN"/* "$MOCK_STATE/shortcut-fe"
 
 export MOCK_STATE
 export PATH="$MOCK_BIN:$PATH"
@@ -239,6 +246,7 @@ export SCORECHECK_SPEEDIFY_RUNTIME_DIR="$MOCK_STATE/runtime"
 export SCORECHECK_SPEEDIFY_WATCH_LOCK_FILE="$MOCK_STATE/watch.lock"
 export SCORECHECK_SPEEDIFY_WATCH_PID_FILE="$MOCK_STATE/watch.pid"
 export SCORECHECK_SPEEDIFY_CONNECT_RETRY_SECONDS=15
+export SCORECHECK_NETWORK_ACCELERATION_INIT="$MOCK_STATE/shortcut-fe"
 printf 'validated_upload_mbps=85\n' >"$SCORECHECK_SPEEDIFY_ENABLED_FILE"
 printf 'HE80\n' >"$MOCK_STATE/wifi.htmode"
 
@@ -283,6 +291,8 @@ assert_contains "$MOCK_STATE/speedify.log" '^mode speed$'
 assert_contains "$MOCK_STATE/speedify.log" '^transport tcp-multi$'
 assert_contains "$MOCK_STATE/speedify.log" '^fixeddelay 75$'
 assert_contains "$MOCK_STATE/speedify.log" '^packetpool default$'
+assert_contains "$MOCK_STATE/network-acceleration.log" '^disable$'
+assert_contains "$MOCK_STATE/network-acceleration.log" '^stop$'
 if ip route get "$INGEST_IP" ipproto udp dport 8890 >/dev/null 2>&1; then
   fail "SRT resolved to a direct route while Speedify was unavailable"
 fi
@@ -295,6 +305,17 @@ if MOCK_SPEEDIFY_NO_ADAPTERS=1 "$ROUTING_TOOL" reconcile-once >/dev/null 2>&1; t
 fi
 if grep -q '^connect last$' "$MOCK_STATE/speedify.log"; then
   fail "reconcile connected before proving automatic uplink priorities"
+fi
+
+# Reconnect also remains fail-closed when GL.iNet network acceleration cannot
+# be disabled before enabling Speedify PEP.
+rm -f "$MOCK_STATE/runtime/last-connect-at"
+: >"$MOCK_STATE/speedify.log"
+if MOCK_NETWORK_ACCELERATION_FAIL=1 "$ROUTING_TOOL" reconcile-once >/dev/null 2>&1; then
+  fail "reconcile accepted a conflicting network acceleration state"
+fi
+if grep -q '^connect last$' "$MOCK_STATE/speedify.log"; then
+  fail "reconcile connected before disabling network acceleration"
 fi
 
 # Event teardown requires both explicit confirmation and zero active flows.
