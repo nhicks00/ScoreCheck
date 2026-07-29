@@ -41,7 +41,8 @@ test("all disruptive rehearsal CLIs use the shared gate lock", async () => {
     "renderer-loss-rehearsal.mjs",
     "supabase-loss-rehearsal.mjs",
     "overlay-exception-rehearsal.mjs",
-    "ingest-recovery-rehearsal.mjs"
+    "ingest-recovery-rehearsal.mjs",
+    "control-plane-loss-gate.mjs"
   ]) {
     const source = await readFile(new URL(file, import.meta.url), "utf8");
     assert.match(source, /import \{ withQualificationGateLock \} from "\.\/qualification-gate-lock\.mjs";/u, file);

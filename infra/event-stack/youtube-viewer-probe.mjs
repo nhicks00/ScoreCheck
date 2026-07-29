@@ -19,7 +19,7 @@ const CONTINUITY_MINIMUM_DURATION_MS = 15_000;
 const CONTINUITY_MAXIMUM_SAMPLE_GAP_MS = 1_000;
 const CONTINUITY_MAXIMUM_STALL_MS = 2_000;
 const CONTINUITY_TIMESTAMP_SKEW_MS = 2_000;
-const CONTINUITY_MARKERS = [
+const DEFAULT_CONTINUITY_MARKERS = [
   "baseline-start",
   "baseline-ready",
   "primary-stop-requested",
@@ -83,9 +83,10 @@ export class YouTubeViewerProbe {
     }
   }
 
-  async startContinuity({ camera, broadcastId }) {
+  async startContinuity({ camera, broadcastId, markers = DEFAULT_CONTINUITY_MARKERS }) {
     validateCamera(camera);
     if (!BROADCAST_ID.test(broadcastId ?? "")) throw new Error("YouTube broadcast id is invalid");
+    const markerLabels = validateContinuityMarkers(markers);
     let viewer;
     try {
       viewer = await openViewer({ browserType: this.browserType, broadcastId });
@@ -95,6 +96,7 @@ export class YouTubeViewerProbe {
         camera,
         broadcastId,
         traceId: `youtube-continuity-${randomUUID()}`,
+        markerLabels,
         sleep: this.sleep
       });
       await session.mark("baseline-start");
@@ -109,13 +111,14 @@ export class YouTubeViewerProbe {
 }
 
 export class YouTubeViewerContinuitySession {
-  constructor({ browser, page, video, camera, broadcastId, traceId, sleep = delay, now = Date.now }) {
+  constructor({ browser, page, video, camera, broadcastId, traceId, markerLabels = DEFAULT_CONTINUITY_MARKERS, sleep = delay, now = Date.now }) {
     this.browser = browser;
     this.page = page;
     this.video = video;
     this.camera = camera;
     this.broadcastId = broadcastId;
     this.traceId = traceId;
+    this.markerLabels = validateContinuityMarkers(markerLabels);
     this.sleep = sleep;
     this.now = now;
     this.startedAt = new Date(this.now()).toISOString();
@@ -129,7 +132,8 @@ export class YouTubeViewerContinuitySession {
 
   async mark(label) {
     if (this.closed) throw new Error("continuous viewer session is closed");
-    if (!CONTINUITY_MARKERS.includes(label) || this.markers.some((entry) => entry.label === label)) throw new Error(`continuous viewer marker ${label} is invalid or duplicated`);
+    const expected = this.markerLabels[this.markers.length];
+    if (label !== expected) throw new Error(`continuous viewer marker must be ${expected ?? "absent"}, not ${label}`);
     const frame = analyzePng(await this.video.screenshot({ type: "png" }));
     const sample = await sampleVideo(this.video);
     const marker = { label, observedAt: new Date(this.now()).toISOString(), sample, frame };
@@ -155,7 +159,8 @@ export class YouTubeViewerContinuitySession {
         completedAt: new Date(this.now()).toISOString(),
         samples: collected?.samples,
         droppedSamples: collected?.droppedSamples,
-        markers: this.markers
+        markers: this.markers,
+        expectedMarkers: this.markerLabels
       });
     } catch (error) {
       return failedContinuityTrace({ camera: this.camera, broadcastId: this.broadcastId, traceId: this.traceId, startedAt: this.startedAt, problem: `continuous viewer trace failed: ${safeError(error)}` });
@@ -171,26 +176,29 @@ export class YouTubeViewerContinuitySession {
   }
 }
 
-export function evaluateViewerContinuityTrace({ camera, broadcastId, traceId, startedAt, completedAt, samples, droppedSamples, markers }) {
+export function evaluateViewerContinuityTrace({ camera, broadcastId, traceId, startedAt, completedAt, samples, droppedSamples, markers, expectedMarkers = DEFAULT_CONTINUITY_MARKERS }) {
   validateCamera(camera);
   if (!BROADCAST_ID.test(broadcastId ?? "") || !/^youtube-continuity-[a-f0-9-]{36}$/u.test(traceId ?? "")) throw new Error("continuous viewer identity is invalid");
   const startedAtMs = Date.parse(startedAt);
   const completedAtMs = Date.parse(completedAt);
   if (!Number.isFinite(startedAtMs) || !Number.isFinite(completedAtMs)) throw new Error("continuous viewer timestamps are invalid");
   const problems = [];
+  let expectedMarkerLabels;
+  try { expectedMarkerLabels = validateContinuityMarkers(expectedMarkers); }
+  catch { expectedMarkerLabels = []; problems.push("continuous viewer expected markers are invalid"); }
   if (completedAtMs <= startedAtMs) problems.push("continuous viewer completion timestamp is not after its start");
   if (!Array.isArray(samples) || samples.length < 20) problems.push("continuous viewer trace has too few samples");
   if (!Array.isArray(markers)) problems.push("continuous viewer trace markers are missing");
   if (!Number.isInteger(droppedSamples) || droppedSamples < 0) problems.push("continuous viewer dropped-sample count is invalid");
   else if (droppedSamples > 0) problems.push("continuous viewer trace exceeded its bounded sample capacity");
   const normalizedSamples = Array.isArray(samples) ? samples.map(normalizeContinuitySample) : [];
-  const normalizedMarkers = Array.isArray(markers) ? markers.map(normalizeContinuityMarker) : [];
+  const normalizedMarkers = Array.isArray(markers) ? markers.map((value) => normalizeContinuityMarker(value, expectedMarkerLabels)) : [];
   if (normalizedSamples.some((entry) => entry === null)) problems.push("continuous viewer trace contains an invalid sample");
   if (normalizedMarkers.some((entry) => entry === null)) problems.push("continuous viewer trace contains an invalid marker");
   const validSamples = normalizedSamples.filter(Boolean);
   const validMarkers = normalizedMarkers.filter(Boolean);
-  const markerLabels = validMarkers.map((entry) => entry.label);
-  if (JSON.stringify(markerLabels) !== JSON.stringify(CONTINUITY_MARKERS)) problems.push("continuous viewer transition markers are missing, duplicated, or out of order");
+  const observedMarkerLabels = validMarkers.map((entry) => entry.label);
+  if (JSON.stringify(observedMarkerLabels) !== JSON.stringify(expectedMarkerLabels)) problems.push("continuous viewer transition markers are missing, duplicated, or out of order");
   const sampleTimes = validSamples.map((entry) => Date.parse(entry.observedAt));
   const markerTimes = validMarkers.map((entry) => Date.parse(entry.observedAt));
   if (!nondecreasing(markerTimes)) problems.push("continuous viewer marker timestamps moved backward");
@@ -254,6 +262,7 @@ export function evaluateViewerContinuityTrace({ camera, broadcastId, traceId, st
     audioCounterResets,
     notPlaybackReadySamples,
     videoDimensions: dimensions,
+    expectedMarkers: expectedMarkerLabels,
     markers: validMarkers,
     samples: validSamples,
     problems: [...new Set(problems)],
@@ -377,14 +386,24 @@ function normalizeContinuitySample(value) {
   };
 }
 
-function normalizeContinuityMarker(value) {
+function normalizeContinuityMarker(value, markerLabels) {
   const sample = normalizeContinuitySample({ ...value?.sample, observedAt: value?.observedAt });
   const frame = value?.frame;
-  if (!CONTINUITY_MARKERS.includes(value?.label) || !sample || !frame || !/^[a-f0-9]{64}$/u.test(frame.sha256 ?? "")
+  if (!markerLabels.includes(value?.label) || !sample || !frame || !/^[a-f0-9]{64}$/u.test(frame.sha256 ?? "")
     || !Number.isFinite(frame.meanLuma) || frame.meanLuma < 0 || frame.meanLuma > 255
     || !Number.isFinite(frame.lumaVariance) || frame.lumaVariance < 0
     || !Number.isFinite(frame.darkPixelRatio) || frame.darkPixelRatio < 0 || frame.darkPixelRatio > 1) return null;
   return { label: value.label, observedAt: value.observedAt, sample, frame };
+}
+
+function validateContinuityMarkers(value) {
+  if (!Array.isArray(value) || value.length < 3 || value.length > 24
+    || value[0] !== "baseline-start" || value[1] !== "baseline-ready" || value.at(-1) !== "complete"
+    || new Set(value).size !== value.length
+    || value.some((label) => typeof label !== "string" || !/^[a-z][a-z0-9-]{2,63}$/u.test(label))) {
+    throw new Error("continuous viewer marker sequence is invalid");
+  }
+  return [...value];
 }
 
 function nondecreasing(values) {

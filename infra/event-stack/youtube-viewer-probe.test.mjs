@@ -114,6 +114,20 @@ test("qualifies one continuously sampled viewer across ordered backup transition
   assert.ok(result.audioDecodedBytes > 0);
 });
 
+test("qualifies an explicit ordered marker contract for a physical recovery gate", () => {
+  const input = continuityInput();
+  input.expectedMarkers = customLabels();
+  input.markers = customLabels().map((label, index) => ({
+    label,
+    observedAt: new Date(Date.parse(observedAt) + index * 2_000).toISOString(),
+    sample: sample({ currentTime: 10 + index * 2, audioDecodedBytes: 1_000 + index * 800 }),
+    frame: analyzePng(frame(index % 2 ? [140, 80, 20] : [20, 80, 140]))
+  }));
+  const result = evaluateViewerContinuityTrace(input);
+  assert.equal(result.passed, true, result.problems.join("; "));
+  assert.deepEqual(result.expectedMarkers, customLabels());
+});
+
 test("records transient reduced ready state without failing advancing playback", () => {
   const input = continuityInput();
   for (let index = 20; index < 26; index += 1) input.samples[index].readyState = 2;
@@ -193,6 +207,21 @@ test("continuity session emits a bounded report and closes its browser", async (
   await session.close();
 });
 
+test("continuity session rejects an out-of-order physical gate marker", async () => {
+  const session = new YouTubeViewerContinuitySession({
+    browser: { close: async () => {} },
+    page: { evaluate: async () => ({ samples: [], droppedSamples: 0 }) },
+    video: { evaluate: async () => sample(), screenshot: async () => frame([20, 80, 140]) },
+    camera: 1,
+    broadcastId: "broadcast_1",
+    traceId: `youtube-continuity-${"b".repeat(36)}`,
+    markerLabels: customLabels()
+  });
+  await session.mark("baseline-start");
+  await assert.rejects(() => session.mark("control-plane-faulted"), /must be baseline-ready/u);
+  await session.close();
+});
+
 function sample(overrides = {}) {
   return { currentTime: 0, readyState: 4, paused: false, videoWidth: 1920, videoHeight: 1080, audioDecodedBytes: 0, ...overrides };
 }
@@ -244,6 +273,20 @@ function continuityLabels() {
     "backup-only-verified", "primary-start-requested", "primary-restored",
     "dual-restored-verified", "backup-stop-requested", "backup-stopped",
     "primary-only-verified", "complete"
+  ];
+}
+
+function customLabels() {
+  return [
+    "baseline-start",
+    "baseline-ready",
+    "control-plane-faulted",
+    "worker-recycle-requested",
+    "replacement-active",
+    "cold-browser-healthy",
+    "control-plane-restored",
+    "recovery-stable",
+    "complete"
   ];
 }
 
