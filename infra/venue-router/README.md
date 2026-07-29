@@ -119,6 +119,10 @@ heartbeat reports both values, and active-event monitoring pages if any saved
 policy drifts from `automatic`. A temporary diagnostic change must be restored
 before the diagnostic ends.
 
+The checked-in event profile uses Enhanced Streaming (`mode streaming`) with
+SRT `8890/udp` and RTMP `1935/tcp` explicitly prioritized. This lets Speedify
+apply stream-aware redundancy while preserving Automatic adapter selection.
+
 The router heartbeat also reports the number of devices associated with the
 dedicated camera Wi-Fi interface and its weakest client signal. This is
 diagnostic telemetry only: it distinguishes a camera that left the venue AP
