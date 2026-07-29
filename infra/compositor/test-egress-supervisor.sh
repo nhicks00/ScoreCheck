@@ -115,8 +115,6 @@ printf 'null\n' >"$FIXTURE/mock/active.json"
 run_once
 jq -e '.status == "MISSING_PENDING" and .missingCount == 1' "$FIXTURE/state/state.json" >/dev/null
 run_once
-jq -e '.status == "MISSING_PENDING" and .missingCount == 2' "$FIXTURE/state/state.json" >/dev/null
-run_once
 jq -e '.status == "RECOVERED" and .recoveryAttempts == 1 and .egressId == "EG_test2"' "$FIXTURE/state/state.json" >/dev/null
 jq -e '.egressId == "EG_test2" and .outputGeneration == "generation-one"' "$FIXTURE/requests/court-1.owner.json" >/dev/null
 jq -e '.schemaVersion == 3 and .rendererRuntimeOrigin == "http://renderer:3000" and .rendererBundleSha256 == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"' "$FIXTURE/requests/court-1.owner.json" >/dev/null
@@ -127,7 +125,6 @@ run_once
 grep -Fxq '1' "$FIXTURE/mock/recreate-count"
 
 printf 'null\n' >"$FIXTURE/mock/active.json"
-run_once
 run_once
 touch "$FIXTURE/mock/renderer-mismatch"
 run_once
@@ -164,7 +161,6 @@ jq -e '.status == "IDLE"' "$FIXTURE/state/state.json" >/dev/null
 run_start generation-two
 printf 'null\n' >"$FIXTURE/mock/active.json"
 touch "$FIXTURE/mock/recreate-fail"
-run_once
 run_once
 run_once
 jq -e '.status == "RECOVERY_FAILED" and .recoveryAttempts == 1' "$FIXTURE/state/state.json" >/dev/null
