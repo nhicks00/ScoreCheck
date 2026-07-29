@@ -90,7 +90,7 @@ export class ProductionYouTubeProvider {
         enableEmbed: true,
         enableDvr: true,
         recordFromStart: true,
-        latencyPreference: "low",
+        latencyPreference: "normal",
         enableAutoStart: false,
         enableAutoStop: false
       }

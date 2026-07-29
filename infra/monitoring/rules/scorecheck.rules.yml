@@ -515,7 +515,7 @@ groups:
 
       - alert: ScoreCheckRenderedScoreMismatch
         expr: (scorecheck_program_score_render_aligned == 0) and on(court) (scorecheck_court_broadcast_live == 1)
-        for: 10s
+        for: 30s
         labels:
           severity: critical
           stage: SCORE_RENDER

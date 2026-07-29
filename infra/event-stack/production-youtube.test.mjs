@@ -133,11 +133,13 @@ test("converts a ready reusable broadcast from auto-start to the manual lifecycl
 
 test("binds a newly created broadcast before enforcing the ready manual lifecycle contract", async () => {
   const calls = [];
+  let createdBody = null;
   const provider = new ProductionYouTubeProvider({ clientId: "client-id", clientSecret: "client-secret", refreshToken: "refresh-token" });
   provider.listAll = async () => [];
-  provider.request = async (method, path) => {
+  provider.request = async (method, path, body) => {
     calls.push(`${method} ${path}`);
     if (method === "POST" && path.startsWith("/liveBroadcasts?")) {
+      createdBody = body;
       return {
         id: "broadcast-1",
         snippet: { title: "ScoreCheck six-camera-soak - Camera 1" },
@@ -154,6 +156,7 @@ test("binds a newly created broadcast before enforcing the ready manual lifecycl
   };
   const result = await provider.prepareBroadcast({ event: "six-camera-soak", court: 1, streamId: "stream-1", scheduledStartTime: "2026-07-23T16:00:00Z" });
   assert.equal(result.streamId, "stream-1");
+  assert.equal(createdBody.contentDetails.latencyPreference, "normal");
   assert.ok(calls[1].startsWith("POST /liveBroadcasts/bind?"));
   assert.equal(calls[2], "enforce broadcast-1");
 });

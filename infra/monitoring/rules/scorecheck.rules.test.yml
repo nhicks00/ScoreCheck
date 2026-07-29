@@ -347,6 +347,9 @@ tests:
     alert_rule_test:
       - eval_time: 15s
         alertname: ScoreCheckRenderedScoreMismatch
+        exp_alerts: []
+      - eval_time: 35s
+        alertname: ScoreCheckRenderedScoreMismatch
         exp_alerts:
           - exp_labels:
               court: '3'

@@ -919,15 +919,17 @@ Every start creates a protected owner record binding:
 
 Resume, stop, replacement, and failover must reconcile the exact record. Ambiguous ownership fails closed instead of launching another RTMPS publisher.
 
-### 13.5 Persistent-output gap
+### 13.5 Persistent-output recovery
 
-The repository has a bounded program supervisor, but the dry run exposed a practical ownership gap: outside the active production-soak owner process, a missing Egress did not automatically restart safely. The YouTube broadcast remained live but received no media until manual recovery.
+The host-local supervisor now restores only the exact owned generation and refuses ambiguous owner or active-output state. In the July 29 Camera 5 physical gate, the active Egress was removed without a normal stop intent. The supervisor confirmed three missing observations, replaced the worker container, verified idle admission and PulseAudio state, and replayed the immutable request. Exactly one replacement became active in 20.705 seconds and no old/new publisher overlap occurred.
 
-An owner-safe always-running output supervisor is still a release blocker. It must restore only the exact missing generation and must never create duplicate publishers.
+That control-plane recovery passed, but the external YouTube viewer stalled for 24.001 seconds because the test broadcast still used YouTube low latency. New broadcasts therefore use normal latency: viewer continuity takes priority over glass-to-glass delay. The same gate must pass against a fresh normal-latency destination before persistent-output recovery is production-qualified.
 
 ## 14. YouTube Delivery
 
 Each Camera owns a distinct YouTube stream/broadcast binding. Event tests use unlisted broadcasts.
+
+New broadcasts use YouTube normal latency. Low-latency delivery is not appropriate for the public program because continuity, synchronization, and fidelity take priority over delay.
 
 Before output admission, the controller verifies:
 
