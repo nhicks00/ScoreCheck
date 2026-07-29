@@ -235,6 +235,15 @@ export function shouldApplyOverlayUpdate(candidate: OverlayState, lastApplied: O
   return appliedTimestamp == null || candidateTimestamp >= appliedTimestamp;
 }
 
+export function shouldRestoreOverlayHealth(candidate: OverlayState, lastApplied: OverlayApplyCursor | null): boolean {
+  if (!lastApplied || candidate.health.stale) return false;
+  const next = overlayApplyCursor(candidate);
+  return next.scope === lastApplied.scope
+    && next.scoreRevision === lastApplied.scoreRevision
+    && next.sourceTimestampMs === lastApplied.sourceTimestampMs
+    && next.updateTimestampMs === lastApplied.updateTimestampMs;
+}
+
 function coerceSetScores(value: unknown): SetScore[] {
   if (!Array.isArray(value)) return [];
   const parsed = value

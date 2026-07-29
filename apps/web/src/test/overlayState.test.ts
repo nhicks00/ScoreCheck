@@ -7,7 +7,8 @@ import {
   overlayPhaseText,
   overlayStateUpdatedAtMs,
   scorebugDisplayScores,
-  shouldApplyOverlayUpdate
+  shouldApplyOverlayUpdate,
+  shouldRestoreOverlayHealth
 } from "../lib/overlayState";
 
 describe("overlayState", () => {
@@ -467,6 +468,35 @@ describe("overlayState", () => {
       health: { lastUpdateAt: "2026-07-21T12:01:00.000Z" }
     });
     expect(shouldApplyOverlayUpdate(regressed, overlayApplyCursor(applied))).toBe(false);
+  });
+
+  it("restores authoritative health for the exact cached revision without accepting different score data", () => {
+    const cached = coerceOverlayState({
+      eventId: "event",
+      courtId: "court",
+      match: { id: null },
+      projection: { scoreRevision: 0, sourceTimestamp: null },
+      health: { stale: true, lastUpdateAt: null }
+    });
+    const restored = coerceOverlayState({
+      eventId: "event",
+      courtId: "court",
+      match: { id: null },
+      projection: { scoreRevision: 0, sourceTimestamp: null },
+      health: { stale: false, lastUpdateAt: null }
+    });
+    const differentRevision = coerceOverlayState({
+      eventId: "event",
+      courtId: "court",
+      match: { id: null },
+      projection: { scoreRevision: 1, sourceTimestamp: null },
+      health: { stale: false, lastUpdateAt: null }
+    });
+
+    expect(shouldApplyOverlayUpdate(restored, overlayApplyCursor(cached))).toBe(false);
+    expect(shouldRestoreOverlayHealth(restored, overlayApplyCursor(cached))).toBe(true);
+    expect(shouldRestoreOverlayHealth(cached, overlayApplyCursor(cached))).toBe(false);
+    expect(shouldRestoreOverlayHealth(differentRevision, overlayApplyCursor(cached))).toBe(false);
   });
 
   it("accepts an authoritative match transition even when the new score timestamp is older", () => {

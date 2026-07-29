@@ -9,6 +9,7 @@ import {
   overlayPhaseText,
   scorebugDisplayScores,
   shouldApplyOverlayUpdate,
+  shouldRestoreOverlayHealth,
   type OverlayApplyCursor
 } from "@/lib/overlayState";
 import {
@@ -175,10 +176,14 @@ function OverlayClientInner({ courtNumber, eventId, buildVersion, reloadOnVersio
         return;
       }
       if (!res.ok) throw new Error(String(res.status));
-      const next = await res.json();
+      const next = coerceOverlayState(await res.json(), courtNumberValue);
       if (!mounted.current) return;
-      if (applyOverlayState(next)) authoritativeEtag.current = res.headers.get("etag");
-      setConnected(res.headers.get("x-scorecheck-overlay-source") !== "local-cache");
+      const localCache = res.headers.get("x-scorecheck-overlay-source") === "local-cache";
+      const applied = applyOverlayState(next);
+      const restoredHealth = !applied && !localCache && shouldRestoreOverlayHealth(next, lastAccepted.current);
+      if (restoredHealth) setState((current) => ({ ...current, health: next.health }));
+      if (applied || restoredHealth) authoritativeEtag.current = res.headers.get("etag");
+      setConnected(!localCache);
     } catch {
       if (mounted.current) setConnected(false);
     }
