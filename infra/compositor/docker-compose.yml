@@ -117,6 +117,7 @@ services:
       - ./renderer.env
     environment:
       CAMERA_NUMBER: "${CAMERA_NUMBER:-}"
+      MEDIAMTX_RTSP_BASE_URL: "rtsp://${MEDIAMTX_PUBLIC_HOST:?MEDIAMTX_PUBLIC_HOST is required}:8554"
     extra_hosts:
       - "${MEDIAMTX_PUBLIC_HOST:?MEDIAMTX_PUBLIC_HOST is required}:${MEDIAMTX_PRIVATE_HOST:?MEDIAMTX_PRIVATE_HOST is required}"
     volumes:

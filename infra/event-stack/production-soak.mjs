@@ -280,7 +280,8 @@ export class ProductionSoakRuntime {
             camera,
             phase: "LIVE",
             commentaryParticipating: this.commentary.qualification.status !== "NOT_PARTICIPATING",
-            runId: state.runId
+            runId: state.runId,
+            youtubeVideoId: this.destinations.broadcasts[camera].id
           });
           await writeState(statePath, state);
         }

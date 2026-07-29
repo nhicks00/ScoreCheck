@@ -28,9 +28,10 @@ export class MonitoringExpectationRuntime {
     return { eventId, cameras: mapping };
   }
 
-  async set({ binding, camera, phase, commentaryParticipating, runId }) {
+  async set({ binding, camera, phase, commentaryParticipating, runId, youtubeVideoId = null }) {
     if (!binding || typeof binding.eventId !== "string" || typeof binding.cameras?.[camera] !== "string") throw new Error(`Camera ${camera} monitoring binding is invalid`);
     if (!new Set(["TESTING", "LIVE"]).has(phase)) throw new Error(`Camera ${camera} monitoring phase is invalid`);
+    if (phase === "LIVE") await this.#bindYouTubeVideo({ binding, camera, youtubeVideoId });
     const observedAt = new Date(this.now()).toISOString();
     const row = {
       event_id: binding.eventId,
@@ -55,7 +56,26 @@ export class MonitoringExpectationRuntime {
     for (const field of ["event_id", "court_id", "coverage_phase", "media_expectation", "broadcast_expectation", "commentary_expectation", "scoring_expectation"]) {
       if (result[0]?.[field] !== row[field]) throw new Error(`Camera ${camera} monitoring expectation verification failed for ${field}`);
     }
-    return { phase, observedAt, eventId: row.event_id, courtId: row.court_id };
+    return { phase, observedAt, eventId: row.event_id, courtId: row.court_id, youtubeVideoId };
+  }
+
+  async #bindYouTubeVideo({ binding, camera, youtubeVideoId }) {
+    if (typeof youtubeVideoId !== "string" || !/^[A-Za-z0-9_-]{6,64}$/u.test(youtubeVideoId)) {
+      throw new Error(`Camera ${camera} YouTube video id is invalid`);
+    }
+    const courtId = binding.cameras[camera];
+    const result = await this.#request(`/rest/v1/courts?id=eq.${encodeURIComponent(courtId)}&event_id=eq.${encodeURIComponent(binding.eventId)}&select=id,event_id,court_number,youtube_video_id`, {
+      method: "PATCH",
+      headers: { prefer: "return=representation" },
+      body: JSON.stringify({ youtube_video_id: youtubeVideoId })
+    });
+    if (!Array.isArray(result) || result.length !== 1
+      || result[0]?.id !== courtId
+      || result[0]?.event_id !== binding.eventId
+      || result[0]?.court_number !== camera
+      || result[0]?.youtube_video_id !== youtubeVideoId) {
+      throw new Error(`Camera ${camera} YouTube video binding verification failed`);
+    }
   }
 
   async #request(path, options = {}) {

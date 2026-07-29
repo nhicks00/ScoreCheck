@@ -51,13 +51,14 @@ if [ -z "$court" ]; then
 fi
 case "$court" in 1|2|3|4|5|6|7|8) ;; *) echo "invalid camera assignment" >&2; exit 64 ;; esac
 
-case "${MEDIAMTX_HLS_BASE_URL:-}" in https://*) ;; *) echo "invalid MediaMTX HLS base URL" >&2; exit 64 ;; esac
+case "${MEDIAMTX_RTSP_BASE_URL:-}" in rtsp://*) ;; *) echo "invalid MediaMTX RTSP base URL" >&2; exit 64 ;; esac
 case "${MEDIAMTX_READ_USER:-}" in ''|*[!A-Za-z0-9_-]*) echo "invalid MediaMTX read user" >&2; exit 64 ;; esac
 case "${MEDIAMTX_READ_PASS:-}" in ''|*[!A-Za-z0-9_-]*) echo "invalid MediaMTX read password" >&2; exit 64 ;; esac
 command -v ffmpeg >/dev/null 2>&1 || { echo "ffmpeg is required" >&2; exit 69; }
 
 owner_file="$request_dir/court-$court.owner.json"
-hls_url="${MEDIAMTX_HLS_BASE_URL%/}/court${court}_program/index.m3u8?user=${MEDIAMTX_READ_USER}&pass=${MEDIAMTX_READ_PASS}"
+rtsp_origin=${MEDIAMTX_RTSP_BASE_URL#rtsp://}
+rtsp_url="rtsp://${MEDIAMTX_READ_USER}:${MEDIAMTX_READ_PASS}@${rtsp_origin%/}/court${court}_program"
 
 while true; do
   if [ ! -f "$owner_file" ] || [ -L "$owner_file" ]; then
@@ -68,10 +69,10 @@ while true; do
   fi
 
   if [ -z "$ffmpeg_pid" ]; then
-    # Keep the event-scoped query credentials out of FFmpeg error output.
+    # Keep the event-scoped read credentials out of FFmpeg error output.
     ffmpeg -nostdin -hide_banner -loglevel quiet \
-      -rw_timeout 15000000 -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 2 \
-      -i "$hls_url" -map 0:v:0 -map 0:a:0? -c copy -f null - &
+      -rw_timeout 15000000 -rtsp_transport tcp -i "$rtsp_url" \
+      -map 0:v:0 -map 0:a:0? -c copy -f null - &
     ffmpeg_pid=$!
     restart_count=$((restart_count + 1))
   fi

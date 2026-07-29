@@ -18,7 +18,7 @@ chmod 0755 "$TEST_ROOT/bin/ffmpeg"
 
 export PATH="$TEST_ROOT/bin:$PATH"
 export CAMERA_NUMBER=3
-export MEDIAMTX_HLS_BASE_URL=https://preview.example.test
+export MEDIAMTX_RTSP_BASE_URL=rtsp://preview.example.test:8554
 export MEDIAMTX_READ_USER=scorecheck_event_reader
 export MEDIAMTX_READ_PASS=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 export SCORECHECK_PROGRAM_WARMER_INTERVAL_SECONDS=1
@@ -44,7 +44,9 @@ for _ in $(seq 1 50); do
   sleep 0.1
 done
 grep -q '"status":"WARM"' "$TEST_ROOT/state/state.json"
-grep -q 'court3_program/index.m3u8?user=scorecheck_event_reader&pass=' "$TEST_ROOT/ffmpeg.args"
+grep -q -- '-rtsp_transport tcp' "$TEST_ROOT/ffmpeg.args"
+! grep -q -- '-reconnect' "$TEST_ROOT/ffmpeg.args"
+grep -Fq "rtsp://${MEDIAMTX_READ_USER}:${MEDIAMTX_READ_PASS}@preview.example.test:8554/court3_program" "$TEST_ROOT/ffmpeg.args"
 grep -q -- '-c copy -f null -' "$TEST_ROOT/ffmpeg.args"
 
 rm "$TEST_ROOT/requests/court-3.owner.json"
