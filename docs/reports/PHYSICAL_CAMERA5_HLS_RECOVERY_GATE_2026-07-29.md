@@ -6,6 +6,11 @@ Runtime media revision: `660c54caa3e76ae69b142e409c7f7bf7b675ab38`
 Latest evidence-tool revision: `41acf18dbaaaefaf0703463479d2cd4ff52cdc62`  
 Result: **Output conformance PASS; continuous browser playback FAIL; formal recorder coverage FAIL**
 
+Follow-up: the later 30-minute physical rerun passed browser continuity,
+output conformance, cleanup, and full recorder coverage. See
+`PHYSICAL_CAMERA5_HLS_ENDURANCE_GATE_2026-07-29.md`. This report remains the
+historical record of the earlier failed topology and evidence gap.
+
 ## Scope
 
 This was a physical-camera, file-only qualification of Camera 5. Camera 5 was
