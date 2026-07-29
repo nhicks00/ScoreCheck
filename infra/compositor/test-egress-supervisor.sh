@@ -121,7 +121,7 @@ run_once() {
 
 run_start generation-one
 run_once
-jq -e '.status == "HEALTHY" and .recoveryAttempts == 0' "$FIXTURE/state/state.json" >/dev/null
+jq -e '.status == "HEALTHY" and .recoveryAttempts == 0 and (.healthySinceEpoch | type) == "number"' "$FIXTURE/state/state.json" >/dev/null
 export_mode="$(stat -c '%a' "$FIXTURE/export/state.json" 2>/dev/null || stat -f '%Lp' "$FIXTURE/export/state.json")"
 [[ "$export_mode" == "644" ]]
 export_directory_mode="$(stat -c '%a' "$FIXTURE/export" 2>/dev/null || stat -f '%Lp' "$FIXTURE/export")"
@@ -142,13 +142,19 @@ grep -Fxq '1' "$FIXTURE/mock/recreate-count"
 grep -Fq ' stop egress livekit redis' "$FIXTURE/mock/compose.log"
 grep -Fq ' up -d --force-recreate redis livekit egress' "$FIXTURE/mock/compose.log"
 run_once
+jq -e '.status == "HEALTHY" and .recoveryAttempts == 1 and (.healthySinceEpoch | type) == "number"' "$FIXTURE/state/state.json" >/dev/null
+reset_epoch=$(( $(date -u +%s) - 301 ))
+jq --argjson resetEpoch "$reset_epoch" '.healthySinceEpoch = $resetEpoch' "$FIXTURE/state/state.json" >"$FIXTURE/state/state-reset.json"
+mv "$FIXTURE/state/state-reset.json" "$FIXTURE/state/state.json"
+run_once
+jq -e '.status == "HEALTHY" and .recoveryAttempts == 0 and .healthySinceEpoch > 0' "$FIXTURE/state/state.json" >/dev/null
 grep -Fxq '1' "$FIXTURE/mock/recreate-count"
 
 printf 'null\n' >"$FIXTURE/mock/active.json"
 run_once
 touch "$FIXTURE/mock/renderer-mismatch"
 run_once
-jq -e '.status == "CONTROL_UNAVAILABLE" and .recoveryAttempts == 1' "$FIXTURE/state/state.json" >/dev/null
+jq -e '.status == "CONTROL_UNAVAILABLE" and .recoveryAttempts == 0' "$FIXTURE/state/state.json" >/dev/null
 grep -Fxq '1' "$FIXTURE/mock/recreate-count"
 rm "$FIXTURE/mock/renderer-mismatch"
 printf '[{"egress_id":"EG_test2"}]\n' >"$FIXTURE/mock/active.json"

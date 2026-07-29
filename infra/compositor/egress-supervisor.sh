@@ -16,6 +16,7 @@ fi
 INTERVAL_SECONDS="${SCORECHECK_EGRESS_SUPERVISOR_INTERVAL_SECONDS:-2}"
 MISSING_POLLS_REQUIRED=2
 MAX_RECOVERY_ATTEMPTS=2
+RECOVERY_BUDGET_RESET_SECONDS=300
 STATE_DIR="${SCORECHECK_EGRESS_SUPERVISOR_STATE_DIR:-/var/lib/scorecheck-egress-supervisor}"
 STATE_FILE="$STATE_DIR/state.json"
 EXPORT_DIR="${SCORECHECK_EGRESS_SUPERVISOR_EXPORT_DIR:-/var/lib/scorecheck-monitoring/egress-supervisor}"
@@ -46,7 +47,7 @@ find_lk
 
 write_state() {
   local generation_key="$1" missing_count="$2" recovery_attempts="$3" status="$4" detail="$5"
-  local court="${6:-null}" egress_id="${7:-}" output="$STATE_FILE.tmp.$$" exported="$EXPORT_FILE.tmp.$$"
+  local court="${6:-null}" egress_id="${7:-}" healthy_since_epoch="${8:-null}" output="$STATE_FILE.tmp.$$" exported="$EXPORT_FILE.tmp.$$"
   jq -n \
     --arg generationKey "$generation_key" \
     --argjson missingCount "$missing_count" \
@@ -55,8 +56,9 @@ write_state() {
     --arg detail "$detail" \
     --argjson court "$court" \
     --arg egressId "$egress_id" \
+    --argjson healthySinceEpoch "$healthy_since_epoch" \
     --arg observedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '{schemaVersion: 1, generationKey: ($generationKey | select(length > 0) // null), missingCount: $missingCount, recoveryAttempts: $recoveryAttempts, status: $status, detail: $detail, court: $court, egressId: ($egressId | select(length > 0) // null), observedAt: $observedAt}' \
+    '{schemaVersion: 1, generationKey: ($generationKey | select(length > 0) // null), missingCount: $missingCount, recoveryAttempts: $recoveryAttempts, healthySinceEpoch: $healthySinceEpoch, status: $status, detail: $detail, court: $court, egressId: ($egressId | select(length > 0) // null), observedAt: $observedAt}' \
     >"$output"
   chmod 600 "$output"
   mv "$output" "$STATE_FILE"
@@ -82,9 +84,10 @@ read_counts() {
       or (.generationKey != null and (.generationKey | type) != "string")
       or (.missingCount | type) != "number" or (.missingCount | floor) != .missingCount or .missingCount < 0
       or (.recoveryAttempts | type) != "number" or (.recoveryAttempts | floor) != .recoveryAttempts or .recoveryAttempts < 0
+      or (.healthySinceEpoch != null and ((.healthySinceEpoch | type) != "number" or (.healthySinceEpoch | floor) != .healthySinceEpoch or .healthySinceEpoch < 0))
     then error("invalid supervisor state")
-    elif .generationKey == $generationKey then "\(.missingCount) \(.recoveryAttempts)"
-    else "0 0"
+    elif .generationKey == $generationKey then "\(.missingCount) \(.recoveryAttempts) \(.healthySinceEpoch // 0)"
+    else "0 0 0"
     end
   ' "$STATE_FILE"
 }
@@ -179,7 +182,7 @@ adopt_single_started_id() {
 reconcile_once() (
   local owners=() stop_intents=() owner_file request_file id_file court owner_id request_sha generation_key
   local renderer_git_sha renderer_deployment_id renderer_release_origin renderer_binding_file
-  local counts missing_count recovery_attempts old_container_id start_log start_status new_id owner_tmp id_tmp stale_owned_active=0
+  local counts missing_count recovery_attempts healthy_since_epoch now_epoch old_container_id start_log start_status new_id owner_tmp id_tmp stale_owned_active=0
 
   exec 9>"$REQ_DIR/start.lock"
   if ! flock -n 9; then
@@ -255,14 +258,20 @@ reconcile_once() (
     echo "error: supervisor state is invalid; recovery is disabled." >&2
     return 1
   fi
-  read -r missing_count recovery_attempts <<<"$counts"
+  read -r missing_count recovery_attempts healthy_since_epoch <<<"$counts"
   if ! load_active_ids; then
     write_state "$generation_key" "$missing_count" "$recovery_attempts" "CONTROL_UNAVAILABLE" "The active Egress list could not be verified." "$court" "$owner_id"
     return
   fi
   if (( ${#ACTIVE_IDS[@]} == 1 )) && [[ "${ACTIVE_IDS[0]}" == "$owner_id" ]]; then
     if egress_worker_ready; then
-      write_state "$generation_key" 0 "$recovery_attempts" "HEALTHY" "The exact owned Egress is active." "$court" "$owner_id"
+      now_epoch="$(date -u +%s)"
+      if (( healthy_since_epoch == 0 )); then
+        healthy_since_epoch="$now_epoch"
+      elif (( recovery_attempts > 0 && now_epoch - healthy_since_epoch >= RECOVERY_BUDGET_RESET_SECONDS )); then
+        recovery_attempts=0
+      fi
+      write_state "$generation_key" 0 "$recovery_attempts" "HEALTHY" "The exact owned Egress is active." "$court" "$owner_id" "$healthy_since_epoch"
       return
     fi
     stale_owned_active=1
