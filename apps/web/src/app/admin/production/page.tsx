@@ -45,10 +45,10 @@ export default async function ProductionConsolePage() {
 
   const courtConfigs: CourtClientConfig[] = snapshot.courts.map((court) => ({
     courtNumber: court.courtNumber,
-    // Pre-resolved playback sources for the lazy monitor players (same shape
+    // Pre-resolved buffered program sources for the lazy monitor players (same shape
     // StreamPlayer's `sources` prop takes; read creds ride along like they do
     // for scorer/commentary players).
-    sources: hasVideo ? courtStreamSources(court.previewStreamPath) : null,
+    sources: hasVideo ? courtStreamSources(court.programStreamPath) : null,
     // Token-gated program-page link: null unless PROGRAM_PAGE_TOKEN is set,
     // so the token never reaches the client as an empty/implied value.
     programUrl: buildProgramMonitorPath(court.courtNumber, token, renderer?.build, renderer?.deployment)

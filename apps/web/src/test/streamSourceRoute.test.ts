@@ -3,7 +3,7 @@ import { NextRequest } from "next/server";
 
 const harness = vi.hoisted(() => ({
   event: null as { id: string; is_active: boolean } | null,
-  court: { id: "court-1", preview_stream_path: null as string | null },
+  court: { id: "court-1", program_stream_path: null as string | null },
   expectation: { broadcast_expectation: null as string | null }
 }));
 
@@ -29,7 +29,7 @@ vi.mock("@/lib/supabase", () => ({
 }));
 vi.mock("@/lib/video", () => ({
   courtMonitorStreamPath: (courtNumber: number) => `court${courtNumber}_monitor`,
-  courtPreviewStreamPath: (courtNumber: number, dbPath?: string | null) => dbPath ?? `court${courtNumber}_preview`,
+  courtProgramStreamPath: (courtNumber: number, dbPath?: string | null) => dbPath ?? `court${courtNumber}_program`,
   courtStreamSources: (path: string) => ({ whepUrl: `https://media.example.com/${path}/whep`, hlsUrl: null }),
   dataSaverStreamAdmitted: (expectation: string | null | undefined) => expectation === "OFF",
   videoConfigured: () => true
@@ -44,7 +44,7 @@ function request(quality: "data_saver" | "detail"): NextRequest {
 describe("admin monitor stream source", () => {
   beforeEach(() => {
     harness.event = null;
-    harness.court.preview_stream_path = null;
+    harness.court.program_stream_path = null;
     harness.expectation.broadcast_expectation = null;
   });
 
@@ -54,6 +54,18 @@ describe("admin monitor stream source", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       whepUrl: "https://media.example.com/court1_monitor/whep"
+    });
+  });
+
+  it("uses the HLS-safe program rendition for detailed operator inspection", async () => {
+    harness.event = { id: "event-1", is_active: true };
+    harness.court.program_stream_path = "camera-one-program";
+
+    const response = await GET(request("detail"));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      whepUrl: "https://media.example.com/camera-one-program/whep"
     });
   });
 

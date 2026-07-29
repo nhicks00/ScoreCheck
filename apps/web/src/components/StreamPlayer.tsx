@@ -651,6 +651,7 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
             startOnSegmentBoundary: true,
             xhrSetup: (xhr: XMLHttpRequest, requestUrl: string) => {
               xhr.open("GET", inheritMediaAuthorization(requestUrl, hlsUrl), true);
+              xhr.withCredentials = true;
             }
           }) as unknown as HlsInstance;
           hls = instance;

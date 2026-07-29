@@ -87,6 +87,9 @@ test("renders an isolated MediaMTX public host and matching TLS health proxy", (
   assert.doesNotMatch(programRule, /court\$\{G1\}_preview/u);
   assert.doesNotMatch(programRule, /-readrate|-copyts|-use_wallclock_as_timestamps|-start_at_zero/u);
   assert.doesNotMatch(programRule, /[?&]ffs=/u);
+  const monitorRule = rendered.mediaConfig.match(/"~\^court\(\[1-8\]\)_monitor\$":([\s\S]+?)runOnDemandRestart:/u)?.[1] ?? "";
+  assert.match(monitorRule, /-c:a aac/u);
+  assert.doesNotMatch(monitorRule, /libopus/u);
   assert.doesNotMatch(rendered.mediaConfig, /__[A-Z0-9_]+__/u);
   assert.doesNotMatch(rendered.caddyConfig, /__[A-Z0-9_]+__/u);
 });

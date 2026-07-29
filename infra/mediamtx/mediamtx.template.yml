@@ -186,7 +186,7 @@ __OPAQUE_RTMP_ALIAS_PATHS__
       -c:v libx264 -preset ultrafast -tune zerolatency -profile:v main
       -pix_fmt yuv420p -vf "fps=10,scale=-2:360" -g 20 -keyint_min 20 -sc_threshold 0
       -b:v 350k -maxrate 450k -bufsize 700k
-      -c:a libopus -b:a 48k -ar 48000 -ac 1 -af "aresample=async=1:first_pts=0"
+      -c:a aac -b:a 64k -ar 48000 -ac 1 -af "aresample=async=1:first_pts=0"
       -f rtsp -rtsp_transport tcp "rtsp://127.0.0.1:${RTSP_PORT}/${MTX_PATH}"
     runOnDemandRestart: yes
     runOnDemandStartTimeout: 20s

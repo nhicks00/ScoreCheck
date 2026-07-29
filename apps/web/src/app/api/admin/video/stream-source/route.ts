@@ -4,7 +4,7 @@ import { requireAdmin } from "@/lib/auth";
 import { getEnv } from "@/lib/env";
 import { getActiveEvent } from "@/lib/eventConfig";
 import { supabaseAdmin } from "@/lib/supabase";
-import { courtMonitorStreamPath, courtPreviewStreamPath, courtStreamSources, dataSaverStreamAdmitted, videoConfigured } from "@/lib/video";
+import { courtMonitorStreamPath, courtProgramStreamPath, courtStreamSources, dataSaverStreamAdmitted, videoConfigured } from "@/lib/video";
 
 export const runtime = "nodejs";
 
@@ -34,10 +34,10 @@ export async function GET(req: NextRequest) {
       error: "Data-saver video is unavailable unless this camera has an explicit non-live monitoring expectation."
     }, { status: 409 });
   }
-  const previewStreamPath = parsed.data.quality === "data_saver"
+  const streamPath = parsed.data.quality === "data_saver"
     ? courtMonitorStreamPath(courtNumber)
-    : courtPreviewStreamPath(courtNumber, configured.previewStreamPath);
-  const sources = courtStreamSources(previewStreamPath);
+    : courtProgramStreamPath(courtNumber, configured.programStreamPath);
+  const sources = courtStreamSources(streamPath);
   if (!sources.whepUrl && !sources.hlsUrl) {
     return NextResponse.json({ error: "Stream preview is not configured for this court." }, { status: 503 });
   }
@@ -51,27 +51,27 @@ export async function GET(req: NextRequest) {
 }
 
 async function loadStreamConfiguration(courtNumber: number): Promise<{
-  previewStreamPath: string | null;
+  programStreamPath: string | null;
   broadcastExpectation: string | null;
 }> {
   const env = getEnv();
   if (!env.supabaseUrl || !env.supabaseServiceRoleKey) {
-    return { previewStreamPath: null, broadcastExpectation: null };
+    return { programStreamPath: null, broadcastExpectation: null };
   }
 
   const db = supabaseAdmin();
   const event = await getActiveEvent(db);
   // getActiveEvent falls back to historical rows; only a manually active event can block monitor transcoding.
-  if (!event || event.is_active !== true) return { previewStreamPath: null, broadcastExpectation: "OFF" };
+  if (!event || event.is_active !== true) return { programStreamPath: null, broadcastExpectation: "OFF" };
 
   const { data: court, error: courtError } = await db
     .from("courts")
-    .select("id,preview_stream_path")
+    .select("id,program_stream_path")
     .eq("event_id", event.id)
     .eq("court_number", courtNumber)
     .maybeSingle();
   if (courtError || !court) {
-    return { previewStreamPath: null, broadcastExpectation: null };
+    return { programStreamPath: null, broadcastExpectation: null };
   }
 
   const { data: expectation, error: expectationError } = await db
@@ -82,7 +82,7 @@ async function loadStreamConfiguration(courtNumber: number): Promise<{
     .maybeSingle();
 
   return {
-    previewStreamPath: court.preview_stream_path ?? null,
+    programStreamPath: court.program_stream_path ?? null,
     broadcastExpectation: expectationError ? null : expectation?.broadcast_expectation ?? null
   };
 }

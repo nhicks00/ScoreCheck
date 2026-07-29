@@ -474,7 +474,7 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
                 <span>Video quality</span>
                 <select value={activeInspectionQuality} onChange={(event) => setInspectionQuality(event.target.value as "data_saver" | "detail")}>
                   <option value="data_saver" disabled={!dataSaverAdmitted}>{dataSaverAdmitted ? "Data saver · 360p / 10 fps · ~0.4 Mbps" : "Data saver · unavailable during full production"}</option>
-                  <option value="detail">Detail · 720p / 30 fps · ~2.6 Mbps</option>
+                  <option value="detail">Detail · 1080p / 30 fps · source bitrate</option>
                 </select>
               </label>
               <button type="button" className="button ghost" onClick={() => setPreviewEnabled(false)} disabled={!previewEnabled || pacingOpen}><VideoOff size={16} /> Close video</button>
