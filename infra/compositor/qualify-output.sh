@@ -90,6 +90,7 @@ HOST_OUTPUT="$HOST_OUTPUT_DIR/$OUTPUT_NAME"
 CONTAINER_OUTPUT="$CONTAINER_OUTPUT_DIR/$OUTPUT_NAME"
 REPORT="$HOST_OUTPUT_DIR/court-${COURT}-${OUTPUT_PROFILE}.capture.json"
 PROBE_REPORT="$HOST_OUTPUT_DIR/court-${COURT}-${OUTPUT_PROFILE}.ffprobe.json"
+KEYFRAME_REPORT="$HOST_OUTPUT_DIR/court-${COURT}-${OUTPUT_PROFILE}.keyframes.json"
 PROBE_SUMMARY="$HOST_OUTPUT_DIR/court-${COURT}-${OUTPUT_PROFILE}.conformance.json"
 mkdir -p "$REQ_DIR"
 install -d -m 0770 "$COMPOSITOR_DIR/evidence" "$HOST_OUTPUT_DIR"
@@ -380,19 +381,30 @@ if ! docker run --rm --network none --read-only --user 0:0 --cap-drop ALL --secu
   -v "$HOST_OUTPUT_DIR:/evidence:ro" \
   --entrypoint ffprobe "$FFPROBE_IMAGE" \
   -v error -print_format json \
-  -show_entries 'stream=index,codec_type,codec_name,profile,width,height,pix_fmt,field_order,color_space,color_transfer,color_primaries,avg_frame_rate,bit_rate,sample_rate,channels:format=duration,bit_rate:frame=stream_index,key_frame,best_effort_timestamp_time' \
-  -show_streams -show_format -show_frames "/evidence/$OUTPUT_NAME" >"$PROBE_REPORT"; then
+  -show_entries 'stream=index,codec_type,codec_name,profile,width,height,pix_fmt,field_order,color_space,color_transfer,color_primaries,avg_frame_rate,bit_rate,sample_rate,channels:format=duration,bit_rate' \
+  -show_streams -show_format "/evidence/$OUTPUT_NAME" >"$PROBE_REPORT"; then
   chmod 600 "$HOST_OUTPUT"
   echo "error: actual output sample could not be inspected." >&2
   exit 1
 fi
+if ! docker run --rm --network none --read-only --user 0:0 --cap-drop ALL --security-opt no-new-privileges:true \
+  -v "$HOST_OUTPUT_DIR:/evidence:ro" \
+  --entrypoint ffprobe "$FFPROBE_IMAGE" \
+  -v error -print_format json -select_streams v:0 -skip_frame nokey \
+  -show_entries 'frame=best_effort_timestamp_time' -show_frames "/evidence/$OUTPUT_NAME" >"$KEYFRAME_REPORT"; then
+  chmod 600 "$HOST_OUTPUT"
+  echo "error: actual output keyframes could not be inspected." >&2
+  exit 1
+fi
 chmod 600 "$HOST_OUTPUT"
 chmod 600 "$PROBE_REPORT"
+chmod 600 "$KEYFRAME_REPORT"
 # LiveKit FileOutput MP4 bitrate is content-dependent. Enforce positive bounded
 # output here; production RTMP CBR is verified by the provider gate.
 if ! jq -e \
   --argjson expectedFps "$EGRESS_FRAMERATE" \
-  --argjson targetVideoKbps "$EGRESS_VIDEO_BITRATE" '
+  --argjson targetVideoKbps "$EGRESS_VIDEO_BITRATE" \
+  --slurpfile keyframeEvidence "$KEYFRAME_REPORT" '
     def ratio:
       split("/") as $parts
       | ($parts[0] | tonumber) / ($parts[1] | tonumber);
@@ -400,7 +412,7 @@ if ! jq -e \
     | (.streams | map(select(.codec_type == "audio"))) as $audios
     | ($videos[0]) as $video
     | ($audios[0]) as $audio
-    | ([.frames[]? | select(.stream_index == $video.index and .key_frame == 1) | .best_effort_timestamp_time | tonumber]) as $keyframes
+    | ([$keyframeEvidence[0].frames[]?.best_effort_timestamp_time | tonumber]) as $keyframes
     | ([range(1; $keyframes | length) | $keyframes[.] - $keyframes[.-1]]) as $keyframeGaps
     | {
         videoCodec: $video.codec_name,

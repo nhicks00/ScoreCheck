@@ -18,9 +18,13 @@ printf '%s\n' '#!/usr/bin/env bash' \
 printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
   'root="${MOCK_ROOT:?}"' \
-  'if [[ "${1:-}" == "run" ]]; then' \
+  'if [[ "${1:-}" == "run" && "$*" == *"-skip_frame nokey"* ]]; then' \
   '  cat <<'\''JSON'\''' \
-  '{"streams":[{"index":0,"codec_type":"video","codec_name":"h264","profile":"High","width":1920,"height":1080,"pix_fmt":"yuv420p","field_order":"progressive","color_space":"bt709","color_transfer":"bt709","color_primaries":"bt709","avg_frame_rate":"30/1","bit_rate":"257482"},{"index":1,"codec_type":"audio","codec_name":"aac","sample_rate":"48000","channels":2,"bit_rate":"5630"}],"format":{"duration":"20.000000","bit_rate":"263112"},"frames":[{"stream_index":0,"key_frame":1,"best_effort_timestamp_time":"0.000000"},{"stream_index":0,"key_frame":1,"best_effort_timestamp_time":"2.000000"},{"stream_index":0,"key_frame":1,"best_effort_timestamp_time":"4.000000"},{"stream_index":0,"key_frame":1,"best_effort_timestamp_time":"6.000000"},{"stream_index":0,"key_frame":1,"best_effort_timestamp_time":"8.000000"},{"stream_index":0,"key_frame":1,"best_effort_timestamp_time":"10.000000"},{"stream_index":0,"key_frame":1,"best_effort_timestamp_time":"12.000000"},{"stream_index":0,"key_frame":1,"best_effort_timestamp_time":"14.000000"},{"stream_index":0,"key_frame":1,"best_effort_timestamp_time":"16.000000"},{"stream_index":0,"key_frame":1,"best_effort_timestamp_time":"18.000000"}]}' \
+  '{"frames":[{"best_effort_timestamp_time":"0.000000"},{"best_effort_timestamp_time":"2.000000"},{"best_effort_timestamp_time":"4.000000"},{"best_effort_timestamp_time":"6.000000"},{"best_effort_timestamp_time":"8.000000"},{"best_effort_timestamp_time":"10.000000"},{"best_effort_timestamp_time":"12.000000"},{"best_effort_timestamp_time":"14.000000"},{"best_effort_timestamp_time":"16.000000"},{"best_effort_timestamp_time":"18.000000"}]}' \
+  'JSON' \
+  'elif [[ "${1:-}" == "run" ]]; then' \
+  '  cat <<'\''JSON'\''' \
+  '{"streams":[{"index":0,"codec_type":"video","codec_name":"h264","profile":"High","width":1920,"height":1080,"pix_fmt":"yuv420p","field_order":"progressive","color_space":"bt709","color_transfer":"bt709","color_primaries":"bt709","avg_frame_rate":"30/1","bit_rate":"257482"},{"index":1,"codec_type":"audio","codec_name":"aac","sample_rate":"48000","channels":2,"bit_rate":"5630"}],"format":{"duration":"20.000000","bit_rate":"263112"}}' \
   'JSON' \
   'elif [[ "$*" == "restart bvm-redis" ]]; then' \
   '  exit 0' \
