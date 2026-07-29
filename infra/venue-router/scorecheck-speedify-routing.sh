@@ -285,8 +285,8 @@ configure_speedify() {
   done
   speedify_cli route default off >/dev/null
   speedify_cli streaming ports set 8890/udp 1935/tcp >/dev/null
-  speedify_cli mode streaming >/dev/null
-  speedify_cli transport udp >/dev/null
+  speedify_cli mode speed >/dev/null
+  speedify_cli transport tcp-multi >/dev/null
   speedify_cli fixeddelay "$SPEEDIFY_FIXED_DELAY_MS" >/dev/null
   speedify_cli packetpool "$SPEEDIFY_PACKET_POOL" >/dev/null
   speedify_cli targetconnections 0 0 >/dev/null
