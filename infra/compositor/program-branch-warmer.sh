@@ -71,7 +71,7 @@ while true; do
   if [ -z "$ffmpeg_pid" ]; then
     # Keep the event-scoped read credentials out of FFmpeg error output.
     ffmpeg -nostdin -hide_banner -loglevel quiet \
-      -rw_timeout 15000000 -rtsp_transport tcp -i "$rtsp_url" \
+      -rtsp_transport tcp -i "$rtsp_url" \
       -map 0:v:0 -map 0:a:0? -c copy -f null - &
     ffmpeg_pid=$!
     restart_count=$((restart_count + 1))

@@ -46,6 +46,7 @@ done
 grep -q '"status":"WARM"' "$TEST_ROOT/state/state.json"
 grep -q -- '-rtsp_transport tcp' "$TEST_ROOT/ffmpeg.args"
 ! grep -q -- '-reconnect' "$TEST_ROOT/ffmpeg.args"
+! grep -q -- '-rw_timeout' "$TEST_ROOT/ffmpeg.args"
 grep -Fq "rtsp://${MEDIAMTX_READ_USER}:${MEDIAMTX_READ_PASS}@preview.example.test:8554/court3_program" "$TEST_ROOT/ffmpeg.args"
 grep -q -- '-c copy -f null -' "$TEST_ROOT/ffmpeg.args"
 
