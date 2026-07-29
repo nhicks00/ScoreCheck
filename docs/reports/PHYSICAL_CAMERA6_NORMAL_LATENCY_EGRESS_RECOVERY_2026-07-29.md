@@ -93,3 +93,19 @@ It includes both viewer traces, one-second host timelines, recovery summaries, p
 Keep YouTube normal latency and the two-second/two-observation exact-owner supervisor timing. The measured combination met the two-second viewer-stall target without weakening ownership, bounded retries, complete worker recycle, or admission checks.
 
 Persistent-output recovery is not yet fully production-qualified. Repeat once on a physical source with a clearly nonblack moving scene, then exercise abnormal handler exit, full Egress-container loss, and compositor restart. The next viewer evaluator should distinguish a bounded transient `readyState=2` interval from an actual pause or playhead stall while continuing to preserve the raw samples.
+
+## Fleet Hard Cutover
+
+After the Camera 6 output was cleanly retired, the exact supervisor script was hard-cut across compositors A-H and the warm spare. The deployed SHA-256 is `196872d325c8a8fd54303911f3b901dd390538797e7630e95fd461064a8a4269`.
+
+- All nine supervisor services were active with restart count zero after cutover.
+- Every Egress worker container ID was unchanged.
+- Idle hosts retained zero active Egresses and reconciled to `IDLE`.
+- Camera 5 retained exact Egress `EG_eRH4YNfPrsF9`, reconciled `HEALTHY`, and remained YouTube live/active/good with no configuration issue.
+- Camera 6 remained raw-only and healthy after its temporary output cleanup.
+- No incident or fault gate opened.
+- The prior script is retained mode-0600 under `backups/egress-supervisor.sh.20260729T0817Z` on each changed host.
+
+Protected before/progress/after evidence is under:
+
+`~/.config/scorecheck/event-stack/events/reliability-physical-20260728/qualification-evidence/egress-supervisor-hardcut-20260729T0815Z`

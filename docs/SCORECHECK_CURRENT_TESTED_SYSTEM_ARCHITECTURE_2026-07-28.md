@@ -927,6 +927,8 @@ A fresh Camera 6 normal-latency gate separated provider buffering from host reco
 
 That repeat proves the timing and ownership path, but Camera 6's physical scene was already nearly black. The evaluator therefore could not certify visual fidelity and preserved seven quarter-second `readyState=2` observations. A measured correction now records transient reduced readiness without failing when the viewer remains unpaused, its playhead stall stays within two seconds, audio continues, and real-time advancement passes. Re-evaluating the preserved trace leaves only the pre-existing black-scene failure. Persistent-output recovery remains conditionally accepted for timing and exact ownership, with a final nonblack physical repeat plus handler, container, and host-restart gates still required.
 
+The measured supervisor script was then deployed service-only to compositors A-H and the warm spare. All Egress container IDs and active-output identities were preserved; the one active Camera 5 Egress remained live/active/good, idle hosts stayed idle, and every supervisor reconciled healthy with no incident. New event builds inherit the same two-second/two-observation contract from the versioned compositor artifact.
+
 ## 14. YouTube Delivery
 
 Each Camera owns a distinct YouTube stream/broadcast binding. Event tests use unlisted broadcasts.
