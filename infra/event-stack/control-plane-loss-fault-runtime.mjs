@@ -192,7 +192,7 @@ export function inspectCommand(target) {
       `  iptables -C "$chain" -d ${shellQuote(`${destination}/32`)} -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable >/dev/null 2>&1 || complete=0`
     ]),
     "fi",
-    "jump_count=$(iptables-save | awk -v chain=\"$chain\" '{ for (index = 1; index < NF; index += 1) if ($index == \"-j\" && $(index + 1) == chain) count += 1 } END { print count + 0 }')",
+    "jump_count=$(iptables-save | awk -v chain=\"$chain\" '{ for (field = 1; field < NF; field += 1) if ($field == \"-j\" && $(field + 1) == chain) count += 1 } END { print count + 0 }')",
     "test \"$jump_count\" -eq 1 || complete=0",
     "iptables -C DOCKER-USER -s \"$expected_subnet\" -m comment --comment \"$comment\" -j \"$chain\" >/dev/null 2>&1 || complete=0",
     "if test \"$complete\" = 1; then echo FAULTED; else echo PARTIAL; fi"
@@ -269,7 +269,7 @@ export function restoreCommand(target) {
     "jq -e --arg digest \"$expected_digest\" '.schemaVersion==1 and .targetSha256==$digest' \"$marker\" >/dev/null",
     "while iptables -C DOCKER-USER -s \"$expected_subnet\" -m comment --comment \"$comment\" -j \"$chain\" >/dev/null 2>&1; do iptables -D DOCKER-USER -s \"$expected_subnet\" -m comment --comment \"$comment\" -j \"$chain\"; done",
     "! iptables-save | grep -Fq -- \"$comment\"",
-    "if iptables -S \"$chain\" >/dev/null 2>&1; then reference_count=$(iptables-save | awk -v chain=\"$chain\" '{ for (index = 1; index < NF; index += 1) if ($index == \"-j\" && $(index + 1) == chain) count += 1 } END { print count + 0 }'); test \"$reference_count\" -eq 0; iptables -F \"$chain\"; iptables -X \"$chain\"; fi",
+    "if iptables -S \"$chain\" >/dev/null 2>&1; then reference_count=$(iptables-save | awk -v chain=\"$chain\" '{ for (field = 1; field < NF; field += 1) if ($field == \"-j\" && $(field + 1) == chain) count += 1 } END { print count + 0 }'); test \"$reference_count\" -eq 0; iptables -F \"$chain\"; iptables -X \"$chain\"; fi",
     "rm -f \"$marker\""
   ].join("\n");
 }

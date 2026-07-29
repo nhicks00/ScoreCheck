@@ -134,6 +134,22 @@ test("control-plane remote programs are valid POSIX shell", async () => {
   }
 });
 
+test("control-plane iptables reference counters execute with the host awk", async () => {
+  const target = await runtimeForPlan().plan(planInput());
+  for (const command of [inspectCommand(target), restoreCommand(target)]) {
+    const programs = [...command.matchAll(/awk -v chain="\$chain" '([^']+)'/gu)].map((match) => match[1]);
+    assert.ok(programs.length > 0);
+    for (const program of programs) {
+      const result = spawnSync("awk", ["-v", "chain=SC_TEST", program], {
+        input: "-A DOCKER-USER -j SC_TEST\n-A SC_TEST -d 203.0.113.10/32 -j REJECT\n",
+        encoding: "utf8"
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout.trim(), "1");
+    }
+  }
+});
+
 function runtimeForPlan() {
   return new ControlPlaneLossFaultRuntime({
     sshKey: "/tmp/key",
