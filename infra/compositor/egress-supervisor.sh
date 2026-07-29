@@ -64,7 +64,8 @@ write_state() {
   mv "$output" "$STATE_FILE"
   # The export contains operational status only and is mounted read-only by the
   # unprivileged monitoring agent.
-  install -m 0644 "$STATE_FILE" "$exported"
+  jq 'del(.healthySinceEpoch)' "$STATE_FILE" >"$exported"
+  chmod 0644 "$exported"
   mv "$exported" "$EXPORT_FILE"
   printf '%s: %s\n' "$status" "$detail"
 }

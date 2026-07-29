@@ -126,6 +126,7 @@ export_mode="$(stat -c '%a' "$FIXTURE/export/state.json" 2>/dev/null || stat -f 
 [[ "$export_mode" == "644" ]]
 export_directory_mode="$(stat -c '%a' "$FIXTURE/export" 2>/dev/null || stat -f '%Lp' "$FIXTURE/export")"
 [[ "$export_directory_mode" == "755" ]]
+jq -e 'has("healthySinceEpoch") | not' "$FIXTURE/export/state.json" >/dev/null
 
 touch "$FIXTURE/mock/worker-unavailable"
 run_once
