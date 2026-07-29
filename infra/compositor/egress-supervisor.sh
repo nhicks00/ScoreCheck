@@ -128,11 +128,11 @@ wait_for_active_id() {
 }
 
 wait_for_recycled_worker() {
-  local old_container_id="$1" new_container_id="" metrics=""
+  local old_container_id="$1" new_container_id="" running="" metrics=""
   for _ in $(seq 1 120); do
     new_container_id="$(docker inspect bvm-egress --format '{{.Id}}' 2>/dev/null || true)"
-    health="$(docker inspect bvm-egress --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null || true)"
-    if [[ -n "$new_container_id" && "$new_container_id" != "$old_container_id" && "$health" == "healthy" ]] \
+    running="$(docker inspect bvm-egress --format '{{.State.Running}}' 2>/dev/null || true)"
+    if [[ -n "$new_container_id" && "$new_container_id" != "$old_container_id" && "$running" == "true" ]] \
       && curl -fsS http://127.0.0.1:9091/ >/dev/null 2>&1; then
       metrics="$(curl -fsS http://127.0.0.1:9090/metrics 2>/dev/null || true)"
       if printf '%s\n' "$metrics" | awk '

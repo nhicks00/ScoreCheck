@@ -43,7 +43,13 @@ if [[ "$1" == inspect && "$4" == *'.State.Running'* ]]; then
 elif [[ "$1" == inspect && "$4" == *'.Id'* ]]; then
   cat "$MOCK_DIR/container-id"
 elif [[ "$1" == inspect && "$4" == *Health* ]]; then
-  if [[ -e "$MOCK_DIR/worker-unavailable" ]]; then printf 'none\n'; else printf 'healthy\n'; fi
+  if [[ -e "$MOCK_DIR/worker-unavailable" ]]; then
+    printf 'none\n'
+  elif [[ -e "$MOCK_DIR/docker-health-pending" ]]; then
+    printf 'starting\n'
+  else
+    printf 'healthy\n'
+  fi
 elif [[ "$1" == compose ]]; then
   printf '%s\n' "$*" >>"$MOCK_DIR/compose.log"
   if [[ "$*" == *' up '* ]]; then
@@ -124,8 +130,10 @@ export_directory_mode="$(stat -c '%a' "$FIXTURE/export" 2>/dev/null || stat -f '
 touch "$FIXTURE/mock/worker-unavailable"
 run_once
 jq -e '.status == "MISSING_PENDING" and .missingCount == 1' "$FIXTURE/state/state.json" >/dev/null
+touch "$FIXTURE/mock/docker-health-pending"
 run_once
 jq -e '.status == "RECOVERED" and .recoveryAttempts == 1 and .egressId == "EG_test2"' "$FIXTURE/state/state.json" >/dev/null
+rm "$FIXTURE/mock/docker-health-pending"
 jq -e '.egressId == "EG_test2" and .outputGeneration == "generation-one"' "$FIXTURE/requests/court-1.owner.json" >/dev/null
 jq -e '.schemaVersion == 3 and .rendererRuntimeOrigin == "http://renderer:3000" and .rendererBundleSha256 == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"' "$FIXTURE/requests/court-1.owner.json" >/dev/null
 grep -Fxq 'EG_test2' "$FIXTURE/requests/court-1.egress-id"
