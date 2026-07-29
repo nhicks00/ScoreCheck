@@ -76,20 +76,27 @@ ssh root@192.168.8.1 /usr/sbin/scorecheck-speedify-routing disable EVENT_ENDED
 The command refuses to remove the guards while camera flows are active. There
 is no emergency fail-open or `reset` command.
 
-## Required Speedify settings
+## Current diagnostic Speedify settings
 
-- Mode: Streaming.
-- Transport: UDP.
+- Mode: Speed.
+- Transport: Multi-TCP.
 - Fixed delay: 75 ms.
 - Packet pool: Default.
 - Default route: Off.
 - PEP: On for RTMP.
 - Target connections: Automatic.
 
-Do not use Auto transport for this production path. In the July 12 test it
-selected TCP and caused severe loss inside the nested camera-LAN tunnel.
-Multi-TCP carried the five direct publishers but made the WireGuard handshake
-stale and dropped listener-camera paths, so it is also rejected.
+These mode and transport values preserve the last physical A/B diagnostic;
+they are not a production qualification. In the July 29 eight-physical-camera
+gate, Speed with single TCP, Enhanced Streaming with UDP, Speed with UDP, and
+Speed with Multi-TCP all failed sustained delivery. The best Multi-TCP warmup
+later saturated the dual-core router. Enhanced Streaming was not proven
+harmful; Enhanced plus Multi-TCP should be compared against Speed plus
+Multi-TCP only after the tunnel runs with measured CPU headroom. Do not infer a
+production choice from the current test residue.
+
+Do not use Auto transport for this path. In the July 12 test it selected TCP
+and caused severe loss inside the nested camera-LAN tunnel.
 
 The camera 5 GHz radio must use `HE80`; router preflight rejects narrower AP
 configuration. In the July 27 eight-camera test, `HE20` left several AVKANS

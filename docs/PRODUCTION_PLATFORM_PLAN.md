@@ -200,11 +200,16 @@ non-congested venue uplink
 before Gate 2 can pass. The temporary MAKI assignments do not alter the final
 AVKANS hardware target.
 
-Venue camera routing is selective rather than router-wide. Speedify runs in
-Streaming mode over UDP with its default route disabled; only MediaMTX RTMP/SRT
-ingest ports enter the bonded tunnel. This keeps operator and camera-control
-traffic independent and prevents the ingest-IP host route that bypassed
-Speedify during the July 12 test. Production camera traffic is fail-closed:
+Venue camera routing is selective rather than router-wide. Only MediaMTX
+RTMP/SRT ingest ports enter the Speedify tunnel, and the default route remains
+disabled. The current diagnostic baseline is Speed plus Multi-TCP, but no
+tested mode passed July 29 eight-camera endurance: the router reached 0% idle
+CPU even while aggregate WAN capacity remained sufficient. Enhanced Streaming
+was not rejected; Enhanced plus Multi-TCP must be compared on hardware with
+measured processing headroom before the production mode is selected. This
+keeps operator and camera-control traffic independent and prevents the
+ingest-IP host route that bypassed Speedify during the July 12 test. Production
+camera traffic is fail-closed:
 table `900` routes it through `connectify0`, table `901` blackholes it if that
 route disappears, and an independent forwarding kill switch rejects it on any
 non-Speedify interface. A persistent watchdog restores the primary route and

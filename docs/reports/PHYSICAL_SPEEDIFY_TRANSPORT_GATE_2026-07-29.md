@@ -97,14 +97,19 @@ The Enhanced Streaming comparison was not skipped. At the endpoint
 - AVKANS RTT reached approximately 1.88 seconds;
 - router load was 5.19.
 
-Enhanced Streaming is generally intended to favor detected live streams, but
-this physical Enhanced-plus-UDP pairing was worse than the strongest
-Multi-TCP warmup. It must not be restored merely because it is the vendor's
-general recommendation.
+Enhanced Streaming is generally intended to favor detected live streams. This
+gate did not prove that feature harmful: it proved only that the physical
+Enhanced-plus-UDP pairing could not overcome the router's saturated processing
+path. A later A/B step left the router and checked-in watchdog on Speed plus
+Multi-TCP, but that mode also failed endurance and is not a qualified
+production selection.
 
 Enhanced Streaming with Multi-TCP has not yet been tested. The router reached
 0% idle CPU in the strongest sustained profile, so another mode permutation
-is not justified until the router-capacity constraint is addressed.
+is not justified until the router-capacity constraint is addressed. Once the
+tunnel runs on hardware with measured headroom, Enhanced plus Multi-TCP should
+be compared against plain Speed plus Multi-TCP with the same eight physical
+cameras and all saved inputs Automatic.
 
 ### Speed + UDP
 
@@ -209,6 +214,33 @@ plain-English Pushover request was delivered to the operator. This behavior
 must be included in event operations unless a camera firmware/configuration
 change proves autonomous reconnect.
 
+## Monitoring Contract Cutover
+
+The idle-output monitoring cutover completed at `04:24Z` from Git revision
+`5699ac2bdd57a20368f1c16ca7f6418212cc29c2`:
+
+- the monitor service was the only observability container recreated and
+  returned healthy with restart count `0`;
+- Prometheus rules increased from `63` to `64` and all rule plus inhibition
+  fixtures passed;
+- Prometheus, Alertmanager, Caddy, and node-exporter retained their exact
+  container identities;
+- router heartbeat contract v4 began reporting measured whole-router CPU and
+  actual per-uplink tunnel protocol;
+- the first stable post-cutover router sample measured `0.324451` CPU usage,
+  Speed/Multi-TCP globally, TCP on each connected physical uplink, four of four
+  saved inputs Automatic, and zero read-queue packets;
+- the primary and guard rule counts remained two each, the kill switch stayed
+  active, and both camera protocol lookups remained on `connectify0` table
+  `900`;
+- all 12 monitor agents remained fresh and no incident or fault gate was
+  created.
+
+This telemetry closes the earlier blind spot where Speedify could report
+`badCpu=false` while the router had zero idle CPU. During required media,
+measured CPU at or above 90% now produces a plain-English venue-router overload
+incident.
+
 ## Classification
 
 | Gate | Result |
@@ -235,9 +267,10 @@ The next physical test should measure the current router's sustainable camera
 count as a capacity staircase, or move the Speedify tunnel to a stronger
 dedicated router/host and repeat the exact eight-camera gate. The MacBook
 should remain off the event data path; a stronger dedicated Speedify device is
-the cleaner production comparison. Another Enhanced/transport permutation on
-the same saturated dual-core router is lower value than addressing the proven
-compute limit.
+the cleaner production comparison. On hardware with headroom, compare
+Enhanced plus Multi-TCP with Speed plus Multi-TCP before selecting the event
+default. Another permutation on the same saturated dual-core router is lower
+value than addressing the proven compute limit.
 
 The AVKANS reconnect failure should be retested independently after Cameras
 3-8 are manually restarted. It is a separate release risk even if the router
@@ -268,3 +301,9 @@ The continuous 15-second monitor recorder and 60-second router recorder remain
 under the parent diagnostic evidence directory. Raw event evidence is
 protected and excluded from Git; this report contains only sanitized values
 and hashes.
+
+The monitoring cutover evidence is retained under the same parent at:
+
+```text
+monitoring-contract-v4-cutover-20260729T042001Z/
+```

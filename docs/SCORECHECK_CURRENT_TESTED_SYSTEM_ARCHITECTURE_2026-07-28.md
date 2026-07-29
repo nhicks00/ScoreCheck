@@ -330,10 +330,10 @@ The managed watchdog reconciles Speedify state, policy rules, route tables, fire
 
 ### 6.2 Speedify operating profile
 
-The checked-in router contract uses:
+The current checked-in and live diagnostic router contract uses:
 
-- Streaming mode;
-- UDP transport;
+- Speed mode;
+- Multi-TCP transport;
 - fixed delay 75 ms;
 - default packet pool;
 - default route off;
@@ -341,7 +341,13 @@ The checked-in router contract uses:
 - automatic target connection count; and
 - a 5 GHz camera radio configured for `HE80`.
 
-The previous Auto and Multi-TCP modes are rejected for this topology. They produced nested-tunnel or listener-path problems during earlier qualification.
+This is not yet a production-qualified transport selection. In the July 29
+eight-physical-camera gate, Speed with single TCP, Enhanced Streaming with UDP,
+Speed with UDP, and Speed with Multi-TCP all failed sustained delivery. The
+best Multi-TCP warmup later saturated the dual-core router at 0% idle CPU.
+Enhanced Streaming was not proven harmful; Enhanced plus Multi-TCP remains a
+candidate to compare on router hardware with measured processing headroom. All
+saved Speedify input priorities must remain Automatic in every mode.
 
 ### 6.3 Capacity admission
 
