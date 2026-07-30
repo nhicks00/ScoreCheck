@@ -53,7 +53,8 @@ cross-model image.
 
 Adopt for the first qualification:
 
-- Stable 8.5.4 firmware baseline when the router arrives on that version.
+- Current stable 8.6.0 production baseline, using 8.5.4 only as the required
+  intermediate upgrade when the router arrives on an older version.
 - Optional phone hotspot as a third Priority 1 Wi-Fi WAN.
 - Two formal DWB profiles: control and Adaptive FEC.
 - `Fast` detection, Low congestion latency, 150 ms jitter buffer, 0 ms receive
@@ -141,20 +142,25 @@ Before applying event settings:
    date before accepting the TechnoRV exchange.
 4. Export a factory-state configuration backup and a supported API snapshot.
 5. Record the firmware and cellular module firmware before upgrading.
-6. If the unit is older than 8.5.4, upgrade to stable 8.5.4 first. Reboot and
-   verify the active slot. Run the first complete router baseline on 8.5.4.
-7. If the unit already has 8.6.0, do not casually downgrade it. Record 8.6.0 as
-   a test variable and keep its beta features disabled.
-8. After an 8.5.4 baseline passes, a separate bounded upgrade comparison may
-   qualify 8.6.0. Peplink requires the 8.5.4 intermediate step for BR1 Pro 5G.
-9. Do not enable automatic firmware changes during event coverage. Pin the
+6. If the unit is older than 8.5.4, upgrade to stable 8.5.4 first, reboot, and
+   verify the active slot. Peplink requires this intermediate step before
+   upgrading the BR1 Pro 5G to 8.6.0 through Web Admin.
+7. Upgrade to the current stable 8.6.0 release, reboot, verify the active slot,
+   and use 8.6.0 for the production-candidate baseline. If the unit already
+   ships on 8.6.0, do not downgrade it.
+8. Keep newly introduced optional features disabled unless they are separately
+   qualified, including SpeedFusion Boost and WireGuard remote-user access.
+9. Use 8.5.4 after this point only for a documented Peplink support diagnostic
+   or a proven 8.6.0 regression, not as the normal production profile.
+10. Do not enable automatic firmware changes during event coverage. Pin the
    version that passed the real-camera qualification.
 
-Firmware 8.6.0 supports this exact hardware, but it was released on the date
-this plan was prepared and several new items remain Beta or RC. It is not the
-first baseline when a stable 8.5.4 unit is available. On either version, do not
-enable SpeedFusion Boost, beta WireGuard remote access, forced 5G SA Carrier
-Aggregation, IPv6, or unrelated new features in the first production profile.
+Firmware 8.6.0 is Peplink's current stable release for this exact hardware.
+Using it avoids qualifying the event on a version that is already behind the
+supported production release. The release still contains newly introduced
+optional capabilities that are unrelated to ScoreCheck, so do not enable
+SpeedFusion Boost, WireGuard remote access, forced 5G SA Carrier Aggregation,
+IPv6, or other new features in the first production profile.
 
 ### 2. Administrator and remote-management security
 
@@ -533,8 +539,9 @@ objective or need physical evidence. This is not a permanent rejection.
 - Record factory firmware, modem firmware, MAC addresses, serial, and license
   state.
 - Export and hash a factory backup.
-- Upgrade to 8.5.4 only if the factory version is older. Keep 8.5.4 as the
-  first baseline; if the unit already has 8.6.0, record it and do not downgrade.
+- If the factory version is older than 8.5.4, upgrade to 8.5.4 and verify it as
+  the required intermediate step. Then upgrade to stable 8.6.0 and use 8.6.0
+  for the production-candidate baseline. If it ships on 8.6.0, do not downgrade.
 - Verify boot, active firmware slot, local login, and factory backup restore
   visibility without actually restoring the old router.
 
