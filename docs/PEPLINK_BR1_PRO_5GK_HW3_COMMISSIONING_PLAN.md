@@ -56,13 +56,14 @@ Adopt for the first qualification:
 - Current stable 8.6.0 production baseline, using 8.5.4 only as the required
   intermediate upgrade when the router arrives on an older version.
 - Optional phone hotspot as a third Priority 1 Wi-Fi WAN.
-- Two formal DWB profiles: control and Adaptive FEC.
+- One production-candidate DWB profile with Adaptive FEC; FEC-off is only a
+  short diagnostic if the primary run fails.
 - `Fast` detection, Low congestion latency, 150 ms jitter buffer, 0 ms receive
   buffer, and 250 ms latency-difference cutoff.
-- San Francisco versus San Jose SFC endpoint comparison.
+- San Francisco SFC endpoint by default; San Jose is only a diagnostic fallback.
 - Conservative Starlink readmission and camera SRT QoS.
 - Fixed 5 GHz Ubiquiti radio plan with mesh off.
-- 30% minimum measured reserve and an event-length physical soak.
+- One 60-minute physical eight-camera capacity and failover gate.
 
 Defer unless the initial evidence requires it:
 
@@ -70,7 +71,9 @@ Defer unless the initial evidence requires it:
 - A new edge collector, SNMPv3, and remote syslog.
 - Router Docker, Tailscale, or a second management system.
 - Plain Bonding and multi-variable buffer tuning.
+- Routine FEC and SFC endpoint A/B testing when the primary profile is healthy.
 - Long WAN Smoothing tests.
+- Multi-hour and event-length router-only soaks.
 - Synthetic media or network load.
 
 This keeps the test focused on the actual reliability question: whether the
@@ -358,17 +361,17 @@ Initial profile:
 | Setting | Initial value | Reason |
 | --- | --- | --- |
 | Service | SpeedFusion Connect | Removes dependence on public venue IP and provides path continuity |
-| Location | Compare San Francisco and San Jose, then pin the winner | Qualify the full venue-to-SFC-to-SFO2 route |
+| Location | San Francisco | Keep the initial route aligned with the DigitalOcean `sfo2` ingest region |
 | Starlink priority | 1 | Active member |
 | Cellular priority | 1 | Active member |
 | Phone Wi-Fi WAN priority | 1 when available | Independent third path; DWB may still assign little traffic |
-| Link-failure detection | `Fast` | Safer baseline against false flaps; compare `Faster` later |
+| Link-failure detection | `Fast` | Avoid false flaps while still providing bounded failure detection |
 | Traffic distribution | Dynamic Weighted Bonding | Can reduce weight on a degrading link |
 | Congestion latency | Low | Peplink's Starlink starting recommendation |
 | Bufferbloat handling | Enabled | Do not disable congestion response during qualification |
 | Packet loss as congestion | Enabled | Prior simultaneous loss was a valid distress signal |
 | WAN Smoothing | Off | Packet duplication can exceed the upload reserve |
-| FEC | Off for baseline | Establish clean comparison first |
+| FEC | Adaptive | Add repair traffic only when measured loss requires it |
 | Packet jitter buffer | 150 ms | Small reorder allowance; latency is not the priority |
 | Receive buffer | 0 ms | Avoid stacking a second large buffer with SRT recovery |
 | Latency-difference cutoff | 250 ms | Exclude a path that becomes far slower than the best path |
@@ -376,33 +379,14 @@ Initial profile:
 | Fragmentation | Default / use DF flag | Change only if packet evidence proves an MTU defect |
 | SpeedFusion Boost | Off | Beta in 8.6.0 |
 
-Use only two formal profiles initially:
-
-| Profile | Difference | Purpose |
-| --- | --- | --- |
-| `SCORECHECK_DWB_CONTROL` | FEC off, Smoothing off | Prove raw router, WAN, and DWB behavior |
-| `SCORECHECK_DWB_ADAPTIVE_FEC` | Adaptive FEC on, Smoothing off | Leading reliability candidate |
-
-Peplink recommends protection options for generic Starlink/cellular use, but
-they are not automatically correct for ScoreCheck. WAN Smoothing duplicates
-traffic and can approach 2x bandwidth at its lowest protection level. The
-previous event already failed when available upload reserve was too small.
-Therefore:
-
-1. Establish a clean physical baseline with Dynamic Weighted Bonding and no
-   manual protection.
-2. Compare Adaptive FEC using the same real cameras and venue links.
-3. Keep Adaptive FEC if loss/freeze behavior improves and at least 30% sustained
-   reserve remains after overhead.
-4. Test WAN Smoothing Normal for only 30-60 minutes if the first two profiles
-   leave a specific dropout problem and capacity can absorb duplication.
-5. Never leave a WAN disabled after a diagnostic comparison. Restore every
-   intended event WAN to its documented production state.
-
-Do not add a plain-bonding profile unless both DWB profiles produce evidence
-that DWB itself is the problem. Do not tune jitter, cutoff, endpoint, and FEC
-simultaneously. After the winning profile is stable, compare `Fast` versus
-`Faster` only during controlled WAN loss and rejoin.
+Use one production-candidate profile, `SCORECHECK_DWB_ADAPTIVE_FEC`. A healthy
+60-minute gate ends the router qualification; do not run extra profile tests.
+If that gate shows unexplained loss while router CPU and WAN capacity remain
+healthy, run one 15-minute FEC-off comparison. If tunnel queueing remains with
+healthy WANs, run one San Jose endpoint comparison. Do not test WAN Smoothing,
+plain Bonding, or additional buffers unless those bounded diagnostics identify
+a specific unresolved tunnel problem. Restore every intended WAN to its
+production state after any diagnostic.
 
 Dynamic Weighted Bonding can shift traffic away from a degraded link; it
 cannot manufacture throughput. Starlink plus cellular bonding can improve
@@ -569,29 +553,21 @@ objective or need physical evidence. This is not a permanent rejection.
 - Confirm the Mac can leave the event router while remote management continues.
 - Export and hash a post-LAN backup.
 
-### Phase 4: WANs independently with real media
+### Phase 4: WAN readiness
 
-Use physical cameras and real unlisted ScoreCheck outputs, not a synthetic
-media generator or a speed-test result, to qualify each link:
-
-- Starlink alone: carry one real camera first, then the measured camera ramp;
-  record loss, continuity, health-check behavior, public-address changes,
-  Starlink status, and thermal state.
-- Cellular alone: repeat the same real-camera stages; record signal metrics,
-  network mode, tower behavior, allowance counter, and thermal state.
-- Phone hotspot alone when available: repeat the same stages and verify
-  automatic reconnection after hotspot off/on, airplane mode, and phone reboot.
-- Record conservative sustained values from actual media delivery. A web
-  speed-test peak is not an admission result.
+- Confirm Starlink and cellular are healthy and participating in SpeedFusion.
+- Confirm the optional phone hotspot participates when it is present.
+- Record each WAN's signal, latency, loss, and current capacity declaration.
+- Do not run separate per-WAN camera ramps or use a speed-test peak as admission
+  evidence. The full eight-camera gate provides the relevant measurement.
 
 ### Phase 5: SpeedFusion and fail-closed routing
 
-- Compare San Francisco and San Jose SFC endpoints under identical real camera
-  load, then pin the endpoint with better tail latency, loss, and delivery.
-- Build `SCORECHECK_DWB_CONTROL` with every intended WAN at Priority 1.
+- Select the San Francisco SFC endpoint.
+- Build `SCORECHECK_DWB_ADAPTIVE_FEC` with every intended WAN at Priority 1.
 - Apply Dynamic Weighted Bonding, `Fast` detection, Low congestion latency,
   150 ms jitter buffer, 0 ms receive buffer, 250 ms latency cutoff, Smoothing
-  off, FEC off, UDP 4500, and default DF handling.
+  off, Adaptive FEC, UDP 4500, and default DF handling.
 - Apply the two protected camera outbound rules.
 - Enable SpeedFusion traffic optimization and highest-priority SRT QoS.
 - Prove normal traffic remains direct.
@@ -600,24 +576,22 @@ media generator or a speed-test result, to qualify each link:
   impossible.
 - Export and hash a post-routing backup.
 
-### Phase 6: Real-camera ramp
+### Phase 6: Sixty-minute eight-camera gate
 
-No synthetic media workload is required. Use the actual cameras and unlisted
-ScoreCheck outputs:
+Use the eight physical cameras and unlisted ScoreCheck outputs. Do not use a
+synthetic workload or a 2/4/6-camera ramp.
 
-1. Two cameras, one AVKANS H.264 and one Mevo HEVC, for at least 15 minutes.
-2. Four cameras for at least 20 minutes.
-3. Six cameras for at least 30 minutes.
-4. Eight cameras for at least two hours.
-5. Repeat the eight-camera workload for two to four hours with only Adaptive
-   FEC changed. Keep it only if reliability improves and reserve remains.
-6. Hold the winning profile for four hours, then run a 16-18 hour event-length
-   soak with full monitoring and unlisted YouTube outputs.
-7. If a later event profile calls for a Mevo at 1080p60, repeat the relevant ramp
-   with that real 60 fps source and recalculate reserve from the measured
-   payload. A 1080p30 pass does not qualify 1080p60 automatically.
+1. **Preflight, 10 minutes:** start all eight cameras; confirm expected codec,
+   1080p30 profile, source freshness, branches, Egresses, and unlisted YouTube
+   outputs.
+2. **Full load, 40 minutes:** hold all eight streams simultaneously. Sample the
+   router and media path every 30 seconds and visually inspect all eight viewer
+   outputs at the beginning and end.
+3. **Failover, 10 minutes:** briefly remove and restore Starlink, then briefly
+   remove and restore cellular. Confirm the remaining WANs carry the camera
+   path and each restored WAN rejoins without stale queue growth.
 
-At every stage require:
+Require:
 
 - Stable camera association.
 - Positive 1080p30 source bitrate and fresh frames.
@@ -627,31 +601,25 @@ At every stage require:
   failure.
 - Audio/video and scoreboard synchronization.
 - SFC tunnel continuity and known per-link behavior.
-- Measured upload reserve of at least 30% after protection overhead; 50% is
-  preferred where the available WANs can sustain it.
-- No router CPU, thermal, queue, or process-growth signal correlated with
-  viewer degradation.
+- Router CPU below 80% during normal full load; fail if CPU is at least 90% for
+  two consecutive 30-second samples.
+- No sustained queue growth; fail if queue delay exceeds one second for two
+  consecutive samples.
+- No router reboot, thermal warning, tunnel restart, or resource exhaustion.
+- No sustained multi-camera SRT-loss growth or simultaneous disconnect pattern.
 
-### Phase 7: Failure and rejoin matrix
+### Phase 7: Conditional diagnostics
 
-Run these only after the clean eight-camera baseline:
+Do not run an additional failure matrix after a clean gate. If the gate fails,
+classify it before changing anything:
 
-| Test | Required outcome |
+| Finding | Next action |
 | --- | --- |
-| Starlink unplug | Cellular carries the protected camera path; YouTube outputs remain active |
-| Starlink reboot/rejoin | No stale multi-second queue, sustained packet-loss growth, or unrelated camera collapse |
-| Cellular disconnect/rejoin | Starlink carries the path; cellular rejoins without poisoning the scheduler |
-| Phone hotspot off/rejoin | Remaining WANs carry the path; Wi-Fi WAN recovers without manual router changes |
-| SFC endpoint interruption | Camera publishing fails closed; outputs retain slate; reconnect is bounded |
-| Public IP change | No camera reconfiguration and no management loss |
-| Router reboot | Configuration returns exactly, remote management returns, cameras reconnect automatically |
-| InControl unavailable | Local routing and SFC continue; local Web Admin remains available from LAN |
-| Mac removed from event network | Monitoring and router management continue remotely; camera bandwidth is unchanged |
-
-After the control baseline, repeat the eight-camera media section with Adaptive
-FEC. Keep it only if it reduces end-viewer impairment without breaking reserve
-or increasing router instability. WAN Smoothing Normal is a later 30-60 minute
-comparison only if a specific problem remains.
+| Sustained CPU at least 90% or thermal/resource failure | Classify the router as insufficient; do not tune around it |
+| Healthy CPU with WAN congestion | Classify the WAN or venue capacity issue separately |
+| Healthy CPU/WAN with tunnel queueing | Run one San Jose endpoint comparison |
+| Loss with Adaptive FEC | Run one 15-minute FEC-off comparison |
+| One-camera-only failure | Investigate that camera/media path without failing router capacity automatically |
 
 ## Acceptance Gates
 
@@ -662,8 +630,10 @@ The router is production-qualified only when all are true:
 - Factory and final protected backups exist and have integrity hashes.
 - InControl 2FA and read-only API monitoring work without public management
   ports.
-- Starlink and cellular each pass an independent sustained test.
-- The eight-camera physical workload retains at least 30% measured reserve.
+- Starlink and cellular are healthy before the gate and each survives the
+  bounded removal/rejoin check.
+- The 40-minute eight-camera full-load interval completes without router
+  saturation, queue growth, or widespread media loss.
 - Camera traffic is provably fail-closed through SFC.
 - Ordinary traffic remains outside SFC.
 - The Starlink rejoin test does not reproduce the old 11.8 MB / 4.4-5.8 second
@@ -675,6 +645,7 @@ The router is production-qualified only when all are true:
 - Remote operation continues with the Mac disconnected from the event router.
 - The monitor dashboard presents plain-language router, WAN, SFC, client,
   allowance, and media-path status without excessive polling.
+- No additional profile or long-duration test is required after a clean pass.
 
 ## Rollback and Evidence
 

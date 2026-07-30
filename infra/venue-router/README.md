@@ -90,16 +90,17 @@ outbound rules are:
 All other traffic retains the router's normal automatic policy. The initial
 SpeedFusion profile uses Dynamic Weighted Bonding with `Fast` failure detection,
 Low congestion latency, a 150 ms jitter buffer, a 250 ms latency-difference
-cutoff, and both FEC and WAN Smoothing off. The only initial A/B enables Adaptive
-FEC. Test `Faster` detection and WAN Smoothing later and one at a time. These
-settings must be applied and verified through the authenticated SFC profile
-editor when they are not exposed by the supported Router API.
+cutoff, Adaptive FEC, and WAN Smoothing off. Use San Francisco as the initial
+SFC endpoint. A clean 60-minute eight-camera gate ends router qualification;
+test FEC-off or San Jose only when the primary run exposes a specific failure.
+These settings must be applied and verified through the authenticated SFC
+profile editor when they are not exposed by the supported Router API.
 
 The WAN bandwidth fields are ceilings, not measured capacity evidence. Do not
-replace them with a speed-test peak or use them as admission proof. Event
-preflight must record sustained Starlink, cellular, and optional phone-hotspot
-delivery separately with real camera media, then prove the combined camera
-payload retains at least 30% reserve.
+replace them with a speed-test peak or use them as admission proof. During the
+full eight-camera gate, record each WAN's contribution and fail the gate on
+sustained congestion, queue growth, or incomplete camera delivery. Separate
+per-WAN media ramps are not required.
 
 Keep Remote Web Admin over InControl, HTTPS redirect, LAN-only local Web Admin,
 disabled SSH/console, disabled UPnP/NAT-PMP, and an empty port-forward table.
