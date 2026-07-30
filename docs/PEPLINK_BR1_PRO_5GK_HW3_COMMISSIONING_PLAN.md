@@ -23,19 +23,23 @@ The first production profile will be deliberately narrow:
 
 - Wired Starlink on the 2.5 Gbps WAN port.
 - One active internal cellular modem, normally using the T-Mobile SIM.
-- Starlink and cellular both available to one SpeedFusion Connect profile.
-- Dynamic Weighted Bonding with faster link-failure detection.
+- A phone hotspot as a third Wi-Fi WAN when it is available, preferably on a
+  carrier other than T-Mobile.
+- Every intended WAN available to one SpeedFusion Connect profile at Priority
+  1; Dynamic Weighted Bonding still decides how much each link contributes.
+- Dynamic Weighted Bonding with `Fast` link-failure detection for the baseline.
 - No manual WAN Smoothing in the initial baseline.
-- No FEC in the initial baseline; Low FEC is the first measured reliability
-  candidate because its documented 13.3% overhead can fit the existing
-  25-30% reserve target.
+- No FEC in the control profile; Adaptive FEC is the only initial A/B candidate.
 - Only camera publishing traffic is forced through SpeedFusion Connect.
 - Camera publishing fails closed if the SpeedFusion tunnel is unavailable.
 - Operator and ordinary control traffic use normal internet routing.
 - A flat `192.168.50.0/24` LAN for the first qualification.
 - One LAN cable to the PoE switch and no LACP.
 - The three Ubiquiti APs remain the primary camera radio layer.
-- The Peplink Wi-Fi network remains fallback/operator access.
+- The Peplink radios serve Wi-Fi WAN only; their client AP role stays disabled.
+- Six AVKANS cameras remain SRT/H.264 at 1080p30 around 3 Mbps and two Mevo
+  Cores remain SRT/HEVC at 1080p30 for the router qualification.
+- 1080p60 is a later profile test, not part of the router baseline.
 - InControl and supported Peplink APIs provide remote management; no public
   SSH, port forward, static public IP, or on-site Mac is required.
 - No Docker workload on the router during initial production qualification.
@@ -44,6 +48,33 @@ This is a clean rebuild from a settings manifest. Do not import the full binary
 backup from either returned `5GH` HW1 router into the incoming `5GK` HW3 router.
 The backup is evidence and rollback material for the old unit, not a safe
 cross-model image.
+
+## Scope Decisions After Architecture Review
+
+Adopt for the first qualification:
+
+- Stable 8.5.4 firmware baseline when the router arrives on that version.
+- Optional phone hotspot as a third Priority 1 Wi-Fi WAN.
+- Two formal DWB profiles: control and Adaptive FEC.
+- `Fast` detection, Low congestion latency, 150 ms jitter buffer, 0 ms receive
+  buffer, and 250 ms latency-difference cutoff.
+- San Francisco versus San Jose SFC endpoint comparison.
+- Conservative Starlink readmission and camera SRT QoS.
+- Fixed 5 GHz Ubiquiti radio plan with mesh off.
+- 30% minimum measured reserve and an event-length physical soak.
+
+Defer unless the initial evidence requires it:
+
+- VLAN migration and camera Internet allowlists.
+- A new edge collector, SNMPv3, and remote syslog.
+- Router Docker, Tailscale, or a second management system.
+- Plain Bonding and multi-variable buffer tuning.
+- Long WAN Smoothing tests.
+- Synthetic media or network load.
+
+This keeps the test focused on the actual reliability question: whether the
+incoming router, three real WANs, the Ubiquiti radio layer, and eight physical
+cameras can sustain continuous unlisted 1080p program outputs.
 
 ## Material Hardware Facts
 
@@ -55,7 +86,7 @@ The exact current product information establishes these limits:
 | Encrypted SpeedFusion | 200 Mbps | Published ceiling is well above the event payload; physical testing still controls admission |
 | Ethernet | One 2.5 Gbps WAN, two 1 Gbps LAN | Starlink uses WAN; only one LAN connects to the PoE switch |
 | Cellular | One 5G modem, two nano-SIM slots | The SIMs are failover choices, not two simultaneously bonded cellular links |
-| Wi-Fi | Dual-radio 2x2 Wi-Fi 6 | Fallback/operator AP only; external Ubiquiti APs carry cameras |
+| Wi-Fi | Dual-radio 2x2 Wi-Fi 6 | Phone hotspot Wi-Fi WAN only; external Ubiquiti APs carry cameras and operators |
 | Edge storage | 8 GB on HW3 | Available, but not a reason to put monitoring or VPN containers on the critical path yet |
 | Power | 12 V adapter or 802.3at PoE input; 19 W maximum | Put the router and network equipment on measured UPS power |
 | SpeedFusion Connect allowance | 1 TB/year with PrimeCare | Track usage; do not assume unlimited service |
@@ -73,6 +104,7 @@ commissioning.
 flowchart LR
     SL["Starlink terminal"] --> WAN["BR1 Pro 5G HW3\n2.5G WAN"]
     CELL["Internal 5G modem\nSIM A active, SIM B standby"] --> SFC["SpeedFusion Connect\nDynamic Weighted Bonding"]
+    PHONE["Optional phone hotspot\nWi-Fi WAN"] --> SFC
     WAN --> SFC
 
     CAMS["Cameras 1-8"] --> APS["Three Ubiquiti APs"]
@@ -110,15 +142,19 @@ Before applying event settings:
 4. Export a factory-state configuration backup and a supported API snapshot.
 5. Record the firmware and cellular module firmware before upgrading.
 6. If the unit is older than 8.5.4, upgrade to stable 8.5.4 first. Reboot and
-   verify the active slot. Only then upgrade to stable 8.6.0 and verify again.
-   Peplink explicitly requires the 8.5.4 intermediate step for BR1 Pro 5G.
-7. Do not enable automatic firmware changes during event coverage. Pin the
+   verify the active slot. Run the first complete router baseline on 8.5.4.
+7. If the unit already has 8.6.0, do not casually downgrade it. Record 8.6.0 as
+   a test variable and keep its beta features disabled.
+8. After an 8.5.4 baseline passes, a separate bounded upgrade comparison may
+   qualify 8.6.0. Peplink requires the 8.5.4 intermediate step for BR1 Pro 5G.
+9. Do not enable automatic firmware changes during event coverage. Pin the
    version that passed the real-camera qualification.
 
-Firmware 8.6.0 supports this exact hardware, but several new items in its
-release notes remain Beta or RC. Do not enable SpeedFusion Boost, beta
-WireGuard remote access, forced 5G SA Carrier Aggregation, IPv6, or unrelated
-new features in the first production profile.
+Firmware 8.6.0 supports this exact hardware, but it was released on the date
+this plan was prepared and several new items remain Beta or RC. It is not the
+first baseline when a stable 8.5.4 unit is available. On either version, do not
+enable SpeedFusion Boost, beta WireGuard remote access, forced 5G SA Carrier
+Aggregation, IPv6, or unrelated new features in the first production profile.
 
 ### 2. Administrator and remote-management security
 
@@ -167,7 +203,7 @@ Use this fixed wiring:
 | Cellular | Internal modem | SIM A active; SIM B standby if a second carrier is installed |
 | LAN 1 | PoE switch uplink | The only switch uplink |
 | LAN 2 | Disconnected | Do not connect to the same switch |
-| Wi-Fi radios | Fallback/operator SSID | Not the primary camera access layer |
+| Wi-Fi radios | Phone hotspot Wi-Fi WAN | Disable Peplink client AP SSIDs |
 
 Do not enable LACP for the first deployment. Do not connect both LAN ports to
 the same switch. Do not convert the WAN port into LAN. These changes add no
@@ -219,14 +255,22 @@ The Peplink AP Controller manages Peplink APs, not the Ubiquiti Swiss Army Knife
 Ultra units. Ubiquiti RF, channel, retry, association, and roaming telemetry
 must come from the UniFi management path.
 
-Peplink fallback Wi-Fi:
+Initial Ubiquiti radio profile:
 
-- SSID: `BeachVolleyballMedia.com`.
-- Protected existing event credential, never committed to Git.
-- WPA2/WPA3 Personal as previously captured.
-- Both radios enabled only after validating the local regulatory country.
-- No guest/open network.
-- Operator/fallback role only.
+- Wired uplinks and mesh disabled.
+- Camera SSID on 5 GHz.
+- 40 MHz channels, fixed and non-overlapping.
+- Non-DFS channels for the baseline so radar events cannot force a channel
+  move during the router test.
+- Medium transmit power initially.
+- Stationary-camera features such as fast roaming and BSS transition disabled
+  until evidence shows they are needed.
+- Initial camera distribution of 3 / 3 / 2 across the three APs.
+- Preferred RSSI at least -65 dBm, with -70 dBm as the hard qualification floor.
+
+Select the actual channels only after an RF scan in the event location. Do not
+use automatic channel changes during coverage. The Peplink built-in client AP
+role remains disabled; operator access uses the Ubiquiti network.
 
 ### 5. WAN profiles
 
@@ -240,10 +284,11 @@ Initial settings:
 - Starlink integration: enabled when detected correctly.
 - Starlink bypass mode: preferred when the terminal generation supports it,
   but not an acceptance blocker because SFC is outbound and works behind NAT.
-- Health check: DNS Lookup using independent public resolvers.
+- Health check: DNS or HTTP, 5-second interval, 3-second timeout, 3 failures,
+  and 10 recovery successes.
 - MTU: automatic for the first pass.
-- Bandwidth values: conservative sustained measurements, never ISP plan speed
-  or a single speed-test peak.
+- Bandwidth values: initially about 80% of the lower sustained capacity observed
+  with real camera media, never ISP plan speed or a single speed-test peak.
 
 Firmware 8.6 includes Starlink detection and status fixes, but the prior dry
 run proved that a newly returning Starlink path can be harmful before it is
@@ -269,6 +314,7 @@ Initial settings:
 - Network mode and 5G SA carrier aggregation: automatic.
 - Health check: default cellular SmartCheck; do not mark an unhealthy modem
   permanently available by disabling health checks.
+- Failure retries: 3; recovery successes: 5.
 - Data allowance monitor: enabled with the real billing date and allowance.
 - MTU: automatic.
 - Bandwidth values: conservative sustained venue measurement.
@@ -277,6 +323,28 @@ There is one modem. SIM A and SIM B cannot supply two simultaneous bonded
 cellular connections. A second active cellular path would require separate
 hardware exposed as another WAN.
 
+#### Phone hotspot Wi-Fi WAN
+
+When the production phone is available:
+
+- Name: `Phone Hotspot`.
+- Operating role: Wi-Fi WAN only; Peplink client AP SSIDs disabled.
+- Priority: 1.
+- Addressing and routing: DHCP/NAT.
+- Preferred BSSID: unset until reconnect behavior is proven stable.
+- Health check: DNS or HTTP.
+- Failure retries: 3.
+- Recovery successes: 6-8 so a returning hotspot proves stability before it
+  resumes meaningful traffic.
+- Phone externally powered, ventilated, and positioned close to the router.
+- Prefer a carrier other than the internal T-Mobile modem to create an
+  independent failure domain.
+
+The phone is an optional third WAN, not a requirement for initial router login
+or configuration. Its production use requires automatic reconnection after
+hotspot off/on, airplane mode, phone reboot, and a locked-screen hold. Do not
+pin its BSSID unless those tests prove the identity remains stable.
+
 ### 6. SpeedFusion Connect
 
 Initial profile:
@@ -284,32 +352,51 @@ Initial profile:
 | Setting | Initial value | Reason |
 | --- | --- | --- |
 | Service | SpeedFusion Connect | Removes dependence on public venue IP and provides path continuity |
-| Location | Automatic, then pin only if measurements justify it | Avoid an assumed region |
+| Location | Compare San Francisco and San Jose, then pin the winner | Qualify the full venue-to-SFC-to-SFO2 route |
 | Starlink priority | 1 | Active member |
 | Cellular priority | 1 | Active member |
-| Link-failure detection | `Faster` | Existing profile; approximately two-second detection |
+| Phone Wi-Fi WAN priority | 1 when available | Independent third path; DWB may still assign little traffic |
+| Link-failure detection | `Fast` | Safer baseline against false flaps; compare `Faster` later |
 | Traffic distribution | Dynamic Weighted Bonding | Can reduce weight on a degrading link |
 | Congestion latency | Low | Peplink's Starlink starting recommendation |
+| Bufferbloat handling | Enabled | Do not disable congestion response during qualification |
+| Packet loss as congestion | Enabled | Prior simultaneous loss was a valid distress signal |
 | WAN Smoothing | Off | Packet duplication can exceed the upload reserve |
 | FEC | Off for baseline | Establish clean comparison first |
+| Packet jitter buffer | 150 ms | Small reorder allowance; latency is not the priority |
+| Receive buffer | 0 ms | Avoid stacking a second large buffer with SRT recovery |
+| Latency-difference cutoff | 250 ms | Exclude a path that becomes far slower than the best path |
+| Transport | UDP `4500` | Avoid outer TCP head-of-line blocking |
+| Fragmentation | Default / use DF flag | Change only if packet evidence proves an MTU defect |
 | SpeedFusion Boost | Off | Beta in 8.6.0 |
 
-Peplink recommends WAN Smoothing Normal plus Low FEC as a generic stable
-Starlink/cellular profile, but that combination is not automatically correct
-for ScoreCheck. WAN Smoothing duplicates traffic and can approach 2x bandwidth
-at its lowest protection level; Low FEC adds 13.3%. The previous event already
-failed when available upload reserve was too small. Therefore:
+Use only two formal profiles initially:
+
+| Profile | Difference | Purpose |
+| --- | --- | --- |
+| `SCORECHECK_DWB_CONTROL` | FEC off, Smoothing off | Prove raw router, WAN, and DWB behavior |
+| `SCORECHECK_DWB_ADAPTIVE_FEC` | Adaptive FEC on, Smoothing off | Leading reliability candidate |
+
+Peplink recommends protection options for generic Starlink/cellular use, but
+they are not automatically correct for ScoreCheck. WAN Smoothing duplicates
+traffic and can approach 2x bandwidth at its lowest protection level. The
+previous event already failed when available upload reserve was too small.
+Therefore:
 
 1. Establish a clean physical baseline with Dynamic Weighted Bonding and no
    manual protection.
-2. Compare Low FEC using the same real cameras and venue links.
-3. Keep Low FEC if loss/freeze behavior improves and at least 25% sustained
+2. Compare Adaptive FEC using the same real cameras and venue links.
+3. Keep Adaptive FEC if loss/freeze behavior improves and at least 30% sustained
    reserve remains after overhead.
-4. Test WAN Smoothing Normal only after a measured capacity table proves its
-   duplication cannot saturate either the aggregate uplink or the cellular
-   plan. It is a reliability tool, not free bandwidth.
+4. Test WAN Smoothing Normal for only 30-60 minutes if the first two profiles
+   leave a specific dropout problem and capacity can absorb duplication.
 5. Never leave a WAN disabled after a diagnostic comparison. Restore every
    intended event WAN to its documented production state.
+
+Do not add a plain-bonding profile unless both DWB profiles produce evidence
+that DWB itself is the problem. Do not tune jitter, cutoff, endpoint, and FEC
+simultaneously. After the winning profile is stable, compare `Fast` versus
+`Faster` only during controlled WAN loss and rejoin.
 
 Dynamic Weighted Bonding can shift traffic away from a degraded link; it
 cannot manufacture throughput. Starlink plus cellular bonding can improve
@@ -341,6 +428,13 @@ Required proof:
 - When SFC returns, cameras reconnect without manual key or URL changes.
 - The public IP may change without changing camera configuration or remote
   router reachability.
+
+Enable SpeedFusion VPN traffic optimization and create one highest-priority
+custom service for ScoreCheck SRT on UDP destination port `8890`. Keep the RTMP
+compatibility service below SRT unless it is actively used. Do not add
+per-camera bandwidth guarantees in the initial profile; accurate WAN capacity,
+the fail-closed policy, and aggregate SRT priority are enough for the first
+qualification.
 
 ### 8. Monitoring and automation
 
@@ -403,12 +497,16 @@ Do not enable these during the first iteration:
 - SpeedFusion Boost.
 - Beta WireGuard remote-user access.
 - Router-local Tailscale or monitoring Docker containers.
+- A new Pi/mini-PC venue collector, SNMPv3, and remote syslog until the
+  supported API proves a material monitoring gap.
 - IPv6.
 - Forced cellular bands, RAT, SA mode, or carrier aggregation.
-- WAN Smoothing.
+- WAN Smoothing except for the bounded evidence-driven canary.
 - VLAN segmentation.
 - LACP or two LAN uplinks.
-- Wi-Fi WAN.
+- Plain Bonding unless DWB itself is implicated.
+- Synthetic media or synthetic network-load workflows.
+- 1080p60 during the router baseline.
 - Air Monitor as a release gate; firmware 8.6 lists a BR1 Pro 5G issue.
 - Automatic firmware upgrades during events.
 - Public Web Admin, SSH, port forwards, UPnP, or NAT-PMP.
@@ -435,7 +533,8 @@ objective or need physical evidence. This is not a permanent rejection.
 - Record factory firmware, modem firmware, MAC addresses, serial, and license
   state.
 - Export and hash a factory backup.
-- Perform the required 8.5.4 to 8.6.0 firmware path if needed.
+- Upgrade to 8.5.4 only if the factory version is older. Keep 8.5.4 as the
+  first baseline; if the unit already has 8.6.0, record it and do not downgrade.
 - Verify boot, active firmware slot, local login, and factory backup restore
   visibility without actually restoring the old router.
 
@@ -453,9 +552,11 @@ objective or need physical evidence. This is not a permanent rejection.
 ### Phase 3: LAN and radio foundation
 
 - Apply `BVM LAN` at `192.168.50.1/24`.
-- Restore the fallback SSID using the protected credential.
+- Disable the Peplink client AP role and configure the phone hotspot as Wi-Fi
+  WAN when that phone is available.
 - Connect exactly one LAN port to the PoE switch.
 - Connect and identify all three Ubiquiti APs.
+- Apply the measured 5 GHz, 40 MHz, fixed non-DFS, mesh-off AP baseline.
 - Confirm DHCP, DNS, NTP, local management, and camera SSID reachability.
 - Capture MAC-based reservations from the real hardware.
 - Confirm the Mac can leave the event router while remote management continues.
@@ -471,14 +572,21 @@ media generator or a speed-test result, to qualify each link:
   Starlink status, and thermal state.
 - Cellular alone: repeat the same real-camera stages; record signal metrics,
   network mode, tower behavior, allowance counter, and thermal state.
+- Phone hotspot alone when available: repeat the same stages and verify
+  automatic reconnection after hotspot off/on, airplane mode, and phone reboot.
 - Record conservative sustained values from actual media delivery. A web
   speed-test peak is not an admission result.
 
 ### Phase 5: SpeedFusion and fail-closed routing
 
-- Build the SFC profile with both WANs at Priority 1.
-- Apply Dynamic Weighted Bonding, Faster detection, Smoothing off, FEC off.
+- Compare San Francisco and San Jose SFC endpoints under identical real camera
+  load, then pin the endpoint with better tail latency, loss, and delivery.
+- Build `SCORECHECK_DWB_CONTROL` with every intended WAN at Priority 1.
+- Apply Dynamic Weighted Bonding, `Fast` detection, Low congestion latency,
+  150 ms jitter buffer, 0 ms receive buffer, 250 ms latency cutoff, Smoothing
+  off, FEC off, UDP 4500, and default DF handling.
 - Apply the two protected camera outbound rules.
+- Enable SpeedFusion traffic optimization and highest-priority SRT QoS.
 - Prove normal traffic remains direct.
 - Prove camera destinations use SFC.
 - Perform the bounded tunnel-unavailable test and prove direct camera bypass is
@@ -490,14 +598,15 @@ media generator or a speed-test result, to qualify each link:
 No synthetic media workload is required. Use the actual cameras and unlisted
 ScoreCheck outputs:
 
-1. One physical camera for at least 15 minutes.
-2. Two cameras, including both intended camera-model/codec paths, for at least
-   30 minutes.
-3. Four cameras for at least 30 minutes.
-4. Eight cameras for at least two hours before the event-length soak.
-5. Event-length eight-camera soak with all final monitoring and unlisted
-   YouTube outputs.
-6. If the event profile calls for a Mevo at 1080p60, repeat the relevant ramp
+1. Two cameras, one AVKANS H.264 and one Mevo HEVC, for at least 15 minutes.
+2. Four cameras for at least 20 minutes.
+3. Six cameras for at least 30 minutes.
+4. Eight cameras for at least two hours.
+5. Repeat the eight-camera workload for two to four hours with only Adaptive
+   FEC changed. Keep it only if reliability improves and reserve remains.
+6. Hold the winning profile for four hours, then run a 16-18 hour event-length
+   soak with full monitoring and unlisted YouTube outputs.
+7. If a later event profile calls for a Mevo at 1080p60, repeat the relevant ramp
    with that real 60 fps source and recalculate reserve from the measured
    payload. A 1080p30 pass does not qualify 1080p60 automatically.
 
@@ -511,7 +620,8 @@ At every stage require:
   failure.
 - Audio/video and scoreboard synchronization.
 - SFC tunnel continuity and known per-link behavior.
-- Measured upload reserve of at least 25% after protection overhead.
+- Measured upload reserve of at least 30% after protection overhead; 50% is
+  preferred where the available WANs can sustain it.
 - No router CPU, thermal, queue, or process-growth signal correlated with
   viewer degradation.
 
@@ -524,15 +634,17 @@ Run these only after the clean eight-camera baseline:
 | Starlink unplug | Cellular carries the protected camera path; YouTube outputs remain active |
 | Starlink reboot/rejoin | No stale multi-second queue, sustained packet-loss growth, or unrelated camera collapse |
 | Cellular disconnect/rejoin | Starlink carries the path; cellular rejoins without poisoning the scheduler |
+| Phone hotspot off/rejoin | Remaining WANs carry the path; Wi-Fi WAN recovers without manual router changes |
 | SFC endpoint interruption | Camera publishing fails closed; outputs retain slate; reconnect is bounded |
 | Public IP change | No camera reconfiguration and no management loss |
 | Router reboot | Configuration returns exactly, remote management returns, cameras reconnect automatically |
 | InControl unavailable | Local routing and SFC continue; local Web Admin remains available from LAN |
 | Mac removed from event network | Monitoring and router management continue remotely; camera bandwidth is unchanged |
 
-After the baseline, repeat the highest-value media sections with Low FEC. Keep
-it only if it reduces end-viewer impairment without breaking reserve or
-increasing router instability. WAN Smoothing is a later separate comparison.
+After the control baseline, repeat the eight-camera media section with Adaptive
+FEC. Keep it only if it reduces end-viewer impairment without breaking reserve
+or increasing router instability. WAN Smoothing Normal is a later 30-60 minute
+comparison only if a specific problem remains.
 
 ## Acceptance Gates
 
@@ -544,7 +656,7 @@ The router is production-qualified only when all are true:
 - InControl 2FA and read-only API monitoring work without public management
   ports.
 - Starlink and cellular each pass an independent sustained test.
-- The eight-camera physical workload retains at least 25% measured reserve.
+- The eight-camera physical workload retains at least 30% measured reserve.
 - Camera traffic is provably fail-closed through SFC.
 - Ordinary traffic remains outside SFC.
 - The Starlink rejoin test does not reproduce the old 11.8 MB / 4.4-5.8 second
@@ -598,10 +710,15 @@ that the physical router has passed production acceptance before it arrives.
 - [Current BR1 Pro 5G technical specifications](https://www.peplink.com/compare/tech-specs/br1-pro-5g.pdf)
 - [BR1 Pro 5G hardware reference guide](https://download.peplink.com/manual/br1_pro_5g_hardware_reference_guide.pdf)
 - [Peplink firmware downloads and supported models](https://www.peplink.com/support/downloads/firmware/)
+- [Firmware 8.5.4 release notes](https://download.peplink.com/resources/firmware-8.5.4-release-notes.pdf)
 - [Firmware 8.6.0 release notes](https://download.peplink.com/resources/firmware-8.6.0-release-notes.pdf)
 - [InControl 2 user guide](https://download.peplink.com/resources/InControl2_User_Guide.pdf)
 - [Peplink Router API documentation](https://download.peplink.com/resources/Peplink-Router-API-Documentation-for-Firmware-8.5.0.pdf)
+- [Peplink MAX user manual](https://manual.peplink.com/pepwave-max-user-manual/)
+- [SpeedFusion Connect service and allowances](https://www.peplink.com/services/products-sfc/)
 - [SpeedFusion best-practices whitepaper](https://download.peplink.com/resources/whitepaper-speedfusion-and-best-practices-2019.pdf)
 - [Peplink Starlink solutions and guidance](https://www.peplink.com/solutions/starlink-solutions-page/)
 - [Peplink Starlink FAQ](https://download.peplink.com/resources/peplink_with_starlink_faq.pdf)
 - [Peplink service port reference](https://forum.peplink.com/t/overview-of-ports-used-by-peplink-sd-wan-routers-and-other-peplink-services/21023)
+- [Ubiquiti UK-Ultra technical specifications](https://techspecs.ui.com/unifi/wifi/uk-ultra?subcategory=all-wifi)
+- [Ubiquiti Wi-Fi optimization guidance](https://help.ui.com/hc/en-us/articles/221029967-Optimizing-WiFi-Connectivity-and-Reducing-Latency)

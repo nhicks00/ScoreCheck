@@ -59,9 +59,9 @@ normal event preflight and monitoring must continue through `snapshot`.
 
 Do not enable WAN SSH or add a router port forward. It does not solve changing
 WAN addresses or carrier NAT, and it adds an unnecessary management surface.
-The embedded camera network is `BeachVolleyballMedia.com`; after any router
-replacement, verify that Wi-Fi AP is `ON`, both radios advertise the saved SSID,
-and the AP controller reports exactly one online access point.
+The Peplink client AP role is disabled for the production candidate. Its radios
+are reserved for the optional phone-hotspot Wi-Fi WAN. The three wired Ubiquiti
+APs carry camera and operator clients.
 
 ## Peplink production profile
 
@@ -69,12 +69,13 @@ The event topology is intentionally narrow:
 
 - `WAN` is the wired Starlink input and is Priority 1.
 - `Cellular` is the internal modem and is Priority 1.
-- Wi-Fi WAN on both radios and VLAN WAN are disabled.
+- The phone hotspot is an optional Priority 1 Wi-Fi WAN; leave its BSSID unpinned
+  until reboot and reconnect tests pass.
+- VLAN WAN is disabled.
 - One LAN port connects to the PoE switch. Never connect both LAN ports to the
   same switch unless loop prevention has been deliberately configured.
 - The switch feeds the three external Ubiquiti Swiss Army Knife Ultra access
-  points. The Peplink AP remains an operator/fallback network, not the primary
-  camera radio layer.
+  points. The Peplink does not serve camera or operator client Wi-Fi.
 - The flat event network remains `BVM LAN` at `192.168.50.0/24` until the
   switch and all three APs are present for a measured VLAN qualification.
 
@@ -86,18 +87,19 @@ outbound rules are:
 | `ScoreCheck SRT` | persistent ingest Reserved IPv4 | UDP `8890` | Enforced `SFC` | Drop |
 | `ScoreCheck RTMP` | persistent ingest Reserved IPv4 | TCP `1935` | Enforced `SFC` | Drop |
 
-All other traffic retains the router's normal automatic policy. The
-SpeedFusion link-failure detector is `Faster` (approximately two seconds).
-The SFC profile uses Dynamic Weighted Bonding. Leave WAN Smoothing off until a
-physical two-WAN gate proves that its up-to-2x packet duplication fits the event
-upload reserve. Adaptive FEC is the preferred first loss-recovery candidate,
-but must be applied and verified through the authenticated SFC profile editor
-because firmware 8.6 does not expose that profile in the supported Router API.
+All other traffic retains the router's normal automatic policy. The initial
+SpeedFusion profile uses Dynamic Weighted Bonding with `Fast` failure detection,
+Low congestion latency, a 150 ms jitter buffer, a 250 ms latency-difference
+cutoff, and both FEC and WAN Smoothing off. The only initial A/B enables Adaptive
+FEC. Test `Faster` detection and WAN Smoothing later and one at a time. These
+settings must be applied and verified through the authenticated SFC profile
+editor when they are not exposed by the supported Router API.
 
 The WAN bandwidth fields are ceilings, not measured capacity evidence. Do not
 replace them with a speed-test peak or use them as admission proof. Event
-preflight must record sustained Starlink and cellular upload separately, then
-prove the combined camera payload retains the configured reserve.
+preflight must record sustained Starlink, cellular, and optional phone-hotspot
+delivery separately with real camera media, then prove the combined camera
+payload retains at least 30% reserve.
 
 Keep Remote Web Admin over InControl, HTTPS redirect, LAN-only local Web Admin,
 disabled SSH/console, disabled UPnP/NAT-PMP, and an empty port-forward table.
