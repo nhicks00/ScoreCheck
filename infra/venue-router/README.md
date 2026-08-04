@@ -59,9 +59,11 @@ normal event preflight and monitoring must continue through `snapshot`.
 
 Do not enable WAN SSH or add a router port forward. It does not solve changing
 WAN addresses or carrier NAT, and it adds an unnecessary management surface.
-The Peplink client AP role is disabled for the production candidate. Its radios
-are reserved for the optional phone-hotspot Wi-Fi WAN. The three wired Ubiquiti
-APs carry camera and operator clients.
+During first-time onboarding, one native Peplink 5 GHz SSID temporarily carries
+the eight cameras so their real MAC addresses can be identified and reserved.
+After migration, the Peplink client AP is disabled and its radios are available
+for the optional phone-hotspot Wi-Fi WAN. The three wired Ubiquiti APs carry the
+production camera and operator clients.
 
 ## Peplink production profile
 
@@ -95,6 +97,18 @@ SFC endpoint. A clean 60-minute eight-camera gate ends router qualification;
 test FEC-off or San Jose only when the primary run exposes a specific failure.
 These settings must be applied and verified through the authenticated SFC
 profile editor when they are not exposed by the supported Router API.
+
+SpeedFusion Boost remains off for the first baseline. It is intended to improve
+single-session throughput across lossy, high-latency WANs, not rejected as
+harmful. Run one bounded Boost-on comparison only if healthy WAN capacity and
+router resources still produce tunnel throughput collapse; a clean baseline
+needs no extra comparison.
+
+UDP `8890` is the current ScoreCheck SRT contract, not a StreamRun dependency.
+The port number itself has no performance advantage, so changing it would add a
+coordinated camera/cloud migration without improving media delivery. TCP `1935`
+remains the conventional RTMP fallback. Change either only for an actual port
+conflict or provider requirement.
 
 The WAN bandwidth fields are ceilings, not measured capacity evidence. Do not
 replace them with a speed-test peak or use them as admission proof. During the

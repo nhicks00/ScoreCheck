@@ -6,6 +6,8 @@ Target product: `MAX-BR1-PRO-5GK-T-PRM`, hardware revision 3
 
 Prepared: 2026-07-29
 
+Revised: 2026-08-04
+
 Scope: venue router, Starlink, one internal cellular modem, SpeedFusion Connect,
 the PoE switch, three Ubiquiti access points, eight cameras, remote management,
 and router monitoring
@@ -35,8 +37,10 @@ The first production profile will be deliberately narrow:
 - Operator and ordinary control traffic use normal internet routing.
 - A flat `192.168.50.0/24` LAN for the first qualification.
 - One LAN cable to the PoE switch and no LACP.
-- The three Ubiquiti APs remain the primary camera radio layer.
-- The Peplink radios serve Wi-Fi WAN only; their client AP role stays disabled.
+- The Peplink 5 GHz client AP temporarily carries all eight cameras during
+  first-time onboarding, identity capture, and DHCP reservation.
+- The three Ubiquiti APs become the production camera radio layer after that
+  simple onboarding phase; the Peplink client AP is then disabled.
 - Six AVKANS cameras remain SRT/H.264 at 1080p30 around 3 Mbps and two Mevo
   Cores remain SRT/HEVC at 1080p30 for the router qualification.
 - 1080p60 is a later profile test, not part of the router baseline.
@@ -53,8 +57,12 @@ cross-model image.
 
 Adopt for the first qualification:
 
-- Current stable 8.6.0 production baseline, using 8.5.4 only as the required
-  intermediate upgrade when the router arrives on an older version.
+- The latest stable firmware that Peplink offers for the exact HW3 product at
+  commissioning time. Never downgrade. If Peplink's supported updater requires
+  an intermediate release from the factory version, use it only as an upgrade
+  step and qualify only the final latest-stable release.
+- Temporary native Peplink 5 GHz camera onboarding before introducing the
+  external Ubiquiti radio layer.
 - Optional phone hotspot as a third Priority 1 Wi-Fi WAN.
 - One production-candidate DWB profile with Adaptive FEC; FEC-off is only a
   short diagnostic if the primary run fails.
@@ -90,7 +98,7 @@ The exact current product information establishes these limits:
 | Encrypted SpeedFusion | 200 Mbps | Published ceiling is well above the event payload; physical testing still controls admission |
 | Ethernet | One 2.5 Gbps WAN, two 1 Gbps LAN | Starlink uses WAN; only one LAN connects to the PoE switch |
 | Cellular | One 5G modem, two nano-SIM slots | The SIMs are failover choices, not two simultaneously bonded cellular links |
-| Wi-Fi | Dual-radio 2x2 Wi-Fi 6 | Phone hotspot Wi-Fi WAN only; external Ubiquiti APs carry cameras and operators |
+| Wi-Fi | Dual-radio 2x2 Wi-Fi 6 | Native 5 GHz AP for initial camera onboarding; external Ubiquiti APs carry the production camera load |
 | Edge storage | 8 GB on HW3 | Available, but not a reason to put monitoring or VPN containers on the critical path yet |
 | Power | 12 V adapter or 802.3at PoE input; 19 W maximum | Put the router and network equipment on measured UPS power |
 | SpeedFusion Connect allowance | 1 TB/year with PrimeCare | Track usage; do not assume unlimited service |
@@ -145,25 +153,28 @@ Before applying event settings:
    date before accepting the TechnoRV exchange.
 4. Export a factory-state configuration backup and a supported API snapshot.
 5. Record the firmware and cellular module firmware before upgrading.
-6. If the unit is older than 8.5.4, upgrade to stable 8.5.4 first, reboot, and
-   verify the active slot. Peplink requires this intermediate step before
-   upgrading the BR1 Pro 5G to 8.6.0 through Web Admin.
-7. Upgrade to the current stable 8.6.0 release, reboot, verify the active slot,
-   and use 8.6.0 for the production-candidate baseline. If the unit already
-   ships on 8.6.0, do not downgrade it.
-8. Keep newly introduced optional features disabled unless they are separately
-   qualified, including SpeedFusion Boost and WireGuard remote-user access.
-9. Use 8.5.4 after this point only for a documented Peplink support diagnostic
-   or a proven 8.6.0 regression, not as the normal production profile.
+6. Check Peplink's current stable channel and release notes for this exact HW3
+   product on commissioning day.
+7. Upgrade to that latest stable release, reboot, and verify the active slot.
+   Never downgrade a router that already ships on the same or a newer stable
+   supported release.
+8. If the factory version cannot jump directly to the latest stable release,
+   follow only Peplink's documented intermediate upgrade path. An intermediate
+   image is transit, not a qualification target; all testing occurs on the final
+   latest-stable firmware.
+9. Keep unrelated optional features disabled unless they are needed and
+   qualified. WireGuard remote-user access remains outside the initial profile.
 10. Do not enable automatic firmware changes during event coverage. Pin the
    version that passed the real-camera qualification.
 
-Firmware 8.6.0 is Peplink's current stable release for this exact hardware.
-Using it avoids qualifying the event on a version that is already behind the
-supported production release. The release still contains newly introduced
-optional capabilities that are unrelated to ScoreCheck, so do not enable
-SpeedFusion Boost, WireGuard remote access, forced 5G SA Carrier Aggregation,
-IPv6, or other new features in the first production profile.
+Firmware 8.6.0 is the current stable release as of this revision, but the plan
+does not freeze that version in perpetuity. Arrival-day verification controls:
+if Peplink has released a newer stable version for this exact HW3 product, use
+that newer stable version. Do not qualify beta, release-candidate, or early-access
+firmware for production. Newly available features do not become enabled merely
+because the firmware includes them; WireGuard remote access, forced 5G SA
+Carrier Aggregation, IPv6, and other unrelated features remain outside the first
+production profile.
 
 ### 2. Administrator and remote-management security
 
@@ -212,7 +223,7 @@ Use this fixed wiring:
 | Cellular | Internal modem | SIM A active; SIM B standby if a second carrier is installed |
 | LAN 1 | PoE switch uplink | The only switch uplink |
 | LAN 2 | Disconnected | Do not connect to the same switch |
-| Wi-Fi radios | Phone hotspot Wi-Fi WAN | Disable Peplink client AP SSIDs |
+| Wi-Fi radios | Onboarding: native 5 GHz camera AP; production: optional phone-hotspot Wi-Fi WAN | Disable Peplink client AP after camera migration to Ubiquiti |
 
 Do not enable LACP for the first deployment. Do not connect both LAN ports to
 the same switch. Do not convert the WAN port into LAN. These changes add no
@@ -253,6 +264,20 @@ Create DHCP reservations after the actual hardware is attached:
 Do not invent reservations from old client records. Capture each device's real
 MAC address from the incoming router and match it to the physical camera label.
 
+For first-time setup, enable one temporary native Peplink 5 GHz camera SSID and
+connect Cameras 1-8 directly to it. Use this deliberately simple phase to verify
+camera identity, record MAC addresses, create DHCP reservations, and confirm that
+all cameras can publish through the router before adding the switch or external
+APs. Use a fixed non-DFS 5 GHz channel and a camera-compatible WPA2-Personal
+profile; do not change camera protocol, codec, or destination merely for
+onboarding. This phase is not the final production radio qualification.
+
+After reservations and direct-router behavior are verified, connect the PoE
+switch and migrate the cameras to the Ubiquiti camera SSID. Confirm each reserved
+identity survives the move, then disable the Peplink client AP. Configure the
+optional phone hotspot Wi-Fi WAN only after this migration so its radio role does
+not complicate initial camera discovery.
+
 Keep the first qualification flat because VLAN success depends on the exact
 PoE switch model, VLAN trunk support, UniFi controller configuration, and
 camera behavior. After the baseline passes, a separate measured hard cutover
@@ -263,6 +288,21 @@ observed WAN queue problem.
 The Peplink AP Controller manages Peplink APs, not the Ubiquiti Swiss Army Knife
 Ultra units. Ubiquiti RF, channel, retry, association, and roaming telemetry
 must come from the UniFi management path.
+
+For the first AP configuration, Nathan's existing macOS UniFi Network Server is
+acceptable. Once the APs are adopted, create a protected official UniFi API key
+and use the controller's documented Network API for device, client, radio, and
+latest-statistics reads. The APs themselves are not the supported API boundary;
+the UniFi control plane is. This permits direct monitoring without automating
+the dashboard UI while the controller is running.
+
+Do not make the Mac-hosted controller a hidden production dependency. Before a
+real event, either keep that controller deliberately running for telemetry or
+move the same backed-up UniFi site to a supported always-on control plane such as
+a CloudKey, UniFi OS Server, or Official UniFi Hosting. The APs continue their
+last applied configuration if the controller is unavailable, but configuration
+changes and detailed telemetry do not. Do not put the UniFi controller on the
+Peplink router during initial qualification.
 
 Initial Ubiquiti radio profile:
 
@@ -377,7 +417,7 @@ Initial profile:
 | Latency-difference cutoff | 250 ms | Exclude a path that becomes far slower than the best path |
 | Transport | UDP `4500` | Avoid outer TCP head-of-line blocking |
 | Fragmentation | Default / use DF flag | Change only if packet evidence proves an MTU defect |
-| SpeedFusion Boost | Off | Beta in 8.6.0 |
+| SpeedFusion Boost | Off for the first baseline | New transport optimization; isolate its effect before adoption |
 
 Use one production-candidate profile, `SCORECHECK_DWB_ADAPTIVE_FEC`. A healthy
 60-minute gate ends the router qualification; do not run extra profile tests.
@@ -387,6 +427,16 @@ healthy WANs, run one San Jose endpoint comparison. Do not test WAN Smoothing,
 plain Bonding, or additional buffers unless those bounded diagnostics identify
 a specific unresolved tunnel problem. Restore every intended WAN to its
 production state after any diagnostic.
+
+SpeedFusion Boost is designed to sustain single-session throughput over lossy,
+high-latency links such as Starlink and 5G. It is not disabled because it is
+known to be harmful. It stays off for the first baseline so the router's normal
+Dynamic Weighted Bonding behavior can be measured without adding another new
+transport variable. If the baseline shows healthy WAN capacity and router CPU
+but SpeedFusion throughput still collapses under loss or latency, run one
+bounded Boost-on comparison. Adopt it only if camera and viewer evidence improve
+without new instability or excessive SFC usage. A clean baseline requires no
+extra Boost test.
 
 Dynamic Weighted Bonding can shift traffic away from a degraded link; it
 cannot manufacture throughput. Starlink plus cellular bonding can improve
@@ -409,6 +459,15 @@ The RTMP rule remains as a controlled fallback even though the intended camera
 profile is SRT. All other traffic uses the normal automatic policy. This keeps
 operator browsing, InControl, camera setup pages, and software management from
 consuming SFC allowance or interfering with camera admission.
+
+UDP `8890` is retained because the current camera, MediaMTX, firewall, and
+monitoring contracts already use it. It is no longer tied to StreamRun, and the
+port number itself provides no throughput or reliability advantage. Moving SRT
+to another unused UDP port would require coordinated camera and cloud changes
+without improving media quality. TCP `1935` remains the conventional RTMP
+fallback port for the same operational reason. Change either port only for a
+documented firewall conflict or provider requirement, not as a performance
+tuning exercise.
 
 Required proof:
 
@@ -444,11 +503,16 @@ Commissioning automation boundary:
 | SFC distribution/FEC/Smoothing details | Authenticated Web Admin/InControl unless a documented endpoint exists |
 | Outbound-policy creation | Authenticated Web Admin/InControl unless a documented endpoint exists |
 | Configuration backup | Web Admin initially; qualify 8.6 token-based backup API before relying on it |
-| Camera/AP radio telemetry | UniFi plus camera and media monitoring, not the Peplink AP Controller |
+| Camera/AP radio telemetry | Official UniFi Network API plus camera and media monitoring, not the Peplink AP Controller |
 
 Do not reverse-engineer undocumented UI endpoints. Do not open SSH. Do not
 create overlapping OAuth sessions: the observed 8.6 behavior invalidated older
 Remote Web Admin sessions when concurrent token grants were created.
+
+Computer Use through the authenticated Web Admin or InControl interface is an
+accepted commissioning method for settings Peplink does not expose through a
+documented API. Direct API snapshots remain the normal monitoring and repeatable
+control path after commissioning.
 
 Event polling profile:
 
@@ -484,7 +548,8 @@ full physical gate, and only with explicit resource limits and removal proof.
 Do not enable these during the first iteration:
 
 - Full binary restore from the returned 5GH HW1 unit.
-- SpeedFusion Boost.
+- SpeedFusion Boost unless the initial baseline proves the specific lossy or
+  high-latency throughput defect it is intended to address.
 - Beta WireGuard remote-user access.
 - Router-local Tailscale or monitoring Docker containers.
 - A new Pi/mini-PC venue collector, SNMPv3, and remote syslog until the
@@ -523,9 +588,10 @@ objective or need physical evidence. This is not a permanent rejection.
 - Record factory firmware, modem firmware, MAC addresses, serial, and license
   state.
 - Export and hash a factory backup.
-- If the factory version is older than 8.5.4, upgrade to 8.5.4 and verify it as
-  the required intermediate step. Then upgrade to stable 8.6.0 and use 8.6.0
-  for the production-candidate baseline. If it ships on 8.6.0, do not downgrade.
+- Check the current stable channel for the exact HW3 product and upgrade to the
+  newest stable release. Never downgrade. Use an intermediate image only when
+  Peplink's supported upgrade workflow requires it from the factory version;
+  qualify only the final newest-stable release.
 - Verify boot, active firmware slot, local login, and factory backup restore
   visibility without actually restoring the old router.
 
@@ -543,13 +609,16 @@ objective or need physical evidence. This is not a permanent rejection.
 ### Phase 3: LAN and radio foundation
 
 - Apply `BVM LAN` at `192.168.50.1/24`.
-- Disable the Peplink client AP role and configure the phone hotspot as Wi-Fi
-  WAN when that phone is available.
+- Enable a temporary native Peplink 5 GHz camera SSID.
+- Connect Cameras 1-8 directly, identify their real MAC addresses, create DHCP
+  reservations, and verify all eight can publish through the router.
 - Connect exactly one LAN port to the PoE switch.
 - Connect and identify all three Ubiquiti APs.
 - Apply the measured 5 GHz, 40 MHz, fixed non-DFS, mesh-off AP baseline.
+- Migrate cameras to the Ubiquiti SSID and confirm every reserved identity.
+- Disable the Peplink client AP, then configure the optional phone hotspot as
+  Wi-Fi WAN when that phone is available.
 - Confirm DHCP, DNS, NTP, local management, and camera SSID reachability.
-- Capture MAC-based reservations from the real hardware.
 - Confirm the Mac can leave the event router while remote management continues.
 - Export and hash a post-LAN backup.
 
@@ -626,7 +695,8 @@ classify it before changing anything:
 The router is production-qualified only when all are true:
 
 - Exact model, HW3 revision, warranty, PrimeCare, and SFC allowance verified.
-- Stable supported firmware reached through the required upgrade path.
+- Latest stable firmware for the exact HW3 product reached through Peplink's
+  supported upgrade path, with no downgrade.
 - Factory and final protected backups exist and have integrity hashes.
 - InControl 2FA and read-only API monitoring work without public management
   ports.
@@ -688,8 +758,8 @@ that the physical router has passed production acceptance before it arrives.
 - [Current BR1 Pro 5G technical specifications](https://www.peplink.com/compare/tech-specs/br1-pro-5g.pdf)
 - [BR1 Pro 5G hardware reference guide](https://download.peplink.com/manual/br1_pro_5g_hardware_reference_guide.pdf)
 - [Peplink firmware downloads and supported models](https://www.peplink.com/support/downloads/firmware/)
-- [Firmware 8.5.4 release notes](https://download.peplink.com/resources/firmware-8.5.4-release-notes.pdf)
 - [Firmware 8.6.0 release notes](https://download.peplink.com/resources/firmware-8.6.0-release-notes.pdf)
+- [Peplink SpeedFusion technology and Boost](https://www.peplink.com/technology/speedfusion-bonding-technology/)
 - [InControl 2 user guide](https://download.peplink.com/resources/InControl2_User_Guide.pdf)
 - [Peplink Router API documentation](https://download.peplink.com/resources/Peplink-Router-API-Documentation-for-Firmware-8.5.0.pdf)
 - [Peplink MAX user manual](https://manual.peplink.com/pepwave-max-user-manual/)
@@ -700,3 +770,5 @@ that the physical router has passed production acceptance before it arrives.
 - [Peplink service port reference](https://forum.peplink.com/t/overview-of-ports-used-by-peplink-sd-wan-routers-and-other-peplink-services/21023)
 - [Ubiquiti UK-Ultra technical specifications](https://techspecs.ui.com/unifi/wifi/uk-ultra?subcategory=all-wifi)
 - [Ubiquiti Wi-Fi optimization guidance](https://help.ui.com/hc/en-us/articles/221029967-Optimizing-WiFi-Connectivity-and-Reducing-Latency)
+- [Ubiquiti official API overview](https://help.ui.com/hc/en-us/articles/30076656117655-Getting-Started-with-the-Official-UniFi-API)
+- [Ubiquiti self-hosting options](https://help.ui.com/hc/en-us/articles/34210126298775-Self-Hosting-UniFi)
