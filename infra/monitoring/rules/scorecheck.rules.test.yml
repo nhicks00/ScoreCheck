@@ -1132,6 +1132,57 @@ tests:
               summary: One or more venue internet connections are no longer set to Automatic.
               first_action: Keep the cameras streaming. In Speedify, set every Ethernet, Wi-Fi, cellular, tethered, and Starlink connection to Automatic.
 
+  - name: unifi venue wifi pages only for sustained active-event defects
+    interval: 30s
+    input_series:
+      - series: 'scorecheck_unifi_configured'
+        values: '1+0x10'
+      - series: 'scorecheck_unifi_api_up'
+        values: '0+0x10'
+      - series: 'scorecheck_unifi_access_point_online{access_point="scorecheck-ap-1"}'
+        values: '0+0x10'
+      - series: 'scorecheck_unifi_radio_tx_retries_percent{access_point="scorecheck-ap-2",frequency_ghz="5"}'
+        values: '30+0x10'
+      - series: 'scorecheck_court_media_required{court="1"}'
+        values: '1+0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ScoreCheckUniFiTelemetryUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              stage: VENUE
+              issue_code: VENUE_WIFI_STATUS_MISSING
+              root_dependency: venue-wifi
+            exp_annotations:
+              summary: The venue Wi-Fi system stopped reporting access-point status.
+              first_action: Keep the cameras streaming. Check that Official UniFi Hosting is online; do not restart cameras that are still streaming.
+      - eval_time: 1m
+        alertname: ScoreCheckUniFiAccessPointOffline
+        exp_alerts:
+          - exp_labels:
+              access_point: scorecheck-ap-1
+              severity: critical
+              stage: VENUE
+              issue_code: VENUE_WIFI_ACCESS_POINT_OFFLINE
+              root_dependency: venue-wifi
+            exp_annotations:
+              summary: Venue access point scorecheck-ap-1 is offline.
+              first_action: Check power and the network cable for scorecheck-ap-1. Keep connected cameras streaming.
+      - eval_time: 3m
+        alertname: ScoreCheckUniFiRadioRetriesHigh
+        exp_alerts:
+          - exp_labels:
+              access_point: scorecheck-ap-2
+              frequency_ghz: '5'
+              severity: warning
+              stage: VENUE
+              issue_code: VENUE_WIFI_RETRIES_HIGH
+              root_dependency: venue-wifi
+            exp_annotations:
+              summary: Venue access point scorecheck-ap-2 is retransmitting too much Wi-Fi traffic.
+              first_action: Check camera signal and nearby interference for scorecheck-ap-2; do not change stream settings first.
+
   - name: shared SRT congestion recovery waits for browser metrics to age out
     interval: 5s
     input_series:

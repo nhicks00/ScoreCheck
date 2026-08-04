@@ -86,6 +86,42 @@ describe("monitoring configuration", () => {
     expect(parsed.healthchecksChannelAuditIntervalMs).toBe(300_000);
   });
 
+  it("keeps UniFi optional until the three real access points are commissioned", () => {
+    const base = {
+      MONITOR_API_TOKEN: "abcdefghijklmnopqrstuvwxyz",
+      MONITOR_ROUTER_HEARTBEAT_TOKEN: "router-heartbeat-token-long-enough",
+      ALERTMANAGER_WEBHOOK_TOKEN: "zyxwvutsrqponmlkjihgfedcba",
+      MONITOR_BROWSER_HEARTBEAT_SECRET: "browser-heartbeat-secret-that-is-long-enough",
+      MONITOR_PUBLIC_HOST: "monitor.example.test"
+    };
+    expect(loadServiceConfig(base).unifi).toMatchObject({ required: false, configured: false, accessPoints: [] });
+    expect(() => loadServiceConfig({ ...base, MONITOR_UNIFI_REQUIRED: "true" })).toThrow(/requires its API key/);
+    expect(() => loadServiceConfig({ ...base, MONITOR_UNIFI_API_KEY: "partial" })).toThrow(/requires its API key/);
+  });
+
+  it("parses exactly three unique commissioned UniFi access points", () => {
+    const base = {
+      MONITOR_API_TOKEN: "abcdefghijklmnopqrstuvwxyz",
+      MONITOR_ROUTER_HEARTBEAT_TOKEN: "router-heartbeat-token-long-enough",
+      ALERTMANAGER_WEBHOOK_TOKEN: "zyxwvutsrqponmlkjihgfedcba",
+      MONITOR_BROWSER_HEARTBEAT_SECRET: "browser-heartbeat-secret-that-is-long-enough",
+      MONITOR_PUBLIC_HOST: "monitor.example.test",
+      MONITOR_UNIFI_REQUIRED: "true",
+      MONITOR_UNIFI_API_KEY: "unifi-api-key",
+      MONITOR_UNIFI_HOST_ID: "900A6F003011:123456789",
+      MONITOR_UNIFI_SITE_ID: "10000000-0000-4000-8000-000000000001"
+    };
+    const accessPoints = [1, 2, 3].map((number) => ({
+      name: `scorecheck-ap-${number}`,
+      deviceId: `20000000-0000-4000-8000-00000000000${number}`,
+      macAddress: `00:11:22:33:44:0${number}`
+    }));
+    const parsed = loadServiceConfig({ ...base, MONITOR_UNIFI_ACCESS_POINTS_JSON: JSON.stringify(accessPoints) });
+    expect(parsed.unifi).toMatchObject({ required: true, configured: true, hostId: "900A6F003011:123456789", accessPoints });
+    expect(() => loadServiceConfig({ ...base, MONITOR_UNIFI_ACCESS_POINTS_JSON: JSON.stringify(accessPoints.slice(0, 2)) })).toThrow();
+    expect(() => loadServiceConfig({ ...base, MONITOR_UNIFI_ACCESS_POINTS_JSON: JSON.stringify([accessPoints[0], accessPoints[0], accessPoints[2]]) })).toThrow(/unique/);
+  });
+
   it("normalizes API base URLs without a trailing slash", () => {
     const agent = loadAgentConfig({
       MONITOR_AGENT_ID: "agent",

@@ -23,6 +23,7 @@ import { incrementCourtCounter } from "./prometheusCounter.js";
 import { LocalIncidentOutbox } from "./localIncidentOutbox.js";
 import { replayDurableOutbox } from "./durableOutboxReplay.js";
 import { RouterHeartbeatManager } from "./routerHeartbeats.js";
+import { UniFiCollector } from "./unifi.js";
 
 const config = loadServiceConfig();
 const app = express();
@@ -99,6 +100,13 @@ const routerUploadHeadroomBps = new Gauge({ name: "scorecheck_router_upload_head
 const routerUplinkSendBps = new Gauge({ name: "scorecheck_router_uplink_upload_bits_per_second", help: "Current upload throughput by venue uplink.", labelNames: ["uplink", "type", "priority"], registers: [registry] });
 const routerUplinkLatency = new Gauge({ name: "scorecheck_router_uplink_latency_ms", help: "Current tunnel latency by venue uplink.", labelNames: ["uplink", "type", "priority"], registers: [registry] });
 const routerUplinkLoss = new Gauge({ name: "scorecheck_router_uplink_send_loss_ratio", help: "Current send loss ratio by venue uplink.", labelNames: ["uplink", "type", "priority"], registers: [registry] });
+const unifiConfigured = new Gauge({ name: "scorecheck_unifi_configured", help: "Whether the UniFi venue Wi-Fi control plane is commissioned for monitoring.", registers: [registry] });
+const unifiApiUp = new Gauge({ name: "scorecheck_unifi_api_up", help: "Official UniFi API state: 1 reachable, 0 unavailable, -1 not configured or not yet sampled.", registers: [registry] });
+const unifiAccessPointOnline = new Gauge({ name: "scorecheck_unifi_access_point_online", help: "Whether an expected venue access point is online.", labelNames: ["access_point"], registers: [registry] });
+const unifiAccessPointCpu = new Gauge({ name: "scorecheck_unifi_access_point_cpu_utilization_percent", help: "Latest UniFi access-point CPU utilization percentage.", labelNames: ["access_point"], registers: [registry] });
+const unifiAccessPointMemory = new Gauge({ name: "scorecheck_unifi_access_point_memory_utilization_percent", help: "Latest UniFi access-point memory utilization percentage.", labelNames: ["access_point"], registers: [registry] });
+const unifiRadioRetries = new Gauge({ name: "scorecheck_unifi_radio_tx_retries_percent", help: "Latest Wi-Fi transmit retry percentage by access point and radio frequency.", labelNames: ["access_point", "frequency_ghz"], registers: [registry] });
+const unifiConnectedClients = new Gauge({ name: "scorecheck_unifi_connected_clients", help: "Current clients reported by the commissioned UniFi site.", registers: [registry] });
 const runtimes = new Map<string, AgentRuntime>(config.targets.map((target) => [target.id, {
   target,
   snapshot: null,
@@ -124,6 +132,7 @@ const externalDeadMan = new ExternalDeadMan(config);
 const faultGateControl = new FaultGateControl();
 const browserCounterAccumulator = new BrowserCounterAccumulator();
 const routerHeartbeats = new RouterHeartbeatManager();
+const unifiCollector = new UniFiCollector(config.unifi);
 let deadManMaintenanceRunning = false;
 let agentPollRunning = false;
 let outboxFlushRunning = false;
@@ -437,7 +446,8 @@ async function pollAll() {
 async function pollAllOnce() {
   await Promise.all([
     ...config.targets.map((target) => pollAgent(target)),
-    controlPlane.refresh().catch(() => null)
+    controlPlane.refresh().catch(() => null),
+    unifiCollector.refresh()
   ]);
   snapshot = currentSnapshot();
   snapshotGenerated.set(Date.parse(snapshot.generatedAt) / 1_000);
@@ -509,6 +519,23 @@ async function pollAllOnce() {
     routerUplinkSendBps.set(labels, uplink.sendBps);
     setOptionalGauge(routerUplinkLatency, labels, uplink.latencyMs);
     setOptionalGauge(routerUplinkLoss, labels, uplink.lossSendRatio);
+  }
+  const unifi = snapshot.unifi;
+  unifiConfigured.set(unifi.configured ? 1 : 0);
+  unifiApiUp.set(unifi.apiReachable == null ? -1 : unifi.apiReachable ? 1 : 0);
+  unifiConnectedClients.set(unifi.connectedClients);
+  unifiAccessPointOnline.reset();
+  unifiAccessPointCpu.reset();
+  unifiAccessPointMemory.reset();
+  unifiRadioRetries.reset();
+  for (const accessPoint of unifi.accessPoints) {
+    const labels = { access_point: accessPoint.name };
+    unifiAccessPointOnline.set(labels, accessPoint.state === "ONLINE" ? 1 : 0);
+    setOptionalGauge(unifiAccessPointCpu, labels, accessPoint.cpuUtilizationPct);
+    setOptionalGauge(unifiAccessPointMemory, labels, accessPoint.memoryUtilizationPct);
+    for (const radio of accessPoint.radios) {
+      setOptionalGauge(unifiRadioRetries, { ...labels, frequency_ghz: String(radio.frequencyGHz) }, radio.txRetriesPct);
+    }
   }
   for (const court of snapshot.courts) {
     const labels = { court: String(court.courtNumber) };
@@ -596,7 +623,8 @@ function currentSnapshot(): MonitorSnapshot {
     browserThumbnails.metadata(),
     silences,
     faultGateControl.active(),
-    routerHeartbeats.current()
+    routerHeartbeats.current(),
+    unifiCollector.current()
   );
 }
 

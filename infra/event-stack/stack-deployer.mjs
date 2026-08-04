@@ -950,7 +950,7 @@ function verificationCommand(role) {
   if (["compositor", "compositor-spare"].includes(role)) {
     return `${agent} && test \"$(docker inspect bvm-renderer --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')\" = healthy && curl -fsS http://127.0.0.1:3000/api/program/renderer-binding >/dev/null && test \"$(docker inspect bvm-program-warmer --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')\" = healthy && test -s /var/lib/scorecheck-monitoring/program-warmer/state.json && test \"$(docker inspect bvm-egress --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')\" = healthy && curl -fsS http://127.0.0.1:9090/metrics >/dev/null`;
   }
-  if (role === "observability") return `${agent} && cd /opt/scorecheck-monitoring && docker compose ps --status running --quiet | grep -q .`;
+  if (role === "observability") return `${agent} && cd /opt/scorecheck-monitoring && docker compose ps --status running --quiet | grep -q . && docker compose exec -T monitor-service node -e 'if(process.env.MONITOR_UNIFI_REQUIRED!=="true")process.exit(0);fetch("http://127.0.0.1:9110/v1/snapshot",{headers:{authorization:"Bearer "+process.env.MONITOR_API_TOKEN}}).then(async response=>{if(!response.ok)throw new Error("snapshot unavailable");const body=await response.json();if(body.unifi?.state!=="HEALTHY")throw new Error("UniFi venue Wi-Fi is not healthy")}).catch(error=>{console.error(error.message);process.exit(1)})'`;
   throw new Error(`unsupported verification role ${role}`);
 }
 

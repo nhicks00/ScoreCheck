@@ -104,6 +104,7 @@ function idleSnapshot(): MonitorSnapshot {
       phoneChannel: { configured: true, state: "HEALTHY", baselineAttached: true, activeAttached: true, lastSuccessAt: null, lastFailureAt: null }
     },
     router: { state: "UNKNOWN", sampledAt: null, receivedAt: null, ageMs: null, speedify: null, routing: null, cameraWifi: null, host: null, uplinks: [] },
+    unifi: { state: "NOT_APPLICABLE", required: false, configured: false, apiReachable: null, sampledAt: null, lastSuccessAt: null, lastFailureAt: null, siteId: null, expectedAccessPoints: 0, onlineAccessPoints: 0, connectedClients: 0, accessPoints: [], clients: [], problems: [] },
     courts: [{
       courtNumber: 4,
       overallState: "HEALTHY",

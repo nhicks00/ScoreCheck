@@ -121,7 +121,13 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     YOUTUBE_CLIENT_ID: z.string().default(""),
     YOUTUBE_CLIENT_SECRET: z.string().default(""),
     YOUTUBE_REFRESH_TOKEN: z.string().default(""),
-    YOUTUBE_MONITOR_INTERVAL_MS: z.coerce.number().int().min(30_000).max(300_000).default(60_000)
+    YOUTUBE_MONITOR_INTERVAL_MS: z.coerce.number().int().min(30_000).max(300_000).default(60_000),
+    MONITOR_UNIFI_REQUIRED: z.enum(["true", "false"]).default("false"),
+    MONITOR_UNIFI_API_KEY: z.string().default(""),
+    MONITOR_UNIFI_HOST_ID: z.string().default(""),
+    MONITOR_UNIFI_SITE_ID: z.string().default(""),
+    MONITOR_UNIFI_ACCESS_POINTS_JSON: z.string().default(""),
+    MONITOR_UNIFI_POLL_INTERVAL_MS: z.coerce.number().int().min(15_000).max(300_000).default(30_000)
   });
   const parsed = schema.parse(env);
   if (Boolean(parsed.SUPABASE_URL) !== Boolean(parsed.SUPABASE_SERVICE_ROLE_KEY)) {
@@ -142,6 +148,7 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
   if (deadManValues.length !== 0 && deadManValues.length !== 5) {
     throw new Error("Healthchecks dead-man monitoring requires both ping URLs, both check ids, and the write API key together.");
   }
+  const unifi = parseUniFiConfig(parsed);
   return {
     token: parsed.MONITOR_API_TOKEN,
     routerHeartbeatToken: parsed.MONITOR_ROUTER_HEARTBEAT_TOKEN,
@@ -174,7 +181,83 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     youtubeClientId: parsed.YOUTUBE_CLIENT_ID.trim() || null,
     youtubeClientSecret: parsed.YOUTUBE_CLIENT_SECRET.trim() || null,
     youtubeRefreshToken: parsed.YOUTUBE_REFRESH_TOKEN.trim() || null,
-    youtubeMonitorIntervalMs: parsed.YOUTUBE_MONITOR_INTERVAL_MS
+    youtubeMonitorIntervalMs: parsed.YOUTUBE_MONITOR_INTERVAL_MS,
+    unifi
+  };
+}
+
+export type UniFiAccessPointBinding = {
+  name: string;
+  deviceId: string;
+  macAddress: string;
+};
+
+export type UniFiConfig = {
+  required: boolean;
+  configured: boolean;
+  apiKey: string | null;
+  hostId: string | null;
+  siteId: string | null;
+  accessPoints: UniFiAccessPointBinding[];
+  pollIntervalMs: number;
+};
+
+function parseUniFiConfig(parsed: {
+  MONITOR_UNIFI_REQUIRED: "true" | "false";
+  MONITOR_UNIFI_API_KEY: string;
+  MONITOR_UNIFI_HOST_ID: string;
+  MONITOR_UNIFI_SITE_ID: string;
+  MONITOR_UNIFI_ACCESS_POINTS_JSON: string;
+  MONITOR_UNIFI_POLL_INTERVAL_MS: number;
+}): UniFiConfig {
+  const required = parsed.MONITOR_UNIFI_REQUIRED === "true";
+  const raw = {
+    apiKey: parsed.MONITOR_UNIFI_API_KEY.trim(),
+    hostId: parsed.MONITOR_UNIFI_HOST_ID.trim(),
+    siteId: parsed.MONITOR_UNIFI_SITE_ID.trim(),
+    accessPoints: parsed.MONITOR_UNIFI_ACCESS_POINTS_JSON.trim()
+  };
+  const configuredValues = Object.values(raw).filter(Boolean).length;
+  if (configuredValues === 0 && !required) {
+    return {
+      required,
+      configured: false,
+      apiKey: null,
+      hostId: null,
+      siteId: null,
+      accessPoints: [],
+      pollIntervalMs: parsed.MONITOR_UNIFI_POLL_INTERVAL_MS
+    };
+  }
+  if (configuredValues !== 4) throw new Error("UniFi monitoring requires its API key, host id, site id, and access-point bindings together.");
+  if (!/^[A-Za-z0-9:._-]{10,256}$/.test(raw.hostId)) throw new Error("MONITOR_UNIFI_HOST_ID is invalid.");
+  const uuid = z.string().uuid();
+  const siteId = uuid.parse(raw.siteId);
+  let value: unknown;
+  try {
+    value = JSON.parse(raw.accessPoints);
+  } catch {
+    throw new Error("MONITOR_UNIFI_ACCESS_POINTS_JSON must be valid JSON.");
+  }
+  const bindingSchema = z.object({
+    name: z.string().trim().min(1).max(40).regex(/^[a-zA-Z0-9_.-]+$/),
+    deviceId: uuid,
+    macAddress: z.string().trim().toLowerCase().regex(/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/)
+  }).strict();
+  const accessPoints = z.array(bindingSchema).length(3).parse(value);
+  if (new Set(accessPoints.map((entry) => entry.name)).size !== accessPoints.length
+    || new Set(accessPoints.map((entry) => entry.deviceId)).size !== accessPoints.length
+    || new Set(accessPoints.map((entry) => entry.macAddress)).size !== accessPoints.length) {
+    throw new Error("UniFi access-point names, device ids, and MAC addresses must be unique.");
+  }
+  return {
+    required,
+    configured: true,
+    apiKey: raw.apiKey,
+    hostId: raw.hostId,
+    siteId,
+    accessPoints,
+    pollIntervalMs: parsed.MONITOR_UNIFI_POLL_INTERVAL_MS
   };
 }
 

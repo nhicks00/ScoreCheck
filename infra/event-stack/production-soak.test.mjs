@@ -215,6 +215,14 @@ test("accepts an idle twelve-host baseline with all cameras off", () => {
   assert.deepEqual(productionIdleProblems(snapshot({ active: false }), venue, startedMs), []);
 });
 
+test("requires healthy commissioned UniFi access points without making uncommissioned rehearsals depend on them", () => {
+  const current = snapshot({ active: false });
+  current.unifi = { required: true, state: "DEGRADED" };
+  assert.ok(productionIdleProblems(current, venue, startedMs).includes("venue Wi-Fi access points are not healthy in UniFi"));
+  current.unifi.required = false;
+  assert.deepEqual(productionIdleProblems(current, venue, startedMs), []);
+});
+
 test("does not mistake an expired browser heartbeat for an active idle-baseline reader", () => {
   const idle = snapshot({ active: false, sampledMs: startedMs });
   idle.courts[0].browser = browser(1, startedMs - 60_000, 0);

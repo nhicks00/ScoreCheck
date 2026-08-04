@@ -1211,6 +1211,7 @@ function commonProblems(snapshot, nowMs) {
   if ((snapshot?.incidents ?? []).length !== 0) problems.push("monitor has an active incident");
   if ((snapshot?.faultGates ?? []).length !== 0) problems.push("monitor has an armed fault gate");
   if (!snapshot?.notifications?.pushover?.configured) problems.push("Pushover monitoring is not configured");
+  if (snapshot?.unifi?.required && snapshot.unifi.state !== "HEALTHY") problems.push("venue Wi-Fi access points are not healthy in UniFi");
   if (!Array.isArray(snapshot?.courts) || snapshot.courts.length !== 8) problems.push("monitor snapshot does not contain exactly eight cameras");
   return problems;
 }

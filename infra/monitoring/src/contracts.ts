@@ -639,6 +639,47 @@ export type RouterMonitorSnapshot = {
   uplinks: RouterUplinkSnapshot[];
 };
 
+export type UniFiMonitorSnapshot = {
+  state: HealthState;
+  required: boolean;
+  configured: boolean;
+  apiReachable: boolean | null;
+  sampledAt: string | null;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  siteId: string | null;
+  expectedAccessPoints: number;
+  onlineAccessPoints: number;
+  connectedClients: number;
+  accessPoints: Array<{
+    name: string;
+    deviceId: string;
+    macAddress: string;
+    model: string | null;
+    firmwareVersion: string | null;
+    state: string;
+    ipAddress: string | null;
+    cpuUtilizationPct: number | null;
+    memoryUtilizationPct: number | null;
+    txRateBps: number | null;
+    rxRateBps: number | null;
+    lastHeartbeatAt: string | null;
+    radios: Array<{
+      frequencyGHz: number;
+      txRetriesPct: number | null;
+    }>;
+  }>;
+  clients: Array<{
+    id: string;
+    name: string;
+    macAddress: string | null;
+    ipAddress: string | null;
+    type: string;
+    uplinkDeviceId: string | null;
+  }>;
+  problems: string[];
+};
+
 export type MonitorSnapshot = {
   version: typeof MONITORING_CONTRACT_VERSION;
   generatedAt: string;
@@ -658,6 +699,7 @@ export type MonitorSnapshot = {
   notifications: NotificationHealth;
   deadMan: DeadManHealth;
   router: RouterMonitorSnapshot;
+  unifi: UniFiMonitorSnapshot;
   courts: CourtMonitorSnapshot[];
   agents: Array<{
     agentId: string;

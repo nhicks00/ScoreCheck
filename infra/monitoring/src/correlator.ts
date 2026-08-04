@@ -1,4 +1,4 @@
-import { MONITORING_CONTRACT_VERSION, worstHealthState, type AgentSnapshot, type BrowserHeartbeatSnapshot, type BrowserThumbnailMetadata, type CameraContentSnapshot, type ControlPlaneSnapshot, type CourtExpectation, type DeadManHealth, type FfmpegBranchSnapshot, type HealthState, type IncidentSnapshot, type MediaPathSnapshot, type MonitoringFaultGate, type MonitoringSilence, type MonitorSnapshot, type MonitoringStage, type NotificationHealth, type RouterMonitorSnapshot, type StageHealth, type YouTubeMonitorSnapshot } from "./contracts.js";
+import { MONITORING_CONTRACT_VERSION, worstHealthState, type AgentSnapshot, type BrowserHeartbeatSnapshot, type BrowserThumbnailMetadata, type CameraContentSnapshot, type ControlPlaneSnapshot, type CourtExpectation, type DeadManHealth, type FfmpegBranchSnapshot, type HealthState, type IncidentSnapshot, type MediaPathSnapshot, type MonitoringFaultGate, type MonitoringSilence, type MonitorSnapshot, type MonitoringStage, type NotificationHealth, type RouterMonitorSnapshot, type StageHealth, type UniFiMonitorSnapshot, type YouTubeMonitorSnapshot } from "./contracts.js";
 import { emptyRouterSnapshot } from "./routerHeartbeats.js";
 import type { AgentTarget } from "./config.js";
 import { faultGateExpectation, programBrowserIsRequired } from "./faultGateControl.js";
@@ -29,7 +29,8 @@ export function buildMonitorSnapshot(
   thumbnails = new Map<number, BrowserThumbnailMetadata>(),
   silences: MonitoringSilence[] = [],
   faultGates: MonitoringFaultGate[] = [],
-  router: RouterMonitorSnapshot = emptyRouterSnapshot()
+  router: RouterMonitorSnapshot = emptyRouterSnapshot(),
+  unifi: UniFiMonitorSnapshot = emptyUniFiSnapshot()
 ): MonitorSnapshot {
   const agents = targets.map((target) => {
     const runtime = runtimes.get(target.id);
@@ -140,11 +141,31 @@ export function buildMonitorSnapshot(
     notifications,
     deadMan,
     router,
+    unifi,
     courts,
     agents,
     incidents,
     silences,
     faultGates
+  };
+}
+
+function emptyUniFiSnapshot(): UniFiMonitorSnapshot {
+  return {
+    state: "NOT_APPLICABLE",
+    required: false,
+    configured: false,
+    apiReachable: null,
+    sampledAt: null,
+    lastSuccessAt: null,
+    lastFailureAt: null,
+    siteId: null,
+    expectedAccessPoints: 0,
+    onlineAccessPoints: 0,
+    connectedClients: 0,
+    accessPoints: [],
+    clients: [],
+    problems: []
   };
 }
 

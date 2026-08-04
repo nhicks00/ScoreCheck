@@ -267,6 +267,42 @@ groups:
           summary: "One or more venue internet connections are no longer set to Automatic."
           first_action: "Keep the cameras streaming. In Speedify, set every Ethernet, Wi-Fi, cellular, tethered, and Starlink connection to Automatic."
 
+      - alert: ScoreCheckUniFiTelemetryUnavailable
+        expr: (scorecheck_unifi_configured == 1) and on() (scorecheck_unifi_api_up == 0) and on() (sum(scorecheck_court_media_required) > 0)
+        for: 2m
+        labels:
+          severity: warning
+          stage: VENUE
+          issue_code: VENUE_WIFI_STATUS_MISSING
+          root_dependency: venue-wifi
+        annotations:
+          summary: "The venue Wi-Fi system stopped reporting access-point status."
+          first_action: "Keep the cameras streaming. Check that Official UniFi Hosting is online; do not restart cameras that are still streaming."
+
+      - alert: ScoreCheckUniFiAccessPointOffline
+        expr: (scorecheck_unifi_access_point_online == 0) and on() (sum(scorecheck_court_media_required) > 0)
+        for: 30s
+        labels:
+          severity: critical
+          stage: VENUE
+          issue_code: VENUE_WIFI_ACCESS_POINT_OFFLINE
+          root_dependency: venue-wifi
+        annotations:
+          summary: "Venue access point {{ $labels.access_point }} is offline."
+          first_action: "Check power and the network cable for {{ $labels.access_point }}. Keep connected cameras streaming."
+
+      - alert: ScoreCheckUniFiRadioRetriesHigh
+        expr: (scorecheck_unifi_radio_tx_retries_percent > 25) and on() (sum(scorecheck_court_media_required) > 0)
+        for: 2m
+        labels:
+          severity: warning
+          stage: VENUE
+          issue_code: VENUE_WIFI_RETRIES_HIGH
+          root_dependency: venue-wifi
+        annotations:
+          summary: "Venue access point {{ $labels.access_point }} is retransmitting too much Wi-Fi traffic."
+          first_action: "Check camera signal and nearby interference for {{ $labels.access_point }}; do not change stream settings first."
+
       - alert: ScoreCheckProgramBrowserMissing
         expr: (scorecheck_program_browser_heartbeat_fresh == 0) and on(court) (scorecheck_program_browser_required == 1)
         for: 15s

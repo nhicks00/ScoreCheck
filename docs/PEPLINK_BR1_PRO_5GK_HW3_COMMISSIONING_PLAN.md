@@ -289,20 +289,28 @@ The Peplink AP Controller manages Peplink APs, not the Ubiquiti Swiss Army Knife
 Ultra units. Ubiquiti RF, channel, retry, association, and roaming telemetry
 must come from the UniFi management path.
 
-For the first AP configuration, Nathan's existing macOS UniFi Network Server is
-acceptable. Once the APs are adopted, create a protected official UniFi API key
-and use the controller's documented Network API for device, client, radio, and
-latest-statistics reads. The APs themselves are not the supported API boundary;
-the UniFi control plane is. This permits direct monitoring without automating
-the dashboard UI while the controller is running.
+Use Official UniFi Hosting as the persistent controller for these three APs.
+This removes the MacBook from event operation without adding a CloudKey or a
+per-event controller Droplet. The controller remains available between events;
+only the APs and PoE equipment power down. The first adoption and radio setup may
+use the authenticated UniFi UI, but routine event readiness and evidence use the
+official API from ScoreCheck monitoring.
 
-Do not make the Mac-hosted controller a hidden production dependency. Before a
-real event, either keep that controller deliberately running for telemetry or
-move the same backed-up UniFi site to a supported always-on control plane such as
-a CloudKey, UniFi OS Server, or Official UniFi Hosting. The APs continue their
-last applied configuration if the controller is unavailable, but configuration
-changes and detailed telemetry do not. Do not put the UniFi controller on the
-Peplink router during initial qualification.
+Create one protected official UniFi API key after the hosted site exists. Store
+the host id, site id, and exact device UUID/MAC binding for all three APs in the
+protected monitoring environment. The monitor reads device state, firmware,
+latest CPU/memory/uplink/radio statistics, and connected-client association.
+The APs themselves are not the supported API boundary; the hosted UniFi control
+plane is. Do not put the UniFi controller on the Peplink router or a temporary
+ScoreCheck Droplet.
+
+The APs continue their last applied configuration if the hosted controller is
+temporarily unreachable, so a controller outage must not stop camera media.
+Monitoring reports that outage separately and tells the operator not to restart
+cameras that are still streaming. Once the real site is commissioned, set
+`MONITOR_UNIFI_REQUIRED=true`; production readiness then fails closed unless all
+three commissioned APs are online and healthy. Rehearsals without physical APs
+leave that flag false.
 
 Initial Ubiquiti radio profile:
 
@@ -771,4 +779,5 @@ that the physical router has passed production acceptance before it arrives.
 - [Ubiquiti UK-Ultra technical specifications](https://techspecs.ui.com/unifi/wifi/uk-ultra?subcategory=all-wifi)
 - [Ubiquiti Wi-Fi optimization guidance](https://help.ui.com/hc/en-us/articles/221029967-Optimizing-WiFi-Connectivity-and-Reducing-Latency)
 - [Ubiquiti official API overview](https://help.ui.com/hc/en-us/articles/30076656117655-Getting-Started-with-the-Official-UniFi-API)
+- [Ubiquiti Official UniFi Hosting setup](https://help.ui.com/hc/en-us/articles/4415364143511-Getting-Started-with-Official-UniFi-Hosting)
 - [Ubiquiti self-hosting options](https://help.ui.com/hc/en-us/articles/34210126298775-Self-Hosting-UniFi)
