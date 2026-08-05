@@ -376,9 +376,48 @@ export class ProductionSoakRuntime {
         problems.push(...bitrateStep.problems);
         if (includeProvider && !(await this.sentinel.inspect(state.sentinel.output))) problems.push("external platform sentinel is not running");
         if (includeProvider && !(await this.criticalLogs.inspect(state.criticalLogs.output))) problems.push("external critical-log exporter is not running");
+        const supervisorActions = [];
+        let adoptedHostRecovery = false;
+        for (const camera of this.venue.activeCameras) {
+          try {
+            const adoption = await reconcileHostRecoveredEgress({
+              egress: this.egress,
+              snapshot,
+              current: state.egress[camera],
+              host: compositorHost(this.manifest, this.lifecycleState, camera),
+              court: camera,
+              profile: state.profiles[camera].profile,
+              owner: egressOwner(state, camera),
+              nowMs: observedMs
+            });
+            if (!adoption.adopted) continue;
+            state.egress[camera] = adoption.replacement;
+            const completed = {
+              type: "host-local-recovery-adopted",
+              camera,
+              oldEgressId: adoption.oldEgressId,
+              replacementEgressId: adoption.replacement.id,
+              observedAt: new Date(observedMs).toISOString(),
+              status: "COMPLETED"
+            };
+            state.supervisor.history.push(completed);
+            supervisorActions.push(completed);
+            adoptedHostRecovery = true;
+          } catch (error) {
+            const failure = {
+              type: "host-local-recovery-adoption",
+              camera,
+              observedAt: new Date(observedMs).toISOString(),
+              status: "REJECTED",
+              error: safeError(error)
+            };
+            supervisorActions.push(failure);
+            problems.push(`Camera ${camera} host-local Egress recovery could not be adopted: ${failure.error}`);
+          }
+        }
+        if (adoptedHostRecovery) await writeState(statePath, state);
         const supervisorStep = programSupervisorStep(state.supervisor, snapshot, this.venue.activeCameras, observedMs);
         state.supervisor = supervisorStep.state;
-        const supervisorActions = [];
         for (const action of supervisorStep.actions) {
           if (action.type === "exhausted") {
             supervisorActions.push({ ...action, observedAt: new Date(observedMs).toISOString(), status: "FAILED_CLOSED" });
@@ -670,6 +709,23 @@ export async function recoverOwnedProgramEgress({ egress, host, court, profile, 
   }
   if (active[0].id === oldEgressId) return egress.restartOwned({ host, court, profile, owner, egressId: oldEgressId });
   return { ...await egress.reconcileOwned({ host, court, profile, owner, expectedId: active[0].id }), adopted: true };
+}
+
+export async function reconcileHostRecoveredEgress({ egress, snapshot, current, host, court, profile, owner, nowMs = Date.now() }) {
+  if (!current?.id) throw new Error(`Camera ${court} current owned Egress id is missing`);
+  const agent = (snapshot?.agents ?? []).find((entry) => entry.role === "compositor" && entry.assignedCourts?.includes(court));
+  const supervisor = agent?.egressSupervisor;
+  if (!supervisor?.egressId || supervisor.egressId === current.id) return { adopted: false, replacement: current };
+  if (!freshSupervisor(supervisor, nowMs) || !["HEALTHY", "RECOVERED"].includes(supervisor.status)
+    || supervisor.court !== court || !supervisor.generationKey) {
+    throw new Error(`Camera ${court} replacement Egress telemetry is not fresh and valid`);
+  }
+  const replacement = await egress.reconcileOwned({ host, court, profile, owner, expectedId: supervisor.egressId });
+  return {
+    adopted: true,
+    oldEgressId: current.id,
+    replacement: { ...replacement, host, profile, adopted: true }
+  };
 }
 
 export async function ensureStartupObserver({ state, statePath, key, runtime, evidenceRoot, start, now = Date.now, persist = writeState }) {

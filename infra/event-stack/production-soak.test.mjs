@@ -18,6 +18,7 @@ import {
   productionProviderProblems,
   productionRawProblems,
   productionRouterPreflightProblems,
+  reconcileHostRecoveredEgress,
   recoverOwnedProgramEgress,
   sourceBitrateWindowStep,
   productionSnapshotProblems,
@@ -100,6 +101,115 @@ test("recycles an idle worker before replaying an interrupted owned browser reco
   });
   assert.equal(replacement.id, "EG_replacement");
   assert.deepEqual(calls, ["recycle:198.51.100.1", "start:198.51.100.1:1"]);
+});
+
+test("adopts a host-local Egress recovery only after exact ownership reconciliation", async () => {
+  const current = { id: "EG_old", host: "198.51.100.1", profile: "1080p30" };
+  const monitor = snapshot();
+  monitor.agents.find((entry) => entry.assignedCourts?.includes(1)).egressSupervisor = {
+    ...monitor.agents.find((entry) => entry.assignedCourts?.includes(1)).egressSupervisor,
+    status: "RECOVERED",
+    egressId: "EG_replacement"
+  };
+  const calls = [];
+  const adoption = await reconcileHostRecoveredEgress({
+    egress: {
+      reconcileOwned: async (value) => {
+        calls.push(value);
+        return { id: "EG_replacement", owner: { outputGeneration: "run-1" } };
+      }
+    },
+    snapshot: monitor,
+    current,
+    host: "198.51.100.1",
+    court: 1,
+    profile: "1080p30",
+    owner: { event: "event-test", destinationId: "broadcast-1", destinationRole: "primary", outputGeneration: "run-1" },
+    nowMs: startedMs
+  });
+  assert.equal(adoption.adopted, true);
+  assert.equal(adoption.oldEgressId, "EG_old");
+  assert.equal(adoption.replacement.id, "EG_replacement");
+  assert.equal(adoption.replacement.host, "198.51.100.1");
+  assert.equal(adoption.replacement.profile, "1080p30");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].expectedId, "EG_replacement");
+});
+
+test("does not reconcile an unchanged host-local Egress id", async () => {
+  let calls = 0;
+  const current = { id: "EG_Camera1", host: "198.51.100.1", profile: "1080p30" };
+  const adoption = await reconcileHostRecoveredEgress({
+    egress: { reconcileOwned: async () => { calls += 1; } },
+    snapshot: snapshot(),
+    current,
+    host: "198.51.100.1",
+    court: 1,
+    profile: "1080p30",
+    owner: { event: "event-test" },
+    nowMs: startedMs
+  });
+  assert.equal(adoption.adopted, false);
+  assert.equal(adoption.replacement, current);
+  assert.equal(calls, 0);
+});
+
+test("rejects stale or unverified host-local Egress replacement telemetry", async () => {
+  const monitor = snapshot();
+  const supervisor = monitor.agents.find((entry) => entry.assignedCourts?.includes(1)).egressSupervisor;
+  supervisor.egressId = "EG_replacement";
+  supervisor.observedAt = new Date(startedMs - 30_000).toISOString();
+  await assert.rejects(() => reconcileHostRecoveredEgress({
+    egress: { reconcileOwned: async () => assert.fail("stale telemetry must not reach ownership reconciliation") },
+    snapshot: monitor,
+    current: { id: "EG_old" },
+    host: "198.51.100.1",
+    court: 1,
+    profile: "1080p30",
+    owner: { event: "event-test" },
+    nowMs: startedMs
+  }), /replacement Egress telemetry is not fresh and valid/u);
+
+  supervisor.observedAt = new Date(startedMs).toISOString();
+  await assert.rejects(() => reconcileHostRecoveredEgress({
+    egress: { reconcileOwned: async () => { throw new Error("owner outputGeneration changed"); } },
+    snapshot: monitor,
+    current: { id: "EG_old" },
+    host: "198.51.100.1",
+    court: 1,
+    profile: "1080p30",
+    owner: { event: "event-test" },
+    nowMs: startedMs
+  }), /owner outputGeneration changed/u);
+});
+
+test("uses the adopted host-local Egress id for a later central browser recovery", async () => {
+  const monitor = snapshot();
+  monitor.agents.find((entry) => entry.assignedCourts?.includes(1)).egressSupervisor.egressId = "EG_replacement";
+  const adoption = await reconcileHostRecoveredEgress({
+    egress: { reconcileOwned: async () => ({ id: "EG_replacement" }) },
+    snapshot: monitor,
+    current: { id: "EG_old" },
+    host: "198.51.100.1",
+    court: 1,
+    profile: "1080p30",
+    owner: { event: "event-test" },
+    nowMs: startedMs
+  });
+  const calls = [];
+  const recovered = await recoverOwnedProgramEgress({
+    egress: {
+      listActive: async () => [{ id: "EG_replacement" }],
+      restartOwned: async (value) => { calls.push(value); return { id: "EG_central" }; }
+    },
+    host: "198.51.100.1",
+    court: 1,
+    profile: "1080p30",
+    owner: { event: "event-test" },
+    oldEgressId: adoption.replacement.id
+  });
+  assert.equal(recovered.id, "EG_central");
+  assert.equal(calls[0].egressId, "EG_replacement");
 });
 
 test("retries bounded transient monitor reads but not authentication failures", async () => {
