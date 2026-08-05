@@ -9,6 +9,7 @@ cp "$SCRIPT_DIR/egress-supervisor.sh" "$SCRIPT_DIR/start-court.sh" "$SCRIPT_DIR/
 printf 'services: {}\n' >"$FIXTURE/docker-compose.yml"
 
 printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$FIXTURE/bin/flock"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$FIXTURE/bin/sleep"
 ln -s "$(command -v jq)" "$FIXTURE/bin/jq"
 ln -s "$(command -v openssl)" "$FIXTURE/bin/openssl"
 
@@ -56,11 +57,15 @@ cat >"$FIXTURE/bin/curl" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "$*" == *'/metrics'* ]]; then
-  cat <<'METRICS'
+  if [[ -f "$MOCK_DIR/metrics" ]]; then
+    cat "$MOCK_DIR/metrics"
+  else
+    cat <<'METRICS'
 livekit_egress_available{node_id="test"} 1
 livekit_egress_can_accept_request{node_id="test"} 1
 livekit_load_ratio{node_id="test",type="pulse"} 0.05
 METRICS
+  fi
 elif [[ "$*" == *'/api/program/renderer-binding'* ]]; then
   if [[ -e "$MOCK_DIR/renderer-mismatch" ]]; then
     git_sha=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
@@ -74,7 +79,7 @@ else
   printf 'ok\n'
 fi
 MOCK
-chmod 755 "$FIXTURE/bin/flock" "$FIXTURE/bin/lk" "$FIXTURE/bin/docker" "$FIXTURE/bin/curl"
+chmod 755 "$FIXTURE/bin/flock" "$FIXTURE/bin/sleep" "$FIXTURE/bin/lk" "$FIXTURE/bin/docker" "$FIXTURE/bin/curl"
 
 printf 'null\n' >"$FIXTURE/mock/active.json"
 printf '0\n' >"$FIXTURE/mock/start-count"
@@ -100,6 +105,22 @@ run_once() {
     SCORECHECK_EGRESS_SUPERVISOR_STATE_DIR="$FIXTURE/state" \
     SCORECHECK_EGRESS_SUPERVISOR_EXPORT_DIR="$FIXTURE/export" \
     "$FIXTURE/egress-supervisor.sh" once >/dev/null
+}
+assert_recycled_metrics_rejected() {
+  local generation="$1" metrics="$2" start_count
+  run_start "$generation"
+  start_count="$(<"$FIXTURE/mock/start-count")"
+  printf 'null\n' >"$FIXTURE/mock/active.json"
+  printf '%s\n' "$metrics" >"$FIXTURE/mock/metrics"
+  run_once
+  run_once
+  run_once
+  jq -e '.status == "RECOVERY_FAILED" and .recoveryAttempts == 1' "$FIXTURE/state/state.json" >/dev/null
+  grep -Fxq "$start_count" "$FIXTURE/mock/start-count"
+  PATH="$FIXTURE/bin:$PATH" "$FIXTURE/stop-court.sh" 1 >/dev/null
+  run_once
+  jq -e '.status == "IDLE"' "$FIXTURE/state/state.json" >/dev/null
+  rm "$FIXTURE/mock/metrics"
 }
 
 run_start generation-one
@@ -159,6 +180,11 @@ test ! -e "$FIXTURE/requests/court-1.json"
 test ! -e "$FIXTURE/requests/court-1.stop-intent"
 run_once
 jq -e '.status == "IDLE"' "$FIXTURE/state/state.json" >/dev/null
+
+assert_recycled_metrics_rejected generation-nonfinite $'livekit_egress_available{node_id="test"} 1\nlivekit_egress_can_accept_request{node_id="test"} 1\nlivekit_load_ratio{node_id="test",type="pulse"} NaN'
+assert_recycled_metrics_rejected generation-duplicate $'livekit_egress_available{node_id="test"} 1\nlivekit_egress_can_accept_request{node_id="test"} 1\nlivekit_load_ratio{node_id="test",type="pulse"} 0.05\nlivekit_load_ratio{node_id="other",type="pulse"} 0.06'
+assert_recycled_metrics_rejected generation-negative $'livekit_egress_available{node_id="test"} 1\nlivekit_egress_can_accept_request{node_id="test"} 1\nlivekit_load_ratio{node_id="test",type="pulse"} -0.01'
+assert_recycled_metrics_rejected generation-fractional-web $'livekit_egress_available{node_id="test"} 1\nlivekit_egress_can_accept_request{node_id="test"} 1\nlivekit_egress_requests{node_id="test",type="web"} 0.5\nlivekit_load_ratio{node_id="test",type="pulse"} 0.05'
 
 run_start generation-two
 printf 'null\n' >"$FIXTURE/mock/active.json"

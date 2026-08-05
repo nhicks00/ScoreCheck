@@ -128,7 +128,7 @@ wait_for_active_id() {
 }
 
 wait_for_recycled_worker() {
-  local old_container_id="$1" new_container_id="" metrics=""
+  local old_container_id="$1" new_container_id="" health="" metrics=""
   for _ in $(seq 1 120); do
     new_container_id="$(docker inspect bvm-egress --format '{{.Id}}' 2>/dev/null || true)"
     health="$(docker inspect bvm-egress --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null || true)"
@@ -136,14 +136,33 @@ wait_for_recycled_worker() {
       && curl -fsS http://127.0.0.1:9091/ >/dev/null 2>&1; then
       metrics="$(curl -fsS http://127.0.0.1:9090/metrics 2>/dev/null || true)"
       if printf '%s\n' "$metrics" | awk '
-        /^livekit_egress_available[{ ]/ { available=$NF }
-        /^livekit_egress_can_accept_request[{ ]/ { accept=$NF }
-        /^livekit_egress_requests[{].*type="web"/ { web=$NF; seen_web=1 }
-        /^livekit_load_ratio[{].*type="pulse"/ { pulse=$NF; seen_pulse=1 }
+        function finite(value) {
+          return value ~ /^[-+]?(([0-9]+([.][0-9]*)?)|([.][0-9]+))([eE][-+]?[0-9]+)?$/
+        }
+        /^livekit_egress_available[{ ]/ {
+          available_count++
+          if (!finite($NF)) invalid=1
+          available=$NF + 0
+        }
+        /^livekit_egress_can_accept_request[{ ]/ {
+          accept_count++
+          if (!finite($NF)) invalid=1
+          accept=$NF + 0
+        }
+        /^livekit_egress_requests[{].*type="web"/ {
+          web_count++
+          if ($NF !~ /^[0-9]+$/) invalid=1
+          web=$NF + 0
+        }
+        /^livekit_load_ratio[{].*type="pulse"/ {
+          pulse_count++
+          if (!finite($NF)) invalid=1
+          pulse=$NF + 0
+        }
         END {
-          if (available != 1 || accept != 1) exit 1
-          if (seen_web && web != 0) exit 1
-          if (!seen_pulse || pulse < 0 || pulse >= 1) exit 1
+          if (invalid || available_count != 1 || accept_count != 1 || pulse_count != 1 || web_count > 1) exit 1
+          if (available != 1 || accept != 1 || (web_count == 1 && web != 0)) exit 1
+          if (pulse < 0 || pulse >= 1) exit 1
         }
       '; then
         return 0
