@@ -9,13 +9,12 @@ import { fileURLToPath } from "node:url";
 import { validateProfile } from "./eventctl.mjs";
 import { loadManifestInputs, validateEventManifest } from "./event-manifest.mjs";
 import { FileStateStore } from "./event-lifecycle.mjs";
-import { ProductionSyntheticPublisherStateStore } from "./production-synthetic-publishers.mjs";
 import { withQualificationGateLock } from "./qualification-gate-lock.mjs";
 import { loadRendererBinding } from "./renderer-binding.mjs";
 import { loadProtectedEnv } from "./stack-deployer.mjs";
 import { evaluateSupabaseLossRehearsal, supabaseLossSnapshotProblems } from "./supabase-loss-evidence.mjs";
 import { SupabaseLossFaultRuntime } from "./supabase-loss-fault-runtime.mjs";
-import { loadVenueAdmission } from "./venue-admission.mjs";
+import { isSyntheticCloudFixtureVenue, loadVenueAdmission } from "./venue-admission.mjs";
 
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIRECTORY, "../..");
@@ -116,13 +115,12 @@ export async function prepareSupabaseLossRehearsal(runtime) {
 }
 
 export async function runSupabaseLossRehearsal(runtime) {
-  const { options, manifest, lifecycleState, renderer, venue, soakState, publisherState, preparedState, monitor, fault, target, now = () => Date.now(), sleep = delay } = runtime;
+  const { options, manifest, lifecycleState, renderer, venue, soakState, preparedState, monitor, fault, target, now = () => Date.now(), sleep = delay } = runtime;
   requireConfirmation(options.confirmPrepare, `PREPARE-SUPABASE-FAULT:${manifest.event}`);
   requireConfirmation(options.confirmFault, `FAULT-SUPABASE:${lifecycleState.generationId}`);
   requireConfirmation(options.confirmRestore, `RESTORE-SUPABASE:${lifecycleState.generationId}`);
   if (lifecycleState.phase !== "live") throw new Error("Supabase-loss rehearsal requires lifecycle phase live");
   if (soakState.phase !== "RUNNING") throw new Error("Supabase-loss rehearsal requires a running production soak");
-  if (publisherState.phase !== "RUNNING") throw new Error("Supabase-loss rehearsal requires active synthetic publishers");
   const statePath = join(options.evidence, "supabase-loss-rehearsal-state.json");
   const samplesPath = join(options.evidence, "supabase-loss-rehearsal-samples.jsonl");
   const handle = await open(samplesPath, "wx", 0o600);
@@ -256,11 +254,11 @@ export function parseArgs(argv) {
   if ([undefined, "help", "-h", "--help"].includes(command)) return null;
   if (!new Set(["prepare", "run", "status", "restore", "cleanup"]).has(command)) throw new Error("first argument must be prepare, run, status, restore, or cleanup");
   const options = {
-    command, profile: null, soakEvidence: null, publisherState: null, rendererBinding: null, evidence: null, camera: null,
+    command, profile: null, soakEvidence: null, rendererBinding: null, evidence: null, camera: null,
     confirmPrepare: null, confirmFault: null, confirmRestore: null, confirmCleanup: null
   };
   const mapping = new Map([
-    ["--profile", "profile"], ["--soak-evidence", "soakEvidence"], ["--publisher-state", "publisherState"], ["--renderer-binding", "rendererBinding"],
+    ["--profile", "profile"], ["--soak-evidence", "soakEvidence"], ["--renderer-binding", "rendererBinding"],
     ["--evidence", "evidence"], ["--camera", "camera"], ["--confirm-prepare", "confirmPrepare"], ["--confirm-fault", "confirmFault"],
     ["--confirm-restore", "confirmRestore"], ["--confirm-cleanup", "confirmCleanup"]
   ]);
@@ -280,24 +278,24 @@ export function parseArgs(argv) {
   if (!options.profile) throw new Error("--profile is required");
   if (command === "prepare") {
     for (const key of ["rendererBinding", "camera", "confirmPrepare"]) if (options[key] === null) throw new Error(`--${kebab(key)} is required`);
-    const extras = ["soakEvidence", "publisherState", "confirmFault", "confirmRestore", "confirmCleanup"].filter((key) => options[key] !== null);
+    const extras = ["soakEvidence", "confirmFault", "confirmRestore", "confirmCleanup"].filter((key) => options[key] !== null);
     if (extras.length) throw new Error("prepare accepts only --profile, --renderer-binding, --evidence, --camera, and --confirm-prepare");
     if (!Number.isInteger(options.camera) || options.camera < 1 || options.camera > 8) throw new Error("--camera must be 1-8");
     return options;
   }
   if (command === "restore") {
     if (!options.confirmRestore) throw new Error("--confirm-restore is required");
-    const extras = ["soakEvidence", "publisherState", "rendererBinding", "camera", "confirmPrepare", "confirmFault", "confirmCleanup"].filter((key) => options[key] !== null);
+    const extras = ["soakEvidence", "rendererBinding", "camera", "confirmPrepare", "confirmFault", "confirmCleanup"].filter((key) => options[key] !== null);
     if (extras.length) throw new Error("restore accepts only --profile, --evidence, and --confirm-restore");
     return options;
   }
   if (command === "cleanup") {
     if (!options.confirmCleanup) throw new Error("--confirm-cleanup is required");
-    const extras = ["soakEvidence", "publisherState", "rendererBinding", "camera", "confirmPrepare", "confirmFault", "confirmRestore"].filter((key) => options[key] !== null);
+    const extras = ["soakEvidence", "rendererBinding", "camera", "confirmPrepare", "confirmFault", "confirmRestore"].filter((key) => options[key] !== null);
     if (extras.length) throw new Error("cleanup accepts only --profile, --evidence, and --confirm-cleanup");
     return options;
   }
-  for (const key of ["soakEvidence", "publisherState", "rendererBinding", "camera", "confirmPrepare", "confirmFault", "confirmRestore"]) if (options[key] === null) throw new Error(`--${kebab(key)} is required`);
+  for (const key of ["soakEvidence", "rendererBinding", "camera", "confirmPrepare", "confirmFault", "confirmRestore"]) if (options[key] === null) throw new Error(`--${kebab(key)} is required`);
   if (options.confirmCleanup !== null) throw new Error("run does not accept --confirm-cleanup; cleanup is a separate post-output command");
   if (!Number.isInteger(options.camera) || options.camera < 1 || options.camera > 8) throw new Error("--camera must be 1-8");
   return options;
@@ -307,12 +305,11 @@ async function createRuntime(options) {
   const base = await loadBaseRuntime(options);
   const renderer = await loadRendererBinding(options.rendererBinding);
   const venue = await loadVenueAdmission(base.profile.venueProfile, base.manifest.event);
-  if (!venue.passed || venue.activeCameras.length !== 8 || !venue.activeCameras.includes(options.camera)) throw new Error("Supabase-loss rehearsal requires eight admitted active synthetic cameras including the target");
+  if (!venue.passed || venue.activeCameras.length !== 8 || !venue.activeCameras.includes(options.camera)) throw new Error("Supabase-loss rehearsal requires eight admitted active physical cameras including the target");
+  if (isSyntheticCloudFixtureVenue(venue.profile)) throw new Error("Supabase-loss rehearsal requires a physical-camera venue profile");
   const soakState = await readProtectedJson(join(options.soakEvidence, "production-soak-state.json"), "production soak state");
   if (soakState.event !== base.manifest.event || soakState.phase !== "RUNNING" || JSON.stringify(soakState.activeCameras) !== JSON.stringify(venue.activeCameras)) throw new Error("Supabase-loss rehearsal production soak binding is invalid");
   if (soakState.runBinding?.renderer?.gitSha !== renderer.gitSha || soakState.runBinding?.renderer?.deploymentId !== renderer.deploymentId) throw new Error("Supabase-loss rehearsal soak renderer binding is stale");
-  const publisherState = await new ProductionSyntheticPublisherStateStore(options.publisherState).load();
-  if (!publisherState || publisherState.event !== base.manifest.event || publisherState.generationId !== base.lifecycleState.generationId || publisherState.phase !== "RUNNING" || Object.keys(publisherState.publishers ?? {}).length !== 8) throw new Error("Supabase-loss rehearsal synthetic publisher binding is invalid");
   const preparedState = await readProtectedJson(join(options.evidence, "supabase-loss-rehearsal-state.json"), "Supabase-loss prepared state");
   const assets = await createFaultAssets(base);
   assertPreparedState(preparedState, base, renderer, options.camera, assets.target);
@@ -322,7 +319,6 @@ async function createRuntime(options) {
     renderer,
     venue,
     soakState,
-    publisherState,
     preparedState,
     target: preparedState.target,
     monitor: assets.monitor,
@@ -541,5 +537,5 @@ function isDirectInvocation() {
 }
 
 function usage() {
-  process.stdout.write("usage:\n  supabase-loss-rehearsal.mjs prepare --profile <event-profile> --renderer-binding <file> --evidence <new-dir> --camera <1-8> --confirm-prepare <token>\n  supabase-loss-rehearsal.mjs run --profile <event-profile> --soak-evidence <dir> --publisher-state <file> --renderer-binding <file> --evidence <prepared-dir> --camera <1-8> --confirm-prepare <token> --confirm-fault <token> --confirm-restore <token>\n  supabase-loss-rehearsal.mjs status --evidence <dir>\n  supabase-loss-rehearsal.mjs restore --profile <event-profile> --evidence <dir> --confirm-restore <token>\n  supabase-loss-rehearsal.mjs cleanup --profile <event-profile> --evidence <dir> --confirm-cleanup <token>\n");
+  process.stdout.write("usage:\n  supabase-loss-rehearsal.mjs prepare --profile <event-profile> --renderer-binding <file> --evidence <new-dir> --camera <1-8> --confirm-prepare <token>\n  supabase-loss-rehearsal.mjs run --profile <event-profile> --soak-evidence <dir> --renderer-binding <file> --evidence <prepared-dir> --camera <1-8> --confirm-prepare <token> --confirm-fault <token> --confirm-restore <token>\n  supabase-loss-rehearsal.mjs status --evidence <dir>\n  supabase-loss-rehearsal.mjs restore --profile <event-profile> --evidence <dir> --confirm-restore <token>\n  supabase-loss-rehearsal.mjs cleanup --profile <event-profile> --evidence <dir> --confirm-cleanup <token>\n");
 }

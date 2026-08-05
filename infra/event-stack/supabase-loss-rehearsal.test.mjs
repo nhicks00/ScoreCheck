@@ -58,7 +58,6 @@ test("Supabase-loss CLI separates pre-soak preparation, live fault/recovery, and
     "run",
     "--profile", "/tmp/profile.json",
     "--soak-evidence", "/tmp/soak",
-    "--publisher-state", "/tmp/publishers.json",
     "--renderer-binding", "/tmp/renderer.json",
     "--evidence", "/tmp/evidence",
     "--camera", "1",
@@ -68,6 +67,11 @@ test("Supabase-loss CLI separates pre-soak preparation, live fault/recovery, and
   ]);
   assert.equal(run.camera, 1);
   assert.equal(run.rendererBinding, "/tmp/renderer.json");
+  assert.throws(() => parseArgs([
+    "run", "--profile", "/tmp/profile.json", "--soak-evidence", "/tmp/soak", "--publisher-state", "/tmp/publishers.json",
+    "--renderer-binding", "/tmp/renderer.json", "--evidence", "/tmp/evidence", "--camera", "1",
+    "--confirm-prepare", "PREPARE", "--confirm-fault", "FAULT", "--confirm-restore", "RESTORE"
+  ]), /--publisher-state is unknown/u);
   assert.throws(() => parseArgs(["run", "--evidence", "/tmp/evidence"]), /--profile is required/u);
   assert.equal(parseArgs([
     "restore", "--profile", "/tmp/profile.json", "--evidence", "/tmp/evidence",
@@ -78,7 +82,7 @@ test("Supabase-loss CLI separates pre-soak preparation, live fault/recovery, and
     "--confirm-cleanup", `CLEANUP-SUPABASE-FAULT:${event}`
   ]).command, "cleanup");
   assert.throws(() => parseArgs([
-    "run", "--profile", "/tmp/profile.json", "--soak-evidence", "/tmp/soak", "--publisher-state", "/tmp/publishers.json",
+    "run", "--profile", "/tmp/profile.json", "--soak-evidence", "/tmp/soak",
     "--renderer-binding", "/tmp/renderer.json", "--evidence", "/tmp/evidence", "--camera", "1",
     "--confirm-prepare", `PREPARE-SUPABASE-FAULT:${event}`, "--confirm-fault", `FAULT-SUPABASE:${generationId}`,
     "--confirm-restore", `RESTORE-SUPABASE:${generationId}`, "--confirm-cleanup", `CLEANUP-SUPABASE-FAULT:${event}`
@@ -171,7 +175,6 @@ test("Supabase-loss gate prepares before output and cleans only after output sto
     renderer,
     venue,
     soakState: { phase: "RUNNING", profiles },
-    publisherState: { phase: "RUNNING" },
     preparedState,
     target,
     monitor: { snapshot: async () => { clock += 5_000; return snapshot(clock, { disconnected: status === "FAULTED", incident: status === "FAULTED" }); } },
@@ -224,7 +227,6 @@ test("Supabase-loss failure restores the dependency but defers route cleanup unt
     renderer,
     venue,
     soakState: { phase: "RUNNING", profiles },
-    publisherState: { phase: "RUNNING" },
     preparedState,
     target,
     monitor: { snapshot: async () => { clock += 5_000; return snapshot(clock); } },

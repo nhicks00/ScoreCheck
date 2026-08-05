@@ -13,10 +13,9 @@ import { FileStateStore } from "./event-lifecycle.mjs";
 import { RendererLossFaultRuntime } from "./renderer-loss-fault-runtime.mjs";
 import { evaluateRendererLossRehearsal, rendererLossSnapshotProblems } from "./renderer-loss-evidence.mjs";
 import { loadRendererBinding } from "./renderer-binding.mjs";
-import { ProductionSyntheticPublisherStateStore } from "./production-synthetic-publishers.mjs";
 import { withQualificationGateLock } from "./qualification-gate-lock.mjs";
 import { loadProtectedEnv } from "./stack-deployer.mjs";
-import { loadVenueAdmission } from "./venue-admission.mjs";
+import { isSyntheticCloudFixtureVenue, loadVenueAdmission } from "./venue-admission.mjs";
 
 const SAMPLE_INTERVAL_MS = 5_000;
 const PHASE_TIMEOUT_MS = 3 * 60_000;
@@ -55,12 +54,11 @@ async function main() {
 }
 
 export async function runRendererLossRehearsal(runtime) {
-  const { options, manifest, lifecycleState, renderer, venue, soakState, publisherState, monitor, fault, now = () => Date.now(), sleep = delay } = runtime;
+  const { options, manifest, lifecycleState, renderer, venue, soakState, monitor, fault, now = () => Date.now(), sleep = delay } = runtime;
   requireConfirmation(options.confirmFault, `FAULT-RENDERER:${manifest.event}:CAMERA-${options.camera}`);
   requireConfirmation(options.confirmRestore, `RESTORE-RENDERER:${manifest.event}:CAMERA-${options.camera}`);
   if (lifecycleState.phase !== "live") throw new Error("renderer-loss rehearsal requires lifecycle phase live");
   if (soakState.phase !== "RUNNING") throw new Error("renderer-loss rehearsal requires a running production soak");
-  if (publisherState.phase !== "RUNNING") throw new Error("renderer-loss rehearsal requires active synthetic publishers");
   const gateId = `renderer-loss-${randomUUID()}`;
   const target = await fault.plan({
     host: runtime.compositorHost,
@@ -184,9 +182,9 @@ export function parseArgs(argv) {
   const command = argv[0];
   if ([undefined, "help", "-h", "--help"].includes(command)) return null;
   if (!new Set(["run", "status", "restore"]).has(command)) throw new Error("first argument must be run, status, or restore");
-  const options = { command, profile: null, soakEvidence: null, publisherState: null, evidence: null, camera: null, confirmFault: null, confirmRestore: null };
+  const options = { command, profile: null, soakEvidence: null, evidence: null, camera: null, confirmFault: null, confirmRestore: null };
   const mapping = new Map([
-    ["--profile", "profile"], ["--soak-evidence", "soakEvidence"], ["--publisher-state", "publisherState"], ["--evidence", "evidence"],
+    ["--profile", "profile"], ["--soak-evidence", "soakEvidence"], ["--evidence", "evidence"],
     ["--camera", "camera"], ["--confirm-fault", "confirmFault"], ["--confirm-restore", "confirmRestore"]
   ]);
   for (let index = 1; index < argv.length; index += 1) {
@@ -204,10 +202,10 @@ export function parseArgs(argv) {
   }
   if (!options.profile || !options.confirmRestore) throw new Error("--profile and --confirm-restore are required");
   if (command === "restore") {
-    if ([options.soakEvidence, options.publisherState, options.camera, options.confirmFault].some((value) => value !== null)) throw new Error("restore accepts only --profile, --evidence, and --confirm-restore");
+    if ([options.soakEvidence, options.camera, options.confirmFault].some((value) => value !== null)) throw new Error("restore accepts only --profile, --evidence, and --confirm-restore");
     return options;
   }
-  for (const key of ["soakEvidence", "publisherState", "camera", "confirmFault"]) if (options[key] === null) throw new Error(`--${kebab(key)} is required`);
+  for (const key of ["soakEvidence", "camera", "confirmFault"]) if (options[key] === null) throw new Error(`--${kebab(key)} is required`);
   if (!Number.isInteger(options.camera) || options.camera < 1 || options.camera > 8) throw new Error("--camera must be 1-8");
   return options;
 }
@@ -215,18 +213,16 @@ export function parseArgs(argv) {
 async function createRuntime(options) {
   const base = await loadBaseRuntime(options);
   const venue = await loadVenueAdmission(base.profile.venueProfile, base.manifest.event);
-  if (!venue.passed || venue.activeCameras.length !== 8 || !venue.activeCameras.includes(options.camera)) throw new Error("renderer-loss rehearsal requires eight admitted active synthetic cameras including the target");
+  if (!venue.passed || venue.activeCameras.length !== 8 || !venue.activeCameras.includes(options.camera)) throw new Error("renderer-loss rehearsal requires eight admitted active physical cameras including the target");
+  if (isSyntheticCloudFixtureVenue(venue.profile)) throw new Error("renderer-loss rehearsal requires a physical-camera venue profile");
   const soakState = await readProtectedJson(join(options.soakEvidence, "production-soak-state.json"), "production soak state");
   if (soakState.event !== base.manifest.event || soakState.phase !== "RUNNING" || JSON.stringify(soakState.activeCameras) !== JSON.stringify(venue.activeCameras)) throw new Error("renderer-loss rehearsal production soak binding is invalid");
   if (soakState.runBinding?.renderer?.gitSha !== base.renderer.gitSha || soakState.runBinding?.renderer?.deploymentId !== base.renderer.deploymentId) throw new Error("renderer-loss rehearsal soak renderer binding is stale");
-  const publisherState = await new ProductionSyntheticPublisherStateStore(options.publisherState).load();
-  if (!publisherState || publisherState.event !== base.manifest.event || publisherState.generationId !== base.lifecycleState.generationId || Object.keys(publisherState.publishers ?? {}).length !== 8) throw new Error("renderer-loss rehearsal synthetic publisher binding is invalid");
   return {
     ...base,
     options,
     venue,
     soakState,
-    publisherState,
     compositorHost: compositorHost(base.manifest, base.lifecycleState, options.camera),
     monitor: new MonitorSnapshotRuntime({ origin: `https://${onlyEndpoint(base.manifest, "observability")}`, token: base.monitorToken }),
     fault: new RendererLossFaultRuntime({ sshKey: base.profile.sshKey, knownHosts: base.profile.knownHosts })
@@ -379,5 +375,5 @@ function safeError(error) { return (error instanceof Error ? error.message : Str
 function isDirectInvocation() { return process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url; }
 
 function usage() {
-  process.stdout.write("Usage:\n  node infra/event-stack/renderer-loss-rehearsal.mjs run --profile FILE --soak-evidence DIR --publisher-state FILE --evidence DIR --camera N --confirm-fault FAULT-RENDERER:EVENT:CAMERA-N --confirm-restore RESTORE-RENDERER:EVENT:CAMERA-N\n  node infra/event-stack/renderer-loss-rehearsal.mjs restore --profile FILE --evidence DIR --confirm-restore RESTORE-RENDERER:EVENT:CAMERA-N\n  node infra/event-stack/renderer-loss-rehearsal.mjs status --evidence DIR\n");
+  process.stdout.write("Usage:\n  node infra/event-stack/renderer-loss-rehearsal.mjs run --profile FILE --soak-evidence DIR --evidence DIR --camera N --confirm-fault FAULT-RENDERER:EVENT:CAMERA-N --confirm-restore RESTORE-RENDERER:EVENT:CAMERA-N\n  node infra/event-stack/renderer-loss-rehearsal.mjs restore --profile FILE --evidence DIR --confirm-restore RESTORE-RENDERER:EVENT:CAMERA-N\n  node infra/event-stack/renderer-loss-rehearsal.mjs status --evidence DIR\n");
 }

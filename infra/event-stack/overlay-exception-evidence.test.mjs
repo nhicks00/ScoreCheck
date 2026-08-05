@@ -133,7 +133,6 @@ test("overlay-exception runner prepares idle, captures the exact fault, and defe
       egress: { 1: { id: "EG_exact123" } },
       runBinding: { renderer: { gitSha: renderer.gitSha, deploymentId: renderer.deploymentId }, destinations: { 1: { broadcastId: "broadcast-1" } } }
     },
-    publisherState: { phase: "RUNNING", event: "overlay-exception-event", generationId: "generation-test-01", publishers: Object.fromEntries(venue.activeCameras.map((camera) => [camera, {}])) },
     state,
     monitor: { snapshot: async () => { clock += 5_000; return snapshot(clock, { fault: faulted }); } },
     debug,
@@ -162,7 +161,8 @@ test("overlay-exception runner prepares idle, captures the exact fault, and defe
 test("overlay-exception CLI keeps preparation, faulting, and cleanup confirmations separate", () => {
   assert.equal(parseArgs(["status", "--evidence", "/tmp/evidence"]).command, "status");
   assert.equal(parseArgs(["prepare", "--profile", "/tmp/profile", "--evidence", "/tmp/evidence", "--camera", "1", "--confirm-prepare", "PREPARE"]).camera, 1);
-  assert.equal(parseArgs(["run", "--profile", "/tmp/profile", "--soak-evidence", "/tmp/soak", "--publisher-state", "/tmp/publishers", "--evidence", "/tmp/evidence", "--confirm-arm", "ARM", "--confirm-fault", "FAULT"]).command, "run");
+  assert.equal(parseArgs(["run", "--profile", "/tmp/profile", "--soak-evidence", "/tmp/soak", "--evidence", "/tmp/evidence", "--confirm-arm", "ARM", "--confirm-fault", "FAULT"]).command, "run");
+  assert.throws(() => parseArgs(["run", "--profile", "/tmp/profile", "--soak-evidence", "/tmp/soak", "--publisher-state", "/tmp/publishers", "--evidence", "/tmp/evidence", "--confirm-arm", "ARM", "--confirm-fault", "FAULT"]), /--publisher-state is unknown/u);
   assert.equal(parseArgs(["cleanup", "--profile", "/tmp/profile", "--evidence", "/tmp/evidence", "--confirm-cleanup", "CLEAN"]).command, "cleanup");
   assert.throws(() => parseArgs(["run", "--profile", "/tmp/profile", "--evidence", "/tmp/evidence"]), /--soak-evidence is required/u);
 });

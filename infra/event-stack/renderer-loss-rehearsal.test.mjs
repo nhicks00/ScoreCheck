@@ -111,18 +111,21 @@ test("renderer-loss remote commands are valid POSIX shell programs", async () =>
   }
 });
 
-test("renderer-loss CLI requires a synthetic soak and separate fault and restore confirmations", () => {
+test("renderer-loss CLI requires a physical soak and separate fault and restore confirmations", () => {
   const run = parseArgs([
     "run",
     "--profile", "/tmp/profile.json",
     "--soak-evidence", "/tmp/soak",
-    "--publisher-state", "/tmp/publishers.json",
     "--evidence", "/tmp/evidence",
     "--camera", "1",
     "--confirm-fault", "FAULT-RENDERER:event:CAMERA-1",
     "--confirm-restore", "RESTORE-RENDERER:event:CAMERA-1"
   ]);
   assert.equal(run.camera, 1);
+  assert.throws(() => parseArgs([
+    "run", "--profile", "/tmp/profile.json", "--soak-evidence", "/tmp/soak", "--publisher-state", "/tmp/publishers.json",
+    "--evidence", "/tmp/evidence", "--camera", "1", "--confirm-fault", "FAULT", "--confirm-restore", "RESTORE"
+  ]), /--publisher-state is unknown/u);
   assert.throws(() => parseArgs(["run", "--evidence", "/tmp/evidence"]), /--profile and --confirm-restore are required/u);
   assert.equal(parseArgs(["restore", "--profile", "/tmp/profile.json", "--evidence", "/tmp/evidence", "--confirm-restore", "RESTORE-RENDERER:event:CAMERA-1"]).command, "restore");
   assert.equal(parseArgs(["status", "--evidence", "/tmp/evidence"]).command, "status");
@@ -216,7 +219,6 @@ test("renderer-loss runner captures all phases and restores the exact fault", as
       egress: { 1: { id: egressOwner.egressId } },
       runBinding: { destinations: { 1: { broadcastId: egressOwner.destinationId } } }
     },
-    publisherState: { phase: "RUNNING" },
     compositorHost: "198.51.100.10",
     monitor: {
       snapshot: async () => {
@@ -259,7 +261,6 @@ test("renderer-loss runner invokes safety restoration when outage evidence canno
     renderer,
     venue,
     soakState: { phase: "RUNNING", profiles, runId: egressOwner.outputGeneration, egress: { 1: { id: egressOwner.egressId } }, runBinding: { destinations: { 1: { broadcastId: egressOwner.destinationId } } } },
-    publisherState: { phase: "RUNNING" },
     compositorHost: "198.51.100.10",
     monitor: { snapshot: async () => { clock += 5_000; return snapshot(clock); } },
     fault: {

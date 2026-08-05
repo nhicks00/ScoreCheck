@@ -12,10 +12,9 @@ import { FileStateStore } from "./event-lifecycle.mjs";
 import { OverlayExceptionDebugRuntime } from "./overlay-exception-debug-runtime.mjs";
 import { evaluateOverlayExceptionRehearsal, overlayExceptionSnapshotProblems } from "./overlay-exception-evidence.mjs";
 import { loadRendererBinding } from "./renderer-binding.mjs";
-import { ProductionSyntheticPublisherStateStore } from "./production-synthetic-publishers.mjs";
 import { withQualificationGateLock } from "./qualification-gate-lock.mjs";
 import { loadProtectedEnv } from "./stack-deployer.mjs";
-import { loadVenueAdmission } from "./venue-admission.mjs";
+import { isSyntheticCloudFixtureVenue, loadVenueAdmission } from "./venue-admission.mjs";
 
 const SAMPLE_INTERVAL_MS = 5_000;
 const PHASE_TIMEOUT_MS = 3 * 60_000;
@@ -66,7 +65,7 @@ async function main() {
 export async function prepareOverlayExceptionRehearsal(runtime) {
   const { options, manifest, lifecycleState, renderer, venue, compositorHost, egressConfig, debug, now = () => Date.now() } = runtime;
   if (!new Set(["ready", "live"]).has(lifecycleState.phase)) throw new Error("overlay-exception preparation requires a ready or live event stack");
-  if (!venue.passed || venue.activeCameras.length !== 8 || !venue.activeCameras.includes(options.camera)) throw new Error("overlay-exception rehearsal requires eight admitted synthetic cameras including the target");
+  if (!venue.passed || venue.activeCameras.length !== 8 || !venue.activeCameras.includes(options.camera)) throw new Error("overlay-exception rehearsal requires eight admitted physical cameras including the target");
   await prepareEvidenceDirectory(options.evidence);
   const target = debug.plan({ host: compositorHost, event: manifest.event, generationId: lifecycleState.generationId, camera: options.camera, renderer, egressConfig });
   let state = {
@@ -107,10 +106,10 @@ export async function prepareOverlayExceptionRehearsal(runtime) {
 }
 
 export async function runOverlayExceptionRehearsal(runtime) {
-  const { options, manifest, lifecycleState, renderer, venue, soakState, publisherState, state: initialState, monitor, debug, now = () => Date.now(), sleep = delay } = runtime;
+  const { options, manifest, lifecycleState, renderer, venue, soakState, state: initialState, monitor, debug, now = () => Date.now(), sleep = delay } = runtime;
   requireConfirmation(options.confirmArm, `ARM-OVERLAY-EXCEPTION:${manifest.event}:CAMERA-${initialState.camera}`);
   requireConfirmation(options.confirmFault, `FAULT-OVERLAY:${manifest.event}:CAMERA-${initialState.camera}`);
-  validateRunBindings({ manifest, lifecycleState, renderer, venue, soakState, publisherState, state: initialState });
+  validateRunBindings({ manifest, lifecycleState, renderer, venue, soakState, state: initialState });
   const owner = {
     event: manifest.event,
     camera: initialState.camera,
@@ -197,9 +196,9 @@ export function parseArgs(argv) {
   const command = argv[0];
   if ([undefined, "help", "-h", "--help"].includes(command)) return null;
   if (!new Set(["prepare", "run", "status", "cleanup"]).has(command)) throw new Error("first argument must be prepare, run, status, or cleanup");
-  const options = { command, profile: null, soakEvidence: null, publisherState: null, evidence: null, camera: null, confirmPrepare: null, confirmArm: null, confirmFault: null, confirmCleanup: null };
+  const options = { command, profile: null, soakEvidence: null, evidence: null, camera: null, confirmPrepare: null, confirmArm: null, confirmFault: null, confirmCleanup: null };
   const mapping = new Map([
-    ["--profile", "profile"], ["--soak-evidence", "soakEvidence"], ["--publisher-state", "publisherState"], ["--evidence", "evidence"], ["--camera", "camera"],
+    ["--profile", "profile"], ["--soak-evidence", "soakEvidence"], ["--evidence", "evidence"], ["--camera", "camera"],
     ["--confirm-prepare", "confirmPrepare"], ["--confirm-arm", "confirmArm"], ["--confirm-fault", "confirmFault"], ["--confirm-cleanup", "confirmCleanup"]
   ]);
   for (let index = 1; index < argv.length; index += 1) {
@@ -218,11 +217,11 @@ export function parseArgs(argv) {
   if (!options.profile) throw new Error("--profile is required");
   const allowed = {
     prepare: new Set(["command", "profile", "evidence", "camera", "confirmPrepare"]),
-    run: new Set(["command", "profile", "soakEvidence", "publisherState", "evidence", "confirmArm", "confirmFault"]),
+    run: new Set(["command", "profile", "soakEvidence", "evidence", "confirmArm", "confirmFault"]),
     cleanup: new Set(["command", "profile", "evidence", "confirmCleanup"])
   }[command];
   for (const [key, value] of Object.entries(options)) if (!allowed.has(key) && value !== null) throw new Error(`${command} does not accept --${kebab(key)}`);
-  const required = command === "prepare" ? ["camera", "confirmPrepare"] : command === "run" ? ["soakEvidence", "publisherState", "confirmArm", "confirmFault"] : ["confirmCleanup"];
+  const required = command === "prepare" ? ["camera", "confirmPrepare"] : command === "run" ? ["soakEvidence", "confirmArm", "confirmFault"] : ["confirmCleanup"];
   for (const key of required) if (options[key] === null) throw new Error(`--${kebab(key)} is required`);
   if (command === "prepare" && (!Number.isInteger(options.camera) || options.camera < 1 || options.camera > 8)) throw new Error("--camera must be 1-8");
   return options;
@@ -230,15 +229,16 @@ export function parseArgs(argv) {
 
 async function createPrepareRuntime(options) {
   const base = await loadBaseRuntime(options);
+  if (isSyntheticCloudFixtureVenue(base.venue.profile)) throw new Error("overlay-exception rehearsal requires a physical-camera venue profile");
   return { ...base, options, egressConfig: await readFile(new URL("../compositor/egress.yaml", import.meta.url), "utf8"), debug: newDebug(base), compositorHost: compositorHost(base.manifest, base.lifecycleState, options.camera) };
 }
 
 async function createRunRuntime(options) {
   const base = await loadBaseRuntime(options);
+  if (isSyntheticCloudFixtureVenue(base.venue.profile)) throw new Error("overlay-exception run requires a physical-camera venue profile");
   const state = await readProtectedJson(join(options.evidence, STATE_FILE), "overlay-exception rehearsal state");
   const soakState = await readProtectedJson(join(options.soakEvidence, "production-soak-state.json"), "production soak state");
-  const publisherState = await new ProductionSyntheticPublisherStateStore(options.publisherState).load();
-  return { ...base, options, state, soakState, publisherState, monitor: new MonitorSnapshotRuntime({ origin: `https://${onlyEndpoint(base.manifest, "observability")}`, token: base.monitorToken }), debug: newDebug(base) };
+  return { ...base, options, state, soakState, monitor: new MonitorSnapshotRuntime({ origin: `https://${onlyEndpoint(base.manifest, "observability")}`, token: base.monitorToken }), debug: newDebug(base) };
 }
 
 async function createCleanupRuntime(options) {
@@ -265,13 +265,12 @@ function newDebug(base) {
   return new OverlayExceptionDebugRuntime({ sshKey: base.profile.sshKey, knownHosts: base.profile.knownHosts });
 }
 
-function validateRunBindings({ manifest, lifecycleState, renderer, venue, soakState, publisherState, state }) {
+function validateRunBindings({ manifest, lifecycleState, renderer, venue, soakState, state }) {
   if (lifecycleState.phase !== "live") throw new Error("overlay-exception run requires lifecycle phase live");
   if (state.phase !== "PREPARED" || state.event !== manifest.event || state.generationId !== lifecycleState.generationId) throw new Error("overlay-exception prepared state does not match the event generation");
-  if (!venue.passed || venue.activeCameras.length !== 8 || !venue.activeCameras.includes(state.camera)) throw new Error("overlay-exception run requires eight admitted synthetic cameras including the target");
+  if (!venue.passed || venue.activeCameras.length !== 8 || !venue.activeCameras.includes(state.camera)) throw new Error("overlay-exception run requires eight admitted physical cameras including the target");
   if (soakState?.phase !== "RUNNING" || soakState.event !== manifest.event || JSON.stringify(soakState.activeCameras) !== JSON.stringify(venue.activeCameras)) throw new Error("overlay-exception run requires the exact running production soak");
   if (soakState.runBinding?.renderer?.gitSha !== renderer.gitSha || soakState.runBinding?.renderer?.deploymentId !== renderer.deploymentId) throw new Error("overlay-exception soak renderer binding is stale");
-  if (publisherState?.phase !== "RUNNING" || publisherState.event !== manifest.event || publisherState.generationId !== lifecycleState.generationId || Object.keys(publisherState.publishers ?? {}).length !== 8) throw new Error("overlay-exception synthetic publisher binding is invalid");
 }
 
 async function captureStablePhase({ label, requiredStableSamples, timeoutMs = PHASE_TIMEOUT_MS, monitor, session, profiles, venue, camera, renderer, baseline = null, initialPrevious = null, handle, now, sleep }) {
@@ -394,5 +393,5 @@ function safeError(error) { return (error instanceof Error ? error.message : Str
 function isDirectInvocation() { return process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url; }
 
 function usage() {
-  process.stdout.write("Usage:\n  node infra/event-stack/overlay-exception-rehearsal.mjs prepare --profile FILE --evidence DIR --camera N --confirm-prepare PREPARE-OVERLAY-DEBUG:EVENT:CAMERA-N\n  node infra/event-stack/overlay-exception-rehearsal.mjs run --profile FILE --soak-evidence DIR --publisher-state FILE --evidence DIR --confirm-arm ARM-OVERLAY-EXCEPTION:EVENT:CAMERA-N --confirm-fault FAULT-OVERLAY:EVENT:CAMERA-N\n  node infra/event-stack/overlay-exception-rehearsal.mjs cleanup --profile FILE --evidence DIR --confirm-cleanup CLEANUP-OVERLAY-DEBUG:EVENT:CAMERA-N\n  node infra/event-stack/overlay-exception-rehearsal.mjs status --evidence DIR\n");
+  process.stdout.write("Usage:\n  node infra/event-stack/overlay-exception-rehearsal.mjs prepare --profile FILE --evidence DIR --camera N --confirm-prepare PREPARE-OVERLAY-DEBUG:EVENT:CAMERA-N\n  node infra/event-stack/overlay-exception-rehearsal.mjs run --profile FILE --soak-evidence DIR --evidence DIR --confirm-arm ARM-OVERLAY-EXCEPTION:EVENT:CAMERA-N --confirm-fault FAULT-OVERLAY:EVENT:CAMERA-N\n  node infra/event-stack/overlay-exception-rehearsal.mjs cleanup --profile FILE --evidence DIR --confirm-cleanup CLEANUP-OVERLAY-DEBUG:EVENT:CAMERA-N\n  node infra/event-stack/overlay-exception-rehearsal.mjs status --evidence DIR\n");
 }
