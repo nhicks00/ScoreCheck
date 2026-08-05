@@ -31,6 +31,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StreamPlayer } from "@/components/StreamPlayer";
 import { deriveMonitorBrowserLiveness, type MonitorBrowserLiveness } from "@/lib/monitorBrowserLiveness";
 import { deriveMonitorDeadManReadiness } from "@/lib/monitorDeadManReadiness";
+import { egressRuntimeHealthy } from "@/lib/monitorEgressPresentation";
 import { deriveMonitorPagingReadiness } from "@/lib/monitorPagingReadiness";
 import { deriveMonitorSystemState } from "@/lib/monitorSystemState";
 import type { MonitorCourt, MonitorCourtPipelineRange, MonitorHealthState, MonitorIncident, MonitorMediaPath, MonitorNetworkSwitch, MonitorRouter, MonitorSilence, MonitorSnapshotEnvelope, MonitorStage, MonitorUniFi } from "@/lib/monitoringTypes";
@@ -574,6 +575,7 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
               {selected.stages.map((stage) => <StageDetail key={stage.stage} stage={stage} />)}
             </div>
           </div>
+          <ProgramTelemetry court={selected} nowMs={nowMs} />
           {pacingOpen && <PacingComparator courtNumber={selected.courtNumber} />}
         </section>
       )}
@@ -589,10 +591,15 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
                 <Metric label="Load" value={agent.host ? agent.host.load1.toFixed(2) : "--"} />
                 <Metric label="Memory" value={agent.host ? percent(agent.host.memoryTotalBytes - agent.host.memoryAvailableBytes, agent.host.memoryTotalBytes) : "--"} />
                 <Metric label="Disk" value={agent.host?.diskTotalBytes && agent.host.diskFreeBytes != null ? percent(agent.host.diskTotalBytes - agent.host.diskFreeBytes, agent.host.diskTotalBytes) : "--"} />
+                {agent.nativeServices?.egress && <>
+                  <Metric label="Egress memory" value={formatBytes(agent.nativeServices.egress.cgroupMemoryBytes)} />
+                  <Metric label="Egress CPU" value={formatPercentRatio(agent.nativeServices.egress.cpuLoadRatio)} />
+                  <Metric label="Egress memory load" value={formatPercentRatio(agent.nativeServices.egress.memoryLoadRatio)} />
+                </>}
               </div>
               <div className="monitor-service-list">
                 {agent.services.map((service) => <span key={service.name} className={service.running && service.healthy !== false && !service.oomKilled ? "is-ok" : "is-bad"}>{service.name} · {service.restartCount}r</span>)}
-                {agent.nativeServices?.egress && <span className={agent.nativeServices.egress.canAcceptRequest ? "is-ok" : "is-bad"}>Egress {agent.nativeServices.egress.idle ? "idle" : "busy"} · {agent.nativeServices.egress.canAcceptRequest ? "ready" : "at capacity"} · CPU {formatPercentRatio(agent.nativeServices.egress.cpuLoadRatio)}</span>}
+                {agent.nativeServices?.egress && <span className={egressRuntimeHealthy(agent.nativeServices.egress) ? "is-ok" : "is-bad"}>Egress {agent.nativeServices.egress.idle ? "idle" : "busy"} · {agent.nativeServices.egress.activeWebRequests}/{agent.nativeServices.egress.maximumWebRequests} outputs · {agent.nativeServices.egress.canAcceptRequest ? "ready" : "admission closed"}</span>}
               </div>
             </article>
           ))}
@@ -672,7 +679,7 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
         <Metric label="Preview speed" value={formatFps(preview?.framesPerSecond)} />
         <Metric label="Rendered speed" value={formatFps(liveBrowser?.video.framesPerSecond)} />
         <Metric label="Picture size" value={liveBrowser?.video.width && liveBrowser.video.height ? `${liveBrowser.video.width}×${liveBrowser.video.height}` : "--"} />
-        <Metric label={browserUsesHls ? "Playback buffer" : "Network delay"} value={formatMs(delayMs)} />
+        <Metric label={browserUsesHls ? "Program delay" : "Network delay"} value={formatMs(delayMs)} />
         <Metric label="Packet loss" value={loss} />
       </div>
       <div className="monitor-trends" aria-label="Five minute trends">
@@ -952,6 +959,43 @@ function StageRow({ stage }: { stage: MonitorStage }) {
   return <div className="monitor-stage-row" title={`${stageLabel(stage.stage)}: ${stage.summary}`}><StateDot state={stage.state} /><span className="monitor-stage-name">{stageLabel(stage.stage)}</span><span className="monitor-stage-state">{stageStateLabel(stage.state)}</span></div>;
 }
 
+function ProgramTelemetry({ court, nowMs }: { court: MonitorCourt; nowMs: number }) {
+  const program = court.paths.program;
+  const liveness = deriveMonitorBrowserLiveness({
+    receivedAt: court.browser?.receivedAt,
+    programReaderCount: program?.readerCount,
+    nowMs
+  });
+  const browser = liveness.state === "LIVE" ? court.browser : null;
+  const video = browser?.video;
+  const commentary = browser?.commentary;
+  const syncGapMs = commentary?.targetDelayMs != null && commentary.appliedDelayMs != null
+    ? Math.abs(commentary.targetDelayMs - commentary.appliedDelayMs)
+    : null;
+  return (
+    <section className="monitor-program-telemetry" aria-label={`Camera ${court.courtNumber} program endurance telemetry`}>
+      <div className="monitor-program-heading">
+        <div><Activity size={18} aria-hidden="true" /><div><h3>Program endurance</h3><p>Buffered playback, browser ownership, memory and audio synchronization</p></div></div>
+        <StateBadge state={browser ? "HEALTHY" : liveness.state === "STATUS_MISSING" ? "DEGRADED" : "UNKNOWN"} label={browser ? "Reporting now" : browserLivenessLabel(liveness)} />
+      </div>
+      <div className="monitor-network-summary monitor-program-summary">
+        <Metric label="Transport" value={video?.transport ? video.transport.toUpperCase() : "--"} />
+        <Metric label="Program delay" value={formatMs(video?.playoutDelayMs)} />
+        <Metric label="Buffered ahead" value={formatMs(video?.bufferedAheadMs)} />
+        <Metric label="HLS owners" value={video?.hlsActiveInstances == null ? "--" : String(video.hlsActiveInstances)} />
+        <Metric label="HLS created / closed" value={video?.hlsCreatedInstances == null || video.hlsDestroyedInstances == null ? "--" : `${video.hlsCreatedInstances} / ${video.hlsDestroyedInstances}`} />
+        <Metric label="Browser heap" value={formatBytes(video?.jsHeapUsedBytes)} />
+        <Metric label="Dropped frames" value={video?.framesDropped == null ? "--" : String(video.framesDropped)} />
+        <Metric label="Freeze time" value={video?.totalFreezesDurationMs == null ? "--" : formatDuration(video.totalFreezesDurationMs)} />
+        <Metric label="Reconnects / reloads" value={video ? `${video.reconnectCount} / ${video.reloadCount}` : "--"} />
+        <Metric label="Audio sync" value={commentary?.configured ? friendlyState(commentary.syncStatus) : "Not in use"} />
+        <Metric label="Audio delay applied" value={commentary?.configured ? formatMs(commentary.appliedDelayMs) : "--"} />
+        <Metric label="Audio sync gap" value={commentary?.configured ? formatMs(syncGapMs) : "--"} />
+      </div>
+    </section>
+  );
+}
+
 function StageDetail({ stage }: { stage: MonitorStage }) {
   return <div className="monitor-stage-detail-row" data-state={stage.state}><div><StateDot state={stage.state} /><strong>{stageLabel(stage.stage)}</strong></div><p>{stage.summary}</p>{stage.firstAction && <small>{stage.firstAction}</small>}</div>;
 }
@@ -1107,6 +1151,13 @@ function formatOptionalPercent(value: number | null | undefined): string {
 
 function formatWatts(value: number | null | undefined): string {
   return value == null ? "--" : `${value.toFixed(value < 10 ? 1 : 0)} W`;
+}
+
+function formatBytes(value: number | null | undefined): string {
+  if (value == null) return "--";
+  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GB`;
+  if (value >= 1024 ** 2) return `${Math.round(value / 1024 ** 2)} MB`;
+  return `${Math.round(value / 1024)} KB`;
 }
 
 function formatUptime(value: number | null | undefined): string {
