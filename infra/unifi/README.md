@@ -45,8 +45,8 @@ the matching UniFi antenna type before cameras connect.
    changing its permanent `UK Ultra 1/2/3` name.
 3. Apply the camera radio baseline from
    `docs/PEPLINK_BR1_PRO_5GK_HW3_COMMISSIONING_PLAN.md`: wired uplink, mesh off,
-   dedicated 5 GHz WPA2 camera SSID, fixed non-DFS channels, medium transmit
-   power, and no automatic channel changes during coverage.
+   2.4 GHz disabled, dedicated 5 GHz WPA2 camera SSID, fixed non-DFS channels,
+   medium transmit power, and no automatic channel changes during coverage.
 4. Select the correct physical antenna type. AP1 and AP2 are always panel; AP3
    follows the event manifest.
 5. Create a dedicated read-only official API key.
@@ -65,7 +65,7 @@ Prometheus, browser code, or the event router.
 - outdoor mode and Ubiquiti panel antenna;
 - DHCP and wired uplink;
 - mesh parent and mesh connect disabled;
-- 2.4 GHz channel 6, 20 MHz, medium transmit power;
+- 2.4 GHz radio disabled;
 - 5 GHz channel 149, 40 MHz, medium transmit power;
 - existing `BVM 2` Wi-Fi name and credentials preserved;
 - existing stable AP firmware preserved.

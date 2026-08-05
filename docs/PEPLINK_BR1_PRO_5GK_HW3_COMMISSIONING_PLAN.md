@@ -322,7 +322,9 @@ Initial Ubiquiti radio profile:
 - AP1 and AP2 always use their Ubiquiti panel antennas.
 - AP3 uses the antenna selected by the event manifest: Ubiquiti panel or omni.
   The next event profile selects the omni antenna.
-- Camera SSID on 5 GHz.
+- Disable the 2.4 GHz radio on all three camera APs. Re-enable it only for an
+  explicitly approved device that cannot use 5 GHz.
+- Camera SSID on 5 GHz only.
 - 40 MHz channels, fixed and non-overlapping.
 - Non-DFS channels for the baseline so radar events cannot force a channel
   move during the router test.
