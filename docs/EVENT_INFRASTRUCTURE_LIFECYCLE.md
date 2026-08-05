@@ -250,37 +250,19 @@ node infra/event-stack/ingest-recoveryctl.mjs rollback \
 ```
 
 Archive the protected state only after phase `ROLLED_BACK`. A later recovery
-episode uses a new state path. This flow is implemented but remains unavailable
-for production reliance until a protected synthetic 12-host takeover and
-rollback records measured RTO and exact output/monitor/provider convergence.
+episode uses a new state path. This flow remains unavailable for production
+reliance until an attended physical-camera 12-host takeover and rollback records
+measured RTO and exact output/monitor/provider convergence.
 
-### Camera-independent recovery rehearsal
+### Physical-camera recovery rehearsal
 
-The recovery proof does not require physical cameras. It uses eight local,
-looping 1080p30 fixtures against the real production ingest and output chain.
-The publisher launcher first requires an exact live 12-host generation and an
-idle raw path for every camera. It refuses to start if any physical or unknown
-publisher is already present. Cameras 1-2 use the production RTMP contract and
-Cameras 3-8 use the production SRT contract; credentials remain in protected
-event inputs and are never written to state or command output.
+Run recovery only while the ordinary production soak owns eight admitted
+physical cameras and all eight unlisted outputs are healthy. Generated feeds
+and generated-publisher state are rejected and cannot qualify production.
+Allow enough time for the ordinary ordered output close and explicit provider
+teardown; never leave the paid stack running while the operator is unavailable.
 
-Generate the event-bound synthetic venue profile with the checked-in CLI. It
-uses only pinned FFmpeg fixtures and must never be used as a physical venue
-attestation:
-
-```bash
-node infra/event-stack/synthetic-venue-profilectl.mjs create \
-  --event EVENT \
-  --output /absolute/protected/inputs/EVENT/synthetic-venue-profile.json
-```
-
-This is an attended, paid production-shaped rehearsal. It is not a local unit
-test and does not create, destroy, or automatically clean up infrastructure.
-Run it only after the normal production build and live admission have passed,
-with enough time remaining for the ordinary ordered output close and explicit
-provider teardown. Never leave it running while the operator is unavailable.
-
-Every disruptive synthetic qualification CLI uses the single protected lock
+Every disruptive qualification CLI uses the single protected lock
 next to the event lifecycle state (`lifecycle-state.json.qualification-gate.lock`).
 Renderer loss, Supabase loss, overlay-exception prepare/run/cleanup, and ingest
 recovery therefore cannot mutate one event generation concurrently. Status
@@ -293,31 +275,18 @@ boundary, so coverage cannot transition or retire while a disruptive gate is
 still active. Read-only lifecycle plan/status and initial provisioning do not
 acquire it.
 
-In one terminal, start the ordinary production soak and wait for its `ARMED`
-line. In a second terminal, start the synthetic publishers:
-
-```bash
-node infra/event-stack/production-synthetic-publishers.mjs start \
-  --profile /absolute/protected/events/EVENT/operator-profile.json \
-  --state /absolute/protected/evidence/EVENT/synthetic-publishers.json \
-  --evidence /absolute/protected/evidence/EVENT/synthetic-publishers \
-  --runtime /absolute/protected/runtime/EVENT/synthetic-publishers \
-  --ffmpeg /absolute/toolchain/ffmpeg \
-  --confirm START-SYNTHETIC-PUBLISHERS:EVENT
-```
-
-The production soak then performs its normal source admission, output
-conformance, Egress start, YouTube health, and stable-output checks. Wait for
-`SOAK_STARTED`; do not run the recovery transaction while the soak is merely
-armed or starting. The recovery runner requires the soak state to be `RUNNING`
-and uses the same destinations and exact event generation:
+Start the ordinary production soak, turn on the declared physical cameras only
+after its `ARMED` line, and wait for `SOAK_STARTED`. The soak performs normal
+source admission, output conformance, Egress start, YouTube health, and
+stable-output checks. Do not run recovery while the soak is merely armed or
+starting. The recovery runner requires state `RUNNING` and uses the same
+destinations and exact event generation:
 
 ```bash
 node infra/event-stack/ingest-recovery-rehearsal.mjs run \
   --profile /absolute/protected/events/EVENT/operator-profile.json \
   --destinations /absolute/protected/youtube/EVENT/destinations.json \
   --soak-evidence /absolute/protected/evidence/EVENT/production-soak \
-  --publisher-state /absolute/protected/evidence/EVENT/synthetic-publishers.json \
   --recovery-state /absolute/protected/evidence/EVENT/ingest-recovery.json \
   --evidence /absolute/protected/evidence/EVENT/ingest-recovery-rehearsal \
   --confirm-fault FAULT-PRIMARY-INGEST:EVENT \
@@ -339,9 +308,10 @@ A pass requires all of the following:
   on the spare, and after rollback;
 - all twelve agents fresh, no fault gates, and no unresolved incidents after
   each stabilization window;
-- exact output and YouTube destination health for all eight synthetic feeds;
+- exact raw, program, browser, output, and YouTube destination health for all
+  eight physical cameras;
 - takeover and rollback RTO no greater than five minutes each;
-- bounded publisher reconnects and all eight feeds healthy after rollback;
+- bounded camera reconnects and all eight feeds healthy after rollback;
 - final recovery phase `ROLLED_BACK` with the primary active and the warm spare
   restored.
 
@@ -353,14 +323,7 @@ node infra/event-stack/ingest-recovery-rehearsal.mjs status \
 ```
 
 After evidence is sealed, let the ordinary production-soak runner perform its
-normal ordered close. Then stop only the owned local publishers:
-
-```bash
-node infra/event-stack/production-synthetic-publishers.mjs stop \
-  --profile /absolute/protected/events/EVENT/operator-profile.json \
-  --state /absolute/protected/evidence/EVENT/synthetic-publishers.json \
-  --confirm STOP-SYNTHETIC-PUBLISHERS:EVENT
-```
+normal ordered close. Physical cameras remain operator-controlled.
 
 If the rehearsal exits in failure after fault injection, it first uses the
 already supplied confirmations to make one bounded safety return: an incomplete
@@ -371,11 +334,6 @@ regardless. If the safety return also fails, use `ingest-recoveryctl.mjs status`
 to correct the reported provider/host dependency and resume the exact incomplete
 step. Reach `ROLLED_BACK` before ordinary output cleanup or provider teardown.
 Never delete state to force recovery.
-
-The bundle generator writes an empty, protected rehearsal endpoint binding.
-That binding proves the rehearsal manifest has no Reserved-IP slots; it does
-not call the Reserved-IP API. Rehearsal DNS is disposable and bound to exact
-Droplet IDs/public addresses in lifecycle state.
 
 ## Protected inputs
 
@@ -892,9 +850,9 @@ missing or identical pair. The primary compositor and warm spare use the same
 protected stream key, but their owner records are explicit schema-2 `primary`
 and `backup` roles and their RTMPS base hosts must differ.
 
-Run this only during an attended synthetic production soak for one selected
-Tier 1 camera. The runner rejects Tier 2, Tier 3, or missing priority. It does not require a physical camera when the protected
-synthetic publishers are the admitted source:
+Run this only during an attended physical-camera production soak for one
+selected Tier 1 camera. The runner rejects Tier 2, Tier 3, missing priority,
+and generated-feed venue profiles:
 
 ```bash
 node infra/event-stack/youtube-backupctl.mjs run \

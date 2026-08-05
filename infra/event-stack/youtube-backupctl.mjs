@@ -6,7 +6,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { loadVenueAdmission } from "./venue-admission.mjs";
+import { isSyntheticCloudFixtureVenue, loadVenueAdmission } from "./venue-admission.mjs";
 import { ProductionYouTubeProvider, readProductionDestinations } from "./production-youtube.mjs";
 import { withQualificationGateLock } from "./qualification-gate-lock.mjs";
 import { EgressRuntime } from "./rehearsal/egress-runtime.mjs";
@@ -64,6 +64,7 @@ export async function createRuntime(options, dependencies = {}) {
   }
   const venue = await loadVenueAdmission(profile.venueProfile, manifest.event);
   if (!venue.passed || !venue.activeCameras.includes(options.camera)) throw new Error(`Camera ${options.camera} is not admitted by the live venue profile`);
+  requirePhysicalCameraVenue(venue);
   requireTierOneCamera(venue, options.camera);
   const destinations = await readProductionDestinations(options.destinations, { event: manifest.event, activeCameras: venue.activeCameras });
   const soakState = await readProtectedJson(join(options.soakEvidence, "production-soak-state.json"), "production soak state");
@@ -117,6 +118,11 @@ export async function createRuntime(options, dependencies = {}) {
       primaryOwner
     }
   };
+}
+
+export function requirePhysicalCameraVenue(venue) {
+  if (isSyntheticCloudFixtureVenue(venue?.profile)) throw new Error("YouTube backup rehearsal requires a physical-camera venue profile");
+  return venue;
 }
 
 export function requireTierOneCamera(venue, camera) {
