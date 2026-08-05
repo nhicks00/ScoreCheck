@@ -98,6 +98,7 @@ test("ingest provisioning admits the configured SRT socket buffers", async () =>
 test("shared compositor deployment runners remain executable in the release tree", async () => {
   for (const [path, label] of [
     ["infra/mediamtx/scorecheck-ffmpeg-runner.sh", "monitored FFmpeg runner"],
+    ["infra/compositor/fault-owned-egress.sh", "owned Egress fault runner"],
     ["infra/compositor/recycle-egress-worker.sh", "Egress worker recycle runner"]
   ]) {
     const runner = await stat(resolve(root, path));

@@ -610,7 +610,7 @@ test("binds each role to exact remote reconstruction config paths", () => {
   assert.ok(compositor.some(([local, remote]) => local === "/secrets/compositors/bvm-compositor-a.env" && remote === "/opt/compositor/.env"));
   assert.ok(compositor.some(([local, remote]) => local === "/secrets/renderer.env" && remote === "/opt/compositor/renderer.env"));
   assert.ok(compositor.some(([local, remote]) => local === "/secrets/renderer/local-renderer.tar.gz" && remote === "/opt/compositor/local-renderer.tar.gz"));
-  for (const remote of ["/etc/systemd/system/scorecheck-egress-supervisor.service", "/opt/compositor/egress-supervisor.sh", "/opt/compositor/recycle-egress-worker.sh", "/opt/compositor/normalize-camera.sh", "/opt/compositor/scorecheck-ffmpeg-runner.sh", "/opt/compositor/qualify-output.sh", "/opt/compositor/rebind-ingest.sh", "/opt/compositor/start-normalizer.sh", "/opt/compositor/stop-normalizer.sh"]) {
+  for (const remote of ["/etc/systemd/system/scorecheck-egress-supervisor.service", "/opt/compositor/egress-supervisor.sh", "/opt/compositor/fault-owned-egress.sh", "/opt/compositor/recycle-egress-worker.sh", "/opt/compositor/normalize-camera.sh", "/opt/compositor/scorecheck-ffmpeg-runner.sh", "/opt/compositor/qualify-output.sh", "/opt/compositor/rebind-ingest.sh", "/opt/compositor/start-normalizer.sh", "/opt/compositor/stop-normalizer.sh"]) {
     assert.ok(compositor.some(([, candidate]) => candidate === remote));
   }
   const observability = roleConfigBindings(repoRoot, secrets, { role: "observability", name: "bvm-observability-01" });

@@ -5,11 +5,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIXTURE="$(mktemp -d)"
 trap 'rm -rf "$FIXTURE"' EXIT
 mkdir -p "$FIXTURE/bin" "$FIXTURE/mock" "$FIXTURE/state" "$FIXTURE/export"
-cp "$SCRIPT_DIR/egress-supervisor.sh" "$SCRIPT_DIR/start-court.sh" "$SCRIPT_DIR/stop-court.sh" "$SCRIPT_DIR/lib.sh" "$FIXTURE/"
+cp "$SCRIPT_DIR/egress-supervisor.sh" "$SCRIPT_DIR/fault-owned-egress.sh" "$SCRIPT_DIR/start-court.sh" "$SCRIPT_DIR/stop-court.sh" "$SCRIPT_DIR/lib.sh" "$FIXTURE/"
 printf 'services: {}\n' >"$FIXTURE/docker-compose.yml"
 
 printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$FIXTURE/bin/flock"
 printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$FIXTURE/bin/sleep"
+printf '%s\n' '#!/usr/bin/env bash' '[[ "$*" == "is-active --quiet scorecheck-egress-supervisor.service" ]]' >"$FIXTURE/bin/systemctl"
 ln -s "$(command -v jq)" "$FIXTURE/bin/jq"
 ln -s "$(command -v openssl)" "$FIXTURE/bin/openssl"
 
@@ -79,7 +80,7 @@ else
   printf 'ok\n'
 fi
 MOCK
-chmod 755 "$FIXTURE/bin/flock" "$FIXTURE/bin/sleep" "$FIXTURE/bin/lk" "$FIXTURE/bin/docker" "$FIXTURE/bin/curl"
+chmod 755 "$FIXTURE/bin/flock" "$FIXTURE/bin/sleep" "$FIXTURE/bin/systemctl" "$FIXTURE/bin/lk" "$FIXTURE/bin/docker" "$FIXTURE/bin/curl"
 
 printf 'null\n' >"$FIXTURE/mock/active.json"
 printf '0\n' >"$FIXTURE/mock/start-count"
@@ -131,7 +132,24 @@ export_mode="$(stat -c '%a' "$FIXTURE/export/state.json" 2>/dev/null || stat -f 
 export_directory_mode="$(stat -c '%a' "$FIXTURE/export" 2>/dev/null || stat -f '%Lp' "$FIXTURE/export")"
 [[ "$export_directory_mode" == "755" ]]
 
-printf 'null\n' >"$FIXTURE/mock/active.json"
+if PATH="$FIXTURE/bin:$PATH" SCORECHECK_EGRESS_SUPERVISOR_EXPORT_DIR="$FIXTURE/export" \
+  "$FIXTURE/fault-owned-egress.sh" 1 EG_test1 WRONG >/dev/null 2>&1; then
+  echo "wrong Egress fault confirmation was accepted" >&2
+  exit 1
+fi
+grep -Fq 'EG_test1' "$FIXTURE/mock/active.json"
+if PATH="$FIXTURE/bin:$PATH" SCORECHECK_EGRESS_SUPERVISOR_EXPORT_DIR="$FIXTURE/export" \
+  "$FIXTURE/fault-owned-egress.sh" 1 EG_wrong 'FAULT-OWNED-EGRESS:CAMERA-1:EG_wrong' >/dev/null 2>&1; then
+  echo "mismatched Egress fault owner was accepted" >&2
+  exit 1
+fi
+grep -Fq 'EG_test1' "$FIXTURE/mock/active.json"
+PATH="$FIXTURE/bin:$PATH" SCORECHECK_EGRESS_SUPERVISOR_EXPORT_DIR="$FIXTURE/export" \
+  "$FIXTURE/fault-owned-egress.sh" 1 EG_test1 'FAULT-OWNED-EGRESS:CAMERA-1:EG_test1' >/dev/null
+grep -Fxq 'EG_test1' "$FIXTURE/requests/court-1.egress-id"
+jq -e '.egressId == "EG_test1" and .outputGeneration == "generation-one"' "$FIXTURE/requests/court-1.owner.json" >/dev/null
+[[ -f "$FIXTURE/requests/court-1.json" ]]
+jq -e '(. // []) as $active | ($active | type) == "array" and ($active | length) == 0' "$FIXTURE/mock/active.json" >/dev/null
 run_once
 jq -e '.status == "MISSING_PENDING" and .missingCount == 1' "$FIXTURE/state/state.json" >/dev/null
 run_once

@@ -43,8 +43,11 @@ bash -n "${shell_scripts[@]}"
 
 reviewed_shell_tests=(
   infra/compositor/test-admission-config.sh
+  infra/compositor/test-egress-supervisor.sh
   infra/compositor/test-normalize-camera.sh
+  infra/compositor/test-program-branch-warmer.sh
   infra/compositor/test-qualify-output.sh
+  infra/compositor/test-recycle-egress-worker.sh
   infra/compositor/test-start-court.sh
   infra/mediamtx/test-scorecheck-ffmpeg-runner.sh
   infra/mediamtx/test-scorecheck-preview-runner.sh

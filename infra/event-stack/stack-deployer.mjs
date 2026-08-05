@@ -907,6 +907,7 @@ export function roleConfigBindings(repoRoot, secretsDirectory, spec) {
     [join(secretsDirectory, "renderer.env"), "/opt/compositor/renderer.env"],
     [join(secretsDirectory, "renderer/local-renderer.tar.gz"), "/opt/compositor/local-renderer.tar.gz"],
     [join(repoRoot, "infra/compositor/egress-supervisor.sh"), "/opt/compositor/egress-supervisor.sh"],
+    [join(repoRoot, "infra/compositor/fault-owned-egress.sh"), "/opt/compositor/fault-owned-egress.sh"],
     [join(repoRoot, "infra/compositor/recycle-egress-worker.sh"), "/opt/compositor/recycle-egress-worker.sh"],
     [join(repoRoot, "infra/compositor/program-branch-warmer.sh"), "/opt/compositor/program-branch-warmer.sh"],
     [join(repoRoot, "infra/compositor/normalize-camera.sh"), "/opt/compositor/normalize-camera.sh"],
