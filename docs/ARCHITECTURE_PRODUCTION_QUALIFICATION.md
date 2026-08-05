@@ -1,7 +1,7 @@
 # ScoreCheck Architecture Production Qualification
 
 Date: 2026-08-05
-Implementation baseline before this gate: `f54b11c9835ad881bc1264280a53144bbefab743`
+Runtime qualification candidate: `b836912352293f87cdbc9e1ae28b1a3748b4dfd1`
 Status: implementation and physical qualification in progress
 
 ## Purpose
@@ -243,9 +243,10 @@ In particular:
   artifact is still required. Dynamic provider dependencies make a static
   destination-IP list unsafe, so no outbound proxy or extra host is admitted
   without measured need.
-- The complete qualification candidate is published on `origin/master` at
-  `f54b11c9835ad881bc1264280a53144bbefab743`; event bundles must bind that exact
-  immutable revision or a later reviewed revision. No temporary event
+- The complete runtime qualification candidate is published on `origin/master`
+  at `b836912352293f87cdbc9e1ae28b1a3748b4dfd1`; event bundles must bind that exact
+  immutable revision or a later reviewed runtime revision. Documentation-only
+  ledger descendants do not change the runtime candidate. No temporary event
   infrastructure is running. A fresh independent read-only audit at
   `2026-08-05T05:50:18.674Z` proved temporary compute zero, exactly one
   persistent UniFi controller, two unassigned retained endpoint anchors, and
