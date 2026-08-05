@@ -336,6 +336,26 @@ Initial Ubiquiti radio profile:
 - Initial camera distribution of 3 / 3 / 2 across the three APs.
 - Preferred RSSI at least -65 dBm, with -70 dBm as the hard qualification floor.
 
+Controller-wide production settings applied on 2026-08-04:
+
+- `BVM 1`, `BVM 2`, and `BVM 3` are 5 GHz-only SSIDs, each restricted to its
+  matching `UK Ultra` AP.
+- All three SSIDs use manual settings with fast roaming, handoff suggestions,
+  band steering, and BSS transition disabled. WPA2 and PMF-disabled behavior
+  are retained for camera compatibility.
+- Wireless meshing is disabled globally; production AP uplinks are wired.
+- UniFi OS, Network, and AP firmware use the Official release channel with
+  automatic updates disabled. Check and apply updates during pre-event
+  commissioning, then freeze versions through coverage.
+- Weekly controller backups remain enabled. A post-hardening all-applications
+  backup is protected locally at
+  `~/.config/scorecheck/unifi/backups/unifi-os-backup-20260804T204701CDT.unifi`
+  with SHA-256
+  `f693ecfa817c9e2e0ee84517b5b7ad8d93894660900214ac86970c485bb50e81`.
+- The third-party `PepWave` network remains flat and conservative: RSTP and
+  rogue-DHCP detection enabled; IGMP snooping, jumbo frames, flow control, and
+  802.1X disabled.
+
 Applied commissioning state as of 2026-08-04:
 
 - `UK Ultra 1`: panel antenna, 2.4 GHz disabled, saved 5 GHz channel 157 at

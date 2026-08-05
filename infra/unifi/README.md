@@ -60,6 +60,27 @@ Prometheus, browser code, or the event router.
 
 ## Applied AP baseline
 
+The controller-wide production baseline was reconciled on 2026-08-04:
+
+- `BVM 1`, `BVM 2`, and `BVM 3` each broadcast only from their matching
+  `UK Ultra` AP and only on 5 GHz;
+- all three SSIDs use explicit manual settings with fast roaming, handoff
+  suggestions, band steering, and BSS transition disabled for stationary
+  cameras;
+- WPA2 compatibility, visible SSIDs, local client communication, automatic
+  DTIM, and unlimited client throughput are preserved;
+- wireless meshing is disabled globally because every production AP has a
+  wired uplink;
+- UniFi OS, Network application, and device firmware remain on the Official
+  channel, but unattended updates are disabled. Updates are checked and
+  applied deliberately before an event, never during coverage;
+- weekly automatic controller backups remain enabled.
+
+The third-party `PepWave` network retains its conservative Layer-2 defaults:
+RSTP and rogue-DHCP detection enabled; IGMP snooping, jumbo frames, flow
+control, and 802.1X disabled. No gateway, VLAN, multicast, or traffic-shaping
+behavior was added during AP commissioning.
+
 `UK Ultra 1` was commissioned on 2026-08-04 with:
 
 - outdoor mode and Ubiquiti panel antenna;
@@ -97,7 +118,25 @@ The 20 MHz profile was saved while AP2 was offline. Its last live check was at
 - existing stable AP firmware preserved.
 
 AP3 was live-verified `Up to date` on wired GbE at `192.168.0.95`, with no
-2.4 GHz channel and live 5 GHz channel 161/20 MHz.
+active 2.4 GHz radio and live 5 GHz channel 161/20 MHz. The UniFi device table
+retained an older 149 MHz summary, but the live AP details and AirView radio
+state both reported 161/20 MHz; production readiness must use fresh radio
+telemetry rather than the stale table summary.
+
+## Protected controller backup
+
+A fresh all-applications controller backup was created after the controller
+hardening at 2026-08-04 20:47 CDT and stored outside Git with mode `0600`:
+
+```text
+~/.config/scorecheck/unifi/backups/unifi-os-backup-20260804T204701CDT.unifi
+SHA-256 f693ecfa817c9e2e0ee84517b5b7ad8d93894660900214ac86970c485bb50e81
+```
+
+The backup may contain controller credentials and must never be committed or
+copied into normal evidence. Event automation should restore from a protected
+copy and export a new protected backup before temporary controller compute is
+destroyed.
 
 ## Protected monitoring contract
 
@@ -142,7 +181,8 @@ DigitalOcean fleet. The APs retain their last configuration while powered down.
 ## Remaining live steps
 
 - Power all three APs together and verify the saved 149/157/161 MHz channel
-  plan after an event-location RF scan.
+  plan and 20 MHz widths after an event-location RF scan. AP1 and AP2 were
+  offline when their 20 MHz profiles were saved.
 - Create the protected read-only API credential and capture all three real
   device UUID/MAC bindings.
 - Automate controller restore, health verification, backup export, and teardown
@@ -152,6 +192,9 @@ DigitalOcean fleet. The APs retain their last configuration while powered down.
 
 ## Official references
 
+- [UniFi WiFi SSID and AP settings](https://help.ui.com/hc/en-us/articles/32065480092951-UniFi-WiFi-SSID-and-AP-Settings-Overview)
+- [UniFi wireless meshing](https://help.ui.com/hc/en-us/articles/115002262328-Considerations-for-Optimal-Wireless-Mesh-Networks)
+- [UniFi update controls](https://help.ui.com/hc/en-us/articles/7605005245975-UniFi-Updates)
 - [Official UniFi API overview](https://help.ui.com/hc/en-us/articles/30076656117655-Getting-Started-with-the-Official-UniFi-API)
 - [Self-hosting UniFi](https://help.ui.com/hc/en-us/articles/34210126298775-Self-Hosting-UniFi)
 - [Remote API connector](https://developer.ui.com/site-manager/v1.0.0/connectorget)
