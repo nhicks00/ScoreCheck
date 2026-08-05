@@ -38,8 +38,7 @@ test("captures, verifies, restores, and integrity-binds protected multi-host Cad
     directory: stateDirectory,
     sshPrivateKey: join(root, "fixture.key"),
     knownHostsPath: join(root, "known_hosts"),
-    runner,
-    now: () => new Date("2026-08-01T12:00:00.000Z")
+    runner
   });
 
   assert.deepEqual(await store.inspect(hosts, { allowMissing: true }), { status: "missing", hosts: [...hosts].sort() });
@@ -84,8 +83,7 @@ test("supports a single observability hostname binding", async () => {
     sshPrivateKey: join(root, "fixture.key"),
     knownHostsPath: join(root, "known_hosts"),
     runner,
-    remoteDirectory: "/opt/scorecheck-monitoring",
-    now: () => new Date("2026-08-01T12:00:00.000Z")
+    remoteDirectory: "/opt/scorecheck-monitoring"
   });
   const captured = await store.capture({ publicIpv4: "192.0.2.12", hosts: [host] });
   assert.equal(captured.status, "ready");
