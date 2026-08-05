@@ -277,7 +277,7 @@ groups:
           root_dependency: venue-wifi
         annotations:
           summary: "The venue Wi-Fi system stopped reporting access-point status."
-          first_action: "Keep the cameras streaming. Check that Official UniFi Hosting is online; do not restart cameras that are still streaming."
+          first_action: "Keep the cameras streaming. Check that the UniFi controller is online; do not restart cameras that are still streaming."
 
       - alert: ScoreCheckUniFiAccessPointOffline
         expr: (scorecheck_unifi_access_point_online == 0) and on() (sum(scorecheck_court_media_required) > 0)

@@ -112,7 +112,7 @@ describe("monitoring configuration", () => {
       MONITOR_UNIFI_SITE_ID: "10000000-0000-4000-8000-000000000001"
     };
     const accessPoints = [1, 2, 3].map((number) => ({
-      name: `scorecheck-ap-${number}`,
+      name: `UK Ultra ${number}`,
       deviceId: `20000000-0000-4000-8000-00000000000${number}`,
       macAddress: `00:11:22:33:44:0${number}`
     }));

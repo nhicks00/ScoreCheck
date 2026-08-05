@@ -289,22 +289,24 @@ The Peplink AP Controller manages Peplink APs, not the Ubiquiti Swiss Army Knife
 Ultra units. Ubiquiti RF, channel, retry, association, and roaming telemetry
 must come from the UniFi management path.
 
-Use Official UniFi Hosting as the persistent controller for these three APs.
-This removes the MacBook from event operation without adding a CloudKey or a
-per-event controller Droplet. The controller remains available between events;
-only the APs and PoE equipment power down. The first adoption and radio setup may
-use the authenticated UniFi UI, but routine event readiness and evidence use the
-official API from ScoreCheck monitoring.
+Use the existing UniFi OS Server site for one-time commissioning. For events,
+restore that protected controller state on the temporary observability Droplet.
+This removes the MacBook from event operation without adding a CloudKey or a paid
+always-on controller. The controller backup persists between events; controller
+compute, APs, and PoE equipment run only for the event. Routine event readiness
+and evidence use the official API from ScoreCheck monitoring.
 
-Create one protected official UniFi API key after the hosted site exists. Store
+Create one protected official UniFi API key after the site is commissioned. Store
 the host id, site id, and exact device UUID/MAC binding for all three APs in the
 protected monitoring environment. The monitor reads device state, firmware,
 latest CPU/memory/uplink/radio statistics, and connected-client association.
-The APs themselves are not the supported API boundary; the hosted UniFi control
-plane is. Do not put the UniFi controller on the Peplink router or a temporary
-ScoreCheck Droplet.
+The APs themselves are not the supported API boundary; UniFi OS Server is. Do
+not put the UniFi controller on the Peplink router. During an event, the
+temporary observability Droplet owns the restored controller and monitoring
+processes; the protected controller backup is exported before that Droplet is
+destroyed.
 
-The APs continue their last applied configuration if the hosted controller is
+The APs continue their last applied configuration if the controller is
 temporarily unreachable, so a controller outage must not stop camera media.
 Monitoring reports that outage separately and tells the operator not to restart
 cameras that are still streaming. Once the real site is commissioned, set
@@ -315,6 +317,11 @@ leave that flag false.
 Initial Ubiquiti radio profile:
 
 - Wired uplinks and mesh disabled.
+- Preserve the permanent device names `UK Ultra 1`, `UK Ultra 2`, and
+  `UK Ultra 3`.
+- AP1 and AP2 always use their Ubiquiti panel antennas.
+- AP3 uses the antenna selected by the event manifest: Ubiquiti panel or omni.
+  The next event profile selects the omni antenna.
 - Camera SSID on 5 GHz.
 - 40 MHz channels, fixed and non-overlapping.
 - Non-DFS channels for the baseline so radar events cannot force a channel
@@ -511,7 +518,7 @@ Commissioning automation boundary:
 | SFC distribution/FEC/Smoothing details | Authenticated Web Admin/InControl unless a documented endpoint exists |
 | Outbound-policy creation | Authenticated Web Admin/InControl unless a documented endpoint exists |
 | Configuration backup | Web Admin initially; qualify 8.6 token-based backup API before relying on it |
-| Camera/AP radio telemetry | Official UniFi Network API plus camera and media monitoring, not the Peplink AP Controller |
+| Camera/AP radio telemetry | Official UniFi Network API through the event UniFi OS Server plus camera and media monitoring, not the Peplink AP Controller |
 
 Do not reverse-engineer undocumented UI endpoints. Do not open SSH. Do not
 create overlapping OAuth sessions: the observed 8.6 behavior invalidated older
@@ -779,5 +786,4 @@ that the physical router has passed production acceptance before it arrives.
 - [Ubiquiti UK-Ultra technical specifications](https://techspecs.ui.com/unifi/wifi/uk-ultra?subcategory=all-wifi)
 - [Ubiquiti Wi-Fi optimization guidance](https://help.ui.com/hc/en-us/articles/221029967-Optimizing-WiFi-Connectivity-and-Reducing-Latency)
 - [Ubiquiti official API overview](https://help.ui.com/hc/en-us/articles/30076656117655-Getting-Started-with-the-Official-UniFi-API)
-- [Ubiquiti Official UniFi Hosting setup](https://help.ui.com/hc/en-us/articles/4415364143511-Getting-Started-with-Official-UniFi-Hosting)
 - [Ubiquiti self-hosting options](https://help.ui.com/hc/en-us/articles/34210126298775-Self-Hosting-UniFi)

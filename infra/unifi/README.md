@@ -1,43 +1,74 @@
 # ScoreCheck UniFi control plane
 
-ScoreCheck uses Official UniFi Hosting as the persistent controller for the
-three Ubiquiti UK-Ultra access points. This is deliberately separate from the
-temporary DigitalOcean event stack.
+ScoreCheck manages the three Ubiquiti UK-Ultra access points with UniFi OS
+Server. The existing macOS controller is the one-time commissioning environment.
+The event target is the same protected controller state restored on the temporary
+observability Droplet, so the MacBook and extra controller hardware are not part
+of event operation.
 
 ## Operating boundary
 
-- No MacBook or local UniFi Network Server is required during an event.
-- No CloudKey or other travel hardware is added.
-- No controller Droplet is created or destroyed with an event.
-- The hosted controller and its protected API key persist between events.
-- The APs retain their last applied configuration when the controller is
-  temporarily unreachable, so media does not depend on the API.
-- Initial adoption and settings changes use the authenticated UniFi UI. Routine
-  readiness, monitoring, and evidence are read-only API operations.
+- The APs keep their last applied configuration if the controller is unavailable;
+  camera media does not depend on the controller or monitoring API.
+- No CloudKey or other travel hardware is required.
+- No paid Official UniFi Hosting subscription is required.
+- The controller backup and API credential persist securely between events, but
+  controller compute exists only while the event stack is running.
+- Initial adoption and radio changes use the authenticated UniFi UI. Routine
+  readiness, monitoring, and evidence use the official API.
+- The event lifecycle must restore and start the controller before setting
+  `MONITOR_UNIFI_REQUIRED=true`, and export its state before provider teardown.
 
-Official UniFi Hosting is a paid Ubiquiti service. Creating the subscription is
-the only billing action in this design and requires Nathan's explicit approval
-at the purchase screen.
+The controller restore/export lifecycle step is not automated yet. Until it is,
+the Mac controller is suitable for commissioning only and UniFi must not be
+claimed as a production-required event dependency.
+
+## Permanent AP identity and antennas
+
+Keep the existing device names. Do not rename them:
+
+| Device | Antenna contract |
+| --- | --- |
+| `UK Ultra 1` | Ubiquiti panel antenna at every event |
+| `UK Ultra 2` | Ubiquiti panel antenna at every event |
+| `UK Ultra 3` | Event-selected Ubiquiti panel or omni antenna; omni for the next event |
+
+The AP3 antenna selection belongs in the event manifest and must match the
+physical attachment before readiness. Changing AP3's antenna requires applying
+the matching UniFi antenna type before cameras connect.
 
 ## One-time commissioning
 
-1. Power all three UK-Ultra APs from the PoE switch or injectors and give their
-   upstream network normal Internet access.
-2. Create the Official UniFi Hosting instance and its first ScoreCheck site.
-3. Remotely adopt the three APs and rename them `scorecheck-ap-1`,
-   `scorecheck-ap-2`, and `scorecheck-ap-3`.
-4. Apply the camera radio baseline from
-   `docs/PEPLINK_BR1_PRO_5GK_HW3_COMMISSIONING_PLAN.md`: wired uplinks, mesh off,
-   a dedicated 5 GHz WPA2 camera SSID, fixed non-DFS 40 MHz channels, medium
-   transmit power, and no automatic channel changes during coverage.
+1. Power each UK-Ultra from the PoE switch or an injector and give its upstream
+   network normal Internet access.
+2. Use the existing UniFi OS Server site to adopt or reconnect the AP without
+   changing its permanent `UK Ultra 1/2/3` name.
+3. Apply the camera radio baseline from
+   `docs/PEPLINK_BR1_PRO_5GK_HW3_COMMISSIONING_PLAN.md`: wired uplink, mesh off,
+   dedicated 5 GHz WPA2 camera SSID, fixed non-DFS channels, medium transmit
+   power, and no automatic channel changes during coverage.
+4. Select the correct physical antenna type. AP1 and AP2 are always panel; AP3
+   follows the event manifest.
 5. Create a dedicated read-only official API key.
-6. Record the hosted console id, local Network site UUID, and each AP's device
-   UUID and MAC address in the protected production monitoring source.
-7. Confirm the API reports each AP as `ONLINE` with a fresh heartbeat, then set
-   `MONITOR_UNIFI_REQUIRED=true`.
+6. Record the controller host id, Network site UUID, and each AP device UUID and
+   MAC address in the protected production monitoring source.
+7. Confirm the API reports each AP as `ONLINE` with a fresh heartbeat before
+   setting `MONITOR_UNIFI_REQUIRED=true`.
 
 The API key must never be committed, printed in evidence, or passed to Caddy,
 Prometheus, browser code, or the event router.
+
+## Applied AP2 baseline
+
+`UK Ultra 2` was commissioned on 2026-08-04 with:
+
+- outdoor mode and Ubiquiti panel antenna;
+- DHCP and wired uplink;
+- mesh parent and mesh connect disabled;
+- 2.4 GHz channel 6, 20 MHz, medium transmit power;
+- 5 GHz channel 149, 40 MHz, medium transmit power;
+- existing `BVM 2` Wi-Fi name and credentials preserved;
+- existing stable AP firmware preserved.
 
 ## Protected monitoring contract
 
@@ -46,9 +77,9 @@ The observability service consumes these values from its mode-0600 environment:
 ```dotenv
 MONITOR_UNIFI_REQUIRED=true
 MONITOR_UNIFI_API_KEY=<protected official API key>
-MONITOR_UNIFI_HOST_ID=<Official UniFi Hosting console id>
+MONITOR_UNIFI_HOST_ID=<UniFi OS Server console id>
 MONITOR_UNIFI_SITE_ID=<Network site UUID>
-MONITOR_UNIFI_ACCESS_POINTS_JSON=[{"name":"scorecheck-ap-1","deviceId":"<uuid>","macAddress":"<mac>"},{"name":"scorecheck-ap-2","deviceId":"<uuid>","macAddress":"<mac>"},{"name":"scorecheck-ap-3","deviceId":"<uuid>","macAddress":"<mac>"}]
+MONITOR_UNIFI_ACCESS_POINTS_JSON=[{"name":"UK Ultra 1","deviceId":"<uuid>","macAddress":"<mac>"},{"name":"UK Ultra 2","deviceId":"<uuid>","macAddress":"<mac>"},{"name":"UK Ultra 3","deviceId":"<uuid>","macAddress":"<mac>"}]
 MONITOR_UNIFI_POLL_INTERVAL_MS=30000
 ```
 
@@ -58,9 +89,10 @@ APs are required.
 
 ## Automatic event behavior
 
-`eventctl up` deploys the existing observability service. The service reads the
-Official UniFi API every 30 seconds through Ubiquiti's remote connector and adds
-the following to `/v1/snapshot` and Prometheus:
+After the controller lifecycle step is implemented, `eventctl up` restores the
+controller on the observability host before monitoring becomes required. The
+monitor reads the official UniFi API every 30 seconds and adds the following to
+`/v1/snapshot` and Prometheus:
 
 - controller reachability;
 - expected and online AP count;
@@ -68,30 +100,30 @@ the following to `/v1/snapshot` and Prometheus:
 - radio transmit-retry percentage;
 - connected clients and each client's `uplinkDeviceId`, which identifies its AP.
 
-Production stack verification and soak admission require `unifi.state=HEALTHY`
-when `MONITOR_UNIFI_REQUIRED=true`. Alerts use plain operator language for:
+Production verification and soak admission require `unifi.state=HEALTHY` when
+`MONITOR_UNIFI_REQUIRED=true`. Alerts use plain operator language for:
 
-- hosted controller/API unavailable;
+- controller/API unavailable;
 - an expected AP offline;
 - sustained radio retries above 25 percent.
 
-Event teardown preserves normal monitoring evidence, destroys the temporary
-DigitalOcean fleet only after the protected lifecycle confirmation, and leaves
-Official UniFi Hosting untouched. No UniFi setup or teardown step is required
-for later events beyond powering and cabling the APs.
+Event teardown must export the controller state before destroying the temporary
+DigitalOcean fleet. The APs retain their last configuration while powered down.
 
-## Remaining live step
+## Remaining live steps
 
-The code path can be validated without hardware, but real host/site/device IDs
-cannot be invented. Live commissioning starts only after all three APs are
-powered and online. Cameras are not required for adoption; they are required
-later to map Camera 1-8 MAC addresses to AP associations and qualify the RF
-layout.
+- Commission AP1 and AP3 when each can be powered.
+- Create the protected read-only API credential and capture all three real
+  device UUID/MAC bindings.
+- Automate controller restore, health verification, backup export, and teardown
+  in the protected event lifecycle.
+- Connect the cameras later to map Camera 1-8 MAC addresses to AP associations
+  and qualify the final RF layout.
 
 ## Official references
 
-- [Official UniFi Hosting setup](https://help.ui.com/hc/en-us/articles/4415364143511-Getting-Started-with-Official-UniFi-Hosting)
 - [Official UniFi API overview](https://help.ui.com/hc/en-us/articles/30076656117655-Getting-Started-with-the-Official-UniFi-API)
+- [Self-hosting UniFi](https://help.ui.com/hc/en-us/articles/34210126298775-Self-Hosting-UniFi)
 - [Remote API connector](https://developer.ui.com/site-manager/v1.0.0/connectorget)
 - [Network device details](https://developer.ui.com/network/v10.3.58/getadopteddevicedetails)
 - [Network device statistics](https://developer.ui.com/network/v9.5.21/getdevicelateststatistics)

@@ -240,7 +240,7 @@ function parseUniFiConfig(parsed: {
     throw new Error("MONITOR_UNIFI_ACCESS_POINTS_JSON must be valid JSON.");
   }
   const bindingSchema = z.object({
-    name: z.string().trim().min(1).max(40).regex(/^[a-zA-Z0-9_.-]+$/),
+    name: z.string().trim().min(1).max(40).regex(/^[a-zA-Z0-9_. -]+$/),
     deviceId: uuid,
     macAddress: z.string().trim().toLowerCase().regex(/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/)
   }).strict();

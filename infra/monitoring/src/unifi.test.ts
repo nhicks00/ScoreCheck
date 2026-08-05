@@ -4,7 +4,7 @@ import { UniFiCollector } from "./unifi.js";
 
 const nowMs = Date.parse("2026-08-04T18:00:00.000Z");
 const accessPoints = [1, 2, 3].map((number) => ({
-  name: `scorecheck-ap-${number}`,
+  name: `UK Ultra ${number}`,
   deviceId: `20000000-0000-4000-8000-00000000000${number}`,
   macAddress: `00:11:22:33:44:0${number}`
 }));
@@ -61,8 +61,8 @@ describe("UniFi collector", () => {
     const collector = new UniFiCollector(config, request as typeof fetch);
     await collector.refresh(nowMs);
     expect(collector.current().state).toBe("CRITICAL");
-    expect(collector.current().problems).toContain("scorecheck-ap-1 identity does not match its commissioned MAC address.");
-    expect(collector.current().problems).toContain("scorecheck-ap-2 is retransmitting too much Wi-Fi traffic.");
+    expect(collector.current().problems).toContain("UK Ultra 1 identity does not match its commissioned MAC address.");
+    expect(collector.current().problems).toContain("UK Ultra 2 is retransmitting too much Wi-Fi traffic.");
   });
 
   it("reports sanitized API failure without discarding prior AP evidence", async () => {
@@ -80,7 +80,7 @@ describe("UniFi collector", () => {
     await collector.refresh(nowMs + 30_000);
     const snapshot = collector.current();
     expect(snapshot).toMatchObject({ state: "DEGRADED", apiReachable: false, onlineAccessPoints: 3 });
-    expect(snapshot.problems).toEqual(["UniFi telemetry could not be read. Check Official UniFi Hosting and its API key."]);
+    expect(snapshot.problems).toEqual(["UniFi telemetry could not be read. Check the UniFi controller and its API key."]);
     expect(JSON.stringify(snapshot)).not.toContain("protected-api-key");
   });
 });

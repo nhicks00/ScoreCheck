@@ -133,7 +133,7 @@ export class UniFiCollector {
         apiReachable: false,
         sampledAt,
         lastFailureAt: sampledAt,
-        problems: ["UniFi telemetry could not be read. Check Official UniFi Hosting and its API key."]
+        problems: ["UniFi telemetry could not be read. Check the UniFi controller and its API key."]
       };
     } finally {
       this.#refreshing = false;
