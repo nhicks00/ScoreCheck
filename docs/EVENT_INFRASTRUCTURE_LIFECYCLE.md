@@ -575,7 +575,7 @@ and ICMP while ingress stays role-scoped. Required outbound purposes are:
 
 This is an explicit reliability tradeoff, not an assertion that unrestricted
 egress is ideal. Do not add a DNS proxy or destination gateway until an attended
-synthetic event captures the exact runtime dependency set and proves the new
+physical event captures the exact runtime dependency set and proves the new
 component cannot become a broadcast failure domain.
 
 ## Protected bundle
@@ -1054,6 +1054,13 @@ authorization.
 
 ## Dry run and live canary
 
+The current production-qualification path is physical-camera only. Provider-free
+tests remain valid code regressions. The generated-fixture live rehearsal below
+is retained only as an infrastructure diagnostic for provisioning, cleanup, and
+provider mechanics; it is not authorized as a production acceptance gate, must
+not substitute for physical soak evidence, and should not be run unless Nathan
+explicitly requests that infrastructure-only diagnostic.
+
 The provider-free rehearsal exercises the exact isolated 12-server workflow,
 dynamic rehearsal endpoints, retained TLS restoration, live teardown rejection, partial and ambiguous
 create resumption, DNS failure recovery, failed-build abort, protected
@@ -1210,16 +1217,13 @@ Errors include only the provider method and sanitized path, never request bodies
 or credentials.
 
 The one-Droplet canary proves provider permissions and replacement mechanics;
-it does **not** qualify the 12-server media system. With the verified account
-limit of 15, the final dry run is a full isolated rehearsal from a proved zero
-event-Droplet baseline: 12 unique rehearsal Droplets, eight synthetic moving
-camera publishers, eight preview/program chains, eight one-per-host Egress
-jobs, an isolated program-page deployment, eight persistent reusable YouTube
-ingest streams, monitoring, commentary connectivity, resource and zombie gates,
-exact evidence, ordered output cleanup, and complete infrastructure teardown.
-No legacy Droplet is retained as an undocumented rollback dependency.
-Production is not approved until this run passes and provider inventory returns
-to the exact persistent non-Droplet baseline.
+it does **not** qualify the 12-server media system. The generated-fixture
+12-host diagnostic can prove lifecycle reconstruction, Egress ownership,
+monitoring, cleanup, and provider-zero mechanics without retaining a legacy
+Droplet, but it cannot approve production media. Production approval requires
+the attended physical-camera execution order in
+`ARCHITECTURE_PRODUCTION_QUALIFICATION.md`, followed by exact cleanup and an
+independent provider-zero audit.
 
 Rehearsal publisher staging uses the same bounded transport policy as host
 deployment: SSH and SCP retry at most three times, with short increasing waits,
