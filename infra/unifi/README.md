@@ -108,8 +108,11 @@ behavior was added during AP commissioning.
 - existing `BVM 1` Wi-Fi name and credentials preserved;
 - existing stable AP firmware preserved.
 
-The 20 MHz profile was saved while AP1 was offline. Its last live check was at
-157/40 MHz, so verify 157/20 MHz when all three APs are powered together.
+AP1 was redirected to the cloud controller and live-verified on 2026-08-04 as
+`Up to date` on wired GbE at `192.168.0.219`, with no active 2.4 GHz channel and
+live 5 GHz channel 157/20 MHz. It remained online with a fresh official-API
+heartbeat after the macOS UniFi OS Server and its local inform listener were
+stopped.
 
 `UK Ultra 2` was commissioned on 2026-08-04 with:
 
@@ -196,11 +199,12 @@ fleet. The APs retain their last configuration while powered down.
 ## Cloud cutover status
 
 The protected controller backup was restored to the cloud controller on
-2026-08-04. `UK Ultra 3` was redirected to
-`unifi.beachvolleyballmedia.com`, reached `Up to date`, and remained online
-after the macOS UniFi OS Server was stopped. The official local Network API key
-is stored outside Git with mode `0600`; the direct HTTPS API reports the three
-permanent AP identities and fresh AP3 telemetry.
+2026-08-04. `UK Ultra 3` and then `UK Ultra 1` were redirected to
+`unifi.beachvolleyballmedia.com`, reached `Up to date`, and independently
+remained online after the macOS UniFi OS Server was stopped. The official local
+Network API key is stored outside Git with mode `0600`; the direct HTTPS API
+reports the three permanent AP identities and fresh telemetry for whichever
+commissioned APs are powered.
 
 A post-cutover all-applications backup is stored outside Git with mode `0600`:
 
@@ -214,11 +218,11 @@ Weekly automatic system backups are enabled in the cloud controller.
 ## Remaining live steps
 
 - Power all three APs together and verify the saved 149/157/161 MHz channel
-  plan and 20 MHz widths after an event-location RF scan. AP1 and AP2 were
-  offline when their 20 MHz profiles were saved.
-- Power AP1 and AP2 individually and redirect each inform URL to the cloud
-  hostname. They were offline during the AP3 cutover and therefore did not
-  receive the controller-wide inform override.
+  plan and 20 MHz widths after an event-location RF scan. AP1 is individually
+  verified at 157/20 MHz; AP2 remains pending individual live verification.
+- Power AP2 and redirect its inform URL to the cloud hostname. It was offline
+  during the AP3 cutover and has not yet received the controller-wide inform
+  override. AP1 completed this step on 2026-08-04.
 - Connect the cameras later to map Camera 1-8 MAC addresses to AP associations
   and qualify the final RF layout.
 

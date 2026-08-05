@@ -380,9 +380,9 @@ Controller-wide production settings applied on 2026-08-04:
 
 Applied commissioning state as of 2026-08-04:
 
-- `UK Ultra 1`: panel antenna, 2.4 GHz disabled, saved 5 GHz channel 157 at
-  20 MHz, medium power. The 20 MHz profile was saved while it was offline and
-  remains pending live verification.
+- `UK Ultra 1`: panel antenna, 2.4 GHz disabled, live-verified 5 GHz channel 157
+  at 20 MHz, medium power, wired GbE, and cloud-controller heartbeat. It
+  remained online after the macOS controller and local inform listener stopped.
 - `UK Ultra 2`: panel antenna, 2.4 GHz disabled, saved 5 GHz channel 149 at
   20 MHz, medium power. The 20 MHz profile was saved while it was offline and
   remains pending live verification.
