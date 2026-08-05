@@ -325,7 +325,9 @@ Initial Ubiquiti radio profile:
 - Disable the 2.4 GHz radio on all three camera APs. Re-enable it only for an
   explicitly approved device that cannot use 5 GHz.
 - Camera SSID on 5 GHz only.
-- 40 MHz channels, fixed and non-overlapping.
+- 20 MHz channels, fixed and non-overlapping. This is ample for the planned
+  3 / 3 / 2 camera distribution and prioritizes isolation and reliability over
+  unused peak Wi-Fi throughput.
 - Non-DFS channels for the baseline so radar events cannot force a channel
   move during the router test.
 - Medium transmit power initially.
@@ -336,14 +338,16 @@ Initial Ubiquiti radio profile:
 
 Applied commissioning state as of 2026-08-04:
 
-- `UK Ultra 1`: panel antenna, 2.4 GHz disabled, 5 GHz channel 157 at 40 MHz,
-  medium power.
-- `UK Ultra 2`: panel antenna, 2.4 GHz disabled, 5 GHz channel 149 at 40 MHz,
-  medium power.
-- Channels 149 and 157 form separate 40 MHz blocks. Preserve this pair unless
-  the event-location RF scan shows a conflict.
-- `UK Ultra 3` remains uncommissioned and must receive a separate non-overlapping
-  5 GHz channel after its antenna is selected.
+- `UK Ultra 1`: panel antenna, 2.4 GHz disabled, saved 5 GHz channel 157 at
+  20 MHz, medium power. The 20 MHz profile was saved while it was offline and
+  remains pending live verification.
+- `UK Ultra 2`: panel antenna, 2.4 GHz disabled, saved 5 GHz channel 149 at
+  20 MHz, medium power. The 20 MHz profile was saved while it was offline and
+  remains pending live verification.
+- `UK Ultra 3`: omni antenna, 2.4 GHz disabled, live-verified 5 GHz channel 161
+  at 20 MHz, medium power.
+- Channels 149, 157, and 161 are separate 20 MHz channels. Verify the complete
+  plan with all three APs powered together before production readiness.
 
 Select the actual channels only after an RF scan in the event location. Do not
 use automatic channel changes during coverage. The Peplink built-in client AP
@@ -642,7 +646,7 @@ objective or need physical evidence. This is not a permanent rejection.
   reservations, and verify all eight can publish through the router.
 - Connect exactly one LAN port to the PoE switch.
 - Connect and identify all three Ubiquiti APs.
-- Apply the measured 5 GHz, 40 MHz, fixed non-DFS, mesh-off AP baseline.
+- Apply the measured 5 GHz, 20 MHz, fixed non-DFS, mesh-off AP baseline.
 - Migrate cameras to the Ubiquiti SSID and confirm every reserved identity.
 - Disable the Peplink client AP, then configure the optional phone hotspot as
   Wi-Fi WAN when that phone is available.

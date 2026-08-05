@@ -58,7 +58,7 @@ the matching UniFi antenna type before cameras connect.
 The API key must never be committed, printed in evidence, or passed to Caddy,
 Prometheus, browser code, or the event router.
 
-## Applied AP1 and AP2 baseline
+## Applied AP baseline
 
 `UK Ultra 1` was commissioned on 2026-08-04 with:
 
@@ -66,9 +66,12 @@ Prometheus, browser code, or the event router.
 - DHCP and wired uplink;
 - mesh parent and mesh connect disabled;
 - 2.4 GHz radio disabled;
-- 5 GHz channel 157, 40 MHz, medium transmit power;
+- 5 GHz channel 157, 20 MHz, medium transmit power;
 - existing `BVM 1` Wi-Fi name and credentials preserved;
 - existing stable AP firmware preserved.
+
+The 20 MHz profile was saved while AP1 was offline. Its last live check was at
+157/40 MHz, so verify 157/20 MHz when all three APs are powered together.
 
 `UK Ultra 2` was commissioned on 2026-08-04 with:
 
@@ -76,9 +79,25 @@ Prometheus, browser code, or the event router.
 - DHCP and wired uplink;
 - mesh parent and mesh connect disabled;
 - 2.4 GHz radio disabled;
-- 5 GHz channel 149, 40 MHz, medium transmit power;
+- 5 GHz channel 149, 20 MHz, medium transmit power;
 - existing `BVM 2` Wi-Fi name and credentials preserved;
 - existing stable AP firmware preserved.
+
+The 20 MHz profile was saved while AP2 was offline. Its last live check was at
+149/40 MHz, so verify 149/20 MHz when all three APs are powered together.
+
+`UK Ultra 3` was commissioned on 2026-08-04 with:
+
+- outdoor mode and Ubiquiti omni antenna;
+- DHCP and wired uplink;
+- mesh parent and mesh connect disabled;
+- 2.4 GHz radio disabled;
+- 5 GHz channel 161, 20 MHz, medium transmit power;
+- existing `BVM 3` Wi-Fi name and credentials preserved;
+- existing stable AP firmware preserved.
+
+AP3 was live-verified `Up to date` on wired GbE at `192.168.0.95`, with no
+2.4 GHz channel and live 5 GHz channel 161/20 MHz.
 
 ## Protected monitoring contract
 
@@ -122,7 +141,8 @@ DigitalOcean fleet. The APs retain their last configuration while powered down.
 
 ## Remaining live steps
 
-- Commission AP3 when it can be powered.
+- Power all three APs together and verify the saved 149/157/161 MHz channel
+  plan after an event-location RF scan.
 - Create the protected read-only API credential and capture all three real
   device UUID/MAC bindings.
 - Automate controller restore, health verification, backup export, and teardown
