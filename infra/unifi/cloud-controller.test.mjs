@@ -25,6 +25,14 @@ test("refuses controller creation without the exact confirmation", () => {
   ]), /confirmation must be exactly/u);
 });
 
+test("refuses controller destruction without the exact confirmation", () => {
+  assert.throws(() => parseArgs([
+    "destroy",
+    "--credentials-env", "/tmp/provider.env",
+    "--state", "/tmp/unifi-state.json"
+  ]), /confirmation must be exactly/u);
+});
+
 test("builds the minimum supported persistent controller request", () => {
   assert.deepEqual(buildRequest({ sshKeys: ["123"], cloudInitSha256: "a".repeat(64) }), {
     name: "bvm-unifi-controller",

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
-import { chmod, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,7 @@ import { DigitalOceanProvider, VercelDnsProvider } from "../event-stack/provider
 import { loadProtectedEnv } from "../event-stack/stack-deployer.mjs";
 
 const CREATE_CONFIRMATION = "CREATE:PERSISTENT-UNIFI-CONTROLLER";
+const DESTROY_CONFIRMATION = "DESTROY:PERSISTENT-UNIFI-CONTROLLER";
 const NAME = "bvm-unifi-controller";
 const ROLE_TAG = "scorecheck-role:unifi-controller";
 const PERSISTENT_TAG = "scorecheck-persistent";
@@ -23,7 +24,7 @@ const CLOUD_INIT = resolve(dirname(fileURLToPath(import.meta.url)), "cloud-init.
 
 export function parseArgs(argv) {
   const command = argv[0];
-  if (!new Set(["up", "status"]).has(command)) throw new Error("first argument must be up or status");
+  if (!new Set(["up", "status", "destroy"]).has(command)) throw new Error("first argument must be up, status, or destroy");
   const options = { command, credentialsEnv: null, state: null, confirm: null };
   for (let index = 1; index < argv.length; index += 1) {
     const flag = argv[index];
@@ -38,6 +39,9 @@ export function parseArgs(argv) {
   if (!options.state) throw new Error("--state is required");
   if (command === "up" && options.confirm !== CREATE_CONFIRMATION) {
     throw new Error(`confirmation must be exactly ${CREATE_CONFIRMATION}`);
+  }
+  if (command === "destroy" && options.confirm !== DESTROY_CONFIRMATION) {
+    throw new Error(`confirmation must be exactly ${DESTROY_CONFIRMATION}`);
   }
   if (command === "status" && options.confirm !== null) throw new Error("status does not accept --confirm");
   return options;
@@ -82,6 +86,25 @@ async function main() {
     const droplet = await cloud.getDroplet(state.dropletId);
     assertIdentity(state, droplet);
     process.stdout.write(`${JSON.stringify(publicStatus(state, droplet), null, 2)}\n`);
+    return;
+  }
+
+  if (options.command === "destroy") {
+    const state = await readState(options.state);
+    const droplet = await cloud.getDroplet(state.dropletId);
+    assertIdentity(state, droplet);
+    if (state.dnsChange) {
+      await dns.restoreRecord({
+        zone: ZONE,
+        hostname: HOSTNAME,
+        change: state.dnsChange,
+        expectedCurrent: droplet.publicIpv4
+      });
+    }
+    await cloud.deleteDroplet(state.dropletId);
+    await cloud.waitDropletAbsent(state.dropletId);
+    await unlink(options.state);
+    process.stdout.write(`${JSON.stringify({ name: NAME, dropletId: state.dropletId, status: "destroyed" }, null, 2)}\n`);
     return;
   }
 
