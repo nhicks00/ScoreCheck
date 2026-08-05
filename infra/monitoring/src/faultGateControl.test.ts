@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CourtExpectation, MonitorSnapshot } from "./contracts.js";
 import { assertFaultGateCanArm, faultGateArmRequestSchema, FaultGateConflictError, FaultGateControl, faultGateExpectation, programBrowserIsRequired } from "./faultGateControl.js";
-import { buildMonitorSnapshot } from "./correlator.js";
+import { buildMonitorSnapshot, emptyNetworkSwitchSnapshot } from "./correlator.js";
 
 describe("monitoring fault-gate control", () => {
   it("accepts a bounded fifteen-minute operator window", () => {
@@ -105,6 +105,7 @@ function idleSnapshot(): MonitorSnapshot {
     },
     router: { state: "UNKNOWN", sampledAt: null, receivedAt: null, ageMs: null, speedify: null, routing: null, cameraWifi: null, host: null, uplinks: [] },
     unifi: { state: "NOT_APPLICABLE", required: false, configured: false, apiReachable: null, sampledAt: null, lastSuccessAt: null, lastFailureAt: null, siteId: null, expectedAccessPoints: 0, onlineAccessPoints: 0, connectedClients: 0, accessPoints: [], clients: [], problems: [] },
+    networkSwitch: emptyNetworkSwitchSnapshot(),
     courts: [{
       courtNumber: 4,
       overallState: "HEALTHY",

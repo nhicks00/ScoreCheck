@@ -680,6 +680,50 @@ export type UniFiMonitorSnapshot = {
   problems: string[];
 };
 
+export type NetworkSwitchMonitorSnapshot = {
+  state: HealthState;
+  required: boolean;
+  configured: boolean;
+  reachable: boolean | null;
+  sampledAt: string | null;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  model: string | null;
+  firmwareVersion: string | null;
+  uptimeSeconds: number | null;
+  ports: Array<{
+    id: string;
+    name: string;
+    role: "access_point" | "router_uplink" | "other";
+    expected: boolean;
+    adminUp: boolean | null;
+    operationalUp: boolean | null;
+    speedMbps: number | null;
+    duplex: "full" | "half" | "unknown" | null;
+    rxBps: number | null;
+    txBps: number | null;
+    inputErrorsPerSecond: number | null;
+    outputErrorsPerSecond: number | null;
+    inputDiscardsPerSecond: number | null;
+    outputDiscardsPerSecond: number | null;
+    lastChangedAt: string | null;
+    poe: {
+      configured: boolean | null;
+      deliveringPower: boolean | null;
+      powerWatts: number | null;
+      limitWatts: number | null;
+      priority: string | null;
+    } | null;
+  }>;
+  poe: {
+    supported: boolean | null;
+    budgetWatts: number | null;
+    consumptionWatts: number | null;
+    remainingWatts: number | null;
+  };
+  problems: string[];
+};
+
 export type MonitorSnapshot = {
   version: typeof MONITORING_CONTRACT_VERSION;
   generatedAt: string;
@@ -700,6 +744,7 @@ export type MonitorSnapshot = {
   deadMan: DeadManHealth;
   router: RouterMonitorSnapshot;
   unifi: UniFiMonitorSnapshot;
+  networkSwitch: NetworkSwitchMonitorSnapshot;
   courts: CourtMonitorSnapshot[];
   agents: Array<{
     agentId: string;

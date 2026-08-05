@@ -12,14 +12,17 @@ import {
   Eye,
   Gauge,
   Headphones,
+  LayoutDashboard,
   Network,
   Radio,
   RefreshCw,
+  Router as RouterIcon,
   Server,
   ShieldAlert,
   Signal,
   Smartphone,
   VideoOff,
+  Wifi,
   WifiOff,
   X,
   Youtube
@@ -30,7 +33,7 @@ import { deriveMonitorBrowserLiveness, type MonitorBrowserLiveness } from "@/lib
 import { deriveMonitorDeadManReadiness } from "@/lib/monitorDeadManReadiness";
 import { deriveMonitorPagingReadiness } from "@/lib/monitorPagingReadiness";
 import { deriveMonitorSystemState } from "@/lib/monitorSystemState";
-import type { MonitorCourt, MonitorCourtPipelineRange, MonitorHealthState, MonitorIncident, MonitorMediaPath, MonitorRouter, MonitorSilence, MonitorSnapshotEnvelope, MonitorStage } from "@/lib/monitoringTypes";
+import type { MonitorCourt, MonitorCourtPipelineRange, MonitorHealthState, MonitorIncident, MonitorMediaPath, MonitorNetworkSwitch, MonitorRouter, MonitorSilence, MonitorSnapshotEnvelope, MonitorStage, MonitorUniFi } from "@/lib/monitoringTypes";
 import { PacingComparator } from "./PacingComparator";
 
 const POLL_INTERVAL_MS = 5_000;
@@ -46,9 +49,43 @@ const ROUTER_UNAVAILABLE: MonitorRouter = {
   host: null,
   uplinks: []
 };
+const UNIFI_UNAVAILABLE: MonitorUniFi = {
+  state: "NOT_APPLICABLE",
+  required: false,
+  configured: false,
+  apiReachable: null,
+  sampledAt: null,
+  lastSuccessAt: null,
+  lastFailureAt: null,
+  siteId: null,
+  expectedAccessPoints: 0,
+  onlineAccessPoints: 0,
+  connectedClients: 0,
+  accessPoints: [],
+  clients: [],
+  problems: []
+};
+const SWITCH_UNAVAILABLE: MonitorNetworkSwitch = {
+  state: "NOT_APPLICABLE",
+  required: false,
+  configured: false,
+  reachable: null,
+  sampledAt: null,
+  lastSuccessAt: null,
+  lastFailureAt: null,
+  model: null,
+  firmwareVersion: null,
+  uptimeSeconds: null,
+  ports: [],
+  poe: { supported: null, budgetWatts: null, consumptionWatts: null, remainingWatts: null },
+  problems: []
+};
+type MonitorTab = "overview" | "cameras" | "wifi" | "switch" | "router" | "system";
+const MONITOR_TABS: MonitorTab[] = ["overview", "cameras", "wifi", "switch", "router", "system"];
 
 export function MonitorDashboardClient({ initial, configured }: { initial: MonitorSnapshotEnvelope | null; configured: boolean }) {
   const [envelope, setEnvelope] = useState(initial);
+  const [activeTab, setActiveTab] = useState<MonitorTab>("overview");
   const [pollError, setPollError] = useState<string | null>(initial ? null : configured ? "Monitoring data is unavailable." : "Monitoring API is not configured.");
   const [refreshing, setRefreshing] = useState(false);
   const [selectedCourt, setSelectedCourt] = useState(() => firstAttentionCourt(initial) ?? 1);
@@ -209,6 +246,7 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
 
   function inspectCamera(courtNumber: number) {
     const mobile = window.matchMedia("(max-width: 860px)").matches;
+    setActiveTab("cameras");
     setSelectedCourt(courtNumber);
     setPreviewEnabled(true);
     setPacingOpen(false);
@@ -220,6 +258,7 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
   }
 
   function jumpToCamera(courtNumber: number) {
+    setActiveTab("cameras");
     setSelectedCourt(courtNumber);
     setMobileInspectionOpen(false);
     setPreviewEnabled(false);
@@ -227,6 +266,16 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
     window.requestAnimationFrame(() => {
       document.getElementById(`monitor-camera-${courtNumber}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
+  }
+
+  function selectTab(tab: MonitorTab) {
+    setActiveTab(tab);
+    if (tab !== "cameras") {
+      setPreviewEnabled(false);
+      setPacingOpen(false);
+      setMobileInspectionOpen(false);
+    }
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
   }
 
   async function acknowledge(incident: MonitorIncident) {
@@ -298,13 +347,15 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
 
   const snapshot = envelope.snapshot;
   const router = snapshot.router ?? ROUTER_UNAVAILABLE;
+  const unifi = snapshot.unifi ?? UNIFI_UNAVAILABLE;
+  const networkSwitch = snapshot.networkSwitch ?? SWITCH_UNAVAILABLE;
   const snapshotAgeMs = Math.max(0, nowMs - Date.parse(snapshot.generatedAt));
   const stale = envelope.source === "checkpoint" || snapshotAgeMs > 15_000;
   const pagingReadiness = deriveMonitorPagingReadiness(snapshot.notifications);
   const deadManReadiness = deriveMonitorDeadManReadiness(snapshot.deadMan);
   const overall = deriveMonitorSystemState({
     courtStates: snapshot.courts.map(effectiveCourtState),
-    globalStates: [snapshot.collector.state, snapshot.controlPlane.state, snapshot.youtube.state, router.state, pagingReadiness.state, deadManReadiness.state],
+    globalStates: [snapshot.collector.state, snapshot.controlPlane.state, snapshot.youtube.state, router.state, unifi.state, networkSwitch.state, pagingReadiness.state, deadManReadiness.state],
     hasCriticalIncident: snapshot.incidents.some((incident) => incident.status !== "resolved" && incident.severity === "critical"),
     stale
   });
@@ -313,6 +364,11 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
   const activeInspectionQuality = dataSaverAdmitted ? inspectionQuality : "detail";
   const activeIncidents = snapshot.incidents.filter((incident) => incident.status !== "resolved");
   const activeSilences = snapshot.silences.filter((silence) => Date.parse(silence.expiresAt) > nowMs);
+  const camerasHealthy = snapshot.courts.filter((court) => ["HEALTHY", "EXPECTED_OFF", "NOT_APPLICABLE"].includes(effectiveCourtState(court))).length;
+  const cameraOverviewState = snapshot.courts.reduce<MonitorHealthState>((worst, court) => {
+    const state = effectiveCourtState(court);
+    return STATE_RANK[state] > STATE_RANK[worst] ? state : worst;
+  }, "NOT_APPLICABLE");
 
   function togglePacing() {
     if (pacingOpen) {
@@ -343,7 +399,16 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
         </div>
       </header>
 
-      <nav className="monitor-mobile-camera-nav" aria-label="Jump to camera">
+      <nav className="monitor-domain-tabs" role="tablist" aria-label="Monitor categories">
+        <MonitorTabButton id="overview" label="Overview" shortLabel="Overview" icon={<LayoutDashboard size={17} />} activeTab={activeTab} onSelect={selectTab} />
+        <MonitorTabButton id="cameras" label="Cameras" shortLabel="Cameras" icon={<Camera size={17} />} activeTab={activeTab} onSelect={selectTab} />
+        <MonitorTabButton id="wifi" label="Wi-Fi & APs" shortLabel="Wi-Fi" icon={<Wifi size={17} />} activeTab={activeTab} onSelect={selectTab} />
+        <MonitorTabButton id="switch" label="PoE switch" shortLabel="Switch" icon={<Network size={17} />} activeTab={activeTab} onSelect={selectTab} />
+        <MonitorTabButton id="router" label="Router & WAN" shortLabel="Router" icon={<RouterIcon size={17} />} activeTab={activeTab} onSelect={selectTab} />
+        <MonitorTabButton id="system" label="System" shortLabel="System" icon={<Server size={17} />} activeTab={activeTab} onSelect={selectTab} />
+      </nav>
+
+      {activeTab === "cameras" && <nav className="monitor-mobile-camera-nav" aria-label="Jump to camera">
         <span>Cameras</span>
         <div ref={cameraNavScrollRef}>
           {snapshot.courts.map((court) => {
@@ -364,9 +429,9 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
             );
           })}
         </div>
-      </nav>
+      </nav>}
 
-      <section className="monitor-global-strip" aria-label="Global health">
+      {activeTab === "system" && <section id="monitor-panel-system" className="monitor-global-strip monitor-tab-panel" role="tabpanel" aria-labelledby="monitor-tab-system" aria-label="Global health">
         <GlobalItem icon={<Activity size={17} />} label="Collector" value={`${snapshot.collector.agentsFresh}/${snapshot.collector.agentsExpected} agents`} state={snapshot.collector.state} />
         <GlobalItem icon={<Signal size={17} />} label="Control" value={snapshot.controlPlane.worker.state === "NOT_APPLICABLE" ? "Idle" : snapshot.controlPlane.worker.state} state={snapshot.controlPlane.state} />
         <GlobalItem icon={<Youtube size={17} />} label="YouTube" value={friendlyState(snapshot.youtube.state)} state={snapshot.youtube.state} />
@@ -377,15 +442,31 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
           <Clock3 size={16} aria-hidden="true" />
           <span>{envelope.source === "checkpoint" ? "Checkpoint" : `${formatDuration(snapshotAgeMs)} ago`}</span>
         </div>
-      </section>
+      </section>}
 
       {(pollError || envelope.monitorError || stale) && (
         <div className="monitor-banner" role="alert"><AlertTriangle size={17} /><span>{pollError ?? envelope.monitorError ?? "Monitoring snapshot is stale."}</span></div>
       )}
 
-      <RouterBand router={router} nowMs={nowMs} />
+      {activeTab === "overview" && <OverviewPanel
+        camerasHealthy={camerasHealthy}
+        cameraCount={snapshot.courts.length}
+        cameraState={cameraOverviewState}
+        unifi={unifi}
+        networkSwitch={networkSwitch}
+        router={router}
+        youtubeState={snapshot.youtube.state}
+        agentsFresh={snapshot.collector.agentsFresh}
+        agentsExpected={snapshot.collector.agentsExpected}
+        incidentCount={activeIncidents.length}
+        stale={stale}
+        onSelect={selectTab}
+      />}
+      {activeTab === "wifi" && <UniFiBand unifi={unifi} nowMs={nowMs} />}
+      {activeTab === "switch" && <NetworkSwitchBand networkSwitch={networkSwitch} nowMs={nowMs} />}
+      {activeTab === "router" && <RouterBand router={router} nowMs={nowMs} />}
 
-      <section className="monitor-incidents-band" aria-label="Action required">
+      {activeTab === "overview" && <section className="monitor-incidents-band" aria-label="Action required">
         <div className="monitor-section-heading">
           <div>
             <h2>Action required</h2>
@@ -439,8 +520,9 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
             })}
           </div>
         )}
-      </section>
+      </section>}
 
+      {activeTab === "cameras" && <div id="monitor-panel-cameras" className="monitor-tab-panel" role="tabpanel" aria-labelledby="monitor-tab-cameras">
       <div className="monitor-bandwidth-note">
         <Camera size={17} aria-hidden="true" />
         <div><strong>Low-data overview</strong><span>Camera cards use one 256×144 snapshot every 15 seconds. Live video opens only for the selected camera.</span></div>
@@ -495,8 +577,9 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
           {pacingOpen && <PacingComparator courtNumber={selected.courtNumber} />}
         </section>
       )}
+      </div>}
 
-      <section className="monitor-shared-band" aria-label="Shared services">
+      {activeTab === "system" && <section className="monitor-shared-band" aria-label="Shared services">
         <div className="monitor-section-heading"><div><p className="eyebrow">Shared dependencies</p><h2>Hosts &amp; services</h2></div></div>
         <div className="monitor-agent-grid">
           {snapshot.agents.map((agent) => (
@@ -514,7 +597,7 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
             </article>
           ))}
         </div>
-      </section>
+      </section>}
 
     </div>
   );
@@ -618,6 +701,194 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
   );
 }
 
+function MonitorTabButton({ id, label, shortLabel, icon, activeTab, onSelect }: {
+  id: MonitorTab;
+  label: string;
+  shortLabel?: string;
+  icon: React.ReactNode;
+  activeTab: MonitorTab;
+  onSelect: (tab: MonitorTab) => void;
+}) {
+  const selected = activeTab === id;
+  function onKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
+    const currentIndex = MONITOR_TABS.indexOf(id);
+    const nextIndex = event.key === "ArrowRight" ? (currentIndex + 1) % MONITOR_TABS.length
+      : event.key === "ArrowLeft" ? (currentIndex - 1 + MONITOR_TABS.length) % MONITOR_TABS.length
+        : event.key === "Home" ? 0 : event.key === "End" ? MONITOR_TABS.length - 1 : null;
+    if (nextIndex == null) return;
+    event.preventDefault();
+    const next = MONITOR_TABS[nextIndex]!;
+    onSelect(next);
+    window.requestAnimationFrame(() => document.getElementById(`monitor-tab-${next}`)?.focus());
+  }
+  return (
+    <button
+      id={`monitor-tab-${id}`}
+      type="button"
+      role="tab"
+      aria-selected={selected}
+      aria-controls={`monitor-panel-${id}`}
+      tabIndex={selected ? 0 : -1}
+      onClick={() => onSelect(id)}
+      onKeyDown={onKeyDown}
+    >
+      {icon}
+      <span className="monitor-tab-label">{label}</span>
+      {shortLabel && <span className="monitor-tab-label-short">{shortLabel}</span>}
+    </button>
+  );
+}
+
+function OverviewPanel({ camerasHealthy, cameraCount, cameraState, unifi, networkSwitch, router, youtubeState, agentsFresh, agentsExpected, incidentCount, stale, onSelect }: {
+  camerasHealthy: number;
+  cameraCount: number;
+  cameraState: MonitorHealthState;
+  unifi: MonitorUniFi;
+  networkSwitch: MonitorNetworkSwitch;
+  router: MonitorRouter;
+  youtubeState: MonitorHealthState;
+  agentsFresh: number;
+  agentsExpected: number;
+  incidentCount: number;
+  stale: boolean;
+  onSelect: (tab: MonitorTab) => void;
+}) {
+  const systemState: MonitorHealthState = stale ? "UNKNOWN" : agentsExpected > 0 && agentsFresh === agentsExpected ? "HEALTHY" : "DEGRADED";
+  const routerDetail = router.speedify?.state === "CONNECTED"
+    ? `${formatBitrate(router.speedify.uploadHeadroomBps)} estimated headroom`
+    : "Bonded connection is not ready";
+  return (
+    <section id="monitor-panel-overview" className="monitor-tab-panel monitor-overview-panel" role="tabpanel" aria-labelledby="monitor-tab-overview">
+      <div className="monitor-section-heading">
+        <div><h2>Production overview</h2><p className="monitor-action-summary">Select any area for its full diagnostic view.</p></div>
+      </div>
+      <div className="monitor-domain-grid">
+        <DomainSummary icon={<Camera size={20} />} label="Cameras" value={`${camerasHealthy}/${cameraCount} accounted for`} detail="Source, picture, audio, program and YouTube" state={cameraState} onClick={() => onSelect("cameras")} />
+        <DomainSummary icon={<Wifi size={20} />} label="Wi-Fi access points" value={unifi.configured ? `${unifi.onlineAccessPoints}/${unifi.expectedAccessPoints} online` : "Not commissioned"} detail={unifi.configured ? `${unifi.connectedClients} connected devices` : "Cloud UniFi telemetry is not configured"} state={unifi.state} onClick={() => onSelect("wifi")} />
+        <DomainSummary icon={<Network size={20} />} label="PoE switch" value={networkSwitch.configured ? networkSwitchStateLabel(networkSwitch) : "Awaiting hardware"} detail={networkSwitch.configured ? `${networkSwitch.ports.filter((port) => port.expected && port.operationalUp).length}/${networkSwitch.ports.filter((port) => port.expected).length} expected links up` : "SNMPv3 framework is ready for commissioning"} state={networkSwitch.state} onClick={() => onSelect("switch")} />
+        <DomainSummary icon={<RouterIcon size={20} />} label="Router and internet" value={routerStateLabel(router.state)} detail={routerDetail} state={router.state} onClick={() => onSelect("router")} />
+        <DomainSummary icon={<Youtube size={20} />} label="Broadcast delivery" value={friendlyState(youtubeState)} detail="Persistent output and YouTube provider status" state={youtubeState} onClick={() => onSelect("cameras")} />
+        <DomainSummary icon={<Server size={20} />} label="Monitoring system" value={`${agentsFresh}/${agentsExpected} agents reporting`} detail={incidentCount ? `${incidentCount} active item${incidentCount === 1 ? "" : "s"} need review` : "No active monitoring incidents"} state={systemState} onClick={() => onSelect("system")} />
+      </div>
+    </section>
+  );
+}
+
+function DomainSummary({ icon, label, value, detail, state, onClick }: { icon: React.ReactNode; label: string; value: string; detail: string; state: MonitorHealthState; onClick: () => void }) {
+  return (
+    <button className="monitor-domain-summary" type="button" data-state={state} onClick={onClick}>
+      <span className="monitor-domain-icon" aria-hidden="true">{icon}</span>
+      <span className="monitor-domain-copy"><span>{label}</span><strong>{value}</strong><small>{detail}</small></span>
+      <StateDot state={state} />
+    </button>
+  );
+}
+
+function UniFiBand({ unifi, nowMs }: { unifi: MonitorUniFi; nowMs: number }) {
+  const totalTxBps = unifi.accessPoints.reduce((total, accessPoint) => total + (accessPoint.txRateBps ?? 0), 0);
+  const totalRxBps = unifi.accessPoints.reduce((total, accessPoint) => total + (accessPoint.rxRateBps ?? 0), 0);
+  return (
+    <section id="monitor-panel-wifi" className="monitor-tab-panel monitor-network-detail" role="tabpanel" aria-labelledby="monitor-tab-wifi">
+      <div className="monitor-network-heading">
+        <div><Wifi size={20} aria-hidden="true" /><div><h2>Wi-Fi access points</h2><p>Cloud-managed UniFi radio, device and client telemetry</p></div></div>
+        <StateBadge state={unifi.state} label={unifiStateLabel(unifi)} />
+      </div>
+      {!unifi.configured ? <CommissioningNotice title="UniFi telemetry is not configured" detail="Connect the persistent UniFi controller API before relying on this view." /> : <>
+        <div className="monitor-network-summary">
+          <Metric label="Access points online" value={`${unifi.onlineAccessPoints}/${unifi.expectedAccessPoints}`} />
+          <Metric label="Connected devices" value={String(unifi.connectedClients)} />
+          <Metric label="Traffic to APs" value={formatBitrate(totalTxBps)} />
+          <Metric label="Traffic from APs" value={formatBitrate(totalRxBps)} />
+          <Metric label="Controller API" value={unifi.apiReachable ? "Connected" : "Unavailable"} />
+          <Metric label="Last update" value={relativeTimestamp(unifi.sampledAt, nowMs)} />
+        </div>
+        {unifi.problems.length > 0 && <ProblemList problems={unifi.problems} />}
+        <div className="monitor-ap-grid">
+          {unifi.accessPoints.map((accessPoint) => {
+            const clients = unifi.clients.filter((client) => client.uplinkDeviceId === accessPoint.deviceId);
+            const retries = accessPoint.radios.map((radio) => radio.txRetriesPct).filter((value): value is number => value != null);
+            const state = accessPoint.state !== "ONLINE" ? "CRITICAL" : retries.some((value) => value > 25) ? "DEGRADED" : "HEALTHY";
+            return (
+              <article className="monitor-ap" key={accessPoint.deviceId} data-state={state}>
+                <header className="monitor-ap-heading"><div><Wifi size={18} /><div><strong>{accessPoint.name}</strong><span>{accessPoint.model ?? "Model unavailable"} · {accessPoint.ipAddress ?? "No IP"}</span></div></div><StateBadge state={state} compact label={accessPoint.state === "ONLINE" ? "Online" : friendlyState(accessPoint.state)} /></header>
+                <div className="monitor-ap-metrics">
+                  <Metric label="Connected devices" value={String(clients.length)} />
+                  <Metric label="Receive" value={formatBitrate(accessPoint.rxRateBps)} />
+                  <Metric label="Send" value={formatBitrate(accessPoint.txRateBps)} />
+                  <Metric label="CPU" value={formatOptionalPercent(accessPoint.cpuUtilizationPct)} />
+                  <Metric label="Memory" value={formatOptionalPercent(accessPoint.memoryUtilizationPct)} />
+                  <Metric label="Heartbeat" value={relativeTimestamp(accessPoint.lastHeartbeatAt, nowMs)} />
+                </div>
+                <div className="monitor-radio-list" aria-label={`${accessPoint.name} radio details`}>
+                  {accessPoint.radios.length ? accessPoint.radios.map((radio) => <span key={radio.frequencyGHz}><strong>{radio.frequencyGHz} GHz</strong><span>{radio.txRetriesPct == null ? "Retries unavailable" : `${radio.txRetriesPct.toFixed(1)}% retries`}</span></span>) : <span><strong>Radio details</strong><span>Unavailable</span></span>}
+                  <span><strong>Firmware</strong><span>{accessPoint.firmwareVersion ?? "Unavailable"}</span></span>
+                </div>
+                <div className="monitor-client-list">
+                  <div className="monitor-subheading"><strong>Connected devices</strong><span>{clients.length}</span></div>
+                  {clients.length ? clients.map((client) => <div className="monitor-client-row" key={client.id}><span><strong>{client.name || "Unnamed device"}</strong><small>{friendlyState(client.type)}</small></span><span>{client.ipAddress ?? "No IP"}</span></div>) : <p>No devices currently report through this access point.</p>}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </>}
+    </section>
+  );
+}
+
+function NetworkSwitchBand({ networkSwitch, nowMs }: { networkSwitch: MonitorNetworkSwitch; nowMs: number }) {
+  const expectedPorts = networkSwitch.ports.filter((port) => port.expected);
+  const activePorts = expectedPorts.filter((port) => port.operationalUp).length;
+  return (
+    <section id="monitor-panel-switch" className="monitor-tab-panel monitor-network-detail" role="tabpanel" aria-labelledby="monitor-tab-switch">
+      <div className="monitor-network-heading">
+        <div><Network size={20} aria-hidden="true" /><div><h2>PoE switch</h2><p>LinoVision wired links, port errors and access-point power</p></div></div>
+        <StateBadge state={networkSwitch.state} label={networkSwitch.configured ? networkSwitchStateLabel(networkSwitch) : "Awaiting commissioning"} />
+      </div>
+      {!networkSwitch.configured ? <CommissioningNotice
+        title="Switch integration framework is ready"
+        detail="When the LinoVision switch arrives, the SNMPv3 collector will populate this view after its physical ports and PoE values are verified. No zero values are being assumed now."
+        items={["Port 1 · UK Ultra 1", "Port 2 · UK Ultra 2", "Port 3 · UK Ultra 3", "Port 9 · Peplink router uplink"]}
+      /> : <>
+        <div className="monitor-network-summary">
+          <Metric label="Expected links up" value={`${activePorts}/${expectedPorts.length}`} />
+          <Metric label="PoE use" value={formatWatts(networkSwitch.poe.consumptionWatts)} />
+          <Metric label="PoE budget" value={formatWatts(networkSwitch.poe.budgetWatts)} />
+          <Metric label="PoE remaining" value={formatWatts(networkSwitch.poe.remainingWatts)} />
+          <Metric label="Switch uptime" value={formatUptime(networkSwitch.uptimeSeconds)} />
+          <Metric label="Last update" value={relativeTimestamp(networkSwitch.sampledAt, nowMs)} />
+        </div>
+        {networkSwitch.problems.length > 0 && <ProblemList problems={networkSwitch.problems} />}
+        <div className="monitor-switch-port-list">
+          {networkSwitch.ports.filter((port) => port.expected || port.operationalUp).map((port) => {
+            const state: MonitorHealthState = port.operationalUp === true ? "HEALTHY" : port.operationalUp === false && port.expected ? "CRITICAL" : "UNKNOWN";
+            const errors = (port.inputErrorsPerSecond ?? 0) + (port.outputErrorsPerSecond ?? 0) + (port.inputDiscardsPerSecond ?? 0) + (port.outputDiscardsPerSecond ?? 0);
+            return <article className="monitor-switch-port" key={port.id} data-state={state}>
+              <header><div><Cable size={18} /><div><strong>{port.name}</strong><span>{switchPortRoleLabel(port.role)} · port {port.id}</span></div></div><StateBadge state={state} compact label={port.operationalUp ? "Linked" : port.operationalUp === false ? "Link down" : "No data"} /></header>
+              <div className="monitor-switch-port-metrics">
+                <Metric label="Link" value={port.speedMbps == null ? "--" : `${port.speedMbps} Mbps ${port.duplex ?? ""}`.trim()} />
+                <Metric label="Receive" value={formatBitrate(port.rxBps)} />
+                <Metric label="Send" value={formatBitrate(port.txBps)} />
+                <Metric label="Errors and discards" value={errors === 0 ? "None" : `${errors.toFixed(2)}/s`} />
+                <Metric label="PoE power" value={formatWatts(port.poe?.powerWatts)} />
+                <Metric label="Last change" value={relativeTimestamp(port.lastChangedAt, nowMs)} />
+              </div>
+            </article>;
+          })}
+        </div>
+      </>}
+    </section>
+  );
+}
+
+function CommissioningNotice({ title, detail, items = [] }: { title: string; detail: string; items?: string[] }) {
+  return <div className="monitor-commissioning-notice"><Network size={22} aria-hidden="true" /><div><strong>{title}</strong><p>{detail}</p>{items.length > 0 && <ul>{items.map((item) => <li key={item}>{item}</li>)}</ul>}</div></div>;
+}
+
+function ProblemList({ problems }: { problems: string[] }) {
+  return <div className="monitor-problem-list" role="status">{problems.map((problem) => <p key={problem}><AlertTriangle size={15} />{problem}</p>)}</div>;
+}
+
 function RouterBand({ router, nowMs }: { router: MonitorRouter; nowMs: number }) {
   const speedify = router.speedify;
   const routing = router.routing;
@@ -629,7 +900,7 @@ function RouterBand({ router, nowMs }: { router: MonitorRouter; nowMs: number })
     && routing.guardRuleCount === 2
     && routing.killSwitchActive;
   return (
-    <section className="monitor-router-band" aria-label="Venue network">
+    <section id="monitor-panel-router" className="monitor-router-band monitor-tab-panel" role="tabpanel" aria-labelledby="monitor-tab-router" aria-label="Venue network">
       <div className="monitor-router-heading">
         <div><Network size={19} aria-hidden="true" /><div><h2>Venue network</h2><p>Speedify bonded upload and fail-closed camera routing</p></div></div>
         <StateBadge state={router.state} label={routerStateLabel(router.state)} />
@@ -781,6 +1052,30 @@ function routerStateLabel(state: MonitorHealthState): string {
   return friendlyState(state);
 }
 
+function unifiStateLabel(unifi: MonitorUniFi): string {
+  if (!unifi.configured) return "Not commissioned";
+  if (unifi.state === "HEALTHY") return "Wi-Fi healthy";
+  if (unifi.state === "CRITICAL") return "Access point offline";
+  if (unifi.state === "DEGRADED") return "Wi-Fi needs attention";
+  if (unifi.state === "UNKNOWN") return "Wi-Fi status unavailable";
+  return friendlyState(unifi.state);
+}
+
+function networkSwitchStateLabel(networkSwitch: MonitorNetworkSwitch): string {
+  if (!networkSwitch.configured) return "Not commissioned";
+  if (networkSwitch.state === "HEALTHY") return "Links and power healthy";
+  if (networkSwitch.state === "CRITICAL") return "Switch needs action";
+  if (networkSwitch.state === "DEGRADED") return "Switch needs attention";
+  if (networkSwitch.state === "UNKNOWN") return "Switch status unavailable";
+  return friendlyState(networkSwitch.state);
+}
+
+function switchPortRoleLabel(role: MonitorNetworkSwitch["ports"][number]["role"]): string {
+  if (role === "access_point") return "Access point";
+  if (role === "router_uplink") return "Router uplink";
+  return "Other connection";
+}
+
 function uplinkName(id: string, type: MonitorRouter["uplinks"][number]["type"]): string {
   if (type === "cellular") return "Cellular connection";
   if (type === "wifi") return "Wi-Fi connection";
@@ -804,6 +1099,27 @@ function formatFps(value: number | null | undefined): string {
 
 function formatMs(value: number | null | undefined): string {
   return value == null ? "--" : `${Math.round(value)} ms`;
+}
+
+function formatOptionalPercent(value: number | null | undefined): string {
+  return value == null ? "--" : `${value.toFixed(1)}%`;
+}
+
+function formatWatts(value: number | null | undefined): string {
+  return value == null ? "--" : `${value.toFixed(value < 10 ? 1 : 0)} W`;
+}
+
+function formatUptime(value: number | null | undefined): string {
+  if (value == null) return "--";
+  if (value < 3_600) return `${Math.floor(value / 60)}m`;
+  if (value < 86_400) return `${Math.floor(value / 3_600)}h ${Math.floor(value % 3_600 / 60)}m`;
+  return `${Math.floor(value / 86_400)}d ${Math.floor(value % 86_400 / 3_600)}h`;
+}
+
+function relativeTimestamp(value: string | null | undefined, nowMs: number): string {
+  if (!value) return "--";
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? `${formatDuration(Math.max(0, nowMs - timestamp))} ago` : "--";
 }
 
 function sourceProfile(path: MonitorMediaPath | undefined): string {

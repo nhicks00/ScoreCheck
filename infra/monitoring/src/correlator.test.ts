@@ -7,6 +7,26 @@ const target: AgentTarget = { id: "preview", role: "mediamtx", url: "http://agen
 const compositorTarget: AgentTarget = { id: "compositor-a", role: "compositor", url: "http://compositor-agent", token: "zyxwvutsrqponmlkjihgfedcba", assignedCourts: [1, 2] };
 
 describe("monitor correlator", () => {
+  it("keeps the future venue switch explicitly uncommissioned until telemetry is configured", () => {
+    const result = buildMonitorSnapshot([], new Map(), 1, Date.parse("2026-08-04T12:00:00.000Z"));
+
+    expect(result.networkSwitch).toEqual({
+      state: "NOT_APPLICABLE",
+      required: false,
+      configured: false,
+      reachable: null,
+      sampledAt: null,
+      lastSuccessAt: null,
+      lastFailureAt: null,
+      model: null,
+      firmwareVersion: null,
+      uptimeSeconds: null,
+      ports: [],
+      poe: { supported: null, budgetWatts: null, consumptionWatts: null, remainingWatts: null },
+      problems: []
+    });
+  });
+
   it("never preserves stale green agent state", () => {
     const generatedAt = "2026-07-12T12:00:00.000Z";
     const snapshot = emptyAgentSnapshot(generatedAt);

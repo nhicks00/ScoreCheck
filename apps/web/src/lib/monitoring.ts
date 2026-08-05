@@ -22,6 +22,30 @@ const envelopeSnapshotSchema = z.object({
       lastFailureAt: z.string().nullable()
     }).passthrough()
   }).passthrough(),
+  unifi: z.object({
+    state: z.string(),
+    configured: z.boolean(),
+    apiReachable: z.boolean().nullable(),
+    expectedAccessPoints: z.number().int().nonnegative(),
+    onlineAccessPoints: z.number().int().nonnegative(),
+    connectedClients: z.number().int().nonnegative(),
+    accessPoints: z.array(z.object({ deviceId: z.string(), name: z.string(), state: z.string() }).passthrough()).max(16),
+    clients: z.array(z.object({ id: z.string(), uplinkDeviceId: z.string().nullable() }).passthrough()).max(200),
+    problems: z.array(z.string()).max(50)
+  }).passthrough(),
+  networkSwitch: z.object({
+    state: z.string(),
+    configured: z.boolean(),
+    reachable: z.boolean().nullable(),
+    ports: z.array(z.object({ id: z.string(), name: z.string(), role: z.string(), expected: z.boolean() }).passthrough()).max(64),
+    poe: z.object({
+      supported: z.boolean().nullable(),
+      budgetWatts: z.number().nonnegative().nullable(),
+      consumptionWatts: z.number().nonnegative().nullable(),
+      remainingWatts: z.number().nonnegative().nullable()
+    }).passthrough(),
+    problems: z.array(z.string()).max(50)
+  }).passthrough(),
   courts: z.array(z.object({ courtNumber: z.number().int().min(1).max(8), overallState: z.string(), stages: z.array(z.unknown()) }).passthrough()).max(8),
   agents: z.array(z.object({ agentId: z.string(), state: z.string() }).passthrough()).max(32),
   incidents: z.array(z.object({ id: z.string().uuid(), status: z.string(), severity: z.string() }).passthrough()).max(200),

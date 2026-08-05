@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CourtMonitorSnapshot, IncidentSnapshot, MonitorSnapshot, MonitoringFaultGate } from "./contracts.js";
+import { emptyNetworkSwitchSnapshot } from "./correlator.js";
 import { enrichIncidentChange } from "./incidentResolution.js";
 
 describe("incident resolution semantics", () => {
@@ -185,6 +186,7 @@ function snapshot(input: {
     },
     router: { state: "UNKNOWN", sampledAt: null, receivedAt: null, ageMs: null, speedify: null, routing: null, cameraWifi: null, host: null, uplinks: [] },
     unifi: { state: "NOT_APPLICABLE", required: false, configured: false, apiReachable: null, sampledAt: null, lastSuccessAt: null, lastFailureAt: null, siteId: null, expectedAccessPoints: 0, onlineAccessPoints: 0, connectedClients: 0, accessPoints: [], clients: [], problems: [] },
+    networkSwitch: emptyNetworkSwitchSnapshot(),
     courts: [court],
     agents: [],
     incidents: [],

@@ -339,6 +339,88 @@ export type MonitorRouter = {
   }>;
 };
 
+export type MonitorUniFi = {
+  state: MonitorHealthState;
+  required: boolean;
+  configured: boolean;
+  apiReachable: boolean | null;
+  sampledAt: string | null;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  siteId: string | null;
+  expectedAccessPoints: number;
+  onlineAccessPoints: number;
+  connectedClients: number;
+  accessPoints: Array<{
+    name: string;
+    deviceId: string;
+    macAddress: string;
+    model: string | null;
+    firmwareVersion: string | null;
+    state: string;
+    ipAddress: string | null;
+    cpuUtilizationPct: number | null;
+    memoryUtilizationPct: number | null;
+    txRateBps: number | null;
+    rxRateBps: number | null;
+    lastHeartbeatAt: string | null;
+    radios: Array<{ frequencyGHz: number; txRetriesPct: number | null }>;
+  }>;
+  clients: Array<{
+    id: string;
+    name: string;
+    macAddress: string | null;
+    ipAddress: string | null;
+    type: string;
+    uplinkDeviceId: string | null;
+  }>;
+  problems: string[];
+};
+
+export type MonitorNetworkSwitch = {
+  state: MonitorHealthState;
+  required: boolean;
+  configured: boolean;
+  reachable: boolean | null;
+  sampledAt: string | null;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  model: string | null;
+  firmwareVersion: string | null;
+  uptimeSeconds: number | null;
+  ports: Array<{
+    id: string;
+    name: string;
+    role: "access_point" | "router_uplink" | "other";
+    expected: boolean;
+    adminUp: boolean | null;
+    operationalUp: boolean | null;
+    speedMbps: number | null;
+    duplex: "full" | "half" | "unknown" | null;
+    rxBps: number | null;
+    txBps: number | null;
+    inputErrorsPerSecond: number | null;
+    outputErrorsPerSecond: number | null;
+    inputDiscardsPerSecond: number | null;
+    outputDiscardsPerSecond: number | null;
+    lastChangedAt: string | null;
+    poe: {
+      configured: boolean | null;
+      deliveringPower: boolean | null;
+      powerWatts: number | null;
+      limitWatts: number | null;
+      priority: string | null;
+    } | null;
+  }>;
+  poe: {
+    supported: boolean | null;
+    budgetWatts: number | null;
+    consumptionWatts: number | null;
+    remainingWatts: number | null;
+  };
+  problems: string[];
+};
+
 export type MonitorSnapshot = {
   version: typeof MONITORING_CONTRACT_VERSION;
   generatedAt: string;
@@ -361,6 +443,8 @@ export type MonitorSnapshot = {
     };
   };
   router: MonitorRouter;
+  unifi: MonitorUniFi;
+  networkSwitch: MonitorNetworkSwitch;
   courts: MonitorCourt[];
   agents: MonitorAgent[];
   incidents: MonitorIncident[];
