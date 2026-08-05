@@ -4,7 +4,6 @@ import {
   Activity,
   AlertTriangle,
   Bell,
-  BellOff,
   Camera,
   Cable,
   CheckCircle2,
@@ -27,14 +26,15 @@ import {
   X,
   Youtube
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { StreamPlayer } from "@/components/StreamPlayer";
 import { deriveMonitorBrowserLiveness, type MonitorBrowserLiveness } from "@/lib/monitorBrowserLiveness";
 import { deriveMonitorDeadManReadiness } from "@/lib/monitorDeadManReadiness";
 import { egressRuntimeHealthy } from "@/lib/monitorEgressPresentation";
 import { deriveMonitorPagingReadiness } from "@/lib/monitorPagingReadiness";
+import { isCheckpointEventOperational, isCourtExpectedOff, isMonitorSnapshotCurrent, isTelemetryCurrent, unavailableState } from "@/lib/monitorPresentation";
 import { deriveMonitorSystemState } from "@/lib/monitorSystemState";
-import type { MonitorCourt, MonitorCourtPipelineRange, MonitorHealthState, MonitorIncident, MonitorMediaPath, MonitorNetworkSwitch, MonitorRouter, MonitorSilence, MonitorSnapshotEnvelope, MonitorStage, MonitorUniFi } from "@/lib/monitoringTypes";
+import type { MonitorAgent, MonitorCourt, MonitorCourtPipelineRange, MonitorHealthState, MonitorMediaPath, MonitorNetworkSwitch, MonitorRouter, MonitorSnapshot, MonitorSnapshotEnvelope, MonitorStage, MonitorUniFi } from "@/lib/monitoringTypes";
 import { PacingComparator } from "./PacingComparator";
 
 const POLL_INTERVAL_MS = 5_000;
@@ -94,17 +94,8 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
   const [mobileInspectionOpen, setMobileInspectionOpen] = useState(false);
   const [inspectionQuality, setInspectionQuality] = useState<"data_saver" | "detail">("data_saver");
   const [pacingOpen, setPacingOpen] = useState(false);
-  const [soundEnabled, setSoundEnabled] = useState(false);
-  const [ackReasons, setAckReasons] = useState<Record<string, string>>({});
-  const [ackBusy, setAckBusy] = useState<string | null>(null);
-  const [ackError, setAckError] = useState<Record<string, string | undefined>>({});
-  const [silenceReasons, setSilenceReasons] = useState<Record<string, string>>({});
-  const [silenceDurations, setSilenceDurations] = useState<Record<string, number>>({});
-  const [silenceBusy, setSilenceBusy] = useState<string | null>(null);
-  const [silenceError, setSilenceError] = useState<Record<string, string | undefined>>({});
   const [nowMs, setNowMs] = useState(() => initial ? Date.parse(initial.fetchedAt) : 0);
   const [history, setHistory] = useState<MonitorCourtPipelineRange | null>(null);
-  const previousCriticalIds = useRef(new Set(initial?.snapshot.incidents.filter((incident) => incident.severity === "critical").map((incident) => incident.id) ?? []));
   const previewBeforePacing = useRef(false);
   const inspectionRef = useRef<HTMLElement | null>(null);
   const inspectionCloseRef = useRef<HTMLButtonElement | null>(null);
@@ -120,7 +111,6 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
   }, [selectedCourt]);
 
   useEffect(() => {
-    setSoundEnabled(window.localStorage.getItem("scorecheck-monitor-sound") === "on");
     setNowMs(Date.now());
     const timer = window.setInterval(() => setNowMs(Date.now()), 1_000);
     return () => window.clearInterval(timer);
@@ -188,24 +178,12 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
       if (!response.ok || !payload || !("snapshot" in payload)) throw new Error(payload && "error" in payload ? payload.error : "Monitoring poll failed.");
       setEnvelope(payload);
       setPollError(null);
-      const criticalIds = new Set(payload.snapshot.incidents.filter((incident) => incident.severity === "critical" && incident.status === "open").map((incident) => incident.id));
-      const newCritical = [...criticalIds].find((id) => !previousCriticalIds.current.has(id));
-      if (newCritical) {
-        const incident = payload.snapshot.incidents.find((entry) => entry.id === newCritical);
-        if (incident?.courtNumber) {
-          setSelectedCourt(incident.courtNumber);
-          setPreviewEnabled(false);
-          setPacingOpen(false);
-        }
-        if (soundEnabled) playAlertTone();
-      }
-      previousCriticalIds.current = criticalIds;
     } catch (error) {
       setPollError(error instanceof Error ? error.message : "Monitoring poll failed.");
     } finally {
       setRefreshing(false);
     }
-  }, [configured, soundEnabled]);
+  }, [configured]);
 
   useEffect(() => {
     if (!configured) return;
@@ -237,13 +215,6 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
     const timer = window.setInterval(() => void refreshHistory(), 30_000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [configured]);
-
-  function toggleSound() {
-    const next = !soundEnabled;
-    setSoundEnabled(next);
-    window.localStorage.setItem("scorecheck-monitor-sound", next ? "on" : "off");
-    if (next) playAlertTone();
-  }
 
   function inspectCamera(courtNumber: number) {
     const mobile = window.matchMedia("(max-width: 860px)").matches;
@@ -279,63 +250,6 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
     window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
   }
 
-  async function acknowledge(incident: MonitorIncident) {
-    const reason = ackReasons[incident.id]?.trim() ?? "";
-    if (reason.length < 3) {
-      setAckError((current) => ({ ...current, [incident.id]: "Enter a brief reason." }));
-      return;
-    }
-    setAckBusy(incident.id);
-    setAckError((current) => ({ ...current, [incident.id]: undefined }));
-    try {
-      const response = await fetch(`/api/admin/monitor/incidents/${incident.id}/acknowledge`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ reason })
-      });
-      const payload = await response.json().catch(() => null) as { error?: string } | null;
-      if (!response.ok) throw new Error(payload?.error ?? "Acknowledgement failed.");
-      setAckReasons((current) => ({ ...current, [incident.id]: "" }));
-      await refresh();
-    } catch (error) {
-      setAckError((current) => ({ ...current, [incident.id]: error instanceof Error ? error.message : "Acknowledgement failed." }));
-    } finally {
-      setAckBusy(null);
-    }
-  }
-
-  async function silenceIncident(incident: MonitorIncident) {
-    const reason = silenceReasons[incident.id]?.trim() ?? "";
-    if (reason.length < 3) {
-      setSilenceError((current) => ({ ...current, [incident.id]: "Enter a brief maintenance reason." }));
-      return;
-    }
-    setSilenceBusy(incident.id);
-    setSilenceError((current) => ({ ...current, [incident.id]: undefined }));
-    try {
-      const response = await fetch("/api/admin/monitor/silences", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          eventId: incident.eventId,
-          courtNumber: incident.courtNumber,
-          stage: incident.stage,
-          issueCode: incident.issueCode,
-          reason,
-          durationMinutes: silenceDurations[incident.id] ?? 30
-        })
-      });
-      const payload = await response.json().catch(() => null) as { error?: string } | null;
-      if (!response.ok) throw new Error(payload?.error ?? "Silence failed.");
-      setSilenceReasons((current) => ({ ...current, [incident.id]: "" }));
-      await refresh();
-    } catch (error) {
-      setSilenceError((current) => ({ ...current, [incident.id]: error instanceof Error ? error.message : "Silence failed." }));
-    } finally {
-      setSilenceBusy(null);
-    }
-  }
-
   if (!envelope) {
     return (
       <section className="monitor-empty" role="status">
@@ -351,25 +265,30 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
   const unifi = snapshot.unifi ?? UNIFI_UNAVAILABLE;
   const networkSwitch = snapshot.networkSwitch ?? SWITCH_UNAVAILABLE;
   const snapshotAgeMs = Math.max(0, nowMs - Date.parse(snapshot.generatedAt));
-  const stale = envelope.source === "checkpoint" || snapshotAgeMs > 15_000;
+  const snapshotCurrent = isMonitorSnapshotCurrent(envelope, nowMs);
+  const eventOperational = snapshotCurrent
+    ? snapshot.event?.status.toLowerCase() === "active"
+    : isCheckpointEventOperational(snapshot.event, nowMs);
+  const stale = !snapshotCurrent;
+  const routerCurrent = isTelemetryCurrent(snapshotCurrent, router.receivedAt, nowMs, 20_000);
+  const unifiCurrent = isTelemetryCurrent(snapshotCurrent, unifi.sampledAt, nowMs, 90_000) && unifi.apiReachable === true;
+  const switchCurrent = isTelemetryCurrent(snapshotCurrent, networkSwitch.sampledAt, nowMs, 90_000) && networkSwitch.reachable === true;
   const pagingReadiness = deriveMonitorPagingReadiness(snapshot.notifications);
   const deadManReadiness = deriveMonitorDeadManReadiness(snapshot.deadMan);
-  const overall = deriveMonitorSystemState({
+  const derivedOverall = deriveMonitorSystemState({
     courtStates: snapshot.courts.map(effectiveCourtState),
     globalStates: [snapshot.collector.state, snapshot.controlPlane.state, snapshot.youtube.state, router.state, unifi.state, networkSwitch.state, pagingReadiness.state, deadManReadiness.state],
     hasCriticalIncident: snapshot.incidents.some((incident) => incident.status !== "resolved" && incident.severity === "critical"),
     stale
   });
+  const overall = stale && !eventOperational ? "EXPECTED_OFF" : derivedOverall;
+  const monitorUnavailableMessage = stale && !eventOperational
+    ? "Event infrastructure is off. No current telemetry is available, so historical measurements are hidden."
+    : pollError ?? envelope.monitorError ?? "Monitoring snapshot is stale.";
   const selected = snapshot.courts.find((court) => court.courtNumber === selectedCourt) ?? snapshot.courts[0] ?? null;
   const dataSaverAdmitted = selected?.expectation.broadcastExpectation !== "LIVE";
   const activeInspectionQuality = dataSaverAdmitted ? inspectionQuality : "detail";
   const activeIncidents = snapshot.incidents.filter((incident) => incident.status !== "resolved");
-  const activeSilences = snapshot.silences.filter((silence) => Date.parse(silence.expiresAt) > nowMs);
-  const camerasHealthy = snapshot.courts.filter((court) => ["HEALTHY", "EXPECTED_OFF", "NOT_APPLICABLE"].includes(effectiveCourtState(court))).length;
-  const cameraOverviewState = snapshot.courts.reduce<MonitorHealthState>((worst, court) => {
-    const state = effectiveCourtState(court);
-    return STATE_RANK[state] > STATE_RANK[worst] ? state : worst;
-  }, "NOT_APPLICABLE");
 
   function togglePacing() {
     if (pacingOpen) {
@@ -388,12 +307,9 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
         <div>
           <p className="eyebrow">Live operations</p>
           <div className="monitor-title-line"><h1>System Monitor</h1><StateBadge state={overall} label={systemStateLabel(overall)} /></div>
-          <p className="monitor-event-name">{snapshot.event?.name ?? "No active event"}</p>
+          <p className="monitor-event-name">{eventOperational ? snapshot.event?.name : "No active event"}</p>
         </div>
         <div className="monitor-heading-actions">
-          <button className="monitor-icon-button" type="button" onClick={toggleSound} title={soundEnabled ? "Disable dashboard alert sound" : "Enable dashboard alert sound"} aria-label={soundEnabled ? "Disable dashboard alert sound" : "Enable dashboard alert sound"}>
-            {soundEnabled ? <Bell size={18} /> : <BellOff size={18} />}
-          </button>
           <button className="monitor-icon-button" type="button" onClick={() => void refresh()} disabled={refreshing} title="Refresh monitoring data" aria-label="Refresh monitoring data">
             <RefreshCw className={refreshing ? "is-spinning" : ""} size={18} />
           </button>
@@ -413,7 +329,7 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
         <span>Cameras</span>
         <div ref={cameraNavScrollRef}>
           {snapshot.courts.map((court) => {
-            const state = effectiveCourtState(court);
+            const state = displayedCourtState(court, snapshotCurrent, eventOperational);
             return (
               <button
                 key={court.courtNumber}
@@ -433,12 +349,12 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
       </nav>}
 
       {activeTab === "system" && <section id="monitor-panel-system" className="monitor-global-strip monitor-tab-panel" role="tabpanel" aria-labelledby="monitor-tab-system" aria-label="Global health">
-        <GlobalItem icon={<Activity size={17} />} label="Collector" value={`${snapshot.collector.agentsFresh}/${snapshot.collector.agentsExpected} agents`} state={snapshot.collector.state} />
-        <GlobalItem icon={<Signal size={17} />} label="Control" value={snapshot.controlPlane.worker.state === "NOT_APPLICABLE" ? "Idle" : snapshot.controlPlane.worker.state} state={snapshot.controlPlane.state} />
-        <GlobalItem icon={<Youtube size={17} />} label="YouTube" value={friendlyState(snapshot.youtube.state)} state={snapshot.youtube.state} />
-        <GlobalItem icon={<Bell size={17} />} label="Phone alerts" value={pagingReadiness.label} state={pagingReadiness.state} wrapValue />
-        <GlobalItem icon={<Radio size={17} />} label="Watchdog" value={deadManReadiness.label} state={deadManReadiness.state} wrapValue />
-        <GlobalItem icon={<ShieldAlert size={17} />} label="Incidents" value={activeIncidents.length ? `${activeIncidents.length} active` : "Clear"} state={activeIncidents.some((incident) => incident.severity === "critical") ? "CRITICAL" : activeIncidents.length ? "DEGRADED" : "HEALTHY"} />
+        <GlobalItem icon={<Activity size={17} />} label="Collector" value={snapshotCurrent ? `${snapshot.collector.agentsFresh}/${snapshot.collector.agentsExpected} agents` : eventOperational ? "No current data" : "Off"} state={snapshotCurrent ? snapshot.collector.state : unavailableState(!eventOperational)} />
+        <GlobalItem icon={<Signal size={17} />} label="Control" value={snapshotCurrent ? snapshot.controlPlane.worker.state === "NOT_APPLICABLE" ? "Idle" : snapshot.controlPlane.worker.state : eventOperational ? "No current data" : "Off"} state={snapshotCurrent ? snapshot.controlPlane.state : unavailableState(!eventOperational)} />
+        <GlobalItem icon={<Youtube size={17} />} label="YouTube" value={snapshotCurrent ? friendlyState(snapshot.youtube.state) : eventOperational ? "No current data" : "Off"} state={snapshotCurrent ? snapshot.youtube.state : unavailableState(!eventOperational)} />
+        <GlobalItem icon={<Bell size={17} />} label="Phone alerts" value={snapshotCurrent ? pagingReadiness.label : eventOperational ? "No current data" : "Off"} state={snapshotCurrent ? pagingReadiness.state : unavailableState(!eventOperational)} wrapValue />
+        <GlobalItem icon={<Radio size={17} />} label="Watchdog" value={snapshotCurrent ? deadManReadiness.label : eventOperational ? "No current data" : "Off"} state={snapshotCurrent ? deadManReadiness.state : unavailableState(!eventOperational)} wrapValue />
+        <GlobalItem icon={<ShieldAlert size={17} />} label="Incidents" value={snapshotCurrent ? activeIncidents.length ? `${activeIncidents.length} active` : "Clear" : eventOperational ? "No current data" : "Off"} state={snapshotCurrent ? activeIncidents.some((incident) => incident.severity === "critical") ? "CRITICAL" : activeIncidents.length ? "DEGRADED" : "HEALTHY" : unavailableState(!eventOperational)} />
         <div className={`monitor-freshness ${stale ? "is-stale" : ""}`}>
           <Clock3 size={16} aria-hidden="true" />
           <span>{envelope.source === "checkpoint" ? "Checkpoint" : `${formatDuration(snapshotAgeMs)} ago`}</span>
@@ -446,82 +362,24 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
       </section>}
 
       {(pollError || envelope.monitorError || stale) && (
-        <div className="monitor-banner" role="alert"><AlertTriangle size={17} /><span>{pollError ?? envelope.monitorError ?? "Monitoring snapshot is stale."}</span></div>
+        <div className={`monitor-banner ${stale && !eventOperational ? "is-idle" : ""}`} role={stale && !eventOperational ? "status" : "alert"}><AlertTriangle size={17} /><span>{monitorUnavailableMessage}</span></div>
       )}
 
       {activeTab === "overview" && <OverviewPanel
-        camerasHealthy={camerasHealthy}
-        cameraCount={snapshot.courts.length}
-        cameraState={cameraOverviewState}
+        snapshot={snapshot}
+        snapshotCurrent={snapshotCurrent}
+        eventOperational={eventOperational}
         unifi={unifi}
+        unifiCurrent={unifiCurrent}
         networkSwitch={networkSwitch}
+        switchCurrent={switchCurrent}
         router={router}
-        youtubeState={snapshot.youtube.state}
-        agentsFresh={snapshot.collector.agentsFresh}
-        agentsExpected={snapshot.collector.agentsExpected}
-        incidentCount={activeIncidents.length}
-        stale={stale}
-        onSelect={selectTab}
+        routerCurrent={routerCurrent}
+        nowMs={nowMs}
       />}
-      {activeTab === "wifi" && <UniFiBand unifi={unifi} nowMs={nowMs} />}
-      {activeTab === "switch" && <NetworkSwitchBand networkSwitch={networkSwitch} nowMs={nowMs} />}
-      {activeTab === "router" && <RouterBand router={router} nowMs={nowMs} />}
-
-      {activeTab === "overview" && <section className="monitor-incidents-band" aria-label="Action required">
-        <div className="monitor-section-heading">
-          <div>
-            <h2>Action required</h2>
-            <p className="monitor-action-summary">{activeIncidents.length ? `${activeIncidents.length} active${activeSilences.length ? ` · ${activeSilences.length} silenced` : ""}` : "No action needed"}</p>
-          </div>
-        </div>
-        {activeIncidents.length > 0 && (
-          <div className="monitor-incident-list">
-            {activeIncidents.map((incident) => {
-              const silence = matchingSilence(incident, activeSilences, nowMs);
-              const incidentCamera = incident.courtNumber;
-              return (
-              <article className="monitor-incident" key={incident.id} data-severity={incident.severity} data-issue-code={incident.issueCode}>
-                <div className="monitor-incident-main">
-                  <div className="monitor-incident-title">
-                    <StateDot state={incident.severity === "critical" ? "CRITICAL" : "DEGRADED"} />
-                    <strong>{incidentCamera ? `Camera ${incidentCamera}` : stageLabel(incident.stage)}</strong>
-                    <span>{incidentCamera ? stageLabel(incident.stage) : incident.rootDependency}</span>
-                  </div>
-                  <p>{incident.summary}</p>
-                  {incident.firstAction && <p className="monitor-first-action"><strong>First action:</strong> {incident.firstAction}</p>}
-                </div>
-                <div className="monitor-incident-actions">
-                  {incidentCamera && (
-                    <button className="monitor-incident-inspect" type="button" onClick={() => inspectCamera(incidentCamera)}>
-                      <Eye size={16} /> Inspect Camera {incidentCamera}
-                    </button>
-                  )}
-                  {incident.status === "open" ? (
-                    <div className="monitor-ack-form">
-                      <input aria-label={`Acknowledgement reason for ${incident.issueCode}`} value={ackReasons[incident.id] ?? ""} onChange={(event) => setAckReasons((current) => ({ ...current, [incident.id]: event.target.value }))} placeholder="Acknowledgement reason" maxLength={300} />
-                      <button type="button" onClick={() => void acknowledge(incident)} disabled={ackBusy === incident.id}><CheckCircle2 size={16} /> Acknowledge</button>
-                      {ackError[incident.id] && <span className="monitor-form-error">{ackError[incident.id]}</span>}
-                    </div>
-                  ) : <span className="status info">Acknowledged by {incident.acknowledgedBy ?? "operator"}</span>}
-                  {silence ? (
-                    <span className="status warning">Paging silenced until {formatTime(silence.expiresAt)} · {silence.reason}</span>
-                  ) : incident.status === "open" && (
-                    <div className="monitor-silence-form">
-                      <input aria-label={`Silence reason for ${incident.issueCode}`} value={silenceReasons[incident.id] ?? ""} onChange={(event) => setSilenceReasons((current) => ({ ...current, [incident.id]: event.target.value }))} placeholder="Planned maintenance reason" maxLength={300} />
-                      <select aria-label={`Silence duration for ${incident.issueCode}`} value={silenceDurations[incident.id] ?? 30} onChange={(event) => setSilenceDurations((current) => ({ ...current, [incident.id]: Number(event.target.value) }))}>
-                        <option value={15}>15 min</option><option value={30}>30 min</option><option value={60}>1 hour</option><option value={120}>2 hours</option>
-                      </select>
-                      <button type="button" onClick={() => void silenceIncident(incident)} disabled={silenceBusy === incident.id}><BellOff size={16} /> Silence</button>
-                      {silenceError[incident.id] && <span className="monitor-form-error">{silenceError[incident.id]}</span>}
-                    </div>
-                  )}
-                </div>
-              </article>
-              );
-            })}
-          </div>
-        )}
-      </section>}
+      {activeTab === "wifi" && <UniFiBand unifi={unifi} nowMs={nowMs} current={unifiCurrent} expectedOff={!eventOperational} />}
+      {activeTab === "switch" && <NetworkSwitchBand networkSwitch={networkSwitch} nowMs={nowMs} current={switchCurrent} expectedOff={!eventOperational} />}
+      {activeTab === "router" && <RouterBand router={router} nowMs={nowMs} current={routerCurrent} expectedOff={!eventOperational} />}
 
       {activeTab === "cameras" && <div id="monitor-panel-cameras" className="monitor-tab-panel" role="tabpanel" aria-labelledby="monitor-tab-cameras">
       <div className="monitor-bandwidth-note">
@@ -530,8 +388,8 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
       </div>
 
       <section className="monitor-court-matrix" aria-label="Camera monitoring matrix">
-        {snapshot.courts.map((court) => (
-          <CourtCard key={court.courtNumber} court={court} history={history?.courts.find((entry) => entry.courtNumber === court.courtNumber) ?? null} selected={court.courtNumber === selectedCourt} nowMs={nowMs} onSelect={() => inspectCamera(court.courtNumber)} />
+          {snapshot.courts.map((court) => (
+          <CourtCard key={court.courtNumber} court={court} history={snapshotCurrent ? history?.courts.find((entry) => entry.courtNumber === court.courtNumber) ?? null : null} selected={court.courtNumber === selectedCourt} nowMs={nowMs} current={snapshotCurrent} eventOperational={eventOperational} onSelect={() => inspectCamera(court.courtNumber)} />
         ))}
       </section>
 
@@ -551,7 +409,7 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
             <strong>Camera {selected.courtNumber} inspection</strong>
           </div>
           <div className="monitor-section-heading">
-            <div><p className="eyebrow">Live inspection</p><h2>Camera {selected.courtNumber}</h2><p className="monitor-detail-assignment">{assignedCourtLabel(selected)}</p></div>
+            <div><p className="eyebrow">Live inspection</p><h2>Camera {selected.courtNumber}</h2><p className="monitor-detail-assignment">{eventOperational ? assignedCourtLabel(selected) : `Camera ${selected.courtNumber} · Off`}</p></div>
             <div className="monitor-detail-actions">
               <label className="monitor-quality-control">
                 <span>Video quality</span>
@@ -572,10 +430,10 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
               )}
             </div>
             <div className="monitor-stage-detail">
-              {selected.stages.map((stage) => <StageDetail key={stage.stage} stage={stage} />)}
+              {selected.stages.map((stage) => <StageDetail key={stage.stage} stage={snapshotCurrent ? stage : { ...stage, state: unavailableState(!eventOperational || isCourtExpectedOff(selected)), summary: "No current telemetry is available." }} />)}
             </div>
           </div>
-          <ProgramTelemetry court={selected} nowMs={nowMs} />
+          <ProgramTelemetry court={selected} nowMs={nowMs} current={snapshotCurrent} />
           {pacingOpen && <PacingComparator courtNumber={selected.courtNumber} />}
         </section>
       )}
@@ -584,25 +442,29 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
       {activeTab === "system" && <section className="monitor-shared-band" aria-label="Shared services">
         <div className="monitor-section-heading"><div><p className="eyebrow">Shared dependencies</p><h2>Hosts &amp; services</h2></div></div>
         <div className="monitor-agent-grid">
-          {snapshot.agents.map((agent) => (
-            <article className="monitor-agent" key={agent.agentId} data-state={agent.state}>
-              <div className="monitor-agent-head"><Server size={17} /><strong>{agent.agentId}</strong><StateDot state={agent.state} /></div>
+          {snapshot.agents.map((agent) => {
+            const agentCurrent = isAgentCurrent(agent, snapshotCurrent, nowMs);
+            const agentState = agentCurrent ? agent.state : unavailableState(!eventOperational);
+            return (
+            <article className="monitor-agent" key={agent.agentId} data-state={agentState}>
+              <div className="monitor-agent-head"><Server size={17} /><strong>{agent.agentId}</strong><StateBadge state={agentState} compact label={agentCurrent ? friendlyState(agentState) : eventOperational ? "No current data" : "Off"} /></div>
               <div className="monitor-agent-metrics">
-                <Metric label="Load" value={agent.host ? agent.host.load1.toFixed(2) : "--"} />
-                <Metric label="Memory" value={agent.host ? percent(agent.host.memoryTotalBytes - agent.host.memoryAvailableBytes, agent.host.memoryTotalBytes) : "--"} />
-                <Metric label="Disk" value={agent.host?.diskTotalBytes && agent.host.diskFreeBytes != null ? percent(agent.host.diskTotalBytes - agent.host.diskFreeBytes, agent.host.diskTotalBytes) : "--"} />
-                {agent.nativeServices?.egress && <>
+                <Metric label="Load" value={agentCurrent && agent.host ? agent.host.load1.toFixed(2) : "--"} />
+                <Metric label="Memory" value={agentCurrent && agent.host ? percent(agent.host.memoryTotalBytes - agent.host.memoryAvailableBytes, agent.host.memoryTotalBytes) : "--"} />
+                <Metric label="Disk" value={agentCurrent && agent.host?.diskTotalBytes && agent.host.diskFreeBytes != null ? percent(agent.host.diskTotalBytes - agent.host.diskFreeBytes, agent.host.diskTotalBytes) : "--"} />
+                {agentCurrent && agent.nativeServices?.egress && <>
                   <Metric label="Egress memory" value={formatBytes(agent.nativeServices.egress.cgroupMemoryBytes)} />
                   <Metric label="Egress CPU" value={formatPercentRatio(agent.nativeServices.egress.cpuLoadRatio)} />
                   <Metric label="Egress memory load" value={formatPercentRatio(agent.nativeServices.egress.memoryLoadRatio)} />
                 </>}
               </div>
               <div className="monitor-service-list">
-                {agent.services.map((service) => <span key={service.name} className={service.running && service.healthy !== false && !service.oomKilled ? "is-ok" : "is-bad"}>{service.name} · {service.restartCount}r</span>)}
-                {agent.nativeServices?.egress && <span className={egressRuntimeHealthy(agent.nativeServices.egress) ? "is-ok" : "is-bad"}>Egress {agent.nativeServices.egress.idle ? "idle" : "busy"} · {agent.nativeServices.egress.activeWebRequests}/{agent.nativeServices.egress.maximumWebRequests} outputs · {agent.nativeServices.egress.canAcceptRequest ? "ready" : "admission closed"}</span>}
+                {agentCurrent ? agent.services.map((service) => <span key={service.name} className={service.running && service.healthy !== false && !service.oomKilled ? "is-ok" : "is-bad"}>{service.name} · {service.restartCount}r</span>) : <span>No live server telemetry</span>}
+                {agentCurrent && agent.nativeServices?.egress && <span className={egressRuntimeHealthy(agent.nativeServices.egress) ? "is-ok" : "is-bad"}>Egress {agent.nativeServices.egress.idle ? "idle" : "busy"} · {agent.nativeServices.egress.activeWebRequests}/{agent.nativeServices.egress.maximumWebRequests} outputs · {agent.nativeServices.egress.canAcceptRequest ? "ready" : "admission closed"}</span>}
               </div>
             </article>
-          ))}
+            );
+          })}
         </div>
       </section>}
 
@@ -610,23 +472,11 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
   );
 }
 
-function matchingSilence(incident: MonitorIncident, silences: MonitorSilence[], nowMs: number): MonitorSilence | null {
-  return silences.find((silence) => Date.parse(silence.expiresAt) > nowMs
-    && (silence.eventId == null || silence.eventId === incident.eventId)
-    && (silence.courtNumber == null || silence.courtNumber === incident.courtNumber)
-    && (silence.stage == null || silence.stage === incident.stage)
-    && (silence.issueCode == null || silence.issueCode === incident.issueCode)) ?? null;
-}
-
-function formatTime(value: string): string {
-  return new Date(value).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-}
-
-function CourtCard({ court, history, selected, nowMs, onSelect }: { court: MonitorCourt; history: MonitorCourtPipelineRange["courts"][number] | null; selected: boolean; nowMs: number; onSelect: () => void }) {
-  const browser = court.browser;
-  const raw = court.paths.raw;
-  const program = court.paths.program;
-  const preview = court.ffmpeg.preview;
+function CourtCard({ court, history, selected, nowMs, current, eventOperational, onSelect }: { court: MonitorCourt; history: MonitorCourtPipelineRange["courts"][number] | null; selected: boolean; nowMs: number; current: boolean; eventOperational: boolean; onSelect: () => void }) {
+  const browser = current ? court.browser : null;
+  const raw = current ? court.paths.raw : undefined;
+  const program = current ? court.paths.program : undefined;
+  const preview = current ? court.ffmpeg.preview : null;
   const browserLiveness = deriveMonitorBrowserLiveness({
     receivedAt: browser?.receivedAt,
     programReaderCount: program?.readerCount,
@@ -634,17 +484,18 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
   });
   const liveBrowser = browserLiveness.state === "LIVE" ? browser : null;
   const cameraStage = court.stages.find((stage) => stage.stage === "RAW_INGEST");
-  const cameraState = cameraStage?.state ?? "UNKNOWN";
-  const productionState = productionPipelineState(court);
-  const effectiveState = effectiveCourtState(court);
-  const current = court.competition?.currentMatch;
-  const score = court.competition?.score;
+  const expectedOff = !eventOperational || isCourtExpectedOff(court);
+  const cameraState = current ? cameraStage?.state ?? "UNKNOWN" : unavailableState(expectedOff);
+  const productionState = current ? productionPipelineState(court) : unavailableState(expectedOff);
+  const effectiveState = displayedCourtState(court, current, eventOperational);
+  const match = current ? court.competition?.currentMatch : null;
+  const score = current ? court.competition?.score : null;
   const relevantStages = court.stages.filter((stage) => stage.stage === "RAW_INGEST"
     || court.expectation.broadcastExpectation !== "OFF"
     || court.expectation.commentaryExpectation !== "NONE"
     || court.expectation.scoringExpectation !== "NONE");
-  const issue = relevantStages.find((stage) => stage.state === "CRITICAL") ?? relevantStages.find((stage) => ["DEGRADED", "UNKNOWN"].includes(stage.state));
-  const thumbnailFresh = court.thumbnail && nowMs - Date.parse(court.thumbnail.receivedAt) <= 45_000;
+  const issue = current ? relevantStages.find((stage) => stage.state === "CRITICAL") ?? relevantStages.find((stage) => ["DEGRADED", "UNKNOWN"].includes(stage.state)) : undefined;
+  const thumbnailFresh = current && court.thumbnail && nowMs - Date.parse(court.thumbnail.receivedAt) <= 45_000;
   const browserLost = liveBrowser?.video.packetsLost;
   const browserReceived = liveBrowser?.video.packetsReceived;
   const loss = browserLost != null && browserReceived != null
@@ -659,7 +510,7 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
   return (
     <article id={`monitor-camera-${court.courtNumber}`} className={`monitor-court ${selected ? "is-selected" : ""}`} data-state={effectiveState}>
       <header className="monitor-court-head">
-        <div><span className="monitor-court-number">{court.courtNumber}</span><div><h2>Camera {court.courtNumber}</h2><p>{assignedCourtLabel(court)} · {court.expectation.coveragePhase.replaceAll("_", " ")}</p></div></div>
+        <div><span className="monitor-court-number">{court.courtNumber}</span><div><h2>Camera {court.courtNumber}</h2><p>{eventOperational ? `${assignedCourtLabel(court)} · ${court.expectation.coveragePhase.replaceAll("_", " ")}` : `Camera ${court.courtNumber} · Off`}</p></div></div>
         <div className="monitor-court-statuses">
           <StateBadge state={cameraState} compact label={cameraStateLabel(raw, cameraState)} />
           <StateBadge state={productionState} compact label={pipelineStateLabel(productionState)} />
@@ -690,16 +541,16 @@ function CourtCard({ court, history, selected, nowMs, onSelect }: { court: Monit
         </div>
       </div>
       <div className="monitor-stage-grid">
-        {court.stages.map((stage) => <StageRow key={stage.stage} stage={stage} />)}
+        {court.stages.map((stage) => <StageRow key={stage.stage} stage={current ? stage : { ...stage, state: unavailableState(expectedOff), summary: "No current telemetry is available." }} />)}
       </div>
       <div className="monitor-match">
-        {current ? <><div><strong>{current.teamA ?? "TBD"}</strong><span>{score ? `${score.teamASets} · ${score.teamAScore}` : "--"}</span></div><div><strong>{current.teamB ?? "TBD"}</strong><span>{score ? `${score.teamBSets} · ${score.teamBScore}` : "--"}</span></div><p>{current.roundName ?? "Match"}{current.matchNumber ? ` · #${current.matchNumber}` : ""}</p></> : <p>No current match</p>}
+        {match ? <><div><strong>{match.teamA ?? "TBD"}</strong><span>{score ? `${score.teamASets} · ${score.teamAScore}` : "--"}</span></div><div><strong>{match.teamB ?? "TBD"}</strong><span>{score ? `${score.teamBSets} · ${score.teamBScore}` : "--"}</span></div><p>{match.roundName ?? "Match"}{match.matchNumber ? ` · #${match.matchNumber}` : ""}</p></> : <p>No current match</p>}
       </div>
       <div className="monitor-court-footer">
         <span className="monitor-source-profile" title={sourceDetail(raw)}><Signal size={14} /> {sourceProfile(raw)}</span>
-        <span><Camera size={14} /> {visualLabel(court.contentAnalysis)}</span>
+        <span><Camera size={14} /> {visualLabel(current ? court.contentAnalysis : null)}</span>
         <span><Headphones size={14} /> {commentaryLabel(liveBrowser)}</span>
-        <span><Youtube size={14} /> {friendlyState(court.youtube?.state ?? "NOT_APPLICABLE")}</span>
+        <span><Youtube size={14} /> {current ? friendlyState(court.youtube?.state ?? "NOT_APPLICABLE") : "no current data"}</span>
         <span title={browserQualityDetail(liveBrowser)}><Activity size={14} /> {browserQualityLabel(liveBrowser, liveBrowser ? history : null)}</span>
         <span title={browserLivenessDetail(browserLiveness)}><Gauge size={14} /> {browserLivenessLabel(browserLiveness)}</span>
       </div>
@@ -746,61 +597,124 @@ function MonitorTabButton({ id, label, shortLabel, icon, activeTab, onSelect }: 
   );
 }
 
-function OverviewPanel({ camerasHealthy, cameraCount, cameraState, unifi, networkSwitch, router, youtubeState, agentsFresh, agentsExpected, incidentCount, stale, onSelect }: {
-  camerasHealthy: number;
-  cameraCount: number;
-  cameraState: MonitorHealthState;
+function OverviewPanel({ snapshot, snapshotCurrent, eventOperational, unifi, unifiCurrent, networkSwitch, switchCurrent, router, routerCurrent, nowMs }: {
+  snapshot: MonitorSnapshot;
+  snapshotCurrent: boolean;
+  eventOperational: boolean;
   unifi: MonitorUniFi;
+  unifiCurrent: boolean;
   networkSwitch: MonitorNetworkSwitch;
+  switchCurrent: boolean;
   router: MonitorRouter;
-  youtubeState: MonitorHealthState;
-  agentsFresh: number;
-  agentsExpected: number;
-  incidentCount: number;
-  stale: boolean;
-  onSelect: (tab: MonitorTab) => void;
+  routerCurrent: boolean;
+  nowMs: number;
 }) {
-  const systemState: MonitorHealthState = stale ? "UNKNOWN" : agentsExpected > 0 && agentsFresh === agentsExpected ? "HEALTHY" : "DEGRADED";
-  const routerDetail = router.speedify?.state === "CONNECTED"
-    ? `${formatBitrate(router.speedify.uploadHeadroomBps)} estimated headroom`
-    : "Bonded connection is not ready";
+  const cameraStates = snapshot.courts.map((court) => displayedCourtState(court, snapshotCurrent, eventOperational));
+  const cameraState = cameraStates.reduce<MonitorHealthState>((worst, state) => STATE_RANK[state] > STATE_RANK[worst] ? state : worst, "NOT_APPLICABLE");
+  const activeCameras = snapshotCurrent ? snapshot.courts.filter((court) => court.paths.raw?.ready).length : 0;
+  const routerState = routerCurrent ? router.state : unavailableState(!eventOperational);
+  const unifiState = unifiCurrent ? unifi.state : unavailableState(!eventOperational);
+  const switchState = switchCurrent ? networkSwitch.state : unavailableState(!eventOperational);
+  const expectedPorts = networkSwitch.ports.filter((port) => port.expected);
+  const switchErrors = networkSwitch.ports.reduce((total, port) => total
+    + (port.inputErrorsPerSecond ?? 0)
+    + (port.outputErrorsPerSecond ?? 0)
+    + (port.inputDiscardsPerSecond ?? 0)
+    + (port.outputDiscardsPerSecond ?? 0), 0);
+  const cameraClients = unifiCurrent ? unifi.clients.filter((client) => cameraNumberFromClientName(client.name) != null) : [];
+  const youtubeState = snapshotCurrent ? snapshot.youtube.state : unavailableState(!eventOperational);
   return (
     <section id="monitor-panel-overview" className="monitor-tab-panel monitor-overview-panel" role="tabpanel" aria-labelledby="monitor-tab-overview">
-      <div className="monitor-section-heading">
-        <div><h2>Production overview</h2><p className="monitor-action-summary">Select any area for its full diagnostic view.</p></div>
+      <OverviewSectionHeading icon={<Camera size={19} />} title="Cameras" state={cameraState} label={activeCameras > 0 ? `${activeCameras} live` : eventOperational && !snapshotCurrent ? "No current data" : "All off"} />
+      <div className="monitor-overview-table-wrap">
+        <table className="monitor-overview-table monitor-camera-overview-table">
+          <thead><tr><th>Camera</th><th>Status</th><th>Ingest bitrate</th><th>Packet loss</th><th>Access point</th><th>Wi-Fi signal</th><th>Program</th></tr></thead>
+          <tbody>
+            {snapshot.courts.map((court) => {
+              const state = displayedCourtState(court, snapshotCurrent, eventOperational);
+              const raw = snapshotCurrent ? court.paths.raw : undefined;
+              const client = unifiCurrent ? findCameraClient(unifi, court.courtNumber) : null;
+              const accessPoint = client ? unifi.accessPoints.find((entry) => entry.deviceId === client.uplinkDeviceId) : null;
+              return <tr key={court.courtNumber} data-state={state}>
+                <th scope="row"><span className="monitor-camera-cell"><StateDot state={state} />Camera {court.courtNumber}</span></th>
+                <td data-label="Status"><StateBadge state={state} compact label={cameraOverviewStatus(court, snapshotCurrent, eventOperational)} /></td>
+                <td data-label="Ingest bitrate">{raw?.ready ? formatBitrate(raw.inboundBitrateBps) : "--"}</td>
+                <td data-label="Packet loss">{raw?.ready ? transportLoss(raw) : "--"}</td>
+                <td data-label="Access point">{accessPoint?.name ?? "--"}</td>
+                <td data-label="Wi-Fi signal">--</td>
+                <td data-label="Program">{programOverviewStatus(court, snapshotCurrent, eventOperational)}</td>
+              </tr>;
+            })}
+          </tbody>
+        </table>
       </div>
-      <div className="monitor-domain-grid">
-        <DomainSummary icon={<Camera size={20} />} label="Cameras" value={`${camerasHealthy}/${cameraCount} accounted for`} detail="Source, picture, audio, program and YouTube" state={cameraState} onClick={() => onSelect("cameras")} />
-        <DomainSummary icon={<Wifi size={20} />} label="Wi-Fi access points" value={unifi.configured ? `${unifi.onlineAccessPoints}/${unifi.expectedAccessPoints} online` : "Not commissioned"} detail={unifi.configured ? `${unifi.connectedClients} connected devices` : "Cloud UniFi telemetry is not configured"} state={unifi.state} onClick={() => onSelect("wifi")} />
-        <DomainSummary icon={<Network size={20} />} label="PoE switch" value={networkSwitch.configured ? networkSwitchStateLabel(networkSwitch) : "Awaiting hardware"} detail={networkSwitch.configured ? `${networkSwitch.ports.filter((port) => port.expected && port.operationalUp).length}/${networkSwitch.ports.filter((port) => port.expected).length} expected links up` : "SNMPv3 framework is ready for commissioning"} state={networkSwitch.state} onClick={() => onSelect("switch")} />
-        <DomainSummary icon={<RouterIcon size={20} />} label="Router and internet" value={routerStateLabel(router.state)} detail={routerDetail} state={router.state} onClick={() => onSelect("router")} />
-        <DomainSummary icon={<Youtube size={20} />} label="Broadcast delivery" value={friendlyState(youtubeState)} detail="Persistent output and YouTube provider status" state={youtubeState} onClick={() => onSelect("cameras")} />
-        <DomainSummary icon={<Server size={20} />} label="Monitoring system" value={`${agentsFresh}/${agentsExpected} agents reporting`} detail={incidentCount ? `${incidentCount} active item${incidentCount === 1 ? "" : "s"} need review` : "No active monitoring incidents"} state={systemState} onClick={() => onSelect("system")} />
+
+      <OverviewSectionHeading icon={<Network size={19} />} title="Venue network and power" state={worstState([routerState, unifiState, switchState, youtubeState])} label={snapshotCurrent ? "Current telemetry" : eventOperational ? "No current data" : "All off"} />
+      <div className="monitor-overview-table-wrap">
+        <table className="monitor-overview-table monitor-infrastructure-overview-table">
+          <thead><tr><th>System</th><th>Status</th><th>Primary reading</th><th>Quality</th></tr></thead>
+          <tbody>
+            <OverviewInfrastructureRow icon={<RouterIcon size={16} />} name="Router and internet" state={routerState} status={routerCurrent ? routerStateLabel(router.state) : offlineLabel(eventOperational)} primary={routerCurrent && router.routing ? `${router.routing.cameraFlowCount} camera sessions` : "--"} quality={routerCurrent && router.speedify ? `${formatBitrate(router.speedify.uploadHeadroomBps)} upload headroom` : "--"} />
+            <OverviewInfrastructureRow icon={<Wifi size={16} />} name="Wi-Fi access points" state={unifiState} status={unifiCurrent ? `${unifi.onlineAccessPoints}/${unifi.expectedAccessPoints} online` : offlineLabel(eventOperational)} primary={unifiCurrent ? `${cameraClients.length} cameras connected` : "--"} quality={routerCurrent && router.cameraWifi?.minimumSignalDbm != null ? `Weakest signal ${router.cameraWifi.minimumSignalDbm} dBm` : "--"} />
+            <OverviewInfrastructureRow icon={<Network size={16} />} name="PoE switch" state={switchState} status={switchCurrent ? networkSwitchStateLabel(networkSwitch) : offlineLabel(eventOperational)} primary={switchCurrent ? `${expectedPorts.filter((port) => port.operationalUp).length}/${expectedPorts.length} expected links up` : "--"} quality={switchCurrent ? `${formatWatts(networkSwitch.poe.consumptionWatts)} used · ${switchErrors === 0 ? "no errors" : `${switchErrors.toFixed(2)}/s errors`}` : "--"} />
+            <OverviewInfrastructureRow icon={<Youtube size={16} />} name="YouTube delivery" state={youtubeState} status={snapshotCurrent ? friendlyState(snapshot.youtube.state) : offlineLabel(eventOperational)} primary={snapshotCurrent ? `${snapshot.courts.filter((court) => court.youtube?.broadcastLifecycle === "live").length} live outputs` : "--"} quality={snapshotCurrent ? `${snapshot.courts.filter((court) => court.youtube?.healthStatus === "good").length} healthy destinations` : "--"} />
+          </tbody>
+        </table>
+      </div>
+
+      <OverviewSectionHeading icon={<Server size={19} />} title="Event servers" state={serverOverviewState(snapshot.agents, snapshotCurrent, eventOperational, nowMs)} label={snapshotCurrent ? `${snapshot.agents.filter((agent) => isAgentCurrent(agent, true, nowMs)).length} reporting` : eventOperational ? "No current data" : "All off"} />
+      <div className="monitor-overview-table-wrap">
+        <table className="monitor-overview-table monitor-server-overview-table">
+          <thead><tr><th>Server</th><th>Status</th><th>Load</th><th>Memory</th><th>Disk</th></tr></thead>
+          <tbody>
+            {snapshot.agents.length ? snapshot.agents.map((agent) => {
+              const current = isAgentCurrent(agent, snapshotCurrent, nowMs);
+              const state = current ? agent.state : unavailableState(!eventOperational);
+              return <tr key={agent.agentId} data-state={state}>
+                <th scope="row"><span className="monitor-server-cell"><StateDot state={state} /><span><strong>{agent.agentId}</strong><small>{friendlyRole(agent.role)}</small></span></span></th>
+                <td data-label="Status"><StateBadge state={state} compact label={current ? friendlyState(state) : offlineLabel(eventOperational)} /></td>
+                <td data-label="Load">{current && agent.host ? agent.host.load1.toFixed(2) : "--"}</td>
+                <td data-label="Memory">{current && agent.host ? percent(agent.host.memoryTotalBytes - agent.host.memoryAvailableBytes, agent.host.memoryTotalBytes) : "--"}</td>
+                <td data-label="Disk">{current && agent.host?.diskTotalBytes && agent.host.diskFreeBytes != null ? percent(agent.host.diskTotalBytes - agent.host.diskFreeBytes, agent.host.diskTotalBytes) : "--"}</td>
+              </tr>;
+            }) : <tr><td colSpan={5} className="monitor-overview-empty">No event servers are reporting.</td></tr>}
+          </tbody>
+        </table>
       </div>
     </section>
   );
 }
 
-function DomainSummary({ icon, label, value, detail, state, onClick }: { icon: React.ReactNode; label: string; value: string; detail: string; state: MonitorHealthState; onClick: () => void }) {
+function OverviewSectionHeading({ icon, title, state, label }: { icon: React.ReactNode; title: string; state: MonitorHealthState; label: string }) {
   return (
-    <button className="monitor-domain-summary" type="button" data-state={state} onClick={onClick}>
-      <span className="monitor-domain-icon" aria-hidden="true">{icon}</span>
-      <span className="monitor-domain-copy"><span>{label}</span><strong>{value}</strong><small>{detail}</small></span>
-      <StateDot state={state} />
-    </button>
+    <div className="monitor-overview-section-heading">
+      <span aria-hidden="true">{icon}</span>
+      <h2>{title}</h2>
+      <StateBadge state={state} compact label={label} />
+    </div>
   );
 }
 
-function UniFiBand({ unifi, nowMs }: { unifi: MonitorUniFi; nowMs: number }) {
+function OverviewInfrastructureRow({ icon, name, state, status, primary, quality }: { icon: React.ReactNode; name: string; state: MonitorHealthState; status: string; primary: string; quality: string }) {
+  return <tr data-state={state}>
+    <th scope="row"><span className="monitor-infrastructure-cell">{icon}{name}</span></th>
+    <td data-label="Status"><StateBadge state={state} compact label={status} /></td>
+    <td data-label="Primary reading">{primary}</td>
+    <td data-label="Quality">{quality}</td>
+  </tr>;
+}
+
+function UniFiBand({ unifi, nowMs, current, expectedOff }: { unifi: MonitorUniFi; nowMs: number; current: boolean; expectedOff: boolean }) {
   const totalTxBps = unifi.accessPoints.reduce((total, accessPoint) => total + (accessPoint.txRateBps ?? 0), 0);
   const totalRxBps = unifi.accessPoints.reduce((total, accessPoint) => total + (accessPoint.rxRateBps ?? 0), 0);
+  const state = current ? unifi.state : unavailableState(expectedOff);
   return (
     <section id="monitor-panel-wifi" className="monitor-tab-panel monitor-network-detail" role="tabpanel" aria-labelledby="monitor-tab-wifi">
       <div className="monitor-network-heading">
         <div><Wifi size={20} aria-hidden="true" /><div><h2>Wi-Fi access points</h2><p>Cloud-managed UniFi radio, device and client telemetry</p></div></div>
-        <StateBadge state={unifi.state} label={unifiStateLabel(unifi)} />
+        <StateBadge state={state} label={current ? unifiStateLabel(unifi) : expectedOff ? "Off" : "No current data"} />
       </div>
-      {!unifi.configured ? <CommissioningNotice title="UniFi telemetry is not configured" detail="Connect the persistent UniFi controller API before relying on this view." /> : <>
+      {!current ? <MonitorUnavailableNotice title={expectedOff ? "Access points are off" : "Access point telemetry is unavailable"} detail="No current AP or connected-device telemetry is available. Historical values are intentionally hidden." /> : <>
         <div className="monitor-network-summary">
           <Metric label="Access points online" value={`${unifi.onlineAccessPoints}/${unifi.expectedAccessPoints}`} />
           <Metric label="Connected devices" value={String(unifi.connectedClients)} />
@@ -843,20 +757,17 @@ function UniFiBand({ unifi, nowMs }: { unifi: MonitorUniFi; nowMs: number }) {
   );
 }
 
-function NetworkSwitchBand({ networkSwitch, nowMs }: { networkSwitch: MonitorNetworkSwitch; nowMs: number }) {
+function NetworkSwitchBand({ networkSwitch, nowMs, current, expectedOff }: { networkSwitch: MonitorNetworkSwitch; nowMs: number; current: boolean; expectedOff: boolean }) {
   const expectedPorts = networkSwitch.ports.filter((port) => port.expected);
   const activePorts = expectedPorts.filter((port) => port.operationalUp).length;
+  const state = current ? networkSwitch.state : unavailableState(expectedOff);
   return (
     <section id="monitor-panel-switch" className="monitor-tab-panel monitor-network-detail" role="tabpanel" aria-labelledby="monitor-tab-switch">
       <div className="monitor-network-heading">
         <div><Network size={20} aria-hidden="true" /><div><h2>PoE switch</h2><p>LinoVision wired links, port errors and access-point power</p></div></div>
-        <StateBadge state={networkSwitch.state} label={networkSwitch.configured ? networkSwitchStateLabel(networkSwitch) : "Awaiting commissioning"} />
+        <StateBadge state={state} label={current ? networkSwitchStateLabel(networkSwitch) : expectedOff ? "Off" : "No current data"} />
       </div>
-      {!networkSwitch.configured ? <CommissioningNotice
-        title="Switch integration framework is ready"
-        detail="When the LinoVision switch arrives, the SNMPv3 collector will populate this view after its physical ports and PoE values are verified. No zero values are being assumed now."
-        items={["Port 1 · UK Ultra 1", "Port 2 · UK Ultra 2", "Port 3 · UK Ultra 3", "Port 9 · Peplink router uplink"]}
-      /> : <>
+      {!current ? <MonitorUnavailableNotice title={expectedOff ? "PoE switch is off" : "PoE switch telemetry is unavailable"} detail="No current port, link, or power telemetry is available. Historical values are intentionally hidden." /> : <>
         <div className="monitor-network-summary">
           <Metric label="Expected links up" value={`${activePorts}/${expectedPorts.length}`} />
           <Metric label="PoE use" value={formatWatts(networkSwitch.poe.consumptionWatts)} />
@@ -888,15 +799,15 @@ function NetworkSwitchBand({ networkSwitch, nowMs }: { networkSwitch: MonitorNet
   );
 }
 
-function CommissioningNotice({ title, detail, items = [] }: { title: string; detail: string; items?: string[] }) {
-  return <div className="monitor-commissioning-notice"><Network size={22} aria-hidden="true" /><div><strong>{title}</strong><p>{detail}</p>{items.length > 0 && <ul>{items.map((item) => <li key={item}>{item}</li>)}</ul>}</div></div>;
+function MonitorUnavailableNotice({ title, detail }: { title: string; detail: string }) {
+  return <div className="monitor-commissioning-notice"><WifiOff size={22} aria-hidden="true" /><div><strong>{title}</strong><p>{detail}</p></div></div>;
 }
 
 function ProblemList({ problems }: { problems: string[] }) {
   return <div className="monitor-problem-list" role="status">{problems.map((problem) => <p key={problem}><AlertTriangle size={15} />{problem}</p>)}</div>;
 }
 
-function RouterBand({ router, nowMs }: { router: MonitorRouter; nowMs: number }) {
+function RouterBand({ router, nowMs, current, expectedOff }: { router: MonitorRouter; nowMs: number; current: boolean; expectedOff: boolean }) {
   const speedify = router.speedify;
   const routing = router.routing;
   const cameraWifi = router.cameraWifi;
@@ -906,12 +817,14 @@ function RouterBand({ router, nowMs }: { router: MonitorRouter; nowMs: number })
     && routing.primaryRuleCount === 2
     && routing.guardRuleCount === 2
     && routing.killSwitchActive;
+  const state = current ? router.state : unavailableState(expectedOff);
   return (
     <section id="monitor-panel-router" className="monitor-router-band monitor-tab-panel" role="tabpanel" aria-labelledby="monitor-tab-router" aria-label="Venue network">
       <div className="monitor-router-heading">
         <div><Network size={19} aria-hidden="true" /><div><h2>Venue network</h2><p>Speedify bonded upload and fail-closed camera routing</p></div></div>
-        <StateBadge state={router.state} label={routerStateLabel(router.state)} />
+        <StateBadge state={state} label={current ? routerStateLabel(router.state) : expectedOff ? "Off" : "No current data"} />
       </div>
+      {!current ? <MonitorUnavailableNotice title={expectedOff ? "Router is off" : "Router telemetry is unavailable"} detail="No current bonded-link, camera-session, or Wi-Fi telemetry is available. Historical values are intentionally hidden." /> : <>
       <div className="monitor-router-summary">
         <Metric label="Sending now" value={formatBitrate(speedify?.sendBps)} />
         <Metric label="Estimated capacity" value={formatBitrate(speedify?.estimatedUploadBps)} />
@@ -951,6 +864,7 @@ function RouterBand({ router, nowMs }: { router: MonitorRouter; nowMs: number })
           );
         }) : <p className="monitor-uplink-empty">Router connection details are not available yet.</p>}
       </div>
+      </>}
     </section>
   );
 }
@@ -959,14 +873,14 @@ function StageRow({ stage }: { stage: MonitorStage }) {
   return <div className="monitor-stage-row" title={`${stageLabel(stage.stage)}: ${stage.summary}`}><StateDot state={stage.state} /><span className="monitor-stage-name">{stageLabel(stage.stage)}</span><span className="monitor-stage-state">{stageStateLabel(stage.state)}</span></div>;
 }
 
-function ProgramTelemetry({ court, nowMs }: { court: MonitorCourt; nowMs: number }) {
-  const program = court.paths.program;
+function ProgramTelemetry({ court, nowMs, current }: { court: MonitorCourt; nowMs: number; current: boolean }) {
+  const program = current ? court.paths.program : undefined;
   const liveness = deriveMonitorBrowserLiveness({
-    receivedAt: court.browser?.receivedAt,
+    receivedAt: current ? court.browser?.receivedAt : null,
     programReaderCount: program?.readerCount,
     nowMs
   });
-  const browser = liveness.state === "LIVE" ? court.browser : null;
+  const browser = current && liveness.state === "LIVE" ? court.browser : null;
   const video = browser?.video;
   const commentary = browser?.commentary;
   const syncGapMs = commentary?.targetDelayMs != null && commentary.appliedDelayMs != null
@@ -1070,6 +984,59 @@ function effectiveCourtState(court: MonitorCourt): MonitorHealthState {
   const cameraState = court.stages.find((stage) => stage.stage === "RAW_INGEST")?.state ?? "UNKNOWN";
   const productionState = productionPipelineState(court);
   return STATE_RANK[cameraState] > STATE_RANK[productionState] ? cameraState : productionState;
+}
+
+function displayedCourtState(court: MonitorCourt, snapshotCurrent: boolean, eventOperational: boolean): MonitorHealthState {
+  return snapshotCurrent ? effectiveCourtState(court) : unavailableState(!eventOperational || isCourtExpectedOff(court));
+}
+
+function cameraOverviewStatus(court: MonitorCourt, snapshotCurrent: boolean, eventOperational: boolean): string {
+  if (!snapshotCurrent) return !eventOperational || isCourtExpectedOff(court) ? "Off" : "No current data";
+  const raw = court.paths.raw;
+  const state = court.stages.find((stage) => stage.stage === "RAW_INGEST")?.state ?? "UNKNOWN";
+  if (raw?.ready) return state === "HEALTHY" ? "Live" : state === "DEGRADED" ? "Unstable" : state === "CRITICAL" ? "Problem" : "Starting";
+  return court.expectation.mediaExpectation === "OFF" ? "Off" : "Offline";
+}
+
+function programOverviewStatus(court: MonitorCourt, snapshotCurrent: boolean, eventOperational: boolean): string {
+  if (!snapshotCurrent) return !eventOperational || isCourtExpectedOff(court) ? "Off" : "No current data";
+  if (court.expectation.broadcastExpectation === "OFF") return "Off";
+  if (court.paths.program?.ready && court.youtube?.broadcastLifecycle === "live") return "Live";
+  if (court.paths.program?.ready) return "Program ready";
+  return "Offline";
+}
+
+function cameraNumberFromClientName(name: string): number | null {
+  const match = name.trim().match(/^camera[\s_-]*(\d)$/i);
+  const cameraNumber = match ? Number(match[1]) : 0;
+  return cameraNumber >= 1 && cameraNumber <= 8 ? cameraNumber : null;
+}
+
+function findCameraClient(unifi: MonitorUniFi, courtNumber: number): MonitorUniFi["clients"][number] | null {
+  return unifi.clients.find((client) => cameraNumberFromClientName(client.name) === courtNumber) ?? null;
+}
+
+function offlineLabel(eventOperational: boolean): string {
+  return eventOperational ? "No current data" : "Off";
+}
+
+function isAgentCurrent(agent: MonitorAgent, snapshotCurrent: boolean, nowMs: number): boolean {
+  return isTelemetryCurrent(snapshotCurrent, agent.lastSeenAt, nowMs, 20_000);
+}
+
+function serverOverviewState(agents: MonitorAgent[], snapshotCurrent: boolean, hasActiveEvent: boolean, nowMs: number): MonitorHealthState {
+  if (!snapshotCurrent) return unavailableState(!hasActiveEvent);
+  const currentAgents = agents.filter((agent) => isAgentCurrent(agent, true, nowMs));
+  if (currentAgents.length === 0) return hasActiveEvent ? "UNKNOWN" : "EXPECTED_OFF";
+  return worstState(currentAgents.map((agent) => agent.state));
+}
+
+function worstState(states: MonitorHealthState[]): MonitorHealthState {
+  return states.reduce<MonitorHealthState>((worst, state) => STATE_RANK[state] > STATE_RANK[worst] ? state : worst, "NOT_APPLICABLE");
+}
+
+function friendlyRole(role: string): string {
+  return role.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function pipelineStateLabel(state: MonitorHealthState): string {
@@ -1275,24 +1242,4 @@ function commentaryLabel(browser: MonitorCourt["browser"]): string {
   if ((commentary.clippedSampleRatio ?? 0) > 0.05) return "clipping";
   if ((commentary.secondsSinceAudio ?? 0) > 60) return "silent";
   return commentary.syncStatus;
-}
-
-function playAlertTone() {
-  try {
-    const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!AudioContextClass) return;
-    const context = new AudioContextClass();
-    const oscillator = context.createOscillator();
-    const gain = context.createGain();
-    oscillator.frequency.value = 740;
-    gain.gain.setValueAtTime(0.0001, context.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.16, context.currentTime + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.28);
-    oscillator.connect(gain).connect(context.destination);
-    oscillator.start();
-    oscillator.stop(context.currentTime + 0.3);
-    oscillator.addEventListener("ended", () => void context.close());
-  } catch {
-    // Browser notification sound is supplemental only.
-  }
 }
