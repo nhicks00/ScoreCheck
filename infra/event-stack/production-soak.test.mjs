@@ -18,6 +18,7 @@ import {
   productionProviderProblems,
   productionRawProblems,
   productionRouterPreflightProblems,
+  recoverOwnedProgramEgress,
   sourceBitrateWindowStep,
   productionSnapshotProblems,
   viewerEvidenceProblems
@@ -81,6 +82,24 @@ test("hard-cuts the production soak client to monitoring snapshot contract v6", 
   const current = snapshot({ active: false });
   assert.equal(assertProductionMonitorSnapshot(current), current);
   assert.throws(() => assertProductionMonitorSnapshot({ ...current, version: 4 }), /snapshot contract is invalid/u);
+});
+
+test("recycles an idle worker before replaying an interrupted owned browser recovery", async () => {
+  const calls = [];
+  const replacement = await recoverOwnedProgramEgress({
+    egress: {
+      listActive: async () => [],
+      recycleIdleWorker: async (host) => { calls.push(`recycle:${host}`); },
+      ensureStarted: async ({ host, court }) => { calls.push(`start:${host}:${court}`); return { id: "EG_replacement" }; }
+    },
+    host: "198.51.100.1",
+    court: 1,
+    profile: "1080p30",
+    owner: { event: "event-test" },
+    oldEgressId: "EG_old"
+  });
+  assert.equal(replacement.id, "EG_replacement");
+  assert.deepEqual(calls, ["recycle:198.51.100.1", "start:198.51.100.1:1"]);
 });
 
 test("retries bounded transient monitor reads but not authentication failures", async () => {

@@ -79,6 +79,30 @@ test("stops only the recorded Egress id and is resumable after confirmed absence
   assert.deepEqual(await runtime.stopExact({ host: "198.51.100.1", court: 1, egressId: "EG_started" }), { absent: true });
 });
 
+test("fully recycles the idle worker before restarting an unhealthy exact owner", async () => {
+  let active = [{ egress_id: "EG_started", status: "EGRESS_ACTIVE" }];
+  let recordedOwner = ownership();
+  const mutations = [];
+  const runner = async (_command, args) => {
+    const remote = args.at(-1);
+    if (remote.includes("list-egress")) return { code: 0, stdout: JSON.stringify(active), stderr: "" };
+    if (remote.includes("owner.json")) return { code: 0, stdout: JSON.stringify(recordedOwner), stderr: "" };
+    if (remote.includes("stop-court.sh")) { mutations.push("stop"); active = []; return { code: 0, stdout: "stopped", stderr: "" }; }
+    if (remote.includes("recycle-egress-worker.sh")) { mutations.push("recycle"); return { code: 0, stdout: "ready", stderr: "" }; }
+    if (remote.includes("start-court.sh")) {
+      mutations.push("start");
+      active = [{ egress_id: "EG_restarted", status: "EGRESS_ACTIVE" }];
+      recordedOwner = ownership("EG_restarted");
+      return { code: 0, stdout: "saved owned egress id EG_restarted", stderr: "" };
+    }
+    throw new Error(`unexpected ${remote}`);
+  };
+  const runtime = new EgressRuntime({ sshKey: "/tmp/key", knownHosts: "/tmp/known", runner, sleep: async () => {} });
+  const restarted = await runtime.restartOwned({ host: "198.51.100.1", court: 1, profile: "1080p30", owner, egressId: "EG_started" });
+  assert.equal(restarted.id, "EG_restarted");
+  assert.deepEqual(mutations, ["stop", "recycle", "start"]);
+});
+
 test("fails closed when an unexpected active Egress replaces the recorded one", async () => {
   const runtime = new EgressRuntime({
     sshKey: "/tmp/key",

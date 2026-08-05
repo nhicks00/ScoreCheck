@@ -114,10 +114,16 @@ export class EgressRuntime {
     throw new Error(`Egress ${egressId} did not stop on compositor ${host}`);
   }
 
+  async recycleIdleWorker(host) {
+    await this.#remote(host, "cd /opt/compositor && ./recycle-egress-worker.sh");
+    return { recycled: true };
+  }
+
   async restartOwned({ host, court, profile = "1080p30", owner, egressId }) {
     validateExpectedOwner(owner);
     await this.reconcileOwned({ host, court, profile, owner, expectedId: egressId });
     await this.stopExact({ host, court, egressId, profile, owner });
+    await this.recycleIdleWorker(host);
     return this.ensureStarted({ host, court, profile, owner });
   }
 

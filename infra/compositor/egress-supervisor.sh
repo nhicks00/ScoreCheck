@@ -127,52 +127,6 @@ wait_for_active_id() {
   return 1
 }
 
-wait_for_recycled_worker() {
-  local old_container_id="$1" new_container_id="" health="" metrics=""
-  for _ in $(seq 1 120); do
-    new_container_id="$(docker inspect bvm-egress --format '{{.Id}}' 2>/dev/null || true)"
-    health="$(docker inspect bvm-egress --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null || true)"
-    if [[ -n "$new_container_id" && "$new_container_id" != "$old_container_id" && "$health" == "healthy" ]] \
-      && curl -fsS http://127.0.0.1:9091/ >/dev/null 2>&1; then
-      metrics="$(curl -fsS http://127.0.0.1:9090/metrics 2>/dev/null || true)"
-      if printf '%s\n' "$metrics" | awk '
-        function finite(value) {
-          return value ~ /^[-+]?(([0-9]+([.][0-9]*)?)|([.][0-9]+))([eE][-+]?[0-9]+)?$/
-        }
-        /^livekit_egress_available[{ ]/ {
-          available_count++
-          if (!finite($NF)) invalid=1
-          available=$NF + 0
-        }
-        /^livekit_egress_can_accept_request[{ ]/ {
-          accept_count++
-          if (!finite($NF)) invalid=1
-          accept=$NF + 0
-        }
-        /^livekit_egress_requests[{].*type="web"/ {
-          web_count++
-          if ($NF !~ /^[0-9]+$/) invalid=1
-          web=$NF + 0
-        }
-        /^livekit_load_ratio[{].*type="pulse"/ {
-          pulse_count++
-          if (!finite($NF)) invalid=1
-          pulse=$NF + 0
-        }
-        END {
-          if (invalid || available_count != 1 || accept_count != 1 || pulse_count != 1 || web_count > 1) exit 1
-          if (available != 1 || accept != 1 || (web_count == 1 && web != 0)) exit 1
-          if (pulse < 0 || pulse >= 1) exit 1
-        }
-      '; then
-        return 0
-      fi
-    fi
-    sleep 1
-  done
-  return 1
-}
-
 adopt_single_started_id() {
   local start_log="$1" parsed_id=""
   parsed_id="$(grep -oE 'EG_[A-Za-z0-9]+' "$start_log" | sort -u | head -n2 || true)"
@@ -323,7 +277,7 @@ reconcile_once() {
     write_state "$generation_key" "$missing_count" "$recovery_attempts" "RECOVERY_FAILED" "The Egress worker could not be recreated." "$court" "$owner_id"
     return
   fi
-  if ! wait_for_recycled_worker "$old_container_id"; then
+  if ! wait_for_recycled_egress_worker "$old_container_id"; then
     write_state "$generation_key" "$missing_count" "$recovery_attempts" "RECOVERY_FAILED" "The recycled worker did not become idle, admissible, and PulseAudio-capable." "$court" "$owner_id"
     return
   fi

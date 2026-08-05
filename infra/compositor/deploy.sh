@@ -46,6 +46,7 @@ rsync -a --delete -e "$rsync_shell" \
   "$SCRIPT_DIR/lib.sh" \
   "$SCRIPT_DIR/list-egress.sh" \
   "$SCRIPT_DIR/egress-supervisor.sh" \
+  "$SCRIPT_DIR/recycle-egress-worker.sh" \
   "$SCRIPT_DIR/program-branch-warmer.sh" \
   "$SCRIPT_DIR/normalize-camera.sh" \
   "$FFMPEG_RUNNER" \
@@ -130,7 +131,7 @@ if [[ -f docker-compose.yml && -f .env ]]; then
   backup_files=(docker-compose.yml livekit.yaml egress.yaml headless_shell
     chrome-sandboxing-seccomp-profile.json lib.sh list-egress.sh
     qualify-output.sh start-court.sh stop-court.sh .env)
-  for optional in egress-supervisor.sh program-branch-warmer.sh normalize-camera.sh scorecheck-ffmpeg-runner.sh rebind-ingest.sh start-normalizer.sh stop-normalizer.sh; do
+  for optional in egress-supervisor.sh recycle-egress-worker.sh program-branch-warmer.sh normalize-camera.sh scorecheck-ffmpeg-runner.sh rebind-ingest.sh start-normalizer.sh stop-normalizer.sh; do
     [[ -f "$optional" ]] && backup_files+=("$optional")
   done
   for optional in renderer renderer.env renderer-cache local-renderer.tar.gz; do
@@ -143,7 +144,7 @@ fi
 for file in docker-compose.yml livekit.yaml egress.yaml chrome-sandboxing-seccomp-profile.json; do
   install -m 0644 ".incoming/$file" "$file"
 done
-for file in headless_shell lib.sh list-egress.sh egress-supervisor.sh program-branch-warmer.sh normalize-camera.sh scorecheck-ffmpeg-runner.sh qualify-output.sh rebind-ingest.sh start-court.sh start-normalizer.sh stop-normalizer.sh stop-court.sh; do
+for file in headless_shell lib.sh list-egress.sh egress-supervisor.sh recycle-egress-worker.sh program-branch-warmer.sh normalize-camera.sh scorecheck-ffmpeg-runner.sh qualify-output.sh rebind-ingest.sh start-court.sh start-normalizer.sh stop-normalizer.sh stop-court.sh; do
   install -m 0755 ".incoming/$file" "$file"
 done
 install -d -m 0700 evidence

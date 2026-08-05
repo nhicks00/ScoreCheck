@@ -615,16 +615,14 @@ export class ProductionSoakRuntime {
     const host = compositorHost(this.manifest, this.lifecycleState, camera);
     const profile = state.profiles[camera].profile;
     const owner = egressOwner(state, camera);
-    const active = await this.egress.listActive(host);
-    if (active.length > 1) throw new Error(`Camera ${camera} compositor has multiple active Egress jobs`);
-    let replacement;
-    if (active.length === 0) {
-      replacement = await this.egress.ensureStarted({ host, court: camera, profile, owner });
-    } else if (active[0].id === pending.oldEgressId) {
-      replacement = await this.egress.restartOwned({ host, court: camera, profile, owner, egressId: pending.oldEgressId });
-    } else {
-      replacement = { ...await this.egress.reconcileOwned({ host, court: camera, profile, owner, expectedId: active[0].id }), adopted: true };
-    }
+    const replacement = await recoverOwnedProgramEgress({
+      egress: this.egress,
+      host,
+      court: camera,
+      profile,
+      owner,
+      oldEgressId: pending.oldEgressId
+    });
     state.egress[camera] = { ...replacement, host, profile };
     const completed = { ...pending, observedAt: new Date(this.now()).toISOString(), status: "COMPLETED", replacementEgressId: replacement.id };
     state.supervisor.history.push(completed);
@@ -661,6 +659,17 @@ export class ProductionSoakRuntime {
       }
     }
   }
+}
+
+export async function recoverOwnedProgramEgress({ egress, host, court, profile, owner, oldEgressId }) {
+  const active = await egress.listActive(host);
+  if (active.length > 1) throw new Error(`Camera ${court} compositor has multiple active Egress jobs`);
+  if (active.length === 0) {
+    await egress.recycleIdleWorker(host);
+    return egress.ensureStarted({ host, court, profile, owner });
+  }
+  if (active[0].id === oldEgressId) return egress.restartOwned({ host, court, profile, owner, egressId: oldEgressId });
+  return { ...await egress.reconcileOwned({ host, court, profile, owner, expectedId: active[0].id }), adopted: true };
 }
 
 export async function ensureStartupObserver({ state, statePath, key, runtime, evidenceRoot, start, now = Date.now, persist = writeState }) {

@@ -96,8 +96,13 @@ test("ingest provisioning admits the configured SRT socket buffers", async () =>
 });
 
 test("shared compositor deployment runners remain executable in the release tree", async () => {
-  const runner = await stat(resolve(root, "infra/mediamtx/scorecheck-ffmpeg-runner.sh"));
-  assert.notEqual(runner.mode & 0o111, 0, "the monitored FFmpeg runner must be executable before compositor deployment");
+  for (const [path, label] of [
+    ["infra/mediamtx/scorecheck-ffmpeg-runner.sh", "monitored FFmpeg runner"],
+    ["infra/compositor/recycle-egress-worker.sh", "Egress worker recycle runner"]
+  ]) {
+    const runner = await stat(resolve(root, path));
+    assert.notEqual(runner.mode & 0o111, 0, `the ${label} must be executable before compositor deployment`);
+  }
 });
 
 function escapeRegexp(value) {
