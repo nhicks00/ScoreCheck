@@ -37,6 +37,11 @@ The first production profile will be deliberately narrow:
 - Operator and ordinary control traffic use normal internet routing.
 - A flat `192.168.50.0/24` LAN for the first qualification.
 - One LAN cable to the PoE switch and no LACP.
+- The PoE switch is the managed LinoVision `POE-SWR612GM-SOLAR`; ports 1-3
+  power the three Ubiquiti APs and non-PoE port 9 is the sole router uplink.
+- ScoreCheck reads the switch through SNMPv3 over a router-initiated,
+  management-only site-to-site tunnel to the event observability Droplet. The
+  switch has no public management exposure and the router runs no collector.
 - The Peplink 5 GHz client AP temporarily carries all eight cameras during
   first-time onboarding, identity capture, and DHCP reservation.
 - The three Ubiquiti APs become the production camera radio layer after that
@@ -76,7 +81,8 @@ Adopt for the first qualification:
 Defer unless the initial evidence requires it:
 
 - VLAN migration and camera Internet allowlists.
-- A new edge collector, SNMPv3, and remote syslog.
+- Router SNMPv3, router-local collectors, and remote syslog. Switch SNMPv3 is
+  part of the purchased managed-switch commissioning path.
 - Router Docker, Tailscale, or a second management system.
 - Plain Bonding and multi-variable buffer tuning.
 - Routine FEC and SFC endpoint A/B testing when the primary profile is healthy.
@@ -120,7 +126,7 @@ flowchart LR
     WAN --> SFC
 
     CAMS["Cameras 1-8"] --> APS["Three Ubiquiti APs"]
-    APS --> SW["PoE switch"]
+    APS --> SW["LinoVision managed PoE switch\nports 1-3"]
     SW --> LAN["One Peplink LAN port\nBVM LAN 192.168.50.0/24"]
     LAN --> POLICY["Destination and port policy"]
     POLICY -->|"SRT UDP 8890 / RTMP TCP 1935 only"| SFC
@@ -129,6 +135,9 @@ flowchart LR
 
     IC2["InControl + supported API"] -. "Outbound-managed remote access" .-> WAN
     MON["ScoreCheck monitor"] -. "One sequential read snapshot" .-> IC2
+    SW -. "SNMPv3 through management-only tunnel" .-> MON
+    UOS["Cloud UniFi OS Server"] -. "Official API" .-> MON
+    APS -. "AP and RF telemetry" .-> UOS
 ```
 
 The incoming public IP can change and cellular can remain behind carrier NAT.
@@ -239,6 +248,21 @@ UPS temperatures under load.
 The UPS must cover the router, Starlink equipment, PoE switch, and all three
 APs. Size it from measured whole-system watts plus reserve, not from the
 router's 19 W maximum alone.
+
+Use this fixed switch wiring for the first qualification:
+
+| Switch interface | Connection | Rule |
+| --- | --- | --- |
+| PoE 1 | `UK Ultra 1` | Permanent panel antenna |
+| PoE 2 | `UK Ultra 2` | Permanent panel antenna |
+| PoE 3 | `UK Ultra 3` | Event-selected omni or panel antenna |
+| Non-PoE 9 | Peplink LAN 1 | The only router uplink |
+| Non-PoE 10 | Service laptop | Normally disconnected; commissioning only |
+
+Power the switch directly from the fused V-mount/D-Tap DC branch. Power the
+Peplink from its separate fused branch; do not run router power through the
+switch. Verify input polarity, cable gauge, fuse rating, and the switch label
+before first power-on.
 
 ### 4. LAN, DHCP, and access points
 
@@ -370,6 +394,82 @@ Applied commissioning state as of 2026-08-04:
 Select the actual channels only after an RF scan in the event location. Do not
 use automatic channel changes during coverage. The Peplink built-in client AP
 role remains disabled; operator access uses the Ubiquiti network.
+
+### 4A. LinoVision switch management and monitoring
+
+The selected switch is LinoVision `POE-SWR612GM-SOLAR`. It is a separate
+management domain from UniFi: UniFi remains authoritative for AP, client, and
+RF behavior, while the switch is authoritative for wired link and PoE state.
+Do not expect it to appear as a UniFi switch.
+
+Initial management contract:
+
+- Assign `192.168.50.2` only after confirming no address conflict, and reserve
+  that address outside the DHCP pool.
+- Replace the default administrator credential before attaching APs.
+- Disable Telnet, plain HTTP, SNMP v1, and SNMP v2c.
+- Enable HTTPS and SSH only on the management LAN. Keep SSH disabled after
+  commissioning unless the exact firmware requires it for a supported task.
+- Enable a dedicated read-only SNMPv3 `authPriv` identity. Prefer SHA-2 and AES
+  when the shipped firmware offers them; never place its credentials in URLs,
+  source control, logs, or the browser application.
+- Do not expose UDP 161/162, HTTPS, or SSH on a public WAN interface.
+- Keep RemoteMonit as a bounded vendor troubleshooting fallback, not a
+  ScoreCheck dependency. The published MQTT wording does not prove support for
+  an arbitrary customer-controlled broker or stable public API.
+
+The initial remote path is a Peplink-initiated, management-only site-to-site
+tunnel terminating on the temporary event observability Droplet. Restrict the
+cloud side to the switch management address and SNMP traffic required by the
+collector. This works with changing WAN addresses and carrier NAT because the
+router initiates the tunnel. It also keeps polling off the router CPU and does
+not add a persistent Droplet: the existing event observability host owns the
+collector. Render the tunnel peer from the event manifest because the temporary
+Droplet address can change between event builds.
+
+If the physical switch later proves that it can publish documented telemetry
+to an arbitrary TLS MQTT broker, compare that outbound path against SNMPv3. A
+documented outbound push would remove the routed management dependency, but do
+not build against RemoteMonit's private payload or scrape its UI.
+
+The first ScoreCheck collector uses standard `SNMPv2-MIB` and `IF-MIB` values:
+
+- switch identity, firmware, uptime, and restart detection;
+- administrative and operational state for ports 1-3 and 9;
+- negotiated link speed;
+- 64-bit receive/transmit byte counters;
+- input/output errors and discards;
+- last link-state transition.
+
+Vendor-specific PoE metrics are admitted only after the exact shipped firmware
+and MIB are archived and walked on the physical unit. Desired fields are PoE
+delivery state, watts, current, voltage, class, total budget, input-power state,
+PD Alive state, and the documented port-cycle control. Missing vendor metrics
+must be displayed as unavailable, never inferred from traffic counters.
+
+The monitor polls once every 30 seconds while event expectations are active and
+calculates error/discard deltas rather than alarming on lifetime totals. The
+dashboard combines the three independent sources:
+
+- Switch: wired link and PoE delivery.
+- UniFi: AP health, clients, RSSI, retries, channel use, and radio settings.
+- Peplink: WAN, SpeedFusion, LAN client, power, and router resource state.
+
+This supports plain-language classification:
+
+- AP offline and switch link/PoE down: check switch power, cable, port, or AP.
+- Switch link up but AP absent from UniFi: check AP boot, adoption, or routing.
+- AP online with weak signal or high retries: check placement, antenna, or RF.
+- Several AP ports reset together: check battery, D-Tap harness, switch input,
+  or switch temperature.
+- APs and switch healthy while publishing fails: check Peplink/WAN/media path.
+
+Start read-only. Keep switch PD Alive automation disabled during the first
+qualification. Do not add automatic PoE cycling. After one deliberate single-AP
+recovery test proves the exact MIB or supported CLI operation, ScoreCheck may
+offer an explicit operator command with confirmation, one-port scope, cooldown,
+and audit evidence. Only one system may own automatic recovery; never enable
+both switch PD Alive and ScoreCheck power cycling.
 
 ### 5. WAN profiles
 
@@ -554,6 +654,7 @@ Commissioning automation boundary:
 | Outbound-policy creation | Authenticated Web Admin/InControl unless a documented endpoint exists |
 | Configuration backup | Web Admin initially; qualify 8.6 token-based backup API before relying on it |
 | Camera/AP radio telemetry | Official UniFi Network API through the event UniFi OS Server plus camera and media monitoring, not the Peplink AP Controller |
+| Switch link/PoE telemetry | Read-only SNMPv3 from the event observability Droplet through the management-only site-to-site tunnel |
 
 Do not reverse-engineer undocumented UI endpoints. Do not open SSH. Do not
 create overlapping OAuth sessions: the observed 8.6 behavior invalidated older
@@ -573,7 +674,7 @@ Event polling profile:
 - Persist WAN state, cellular signal and mode, SFC tunnel state, per-link
   traffic, client associations, allowance, and firmware identity.
 - Correlate router timestamps with camera ingest loss, MediaMTX counters,
-  browser quality, Egress, and YouTube health.
+  switch/UniFi state, browser quality, Egress, and YouTube health.
 
 Initial alert semantics:
 
@@ -582,7 +683,10 @@ Initial alert semantics:
   unreachable from both InControl and local management.
 - Warning: one intended WAN unavailable, camera association below expectation,
   sustained load near the measured upload ceiling, cellular allowance nearing
-  threshold, or repeated SFC link churn.
+  threshold, repeated SFC link churn, sustained switch error/discard growth, or
+  an expected Gigabit switch link negotiating below 1 Gbps.
+- Critical while media is required: switch unreachable, router uplink port
+  down, or an expected AP's switch port/PoE state down.
 - Informational: expected WAN rejoin, SIM failover, firmware/config drift, or
   temporary operator maintenance.
 
@@ -663,7 +767,13 @@ objective or need physical evidence. This is not a permanent rejection.
 - Connect Cameras 1-8 directly, identify their real MAC addresses, create DHCP
   reservations, and verify all eight can publish through the router.
 - Connect exactly one LAN port to the PoE switch.
+- Verify the switch label is `POE-SWR612GM-SOLAR`, record its firmware, archive
+  its exact MIB, replace default credentials, and apply the management contract.
+- Assign the conflict-checked management address and prove the event
+  observability Droplet can poll SNMPv3 through the management-only tunnel.
 - Connect and identify all three Ubiquiti APs.
+- Connect APs one at a time to ports 1-3 and verify Gigabit negotiation, PoE
+  delivery, UniFi visibility, and stable power before connecting the next AP.
 - Apply the measured 5 GHz, 20 MHz, fixed non-DFS, mesh-off AP baseline.
 - Migrate cameras to the Ubiquiti SSID and confirm every reserved identity.
 - Disable the Peplink client AP, then configure the optional phone hotspot as
@@ -763,6 +873,12 @@ The router is production-qualified only when all are true:
 - No sustained router CPU, temperature, queue, modem, tunnel, or process
   anomaly correlates with media loss.
 - Remote operation continues with the Mac disconnected from the event router.
+- Switch polling is fresh without public management ports or a router-local
+  collector; ports 1-3 and 9 remain up at 1 Gbps with no sustained error or
+  discard growth.
+- A deliberate single-AP port disable/enable test recovers only that AP and does
+  not interrupt the router uplink or the other APs. Automated PoE cycling
+  remains disabled unless separately qualified.
 - The monitor dashboard presents plain-language router, WAN, SFC, client,
   allowance, and media-path status without excessive polling.
 - No additional profile or long-duration test is required after a clean pass.
@@ -793,7 +909,9 @@ evidence before rollback.
 - PrimeCare and SFC allowance transfer status.
 - Current firmware and cellular module firmware.
 - Actual event SIM carrier(s), plan allowance, and billing date.
-- Exact PoE switch model and whether it is managed/VLAN-capable.
+- LinoVision switch serial number, shipped firmware, exact vendor MIB, supported
+  SNMPv3 authentication/encryption choices, and whether its MQTT settings allow
+  a documented arbitrary TLS broker rather than only RemoteMonit.
 - UniFi controller location and credentials.
 - Starlink terminal/router generation and whether bypass mode is available.
 - Desired UPS runtime and whole-system measured power.
@@ -822,3 +940,5 @@ that the physical router has passed production acceptance before it arrives.
 - [Ubiquiti Wi-Fi optimization guidance](https://help.ui.com/hc/en-us/articles/221029967-Optimizing-WiFi-Connectivity-and-Reducing-Latency)
 - [Ubiquiti official API overview](https://help.ui.com/hc/en-us/articles/30076656117655-Getting-Started-with-the-Official-UniFi-API)
 - [Ubiquiti self-hosting options](https://help.ui.com/hc/en-us/articles/34210126298775-Self-Hosting-UniFi)
+- [LinoVision POE-SWR612GM-SOLAR product page](https://linovision.com/products/12-ports-l2-cloud-managed-poe-switch-with-dc12v-to-dc48v-voltage-booster)
+- [LinoVision POE-SWR612GM-SOLAR quick guide](https://cdn.shopify.com/s/files/1/0401/9657/1304/files/POE-SWR612GM-SOLAR_Quick_Guide_1.pdf?v=1773382739)
