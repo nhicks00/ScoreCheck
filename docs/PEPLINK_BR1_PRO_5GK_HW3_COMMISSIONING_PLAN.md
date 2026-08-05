@@ -402,6 +402,10 @@ management domain from UniFi: UniFi remains authoritative for AP, client, and
 RF behavior, while the switch is authoritative for wired link and PoE state.
 Do not expect it to appear as a UniFi switch.
 
+The complete purchase-validation, protocol matrix, dashboard design, security
+contract, and physical acceptance procedure are in
+[`LINOVISION_POE_SWITCH_INTEGRATION_RESEARCH.md`](LINOVISION_POE_SWITCH_INTEGRATION_RESEARCH.md).
+
 Initial management contract:
 
 - Assign `192.168.50.2` only after confirming no address conflict, and reserve
@@ -410,13 +414,17 @@ Initial management contract:
 - Disable Telnet, plain HTTP, SNMP v1, and SNMP v2c.
 - Enable HTTPS and SSH only on the management LAN. Keep SSH disabled after
   commissioning unless the exact firmware requires it for a supported task.
-- Enable a dedicated read-only SNMPv3 `authPriv` identity. Prefer SHA-2 and AES
-  when the shipped firmware offers them; never place its credentials in URLs,
-  source control, logs, or the browser application.
+- Enable a dedicated read-only SNMPv3 `authPriv` identity using the strongest
+  combination the shipped firmware actually offers. Available documentation
+  describes SHA and AES; use SHA-2 only if the physical firmware exposes it.
+  Never place its credentials in URLs, source control, logs, or the browser
+  application.
 - Do not expose UDP 161/162, HTTPS, or SSH on a public WAN interface.
 - Keep RemoteMonit as a bounded vendor troubleshooting fallback, not a
-  ScoreCheck dependency. The published MQTT wording does not prove support for
-  an arbitrary customer-controlled broker or stable public API.
+  ScoreCheck dependency. LinoVision confirms that it displays port on/off,
+  speed, power consumption, and priority and supports remote PoE control. No
+  supported customer API, stable payload contract, or TLS MQTT mode is
+  documented.
 
 The initial remote path is a Peplink-initiated, management-only site-to-site
 tunnel terminating on the temporary event observability Droplet. Restrict the
@@ -430,7 +438,9 @@ Droplet address can change between event builds.
 If the physical switch later proves that it can publish documented telemetry
 to an arbitrary TLS MQTT broker, compare that outbound path against SNMPv3. A
 documented outbound push would remove the routed management dependency, but do
-not build against RemoteMonit's private payload or scrape its UI.
+not build against RemoteMonit's private payload or scrape its UI. Available
+configuration material shows MQTT port 1883 and does not prove transport
+encryption, so MQTT is not the initial production path.
 
 The first ScoreCheck collector uses standard `SNMPv2-MIB` and `IF-MIB` values:
 
