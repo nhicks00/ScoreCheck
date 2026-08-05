@@ -334,6 +334,17 @@ Initial Ubiquiti radio profile:
 - Initial camera distribution of 3 / 3 / 2 across the three APs.
 - Preferred RSSI at least -65 dBm, with -70 dBm as the hard qualification floor.
 
+Applied commissioning state as of 2026-08-04:
+
+- `UK Ultra 1`: panel antenna, 2.4 GHz disabled, 5 GHz channel 157 at 40 MHz,
+  medium power.
+- `UK Ultra 2`: panel antenna, 2.4 GHz disabled, 5 GHz channel 149 at 40 MHz,
+  medium power.
+- Channels 149 and 157 form separate 40 MHz blocks. Preserve this pair unless
+  the event-location RF scan shows a conflict.
+- `UK Ultra 3` remains uncommissioned and must receive a separate non-overlapping
+  5 GHz channel after its antenna is selected.
+
 Select the actual channels only after an RF scan in the event location. Do not
 use automatic channel changes during coverage. The Peplink built-in client AP
 role remains disabled; operator access uses the Ubiquiti network.

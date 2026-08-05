@@ -58,7 +58,17 @@ the matching UniFi antenna type before cameras connect.
 The API key must never be committed, printed in evidence, or passed to Caddy,
 Prometheus, browser code, or the event router.
 
-## Applied AP2 baseline
+## Applied AP1 and AP2 baseline
+
+`UK Ultra 1` was commissioned on 2026-08-04 with:
+
+- outdoor mode and Ubiquiti panel antenna;
+- DHCP and wired uplink;
+- mesh parent and mesh connect disabled;
+- 2.4 GHz radio disabled;
+- 5 GHz channel 157, 40 MHz, medium transmit power;
+- existing `BVM 1` Wi-Fi name and credentials preserved;
+- existing stable AP firmware preserved.
 
 `UK Ultra 2` was commissioned on 2026-08-04 with:
 
@@ -112,7 +122,7 @@ DigitalOcean fleet. The APs retain their last configuration while powered down.
 
 ## Remaining live steps
 
-- Commission AP1 and AP3 when each can be powered.
+- Commission AP3 when it can be powered.
 - Create the protected read-only API credential and capture all three real
   device UUID/MAC bindings.
 - Automate controller restore, health verification, backup export, and teardown
