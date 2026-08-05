@@ -7,7 +7,14 @@ function healthyInput() {
   return {
     event: "turnkey-zero-to-12-rehearsal-r56",
     account: { status: "active", dropletLimit: 15 },
-    droplets: [],
+    droplets: [{
+      id: "590049239",
+      name: "bvm-unifi-controller",
+      status: "active",
+      region: "sfo2",
+      size: "s-1vcpu-2gb",
+      tags: ["scorecheck-role:unifi-controller", "scorecheck-persistent"]
+    }],
     reservedIpv4: [
       { ip: "203.0.113.1", region: "sfo2", dropletId: null, locked: false },
       { ip: "203.0.113.2", region: "sfo2", dropletId: null, locked: false }
@@ -27,17 +34,35 @@ function healthyInput() {
   };
 }
 
-test("accepts only the complete zero-compute, zero-residue provider baseline", () => {
+test("accepts the exact persistent UniFi host with zero temporary compute and zero residue", () => {
   const audit = classifyProviderZero(healthyInput());
   assert.equal(audit.pass, true);
-  assert.equal(audit.checks.dropletsZero, true);
+  assert.equal(audit.schemaVersion, 2);
+  assert.equal(audit.checks.persistentSupportExact, true);
+  assert.equal(audit.checks.temporaryComputeZero, true);
+  assert.equal(audit.persistentSupportDroplets.length, 1);
+  assert.deepEqual(audit.temporaryDroplets, []);
   assert.equal(audit.checks.youtubePoolExactIdle, true);
   assert.equal(audit.providerReadContracts.volumesReadable, false);
 });
 
-test("fails on any compute, event tag, snapshot, rehearsal control plane, active destination, or anchor drift", () => {
+test("fails when the persistent support host is missing, duplicated, or drifts", () => {
+  const controller = healthyInput().droplets[0];
   const cases = [
-    { droplets: [{ id: "1", name: "unexpected", status: "active", tags: [] }] },
+    [],
+    [controller, { ...controller, id: "590049240" }],
+    [{ ...controller, status: "off" }],
+    [{ ...controller, region: "nyc3" }],
+    [{ ...controller, size: "s-2vcpu-4gb" }],
+    [{ ...controller, tags: ["scorecheck-persistent"] }],
+    [{ ...controller, tags: [...controller.tags, "unexpected"] }]
+  ];
+  for (const droplets of cases) assert.equal(classifyProviderZero({ ...healthyInput(), droplets }).pass, false);
+});
+
+test("fails on any temporary compute, event tag, snapshot, rehearsal control plane, active destination, or anchor drift", () => {
+  const cases = [
+    { droplets: [...healthyInput().droplets, { id: "1", name: "unexpected", status: "active", region: "sfo2", size: "c-4", tags: [] }] },
     { tags: [{ name: "scorecheck-event:old" }] },
     { snapshots: [{ id: "1", name: "scorecheck-old" }] },
     { projects: [{ id: "p1", name: "scorecheck-rehearsal-old" }] },

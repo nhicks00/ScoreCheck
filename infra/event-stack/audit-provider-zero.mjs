@@ -13,6 +13,13 @@ const EVENT = /^[a-z0-9][a-z0-9-]{0,62}$/u;
 const DNS_ZONE = /^[a-z0-9](?:[a-z0-9.-]{1,251}[a-z0-9])$/u;
 const DO_API = "https://api.digitalocean.com/v2";
 const VERCEL_API = "https://api.vercel.com";
+const PERSISTENT_SUPPORT_DROPLET = Object.freeze({
+  name: "bvm-unifi-controller",
+  status: "active",
+  region: "sfo2",
+  size: "s-1vcpu-2gb",
+  tags: ["scorecheck-persistent", "scorecheck-role:unifi-controller"]
+});
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
@@ -87,6 +94,9 @@ export function classifyProviderZero({ event, account, droplets, reservedIpv4, e
     .filter((entry) => String(entry.name ?? "").includes("rehearsal"))
     .map((entry) => ({ id: String(entry.id ?? entry.uid), name: String(entry.name), type: String(entry.type ?? entry.recordType ?? "") }));
   const pool = Object.values(youtubePool).sort((left, right) => left.court - right.court);
+  const dropletInventory = droplets.map(publicDroplet);
+  const persistentSupportDroplets = dropletInventory.filter(matchesPersistentSupportDroplet);
+  const temporaryDroplets = dropletInventory.filter((entry) => !matchesPersistentSupportDroplet(entry));
   const youtubePersistentStreamPool = pool.map((entry) => ({
     court: entry.court,
     status: entry.streamStatus,
@@ -96,7 +106,8 @@ export function classifyProviderZero({ event, account, droplets, reservedIpv4, e
   const checks = {
     accountActive: account.status === "active",
     dropletLimitAtLeast12: Number.isInteger(account.dropletLimit) && account.dropletLimit >= 12,
-    dropletsZero: droplets.length === 0,
+    persistentSupportExact: persistentSupportDroplets.length === 1,
+    temporaryComputeZero: temporaryDroplets.length === 0,
     reservedExact: JSON.stringify(actualAddresses) === JSON.stringify(expectedAddresses),
     reservedUnassigned: reservedIpv4.every((entry) => entry.dropletId === null && entry.locked === false),
     eventSnapshotsZero: eventSnapshots.length === 0,
@@ -109,12 +120,15 @@ export function classifyProviderZero({ event, account, droplets, reservedIpv4, e
     volumesZeroWhenReadable: volumesResult.readable === false || volumesResult.items.length === 0
   };
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     checkedAt: new Date().toISOString(),
     event,
     pass: Object.values(checks).every(Boolean),
     account: { status: account.status, dropletLimit: account.dropletLimit },
-    droplets: droplets.map((entry) => ({ id: entry.id, name: entry.name, status: entry.status, tags: entry.tags })),
+    persistentSupportContract: PERSISTENT_SUPPORT_DROPLET,
+    droplets: dropletInventory,
+    persistentSupportDroplets,
+    temporaryDroplets,
     eventSnapshots,
     eventTags,
     reservedIpv4: reservedIpv4.map((entry) => ({ ip: entry.ip, region: entry.region, assigned: entry.dropletId !== null, locked: entry.locked })),
@@ -127,6 +141,25 @@ export function classifyProviderZero({ event, account, droplets, reservedIpv4, e
     },
     checks
   };
+}
+
+function publicDroplet(entry) {
+  return {
+    id: String(entry.id),
+    name: String(entry.name),
+    status: String(entry.status),
+    region: String(entry.region),
+    size: String(entry.size),
+    tags: Array.isArray(entry.tags) ? entry.tags.map(String).sort() : []
+  };
+}
+
+function matchesPersistentSupportDroplet(entry) {
+  return entry.name === PERSISTENT_SUPPORT_DROPLET.name
+    && entry.status === PERSISTENT_SUPPORT_DROPLET.status
+    && entry.region === PERSISTENT_SUPPORT_DROPLET.region
+    && entry.size === PERSISTENT_SUPPORT_DROPLET.size
+    && JSON.stringify(entry.tags) === JSON.stringify(PERSISTENT_SUPPORT_DROPLET.tags);
 }
 
 async function digitalOceanCollection({ token, path, key }) {

@@ -1182,11 +1182,15 @@ node infra/event-stack/audit-provider-zero.mjs \
 ```
 
 Admission and teardown are not complete unless this independent inventory
-proves an active account with capacity for 12 Droplets, zero Droplets, exactly
-two unassigned persistent endpoint Reserved IPv4s, zero ScoreCheck snapshots,
-zero event tags, zero rehearsal Vercel projects/DNS, zero volumes when that
-least-privilege API is readable, and the exact eight persistent YouTube test
-streams idle with no configuration issues.
+proves an active account with capacity for 12 temporary Droplets, exactly one
+active persistent `bvm-unifi-controller` matching its pinned region, size, and
+ownership tags, zero temporary or unknown Droplets, exactly two unassigned
+persistent endpoint Reserved IPv4s, zero ScoreCheck snapshots, zero event tags,
+zero rehearsal Vercel projects/DNS, zero volumes when that least-privilege API
+is readable, and the exact eight persistent YouTube test streams idle with no
+configuration issues. This is the temporary-compute-zero billing boundary; the
+cloud UniFi controller is retained support infrastructure and is reported
+separately in the audit.
 
 The isolated live canary uses one unique nonproduction hostname and tag. It does
 not use a production endpoint or select an existing Droplet. It performs:
