@@ -289,22 +289,20 @@ The Peplink AP Controller manages Peplink APs, not the Ubiquiti Swiss Army Knife
 Ultra units. Ubiquiti RF, channel, retry, association, and roaming telemetry
 must come from the UniFi management path.
 
-Use the existing UniFi OS Server site for one-time commissioning. For events,
-restore that protected controller state on the temporary observability Droplet.
-This removes the MacBook from event operation without adding a CloudKey or a paid
-always-on controller. The controller backup persists between events; controller
-compute, APs, and PoE equipment run only for the event. Routine event readiness
-and evidence use the official API from ScoreCheck monitoring.
+Use the existing UniFi OS Server site only for one-time commissioning and
+migration. The production controller is a persistent minimum-size DigitalOcean
+Droplet. This removes the MacBook from event startup and operation without
+adding a CloudKey or paid UniFi hosting. Routine event readiness and evidence
+use the official API from ScoreCheck monitoring.
 
 Create one protected official UniFi API key after the site is commissioned. Store
 the host id, site id, and exact device UUID/MAC binding for all three APs in the
 protected monitoring environment. The monitor reads device state, firmware,
 latest CPU/memory/uplink/radio statistics, and connected-client association.
 The APs themselves are not the supported API boundary; UniFi OS Server is. Do
-not put the UniFi controller on the Peplink router. During an event, the
-temporary observability Droplet owns the restored controller and monitoring
-processes; the protected controller backup is exported before that Droplet is
-destroyed.
+not put the UniFi controller on the Peplink router. The persistent controller
+survives event-fleet teardown, while the temporary observability Droplet owns
+ScoreCheck monitoring and reads the controller through the official API.
 
 The APs continue their last applied configuration if the controller is
 temporarily unreachable, so a controller outage must not stop camera media.

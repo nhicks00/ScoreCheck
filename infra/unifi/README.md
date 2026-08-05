@@ -1,10 +1,10 @@
 # ScoreCheck UniFi control plane
 
 ScoreCheck manages the three Ubiquiti UK-Ultra access points with UniFi OS
-Server. The existing macOS controller is the one-time commissioning environment.
-The event target is the same protected controller state restored on the temporary
-observability Droplet, so the MacBook and extra controller hardware are not part
-of event operation.
+Server. The existing macOS controller is only the initial commissioning and
+migration source. The production controller is a persistent, minimum-size
+DigitalOcean Droplet so the MacBook and extra controller hardware are not part
+of event startup, operation, monitoring, or maintenance.
 
 ## Operating boundary
 
@@ -12,16 +12,29 @@ of event operation.
   camera media does not depend on the controller or monitoring API.
 - No CloudKey or other travel hardware is required.
 - No paid Official UniFi Hosting subscription is required.
-- The controller backup and API credential persist securely between events, but
-  controller compute exists only while the event stack is running.
+- The controller and its API remain available between events. This consumes one
+  of the 15 available Droplet slots and leaves enough room for the 12-host event
+  fleet plus two unused slots.
 - Initial adoption and radio changes use the authenticated UniFi UI. Routine
   readiness, monitoring, and evidence use the official API.
-- The event lifecycle must restore and start the controller before setting
-  `MONITOR_UNIFI_REQUIRED=true`, and export its state before provider teardown.
+- The event lifecycle treats this controller as persistent baseline inventory,
+  verifies it before setting `MONITOR_UNIFI_REQUIRED=true`, and never deletes it
+  during provider-zero event teardown.
 
-The controller restore/export lifecycle step is not automated yet. Until it is,
-the Mac controller is suitable for commissioning only and UniFi must not be
-claimed as a production-required event dependency.
+Provision or reconcile the controller with:
+
+```sh
+node infra/unifi/cloud-controller.mjs up \
+  --credentials-env "$HOME/.config/scorecheck/event-stack/lifecycle-provider.env" \
+  --state "$HOME/.config/scorecheck/unifi/cloud-controller.json" \
+  --confirm CREATE:PERSISTENT-UNIFI-CONTROLLER
+```
+
+The pinned deployment is UniFi OS Server 5.1.21 on Ubuntu 24.04 x64, hosted at
+`unifi.beachvolleyballmedia.com` on `s-1vcpu-2gb`. The host firewall exposes only
+SSH, device inform TCP 8080, and STUN UDP 3478. Administrative setup uses an SSH
+tunnel initially and UniFi Site Manager after the UI account is linked; port
+11443 is not public.
 
 ## Permanent AP identity and antennas
 
@@ -134,9 +147,8 @@ SHA-256 f693ecfa817c9e2e0ee84517b5b7ad8d93894660900214ac86970c485bb50e81
 ```
 
 The backup may contain controller credentials and must never be committed or
-copied into normal evidence. Event automation should restore from a protected
-copy and export a new protected backup before temporary controller compute is
-destroyed.
+copied into normal evidence. It is the one-time migration source for the cloud
+controller and remains protected recovery material after migration.
 
 ## Protected monitoring contract
 
@@ -157,10 +169,9 @@ APs are required.
 
 ## Automatic event behavior
 
-After the controller lifecycle step is implemented, `eventctl up` restores the
-controller on the observability host before monitoring becomes required. The
-monitor reads the official UniFi API every 30 seconds and adds the following to
-`/v1/snapshot` and Prometheus:
+`eventctl up` verifies the persistent controller before monitoring becomes
+required. The monitor reads the official UniFi API every 30 seconds and adds the
+following to `/v1/snapshot` and Prometheus:
 
 - controller reachability;
 - expected and online AP count;
@@ -175,18 +186,19 @@ Production verification and soak admission require `unifi.state=HEALTHY` when
 - an expected AP offline;
 - sustained radio retries above 25 percent.
 
-Event teardown must export the controller state before destroying the temporary
-DigitalOcean fleet. The APs retain their last configuration while powered down.
+Event teardown preserves the controller and destroys only the temporary event
+fleet. The APs retain their last configuration while powered down.
 
 ## Remaining live steps
 
 - Power all three APs together and verify the saved 149/157/161 MHz channel
   plan and 20 MHz widths after an event-location RF scan. AP1 and AP2 were
   offline when their 20 MHz profiles were saved.
+- Complete the one-time protected restore, link Site Manager, and move all AP
+  inform URLs to the cloud hostname.
 - Create the protected read-only API credential and capture all three real
   device UUID/MAC bindings.
-- Automate controller restore, health verification, backup export, and teardown
-  in the protected event lifecycle.
+- Store and test a second protected cloud-controller backup outside the Droplet.
 - Connect the cameras later to map Camera 1-8 MAC addresses to AP associations
   and qualify the final RF layout.
 

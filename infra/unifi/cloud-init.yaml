@@ -1,0 +1,58 @@
+#cloud-config
+
+package_update: true
+packages:
+  - ca-certificates
+  - curl
+  - podman
+  - slirp4netns
+  - ufw
+
+ssh_deletekeys: true
+ssh_genkeytypes:
+  - ed25519
+  - rsa
+
+write_files:
+  - path: /usr/local/sbin/scorecheck-install-unifi-os-server
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      set -eu
+
+      version=5.1.21
+      expected_sha256=77e3feac1595779402dd87ff8d20d66faa39c87b572646f86ff0006711262445
+      installer=/var/cache/unifi-os-server-${version}-linux-x64
+      url=https://fw-download.ubnt.com/data/unifi-os-server/f5e2-linux-x64-5.1.21-a400c9c6-8328-4634-b223-ebfcf742720a.21-x64
+
+      if ! swapon --show=NAME --noheadings | grep -q .; then
+        fallocate -l 2G /swapfile
+        chmod 0600 /swapfile
+        mkswap /swapfile
+        swapon /swapfile
+        grep -q '^/swapfile ' /etc/fstab || printf '/swapfile none swap sw 0 0\n' >> /etc/fstab
+      fi
+
+      if [ ! -f /var/lib/scorecheck-unifi/install.complete ]; then
+        curl --fail --location --retry 3 --output "$installer" "$url"
+        printf '%s  %s\n' "$expected_sha256" "$installer" | sha256sum --check --strict
+        chmod 0755 "$installer"
+        "$installer" --non-interactive
+        install -d -m 0755 /var/lib/scorecheck-unifi
+        printf 'version=%s\nsha256=%s\ninstalled_at=%s\n' \
+          "$version" "$expected_sha256" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          > /var/lib/scorecheck-unifi/install.complete
+      fi
+
+      systemctl enable --now uosserver.service
+
+runcmd:
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw limit 22/tcp
+  - ufw allow 8080/tcp
+  - ufw allow 3478/udp
+  - ufw --force enable
+  - /usr/local/sbin/scorecheck-install-unifi-os-server
+
+final_message: "ScoreCheck cloud UniFi OS Server installation finished."
