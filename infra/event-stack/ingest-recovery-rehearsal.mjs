@@ -14,20 +14,17 @@ import { IngestRecoveryFaultRuntime } from "./ingest-recovery-fault-runtime.mjs"
 import { LocalIngestRecoveryPlatform } from "./ingest-recovery-platform.mjs";
 import { assertNetworkContractDeployable } from "./network-contract.mjs";
 import { productionProviderProblems, productionSnapshotProblems } from "./production-soak.mjs";
-import { ProductionSyntheticPublisherStateStore } from "./production-synthetic-publishers.mjs";
 import { ProductionYouTubeProvider, readProductionDestinations } from "./production-youtube.mjs";
 import { withQualificationGateLock } from "./qualification-gate-lock.mjs";
 import { DigitalOceanProvider } from "./providers.mjs";
-import { SyntheticPublisherManager } from "./rehearsal/synthetic-publishers.mjs";
 import { loadProtectedEnv } from "./stack-deployer.mjs";
-import { loadVenueAdmission } from "./venue-admission.mjs";
+import { isSyntheticCloudFixtureVenue, loadVenueAdmission } from "./venue-admission.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(SCRIPT_PATH), "../..");
 const MAX_RTO_MS = 5 * 60_000;
 const STABLE_SAMPLES = 6;
 const SAMPLE_INTERVAL_MS = 5_000;
-const MAX_SYNTHETIC_RESTARTS = 30;
 
 if (isDirectInvocation()) {
   main().catch((error) => {
@@ -53,20 +50,17 @@ async function main() {
 }
 
 export async function runIngestRecoveryRehearsal(runtime) {
-  const { options, manifest, lifecycleState, venue, destinations, recoveryStore, publisherStore, publishers, platform, fault, youtube, monitor, now = () => Date.now(), sleep = delay } = runtime;
+  const { options, manifest, lifecycleState, venue, destinations, recoveryStore, platform, fault, youtube, monitor, now = () => Date.now(), sleep = delay } = runtime;
   requireConfirmation(options.confirmFault, `FAULT-PRIMARY-INGEST:${manifest.event}`);
   requireConfirmation(options.confirmTakeover, `TAKEOVER-INGEST:${manifest.event}`);
   requireConfirmation(options.confirmRestore, `RESTORE-PRIMARY-INGEST:${manifest.event}`);
   requireConfirmation(options.confirmRollback, `ROLLBACK-INGEST:${manifest.event}`);
   if (lifecycleState.phase !== "live") throw new Error("ingest recovery rehearsal requires live lifecycle state");
-  if (JSON.stringify(venue.activeCameras) !== JSON.stringify(Array.from({ length: 8 }, (_, index) => index + 1))) throw new Error("ingest recovery rehearsal requires eight active synthetic cameras");
+  if (JSON.stringify(venue.activeCameras) !== JSON.stringify(Array.from({ length: 8 }, (_, index) => index + 1))) throw new Error("ingest recovery rehearsal requires eight active physical cameras");
   await prepareEvidenceDirectory(options.evidence);
   const samplePath = join(options.evidence, "ingest-recovery-rehearsal-samples.jsonl");
   const handle = await open(samplePath, "a", 0o600);
   await chmod(samplePath, 0o600);
-  const publisherState = await publisherStore.load();
-  if (!publisherState || publisherState.phase !== "RUNNING" || publisherState.event !== manifest.event || publisherState.generationId !== lifecycleState.generationId) throw new Error("eight production synthetic publishers are not running for this generation");
-  const baselinePublisherHealth = await publishers.waitForHealthy(Object.values(publisherState.publishers));
   const controller = new IngestRecoveryController({ platform, checkpoint: (state) => recoveryStore.save(state) });
   let recovery = await recoveryStore.load();
   let faultStartedAt = null;
@@ -94,7 +88,6 @@ export async function runIngestRecoveryRehearsal(runtime) {
     });
     recovery = await recoveryStore.withLock(async () => controller.rollback({ state: await recoveryStore.load(), confirmation: options.confirmRollback }));
     const rolledBack = await captureStableEvidence({ label: "rolled-back", monitor, youtube, destinations, venue, profiles: runtime.soakState.profiles, handle, now, sleep });
-    const finalPublisherHealth = await publishers.waitForHealthy(Object.values(publisherState.publishers), { maximumRestartCount: MAX_SYNTHETIC_RESTARTS });
     const report = evaluateIngestRecoveryRehearsal({
       manifest,
       lifecycleState,
@@ -106,8 +99,6 @@ export async function runIngestRecoveryRehearsal(runtime) {
       baseline,
       activeOnSpare,
       rolledBack,
-      baselinePublisherHealth,
-      finalPublisherHealth,
       completedAt: new Date(now()).toISOString()
     });
     await writeProtected(join(options.evidence, "ingest-recovery-rehearsal-report.json"), report);
@@ -194,7 +185,7 @@ export async function restorePrimaryAfterFailedRehearsal({ recoveryStore, contro
   }
 }
 
-export function evaluateIngestRecoveryRehearsal({ manifest, lifecycleState, recovery, faultStartedAt, faultEvidence, restoreStartedAt, restoreEvidence, baseline, activeOnSpare, rolledBack, baselinePublisherHealth, finalPublisherHealth, completedAt }) {
+export function evaluateIngestRecoveryRehearsal({ manifest, lifecycleState, recovery, faultStartedAt, faultEvidence, restoreStartedAt, restoreEvidence, baseline, activeOnSpare, rolledBack, completedAt }) {
   validateRecoveryState(recovery);
   const takeoverQualifiedAt = timelineAt(recovery, "takeover-qualified");
   const rollbackQualifiedAt = timelineAt(recovery, "rollback-qualified");
@@ -208,10 +199,8 @@ export function evaluateIngestRecoveryRehearsal({ manifest, lifecycleState, reco
   if (!Number.isFinite(takeoverRtoMs) || takeoverRtoMs < 0 || takeoverRtoMs > MAX_RTO_MS) problems.push(`takeover RTO ${takeoverRtoMs}ms exceeds ${MAX_RTO_MS}ms`);
   if (!Number.isFinite(rollbackRtoMs) || rollbackRtoMs < 0 || rollbackRtoMs > MAX_RTO_MS) problems.push(`rollback RTO ${rollbackRtoMs}ms exceeds ${MAX_RTO_MS}ms`);
   for (const evidence of [baseline, activeOnSpare, rolledBack]) if (evidence?.passed !== true) problems.push(`${evidence?.label ?? "unknown"} stable evidence did not pass`);
-  if (baselinePublisherHealth?.passed !== true) problems.push("synthetic publishers were not healthy before the fault");
-  if (finalPublisherHealth?.passed !== true) problems.push("synthetic publishers did not recover within their bounded restart budget");
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     classification: problems.length ? "FAIL" : "PASS",
     event: manifest.event,
     generationId: lifecycleState.generationId,
@@ -222,7 +211,6 @@ export function evaluateIngestRecoveryRehearsal({ manifest, lifecycleState, reco
     rollback: { qualifiedAt: rollbackQualifiedAt, rtoMs: rollbackRtoMs, maximumRtoMs: MAX_RTO_MS },
     recovery: recoverySummary(recovery),
     stableEvidence: { baseline, activeOnSpare, rolledBack },
-    publishers: { baseline: baselinePublisherHealth, final: finalPublisherHealth },
     problems
   };
 }
@@ -239,6 +227,7 @@ async function createRuntime(options) {
   recoveryTopology(manifest, lifecycleState, anchors);
   const venue = await loadVenueAdmission(profile.venueProfile, manifest.event);
   if (!venue.passed) throw new Error(`venue profile is not admitted: ${venue.problems.join("; ")}`);
+  if (isSyntheticCloudFixtureVenue(venue.profile)) throw new Error("ingest recovery rehearsal requires a physical-camera venue profile");
   const soakState = await readProtectedJson(join(options.soakEvidence, "production-soak-state.json"), "production soak state");
   if (soakState?.phase !== "RUNNING" || soakState.event !== manifest.event || JSON.stringify(soakState.activeCameras) !== JSON.stringify(venue.activeCameras)) throw new Error("production soak workload is not running for this event");
   const destinations = await readProductionDestinations(options.destinations, { event: manifest.event, activeCameras: venue.activeCameras });
@@ -269,8 +258,6 @@ async function createRuntime(options) {
     soakState,
     platform,
     recoveryStore: new FileIngestRecoveryStateStore(options.recoveryState),
-    publisherStore: new ProductionSyntheticPublisherStateStore(options.publisherState),
-    publishers: new SyntheticPublisherManager(),
     fault: new IngestRecoveryFaultRuntime({ sshKey: profile.sshKey, knownHosts: profile.knownHosts }),
     youtube: new ProductionYouTubeProvider({
       clientId: required(credentials, "YOUTUBE_CLIENT_ID"),
@@ -339,9 +326,9 @@ export function parseArgs(argv) {
   const command = argv[0];
   if ([undefined, "help", "-h", "--help"].includes(command)) return null;
   if (!new Set(["run", "status"]).has(command)) throw new Error("first argument must be run or status");
-  const options = { command, profile: null, destinations: null, soakEvidence: null, publisherState: null, recoveryState: null, evidence: null, confirmFault: null, confirmTakeover: null, confirmRestore: null, confirmRollback: null };
+  const options = { command, profile: null, destinations: null, soakEvidence: null, recoveryState: null, evidence: null, confirmFault: null, confirmTakeover: null, confirmRestore: null, confirmRollback: null };
   const mappings = new Map([
-    ["--profile", "profile"], ["--destinations", "destinations"], ["--soak-evidence", "soakEvidence"], ["--publisher-state", "publisherState"], ["--recovery-state", "recoveryState"], ["--evidence", "evidence"],
+    ["--profile", "profile"], ["--destinations", "destinations"], ["--soak-evidence", "soakEvidence"], ["--recovery-state", "recoveryState"], ["--evidence", "evidence"],
     ["--confirm-fault", "confirmFault"], ["--confirm-takeover", "confirmTakeover"], ["--confirm-restore", "confirmRestore"], ["--confirm-rollback", "confirmRollback"]
   ]);
   for (let index = 1; index < argv.length; index += 1) {
@@ -357,7 +344,7 @@ export function parseArgs(argv) {
     if (Object.entries(options).some(([key, value]) => !["command", "evidence"].includes(key) && value !== null)) throw new Error("status accepts only --evidence");
     return options;
   }
-  for (const key of ["profile", "destinations", "soakEvidence", "publisherState", "recoveryState", "evidence", "confirmFault", "confirmTakeover", "confirmRestore", "confirmRollback"]) if (!options[key]) throw new Error(`--${kebab(key)} is required for run`);
+  for (const key of ["profile", "destinations", "soakEvidence", "recoveryState", "evidence", "confirmFault", "confirmTakeover", "confirmRestore", "confirmRollback"]) if (!options[key]) throw new Error(`--${kebab(key)} is required for run`);
   return options;
 }
 
@@ -437,5 +424,5 @@ function kebab(value) { return value.replace(/[A-Z]/g, (letter) => `-${letter.to
 function isDirectInvocation() { return process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url; }
 
 function usage() {
-  process.stdout.write(`Usage:\n  node infra/event-stack/ingest-recovery-rehearsal.mjs run --profile FILE --destinations FILE --soak-evidence DIR --publisher-state FILE --recovery-state FILE --evidence DIR --confirm-fault FAULT-PRIMARY-INGEST:EVENT --confirm-takeover TAKEOVER-INGEST:EVENT --confirm-restore RESTORE-PRIMARY-INGEST:EVENT --confirm-rollback ROLLBACK-INGEST:EVENT\n  node infra/event-stack/ingest-recovery-rehearsal.mjs status --evidence DIR\n`);
+  process.stdout.write(`Usage:\n  node infra/event-stack/ingest-recovery-rehearsal.mjs run --profile FILE --destinations FILE --soak-evidence DIR --recovery-state FILE --evidence DIR --confirm-fault FAULT-PRIMARY-INGEST:EVENT --confirm-takeover TAKEOVER-INGEST:EVENT --confirm-restore RESTORE-PRIMARY-INGEST:EVENT --confirm-rollback ROLLBACK-INGEST:EVENT\n  node infra/event-stack/ingest-recovery-rehearsal.mjs status --evidence DIR\n`);
 }

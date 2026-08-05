@@ -84,7 +84,6 @@ test("recovery rehearsal CLI requires four separate destructive confirmations", 
     "--profile", "/tmp/profile.json",
     "--destinations", "/tmp/destinations.json",
     "--soak-evidence", "/tmp/soak",
-    "--publisher-state", "/tmp/publishers.json",
     "--recovery-state", "/tmp/recovery.json",
     "--evidence", "/tmp/evidence",
     "--confirm-fault", "FAULT-PRIMARY-INGEST:event-test",
@@ -93,6 +92,11 @@ test("recovery rehearsal CLI requires four separate destructive confirmations", 
     "--confirm-rollback", "ROLLBACK-INGEST:event-test"
   ]);
   assert.equal(args.command, "run");
+  assert.throws(() => parseRehearsalArgs([
+    "run", "--profile", "/tmp/profile.json", "--destinations", "/tmp/destinations.json", "--soak-evidence", "/tmp/soak",
+    "--publisher-state", "/tmp/publishers.json", "--recovery-state", "/tmp/recovery.json", "--evidence", "/tmp/evidence",
+    "--confirm-fault", "FAULT", "--confirm-takeover", "TAKEOVER", "--confirm-restore", "RESTORE", "--confirm-rollback", "ROLLBACK"
+  ]), /--publisher-state is unknown/u);
   assert.throws(() => parseRehearsalArgs(["run", "--evidence", "/tmp/evidence"]), /--profile is required/u);
   assert.deepEqual(parseRehearsalArgs(["status", "--evidence", "/tmp/evidence"]).command, "status");
 });
@@ -101,6 +105,8 @@ test("recovery evidence passes only after bounded takeover and rollback with hea
   const input = evidenceInput();
   const report = evaluateIngestRecoveryRehearsal(input);
   assert.equal(report.classification, "PASS");
+  assert.equal(report.schemaVersion, 2);
+  assert.equal("publishers" in report, false);
   assert.equal(report.takeover.rtoMs, 120_000);
   assert.equal(report.rollback.rtoMs, 90_000);
 
@@ -263,8 +269,6 @@ function evidenceInput() {
     baseline: { label: "baseline", passed: true },
     activeOnSpare: { label: "active-on-spare", passed: true },
     rolledBack: { label: "rolled-back", passed: true },
-    baselinePublisherHealth: { passed: true },
-    finalPublisherHealth: { passed: true },
     completedAt: "2026-07-22T12:06:00Z"
   };
 }
