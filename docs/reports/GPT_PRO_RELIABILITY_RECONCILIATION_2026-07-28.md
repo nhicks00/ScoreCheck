@@ -14,7 +14,7 @@ The current release is not production-qualified. The first dry run exposed four 
 
 | Recommendation | Status | Current evidence | Decision |
 |---|---|---|---|
-| Use buffered HLS in the program renderer | Satisfied in configuration; endurance open | `programTimeline.ts` defines 12 s target, 24 s maximum, 18 s forward buffer, 4 s back buffer, 32 MB compressed buffer, and six startup segments. `StreamPlayer.tsx` uses standard-latency hls.js, a segment-boundary start, and no catch-up playback. | Keep. Add event-length process/object/media-buffer instrumentation; do not claim that the 32 MB compressed buffer caps total browser memory. |
+| Use buffered HLS in the program renderer | Satisfied in configuration and instrumentation; endurance open | `programTimeline.ts` defines 12 s target, 24 s maximum, 18 s forward buffer, 4 s back buffer, 32 MB compressed buffer, and six startup segments. `StreamPlayer.tsx` uses standard-latency hls.js, a segment-boundary start, and no catch-up playback. The production-soak evaluator now retains playout-delay bounds, browser heap, HLS instance ownership, and full Egress cgroup floor/peak/growth evidence, and rejects missing headroom or sustained retained growth. | Keep. Run the event-length physical gate; do not claim that the 32 MB compressed buffer caps total browser memory. |
 | Keep WHEP only for low-bandwidth operator inspection | Partial | Program mode uses HLS; preview and selected monitoring paths still support WHEP. | Keep WHEP out of the program output path. Verify overview pages create no live readers. |
 | Keep one compositor per output | Satisfied architecturally | The manifest assigns one court per compositor and each host hard-rejects a second web Egress. | Keep through 1080p30 qualification. Defer consolidation. |
 | Persist YouTube output through camera loss | Partial | `start-court.sh` starts the renderer without awaiting camera media, so the interruption slate can remain encoded. Camera loss does not intentionally complete YouTube. | Keep invariant. Prove it under a bounded physical source loss after exact-once supervision is deployed. |
@@ -43,7 +43,7 @@ The current release is not production-qualified. The first dry run exposed four 
 ### Phase 1: Code-backed P0 hardening
 
 1. Deploy the locally validated host-local exact-owner Egress supervisor and exercise its bounded recovery paths.
-2. Validate the new HLS runtime telemetry for process RSS, JS heap, media-source/buffer object counts, buffer length, reload/reconnect generations, drops, freezes, and audio correction.
+2. Run the event-length physical gate against the HLS runtime telemetry for Egress cgroup memory, JS heap, HLS instance ownership, buffer length, playout delay, reload/reconnect generations, drops, freezes, and audio correction.
 3. Exercise the compositor-local renderer through cold-start Vercel and Supabase loss gates.
 4. Verify coverage-owned program branches stay warm only while broadcast expectation is LIVE.
 5. Verify the scoped derived-media hard cutover across compositor, monitor, calibration, and operator consumers.

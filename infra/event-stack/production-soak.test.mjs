@@ -416,7 +416,18 @@ test("records bounded HLS runtime evidence and rejects buffer or instance fan-ou
   const accepted = evaluateHlsRuntimeEvidence(samples, venue.activeCameras);
   assert.equal(accepted.passed, true);
   assert.equal(accepted.cameras[0].maximumBufferedAheadMs, 12_000);
+  assert.equal(accepted.cameras[0].minimumPlayoutDelayMs, 12_000);
+  assert.equal(accepted.cameras[0].maximumPlayoutDelayMs, 12_000);
   assert.ok(Number.isFinite(accepted.cameras[0].retainedHeapGrowthBytes));
+  assert.ok(Number.isFinite(accepted.cameras[0].retainedEgressCgroupGrowthBytes));
+  assert.equal(accepted.cameras[0].peakEgressCgroupMemoryBytes, 2_000_000_000);
+
+  const transient = [samples[0], structuredClone(samples[1]), structuredClone(samples[1])];
+  transient[1].monitor.agents.find((agent) => agent.assignedCourts?.includes(1)).nativeServices.egress.cgroupMemoryBytes = 3_000_000_000;
+  const transientAccepted = evaluateHlsRuntimeEvidence(transient, venue.activeCameras);
+  assert.equal(transientAccepted.passed, true);
+  assert.equal(transientAccepted.cameras[0].peakEgressCgroupMemoryBytes, 3_000_000_000);
+  assert.equal(transientAccepted.cameras[0].retainedEgressCgroupGrowthBytes, 0);
 
   const broken = structuredClone(samples);
   const video = broken[1].monitor.courts[0].browser.video;
@@ -427,6 +438,24 @@ test("records bounded HLS runtime evidence and rejects buffer or instance fan-ou
   assert.equal(rejected.passed, false);
   assert.ok(rejected.problems.some((problem) => problem.includes("Camera 1 HLS runtime evidence exceeded")));
   assert.ok(rejected.problems.some((problem) => problem.includes("Camera 1 HLS instance generation changed")));
+
+  const growing = structuredClone(samples);
+  growing[1].monitor.agents.find((agent) => agent.assignedCourts?.includes(1)).nativeServices.egress.cgroupMemoryBytes = 3_000_000_000;
+  const growthRejected = evaluateHlsRuntimeEvidence(growing, venue.activeCameras);
+  assert.equal(growthRejected.passed, false);
+  assert.ok(growthRejected.problems.some((problem) => problem.includes("Camera 1 HLS Egress cgroup retained")));
+
+  const missing = structuredClone(samples);
+  missing[1].monitor.agents.find((agent) => agent.assignedCourts?.includes(1)).nativeServices.egress.cgroupMemoryBytes = null;
+  const missingRejected = evaluateHlsRuntimeEvidence(missing, venue.activeCameras);
+  assert.equal(missingRejected.passed, false);
+  assert.ok(missingRejected.problems.some((problem) => problem.includes("Camera 1 HLS Egress memory evidence")));
+
+  const latency = structuredClone(samples);
+  latency[1].monitor.courts[0].browser.video.playoutDelayMs = 30_000;
+  const latencyRejected = evaluateHlsRuntimeEvidence(latency, venue.activeCameras);
+  assert.equal(latencyRejected.passed, false);
+  assert.ok(latencyRejected.problems.some((problem) => problem.includes("Camera 1 HLS runtime evidence exceeded")));
 });
 
 test("qualifies continuous fail-closed Speedify evidence and rejects route drift", () => {
@@ -616,6 +645,7 @@ function agent(agentId, role, assignedCourt = null, outputActive = false, sample
         activeWebRequests: outputActive ? 1 : 0,
         maximumWebRequests: 1,
         canAcceptRequest: !outputActive,
+        cgroupMemoryBytes: outputActive ? 2_000_000_000 : 100_000_000,
         cpuLoadRatio: outputActive ? 0.35 : 0.02,
         memoryLoadRatio: outputActive ? 0.25 : 0.02
       }

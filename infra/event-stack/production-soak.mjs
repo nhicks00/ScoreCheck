@@ -41,6 +41,10 @@ const ROUTER_INTERVAL_MS = 60_000;
 const ROUTER_MAX_GAP_MS = 75_000;
 const ROUTER_MIN_MEMORY_KB = 65_536;
 const MONITOR_READ_RETRY_DELAYS_MS = Object.freeze([1_000, 2_500, 5_000]);
+// RUNNING begins after output stabilization, so a sustained final cgroup floor
+// this far above the initial floor is retained growth rather than cold start.
+const HLS_MAX_RETAINED_EGRESS_GROWTH_BYTES = 512 * 1024 * 1024;
+const HLS_MAX_RETAINED_EGRESS_GROWTH_RATIO = 0.25;
 const ROUTER_COLUMNS = Object.freeze([
   "timestamp", "speedify_state", "srt_route_dev", "rtmp_route_dev", "primary_rule_count", "guard_rule_count", "kill_switch",
   "camera_flow_count", "connectify_rx_bytes", "connectify_tx_bytes", "eth0_rx_bytes", "eth0_tx_bytes", "rmnet_rx_bytes",
@@ -936,15 +940,20 @@ export function evaluateHlsRuntimeEvidence(samples, activeCameras) {
   const cameras = [];
   for (const camera of activeCameras) {
     const videos = samples.map((sample) => sample?.monitor?.courts?.find((court) => court.courtNumber === camera)?.browser?.video ?? null);
-    if (videos.length === 0 || videos.some((video) => !video)) {
+    const egressSamples = samples.map((sample) => sample?.monitor?.agents?.find((agent) => agent.role === "compositor" && agent.assignedCourts?.includes(camera))?.nativeServices?.egress ?? null);
+    if (videos.length === 0 || videos.some((video) => !video) || egressSamples.some((egress) => !egress)) {
       problems.push(`Camera ${camera} HLS runtime evidence is incomplete`);
       cameras.push({ camera, observedSamples: videos.filter(Boolean).length });
       continue;
     }
     const values = videos;
     const buffers = values.map((video) => video.bufferedAheadMs).filter(Number.isFinite);
+    const latencies = values.map((video) => video.playoutDelayMs).filter(Number.isFinite);
     const heaps = values.map((video) => video.jsHeapUsedBytes).filter(Number.isFinite);
+    const egressMemory = egressSamples.map((egress) => egress.cgroupMemoryBytes).filter(Number.isFinite);
+    const egressMemoryLoad = egressSamples.map((egress) => egress.memoryLoadRatio).filter(Number.isFinite);
     if (values.some((video) => video.transport !== "hls"
+      || !Number.isFinite(video.playoutDelayMs) || video.playoutDelayMs < 0 || video.playoutDelayMs > 24_000
       || !Number.isFinite(video.bufferedAheadMs) || video.bufferedAheadMs < 0 || video.bufferedAheadMs > 24_000
       || !Number.isInteger(video.bufferedRangeCount) || video.bufferedRangeCount < 1 || video.bufferedRangeCount > 2
       || !Number.isInteger(video.hlsCreatedInstances) || video.hlsCreatedInstances < 1
@@ -954,6 +963,10 @@ export function evaluateHlsRuntimeEvidence(samples, activeCameras) {
       || !Number.isInteger(video.jsHeapUsedBytes) || video.jsHeapUsedBytes <= 0)) {
       problems.push(`Camera ${camera} HLS runtime evidence exceeded its buffer, ownership, or memory contract`);
     }
+    if (egressSamples.some((egress) => !Number.isFinite(egress.cgroupMemoryBytes) || egress.cgroupMemoryBytes <= 0
+      || !Number.isFinite(egress.memoryLoadRatio) || egress.memoryLoadRatio < 0 || egress.memoryLoadRatio >= 0.85)) {
+      problems.push(`Camera ${camera} HLS Egress memory evidence is unavailable or outside its headroom contract`);
+    }
     const first = values[0];
     const last = values.at(-1);
     if (last.hlsCreatedInstances !== first.hlsCreatedInstances || last.hlsDestroyedInstances !== first.hlsDestroyedInstances) {
@@ -962,9 +975,25 @@ export function evaluateHlsRuntimeEvidence(samples, activeCameras) {
     const edgeCount = Math.max(1, Math.ceil(values.length * 0.1));
     const initialHeapFloorBytes = heaps.length ? Math.min(...heaps.slice(0, edgeCount)) : null;
     const finalHeapFloorBytes = heaps.length ? Math.min(...heaps.slice(-edgeCount)) : null;
+    const initialEgressCgroupFloorBytes = egressMemory.length ? Math.min(...egressMemory.slice(0, edgeCount)) : null;
+    const finalEgressCgroupFloorBytes = egressMemory.length ? Math.min(...egressMemory.slice(-edgeCount)) : null;
+    const retainedEgressCgroupGrowthBytes = initialEgressCgroupFloorBytes == null || finalEgressCgroupFloorBytes == null
+      ? null
+      : finalEgressCgroupFloorBytes - initialEgressCgroupFloorBytes;
+    const retainedEgressGrowthLimitBytes = initialEgressCgroupFloorBytes == null
+      ? null
+      : Math.max(HLS_MAX_RETAINED_EGRESS_GROWTH_BYTES, initialEgressCgroupFloorBytes * HLS_MAX_RETAINED_EGRESS_GROWTH_RATIO);
+    if (retainedEgressCgroupGrowthBytes != null && retainedEgressGrowthLimitBytes != null
+      && retainedEgressCgroupGrowthBytes > retainedEgressGrowthLimitBytes) {
+      problems.push(`Camera ${camera} HLS Egress cgroup retained ${Math.round(retainedEgressCgroupGrowthBytes)} bytes beyond its startup baseline`);
+    }
     cameras.push({
       camera,
       observedSamples: values.length,
+      minimumPlayoutDelayMs: latencies.length ? Math.min(...latencies) : null,
+      maximumPlayoutDelayMs: latencies.length ? Math.max(...latencies) : null,
+      initialPlayoutDelayMs: latencies.length ? latencies[0] : null,
+      finalPlayoutDelayMs: latencies.length ? latencies.at(-1) : null,
       maximumBufferedAheadMs: buffers.length ? Math.max(...buffers) : null,
       maximumBufferedRangeCount: Math.max(...values.map((video) => video.bufferedRangeCount)),
       hlsCreatedInstances: last.hlsCreatedInstances,
@@ -973,7 +1002,13 @@ export function evaluateHlsRuntimeEvidence(samples, activeCameras) {
       initialHeapFloorBytes,
       finalHeapFloorBytes,
       retainedHeapGrowthBytes: initialHeapFloorBytes == null || finalHeapFloorBytes == null ? null : finalHeapFloorBytes - initialHeapFloorBytes,
-      peakHeapBytes: heaps.length ? Math.max(...heaps) : null
+      peakHeapBytes: heaps.length ? Math.max(...heaps) : null,
+      initialEgressCgroupFloorBytes,
+      finalEgressCgroupFloorBytes,
+      retainedEgressCgroupGrowthBytes,
+      retainedEgressGrowthLimitBytes,
+      peakEgressCgroupMemoryBytes: egressMemory.length ? Math.max(...egressMemory) : null,
+      peakEgressMemoryLoadRatio: egressMemoryLoad.length ? Math.max(...egressMemoryLoad) : null
     });
   }
   return { passed: problems.length === 0, problems: unique(problems), cameras };
