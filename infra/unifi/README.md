@@ -32,9 +32,11 @@ node infra/unifi/cloud-controller.mjs up \
 
 The pinned deployment is UniFi OS Server 5.1.21 on Ubuntu 24.04 x64, hosted at
 `unifi.beachvolleyballmedia.com` on `s-1vcpu-2gb`. The host firewall exposes only
-SSH, device inform TCP 8080, and STUN UDP 3478. Administrative setup uses an SSH
-tunnel initially and UniFi Site Manager after the UI account is linked; port
-11443 is not public.
+SSH, HTTPS and its certificate-renewal challenge, device inform TCP 8080, and
+STUN UDP 3478. Nginx terminates the public certificate and proxies the UniFi OS
+Server; port 11443 is blocked by the host firewall. A fresh controller requires
+one explicit administrator acceptance of the certificate authority terms after
+DNS points at the new host. The resulting certificate renews automatically.
 
 ## Permanent AP identity and antennas
 
@@ -62,9 +64,11 @@ the matching UniFi antenna type before cameras connect.
    medium transmit power, and no automatic channel changes during coverage.
 4. Select the correct physical antenna type. AP1 and AP2 are always panel; AP3
    follows the event manifest.
-5. Create a dedicated read-only official API key.
-6. Record the controller host id, Network site UUID, and each AP device UUID and
-   MAC address in the protected production monitoring source.
+5. Create a dedicated official Network API key. UniFi does not expose a
+   per-key read-only scope here, so the ScoreCheck collector is limited to GET
+   requests and the key remains only in the protected service environment.
+6. Record the controller API base URL, Network site UUID, and each AP device
+   UUID and MAC address in the protected production monitoring source.
 7. Confirm the API reports each AP as `ONLINE` with a fresh heartbeat before
    setting `MONITOR_UNIFI_REQUIRED=true`.
 
@@ -157,7 +161,7 @@ The observability service consumes these values from its mode-0600 environment:
 ```dotenv
 MONITOR_UNIFI_REQUIRED=true
 MONITOR_UNIFI_API_KEY=<protected official API key>
-MONITOR_UNIFI_HOST_ID=<UniFi OS Server console id>
+MONITOR_UNIFI_BASE_URL=https://unifi.beachvolleyballmedia.com/proxy/network/integration/v1
 MONITOR_UNIFI_SITE_ID=<Network site UUID>
 MONITOR_UNIFI_ACCESS_POINTS_JSON=[{"name":"UK Ultra 1","deviceId":"<uuid>","macAddress":"<mac>"},{"name":"UK Ultra 2","deviceId":"<uuid>","macAddress":"<mac>"},{"name":"UK Ultra 3","deviceId":"<uuid>","macAddress":"<mac>"}]
 MONITOR_UNIFI_POLL_INTERVAL_MS=30000
@@ -189,16 +193,32 @@ Production verification and soak admission require `unifi.state=HEALTHY` when
 Event teardown preserves the controller and destroys only the temporary event
 fleet. The APs retain their last configuration while powered down.
 
+## Cloud cutover status
+
+The protected controller backup was restored to the cloud controller on
+2026-08-04. `UK Ultra 3` was redirected to
+`unifi.beachvolleyballmedia.com`, reached `Up to date`, and remained online
+after the macOS UniFi OS Server was stopped. The official local Network API key
+is stored outside Git with mode `0600`; the direct HTTPS API reports the three
+permanent AP identities and fresh AP3 telemetry.
+
+A post-cutover all-applications backup is stored outside Git with mode `0600`:
+
+```text
+~/.config/scorecheck/unifi/backups/unifi-os-cloud-cutover-20260804T221016CDT.unifi
+SHA-256 7e7b87672f363502c3ea8d57a4bf29b37c3911bd4102cc23cf7dd1accefec0e6
+```
+
+Weekly automatic system backups are enabled in the cloud controller.
+
 ## Remaining live steps
 
 - Power all three APs together and verify the saved 149/157/161 MHz channel
   plan and 20 MHz widths after an event-location RF scan. AP1 and AP2 were
   offline when their 20 MHz profiles were saved.
-- Complete the one-time protected restore, link Site Manager, and move all AP
-  inform URLs to the cloud hostname.
-- Create the protected read-only API credential and capture all three real
-  device UUID/MAC bindings.
-- Store and test a second protected cloud-controller backup outside the Droplet.
+- Power AP1 and AP2 individually and redirect each inform URL to the cloud
+  hostname. They were offline during the AP3 cutover and therefore did not
+  receive the controller-wide inform override.
 - Connect the cameras later to map Camera 1-8 MAC addresses to AP associations
   and qualify the final RF layout.
 

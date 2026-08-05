@@ -108,7 +108,7 @@ describe("monitoring configuration", () => {
       MONITOR_PUBLIC_HOST: "monitor.example.test",
       MONITOR_UNIFI_REQUIRED: "true",
       MONITOR_UNIFI_API_KEY: "unifi-api-key",
-      MONITOR_UNIFI_HOST_ID: "900A6F003011:123456789",
+      MONITOR_UNIFI_BASE_URL: "https://unifi.example.test/proxy/network/integration/v1/",
       MONITOR_UNIFI_SITE_ID: "10000000-0000-4000-8000-000000000001"
     };
     const accessPoints = [1, 2, 3].map((number) => ({
@@ -117,9 +117,11 @@ describe("monitoring configuration", () => {
       macAddress: `00:11:22:33:44:0${number}`
     }));
     const parsed = loadServiceConfig({ ...base, MONITOR_UNIFI_ACCESS_POINTS_JSON: JSON.stringify(accessPoints) });
-    expect(parsed.unifi).toMatchObject({ required: true, configured: true, hostId: "900A6F003011:123456789", accessPoints });
+    expect(parsed.unifi).toMatchObject({ required: true, configured: true, baseUrl: "https://unifi.example.test/proxy/network/integration/v1", accessPoints });
     expect(() => loadServiceConfig({ ...base, MONITOR_UNIFI_ACCESS_POINTS_JSON: JSON.stringify(accessPoints.slice(0, 2)) })).toThrow();
     expect(() => loadServiceConfig({ ...base, MONITOR_UNIFI_ACCESS_POINTS_JSON: JSON.stringify([accessPoints[0], accessPoints[0], accessPoints[2]]) })).toThrow(/unique/);
+    expect(() => loadServiceConfig({ ...base, MONITOR_UNIFI_BASE_URL: "http://unifi.example.test/proxy/network/integration/v1", MONITOR_UNIFI_ACCESS_POINTS_JSON: JSON.stringify(accessPoints) })).toThrow(/credential-free HTTPS/);
+    expect(() => loadServiceConfig({ ...base, MONITOR_UNIFI_BASE_URL: "https://unifi.example.test/network/default", MONITOR_UNIFI_ACCESS_POINTS_JSON: JSON.stringify(accessPoints) })).toThrow(/integration API URL/);
   });
 
   it("normalizes API base URLs without a trailing slash", () => {

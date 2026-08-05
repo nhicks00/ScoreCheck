@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { buildRequest, parseArgs } from "./cloud-controller.mjs";
@@ -45,4 +46,13 @@ test("builds the minimum supported persistent controller request", () => {
     userDataProfile: "unifi",
     userDataSha256: "a".repeat(64)
   });
+});
+
+test("provisions only the required public controller services", async () => {
+  const cloudInit = await readFile(new URL("./cloud-init.yaml", import.meta.url), "utf8");
+  assert.match(cloudInit, /- nginx\n/u);
+  assert.match(cloudInit, /proxy_pass https:\/\/127\.0\.0\.1:11443;/u);
+  assert.match(cloudInit, /ufw allow 80\/tcp/u);
+  assert.match(cloudInit, /ufw allow 443\/tcp/u);
+  assert.doesNotMatch(cloudInit, /ufw allow 11443/u);
 });

@@ -142,8 +142,8 @@ export class UniFiCollector {
 
   async #request<T>(path: string, schema: z.ZodType<T>): Promise<T> {
     const config = this.#config;
-    if (!config.apiKey || !config.hostId || !config.siteId) throw new Error("UniFi is not configured.");
-    const base = `https://api.ui.com/v1/connector/consoles/${encodeURIComponent(config.hostId)}/network/integration/v1/sites/${encodeURIComponent(config.siteId)}`;
+    if (!config.apiKey || !config.baseUrl || !config.siteId) throw new Error("UniFi is not configured.");
+    const base = `${config.baseUrl}/sites/${encodeURIComponent(config.siteId)}`;
     const response = await this.#fetch(`${base}/${path}`, {
       headers: { "X-API-Key": config.apiKey },
       signal: AbortSignal.timeout(10_000)

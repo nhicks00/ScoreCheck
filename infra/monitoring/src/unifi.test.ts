@@ -13,7 +13,7 @@ const config: UniFiConfig = {
   required: true,
   configured: true,
   apiKey: "protected-api-key",
-  hostId: "900A6F003011:123456789",
+  baseUrl: "https://unifi.example.test/proxy/network/integration/v1",
   siteId: "10000000-0000-4000-8000-000000000001",
   accessPoints,
   pollIntervalMs: 30_000
@@ -22,7 +22,7 @@ const config: UniFiConfig = {
 describe("UniFi collector", () => {
   it("stays not applicable without a commissioned site", async () => {
     const request = vi.fn();
-    const collector = new UniFiCollector({ ...config, required: false, configured: false, apiKey: null, hostId: null, siteId: null, accessPoints: [] }, request as typeof fetch);
+    const collector = new UniFiCollector({ ...config, required: false, configured: false, apiKey: null, baseUrl: null, siteId: null, accessPoints: [] }, request as typeof fetch);
     await collector.refresh(nowMs);
     expect(collector.current()).toMatchObject({ state: "NOT_APPLICABLE", configured: false, apiReachable: null });
     expect(request).not.toHaveBeenCalled();
@@ -32,6 +32,7 @@ describe("UniFi collector", () => {
     const request = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       expect(new Headers(init?.headers).get("X-API-Key")).toBe("protected-api-key");
       const url = String(input);
+      expect(url.startsWith("https://unifi.example.test/proxy/network/integration/v1/sites/10000000-0000-4000-8000-000000000001/")).toBe(true);
       if (url.endsWith("/devices?offset=0&limit=200")) return json({ data: accessPoints.map(device), totalCount: 3 });
       if (url.endsWith("/clients?offset=0&limit=200")) return json({
         data: [{ id: "30000000-0000-4000-8000-000000000001", name: "Camera 1", macAddress: "aa:bb:cc:dd:ee:01", ipAddress: "192.168.50.101", type: "WIRELESS", uplinkDeviceId: accessPoints[0]?.deviceId }],

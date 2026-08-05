@@ -3,8 +3,11 @@
 package_update: true
 packages:
   - ca-certificates
+  - certbot
   - curl
+  - nginx
   - podman
+  - python3-certbot-nginx
   - slirp4netns
   - ufw
 
@@ -14,6 +17,28 @@ ssh_genkeytypes:
   - rsa
 
 write_files:
+  - path: /etc/nginx/sites-available/unifi
+    permissions: "0644"
+    content: |
+      server {
+        listen 80;
+        listen [::]:80;
+        server_name unifi.beachvolleyballmedia.com;
+
+        location / {
+          proxy_pass https://127.0.0.1:11443;
+          proxy_ssl_verify off;
+          proxy_http_version 1.1;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $scheme;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection "upgrade";
+          proxy_read_timeout 3600;
+        }
+      }
+
   - path: /usr/local/sbin/scorecheck-install-unifi-os-server
     permissions: "0755"
     content: |
@@ -52,7 +77,12 @@ runcmd:
   - ufw limit 22/tcp
   - ufw allow 8080/tcp
   - ufw allow 3478/udp
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
   - ufw --force enable
   - /usr/local/sbin/scorecheck-install-unifi-os-server
+  - ln -sfn /etc/nginx/sites-available/unifi /etc/nginx/sites-enabled/unifi
+  - nginx -t
+  - systemctl enable --now nginx.service
 
 final_message: "ScoreCheck cloud UniFi OS Server installation finished."

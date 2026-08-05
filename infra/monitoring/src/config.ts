@@ -124,7 +124,7 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     YOUTUBE_MONITOR_INTERVAL_MS: z.coerce.number().int().min(30_000).max(300_000).default(60_000),
     MONITOR_UNIFI_REQUIRED: z.enum(["true", "false"]).default("false"),
     MONITOR_UNIFI_API_KEY: z.string().default(""),
-    MONITOR_UNIFI_HOST_ID: z.string().default(""),
+    MONITOR_UNIFI_BASE_URL: z.string().default(""),
     MONITOR_UNIFI_SITE_ID: z.string().default(""),
     MONITOR_UNIFI_ACCESS_POINTS_JSON: z.string().default(""),
     MONITOR_UNIFI_POLL_INTERVAL_MS: z.coerce.number().int().min(15_000).max(300_000).default(30_000)
@@ -196,7 +196,7 @@ export type UniFiConfig = {
   required: boolean;
   configured: boolean;
   apiKey: string | null;
-  hostId: string | null;
+  baseUrl: string | null;
   siteId: string | null;
   accessPoints: UniFiAccessPointBinding[];
   pollIntervalMs: number;
@@ -205,7 +205,7 @@ export type UniFiConfig = {
 function parseUniFiConfig(parsed: {
   MONITOR_UNIFI_REQUIRED: "true" | "false";
   MONITOR_UNIFI_API_KEY: string;
-  MONITOR_UNIFI_HOST_ID: string;
+  MONITOR_UNIFI_BASE_URL: string;
   MONITOR_UNIFI_SITE_ID: string;
   MONITOR_UNIFI_ACCESS_POINTS_JSON: string;
   MONITOR_UNIFI_POLL_INTERVAL_MS: number;
@@ -213,7 +213,7 @@ function parseUniFiConfig(parsed: {
   const required = parsed.MONITOR_UNIFI_REQUIRED === "true";
   const raw = {
     apiKey: parsed.MONITOR_UNIFI_API_KEY.trim(),
-    hostId: parsed.MONITOR_UNIFI_HOST_ID.trim(),
+    baseUrl: parsed.MONITOR_UNIFI_BASE_URL.trim(),
     siteId: parsed.MONITOR_UNIFI_SITE_ID.trim(),
     accessPoints: parsed.MONITOR_UNIFI_ACCESS_POINTS_JSON.trim()
   };
@@ -223,14 +223,14 @@ function parseUniFiConfig(parsed: {
       required,
       configured: false,
       apiKey: null,
-      hostId: null,
+      baseUrl: null,
       siteId: null,
       accessPoints: [],
       pollIntervalMs: parsed.MONITOR_UNIFI_POLL_INTERVAL_MS
     };
   }
-  if (configuredValues !== 4) throw new Error("UniFi monitoring requires its API key, host id, site id, and access-point bindings together.");
-  if (!/^[A-Za-z0-9:._-]{10,256}$/.test(raw.hostId)) throw new Error("MONITOR_UNIFI_HOST_ID is invalid.");
+  if (configuredValues !== 4) throw new Error("UniFi monitoring requires its API key, base URL, site id, and access-point bindings together.");
+  const baseUrl = parseUniFiBaseUrl(raw.baseUrl);
   const uuid = z.string().uuid();
   const siteId = uuid.parse(raw.siteId);
   let value: unknown;
@@ -254,11 +254,20 @@ function parseUniFiConfig(parsed: {
     required,
     configured: true,
     apiKey: raw.apiKey,
-    hostId: raw.hostId,
+    baseUrl,
     siteId,
     accessPoints,
     pollIntervalMs: parsed.MONITOR_UNIFI_POLL_INTERVAL_MS
   };
+}
+
+function parseUniFiBaseUrl(raw: string): string {
+  const value = new URL(raw);
+  if (value.protocol !== "https:" || value.username || value.password || value.search || value.hash
+    || value.pathname.replace(/\/+$/, "") !== "/proxy/network/integration/v1") {
+    throw new Error("MONITOR_UNIFI_BASE_URL must be a credential-free HTTPS UniFi Network integration API URL.");
+  }
+  return value.toString().replace(/\/+$/, "");
 }
 
 function parseOrigins(raw: string): string[] {
