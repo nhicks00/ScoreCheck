@@ -32,7 +32,7 @@ const envelopeSnapshotSchema = z.object({
     accessPoints: z.array(z.object({ deviceId: z.string(), name: z.string(), state: z.string() }).passthrough()).max(16),
     clients: z.array(z.object({ id: z.string(), uplinkDeviceId: z.string().nullable() }).passthrough()).max(200),
     problems: z.array(z.string()).max(50)
-  }).passthrough(),
+  }).passthrough().optional(),
   networkSwitch: z.object({
     state: z.string(),
     configured: z.boolean(),
@@ -45,7 +45,7 @@ const envelopeSnapshotSchema = z.object({
       remainingWatts: z.number().nonnegative().nullable()
     }).passthrough(),
     problems: z.array(z.string()).max(50)
-  }).passthrough(),
+  }).passthrough().optional(),
   courts: z.array(z.object({ courtNumber: z.number().int().min(1).max(8), overallState: z.string(), stages: z.array(z.unknown()) }).passthrough()).max(8),
   agents: z.array(z.object({ agentId: z.string(), state: z.string() }).passthrough()).max(32),
   incidents: z.array(z.object({ id: z.string().uuid(), status: z.string(), severity: z.string() }).passthrough()).max(200),

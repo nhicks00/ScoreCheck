@@ -443,8 +443,8 @@ export type MonitorSnapshot = {
     };
   };
   router: MonitorRouter;
-  unifi: MonitorUniFi;
-  networkSwitch: MonitorNetworkSwitch;
+  unifi?: MonitorUniFi;
+  networkSwitch?: MonitorNetworkSwitch;
   courts: MonitorCourt[];
   agents: MonitorAgent[];
   incidents: MonitorIncident[];
