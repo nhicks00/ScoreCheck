@@ -131,9 +131,9 @@ export async function routerRequest({ credentials, accessToken, endpoint, method
   const validatedMethod = method === "POST" ? "POST" : method === "GET" ? "GET" : null;
   if (!validatedMethod) throw new Error("Peplink request method must be GET or POST");
   const url = new URL(`/api/${validateEndpoint(endpoint)}`, remoteAdminBase(credentials.deviceSerial));
-  const response = await fetchImpl(url, {
+  const request = {
     method: validatedMethod,
-    redirect: "follow",
+    redirect: "manual",
     cache: "no-store",
     headers: {
       authorization: `Bearer ${accessToken}`,
@@ -141,10 +141,51 @@ export async function routerRequest({ credentials, accessToken, endpoint, method
     },
     ...(validatedMethod === "POST" ? { body: JSON.stringify(body) } : {}),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
-  });
+  };
+  let response = await fetchImpl(url, request);
+  if (isRedirect(response.status)) {
+    const redirectUrl = trustedRemoteAdminRedirect({
+      location: response.headers.get("location"),
+      requestUrl: url,
+      serial: credentials.deviceSerial
+    });
+    response = await fetchImpl(redirectUrl, {
+      ...request,
+      redirect: "error",
+      headers: validatedMethod === "POST" ? { "content-type": "application/json" } : {}
+    });
+  }
   const payload = await readJsonResponse(response, `Peplink ${validatedMethod} ${endpoint}`);
   if (!response.ok || payload.stat !== "ok") throw new Error(`Peplink ${validatedMethod} ${endpoint} failed: ${payload.message ?? `HTTP ${response.status}`}`);
   return payload.response ?? null;
+}
+
+function isRedirect(status) {
+  return new Set([301, 302, 303, 307, 308]).has(status);
+}
+
+function trustedRemoteAdminRedirect({ location, requestUrl, serial }) {
+  let redirectUrl;
+  try {
+    redirectUrl = new URL(location ?? "");
+  } catch {
+    throw new Error("Peplink Router API returned an invalid redirect");
+  }
+  const serialPrefix = serial.toLowerCase();
+  const expectedHost = new RegExp(`^${serialPrefix}-ic\\.rwa[0-9]+\\.peplink\\.com$`, "u");
+  const accessToken = redirectUrl.searchParams.get("access_token") ?? "";
+  const remainingQuery = new URLSearchParams(redirectUrl.searchParams);
+  remainingQuery.delete("access_token");
+  if (
+    redirectUrl.protocol !== "https:"
+    || !expectedHost.test(redirectUrl.hostname)
+    || redirectUrl.pathname !== requestUrl.pathname
+    || !/^[A-Fa-f0-9]{32,128}$/.test(accessToken)
+    || remainingQuery.toString() !== requestUrl.searchParams.toString()
+  ) {
+    throw new Error("Peplink Router API returned an untrusted redirect");
+  }
+  return redirectUrl;
 }
 
 export async function collectRouterEndpoints({ credentials, accessToken, endpoints, fetchImpl }) {

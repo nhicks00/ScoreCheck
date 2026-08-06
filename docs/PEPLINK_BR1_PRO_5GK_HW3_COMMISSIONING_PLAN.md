@@ -176,13 +176,14 @@ Before applying event settings:
 10. Do not enable automatic firmware changes during event coverage. Pin the
    version that passed the real-camera qualification.
 
-Firmware 8.6.0 is the current stable release as of this revision, but the plan
-does not freeze that version in perpetuity. Arrival-day verification controls:
-if Peplink has released a newer stable version for this exact HW3 product, use
-that newer stable version. Do not qualify beta, release-candidate, or early-access
-firmware for production. Newly available features do not become enabled merely
-because the firmware includes them; WireGuard remote access, forced 5G SA
-Carrier Aggregation, IPv6, and other unrelated features remain outside the first
+Firmware 8.5.4 is the current stable release for this exact HW3 product as of
+2026-08-06. Firmware 8.6.0 remains on Peplink's beta/RC download page and is not
+a production qualification target. The plan does not freeze 8.5.4 in
+perpetuity: arrival-day verification against Peplink's stable download page
+controls. Do not qualify beta, release-candidate, or early-access firmware for
+production. Newly available features do not become enabled merely because the
+firmware includes them; WireGuard remote access, forced 5G SA Carrier
+Aggregation, IPv6, and other unrelated features remain outside the first
 production profile.
 
 ### 2. Administrator and remote-management security
@@ -499,12 +500,11 @@ Initial settings:
 - Bandwidth values: initially about 80% of the lower sustained capacity observed
   with real camera media, never ISP plan speed or a single speed-test peak.
 
-Firmware 8.6 includes Starlink detection and status fixes, but the prior dry
-run proved that a newly returning Starlink path can be harmful before it is
-stable. The qualification must therefore include a real Starlink reboot and
-rejoin while camera traffic remains active. A dashboard `connected` label is
-not sufficient; the pass condition is bounded queue, loss, and recovery at the
-camera and YouTube layers.
+The prior dry run proved that a newly returning Starlink path can be harmful
+before it is stable. The qualification must therefore include a real Starlink
+reboot and rejoin while camera traffic remains active. A dashboard `connected`
+label is not sufficient; the pass condition is bounded queue, loss, and
+recovery at the camera and YouTube layers.
 
 Do not enable `Ignore Obstruction Outages` during the first baseline. Record
 normal behavior first. It can be compared later if brief obstruction reports
@@ -726,7 +726,7 @@ Do not enable these during the first iteration:
 - Plain Bonding unless DWB itself is implicated.
 - Synthetic media or synthetic network-load workflows.
 - 1080p60 during the router baseline.
-- Air Monitor as a release gate; firmware 8.6 lists a BR1 Pro 5G issue.
+- Air Monitor as a release gate.
 - Automatic firmware upgrades during events.
 - Public Web Admin, SSH, port forwards, UPnP, or NAT-PMP.
 
@@ -936,7 +936,7 @@ that the physical router has passed production acceptance before it arrives.
 - [Current BR1 Pro 5G technical specifications](https://www.peplink.com/compare/tech-specs/br1-pro-5g.pdf)
 - [BR1 Pro 5G hardware reference guide](https://download.peplink.com/manual/br1_pro_5g_hardware_reference_guide.pdf)
 - [Peplink firmware downloads and supported models](https://www.peplink.com/support/downloads/firmware/)
-- [Firmware 8.6.0 release notes](https://download.peplink.com/resources/firmware-8.6.0-release-notes.pdf)
+- [Firmware 8.5.4 release notes](https://download.peplink.com/resources/firmware-8.5.4-release-notes.pdf)
 - [Peplink SpeedFusion technology and Boost](https://www.peplink.com/technology/speedfusion-bonding-technology/)
 - [InControl 2 user guide](https://download.peplink.com/resources/InControl2_User_Guide.pdf)
 - [Peplink Router API documentation](https://download.peplink.com/resources/Peplink-Router-API-Documentation-for-Firmware-8.5.0.pdf)

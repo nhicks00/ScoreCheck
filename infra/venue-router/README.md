@@ -57,6 +57,14 @@ are not present in the supported Router API. Treat those as bounded console-only
 commissioning changes rather than reverse-engineering an unsupported endpoint;
 normal event preflight and monitoring must continue through `snapshot`.
 
+WAN priority changes must use the documented
+`config.wan.connection.priority` endpoint with `instantActive: true` and
+`connId` entries. Posting priority fields through the broader
+`config.wan.connection` endpoint only stages them for a later Apply Changes
+operation, so a successful response from that endpoint is not evidence that the
+runtime WAN priorities changed. Always verify the result through
+`status.wan.connection`.
+
 Do not enable WAN SSH or add a router port forward. It does not solve changing
 WAN addresses or carrier NAT, and it adds an unnecessary management surface.
 During first-time onboarding, one native Peplink 5 GHz SSID temporarily carries

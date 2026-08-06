@@ -45,6 +45,47 @@ test("uses OAuth bearer authorization through the stable router tunnel", async (
   assert.equal(calls[1].options.headers.authorization, `Bearer ${accessToken}`);
 });
 
+test("follows the serial-bound Peplink remote-admin redirect without forwarding bearer authorization", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options) => {
+    calls.push({ url: String(url), options });
+    if (calls.length === 1) {
+      return new Response(null, {
+        status: 302,
+        headers: {
+          location: "https://293c-5441-6d74-ic.rwa11.peplink.com/api/info.firmware?access_token=5".concat("a".repeat(31))
+        }
+      });
+    }
+    return new Response(JSON.stringify({ stat: "ok", response: { firmware: "8.6.0" } }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  };
+
+  const result = await routerRequest({ credentials, accessToken: "t".repeat(32), endpoint: "info.firmware", method: "GET", fetchImpl });
+
+  assert.deepEqual(result, { firmware: "8.6.0" });
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].url, /^https:\/\/293c-5441-6d74-ic\.rwa11\.peplink\.com\/api\/info\.firmware\?access_token=/u);
+  assert.equal(calls[1].options.headers.authorization, undefined);
+  assert.equal(calls[1].options.redirect, "error");
+});
+
+test("rejects remote-admin redirects outside the expected serial-bound host and path", async () => {
+  for (const location of [
+    "https://example.com/api/info.firmware?access_token=".concat("a".repeat(32)),
+    "https://293c-5441-6d74-ic.rwa11.peplink.com/api/status.client?access_token=".concat("a".repeat(32)),
+    "https://293c-5441-6d74-ic.rwa11.peplink.com/api/info.firmware?access_token=short"
+  ]) {
+    const fetchImpl = async () => new Response(null, { status: 302, headers: { location } });
+    await assert.rejects(
+      routerRequest({ credentials, accessToken: "t".repeat(32), endpoint: "info.firmware", method: "GET", fetchImpl }),
+      /untrusted redirect/u
+    );
+  }
+});
+
 test("requires an explicit body and confirmation for configuration writes", () => {
   assert.throws(() => parseArgs(["post", "config.wan.connection"]), /requires --body/u);
   assert.deepEqual(parseArgs(["post", "config.wan.connection", "--body", "/tmp/request.json", "--confirm-write"]), {
