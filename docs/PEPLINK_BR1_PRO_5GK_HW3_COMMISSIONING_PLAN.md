@@ -231,8 +231,8 @@ Use this fixed wiring:
 | --- | --- | --- |
 | 2.5G WAN | Starlink Ethernet adapter/router | DHCP; retain as WAN |
 | Cellular | Internal modem | SIM A active; SIM B standby if a second carrier is installed |
-| LAN 1 | PoE switch uplink | The only switch uplink |
-| LAN 2 | Disconnected | Do not connect to the same switch |
+| LAN 2 | PoE switch uplink | The only switch uplink |
+| LAN 1 | Disconnected | Do not connect to the same switch |
 | Wi-Fi radios | Onboarding: native 5 GHz camera AP; production: optional phone-hotspot Wi-Fi WAN | Disable Peplink client AP after camera migration to Ubiquiti |
 
 Do not enable LACP for the first deployment. Do not connect both LAN ports to
@@ -257,7 +257,7 @@ Use this fixed switch wiring for the first qualification:
 | PoE 1 | `UK Ultra 1` | Permanent panel antenna |
 | PoE 2 | `UK Ultra 2` | Permanent panel antenna |
 | PoE 3 | `UK Ultra 3` | Event-selected omni or panel antenna |
-| Non-PoE 9 | Peplink LAN 1 | The only router uplink |
+| Non-PoE 9 | Peplink LAN 2 | The only router uplink |
 | Non-PoE 10 | Service laptop | Normally disconnected; commissioning only |
 
 Power the switch directly from the fused V-mount/D-Tap DC branch. Power the
