@@ -41,6 +41,7 @@ fi
 
 node "$SCRIPT_DIR/render-config.mjs"
 node "$SCRIPT_DIR/render-service-env.mjs"
+node "$SCRIPT_DIR/render-snmp-env.mjs"
 
 candidate_name="${REVISION:0:12}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 candidate_dir="$REMOTE_DIR/.incoming/$candidate_name"
@@ -58,6 +59,7 @@ trap 'exit 129' HUP
 ssh "${ssh_options[@]}" "$SSH_HOST" "install -d -m 0700 '$candidate_dir/.generated' '$candidate_dir/fault-gates'"
 rsync -a --delete -e "$rsync_shell" "$SCRIPT_DIR/src/" "$SSH_HOST:$candidate_dir/src/"
 rsync -a --delete -e "$rsync_shell" "$SCRIPT_DIR/rules/" "$SSH_HOST:$candidate_dir/rules/"
+rsync -a --delete -e "$rsync_shell" "$SCRIPT_DIR/snmp/" "$SSH_HOST:$candidate_dir/snmp/"
 rsync -a -e "$rsync_shell" \
   "$SCRIPT_DIR/package.json" \
   "$SCRIPT_DIR/package-lock.json" \
@@ -79,11 +81,12 @@ rsync -a -e "$rsync_shell" "$SCRIPT_DIR/.generated/service.env" "$SSH_HOST:$cand
 rsync -a -e "$rsync_shell" \
   "$SCRIPT_DIR/.generated/prometheus.yml" \
   "$SCRIPT_DIR/.generated/alertmanager.yml" \
+  "$SCRIPT_DIR/.generated/snmp.env" \
   "$SSH_HOST:$candidate_dir/.generated/"
 
 deployment_mode="$(ssh "${ssh_options[@]}" "$SSH_HOST" "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE'
 set -euo pipefail
-required=(docker-compose.yml Caddyfile .env .generated/prometheus.yml .generated/alertmanager.yml rules src)
+required=(docker-compose.yml Caddyfile .env .generated/prometheus.yml .generated/alertmanager.yml .generated/snmp.env rules snmp src)
 present=0
 for path in "${required[@]}"; do
   [[ -e "$REMOTE_DIR/$path" ]] && present=$((present + 1))

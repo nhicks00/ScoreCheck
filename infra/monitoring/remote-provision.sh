@@ -55,7 +55,7 @@ cleanup() {
     echo "First observability provisioning failed; removing the partial stack." >&2
     (cd "$REMOTE_DIR" && compose down --volumes --remove-orphans) >/dev/null 2>&1 || true
     docker image rm scorecheck-monitoring:local >/dev/null 2>&1 || true
-    rm -rf "$REMOTE_DIR/src" "$REMOTE_DIR/rules" "$REMOTE_DIR/fault-gates" "$REMOTE_DIR/.generated"
+    rm -rf "$REMOTE_DIR/src" "$REMOTE_DIR/rules" "$REMOTE_DIR/snmp" "$REMOTE_DIR/fault-gates" "$REMOTE_DIR/.generated"
     rm -f "$REMOTE_DIR/.dockerignore" "$REMOTE_DIR/Caddyfile" "$REMOTE_DIR/Dockerfile" \
       "$REMOTE_DIR/docker-compose.yml" "$REMOTE_DIR/package.json" "$REMOTE_DIR/package-lock.json" \
       "$REMOTE_DIR/remote-deploy.sh" "$REMOTE_DIR/remote-provision.sh" "$REMOTE_DIR/replace-agent-targets.sh" \
@@ -70,7 +70,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
-live_paths=(docker-compose.yml Caddyfile .env .generated/prometheus.yml .generated/alertmanager.yml fault-gates rules src)
+live_paths=(docker-compose.yml Caddyfile .env .generated/prometheus.yml .generated/alertmanager.yml .generated/snmp.env fault-gates rules snmp src)
 for path in "${live_paths[@]}"; do
   if [[ -e "$REMOTE_DIR/$path" ]]; then
     echo "First provisioning requires an empty observability baseline; found $path." >&2
@@ -79,22 +79,31 @@ for path in "${live_paths[@]}"; do
 done
 for path in .dockerignore docker-compose.yml Caddyfile .env Dockerfile package.json package-lock.json \
   tsconfig.json test-alertmanager-inhibition.mjs remote-deploy.sh remote-provision.sh replace-agent-targets.sh \
-  .generated/prometheus.yml .generated/alertmanager.yml fault-gates rules src; do
+  .generated/prometheus.yml .generated/alertmanager.yml .generated/snmp.env fault-gates rules snmp src; do
   [[ -e "$CANDIDATE_DIR/$path" ]] || { echo "Candidate is incomplete at $path." >&2; exit 1; }
 done
 
 prometheus_image='prom/prometheus:v3.13.1@sha256:3c42b892cf723fa54d2f262c37a0e1f80aa8c8ddb1da7b9b0df9455a35a7f893'
 alertmanager_image='prom/alertmanager:v0.33.1@sha256:9e082985f56f4c8c9f724e18f2288c6708f472e56a5286b8863d080434ea065d'
 node_exporter_image='prom/node-exporter:v1.12.0@sha256:9b0ade5e607f9dbedb0a8e11151b6011ae5bd79304c261804cfdd2cadf200a80'
+snmp_exporter_image='prom/snmp-exporter:v0.30.1@sha256:e5fd5e8b43ace6c088fe9bf0b37b7fff0e04380bee352be7ec41b853a4dd5859'
 caddy_image='caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648'
 node_image='node:22.23.1-alpine3.24@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2'
 
-for image in "$prometheus_image" "$alertmanager_image" "$node_exporter_image" "$caddy_image" "$node_image"; do
+for image in "$prometheus_image" "$alertmanager_image" "$node_exporter_image" "$snmp_exporter_image" "$caddy_image" "$node_image"; do
   retry_docker_operation docker pull --quiet "$image"
 done
 
 chmod 0444 "$CANDIDATE_DIR/.generated/prometheus.yml" "$CANDIDATE_DIR/.generated/alertmanager.yml"
 (cd "$CANDIDATE_DIR" && compose config -q)
+docker run --rm --network none --read-only --cap-drop ALL --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
+  --env-file "$CANDIDATE_DIR/.generated/snmp.env" \
+  -v "$CANDIDATE_DIR/snmp/linovision-auth.yml:/etc/snmp_exporter/linovision-auth.yml:ro" \
+  -v "$CANDIDATE_DIR/snmp/linovision-poe.yml:/etc/snmp_exporter/linovision-poe.yml:ro" \
+  "$snmp_exporter_image" --dry-run --config.expand-environment-variables \
+  --config.file=/etc/snmp_exporter/snmp.yml \
+  --config.file=/etc/snmp_exporter/linovision-auth.yml \
+  --config.file=/etc/snmp_exporter/linovision-poe.yml >/dev/null
 docker run --rm --network none --read-only --cap-drop ALL --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
   --entrypoint promtool -w /rules -v "$CANDIDATE_DIR/rules:/rules:ro" \
   "$prometheus_image" check rules /rules/scorecheck.rules.yml >/dev/null
@@ -127,9 +136,11 @@ retry_docker_operation docker build --pull --label "org.opencontainers.image.rev
 
 install -d -m 0700 "$REMOTE_DIR/.generated" "$REMOTE_DIR/caddy_data"
 install -m 0600 "$CANDIDATE_DIR/.env" "$REMOTE_DIR/.env"
+install -m 0600 "$CANDIDATE_DIR/.generated/snmp.env" "$REMOTE_DIR/.generated/snmp.env"
 install -m 0400 -o 65534 -g 65534 "$CANDIDATE_DIR/.generated/prometheus.yml" "$REMOTE_DIR/.generated/prometheus.yml"
 install -m 0444 "$CANDIDATE_DIR/.generated/alertmanager.yml" "$REMOTE_DIR/.generated/alertmanager.yml"
 rsync -a --delete "$CANDIDATE_DIR/rules/" "$REMOTE_DIR/rules/"
+rsync -a --delete "$CANDIDATE_DIR/snmp/" "$REMOTE_DIR/snmp/"
 rsync -a --delete "$CANDIDATE_DIR/src/" "$REMOTE_DIR/src/"
 rsync -a --delete "$CANDIDATE_DIR/fault-gates/" "$REMOTE_DIR/fault-gates/"
 for path in .dockerignore Caddyfile Dockerfile docker-compose.yml package.json package-lock.json test-alertmanager-inhibition.mjs tsconfig.json; do
@@ -150,7 +161,7 @@ for _attempt in $(seq 1 90); do
   monitor_revision="$(docker inspect "$monitor_container" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || true)"
   monitor_health="$(docker inspect "$monitor_container" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null || true)"
   running_count="$(cd "$REMOTE_DIR" && compose ps --status running -q 2>/dev/null | sed '/^$/d' | wc -l | tr -d ' ')"
-  if [[ "$monitor_revision" == "$REVISION" && "$monitor_health" == "healthy" && "$running_count" == "5" ]] \
+  if [[ "$monitor_revision" == "$REVISION" && "$monitor_health" == "healthy" && "$running_count" == "6" ]] \
     && curl -fsS --max-time 5 http://127.0.0.1:9090/-/ready >/dev/null 2>&1 \
     && curl -fsS --max-time 5 http://127.0.0.1:9093/-/ready >/dev/null 2>&1 \
     && curl -fsS --max-time 10 "https://$public_host/healthz" \
@@ -164,7 +175,7 @@ done
 monitor_container="$(cd "$REMOTE_DIR" && compose ps -q monitor-service)"
 [[ "$(docker inspect "$monitor_container" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" == "$REVISION" ]]
 [[ "$(docker inspect "$monitor_container" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')" == "healthy" ]]
-[[ "$(cd "$REMOTE_DIR" && compose ps --status running -q | sed '/^$/d' | wc -l | tr -d ' ')" == "5" ]]
+[[ "$(cd "$REMOTE_DIR" && compose ps --status running -q | sed '/^$/d' | wc -l | tr -d ' ')" == "6" ]]
 curl -fsS --max-time 10 http://127.0.0.1:9090/api/v1/rules \
   | jq -e '.status == "success" and ([.data.groups[].rules[]] | length > 0)' >/dev/null
 curl -fsS --retry 30 --retry-all-errors --retry-delay 2 --retry-max-time 120 \

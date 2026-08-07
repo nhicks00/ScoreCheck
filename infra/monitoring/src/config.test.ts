@@ -124,6 +124,41 @@ describe("monitoring configuration", () => {
     expect(() => loadServiceConfig({ ...base, MONITOR_UNIFI_BASE_URL: "https://unifi.example.test/network/default", MONITOR_UNIFI_ACCESS_POINTS_JSON: JSON.stringify(accessPoints) })).toThrow(/integration API URL/);
   });
 
+  it("requires a complete, bounded network-switch contract", () => {
+    const base = {
+      MONITOR_API_TOKEN: "abcdefghijklmnopqrstuvwxyz",
+      MONITOR_ROUTER_HEARTBEAT_TOKEN: "router-heartbeat-token-long-enough",
+      ALERTMANAGER_WEBHOOK_TOKEN: "zyxwvutsrqponmlkjihgfedcba",
+      MONITOR_BROWSER_HEARTBEAT_SECRET: "browser-heartbeat-secret-that-is-long-enough",
+      MONITOR_PUBLIC_HOST: "monitor.example.test"
+    };
+    expect(loadServiceConfig(base).networkSwitch).toMatchObject({ required: false, configured: false, ports: [] });
+    expect(() => loadServiceConfig({ ...base, MONITOR_NETWORK_SWITCH_REQUIRED: "true" })).toThrow(/not configured/);
+    const ports = [
+      { id: "1", name: "UK Ultra 1", role: "access_point", expected: true },
+      { id: "9", name: "Peplink LAN 2", role: "router_uplink", expected: true }
+    ];
+    const configured = {
+      ...base,
+      MONITOR_NETWORK_SWITCH_REQUIRED: "true",
+      MONITOR_NETWORK_SWITCH_EXPORTER_URL: "http://snmp-exporter:9116/",
+      MONITOR_NETWORK_SWITCH_TARGET: "192.168.50.2",
+      MONITOR_NETWORK_SWITCH_MODEL: "POE-SWR612GM-SOLAR",
+      MONITOR_NETWORK_SWITCH_FIRMWARE_VERSION: "V200SP10251021",
+      MONITOR_NETWORK_SWITCH_PORTS_JSON: JSON.stringify(ports)
+    };
+    expect(loadServiceConfig(configured).networkSwitch).toMatchObject({
+      required: true,
+      configured: true,
+      exporterUrl: "http://snmp-exporter:9116",
+      target: "192.168.50.2",
+      ports
+    });
+    expect(() => loadServiceConfig({ ...configured, MONITOR_NETWORK_SWITCH_TARGET: "http://192.168.50.2" })).toThrow(/hostname or IPv4/);
+    expect(() => loadServiceConfig({ ...configured, MONITOR_NETWORK_SWITCH_EXPORTER_URL: "https://snmp-exporter:9116" })).toThrow(/internal HTTP origin/);
+    expect(() => loadServiceConfig({ ...configured, MONITOR_NETWORK_SWITCH_PORTS_JSON: JSON.stringify([ports[0], ports[0]]) })).toThrow(/unique/);
+  });
+
   it("normalizes API base URLs without a trailing slash", () => {
     const agent = loadAgentConfig({
       MONITOR_AGENT_ID: "agent",

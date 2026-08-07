@@ -5,9 +5,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const outputDirectory = path.join(directory, ".generated");
 
-export function renderPrometheusConfig(rawTargets, monitorToken) {
+export function renderPrometheusConfig(rawTargets, monitorToken, networkSwitchTarget = "") {
   requiredValue(monitorToken, "MONITOR_API_TOKEN");
   const targets = parseTargets(rawTargets);
+  const switchTarget = parseSnmpTarget(networkSwitchTarget);
   const scrapeJobs = targets.map((target) => {
     const url = new URL(target.url);
     return `  - job_name: ${yaml(`agent-${target.id}`)}
@@ -49,7 +50,24 @@ scrape_configs:
   - job_name: observability-node
     static_configs:
       - targets: [node-exporter:9100]
-${scrapeJobs ? `\n${scrapeJobs}` : ""}
+${switchTarget ? `
+  - job_name: venue-network-switch
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    metrics_path: /snmp
+    params:
+      auth: [scorecheck_linovision_v3]
+      module: [system,if_mib,linovision_poe]
+    static_configs:
+      - targets: [${yaml(switchTarget)}]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: snmp-exporter:9116
+` : ""}${scrapeJobs ? `\n${scrapeJobs}` : ""}
 `;
 }
 
@@ -150,9 +168,18 @@ if (isDirectInvocation()) await main();
 async function main() {
   const rawTargets = process.env.MONITOR_AGENT_TARGETS ?? "";
   await mkdir(outputDirectory, { recursive: true });
-  await writeSecure("prometheus.yml", renderPrometheusConfig(rawTargets, required("MONITOR_API_TOKEN")));
+  await writeSecure("prometheus.yml", renderPrometheusConfig(rawTargets, required("MONITOR_API_TOKEN"), process.env.MONITOR_NETWORK_SWITCH_TARGET ?? ""));
   await writeSecure("alertmanager.yml", renderAlertmanagerConfig(required("ALERTMANAGER_WEBHOOK_TOKEN")));
   console.log(`Rendered monitoring configuration for ${parseTargets(rawTargets).length} agent target(s).`);
+}
+
+function parseSnmpTarget(raw) {
+  const target = raw.trim();
+  if (!target) return "";
+  if (target.length > 253 || !(/^(?:[a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+$/.test(target) || /^(?:\d{1,3}\.){3}\d{1,3}$/.test(target))) {
+    throw new Error("MONITOR_NETWORK_SWITCH_TARGET must be a hostname or IPv4 address.");
+  }
+  return target;
 }
 
 async function writeSecure(name, content) {

@@ -10,6 +10,9 @@ const remoteProvisionPath = fileURLToPath(new URL("../remote-provision.sh", impo
 const replaceAgentTargetsPath = fileURLToPath(new URL("../replace-agent-targets.sh", import.meta.url));
 const contractsPath = fileURLToPath(new URL("./contracts.ts", import.meta.url));
 const agentComposePath = fileURLToPath(new URL("../agent-compose.yml", import.meta.url));
+const composePath = fileURLToPath(new URL("../docker-compose.yml", import.meta.url));
+const snmpAuthPath = fileURLToPath(new URL("../snmp/linovision-auth.yml", import.meta.url));
+const snmpPoePath = fileURLToPath(new URL("../snmp/linovision-poe.yml", import.meta.url));
 const dockerignorePath = fileURLToPath(new URL("../.dockerignore", import.meta.url));
 const testFeedDockerfilePath = fileURLToPath(new URL("../Dockerfile.test-feed", import.meta.url));
 const testFeedRunnerPath = fileURLToPath(new URL("../run-test-feed-container.sh", import.meta.url));
@@ -20,6 +23,9 @@ const remoteProvision = readFileSync(remoteProvisionPath, "utf8");
 const replaceAgentTargets = readFileSync(replaceAgentTargetsPath, "utf8");
 const contracts = readFileSync(contractsPath, "utf8");
 const agentCompose = readFileSync(agentComposePath, "utf8");
+const compose = readFileSync(composePath, "utf8");
+const snmpAuth = readFileSync(snmpAuthPath, "utf8");
+const snmpPoe = readFileSync(snmpPoePath, "utf8");
 const dockerignore = readFileSync(dockerignorePath, "utf8");
 const testFeedDockerfile = readFileSync(testFeedDockerfilePath, "utf8");
 const testFeedRunner = readFileSync(testFeedRunnerPath, "utf8");
@@ -58,8 +64,20 @@ describe("staged observability deployment", () => {
     expect(remoteProvision).toContain('test-alertmanager-inhibition.mjs');
     expect(remoteProvision).toContain('docker build --pull --label');
     expect(remoteProvision).toContain('compose up -d --no-build --remove-orphans');
-    expect(remoteProvision).toContain('running_count\" == \"5');
+    expect(remoteProvision).toContain('running_count\" == \"6');
     expect(remoteProvision).toContain('api/v1/rules');
+  });
+
+  it("runs the pinned SNMPv3 exporter without embedding switch credentials", () => {
+    expect(compose).toContain("prom/snmp-exporter:v0.30.1@sha256:e5fd5e8b43ace6c088fe9bf0b37b7fff0e04380bee352be7ec41b853a4dd5859");
+    expect(compose).toContain("--config.expand-environment-variables");
+    expect(compose).toContain(".generated/snmp.env");
+    expect(snmpAuth).toContain("version: 3");
+    expect(snmpAuth).toContain("security_level: authPriv");
+    expect(snmpAuth).toContain("${LINOVISION_SNMP_AUTH_PASSWORD}");
+    expect(snmpPoe).toContain("linovision_poe_port_power_watts");
+    expect(remoteProvision).toContain('"$snmp_exporter_image" --dry-run');
+    expect(remoteDeploy).toContain('"$snmp_exporter_image" --dry-run');
   });
 
   it("requires a clean exact revision and excludes secrets from the build context", () => {
@@ -123,7 +141,7 @@ describe("staged observability deployment", () => {
     expect(remoteDeploy).not.toContain("--remove-orphans");
     expect(remoteDeploy).not.toContain("compose up -d --build");
     expect(remoteDeploy).toContain("compose up -d --no-deps --force-recreate --no-build monitor-service");
-    expect(remoteDeploy).toContain("for service in prometheus alertmanager caddy node-exporter");
+    expect(remoteDeploy).toContain("for service in prometheus alertmanager caddy node-exporter snmp-exporter");
     expect(remoteDeploy).toContain("assert_static_container_ids");
   });
 

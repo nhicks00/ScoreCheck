@@ -127,7 +127,14 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     MONITOR_UNIFI_BASE_URL: z.string().default(""),
     MONITOR_UNIFI_SITE_ID: z.string().default(""),
     MONITOR_UNIFI_ACCESS_POINTS_JSON: z.string().default(""),
-    MONITOR_UNIFI_POLL_INTERVAL_MS: z.coerce.number().int().min(15_000).max(300_000).default(30_000)
+    MONITOR_UNIFI_POLL_INTERVAL_MS: z.coerce.number().int().min(15_000).max(300_000).default(30_000),
+    MONITOR_NETWORK_SWITCH_REQUIRED: z.enum(["true", "false"]).default("false"),
+    MONITOR_NETWORK_SWITCH_EXPORTER_URL: z.string().default(""),
+    MONITOR_NETWORK_SWITCH_TARGET: z.string().default(""),
+    MONITOR_NETWORK_SWITCH_MODEL: z.string().default(""),
+    MONITOR_NETWORK_SWITCH_FIRMWARE_VERSION: z.string().default(""),
+    MONITOR_NETWORK_SWITCH_PORTS_JSON: z.string().default(""),
+    MONITOR_NETWORK_SWITCH_POLL_INTERVAL_MS: z.coerce.number().int().min(15_000).max(300_000).default(30_000)
   });
   const parsed = schema.parse(env);
   if (Boolean(parsed.SUPABASE_URL) !== Boolean(parsed.SUPABASE_SERVICE_ROLE_KEY)) {
@@ -149,6 +156,7 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     throw new Error("Healthchecks dead-man monitoring requires both ping URLs, both check ids, and the write API key together.");
   }
   const unifi = parseUniFiConfig(parsed);
+  const networkSwitch = parseNetworkSwitchConfig(parsed);
   return {
     token: parsed.MONITOR_API_TOKEN,
     routerHeartbeatToken: parsed.MONITOR_ROUTER_HEARTBEAT_TOKEN,
@@ -182,8 +190,95 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     youtubeClientSecret: parsed.YOUTUBE_CLIENT_SECRET.trim() || null,
     youtubeRefreshToken: parsed.YOUTUBE_REFRESH_TOKEN.trim() || null,
     youtubeMonitorIntervalMs: parsed.YOUTUBE_MONITOR_INTERVAL_MS,
-    unifi
+    unifi,
+    networkSwitch
   };
+}
+
+export type NetworkSwitchPortBinding = {
+  id: string;
+  name: string;
+  role: "access_point" | "router_uplink" | "other";
+  expected: boolean;
+};
+
+export type NetworkSwitchConfig = {
+  required: boolean;
+  configured: boolean;
+  exporterUrl: string | null;
+  target: string | null;
+  model: string | null;
+  firmwareVersion: string | null;
+  ports: NetworkSwitchPortBinding[];
+  pollIntervalMs: number;
+};
+
+function parseNetworkSwitchConfig(parsed: {
+  MONITOR_NETWORK_SWITCH_REQUIRED: "true" | "false";
+  MONITOR_NETWORK_SWITCH_EXPORTER_URL: string;
+  MONITOR_NETWORK_SWITCH_TARGET: string;
+  MONITOR_NETWORK_SWITCH_MODEL: string;
+  MONITOR_NETWORK_SWITCH_FIRMWARE_VERSION: string;
+  MONITOR_NETWORK_SWITCH_PORTS_JSON: string;
+  MONITOR_NETWORK_SWITCH_POLL_INTERVAL_MS: number;
+}): NetworkSwitchConfig {
+  const required = parsed.MONITOR_NETWORK_SWITCH_REQUIRED === "true";
+  const raw = {
+    exporterUrl: parsed.MONITOR_NETWORK_SWITCH_EXPORTER_URL.trim(),
+    target: parsed.MONITOR_NETWORK_SWITCH_TARGET.trim(),
+    model: parsed.MONITOR_NETWORK_SWITCH_MODEL.trim(),
+    firmwareVersion: parsed.MONITOR_NETWORK_SWITCH_FIRMWARE_VERSION.trim(),
+    ports: parsed.MONITOR_NETWORK_SWITCH_PORTS_JSON.trim()
+  };
+  const configuredValues = Object.values(raw).filter(Boolean).length;
+  if (configuredValues === 0) {
+    if (required) throw new Error("Required network-switch monitoring is not configured.");
+    return {
+      required,
+      configured: false,
+      exporterUrl: null,
+      target: null,
+      model: null,
+      firmwareVersion: null,
+      ports: [],
+      pollIntervalMs: parsed.MONITOR_NETWORK_SWITCH_POLL_INTERVAL_MS
+    };
+  }
+  if (configuredValues !== Object.keys(raw).length) throw new Error("Network-switch monitoring requires exporter URL, target, model, firmware, and port bindings together.");
+  const exporterUrl = parseInternalExporterUrl(raw.exporterUrl);
+  if (!/^(?:[a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+$|^(?:\d{1,3}\.){3}\d{1,3}$/.test(raw.target) || raw.target.length > 253) {
+    throw new Error("MONITOR_NETWORK_SWITCH_TARGET must be a hostname or IPv4 address without credentials or a port.");
+  }
+  let ports: NetworkSwitchPortBinding[];
+  try {
+    ports = z.array(z.object({
+      id: z.string().regex(/^(?:[1-9]|1[0-2])$/),
+      name: z.string().trim().min(1).max(80),
+      role: z.enum(["access_point", "router_uplink", "other"]),
+      expected: z.boolean()
+    }).strict()).min(1).max(12).parse(JSON.parse(raw.ports));
+  } catch {
+    throw new Error("MONITOR_NETWORK_SWITCH_PORTS_JSON must contain valid port bindings for ports 1-12.");
+  }
+  if (new Set(ports.map((portBinding) => portBinding.id)).size !== ports.length) throw new Error("Network-switch port ids must be unique.");
+  return {
+    required,
+    configured: true,
+    exporterUrl,
+    target: raw.target,
+    model: raw.model,
+    firmwareVersion: raw.firmwareVersion,
+    ports,
+    pollIntervalMs: parsed.MONITOR_NETWORK_SWITCH_POLL_INTERVAL_MS
+  };
+}
+
+function parseInternalExporterUrl(raw: string): string {
+  const value = new URL(raw);
+  if (value.protocol !== "http:" || value.username || value.password || value.search || value.hash || !["", "/"].includes(value.pathname)) {
+    throw new Error("MONITOR_NETWORK_SWITCH_EXPORTER_URL must be a credential-free internal HTTP origin.");
+  }
+  return value.toString().replace(/\/+$/, "");
 }
 
 export type UniFiAccessPointBinding = {

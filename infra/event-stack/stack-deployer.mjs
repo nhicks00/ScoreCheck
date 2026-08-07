@@ -926,6 +926,9 @@ export function roleConfigBindings(repoRoot, secretsDirectory, spec) {
     [join(repoRoot, "infra/monitoring/.generated/service.env"), "/opt/scorecheck-monitoring/.env"],
     [join(repoRoot, "infra/monitoring/.generated/prometheus.yml"), "/opt/scorecheck-monitoring/.generated/prometheus.yml"],
     [join(repoRoot, "infra/monitoring/.generated/alertmanager.yml"), "/opt/scorecheck-monitoring/.generated/alertmanager.yml"],
+    [join(repoRoot, "infra/monitoring/.generated/snmp.env"), "/opt/scorecheck-monitoring/.generated/snmp.env"],
+    [join(repoRoot, "infra/monitoring/snmp/linovision-auth.yml"), "/opt/scorecheck-monitoring/snmp/linovision-auth.yml"],
+    [join(repoRoot, "infra/monitoring/snmp/linovision-poe.yml"), "/opt/scorecheck-monitoring/snmp/linovision-poe.yml"],
     [join(repoRoot, "infra/monitoring/rules/scorecheck.rules.yml"), "/opt/scorecheck-monitoring/rules/scorecheck.rules.yml"],
     [join(repoRoot, "infra/event-stack/supabase-fault-proxy.mjs"), "/opt/scorecheck-monitoring/fault-gates/supabase-fault-proxy.mjs"],
     [join(repoRoot, "infra/event-stack/supabase-fault-proxy-service.mjs"), "/opt/scorecheck-monitoring/fault-gates/supabase-fault-proxy-service.mjs"]
@@ -952,7 +955,7 @@ function verificationCommand(role) {
   if (["compositor", "compositor-spare"].includes(role)) {
     return `${agent} && test \"$(docker inspect bvm-renderer --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')\" = healthy && curl -fsS http://127.0.0.1:3000/api/program/renderer-binding >/dev/null && test \"$(docker inspect bvm-program-warmer --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')\" = healthy && test -s /var/lib/scorecheck-monitoring/program-warmer/state.json && test \"$(docker inspect bvm-egress --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')\" = healthy && curl -fsS http://127.0.0.1:9090/metrics >/dev/null`;
   }
-  if (role === "observability") return `${agent} && cd /opt/scorecheck-monitoring && docker compose ps --status running --quiet | grep -q . && docker compose exec -T monitor-service node -e 'if(process.env.MONITOR_UNIFI_REQUIRED!=="true")process.exit(0);fetch("http://127.0.0.1:9110/v1/snapshot",{headers:{authorization:"Bearer "+process.env.MONITOR_API_TOKEN}}).then(async response=>{if(!response.ok)throw new Error("snapshot unavailable");const body=await response.json();if(body.unifi?.state!=="HEALTHY")throw new Error("UniFi venue Wi-Fi is not healthy")}).catch(error=>{console.error(error.message);process.exit(1)})'`;
+  if (role === "observability") return `${agent} && cd /opt/scorecheck-monitoring && docker compose ps --status running --quiet | grep -q . && docker compose exec -T monitor-service node -e 'fetch("http://127.0.0.1:9110/v1/snapshot",{headers:{authorization:"Bearer "+process.env.MONITOR_API_TOKEN}}).then(async response=>{if(!response.ok)throw new Error("snapshot unavailable");const body=await response.json();if(process.env.MONITOR_UNIFI_REQUIRED==="true"&&body.unifi?.state!=="HEALTHY")throw new Error("UniFi venue Wi-Fi is not healthy");if(process.env.MONITOR_NETWORK_SWITCH_REQUIRED==="true"&&body.networkSwitch?.state!=="HEALTHY")throw new Error("venue PoE switch is not healthy")}).catch(error=>{console.error(error.message);process.exit(1)})'`;
   throw new Error(`unsupported verification role ${role}`);
 }
 

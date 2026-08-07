@@ -24,6 +24,7 @@ import { LocalIncidentOutbox } from "./localIncidentOutbox.js";
 import { replayDurableOutbox } from "./durableOutboxReplay.js";
 import { RouterHeartbeatManager } from "./routerHeartbeats.js";
 import { UniFiCollector } from "./unifi.js";
+import { NetworkSwitchCollector } from "./networkSwitch.js";
 
 const config = loadServiceConfig();
 const app = express();
@@ -107,6 +108,17 @@ const unifiAccessPointCpu = new Gauge({ name: "scorecheck_unifi_access_point_cpu
 const unifiAccessPointMemory = new Gauge({ name: "scorecheck_unifi_access_point_memory_utilization_percent", help: "Latest UniFi access-point memory utilization percentage.", labelNames: ["access_point"], registers: [registry] });
 const unifiRadioRetries = new Gauge({ name: "scorecheck_unifi_radio_tx_retries_percent", help: "Latest Wi-Fi transmit retry percentage by access point and radio frequency.", labelNames: ["access_point", "frequency_ghz"], registers: [registry] });
 const unifiConnectedClients = new Gauge({ name: "scorecheck_unifi_connected_clients", help: "Current clients reported by the commissioned UniFi site.", registers: [registry] });
+const networkSwitchConfigured = new Gauge({ name: "scorecheck_network_switch_configured", help: "Whether the venue PoE switch is commissioned for monitoring.", registers: [registry] });
+const networkSwitchUp = new Gauge({ name: "scorecheck_network_switch_up", help: "PoE switch telemetry state: 1 reachable, 0 unavailable, -1 not configured or not yet sampled.", registers: [registry] });
+const networkSwitchPortUp = new Gauge({ name: "scorecheck_network_switch_port_up", help: "Whether a commissioned venue switch port has an operational Ethernet link.", labelNames: ["port", "name", "role"], registers: [registry] });
+const networkSwitchPortSpeed = new Gauge({ name: "scorecheck_network_switch_port_speed_mbps", help: "Negotiated venue switch port speed in megabits per second.", labelNames: ["port", "name", "role"], registers: [registry] });
+const networkSwitchPortRx = new Gauge({ name: "scorecheck_network_switch_port_receive_bits_per_second", help: "Current receive traffic rate by venue switch port.", labelNames: ["port", "name", "role"], registers: [registry] });
+const networkSwitchPortTx = new Gauge({ name: "scorecheck_network_switch_port_transmit_bits_per_second", help: "Current transmit traffic rate by venue switch port.", labelNames: ["port", "name", "role"], registers: [registry] });
+const networkSwitchPortErrors = new Gauge({ name: "scorecheck_network_switch_port_errors_per_second", help: "Combined input and output Ethernet errors by venue switch port.", labelNames: ["port", "name", "role"], registers: [registry] });
+const networkSwitchPortDiscards = new Gauge({ name: "scorecheck_network_switch_port_discards_per_second", help: "Combined input and output discarded packets by venue switch port.", labelNames: ["port", "name", "role"], registers: [registry] });
+const networkSwitchPortPoePower = new Gauge({ name: "scorecheck_network_switch_port_poe_power_watts", help: "Current PoE power delivered by venue switch port.", labelNames: ["port", "name"], registers: [registry] });
+const networkSwitchPoeConsumption = new Gauge({ name: "scorecheck_network_switch_poe_consumption_watts", help: "Current aggregate PoE power consumed by the venue switch.", registers: [registry] });
+const networkSwitchPoeBudget = new Gauge({ name: "scorecheck_network_switch_poe_budget_watts", help: "Total PoE power budget of the venue switch.", registers: [registry] });
 const runtimes = new Map<string, AgentRuntime>(config.targets.map((target) => [target.id, {
   target,
   snapshot: null,
@@ -133,6 +145,7 @@ const faultGateControl = new FaultGateControl();
 const browserCounterAccumulator = new BrowserCounterAccumulator();
 const routerHeartbeats = new RouterHeartbeatManager();
 const unifiCollector = new UniFiCollector(config.unifi);
+const networkSwitchCollector = new NetworkSwitchCollector(config.networkSwitch);
 let deadManMaintenanceRunning = false;
 let agentPollRunning = false;
 let outboxFlushRunning = false;
@@ -447,7 +460,8 @@ async function pollAllOnce() {
   await Promise.all([
     ...config.targets.map((target) => pollAgent(target)),
     controlPlane.refresh().catch(() => null),
-    unifiCollector.refresh()
+    unifiCollector.refresh(),
+    networkSwitchCollector.refresh()
   ]);
   snapshot = currentSnapshot();
   snapshotGenerated.set(Date.parse(snapshot.generatedAt) / 1_000);
@@ -537,6 +551,32 @@ async function pollAllOnce() {
       setOptionalGauge(unifiRadioRetries, { ...labels, frequency_ghz: String(radio.frequencyGHz) }, radio.txRetriesPct);
     }
   }
+  const networkSwitch = snapshot.networkSwitch;
+  networkSwitchConfigured.set(networkSwitch.configured ? 1 : 0);
+  networkSwitchUp.set(networkSwitch.reachable == null ? -1 : networkSwitch.reachable ? 1 : 0);
+  networkSwitchPortUp.reset();
+  networkSwitchPortSpeed.reset();
+  networkSwitchPortRx.reset();
+  networkSwitchPortTx.reset();
+  networkSwitchPortErrors.reset();
+  networkSwitchPortDiscards.reset();
+  networkSwitchPortPoePower.reset();
+  networkSwitchPoeConsumption.reset();
+  networkSwitchPoeBudget.reset();
+  for (const port of networkSwitch.ports) {
+    const labels = { port: port.id, name: port.name, role: port.role };
+    if (port.operationalUp != null) networkSwitchPortUp.set(labels, port.operationalUp ? 1 : 0);
+    setOptionalGauge(networkSwitchPortSpeed, labels, port.speedMbps);
+    setOptionalGauge(networkSwitchPortRx, labels, port.rxBps);
+    setOptionalGauge(networkSwitchPortTx, labels, port.txBps);
+    setOptionalGauge(networkSwitchPortErrors, labels, port.inputErrorsPerSecond == null || port.outputErrorsPerSecond == null
+      ? null : port.inputErrorsPerSecond + port.outputErrorsPerSecond);
+    setOptionalGauge(networkSwitchPortDiscards, labels, port.inputDiscardsPerSecond == null || port.outputDiscardsPerSecond == null
+      ? null : port.inputDiscardsPerSecond + port.outputDiscardsPerSecond);
+    setOptionalGauge(networkSwitchPortPoePower, { port: port.id, name: port.name }, port.poe?.powerWatts ?? null);
+  }
+  setOptionalGauge(networkSwitchPoeConsumption, {}, networkSwitch.poe.consumptionWatts);
+  setOptionalGauge(networkSwitchPoeBudget, {}, networkSwitch.poe.budgetWatts);
   for (const court of snapshot.courts) {
     const labels = { court: String(court.courtNumber) };
     const browser = court.browser;
@@ -624,7 +664,8 @@ function currentSnapshot(): MonitorSnapshot {
     silences,
     faultGateControl.active(),
     routerHeartbeats.current(),
-    unifiCollector.current()
+    unifiCollector.current(),
+    networkSwitchCollector.current()
   );
 }
 

@@ -1,0 +1,9 @@
+auths:
+  scorecheck_linovision_v3:
+    version: 3
+    security_level: authPriv
+    username: ${LINOVISION_SNMP_USER}
+    password: ${LINOVISION_SNMP_AUTH_PASSWORD}
+    auth_protocol: SHA
+    priv_protocol: AES
+    priv_password: ${LINOVISION_SNMP_PRIV_PASSWORD}

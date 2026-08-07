@@ -74,6 +74,7 @@ prometheus_before=""
 alertmanager_before=""
 caddy_before=""
 node_exporter_before=""
+snmp_exporter_before=""
 provenance_paths=(
   .dockerignore
   Dockerfile
@@ -106,7 +107,7 @@ wait_for_monitor() {
 
 assert_static_container_ids() {
   local service before_variable current
-  for service in prometheus alertmanager caddy node-exporter; do
+  for service in prometheus alertmanager caddy node-exporter snmp-exporter; do
     before_variable="${service//-/_}_before"
     current="$(compose ps -q "$service")"
     if [[ -z "$current" || "$current" != "${!before_variable}" ]]; then
@@ -269,7 +270,7 @@ trap 'exit 129' HUP
 
 for path in \
   docker-compose.yml Caddyfile .env .generated/prometheus.yml \
-  .generated/alertmanager.yml rules src; do
+  .generated/alertmanager.yml .generated/snmp.env rules snmp src; do
   if [[ ! -e "$REMOTE_DIR/$path" ]]; then
     echo "Live observability stack is incomplete at $path; use provisioning instead." >&2
     exit 1
@@ -279,7 +280,7 @@ for path in \
   .dockerignore docker-compose.yml Caddyfile .env Dockerfile package.json \
   package-lock.json tsconfig.json test-alertmanager-inhibition.mjs \
   remote-deploy.sh remote-provision.sh replace-agent-targets.sh .generated/prometheus.yml .generated/alertmanager.yml \
-  fault-gates rules src; do
+  .generated/snmp.env fault-gates rules snmp src; do
   if [[ ! -e "$CANDIDATE_DIR/$path" ]]; then
     echo "Candidate is incomplete at $path." >&2
     exit 1
@@ -294,7 +295,7 @@ fi
 
 # Routine releases must not silently become infrastructure cutovers. Caddy,
 # Alertmanager, and Compose topology changes require a separately reviewed plan.
-for path in docker-compose.yml Caddyfile .generated/alertmanager.yml; do
+for path in docker-compose.yml Caddyfile .generated/alertmanager.yml .generated/snmp.env snmp/linovision-auth.yml snmp/linovision-poe.yml; do
   if ! cmp -s "$REMOTE_DIR/$path" "$CANDIDATE_DIR/$path"; then
     echo "Routine deployment rejected infrastructure change at $path." >&2
     exit 1
@@ -317,10 +318,22 @@ chmod 0444 \
 prometheus_image='prom/prometheus:v3.13.1@sha256:3c42b892cf723fa54d2f262c37a0e1f80aa8c8ddb1da7b9b0df9455a35a7f893'
 alertmanager_image='prom/alertmanager:v0.33.1@sha256:9e082985f56f4c8c9f724e18f2288c6708f472e56a5286b8863d080434ea065d'
 node_image='node:22.23.1-alpine3.24@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2'
+snmp_exporter_image='prom/snmp-exporter:v0.30.1@sha256:e5fd5e8b43ace6c088fe9bf0b37b7fff0e04380bee352be7ec41b853a4dd5859'
 
 retry_docker_operation docker pull --quiet "$prometheus_image"
 retry_docker_operation docker pull --quiet "$alertmanager_image"
 retry_docker_operation docker pull --quiet "$node_image"
+retry_docker_operation docker pull --quiet "$snmp_exporter_image"
+
+docker run --rm --network none --read-only --cap-drop ALL \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
+  --env-file "$CANDIDATE_DIR/.generated/snmp.env" \
+  -v "$CANDIDATE_DIR/snmp/linovision-auth.yml:/etc/snmp_exporter/linovision-auth.yml:ro" \
+  -v "$CANDIDATE_DIR/snmp/linovision-poe.yml:/etc/snmp_exporter/linovision-poe.yml:ro" \
+  "$snmp_exporter_image" --dry-run --config.expand-environment-variables \
+  --config.file=/etc/snmp_exporter/snmp.yml \
+  --config.file=/etc/snmp_exporter/linovision-auth.yml \
+  --config.file=/etc/snmp_exporter/linovision-poe.yml >/dev/null
 
 docker run --rm --network none --read-only --cap-drop ALL \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m --entrypoint promtool \
@@ -365,7 +378,8 @@ prometheus_before="$(compose ps -q prometheus)"
 alertmanager_before="$(compose ps -q alertmanager)"
 caddy_before="$(compose ps -q caddy)"
 node_exporter_before="$(compose ps -q node-exporter)"
-for value in "$monitor_before" "$prometheus_before" "$alertmanager_before" "$caddy_before" "$node_exporter_before"; do
+snmp_exporter_before="$(compose ps -q snmp-exporter)"
+for value in "$monitor_before" "$prometheus_before" "$alertmanager_before" "$caddy_before" "$node_exporter_before" "$snmp_exporter_before"; do
   if [[ -z "$value" || "$(docker inspect "$value" --format '{{.State.Running}}')" != "true" ]]; then
     echo "Every observability service must be running before a staged deployment." >&2
     exit 1
