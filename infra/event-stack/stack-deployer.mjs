@@ -546,7 +546,7 @@ export class LocalStackDeployer {
 }
 
 export function clockVerificationCommand() {
-  return "sync=$(timedatectl show --property=NTPSynchronized --value) && offset=$(timedatectl timesync-status --no-pager | awk '$1 == \"Offset:\" { print $2; exit }') && test -n \"$offset\" && printf '%s %s\\n' \"$sync\" \"$offset\"";
+  return "export LC_ALL=C && sync=$(timedatectl show --property=NTPSynchronized --value) && offset=$(timedatectl timesync-status --no-pager | awk '$1 == \"Offset:\" { print $2; exit }') && test -n \"$offset\" && printf '%s %s\\n' \"$sync\" \"$offset\"";
 }
 
 export function evaluateClockProbe({ stdout, startedAtMs, endedAtMs }) {
@@ -554,11 +554,13 @@ export function evaluateClockProbe({ stdout, startedAtMs, endedAtMs }) {
     throw new Error("clock probe timestamps are invalid");
   }
   const roundTripMs = endedAtMs - startedAtMs;
-  const match = String(stdout ?? "").trim().match(/^(yes|no)\s+([+-]?\d+(?:\.\d+)?)(ns|us|ms|s)$/u);
-  if (!match) throw new Error("clock probe response is invalid");
+  const response = String(stdout ?? "").trim();
+  const match = response.match(/^(yes|no)\s+([+-]?\d+(?:\.\d+)?)(ns|us|ms|s)?$/u);
+  if (!match || (!match[3] && Number(match[2]) !== 0)) {
+    throw new Error(`clock probe response is invalid: ${JSON.stringify(response.slice(0, 160))}`);
+  }
   if (match[1] !== "yes") throw new Error("host clock is not NTP synchronized");
-  const scale = { ns: 1e-6, us: 1e-3, ms: 1, s: 1_000 }[match[3]];
-  const offsetMs = Number(match[2]) * scale;
+  const offsetMs = match[3] ? Number(match[2]) * { ns: 1e-6, us: 1e-3, ms: 1, s: 1_000 }[match[3]] : 0;
   if (Math.abs(offsetMs) > MAX_CLOCK_OFFSET_MS) {
     throw new Error(`host clock offset ${offsetMs}ms exceeds ${MAX_CLOCK_OFFSET_MS}ms`);
   }

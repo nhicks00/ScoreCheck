@@ -205,6 +205,7 @@ test("builds one private monitoring target per exact event resource", () => {
 });
 
 test("requires synchronized event-host clocks with a bounded measured offset", () => {
+  assert.match(clockVerificationCommand(), /LC_ALL=C/u);
   assert.match(clockVerificationCommand(), /NTPSynchronized/u);
   assert.match(clockVerificationCommand(), /timesync-status/u);
   assert.deepEqual(
@@ -214,6 +215,7 @@ test("requires synchronized event-host clocks with a bounded measured offset", (
   assert.equal(evaluateClockProbe({ stdout: "yes -250us\n", startedAtMs: 0, endedAtMs: 10 }).offsetMs, -0.25);
   assert.equal(evaluateClockProbe({ stdout: "yes +500000ns\n", startedAtMs: 0, endedAtMs: 10 }).offsetMs, 0.5);
   assert.equal(evaluateClockProbe({ stdout: "yes -0.5s\n", startedAtMs: 0, endedAtMs: 10 }).offsetMs, -500);
+  assert.equal(evaluateClockProbe({ stdout: "yes +0\n", startedAtMs: 0, endedAtMs: 10 }).offsetMs, 0);
   assert.throws(
     () => evaluateClockProbe({ stdout: "no +3ms\n", startedAtMs: 1_784_700_000_000, endedAtMs: 1_784_700_000_200 }),
     /not NTP synchronized/u
@@ -224,7 +226,11 @@ test("requires synchronized event-host clocks with a bounded measured offset", (
   );
   assert.throws(
     () => evaluateClockProbe({ stdout: "yes unavailable\n", startedAtMs: 1_784_700_000_000, endedAtMs: 1_784_700_000_200 }),
-    /response is invalid/u
+    /response is invalid: "yes unavailable"/u
+  );
+  assert.throws(
+    () => evaluateClockProbe({ stdout: "yes +1\n", startedAtMs: 1_784_700_000_000, endedAtMs: 1_784_700_000_200 }),
+    /response is invalid: "yes \+1"/u
   );
 });
 
