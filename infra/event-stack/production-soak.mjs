@@ -40,6 +40,7 @@ const WHEP_COUNTER_FIELDS = Object.freeze([...BROWSER_COUNTER_FIELDS, "packetsLo
 const ROUTER_INTERVAL_MS = 60_000;
 const ROUTER_MAX_GAP_MS = 75_000;
 const ROUTER_MIN_MEMORY_KB = 65_536;
+const PEPLINK_MAX_SAMPLE_AGE_MS = 90_000;
 const MONITOR_READ_RETRY_DELAYS_MS = Object.freeze([1_000, 2_500, 5_000]);
 // RUNNING begins after output stabilization, so a sustained final cgroup floor
 // this far above the initial floor is retained growth rather than cold start.
@@ -139,7 +140,11 @@ export class ProductionSoakRuntime {
       ];
       if (problems.length) throw new Error(`production soak cannot arm: ${problems.slice(0, 8).join("; ")}`);
       if (!isSyntheticCloudFixtureVenue(this.venue.profile)) {
-        await this.router.preflight({ minimumUploadMbps: this.venue.requiredSustainedUploadMbpsRounded });
+        await this.router.preflight({
+          activeCameras: this.venue.activeCameras.length,
+          minimumUploadMbps: this.venue.requiredSustainedUploadMbpsRounded,
+          snapshot
+        });
       }
       state = createState({
         event: this.manifest.event,
@@ -185,7 +190,13 @@ export class ProductionSoakRuntime {
       await writeState(statePath, state);
       state.router = isSyntheticCloudFixtureVenue(this.venue.profile)
         ? { status: "NOT_APPLICABLE", reason: "synthetic-cloud-fixture" }
-        : await this.router.start({ event: this.manifest.event, durationSeconds: Math.ceil(this.options.maximumDurationMs / 1_000) + 600 });
+        : await this.router.start({
+          event: this.manifest.event,
+          durationSeconds: Math.ceil(this.options.maximumDurationMs / 1_000) + 600,
+          activeCameras: this.venue.activeCameras.length,
+          minimumUploadMbps: this.venue.requiredSustainedUploadMbpsRounded,
+          snapshot: await this.#snapshot()
+        });
       await writeState(statePath, state);
     }
 
@@ -511,6 +522,14 @@ export class ProductionSoakRuntime {
     const viewerEvidence = await readViewerProbes(viewerPath, state.runId);
     const routerEvidence = state.router?.status === "NOT_APPLICABLE"
       ? { status: "NOT_APPLICABLE", reason: "synthetic-cloud-fixture", problems: [] }
+      : state.router?.kind === "peplink-monitor"
+        ? evaluatePeplinkRouterEvidence({
+          samples,
+          startMs: Date.parse(state.startedAt),
+          endMs: endedMs,
+          activeCameras: this.venue.activeCameras.length,
+          minimumUploadMbps: this.venue.requiredSustainedUploadMbpsRounded
+        })
       : await readAndEvaluateSpeedifyEvidence({
         path: state.router.localPath,
         startMs: Date.parse(state.startedAt),
@@ -831,7 +850,13 @@ export function productionIdleProblems(snapshot, venue, nowMs = Date.now()) {
     const court = courtByNumber(snapshot, camera, problems);
     if (!court) continue;
     if (court.browser && freshAge(nowMs - Date.parse(court.browser.receivedAt))) problems.push(`Camera ${camera} has a browser before the soak starts`);
-    for (const branch of ["raw", "normalized", "preview", "program"]) {
+    const raw = court.paths?.raw;
+    if (venue.activeCameras.includes(camera)) {
+      if ((raw?.readerCount ?? 0) > 1) problems.push(`Camera ${camera} raw path has an unexpected pre-soak reader`);
+    } else if (raw?.ready || (raw?.readerCount ?? 0) !== 0) {
+      problems.push(`Camera ${camera} raw is occupied before the soak starts`);
+    }
+    for (const branch of ["normalized", "preview", "program"]) {
       const path = court.paths?.[branch];
       if (path?.ready || (path?.readerCount ?? 0) !== 0) problems.push(`Camera ${camera} ${branch} is occupied before the soak starts`);
     }
@@ -1274,6 +1299,96 @@ export function evaluateSpeedifyEvidence({ content, startMs, endMs, activeCamera
   };
 }
 
+export function productionPeplinkRouterProblems(router, { nowMs, activeCameras, minimumUploadMbps }) {
+  const problems = [];
+  if (!router?.configured || router.required !== true) problems.push("commissioned Peplink monitoring is not required and configured");
+  if (router?.state !== "HEALTHY" || router.apiReachable !== true || router.problems?.length) problems.push("Peplink router monitoring is not healthy");
+  const sampledAtMs = Date.parse(router?.sampledAt ?? "");
+  if (!Number.isFinite(sampledAtMs) || nowMs - sampledAtMs < -5_000 || nowMs - sampledAtMs > PEPLINK_MAX_SAMPLE_AGE_MS) problems.push("Peplink router telemetry is stale");
+  if (!router?.identity?.online || !Number.isFinite(router.identity.uptimeSeconds)) problems.push("Peplink router is not online with uptime telemetry");
+  if (!Number.isFinite(router?.resources?.cpuUtilizationPct) || router.resources.cpuUtilizationPct >= 90) problems.push("Peplink CPU utilization is unavailable or at least 90%");
+  if (!Number.isFinite(router?.resources?.memoryUtilizationPct) || router.resources.memoryUtilizationPct >= 90) problems.push("Peplink memory utilization is unavailable or at least 90%");
+  const requiredWans = Array.isArray(router?.wans) ? router.wans.filter((wan) => wan.required) : [];
+  if (requiredWans.length < 2 || requiredWans.some((wan) => !wan.enabled || !wan.connected)) problems.push("Peplink required WANs are not all enabled and connected");
+  const speedFusion = router?.speedFusion;
+  if (!speedFusion?.connected || speedFusion.profileStatus !== "CONNECTED" || speedFusion.peerStatus !== "CONNECTED" || speedFusion.transport !== "UDP") problems.push("Peplink SpeedFusion is not continuously connected over UDP");
+  if (speedFusion?.suspended !== false) problems.push("Peplink SpeedFusion service is suspended or unavailable");
+  if (!Number.isFinite(speedFusion?.rateLimitMbps) || speedFusion.rateLimitMbps < minimumUploadMbps) problems.push("Peplink SpeedFusion rate limit is below the event requirement");
+  if (!Number.isFinite(speedFusion?.quotaMb) || !Number.isFinite(speedFusion?.usageMb) || speedFusion.usageMb >= speedFusion.quotaMb) problems.push("Peplink SpeedFusion quota is unavailable or exhausted");
+  if (speedFusion?.linksAvailable !== true || !Array.isArray(speedFusion.links)) problems.push("Peplink SpeedFusion link telemetry is unavailable");
+  const links = speedFusion?.links ?? [];
+  for (const wan of requiredWans) {
+    const link = links.find((entry) => entry.name === wan.name);
+    if (!link || link.state !== "ACTIVE") problems.push(`Peplink SpeedFusion link ${wan.name} is not active`);
+  }
+  if (!Number.isInteger(activeCameras) || activeCameras < 1 || activeCameras > 8) problems.push("Peplink active-camera count is invalid");
+  return unique(problems);
+}
+
+export function evaluatePeplinkRouterEvidence({ samples, startMs, endMs, activeCameras, minimumUploadMbps }) {
+  if (!Array.isArray(samples) || !Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) throw new Error("Peplink router evidence window is invalid");
+  const inWindow = samples.filter((sample) => {
+    const observedAtMs = Date.parse(sample?.observedAt ?? sample?.monitor?.generatedAt ?? "");
+    return Number.isFinite(observedAtMs) && observedAtMs >= startMs && observedAtMs <= endMs;
+  });
+  const observations = [];
+  for (const sample of inWindow) {
+    const router = sample?.monitor?.router;
+    const sampledAt = router?.sampledAt;
+    if (!sampledAt || observations.at(-1)?.sampledAt === sampledAt) continue;
+    observations.push({ sampledAt, router });
+  }
+  const problems = [];
+  if (observations.length === 0) problems.push("Peplink router evidence has no fresh observations in the soak window");
+  for (const observation of observations) {
+    problems.push(...productionPeplinkRouterProblems(observation.router, {
+      nowMs: Date.parse(observation.sampledAt),
+      activeCameras,
+      minimumUploadMbps
+    }));
+  }
+  let maximumGapMs = 0;
+  for (let index = 1; index < observations.length; index += 1) {
+    const gap = Date.parse(observations[index].sampledAt) - Date.parse(observations[index - 1].sampledAt);
+    maximumGapMs = Math.max(maximumGapMs, gap);
+    if (gap <= 0) problems.push("Peplink router timestamps are not strictly increasing");
+    const previousUptime = observations[index - 1].router?.identity?.uptimeSeconds;
+    const currentUptime = observations[index].router?.identity?.uptimeSeconds;
+    if (Number.isFinite(previousUptime) && Number.isFinite(currentUptime) && currentUptime < previousUptime) problems.push("Peplink router restarted during the soak");
+  }
+  if (maximumGapMs > PEPLINK_MAX_SAMPLE_AGE_MS) problems.push(`Peplink router maximum telemetry gap was ${maximumGapMs}ms`);
+  const firstObservedMs = observations.length ? Date.parse(observations[0].sampledAt) : null;
+  const lastObservedMs = observations.length ? Date.parse(observations.at(-1).sampledAt) : null;
+  const startEdgeMs = firstObservedMs == null ? null : firstObservedMs - startMs;
+  const endEdgeMs = lastObservedMs == null ? null : endMs - lastObservedMs;
+  if (startEdgeMs !== null && startEdgeMs > PEPLINK_MAX_SAMPLE_AGE_MS) problems.push(`Peplink router start edge gap was ${startEdgeMs}ms`);
+  if (endEdgeMs !== null && endEdgeMs > PEPLINK_MAX_SAMPLE_AGE_MS) problems.push(`Peplink router end edge gap was ${endEdgeMs}ms`);
+  const cpu = observations.map((entry) => entry.router?.resources?.cpuUtilizationPct).filter(Number.isFinite);
+  const memory = observations.map((entry) => entry.router?.resources?.memoryUtilizationPct).filter(Number.isFinite);
+  const cameraClients = observations.map((entry) => entry.router?.clients?.cameraWlanConnected).filter(Number.isInteger);
+  const linkRates = observations.flatMap((entry) => entry.router?.speedFusion?.links ?? []).map((link) => link.transmitBitrateBps).filter(Number.isFinite);
+  const linkLoss = observations.flatMap((entry) => entry.router?.speedFusion?.links ?? []).map((link) => link.transmitPacketLossPct).filter(Number.isFinite);
+  const routerProblems = unique(problems);
+  return {
+    schemaVersion: 2,
+    source: "peplink-monitor",
+    sha256: sha256(stableJson(observations)),
+    observedRows: observations.length,
+    firstObservedAt: observations[0]?.sampledAt ?? null,
+    lastObservedAt: observations.at(-1)?.sampledAt ?? null,
+    startEdgeMs,
+    endEdgeMs,
+    maximumGapMs,
+    maximumCpuUtilizationPct: cpu.length ? Math.max(...cpu) : null,
+    maximumMemoryUtilizationPct: memory.length ? Math.max(...memory) : null,
+    minimumCameraWlanConnected: cameraClients.length ? Math.min(...cameraClients) : null,
+    maximumLinkTransmitBitrateBps: linkRates.length ? Math.max(...linkRates) : null,
+    maximumLinkTransmitPacketLossPct: linkLoss.length ? Math.max(...linkLoss) : null,
+    problems: routerProblems,
+    passed: routerProblems.length === 0
+  };
+}
+
 function aggregateCadenceProblems(samples, profiles, activeCameras) {
   validateActiveCameras(activeCameras);
   if (samples.length < 2) return ["production soak has fewer than two monitor samples"];
@@ -1372,14 +1487,32 @@ function plainEnglishAlert(problems) {
 class RouterSoakRuntime {
   constructor({ host, runner = runCommand }) { this.host = validateRouterHost(host); this.runner = runner; }
 
-  async preflight({ minimumUploadMbps }) {
+  async preflight({ activeCameras, minimumUploadMbps, snapshot }) {
+    if (snapshot?.router?.configured) {
+      const problems = productionPeplinkRouterProblems(snapshot.router, {
+        nowMs: Date.parse(snapshot.generatedAt),
+        activeCameras,
+        minimumUploadMbps
+      });
+      if (problems.length) throw new Error(`venue router is not ready: ${problems.join("; ")}`);
+      return { healthy: true, kind: "peplink-monitor" };
+    }
     const result = await this.#ssh("test -x /usr/sbin/scorecheck-speedify-soak-recorder && /usr/sbin/scorecheck-speedify-routing status");
     const problems = productionRouterPreflightProblems(result.stdout, minimumUploadMbps);
     if (problems.length) throw new Error(`venue router is not ready: ${problems.join("; ")}`);
     return { healthy: true };
   }
 
-  async start({ event, durationSeconds }) {
+  async start({ event, durationSeconds, activeCameras, minimumUploadMbps, snapshot }) {
+    if (snapshot?.router?.configured) {
+      const problems = productionPeplinkRouterProblems(snapshot.router, {
+        nowMs: Date.parse(snapshot.generatedAt),
+        activeCameras,
+        minimumUploadMbps
+      });
+      if (problems.length) throw new Error(`venue router is not ready: ${problems.join("; ")}`);
+      return { status: "running", kind: "peplink-monitor", startedAt: new Date().toISOString(), sampledAt: snapshot.router.sampledAt };
+    }
     const logPath = `/root/scorecheck-production-soak-${event}.tsv`;
     const command = [
       "set -eu",
@@ -1402,6 +1535,7 @@ class RouterSoakRuntime {
   }
 
   async stopAndFetch(state, localPath) {
+    if (state?.kind === "peplink-monitor") return { ...state, status: "stopped", stoppedAt: new Date().toISOString() };
     if (!state?.pid || !state.logPath) throw new Error("router soak recorder state is invalid");
     await this.#ssh(`PID=${state.pid}; if kill -0 \"$PID\" 2>/dev/null; then kill -TERM \"$PID\"; fi; for n in 1 2 3 4 5 6 7 8 9 10; do kill -0 \"$PID\" 2>/dev/null || break; sleep 1; done; test ! -e /proc/\"$PID\"; test -s ${state.logPath}`);
     await this.runner("scp", ["-q", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", `${this.host}:${state.logPath}`, localPath]);

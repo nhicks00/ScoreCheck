@@ -7,6 +7,7 @@ import {
   browserDeltaProblems,
   assertProductionMonitorSnapshot,
   evaluateProductionSoak,
+  evaluatePeplinkRouterEvidence,
   evaluateHlsRuntimeEvidence,
   evaluateSpeedifyEvidence,
   ensureStartupObserver,
@@ -16,6 +17,7 @@ import {
   productionIdleProblems,
   productionProviderIdleProblems,
   productionProviderProblems,
+  productionPeplinkRouterProblems,
   productionRawProblems,
   productionRouterPreflightProblems,
   reconcileHostRecoveredEgress,
@@ -344,6 +346,18 @@ test("accepts an idle twelve-host baseline with all cameras off", () => {
   assert.deepEqual(productionIdleProblems(snapshot({ active: false }), venue, startedMs), []);
 });
 
+test("allows auto-publishing raw cameras while keeping every output branch idle", () => {
+  const current = snapshot({ active: false });
+  for (const camera of venue.activeCameras) current.courts[camera - 1].paths.raw = path("raw", 1, 3_000_000);
+  assert.deepEqual(productionIdleProblems(current, venue, startedMs), []);
+
+  current.courts[0].paths.preview = path("preview", 1);
+  current.courts[1].paths.raw.readerCount = 2;
+  const problems = productionIdleProblems(current, venue, startedMs);
+  assert.ok(problems.includes("Camera 1 preview is occupied before the soak starts"));
+  assert.ok(problems.includes("Camera 2 raw path has an unexpected pre-soak reader"));
+});
+
 test("requires healthy commissioned UniFi access points without making uncommissioned rehearsals depend on them", () => {
   const current = snapshot({ active: false });
   current.unifi = { required: true, state: "DEGRADED" };
@@ -601,6 +615,46 @@ test("qualifies continuous fail-closed Speedify evidence and rejects route drift
   assert.ok(failed.problems.includes("fewer than 6 camera flows reached the ingest endpoint"));
 });
 
+test("qualifies fresh Peplink SpeedFusion monitor evidence and rejects failed tunnel members", () => {
+  const first = peplinkRouter(startedMs, 43_200);
+  const second = peplinkRouter(startedMs + 30_000, 43_230);
+  assert.deepEqual(productionPeplinkRouterProblems(first, { nowMs: startedMs, activeCameras: 7, minimumUploadMbps: 32 }), []);
+
+  const accepted = evaluatePeplinkRouterEvidence({
+    samples: [
+      { observedAt: new Date(startedMs).toISOString(), monitor: { router: first } },
+      { observedAt: new Date(startedMs + 30_000).toISOString(), monitor: { router: second } }
+    ],
+    startMs: startedMs,
+    endMs: startedMs + 30_000,
+    activeCameras: 7,
+    minimumUploadMbps: 32
+  });
+  assert.equal(accepted.passed, true);
+  assert.equal(accepted.source, "peplink-monitor");
+  assert.equal(accepted.observedRows, 2);
+  assert.equal(accepted.maximumCpuUtilizationPct, 20);
+
+  const failedLink = structuredClone(second);
+  failedLink.speedFusion.links[1].state = "REMOTE_FAILURE";
+  const linkProblems = productionPeplinkRouterProblems(failedLink, { nowMs: startedMs + 30_000, activeCameras: 7, minimumUploadMbps: 32 });
+  assert.ok(linkProblems.includes("Peplink SpeedFusion link Cellular is not active"));
+
+  const restarted = peplinkRouter(startedMs + 30_000, 5);
+  const rejected = evaluatePeplinkRouterEvidence({
+    samples: [
+      { observedAt: new Date(startedMs).toISOString(), monitor: { router: first } },
+      { observedAt: new Date(startedMs + 30_000).toISOString(), monitor: { router: restarted } }
+    ],
+    startMs: startedMs,
+    endMs: startedMs + 30_000,
+    activeCameras: 7,
+    minimumUploadMbps: 32
+  });
+  assert.equal(rejected.passed, false);
+  assert.ok(rejected.problems.includes("Peplink router restarted during the soak"));
+});
+
 test("requires each selected output profile to be bound to encoder, renderer, and YouTube evidence", () => {
   const evidence = outputConformanceEvidence();
   assert.deepEqual(outputConformanceProblems(evidence, profiles, venue.activeCameras, runBinding), []);
@@ -693,6 +747,50 @@ function snapshot({ active = true, sampledMs = startedMs, framesMultiplier = 0 }
         browser: running ? browser(camera, sampledMs, framesMultiplier * fps) : null
       };
     })
+  };
+}
+
+function peplinkRouter(sampledMs, uptimeSeconds) {
+  return {
+    state: "HEALTHY",
+    required: true,
+    configured: true,
+    apiReachable: true,
+    sampledAt: new Date(sampledMs).toISOString(),
+    lastSuccessAt: new Date(sampledMs).toISOString(),
+    lastFailureAt: null,
+    identity: {
+      name: "scorecheck-event-router",
+      productName: "Peplink MAX BR1 Pro 5G",
+      productCode: "MAX-BR1-PRO-5GK-T-PRM",
+      hardwareVersion: "3",
+      firmwareVersion: "8.6.0 build 6450",
+      online: true,
+      uptimeSeconds
+    },
+    resources: { cpuUtilizationPct: 20, memoryUtilizationPct: 30 },
+    speedFusion: {
+      profileName: "SFC-SFO",
+      connected: true,
+      profileStatus: "CONNECTED",
+      peerStatus: "CONNECTED",
+      transport: "UDP",
+      rateLimitMbps: 200,
+      quotaMb: 1_000_000,
+      usageMb: 100_000,
+      suspended: false,
+      linksAvailable: true,
+      links: [
+        { name: "WAN", state: "ACTIVE", transmitBitrateBps: 12_000_000, transmitPacketLossPct: 0 },
+        { name: "Cellular", state: "ACTIVE", transmitBitrateBps: 9_000_000, transmitPacketLossPct: 0 }
+      ]
+    },
+    clients: { cameraWlanConnected: 7 },
+    wans: [
+      { id: "1", name: "WAN", required: true, enabled: true, connected: true },
+      { id: "2", name: "Cellular", required: true, enabled: true, connected: true }
+    ],
+    problems: []
   };
 }
 
