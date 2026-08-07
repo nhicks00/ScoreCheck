@@ -25,6 +25,11 @@ export class MonitoringExpectationRuntime {
       mapping[court.court_number] = court.id;
     }
     if (Object.keys(mapping).length !== activeCameras.length) throw new Error("production monitoring does not map every active camera");
+    const courtIds = Object.values(mapping);
+    const existing = await this.#request(`/rest/v1/court_monitoring_expectations?select=court_id&event_id=eq.${encodeURIComponent(eventId)}&court_id=in.(${courtIds.map(encodeURIComponent).join(",")})`);
+    if (!Array.isArray(existing) || existing.length !== 0) {
+      throw new Error("production monitoring requires no pre-existing expectations for active cameras");
+    }
     return { eventId, cameras: mapping };
   }
 
@@ -56,6 +61,15 @@ export class MonitoringExpectationRuntime {
       if (result[0]?.[field] !== row[field]) throw new Error(`Camera ${camera} monitoring expectation verification failed for ${field}`);
     }
     return { phase, observedAt, eventId: row.event_id, courtId: row.court_id };
+  }
+
+  async clear({ binding, camera, runId }) {
+    if (!binding || typeof binding.eventId !== "string" || typeof binding.cameras?.[camera] !== "string") throw new Error(`Camera ${camera} monitoring binding is invalid`);
+    const reason = expectationReason(runId, camera);
+    const path = `/rest/v1/court_monitoring_expectations?event_id=eq.${encodeURIComponent(binding.eventId)}&court_id=eq.${encodeURIComponent(binding.cameras[camera])}&override_created_by=eq.scorecheck-production-soak&override_reason=eq.${encodeURIComponent(reason)}`;
+    const result = await this.#request(path, { method: "DELETE", headers: { prefer: "return=representation" } });
+    if (!Array.isArray(result) || result.length !== 1) throw new Error(`Camera ${camera} monitoring expectation cleanup did not remove exactly one run-owned row`);
+    return { phase: "CLEARED", observedAt: new Date(this.now()).toISOString(), eventId: binding.eventId, courtId: binding.cameras[camera] };
   }
 
   async #request(path, options = {}) {
@@ -91,4 +105,9 @@ function validateCameras(value) {
   if (!Array.isArray(value) || value.length < 1 || value.length > 8 || value.some((camera, index) => !Number.isInteger(camera) || camera < 1 || camera > 8 || (index > 0 && camera <= value[index - 1]))) {
     throw new Error("production monitoring active cameras are invalid");
   }
+}
+
+function expectationReason(runId, camera) {
+  if (typeof runId !== "string" || runId.length < 1 || /[\r\n\0]/u.test(runId)) throw new Error("production monitoring run id is invalid");
+  return `Production soak ${runId} set Camera ${camera} testing.`;
 }

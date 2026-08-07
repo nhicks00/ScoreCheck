@@ -314,6 +314,7 @@ export class ProductionSoakRuntime {
           await stopPreOutputStartupResources({
             state,
             normalizer: this.normalizer,
+            expectations: this.expectations,
             sampler: this.sampler,
             sentinel: this.sentinel,
             criticalLogs: this.criticalLogs,
@@ -813,7 +814,7 @@ export async function stopStartupObservers({ state, sampler, sentinel, criticalL
   return state;
 }
 
-export async function stopPreOutputStartupResources({ state, normalizer, sampler, sentinel, criticalLogs, manifest, lifecycleState }) {
+export async function stopPreOutputStartupResources({ state, normalizer, expectations, sampler, sentinel, criticalLogs, manifest, lifecycleState }) {
   const failures = [];
   for (const [cameraText, current] of Object.entries(state.normalizers ?? {})) {
     if (!current?.required || !current.running) continue;
@@ -822,6 +823,15 @@ export async function stopPreOutputStartupResources({ state, normalizer, sampler
       state.normalizers[camera] = await normalizer.stop({ host: compositorHost(manifest, lifecycleState, camera), court: camera });
     } catch (error) {
       failures.push(`Camera ${camera} normalizer: ${safeError(error)}`);
+    }
+  }
+  for (const [cameraText, current] of Object.entries(state.monitoringExpectations ?? {})) {
+    if (!current || current.phase === "CLEARED") continue;
+    const camera = Number(cameraText);
+    try {
+      state.monitoringExpectations[camera] = await expectations.clear({ binding: state.monitoringBinding, camera, runId: state.runId });
+    } catch (error) {
+      failures.push(`Camera ${camera} monitoring expectation: ${safeError(error)}`);
     }
   }
   await stopStartupObservers({ state, sampler, sentinel, criticalLogs });

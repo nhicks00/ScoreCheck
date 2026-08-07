@@ -14,12 +14,14 @@ test("resolves exactly one active event and every requested camera", async () =>
     fetchImpl: async (url) => {
       requests.push(url.toString());
       if (url.pathname.endsWith("/events")) return response([{ id: "event-1" }]);
+      if (url.pathname.endsWith("/court_monitoring_expectations")) return response([]);
       return response([{ id: "court-1", court_number: 1 }, { id: "court-2", court_number: 2 }]);
     }
   });
   assert.deepEqual(await runtime.resolve([1, 2]), { eventId: "event-1", cameras: { 1: "court-1", 2: "court-2" } });
   assert.match(requests[0], /is_active=eq\.true/u);
   assert.match(requests[1], /court_number=in\.\(1%2C2\)|court_number=in\.\(1,2\)/u);
+  assert.match(requests[2], /court_monitoring_expectations/u);
 });
 
 test("fails closed on an absent event or incomplete camera mapping", async () => {
@@ -33,6 +35,18 @@ test("fails closed on an absent event or incomplete camera mapping", async () =>
     fetchImpl: async () => response(request++ === 0 ? [{ id: "event-1" }] : [{ id: "court-1", court_number: 1 }])
   });
   await assert.rejects(() => incomplete.resolve([1, 2]), /does not map every active camera/u);
+});
+
+test("rejects an active camera with a pre-existing monitoring expectation", async () => {
+  let request = 0;
+  const runtime = new MonitoringExpectationRuntime({
+    supabaseUrl: "https://project.supabase.co",
+    serviceRoleKey: key,
+    fetchImpl: async () => response(request++ === 0
+      ? [{ id: "event-1" }]
+      : request === 2 ? [{ id: "court-1", court_number: 1 }] : [{ court_id: "court-1" }])
+  });
+  await assert.rejects(() => runtime.resolve([1]), /no pre-existing expectations/u);
 });
 
 test("upserts and verifies testing and live expectations without requiring commentary", async () => {
@@ -53,6 +67,24 @@ test("upserts and verifies testing and live expectations without requiring comme
   assert.deepEqual(bodies.map((body) => body.broadcast_expectation), ["TESTING", "LIVE"]);
   assert.ok(bodies.every((body) => body.media_expectation === "REQUIRED" && body.commentary_expectation === "NONE" && body.scoring_expectation === "SCHEDULED"));
   assert.equal(bodies[0].override_expires_at, "2026-07-27T06:00:00.000Z");
+});
+
+test("clears exactly one expectation owned by the failed run", async () => {
+  const requests = [];
+  const runtime = new MonitoringExpectationRuntime({
+    supabaseUrl: "https://project.supabase.co",
+    serviceRoleKey: key,
+    now: () => nowMs,
+    fetchImpl: async (url, options) => {
+      requests.push({ url: url.toString(), options });
+      return response([{ court_id: "court-1" }]);
+    }
+  });
+  const result = await runtime.clear({ binding: { eventId: "event-1", cameras: { 1: "court-1" } }, camera: 1, runId: "run-1" });
+  assert.equal(result.phase, "CLEARED");
+  assert.equal(requests[0].options.method, "DELETE");
+  assert.match(requests[0].url, /override_created_by=eq\.scorecheck-production-soak/u);
+  assert.match(requests[0].url, /Production%20soak%20run-1%20set%20Camera%201%20testing\./u);
 });
 
 function response(body, status = 200) {

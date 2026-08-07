@@ -166,6 +166,7 @@ test("stops HEVC normalizers when startup fails before any output exists", async
   await stopPreOutputStartupResources({
     state,
     normalizer: { stop: async (value) => { calls.push(value); return { required: true, running: false, camera: 1, absent: true }; } },
+    expectations: { clear: async () => assert.fail("absent expectation must not be cleared") },
     sampler: { stop: async () => assert.fail("absent sampler must not be stopped") },
     sentinel: { stop: async () => assert.fail("absent sentinel must not be stopped") },
     criticalLogs: { stop: async () => assert.fail("absent logs must not be stopped") },
@@ -174,6 +175,28 @@ test("stops HEVC normalizers when startup fails before any output exists", async
   });
   assert.deepEqual(calls, [{ host: "198.51.100.1", court: 1 }]);
   assert.equal(state.normalizers[1].running, false);
+});
+
+test("clears run-owned monitoring expectations when startup fails before output", async () => {
+  const state = {
+    runId: "run-1",
+    startupFailure: { error: "startup failed" },
+    monitoringBinding: { eventId: "event-1", cameras: { 1: "court-1" } },
+    monitoringExpectations: { 1: { phase: "TESTING" } }
+  };
+  const calls = [];
+  await stopPreOutputStartupResources({
+    state,
+    normalizer: { stop: async () => assert.fail("absent normalizer must not be stopped") },
+    expectations: { clear: async (value) => { calls.push(value); return { phase: "CLEARED", observedAt: "2026-07-26T12:00:00Z" }; } },
+    sampler: { stop: async () => assert.fail("absent sampler must not be stopped") },
+    sentinel: { stop: async () => assert.fail("absent sentinel must not be stopped") },
+    criticalLogs: { stop: async () => assert.fail("absent logs must not be stopped") },
+    manifest: { droplets: [] },
+    lifecycleState: { droplets: {} }
+  });
+  assert.deepEqual(calls, [{ binding: state.monitoringBinding, camera: 1, runId: "run-1" }]);
+  assert.equal(state.monitoringExpectations[1].phase, "CLEARED");
 });
 
 test("recycles an idle worker before replaying an interrupted owned browser recovery", async () => {
