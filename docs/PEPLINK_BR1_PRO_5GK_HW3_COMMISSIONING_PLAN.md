@@ -1,12 +1,12 @@
 # ScoreCheck Peplink MAX BR1 Pro 5G HW3 Commissioning Plan
 
-Status: implementation plan for the incoming replacement router
+Status: partially commissioned on physical HW3; final eight-camera/AP/output gate remains open
 
 Target product: `MAX-BR1-PRO-5GK-T-PRM`, hardware revision 3
 
 Prepared: 2026-07-29
 
-Revised: 2026-08-04
+Revised: 2026-08-07
 
 Scope: venue router, Starlink, one internal cellular modem, SpeedFusion Connect,
 the PoE switch, three Ubiquiti access points, eight cameras, remote management,
@@ -93,6 +93,32 @@ Defer unless the initial evidence requires it:
 This keeps the test focused on the actual reliability question: whether the
 incoming router, three real WANs, the Ubiquiti radio layer, and eight physical
 cameras can sustain continuous unlisted 1080p program outputs.
+
+## Physical Commissioning Result Through 2026-08-07
+
+The replacement HW3 router is running firmware `8.6.0 build 6450`. The accepted
+profile uses SFC-SFO over UDP, Dynamic Weighted Bonding, Adaptive FEC, Low
+congestion latency, a 500 ms packet jitter buffer, 0 ms receive buffer, 500 ms
+latency-difference cutoff, forced fragmentation, and disabled bufferbloat
+packet dropping. WAN Smoothing and SpeedFusion Boost remain off.
+
+A full router reboot preserved firmware, profile settings, WAN priorities, and
+the protected SRT/RTMP outbound rules. Existing SRT sessions retired while the
+tunnel was unavailable and reopened only through SpeedFusion egress addresses;
+no direct source address reached ingest. This passes reboot persistence and
+fail-closed media routing for the seven physically present cameras.
+
+A 1,075-second Adaptive-FEC window kept Cameras 1-6 and 8 ready with stable
+source generations and zero frame errors. A matched 906-second FEC-off window
+preserved bitrate but increased received-retransmission share on five of seven
+streams and shifted almost all tunnel traffic onto WAN. Adaptive FEC was
+restored; all seven sessions reopened at 05:05:33Z and all seven raw paths were
+publishing by 05:05:37Z. Camera 7 remained physically absent.
+
+Detailed timestamps and reset-safe values are preserved under the protected
+event bundle in `evidence/20260807T0506Z-commissioning-and-fec-result.md`.
+This is not the final router qualification: all eight cameras, the three
+external APs, and eight unlisted outputs were not simultaneously available.
 
 ## Material Hardware Facts
 
@@ -584,7 +610,7 @@ Initial profile:
 | FEC | Adaptive | Add repair traffic only when measured loss requires it |
 | Packet jitter buffer | 500 ms | Covers the measured 50-245 ms WAN RTT spread; latency is not the priority |
 | Receive buffer | 0 ms | Avoid stacking a second large buffer with SRT recovery |
-| Latency-difference cutoff | 250 ms | Exclude a path that becomes far slower than the best path |
+| Latency-difference cutoff | 500 ms | Match the deployed, reboot-verified cutoff while excluding a path that becomes materially slower than the best path |
 | Transport | UDP `4500` | Avoid outer TCP head-of-line blocking |
 | Fragmentation | Always | Physical SRT evidence proved DF packets exceeded the SpeedFusion tunnel MTU |
 | SpeedFusion Boost | Off | Bounded physical-camera comparison did not improve delivery |
