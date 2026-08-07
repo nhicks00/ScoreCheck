@@ -26,11 +26,21 @@ fi
 
 node "$SCRIPT_DIR/render-agent-env.mjs"
 GENERATED_ENV="$SCRIPT_DIR/.generated/agent-$MONITOR_AGENT_ID.env"
-ssh_options=(-i "$SSH_KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS")
-rsync_shell="ssh -i $SSH_KEY -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS"
+ssh_options=(
+  -i "$SSH_KEY"
+  -o IdentitiesOnly=yes
+  -o BatchMode=yes
+  -o StrictHostKeyChecking=yes
+  -o UserKnownHostsFile="$KNOWN_HOSTS"
+  -o ConnectTimeout=15
+  -o ConnectionAttempts=3
+  -o ServerAliveInterval=5
+  -o ServerAliveCountMax=2
+)
+rsync_shell="ssh -i $SSH_KEY -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS -o ConnectTimeout=15 -o ConnectionAttempts=3 -o ServerAliveInterval=5 -o ServerAliveCountMax=2"
 
 ssh "${ssh_options[@]}" "$SSH_HOST" "mkdir -p '$REMOTE_DIR/.incoming'"
-rsync -a --delete -e "$rsync_shell" \
+rsync -a --delete --timeout=30 -e "$rsync_shell" \
   "$SCRIPT_DIR/src" \
   "$SCRIPT_DIR/package.json" \
   "$SCRIPT_DIR/package-lock.json" \
@@ -38,7 +48,7 @@ rsync -a --delete -e "$rsync_shell" \
   "$SCRIPT_DIR/Dockerfile" \
   "$SCRIPT_DIR/agent-compose.yml" \
   "$SSH_HOST:$REMOTE_DIR/.incoming/"
-rsync -a -e "$rsync_shell" "$GENERATED_ENV" "$SSH_HOST:$REMOTE_DIR/.incoming/.env"
+rsync -a --timeout=30 -e "$rsync_shell" "$GENERATED_ENV" "$SSH_HOST:$REMOTE_DIR/.incoming/.env"
 
 ssh "${ssh_options[@]}" "$SSH_HOST" "REMOTE_DIR='$REMOTE_DIR' MONITOR_IMAGE_REVISION='$REVISION' bash -s" <<'REMOTE'
 set -euo pipefail

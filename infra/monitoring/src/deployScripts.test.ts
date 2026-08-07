@@ -48,6 +48,14 @@ describe("staged observability deployment", () => {
     expect(deployAgent).toContain("install -d -m 0755 /var/lib/scorecheck-monitoring/egress-supervisor");
   });
 
+  it("bounds monitor-agent SSH and rsync transport stalls", () => {
+    expect(deployAgent).toContain("-o ConnectTimeout=15");
+    expect(deployAgent).toContain("-o ConnectionAttempts=3");
+    expect(deployAgent).toContain("-o ServerAliveInterval=5");
+    expect(deployAgent).toContain("-o ServerAliveCountMax=2");
+    expect(deployAgent.match(/rsync -a[^\n]*--timeout=30/g)).toHaveLength(2);
+  });
+
   it("selects a guarded first-provision transaction only for an empty live baseline", () => {
     expect(deploy).toContain('printf \'provision\\n\'');
     expect(deploy).toContain('printf \'deploy\\n\'');
