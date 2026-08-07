@@ -45,9 +45,9 @@ test("rejects an active camera with a pre-existing monitoring expectation", asyn
     now: () => nowMs,
     fetchImpl: async () => response(request++ === 0
       ? [{ id: "event-1" }]
-      : request === 2 ? [{ id: "court-1", court_number: 1 }] : [{ court_id: "court-1", override_expires_at: "2026-07-27T07:00:00Z" }])
+      : request === 2 ? [{ id: "court-1", court_number: 1 }] : [{ court_id: "court-1", override_created_by: "operator", override_expires_at: "2026-07-27T07:00:00Z" }])
   });
-  await assert.rejects(() => runtime.resolve([1]), /no pre-existing expectations/u);
+  await assert.rejects(() => runtime.resolve([1]), /no active pre-existing overrides/u);
 });
 
 test("allows an expired monitoring expectation to be replaced by the new run", async () => {
@@ -58,7 +58,20 @@ test("allows an expired monitoring expectation to be replaced by the new run", a
     now: () => nowMs,
     fetchImpl: async () => response(request++ === 0
       ? [{ id: "event-1" }]
-      : request === 2 ? [{ id: "court-1", court_number: 1 }] : [{ court_id: "court-1", override_expires_at: "2026-07-26T11:00:00Z" }])
+      : request === 2 ? [{ id: "court-1", court_number: 1 }] : [{ court_id: "court-1", override_created_by: "operator", override_expires_at: "2026-07-26T11:00:00Z" }])
+  });
+  assert.deepEqual(await runtime.resolve([1]), { eventId: "event-1", cameras: { 1: "court-1" } });
+});
+
+test("allows the canonical non-expiring OFF baseline", async () => {
+  let request = 0;
+  const runtime = new MonitoringExpectationRuntime({
+    supabaseUrl: "https://project.supabase.co",
+    serviceRoleKey: key,
+    now: () => nowMs,
+    fetchImpl: async () => response(request++ === 0
+      ? [{ id: "event-1" }]
+      : request === 2 ? [{ id: "court-1", court_number: 1 }] : [{ court_id: "court-1", override_created_by: null, override_expires_at: null }])
   });
   assert.deepEqual(await runtime.resolve([1]), { eventId: "event-1", cameras: { 1: "court-1" } });
 });
@@ -83,7 +96,7 @@ test("upserts and verifies testing and live expectations without requiring comme
   assert.equal(bodies[0].override_expires_at, "2026-07-27T06:00:00.000Z");
 });
 
-test("clears exactly one expectation owned by the failed run", async () => {
+test("restores exactly one expectation owned by the failed run to OFF", async () => {
   const requests = [];
   const runtime = new MonitoringExpectationRuntime({
     supabaseUrl: "https://project.supabase.co",
@@ -96,7 +109,19 @@ test("clears exactly one expectation owned by the failed run", async () => {
   });
   const result = await runtime.clear({ binding: { eventId: "event-1", cameras: { 1: "court-1" } }, camera: 1, runId: "run-1" });
   assert.equal(result.phase, "CLEARED");
-  assert.equal(requests[0].options.method, "DELETE");
+  assert.equal(requests[0].options.method, "PATCH");
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    coverage_phase: "OFF",
+    media_expectation: "OFF",
+    broadcast_expectation: "OFF",
+    commentary_expectation: "NONE",
+    scoring_expectation: "NONE",
+    override_created_by: null,
+    override_created_at: null,
+    override_reason: null,
+    override_expires_at: null,
+    updated_at: "2026-07-26T12:00:00.000Z"
+  });
   assert.match(requests[0].url, /override_created_by=eq\.scorecheck-production-soak/u);
   assert.match(requests[0].url, /Production%20soak%20run-1%20set%20Camera%201%20testing\./u);
 });

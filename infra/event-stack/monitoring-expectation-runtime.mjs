@@ -26,9 +26,9 @@ export class MonitoringExpectationRuntime {
     }
     if (Object.keys(mapping).length !== activeCameras.length) throw new Error("production monitoring does not map every active camera");
     const courtIds = Object.values(mapping);
-    const existing = await this.#request(`/rest/v1/court_monitoring_expectations?select=court_id,override_expires_at&event_id=eq.${encodeURIComponent(eventId)}&court_id=in.(${courtIds.map(encodeURIComponent).join(",")})`);
-    if (!Array.isArray(existing) || existing.some((row) => expectationIsActive(row, this.now()))) {
-      throw new Error("production monitoring requires no pre-existing expectations for active cameras");
+    const existing = await this.#request(`/rest/v1/court_monitoring_expectations?select=court_id,override_created_by,override_expires_at&event_id=eq.${encodeURIComponent(eventId)}&court_id=in.(${courtIds.map(encodeURIComponent).join(",")})`);
+    if (!Array.isArray(existing) || existing.some((row) => activeOverrideExists(row, this.now()))) {
+      throw new Error("production monitoring requires no active pre-existing overrides for active cameras");
     }
     return { eventId, cameras: mapping };
   }
@@ -67,9 +67,25 @@ export class MonitoringExpectationRuntime {
     if (!binding || typeof binding.eventId !== "string" || typeof binding.cameras?.[camera] !== "string") throw new Error(`Camera ${camera} monitoring binding is invalid`);
     const reason = expectationReason(runId, camera);
     const path = `/rest/v1/court_monitoring_expectations?event_id=eq.${encodeURIComponent(binding.eventId)}&court_id=eq.${encodeURIComponent(binding.cameras[camera])}&override_created_by=eq.scorecheck-production-soak&override_reason=eq.${encodeURIComponent(reason)}`;
-    const result = await this.#request(path, { method: "DELETE", headers: { prefer: "return=representation" } });
-    if (!Array.isArray(result) || result.length !== 1) throw new Error(`Camera ${camera} monitoring expectation cleanup did not remove exactly one run-owned row`);
-    return { phase: "CLEARED", observedAt: new Date(this.now()).toISOString(), eventId: binding.eventId, courtId: binding.cameras[camera] };
+    const observedAt = new Date(this.now()).toISOString();
+    const result = await this.#request(path, {
+      method: "PATCH",
+      headers: { prefer: "return=representation" },
+      body: JSON.stringify({
+        coverage_phase: "OFF",
+        media_expectation: "OFF",
+        broadcast_expectation: "OFF",
+        commentary_expectation: "NONE",
+        scoring_expectation: "NONE",
+        override_created_by: null,
+        override_created_at: null,
+        override_reason: null,
+        override_expires_at: null,
+        updated_at: observedAt
+      })
+    });
+    if (!Array.isArray(result) || result.length !== 1) throw new Error(`Camera ${camera} monitoring expectation cleanup did not restore exactly one run-owned row`);
+    return { phase: "CLEARED", observedAt, eventId: binding.eventId, courtId: binding.cameras[camera] };
   }
 
   async #request(path, options = {}) {
@@ -112,8 +128,10 @@ function expectationReason(runId, camera) {
   return `Production soak ${runId} set Camera ${camera} testing.`;
 }
 
-function expectationIsActive(row, nowMs) {
+function activeOverrideExists(row, nowMs) {
   if (!row || typeof row.court_id !== "string") return true;
+  if (row.override_created_by === null) return false;
+  if (typeof row.override_created_by !== "string" || row.override_created_by.length < 1) return true;
   if (row.override_expires_at === null) return true;
   const expiresAt = Date.parse(row.override_expires_at);
   return !Number.isFinite(expiresAt) || expiresAt > nowMs;
