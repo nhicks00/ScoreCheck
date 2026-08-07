@@ -625,9 +625,11 @@ node infra/event-stack/production-renderer.mjs prepare \
 ```
 
 Pass `/absolute/protected/renderer/next-event-slug/renderer-binding.json` to
-the bundle generator. After the matching event lifecycle reaches a terminal
-`destroyed` or `aborted` state, delete that exact project with the event-scoped
-confirmation:
+the bundle generator. The bundle copies and integrity-binds the matching
+renderer ownership state. An exact `eventctl destroy` or `eventctl abort`
+deletes that event's renderer project after the lifecycle command succeeds.
+Both operations are idempotent. Use the lower-level command only to repair a
+terminal lifecycle created before this integration:
 
 ```bash
 node infra/event-stack/production-renderer.mjs destroy \

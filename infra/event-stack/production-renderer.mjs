@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createHash } from "node:crypto";
 import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import process from "node:process";
@@ -156,12 +157,31 @@ export async function destroyProductionRenderer({ event, output, confirmation, p
   validateEvent(event);
   if (confirmation !== `DESTROY-RENDERER:${event}`) throw new Error("renderer destruction confirmation is invalid");
   const root = protectedRoot(output, "renderer output");
-  const state = await readRendererState(root);
+  const state = await loadProductionRendererState(root);
   if (state.event !== event) throw new Error("renderer state belongs to a different event");
+  const existing = await readRendererDestroyedOrNull(root);
+  if (existing) {
+    if (existing.event !== event || existing.projectId !== state.project.id) throw new Error("renderer destruction state does not match the renderer");
+    return existing;
+  }
   await provider.deleteProject(state.project.id);
   const result = { schemaVersion: 1, status: "DESTROYED", event, destroyedAt: now().toISOString(), projectId: state.project.id };
   await writeProtectedJson(join(root, "renderer-destroyed.json"), result);
   return result;
+}
+
+async function readRendererDestroyedOrNull(root) {
+  try {
+    const value = JSON.parse(await readFile(join(root, "renderer-destroyed.json"), "utf8"));
+    if (value?.schemaVersion !== 1 || value.status !== "DESTROYED" || typeof value.event !== "string"
+      || !PROVIDER_ID.test(value.projectId ?? "") || !Number.isFinite(Date.parse(value.destroyedAt ?? ""))) {
+      throw new Error("renderer destruction state is invalid");
+    }
+    return value;
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
 }
 
 export function assertRendererCleanupLifecycleState(state, event) {
@@ -198,6 +218,31 @@ async function readRendererState(root) {
   const file = await stat(source);
   if (!file.isFile() || (file.mode & 0o077) !== 0) throw new Error("renderer state must be protected");
   return validateRendererState(JSON.parse(await readFile(source, "utf8")));
+}
+
+export async function loadProductionRendererState(output) {
+  const root = protectedRoot(output, "renderer output");
+  const state = await readRendererState(root);
+  await verifyBundledRendererStateOrAbsent(root, state);
+  return state;
+}
+
+async function verifyBundledRendererStateOrAbsent(root, state) {
+  const path = join(root, "BUNDLE.json");
+  let marker;
+  try {
+    const information = await stat(path);
+    if (!information.isFile() || (information.mode & 0o077) !== 0) throw new Error("event bundle marker must be protected");
+    marker = JSON.parse(await readFile(path, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+  if (marker?.schemaVersion !== 2 || marker.event !== state.event || !/^[a-f0-9]{64}$/u.test(marker.rendererStateSha256 ?? "")) {
+    throw new Error("event bundle renderer ownership marker is invalid");
+  }
+  const observed = createHash("sha256").update(await readFile(join(root, STATE_FILE))).digest("hex");
+  if (observed !== marker.rendererStateSha256) throw new Error("event bundle renderer ownership state changed");
 }
 
 function validateRendererState(value) {

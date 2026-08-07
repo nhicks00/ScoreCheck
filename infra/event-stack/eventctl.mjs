@@ -8,6 +8,7 @@ import { spawn } from "node:child_process";
 
 const DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const LIFECYCLE = resolve(DIRECTORY, "event-stack.mjs");
+const PRODUCTION_RENDERER = resolve(DIRECTORY, "production-renderer.mjs");
 const COMMANDS = new Set(["plan", "up", "status", "start", "close", "evidence", "destroy", "abort"]);
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -22,7 +23,28 @@ async function main() {
   const profile = await readProfile(options.profile);
   const args = buildEventctlInvocation(options.command, profile, options.confirm, options.sameDayConfirm);
   const code = await run(process.execPath, [LIFECYCLE, ...args]);
-  if (code !== 0) process.exitCode = code;
+  if (code !== 0) {
+    process.exitCode = code;
+    return;
+  }
+  const manifest = JSON.parse(await readFile(profile.manifest, "utf8"));
+  const rendererCleanup = buildRendererCleanupInvocation(options.command, profile, manifest.event);
+  if (!rendererCleanup) return;
+  const rendererCode = await run(process.execPath, [PRODUCTION_RENDERER, ...rendererCleanup]);
+  if (rendererCode !== 0) process.exitCode = rendererCode;
+}
+
+export function buildRendererCleanupInvocation(command, profile, event) {
+  validateProfile(profile);
+  if (!["abort", "destroy"].includes(command) || profile.rendererBinding === null) return null;
+  return [
+    "destroy",
+    "--event", event,
+    "--credentials-env", profile.credentialsEnv,
+    "--output", dirname(profile.rendererBinding),
+    "--state", profile.state,
+    "--confirm", `DESTROY-RENDERER:${event}`
+  ];
 }
 
 export function buildEventctlInvocation(command, profile, confirmation = null, sameDayConfirm = null) {

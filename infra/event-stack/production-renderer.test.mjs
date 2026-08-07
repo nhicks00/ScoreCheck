@@ -88,6 +88,8 @@ test("deletes only the exact renderer project after the caller provides the even
     await assert.rejects(() => destroyProductionRenderer({ event, output, confirmation: "wrong", provider }), /confirmation/);
     const result = await destroyProductionRenderer({ event, output, confirmation: `DESTROY-RENDERER:${event}`, provider, now: () => new Date("2026-07-23T14:05:00.000Z") });
     assert.equal(result.status, "DESTROYED");
+    const repeated = await destroyProductionRenderer({ event, output, confirmation: `DESTROY-RENDERER:${event}`, provider, now: () => new Date("2026-07-23T14:06:00.000Z") });
+    assert.deepEqual(repeated, result);
     assert.deepEqual(calls.filter((call) => call.startsWith("delete:")), ["delete:prj_renderer123"]);
   } finally {
     await rm(root, { recursive: true, force: true });

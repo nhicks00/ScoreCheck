@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildEventctlInvocation, validateProfile } from "./eventctl.mjs";
+import { buildEventctlInvocation, buildRendererCleanupInvocation, validateProfile } from "./eventctl.mjs";
 
 const profile = {
   schemaVersion: 9,
@@ -69,6 +69,21 @@ test("never invents destructive confirmations", () => {
   }
   assert.throws(() => buildEventctlInvocation("up", profile, "yes"), /does not accept/);
   assert.throws(() => buildEventctlInvocation("close", profile, "CLOSE:event", "DESTROY-NOW:event"), /does not accept/);
+});
+
+test("cleans the exact immutable renderer after terminal lifecycle commands", () => {
+  const expected = [
+    "destroy",
+    "--event", "event-one",
+    "--credentials-env", profile.credentialsEnv,
+    "--output", "/protected/event",
+    "--state", profile.state,
+    "--confirm", "DESTROY-RENDERER:event-one"
+  ];
+  assert.deepEqual(buildRendererCleanupInvocation("abort", profile, "event-one"), expected);
+  assert.deepEqual(buildRendererCleanupInvocation("destroy", profile, "event-one"), expected);
+  assert.equal(buildRendererCleanupInvocation("close", profile, "event-one"), null);
+  assert.equal(buildRendererCleanupInvocation("abort", { ...profile, rendererBinding: null }, "event-one"), null);
 });
 
 test("rejects relative, missing, and extra profile fields", () => {

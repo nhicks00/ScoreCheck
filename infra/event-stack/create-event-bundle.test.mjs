@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { assertCommentaryBrowserRuntime, assertRehearsalFfmpegRuntime, assertRehearsalGitIdentity, createEventBundle, parseBundleArgs } from "./create-event-bundle.mjs";
+import { loadProductionRendererState } from "./production-renderer.mjs";
 import { createSyntheticRehearsalVenueProfile } from "./venue-admission.mjs";
 import { createPendingCommentaryQualification, createSyntheticCommentaryQualification } from "./commentary-qualification.mjs";
 
@@ -139,11 +140,37 @@ test("creates a production bundle bound to existing persistent anchors", async (
   assert.equal(profile.commentaryQualification, join(options.root, "commentary-qualification.json"));
   const marker = JSON.parse(await readFile(join(options.root, "BUNDLE.json"), "utf8"));
   assert.equal(marker.schemaVersion, 2);
+  assert.match(marker.rendererStateSha256, /^[a-f0-9]{64}$/u);
   assert.match(marker.initialCommentaryQualificationSha256, /^[a-f0-9]{64}$/u);
   assert.equal(JSON.parse(await readFile(profile.rendererBinding, "utf8")).deploymentId, "dpl_renderer123");
+  const rendererState = JSON.parse(await readFile(join(options.root, "renderer-state.json"), "utf8"));
+  assert.equal(rendererState.event, "bundle-production");
+  assert.equal(rendererState.project.id, "prj_renderer123");
+  assert.equal(rendererState.binding.path, profile.rendererBinding);
   assert.equal(profile.rehearsalEvidence, null);
   assert.equal((await stat(profile.secrets)).mode & 0o077, 0);
   assert.equal((await stat(join(profile.secrets, "RENDER_COMPLETE.json"))).mode & 0o077, 0);
+});
+
+test("rejects a production bundle whose renderer ownership state differs from its binding", async () => {
+  const options = await fixture("production");
+  const statePath = join(dirname(options.rendererBinding), "renderer-state.json");
+  const state = JSON.parse(await readFile(statePath, "utf8"));
+  state.event = "another-event";
+  await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+  await assert.rejects(() => createFixtureBundle(options), /renderer state does not match the event binding/u);
+  await assert.rejects(() => stat(options.root), { code: "ENOENT" });
+});
+
+test("integrity-binds renderer ownership inside the completed production bundle", async () => {
+  const options = await fixture("production");
+  await createFixtureBundle(options);
+  await assert.doesNotReject(() => loadProductionRendererState(options.root));
+  const statePath = join(options.root, "renderer-state.json");
+  const state = JSON.parse(await readFile(statePath, "utf8"));
+  state.project.id = "prj_changed123";
+  await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+  await assert.rejects(() => loadProductionRendererState(options.root), /renderer ownership state changed/u);
 });
 
 test("rejects a production bundle before rendering when venue upload is not admitted", async () => {
@@ -273,7 +300,7 @@ async function productionSourceFixture(parent) {
 
 async function rendererBindingFixture(parent) {
   const path = join(parent, "renderer.json");
-  await writeFile(path, `${JSON.stringify({
+  const binding = {
     schemaVersion: 1,
     provider: "vercel",
     origin: "https://scorecheck-abc123-team.vercel.app",
@@ -286,7 +313,32 @@ async function rendererBindingFixture(parent) {
       commentary: "commentary-v1",
       browserHeartbeat: "browser-heartbeat-v6"
     }
+  };
+  const bindingBody = `${JSON.stringify(binding, null, 2)}\n`;
+  const localRendererBody = "local renderer fixture\n";
+  const localRendererPath = join(parent, "local-renderer.tar.gz");
+  await writeFile(path, bindingBody, { mode: 0o600 });
+  await writeFile(localRendererPath, localRendererBody, { mode: 0o600 });
+  await writeFile(join(parent, "renderer-state.json"), `${JSON.stringify({
+    schemaVersion: 2,
+    status: "READY",
+    event: "bundle-production",
+    preparedAt: "2026-07-15T00:00:00.000Z",
+    gitSha: binding.gitSha,
+    repo: "nhicks00/ScoreCheck",
+    repoId: "123",
+    project: { id: "prj_renderer123", name: "scorecheck-bundle-production", origin: "https://scorecheck-bundle-production.vercel.app" },
+    deployment: { id: binding.deploymentId, origin: binding.origin, generationId: "bundle-production-aaaaaaaaaaaa" },
+    binding: { path, sha256: createHash("sha256").update(bindingBody).digest("hex") },
+    localRenderer: {
+      schemaVersion: 1,
+      path: localRendererPath,
+      sha256: createHash("sha256").update(localRendererBody).digest("hex"),
+      bytes: Buffer.byteLength(localRendererBody),
+      gitSha: binding.gitSha,
+      deploymentId: binding.deploymentId
+    },
+    environmentKeys: []
   }, null, 2)}\n`, { mode: 0o600 });
-  await writeFile(join(parent, "local-renderer.tar.gz"), "local renderer fixture\n", { mode: 0o600 });
   return path;
 }

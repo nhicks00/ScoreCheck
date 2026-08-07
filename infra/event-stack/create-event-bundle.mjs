@@ -12,6 +12,7 @@ import { buildEventManifest, loadManifestInputs } from "./event-manifest.mjs";
 import { validateAnchorConfig } from "./event-lifecycle.mjs";
 import { validateProfile as validateEventProfile } from "./eventctl.mjs";
 import { assertNetworkContractDeployable } from "./network-contract.mjs";
+import { loadProductionRendererState } from "./production-renderer.mjs";
 import { renderProductionSecretDirectory } from "./production-recovery.mjs";
 import { loadRendererBinding } from "./renderer-binding.mjs";
 import { createSyntheticRehearsalVenueProfile, evaluateVenueAdmission, loadVenueAdmission } from "./venue-admission.mjs";
@@ -101,10 +102,14 @@ export async function createEventBundle(options, {
       };
   validateAnchorConfig(anchorConfig, manifest);
   const renderer = options.kind === "production" ? await loadRendererBinding(options.rendererBinding) : null;
+  const rendererState = options.kind === "production"
+    ? await loadProductionRendererState(dirname(options.rendererBinding))
+    : null;
   const localRendererBundle = options.kind === "production"
     ? join(dirname(options.rendererBinding), "local-renderer.tar.gz")
     : null;
   if (localRendererBundle) await assertProtectedFile(localRendererBundle, "local renderer bundle");
+  if (rendererState) await assertRendererStateMatchesInputs(rendererState, renderer, options.rendererBinding, localRendererBundle, manifest.event);
   const rehearsalVenueProfile = options.kind === "rehearsal" ? createSyntheticRehearsalVenueProfile(manifest.event) : null;
   const venueAdmission = options.kind === "production"
     ? await loadVenueAdmission(options.venueProfile, manifest.event)
@@ -131,6 +136,10 @@ export async function createEventBundle(options, {
       await writeProtectedJson(temporaryPaths.rehearsalBinding, anchorConfig);
     } else {
       await writeProtectedJson(temporaryPaths.rendererBinding, renderer);
+      await writeProtectedJson(temporaryPaths.rendererState, {
+        ...rendererState,
+        binding: { ...rendererState.binding, path: final.rendererBinding }
+      });
       await renderProductionSecretDirectory({
         manifest,
         sourceDirectory: options.productionSource,
@@ -194,6 +203,7 @@ export async function createEventBundle(options, {
       manifestSha256: sha256(await readFile(temporaryPaths.manifest)),
       eventProfileSha256: sha256(await readFile(temporaryPaths.eventProfile)),
       rendererBindingSha256: renderer ? sha256(await readFile(temporaryPaths.rendererBinding)) : null,
+      rendererStateSha256: rendererState ? sha256(await readFile(temporaryPaths.rendererState)) : null,
       localRendererSha256: localRendererBundle ? sha256(await readFile(localRendererBundle)) : null,
       venueProfileSha256: sha256(await readFile(temporaryPaths.venueProfile)),
       initialCommentaryQualificationSha256: sha256(await readFile(temporaryPaths.commentaryQualification)),
@@ -328,6 +338,7 @@ function bundlePaths(root) {
     rehearsalState: join(root, "rehearsal-state.json"),
     rehearsalBinding: join(root, "rehearsal-endpoint-binding.json"),
     rendererBinding: join(root, "renderer-binding.json"),
+    rendererState: join(root, "renderer-state.json"),
     venueProfile: join(root, "venue-profile.json"),
     commentaryQualification: join(root, "commentary-qualification.json"),
     eventProfile: join(root, "event-profile.json"),
@@ -340,6 +351,15 @@ function bundlePaths(root) {
     turnkeyReport: join(root, "full-dry-run-report.json"),
     marker: join(root, "BUNDLE.json")
   };
+}
+
+async function assertRendererStateMatchesInputs(state, renderer, bindingPath, localRendererPath, event) {
+  if (state.event !== event || state.gitSha !== renderer.gitSha || state.deployment.id !== renderer.deploymentId) {
+    throw new Error("renderer state does not match the event binding");
+  }
+  if (state.binding.sha256 !== sha256(await readFile(bindingPath)) || state.localRenderer.sha256 !== sha256(await readFile(localRendererPath))) {
+    throw new Error("renderer state does not match the immutable renderer artifacts");
+  }
 }
 
 async function writeProtectedJson(path, value) {
