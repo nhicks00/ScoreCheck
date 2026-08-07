@@ -6,6 +6,10 @@ FIXTURE="$(mktemp -d)"
 trap 'rm -rf "$FIXTURE"' EXIT
 mkdir -p "$FIXTURE/bin" "$FIXTURE/mock" "$FIXTURE/state" "$FIXTURE/export"
 cp "$SCRIPT_DIR/egress-supervisor.sh" "$SCRIPT_DIR/fault-owned-egress.sh" "$SCRIPT_DIR/start-court.sh" "$SCRIPT_DIR/stop-court.sh" "$SCRIPT_DIR/lib.sh" "$FIXTURE/"
+grep -Fq 'reconcile_once() (' "$FIXTURE/egress-supervisor.sh" || {
+  echo "Egress supervisor reconciliation must close its lock descriptor before watch sleep" >&2
+  exit 1
+}
 printf 'services: {}\n' >"$FIXTURE/docker-compose.yml"
 
 printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$FIXTURE/bin/flock"
