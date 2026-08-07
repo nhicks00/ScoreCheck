@@ -270,7 +270,9 @@ Initial rules:
 ## Security contract
 
 - Static management address: `192.168.50.2`, reserved outside DHCP.
-- Replace the default administrator credential before attaching production APs.
+- Retain the default administrator credential per Nathan's explicit decision;
+  compensate by keeping management private, HTTPS-only, and unexposed to the
+  public Internet.
 - Enable HTTPS; disable plain HTTP and Telnet.
 - Enable SNMPv3 only. Disable v1/v2c and remove default communities.
 - Use `authPriv` with the strongest shipped combination. Current evidence
@@ -293,7 +295,8 @@ The switch is not production-admitted until these steps pass on the exact unit:
 1. Photograph and record model, serial, hardware revision, and shipped firmware.
 2. Download and checksum the exact firmware and all vendor documentation.
 3. Export the factory and configured backups.
-4. Assign `192.168.50.2`; replace defaults; configure NTP and timezone.
+4. Assign `192.168.50.2`; retain the user-approved default administrator
+   credential; configure NTP and timezone.
 5. Disable HTTP, Telnet, SNMPv1, and SNMPv2c.
 6. Configure read-only SNMPv3 `authPriv` and security-IP restrictions.
 7. Walk standard `SNMPv2-MIB`, `IF-MIB`, `IF-MIB::ifXTable`, LLDP, and the

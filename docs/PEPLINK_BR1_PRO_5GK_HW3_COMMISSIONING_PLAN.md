@@ -42,10 +42,9 @@ The first production profile will be deliberately narrow:
 - ScoreCheck reads the switch through SNMPv3 over a router-initiated,
   management-only site-to-site tunnel to the event observability Droplet. The
   switch has no public management exposure and the router runs no collector.
-- The Peplink 5 GHz client AP temporarily carries all eight cameras during
-  first-time onboarding, identity capture, and DHCP reservation.
-- The three Ubiquiti APs become the production camera radio layer after that
-  simple onboarding phase; the Peplink client AP is then disabled.
+- The Peplink 5 GHz `BVM` client AP remains available alongside the three
+  Ubiquiti camera SSIDs. It provides direct-router coverage and a controlled
+  fallback without replacing the wired Ubiquiti production radio layer.
 - Six AVKANS cameras remain SRT/H.264 at 1080p30 around 3 Mbps and two Mevo
   Cores remain SRT/HEVC at 1080p30 for the router qualification.
 - 1080p60 is a later profile test, not part of the router baseline.
@@ -66,13 +65,13 @@ Adopt for the first qualification:
   commissioning time. Never downgrade. If Peplink's supported updater requires
   an intermediate release from the factory version, use it only as an upgrade
   step and qualify only the final latest-stable release.
-- Temporary native Peplink 5 GHz camera onboarding before introducing the
-  external Ubiquiti radio layer.
+- Retained native Peplink 5 GHz `BVM` camera WLAN alongside the external
+  Ubiquiti radio layer.
 - Optional phone hotspot as a third Priority 1 Wi-Fi WAN.
 - One production-candidate DWB profile with Adaptive FEC; FEC-off is only a
   short diagnostic if the primary run fails.
 - `Fast` detection, Low congestion latency, 150 ms jitter buffer, 0 ms receive
-  buffer, and 250 ms latency-difference cutoff.
+  buffer, and the deployed 500 ms latency-difference cutoff.
 - San Francisco SFC endpoint by default; San Jose is only a diagnostic fallback.
 - Conservative Starlink readmission and camera SRT QoS.
 - Fixed 5 GHz Ubiquiti radio plan with mesh off.
@@ -176,15 +175,17 @@ Before applying event settings:
 10. Do not enable automatic firmware changes during event coverage. Pin the
    version that passed the real-camera qualification.
 
-Firmware 8.5.4 is the current stable release for this exact HW3 product as of
-2026-08-06. Firmware 8.6.0 remains on Peplink's beta/RC download page and is not
-a production qualification target. The plan does not freeze 8.5.4 in
-perpetuity: arrival-day verification against Peplink's stable download page
-controls. Do not qualify beta, release-candidate, or early-access firmware for
-production. Newly available features do not become enabled merely because the
-firmware includes them; WireGuard remote access, forced 5G SA Carrier
-Aggregation, IPv6, and other unrelated features remain outside the first
-production profile.
+Firmware 8.6.0 build 6450 is the stable release offered by the router and
+InControl for this exact HW3 product as of 2026-08-06. It is the commissioning
+and production-qualification baseline. InControl must also assign 8.6.0 so a
+stale cloud policy cannot schedule a downgrade after local commissioning.
+Arrival-day verification against Peplink's stable channel still controls for
+future devices: use the newest stable release available for the exact hardware,
+not a deliberately older baseline. Do not qualify beta, release-candidate, or
+early-access firmware for production. Newly available features do not become
+enabled merely because the firmware includes them; WireGuard remote access,
+forced 5G SA Carrier Aggregation, IPv6, and other unrelated features remain
+outside the first production profile.
 
 ### 2. Administrator and remote-management security
 
@@ -233,7 +234,7 @@ Use this fixed wiring:
 | Cellular | Internal modem | SIM A active; SIM B standby if a second carrier is installed |
 | LAN 2 | PoE switch uplink | The only switch uplink |
 | LAN 1 | Disconnected | Do not connect to the same switch |
-| Wi-Fi radios | Onboarding: native 5 GHz camera AP; production: optional phone-hotspot Wi-Fi WAN | Disable Peplink client AP after camera migration to Ubiquiti |
+| Wi-Fi radios | Native 5 GHz `BVM` camera AP plus optional phone-hotspot Wi-Fi WAN | Keep `BVM` available; do not disable it after Ubiquiti migration |
 
 Do not enable LACP for the first deployment. Do not connect both LAN ports to
 the same switch. Do not convert the WAN port into LAN. These changes add no
@@ -289,8 +290,8 @@ Create DHCP reservations after the actual hardware is attached:
 Do not invent reservations from old client records. Capture each device's real
 MAC address from the incoming router and match it to the physical camera label.
 
-For first-time setup, enable one temporary native Peplink 5 GHz camera SSID and
-connect Cameras 1-8 directly to it. Use this deliberately simple phase to verify
+For first-time setup, use the native Peplink 5 GHz `BVM` camera SSID and connect
+Cameras 1-8 directly to it. Use this deliberately simple phase to verify
 camera identity, record MAC addresses, create DHCP reservations, and confirm that
 all cameras can publish through the router before adding the switch or external
 APs. Use a fixed non-DFS 5 GHz channel and a camera-compatible WPA2-Personal
@@ -298,10 +299,10 @@ profile; do not change camera protocol, codec, or destination merely for
 onboarding. This phase is not the final production radio qualification.
 
 After reservations and direct-router behavior are verified, connect the PoE
-switch and migrate the cameras to the Ubiquiti camera SSID. Confirm each reserved
-identity survives the move, then disable the Peplink client AP. Configure the
-optional phone hotspot Wi-Fi WAN only after this migration so its radio role does
-not complicate initial camera discovery.
+switch and migrate the intended cameras to their Ubiquiti camera SSIDs. Confirm
+each reserved identity survives the move and keep the Peplink `BVM` WLAN
+available. Configure the optional phone hotspot Wi-Fi WAN only after this
+migration so its radio role does not complicate initial camera discovery.
 
 Keep the first qualification flat because VLAN success depends on the exact
 PoE switch model, VLAN trunk support, UniFi controller configuration, and
@@ -394,7 +395,7 @@ Applied commissioning state as of 2026-08-04:
 
 Select the actual channels only after an RF scan in the event location. Do not
 use automatic channel changes during coverage. The Peplink built-in client AP
-role remains disabled; operator access uses the Ubiquiti network.
+retains the `BVM` WLAN alongside the Ubiquiti networks.
 
 ### 4A. LinoVision switch management and monitoring
 
@@ -411,7 +412,9 @@ Initial management contract:
 
 - Assign `192.168.50.2` only after confirming no address conflict, and reserve
   that address outside the DHCP pool.
-- Replace the default administrator credential before attaching APs.
+- Retain the switch's default administrator credential per Nathan's explicit
+  commissioning decision. Restrict management to the private LAN, keep HTTPS
+  enabled, and do not expose the switch publicly.
 - Disable Telnet, plain HTTP, SNMP v1, and SNMP v2c.
 - Enable HTTPS and SSH only on the management LAN. Keep SSH disabled after
   commissioning unless the exact firmware requires it for a supported task.
@@ -537,7 +540,7 @@ hardware exposed as another WAN.
 When the production phone is available:
 
 - Name: `Phone Hotspot`.
-- Operating role: Wi-Fi WAN only; Peplink client AP SSIDs disabled.
+- Operating role: Wi-Fi WAN alongside the retained Peplink `BVM` client AP.
 - Priority: 1.
 - Addressing and routing: DHCP/NAT.
 - Preferred BSSID: unset until reconnect behavior is proven stable.
@@ -773,21 +776,22 @@ objective or need physical evidence. This is not a permanent rejection.
 ### Phase 3: LAN and radio foundation
 
 - Apply `BVM LAN` at `192.168.50.1/24`.
-- Enable a temporary native Peplink 5 GHz camera SSID.
+- Enable and retain the native Peplink 5 GHz `BVM` camera SSID.
 - Connect Cameras 1-8 directly, identify their real MAC addresses, create DHCP
   reservations, and verify all eight can publish through the router.
 - Connect exactly one LAN port to the PoE switch.
 - Verify the switch label is `POE-SWR612GM-SOLAR`, record its firmware, archive
-  its exact MIB, replace default credentials, and apply the management contract.
+  its exact MIB, retain the user-approved default administrator credential, and
+  apply the remaining management contract.
 - Assign the conflict-checked management address and prove the event
   observability Droplet can poll SNMPv3 through the management-only tunnel.
 - Connect and identify all three Ubiquiti APs.
 - Connect APs one at a time to ports 1-3 and verify Gigabit negotiation, PoE
   delivery, UniFi visibility, and stable power before connecting the next AP.
 - Apply the measured 5 GHz, 20 MHz, fixed non-DFS, mesh-off AP baseline.
-- Migrate cameras to the Ubiquiti SSID and confirm every reserved identity.
-- Disable the Peplink client AP, then configure the optional phone hotspot as
-  Wi-Fi WAN when that phone is available.
+- Migrate cameras to the Ubiquiti SSIDs and confirm every reserved identity.
+- Keep the Peplink `BVM` client AP available, then configure the optional phone
+  hotspot as Wi-Fi WAN when that phone is available.
 - Confirm DHCP, DNS, NTP, local management, and camera SSID reachability.
 - Confirm the Mac can leave the event router while remote management continues.
 - Export and hash a post-LAN backup.
@@ -805,7 +809,7 @@ objective or need physical evidence. This is not a permanent rejection.
 - Select the San Francisco SFC endpoint.
 - Build `SCORECHECK_DWB_ADAPTIVE_FEC` with every intended WAN at Priority 1.
 - Apply Dynamic Weighted Bonding, `Fast` detection, Low congestion latency,
-  150 ms jitter buffer, 0 ms receive buffer, 250 ms latency cutoff, Smoothing
+  150 ms jitter buffer, 0 ms receive buffer, 500 ms latency cutoff, Smoothing
   off, Adaptive FEC, UDP 4500, and default DF handling.
 - Apply the two protected camera outbound rules.
 - Enable SpeedFusion traffic optimization and highest-priority SRT QoS.
@@ -936,7 +940,7 @@ that the physical router has passed production acceptance before it arrives.
 - [Current BR1 Pro 5G technical specifications](https://www.peplink.com/compare/tech-specs/br1-pro-5g.pdf)
 - [BR1 Pro 5G hardware reference guide](https://download.peplink.com/manual/br1_pro_5g_hardware_reference_guide.pdf)
 - [Peplink firmware downloads and supported models](https://www.peplink.com/support/downloads/firmware/)
-- [Firmware 8.5.4 release notes](https://download.peplink.com/resources/firmware-8.5.4-release-notes.pdf)
+- [Firmware 8.6.0 release notes](https://download.peplink.com/resources/firmware-8.6.0-release-notes.pdf)
 - [Peplink SpeedFusion technology and Boost](https://www.peplink.com/technology/speedfusion-bonding-technology/)
 - [InControl 2 user guide](https://download.peplink.com/resources/InControl2_User_Guide.pdf)
 - [Peplink Router API documentation](https://download.peplink.com/resources/Peplink-Router-API-Documentation-for-Firmware-8.5.0.pdf)

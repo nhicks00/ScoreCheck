@@ -67,11 +67,10 @@ runtime WAN priorities changed. Always verify the result through
 
 Do not enable WAN SSH or add a router port forward. It does not solve changing
 WAN addresses or carrier NAT, and it adds an unnecessary management surface.
-During first-time onboarding, one native Peplink 5 GHz SSID temporarily carries
-the eight cameras so their real MAC addresses can be identified and reserved.
-After migration, the Peplink client AP is disabled and its radios are available
-for the optional phone-hotspot Wi-Fi WAN. The three wired Ubiquiti APs carry the
-production camera and operator clients.
+During first-time onboarding, the native Peplink 5 GHz `BVM` SSID carries the
+eight cameras so their real MAC addresses can be identified and reserved. It
+remains available after migration alongside the three wired Ubiquiti camera
+SSIDs and the optional phone-hotspot Wi-Fi WAN.
 
 ## Peplink production profile
 
@@ -85,7 +84,7 @@ The event topology is intentionally narrow:
 - One LAN port connects to the PoE switch. Never connect both LAN ports to the
   same switch unless loop prevention has been deliberately configured.
 - The switch feeds the three external Ubiquiti Swiss Army Knife Ultra access
-  points. The Peplink does not serve camera or operator client Wi-Fi.
+  points. The Peplink also retains its `BVM` camera WLAN.
 - The flat event network remains `BVM LAN` at `192.168.50.0/24` until the
   switch and all three APs are present for a measured VLAN qualification.
 
@@ -99,7 +98,7 @@ outbound rules are:
 
 All other traffic retains the router's normal automatic policy. The initial
 SpeedFusion profile uses Dynamic Weighted Bonding with `Fast` failure detection,
-Low congestion latency, a 150 ms jitter buffer, a 250 ms latency-difference
+Low congestion latency, a 150 ms jitter buffer, a 500 ms latency-difference
 cutoff, Adaptive FEC, and WAN Smoothing off. Use San Francisco as the initial
 SFC endpoint. A clean 60-minute eight-camera gate ends router qualification;
 test FEC-off or San Jose only when the primary run exposes a specific failure.
