@@ -184,7 +184,7 @@ function snapshot(input: {
       active: { configured: true, mode: "PAUSED", lastSuccessAt: null, lastFailureAt: null },
       phoneChannel: { configured: true, state: "HEALTHY", baselineAttached: true, activeAttached: true, lastSuccessAt: null, lastFailureAt: null }
     },
-    router: { state: "UNKNOWN", sampledAt: null, receivedAt: null, ageMs: null, speedify: null, routing: null, cameraWifi: null, host: null, uplinks: [] },
+    router: { state: "NOT_APPLICABLE", required: false, configured: false, apiReachable: null, sampledAt: null, lastSuccessAt: null, lastFailureAt: null, identity: null, resources: null, speedFusion: null, clients: null, wans: [], problems: [] },
     unifi: { state: "NOT_APPLICABLE", required: false, configured: false, apiReachable: null, sampledAt: null, lastSuccessAt: null, lastFailureAt: null, siteId: null, expectedAccessPoints: 0, onlineAccessPoints: 0, connectedClients: 0, accessPoints: [], clients: [], problems: [] },
     networkSwitch: emptyNetworkSwitchSnapshot(),
     courts: [court],

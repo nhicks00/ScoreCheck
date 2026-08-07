@@ -63,8 +63,11 @@ function fixture() {
   };
   const monitoringEnvironment = Object.fromEntries([
     "ALERTMANAGER_WEBHOOK_TOKEN", "HEALTHCHECKS_ACTIVE_CHECK_ID", "HEALTHCHECKS_ACTIVE_PING_URL", "HEALTHCHECKS_API_KEY",
-    "HEALTHCHECKS_BASELINE_CHECK_ID", "HEALTHCHECKS_BASELINE_PING_URL", "HEALTHCHECKS_SENTINEL_PING_URL", "MONITOR_API_TOKEN", "MONITOR_ROUTER_HEARTBEAT_TOKEN", "MONITOR_BROWSER_ALLOWED_ORIGINS",
+    "HEALTHCHECKS_BASELINE_CHECK_ID", "HEALTHCHECKS_BASELINE_PING_URL", "HEALTHCHECKS_SENTINEL_PING_URL", "MONITOR_API_TOKEN", "MONITOR_BROWSER_ALLOWED_ORIGINS",
     "MONITOR_BROWSER_HEARTBEAT_SECRET", "MONITOR_DASHBOARD_URL", "MONITOR_PUBLIC_HOST", "PUSHOVER_APP_TOKEN", "PUSHOVER_USER_KEY",
+    "MONITOR_PEPLINK_CAMERA_SSID", "MONITOR_PEPLINK_CLIENT_ID", "MONITOR_PEPLINK_CLIENT_SECRET", "MONITOR_PEPLINK_DEVICE_ID",
+    "MONITOR_PEPLINK_FIRMWARE_VERSION", "MONITOR_PEPLINK_GROUP_ID", "MONITOR_PEPLINK_HARDWARE_VERSION", "MONITOR_PEPLINK_ORGANIZATION_ID",
+    "MONITOR_PEPLINK_PRODUCT_CODE", "MONITOR_PEPLINK_SPEEDFUSION_PROFILE_NAME", "MONITOR_PEPLINK_WANS_JSON",
     "MONITOR_NETWORK_SWITCH_EXPORTER_URL", "MONITOR_NETWORK_SWITCH_FIRMWARE_VERSION", "MONITOR_NETWORK_SWITCH_MODEL", "MONITOR_NETWORK_SWITCH_PORTS_JSON",
     "MONITOR_NETWORK_SWITCH_REQUIRED", "MONITOR_NETWORK_SWITCH_TARGET", "MONITOR_UNIFI_ACCESS_POINTS_JSON", "MONITOR_UNIFI_API_KEY", "MONITOR_UNIFI_BASE_URL",
     "MONITOR_UNIFI_REQUIRED", "MONITOR_UNIFI_SITE_ID", "LINOVISION_SNMP_AUTH_PASSWORD", "LINOVISION_SNMP_PRIV_PASSWORD", "LINOVISION_SNMP_USER",
@@ -73,6 +76,12 @@ function fixture() {
   monitoringEnvironment.HEALTHCHECKS_BASELINE_PING_URL = "https://hc-ping.com/monitor-baseline";
   monitoringEnvironment.HEALTHCHECKS_ACTIVE_PING_URL = "https://hc-ping.com/monitor-active";
   monitoringEnvironment.HEALTHCHECKS_SENTINEL_PING_URL = "https://hc-ping.com/platform-sentinel";
+  monitoringEnvironment.MONITOR_PEPLINK_PRODUCT_CODE = "MAX-BR1-PRO-5GK-T-PRM";
+  monitoringEnvironment.MONITOR_PEPLINK_HARDWARE_VERSION = "3";
+  monitoringEnvironment.MONITOR_PEPLINK_FIRMWARE_VERSION = "8.6.0 build 6450";
+  monitoringEnvironment.MONITOR_PEPLINK_SPEEDFUSION_PROFILE_NAME = "SFC-SFO";
+  monitoringEnvironment.MONITOR_PEPLINK_CAMERA_SSID = "BVM";
+  monitoringEnvironment.MONITOR_PEPLINK_WANS_JSON = '[{"id":1,"name":"WAN","required":true},{"id":2,"name":"Cellular","required":true}]';
   monitoringEnvironment.MONITOR_AGENT_TARGETS = "old-target-must-not-survive";
   const compositorEnvironments = Array.from({ length: 4 }, (_, index) => {
     const firstCourt = (index * 2) + 1;
@@ -150,7 +159,8 @@ test("renders the exact 12-host production secret contract and strips stale targ
   assert.doesNotMatch(files["ingest.env"], /MEDIAMTX_COURT_(?:1|2|4|5|6|7|8)_RTMP_PUBLISH_KEY/u);
   assert.doesNotMatch(files["observability.env"], /MONITOR_AGENT_TARGETS/);
   assert.doesNotMatch(files["observability.env"], /TWILIO_/);
-  assert.match(files["observability.env"], /MONITOR_ROUTER_HEARTBEAT_TOKEN=/);
+  assert.doesNotMatch(files["observability.env"], /MONITOR_ROUTER_HEARTBEAT_TOKEN=/);
+  assert.match(files["observability.env"], /MONITOR_PEPLINK_CLIENT_ID=/);
   assert.match(files["compositors/bvm-compositor-h.env"], /COURT_8_YOUTUBE_KEY=/);
   assert.match(files["compositors/bvm-compositor-h.env"], /COURT_8_YOUTUBE_STREAM_ID=/);
   assert.match(files["compositors/bvm-compositor-h.env"], /YOUTUBE_STREAM_RESOLUTION="variable"/);
@@ -267,36 +277,32 @@ test("fails closed when current destination rotation receives malformed or dupli
   assert.throws(() => replaceProductionDestinations({ material: current, destinations: duplicate }), /stream identities are not unique/);
 });
 
-test("adds only a distinct dedicated Healthchecks sentinel to a pre-sentinel recovery environment", () => {
+test("replaces the retired router heartbeat with the current Peplink monitoring contract", () => {
   const sourceEnvironment = fixture().monitoringEnvironment;
-  delete sourceEnvironment.HEALTHCHECKS_SENTINEL_PING_URL;
+  const currentEnvironment = Object.fromEntries(Object.entries(sourceEnvironment).filter(([key]) => /^(?:MONITOR_PEPLINK_|MONITOR_UNIFI_|MONITOR_NETWORK_SWITCH_|LINOVISION_SNMP_)/u.test(key)));
+  for (const key of Object.keys(currentEnvironment)) delete sourceEnvironment[key];
+  sourceEnvironment.MONITOR_ROUTER_HEARTBEAT_TOKEN = "retired-router-heartbeat-token-abcdefghijklmnopqrstuvwxyz";
   const migrated = migrateMonitoringEnvironment({
     sourceEnvironment,
-    currentEnvironment: { HEALTHCHECKS_SENTINEL_PING_URL: "https://hc-ping.com/platform-sentinel" }
+    currentEnvironment
   });
-  assert.equal(migrated.HEALTHCHECKS_SENTINEL_PING_URL, "https://hc-ping.com/platform-sentinel");
+  assert.equal(migrated.MONITOR_PEPLINK_PRODUCT_CODE, "MAX-BR1-PRO-5GK-T-PRM");
   assert.equal(migrated.PUSHOVER_APP_TOKEN, sourceEnvironment.PUSHOVER_APP_TOKEN);
+  assert.equal("MONITOR_ROUTER_HEARTBEAT_TOKEN" in migrated, false);
   assert.equal("MONITOR_AGENT_TARGETS" in migrated, false);
 });
 
-test("rejects an existing sentinel, dead-man reuse, malformed URLs, and Twilio residue during sentinel migration", () => {
+test("rejects missing Peplink values and Twilio residue during router monitoring migration", () => {
   const sourceEnvironment = fixture().monitoringEnvironment;
-  assert.throws(() => migrateMonitoringEnvironment({ sourceEnvironment, currentEnvironment: sourceEnvironment }), /already contains/);
-
-  delete sourceEnvironment.HEALTHCHECKS_SENTINEL_PING_URL;
-  assert.throws(() => migrateMonitoringEnvironment({
-    sourceEnvironment,
-    currentEnvironment: { HEALTHCHECKS_SENTINEL_PING_URL: sourceEnvironment.HEALTHCHECKS_ACTIVE_PING_URL }
-  }), /must not reuse/);
-  assert.throws(() => migrateMonitoringEnvironment({
-    sourceEnvironment,
-    currentEnvironment: { HEALTHCHECKS_SENTINEL_PING_URL: "http://hc-ping.com/not-secure" }
-  }), /must be HTTPS/);
-
+  const currentEnvironment = Object.fromEntries(Object.entries(sourceEnvironment).filter(([key]) => /^(?:MONITOR_PEPLINK_|MONITOR_UNIFI_|MONITOR_NETWORK_SWITCH_|LINOVISION_SNMP_)/u.test(key)));
+  for (const key of Object.keys(currentEnvironment)) delete sourceEnvironment[key];
+  sourceEnvironment.MONITOR_ROUTER_HEARTBEAT_TOKEN = "retired-router-heartbeat-token-abcdefghijklmnopqrstuvwxyz";
+  delete currentEnvironment.MONITOR_PEPLINK_DEVICE_ID;
+  assert.throws(() => migrateMonitoringEnvironment({ sourceEnvironment, currentEnvironment }), /MONITOR_PEPLINK_DEVICE_ID is required/);
   sourceEnvironment.TWILIO_ACCOUNT_SID = "must-not-survive";
   assert.throws(() => migrateMonitoringEnvironment({
     sourceEnvironment,
-    currentEnvironment: { HEALTHCHECKS_SENTINEL_PING_URL: "https://hc-ping.com/platform-sentinel" }
+    currentEnvironment: fixture().monitoringEnvironment
   }), /must not contain Twilio credentials/);
 });
 

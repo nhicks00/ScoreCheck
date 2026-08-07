@@ -1086,20 +1086,16 @@ tests:
               summary: Camera 3's required Program viewer is dropping many video frames.
               first_action: Inspect the buffered HLS decoder, segment freshness, and program timeline immediately; verify upstream preview health before changing source encoding.
 
-  - name: venue router status and fail-closed route page only while cameras are required
+  - name: peplink router pages only while cameras are required
     interval: 5s
     input_series:
-      - series: 'scorecheck_router_heartbeat_fresh'
-        values: '0+0x20'
-      - series: 'scorecheck_router_camera_route_healthy'
-        values: '0+0x20'
-      - series: 'scorecheck_router_speedify_adapter_policy_automatic'
+      - series: 'scorecheck_router_api_up'
         values: '0+0x20'
       - series: 'scorecheck_court_media_required{court="1"}'
         values: '1+0x20'
     alert_rule_test:
       - eval_time: 45s
-        alertname: ScoreCheckVenueRouterHeartbeatMissing
+        alertname: ScoreCheckVenueRouterTelemetryUnavailable
         exp_alerts:
           - exp_labels:
               severity: critical
@@ -1109,28 +1105,57 @@ tests:
             exp_annotations:
               summary: The venue router stopped reporting its internet and routing status.
               first_action: Keep the cameras streaming. Check that the venue router is powered on and connected to the internet.
+
+  - name: peplink router online speedfusion and required WAN gates
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_router_api_up'
+        values: '1+0x20'
+      - series: 'scorecheck_router_online'
+        values: '0+0x5 1+0x15'
+      - series: 'scorecheck_router_speedfusion_connected'
+        values: '1+0x9 0+0x11'
+      - series: 'scorecheck_router_wan_connected{wan="WAN",type="ethernet",required="true"}'
+        values: '1+0x9 0+0x11'
+      - series: 'scorecheck_court_media_required{court="1"}'
+        values: '1+0x20'
+    alert_rule_test:
       - eval_time: 20s
-        alertname: ScoreCheckVenueCameraRouteUnprotected
+        alertname: ScoreCheckVenueRouterOffline
         exp_alerts:
           - exp_labels:
               severity: critical
               stage: VENUE
-              issue_code: VENUE_CAMERA_ROUTE_UNPROTECTED
+              issue_code: VENUE_ROUTER_OFFLINE
               root_dependency: venue-router
             exp_annotations:
-              summary: Camera traffic is not protected by the bonded fail-closed route.
-              first_action: Keep the cameras streaming and contact the technical operator. Do not change camera settings.
-      - eval_time: 20s
-        alertname: ScoreCheckVenueSpeedifyInputPolicyChanged
+              summary: The venue router is offline, so camera internet service is unavailable.
+              first_action: Check the venue router's power and internet cables. Keep the cameras on; they should reconnect automatically.
+      - eval_time: 70s
+        alertname: ScoreCheckVenueSpeedFusionDisconnected
         exp_alerts:
           - exp_labels:
               severity: critical
               stage: VENUE
-              issue_code: VENUE_SPEEDIFY_INPUT_POLICY_CHANGED
+              issue_code: VENUE_SPEEDFUSION_DISCONNECTED
               root_dependency: venue-router
             exp_annotations:
-              summary: One or more venue internet connections are no longer set to Automatic.
-              first_action: Keep the cameras streaming. In Speedify, set every Ethernet, Wi-Fi, cellular, tethered, and Starlink connection to Automatic.
+              summary: The protected camera internet connection is disconnected.
+              first_action: Keep the cameras on. Check the Peplink WAN and cellular connections; do not change camera settings.
+      - eval_time: 90s
+        alertname: ScoreCheckVenueRequiredWanDisconnected
+        exp_alerts:
+          - exp_labels:
+              wan: WAN
+              type: ethernet
+              required: 'true'
+              severity: critical
+              stage: VENUE
+              issue_code: VENUE_REQUIRED_WAN_DISCONNECTED
+              root_dependency: venue-router
+            exp_annotations:
+              summary: The required WAN internet connection is disconnected.
+              first_action: Check that connection's cable, modem, or service. Keep the cameras on; do not change their settings.
 
   - name: unifi venue wifi pages only for sustained active-event defects
     interval: 30s

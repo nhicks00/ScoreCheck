@@ -45,7 +45,38 @@ const SOURCE_FILES = Object.freeze([
 const OMITTED_MONITORING_KEYS = new Set([
   "COMMENTARY_MONITOR_AGENT_TOKEN",
   "MONITOR_AGENT_TARGETS",
+  "MONITOR_ROUTER_HEARTBEAT_TOKEN",
   "PREVIEW_MONITOR_AGENT_TOKEN"
+]);
+const PEPLINK_MONITORING_KEYS = Object.freeze([
+  "MONITOR_PEPLINK_CAMERA_SSID",
+  "MONITOR_PEPLINK_CLIENT_ID",
+  "MONITOR_PEPLINK_CLIENT_SECRET",
+  "MONITOR_PEPLINK_DEVICE_ID",
+  "MONITOR_PEPLINK_FIRMWARE_VERSION",
+  "MONITOR_PEPLINK_GROUP_ID",
+  "MONITOR_PEPLINK_HARDWARE_VERSION",
+  "MONITOR_PEPLINK_ORGANIZATION_ID",
+  "MONITOR_PEPLINK_PRODUCT_CODE",
+  "MONITOR_PEPLINK_SPEEDFUSION_PROFILE_NAME",
+  "MONITOR_PEPLINK_WANS_JSON"
+]);
+const VENUE_MONITORING_KEYS = Object.freeze([
+  ...PEPLINK_MONITORING_KEYS,
+  "LINOVISION_SNMP_AUTH_PASSWORD",
+  "LINOVISION_SNMP_PRIV_PASSWORD",
+  "LINOVISION_SNMP_USER",
+  "MONITOR_NETWORK_SWITCH_EXPORTER_URL",
+  "MONITOR_NETWORK_SWITCH_FIRMWARE_VERSION",
+  "MONITOR_NETWORK_SWITCH_MODEL",
+  "MONITOR_NETWORK_SWITCH_PORTS_JSON",
+  "MONITOR_NETWORK_SWITCH_REQUIRED",
+  "MONITOR_NETWORK_SWITCH_TARGET",
+  "MONITOR_UNIFI_ACCESS_POINTS_JSON",
+  "MONITOR_UNIFI_API_KEY",
+  "MONITOR_UNIFI_BASE_URL",
+  "MONITOR_UNIFI_REQUIRED",
+  "MONITOR_UNIFI_SITE_ID"
 ]);
 const REQUIRED_MONITORING_KEYS = Object.freeze([
   "ALERTMANAGER_WEBHOOK_TOKEN",
@@ -56,10 +87,10 @@ const REQUIRED_MONITORING_KEYS = Object.freeze([
   "HEALTHCHECKS_BASELINE_PING_URL",
   "HEALTHCHECKS_SENTINEL_PING_URL",
   "MONITOR_API_TOKEN",
-  "MONITOR_ROUTER_HEARTBEAT_TOKEN",
   "MONITOR_BROWSER_ALLOWED_ORIGINS",
   "MONITOR_BROWSER_HEARTBEAT_SECRET",
   "MONITOR_DASHBOARD_URL",
+  ...PEPLINK_MONITORING_KEYS,
   "MONITOR_NETWORK_SWITCH_EXPORTER_URL",
   "MONITOR_NETWORK_SWITCH_FIRMWARE_VERSION",
   "MONITOR_NETWORK_SWITCH_MODEL",
@@ -83,7 +114,10 @@ const REQUIRED_MONITORING_KEYS = Object.freeze([
   "LINOVISION_SNMP_PRIV_PASSWORD",
   "LINOVISION_SNMP_USER"
 ]);
-const PRE_SENTINEL_MONITORING_KEYS = Object.freeze(REQUIRED_MONITORING_KEYS.filter((key) => key !== "HEALTHCHECKS_SENTINEL_PING_URL"));
+const PRE_VENUE_MONITORING_KEYS = Object.freeze([
+  ...REQUIRED_MONITORING_KEYS.filter((key) => !VENUE_MONITORING_KEYS.includes(key)),
+  "MONITOR_ROUTER_HEARTBEAT_TOKEN"
+]);
 
 if (process.argv[1] && resolve(process.argv[1]) === SCRIPT_PATH) {
   main().catch((error) => {
@@ -233,7 +267,7 @@ export async function migrateProductionRecoverySource({ source, destinations, ou
 }
 
 export async function refreshProductionRecoveryMonitoring({ source, monitoringEnvironment, output }) {
-  const previous = await loadPreSentinelProductionRecoverySource(source);
+  const previous = await loadPreVenueProductionRecoverySource(source);
   const currentEnvironment = await loadProtectedEnv(monitoringEnvironment);
   const refreshedMonitoring = migrateMonitoringEnvironment({
     sourceEnvironment: previous.monitoringEnvironment,
@@ -257,7 +291,7 @@ export async function refreshProductionRecoveryMonitoring({ source, monitoringEn
       ...previous.marker,
       createdAt: new Date().toISOString(),
       monitoringMigratedFromSourceSha256: previous.sourceSha256,
-      sentinelPingSha256: sha256(Buffer.from(refreshedMonitoring.HEALTHCHECKS_SENTINEL_PING_URL, "utf8")),
+      venueMonitoringContractSha256: sha256(Buffer.from(stableJson(Object.fromEntries(VENUE_MONITORING_KEYS.map((key) => [key, refreshedMonitoring[key]]))), "utf8")),
       files: await hashesForFiles(temporary, SOURCE_FILES)
     };
     await writeProtected(join(temporary, "SOURCE_COMPLETE.json"), `${JSON.stringify(marker, null, 2)}\n`);
@@ -319,18 +353,16 @@ export async function refreshProductionRecoveryWebRuntime({ source, output }) {
 }
 
 export function migrateMonitoringEnvironment({ sourceEnvironment, currentEnvironment }) {
-  requireEnvironment(sourceEnvironment, PRE_SENTINEL_MONITORING_KEYS);
+  requireEnvironment(sourceEnvironment, PRE_VENUE_MONITORING_KEYS);
   rejectTwilio(sourceEnvironment);
-  if (sourceEnvironment.HEALTHCHECKS_SENTINEL_PING_URL?.trim()) {
-    throw new Error("production recovery source already contains a Healthchecks sentinel ping URL");
-  }
-  requireEnvironment(currentEnvironment, ["HEALTHCHECKS_SENTINEL_PING_URL"]);
+  requireEnvironment(currentEnvironment, VENUE_MONITORING_KEYS);
   rejectTwilio(currentEnvironment);
-  const sentinel = validateHealthchecksPingUrl(currentEnvironment.HEALTHCHECKS_SENTINEL_PING_URL);
-  if ([sourceEnvironment.HEALTHCHECKS_BASELINE_PING_URL, sourceEnvironment.HEALTHCHECKS_ACTIVE_PING_URL].includes(sentinel)) {
-    throw new Error("Healthchecks sentinel ping URL must not reuse a monitor dead-man URL");
-  }
-  return filterMonitoringEnvironment({ ...sourceEnvironment, HEALTHCHECKS_SENTINEL_PING_URL: sentinel });
+  const migrated = {
+    ...sourceEnvironment,
+    ...Object.fromEntries(VENUE_MONITORING_KEYS.map((key) => [key, currentEnvironment[key].trim()]))
+  };
+  delete migrated.MONITOR_ROUTER_HEARTBEAT_TOKEN;
+  return filterMonitoringEnvironment(migrated);
 }
 
 export function migrateWebRuntimeEnvironment(sourceEnvironment) {
@@ -450,12 +482,8 @@ export async function loadProductionRecoverySource(sourceDirectory) {
   return loadProductionRecoverySourceWithKeys(sourceDirectory, REQUIRED_MONITORING_KEYS);
 }
 
-async function loadPreSentinelProductionRecoverySource(sourceDirectory) {
-  const source = await loadProductionRecoverySourceWithKeys(sourceDirectory, PRE_SENTINEL_MONITORING_KEYS);
-  if (source.monitoringEnvironment.HEALTHCHECKS_SENTINEL_PING_URL?.trim()) {
-    throw new Error("production recovery source already contains a Healthchecks sentinel ping URL");
-  }
-  return source;
+async function loadPreVenueProductionRecoverySource(sourceDirectory) {
+  return loadProductionRecoverySourceWithKeys(sourceDirectory, PRE_VENUE_MONITORING_KEYS);
 }
 
 async function loadPreHlsProductionRecoverySource(sourceDirectory) {
@@ -734,7 +762,6 @@ function buildRecoveryWebEnvironment({ webEnvironment, monitoringEnvironment, ma
   const mediaReader = derivedMediaReadCredentials(material.programPageToken);
   output.PROGRAM_PAGE_TOKEN = material.programPageToken;
   output.MONITOR_API_TOKEN = required(monitoringEnvironment, "MONITOR_API_TOKEN");
-  output.MONITOR_ROUTER_HEARTBEAT_TOKEN = required(monitoringEnvironment, "MONITOR_ROUTER_HEARTBEAT_TOKEN");
   output.MONITOR_BROWSER_HEARTBEAT_SECRET = required(monitoringEnvironment, "MONITOR_BROWSER_HEARTBEAT_SECRET");
   output.MONITOR_PUBLIC_URL = `https://${required(monitoringEnvironment, "MONITOR_PUBLIC_HOST")}`;
   output.MEDIAMTX_RTMP_INGEST_BASE = output.MEDIAMTX_RTMP_INGEST_BASE
@@ -936,7 +963,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-  process.stdout.write("Usage:\n  node infra/event-stack/production-recovery.mjs capture --capture-root /PROTECTED/CAPTURE --output /PROTECTED/SOURCE\n  node infra/event-stack/production-recovery.mjs migrate-youtube --source /PROTECTED/SOURCE --destinations /PROTECTED/destinations.json --output /PROTECTED/ROTATED-SOURCE\n  node infra/event-stack/production-recovery.mjs refresh-monitoring --source /PROTECTED/PRE-SENTINEL-SOURCE --monitoring-env /PROTECTED/monitoring.env --output /PROTECTED/REFRESHED-SOURCE\n  node infra/event-stack/production-recovery.mjs refresh-web-runtime --source /PROTECTED/PRE-HLS-SOURCE --output /PROTECTED/REFRESHED-SOURCE\n  node infra/event-stack/production-recovery.mjs verify --source /PROTECTED/SOURCE\n");
+  process.stdout.write("Usage:\n  node infra/event-stack/production-recovery.mjs capture --capture-root /PROTECTED/CAPTURE --output /PROTECTED/SOURCE\n  node infra/event-stack/production-recovery.mjs migrate-youtube --source /PROTECTED/SOURCE --destinations /PROTECTED/destinations.json --output /PROTECTED/ROTATED-SOURCE\n  node infra/event-stack/production-recovery.mjs refresh-monitoring --source /PROTECTED/PRE-VENUE-SOURCE --monitoring-env /PROTECTED/monitoring.env --output /PROTECTED/REFRESHED-SOURCE\n  node infra/event-stack/production-recovery.mjs refresh-web-runtime --source /PROTECTED/PRE-HLS-SOURCE --output /PROTECTED/REFRESHED-SOURCE\n  node infra/event-stack/production-recovery.mjs verify --source /PROTECTED/SOURCE\n");
 }
 
 function envFile(values) {
@@ -972,15 +999,6 @@ function requireProviderId(value, label) {
 function rejectTwilio(environment) {
   const keys = Object.keys(environment ?? {}).filter((key) => key.startsWith("TWILIO_"));
   if (keys.length) throw new Error("production monitoring recovery source must not contain Twilio credentials");
-}
-
-function validateHealthchecksPingUrl(value) {
-  let url;
-  try { url = new URL(value); } catch { throw new Error("Healthchecks sentinel ping URL is invalid"); }
-  if (url.protocol !== "https:" || url.username || url.password || url.hash) {
-    throw new Error("Healthchecks sentinel ping URL must be HTTPS without credentials or fragments");
-  }
-  return url.toString();
 }
 
 function validateRelativeFile(value) {

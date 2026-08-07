@@ -1,5 +1,6 @@
 import { MONITORING_CONTRACT_VERSION, worstHealthState, type AgentSnapshot, type BrowserHeartbeatSnapshot, type BrowserThumbnailMetadata, type CameraContentSnapshot, type ControlPlaneSnapshot, type CourtExpectation, type DeadManHealth, type FfmpegBranchSnapshot, type HealthState, type IncidentSnapshot, type MediaPathSnapshot, type MonitoringFaultGate, type MonitoringSilence, type MonitorSnapshot, type MonitoringStage, type NetworkSwitchMonitorSnapshot, type NotificationHealth, type RouterMonitorSnapshot, type StageHealth, type UniFiMonitorSnapshot, type YouTubeMonitorSnapshot } from "./contracts.js";
-import { emptyRouterSnapshot } from "./routerHeartbeats.js";
+import { emptyPeplinkSnapshot } from "./peplink.js";
+import type { PeplinkConfig } from "./config.js";
 import type { AgentTarget } from "./config.js";
 import { faultGateExpectation, programBrowserIsRequired } from "./faultGateControl.js";
 
@@ -29,7 +30,22 @@ export function buildMonitorSnapshot(
   thumbnails = new Map<number, BrowserThumbnailMetadata>(),
   silences: MonitoringSilence[] = [],
   faultGates: MonitoringFaultGate[] = [],
-  router: RouterMonitorSnapshot = emptyRouterSnapshot(),
+  router: RouterMonitorSnapshot = emptyPeplinkSnapshot({
+    required: false,
+    configured: false,
+    clientId: null,
+    clientSecret: null,
+    organizationId: null,
+    groupId: null,
+    deviceId: null,
+    productCode: null,
+    hardwareVersion: null,
+    firmwareVersion: null,
+    speedFusionProfileName: null,
+    cameraSsid: null,
+    wans: [],
+    pollIntervalMs: 30_000
+  } satisfies PeplinkConfig),
   unifi: UniFiMonitorSnapshot = emptyUniFiSnapshot(),
   networkSwitch: NetworkSwitchMonitorSnapshot = emptyNetworkSwitchSnapshot()
 ): MonitorSnapshot {

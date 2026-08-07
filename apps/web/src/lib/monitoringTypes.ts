@@ -272,71 +272,59 @@ export type MonitorAgent = {
 
 export type MonitorRouter = {
   state: MonitorHealthState;
+  required: boolean;
+  configured: boolean;
+  apiReachable: boolean | null;
   sampledAt: string | null;
-  receivedAt: string | null;
-  ageMs: number | null;
-  speedify: {
-    state: "CONNECTED" | "LOGGED_IN" | "DISCONNECTED" | "UNKNOWN";
-    softwareVersion: string;
-    bondingMode: "speed" | "streaming" | "redundant" | "unknown";
-    transportMode: "udp" | "tcp" | "tcp-multi" | "https" | "auto" | "unknown";
-    adapterCount: number;
-    automaticAdapterCount: number;
-    sendBps: number;
-    receiveBps: number;
-    estimatedUploadBps: number | null;
-    uploadHeadroomBps: number | null;
-    latencyMs: number | null;
-    jitterMs: number | null;
-    lossSendRatio: number | null;
-    lossReceiveRatio: number | null;
-    uploadCongested: boolean;
-    badCpu: boolean;
-    badLatency: boolean;
-    badLoss: boolean;
-    badMemory: boolean;
-    readQueuePackets: number | null;
-    failoverCount: number | null;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  identity: {
+    name: string;
+    productName: string;
+    productCode: string;
+    hardwareVersion: string;
+    firmwareVersion: string;
+    online: boolean;
+    uptimeSeconds: number | null;
   } | null;
-  routing: {
-    srtDevice: string;
-    rtmpDevice: string;
-    primaryRuleCount: number;
-    guardRuleCount: number;
-    killSwitchActive: boolean;
-    cameraFlowCount: number;
+  resources: {
+    cpuUtilizationPct: number | null;
+    memoryUtilizationPct: number | null;
   } | null;
-  cameraWifi: {
-    interface: string;
-    associatedClientCount: number | null;
-    minimumSignalDbm: number | null;
-  } | null;
-  host: {
-    load1: number;
-    memoryAvailableBytes: number;
-    speedifyRssBytes: number;
-    streamingStatsProcessCount: number;
-  } | null;
-  uplinks: Array<{
-    id: string;
-    isp: string | null;
-    type: "ethernet" | "wifi" | "cellular" | "other";
+  speedFusion: {
+    profileName: string;
     connected: boolean;
-    priority: "always" | "secondary" | "backup" | "never" | "unknown";
-    savedPriority: "automatic" | "always" | "secondary" | "backup" | "never" | "unknown";
-    sendBps: number;
-    receiveBps: number;
-    estimatedUploadBps: number | null;
-    latencyMs: number | null;
-    jitterMs: number | null;
-    lossSendRatio: number | null;
-    lossReceiveRatio: number | null;
-    inFlightBytes: number | null;
-    inFlightWindowBytes: number | null;
-    uploadCongested: boolean;
-    poorConnection: boolean;
-    slowConnection: boolean;
+    profileStatus: string | null;
+    peerStatus: string | null;
+    transport: "UDP" | "TCP" | null;
+    latencyDifferenceCutoffMs: number | null;
+    rateLimitMbps: number | null;
+    quotaMb: number | null;
+    usageMb: number | null;
+    expiresAt: string | null;
+    suspended: boolean | null;
+  } | null;
+  clients: {
+    connected: number;
+    cameraWlanSsid: string;
+    cameraWlanConnected: number;
+  } | null;
+  wans: Array<{
+    id: string;
+    name: string;
+    type: "ethernet" | "wifi" | "cellular" | "other";
+    required: boolean;
+    enabled: boolean;
+    connected: boolean;
+    message: string;
+    priority: number | null;
+    uptimeSeconds: number | null;
+    carrier: string | null;
+    technology: string | null;
+    signalLevel: number | null;
+    bands: Array<{ name: string; channelWidth: string | null; rssiDbm: number | null; rsrpDbm: number | null; rsrqDb: number | null }>;
   }>;
+  problems: string[];
 };
 
 export type MonitorUniFi = {

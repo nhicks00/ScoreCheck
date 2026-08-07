@@ -39,7 +39,6 @@ describe("monitoring configuration", () => {
 
     const service = loadServiceConfig({
       MONITOR_API_TOKEN: "abcdefghijklmnopqrstuvwxyz",
-      MONITOR_ROUTER_HEARTBEAT_TOKEN: "router-heartbeat-token-long-enough",
       ALERTMANAGER_WEBHOOK_TOKEN: "zyxwvutsrqponmlkjihgfedcba",
       MONITOR_BROWSER_HEARTBEAT_SECRET: "browser-heartbeat-secret-that-is-long-enough",
       MONITOR_PUBLIC_HOST: "monitor.example.test",
@@ -64,7 +63,6 @@ describe("monitoring configuration", () => {
   it("requires the complete Healthchecks lifecycle and channel-audit configuration as one unit", () => {
     const base = {
       MONITOR_API_TOKEN: "abcdefghijklmnopqrstuvwxyz",
-      MONITOR_ROUTER_HEARTBEAT_TOKEN: "router-heartbeat-token-long-enough",
       ALERTMANAGER_WEBHOOK_TOKEN: "zyxwvutsrqponmlkjihgfedcba",
       MONITOR_BROWSER_HEARTBEAT_SECRET: "browser-heartbeat-secret-that-is-long-enough",
       MONITOR_PUBLIC_HOST: "monitor.example.test"
@@ -89,7 +87,6 @@ describe("monitoring configuration", () => {
   it("keeps UniFi optional until the three real access points are commissioned", () => {
     const base = {
       MONITOR_API_TOKEN: "abcdefghijklmnopqrstuvwxyz",
-      MONITOR_ROUTER_HEARTBEAT_TOKEN: "router-heartbeat-token-long-enough",
       ALERTMANAGER_WEBHOOK_TOKEN: "zyxwvutsrqponmlkjihgfedcba",
       MONITOR_BROWSER_HEARTBEAT_SECRET: "browser-heartbeat-secret-that-is-long-enough",
       MONITOR_PUBLIC_HOST: "monitor.example.test"
@@ -99,10 +96,50 @@ describe("monitoring configuration", () => {
     expect(() => loadServiceConfig({ ...base, MONITOR_UNIFI_API_KEY: "partial" })).toThrow(/requires its API key/);
   });
 
+  it("requires and parses the complete commissioned Peplink contract", () => {
+    const base = {
+      MONITOR_API_TOKEN: "abcdefghijklmnopqrstuvwxyz",
+      ALERTMANAGER_WEBHOOK_TOKEN: "zyxwvutsrqponmlkjihgfedcba",
+      MONITOR_BROWSER_HEARTBEAT_SECRET: "browser-heartbeat-secret-that-is-long-enough",
+      MONITOR_PUBLIC_HOST: "monitor.example.test"
+    };
+    expect(loadServiceConfig(base).peplink).toMatchObject({ required: false, configured: false, wans: [] });
+    expect(() => loadServiceConfig({ ...base, MONITOR_PEPLINK_REQUIRED: "true" })).toThrow(/not configured/);
+    const configured = {
+      ...base,
+      MONITOR_PEPLINK_REQUIRED: "true",
+      MONITOR_PEPLINK_CLIENT_ID: "a".repeat(32),
+      MONITOR_PEPLINK_CLIENT_SECRET: "b".repeat(32),
+      MONITOR_PEPLINK_ORGANIZATION_ID: "org123",
+      MONITOR_PEPLINK_GROUP_ID: "3",
+      MONITOR_PEPLINK_DEVICE_ID: "9",
+      MONITOR_PEPLINK_PRODUCT_CODE: "MAX-BR1-PRO-5GK-T-PRM",
+      MONITOR_PEPLINK_HARDWARE_VERSION: "3",
+      MONITOR_PEPLINK_FIRMWARE_VERSION: "8.6.0 build 6450",
+      MONITOR_PEPLINK_SPEEDFUSION_PROFILE_NAME: "SFC-SFO",
+      MONITOR_PEPLINK_CAMERA_SSID: "BVM",
+      MONITOR_PEPLINK_WANS_JSON: JSON.stringify([
+        { id: 1, name: "WAN", required: true },
+        { id: 2, name: "Cellular", required: true }
+      ])
+    };
+    expect(loadServiceConfig(configured).peplink).toMatchObject({
+      required: true,
+      configured: true,
+      groupId: 3,
+      deviceId: 9,
+      productCode: "MAX-BR1-PRO-5GK-T-PRM",
+      firmwareVersion: "8.6.0 build 6450",
+      wans: [{ id: 1, name: "WAN", required: true }, { id: 2, name: "Cellular", required: true }]
+    });
+    expect(() => loadServiceConfig({ ...configured, MONITOR_PEPLINK_CLIENT_SECRET: "" })).toThrow(/complete InControl/);
+    expect(() => loadServiceConfig({ ...configured, MONITOR_PEPLINK_FIRMWARE_VERSION: "8.5.4 build 6264" })).toThrow(/8.6.0 build 6450/);
+    expect(() => loadServiceConfig({ ...configured, MONITOR_PEPLINK_WANS_JSON: "[]" })).toThrow(/valid WAN bindings/);
+  });
+
   it("parses exactly three unique commissioned UniFi access points", () => {
     const base = {
       MONITOR_API_TOKEN: "abcdefghijklmnopqrstuvwxyz",
-      MONITOR_ROUTER_HEARTBEAT_TOKEN: "router-heartbeat-token-long-enough",
       ALERTMANAGER_WEBHOOK_TOKEN: "zyxwvutsrqponmlkjihgfedcba",
       MONITOR_BROWSER_HEARTBEAT_SECRET: "browser-heartbeat-secret-that-is-long-enough",
       MONITOR_PUBLIC_HOST: "monitor.example.test",
@@ -127,7 +164,6 @@ describe("monitoring configuration", () => {
   it("requires a complete, bounded network-switch contract", () => {
     const base = {
       MONITOR_API_TOKEN: "abcdefghijklmnopqrstuvwxyz",
-      MONITOR_ROUTER_HEARTBEAT_TOKEN: "router-heartbeat-token-long-enough",
       ALERTMANAGER_WEBHOOK_TOKEN: "zyxwvutsrqponmlkjihgfedcba",
       MONITOR_BROWSER_HEARTBEAT_SECRET: "browser-heartbeat-secret-that-is-long-enough",
       MONITOR_PUBLIC_HOST: "monitor.example.test"

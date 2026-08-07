@@ -89,7 +89,6 @@ export type AgentTarget = {
 export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
   const schema = z.object({
     MONITOR_API_TOKEN: z.string().min(24),
-    MONITOR_ROUTER_HEARTBEAT_TOKEN: z.string().min(24),
     ALERTMANAGER_WEBHOOK_TOKEN: z.string().min(24),
     ALERTMANAGER_INTERNAL_URL: safeHttpUrl.default("http://alertmanager:9093"),
     PROMETHEUS_INTERNAL_URL: safeHttpUrl.default("http://prometheus:9090"),
@@ -122,6 +121,19 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     YOUTUBE_CLIENT_SECRET: z.string().default(""),
     YOUTUBE_REFRESH_TOKEN: z.string().default(""),
     YOUTUBE_MONITOR_INTERVAL_MS: z.coerce.number().int().min(30_000).max(300_000).default(60_000),
+    MONITOR_PEPLINK_REQUIRED: z.enum(["true", "false"]).default("false"),
+    MONITOR_PEPLINK_CLIENT_ID: z.string().default(""),
+    MONITOR_PEPLINK_CLIENT_SECRET: z.string().default(""),
+    MONITOR_PEPLINK_ORGANIZATION_ID: z.string().default(""),
+    MONITOR_PEPLINK_GROUP_ID: z.string().default(""),
+    MONITOR_PEPLINK_DEVICE_ID: z.string().default(""),
+    MONITOR_PEPLINK_PRODUCT_CODE: z.string().default(""),
+    MONITOR_PEPLINK_HARDWARE_VERSION: z.string().default(""),
+    MONITOR_PEPLINK_FIRMWARE_VERSION: z.string().default(""),
+    MONITOR_PEPLINK_SPEEDFUSION_PROFILE_NAME: z.string().default(""),
+    MONITOR_PEPLINK_CAMERA_SSID: z.string().default(""),
+    MONITOR_PEPLINK_WANS_JSON: z.string().default(""),
+    MONITOR_PEPLINK_POLL_INTERVAL_MS: z.coerce.number().int().min(15_000).max(300_000).default(30_000),
     MONITOR_UNIFI_REQUIRED: z.enum(["true", "false"]).default("false"),
     MONITOR_UNIFI_API_KEY: z.string().default(""),
     MONITOR_UNIFI_BASE_URL: z.string().default(""),
@@ -156,10 +168,10 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     throw new Error("Healthchecks dead-man monitoring requires both ping URLs, both check ids, and the write API key together.");
   }
   const unifi = parseUniFiConfig(parsed);
+  const peplink = parsePeplinkConfig(parsed);
   const networkSwitch = parseNetworkSwitchConfig(parsed);
   return {
     token: parsed.MONITOR_API_TOKEN,
-    routerHeartbeatToken: parsed.MONITOR_ROUTER_HEARTBEAT_TOKEN,
     alertmanagerWebhookToken: parsed.ALERTMANAGER_WEBHOOK_TOKEN,
     alertmanagerInternalUrl: parsed.ALERTMANAGER_INTERNAL_URL.replace(/\/+$/, ""),
     prometheusInternalUrl: parsed.PROMETHEUS_INTERNAL_URL.replace(/\/+$/, ""),
@@ -190,8 +202,124 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     youtubeClientSecret: parsed.YOUTUBE_CLIENT_SECRET.trim() || null,
     youtubeRefreshToken: parsed.YOUTUBE_REFRESH_TOKEN.trim() || null,
     youtubeMonitorIntervalMs: parsed.YOUTUBE_MONITOR_INTERVAL_MS,
+    peplink,
     unifi,
     networkSwitch
+  };
+}
+
+export type PeplinkWanBinding = {
+  id: number;
+  name: string;
+  required: boolean;
+};
+
+export type PeplinkConfig = {
+  required: boolean;
+  configured: boolean;
+  clientId: string | null;
+  clientSecret: string | null;
+  organizationId: string | null;
+  groupId: number | null;
+  deviceId: number | null;
+  productCode: string | null;
+  hardwareVersion: string | null;
+  firmwareVersion: string | null;
+  speedFusionProfileName: string | null;
+  cameraSsid: string | null;
+  wans: PeplinkWanBinding[];
+  pollIntervalMs: number;
+};
+
+function parsePeplinkConfig(parsed: {
+  MONITOR_PEPLINK_REQUIRED: "true" | "false";
+  MONITOR_PEPLINK_CLIENT_ID: string;
+  MONITOR_PEPLINK_CLIENT_SECRET: string;
+  MONITOR_PEPLINK_ORGANIZATION_ID: string;
+  MONITOR_PEPLINK_GROUP_ID: string;
+  MONITOR_PEPLINK_DEVICE_ID: string;
+  MONITOR_PEPLINK_PRODUCT_CODE: string;
+  MONITOR_PEPLINK_HARDWARE_VERSION: string;
+  MONITOR_PEPLINK_FIRMWARE_VERSION: string;
+  MONITOR_PEPLINK_SPEEDFUSION_PROFILE_NAME: string;
+  MONITOR_PEPLINK_CAMERA_SSID: string;
+  MONITOR_PEPLINK_WANS_JSON: string;
+  MONITOR_PEPLINK_POLL_INTERVAL_MS: number;
+}): PeplinkConfig {
+  const required = parsed.MONITOR_PEPLINK_REQUIRED === "true";
+  const raw = {
+    clientId: parsed.MONITOR_PEPLINK_CLIENT_ID.trim(),
+    clientSecret: parsed.MONITOR_PEPLINK_CLIENT_SECRET.trim(),
+    organizationId: parsed.MONITOR_PEPLINK_ORGANIZATION_ID.trim(),
+    groupId: parsed.MONITOR_PEPLINK_GROUP_ID.trim(),
+    deviceId: parsed.MONITOR_PEPLINK_DEVICE_ID.trim(),
+    productCode: parsed.MONITOR_PEPLINK_PRODUCT_CODE.trim(),
+    hardwareVersion: parsed.MONITOR_PEPLINK_HARDWARE_VERSION.trim(),
+    firmwareVersion: parsed.MONITOR_PEPLINK_FIRMWARE_VERSION.trim(),
+    speedFusionProfileName: parsed.MONITOR_PEPLINK_SPEEDFUSION_PROFILE_NAME.trim(),
+    cameraSsid: parsed.MONITOR_PEPLINK_CAMERA_SSID.trim(),
+    wans: parsed.MONITOR_PEPLINK_WANS_JSON.trim()
+  };
+  const configuredValues = Object.values(raw).filter(Boolean).length;
+  if (configuredValues === 0) {
+    if (required) throw new Error("Required Peplink monitoring is not configured.");
+    return {
+      required,
+      configured: false,
+      clientId: null,
+      clientSecret: null,
+      organizationId: null,
+      groupId: null,
+      deviceId: null,
+      productCode: null,
+      hardwareVersion: null,
+      firmwareVersion: null,
+      speedFusionProfileName: null,
+      cameraSsid: null,
+      wans: [],
+      pollIntervalMs: parsed.MONITOR_PEPLINK_POLL_INTERVAL_MS
+    };
+  }
+  if (configuredValues !== Object.keys(raw).length) throw new Error("Peplink monitoring requires its complete InControl, identity, SpeedFusion, camera WLAN, and WAN contract together.");
+  if (!/^[A-Za-z0-9_-]{24,}$/.test(raw.clientId) || !/^[A-Za-z0-9_-]{24,}$/.test(raw.clientSecret)) {
+    throw new Error("Peplink InControl client credentials are invalid.");
+  }
+  if (!/^[A-Za-z0-9_-]{1,32}$/.test(raw.organizationId)) throw new Error("Peplink organization id is invalid.");
+  const groupId = z.coerce.number().int().positive().parse(raw.groupId);
+  const deviceId = z.coerce.number().int().positive().parse(raw.deviceId);
+  if (raw.productCode !== "MAX-BR1-PRO-5GK-T-PRM") throw new Error("Peplink product code must match the commissioned MAX BR1 Pro 5G HW3.");
+  if (raw.hardwareVersion !== "3") throw new Error("Peplink hardware version must be 3.");
+  if (raw.firmwareVersion !== "8.6.0 build 6450") throw new Error("Peplink firmware must be the commissioned 8.6.0 build 6450 release.");
+  if (!/^[A-Za-z0-9_. -]{1,80}$/.test(raw.speedFusionProfileName)) throw new Error("Peplink SpeedFusion profile name is invalid.");
+  if (raw.cameraSsid.length > 32 || /[\r\n\0]/.test(raw.cameraSsid)) throw new Error("Peplink camera SSID is invalid.");
+  let wans: PeplinkWanBinding[];
+  try {
+    wans = z.array(z.object({
+      id: z.number().int().positive().max(64),
+      name: z.string().trim().min(1).max(80),
+      required: z.boolean()
+    }).strict()).min(1).max(16).parse(JSON.parse(raw.wans));
+  } catch {
+    throw new Error("MONITOR_PEPLINK_WANS_JSON must contain valid WAN bindings.");
+  }
+  if (new Set(wans.map((wan) => wan.id)).size !== wans.length || new Set(wans.map((wan) => wan.name)).size !== wans.length) {
+    throw new Error("Peplink WAN ids and names must be unique.");
+  }
+  return {
+    required,
+    configured: true,
+    clientId: raw.clientId,
+    clientSecret: raw.clientSecret,
+    organizationId: raw.organizationId,
+    groupId,
+    deviceId,
+    productCode: raw.productCode,
+    hardwareVersion: raw.hardwareVersion,
+    firmwareVersion: raw.firmwareVersion,
+    speedFusionProfileName: raw.speedFusionProfileName,
+    cameraSsid: raw.cameraSsid,
+    wans,
+    pollIntervalMs: parsed.MONITOR_PEPLINK_POLL_INTERVAL_MS
   };
 }
 

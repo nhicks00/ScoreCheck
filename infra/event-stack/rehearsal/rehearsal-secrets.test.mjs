@@ -15,6 +15,21 @@ const renderer = {
   deploymentId: "dpl_renderer123",
   gitSha: "a".repeat(40)
 };
+const external = {
+  peplink: {
+    MONITOR_PEPLINK_CAMERA_SSID: "BVM",
+    MONITOR_PEPLINK_CLIENT_ID: "peplink-client-id-abcdefghijklmnopqrstuvwxyz",
+    MONITOR_PEPLINK_CLIENT_SECRET: "peplink-client-secret-abcdefghijklmnopqrstuvwxyz",
+    MONITOR_PEPLINK_DEVICE_ID: "123",
+    MONITOR_PEPLINK_FIRMWARE_VERSION: "8.6.0 build 6450",
+    MONITOR_PEPLINK_GROUP_ID: "456",
+    MONITOR_PEPLINK_HARDWARE_VERSION: "3",
+    MONITOR_PEPLINK_ORGANIZATION_ID: "organization-1",
+    MONITOR_PEPLINK_PRODUCT_CODE: "MAX-BR1-PRO-5GK-T-PRM",
+    MONITOR_PEPLINK_SPEEDFUSION_PROFILE_NAME: "SFC-SFO",
+    MONITOR_PEPLINK_WANS_JSON: '[{"id":1,"name":"WAN","required":true},{"id":2,"name":"Cellular","required":true}]'
+  }
+};
 
 test("generates isolated Vercel configuration without Supabase", () => {
   const material = createRehearsalSecretMaterial({ random: deterministic });
@@ -46,7 +61,8 @@ test("renders protected all-publisher, eight-compositor secrets with no producti
     material,
     directory: target,
     renderer,
-    youtubeDestinations: destinations
+    youtubeDestinations: destinations,
+    external
   });
   const ingest = await readFile(join(target, "ingest.env"), "utf8");
   for (let court = 1; court <= 8; court += 1) {
@@ -55,6 +71,8 @@ test("renders protected all-publisher, eight-compositor secrets with no producti
   }
   const observer = await readFile(join(target, "observability.env"), "utf8");
   assert.doesNotMatch(observer, /SUPABASE_|HEALTHCHECKS_/);
+  assert.doesNotMatch(observer, /MONITOR_ROUTER_HEARTBEAT_TOKEN/);
+  assert.match(observer, /MONITOR_PEPLINK_PRODUCT_CODE="MAX-BR1-PRO-5GK-T-PRM"/);
   const compositor = await readFile(join(target, "compositors", "bvm-compositor-a.env"), "utf8");
   assert.match(compositor, /COURT_1_YOUTUBE_KEY="secret-key-1"/);
   assert.match(compositor, /PROGRAM_PAGE_BASE_URL="https:\/\/scorecheck-rehearsal-abc123-test\.vercel\.app\/program"/);
@@ -69,7 +87,8 @@ test("renders protected all-publisher, eight-compositor secrets with no producti
     material,
     directory: target,
     renderer,
-    youtubeDestinations: destinations
+    youtubeDestinations: destinations,
+    external
   });
   assert.equal((await stat(join(target, "RENDER_COMPLETE.json"))).mode & 0o077, 0);
 });
@@ -84,6 +103,7 @@ test("rejects production origins and incomplete YouTube ownership", async () => 
     material,
     directory: root,
     renderer: { ...renderer, origin: "https://score.beachvolleyballmedia.com" },
-    youtubeDestinations: []
+    youtubeDestinations: [],
+    external
   }), /isolated HTTPS origin/);
 });

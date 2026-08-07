@@ -41,14 +41,18 @@ const POLL_INTERVAL_MS = 5_000;
 const STATE_RANK: Record<MonitorHealthState, number> = { CRITICAL: 9, UNKNOWN: 8, DEGRADED: 7, RECOVERING: 6, STARTING: 5, HEALTHY: 4, MAINTENANCE: 3, EXPECTED_OFF: 2, NOT_APPLICABLE: 1 };
 const ROUTER_UNAVAILABLE: MonitorRouter = {
   state: "UNKNOWN",
+  required: false,
+  configured: false,
+  apiReachable: null,
   sampledAt: null,
-  receivedAt: null,
-  ageMs: null,
-  speedify: null,
-  routing: null,
-  cameraWifi: null,
-  host: null,
-  uplinks: []
+  lastSuccessAt: null,
+  lastFailureAt: null,
+  identity: null,
+  resources: null,
+  speedFusion: null,
+  clients: null,
+  wans: [],
+  problems: []
 };
 const UNIFI_UNAVAILABLE: MonitorUniFi = {
   state: "NOT_APPLICABLE",
@@ -270,7 +274,7 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
     ? snapshot.event?.status.toLowerCase() === "active"
     : isCheckpointEventOperational(snapshot.event, nowMs);
   const stale = !snapshotCurrent;
-  const routerCurrent = isTelemetryCurrent(snapshotCurrent, router.receivedAt, nowMs, 20_000);
+  const routerCurrent = isTelemetryCurrent(snapshotCurrent, router.sampledAt, nowMs, 90_000) && router.apiReachable === true;
   const unifiCurrent = isTelemetryCurrent(snapshotCurrent, unifi.sampledAt, nowMs, 90_000) && unifi.apiReachable === true;
   const switchCurrent = isTelemetryCurrent(snapshotCurrent, networkSwitch.sampledAt, nowMs, 90_000) && networkSwitch.reachable === true;
   const pagingReadiness = deriveMonitorPagingReadiness(snapshot.notifications);
@@ -622,6 +626,11 @@ function OverviewPanel({ snapshot, snapshotCurrent, eventOperational, unifi, uni
     + (port.inputDiscardsPerSecond ?? 0)
     + (port.outputDiscardsPerSecond ?? 0), 0);
   const cameraClients = unifiCurrent ? unifi.clients.filter((client) => cameraNumberFromClientName(client.name) != null) : [];
+  const requiredWans = router.wans.filter((wan) => wan.required);
+  const requiredWansConnected = requiredWans.filter((wan) => wan.connected).length;
+  const worstApRetriesPct = unifiCurrent
+    ? Math.max(0, ...unifi.accessPoints.flatMap((accessPoint) => accessPoint.radios.map((radio) => radio.txRetriesPct ?? 0)))
+    : null;
   const youtubeState = snapshotCurrent ? snapshot.youtube.state : unavailableState(!eventOperational);
   return (
     <section id="monitor-panel-overview" className="monitor-tab-panel monitor-overview-panel" role="tabpanel" aria-labelledby="monitor-tab-overview">
@@ -654,8 +663,8 @@ function OverviewPanel({ snapshot, snapshotCurrent, eventOperational, unifi, uni
         <table className="monitor-overview-table monitor-infrastructure-overview-table">
           <thead><tr><th>System</th><th>Status</th><th>Primary reading</th><th>Quality</th></tr></thead>
           <tbody>
-            <OverviewInfrastructureRow icon={<RouterIcon size={16} />} name="Router and internet" state={routerState} status={routerCurrent ? routerStateLabel(router.state) : offlineLabel(eventOperational)} primary={routerCurrent && router.routing ? `${router.routing.cameraFlowCount} camera sessions` : "--"} quality={routerCurrent && router.speedify ? `${formatBitrate(router.speedify.uploadHeadroomBps)} upload headroom` : "--"} />
-            <OverviewInfrastructureRow icon={<Wifi size={16} />} name="Wi-Fi access points" state={unifiState} status={unifiCurrent ? `${unifi.onlineAccessPoints}/${unifi.expectedAccessPoints} online` : offlineLabel(eventOperational)} primary={unifiCurrent ? `${cameraClients.length} cameras connected` : "--"} quality={routerCurrent && router.cameraWifi?.minimumSignalDbm != null ? `Weakest signal ${router.cameraWifi.minimumSignalDbm} dBm` : "--"} />
+            <OverviewInfrastructureRow icon={<RouterIcon size={16} />} name="Router and internet" state={routerState} status={routerCurrent ? routerStateLabel(router.state) : offlineLabel(eventOperational)} primary={routerCurrent && router.clients ? `${router.clients.connected} connected devices` : "--"} quality={routerCurrent ? `${requiredWansConnected}/${requiredWans.length} required WANs · ${router.speedFusion?.connected ? "SpeedFusion connected" : "SpeedFusion disconnected"}` : "--"} />
+            <OverviewInfrastructureRow icon={<Wifi size={16} />} name="Wi-Fi access points" state={unifiState} status={unifiCurrent ? `${unifi.onlineAccessPoints}/${unifi.expectedAccessPoints} online` : offlineLabel(eventOperational)} primary={unifiCurrent ? `${cameraClients.length} cameras connected` : "--"} quality={worstApRetriesPct == null ? "--" : `Highest AP retries ${worstApRetriesPct.toFixed(1)}%`} />
             <OverviewInfrastructureRow icon={<Network size={16} />} name="PoE switch" state={switchState} status={switchCurrent ? networkSwitchStateLabel(networkSwitch) : offlineLabel(eventOperational)} primary={switchCurrent ? `${expectedPorts.filter((port) => port.operationalUp).length}/${expectedPorts.length} expected links up` : "--"} quality={switchCurrent ? `${formatWatts(networkSwitch.poe.consumptionWatts)} used · ${switchErrors === 0 ? "no errors" : `${switchErrors.toFixed(2)}/s errors`}` : "--"} />
             <OverviewInfrastructureRow icon={<Youtube size={16} />} name="YouTube delivery" state={youtubeState} status={snapshotCurrent ? friendlyState(snapshot.youtube.state) : offlineLabel(eventOperational)} primary={snapshotCurrent ? `${snapshot.courts.filter((court) => court.youtube?.broadcastLifecycle === "live").length} live outputs` : "--"} quality={snapshotCurrent ? `${snapshot.courts.filter((court) => court.youtube?.healthStatus === "good").length} healthy destinations` : "--"} />
           </tbody>
@@ -808,57 +817,51 @@ function ProblemList({ problems }: { problems: string[] }) {
 }
 
 function RouterBand({ router, nowMs, current, expectedOff }: { router: MonitorRouter; nowMs: number; current: boolean; expectedOff: boolean }) {
-  const speedify = router.speedify;
-  const routing = router.routing;
-  const cameraWifi = router.cameraWifi;
-  const ageMs = router.receivedAt ? Math.max(0, nowMs - Date.parse(router.receivedAt)) : null;
-  const routeReady = routing?.srtDevice === "connectify0"
-    && routing.rtmpDevice === "connectify0"
-    && routing.primaryRuleCount === 2
-    && routing.guardRuleCount === 2
-    && routing.killSwitchActive;
+  const ageMs = router.sampledAt ? Math.max(0, nowMs - Date.parse(router.sampledAt)) : null;
+  const requiredWans = router.wans.filter((wan) => wan.required);
+  const requiredWansConnected = requiredWans.filter((wan) => wan.connected).length;
   const state = current ? router.state : unavailableState(expectedOff);
   return (
     <section id="monitor-panel-router" className="monitor-router-band monitor-tab-panel" role="tabpanel" aria-labelledby="monitor-tab-router" aria-label="Venue network">
       <div className="monitor-router-heading">
-        <div><Network size={19} aria-hidden="true" /><div><h2>Venue network</h2><p>Speedify bonded upload and fail-closed camera routing</p></div></div>
+        <div><Network size={19} aria-hidden="true" /><div><h2>Peplink router and internet</h2><p>Required WAN links, SpeedFusion connection, router load and cellular radio health</p></div></div>
         <StateBadge state={state} label={current ? routerStateLabel(router.state) : expectedOff ? "Off" : "No current data"} />
       </div>
-      {!current ? <MonitorUnavailableNotice title={expectedOff ? "Router is off" : "Router telemetry is unavailable"} detail="No current bonded-link, camera-session, or Wi-Fi telemetry is available. Historical values are intentionally hidden." /> : <>
+      {!current ? <MonitorUnavailableNotice title={expectedOff ? "Router is off" : "Router telemetry is unavailable"} detail="No current router, WAN, SpeedFusion, or client telemetry is available. Historical values are intentionally hidden." /> : <>
       <div className="monitor-router-summary">
-        <Metric label="Sending now" value={formatBitrate(speedify?.sendBps)} />
-        <Metric label="Estimated capacity" value={formatBitrate(speedify?.estimatedUploadBps)} />
-        <Metric label="Estimated headroom" value={formatBitrate(speedify?.uploadHeadroomBps)} />
-        <Metric label="Bonded delay" value={formatMs(speedify?.latencyMs)} />
-        <Metric label="Queue" value={speedify?.readQueuePackets == null ? "--" : `${speedify.readQueuePackets} packets`} />
-        <Metric label="Camera sessions" value={routing ? String(routing.cameraFlowCount) : "--"} />
-        <Metric label="Camera Wi-Fi devices" value={cameraWifi?.associatedClientCount == null ? "--" : String(cameraWifi.associatedClientCount)} />
-        <Metric label="Weakest camera signal" value={cameraWifi?.minimumSignalDbm == null ? "--" : `${cameraWifi.minimumSignalDbm} dBm`} />
+        <Metric label="Router CPU" value={formatPercent(router.resources?.cpuUtilizationPct)} />
+        <Metric label="Router memory" value={formatPercent(router.resources?.memoryUtilizationPct)} />
+        <Metric label="Connected devices" value={router.clients ? String(router.clients.connected) : "--"} />
+        <Metric label={`${router.clients?.cameraWlanSsid ?? "Camera Wi-Fi"} devices`} value={router.clients ? String(router.clients.cameraWlanConnected) : "--"} />
+        <Metric label="SpeedFusion data" value={formatDataUsage(router.speedFusion?.usageMb, router.speedFusion?.quotaMb)} />
+        <Metric label="SpeedFusion limit" value={router.speedFusion?.rateLimitMbps == null ? "--" : `${router.speedFusion.rateLimitMbps} Mbps`} />
+        <Metric label="Router uptime" value={formatUptime(router.identity?.uptimeSeconds)} />
+        <Metric label="Last update" value={relativeTimestamp(router.sampledAt, nowMs)} />
       </div>
       <div className="monitor-router-status-line">
-        <span data-ok={speedify?.state === "CONNECTED"}>{speedify?.state === "CONNECTED" ? "Speedify connected" : "Speedify not connected"}</span>
-        <span data-ok={Boolean(speedify?.adapterCount) && speedify?.automaticAdapterCount === speedify?.adapterCount}>{speedify ? `${speedify.automaticAdapterCount}/${speedify.adapterCount} inputs set to Automatic` : "Input policy unavailable"}</span>
-        <span data-ok={routeReady}>{routeReady ? "Camera traffic protected" : "Camera route protection needs attention"}</span>
-        <span data-ok={ageMs != null && ageMs <= 20_000}>{ageMs == null ? "No router status received" : `Updated ${formatDuration(ageMs)} ago`}</span>
-        {speedify?.failoverCount != null && <span data-ok="true">{speedify.failoverCount} failovers this session</span>}
+        <span data-ok={router.apiReachable === true}>{router.apiReachable ? "InControl reporting" : "InControl unavailable"}</span>
+        <span data-ok={router.identity?.online === true}>{router.identity?.online ? "Router online" : "Router offline"}</span>
+        <span data-ok={router.speedFusion?.connected === true}>{router.speedFusion?.connected ? "SpeedFusion connected" : "SpeedFusion disconnected"}</span>
+        <span data-ok={requiredWans.length > 0 && requiredWansConnected === requiredWans.length}>{requiredWansConnected}/{requiredWans.length} required WANs connected</span>
+        <span data-ok={ageMs != null && ageMs <= 90_000}>{ageMs == null ? "No router status received" : `Updated ${formatDuration(ageMs)} ago`}</span>
+        {router.identity?.firmwareVersion && <span data-ok="true">Firmware {router.identity.firmwareVersion}</span>}
       </div>
+      {router.problems.length > 0 && <ProblemList problems={router.problems} />}
       <div className="monitor-uplink-grid">
-        {router.uplinks.length ? router.uplinks.map((uplink) => {
-          const Icon = uplink.type === "cellular" ? Smartphone : uplink.type === "wifi" ? Signal : Cable;
-          const pressure = uplink.inFlightBytes != null && uplink.inFlightWindowBytes
-            ? uplink.inFlightBytes / uplink.inFlightWindowBytes
-            : null;
-          const degraded = uplink.savedPriority !== "automatic" || !uplink.connected || uplink.uploadCongested || uplink.poorConnection || uplink.slowConnection;
+        {router.wans.length ? router.wans.map((wan) => {
+          const Icon = wan.type === "cellular" ? Smartphone : wan.type === "wifi" ? Signal : Cable;
+          const degraded = wan.required ? !wan.connected : wan.enabled && !wan.connected;
+          const wanState: MonitorHealthState = wan.connected ? "HEALTHY" : wan.enabled ? "DEGRADED" : "EXPECTED_OFF";
           return (
-            <article className="monitor-uplink" key={uplink.id} data-degraded={degraded}>
-              <div className="monitor-uplink-heading"><Icon size={17} aria-hidden="true" /><div><strong>{uplinkName(uplink.id, uplink.type)}</strong><span>{uplink.isp ?? "Provider not identified"} · {uplink.savedPriority === "automatic" ? "Automatic" : `Saved ${friendlyState(uplink.savedPriority)}`} · currently {friendlyState(uplink.priority)}</span></div><StateDot state={degraded ? "DEGRADED" : "HEALTHY"} /></div>
+            <article className="monitor-uplink" key={wan.id} data-degraded={degraded}>
+              <div className="monitor-uplink-heading"><Icon size={17} aria-hidden="true" /><div><strong>{wan.name}</strong><span>{wan.required ? "Required" : "Optional"} · {wan.message}</span></div><StateDot state={wanState} /></div>
               <div className="monitor-uplink-metrics">
-                <Metric label="Contribution" value={formatBitrate(uplink.sendBps)} />
-                <Metric label="Available estimate" value={formatBitrate(uplink.estimatedUploadBps)} />
-                <Metric label="Delay" value={formatMs(uplink.latencyMs)} />
-                <Metric label="Jitter" value={formatMs(uplink.jitterMs)} />
-                <Metric label="Packet loss" value={uplink.lossSendRatio == null ? "--" : formatQualityRatio(uplink.lossSendRatio)} />
-                <Metric label="Queue pressure" value={pressure == null ? "--" : formatQualityRatio(pressure)} />
+                <Metric label="Status" value={wan.connected ? "Connected" : wan.enabled ? "Disconnected" : "Disabled"} />
+                <Metric label="Priority" value={wan.priority == null ? "--" : `Priority ${wan.priority}`} />
+                <Metric label="Uptime" value={formatUptime(wan.uptimeSeconds)} />
+                <Metric label="Network" value={[wan.carrier, wan.technology].filter(Boolean).join(" · ") || "--"} />
+                <Metric label="Signal" value={wan.signalLevel == null ? "--" : `${wan.signalLevel}/5`} />
+                <Metric label="Radio band" value={formatWanBands(wan.bands)} />
               </div>
             </article>
           );
@@ -1087,14 +1090,6 @@ function switchPortRoleLabel(role: MonitorNetworkSwitch["ports"][number]["role"]
   return "Other connection";
 }
 
-function uplinkName(id: string, type: MonitorRouter["uplinks"][number]["type"]): string {
-  if (type === "cellular") return "Cellular connection";
-  if (type === "wifi") return "Wi-Fi connection";
-  if (id === "eth0") return "Primary wired connection";
-  if (type === "ethernet") return "Wired connection";
-  return id;
-}
-
 function friendlyState(state: string): string {
   return state.replaceAll("_", " ").toLowerCase().replace(/(^|\s)\S/g, (letter) => letter.toUpperCase());
 }
@@ -1102,6 +1097,27 @@ function friendlyState(state: string): string {
 function formatBitrate(value: number | null | undefined): string {
   if (value == null) return "--";
   return value >= 1_000_000 ? `${(value / 1_000_000).toFixed(1)} Mbps` : `${Math.round(value / 1_000)} kbps`;
+}
+
+function formatPercent(value: number | null | undefined): string {
+  return value == null ? "--" : `${value.toFixed(1)}%`;
+}
+
+function formatDataUsage(usageMb: number | null | undefined, quotaMb: number | null | undefined): string {
+  if (usageMb == null || quotaMb == null) return "--";
+  return `${formatMegabytes(usageMb)} / ${formatMegabytes(quotaMb)}`;
+}
+
+function formatMegabytes(value: number): string {
+  return value >= 1_000 ? `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)} GB` : `${Math.round(value)} MB`;
+}
+
+function formatWanBands(bands: MonitorRouter["wans"][number]["bands"]): string {
+  if (bands.length === 0) return "--";
+  return bands.map((band) => {
+    const signal = band.rsrpDbm ?? band.rssiDbm;
+    return `${band.name}${band.channelWidth ? ` ${band.channelWidth}` : ""}${signal == null ? "" : ` · ${signal} dBm`}`;
+  }).join(", ");
 }
 
 function formatFps(value: number | null | undefined): string {

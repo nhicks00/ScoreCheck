@@ -5571,7 +5571,7 @@ body:has(.program-root) {
 .monitor-router-summary {
   border: 1px solid var(--line);
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .monitor-router-summary .monitor-metric {
@@ -5581,9 +5581,8 @@ body:has(.program-root) {
   padding: 9px 11px;
 }
 
-.monitor-router-summary .monitor-metric:last-child {
-  border-right: 0;
-}
+.monitor-router-summary .monitor-metric:nth-child(4n) { border-right: 0; }
+.monitor-router-summary .monitor-metric:nth-child(-n + 4) { border-bottom: 1px solid var(--line); }
 
 .monitor-router-status-line {
   display: flex;
@@ -6627,9 +6626,7 @@ body:has(.program-root) {
   .monitor-network-summary .monitor-metric { border-bottom: 1px solid var(--line); }
   .monitor-network-summary .monitor-metric:nth-child(3n) { border-right: 0; }
   .monitor-network-summary .monitor-metric:nth-last-child(-n + 3) { border-bottom: 0; }
-  .monitor-router-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .monitor-router-summary .monitor-metric:nth-child(3) { border-right: 0; }
-  .monitor-router-summary .monitor-metric:nth-child(-n + 3) { border-bottom: 1px solid var(--line); }
+  .monitor-router-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 
 @media (max-width: 860px) {
@@ -6853,7 +6850,7 @@ body:has(.program-root) {
   .monitor-router-heading p { line-height: 1.35; }
   .monitor-router-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .monitor-router-summary .monitor-metric,
-  .monitor-router-summary .monitor-metric:nth-child(3) { border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); }
+  .monitor-router-summary .monitor-metric:nth-child(4n) { border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); }
   .monitor-router-summary .monitor-metric:nth-child(2n) { border-right: 0; }
   .monitor-router-summary .monitor-metric:nth-last-child(-n + 2) { border-bottom: 0; }
   .monitor-uplink-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }

@@ -3,7 +3,20 @@ import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/pro
 import { join, resolve } from "node:path";
 
 const COURTS = Object.freeze(Array.from({ length: 8 }, (_, index) => index + 1));
-const SECRET_SCHEMA_VERSION = 3;
+const SECRET_SCHEMA_VERSION = 4;
+const PEPLINK_MONITORING_KEYS = Object.freeze([
+  "MONITOR_PEPLINK_CAMERA_SSID",
+  "MONITOR_PEPLINK_CLIENT_ID",
+  "MONITOR_PEPLINK_CLIENT_SECRET",
+  "MONITOR_PEPLINK_DEVICE_ID",
+  "MONITOR_PEPLINK_FIRMWARE_VERSION",
+  "MONITOR_PEPLINK_GROUP_ID",
+  "MONITOR_PEPLINK_HARDWARE_VERSION",
+  "MONITOR_PEPLINK_ORGANIZATION_ID",
+  "MONITOR_PEPLINK_PRODUCT_CODE",
+  "MONITOR_PEPLINK_SPEEDFUSION_PROFILE_NAME",
+  "MONITOR_PEPLINK_WANS_JSON"
+]);
 
 export function createRehearsalSecretMaterial({ random = randomBytes } = {}) {
   const secret = (bytes = 32) => random(bytes).toString("base64url");
@@ -13,7 +26,6 @@ export function createRehearsalSecretMaterial({ random = randomBytes } = {}) {
     adminSecret: secret(),
     commentatorPasscode: secret(18),
     monitorApiToken: secret(),
-    routerHeartbeatToken: secret(),
     alertmanagerWebhookToken: secret(),
     browserHeartbeatSecret: secret(),
     commentary: { apiKey: `SC${secret(12)}`, apiSecret: secret(36), roomPrefix: `scorecheck-rehearsal-${secret(6)}-` },
@@ -63,6 +75,7 @@ export async function renderRehearsalSecretDirectory({ manifest, material, direc
   validateRenderer(renderer);
   completeAgentSecrets(material, manifest);
   validateYoutubeDestinations(youtubeDestinations);
+  const peplink = requiredExternalEnvironment(external.peplink, PEPLINK_MONITORING_KEYS);
   const target = resolve(directory);
   const inputSha256 = sha256(stableJson({ manifest, material, renderer, youtubeDestinations, external }));
   if (await exists(target)) {
@@ -94,12 +107,12 @@ export async function renderRehearsalSecretDirectory({ manifest, material, direc
 
   const observer = {
     MONITOR_API_TOKEN: material.monitorApiToken,
-    MONITOR_ROUTER_HEARTBEAT_TOKEN: material.routerHeartbeatToken,
     ALERTMANAGER_WEBHOOK_TOKEN: material.alertmanagerWebhookToken,
     MONITOR_BROWSER_HEARTBEAT_SECRET: material.browserHeartbeatSecret,
     MONITOR_BROWSER_ALLOWED_ORIGINS: renderer.origin,
     MONITOR_DASHBOARD_URL: `${renderer.origin}/admin/monitor`,
     MONITOR_COURT_COUNT: "8",
+    ...peplink,
     ...(external.pushoverAppToken && external.pushoverUserKey ? {
       PUSHOVER_APP_TOKEN: external.pushoverAppToken,
       PUSHOVER_USER_KEY: external.pushoverUserKey
@@ -180,7 +193,7 @@ export async function loadProtectedSecretMaterial(path) {
 
 export function validateSecretMaterial(value) {
   if (!value || value.schemaVersion !== SECRET_SCHEMA_VERSION) throw new Error("rehearsal secret material schema is invalid");
-  for (const key of ["programPageToken", "adminSecret", "commentatorPasscode", "monitorApiToken", "routerHeartbeatToken", "alertmanagerWebhookToken", "browserHeartbeatSecret"]) requireSecret(value[key], key);
+  for (const key of ["programPageToken", "adminSecret", "commentatorPasscode", "monitorApiToken", "alertmanagerWebhookToken", "browserHeartbeatSecret"]) requireSecret(value[key], key);
   requireSecret(value.commentary?.apiKey, "commentary api key", 12);
   requireSecret(value.commentary?.apiSecret, "commentary api secret");
   requireSecret(value.commentary?.roomPrefix, "commentary room prefix", 12);
@@ -267,6 +280,17 @@ async function verifyRenderedDirectory(root, inputSha256) {
 
 async function exists(path) {
   try { await stat(path); return true; } catch (error) { if (error?.code === "ENOENT") return false; throw error; }
+}
+
+function requiredExternalEnvironment(environment, names) {
+  if (!environment || typeof environment !== "object" || Array.isArray(environment)) {
+    throw new Error("rehearsal Peplink monitoring environment is required");
+  }
+  return Object.fromEntries(names.map((name) => {
+    const value = environment[name]?.trim();
+    if (!value) throw new Error(`${name} is required`);
+    return [name, value];
+  }));
 }
 
 function envFile(values) {

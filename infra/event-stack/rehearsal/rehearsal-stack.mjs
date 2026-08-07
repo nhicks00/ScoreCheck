@@ -24,6 +24,19 @@ import { YouTubeRehearsalProvider } from "./youtube-provider.mjs";
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIRECTORY, "../../..");
 const COMMANDS = new Set(["plan", "prepare", "status", "start", "soak", "stop", "cleanup", "seal"]);
+const PEPLINK_MONITORING_KEYS = Object.freeze([
+  "MONITOR_PEPLINK_CAMERA_SSID",
+  "MONITOR_PEPLINK_CLIENT_ID",
+  "MONITOR_PEPLINK_CLIENT_SECRET",
+  "MONITOR_PEPLINK_DEVICE_ID",
+  "MONITOR_PEPLINK_FIRMWARE_VERSION",
+  "MONITOR_PEPLINK_GROUP_ID",
+  "MONITOR_PEPLINK_HARDWARE_VERSION",
+  "MONITOR_PEPLINK_ORGANIZATION_ID",
+  "MONITOR_PEPLINK_PRODUCT_CODE",
+  "MONITOR_PEPLINK_SPEEDFUSION_PROFILE_NAME",
+  "MONITOR_PEPLINK_WANS_JSON"
+]);
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
@@ -267,7 +280,8 @@ function externalCredentials(environment) {
     ...(environment.PUSHOVER_APP_TOKEN?.trim() && environment.PUSHOVER_USER_KEY?.trim() ? { pushoverAppToken: environment.PUSHOVER_APP_TOKEN.trim(), pushoverUserKey: environment.PUSHOVER_USER_KEY.trim() } : {}),
     youtubeClientId: requiredEnvironment(environment, "YOUTUBE_CLIENT_ID"),
     youtubeClientSecret: requiredEnvironment(environment, "YOUTUBE_CLIENT_SECRET"),
-    youtubeRefreshToken: requiredEnvironment(environment, "YOUTUBE_REFRESH_TOKEN")
+    youtubeRefreshToken: requiredEnvironment(environment, "YOUTUBE_REFRESH_TOKEN"),
+    peplink: Object.fromEntries(PEPLINK_MONITORING_KEYS.map((name) => [name, requiredEnvironment(environment, name)]))
   };
 }
 

@@ -22,6 +22,68 @@ const envelopeSnapshotSchema = z.object({
       lastFailureAt: z.string().nullable()
     }).passthrough()
   }).passthrough(),
+  router: z.object({
+    state: z.string(),
+    required: z.boolean(),
+    configured: z.boolean(),
+    apiReachable: z.boolean().nullable(),
+    sampledAt: z.string().nullable(),
+    lastSuccessAt: z.string().nullable(),
+    lastFailureAt: z.string().nullable(),
+    identity: z.object({
+      name: z.string(),
+      productName: z.string(),
+      productCode: z.string(),
+      hardwareVersion: z.string(),
+      firmwareVersion: z.string(),
+      online: z.boolean(),
+      uptimeSeconds: z.number().nonnegative().nullable()
+    }).passthrough().nullable(),
+    resources: z.object({
+      cpuUtilizationPct: z.number().nonnegative().nullable(),
+      memoryUtilizationPct: z.number().nonnegative().nullable()
+    }).passthrough().nullable(),
+    speedFusion: z.object({
+      profileName: z.string(),
+      connected: z.boolean(),
+      profileStatus: z.string().nullable(),
+      peerStatus: z.string().nullable(),
+      transport: z.enum(["UDP", "TCP"]).nullable(),
+      latencyDifferenceCutoffMs: z.number().nonnegative().nullable(),
+      rateLimitMbps: z.number().nonnegative().nullable(),
+      quotaMb: z.number().nonnegative().nullable(),
+      usageMb: z.number().nonnegative().nullable(),
+      expiresAt: z.string().nullable(),
+      suspended: z.boolean().nullable()
+    }).passthrough().nullable(),
+    clients: z.object({
+      connected: z.number().int().nonnegative(),
+      cameraWlanSsid: z.string(),
+      cameraWlanConnected: z.number().int().nonnegative()
+    }).passthrough().nullable(),
+    wans: z.array(z.object({
+      id: z.string(),
+      name: z.string(),
+      type: z.enum(["ethernet", "wifi", "cellular", "other"]),
+      required: z.boolean(),
+      enabled: z.boolean(),
+      connected: z.boolean(),
+      message: z.string(),
+      priority: z.number().int().nonnegative().nullable(),
+      uptimeSeconds: z.number().nonnegative().nullable(),
+      carrier: z.string().nullable(),
+      technology: z.string().nullable(),
+      signalLevel: z.number().int().min(0).max(5).nullable(),
+      bands: z.array(z.object({
+        name: z.string(),
+        channelWidth: z.string().nullable(),
+        rssiDbm: z.number().nullable(),
+        rsrpDbm: z.number().nullable(),
+        rsrqDb: z.number().nullable()
+      }).passthrough()).max(16)
+    }).passthrough()).max(16),
+    problems: z.array(z.string()).max(50)
+  }).passthrough(),
   unifi: z.object({
     state: z.string(),
     configured: z.boolean(),

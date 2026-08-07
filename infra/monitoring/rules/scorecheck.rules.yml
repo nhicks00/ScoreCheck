@@ -231,8 +231,8 @@ groups:
           summary: "The venue upload is overloaded, so multiple SRT cameras are retransmitting video."
           first_action: "Do not restart the cameras. Add upload capacity or lower total camera bitrate until this alert clears."
 
-      - alert: ScoreCheckVenueRouterHeartbeatMissing
-        expr: (scorecheck_router_heartbeat_fresh == 0) and on() (sum(scorecheck_court_media_required) > 0)
+      - alert: ScoreCheckVenueRouterTelemetryUnavailable
+        expr: (scorecheck_router_api_up == 0) and on() (sum(scorecheck_court_media_required) > 0)
         for: 30s
         labels:
           severity: critical
@@ -243,29 +243,41 @@ groups:
           summary: "The venue router stopped reporting its internet and routing status."
           first_action: "Keep the cameras streaming. Check that the venue router is powered on and connected to the internet."
 
-      - alert: ScoreCheckVenueCameraRouteUnprotected
-        expr: (scorecheck_router_camera_route_healthy == 0) and on() (sum(scorecheck_court_media_required) > 0)
+      - alert: ScoreCheckVenueRouterOffline
+        expr: (scorecheck_router_api_up == 1) and on() (scorecheck_router_online == 0) and on() (sum(scorecheck_court_media_required) > 0)
         for: 10s
         labels:
           severity: critical
           stage: VENUE
-          issue_code: VENUE_CAMERA_ROUTE_UNPROTECTED
+          issue_code: VENUE_ROUTER_OFFLINE
           root_dependency: venue-router
         annotations:
-          summary: "Camera traffic is not protected by the bonded fail-closed route."
-          first_action: "Keep the cameras streaming and contact the technical operator. Do not change camera settings."
+          summary: "The venue router is offline, so camera internet service is unavailable."
+          first_action: "Check the venue router's power and internet cables. Keep the cameras on; they should reconnect automatically."
 
-      - alert: ScoreCheckVenueSpeedifyInputPolicyChanged
-        expr: (scorecheck_router_speedify_adapter_policy_automatic == 0) and on() (sum(scorecheck_court_media_required) > 0)
+      - alert: ScoreCheckVenueSpeedFusionDisconnected
+        expr: (scorecheck_router_api_up == 1) and on() (scorecheck_router_online == 1) and on() (scorecheck_router_speedfusion_connected == 0) and on() (sum(scorecheck_court_media_required) > 0)
         for: 10s
         labels:
           severity: critical
           stage: VENUE
-          issue_code: VENUE_SPEEDIFY_INPUT_POLICY_CHANGED
+          issue_code: VENUE_SPEEDFUSION_DISCONNECTED
           root_dependency: venue-router
         annotations:
-          summary: "One or more venue internet connections are no longer set to Automatic."
-          first_action: "Keep the cameras streaming. In Speedify, set every Ethernet, Wi-Fi, cellular, tethered, and Starlink connection to Automatic."
+          summary: "The protected camera internet connection is disconnected."
+          first_action: "Keep the cameras on. Check the Peplink WAN and cellular connections; do not change camera settings."
+
+      - alert: ScoreCheckVenueRequiredWanDisconnected
+        expr: (scorecheck_router_wan_connected{required="true"} == 0) and on() (scorecheck_router_api_up == 1) and on() (scorecheck_router_online == 1) and on() (sum(scorecheck_court_media_required) > 0)
+        for: 30s
+        labels:
+          severity: critical
+          stage: VENUE
+          issue_code: VENUE_REQUIRED_WAN_DISCONNECTED
+          root_dependency: venue-router
+        annotations:
+          summary: "The required {{ $labels.wan }} internet connection is disconnected."
+          first_action: "Check that connection's cable, modem, or service. Keep the cameras on; do not change their settings."
 
       - alert: ScoreCheckUniFiTelemetryUnavailable
         expr: (scorecheck_unifi_configured == 1) and on() (scorecheck_unifi_api_up == 0) and on() (sum(scorecheck_court_media_required) > 0)

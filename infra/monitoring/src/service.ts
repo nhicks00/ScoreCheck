@@ -22,7 +22,7 @@ import { BrowserCounterAccumulator } from "./browserCounterAccumulator.js";
 import { incrementCourtCounter } from "./prometheusCounter.js";
 import { LocalIncidentOutbox } from "./localIncidentOutbox.js";
 import { replayDurableOutbox } from "./durableOutboxReplay.js";
-import { RouterHeartbeatManager } from "./routerHeartbeats.js";
+import { PeplinkCollector } from "./peplink.js";
 import { UniFiCollector } from "./unifi.js";
 import { NetworkSwitchCollector } from "./networkSwitch.js";
 
@@ -91,16 +91,15 @@ const deadManTestGateActive = new Gauge({ name: "scorecheck_external_dead_man_te
 const deadManTestGateExpires = new Gauge({ name: "scorecheck_external_dead_man_test_gate_expires_timestamp_seconds", help: "Expiry time of the bounded external dead-man test gate, or zero when inactive.", labelNames: ["check"], registers: [registry] });
 const activeIncidents = new Gauge({ name: "scorecheck_active_incidents", help: "Current unresolved monitoring incident count, including acknowledged incidents.", registers: [registry] });
 const activeFaultGates = new Gauge({ name: "scorecheck_active_fault_gates", help: "Current bounded monitoring fault-gate count.", registers: [registry] });
-const routerHeartbeatFresh = new Gauge({ name: "scorecheck_router_heartbeat_fresh", help: "Whether venue-router telemetry was received within twenty seconds.", registers: [registry] });
-const routerConnected = new Gauge({ name: "scorecheck_router_speedify_connected", help: "Whether the venue Speedify tunnel is connected.", registers: [registry] });
-const routerRouteHealthy = new Gauge({ name: "scorecheck_router_camera_route_healthy", help: "Whether SRT and RTMP camera routes and fail-closed guards are correct.", registers: [registry] });
-const routerAdapterPolicyAutomatic = new Gauge({ name: "scorecheck_router_speedify_adapter_policy_automatic", help: "Whether every discovered Speedify input has saved policy Automatic.", registers: [registry] });
-const routerSendBps = new Gauge({ name: "scorecheck_router_bonded_upload_bits_per_second", help: "Current bonded upload throughput.", registers: [registry] });
-const routerEstimatedUploadBps = new Gauge({ name: "scorecheck_router_estimated_upload_capacity_bits_per_second", help: "Current Speedify aggregate upload estimate.", registers: [registry] });
-const routerUploadHeadroomBps = new Gauge({ name: "scorecheck_router_upload_headroom_bits_per_second", help: "Estimated bonded upload capacity minus current upload throughput.", registers: [registry] });
-const routerUplinkSendBps = new Gauge({ name: "scorecheck_router_uplink_upload_bits_per_second", help: "Current upload throughput by venue uplink.", labelNames: ["uplink", "type", "priority"], registers: [registry] });
-const routerUplinkLatency = new Gauge({ name: "scorecheck_router_uplink_latency_ms", help: "Current tunnel latency by venue uplink.", labelNames: ["uplink", "type", "priority"], registers: [registry] });
-const routerUplinkLoss = new Gauge({ name: "scorecheck_router_uplink_send_loss_ratio", help: "Current send loss ratio by venue uplink.", labelNames: ["uplink", "type", "priority"], registers: [registry] });
+const routerApiUp = new Gauge({ name: "scorecheck_router_api_up", help: "Whether current Peplink telemetry is reachable through InControl.", registers: [registry] });
+const routerOnline = new Gauge({ name: "scorecheck_router_online", help: "Whether the commissioned Peplink router is online.", registers: [registry] });
+const routerSpeedFusionConnected = new Gauge({ name: "scorecheck_router_speedfusion_connected", help: "Whether the commissioned ScoreCheck SpeedFusion profile and peer are connected.", registers: [registry] });
+const routerCpu = new Gauge({ name: "scorecheck_router_cpu_utilization_percent", help: "Current Peplink CPU utilization percentage reported by InControl.", registers: [registry] });
+const routerMemory = new Gauge({ name: "scorecheck_router_memory_utilization_percent", help: "Current Peplink memory utilization percentage reported by InControl.", registers: [registry] });
+const routerClients = new Gauge({ name: "scorecheck_router_connected_clients", help: "Current active clients reported by the Peplink router.", registers: [registry] });
+const routerCameraWlanClients = new Gauge({ name: "scorecheck_router_camera_wlan_clients", help: "Current active clients on the commissioned Peplink camera WLAN.", registers: [registry] });
+const routerWanConnected = new Gauge({ name: "scorecheck_router_wan_connected", help: "Whether a commissioned Peplink WAN is currently connected.", labelNames: ["wan", "type", "required"], registers: [registry] });
+const routerCellularSignal = new Gauge({ name: "scorecheck_router_cellular_signal_db", help: "Current cellular signal measurements by WAN and band.", labelNames: ["wan", "band", "metric"], registers: [registry] });
 const unifiConfigured = new Gauge({ name: "scorecheck_unifi_configured", help: "Whether the UniFi venue Wi-Fi control plane is commissioned for monitoring.", registers: [registry] });
 const unifiApiUp = new Gauge({ name: "scorecheck_unifi_api_up", help: "Official UniFi API state: 1 reachable, 0 unavailable, -1 not configured or not yet sampled.", registers: [registry] });
 const unifiAccessPointOnline = new Gauge({ name: "scorecheck_unifi_access_point_online", help: "Whether an expected venue access point is online.", labelNames: ["access_point"], registers: [registry] });
@@ -143,7 +142,7 @@ const notificationDispatcher = new NotificationDispatcher(config, localIncidentO
 const externalDeadMan = new ExternalDeadMan(config);
 const faultGateControl = new FaultGateControl();
 const browserCounterAccumulator = new BrowserCounterAccumulator();
-const routerHeartbeats = new RouterHeartbeatManager();
+const peplinkCollector = new PeplinkCollector(config.peplink);
 const unifiCollector = new UniFiCollector(config.unifi);
 const networkSwitchCollector = new NetworkSwitchCollector(config.networkSwitch);
 let deadManMaintenanceRunning = false;
@@ -185,15 +184,6 @@ app.get("/metrics", bearerAuth(config.token), async (_req, res) => {
   res.type(registry.contentType).send(await registry.metrics());
 });
 app.get("/v1/snapshot", bearerAuth(config.token), (_req, res) => res.json(snapshot));
-app.post("/v1/router-heartbeats", bearerAuth(config.routerHeartbeatToken), (req, res) => {
-  try {
-    routerHeartbeats.accept(req.body);
-    snapshot = currentSnapshot();
-    res.sendStatus(202);
-  } catch {
-    res.status(400).json({ error: "Invalid router heartbeat." });
-  }
-});
 app.get("/v1/dead-man-test-gate", bearerAuth(config.token), (_req, res) => {
   res.setHeader("cache-control", "private, no-store");
   res.json({ testGate: externalDeadMan.testGate() });
@@ -460,6 +450,7 @@ async function pollAllOnce() {
   await Promise.all([
     ...config.targets.map((target) => pollAgent(target)),
     controlPlane.refresh().catch(() => null),
+    peplinkCollector.refresh(),
     unifiCollector.refresh(),
     networkSwitchCollector.refresh()
   ]);
@@ -511,28 +502,23 @@ async function pollAllOnce() {
   activeIncidents.set(snapshot.incidents.length);
   activeFaultGates.set(faultGateControl.active().length);
   const router = snapshot.router;
-  routerHeartbeatFresh.set(router.ageMs != null && router.ageMs <= 20_000 ? 1 : 0);
-  routerConnected.set(router.speedify?.state === "CONNECTED" ? 1 : 0);
-  routerRouteHealthy.set(router.routing
-    && router.routing.srtDevice === "connectify0"
-    && router.routing.rtmpDevice === "connectify0"
-    && router.routing.primaryRuleCount === 2
-    && router.routing.guardRuleCount === 2
-    && router.routing.killSwitchActive ? 1 : 0);
-  routerAdapterPolicyAutomatic.set(router.speedify
-    && router.speedify.adapterCount > 0
-    && router.speedify.automaticAdapterCount === router.speedify.adapterCount ? 1 : 0);
-  setOptionalGauge(routerSendBps, {}, router.speedify?.sendBps ?? null);
-  setOptionalGauge(routerEstimatedUploadBps, {}, router.speedify?.estimatedUploadBps ?? null);
-  setOptionalGauge(routerUploadHeadroomBps, {}, router.speedify?.uploadHeadroomBps ?? null);
-  routerUplinkSendBps.reset();
-  routerUplinkLatency.reset();
-  routerUplinkLoss.reset();
-  for (const uplink of router.uplinks) {
-    const labels = { uplink: uplink.id, type: uplink.type, priority: uplink.priority };
-    routerUplinkSendBps.set(labels, uplink.sendBps);
-    setOptionalGauge(routerUplinkLatency, labels, uplink.latencyMs);
-    setOptionalGauge(routerUplinkLoss, labels, uplink.lossSendRatio);
+  routerApiUp.set(router.apiReachable == null ? -1 : router.apiReachable ? 1 : 0);
+  routerOnline.set(router.identity == null ? -1 : router.identity.online ? 1 : 0);
+  routerSpeedFusionConnected.set(router.speedFusion == null ? -1 : router.speedFusion.connected ? 1 : 0);
+  setOptionalGauge(routerCpu, {}, router.resources?.cpuUtilizationPct ?? null);
+  setOptionalGauge(routerMemory, {}, router.resources?.memoryUtilizationPct ?? null);
+  setOptionalGauge(routerClients, {}, router.clients?.connected ?? null);
+  setOptionalGauge(routerCameraWlanClients, {}, router.clients?.cameraWlanConnected ?? null);
+  routerWanConnected.reset();
+  routerCellularSignal.reset();
+  for (const wan of router.wans) {
+    const labels = { wan: wan.name, type: wan.type, required: String(wan.required) };
+    routerWanConnected.set(labels, wan.connected ? 1 : 0);
+    for (const band of wan.bands) {
+      setOptionalGauge(routerCellularSignal, { wan: wan.name, band: band.name, metric: "rssi" }, band.rssiDbm);
+      setOptionalGauge(routerCellularSignal, { wan: wan.name, band: band.name, metric: "rsrp" }, band.rsrpDbm);
+      setOptionalGauge(routerCellularSignal, { wan: wan.name, band: band.name, metric: "rsrq" }, band.rsrqDb);
+    }
   }
   const unifi = snapshot.unifi;
   unifiConfigured.set(unifi.configured ? 1 : 0);
@@ -663,7 +649,7 @@ function currentSnapshot(): MonitorSnapshot {
     browserThumbnails.metadata(),
     silences,
     faultGateControl.active(),
-    routerHeartbeats.current(),
+    peplinkCollector.current(),
     unifiCollector.current(),
     networkSwitchCollector.current()
   );
