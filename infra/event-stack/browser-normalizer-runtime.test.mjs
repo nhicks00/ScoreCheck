@@ -44,6 +44,28 @@ test("adopts an H264 browser normalizer when direct admission is unsafe", async 
   assert.equal(result.sourceCodec, "H264");
 });
 
+test("stops and verifies an isolated browser normalizer", async () => {
+  const commands = [];
+  let running = true;
+  const runtime = new BrowserNormalizerRuntime({
+    ...paths,
+    runner: async (_command, args) => {
+      const remote = args.at(-1);
+      commands.push(remote);
+      if (remote.includes("stop-normalizer.sh")) {
+        running = false;
+        return { code: 0, stdout: "Camera normalizer is stopped.\n", stderr: "" };
+      }
+      return { code: 0, stdout: running ? `${JSON.stringify(inspectFixture(2))}\n` : "null\n", stderr: "" };
+    },
+    sleep: async () => {}
+  });
+  const result = await runtime.stop({ host: "198.51.100.2", court: 2 });
+  assert.equal(result.running, false);
+  assert.equal(result.absent, true);
+  assert.equal(commands.filter((command) => command.includes("stop-normalizer.sh")).length, 1);
+});
+
 test("adopts a matching normalizer and rejects any container on a direct-H264 camera", async () => {
   const runtime = new BrowserNormalizerRuntime({
     ...paths,

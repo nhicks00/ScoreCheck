@@ -310,7 +310,17 @@ export class ProductionSoakRuntime {
         process.stdout.write(`SOAK_STARTED ${state.startedAt}: ${this.venue.activeCameras.length} persistent 1080 scoreboard output(s) are live; source defects are monitored independently.\n`);
       } catch (error) {
         state.startupFailure = { observedAt: new Date(this.now()).toISOString(), error: safeError(error) };
-        await stopStartupObservers({ state, sampler: this.sampler, sentinel: this.sentinel, criticalLogs: this.criticalLogs });
+        if (Object.keys(state.egress).length === 0) {
+          await stopPreOutputStartupResources({
+            state,
+            normalizer: this.normalizer,
+            sampler: this.sampler,
+            sentinel: this.sentinel,
+            criticalLogs: this.criticalLogs,
+            manifest: this.manifest,
+            lifecycleState: this.lifecycleState
+          });
+        }
         await writeState(statePath, state);
         throw error;
       }
@@ -800,6 +810,22 @@ export async function stopStartupObservers({ state, sampler, sentinel, criticalL
     }
   }
   if (failures.length) state.startupFailure.cleanupErrors = failures;
+  return state;
+}
+
+export async function stopPreOutputStartupResources({ state, normalizer, sampler, sentinel, criticalLogs, manifest, lifecycleState }) {
+  const failures = [];
+  for (const [cameraText, current] of Object.entries(state.normalizers ?? {})) {
+    if (!current?.required || !current.running) continue;
+    const camera = Number(cameraText);
+    try {
+      state.normalizers[camera] = await normalizer.stop({ host: compositorHost(manifest, lifecycleState, camera), court: camera });
+    } catch (error) {
+      failures.push(`Camera ${camera} normalizer: ${safeError(error)}`);
+    }
+  }
+  await stopStartupObservers({ state, sampler, sentinel, criticalLogs });
+  if (failures.length) state.startupFailure.cleanupErrors = [...(state.startupFailure.cleanupErrors ?? []), ...failures];
   return state;
 }
 

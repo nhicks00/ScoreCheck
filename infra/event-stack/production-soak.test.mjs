@@ -25,6 +25,7 @@ import {
   reconcileHostRecoveredEgress,
   recoverOwnedProgramEgress,
   sourceBitrateWindowStep,
+  stopPreOutputStartupResources,
   stopStartupObservers,
   productionSnapshotProblems,
   viewerEvidenceProblems
@@ -154,6 +155,25 @@ test("stops every run-owned observer after startup failure", async () => {
   assert.equal(state.sampler.status, "stopped");
   assert.equal(state.sentinel.status, "stopped");
   assert.equal(state.criticalLogs.status, "stopped");
+});
+
+test("stops HEVC normalizers when startup fails before any output exists", async () => {
+  const state = {
+    startupFailure: { error: "startup failed" },
+    normalizers: { 1: { required: true, running: true, camera: 1 } }
+  };
+  const calls = [];
+  await stopPreOutputStartupResources({
+    state,
+    normalizer: { stop: async (value) => { calls.push(value); return { required: true, running: false, camera: 1, absent: true }; } },
+    sampler: { stop: async () => assert.fail("absent sampler must not be stopped") },
+    sentinel: { stop: async () => assert.fail("absent sentinel must not be stopped") },
+    criticalLogs: { stop: async () => assert.fail("absent logs must not be stopped") },
+    manifest: { droplets: [{ name: "bvm-compositor-a", role: "compositor", court: 1 }] },
+    lifecycleState: { droplets: { "bvm-compositor-a": { publicIpv4: "198.51.100.1" } } }
+  });
+  assert.deepEqual(calls, [{ host: "198.51.100.1", court: 1 }]);
+  assert.equal(state.normalizers[1].running, false);
 });
 
 test("recycles an idle worker before replaying an interrupted owned browser recovery", async () => {

@@ -40,6 +40,14 @@ export class BrowserNormalizerRuntime {
     };
   }
 
+  async stop({ host, court }) {
+    validateCourt(court);
+    if (await this.#status(host) === null) return { required: true, running: false, camera: court, absent: true };
+    await this.#remote(host, "cd /opt/compositor && ./stop-normalizer.sh");
+    if (await this.#status(host) !== null) throw new Error(`Camera ${court} browser normalizer did not stop`);
+    return { required: true, running: false, camera: court, absent: true };
+  }
+
   async #status(host) {
     const result = await this.#remote(host, "cd /opt/compositor && if docker inspect bvm-normalizer >/dev/null 2>&1; then docker inspect bvm-normalizer --format '{{json .}}'; else printf 'null\\n'; fi", { retrySafe: true });
     return parseNormalizerInspect(result.stdout);
