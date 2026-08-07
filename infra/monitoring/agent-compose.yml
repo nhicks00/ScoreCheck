@@ -34,7 +34,11 @@ services:
       context: .
       dockerfile: Dockerfile
       target: agent
+      labels:
+        org.opencontainers.image.revision: "${MONITOR_IMAGE_REVISION:?MONITOR_IMAGE_REVISION is required}"
     image: scorecheck-monitor-agent:local
+    labels:
+      org.opencontainers.image.revision: "${MONITOR_IMAGE_REVISION:?MONITOR_IMAGE_REVISION is required}"
     init: true
     command: ["npm", "run", "start:agent"]
     restart: unless-stopped

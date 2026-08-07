@@ -3,6 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
 SSH_HOST="${MONITOR_AGENT_SSH_HOST:?MONITOR_AGENT_SSH_HOST is required}"
 SSH_KEY="${MONITOR_AGENT_SSH_KEY:-$HOME/.ssh/scorecheck_do}"
 REMOTE_DIR="${MONITOR_AGENT_REMOTE_DIR:-/opt/scorecheck-monitor-agent}"
@@ -12,6 +13,16 @@ KNOWN_HOSTS="${SCORECHECK_SSH_KNOWN_HOSTS:?SCORECHECK_SSH_KNOWN_HOSTS is require
 : "${MONITOR_AGENT_ROLE:?MONITOR_AGENT_ROLE is required}"
 : "${MONITOR_AGENT_TOKEN:?MONITOR_AGENT_TOKEN is required}"
 : "${MONITOR_AGENT_BIND:?MONITOR_AGENT_BIND must be the host private address}"
+
+if [[ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]]; then
+  echo "Refusing to deploy an agent from a dirty worktree." >&2
+  exit 1
+fi
+REVISION="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+if [[ ! "$REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "Unable to resolve an exact Git revision." >&2
+  exit 1
+fi
 
 node "$SCRIPT_DIR/render-agent-env.mjs"
 GENERATED_ENV="$SCRIPT_DIR/.generated/agent-$MONITOR_AGENT_ID.env"
@@ -29,8 +40,9 @@ rsync -a --delete -e "$rsync_shell" \
   "$SSH_HOST:$REMOTE_DIR/.incoming/"
 rsync -a -e "$rsync_shell" "$GENERATED_ENV" "$SSH_HOST:$REMOTE_DIR/.incoming/.env"
 
-ssh "${ssh_options[@]}" "$SSH_HOST" "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE'
+ssh "${ssh_options[@]}" "$SSH_HOST" "REMOTE_DIR='$REMOTE_DIR' MONITOR_IMAGE_REVISION='$REVISION' bash -s" <<'REMOTE'
 set -euo pipefail
+MONITOR_IMAGE_REVISION="${MONITOR_IMAGE_REVISION:?MONITOR_IMAGE_REVISION is required}"
 cd "$REMOTE_DIR"
 retry_docker_operation() {
   local attempt=1 delay_seconds=2 status
@@ -82,7 +94,14 @@ for attempt in $(seq 1 60); do
   agent_container="$(compose -f agent-compose.yml ps -q monitor-agent 2>/dev/null || true)"
   if [[ -n "$agent_container" ]] \
     && docker inspect "$agent_container" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null | grep -qx healthy; then
-    echo "ScoreCheck monitor agent healthy."
+    agent_revision="$(docker inspect "$agent_container" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
+    image_id="$(docker inspect "$agent_container" --format '{{.Image}}')"
+    image_revision="$(docker image inspect "$image_id" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
+    [[ "$agent_revision" == "$MONITOR_IMAGE_REVISION" && "$image_revision" == "$MONITOR_IMAGE_REVISION" ]] || {
+      echo "ScoreCheck monitor agent revision provenance is invalid." >&2
+      exit 1
+    }
+    echo "ScoreCheck monitor agent healthy revision=$MONITOR_IMAGE_REVISION"
     exit 0
   fi
   sleep 2
