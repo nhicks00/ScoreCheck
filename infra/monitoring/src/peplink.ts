@@ -73,7 +73,8 @@ const pepVpnSchema = z.object({
     name: z.string(),
     status: z.string(),
     dataUseTcp: z.boolean().optional(),
-    latencyDiffCutoff: z.number().nonnegative().optional()
+    latencyDiffCutoff: z.number().nonnegative().optional(),
+    peerId: z.string().regex(/^[0-9]+-[0-9]+$/u).optional()
   }).passthrough()).optional()
 }).passthrough();
 const pepVpnProfileSchema = z.object({
@@ -85,9 +86,39 @@ const clientsSchema = z.object({
   list: z.array(z.object({
     mac: z.string(),
     active: z.boolean(),
-    connectionType: z.string(),
-    essid: z.string().optional()
-  }).passthrough())
+    connectionType: z.string().optional(),
+    ip: z.string().optional(),
+    name: z.string().optional(),
+    essid: z.string().optional(),
+    signalStrength: z.object({
+      value: z.number(),
+      unit: z.string().optional()
+    }).optional(),
+    signal: z.object({ level: z.number().int().min(0).max(5).optional() }).optional(),
+    speed: z.object({
+      download: z.number().nonnegative().optional(),
+      upload: z.number().nonnegative().optional(),
+      unit: z.string().optional()
+    }).optional()
+  }).passthrough()).max(512)
+}).passthrough();
+const tunnelResponseSchema = z.object({ tunnel: z.record(z.string(), z.unknown()) }).passthrough();
+const tunnelEntrySchema = z.object({
+  wan: z.record(z.string(), z.unknown())
+}).passthrough();
+const tunnelWanSchema = z.object({
+  name: z.string(),
+  state: z.string(),
+  rtt: z.number().nonnegative().optional(),
+  time: z.object({ second: z.number().nonnegative() }).optional(),
+  transmit: z.object({
+    byte: z.array(z.number().nonnegative()),
+    packet: z.object({
+      forward: z.array(z.number().nonnegative()),
+      loss: z.array(z.number().nonnegative()),
+      fec: z.array(z.number().nonnegative())
+    }).passthrough()
+  }).optional()
 }).passthrough();
 
 const API_BASE = "https://api.ic.peplink.com";
@@ -121,8 +152,17 @@ export class PeplinkCollector {
       const firmware = firmwareSchema.parse(await this.#deviceApi("info.firmware", accessToken));
       const wans = wanSchema.parse(await this.#deviceApi("status.wan.connection", accessToken));
       const pepVpn = pepVpnSchema.parse(await this.#deviceApi("status.pepvpn?infoType=profile%20peer%20tunnel", accessToken));
-      const clients = clientsSchema.parse(await this.#deviceApi("status.client", accessToken));
-      this.#snapshot = buildSnapshot(this.#config, { device, firmware, wans, pepVpn, clients }, sampledAt);
+      const peerId = pepVpn.peer?.find((peer) => peer.peerId)?.peerId ?? null;
+      let tunnel: z.infer<typeof tunnelResponseSchema> | null = null;
+      if (peerId) {
+        try {
+          tunnel = tunnelResponseSchema.parse(await this.#deviceApi(`status.pepvpn?infoType=tunnel&tunnelOption=${peerId}`, accessToken));
+        } catch {
+          tunnel = null;
+        }
+      }
+      const clients = clientsSchema.parse(await this.#deviceApi("status.client?activeOnly=yes&outputWeight=full", accessToken));
+      this.#snapshot = buildSnapshot(this.#config, { device, firmware, wans, pepVpn, tunnel, peerId, clients }, sampledAt);
     } catch (error) {
       this.#snapshot = {
         ...emptyPeplinkSnapshot(this.#config),
@@ -181,6 +221,8 @@ function buildSnapshot(
     firmware: z.infer<typeof firmwareSchema>;
     wans: z.infer<typeof wanSchema>;
     pepVpn: z.infer<typeof pepVpnSchema>;
+    tunnel: z.infer<typeof tunnelResponseSchema> | null;
+    peerId: string | null;
     clients: z.infer<typeof clientsSchema>;
   },
   sampledAt: string
@@ -227,7 +269,19 @@ function buildSnapshot(
     } as const;
   });
   const activeClients = input.clients.list.filter((client) => client.active);
-  const cameraWlanClients = activeClients.filter((client) => client.essid === cameraSsid).length;
+  const cameraWlanDevices = activeClients
+    .filter((client) => client.essid === cameraSsid)
+    .map((client) => ({
+      macAddress: client.mac,
+      ipAddress: client.ip ?? null,
+      name: client.name ?? null,
+      connectionType: client.connectionType ?? "unknown",
+      signalDbm: client.signalStrength?.value ?? null,
+      signalLevel: client.signal?.level ?? null,
+      downloadKbps: client.speed?.unit === "kbps" ? client.speed.download ?? null : null,
+      uploadKbps: client.speed?.unit === "kbps" ? client.speed.upload ?? null : null
+    }))
+    .sort((left, right) => (left.ipAddress ?? left.macAddress).localeCompare(right.ipAddress ?? right.macAddress, undefined, { numeric: true }));
   const memory = input.device.periph_status?.memory_usage?.[0]?.percentage ?? null;
   const speedFusionConnected = profile?.value.status === "CONNECTED" && peer?.status === "CONNECTED";
   const problems: Array<{ severity: "critical" | "warning"; message: string }> = [];
@@ -284,16 +338,42 @@ function buildSnapshot(
       quotaMb: input.device.sf_cloud_license_local?.quota_mb ?? null,
       usageMb: input.device.sf_cloud_license_local?.usage_mb ?? null,
       expiresAt: input.device.sf_cloud_license_local?.expiry_date ?? null,
-      suspended: input.device.sf_cloud_license_local?.suspend ?? null
+      suspended: input.device.sf_cloud_license_local?.suspend ?? null,
+      linksAvailable: input.tunnel != null,
+      links: buildTunnelLinks(input.tunnel, input.peerId)
     },
     clients: {
       connected: activeClients.length,
       cameraWlanSsid: cameraSsid,
-      cameraWlanConnected: cameraWlanClients
+      cameraWlanConnected: cameraWlanDevices.length,
+      cameraWlanDevices
     },
     wans,
     problems: problems.map((problem) => problem.message)
   };
+}
+
+function buildTunnelLinks(tunnel: z.infer<typeof tunnelResponseSchema> | null, peerId: string | null) {
+  if (!tunnel || !peerId) return [];
+  const entry = tunnelEntrySchema.parse(tunnel.tunnel[peerId]);
+  return Object.entries(entry.wan)
+    .filter(([id]) => /^[0-9]+$/u.test(id))
+    .map(([, value]) => tunnelWanSchema.parse(value))
+    .map((wan) => {
+      const seconds = wan.time?.second ?? 0;
+      const bytes = wan.transmit?.byte[0] ?? 0;
+      const forward = wan.transmit?.packet.forward[0] ?? 0;
+      const loss = wan.transmit?.packet.loss[0] ?? 0;
+      const fec = wan.transmit?.packet.fec[0] ?? 0;
+      return {
+        name: wan.name,
+        state: wan.state,
+        rttMs: wan.rtt ?? null,
+        transmitBitrateBps: seconds > 0 ? (bytes * 8) / seconds : null,
+        transmitPacketLossPct: forward + loss > 0 ? (loss * 100) / (forward + loss) : null,
+        transmitFecPct: forward + fec > 0 ? (fec * 100) / (forward + fec) : null
+      };
+    });
 }
 
 function isActiveFirmware(value: z.infer<typeof firmwareSchema>[string]): value is { version: string; bootable: boolean; inUse: boolean } {

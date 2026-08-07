@@ -54,12 +54,31 @@ const envelopeSnapshotSchema = z.object({
       quotaMb: z.number().nonnegative().nullable(),
       usageMb: z.number().nonnegative().nullable(),
       expiresAt: z.string().nullable(),
-      suspended: z.boolean().nullable()
+      suspended: z.boolean().nullable(),
+      linksAvailable: z.boolean(),
+      links: z.array(z.object({
+        name: z.string(),
+        state: z.string(),
+        rttMs: z.number().nonnegative().nullable(),
+        transmitBitrateBps: z.number().nonnegative().nullable(),
+        transmitPacketLossPct: z.number().nonnegative().nullable(),
+        transmitFecPct: z.number().nonnegative().nullable()
+      }).passthrough()).max(16)
     }).passthrough().nullable(),
     clients: z.object({
       connected: z.number().int().nonnegative(),
       cameraWlanSsid: z.string(),
-      cameraWlanConnected: z.number().int().nonnegative()
+      cameraWlanConnected: z.number().int().nonnegative(),
+      cameraWlanDevices: z.array(z.object({
+        macAddress: z.string(),
+        ipAddress: z.string().nullable(),
+        name: z.string().nullable(),
+        connectionType: z.string(),
+        signalDbm: z.number().nullable(),
+        signalLevel: z.number().nullable(),
+        downloadKbps: z.number().nonnegative().nullable(),
+        uploadKbps: z.number().nonnegative().nullable()
+      }).passthrough()).max(64)
     }).passthrough().nullable(),
     wans: z.array(z.object({
       id: z.string(),

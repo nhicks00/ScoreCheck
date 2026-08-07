@@ -47,14 +47,41 @@ describe("Peplink collector", () => {
         online: true
       },
       resources: { cpuUtilizationPct: 25, memoryUtilizationPct: 40 },
-      speedFusion: { profileName: "SFC-SFO", connected: true, transport: "UDP", usageMb: 4, quotaMb: 1_048_572 },
-      clients: { connected: 3, cameraWlanSsid: "BVM", cameraWlanConnected: 2 },
+      speedFusion: {
+        profileName: "SFC-SFO",
+        connected: true,
+        transport: "UDP",
+        usageMb: 4,
+        quotaMb: 1_048_572,
+        linksAvailable: true,
+        links: [expect.objectContaining({
+          name: "WAN",
+          state: "ACTIVE",
+          rttMs: 53,
+          transmitBitrateBps: 800_000,
+          transmitPacketLossPct: 1,
+          transmitFecPct: 20
+        })]
+      },
+      clients: {
+        connected: 3,
+        cameraWlanSsid: "BVM",
+        cameraWlanConnected: 2
+      },
       problems: []
     });
     expect(snapshot.wans).toHaveLength(2);
     expect(snapshot.wans[1]).toMatchObject({ name: "Cellular", required: true, connected: true, carrier: "T-Mobile", technology: "5G SA", signalLevel: 5 });
     expect(snapshot.wans[1]?.bands[0]).toEqual({ name: "5G Band n41", channelWidth: "100 MHz", rssiDbm: -74, rsrpDbm: -83, rsrqDb: -10 });
-    expect(request).toHaveBeenCalledTimes(6);
+    expect(snapshot.clients?.cameraWlanDevices).toEqual(expect.arrayContaining([expect.objectContaining({
+      macAddress: "00:00:00:00:00:01",
+      ipAddress: "192.168.50.10",
+      signalDbm: -58,
+      signalLevel: 4,
+      downloadKbps: 12,
+      uploadKbps: 3_100
+    })]));
+    expect(request).toHaveBeenCalledTimes(7);
   });
 
   it("fails closed on required WAN, hardware, firmware, resource, and SpeedFusion drift", async () => {
@@ -98,6 +125,33 @@ describe("Peplink collector", () => {
     });
     expect(JSON.stringify(collector.current())).not.toContain(config.clientSecret);
   });
+
+  it("keeps current router telemetry when a transient client omits its connection type", async () => {
+    const request = healthyRequest({ clients: [
+      { mac: "00:00:00:00:00:09", active: true, ip: "192.168.50.90", essid: "BVM" }
+    ] });
+    const collector = new PeplinkCollector(config, request as typeof fetch);
+    await collector.refresh(nowMs);
+    expect(collector.current()).toMatchObject({
+      state: "HEALTHY",
+      apiReachable: true,
+      clients: {
+        connected: 1,
+        cameraWlanConnected: 1,
+        cameraWlanDevices: [{ connectionType: "unknown", ipAddress: "192.168.50.90" }]
+      }
+    });
+  });
+
+  it("keeps current router telemetry when detailed tunnel counters are unavailable", async () => {
+    const collector = new PeplinkCollector(config, healthyRequest({ tunnel: {} }) as typeof fetch);
+    await collector.refresh(nowMs);
+    expect(collector.current()).toMatchObject({
+      state: "HEALTHY",
+      apiReachable: true,
+      speedFusion: { connected: true, linksAvailable: false, links: [] }
+    });
+  });
 });
 
 function healthyRequest(overrides: {
@@ -105,6 +159,8 @@ function healthyRequest(overrides: {
   firmware?: Record<string, unknown>;
   wan?: Record<string, Record<string, unknown>>;
   pepVpn?: Record<string, unknown>;
+  tunnel?: unknown;
+  clients?: unknown[];
 } = {}) {
   return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
@@ -142,15 +198,27 @@ function healthyRequest(overrides: {
       for (const [id, value] of Object.entries(overrides.wan ?? {})) wan[id] = { ...(wan[id] as object), ...value };
       return deviceApi(wan);
     }
+    if (url.includes("/devapi/status.pepvpn?") && url.includes("tunnelOption=60000-1")) {
+      return deviceApi(overrides.tunnel ?? { tunnel: { order: ["60000-1"], "60000-1": { wan: {
+        order: [1],
+        "1": {
+          name: "WAN",
+          state: "ACTIVE",
+          rtt: 53,
+          time: { second: 100 },
+          transmit: { byte: [10_000_000], packet: { forward: [9_900], loss: [100], fec: [2_475] } }
+        }
+      } } } });
+    }
     if (url.includes("/devapi/status.pepvpn?")) {
       return deviceApi(overrides.pepVpn ?? {
         profile: { "60000": { name: "SFC-SFO", status: "CONNECTED", speedfusionConnectProtect: true }, order: [60000] },
-        peer: [{ profileId: 60000, name: "SFC-SFO-022", status: "CONNECTED", dataUseTcp: false, latencyDiffCutoff: 500 }]
+        peer: [{ profileId: 60000, peerId: "60000-1", name: "SFC-SFO-022", status: "CONNECTED", dataUseTcp: false, latencyDiffCutoff: 500 }]
       });
     }
-    if (url.endsWith("/devapi/status.client")) {
-      return deviceApi({ list: [
-        { mac: "00:00:00:00:00:01", active: true, connectionType: "wireless", essid: "BVM" },
+    if (url.endsWith("/devapi/status.client?activeOnly=yes&outputWeight=full")) {
+      return deviceApi({ list: overrides.clients ?? [
+        { mac: "00:00:00:00:00:01", ip: "192.168.50.10", active: true, connectionType: "wireless", essid: "BVM", signalStrength: { value: -58, unit: "dBm" }, signal: { level: 4 }, speed: { download: 12, upload: 3_100, unit: "kbps" } },
         { mac: "00:00:00:00:00:02", active: true, connectionType: "wireless", essid: "BVM" },
         { mac: "00:00:00:00:00:03", active: true, connectionType: "ethernet" }
       ] });

@@ -98,18 +98,28 @@ outbound rules are:
 
 All other traffic retains the router's normal automatic policy. The initial
 SpeedFusion profile uses Dynamic Weighted Bonding with `Fast` failure detection,
-Low congestion latency, a 150 ms jitter buffer, a 500 ms latency-difference
-cutoff, Adaptive FEC, and WAN Smoothing off. Use San Francisco as the initial
+Low congestion latency, a 500 ms jitter buffer, a 500 ms latency-difference
+cutoff, Adaptive FEC, WAN Smoothing off, forced fragmentation of oversized
+packets, and bufferbloat packet dropping disabled. Use San Francisco as the initial
 SFC endpoint. A clean 60-minute eight-camera gate ends router qualification;
 test FEC-off or San Jose only when the primary run exposes a specific failure.
 These settings must be applied and verified through the authenticated SFC
 profile editor when they are not exposed by the supported Router API.
 
-SpeedFusion Boost remains off for the first baseline. It is intended to improve
+SpeedFusion Boost remains off. It is intended to improve
 single-session throughput across lossy, high-latency WANs, not rejected as
 harmful. Run one bounded Boost-on comparison only if healthy WAN capacity and
 router resources still produce tunnel throughput collapse; a clean baseline
 needs no extra comparison.
+
+The 2026-08-07 physical SRT comparison proved these settings are required for
+this camera mix. Respecting the DF flag and the prior 150 ms jitter buffer
+collapsed otherwise healthy 3 Mbps feeds to roughly 51 kbps through SFC while
+the same camera delivered about 3.2 Mbps over direct WAN. Forcing fragmentation
+and raising the reorder buffer to 500 ms restored multiple AVKANS feeds to
+3.2 Mbps with zero MediaMTX frame errors. Disabling DWB bufferbloat drops also
+reduced measured tunnel transmit loss from roughly 30% to about 2%. A bounded
+Boost-on comparison did not improve delivery and was reverted.
 
 UDP `8890` is the current ScoreCheck SRT contract, not a StreamRun dependency.
 The port number itself has no performance advantage, so changing it would add a

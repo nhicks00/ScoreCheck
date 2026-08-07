@@ -94,10 +94,16 @@ const activeFaultGates = new Gauge({ name: "scorecheck_active_fault_gates", help
 const routerApiUp = new Gauge({ name: "scorecheck_router_api_up", help: "Whether current Peplink telemetry is reachable through InControl.", registers: [registry] });
 const routerOnline = new Gauge({ name: "scorecheck_router_online", help: "Whether the commissioned Peplink router is online.", registers: [registry] });
 const routerSpeedFusionConnected = new Gauge({ name: "scorecheck_router_speedfusion_connected", help: "Whether the commissioned ScoreCheck SpeedFusion profile and peer are connected.", registers: [registry] });
+const routerSpeedFusionRtt = new Gauge({ name: "scorecheck_router_speedfusion_link_rtt_ms", help: "Current SpeedFusion tunnel round-trip time by WAN link.", labelNames: ["wan"], registers: [registry] });
+const routerSpeedFusionTransmit = new Gauge({ name: "scorecheck_router_speedfusion_link_transmit_bits_per_second", help: "Average SpeedFusion tunnel transmit rate since the current tunnel connection began.", labelNames: ["wan"], registers: [registry] });
+const routerSpeedFusionLoss = new Gauge({ name: "scorecheck_router_speedfusion_link_transmit_packet_loss_percent", help: "SpeedFusion tunnel transmit packet-loss percentage since the current tunnel connection began.", labelNames: ["wan"], registers: [registry] });
+const routerSpeedFusionFec = new Gauge({ name: "scorecheck_router_speedfusion_link_fec_percent", help: "SpeedFusion tunnel forward-error-correction overhead percentage since the current tunnel connection began.", labelNames: ["wan"], registers: [registry] });
 const routerCpu = new Gauge({ name: "scorecheck_router_cpu_utilization_percent", help: "Current Peplink CPU utilization percentage reported by InControl.", registers: [registry] });
 const routerMemory = new Gauge({ name: "scorecheck_router_memory_utilization_percent", help: "Current Peplink memory utilization percentage reported by InControl.", registers: [registry] });
 const routerClients = new Gauge({ name: "scorecheck_router_connected_clients", help: "Current active clients reported by the Peplink router.", registers: [registry] });
 const routerCameraWlanClients = new Gauge({ name: "scorecheck_router_camera_wlan_clients", help: "Current active clients on the commissioned Peplink camera WLAN.", registers: [registry] });
+const routerCameraWlanSignal = new Gauge({ name: "scorecheck_router_camera_wlan_signal_dbm", help: "Current signal strength for an active device on the commissioned Peplink camera WLAN.", labelNames: ["ip", "mac"], registers: [registry] });
+const routerCameraWlanTraffic = new Gauge({ name: "scorecheck_router_camera_wlan_traffic_kbps", help: "Current traffic for an active device on the commissioned Peplink camera WLAN.", labelNames: ["ip", "mac", "direction"], registers: [registry] });
 const routerWanConnected = new Gauge({ name: "scorecheck_router_wan_connected", help: "Whether a commissioned Peplink WAN is currently connected.", labelNames: ["wan", "type", "required"], registers: [registry] });
 const routerCellularSignal = new Gauge({ name: "scorecheck_router_cellular_signal_db", help: "Current cellular signal measurements by WAN and band.", labelNames: ["wan", "band", "metric"], registers: [registry] });
 const unifiConfigured = new Gauge({ name: "scorecheck_unifi_configured", help: "Whether the UniFi venue Wi-Fi control plane is commissioned for monitoring.", registers: [registry] });
@@ -505,10 +511,29 @@ async function pollAllOnce() {
   routerApiUp.set(router.apiReachable == null ? -1 : router.apiReachable ? 1 : 0);
   routerOnline.set(router.identity == null ? -1 : router.identity.online ? 1 : 0);
   routerSpeedFusionConnected.set(router.speedFusion == null ? -1 : router.speedFusion.connected ? 1 : 0);
+  routerSpeedFusionRtt.reset();
+  routerSpeedFusionTransmit.reset();
+  routerSpeedFusionLoss.reset();
+  routerSpeedFusionFec.reset();
+  for (const link of router.speedFusion?.links ?? []) {
+    const labels = { wan: link.name };
+    setOptionalGauge(routerSpeedFusionRtt, labels, link.rttMs);
+    setOptionalGauge(routerSpeedFusionTransmit, labels, link.transmitBitrateBps);
+    setOptionalGauge(routerSpeedFusionLoss, labels, link.transmitPacketLossPct);
+    setOptionalGauge(routerSpeedFusionFec, labels, link.transmitFecPct);
+  }
   setOptionalGauge(routerCpu, {}, router.resources?.cpuUtilizationPct ?? null);
   setOptionalGauge(routerMemory, {}, router.resources?.memoryUtilizationPct ?? null);
   setOptionalGauge(routerClients, {}, router.clients?.connected ?? null);
   setOptionalGauge(routerCameraWlanClients, {}, router.clients?.cameraWlanConnected ?? null);
+  routerCameraWlanSignal.reset();
+  routerCameraWlanTraffic.reset();
+  for (const client of router.clients?.cameraWlanDevices ?? []) {
+    const labels = { ip: client.ipAddress ?? "unknown", mac: client.macAddress };
+    setOptionalGauge(routerCameraWlanSignal, labels, client.signalDbm);
+    setOptionalGauge(routerCameraWlanTraffic, { ...labels, direction: "download" }, client.downloadKbps);
+    setOptionalGauge(routerCameraWlanTraffic, { ...labels, direction: "upload" }, client.uploadKbps);
+  }
   routerWanConnected.reset();
   routerCellularSignal.reset();
   for (const wan of router.wans) {

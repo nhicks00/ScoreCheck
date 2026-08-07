@@ -622,11 +622,30 @@ export type RouterMonitorSnapshot = {
     usageMb: number | null;
     expiresAt: string | null;
     suspended: boolean | null;
+    linksAvailable: boolean;
+    links: Array<{
+      name: string;
+      state: string;
+      rttMs: number | null;
+      transmitBitrateBps: number | null;
+      transmitPacketLossPct: number | null;
+      transmitFecPct: number | null;
+    }>;
   } | null;
   clients: {
     connected: number;
     cameraWlanSsid: string;
     cameraWlanConnected: number;
+    cameraWlanDevices: Array<{
+      macAddress: string;
+      ipAddress: string | null;
+      name: string | null;
+      connectionType: string;
+      signalDbm: number | null;
+      signalLevel: number | null;
+      downloadKbps: number | null;
+      uploadKbps: number | null;
+    }>;
   } | null;
   wans: Array<{
     id: string;

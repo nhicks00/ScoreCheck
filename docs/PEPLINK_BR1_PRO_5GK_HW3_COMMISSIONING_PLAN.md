@@ -578,16 +578,16 @@ Initial profile:
 | Link-failure detection | `Fast` | Avoid false flaps while still providing bounded failure detection |
 | Traffic distribution | Dynamic Weighted Bonding | Can reduce weight on a degrading link |
 | Congestion latency | Low | Peplink's Starlink starting recommendation |
-| Bufferbloat handling | Enabled | Do not disable congestion response during qualification |
+| Bufferbloat handling | Disabled | Physical SRT evidence showed DWB packet dropping was destructive; continuity takes priority over latency |
 | Packet loss as congestion | Enabled | Prior simultaneous loss was a valid distress signal |
 | WAN Smoothing | Off | Packet duplication can exceed the upload reserve |
 | FEC | Adaptive | Add repair traffic only when measured loss requires it |
-| Packet jitter buffer | 150 ms | Small reorder allowance; latency is not the priority |
+| Packet jitter buffer | 500 ms | Covers the measured 50-245 ms WAN RTT spread; latency is not the priority |
 | Receive buffer | 0 ms | Avoid stacking a second large buffer with SRT recovery |
 | Latency-difference cutoff | 250 ms | Exclude a path that becomes far slower than the best path |
 | Transport | UDP `4500` | Avoid outer TCP head-of-line blocking |
-| Fragmentation | Default / use DF flag | Change only if packet evidence proves an MTU defect |
-| SpeedFusion Boost | Off for the first baseline | New transport optimization; isolate its effect before adoption |
+| Fragmentation | Always | Physical SRT evidence proved DF packets exceeded the SpeedFusion tunnel MTU |
+| SpeedFusion Boost | Off | Bounded physical-camera comparison did not improve delivery |
 
 Use one production-candidate profile, `SCORECHECK_DWB_ADAPTIVE_FEC`. A healthy
 60-minute gate ends the router qualification; do not run extra profile tests.
@@ -817,8 +817,9 @@ objective or need physical evidence. This is not a permanent rejection.
 - Select the San Francisco SFC endpoint.
 - Build `SCORECHECK_DWB_ADAPTIVE_FEC` with every intended WAN at Priority 1.
 - Apply Dynamic Weighted Bonding, `Fast` detection, Low congestion latency,
-  150 ms jitter buffer, 0 ms receive buffer, 500 ms latency cutoff, Smoothing
-  off, Adaptive FEC, UDP 4500, and default DF handling.
+  500 ms jitter buffer, 0 ms receive buffer, 500 ms latency cutoff, Smoothing
+  off, Adaptive FEC, UDP 4500, forced oversized-packet fragmentation, and
+  disabled bufferbloat packet dropping.
 - Apply the two protected camera outbound rules.
 - Enable SpeedFusion traffic optimization and highest-priority SRT QoS.
 - Prove normal traffic remains direct.

@@ -32,7 +32,7 @@ import { deriveMonitorBrowserLiveness, type MonitorBrowserLiveness } from "@/lib
 import { deriveMonitorDeadManReadiness } from "@/lib/monitorDeadManReadiness";
 import { egressRuntimeHealthy } from "@/lib/monitorEgressPresentation";
 import { deriveMonitorPagingReadiness } from "@/lib/monitorPagingReadiness";
-import { isCheckpointEventOperational, isCourtExpectedOff, isMonitorSnapshotCurrent, isTelemetryCurrent, unavailableState } from "@/lib/monitorPresentation";
+import { deriveRawCameraState, isCheckpointEventOperational, isCourtExpectedOff, isMonitorSnapshotCurrent, isTelemetryCurrent, unavailableState } from "@/lib/monitorPresentation";
 import { deriveMonitorSystemState } from "@/lib/monitorSystemState";
 import type { MonitorAgent, MonitorCourt, MonitorCourtPipelineRange, MonitorHealthState, MonitorMediaPath, MonitorNetworkSwitch, MonitorRouter, MonitorSnapshot, MonitorSnapshotEnvelope, MonitorStage, MonitorUniFi } from "@/lib/monitoringTypes";
 import { PacingComparator } from "./PacingComparator";
@@ -842,11 +842,48 @@ function RouterBand({ router, nowMs, current, expectedOff }: { router: MonitorRo
         <span data-ok={router.apiReachable === true}>{router.apiReachable ? "InControl reporting" : "InControl unavailable"}</span>
         <span data-ok={router.identity?.online === true}>{router.identity?.online ? "Router online" : "Router offline"}</span>
         <span data-ok={router.speedFusion?.connected === true}>{router.speedFusion?.connected ? "SpeedFusion connected" : "SpeedFusion disconnected"}</span>
+        <span data-ok={router.speedFusion?.linksAvailable === true}>{router.speedFusion?.linksAvailable ? "Tunnel metrics current" : "Tunnel metrics unavailable"}</span>
         <span data-ok={requiredWans.length > 0 && requiredWansConnected === requiredWans.length}>{requiredWansConnected}/{requiredWans.length} required WANs connected</span>
         <span data-ok={ageMs != null && ageMs <= 90_000}>{ageMs == null ? "No router status received" : `Updated ${formatDuration(ageMs)} ago`}</span>
         {router.identity?.firmwareVersion && <span data-ok="true">Firmware {router.identity.firmwareVersion}</span>}
       </div>
       {router.problems.length > 0 && <ProblemList problems={router.problems} />}
+      {router.speedFusion && router.speedFusion.links.length > 0 && <>
+        <div className="monitor-subheading"><strong>SpeedFusion tunnel links</strong><span>{router.speedFusion.links.length}</span></div>
+        <div className="monitor-uplink-grid">
+          {router.speedFusion.links.map((link) => {
+            const linkState: MonitorHealthState = link.state === "ACTIVE"
+              ? (link.transmitPacketLossPct ?? 0) >= 10 ? "CRITICAL" : (link.transmitPacketLossPct ?? 0) >= 3 ? "DEGRADED" : "HEALTHY"
+              : "CRITICAL";
+            return <article className="monitor-uplink" key={link.name} data-degraded={linkState !== "HEALTHY"}>
+              <div className="monitor-uplink-heading"><Network size={17} aria-hidden="true" /><div><strong>{link.name}</strong><span>{link.state === "ACTIVE" ? "Active tunnel path" : link.state}</span></div><StateDot state={linkState} /></div>
+              <div className="monitor-uplink-metrics">
+                <Metric label="Tunnel upload" value={formatBitrate(link.transmitBitrateBps)} />
+                <Metric label="Round trip" value={link.rttMs == null ? "--" : `${Math.round(link.rttMs)} ms`} />
+                <Metric label="Packet loss" value={formatPercent(link.transmitPacketLossPct)} />
+                <Metric label="FEC overhead" value={formatPercent(link.transmitFecPct)} />
+              </div>
+            </article>;
+          })}
+        </div>
+      </>}
+      {router.clients && <>
+        <div className="monitor-subheading"><strong>{router.clients.cameraWlanSsid} Wi-Fi devices</strong><span>{router.clients.cameraWlanDevices.length}</span></div>
+        <div className="monitor-uplink-grid">
+          {router.clients.cameraWlanDevices.map((client) => {
+            const signalState = routerClientSignalState(client.signalDbm);
+            return <article className="monitor-uplink" key={client.macAddress} data-degraded={signalState === "CRITICAL" || signalState === "DEGRADED"}>
+              <div className="monitor-uplink-heading"><Wifi size={17} aria-hidden="true" /><div><strong>{client.name ?? client.ipAddress ?? "Unnamed device"}</strong><span>{client.ipAddress ?? "No IP"} · {client.macAddress}</span></div><StateDot state={signalState} /></div>
+              <div className="monitor-uplink-metrics">
+                <Metric label="Signal" value={client.signalDbm == null ? "--" : `${client.signalDbm} dBm · ${routerSignalLabel(client.signalDbm)}`} />
+                <Metric label="Signal bars" value={client.signalLevel == null ? "--" : `${client.signalLevel}/5`} />
+                <Metric label="Upload" value={formatBitrate(client.uploadKbps == null ? null : client.uploadKbps * 1_000)} />
+                <Metric label="Download" value={formatBitrate(client.downloadKbps == null ? null : client.downloadKbps * 1_000)} />
+              </div>
+            </article>;
+          })}
+        </div>
+      </>}
       <div className="monitor-uplink-grid">
         {router.wans.length ? router.wans.map((wan) => {
           const Icon = wan.type === "cellular" ? Smartphone : wan.type === "wifi" ? Signal : Cable;
@@ -984,7 +1021,7 @@ function productionPipelineState(court: MonitorCourt): MonitorHealthState {
 }
 
 function effectiveCourtState(court: MonitorCourt): MonitorHealthState {
-  const cameraState = court.stages.find((stage) => stage.stage === "RAW_INGEST")?.state ?? "UNKNOWN";
+  const cameraState = deriveRawCameraState(court);
   const productionState = productionPipelineState(court);
   return STATE_RANK[cameraState] > STATE_RANK[productionState] ? cameraState : productionState;
 }
@@ -996,7 +1033,7 @@ function displayedCourtState(court: MonitorCourt, snapshotCurrent: boolean, even
 function cameraOverviewStatus(court: MonitorCourt, snapshotCurrent: boolean, eventOperational: boolean): string {
   if (!snapshotCurrent) return !eventOperational || isCourtExpectedOff(court) ? "Off" : "No current data";
   const raw = court.paths.raw;
-  const state = court.stages.find((stage) => stage.stage === "RAW_INGEST")?.state ?? "UNKNOWN";
+  const state = deriveRawCameraState(court);
   if (raw?.ready) return state === "HEALTHY" ? "Live" : state === "DEGRADED" ? "Unstable" : state === "CRITICAL" ? "Problem" : "Starting";
   return court.expectation.mediaExpectation === "OFF" ? "Off" : "Offline";
 }
@@ -1064,6 +1101,20 @@ function routerStateLabel(state: MonitorHealthState): string {
   if (state === "DEGRADED") return "Connection under pressure";
   if (state === "UNKNOWN") return "Router status unavailable";
   return friendlyState(state);
+}
+
+function routerClientSignalState(signalDbm: number | null): MonitorHealthState {
+  if (signalDbm == null) return "UNKNOWN";
+  if (signalDbm >= -67) return "HEALTHY";
+  if (signalDbm >= -75) return "DEGRADED";
+  return "CRITICAL";
+}
+
+function routerSignalLabel(signalDbm: number): string {
+  if (signalDbm >= -60) return "Strong";
+  if (signalDbm >= -67) return "Good";
+  if (signalDbm >= -75) return "Weak";
+  return "Poor";
 }
 
 function unifiStateLabel(unifi: MonitorUniFi): string {
