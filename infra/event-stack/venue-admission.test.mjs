@@ -125,14 +125,24 @@ test("rejects missing venue isolation, rate caps, thermal headroom, and protecte
   profile.physicalReadiness.cameraNetworkIsolated = false;
   assert.throws(() => validateVenueProfile(profile), /cameraNetworkIsolated/u);
   profile.physicalReadiness.cameraNetworkIsolated = true;
-  profile.physicalReadiness.routerTemperatureC = 80;
-  assert.throws(() => validateVenueProfile(profile), /thermal/u);
-  profile.physicalReadiness.routerTemperatureC = 35;
+  profile.physicalReadiness.routerThermalPassed = false;
+  assert.throws(() => validateVenueProfile(profile), /routerThermalPassed/u);
+  profile.physicalReadiness.routerThermalPassed = true;
   profile.cameras[0].sourceRateCapMbps = 25;
   assert.throws(() => validateVenueProfile(profile), /rate cap/u);
   profile.cameras[0].sourceRateCapMbps = 5;
   profile.cameras[0].powerProtected = false;
   assert.throws(() => validateVenueProfile(profile), /power is not protected/u);
+});
+
+test("distinguishes an indoor diagnostic from later event-venue readiness", () => {
+  const profile = createSyntheticRehearsalVenueProfile("indoor-diagnostic");
+  assert.equal(profile.physicalReadiness.mode, "INDOOR_DIAGNOSTIC");
+  assert.doesNotThrow(() => assertPhysicalReadiness(profile));
+  profile.physicalReadiness.mode = "EVENT_VENUE";
+  assert.doesNotThrow(() => assertPhysicalReadiness(profile));
+  profile.physicalReadiness.mode = "unknown";
+  assert.throws(() => validateVenueProfile(profile), /readiness mode/u);
 });
 
 test("loads only a protected profile bound to the expected event", async () => {

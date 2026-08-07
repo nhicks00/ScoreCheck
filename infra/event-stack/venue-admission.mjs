@@ -40,6 +40,7 @@ const SOURCE_PATH_MODES = new Set(["direct-h264", "isolated-browser-normalizer"]
 const SOURCE_CODECS = new Set(["H264", "H265"]);
 const SOURCE_PROTOCOLS = new Set(["SRT_ENCRYPTED", "RTMPS", "RTMP_LEGACY_APPROVED"]);
 const VENUE_LINKS = new Set(["WIRED_ETHERNET", "DEDICATED_WIFI"]);
+const READINESS_MODES = new Set(["INDOOR_DIAGNOSTIC", "EVENT_VENUE"]);
 
 export async function loadVenueAdmission(path, expectedEvent) {
   const information = await stat(path);
@@ -55,7 +56,7 @@ export async function loadVenueAdmission(path, expectedEvent) {
 }
 
 export function validateVenueProfile(value, expectedEvent = null) {
-  if (!value || value.schemaVersion !== 2) throw new Error("venue profile schemaVersion must be 2");
+  if (!value || value.schemaVersion !== 3) throw new Error("venue profile schemaVersion must be 3");
   if (!EVENT_SLUG.test(value.event ?? "")) throw new Error("venue profile event is invalid");
   if (expectedEvent !== null && value.event !== expectedEvent) throw new Error("venue profile belongs to a different event");
   if (value.reserveFraction !== VENUE_RESERVE_FRACTION) throw new Error(`venue profile reserveFraction must be ${VENUE_RESERVE_FRACTION}`);
@@ -141,7 +142,7 @@ export function assertPhysicalReadiness(profileInput, nowMs = Date.now()) {
 export function createSyntheticRehearsalVenueProfile(event, now = new Date()) {
   const observedAt = now.toISOString();
   const profile = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     event,
     reserveFraction: VENUE_RESERVE_FRACTION,
     uploadMeasurement: {
@@ -172,14 +173,14 @@ export function createSyntheticRehearsalVenueProfile(event, now = new Date()) {
     physicalReadiness: {
       assessedAt: observedAt,
       operator: "isolated-rehearsal",
+      mode: "INDOOR_DIAGNOSTIC",
       cameraNetworkIsolated: true,
       operatorNetworkSeparated: true,
       qosFairnessConfigured: true,
       rfSurveyPassed: true,
-      routerTemperatureC: 35,
-      routerTemperatureLimitC: 75,
+      routerThermalPassed: true,
       upsRuntimeMinutes: 60,
-      starlinkObstructionPassed: true,
+      primaryWanReadinessPassed: true,
       cellularWanCount: 1,
       weatherProtectionReady: true,
       sparePowerAndCablesReady: true
@@ -213,12 +214,10 @@ function validateUploadMeasurement(value) {
 function validatePhysicalReadiness(value) {
   if (!value || !ISO_TIMESTAMP.test(value.assessedAt ?? "") || !Number.isFinite(Date.parse(value.assessedAt))) throw new Error("venue physical-readiness timestamp is invalid");
   if (!SAFE_DECLARATION.test(value.operator ?? "")) throw new Error("venue physical-readiness operator is invalid");
-  for (const field of ["cameraNetworkIsolated", "operatorNetworkSeparated", "qosFairnessConfigured", "rfSurveyPassed", "starlinkObstructionPassed", "weatherProtectionReady", "sparePowerAndCablesReady"]) {
+  if (!READINESS_MODES.has(value.mode)) throw new Error("venue physical-readiness mode is invalid");
+  for (const field of ["cameraNetworkIsolated", "operatorNetworkSeparated", "qosFairnessConfigured", "rfSurveyPassed", "routerThermalPassed", "primaryWanReadinessPassed", "weatherProtectionReady", "sparePowerAndCablesReady"]) {
     if (value[field] !== true) throw new Error(`venue physical readiness requires ${field}`);
   }
-  if (!Number.isFinite(value.routerTemperatureC) || !Number.isFinite(value.routerTemperatureLimitC)
-    || value.routerTemperatureC < -20 || value.routerTemperatureLimitC < 40 || value.routerTemperatureLimitC > 100
-    || value.routerTemperatureC > value.routerTemperatureLimitC) throw new Error("venue router thermal check is invalid or over limit");
   if (!Number.isInteger(value.upsRuntimeMinutes) || value.upsRuntimeMinutes < 30 || value.upsRuntimeMinutes > 1_440) throw new Error("venue UPS runtime must be at least 30 minutes");
   if (!Number.isInteger(value.cellularWanCount) || value.cellularWanCount < 1 || value.cellularWanCount > 8) throw new Error("venue must have at least one cellular WAN in the bonded route");
 }
