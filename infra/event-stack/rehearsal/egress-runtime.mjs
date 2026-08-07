@@ -67,7 +67,17 @@ export class EgressRuntime {
       return { ...await this.reconcileOwned({ host, court, profile, owner: expectedOwner, expectedId }), adopted: true };
     }
     if (expectedId) throw new Error(`expected Egress ${expectedId} is absent from compositor ${host}`);
-    const result = await this.#remote(host, `cd /opt/compositor && ./start-court.sh ${court} ${profile} ${expectedOwner.event} ${expectedOwner.destinationId} ${expectedOwner.outputGeneration} ${expectedOwner.destinationRole}`);
+    const startCommand = `cd /opt/compositor && ./start-court.sh ${court} ${profile} ${expectedOwner.event} ${expectedOwner.destinationId} ${expectedOwner.outputGeneration} ${expectedOwner.destinationRole}`;
+    let result;
+    for (let attempt = 1; attempt <= 10; attempt += 1) {
+      try {
+        result = await this.#remote(host, startCommand);
+        break;
+      } catch (error) {
+        if (attempt === 10 || !isPreMutationLockContention(error)) throw error;
+        await this.sleep(1_000);
+      }
+    }
     const ids = [...new Set(result.stdout.match(/EG_[a-zA-Z0-9]+/g) ?? [])];
     if (ids.length !== 1) throw new Error(`compositor ${host} start did not return exactly one Egress id`);
     const id = ids[0];
@@ -150,6 +160,10 @@ export class EgressRuntime {
     }
     throw new Error("Egress SSH retry loop exited unexpectedly");
   }
+}
+
+function isPreMutationLockContention(error) {
+  return error instanceof Error && /another Egress lifecycle operation is already in progress[.]/u.test(error.message);
 }
 
 export function parseActiveEgress(raw) {

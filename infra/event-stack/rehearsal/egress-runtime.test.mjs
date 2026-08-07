@@ -147,6 +147,35 @@ test("does not retry Egress mutations after a transient SSH failure", async () =
   assert.equal(attempts, 1);
 });
 
+test("retries only exact pre-mutation Egress lock contention", async () => {
+  let active = [];
+  let recordedOwner = null;
+  let startAttempts = 0;
+  const waits = [];
+  const runtime = new EgressRuntime({
+    sshKey: "/tmp/key",
+    knownHosts: "/tmp/known",
+    sleep: async (milliseconds) => { waits.push(milliseconds); },
+    runner: async (_command, args) => {
+      const remote = args.at(-1);
+      if (remote.includes("list-egress")) return { code: 0, stdout: JSON.stringify(active), stderr: "" };
+      if (remote.includes("owner.json")) return { code: 0, stdout: JSON.stringify(recordedOwner), stderr: "" };
+      if (remote.includes("start-court")) {
+        startAttempts += 1;
+        if (startAttempts === 1) throw new Error("ssh failed with exit 1: error: another Egress lifecycle operation is already in progress.");
+        active = [{ egress_id: "EG_started", status: "EGRESS_ACTIVE" }];
+        recordedOwner = ownership();
+        return { code: 0, stdout: "saved owned egress id EG_started", stderr: "" };
+      }
+      throw new Error(`unexpected ${remote}`);
+    }
+  });
+  const started = await runtime.ensureStarted({ host: "198.51.100.1", court: 1, owner });
+  assert.equal(started.id, "EG_started");
+  assert.equal(startAttempts, 2);
+  assert.deepEqual(waits, [1_000]);
+});
+
 test("refuses to adopt an active Egress whose durable owner differs", async () => {
   const runtime = new EgressRuntime({
     sshKey: "/tmp/key",
