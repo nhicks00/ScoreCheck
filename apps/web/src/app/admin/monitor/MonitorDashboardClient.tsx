@@ -522,7 +522,7 @@ function CourtCard({ court, history, selected, nowMs, current, eventOperational,
         <Metric label="Preview speed" value={formatFps(preview?.framesPerSecond)} />
         <Metric label="Rendered speed" value={formatFps(liveBrowser?.video.framesPerSecond)} />
         <Metric label="Picture size" value={liveBrowser?.video.width && liveBrowser.video.height ? `${liveBrowser.video.width}×${liveBrowser.video.height}` : "--"} />
-        <Metric label="Late packet drops" value={transportDrops(raw)} />
+        <Metric label="SRT retransmissions" value={transportRecovery(raw)} />
         <Metric label="Viewer packet loss" value={viewerLoss} />
       </div>
       <div className="monitor-trends" aria-label="Five minute trends">
@@ -625,7 +625,7 @@ function OverviewPanel({ snapshot, snapshotCurrent, eventOperational, unifi, uni
       <OverviewSectionHeading icon={<Camera size={19} />} title="Cameras" state={cameraState} label={activeCameras > 0 ? `${activeCameras} live` : eventOperational && !snapshotCurrent ? "No current data" : "All off"} />
       <div className="monitor-overview-table-wrap">
         <table className="monitor-overview-table monitor-camera-overview-table">
-          <thead><tr><th>Camera</th><th>Status</th><th>Ingest bitrate</th><th>Late packet drops</th><th>Access point</th><th>Wi-Fi signal</th><th>Program</th></tr></thead>
+          <thead><tr><th>Camera</th><th>Status</th><th>Ingest bitrate</th><th>SRT retransmissions</th><th>Access point</th><th>Wi-Fi signal</th><th>Program</th></tr></thead>
           <tbody>
             {snapshot.courts.map((court) => {
               const state = displayedCourtState(court, snapshotCurrent, eventOperational);
@@ -636,7 +636,7 @@ function OverviewPanel({ snapshot, snapshotCurrent, eventOperational, unifi, uni
                 <th scope="row"><span className="monitor-camera-cell"><StateDot state={state} />Camera {court.courtNumber}</span></th>
                 <td data-label="Status"><StateBadge state={state} compact label={cameraOverviewStatus(court, snapshotCurrent, eventOperational)} /></td>
                 <td data-label="Ingest bitrate">{raw?.ready ? formatBitrate(raw.inboundBitrateBps) : "--"}</td>
-                <td data-label="Late packet drops">{raw?.ready ? transportDrops(raw) : "--"}</td>
+                <td data-label="SRT retransmissions">{raw?.ready ? transportRecovery(raw) : "--"}</td>
                 <td data-label="Access point">{accessPoint?.name ?? "--"}</td>
                 <td data-label="Wi-Fi signal">--</td>
                 <td data-label="Program">{programOverviewStatus(court, snapshotCurrent, eventOperational)}</td>
@@ -1215,10 +1215,10 @@ function sourceDetail(path: MonitorMediaPath | undefined): string {
   return details.join(" · ");
 }
 
-function transportDrops(path: MonitorMediaPath | undefined): string {
-  const dropped = path?.transport?.packetsDropped;
+function transportRecovery(path: MonitorMediaPath | undefined): string {
+  const retransmitted = path?.transport?.packetsRetransmitted;
   const received = path?.transport?.packetsReceived;
-  return dropped != null && received != null ? percent(dropped, dropped + received) : "--";
+  return retransmitted != null && received != null ? percent(retransmitted, received) : "--";
 }
 
 function percent(value: number, total: number): string {
