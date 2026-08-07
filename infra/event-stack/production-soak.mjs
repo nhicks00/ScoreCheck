@@ -34,6 +34,8 @@ const MAX_SAMPLE_LAG_MS = 1_000;
 const MAX_MONITOR_AGE_MS = 15_000;
 const SOURCE_BITRATE_WINDOW_MS = 60_000;
 const SOURCE_BITRATE_EXTREME_FACTOR = 1.5;
+const SOURCE_PROFILE_ATTEMPTS = 2;
+const LOCAL_RENDERER_RUNTIME_ORIGIN = "http://renderer:3000";
 const BROWSER_IDENTITY_FIELDS = Object.freeze(["pageLoadedAt", "pageBuildVersion"]);
 const BROWSER_COUNTER_FIELDS = Object.freeze(["framesDropped", "freezeCount", "totalFreezesDurationMs", "reconnectCount", "reloadCount"]);
 const WHEP_COUNTER_FIELDS = Object.freeze([...BROWSER_COUNTER_FIELDS, "packetsLost"]);
@@ -68,7 +70,8 @@ export class ProductionSoakRuntime {
     await assertExecutable(options.ffprobe, "FFprobe");
     const manifest = await readProtectedJson(profile.manifest, "event manifest");
     const lifecycleState = await readProtectedJson(profile.state, "event lifecycle state");
-    const renderer = await loadRendererBinding(profile.rendererBinding);
+    const rendererBinding = await loadRendererBinding(profile.rendererBinding);
+    const renderer = await loadProductionRenderer(profile, rendererBinding);
     const venue = await loadVenueAdmission(profile.venueProfile, manifest.event);
     if (!venue.passed) throw new Error(`venue profile is not admitted: ${venue.problems.join("; ")}`);
     assertFirmwareAttested(venue.profile);
@@ -239,7 +242,7 @@ export class ProductionSoakRuntime {
         for (const camera of this.venue.activeCameras) {
           const host = compositorHost(this.manifest, this.lifecycleState, camera);
           const expectedId = state.egress[camera]?.id ?? null;
-          const owner = egressOwner(state, camera);
+          const owner = productionEgressOwner(state, camera);
           state.monitoringExpectations[camera] = await this.expectations.set({
             binding: state.monitoringBinding,
             camera,
@@ -307,6 +310,7 @@ export class ProductionSoakRuntime {
         process.stdout.write(`SOAK_STARTED ${state.startedAt}: ${this.venue.activeCameras.length} persistent 1080 scoreboard output(s) are live; source defects are monitored independently.\n`);
       } catch (error) {
         state.startupFailure = { observedAt: new Date(this.now()).toISOString(), error: safeError(error) };
+        await stopStartupObservers({ state, sampler: this.sampler, sentinel: this.sentinel, criticalLogs: this.criticalLogs });
         await writeState(statePath, state);
         throw error;
       }
@@ -398,7 +402,7 @@ export class ProductionSoakRuntime {
               host: compositorHost(this.manifest, this.lifecycleState, camera),
               court: camera,
               profile: state.profiles[camera].profile,
-              owner: egressOwner(state, camera),
+              owner: productionEgressOwner(state, camera),
               nowMs: observedMs
             });
             if (!adoption.adopted) continue;
@@ -592,17 +596,14 @@ export class ProductionSoakRuntime {
     for (const camera of this.venue.activeCameras) {
       const assignment = this.venue.assignments[camera];
       try {
-        profiles[camera] = await this.sourceProbe.probe({
+        profiles[camera] = await probeAdmittedSourceProfile({
+          sourceProbe: this.sourceProbe,
           host: ingest,
-          court: camera,
-          sourcePathMode: assignment.sourcePathMode,
-          expectedFrameRateMode: assignment.frameRateMode
+          camera,
+          assignment,
+          sleep: this.sleep
         });
-        const problems = admittedProfileProblems(camera, profiles[camera], assignment);
-        if (problems.length) throw new Error(problems.join("; "));
-      } catch (error) {
-        profiles[camera] = degradedAssignedProfile(assignment, safeError(error));
-      }
+      } catch (error) { profiles[camera] = degradedAssignedProfile(assignment, safeError(error)); }
     }
     return profiles;
   }
@@ -672,7 +673,7 @@ export class ProductionSoakRuntime {
     const camera = pending.camera;
     const host = compositorHost(this.manifest, this.lifecycleState, camera);
     const profile = state.profiles[camera].profile;
-    const owner = egressOwner(state, camera);
+    const owner = productionEgressOwner(state, camera);
     const replacement = await recoverOwnedProgramEgress({
       egress: this.egress,
       host,
@@ -786,6 +787,20 @@ export async function ensureStartupObserver({ state, statePath, key, runtime, ev
   };
   await persist(statePath, state);
   return finishStartupObserver({ state, statePath, key, attempt: state.observerStarts[key], start, now, persist });
+}
+
+export async function stopStartupObservers({ state, sampler, sentinel, criticalLogs }) {
+  const failures = [];
+  for (const [key, runtime] of [["sampler", sampler], ["sentinel", sentinel], ["criticalLogs", criticalLogs]]) {
+    if (!state[key]?.output) continue;
+    try {
+      state[key] = await runtime.stop(state[key]);
+    } catch (error) {
+      failures.push(`${key}: ${safeError(error)}`);
+    }
+  }
+  if (failures.length) state.startupFailure.cleanupErrors = failures;
+  return state;
 }
 
 async function finishStartupObserver({ state, statePath, key, attempt, start, now, persist }) {
@@ -1644,17 +1659,22 @@ function validateState(state, event, options, venue, commentary, renderer, desti
     || JSON.stringify(state.activeCameras) !== JSON.stringify(venue.activeCameras) || JSON.stringify(state.inactiveCameras) !== JSON.stringify(venue.inactiveCameras)) throw new Error("production soak state does not match this run");
 }
 
-function egressOwner(state, camera) {
+export function productionEgressOwner(state, camera) {
   const destinationId = state.runBinding?.destinations?.[camera]?.broadcastId;
   const renderer = state.runBinding?.renderer;
-  if (!destinationId || !renderer?.gitSha || !renderer?.deploymentId) throw new Error(`Camera ${camera} Egress owner binding is incomplete`);
+  if (!destinationId || !renderer?.gitSha || !renderer?.deploymentId || !renderer?.runtimeOrigin || !renderer?.releaseOrigin || !renderer?.bundleSha256) {
+    throw new Error(`Camera ${camera} Egress owner binding is incomplete`);
+  }
   return {
     event: state.event,
     destinationId,
     destinationRole: "primary",
     outputGeneration: state.runId,
     rendererGitSha: renderer.gitSha,
-    rendererDeploymentId: renderer.deploymentId
+    rendererDeploymentId: renderer.deploymentId,
+    rendererRuntimeOrigin: renderer.runtimeOrigin,
+    rendererReleaseOrigin: renderer.releaseOrigin,
+    rendererBundleSha256: renderer.bundleSha256
   };
 }
 
@@ -1678,7 +1698,10 @@ export function outputConformanceProblems(value, profiles, activeCameras, runBin
 
 function createRunBinding(renderer, destinations, activeCameras) {
   validateActiveCameras(activeCameras);
-  if (!renderer || typeof renderer !== "object" || !/^[a-f0-9]{40}$/u.test(renderer.gitSha ?? "") || !/^dpl_[A-Za-z0-9]+$/u.test(renderer.deploymentId ?? "")) throw new Error("production renderer binding is invalid");
+  if (!renderer || typeof renderer !== "object" || !/^[a-f0-9]{40}$/u.test(renderer.gitSha ?? "") || !/^dpl_[A-Za-z0-9]+$/u.test(renderer.deploymentId ?? "")
+    || renderer.runtimeOrigin !== LOCAL_RENDERER_RUNTIME_ORIGIN || renderer.releaseOrigin !== renderer.origin || !/^[a-f0-9]{64}$/u.test(renderer.bundleSha256 ?? "")) {
+    throw new Error("production renderer binding is invalid");
+  }
   const destinationBinding = {};
   for (const camera of activeCameras) {
     const streamId = destinations?.streams?.[camera]?.id;
@@ -1690,10 +1713,25 @@ function createRunBinding(renderer, destinations, activeCameras) {
     renderer: {
       gitSha: renderer.gitSha,
       deploymentId: renderer.deploymentId,
+      runtimeOrigin: renderer.runtimeOrigin,
+      releaseOrigin: renderer.releaseOrigin,
+      bundleSha256: renderer.bundleSha256,
       assetNamespace: renderer.assetNamespace,
       contracts: { ...renderer.contracts }
     },
     destinations: destinationBinding
+  };
+}
+
+async function loadProductionRenderer(profile, binding) {
+  const bundlePath = join(profile.secrets, "renderer", "local-renderer.tar.gz");
+  const information = await stat(bundlePath);
+  if (!information.isFile() || (information.mode & 0o077) !== 0) throw new Error("local renderer bundle must be a protected file");
+  return {
+    ...binding,
+    runtimeOrigin: LOCAL_RENDERER_RUNTIME_ORIGIN,
+    releaseOrigin: binding.origin,
+    bundleSha256: sha256(await readFile(bundlePath))
   };
 }
 
@@ -1726,6 +1764,27 @@ export function admittedProfileProblems(camera, profile, assignment) {
   if (profile?.source?.frameRateMode !== assignment.frameRateMode) problems.push(`Camera ${camera} source frame rate does not match its venue assignment`);
   if (profile?.browserInput?.codec !== "H264" || profile?.browserInput?.hasBFrames !== 0 || profile?.browserInput?.pixelFormat !== "yuv420p") problems.push(`Camera ${camera} browser input is not H264 yuv420p with zero B-frames`);
   return unique(problems);
+}
+
+export async function probeAdmittedSourceProfile({ sourceProbe, host, camera, assignment, sleep = delay }) {
+  let lastError;
+  for (let attempt = 1; attempt <= SOURCE_PROFILE_ATTEMPTS; attempt += 1) {
+    try {
+      const profile = await sourceProbe.probe({
+        host,
+        court: camera,
+        sourcePathMode: assignment.sourcePathMode,
+        expectedFrameRateMode: assignment.frameRateMode
+      });
+      const problems = admittedProfileProblems(camera, profile, assignment);
+      if (problems.length) throw new Error(problems.join("; "));
+      return profile;
+    } catch (error) {
+      lastError = error;
+      if (attempt < SOURCE_PROFILE_ATTEMPTS) await sleep(2_000);
+    }
+  }
+  return degradedAssignedProfile(assignment, safeError(lastError));
 }
 
 function degradedAssignedProfile(assignment, admissionError) {

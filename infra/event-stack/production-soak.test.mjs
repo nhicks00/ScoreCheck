@@ -14,6 +14,8 @@ import {
   fetchProductionMonitorSnapshot,
   outputConformanceProblems,
   persistentOutputProblems,
+  probeAdmittedSourceProfile,
+  productionEgressOwner,
   productionIdleProblems,
   productionProviderIdleProblems,
   productionProviderProblems,
@@ -23,6 +25,7 @@ import {
   reconcileHostRecoveredEgress,
   recoverOwnedProgramEgress,
   sourceBitrateWindowStep,
+  stopStartupObservers,
   productionSnapshotProblems,
   viewerEvidenceProblems
 } from "./production-soak.mjs";
@@ -42,6 +45,9 @@ const runBinding = {
   renderer: {
     gitSha: "a".repeat(40),
     deploymentId: "dpl_renderer123",
+    runtimeOrigin: "http://renderer:3000",
+    releaseOrigin: "https://scorecheck-test.vercel.app",
+    bundleSha256: "c".repeat(64),
     assetNamespace: "dpl_renderer123",
     contracts: {
       programSession: "program-session-v1",
@@ -85,6 +91,69 @@ test("hard-cuts the production soak client to monitoring snapshot contract v6", 
   const current = snapshot({ active: false });
   assert.equal(assertProductionMonitorSnapshot(current), current);
   assert.throws(() => assertProductionMonitorSnapshot({ ...current, version: 4 }), /snapshot contract is invalid/u);
+});
+
+test("builds complete local-renderer Egress ownership", () => {
+  assert.deepEqual(productionEgressOwner({ event: "event-test", runId: "run-test", runBinding }, 1), {
+    event: "event-test",
+    destinationId: "broadcast-1",
+    destinationRole: "primary",
+    outputGeneration: "run-test",
+    rendererGitSha: "a".repeat(40),
+    rendererDeploymentId: "dpl_renderer123",
+    rendererRuntimeOrigin: "http://renderer:3000",
+    rendererReleaseOrigin: "https://scorecheck-test.vercel.app",
+    rendererBundleSha256: "c".repeat(64)
+  });
+});
+
+test("requires a repeatable source-profile failure before rejecting admission", async () => {
+  let attempts = 0;
+  const sleeps = [];
+  const recovered = await probeAdmittedSourceProfile({
+    sourceProbe: {
+      probe: async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("transient packet cadence");
+        return profiles[3];
+      }
+    },
+    host: "198.51.100.1",
+    camera: 3,
+    assignment: venue.assignments[3],
+    sleep: async (milliseconds) => { sleeps.push(milliseconds); }
+  });
+  assert.equal(attempts, 2);
+  assert.deepEqual(sleeps, [2_000]);
+  assert.equal(recovered, profiles[3]);
+
+  attempts = 0;
+  const rejected = await probeAdmittedSourceProfile({
+    sourceProbe: { probe: async () => { attempts += 1; throw new Error(`persistent failure ${attempts}`); } },
+    host: "198.51.100.1",
+    camera: 3,
+    assignment: venue.assignments[3],
+    sleep: async () => {}
+  });
+  assert.equal(attempts, 2);
+  assert.equal(rejected.admitted, false);
+  assert.match(rejected.admissionError, /persistent failure 2/u);
+});
+
+test("stops every run-owned observer after startup failure", async () => {
+  const state = {
+    startupFailure: { error: "startup failed" },
+    sampler: { output: "/evidence/sampler.jsonl" },
+    sentinel: { output: "/evidence/sentinel.jsonl" },
+    criticalLogs: { output: "/evidence/logs.jsonl" }
+  };
+  const calls = [];
+  const runtime = (name) => ({ stop: async (value) => { calls.push(name); return { ...value, status: "stopped" }; } });
+  await stopStartupObservers({ state, sampler: runtime("sampler"), sentinel: runtime("sentinel"), criticalLogs: runtime("criticalLogs") });
+  assert.deepEqual(calls, ["sampler", "sentinel", "criticalLogs"]);
+  assert.equal(state.sampler.status, "stopped");
+  assert.equal(state.sentinel.status, "stopped");
+  assert.equal(state.criticalLogs.status, "stopped");
 });
 
 test("recycles an idle worker before replaying an interrupted owned browser recovery", async () => {
