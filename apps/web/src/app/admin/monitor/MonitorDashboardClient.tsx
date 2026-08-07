@@ -613,7 +613,7 @@ function OverviewPanel({ snapshot, snapshotCurrent, eventOperational, unifi, uni
     + (port.outputErrorsPerSecond ?? 0)
     + (port.inputDiscardsPerSecond ?? 0)
     + (port.outputDiscardsPerSecond ?? 0), 0);
-  const cameraClients = unifiCurrent ? unifi.clients.filter((client) => cameraNumberFromClientName(client.name) != null) : [];
+  const cameraClients = unifiCurrent ? unifi.clients.filter((client) => client.cameraNumber != null) : [];
   const requiredWans = router.wans.filter((wan) => wan.required);
   const requiredWansConnected = requiredWans.filter((wan) => wan.connected).length;
   const apRetrySamples = unifiCurrent
@@ -1038,14 +1038,8 @@ function programOverviewStatus(court: MonitorCourt, snapshotCurrent: boolean, ev
   return "Offline";
 }
 
-function cameraNumberFromClientName(name: string): number | null {
-  const match = name.trim().match(/^camera[\s_-]*(\d)$/i);
-  const cameraNumber = match ? Number(match[1]) : 0;
-  return cameraNumber >= 1 && cameraNumber <= 8 ? cameraNumber : null;
-}
-
 function findCameraClient(unifi: MonitorUniFi, courtNumber: number): MonitorUniFi["clients"][number] | null {
-  return unifi.clients.find((client) => cameraNumberFromClientName(client.name) === courtNumber) ?? null;
+  return unifi.clients.find((client) => client.cameraNumber === courtNumber) ?? null;
 }
 
 function offlineLabel(eventOperational: boolean): string {

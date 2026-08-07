@@ -75,6 +75,7 @@ export class UniFiCollector {
       if (devicePage.totalCount > 200 || clientPage.totalCount > 200) throw new Error("UniFi API result exceeds the supported page size.");
       const devices = devicePage.data.map((entry) => deviceSchema.parse(entry));
       const clients = clientPage.data.map((entry) => clientSchema.parse(entry));
+      const cameraByMac = new Map(this.#config.cameraClients.map((binding) => [binding.macAddress, binding.cameraNumber]));
       const accessPoints = await Promise.all(this.#config.accessPoints.map(async (binding) => {
         const device = devices.find((entry) => entry.id === binding.deviceId);
         if (!device) return missingAccessPoint(binding);
@@ -122,6 +123,7 @@ export class UniFiCollector {
           macAddress: client.macAddress ?? null,
           ipAddress: client.ipAddress ?? null,
           type: client.type,
+          cameraNumber: client.macAddress ? cameraByMac.get(client.macAddress) ?? null : null,
           uplinkDeviceId: client.uplinkDeviceId ?? null
         })),
         problems: problems.map((entry) => entry.message)

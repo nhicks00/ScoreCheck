@@ -139,6 +139,7 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env) {
     MONITOR_UNIFI_BASE_URL: z.string().default(""),
     MONITOR_UNIFI_SITE_ID: z.string().default(""),
     MONITOR_UNIFI_ACCESS_POINTS_JSON: z.string().default(""),
+    MONITOR_UNIFI_CAMERA_CLIENTS_JSON: z.string().default(""),
     MONITOR_UNIFI_POLL_INTERVAL_MS: z.coerce.number().int().min(15_000).max(300_000).default(30_000),
     MONITOR_NETWORK_SWITCH_REQUIRED: z.enum(["true", "false"]).default("false"),
     MONITOR_NETWORK_SWITCH_EXPORTER_URL: z.string().default(""),
@@ -416,6 +417,11 @@ export type UniFiAccessPointBinding = {
   expected: boolean;
 };
 
+export type UniFiCameraClientBinding = {
+  cameraNumber: number;
+  macAddress: string;
+};
+
 export type UniFiConfig = {
   required: boolean;
   configured: boolean;
@@ -423,6 +429,7 @@ export type UniFiConfig = {
   baseUrl: string | null;
   siteId: string | null;
   accessPoints: UniFiAccessPointBinding[];
+  cameraClients: UniFiCameraClientBinding[];
   pollIntervalMs: number;
 };
 
@@ -432,6 +439,7 @@ function parseUniFiConfig(parsed: {
   MONITOR_UNIFI_BASE_URL: string;
   MONITOR_UNIFI_SITE_ID: string;
   MONITOR_UNIFI_ACCESS_POINTS_JSON: string;
+  MONITOR_UNIFI_CAMERA_CLIENTS_JSON: string;
   MONITOR_UNIFI_POLL_INTERVAL_MS: number;
 }): UniFiConfig {
   const required = parsed.MONITOR_UNIFI_REQUIRED === "true";
@@ -439,7 +447,8 @@ function parseUniFiConfig(parsed: {
     apiKey: parsed.MONITOR_UNIFI_API_KEY.trim(),
     baseUrl: parsed.MONITOR_UNIFI_BASE_URL.trim(),
     siteId: parsed.MONITOR_UNIFI_SITE_ID.trim(),
-    accessPoints: parsed.MONITOR_UNIFI_ACCESS_POINTS_JSON.trim()
+    accessPoints: parsed.MONITOR_UNIFI_ACCESS_POINTS_JSON.trim(),
+    cameraClients: parsed.MONITOR_UNIFI_CAMERA_CLIENTS_JSON.trim()
   };
   const configuredValues = Object.values(raw).filter(Boolean).length;
   if (configuredValues === 0 && !required) {
@@ -450,10 +459,11 @@ function parseUniFiConfig(parsed: {
       baseUrl: null,
       siteId: null,
       accessPoints: [],
+      cameraClients: [],
       pollIntervalMs: parsed.MONITOR_UNIFI_POLL_INTERVAL_MS
     };
   }
-  if (configuredValues !== 4) throw new Error("UniFi monitoring requires its API key, base URL, site id, and access-point bindings together.");
+  if (configuredValues !== 5) throw new Error("UniFi monitoring requires its API key, base URL, site id, access-point bindings, and camera-client bindings together.");
   const baseUrl = parseUniFiBaseUrl(raw.baseUrl);
   const uuid = z.string().uuid();
   const siteId = uuid.parse(raw.siteId);
@@ -476,6 +486,20 @@ function parseUniFiConfig(parsed: {
     throw new Error("UniFi access-point names, device ids, and MAC addresses must be unique.");
   }
   if (!accessPoints.some((entry) => entry.expected)) throw new Error("UniFi monitoring requires at least one expected access point.");
+  let cameraValue: unknown;
+  try {
+    cameraValue = JSON.parse(raw.cameraClients);
+  } catch {
+    throw new Error("MONITOR_UNIFI_CAMERA_CLIENTS_JSON must be valid JSON.");
+  }
+  const cameraClients = z.array(z.object({
+    cameraNumber: z.number().int().min(1).max(8),
+    macAddress: z.string().trim().toLowerCase().regex(/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/)
+  }).strict()).length(8).parse(cameraValue);
+  if (new Set(cameraClients.map((entry) => entry.cameraNumber)).size !== cameraClients.length
+    || new Set(cameraClients.map((entry) => entry.macAddress)).size !== cameraClients.length) {
+    throw new Error("UniFi camera numbers and MAC addresses must be unique.");
+  }
   return {
     required,
     configured: true,
@@ -483,6 +507,7 @@ function parseUniFiConfig(parsed: {
     baseUrl,
     siteId,
     accessPoints,
+    cameraClients,
     pollIntervalMs: parsed.MONITOR_UNIFI_POLL_INTERVAL_MS
   };
 }

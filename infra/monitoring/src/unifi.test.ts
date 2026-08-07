@@ -9,6 +9,10 @@ const accessPoints = [1, 2, 3].map((number) => ({
   macAddress: `00:11:22:33:44:0${number}`,
   expected: true
 }));
+const cameraClients = Array.from({ length: 8 }, (_, index) => ({
+  cameraNumber: index + 1,
+  macAddress: `aa:bb:cc:dd:ee:0${index + 1}`
+}));
 
 const config: UniFiConfig = {
   required: true,
@@ -17,13 +21,14 @@ const config: UniFiConfig = {
   baseUrl: "https://unifi.example.test/proxy/network/integration/v1",
   siteId: "10000000-0000-4000-8000-000000000001",
   accessPoints,
+  cameraClients,
   pollIntervalMs: 30_000
 };
 
 describe("UniFi collector", () => {
   it("stays not applicable without a commissioned site", async () => {
     const request = vi.fn();
-    const collector = new UniFiCollector({ ...config, required: false, configured: false, apiKey: null, baseUrl: null, siteId: null, accessPoints: [] }, request as typeof fetch);
+    const collector = new UniFiCollector({ ...config, required: false, configured: false, apiKey: null, baseUrl: null, siteId: null, accessPoints: [], cameraClients: [] }, request as typeof fetch);
     await collector.refresh(nowMs);
     expect(collector.current()).toMatchObject({ state: "NOT_APPLICABLE", configured: false, apiReachable: null });
     expect(request).not.toHaveBeenCalled();
@@ -47,7 +52,7 @@ describe("UniFi collector", () => {
     const snapshot = collector.current();
     expect(snapshot).toMatchObject({ state: "HEALTHY", apiReachable: true, onlineAccessPoints: 3, connectedClients: 1, problems: [] });
     expect(snapshot.accessPoints[0]?.radios).toEqual([{ frequencyGHz: 5, txRetriesPct: 4 }]);
-    expect(snapshot.clients[0]).toMatchObject({ name: "Camera 1", uplinkDeviceId: accessPoints[0]?.deviceId });
+    expect(snapshot.clients[0]).toMatchObject({ name: "Camera 1", cameraNumber: 1, uplinkDeviceId: accessPoints[0]?.deviceId });
     expect(request).toHaveBeenCalledTimes(5);
   });
 

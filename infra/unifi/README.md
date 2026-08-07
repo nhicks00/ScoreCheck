@@ -201,8 +201,14 @@ MONITOR_UNIFI_API_KEY=<protected official API key>
 MONITOR_UNIFI_BASE_URL=https://unifi.beachvolleyballmedia.com/proxy/network/integration/v1
 MONITOR_UNIFI_SITE_ID=<Network site UUID>
 MONITOR_UNIFI_ACCESS_POINTS_JSON=[{"name":"UK Ultra 1","deviceId":"<uuid>","macAddress":"<mac>","expected":true},{"name":"UK Ultra 2","deviceId":"<uuid>","macAddress":"<mac>","expected":false},{"name":"UK Ultra 3","deviceId":"<uuid>","macAddress":"<mac>","expected":true}]
+MONITOR_UNIFI_CAMERA_CLIENTS_JSON=[{"cameraNumber":1,"macAddress":"<camera-1-mac>"},{"cameraNumber":2,"macAddress":"<camera-2-mac>"},{"cameraNumber":3,"macAddress":"<camera-3-mac>"},{"cameraNumber":4,"macAddress":"<camera-4-mac>"},{"cameraNumber":5,"macAddress":"<camera-5-mac>"},{"cameraNumber":6,"macAddress":"<camera-6-mac>"},{"cameraNumber":7,"macAddress":"<camera-7-mac>"},{"cameraNumber":8,"macAddress":"<camera-8-mac>"}]
 MONITOR_UNIFI_POLL_INTERVAL_MS=30000
 ```
+
+Camera identities are bound by their permanent MAC addresses. The official
+Network integration API supplies the current client-to-AP association, but it
+does not expose per-client RSSI. The monitor therefore reports the observed AP
+without inventing a signal value; AP-wide retry telemetry remains available.
 
 All four identity/credential values are atomic: partial configuration is
 rejected. The AP names, UUIDs, and MACs must each be unique, and exactly three

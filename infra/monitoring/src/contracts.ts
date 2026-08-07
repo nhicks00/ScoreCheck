@@ -708,6 +708,7 @@ export type UniFiMonitorSnapshot = {
     macAddress: string | null;
     ipAddress: string | null;
     type: string;
+    cameraNumber: number | null;
     uplinkDeviceId: string | null;
   }>;
   problems: string[];

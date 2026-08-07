@@ -375,6 +375,12 @@ Create one protected official UniFi API key after the site is commissioned. Stor
 the host id, site id, and exact device UUID/MAC binding for all three APs in the
 protected monitoring environment. The monitor reads device state, firmware,
 latest CPU/memory/uplink/radio statistics, and connected-client association.
+Bind Cameras 1-8 to their permanent MAC addresses in
+`MONITOR_UNIFI_CAMERA_CLIENTS_JSON`. This makes the supported API's live AP
+association actionable without relying on mutable client display names. The
+official integration API does not expose per-client RSSI, so the dashboard must
+show that value as unavailable rather than infer it from AP-wide statistics.
+
 The APs themselves are not the supported API boundary; UniFi OS Server is. Do
 not put the UniFi controller on the Peplink router. The persistent controller
 survives event-fleet teardown, while the temporary observability Droplet owns

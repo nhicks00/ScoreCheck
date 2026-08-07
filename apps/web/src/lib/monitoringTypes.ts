@@ -380,6 +380,7 @@ export type MonitorUniFi = {
     macAddress: string | null;
     ipAddress: string | null;
     type: string;
+    cameraNumber: number | null;
     uplinkDeviceId: string | null;
   }>;
   problems: string[];
