@@ -75,6 +75,37 @@ the matching UniFi antenna type before cameras connect.
 The API key must never be committed, printed in evidence, or passed to Caddy,
 Prometheus, browser code, or the event router.
 
+## Venue switch relay
+
+The LinoVision switch remains private at `192.168.50.2`. A single constrained
+FRP client on the Peplink connects outbound to a pinned FRP server on this
+persistent controller host. The server binds the resulting SNMP listener only
+to the DigitalOcean VPC address on UDP `1161`; no switch or SNMP port is exposed
+on the public interface. The event observability host therefore polls
+`10.120.0.3:1161` with the existing read-only SNMPv3 identity.
+
+This is deliberately a one-service relay, not a general site-to-site VPN. It
+does not carry camera, Egress, dashboard, or ordinary venue traffic. The router
+container can reach only the switch's UDP `161` endpoint, and the cloud server
+is limited to 0.10 CPU and 64 MB. Peplink's Docker wrapper does not accept CPU
+or memory limit flags, so router-side admission is based on measured idle and
+eight-camera resource evidence rather than a limit the platform cannot enforce.
+
+Deploy or reconcile the persistent cloud half with a mode-0600 environment
+containing `SCORECHECK_VENUE_RELAY_TOKEN`:
+
+```sh
+infra/unifi/deploy-venue-relay.sh \
+  --env "$HOME/.config/scorecheck/unifi/venue-relay.env" \
+  --host 167.172.116.163 \
+  --private-ip 10.120.0.3
+```
+
+The Peplink client uses pinned `fatedier/frpc:v0.69.0`, TLS, token
+authentication, and one UDP mapping from cloud port `1161` to
+`192.168.50.2:161`. Removing that one router container and disabling
+`scorecheck-venue-relay.service` on the controller is the complete rollback.
+
 ## Applied AP baseline
 
 The controller-wide production baseline was reconciled on 2026-08-04:

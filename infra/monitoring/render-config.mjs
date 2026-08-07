@@ -176,8 +176,8 @@ async function main() {
 function parseSnmpTarget(raw) {
   const target = raw.trim();
   if (!target) return "";
-  if (target.length > 253 || !(/^(?:[a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+$/.test(target) || /^(?:\d{1,3}\.){3}\d{1,3}$/.test(target))) {
-    throw new Error("MONITOR_NETWORK_SWITCH_TARGET must be a hostname or IPv4 address.");
+  if (target.length > 259 || !/^(?:(?:[a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+|(?:\d{1,3}\.){3}\d{1,3})(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?$/.test(target)) {
+    throw new Error("MONITOR_NETWORK_SWITCH_TARGET must be a hostname or IPv4 address with an optional valid port.");
   }
   return target;
 }

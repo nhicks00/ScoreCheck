@@ -374,8 +374,8 @@ function parseNetworkSwitchConfig(parsed: {
   }
   if (configuredValues !== Object.keys(raw).length) throw new Error("Network-switch monitoring requires exporter URL, target, model, firmware, and port bindings together.");
   const exporterUrl = parseInternalExporterUrl(raw.exporterUrl);
-  if (!/^(?:[a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+$|^(?:\d{1,3}\.){3}\d{1,3}$/.test(raw.target) || raw.target.length > 253) {
-    throw new Error("MONITOR_NETWORK_SWITCH_TARGET must be a hostname or IPv4 address without credentials or a port.");
+  if (!/^(?:(?:[a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+|(?:\d{1,3}\.){3}\d{1,3})(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?$/.test(raw.target) || raw.target.length > 259) {
+    throw new Error("MONITOR_NETWORK_SWITCH_TARGET must be a hostname or IPv4 address with an optional valid port.");
   }
   let ports: NetworkSwitchPortBinding[];
   try {

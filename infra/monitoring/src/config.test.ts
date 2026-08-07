@@ -190,7 +190,9 @@ describe("monitoring configuration", () => {
       target: "192.168.50.2",
       ports
     });
+    expect(loadServiceConfig({ ...configured, MONITOR_NETWORK_SWITCH_TARGET: "10.120.0.3:1161" }).networkSwitch.target).toBe("10.120.0.3:1161");
     expect(() => loadServiceConfig({ ...configured, MONITOR_NETWORK_SWITCH_TARGET: "http://192.168.50.2" })).toThrow(/hostname or IPv4/);
+    expect(() => loadServiceConfig({ ...configured, MONITOR_NETWORK_SWITCH_TARGET: "10.120.0.3:65536" })).toThrow(/hostname or IPv4/);
     expect(() => loadServiceConfig({ ...configured, MONITOR_NETWORK_SWITCH_EXPORTER_URL: "https://snmp-exporter:9116" })).toThrow(/internal HTTP origin/);
     expect(() => loadServiceConfig({ ...configured, MONITOR_NETWORK_SWITCH_PORTS_JSON: JSON.stringify([ports[0], ports[0]]) })).toThrow(/unique/);
   });

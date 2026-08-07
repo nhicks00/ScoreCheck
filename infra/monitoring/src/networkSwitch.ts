@@ -85,7 +85,7 @@ export class NetworkSwitchCollector {
         reachable: false,
         sampledAt,
         lastFailureAt: sampledAt,
-        problems: ["PoE switch telemetry could not be read. Check the venue management tunnel and switch power."]
+        problems: ["PoE switch telemetry could not be read. Check the venue switch relay and switch power."]
       };
     } finally {
       this.#refreshing = false;

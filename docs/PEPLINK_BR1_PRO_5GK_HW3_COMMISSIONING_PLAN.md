@@ -39,8 +39,8 @@ The first production profile will be deliberately narrow:
 - One LAN cable to the PoE switch and no LACP.
 - The PoE switch is the managed LinoVision `POE-SWR612GM-SOLAR`; ports 1-3
   power the three Ubiquiti APs and non-PoE port 9 is the sole router uplink.
-- ScoreCheck reads the switch through SNMPv3 over a router-initiated,
-  management-only site-to-site tunnel to the event observability Droplet. The
+- ScoreCheck reads the switch through SNMPv3 over a narrow, router-initiated
+  outbound UDP relay terminating on the persistent UniFi controller host. The
   switch has no public management exposure and the router runs no collector.
 - The Peplink 5 GHz `BVM` client AP remains available alongside the three
   Ubiquiti camera SSIDs. It provides direct-router coverage and a controlled
@@ -50,7 +50,8 @@ The first production profile will be deliberately narrow:
 - 1080p60 is a later profile test, not part of the router baseline.
 - InControl and supported Peplink APIs provide remote management; no public
   SSH, port forward, static public IP, or on-site Mac is required.
-- No Docker workload on the router during initial production qualification.
+- The only router Docker workload is the read-only, restart-persistent venue
+  switch relay. It cannot carry camera, control, or ordinary venue traffic.
 
 This is a clean rebuild from a settings manifest. Do not import the full binary
 backup from either returned `5GH` HW1 router into the incoming `5GK` HW3 router.
@@ -430,14 +431,20 @@ Initial management contract:
   supported customer API, stable payload contract, or TLS MQTT mode is
   documented.
 
-The initial remote path is a Peplink-initiated, management-only site-to-site
-tunnel terminating on the temporary event observability Droplet. Restrict the
-cloud side to the switch management address and SNMP traffic required by the
-collector. This works with changing WAN addresses and carrier NAT because the
-router initiates the tunnel. It also keeps polling off the router CPU and does
-not add a persistent Droplet: the existing event observability host owns the
-collector. Render the tunnel peer from the event manifest because the temporary
-Droplet address can change between event builds.
+The commissioned remote path is a Peplink-initiated FRP UDP relay terminating
+on the persistent UniFi controller host. It exposes only the switch's UDP 161
+service through a VPC-only UDP 1161 listener. This works with changing WAN
+addresses and carrier NAT because the router initiates the connection. Polling
+and SNMP parsing remain off the router CPU, no general routed tunnel is added,
+and the LinoVision switch has no public listener.
+
+The cloud relay service is capped at 0.10 CPU and 64 MB. Peplink's 8.6 Docker
+wrapper accepts `--restart` and `--read-only` but rejects Docker CPU and memory
+limit flags, so no router-side resource cap is claimed. The router workload is
+admitted only after measured idle and eight-camera CPU, memory, queue, and media
+quality evidence pass. If it causes material contention, remove the one relay
+container and fall back to on-site switch telemetry rather than weakening the
+media path.
 
 If the physical switch later proves that it can publish documented telemetry
 to an arbitrary TLS MQTT broker, compare that outbound path against SNMPv3. A
@@ -667,7 +674,7 @@ Commissioning automation boundary:
 | Outbound-policy creation | Authenticated Web Admin/InControl unless a documented endpoint exists |
 | Configuration backup | Web Admin initially; qualify 8.6 token-based backup API before relying on it |
 | Camera/AP radio telemetry | Official UniFi Network API through the event UniFi OS Server plus camera and media monitoring, not the Peplink AP Controller |
-| Switch link/PoE telemetry | Read-only SNMPv3 from the event observability Droplet through the management-only site-to-site tunnel |
+| Switch link/PoE telemetry | Read-only SNMPv3 from the event observability Droplet through the VPC-only venue relay |
 
 Do not reverse-engineer undocumented UI endpoints. Do not open SSH. Do not
 create overlapping OAuth sessions: the observed 8.6 behavior invalidated older
@@ -703,12 +710,13 @@ Initial alert semantics:
 - Informational: expected WAN rejoin, SIM failover, firmware/config drift, or
   temporary operator maintenance.
 
-No router-local Docker agent is required for first production. InControl and
-the supported API already solve dynamic-address and carrier-NAT management.
-Firmware 8.6 fixed Docker CPU issues but still documents a DHCP-related Docker
-known issue. A router container adds a new process to the critical media path.
-Only consider a small push-only telemetry container after the router passes the
-full physical gate, and only with explicit resource limits and removal proof.
+InControl and the supported API solve router monitoring across dynamic addresses
+and carrier NAT. Switch SNMP requires one separate path. The commissioned path
+uses the HW3 Docker runtime for one constrained outbound FRP client that maps
+only `192.168.50.2:161/udp` to UDP `1161` on the persistent UniFi host's private
+VPC address. It is not a general VPN and carries no media. The router container
+must remain bounded, removable, and admitted by idle plus eight-camera resource
+measurement before production.
 
 ### 9. Settings explicitly deferred
 
@@ -718,7 +726,7 @@ Do not enable these during the first iteration:
 - SpeedFusion Boost unless the initial baseline proves the specific lossy or
   high-latency throughput defect it is intended to address.
 - Beta WireGuard remote-user access.
-- Router-local Tailscale or monitoring Docker containers.
+- General router-local Tailscale, monitoring agents, or unrestricted tunnel containers.
 - A new Pi/mini-PC venue collector, SNMPv3, and remote syslog until the
   supported API proves a material monitoring gap.
 - IPv6.
