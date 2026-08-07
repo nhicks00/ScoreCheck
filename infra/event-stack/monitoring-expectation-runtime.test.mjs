@@ -42,11 +42,25 @@ test("rejects an active camera with a pre-existing monitoring expectation", asyn
   const runtime = new MonitoringExpectationRuntime({
     supabaseUrl: "https://project.supabase.co",
     serviceRoleKey: key,
+    now: () => nowMs,
     fetchImpl: async () => response(request++ === 0
       ? [{ id: "event-1" }]
-      : request === 2 ? [{ id: "court-1", court_number: 1 }] : [{ court_id: "court-1" }])
+      : request === 2 ? [{ id: "court-1", court_number: 1 }] : [{ court_id: "court-1", override_expires_at: "2026-07-27T07:00:00Z" }])
   });
   await assert.rejects(() => runtime.resolve([1]), /no pre-existing expectations/u);
+});
+
+test("allows an expired monitoring expectation to be replaced by the new run", async () => {
+  let request = 0;
+  const runtime = new MonitoringExpectationRuntime({
+    supabaseUrl: "https://project.supabase.co",
+    serviceRoleKey: key,
+    now: () => nowMs,
+    fetchImpl: async () => response(request++ === 0
+      ? [{ id: "event-1" }]
+      : request === 2 ? [{ id: "court-1", court_number: 1 }] : [{ court_id: "court-1", override_expires_at: "2026-07-26T11:00:00Z" }])
+  });
+  assert.deepEqual(await runtime.resolve([1]), { eventId: "event-1", cameras: { 1: "court-1" } });
 });
 
 test("upserts and verifies testing and live expectations without requiring commentary", async () => {

@@ -26,8 +26,8 @@ export class MonitoringExpectationRuntime {
     }
     if (Object.keys(mapping).length !== activeCameras.length) throw new Error("production monitoring does not map every active camera");
     const courtIds = Object.values(mapping);
-    const existing = await this.#request(`/rest/v1/court_monitoring_expectations?select=court_id&event_id=eq.${encodeURIComponent(eventId)}&court_id=in.(${courtIds.map(encodeURIComponent).join(",")})`);
-    if (!Array.isArray(existing) || existing.length !== 0) {
+    const existing = await this.#request(`/rest/v1/court_monitoring_expectations?select=court_id,override_expires_at&event_id=eq.${encodeURIComponent(eventId)}&court_id=in.(${courtIds.map(encodeURIComponent).join(",")})`);
+    if (!Array.isArray(existing) || existing.some((row) => expectationIsActive(row, this.now()))) {
       throw new Error("production monitoring requires no pre-existing expectations for active cameras");
     }
     return { eventId, cameras: mapping };
@@ -110,4 +110,11 @@ function validateCameras(value) {
 function expectationReason(runId, camera) {
   if (typeof runId !== "string" || runId.length < 1 || /[\r\n\0]/u.test(runId)) throw new Error("production monitoring run id is invalid");
   return `Production soak ${runId} set Camera ${camera} testing.`;
+}
+
+function expectationIsActive(row, nowMs) {
+  if (!row || typeof row.court_id !== "string") return true;
+  if (row.override_expires_at === null) return true;
+  const expiresAt = Date.parse(row.override_expires_at);
+  return !Number.isFinite(expiresAt) || expiresAt > nowMs;
 }
