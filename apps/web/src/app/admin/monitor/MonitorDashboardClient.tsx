@@ -616,9 +616,13 @@ function OverviewPanel({ snapshot, snapshotCurrent, eventOperational, unifi, uni
   const cameraClients = unifiCurrent ? unifi.clients.filter((client) => cameraNumberFromClientName(client.name) != null) : [];
   const requiredWans = router.wans.filter((wan) => wan.required);
   const requiredWansConnected = requiredWans.filter((wan) => wan.connected).length;
-  const worstApRetriesPct = unifiCurrent
-    ? Math.max(0, ...unifi.accessPoints.flatMap((accessPoint) => accessPoint.radios.map((radio) => radio.txRetriesPct ?? 0)))
-    : null;
+  const apRetrySamples = unifiCurrent
+    ? unifi.accessPoints
+      .filter((accessPoint) => accessPoint.state === "ONLINE")
+      .flatMap((accessPoint) => accessPoint.radios.map((radio) => radio.txRetriesPct))
+      .filter((value): value is number => value != null)
+    : [];
+  const worstApRetriesPct = apRetrySamples.length ? Math.max(...apRetrySamples) : null;
   const youtubeState = snapshotCurrent ? snapshot.youtube.state : unavailableState(!eventOperational);
   return (
     <section id="monitor-panel-overview" className="monitor-tab-panel monitor-overview-panel" role="tabpanel" aria-labelledby="monitor-tab-overview">
