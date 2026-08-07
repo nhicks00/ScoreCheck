@@ -55,14 +55,14 @@ describe("Peplink collector", () => {
         usageMb: 4,
         quotaMb: 1_048_572,
         linksAvailable: true,
-        links: [expect.objectContaining({
+        links: expect.arrayContaining([expect.objectContaining({
           name: "WAN",
           state: "ACTIVE",
           rttMs: 53,
           transmitBitrateBps: 800_000,
           transmitPacketLossPct: 1,
           transmitFecPct: 20
-        })]
+        })])
       },
       clients: {
         connected: 3,
@@ -82,7 +82,8 @@ describe("Peplink collector", () => {
       downloadKbps: 12,
       uploadKbps: 3_100
     })]));
-    expect(request).toHaveBeenCalledTimes(14);
+    expect(request).toHaveBeenCalledTimes(13);
+    expect(request.mock.calls.filter(([input]) => String(input).endsWith("/api/oauth2/token"))).toHaveLength(1);
   });
 
   it("fails closed on required WAN, hardware, firmware, resource, and SpeedFusion drift", async () => {
@@ -103,6 +104,17 @@ describe("Peplink collector", () => {
       "Peplink CPU utilization is at least 90%.",
       "Peplink memory utilization is at least 90%."
     ]));
+  });
+
+  it("fails closed when a connected required WAN is not active in SpeedFusion", async () => {
+    const collector = new PeplinkCollector(config, healthyRequest({
+      tunnel: tunnelResponse({ cellularState: "REMOTE_FAILURE" })
+    }) as typeof fetch);
+    await collector.refresh(nowMs);
+    expect(collector.current()).toMatchObject({
+      state: "CRITICAL",
+      problems: ["Cellular is not active in the SFC-SFO tunnel (REMOTE_FAILURE)."]
+    });
   });
 
   it("marks current data unavailable and retains only freshness evidence after an API failure", async () => {
@@ -144,13 +156,23 @@ describe("Peplink collector", () => {
     });
   });
 
+  it("refreshes the cached InControl token after its declared expiry", async () => {
+    const request = healthyRequest();
+    const collector = new PeplinkCollector(config, request as typeof fetch);
+    await collector.refresh(nowMs);
+    await collector.refresh(nowMs + 30_000);
+    await collector.refresh(nowMs + 172_800_000);
+    expect(request.mock.calls.filter(([input]) => String(input).endsWith("/api/oauth2/token"))).toHaveLength(2);
+  });
+
   it("keeps current router telemetry when detailed tunnel counters are unavailable", async () => {
     const collector = new PeplinkCollector(config, healthyRequest({ tunnel: {} }) as typeof fetch);
     await collector.refresh(nowMs);
     expect(collector.current()).toMatchObject({
-      state: "HEALTHY",
+      state: "DEGRADED",
       apiReachable: true,
-      speedFusion: { connected: true, linksAvailable: false, links: [] }
+      speedFusion: { connected: true, linksAvailable: false, links: [] },
+      problems: ["SpeedFusion link telemetry is unavailable."]
     });
   });
 });
@@ -168,7 +190,7 @@ function healthyRequest(overrides: {
     const url = String(input);
     if (url.endsWith("/api/oauth2/token")) {
       expect(String(init?.body)).toContain("grant_type=client_credentials");
-      return json({ access_token: "token-".padEnd(32, "x") });
+      return json({ access_token: "token-".padEnd(32, "x"), expires_in: 172_799 });
     }
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer token-xxxxxxxxxxxxxxxxxxxxxxxxxx");
     if (url.endsWith("/rest/o/org123/g/3/d/9")) {
@@ -202,22 +224,7 @@ function healthyRequest(overrides: {
     }
     if (url.includes("/devapi/status.pepvpn?") && url.includes("tunnelOption=60000-1")) {
       tunnelCalls += 1;
-      return deviceApi(overrides.tunnel ?? { tunnel: { order: ["60000-1"], "60000-1": { wan: {
-        order: [1],
-        "1": {
-          name: "WAN",
-          state: "ACTIVE",
-          rtt: 53,
-          transmit: {
-            byte: [10_000_000 + (tunnelCalls - 1) * 3_000_000],
-            packet: {
-              forward: [9_900 + (tunnelCalls - 1) * 5_940],
-              loss: [100 + (tunnelCalls - 1) * 60],
-              fec: [2_475 + (tunnelCalls - 1) * 1_485]
-            }
-          }
-        }
-      } } } });
+      return deviceApi(overrides.tunnel ?? tunnelResponse({ sample: tunnelCalls }));
     }
     if (url.includes("/devapi/status.pepvpn?")) {
       return deviceApi(overrides.pepVpn ?? {
@@ -234,6 +241,23 @@ function healthyRequest(overrides: {
     }
     return new Response(null, { status: 404 });
   });
+}
+
+function tunnelResponse({ sample = 1, cellularState = "ACTIVE" }: { sample?: number; cellularState?: string } = {}) {
+  const offset = sample - 1;
+  const counters = (byte: number, forward: number, loss: number, fec: number) => ({
+    byte: [byte + offset * 3_000_000],
+    packet: {
+      forward: [forward + offset * 5_940],
+      loss: [loss + offset * 60],
+      fec: [fec + offset * 1_485]
+    }
+  });
+  return { tunnel: { order: ["60000-1"], "60000-1": { wan: {
+    order: [1, 2],
+    "1": { name: "WAN", state: "ACTIVE", rtt: 53, transmit: counters(10_000_000, 9_900, 100, 2_475) },
+    "2": { name: "Cellular", state: cellularState, rtt: cellularState === "ACTIVE" ? 88 : 0, transmit: counters(8_000_000, 7_920, 80, 1_980) }
+  } } } };
 }
 
 function deviceApi(response: unknown): Response {

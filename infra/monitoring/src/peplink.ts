@@ -4,7 +4,10 @@ import type { HealthState, RouterMonitorSnapshot } from "./contracts.js";
 
 type Fetch = typeof fetch;
 
-const tokenSchema = z.object({ access_token: z.string().min(24) }).passthrough();
+const tokenSchema = z.object({
+  access_token: z.string().min(24),
+  expires_in: z.number().int().positive().max(7 * 24 * 60 * 60)
+}).passthrough();
 const inControlEnvelopeSchema = z.object({
   resp_code: z.literal("SUCCESS"),
   data: z.object({ stat: z.literal("ok"), response: z.unknown() }).passthrough()
@@ -132,6 +135,7 @@ export class PeplinkCollector {
   #refreshing = false;
   #snapshot: RouterMonitorSnapshot;
   #tunnelBaseline: TunnelCounterBaseline | null = null;
+  #accessToken: { value: string; expiresAtMs: number } | null = null;
 
   constructor(config: PeplinkConfig, fetchImplementation: Fetch = fetch) {
     this.#config = config;
@@ -149,7 +153,7 @@ export class PeplinkCollector {
     this.#nextPollAtMs = nowMs + this.#config.pollIntervalMs;
     const sampledAt = new Date(nowMs).toISOString();
     try {
-      const accessToken = await this.#grantToken();
+      const accessToken = await this.#grantToken(nowMs);
       const device = deviceEnvelopeSchema.parse(await this.#request("device", accessToken)).data;
       const firmware = firmwareSchema.parse(await this.#deviceApi("info.firmware", accessToken));
       const wans = wanSchema.parse(await this.#deviceApi("status.wan.connection", accessToken));
@@ -172,6 +176,7 @@ export class PeplinkCollector {
       const clients = clientsSchema.parse(await this.#deviceApi("status.client?activeOnly=yes&outputWeight=full", accessToken));
       this.#snapshot = buildSnapshot(this.#config, { device, firmware, wans, pepVpn, tunnelLinks, tunnelLinksAvailable: tunnel != null, clients }, sampledAt);
     } catch (error) {
+      if (error instanceof Error && /^(?:token_http_|api_http_401$)/u.test(error.message)) this.#accessToken = null;
       this.#snapshot = {
         ...emptyPeplinkSnapshot(this.#config),
         state: this.#config.required ? "CRITICAL" : "UNKNOWN",
@@ -186,7 +191,8 @@ export class PeplinkCollector {
     }
   }
 
-  async #grantToken(): Promise<string> {
+  async #grantToken(nowMs: number): Promise<string> {
+    if (this.#accessToken && nowMs + 60_000 < this.#accessToken.expiresAtMs) return this.#accessToken.value;
     if (!this.#config.clientId || !this.#config.clientSecret) throw new Error("peplink_not_configured");
     const response = await this.#fetch(TOKEN_URL, {
       method: "POST",
@@ -199,7 +205,9 @@ export class PeplinkCollector {
       signal: AbortSignal.timeout(10_000)
     });
     if (!response.ok) throw new Error(`token_http_${response.status}`);
-    return tokenSchema.parse(await response.json()).access_token;
+    const token = tokenSchema.parse(await response.json());
+    this.#accessToken = { value: token.access_token, expiresAtMs: nowMs + token.expires_in * 1_000 };
+    return token.access_token;
   }
 
   async #request(kind: "device" | "deviceApi", accessToken: string, endpoint?: string): Promise<unknown> {
@@ -308,6 +316,16 @@ function buildSnapshot(
     else if (binding.required && !wan.connected) problems.push({ severity: "critical", message: `${binding.name} is not connected.` });
   }
   if (!speedFusionConnected) problems.push({ severity: "critical", message: `${speedFusionProfileName} is not connected.` });
+  else if (!input.tunnelLinksAvailable) problems.push({ severity: "warning", message: "SpeedFusion link telemetry is unavailable." });
+  else {
+    for (const binding of config.wans.filter((wan) => wan.required)) {
+      const wan = wans.find((entry) => entry.id === String(binding.id));
+      if (!wan?.connected) continue;
+      const link = input.tunnelLinks.find((entry) => entry.name === binding.name);
+      if (!link) problems.push({ severity: "critical", message: `${binding.name} is missing from the ${speedFusionProfileName} tunnel.` });
+      else if (link.state !== "ACTIVE") problems.push({ severity: "critical", message: `${binding.name} is not active in the ${speedFusionProfileName} tunnel (${link.state}).` });
+    }
+  }
   if ((input.device.periph_status?.cpu_load?.percentage ?? 0) >= 90) problems.push({ severity: "critical", message: "Peplink CPU utilization is at least 90%." });
   else if ((input.device.periph_status?.cpu_load?.percentage ?? 0) >= 80) problems.push({ severity: "warning", message: "Peplink CPU utilization is at least 80%." });
   if ((memory ?? 0) >= 90) problems.push({ severity: "critical", message: "Peplink memory utilization is at least 90%." });
