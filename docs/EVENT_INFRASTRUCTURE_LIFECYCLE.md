@@ -839,6 +839,13 @@ operator machine without repeated SSH polling. Sentinel/log liveness, full-host
 readiness, edge gaps, and coverage are hard acceptance inputs. Cameras not
 declared in the event profile must remain isolated.
 
+The Peplink and its native `BVM` client radio must remain steady during an
+unattended soak. The currently qualified cameras can select another remembered
+SSID after a router or `BVM` radio restart and require Nathan to reassociate
+them manually. Schedule either restart only for an attended maintenance window,
+then require every declared camera association and raw publisher to return
+before resuming output admission or evidence timing.
+
 `HEALTHCHECKS_SENTINEL_PING_URL` is a third protected Healthchecks check. Do not
 reuse the monitor-service baseline or active ping URL: reuse could let one
 process mask another process's failure. Attach Pushover to the sentinel check

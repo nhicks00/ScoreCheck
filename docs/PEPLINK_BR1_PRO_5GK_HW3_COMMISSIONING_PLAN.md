@@ -836,6 +836,10 @@ objective or need physical evidence. This is not a permanent rejection.
 - Enable and retain the native Peplink 5 GHz `BVM` camera SSID.
 - Connect Cameras 1-8 directly, identify their real MAC addresses, create DHCP
   reservations, and verify all eight can publish through the router.
+- Record that the current cameras may select another remembered SSID after a
+  Peplink or `BVM` radio restart. Treat either restart as an attended operation:
+  Nathan must be available to reassociate every intended camera with `BVM`
+  before source or output validation resumes.
 - Connect exactly one LAN port to the PoE switch.
 - Verify the switch label is `POE-SWR612GM-SOLAR`, record its firmware, archive
   its exact MIB, retain the user-approved default administrator credential, and
@@ -891,6 +895,11 @@ synthetic workload or a 2/4/6-camera ramp.
 3. **Failover, 10 minutes:** briefly remove and restore Starlink, then briefly
    remove and restore cellular. Confirm the remaining WANs carry the camera
    path and each restored WAN rejoins without stale queue growth.
+
+Do not reboot the Peplink or cycle the `BVM` client radio during an unattended
+camera or output window. Current camera behavior requires manual SSID
+reassociation after either action; a router/radio restart is therefore a
+planned operator intervention, not a transparent recovery mechanism.
 
 Require:
 
