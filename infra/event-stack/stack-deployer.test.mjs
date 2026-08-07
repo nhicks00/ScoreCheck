@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { buildEventManifest, loadManifestInputs } from "./event-manifest.mjs";
-import { AGENT_DEPLOY_CONCURRENCY, DEPLOYMENT_SCRIPT_TIMEOUT_MS, LocalStackDeployer, agentRoleEnvironment, buildAgentPlans, clockVerificationCommand, commandFailureMessage, commentaryEndpointHosts, compositorContentAnalyzerBindings, compositorRemoteEnvironment, deploymentScriptEnvironment, evaluateClockProbe, isRetryableDeploymentTransportError, loadProtectedEnv, mapWithConcurrency, privateNetworkVerificationPlan, roleConfigBindings, runCommand, runDeploymentScript, serializeAgentTargets, servicePublicIpv4, sshAuditSourcePolicy, verifyProtectedSecretDirectory } from "./stack-deployer.mjs";
+import { AGENT_DEPLOY_CONCURRENCY, DEPLOYMENT_SCRIPT_TIMEOUT_MS, LocalStackDeployer, agentRoleEnvironment, buildAgentPlans, clockVerificationCommand, commandFailureMessage, commentaryEndpointHosts, compositorContentAnalyzerBindings, compositorRemoteEnvironment, deploymentScriptEnvironment, evaluateClockProbe, isRetryableDeploymentTransportError, loadProtectedEnv, mapWithConcurrency, privateNetworkVerificationPlan, roleConfigBindings, runCommand, runDeploymentScript, serializeAgentTargets, servicePublicIpv4, sshAuditSourcePolicy, verificationCommand, verifyProtectedSecretDirectory } from "./stack-deployer.mjs";
 
 const inputs = await loadManifestInputs();
 const manifest = buildEventManifest({ event: "deploy-test", kind: "production", destroyAfter: "2026-08-01", ...inputs });
@@ -93,6 +93,13 @@ test("bounds independent monitor-agent deployment work without changing its inpu
   assert.deepEqual(results, ["A", "B", "C", "D", "E", "F", "G"]);
   assert.equal(maximumActive, AGENT_DEPLOY_CONCURRENCY);
   await assert.rejects(() => mapWithConcurrency(values, 0, async () => {}), /positive integer/);
+});
+
+test("verifies monitor-agent health without reparsing its required Compose environment", () => {
+  const command = verificationCommand("ingest");
+  assert.match(command, /docker ps -q --filter label=com\.docker\.compose\.project=scorecheck-monitor-agent/u);
+  assert.match(command, /label=com\.docker\.compose\.service=monitor-agent/u);
+  assert.doesNotMatch(command, /docker compose/u);
 });
 
 test("passes a bounded timeout to deployment scripts and terminates hung commands", async () => {

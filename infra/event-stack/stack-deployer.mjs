@@ -948,8 +948,8 @@ export function compositorRemoteEnvironment(source, ingestPrivateIpv4, ingestHos
   return Buffer.from(`${body.endsWith("\n") ? body : `${body}\n`}MEDIAMTX_PRIVATE_HOST="${privateHost}"\nMEDIAMTX_PUBLIC_HOST="${ingestHost}"\n`, "utf8");
 }
 
-function verificationCommand(role) {
-  const agent = "cd /opt/scorecheck-monitor-agent && cid=$(docker compose -f agent-compose.yml ps -q monitor-agent) && test -n \"$cid\" && test \"$(docker inspect \"$cid\" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')\" = healthy";
+export function verificationCommand(role) {
+  const agent = "cid=$(docker ps -q --filter label=com.docker.compose.project=scorecheck-monitor-agent --filter label=com.docker.compose.service=monitor-agent) && test -n \"$cid\" && test \"$(docker inspect \"$cid\" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')\" = healthy";
   if (role === "ingest") return `${agent} && curl -fsS http://127.0.0.1:9997/v3/config/global/get >/dev/null && if test -f /etc/wireguard/camera-lan.conf; then wg show camera-lan >/dev/null && ip -4 address show dev camera-lan | grep -q '10\\.89\\.0\\.1/24' && ip route show 192.168.8.0/24 | grep -q 'dev camera-lan'; fi`;
   if (role === "commentary") return `${agent} && curl -fsS http://127.0.0.1:7880/ >/dev/null && curl -fsS http://127.0.0.1:6789/metrics >/dev/null`;
   if (["compositor", "compositor-spare"].includes(role)) {
