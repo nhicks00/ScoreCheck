@@ -5955,6 +5955,13 @@ body:has(.program-root) {
   white-space: nowrap;
 }
 
+.monitor-metric.has-wrapped-value strong {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+}
+
 .monitor-metric span {
   font-size: 11px;
 }

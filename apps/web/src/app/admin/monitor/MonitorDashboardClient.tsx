@@ -33,7 +33,6 @@ import { deriveMonitorDeadManReadiness } from "@/lib/monitorDeadManReadiness";
 import { egressRuntimeHealthy } from "@/lib/monitorEgressPresentation";
 import { deriveMonitorPagingReadiness } from "@/lib/monitorPagingReadiness";
 import { deriveRawCameraState, isCheckpointEventOperational, isCourtExpectedOff, isMonitorSnapshotCurrent, isTelemetryCurrent, unavailableState } from "@/lib/monitorPresentation";
-import { deriveMonitorSystemState } from "@/lib/monitorSystemState";
 import type { MonitorAgent, MonitorCourt, MonitorCourtPipelineRange, MonitorHealthState, MonitorMediaPath, MonitorNetworkSwitch, MonitorRouter, MonitorSnapshot, MonitorSnapshotEnvelope, MonitorStage, MonitorUniFi } from "@/lib/monitoringTypes";
 import { PacingComparator } from "./PacingComparator";
 
@@ -279,13 +278,6 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
   const switchCurrent = isTelemetryCurrent(snapshotCurrent, networkSwitch.sampledAt, nowMs, 90_000) && networkSwitch.reachable === true;
   const pagingReadiness = deriveMonitorPagingReadiness(snapshot.notifications);
   const deadManReadiness = deriveMonitorDeadManReadiness(snapshot.deadMan);
-  const derivedOverall = deriveMonitorSystemState({
-    courtStates: snapshot.courts.map(effectiveCourtState),
-    globalStates: [snapshot.collector.state, snapshot.controlPlane.state, snapshot.youtube.state, router.state, unifi.state, networkSwitch.state, pagingReadiness.state, deadManReadiness.state],
-    hasCriticalIncident: snapshot.incidents.some((incident) => incident.status !== "resolved" && incident.severity === "critical"),
-    stale
-  });
-  const overall = stale && !eventOperational ? "EXPECTED_OFF" : derivedOverall;
   const monitorUnavailableMessage = stale && !eventOperational
     ? "Event infrastructure is off. No current telemetry is available, so historical measurements are hidden."
     : pollError ?? envelope.monitorError ?? "Monitoring snapshot is stale.";
@@ -310,7 +302,7 @@ export function MonitorDashboardClient({ initial, configured }: { initial: Monit
       <header className="monitor-heading">
         <div>
           <p className="eyebrow">Live operations</p>
-          <div className="monitor-title-line"><h1>System Monitor</h1><StateBadge state={overall} label={systemStateLabel(overall)} /></div>
+          <div className="monitor-title-line"><h1>System Monitor</h1></div>
           <p className="monitor-event-name">{eventOperational ? snapshot.event?.name : "No active event"}</p>
         </div>
         <div className="monitor-heading-actions">
@@ -502,13 +494,9 @@ function CourtCard({ court, history, selected, nowMs, current, eventOperational,
   const thumbnailFresh = current && court.thumbnail && nowMs - Date.parse(court.thumbnail.receivedAt) <= 45_000;
   const browserLost = liveBrowser?.video.packetsLost;
   const browserReceived = liveBrowser?.video.packetsReceived;
-  const loss = browserLost != null && browserReceived != null
+  const viewerLoss = browserLost != null && browserReceived != null
     ? percent(browserLost, browserLost + browserReceived)
-    : transportLoss(raw);
-  const browserUsesHls = liveBrowser?.video.transport === "hls";
-  const delayMs = browserUsesHls
-    ? liveBrowser.video.playoutDelayMs
-    : liveBrowser?.video.rttMs ?? raw?.transport?.rttMs;
+    : "--";
   const rawTrend = history?.rawBitrate ?? [];
   const fpsTrend = history?.programFps.length ? history.programFps : history?.previewFps ?? [];
   return (
@@ -534,8 +522,8 @@ function CourtCard({ court, history, selected, nowMs, current, eventOperational,
         <Metric label="Preview speed" value={formatFps(preview?.framesPerSecond)} />
         <Metric label="Rendered speed" value={formatFps(liveBrowser?.video.framesPerSecond)} />
         <Metric label="Picture size" value={liveBrowser?.video.width && liveBrowser.video.height ? `${liveBrowser.video.width}×${liveBrowser.video.height}` : "--"} />
-        <Metric label={browserUsesHls ? "Program delay" : "Network delay"} value={formatMs(delayMs)} />
-        <Metric label="Packet loss" value={loss} />
+        <Metric label="Late packet drops" value={transportDrops(raw)} />
+        <Metric label="Viewer packet loss" value={viewerLoss} />
       </div>
       <div className="monitor-trends" aria-label="Five minute trends">
         <div className="monitor-trends-heading"><strong>Last 5 minutes</strong><div className="monitor-trends-legend"><span className="is-bitrate">Camera bitrate · {formatBitrate(latestPoint(rawTrend))}</span><span className="is-fps">{liveBrowser ? "Rendered speed" : "Last rendered speed"} · {formatFps(latestPoint(fpsTrend))}</span></div></div>
@@ -637,7 +625,7 @@ function OverviewPanel({ snapshot, snapshotCurrent, eventOperational, unifi, uni
       <OverviewSectionHeading icon={<Camera size={19} />} title="Cameras" state={cameraState} label={activeCameras > 0 ? `${activeCameras} live` : eventOperational && !snapshotCurrent ? "No current data" : "All off"} />
       <div className="monitor-overview-table-wrap">
         <table className="monitor-overview-table monitor-camera-overview-table">
-          <thead><tr><th>Camera</th><th>Status</th><th>Ingest bitrate</th><th>Packet loss</th><th>Access point</th><th>Wi-Fi signal</th><th>Program</th></tr></thead>
+          <thead><tr><th>Camera</th><th>Status</th><th>Ingest bitrate</th><th>Late packet drops</th><th>Access point</th><th>Wi-Fi signal</th><th>Program</th></tr></thead>
           <tbody>
             {snapshot.courts.map((court) => {
               const state = displayedCourtState(court, snapshotCurrent, eventOperational);
@@ -648,7 +636,7 @@ function OverviewPanel({ snapshot, snapshotCurrent, eventOperational, unifi, uni
                 <th scope="row"><span className="monitor-camera-cell"><StateDot state={state} />Camera {court.courtNumber}</span></th>
                 <td data-label="Status"><StateBadge state={state} compact label={cameraOverviewStatus(court, snapshotCurrent, eventOperational)} /></td>
                 <td data-label="Ingest bitrate">{raw?.ready ? formatBitrate(raw.inboundBitrateBps) : "--"}</td>
-                <td data-label="Packet loss">{raw?.ready ? transportLoss(raw) : "--"}</td>
+                <td data-label="Late packet drops">{raw?.ready ? transportDrops(raw) : "--"}</td>
                 <td data-label="Access point">{accessPoint?.name ?? "--"}</td>
                 <td data-label="Wi-Fi signal">--</td>
                 <td data-label="Program">{programOverviewStatus(court, snapshotCurrent, eventOperational)}</td>
@@ -898,7 +886,7 @@ function RouterBand({ router, nowMs, current, expectedOff }: { router: MonitorRo
                 <Metric label="Uptime" value={formatUptime(wan.uptimeSeconds)} />
                 <Metric label="Network" value={[wan.carrier, wan.technology].filter(Boolean).join(" · ") || "--"} />
                 <Metric label="Signal" value={wan.signalLevel == null ? "--" : `${wan.signalLevel}/5`} />
-                <Metric label="Radio band" value={formatWanBands(wan.bands)} />
+                <Metric label="Radio band" value={formatWanBands(wan.bands)} wrapValue />
               </div>
             </article>
           );
@@ -958,8 +946,8 @@ function GlobalItem({ icon, label, value, state, wrapValue = false }: { icon: Re
   return <div className={`monitor-global-item ${wrapValue ? "has-wrapped-value" : ""}`} data-state={state}>{icon}<div><span>{label}</span><strong>{value}</strong></div><StateDot state={state} /></div>;
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
-  return <div className="monitor-metric"><span>{label}</span><strong>{value}</strong></div>;
+function Metric({ label, value, wrapValue = false }: { label: string; value: string; wrapValue?: boolean }) {
+  return <div className={`monitor-metric ${wrapValue ? "has-wrapped-value" : ""}`}><span>{label}</span><strong>{value}</strong></div>;
 }
 
 function Sparkline({ values, label, className, fixedMax }: { values: Array<[number, number]>; label: string; className: string; fixedMax?: number }) {
@@ -1227,10 +1215,10 @@ function sourceDetail(path: MonitorMediaPath | undefined): string {
   return details.join(" · ");
 }
 
-function transportLoss(path: MonitorMediaPath | undefined): string {
-  const lost = path?.transport?.packetsLost;
+function transportDrops(path: MonitorMediaPath | undefined): string {
+  const dropped = path?.transport?.packetsDropped;
   const received = path?.transport?.packetsReceived;
-  return lost != null && received != null ? percent(lost, lost + received) : "--";
+  return dropped != null && received != null ? percent(dropped, dropped + received) : "--";
 }
 
 function percent(value: number, total: number): string {
