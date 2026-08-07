@@ -36,6 +36,7 @@ describe("Peplink collector", () => {
     const request = healthyRequest();
     const collector = new PeplinkCollector(config, request as typeof fetch);
     await collector.refresh(nowMs);
+    await collector.refresh(nowMs + 30_000);
     const snapshot = collector.current();
     expect(snapshot).toMatchObject({
       state: "HEALTHY",
@@ -81,7 +82,7 @@ describe("Peplink collector", () => {
       downloadKbps: 12,
       uploadKbps: 3_100
     })]));
-    expect(request).toHaveBeenCalledTimes(7);
+    expect(request).toHaveBeenCalledTimes(14);
   });
 
   it("fails closed on required WAN, hardware, firmware, resource, and SpeedFusion drift", async () => {
@@ -162,6 +163,7 @@ function healthyRequest(overrides: {
   tunnel?: unknown;
   clients?: unknown[];
 } = {}) {
+  let tunnelCalls = 0;
   return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith("/api/oauth2/token")) {
@@ -199,14 +201,21 @@ function healthyRequest(overrides: {
       return deviceApi(wan);
     }
     if (url.includes("/devapi/status.pepvpn?") && url.includes("tunnelOption=60000-1")) {
+      tunnelCalls += 1;
       return deviceApi(overrides.tunnel ?? { tunnel: { order: ["60000-1"], "60000-1": { wan: {
         order: [1],
         "1": {
           name: "WAN",
           state: "ACTIVE",
           rtt: 53,
-          time: { second: 100 },
-          transmit: { byte: [10_000_000], packet: { forward: [9_900], loss: [100], fec: [2_475] } }
+          transmit: {
+            byte: [10_000_000 + (tunnelCalls - 1) * 3_000_000],
+            packet: {
+              forward: [9_900 + (tunnelCalls - 1) * 5_940],
+              loss: [100 + (tunnelCalls - 1) * 60],
+              fec: [2_475 + (tunnelCalls - 1) * 1_485]
+            }
+          }
         }
       } } } });
     }

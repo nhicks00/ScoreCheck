@@ -110,7 +110,6 @@ const tunnelWanSchema = z.object({
   name: z.string(),
   state: z.string(),
   rtt: z.number().nonnegative().optional(),
-  time: z.object({ second: z.number().nonnegative() }).optional(),
   transmit: z.object({
     byte: z.array(z.number().nonnegative()),
     packet: z.object({
@@ -123,6 +122,8 @@ const tunnelWanSchema = z.object({
 
 const API_BASE = "https://api.ic.peplink.com";
 const TOKEN_URL = `${API_BASE}/api/oauth2/token`;
+type TunnelCounter = { transmitBytes: number; transmitForward: number; transmitLoss: number; transmitFec: number };
+type TunnelCounterBaseline = { sampledAtMs: number; links: Map<string, TunnelCounter> };
 
 export class PeplinkCollector {
   readonly #config: PeplinkConfig;
@@ -130,6 +131,7 @@ export class PeplinkCollector {
   #nextPollAtMs = 0;
   #refreshing = false;
   #snapshot: RouterMonitorSnapshot;
+  #tunnelBaseline: TunnelCounterBaseline | null = null;
 
   constructor(config: PeplinkConfig, fetchImplementation: Fetch = fetch) {
     this.#config = config;
@@ -161,8 +163,14 @@ export class PeplinkCollector {
           tunnel = null;
         }
       }
+      const tunnelRawLinks = parseTunnelLinks(tunnel, peerId);
+      const tunnelLinks = calculateTunnelLinks(tunnelRawLinks, this.#tunnelBaseline, nowMs);
+      this.#tunnelBaseline = tunnel == null ? null : {
+        sampledAtMs: nowMs,
+        links: new Map(tunnelRawLinks.map((link) => [link.name, link]))
+      };
       const clients = clientsSchema.parse(await this.#deviceApi("status.client?activeOnly=yes&outputWeight=full", accessToken));
-      this.#snapshot = buildSnapshot(this.#config, { device, firmware, wans, pepVpn, tunnel, peerId, clients }, sampledAt);
+      this.#snapshot = buildSnapshot(this.#config, { device, firmware, wans, pepVpn, tunnelLinks, tunnelLinksAvailable: tunnel != null, clients }, sampledAt);
     } catch (error) {
       this.#snapshot = {
         ...emptyPeplinkSnapshot(this.#config),
@@ -221,8 +229,8 @@ function buildSnapshot(
     firmware: z.infer<typeof firmwareSchema>;
     wans: z.infer<typeof wanSchema>;
     pepVpn: z.infer<typeof pepVpnSchema>;
-    tunnel: z.infer<typeof tunnelResponseSchema> | null;
-    peerId: string | null;
+    tunnelLinks: NonNullable<RouterMonitorSnapshot["speedFusion"]>["links"];
+    tunnelLinksAvailable: boolean;
     clients: z.infer<typeof clientsSchema>;
   },
   sampledAt: string
@@ -339,8 +347,8 @@ function buildSnapshot(
       usageMb: input.device.sf_cloud_license_local?.usage_mb ?? null,
       expiresAt: input.device.sf_cloud_license_local?.expiry_date ?? null,
       suspended: input.device.sf_cloud_license_local?.suspend ?? null,
-      linksAvailable: input.tunnel != null,
-      links: buildTunnelLinks(input.tunnel, input.peerId)
+      linksAvailable: input.tunnelLinksAvailable,
+      links: input.tunnelLinks
     },
     clients: {
       connected: activeClients.length,
@@ -353,27 +361,44 @@ function buildSnapshot(
   };
 }
 
-function buildTunnelLinks(tunnel: z.infer<typeof tunnelResponseSchema> | null, peerId: string | null) {
+type TunnelRawLink = TunnelCounter & { name: string; state: string; rttMs: number | null };
+
+function parseTunnelLinks(tunnel: z.infer<typeof tunnelResponseSchema> | null, peerId: string | null): TunnelRawLink[] {
   if (!tunnel || !peerId) return [];
   const entry = tunnelEntrySchema.parse(tunnel.tunnel[peerId]);
   return Object.entries(entry.wan)
     .filter(([id]) => /^[0-9]+$/u.test(id))
     .map(([, value]) => tunnelWanSchema.parse(value))
-    .map((wan) => {
-      const seconds = wan.time?.second ?? 0;
-      const bytes = wan.transmit?.byte[0] ?? 0;
-      const forward = wan.transmit?.packet.forward[0] ?? 0;
-      const loss = wan.transmit?.packet.loss[0] ?? 0;
-      const fec = wan.transmit?.packet.fec[0] ?? 0;
-      return {
-        name: wan.name,
-        state: wan.state,
-        rttMs: wan.rtt ?? null,
-        transmitBitrateBps: seconds > 0 ? (bytes * 8) / seconds : null,
-        transmitPacketLossPct: forward + loss > 0 ? (loss * 100) / (forward + loss) : null,
-        transmitFecPct: forward + fec > 0 ? (fec * 100) / (forward + fec) : null
-      };
-    });
+    .filter((wan) => wan.state !== "WAN_DISABLED")
+    .map((wan) => ({
+      name: wan.name,
+      state: wan.state,
+      rttMs: wan.rtt ?? null,
+      transmitBytes: wan.transmit?.byte[0] ?? 0,
+      transmitForward: wan.transmit?.packet.forward[0] ?? 0,
+      transmitLoss: wan.transmit?.packet.loss[0] ?? 0,
+      transmitFec: wan.transmit?.packet.fec[0] ?? 0
+    }));
+}
+
+function calculateTunnelLinks(rawLinks: TunnelRawLink[], baseline: TunnelCounterBaseline | null, sampledAtMs: number) {
+  const seconds = baseline == null ? 0 : (sampledAtMs - baseline.sampledAtMs) / 1_000;
+  return rawLinks.map((link) => {
+    const previous = baseline?.links.get(link.name);
+    const transmitBytes = previous == null ? -1 : link.transmitBytes - previous.transmitBytes;
+    const transmitForward = previous == null ? -1 : link.transmitForward - previous.transmitForward;
+    const transmitLoss = previous == null ? -1 : link.transmitLoss - previous.transmitLoss;
+    const transmitFec = previous == null ? -1 : link.transmitFec - previous.transmitFec;
+    const valid = seconds > 0 && transmitBytes >= 0 && transmitForward >= 0 && transmitLoss >= 0 && transmitFec >= 0;
+    return {
+      name: link.name,
+      state: link.state,
+      rttMs: link.rttMs,
+      transmitBitrateBps: valid ? (transmitBytes * 8) / seconds : null,
+      transmitPacketLossPct: valid && transmitForward + transmitLoss > 0 ? (transmitLoss * 100) / (transmitForward + transmitLoss) : null,
+      transmitFecPct: valid && transmitForward + transmitFec > 0 ? (transmitFec * 100) / (transmitForward + transmitFec) : null
+    };
+  });
 }
 
 function isActiveFirmware(value: z.infer<typeof firmwareSchema>[string]): value is { version: string; bootable: boolean; inUse: boolean } {
