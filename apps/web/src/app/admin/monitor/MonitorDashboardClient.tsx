@@ -1116,9 +1116,10 @@ function unifiStateLabel(unifi: MonitorUniFi): string {
 
 function networkSwitchStateLabel(networkSwitch: MonitorNetworkSwitch): string {
   if (!networkSwitch.configured) return "Not commissioned";
-  if (networkSwitch.state === "HEALTHY") return "Links and power healthy";
-  if (networkSwitch.state === "CRITICAL") return "Switch needs action";
-  if (networkSwitch.state === "DEGRADED") return "Switch needs attention";
+  if (!networkSwitch.reachable) return "Switch offline";
+  if (networkSwitch.state === "HEALTHY") return "Switch online";
+  if (networkSwitch.state === "CRITICAL") return "Expected link offline";
+  if (networkSwitch.state === "DEGRADED") return "Link warning";
   if (networkSwitch.state === "UNKNOWN") return "Switch status unavailable";
   return friendlyState(networkSwitch.state);
 }
