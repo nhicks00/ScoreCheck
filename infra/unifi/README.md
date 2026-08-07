@@ -200,7 +200,7 @@ MONITOR_UNIFI_REQUIRED=true
 MONITOR_UNIFI_API_KEY=<protected official API key>
 MONITOR_UNIFI_BASE_URL=https://unifi.beachvolleyballmedia.com/proxy/network/integration/v1
 MONITOR_UNIFI_SITE_ID=<Network site UUID>
-MONITOR_UNIFI_ACCESS_POINTS_JSON=[{"name":"UK Ultra 1","deviceId":"<uuid>","macAddress":"<mac>"},{"name":"UK Ultra 2","deviceId":"<uuid>","macAddress":"<mac>"},{"name":"UK Ultra 3","deviceId":"<uuid>","macAddress":"<mac>"}]
+MONITOR_UNIFI_ACCESS_POINTS_JSON=[{"name":"UK Ultra 1","deviceId":"<uuid>","macAddress":"<mac>","expected":true},{"name":"UK Ultra 2","deviceId":"<uuid>","macAddress":"<mac>","expected":false},{"name":"UK Ultra 3","deviceId":"<uuid>","macAddress":"<mac>","expected":true}]
 MONITOR_UNIFI_POLL_INTERVAL_MS=30000
 ```
 

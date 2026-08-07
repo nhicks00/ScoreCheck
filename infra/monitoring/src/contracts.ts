@@ -687,6 +687,7 @@ export type UniFiMonitorSnapshot = {
     name: string;
     deviceId: string;
     macAddress: string;
+    expected: boolean;
     model: string | null;
     firmwareVersion: string | null;
     state: string;

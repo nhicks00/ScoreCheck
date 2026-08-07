@@ -110,7 +110,7 @@ const envelopeSnapshotSchema = z.object({
     expectedAccessPoints: z.number().int().nonnegative(),
     onlineAccessPoints: z.number().int().nonnegative(),
     connectedClients: z.number().int().nonnegative(),
-    accessPoints: z.array(z.object({ deviceId: z.string(), name: z.string(), state: z.string() }).passthrough()).max(16),
+    accessPoints: z.array(z.object({ deviceId: z.string(), name: z.string(), expected: z.boolean(), state: z.string() }).passthrough()).max(16),
     clients: z.array(z.object({ id: z.string(), uplinkDeviceId: z.string().nullable() }).passthrough()).max(200),
     problems: z.array(z.string()).max(50)
   }).passthrough().optional(),

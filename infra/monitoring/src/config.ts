@@ -413,6 +413,7 @@ export type UniFiAccessPointBinding = {
   name: string;
   deviceId: string;
   macAddress: string;
+  expected: boolean;
 };
 
 export type UniFiConfig = {
@@ -465,7 +466,8 @@ function parseUniFiConfig(parsed: {
   const bindingSchema = z.object({
     name: z.string().trim().min(1).max(40).regex(/^[a-zA-Z0-9_. -]+$/),
     deviceId: uuid,
-    macAddress: z.string().trim().toLowerCase().regex(/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/)
+    macAddress: z.string().trim().toLowerCase().regex(/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/),
+    expected: z.boolean()
   }).strict();
   const accessPoints = z.array(bindingSchema).length(3).parse(value);
   if (new Set(accessPoints.map((entry) => entry.name)).size !== accessPoints.length
@@ -473,6 +475,7 @@ function parseUniFiConfig(parsed: {
     || new Set(accessPoints.map((entry) => entry.macAddress)).size !== accessPoints.length) {
     throw new Error("UniFi access-point names, device ids, and MAC addresses must be unique.");
   }
+  if (!accessPoints.some((entry) => entry.expected)) throw new Error("UniFi monitoring requires at least one expected access point.");
   return {
     required,
     configured: true,

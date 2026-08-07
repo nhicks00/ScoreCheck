@@ -6,7 +6,8 @@ const nowMs = Date.parse("2026-08-04T18:00:00.000Z");
 const accessPoints = [1, 2, 3].map((number) => ({
   name: `UK Ultra ${number}`,
   deviceId: `20000000-0000-4000-8000-00000000000${number}`,
-  macAddress: `00:11:22:33:44:0${number}`
+  macAddress: `00:11:22:33:44:0${number}`,
+  expected: true
 }));
 
 const config: UniFiConfig = {
@@ -64,6 +65,20 @@ describe("UniFi collector", () => {
     expect(collector.current().state).toBe("CRITICAL");
     expect(collector.current().problems).toContain("UK Ultra 1 identity does not match its commissioned MAC address.");
     expect(collector.current().problems).toContain("UK Ultra 2 is retransmitting too much Wi-Fi traffic.");
+  });
+
+  it("keeps a commissioned standby AP visible without treating it as offline", async () => {
+    const standbyAccessPoints = accessPoints.map((entry, index) => ({ ...entry, expected: index !== 1 }));
+    const request = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/devices?offset=0&limit=200")) return json({ data: [device(standbyAccessPoints[0]!), { ...device(standbyAccessPoints[1]!), state: "OFFLINE" }, device(standbyAccessPoints[2]!)], totalCount: 3 });
+      if (url.endsWith("/clients?offset=0&limit=200")) return json({ data: [], totalCount: 0 });
+      return json(statistics());
+    });
+    const collector = new UniFiCollector({ ...config, accessPoints: standbyAccessPoints }, request as typeof fetch);
+    await collector.refresh(nowMs);
+    expect(collector.current()).toMatchObject({ state: "HEALTHY", expectedAccessPoints: 2, onlineAccessPoints: 2, problems: [] });
+    expect(collector.current().accessPoints[1]).toMatchObject({ name: "UK Ultra 2", expected: false, state: "OFFLINE" });
   });
 
   it("reports sanitized API failure without discarding prior AP evidence", async () => {

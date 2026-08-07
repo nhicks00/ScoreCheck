@@ -554,6 +554,7 @@ async function pollAllOnce() {
   unifiAccessPointMemory.reset();
   unifiRadioRetries.reset();
   for (const accessPoint of unifi.accessPoints) {
+    if (!accessPoint.expected) continue;
     const labels = { access_point: accessPoint.name };
     unifiAccessPointOnline.set(labels, accessPoint.state === "ONLINE" ? 1 : 0);
     setOptionalGauge(unifiAccessPointCpu, labels, accessPoint.cpuUtilizationPct);

@@ -85,6 +85,7 @@ export class UniFiCollector {
           name: binding.name,
           deviceId: binding.deviceId,
           macAddress: device.macAddress,
+          expected: binding.expected,
           model: device.model,
           firmwareVersion: device.firmwareVersion ?? null,
           state: device.state,
@@ -111,8 +112,8 @@ export class UniFiCollector {
         lastSuccessAt: sampledAt,
         lastFailureAt: null,
         siteId: this.#config.siteId,
-        expectedAccessPoints: this.#config.accessPoints.length,
-        onlineAccessPoints: accessPoints.filter((entry) => entry.state === "ONLINE").length,
+        expectedAccessPoints: this.#config.accessPoints.filter((entry) => entry.expected).length,
+        onlineAccessPoints: accessPoints.filter((entry) => entry.expected && entry.state === "ONLINE").length,
         connectedClients: clients.length,
         accessPoints,
         clients: clients.map((client) => ({
@@ -161,6 +162,7 @@ function missingAccessPoint(binding: UniFiConfig["accessPoints"][number]): Acces
     name: binding.name,
     deviceId: binding.deviceId,
     macAddress: binding.macAddress,
+    expected: binding.expected,
     model: null,
     firmwareVersion: null,
     state: "MISSING",
@@ -181,6 +183,7 @@ function assess(accessPoints: AccessPoint[], config: UniFiConfig, nowMs: number)
     if (binding && accessPoint.macAddress !== binding.macAddress) {
       problems.push({ severity: "critical", message: `${accessPoint.name} identity does not match its commissioned MAC address.` });
     }
+    if (!accessPoint.expected) continue;
     if (accessPoint.state !== "ONLINE") {
       problems.push({ severity: "critical", message: `${accessPoint.name} is ${accessPoint.state.toLowerCase().replaceAll("_", " ")}.` });
       continue;
@@ -214,7 +217,7 @@ function emptySnapshot(config: UniFiConfig): UniFiMonitorSnapshot {
     lastSuccessAt: null,
     lastFailureAt: null,
     siteId: config.siteId,
-    expectedAccessPoints: config.accessPoints.length,
+    expectedAccessPoints: config.accessPoints.filter((entry) => entry.expected).length,
     onlineAccessPoints: 0,
     connectedClients: 0,
     accessPoints: config.accessPoints.map(missingAccessPoint),

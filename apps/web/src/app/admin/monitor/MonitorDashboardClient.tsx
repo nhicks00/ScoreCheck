@@ -729,10 +729,10 @@ function UniFiBand({ unifi, nowMs, current, expectedOff }: { unifi: MonitorUniFi
           {unifi.accessPoints.map((accessPoint) => {
             const clients = unifi.clients.filter((client) => client.uplinkDeviceId === accessPoint.deviceId);
             const retries = accessPoint.radios.map((radio) => radio.txRetriesPct).filter((value): value is number => value != null);
-            const state = accessPoint.state !== "ONLINE" ? "CRITICAL" : retries.some((value) => value > 25) ? "DEGRADED" : "HEALTHY";
+            const state = !accessPoint.expected ? "NOT_APPLICABLE" : accessPoint.state !== "ONLINE" ? "CRITICAL" : retries.some((value) => value > 25) ? "DEGRADED" : "HEALTHY";
             return (
               <article className="monitor-ap" key={accessPoint.deviceId} data-state={state}>
-                <header className="monitor-ap-heading"><div><Wifi size={18} /><div><strong>{accessPoint.name}</strong><span>{accessPoint.model ?? "Model unavailable"} · {accessPoint.ipAddress ?? "No IP"}</span></div></div><StateBadge state={state} compact label={accessPoint.state === "ONLINE" ? "Online" : friendlyState(accessPoint.state)} /></header>
+                <header className="monitor-ap-heading"><div><Wifi size={18} /><div><strong>{accessPoint.name}</strong><span>{accessPoint.model ?? "Model unavailable"} · {accessPoint.ipAddress ?? "No IP"}</span></div></div><StateBadge state={state} compact label={!accessPoint.expected ? "Standby" : accessPoint.state === "ONLINE" ? "Online" : friendlyState(accessPoint.state)} /></header>
                 <div className="monitor-ap-metrics">
                   <Metric label="Connected devices" value={String(clients.length)} />
                   <Metric label="Receive" value={formatBitrate(accessPoint.rxRateBps)} />
