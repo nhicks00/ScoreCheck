@@ -115,6 +115,29 @@ streams and shifted almost all tunnel traffic onto WAN. Adaptive FEC was
 restored; all seven sessions reopened at 05:05:33Z and all seven raw paths were
 publishing by 05:05:37Z. Camera 7 remained physically absent.
 
+The final Adaptive-FEC hold produced 121/121 samples over 3,798.388 seconds.
+The same seven publishers stayed ready on one unchanged generation with
+positive bitrate and zero frame errors. WAN and cellular remained active for
+the full window at mean transmit rates of 13.785 and 6.967 Mbps. Router CPU
+averaged 22.155% and peaked at 27.516%; memory peaked at 25.574%. No service
+restart, OOM kill, incident, or fault gate occurred. This passes the
+seven-camera native-Peplink WLAN/router/SFC/raw-ingest scope, but not the final
+eight-camera, external-AP, Egress, YouTube, or viewer gate.
+
+Close-range BVM RSSI was not uniformly stable: the weakest client averaged
+-67.7 dBm and sampled as low as -90 dBm without a publisher reset. Permanent
+camera labels remain blocked until camera-number-to-MAC ownership is physically
+proven. One compact sample showed a bounded collector degradation with all 12
+agents fresh and recovered on the next sample; the recorder did not preserve
+the per-agent subtype, so the next long-window capture must retain agent
+state/age details.
+
+The production operator dashboard is live from
+`018fb7ab993e5325be64e59fff53387a6b17fd97`. It trusts the monitoring service's
+camera-health contract, distinguishes SRT retransmission pressure from viewer
+loss, reports intentionally offline switch/AP links plainly, and does not
+fabricate AP retry quality while every AP is offline.
+
 Detailed timestamps and reset-safe values are preserved under the protected
 event bundle in `evidence/20260807T0506Z-commissioning-and-fec-result.md`.
 This is not the final router qualification: all eight cameras, the three
