@@ -91,6 +91,13 @@ MONITOR_SSH_HOST=root@OBSERVABILITY_PUBLIC_IP \
 `update-agent-target.mjs` never prints target credentials and atomically keeps
 `~/.config/scorecheck/monitoring.env` mode `0600`.
 
+The host agent uses the dedicated local image tag
+`scorecheck-monitor-agent:local`; monitor-service uses
+`scorecheck-monitoring:local`. Keeping those tags separate is required on the
+observability host, which runs both services, so an agent rebuild cannot replace
+the monitor-service rollback image. `deploy-agent.sh` refuses a dirty worktree
+and verifies the exact Git revision on both the agent image and container.
+
 ## Deploy observability
 
 The event lifecycle controller creates the observability host with its exact
