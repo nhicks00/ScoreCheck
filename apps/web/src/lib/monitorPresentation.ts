@@ -1,18 +1,6 @@
-import type { MonitorCourt, MonitorHealthState, MonitorMediaPath, MonitorSnapshot, MonitorSnapshotEnvelope } from "./monitoringTypes";
+import type { MonitorCourt, MonitorHealthState, MonitorSnapshot, MonitorSnapshotEnvelope } from "./monitoringTypes";
 
 export const MONITOR_SNAPSHOT_FRESH_MS = 30_000;
-
-const HEALTH_RANK: Record<MonitorHealthState, number> = {
-  CRITICAL: 9,
-  UNKNOWN: 8,
-  DEGRADED: 7,
-  RECOVERING: 6,
-  STARTING: 5,
-  HEALTHY: 4,
-  MAINTENANCE: 3,
-  EXPECTED_OFF: 2,
-  NOT_APPLICABLE: 1
-};
 
 export function isMonitorSnapshotCurrent(envelope: MonitorSnapshotEnvelope, nowMs: number): boolean {
   return envelope.source === "live"
@@ -33,9 +21,7 @@ export function isCourtExpectedOff(court: MonitorCourt): boolean {
 }
 
 export function deriveRawCameraState(court: MonitorCourt): MonitorHealthState {
-  const stageState = court.stages.find((stage) => stage.stage === "RAW_INGEST")?.state ?? "UNKNOWN";
-  const transportState = liveTransportState(court.paths.raw);
-  return HEALTH_RANK[transportState] > HEALTH_RANK[stageState] ? transportState : stageState;
+  return court.stages.find((stage) => stage.stage === "RAW_INGEST")?.state ?? "UNKNOWN";
 }
 
 export function unavailableState(expectedOff: boolean): MonitorHealthState {
@@ -59,13 +45,4 @@ function dateInChicago(nowMs: number): string {
   }).formatToParts(nowMs);
   const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
   return `${value("year")}-${value("month")}-${value("day")}`;
-}
-
-function liveTransportState(path: MonitorMediaPath | undefined): MonitorHealthState {
-  if (!path?.ready) return "NOT_APPLICABLE";
-  if (path.frameErrors > 0) return "DEGRADED";
-  if (path.inboundBitrateBps == null) return "NOT_APPLICABLE";
-  if (path.inboundBitrateBps < 500_000) return "CRITICAL";
-  if (path.inboundBitrateBps < 2_000_000) return "DEGRADED";
-  return "NOT_APPLICABLE";
 }

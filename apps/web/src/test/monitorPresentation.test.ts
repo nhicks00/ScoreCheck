@@ -22,10 +22,10 @@ describe("monitor presentation freshness", () => {
     expect(isMonitorSnapshotCurrent(current, Date.parse("2026-08-05T12:00:30.001Z"))).toBe(false);
   });
 
-  it("does not label a ready camera healthy when its current delivered bitrate has collapsed", () => {
+  it("uses the monitoring contract instead of inventing an absolute bitrate health threshold", () => {
     expect(deriveRawCameraState(courtWithRaw(rawPath(3_000_000)))).toBe("HEALTHY");
-    expect(deriveRawCameraState(courtWithRaw(rawPath(1_500_000)))).toBe("DEGRADED");
-    expect(deriveRawCameraState(courtWithRaw(rawPath(50_000)))).toBe("CRITICAL");
+    expect(deriveRawCameraState(courtWithRaw(rawPath(900_000, 0, 1_000, "H265")))).toBe("HEALTHY");
+    expect(deriveRawCameraState(courtWithRaw(rawPath(3_000_000), "DEGRADED"))).toBe("DEGRADED");
   });
 
   it("does not keep a recovered camera red because its current SRT session has older loss counters", () => {
@@ -52,7 +52,7 @@ describe("monitor presentation freshness", () => {
   });
 });
 
-function rawPath(inboundBitrateBps: number, packetsLost = 0, packetsReceived = 1_000): MonitorMediaPath {
+function rawPath(inboundBitrateBps: number, packetsLost = 0, packetsReceived = 1_000, videoCodec = "H264"): MonitorMediaPath {
   return {
     name: "court1_raw",
     courtNumber: 1,
@@ -66,7 +66,7 @@ function rawPath(inboundBitrateBps: number, packetsLost = 0, packetsReceived = 1
     readerCount: 1,
     sourceProtocol: "SRT",
     sourceMode: "PUSH",
-    videoCodec: "H264",
+    videoCodec,
     audioCodec: "AAC",
     videoWidth: 1920,
     videoHeight: 1080,
@@ -86,10 +86,10 @@ function rawPath(inboundBitrateBps: number, packetsLost = 0, packetsReceived = 1
   };
 }
 
-function courtWithRaw(raw: MonitorMediaPath): MonitorCourt {
+function courtWithRaw(raw: MonitorMediaPath, stageState: MonitorCourt["overallState"] = "HEALTHY"): MonitorCourt {
   return {
     courtNumber: 1,
-    stages: [{ stage: "RAW_INGEST", state: "HEALTHY" }],
+    stages: [{ stage: "RAW_INGEST", state: stageState }],
     paths: { raw }
   } as MonitorCourt;
 }
