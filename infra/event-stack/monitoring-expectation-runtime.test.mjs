@@ -15,10 +15,14 @@ test("resolves exactly one active event and every requested camera", async () =>
       requests.push(url.toString());
       if (url.pathname.endsWith("/events")) return response([{ id: "event-1" }]);
       if (url.pathname.endsWith("/court_monitoring_expectations")) return response([]);
-      return response([{ id: "court-1", court_number: 1 }, { id: "court-2", court_number: 2 }]);
+      return response([{ id: "court-1", court_number: 1, youtube_video_id: "video-old-1" }, { id: "court-2", court_number: 2, youtube_video_id: null }]);
     }
   });
-  assert.deepEqual(await runtime.resolve([1, 2]), { eventId: "event-1", cameras: { 1: "court-1", 2: "court-2" } });
+  assert.deepEqual(await runtime.resolve([1, 2]), {
+    eventId: "event-1",
+    cameras: { 1: "court-1", 2: "court-2" },
+    youtubeVideoIds: { 1: "video-old-1", 2: null }
+  });
   assert.match(requests[0], /is_active=eq\.true/u);
   assert.match(requests[1], /court_number=in\.\(1%2C2\)|court_number=in\.\(1,2\)/u);
   assert.match(requests[2], /court_monitoring_expectations/u);
@@ -45,7 +49,7 @@ test("rejects an active camera with a pre-existing monitoring expectation", asyn
     now: () => nowMs,
     fetchImpl: async () => response(request++ === 0
       ? [{ id: "event-1" }]
-      : request === 2 ? [{ id: "court-1", court_number: 1 }] : [{ court_id: "court-1", override_created_by: "operator", override_expires_at: "2026-07-27T07:00:00Z" }])
+      : request === 2 ? [{ id: "court-1", court_number: 1, youtube_video_id: null }] : [{ court_id: "court-1", override_created_by: "operator", override_expires_at: "2026-07-27T07:00:00Z" }])
   });
   await assert.rejects(() => runtime.resolve([1]), /no active pre-existing overrides/u);
 });
@@ -58,9 +62,9 @@ test("allows an expired monitoring expectation to be replaced by the new run", a
     now: () => nowMs,
     fetchImpl: async () => response(request++ === 0
       ? [{ id: "event-1" }]
-      : request === 2 ? [{ id: "court-1", court_number: 1 }] : [{ court_id: "court-1", override_created_by: "operator", override_expires_at: "2026-07-26T11:00:00Z" }])
+      : request === 2 ? [{ id: "court-1", court_number: 1, youtube_video_id: null }] : [{ court_id: "court-1", override_created_by: "operator", override_expires_at: "2026-07-26T11:00:00Z" }])
   });
-  assert.deepEqual(await runtime.resolve([1]), { eventId: "event-1", cameras: { 1: "court-1" } });
+  assert.deepEqual(await runtime.resolve([1]), { eventId: "event-1", cameras: { 1: "court-1" }, youtubeVideoIds: { 1: null } });
 });
 
 test("allows the canonical non-expiring OFF baseline", async () => {
@@ -71,9 +75,46 @@ test("allows the canonical non-expiring OFF baseline", async () => {
     now: () => nowMs,
     fetchImpl: async () => response(request++ === 0
       ? [{ id: "event-1" }]
-      : request === 2 ? [{ id: "court-1", court_number: 1 }] : [{ court_id: "court-1", override_created_by: null, override_expires_at: null }])
+      : request === 2 ? [{ id: "court-1", court_number: 1, youtube_video_id: "video-old-1" }] : [{ court_id: "court-1", override_created_by: null, override_expires_at: null }])
   });
-  assert.deepEqual(await runtime.resolve([1]), { eventId: "event-1", cameras: { 1: "court-1" } });
+  assert.deepEqual(await runtime.resolve([1]), { eventId: "event-1", cameras: { 1: "court-1" }, youtubeVideoIds: { 1: "video-old-1" } });
+});
+
+test("binds a run-owned YouTube destination and restores the exact prior value", async () => {
+  let current = "video-old-1";
+  const requests = [];
+  const runtime = new MonitoringExpectationRuntime({
+    supabaseUrl: "https://project.supabase.co",
+    serviceRoleKey: key,
+    fetchImpl: async (url, options) => {
+      requests.push({ url: url.toString(), options });
+      if (!options.method) return response([{ youtube_video_id: current }]);
+      const body = JSON.parse(options.body);
+      current = body.youtube_video_id;
+      return response([{ youtube_video_id: current }]);
+    }
+  });
+  const binding = { eventId: "event-1", cameras: { 1: "court-1" }, youtubeVideoIds: { 1: "video-old-1" } };
+  const bound = await runtime.bindDestination({ binding, camera: 1, broadcastId: "video-new-1" });
+  assert.deepEqual(bound, { broadcastId: "video-new-1", previousVideoId: "video-old-1", adopted: false });
+  assert.match(requests[1].url, /youtube_video_id=eq\.video-old-1/u);
+  const restored = await runtime.restoreDestination({ binding, camera: 1, broadcastId: "video-new-1" });
+  assert.deepEqual(restored, { status: "RESTORED", broadcastId: "video-new-1", previousVideoId: "video-old-1", adopted: false });
+  assert.equal(current, "video-old-1");
+  assert.match(requests[3].url, /youtube_video_id=eq\.video-new-1/u);
+});
+
+test("refuses to overwrite a YouTube destination changed after resolution", async () => {
+  const runtime = new MonitoringExpectationRuntime({
+    supabaseUrl: "https://project.supabase.co",
+    serviceRoleKey: key,
+    fetchImpl: async () => response([{ youtube_video_id: "video-operator" }])
+  });
+  await assert.rejects(() => runtime.bindDestination({
+    binding: { eventId: "event-1", cameras: { 1: "court-1" }, youtubeVideoIds: { 1: "video-old-1" } },
+    camera: 1,
+    broadcastId: "video-new-1"
+  }), /changed after monitoring resolution/u);
 });
 
 test("upserts and verifies testing and live expectations without requiring commentary", async () => {

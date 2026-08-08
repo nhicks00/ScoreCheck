@@ -10,6 +10,7 @@ import {
   evaluatePeplinkRouterEvidence,
   evaluateHlsRuntimeEvidence,
   evaluateSpeedifyEvidence,
+  assertStartupObserversRunning,
   ensureStartupObserver,
   fetchProductionMonitorSnapshot,
   outputConformanceProblems,
@@ -210,6 +211,10 @@ test("unwinds every resource owned by a partially started production run", async
     },
     normalizers: { 1: { required: true, running: true } },
     monitoringBinding: { eventId: "event-1", cameras: { 1: "court-1", 2: "court-2" } },
+    monitoringDestinations: {
+      1: { broadcastId: "broadcast-1", previousVideoId: "old-video-1" },
+      2: { broadcastId: "broadcast-2", previousVideoId: "old-video-2" }
+    },
     monitoringExpectations: { 1: { phase: "LIVE" }, 2: { phase: "TESTING" } },
     sampler: { output: "/evidence/sampler.jsonl" },
     sentinel: { output: "/evidence/sentinel.jsonl" },
@@ -227,7 +232,13 @@ test("unwinds every resource owned by a partially started production run", async
     },
     destinations: { broadcasts: { 1: { id: "broadcast-1" }, 2: { id: "broadcast-2" } } },
     normalizer: { stop: async ({ court }) => { calls.push(`normalizer:${court}`); return { required: true, running: false }; } },
-    expectations: { clear: async ({ camera }) => { calls.push(`expectation:${camera}`); return { phase: "CLEARED" }; } },
+    expectations: {
+      clear: async ({ camera }) => { calls.push(`expectation:${camera}`); return { phase: "CLEARED" }; },
+      restoreDestination: async ({ camera, broadcastId }) => {
+        calls.push(`destination:${camera}:${broadcastId}`);
+        return { status: "RESTORED", broadcastId };
+      }
+    },
     sampler: { stop: async (value) => { calls.push("sampler"); return { ...value, status: "stopped" }; } },
     sentinel: { stop: async (value) => { calls.push("sentinel"); return { ...value, status: "stopped" }; } },
     criticalLogs: { stop: async (value) => { calls.push("criticalLogs"); return { ...value, status: "stopped" }; } },
@@ -244,6 +255,8 @@ test("unwinds every resource owned by a partially started production run", async
     "normalizer:1",
     "expectation:1",
     "expectation:2",
+    "destination:1:broadcast-1",
+    "destination:2:broadcast-2",
     "sampler",
     "sentinel",
     "criticalLogs",
@@ -255,6 +268,8 @@ test("unwinds every resource owned by a partially started production run", async
   assert.equal(state.providerCleanup[2].lifecycleStatus, "complete");
   assert.equal(state.monitoringExpectations[1].phase, "CLEARED");
   assert.equal(state.monitoringExpectations[2].phase, "CLEARED");
+  assert.equal(state.monitoringDestinations[1].status, "RESTORED");
+  assert.equal(state.monitoringDestinations[2].status, "RESTORED");
   assert.equal(state.router.status, "stopped");
 });
 
@@ -536,6 +551,21 @@ test("increments the startup observer generation after a failed attempt", async 
   assert.equal(state.observerStarts.sampler.generation, 3);
 });
 
+test("refuses formal admission when a startup observer has exited", async () => {
+  const state = {
+    sampler: { output: "/evidence/pool-host-samples.jsonl" },
+    sentinel: { output: "/evidence/platform-sentinel.jsonl" },
+    criticalLogs: { output: "/evidence/critical-logs.jsonl" }
+  };
+  const running = { inspect: async () => ({ pid: 100 }) };
+  await assert.rejects(() => assertStartupObserversRunning({
+    state,
+    sampler: { inspect: async () => null },
+    sentinel: running,
+    criticalLogs: running
+  }), /pool host sampler is not running/u);
+});
+
 test("accepts an idle twelve-host baseline with all cameras off", () => {
   assert.deepEqual(productionIdleProblems(snapshot({ active: false }), venue, startedMs), []);
 });
@@ -574,6 +604,22 @@ test("accepts six native 1080 camera chains and two isolated inactive cameras", 
   assert.deepEqual(productionRawProblems(after, venue, startedMs + 5_000), []);
   assert.deepEqual(productionSnapshotProblems(after, profiles, venue, before, startedMs + 5_000), []);
   assert.deepEqual(browserDeltaProblems(before, after, profiles, venue.activeCameras), []);
+});
+
+test("accepts a retired on-demand preview but validates one while occupied", () => {
+  const before = snapshot({ sampledMs: startedMs, framesMultiplier: 0 });
+  const after = snapshot({ sampledMs: startedMs + 5_000, framesMultiplier: 5 });
+  delete before.courts[0].paths.preview;
+  delete before.courts[0].ffmpeg.preview;
+  delete after.courts[0].paths.preview;
+  delete after.courts[0].ffmpeg.preview;
+  assert.deepEqual(productionSnapshotProblems(after, profiles, venue, before, startedMs + 5_000), []);
+
+  after.courts[0].paths.preview = path("preview", 3);
+  after.courts[0].ffmpeg.preview = ffmpeg(20, 1);
+  const problems = productionSnapshotProblems(after, profiles, venue, before, startedMs + 5_000);
+  assert.ok(problems.includes("Camera 1 preview path is not healthy with 1-2 reader(s)"));
+  assert.ok(problems.includes("Camera 1 preview processing is outside 60fps, zero-drop bounds"));
 });
 
 test("requires exactly one authenticated program HLS proxy session", () => {

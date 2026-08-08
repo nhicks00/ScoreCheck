@@ -213,6 +213,7 @@ export class ProductionSoakRuntime {
         }
         state.monitoringBinding = monitoringBinding;
         state.monitoringExpectations ??= {};
+        state.monitoringDestinations ??= {};
         await writeState(statePath, state);
         await ensureStartupObserver({
           state,
@@ -246,6 +247,14 @@ export class ProductionSoakRuntime {
           const host = compositorHost(this.manifest, this.lifecycleState, camera);
           const expectedId = state.egress[camera]?.id ?? null;
           const owner = productionEgressOwner(state, camera);
+          if (!state.monitoringDestinations[camera]) {
+            state.monitoringDestinations[camera] = await this.expectations.bindDestination({
+              binding: state.monitoringBinding,
+              camera,
+              broadcastId: this.destinations.broadcasts[camera].id
+            });
+            await writeState(statePath, state);
+          }
           state.monitoringExpectations[camera] = await this.expectations.set({
             binding: state.monitoringBinding,
             camera,
@@ -307,6 +316,12 @@ export class ProductionSoakRuntime {
           await writeState(statePath, state);
         }
         const accepted = await this.#waitForStableOutput(state.profiles, startupSignal);
+        await assertStartupObserversRunning({
+          state,
+          sampler: this.sampler,
+          sentinel: this.sentinel,
+          criticalLogs: this.criticalLogs
+        });
         state.phase = "RUNNING";
         state.startedAt = accepted.observedAt;
         state.baseline = accepted.snapshot;
@@ -417,6 +432,7 @@ export class ProductionSoakRuntime {
         const bitrateStep = sourceBitrateWindowStep(state.sourceBitrateWindows, snapshot, this.venue, observedMs);
         state.sourceBitrateWindows = bitrateStep.windows;
         problems.push(...bitrateStep.problems);
+        if (includeProvider && !(await this.sampler.inspect(state.sampler.output))) problems.push("pool host sampler is not running");
         if (includeProvider && !(await this.sentinel.inspect(state.sentinel.output))) problems.push("external platform sentinel is not running");
         if (includeProvider && !(await this.criticalLogs.inspect(state.criticalLogs.output))) problems.push("external critical-log exporter is not running");
         const supervisorActions = [];
@@ -823,6 +839,18 @@ export async function ensureStartupObserver({ state, statePath, key, runtime, ev
   return finishStartupObserver({ state, statePath, key, attempt: state.observerStarts[key], start, now, persist });
 }
 
+export async function assertStartupObserversRunning({ state, sampler, sentinel, criticalLogs }) {
+  for (const [key, label, runtime] of [
+    ["sampler", "pool host sampler", sampler],
+    ["sentinel", "external platform sentinel", sentinel],
+    ["criticalLogs", "external critical-log exporter", criticalLogs]
+  ]) {
+    if (!state?.[key]?.output || !runtime || typeof runtime.inspect !== "function" || !(await runtime.inspect(state[key].output))) {
+      throw new Error(`${label} is not running`);
+    }
+  }
+}
+
 export async function stopStartupObservers({ state, sampler, sentinel, criticalLogs }) {
   const failures = [];
   for (const [key, runtime] of [["sampler", sampler], ["sentinel", sentinel], ["criticalLogs", criticalLogs]]) {
@@ -887,6 +915,19 @@ export async function stopFailedStartupResources({ state, egress, youtube, desti
       state.monitoringExpectations[camera] = await expectations.clear({ binding: state.monitoringBinding, camera, runId: state.runId });
     } catch (error) {
       failures.push(`Camera ${camera} monitoring expectation: ${safeError(error)}`);
+    }
+  }
+  for (const [cameraText, current] of Object.entries(state.monitoringDestinations ?? {})) {
+    if (!current || current.status === "RESTORED") continue;
+    const camera = Number(cameraText);
+    try {
+      state.monitoringDestinations[camera] = await expectations.restoreDestination({
+        binding: state.monitoringBinding,
+        camera,
+        broadcastId: current.broadcastId
+      });
+    } catch (error) {
+      failures.push(`Camera ${camera} monitoring destination: ${safeError(error)}`);
     }
   }
   await stopStartupObservers({ state, sampler, sentinel, criticalLogs });
@@ -1052,14 +1093,28 @@ export function productionSnapshotProblems(snapshot, profiles, venue, previous =
     if (!court) continue;
     problems.push(...normalizerProblems(camera, court, assignment, expectedFps));
     const readerBounds = { raw: [1, 3], preview: [1, 2], program: [1, 1] };
-    for (const branch of ["raw", "preview", "program"]) {
+    for (const branch of ["raw", "program"]) {
       const path = court.paths?.[branch];
       const [minimum, maximum] = readerBounds[branch];
       if (!path?.ready || path.frameErrors !== 0 || (path.inboundBitrateBps ?? 0) <= 0 || path.readerCount < minimum || path.readerCount > maximum) {
         problems.push(`Camera ${camera} ${branch} path is not healthy with ${minimum === maximum ? minimum : `${minimum}-${maximum}`} reader(s)`);
       }
     }
-    for (const branch of ["preview", "program"]) {
+    const previewPath = court.paths?.preview;
+    const previewFfmpeg = court.ffmpeg?.preview;
+    if (previewPath || previewFfmpeg) {
+      const [minimum, maximum] = readerBounds.preview;
+      if (!previewPath?.ready || previewPath.frameErrors !== 0 || (previewPath.inboundBitrateBps ?? 0) <= 0
+        || previewPath.readerCount < minimum || previewPath.readerCount > maximum) {
+        problems.push(`Camera ${camera} preview path is not healthy with ${minimum}-${maximum} reader(s)`);
+      }
+      if (!previewFfmpeg || !Number.isFinite(previewFfmpeg.framesPerSecond) || Math.abs(previewFfmpeg.framesPerSecond - expectedFps) > 2
+        || previewFfmpeg.droppedFrames !== 0 || previewFfmpeg.duplicatedFrames !== 0
+        || (previewFfmpeg.speedRatio !== null && previewFfmpeg.speedRatio !== undefined && (previewFfmpeg.speedRatio < 0.95 || previewFfmpeg.speedRatio > 1.05))) {
+        problems.push(`Camera ${camera} preview processing is outside ${expectedFps}fps, zero-drop bounds`);
+      }
+    }
+    for (const branch of ["program"]) {
       const ffmpeg = court.ffmpeg?.[branch];
       if (!ffmpeg || !Number.isFinite(ffmpeg.framesPerSecond) || Math.abs(ffmpeg.framesPerSecond - expectedFps) > 2
         || ffmpeg.droppedFrames !== 0 || ffmpeg.duplicatedFrames !== 0
@@ -1728,6 +1783,7 @@ function createState({ event, evidence, nowMs, minimumDurationMs, maximumDuratio
     sentinel: null,
     criticalLogs: null,
     monitoringBinding: null,
+    monitoringDestinations: {},
     monitoringExpectations: {},
     router: null,
     baseline: null,

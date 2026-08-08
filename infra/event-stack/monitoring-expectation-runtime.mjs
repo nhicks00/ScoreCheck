@@ -15,14 +15,16 @@ export class MonitoringExpectationRuntime {
       throw new Error("production monitoring requires exactly one active Supabase event");
     }
     const eventId = events[0].id;
-    const courts = await this.#request(`/rest/v1/courts?select=id,court_number&event_id=eq.${encodeURIComponent(eventId)}&court_number=in.(${activeCameras.join(",")})`);
+    const courts = await this.#request(`/rest/v1/courts?select=id,court_number,youtube_video_id&event_id=eq.${encodeURIComponent(eventId)}&court_number=in.(${activeCameras.join(",")})`);
     if (!Array.isArray(courts)) throw new Error("production monitoring court mapping response is invalid");
     const mapping = {};
+    const youtubeVideoIds = {};
     for (const court of courts) {
       if (!activeCameras.includes(court?.court_number) || typeof court?.id !== "string" || mapping[court.court_number]) {
         throw new Error("production monitoring court mapping is invalid");
       }
       mapping[court.court_number] = court.id;
+      youtubeVideoIds[court.court_number] = optionalVideoId(court.youtube_video_id);
     }
     if (Object.keys(mapping).length !== activeCameras.length) throw new Error("production monitoring does not map every active camera");
     const courtIds = Object.values(mapping);
@@ -30,7 +32,43 @@ export class MonitoringExpectationRuntime {
     if (!Array.isArray(existing) || existing.some((row) => activeOverrideExists(row, this.now()))) {
       throw new Error("production monitoring requires no active pre-existing overrides for active cameras");
     }
-    return { eventId, cameras: mapping };
+    return { eventId, cameras: mapping, youtubeVideoIds };
+  }
+
+  async bindDestination({ binding, camera, broadcastId }) {
+    const courtId = boundCourtId(binding, camera);
+    const previousVideoId = binding.youtubeVideoIds?.[camera] ?? null;
+    const nextVideoId = videoId(broadcastId, `Camera ${camera} YouTube broadcast id`);
+    const current = await this.#courtVideoId(binding.eventId, courtId, camera);
+    if (current === nextVideoId) return { broadcastId: nextVideoId, previousVideoId, adopted: true };
+    if (current !== previousVideoId) throw new Error(`Camera ${camera} YouTube destination changed after monitoring resolution`);
+    const result = await this.#request(courtPatchPath(binding.eventId, courtId, current), {
+      method: "PATCH",
+      headers: { prefer: "return=representation" },
+      body: JSON.stringify({ youtube_video_id: nextVideoId })
+    });
+    if (!Array.isArray(result) || result.length !== 1 || result[0]?.youtube_video_id !== nextVideoId) {
+      throw new Error(`Camera ${camera} YouTube destination binding was not durably verified`);
+    }
+    return { broadcastId: nextVideoId, previousVideoId, adopted: false };
+  }
+
+  async restoreDestination({ binding, camera, broadcastId }) {
+    const courtId = boundCourtId(binding, camera);
+    const currentVideoId = videoId(broadcastId, `Camera ${camera} run-owned YouTube broadcast id`);
+    const previousVideoId = binding.youtubeVideoIds?.[camera] ?? null;
+    const current = await this.#courtVideoId(binding.eventId, courtId, camera);
+    if (current === previousVideoId) return { status: "RESTORED", broadcastId: currentVideoId, previousVideoId, adopted: true };
+    if (current !== currentVideoId) throw new Error(`Camera ${camera} YouTube destination is no longer owned by this run`);
+    const result = await this.#request(courtPatchPath(binding.eventId, courtId, currentVideoId), {
+      method: "PATCH",
+      headers: { prefer: "return=representation" },
+      body: JSON.stringify({ youtube_video_id: previousVideoId })
+    });
+    if (!Array.isArray(result) || result.length !== 1 || optionalVideoId(result[0]?.youtube_video_id) !== previousVideoId) {
+      throw new Error(`Camera ${camera} prior YouTube destination was not durably restored`);
+    }
+    return { status: "RESTORED", broadcastId: currentVideoId, previousVideoId, adopted: false };
   }
 
   async set({ binding, camera, phase, commentaryParticipating, runId }) {
@@ -109,6 +147,12 @@ export class MonitoringExpectationRuntime {
     if (!response.ok) throw new Error(`production monitoring request returned HTTP ${response.status}`);
     return response.json();
   }
+
+  async #courtVideoId(eventId, courtId, camera) {
+    const rows = await this.#request(`/rest/v1/courts?select=youtube_video_id&id=eq.${encodeURIComponent(courtId)}&event_id=eq.${encodeURIComponent(eventId)}`);
+    if (!Array.isArray(rows) || rows.length !== 1) throw new Error(`Camera ${camera} YouTube destination lookup was not unique`);
+    return optionalVideoId(rows[0]?.youtube_video_id);
+  }
 }
 
 function protectedOrigin(value) {
@@ -127,6 +171,27 @@ function validateCameras(value) {
   if (!Array.isArray(value) || value.length < 1 || value.length > 8 || value.some((camera, index) => !Number.isInteger(camera) || camera < 1 || camera > 8 || (index > 0 && camera <= value[index - 1]))) {
     throw new Error("production monitoring active cameras are invalid");
   }
+}
+
+function boundCourtId(binding, camera) {
+  if (!binding || typeof binding.eventId !== "string" || typeof binding.cameras?.[camera] !== "string") {
+    throw new Error(`Camera ${camera} monitoring binding is invalid`);
+  }
+  return binding.cameras[camera];
+}
+
+function courtPatchPath(eventId, courtId, currentVideoId) {
+  const current = currentVideoId === null ? "is.null" : `eq.${encodeURIComponent(currentVideoId)}`;
+  return `/rest/v1/courts?id=eq.${encodeURIComponent(courtId)}&event_id=eq.${encodeURIComponent(eventId)}&youtube_video_id=${current}`;
+}
+
+function optionalVideoId(value) {
+  return value === null || value === undefined || value === "" ? null : videoId(value, "YouTube video id");
+}
+
+function videoId(value, label) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{6,32}$/u.test(value)) throw new Error(`${label} is invalid`);
+  return value;
 }
 
 function expectationReason(runId, camera, phase) {
