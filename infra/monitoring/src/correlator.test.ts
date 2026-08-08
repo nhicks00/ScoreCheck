@@ -187,6 +187,59 @@ describe("monitor correlator", () => {
     expect(raw?.summary).toBe("Required raw path is not ready.");
   });
 
+  it("escalates a required raw session that stays ready while its bitrate is zero", () => {
+    const readySince = "2026-07-12T12:00:00.000Z";
+    const generatedAt = "2026-07-12T12:00:31.000Z";
+    const snapshot = rawAgentSnapshot(generatedAt);
+    snapshot.mediaPaths[0] = {
+      ...snapshot.mediaPaths[0]!,
+      ready: true,
+      readySince,
+      inboundBitrateBps: 0
+    };
+    const runtimes = new Map<string, AgentRuntime>([[target.id, { target, snapshot, lastSeenAt: generatedAt, lastErrorAt: null }]]);
+    const result = buildMonitorSnapshot(
+      [target],
+      runtimes,
+      1,
+      Date.parse(generatedAt) + 1_000,
+      [],
+      new Map(),
+      liveControlPlane(generatedAt)
+    );
+    const raw = result.courts[0]?.stages.find((stage) => stage.stage === "RAW_INGEST");
+
+    expect(raw).toMatchObject({
+      state: "CRITICAL",
+      issueCode: "REQUIRED_RAW_MEDIA_STALLED",
+      summary: "The camera transport session is connected but no media is arriving."
+    });
+  });
+
+  it("prefers a court-specific stalled-media incident over shared SRT transport loss", () => {
+    const generatedAt = "2026-07-12T12:00:00.000Z";
+    const snapshot = rawAgentSnapshot(generatedAt);
+    const shared = incidentSnapshot({
+      id: "30000000-0000-4000-8000-000000000003",
+      courtNumber: null,
+      rootDependency: "VENUE-UPLINK",
+      stage: "RAW_INGEST",
+      issueCode: "VENUE_SRT_CONGESTION"
+    });
+    const stalled = incidentSnapshot({
+      id: "30000000-0000-4000-8000-000000000004",
+      courtNumber: 1,
+      rootDependency: "CAMERA-PUBLISHER",
+      stage: "RAW_INGEST",
+      issueCode: "REQUIRED_RAW_MEDIA_STALLED"
+    });
+    const runtimes = new Map<string, AgentRuntime>([[target.id, { target, snapshot, lastSeenAt: generatedAt, lastErrorAt: null }]]);
+    const result = buildMonitorSnapshot([target], runtimes, 1, Date.parse(generatedAt) + 1_000, [shared, stalled], new Map(), liveControlPlane(generatedAt));
+    const raw = result.courts[0]?.stages.find((stage) => stage.stage === "RAW_INGEST");
+
+    expect(raw?.issueCode).toBe("REQUIRED_RAW_MEDIA_STALLED");
+  });
+
   it("keeps an idle on-demand preview optional during active media coverage", () => {
     const generatedAt = "2026-07-12T12:00:00.000Z";
     const snapshot = rawAgentSnapshot(generatedAt);
@@ -512,6 +565,31 @@ describe("monitor correlator", () => {
     expect(result.courts[0]?.stages.find((stage) => stage.stage === "PROGRAM_BROWSER")?.state).toBe("HEALTHY");
   });
 });
+
+function incidentSnapshot(overrides: Partial<IncidentSnapshot> = {}): IncidentSnapshot {
+  const observedAt = "2026-07-12T12:00:00.000Z";
+  return {
+    id: "30000000-0000-4000-8000-000000000001",
+    fingerprint: "event|dependency|RAW_INGEST|court-1|issue",
+    eventId: "10000000-0000-4000-8000-000000000001",
+    rootDependency: "DEPENDENCY",
+    status: "open",
+    severity: "critical",
+    stage: "RAW_INGEST",
+    issueCode: "ISSUE",
+    courtNumber: 1,
+    host: null,
+    summary: "Issue summary.",
+    firstAction: "Take action.",
+    evidence: {},
+    openedAt: observedAt,
+    lastObservedAt: observedAt,
+    acknowledgedAt: null,
+    acknowledgedBy: null,
+    resolvedAt: null,
+    ...overrides
+  };
+}
 
 function rawAgentSnapshot(generatedAt: string): AgentSnapshot {
   return {

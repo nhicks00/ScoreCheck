@@ -188,6 +188,37 @@ tests:
               summary: '[INTENTIONAL FAULT GATE] Required camera ingest is missing on court 4.'
               first_action: Restore the isolated test feed, verify raw readiness, then disarm the monitoring fault gate.
 
+  - name: connected required camera with zero bitrate pages as stalled media
+    interval: 5s
+    input_series:
+      - series: 'scorecheck_media_path_ready{agent="ingest",court="5",branch="raw"}'
+        values: '1+0x10'
+      - series: 'scorecheck_media_path_inbound_bitrate_bps{agent="ingest",court="5",branch="raw"}'
+        values: '0+0x10'
+      - series: 'scorecheck_court_media_required{court="5"}'
+        values: '1+0x10'
+      - series: 'scorecheck_court_expectation_context{court="5",expectation_source="control_plane"}'
+        values: '1+0x10'
+    alert_rule_test:
+      - eval_time: 25s
+        alertname: ScoreCheckRequiredRawMediaStalled
+        exp_alerts: []
+      - eval_time: 35s
+        alertname: ScoreCheckRequiredRawMediaStalled
+        exp_alerts:
+          - exp_labels:
+              agent: ingest
+              court: '5'
+              branch: raw
+              expectation_source: control_plane
+              severity: critical
+              stage: RAW_INGEST
+              issue_code: REQUIRED_RAW_MEDIA_STALLED
+              root_dependency: camera-publisher
+            exp_annotations:
+              summary: Camera 5 is connected but has stopped sending media.
+              first_action: Leave the YouTube broadcast running. Restart this camera's stream once, then check its Wi-Fi and bonded uplink if media does not return.
+
   - name: camera audio failures keep exact issue codes and live-match gating
     interval: 5s
     input_series:
@@ -1071,8 +1102,8 @@ tests:
               issue_code: VENUE_SRT_CONGESTION
               root_dependency: venue-uplink
             exp_annotations:
-              summary: The venue upload is overloaded, so multiple SRT cameras are retransmitting video.
-              first_action: Do not restart the cameras. Add upload capacity or lower total camera bitrate until this alert clears.
+              summary: Multiple SRT camera feeds are losing or retransmitting transport packets.
+              first_action: Leave broadcasts running. Compare router-link loss, SRT receive rates, and camera bitrates before changing bandwidth or restarting a camera.
       - eval_time: 3m
         alertname: ScoreCheckProgramFrameDropRatioCritical
         exp_alerts:

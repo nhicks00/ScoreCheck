@@ -50,11 +50,19 @@ export function operatorNotificationCopy(incident: IncidentSnapshot): OperatorNo
   }
   if (issue === "VENUE_SRT_CONGESTION") {
     return {
-      title: "Venue internet needs attention",
-      problem: "The venue upload is overloaded, so several camera streams may stutter.",
-      action: "Do not restart the cameras. Add upload capacity or lower the total camera bitrate.",
-      recoveryTitle: "Venue internet is back to normal",
-      recovery: "The venue upload is keeping up with the camera streams again. No action is needed."
+      title: "Camera connections need attention",
+      problem: "Several SRT camera feeds are losing or retransmitting data and may stutter.",
+      action: "Leave broadcasts running and contact the technical operator. Do not change camera settings based on this alert alone.",
+      recoveryTitle: "Camera connections are back to normal",
+      recovery: "The SRT camera feeds are transporting data normally again. No action is needed."
+    };
+  }
+  if (issue === "REQUIRED_RAW_MEDIA_STALLED") {
+    return {
+      ...base,
+      problem: `${camera ?? "A camera"} is still connected but has stopped sending video.`,
+      action: `Leave the YouTube broadcast running. Restart ${camera ?? "the camera"}'s stream once; if video does not return, check its Wi-Fi connection.`,
+      recovery: `${camera ?? "The camera"} is sending video again. No action is needed.`
     };
   }
   if (incident.stage === "RAW_INGEST" || matches(issue, ["REQUIRED_RAW_PATH_MISSING", "REQUIRED_PATH_MISSING", "RAW_BITRATE_LOW", "NO_PATH_OBSERVATION", "PATH_NOT_READY_EXPECTATION_UNKNOWN", "MEDIA_FRAME_ERRORS"])) {

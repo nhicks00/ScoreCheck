@@ -227,7 +227,10 @@ function applyCourtIncidents(
   return stages.map((stageHealth) => {
     const candidates = active.filter((incident) => incident.stage === stageHealth.stage);
     if (candidates.length === 0) return stageHealth;
-    const incident = candidates.sort((left, right) => severityRank(right.severity) - severityRank(left.severity))[0];
+    const incident = candidates.sort((left, right) =>
+      severityRank(right.severity) - severityRank(left.severity)
+      || Number(right.courtNumber === courtNumber) - Number(left.courtNumber === courtNumber)
+    )[0];
     if (!incident) return stageHealth;
     const incidentState: HealthState = incident.severity === "critical" ? "CRITICAL" : incident.severity === "warning" ? "DEGRADED" : stageHealth.state;
     if (worstHealthState([stageHealth.state, incidentState]) !== incidentState) return stageHealth;
@@ -798,13 +801,20 @@ function pathStage(stage: MonitoringStage, branch: MediaPathSnapshot["branch"], 
       evidence: { branch }
     };
   }
+  const readyAgeMs = age(path.readySince, nowMs);
+  const stalledRaw = branch === "raw"
+    && required
+    && path.ready
+    && path.inboundBitrateBps === 0
+    && readyAgeMs != null
+    && readyAgeMs >= 30_000;
   return {
     stage,
-    state: path.ready ? "HEALTHY" : required ? "CRITICAL" : "UNKNOWN",
-    severity: path.ready ? "info" : required ? "critical" : "warning",
-    issueCode: path.ready ? null : required ? "REQUIRED_PATH_MISSING" : "PATH_NOT_READY_EXPECTATION_UNKNOWN",
-    summary: path.ready ? `${branch} path ready.` : required ? `Required ${branch} path is not ready.` : `${branch} path is not ready; expectation has not been loaded yet.`,
-    firstAction: path.ready ? null : required ? "Check that the camera is powered on, connected, and still streaming." : "Check coverage expectation before treating this as an outage.",
+    state: stalledRaw ? "CRITICAL" : path.ready ? "HEALTHY" : required ? "CRITICAL" : "UNKNOWN",
+    severity: stalledRaw ? "critical" : path.ready ? "info" : required ? "critical" : "warning",
+    issueCode: stalledRaw ? "REQUIRED_RAW_MEDIA_STALLED" : path.ready ? null : required ? "REQUIRED_PATH_MISSING" : "PATH_NOT_READY_EXPECTATION_UNKNOWN",
+    summary: stalledRaw ? "The camera transport session is connected but no media is arriving." : path.ready ? `${branch} path ready.` : required ? `Required ${branch} path is not ready.` : `${branch} path is not ready; expectation has not been loaded yet.`,
+    firstAction: stalledRaw ? "Leave the YouTube broadcast running. Restart this camera's stream once, then check its Wi-Fi and bonded uplink if media does not return." : path.ready ? null : required ? "Check that the camera is powered on, connected, and still streaming." : "Check coverage expectation before treating this as an outage.",
     confidence: "high",
     observedAt: new Date(nowMs).toISOString(),
     ageMs: 0,

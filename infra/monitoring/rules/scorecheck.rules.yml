@@ -197,6 +197,18 @@ groups:
           summary: '{{ if eq $labels.expectation_source "fault_gate" }}[INTENTIONAL FAULT GATE] {{ end }}Required camera ingest is missing on court {{ $labels.court }}.'
           first_action: '{{ if eq $labels.expectation_source "fault_gate" }}Restore the isolated test feed, verify raw readiness, then disarm the monitoring fault gate.{{ else }}Check camera power, venue uplink, encoder publish status, and the MediaMTX raw path.{{ end }}'
 
+      - alert: ScoreCheckRequiredRawMediaStalled
+        expr: (((scorecheck_media_path_ready{branch="raw"} == 1) and on(agent, court, branch) (scorecheck_media_path_inbound_bitrate_bps{branch="raw"} == 0)) * on(court) group_left(expectation_source) scorecheck_court_expectation_context) and on(court) (scorecheck_court_media_required == 1)
+        for: 30s
+        labels:
+          severity: critical
+          stage: RAW_INGEST
+          issue_code: REQUIRED_RAW_MEDIA_STALLED
+          root_dependency: camera-publisher
+        annotations:
+          summary: "Camera {{ $labels.court }} is connected but has stopped sending media."
+          first_action: "Leave the YouTube broadcast running. Restart this camera's stream once, then check its Wi-Fi and bonded uplink if media does not return."
+
       - record: scorecheck_venue_srt_congested
         expr: |
           (
@@ -228,8 +240,8 @@ groups:
           issue_code: VENUE_SRT_CONGESTION
           root_dependency: venue-uplink
         annotations:
-          summary: "The venue upload is overloaded, so multiple SRT cameras are retransmitting video."
-          first_action: "Do not restart the cameras. Add upload capacity or lower total camera bitrate until this alert clears."
+          summary: "Multiple SRT camera feeds are losing or retransmitting transport packets."
+          first_action: "Leave broadcasts running. Compare router-link loss, SRT receive rates, and camera bitrates before changing bandwidth or restarting a camera."
 
       - alert: ScoreCheckVenueRouterTelemetryUnavailable
         expr: (scorecheck_router_api_up == 0) and on() (sum(scorecheck_court_media_required) > 0)
