@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 
 import {
+  admitBoundVenueResume,
   browserDeltaProblems,
   assertProductionMonitorSnapshot,
   evaluateProductionSoak,
@@ -25,6 +26,7 @@ import {
   productionRouterPreflightProblems,
   reconcileHostRecoveredEgress,
   recoverOwnedProgramEgress,
+  resumedSampleDueAt,
   sourceBitrateWindowStep,
   stopFailedStartupResources,
   stopPreOutputStartupResources,
@@ -88,6 +90,41 @@ test("starts through the real CLI entrypoint after module initialization", () =>
   const missingProbe = spawnSync(process.execPath, [script, "status", "--profile", "/tmp/profile", "--destinations", "/tmp/destinations", "--evidence", "/tmp/evidence"], { encoding: "utf8" });
   assert.equal(missingProbe.status, 1);
   assert.match(missingProbe.stderr, /--ffprobe are required/u);
+});
+
+test("allows only an already-bound active soak to resume after upload evidence ages out", () => {
+  const staleVenue = {
+    ...venue,
+    passed: false,
+    problems: ["bonded upload measurement is older than 24 hours"]
+  };
+  const state = {
+    schemaVersion: 6,
+    phase: "RUNNING",
+    venueProfileSha256: staleVenue.sha256,
+    venueAdmission: { passed: true }
+  };
+
+  assert.equal(admitBoundVenueResume(staleVenue, state, "run").passed, true);
+  assert.equal(admitBoundVenueResume(staleVenue, { ...state, phase: "ARMED" }, "run").passed, false);
+  assert.equal(admitBoundVenueResume(staleVenue, { ...state, venueProfileSha256: "a".repeat(64) }, "run").passed, false);
+  assert.equal(admitBoundVenueResume({ ...staleVenue, problems: ["bonded upload is below the required reserve"] }, state, "run").passed, false);
+});
+
+test("resumes sample cadence at the current time instead of replaying missed slots", () => {
+  const nowMs = Date.parse("2026-07-21T13:00:00Z");
+  assert.equal(resumedSampleDueAt({
+    startedAt: "2026-07-21T12:00:00Z",
+    slot: 12,
+    previousObservedAt: "2026-07-21T12:01:00Z",
+    nowMs
+  }), nowMs);
+  assert.equal(resumedSampleDueAt({
+    startedAt: "2026-07-21T12:00:00Z",
+    slot: 12,
+    previousObservedAt: "2026-07-21T12:00:55Z",
+    nowMs: Date.parse("2026-07-21T12:00:58Z")
+  }), Date.parse("2026-07-21T12:01:00Z"));
 });
 
 test("hard-cuts the production soak client to monitoring snapshot contract v6", () => {

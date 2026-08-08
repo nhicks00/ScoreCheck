@@ -73,7 +73,12 @@ export class ProductionSoakRuntime {
     const lifecycleState = await readProtectedJson(profile.state, "event lifecycle state");
     const rendererBinding = await loadRendererBinding(profile.rendererBinding);
     const renderer = await loadProductionRenderer(profile, rendererBinding);
-    const venue = await loadVenueAdmission(profile.venueProfile, manifest.event);
+    const existingState = await readStateOrNull(join(options.evidence, "production-soak-state.json"));
+    const venue = admitBoundVenueResume(
+      await loadVenueAdmission(profile.venueProfile, manifest.event),
+      existingState,
+      options.command
+    );
     if (!venue.passed) throw new Error(`venue profile is not admitted: ${venue.problems.join("; ")}`);
     assertFirmwareAttested(venue.profile);
     assertPhysicalReadiness(venue.profile);
@@ -383,6 +388,12 @@ export class ProductionSoakRuntime {
     let previousObservedMs = state.lastObservedAt ? Date.parse(state.lastObservedAt) : null;
     let viewerTask = null;
     let completedViewer = null;
+    let dueAt = resumedSampleDueAt({
+      startedAt: state.startedAt,
+      slot,
+      previousObservedAt: state.lastObservedAt,
+      nowMs: this.now()
+    });
     const flushViewer = async () => {
       if (!completedViewer) return null;
       const result = completedViewer;
@@ -419,7 +430,6 @@ export class ProductionSoakRuntime {
     };
     try {
       while (!signal.stopped) {
-        const dueAt = Date.parse(state.startedAt) + slot * SAMPLE_INTERVAL_MS;
         const remaining = dueAt - this.now();
         if (remaining > 0) await this.sleep(remaining);
         if (this.now() - Date.parse(state.startedAt) > this.options.maximumDurationMs) break;
@@ -542,6 +552,7 @@ export class ProductionSoakRuntime {
         previous = snapshot;
         previousObservedMs = observedMs;
         slot += 1;
+        dueAt = Math.max(dueAt + SAMPLE_INTERVAL_MS, this.now());
       }
     } finally {
       signal.close();
@@ -768,6 +779,24 @@ export class ProductionSoakRuntime {
       }
     }
   }
+}
+
+export function admitBoundVenueResume(venue, state, command) {
+  if (venue?.passed === true) return venue;
+  const staleOnly = Array.isArray(venue?.problems)
+    && venue.problems.length === 1
+    && /bonded upload measurement is older than 24 hours/u.test(venue.problems[0]);
+  const bound = state?.schemaVersion === 6
+    && state.venueProfileSha256 === venue?.sha256
+    && state.venueAdmission?.passed === true;
+  const resumable = command === "status" || new Set(["STARTING", "RUNNING", "ABORTING", "COMPLETE", "ABORTED"]).has(state?.phase);
+  return staleOnly && bound && resumable ? { ...venue, passed: true, resumedBoundAdmission: true } : venue;
+}
+
+export function resumedSampleDueAt({ startedAt, slot, previousObservedAt, nowMs }) {
+  const scheduledAt = Date.parse(startedAt) + slot * SAMPLE_INTERVAL_MS;
+  const priorCadenceAt = previousObservedAt ? Date.parse(previousObservedAt) + SAMPLE_INTERVAL_MS : scheduledAt;
+  return Math.max(scheduledAt, priorCadenceAt, nowMs);
 }
 
 export async function recoverOwnedProgramEgress({ egress, host, court, profile, owner, oldEgressId }) {
