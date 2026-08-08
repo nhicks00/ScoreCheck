@@ -1227,7 +1227,7 @@ export function productionSnapshotProblems(snapshot, profiles, venue, previous =
     const court = courtByNumber(snapshot, camera, problems);
     if (!court) continue;
     problems.push(...normalizerProblems(camera, court, assignment, expectedFps));
-    const readerBounds = { raw: [1, 3], preview: [1, 2], program: [1, 1] };
+    const readerBounds = { raw: [1, 3], preview: [1, 2], program: [2, 2] };
     for (const branch of ["raw", "program"]) {
       const path = court.paths?.[branch];
       const [minimum, maximum] = readerBounds[branch];
@@ -1777,7 +1777,7 @@ function cameraOutputProblems(court, stream, broadcast, expectedStreamId, nowMs)
   const problems = [];
   const browser = court?.browser;
   if (!browser || !freshAge(nowMs - Date.parse(browser.receivedAt))) problems.push("program renderer heartbeat is not fresh");
-  if (!court?.paths?.program?.ready || court.paths.program.readerCount !== 1) problems.push("program HLS path does not have exactly one authenticated proxy session");
+  if (!court?.paths?.program?.ready || court.paths.program.readerCount !== 2) problems.push("program HLS path does not have exactly one authenticated proxy session and one output-owned warmer");
   if (stream.streamStatus !== "active" || stream.healthStatus !== "good" || !Array.isArray(stream.configurationIssues)) problems.push("YouTube ingest is not healthy");
   if (broadcast.streamId !== expectedStreamId || broadcast.lifeCycleStatus !== "live" || broadcast.recordingStatus !== "recording" || broadcast.privacyStatus !== "unlisted") problems.push("YouTube broadcast is not live and correctly bound");
   return problems;

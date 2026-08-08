@@ -733,12 +733,12 @@ test("accepts a retired on-demand preview but validates one while occupied", () 
   assert.ok(problems.includes("Camera 1 preview processing is outside 60fps, zero-drop bounds"));
 });
 
-test("requires exactly one authenticated program HLS proxy session", () => {
+test("requires exactly one authenticated program HLS proxy session and one output-owned warmer", () => {
   const before = snapshot({ sampledMs: startedMs, framesMultiplier: 0 });
   const after = snapshot({ sampledMs: startedMs + 5_000, framesMultiplier: 5 });
-  after.courts[0].paths.program.readerCount = 2;
+  after.courts[0].paths.program.readerCount = 1;
   assert.ok(productionSnapshotProblems(after, profiles, venue, before, startedMs + 5_000)
-    .some((entry) => entry.includes("Camera 1 program path is not healthy with 1 reader(s)")));
+    .some((entry) => entry.includes("Camera 1 program path is not healthy with 2 reader(s)")));
 });
 
 test("allows bounded audio and mux overhead above a constrained camera encoder cap", () => {
@@ -1101,7 +1101,7 @@ function snapshot({ active = true, sampledMs = startedMs, framesMultiplier = 0 }
       const fps = profiles[camera]?.framesPerSecond ?? 30;
       return {
         courtNumber: camera,
-        paths: running ? { raw: path("raw", 2, camera <= 2 ? 8_000_000 : 5_000_000), preview: path("preview", 1), program: path("program", 1) } : {},
+        paths: running ? { raw: path("raw", 2, camera <= 2 ? 8_000_000 : 5_000_000), preview: path("preview", 1), program: path("program", 2) } : {},
         ffmpeg: running ? { preview: ffmpeg(fps, null), program: ffmpeg(fps, 1) } : {},
         browser: running ? browser(camera, sampledMs, framesMultiplier * fps) : null
       };
