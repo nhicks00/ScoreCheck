@@ -116,10 +116,9 @@ const REQUIRED_MONITORING_KEYS = Object.freeze([
   "LINOVISION_SNMP_PRIV_PASSWORD",
   "LINOVISION_SNMP_USER"
 ]);
-const PRE_VENUE_MONITORING_KEYS = Object.freeze([
-  ...REQUIRED_MONITORING_KEYS.filter((key) => !VENUE_MONITORING_KEYS.includes(key)),
-  "MONITOR_ROUTER_HEARTBEAT_TOKEN"
-]);
+const RECOVERY_BASE_MONITORING_KEYS = Object.freeze(
+  REQUIRED_MONITORING_KEYS.filter((key) => !VENUE_MONITORING_KEYS.includes(key))
+);
 
 if (process.argv[1] && resolve(process.argv[1]) === SCRIPT_PATH) {
   main().catch((error) => {
@@ -269,7 +268,7 @@ export async function migrateProductionRecoverySource({ source, destinations, ou
 }
 
 export async function refreshProductionRecoveryMonitoring({ source, monitoringEnvironment, output }) {
-  const previous = await loadPreVenueProductionRecoverySource(source);
+  const previous = await loadRefreshableMonitoringSource(source);
   const currentEnvironment = await loadProtectedEnv(monitoringEnvironment);
   const refreshedMonitoring = migrateMonitoringEnvironment({
     sourceEnvironment: previous.monitoringEnvironment,
@@ -355,7 +354,7 @@ export async function refreshProductionRecoveryWebRuntime({ source, output }) {
 }
 
 export function migrateMonitoringEnvironment({ sourceEnvironment, currentEnvironment }) {
-  requireEnvironment(sourceEnvironment, PRE_VENUE_MONITORING_KEYS);
+  requireEnvironment(sourceEnvironment, RECOVERY_BASE_MONITORING_KEYS);
   rejectTwilio(sourceEnvironment);
   requireEnvironment(currentEnvironment, VENUE_MONITORING_KEYS);
   rejectTwilio(currentEnvironment);
@@ -484,8 +483,8 @@ export async function loadProductionRecoverySource(sourceDirectory) {
   return loadProductionRecoverySourceWithKeys(sourceDirectory, REQUIRED_MONITORING_KEYS);
 }
 
-async function loadPreVenueProductionRecoverySource(sourceDirectory) {
-  return loadProductionRecoverySourceWithKeys(sourceDirectory, PRE_VENUE_MONITORING_KEYS);
+async function loadRefreshableMonitoringSource(sourceDirectory) {
+  return loadProductionRecoverySourceWithKeys(sourceDirectory, RECOVERY_BASE_MONITORING_KEYS);
 }
 
 async function loadPreHlsProductionRecoverySource(sourceDirectory) {

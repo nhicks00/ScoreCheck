@@ -292,6 +292,17 @@ test("replaces the retired router heartbeat with the current Peplink monitoring 
   assert.equal("MONITOR_AGENT_TARGETS" in migrated, false);
 });
 
+test("refreshes an existing venue monitoring contract when a required field is added", () => {
+  const sourceEnvironment = fixture().monitoringEnvironment;
+  delete sourceEnvironment.MONITOR_UNIFI_CAMERA_CLIENTS_JSON;
+  const currentEnvironment = Object.fromEntries(Object.entries(fixture().monitoringEnvironment)
+    .filter(([key]) => /^(?:MONITOR_PEPLINK_|MONITOR_UNIFI_|MONITOR_NETWORK_SWITCH_|LINOVISION_SNMP_)/u.test(key)));
+  const migrated = migrateMonitoringEnvironment({ sourceEnvironment, currentEnvironment });
+  assert.equal(migrated.MONITOR_UNIFI_CAMERA_CLIENTS_JSON, currentEnvironment.MONITOR_UNIFI_CAMERA_CLIENTS_JSON);
+  assert.equal(migrated.PUSHOVER_APP_TOKEN, sourceEnvironment.PUSHOVER_APP_TOKEN);
+  assert.equal("MONITOR_ROUTER_HEARTBEAT_TOKEN" in migrated, false);
+});
+
 test("rejects missing Peplink values and Twilio residue during router monitoring migration", () => {
   const sourceEnvironment = fixture().monitoringEnvironment;
   const currentEnvironment = Object.fromEntries(Object.entries(sourceEnvironment).filter(([key]) => /^(?:MONITOR_PEPLINK_|MONITOR_UNIFI_|MONITOR_NETWORK_SWITCH_|LINOVISION_SNMP_)/u.test(key)));
