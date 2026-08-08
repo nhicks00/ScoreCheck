@@ -26,7 +26,7 @@ services:
         condition: service_healthy
 
   mediamtx:
-    image: scorecheck/mediamtx:1.19.2-avkans-adts1
+    image: scorecheck/mediamtx:1.19.2-avkans-adts2
     build:
       context: .
       dockerfile: Dockerfile

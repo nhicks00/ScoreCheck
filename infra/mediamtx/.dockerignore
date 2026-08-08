@@ -2,3 +2,4 @@
 !Dockerfile
 !patches/
 !patches/gortmplib-avkans-adts-aac.patch
+!patches/mediamtx-hls-partial-session-close.patch

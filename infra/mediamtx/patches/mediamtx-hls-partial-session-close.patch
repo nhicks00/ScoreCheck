@@ -1,0 +1,49 @@
+diff --git a/internal/servers/hls/session.go b/internal/servers/hls/session.go
+index 47502b9e..a912da16 100644
+--- a/internal/servers/hls/session.go
++++ b/internal/servers/hls/session.go
+@@ -146,11 +146,15 @@ func (s *session) Close() {
+ }
+ 
+ func (s *session) close2(err error) {
+-	s.stream.RemoveReader(s.reader)
++	if s.reader != nil {
++		s.stream.RemoveReader(s.reader)
++	}
+ 
+ 	s.path.RemoveReader(defs.PathRemoveReaderReq{Author: s})
+ 
+-	s.onUnreadHook()
++	if s.onUnreadHook != nil {
++		s.onUnreadHook()
++	}
+ 
+ 	s.Log(logger.Info, "closed: %v", err)
+ }
+diff --git a/internal/servers/hls/session_scorecheck_test.go b/internal/servers/hls/session_scorecheck_test.go
+new file mode 100644
+index 00000000..c8ec604c
+--- /dev/null
++++ b/internal/servers/hls/session_scorecheck_test.go
+@@ -0,0 +1,21 @@
++package hls
++
++import (
++	"errors"
++	"testing"
++
++	"github.com/bluenviron/mediamtx/internal/test"
++	"github.com/stretchr/testify/require"
++)
++
++func TestSessionCloseWhileInitializationIsIncomplete(t *testing.T) {
++	pa := &dummyPath{}
++	sx := &session{
++		path:   pa,
++		server: &Server{Parent: test.NilLogger},
++	}
++
++	require.NotPanics(t, func() {
++		sx.close2(errors.New("replaced by new CDN session"))
++	})
++}

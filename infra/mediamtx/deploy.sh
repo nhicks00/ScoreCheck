@@ -38,7 +38,7 @@ rsync -a -e "$rsync_shell" \
   "$SCRIPT_DIR/docker-compose.yml" "$SCRIPT_DIR/Dockerfile" "$SCRIPT_DIR/.dockerignore" "$SCRIPT_DIR/scorecheck-ffmpeg-runner.sh" "$SCRIPT_DIR/scorecheck-preview-runner.sh" "$SCRIPT_DIR/scorecheck-program-runner.sh" "$SCRIPT_DIR/recovery-role.sh" "$GENERATED" "$GENERATED_CADDY" \
   "$SSH_HOST:$REMOTE_DIR/.incoming/"
 rsync -a -e "$rsync_shell" \
-  "$SCRIPT_DIR/patches/gortmplib-avkans-adts-aac.patch" \
+  "$SCRIPT_DIR/patches/gortmplib-avkans-adts-aac.patch" "$SCRIPT_DIR/patches/mediamtx-hls-partial-session-close.patch" \
   "$SSH_HOST:$REMOTE_DIR/.incoming/patches/"
 
 ssh "${ssh_options[@]}" "$SSH_HOST" "REMOTE_DIR='$REMOTE_DIR' DEPLOY_MODE='$DEPLOY_MODE' bash -s" <<'REMOTE'
@@ -65,6 +65,7 @@ timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p backups
 had_previous=0
 had_previous_build_sources=0
+had_previous_hls_patch=0
 had_previous_program_runner=0
 compose_changed=1
 caddy_service_changed=1
@@ -93,7 +94,14 @@ if [[ "$existing_files" -eq "${#installed_files[@]}" ]]; then
     cp Dockerfile "backups/Dockerfile.$timestamp"
     cp .dockerignore "backups/dockerignore.$timestamp"
     cp patches/gortmplib-avkans-adts-aac.patch "backups/gortmplib-avkans-adts-aac.$timestamp.patch"
+    if [[ -f patches/mediamtx-hls-partial-session-close.patch ]]; then
+      cp patches/mediamtx-hls-partial-session-close.patch "backups/mediamtx-hls-partial-session-close.$timestamp.patch"
+      had_previous_hls_patch=1
+    fi
     had_previous_build_sources=1
+  elif [[ -f patches/mediamtx-hls-partial-session-close.patch ]]; then
+    echo "MediaMTX deployment directory contains an HLS patch without the base image build sources." >&2
+    exit 1
   fi
   cp mediamtx.yml "backups/mediamtx.$timestamp.yml"
   cp Caddyfile "backups/Caddyfile.$timestamp"
@@ -125,8 +133,13 @@ restore_previous() {
     cp "backups/Dockerfile.$timestamp" Dockerfile
     cp "backups/dockerignore.$timestamp" .dockerignore
     cp "backups/gortmplib-avkans-adts-aac.$timestamp.patch" patches/gortmplib-avkans-adts-aac.patch
+    if [[ "$had_previous_hls_patch" -eq 1 ]]; then
+      cp "backups/mediamtx-hls-partial-session-close.$timestamp.patch" patches/mediamtx-hls-partial-session-close.patch
+    else
+      rm -f patches/mediamtx-hls-partial-session-close.patch
+    fi
   else
-    rm -f Dockerfile .dockerignore patches/gortmplib-avkans-adts-aac.patch
+    rm -f Dockerfile .dockerignore patches/gortmplib-avkans-adts-aac.patch patches/mediamtx-hls-partial-session-close.patch
   fi
   cp "backups/mediamtx.$timestamp.yml" mediamtx.yml
   cp "backups/Caddyfile.$timestamp" Caddyfile
@@ -148,6 +161,7 @@ install -m 0644 .incoming/docker-compose.yml docker-compose.yml
 install -m 0644 .incoming/Dockerfile Dockerfile
 install -m 0644 .incoming/.dockerignore .dockerignore
 install -m 0644 .incoming/patches/gortmplib-avkans-adts-aac.patch patches/gortmplib-avkans-adts-aac.patch
+install -m 0644 .incoming/patches/mediamtx-hls-partial-session-close.patch patches/mediamtx-hls-partial-session-close.patch
 install -m 0600 .incoming/mediamtx.yml mediamtx.yml
 install -m 0600 .incoming/Caddyfile Caddyfile
 install -m 0755 .incoming/scorecheck-ffmpeg-runner.sh scorecheck-ffmpeg-runner.sh
