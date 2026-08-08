@@ -226,7 +226,7 @@ export function evaluateYoutubeBackupSample({ label, camera, primaryExpected, ba
   const problems = productionSnapshotProblems(snapshot, profiles, venue, null, nowMs).filter((problem) => {
     if (problem === "warm spare is not healthy and idle") return false;
     if (problem === "warm spare Egress supervisor is not fresh and idle") return false;
-    if (problem === `Camera ${camera} program path is not healthy with 1 reader(s)`) return false;
+    if (problem === `Camera ${camera} program path is not healthy with 2 reader(s)`) return false;
     if (!primaryExpected && problem === `Camera ${camera} output server is not running exactly one healthy Egress with headroom`) return false;
     if (!primaryExpected && problem === `Camera ${camera} Egress supervisor does not own one fresh healthy output generation`) return false;
     return true;
@@ -237,7 +237,9 @@ export function evaluateYoutubeBackupSample({ label, camera, primaryExpected, ba
   if (!Array.isArray(primary) || primary.length !== expectedPrimaryCount) problems.push(`primary compositor active Egress count is not ${expectedPrimaryCount}`);
   if (!Array.isArray(backup) || backup.length !== expectedBackupCount) problems.push(`backup compositor active Egress count is not ${expectedBackupCount}`);
   const court = snapshot.courts.find((entry) => entry.courtNumber === camera);
-  const expectedReaders = expectedPrimaryCount + expectedBackupCount;
+  // Assigned compositors contribute one branch warmer and one browser. The
+  // unassigned spare contributes only its backup browser.
+  const expectedReaders = expectedPrimaryCount * 2 + expectedBackupCount;
   if (!court?.paths?.program?.ready || court.paths.program.readerCount !== expectedReaders || court.paths.program.frameErrors !== 0 || (court.paths.program.inboundBitrateBps ?? 0) <= 0) {
     problems.push(`Camera ${camera} program path does not have exactly ${expectedReaders} healthy reader(s)`);
   }

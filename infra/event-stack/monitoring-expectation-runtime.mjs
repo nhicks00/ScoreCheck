@@ -47,7 +47,7 @@ export class MonitoringExpectationRuntime {
       scoring_expectation: "SCHEDULED",
       override_created_by: "scorecheck-production-soak",
       override_created_at: observedAt,
-      override_reason: `Production soak ${runId} set Camera ${camera} ${phase.toLowerCase()}.`,
+      override_reason: expectationReason(runId, camera, phase),
       override_expires_at: new Date(this.now() + EXPECTATION_TTL_MS).toISOString(),
       updated_at: observedAt
     };
@@ -65,7 +65,13 @@ export class MonitoringExpectationRuntime {
 
   async clear({ binding, camera, runId }) {
     if (!binding || typeof binding.eventId !== "string" || typeof binding.cameras?.[camera] !== "string") throw new Error(`Camera ${camera} monitoring binding is invalid`);
-    const reason = expectationReason(runId, camera);
+    const lookupPath = `/rest/v1/court_monitoring_expectations?select=override_created_by,override_reason&event_id=eq.${encodeURIComponent(binding.eventId)}&court_id=eq.${encodeURIComponent(binding.cameras[camera])}`;
+    const current = await this.#request(lookupPath);
+    const allowedReasons = new Set([expectationReason(runId, camera, "TESTING"), expectationReason(runId, camera, "LIVE")]);
+    if (!Array.isArray(current) || current.length !== 1 || current[0]?.override_created_by !== "scorecheck-production-soak" || !allowedReasons.has(current[0]?.override_reason)) {
+      throw new Error(`Camera ${camera} monitoring expectation cleanup does not own the current row`);
+    }
+    const reason = current[0].override_reason;
     const path = `/rest/v1/court_monitoring_expectations?event_id=eq.${encodeURIComponent(binding.eventId)}&court_id=eq.${encodeURIComponent(binding.cameras[camera])}&override_created_by=eq.scorecheck-production-soak&override_reason=eq.${encodeURIComponent(reason)}`;
     const observedAt = new Date(this.now()).toISOString();
     const result = await this.#request(path, {
@@ -123,9 +129,10 @@ function validateCameras(value) {
   }
 }
 
-function expectationReason(runId, camera) {
+function expectationReason(runId, camera, phase) {
   if (typeof runId !== "string" || runId.length < 1 || /[\r\n\0]/u.test(runId)) throw new Error("production monitoring run id is invalid");
-  return `Production soak ${runId} set Camera ${camera} testing.`;
+  if (!new Set(["TESTING", "LIVE"]).has(phase)) throw new Error("production monitoring phase is invalid");
+  return `Production soak ${runId} set Camera ${camera} ${phase.toLowerCase()}.`;
 }
 
 function activeOverrideExists(row, nowMs) {

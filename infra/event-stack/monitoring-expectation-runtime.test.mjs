@@ -96,34 +96,58 @@ test("upserts and verifies testing and live expectations without requiring comme
   assert.equal(bodies[0].override_expires_at, "2026-07-27T06:00:00.000Z");
 });
 
-test("restores exactly one expectation owned by the failed run to OFF", async () => {
-  const requests = [];
+for (const phase of ["testing", "live"]) {
+  test(`restores exactly one ${phase} expectation owned by the failed run to OFF`, async () => {
+    const requests = [];
+    const reason = `Production soak run-1 set Camera 1 ${phase}.`;
+    const runtime = new MonitoringExpectationRuntime({
+      supabaseUrl: "https://project.supabase.co",
+      serviceRoleKey: key,
+      now: () => nowMs,
+      fetchImpl: async (url, options) => {
+        requests.push({ url: url.toString(), options });
+        if (!options.method) return response([{ override_created_by: "scorecheck-production-soak", override_reason: reason }]);
+        return response([{ court_id: "court-1" }]);
+      }
+    });
+    const result = await runtime.clear({ binding: { eventId: "event-1", cameras: { 1: "court-1" } }, camera: 1, runId: "run-1" });
+    assert.equal(result.phase, "CLEARED");
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].options.method, undefined);
+    assert.match(requests[0].url, /select=override_created_by%2Coverride_reason|select=override_created_by,override_reason/u);
+    assert.equal(requests[1].options.method, "PATCH");
+    assert.deepEqual(JSON.parse(requests[1].options.body), {
+      coverage_phase: "OFF",
+      media_expectation: "OFF",
+      broadcast_expectation: "OFF",
+      commentary_expectation: "NONE",
+      scoring_expectation: "NONE",
+      override_created_by: null,
+      override_created_at: null,
+      override_reason: null,
+      override_expires_at: null,
+      updated_at: "2026-07-26T12:00:00.000Z"
+    });
+    assert.match(requests[1].url, /override_created_by=eq\.scorecheck-production-soak/u);
+    assert.match(requests[1].url, new RegExp(encodeURIComponent(reason).replaceAll(".", "\\."), "u"));
+  });
+}
+
+test("refuses to clear an expectation not owned by the failed run", async () => {
+  let requests = 0;
   const runtime = new MonitoringExpectationRuntime({
     supabaseUrl: "https://project.supabase.co",
     serviceRoleKey: key,
-    now: () => nowMs,
-    fetchImpl: async (url, options) => {
-      requests.push({ url: url.toString(), options });
-      return response([{ court_id: "court-1" }]);
+    fetchImpl: async () => {
+      requests += 1;
+      return response([{ override_created_by: "operator", override_reason: "manual override" }]);
     }
   });
-  const result = await runtime.clear({ binding: { eventId: "event-1", cameras: { 1: "court-1" } }, camera: 1, runId: "run-1" });
-  assert.equal(result.phase, "CLEARED");
-  assert.equal(requests[0].options.method, "PATCH");
-  assert.deepEqual(JSON.parse(requests[0].options.body), {
-    coverage_phase: "OFF",
-    media_expectation: "OFF",
-    broadcast_expectation: "OFF",
-    commentary_expectation: "NONE",
-    scoring_expectation: "NONE",
-    override_created_by: null,
-    override_created_at: null,
-    override_reason: null,
-    override_expires_at: null,
-    updated_at: "2026-07-26T12:00:00.000Z"
-  });
-  assert.match(requests[0].url, /override_created_by=eq\.scorecheck-production-soak/u);
-  assert.match(requests[0].url, /Production%20soak%20run-1%20set%20Camera%201%20testing\./u);
+  await assert.rejects(
+    () => runtime.clear({ binding: { eventId: "event-1", cameras: { 1: "court-1" } }, camera: 1, runId: "run-1" }),
+    /does not own the current row/u
+  );
+  assert.equal(requests, 1);
 });
 
 function response(body, status = 200) {

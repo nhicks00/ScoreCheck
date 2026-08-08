@@ -28,3 +28,8 @@ export function inheritMediaAuthorization(requestUrl: string, sourceUrl: string)
     return requestUrl;
   }
 }
+
+export function configureAuthenticatedHlsRequest(xhr: XMLHttpRequest, requestUrl: string, sourceUrl: string): void {
+  xhr.open("GET", inheritMediaAuthorization(requestUrl, sourceUrl), true);
+  xhr.withCredentials = true;
+}

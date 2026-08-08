@@ -25,6 +25,7 @@ import {
   reconcileHostRecoveredEgress,
   recoverOwnedProgramEgress,
   sourceBitrateWindowStep,
+  stopFailedStartupResources,
   stopPreOutputStartupResources,
   stopStartupObservers,
   productionSnapshotProblems,
@@ -197,6 +198,87 @@ test("clears run-owned monitoring expectations when startup fails before output"
   });
   assert.deepEqual(calls, [{ binding: state.monitoringBinding, camera: 1, runId: "run-1" }]);
   assert.equal(state.monitoringExpectations[1].phase, "CLEARED");
+});
+
+test("unwinds every resource owned by a partially started production run", async () => {
+  const state = {
+    runId: "run-1",
+    startupFailure: { error: "startup failed" },
+    egress: {
+      1: { id: "EG_1", host: "198.51.100.1", profile: "1080p30", owner: { event: "event-1" } },
+      2: { id: "EG_2", host: "198.51.100.2", profile: "1080p30", owner: { event: "event-1" } }
+    },
+    normalizers: { 1: { required: true, running: true } },
+    monitoringBinding: { eventId: "event-1", cameras: { 1: "court-1", 2: "court-2" } },
+    monitoringExpectations: { 1: { phase: "LIVE" }, 2: { phase: "TESTING" } },
+    sampler: { output: "/evidence/sampler.jsonl" },
+    sentinel: { output: "/evidence/sentinel.jsonl" },
+    criticalLogs: { output: "/evidence/logs.jsonl" },
+    router: { status: "running", output: "/evidence/router.tsv" }
+  };
+  const calls = [];
+  const broadcasts = new Map([["broadcast-1", "live"], ["broadcast-2", "testing"]]);
+  await stopFailedStartupResources({
+    state,
+    egress: { stopExact: async ({ court, egressId }) => { calls.push(`egress:${court}:${egressId}`); } },
+    youtube: {
+      getBroadcast: async (id) => ({ id, lifeCycleStatus: broadcasts.get(id) }),
+      transitionBroadcast: async (id, phase) => { calls.push(`youtube:${id}:${phase}`); broadcasts.set(id, phase); }
+    },
+    destinations: { broadcasts: { 1: { id: "broadcast-1" }, 2: { id: "broadcast-2" } } },
+    normalizer: { stop: async ({ court }) => { calls.push(`normalizer:${court}`); return { required: true, running: false }; } },
+    expectations: { clear: async ({ camera }) => { calls.push(`expectation:${camera}`); return { phase: "CLEARED" }; } },
+    sampler: { stop: async (value) => { calls.push("sampler"); return { ...value, status: "stopped" }; } },
+    sentinel: { stop: async (value) => { calls.push("sentinel"); return { ...value, status: "stopped" }; } },
+    criticalLogs: { stop: async (value) => { calls.push("criticalLogs"); return { ...value, status: "stopped" }; } },
+    router: { stopAndFetch: async (_value, output) => { calls.push(`router:${output}`); return { status: "stopped", output }; } },
+    evidenceRoot: "/evidence",
+    manifest: { droplets: [{ name: "bvm-compositor-a", role: "compositor", court: 1 }] },
+    lifecycleState: { droplets: { "bvm-compositor-a": { publicIpv4: "198.51.100.1" } } }
+  });
+  assert.deepEqual(calls, [
+    "egress:2:EG_2",
+    "egress:1:EG_1",
+    "youtube:broadcast-1:complete",
+    "youtube:broadcast-2:complete",
+    "normalizer:1",
+    "expectation:1",
+    "expectation:2",
+    "sampler",
+    "sentinel",
+    "criticalLogs",
+    "router:/evidence/startup-failure-router.tsv"
+  ]);
+  assert.equal(state.egress[1].status, "stopped");
+  assert.equal(state.egress[2].status, "stopped");
+  assert.equal(state.providerCleanup[1].lifecycleStatus, "complete");
+  assert.equal(state.providerCleanup[2].lifecycleStatus, "complete");
+  assert.equal(state.monitoringExpectations[1].phase, "CLEARED");
+  assert.equal(state.monitoringExpectations[2].phase, "CLEARED");
+  assert.equal(state.router.status, "stopped");
+});
+
+test("preserves exact cleanup failures instead of claiming a failed-start resource stopped", async () => {
+  const state = {
+    runId: "run-1",
+    startupFailure: { error: "startup failed" },
+    egress: { 1: { id: "EG_1", host: "198.51.100.1", profile: "1080p30", owner: { event: "event-1" } } }
+  };
+  await stopFailedStartupResources({
+    state,
+    egress: { stopExact: async () => { throw new Error("remote stop failed"); } },
+    youtube: { getBroadcast: async () => ({ id: "broadcast-1", lifeCycleStatus: "ready" }) },
+    destinations: { broadcasts: { 1: { id: "broadcast-1" } } },
+    normalizer: {},
+    expectations: {},
+    sampler: {},
+    sentinel: {},
+    criticalLogs: {},
+    manifest: { droplets: [] },
+    lifecycleState: { droplets: {} }
+  });
+  assert.equal(state.egress[1].status, undefined);
+  assert.deepEqual(state.startupFailure.cleanupErrors, ["Camera 1 Egress: remote stop failed"]);
 });
 
 test("recycles an idle worker before replaying an interrupted owned browser recovery", async () => {
@@ -492,6 +574,14 @@ test("accepts six native 1080 camera chains and two isolated inactive cameras", 
   assert.deepEqual(productionRawProblems(after, venue, startedMs + 5_000), []);
   assert.deepEqual(productionSnapshotProblems(after, profiles, venue, before, startedMs + 5_000), []);
   assert.deepEqual(browserDeltaProblems(before, after, profiles, venue.activeCameras), []);
+});
+
+test("requires exactly one program warmer and one browser HLS reader", () => {
+  const before = snapshot({ sampledMs: startedMs, framesMultiplier: 0 });
+  const after = snapshot({ sampledMs: startedMs + 5_000, framesMultiplier: 5 });
+  after.courts[0].paths.program.readerCount = 3;
+  assert.ok(productionSnapshotProblems(after, profiles, venue, before, startedMs + 5_000)
+    .some((entry) => entry.includes("Camera 1 program path is not healthy with 2 reader(s)")));
 });
 
 test("allows bounded audio and mux overhead above a constrained camera encoder cap", () => {
@@ -854,7 +944,7 @@ function snapshot({ active = true, sampledMs = startedMs, framesMultiplier = 0 }
       const fps = profiles[camera]?.framesPerSecond ?? 30;
       return {
         courtNumber: camera,
-        paths: running ? { raw: path("raw", 2, camera <= 2 ? 8_000_000 : 5_000_000), preview: path("preview", 1), program: path("program", 1) } : {},
+        paths: running ? { raw: path("raw", 2, camera <= 2 ? 8_000_000 : 5_000_000), preview: path("preview", 1), program: path("program", 2) } : {},
         ffmpeg: running ? { preview: ffmpeg(fps, null), program: ffmpeg(fps, 1) } : {},
         browser: running ? browser(camera, sampledMs, framesMultiplier * fps) : null
       };

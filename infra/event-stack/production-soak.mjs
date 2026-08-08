@@ -48,6 +48,7 @@ const MONITOR_READ_RETRY_DELAYS_MS = Object.freeze([1_000, 2_500, 5_000]);
 // this far above the initial floor is retained growth rather than cold start.
 const HLS_MAX_RETAINED_EGRESS_GROWTH_BYTES = 512 * 1024 * 1024;
 const HLS_MAX_RETAINED_EGRESS_GROWTH_RATIO = 0.25;
+const HLS_MAX_STARTUP_PROGRAM_READERS = 8;
 const ROUTER_COLUMNS = Object.freeze([
   "timestamp", "speedify_state", "srt_route_dev", "rtmp_route_dev", "primary_rule_count", "guard_rule_count", "kill_switch",
   "camera_flow_count", "connectify_rx_bytes", "connectify_tx_bytes", "eth0_rx_bytes", "eth0_tx_bytes", "rmnet_rx_bytes",
@@ -204,6 +205,7 @@ export class ProductionSoakRuntime {
     }
 
     if (state.phase === "STARTING") {
+      const startupSignal = createSignalLatch();
       try {
         const monitoringBinding = await this.expectations.resolve(this.venue.activeCameras);
         if (state.monitoringBinding && stableJson(state.monitoringBinding) !== stableJson(monitoringBinding)) {
@@ -240,6 +242,7 @@ export class ProductionSoakRuntime {
           start: (evidenceDirectory) => this.criticalLogs.ensure({ manifest: this.manifest, lifecycleState: this.lifecycleState, evidenceDirectory })
         });
         for (const camera of this.venue.activeCameras) {
+          if (startupSignal.stopped) throw new Error("production soak startup interrupted");
           const host = compositorHost(this.manifest, this.lifecycleState, camera);
           const expectedId = state.egress[camera]?.id ?? null;
           const owner = productionEgressOwner(state, camera);
@@ -287,12 +290,13 @@ export class ProductionSoakRuntime {
             await writeState(statePath, state);
           }
           if (!expectedId) await this.egress.preflight(host);
+          if (startupSignal.stopped) throw new Error("production soak startup interrupted");
           const active = await this.egress.ensureStarted({ host, court: camera, profile: state.profiles[camera].profile, owner, expectedId });
           state.egress[camera] = { ...active, host, profile: state.profiles[camera].profile };
           await writeState(statePath, state);
           state.admission[camera] = await this.egress.proveSecondStartRejected({ host, court: camera, profile: state.profiles[camera].profile, owner, expectedId: active.id });
           await writeState(statePath, state);
-          await this.#waitForCameraOutput(camera);
+          await this.#waitForCameraOutput(camera, startupSignal);
           state.monitoringExpectations[camera] = await this.expectations.set({
             binding: state.monitoringBinding,
             camera,
@@ -302,7 +306,7 @@ export class ProductionSoakRuntime {
           });
           await writeState(statePath, state);
         }
-        const accepted = await this.#waitForStableOutput(state.profiles);
+        const accepted = await this.#waitForStableOutput(state.profiles, startupSignal);
         state.phase = "RUNNING";
         state.startedAt = accepted.observedAt;
         state.baseline = accepted.snapshot;
@@ -310,20 +314,33 @@ export class ProductionSoakRuntime {
         process.stdout.write(`SOAK_STARTED ${state.startedAt}: ${this.venue.activeCameras.length} persistent 1080 scoreboard output(s) are live; source defects are monitored independently.\n`);
       } catch (error) {
         state.startupFailure = { observedAt: new Date(this.now()).toISOString(), error: safeError(error) };
-        if (Object.keys(state.egress).length === 0) {
-          await stopPreOutputStartupResources({
-            state,
-            normalizer: this.normalizer,
-            expectations: this.expectations,
-            sampler: this.sampler,
-            sentinel: this.sentinel,
-            criticalLogs: this.criticalLogs,
-            manifest: this.manifest,
-            lifecycleState: this.lifecycleState
-          });
+        state.phase = "ABORTING";
+        await writeState(statePath, state);
+        await stopFailedStartupResources({
+          state,
+          egress: this.egress,
+          youtube: this.youtube,
+          destinations: this.destinations,
+          normalizer: this.normalizer,
+          expectations: this.expectations,
+          sampler: this.sampler,
+          sentinel: this.sentinel,
+          criticalLogs: this.criticalLogs,
+          router: this.router,
+          evidenceRoot: this.options.evidence,
+          manifest: this.manifest,
+          lifecycleState: this.lifecycleState
+        });
+        if (state.startupFailure.cleanupErrors?.length) {
+          await writeState(statePath, state);
+          throw new Error(`production soak startup failed and cleanup is incomplete: ${state.startupFailure.cleanupErrors.join("; ")}`, { cause: error });
         }
+        state.phase = "ABORTED";
+        state.abortedAt = new Date(this.now()).toISOString();
         await writeState(statePath, state);
         throw error;
+      } finally {
+        startupSignal.close();
       }
     }
 
@@ -619,13 +636,18 @@ export class ProductionSoakRuntime {
     return profiles;
   }
 
-  async #waitForCameraOutput(camera) {
+  async #waitForCameraOutput(camera, signal = null) {
     const startedAt = this.now();
     let transitioned = false;
     let lastProblems = [];
     while (this.now() - startedAt <= 180_000) {
+      if (signal?.stopped) throw new Error("production soak startup interrupted");
       const snapshot = await this.#snapshot();
       const court = snapshot.courts.find((entry) => entry.courtNumber === camera);
+      const readerCount = court?.paths?.program?.readerCount;
+      if (Number.isInteger(readerCount) && readerCount > HLS_MAX_STARTUP_PROGRAM_READERS) {
+        throw new Error(`Camera ${camera} program HLS reader fan-out reached ${readerCount} during startup`);
+      }
       const stream = await this.youtube.getStream(this.destinations.streams[camera].id);
       const broadcast = await this.youtube.getBroadcast(this.destinations.broadcasts[camera].id);
       lastProblems = cameraOutputProblems(court, stream, broadcast, this.destinations.streams[camera].id, this.now());
@@ -639,11 +661,12 @@ export class ProductionSoakRuntime {
     throw new Error(`Camera ${camera} output did not become healthy: ${lastProblems.join("; ")}`);
   }
 
-  async #waitForStableOutput(profiles) {
+  async #waitForStableOutput(profiles, signal = null) {
     let stable = 0;
     let previous = null;
     let lastProblems = [];
     for (let attempt = 0; attempt < 60; attempt += 1) {
+      if (signal?.stopped) throw new Error("production soak startup interrupted");
       const snapshot = await this.#snapshot();
       const provider = await this.#providerEvidence();
       lastProblems = unique([
@@ -814,8 +837,40 @@ export async function stopStartupObservers({ state, sampler, sentinel, criticalL
   return state;
 }
 
-export async function stopPreOutputStartupResources({ state, normalizer, expectations, sampler, sentinel, criticalLogs, manifest, lifecycleState }) {
+export async function stopFailedStartupResources({ state, egress, youtube, destinations, normalizer, expectations, sampler, sentinel, criticalLogs, router, evidenceRoot, manifest, lifecycleState }) {
   const failures = [];
+  for (const [cameraText, current] of Object.entries(state.egress ?? {}).toSorted(([left], [right]) => Number(right) - Number(left))) {
+    if (!egress || !current?.id || current.status === "stopped") continue;
+    const camera = Number(cameraText);
+    try {
+      await egress.stopExact({
+        host: current.host,
+        court: camera,
+        egressId: current.id,
+        profile: current.profile,
+        owner: current.owner ?? productionEgressOwner(state, camera)
+      });
+      state.egress[camera] = { ...current, status: "stopped", stoppedAt: new Date().toISOString() };
+    } catch (error) {
+      failures.push(`Camera ${camera} Egress: ${safeError(error)}`);
+    }
+  }
+  for (const cameraText of Object.keys(state.egress ?? {}).toSorted((left, right) => Number(left) - Number(right))) {
+    if (!youtube || !destinations?.broadcasts?.[cameraText]) continue;
+    const camera = Number(cameraText);
+    try {
+      let broadcast = await youtube.getBroadcast(destinations.broadcasts[camera].id);
+      if (["testing", "live"].includes(broadcast.lifeCycleStatus)) {
+        await youtube.transitionBroadcast(broadcast.id, "complete");
+        broadcast = await youtube.getBroadcast(broadcast.id);
+      }
+      if (!["ready", "complete"].includes(broadcast.lifeCycleStatus)) throw new Error(`unexpected lifecycle ${broadcast.lifeCycleStatus}`);
+      state.providerCleanup ??= {};
+      state.providerCleanup[camera] = { lifecycleStatus: broadcast.lifeCycleStatus, observedAt: new Date().toISOString() };
+    } catch (error) {
+      failures.push(`Camera ${camera} YouTube broadcast: ${safeError(error)}`);
+    }
+  }
   for (const [cameraText, current] of Object.entries(state.normalizers ?? {})) {
     if (!current?.required || !current.running) continue;
     const camera = Number(cameraText);
@@ -835,8 +890,20 @@ export async function stopPreOutputStartupResources({ state, normalizer, expecta
     }
   }
   await stopStartupObservers({ state, sampler, sentinel, criticalLogs });
-  if (failures.length) state.startupFailure.cleanupErrors = [...(state.startupFailure.cleanupErrors ?? []), ...failures];
+  if (router && state.router?.status === "running") {
+    try {
+      state.router = await router.stopAndFetch(state.router, join(evidenceRoot, "startup-failure-router.tsv"));
+    } catch (error) {
+      failures.push(`router observer: ${safeError(error)}`);
+    }
+  }
+  const cleanupErrors = unique([...(state.startupFailure.cleanupErrors ?? []), ...failures]);
+  if (cleanupErrors.length) state.startupFailure.cleanupErrors = cleanupErrors;
   return state;
+}
+
+export async function stopPreOutputStartupResources(values) {
+  return stopFailedStartupResources(values);
 }
 
 async function finishStartupObserver({ state, statePath, key, attempt, start, now, persist }) {
@@ -984,7 +1051,7 @@ export function productionSnapshotProblems(snapshot, profiles, venue, previous =
     const court = courtByNumber(snapshot, camera, problems);
     if (!court) continue;
     problems.push(...normalizerProblems(camera, court, assignment, expectedFps));
-    const readerBounds = { raw: [1, 3], preview: [1, 2], program: [1, 1] };
+    const readerBounds = { raw: [1, 3], preview: [1, 2], program: [2, 2] };
     for (const branch of ["raw", "preview", "program"]) {
       const path = court.paths?.[branch];
       const [minimum, maximum] = readerBounds[branch];
@@ -1520,6 +1587,7 @@ function cameraOutputProblems(court, stream, broadcast, expectedStreamId, nowMs)
   const problems = [];
   const browser = court?.browser;
   if (!browser || !freshAge(nowMs - Date.parse(browser.receivedAt))) problems.push("program renderer heartbeat is not fresh");
+  if (!court?.paths?.program?.ready || court.paths.program.readerCount !== 2) problems.push("program HLS path does not have exactly one warmer and one browser reader");
   if (stream.streamStatus !== "active" || stream.healthStatus !== "good" || !Array.isArray(stream.configurationIssues)) problems.push("YouTube ingest is not healthy");
   if (broadcast.streamId !== expectedStreamId || broadcast.lifeCycleStatus !== "live" || broadcast.recordingStatus !== "recording" || broadcast.privacyStatus !== "unlisted") problems.push("YouTube broadcast is not live and correctly bound");
   return problems;

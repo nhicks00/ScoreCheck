@@ -30,7 +30,7 @@ import {
   PROGRAM_HLS_STARTUP_BUFFER_SECONDS,
   PROGRAM_HLS_TARGET_LATENCY_MS
 } from "@/lib/programTimeline";
-import { inheritMediaAuthorization, whepResourceUrl } from "@/lib/mediaAuthorization";
+import { configureAuthenticatedHlsRequest, whepResourceUrl } from "@/lib/mediaAuthorization";
 
 type StreamPlayerProps = {
   courtNumber: number;
@@ -650,7 +650,7 @@ export const StreamPlayer = forwardRef<StreamPlayerHandle, StreamPlayerProps>(fu
             maxLiveSyncPlaybackRate: 1,
             startOnSegmentBoundary: true,
             xhrSetup: (xhr: XMLHttpRequest, requestUrl: string) => {
-              xhr.open("GET", inheritMediaAuthorization(requestUrl, hlsUrl), true);
+              configureAuthenticatedHlsRequest(xhr, requestUrl, hlsUrl);
             }
           }) as unknown as HlsInstance;
           hls = instance;

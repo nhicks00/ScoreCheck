@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { inheritMediaAuthorization, whepResourceUrl } from "../lib/mediaAuthorization";
+import { configureAuthenticatedHlsRequest, inheritMediaAuthorization, whepResourceUrl } from "../lib/mediaAuthorization";
 
 describe("derived media authorization", () => {
   it("carries scoped credentials to same-origin HLS playlists and segments", () => {
@@ -18,5 +18,26 @@ describe("derived media authorization", () => {
     expect(whepResourceUrl("/court1_program/whep/session-1", offer)).toBe(
       "https://media.example.com/court1_program/whep/session-1?user=event_reader&pass=secret"
     );
+  });
+
+  it("allows MediaMTX to retain one cross-origin HLS session cookie", () => {
+    const calls: unknown[][] = [];
+    const xhr = {
+      withCredentials: false,
+      open: (...args: unknown[]) => calls.push(args)
+    } as unknown as XMLHttpRequest;
+
+    configureAuthenticatedHlsRequest(
+      xhr,
+      "segment-42.mp4",
+      "https://media.example.com/court1_program/index.m3u8?user=event_reader&pass=secret"
+    );
+
+    expect(calls).toEqual([[
+      "GET",
+      "https://media.example.com/court1_program/segment-42.mp4?user=event_reader&pass=secret",
+      true
+    ]]);
+    expect(xhr.withCredentials).toBe(true);
   });
 });
