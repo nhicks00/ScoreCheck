@@ -207,7 +207,7 @@ groups:
           root_dependency: camera-publisher
         annotations:
           summary: "Camera {{ $labels.court }} is connected but has stopped sending media."
-          first_action: "Leave the YouTube broadcast running. Restart this camera's stream once, then check its Wi-Fi and bonded uplink if media does not return."
+          first_action: "Leave the YouTube broadcast running. Open the camera app and restore only this camera's stream; do not restart the broadcast output."
 
       - record: scorecheck_venue_srt_congested
         expr: |

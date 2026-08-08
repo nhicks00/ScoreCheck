@@ -35,11 +35,11 @@ describe("operator notification copy", () => {
     });
   });
 
-  it("turns a connected zero-bitrate camera into one bounded stream restart", () => {
+  it("keeps a connected zero-bitrate camera recovery scoped to its camera app", () => {
     const copy = operatorNotificationCopy(incident({ stage: "RAW_INGEST", issueCode: "REQUIRED_RAW_MEDIA_STALLED", courtNumber: 5 }));
     expect(copy).toMatchObject({
       problem: "Camera 5 is still connected but has stopped sending video.",
-      action: "Leave the YouTube broadcast running. Restart Camera 5's stream once; if video does not return, check its Wi-Fi connection."
+      action: "Leave the YouTube broadcast running. Open the camera app and restore only Camera 5's stream; do not restart the broadcast output."
     });
   });
 

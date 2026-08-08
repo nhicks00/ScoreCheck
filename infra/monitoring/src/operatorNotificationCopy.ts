@@ -61,7 +61,7 @@ export function operatorNotificationCopy(incident: IncidentSnapshot): OperatorNo
     return {
       ...base,
       problem: `${camera ?? "A camera"} is still connected but has stopped sending video.`,
-      action: `Leave the YouTube broadcast running. Restart ${camera ?? "the camera"}'s stream once; if video does not return, check its Wi-Fi connection.`,
+      action: `Leave the YouTube broadcast running. Open the camera app and restore only ${camera ?? "the camera"}'s stream; do not restart the broadcast output.`,
       recovery: `${camera ?? "The camera"} is sending video again. No action is needed.`
     };
   }
