@@ -195,13 +195,13 @@ __OPAQUE_RTMP_ALIAS_PATHS__
 
   # Program-only path. Read the admitted raw/normalized source directly: an
   # extra RTSP stream-copy through preview can time out during recoverable
-  # decoder gaps and unnecessarily retire the program. SRT receiver latency
-  # holds video and ambient audio together, then audio is normalized to Opus
-  # for WHEP while H.264 remains stream-copy. Commentary gets fine delay in the
-  # program page's Web Audio graph.
+  # decoder gaps and unnecessarily retire the program. Private RTSP preserves
+  # cached codec parameters across a mid-stream reader restart; a MediaMTX SRT
+  # self-read can lose those parameters and strand the output on its slate.
+  # Program HLS provides the viewer buffer while H.264 remains stream-copy.
   "~^court([1-8])_program$":
     runOnDemand: >
-      /usr/local/bin/scorecheck-program-runner "court${G1}_program" "__BROWSER_SOURCE_MAP__" "__PROGRAM_DELAY_US__"
+      /usr/local/bin/scorecheck-program-runner "court${G1}_program" "__BROWSER_SOURCE_MAP__"
     runOnDemandRestart: yes
     runOnDemandStartTimeout: 25s
     runOnDemandCloseAfter: 90s

@@ -13,11 +13,12 @@ Each camera has one permanent publishing identity and three consumer branches:
 | `courtN_raw` | Permanent camera SRT input: Mevo HEVC or AVKANS H.264, plus AAC |
 | `courtN_preview` | Clean, undelayed 1080p H.264 + Opus WHEP commentary/inspection preview |
 | `courtN_monitor` | On-demand 360p/10 FPS low-bandwidth operator view |
-| `courtN_program` | Clean 1080p source held by the program SRT delay and consumed as buffered fMP4 HLS |
+| `courtN_program` | Clean 1080p source read over private RTSP and consumed as buffered fMP4 HLS |
 | `courtN_calibration` | On-demand UTC-burned engineering view only |
 
-The program path stream-copies the normalized preview after the SRT receiver
-buffer. It does not run a second H.264 encoder.
+The program path reads the admitted raw or normalized source over private RTSP
+so codec parameters remain available after a mid-stream restart. It does not
+run a second H.264 encoder. Buffered program HLS supplies the viewer buffer.
 
 ## Mevo publishing
 
@@ -65,7 +66,7 @@ cd infra/mediamtx
 set -a
 source ../../apps/web/.env.setup.local
 set +a
-MEDIAMTX_PROGRAM_DELAY_MS=3500 ./deploy.sh
+./deploy.sh
 ```
 
 The script:

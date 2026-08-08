@@ -26,8 +26,7 @@ test("renders an isolated MediaMTX public host and matching TLS health proxy", (
     MEDIAMTX_CONTENT_ANALYZER_BINDINGS: JSON.stringify([
       { ip: "10.120.0.12", courts: [3, 4, 7, 8] },
       { ip: "10.120.0.11", courts: [1, 2, 5, 6] }
-    ]),
-    MEDIAMTX_PROGRAM_DELAY_MS: "3500"
+    ])
   };
   for (let court = 1; court <= 8; court += 1) {
     environment[`MEDIAMTX_COURT_${court}_PUBLISH_USER`] = `court${court}`;
@@ -51,7 +50,7 @@ test("renders an isolated MediaMTX public host and matching TLS health proxy", (
   assert.match(rendered.mediaConfig, /ips: \["10\.120\.0\.12"\][\s\S]+path: "~\^court\(3\|4\|7\|8\)_raw\$"/u);
   assert.match(rendered.mediaConfig, /action: publish\n\s+path: "~\^court\(1\|2\|5\|6\)_normalized\$"/u);
   assert.match(rendered.mediaConfig, /scorecheck-preview-runner "court\$\{G1\}_preview" "raw,normalized,raw,raw,raw,raw,raw,raw"/u);
-  assert.match(rendered.mediaConfig, /scorecheck-program-runner "court\$\{G1\}_program" "raw,normalized,raw,raw,raw,raw,raw,raw" "3500000"/u);
+  assert.match(rendered.mediaConfig, /scorecheck-program-runner "court\$\{G1\}_program" "raw,normalized,raw,raw,raw,raw,raw,raw"/u);
   assert.equal(rendered.contentAnalyzerBindingCount, 2);
   assert.equal(rendered.contentAnalyzerCourtCount, 8);
   assert.equal(rendered.opaqueRtmpAliasCount, 2);
@@ -87,6 +86,7 @@ test("renders an isolated MediaMTX public host and matching TLS health proxy", (
   const programRule = rendered.mediaConfig.match(/"~\^court\(\[1-8\]\)_program\$":([\s\S]+?)runOnDemandRestart:/u)?.[1] ?? "";
   assert.match(programRule, /scorecheck-program-runner/u);
   assert.doesNotMatch(programRule, /court\$\{G1\}_preview/u);
+  assert.doesNotMatch(programRule, /__PROGRAM_DELAY_US__|srt:\/\//u);
   assert.doesNotMatch(programRule, /-readrate|-copyts|-use_wallclock_as_timestamps|-start_at_zero/u);
   assert.doesNotMatch(programRule, /[?&]ffs=/u);
   assert.doesNotMatch(rendered.mediaConfig, /__[A-Z0-9_]+__/u);

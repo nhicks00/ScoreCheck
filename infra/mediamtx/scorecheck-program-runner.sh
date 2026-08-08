@@ -4,15 +4,11 @@ set -eu
 
 branch="${1:-}"
 source_map="${2:-}"
-delay_us="${3:-}"
 case "$branch" in
   court[1-8]_program) ;;
   *) echo "invalid program branch" >&2; exit 64 ;;
 esac
-case "$delay_us" in
-  ''|*[!0-9]*) echo "invalid program delay" >&2; exit 64 ;;
-esac
-[ "$delay_us" -le 30000000 ] || { echo "invalid program delay" >&2; exit 64; }
+[ "$#" -eq 2 ] || { echo "invalid program runner arguments" >&2; exit 64; }
 
 old_ifs=$IFS
 IFS=,
@@ -37,11 +33,12 @@ source_path="court${court}_${source_kind}"
 runner=${SCORECHECK_FFMPEG_RUNNER:-/usr/local/bin/scorecheck-ffmpeg-runner}
 [ -x "$runner" ] || { echo "FFmpeg branch runner is unavailable" >&2; exit 69; }
 
+# RTSP carries cached codec parameters when a reader reconnects mid-stream.
 # Video is stream-copied, so audio must retain the same source timeline.
 exec "$runner" "$branch" --wait-ready "$source_path" -- \
   -nostdin -hide_banner -loglevel warning \
-  -fflags +genpts+discardcorrupt \
-  -i "srt://127.0.0.1:${SRT_PORT:?SRT_PORT is required}?streamid=read:${source_path}&latency=${delay_us}&rcvbuf=33554432&timeout=60000000" \
+  -fflags +genpts+discardcorrupt -rtsp_transport tcp \
+  -i "rtsp://127.0.0.1:${RTSP_PORT:?RTSP_PORT is required}/${source_path}" \
   -map 0:v:0 -map 0:a:0? \
   -c:v copy \
   -c:a aac -b:a 128k -ar 48000 -ac 2 -af "aresample=async=1:first_pts=0" \

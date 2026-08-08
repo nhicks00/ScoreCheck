@@ -17,7 +17,6 @@ export function renderMediaMtxConfigs({ mediaTemplate, caddyTemplate, environmen
   const derivedReadUser = credential(required(environment, "MEDIAMTX_READ_USER"), "MEDIAMTX_READ_USER", 4, 64);
   const derivedReadPass = credential(required(environment, "MEDIAMTX_READ_PASS"), "MEDIAMTX_READ_PASS", 24, 128);
   const contentAnalyzerBindings = exactContentAnalyzerBindings(required(environment, "MEDIAMTX_CONTENT_ANALYZER_BINDINGS"));
-  const delayMs = integerInRange(environment.MEDIAMTX_PROGRAM_DELAY_MS ?? "3500", 0, 30_000);
   const browserSources = [];
   const opaqueRtmpAliases = [];
 
@@ -26,8 +25,7 @@ export function renderMediaMtxConfigs({ mediaTemplate, caddyTemplate, environmen
     .replaceAll("__PRIVATE_IP__", JSON.stringify(privateIp))
     .replaceAll("__PUBLIC_HOST__", JSON.stringify(publicHost))
     .replaceAll("__HLS_CDN_SECRET__", JSON.stringify(derivedReadPass))
-    .replaceAll("__CONTENT_ANALYZER_USERS__", renderContentAnalyzerUsers(contentAnalyzerBindings))
-    .replaceAll("__PROGRAM_DELAY_US__", String(delayMs * 1_000));
+    .replaceAll("__CONTENT_ANALYZER_USERS__", renderContentAnalyzerUsers(contentAnalyzerBindings));
 
   for (let court = 1; court <= 8; court += 1) {
     const rawSource = environment[`MEDIAMTX_COURT_${court}_RAW_SOURCE`]?.trim() || "publisher";
@@ -70,7 +68,6 @@ export function renderMediaMtxConfigs({ mediaTemplate, caddyTemplate, environmen
   return {
     mediaConfig,
     caddyConfig,
-    delayMs,
     opaqueRtmpAliasCount: opaqueRtmpAliases.length,
     contentAnalyzerBindingCount: contentAnalyzerBindings.length,
     contentAnalyzerCourtCount: contentAnalyzerBindings.reduce((total, binding) => total + binding.courts.length, 0)
@@ -111,7 +108,7 @@ async function main() {
   await writeFile(caddyOutputPath, rendered.caddyConfig, { encoding: "utf8", mode: 0o600 });
   await chmod(mediaOutputPath, 0o600);
   await chmod(caddyOutputPath, 0o600);
-  console.log(`Rendered MediaMTX and TLS proxy configuration (${rendered.delayMs} ms program delay).`);
+  console.log("Rendered MediaMTX and TLS proxy configuration.");
 }
 
 function required(environment, name) {
@@ -130,14 +127,6 @@ function credential(value, name, minimumLength, maximumLength) {
     throw new Error(`${name} must contain ${minimumLength}-${maximumLength} URL-safe characters.`);
   }
   return value;
-}
-
-function integerInRange(value, min, max) {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
-    throw new Error(`Expected an integer from ${min} through ${max}, received ${value}.`);
-  }
-  return parsed;
 }
 
 function privateIpv4(value) {

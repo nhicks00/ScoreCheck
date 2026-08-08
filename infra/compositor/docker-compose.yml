@@ -106,9 +106,9 @@ services:
     logging: *default-logging
 
   program-warmer:
-    # An exact output owner keeps its MediaMTX HLS branch warm independently of
-    # Chromium and the Egress worker. It packet-copies to the null muxer; there
-    # is no decode, encode, or additional venue upload.
+    # An exact output owner keeps its MediaMTX program branch warm over private
+    # RTSP independently of Chromium and the Egress worker. It packet-copies to
+    # the null muxer; there is no decode, encode, or extra venue upload.
     image: bluenviron/mediamtx:1.19.2-ffmpeg@sha256:08c837deb7bac85d509e2a4c2737308e5a34f8f084a46a0d8793cdb0579a6e5d
     container_name: bvm-program-warmer
     restart: unless-stopped

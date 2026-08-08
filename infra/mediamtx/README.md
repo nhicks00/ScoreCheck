@@ -35,7 +35,7 @@ Render and deploy without printing the publish credential:
 set -a
 source ../../apps/web/.env.setup.local
 set +a
-MEDIAMTX_PROGRAM_DELAY_MS=3500 ./deploy.sh
+./deploy.sh
 ```
 
 Each `MEDIAMTX_COURT_N_RAW_SOURCE` defaults to `publisher`. Set it to a private
