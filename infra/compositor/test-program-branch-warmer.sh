@@ -18,9 +18,7 @@ chmod 0755 "$TEST_ROOT/bin/ffmpeg"
 
 export PATH="$TEST_ROOT/bin:$PATH"
 export CAMERA_NUMBER=3
-export MEDIAMTX_HLS_BASE_URL=https://preview.example.test
-export MEDIAMTX_READ_USER=scorecheck_event_reader
-export MEDIAMTX_READ_PASS=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+export MEDIAMTX_PRIVATE_HOST=10.120.0.5
 export SCORECHECK_PROGRAM_WARMER_INTERVAL_SECONDS=1
 export SCORECHECK_PROGRAM_WARMER_REQUEST_DIR="$TEST_ROOT/requests"
 export SCORECHECK_PROGRAM_WARMER_STATE_DIR="$TEST_ROOT/state"
@@ -44,7 +42,10 @@ for _ in $(seq 1 50); do
   sleep 0.1
 done
 grep -q '"status":"WARM"' "$TEST_ROOT/state/state.json"
-grep -q 'court3_program/index.m3u8?user=scorecheck_event_reader&pass=' "$TEST_ROOT/ffmpeg.args"
+grep -q -- '-timeout 15000000' "$TEST_ROOT/ffmpeg.args"
+grep -q -- '-rtsp_transport tcp' "$TEST_ROOT/ffmpeg.args"
+grep -q 'rtsp://10.120.0.5:8554/court3_program' "$TEST_ROOT/ffmpeg.args"
+! grep -q 'index.m3u8' "$TEST_ROOT/ffmpeg.args"
 grep -q -- '-map 0:v:0' "$TEST_ROOT/ffmpeg.args"
 ! grep -q -- '-map 0:a:0' "$TEST_ROOT/ffmpeg.args"
 grep -q -- '-c copy -f null -' "$TEST_ROOT/ffmpeg.args"
