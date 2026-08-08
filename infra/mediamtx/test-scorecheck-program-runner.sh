@@ -35,7 +35,10 @@ grep -Fq 'latency=3500000' "$CAPTURE" || fail "wrapper did not preserve the conf
 grep -Fq 'timeout=60000000' "$CAPTURE" || fail "wrapper does not bound the delayed input timeout"
 grep -Fxq 'copy' "$CAPTURE" || fail "wrapper transcodes browser video unexpectedly"
 grep -Fxq 'aac' "$CAPTURE" || fail "wrapper did not normalize delayed audio to HLS-safe AAC"
-grep -Fq 'asetpts=N/SR/TB,aresample=async=1:first_pts=0' "$CAPTURE" || fail "delayed audio is not rebased"
+grep -Fq 'aresample=async=1:first_pts=0' "$CAPTURE" || fail "delayed audio does not preserve the source timeline"
+if grep -Fq 'asetpts=N/' "$CAPTURE"; then
+  fail "delayed audio is independently restamped from copied video"
+fi
 if grep -Fq 'court2_preview' "$CAPTURE"; then
   fail "program still depends on the preview RTSP branch"
 fi

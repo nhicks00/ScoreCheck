@@ -32,7 +32,10 @@ grep -Fxq 'rtsp://127.0.0.1:8554/court2_normalized' "$CAPTURE" || fail "wrapper 
 grep -Fxq -- '-c:v' "$CAPTURE" || fail "wrapper did not configure video copy"
 grep -Fxq 'copy' "$CAPTURE" || fail "wrapper transcodes browser video unexpectedly"
 grep -Fxq 'libopus' "$CAPTURE" || fail "wrapper did not normalize transport audio to browser-safe Opus"
-grep -Fq 'asetpts=N/SR/TB,aresample=async=1:first_pts=0' "$CAPTURE" || fail "normalized audio is not rebased"
+grep -Fq 'aresample=async=1:first_pts=0' "$CAPTURE" || fail "normalized audio does not preserve the source timeline"
+if grep -Fq 'asetpts=N/' "$CAPTURE"; then
+  fail "normalized audio is independently restamped from copied video"
+fi
 if grep -Fxq -- '-readrate' "$CAPTURE"; then
   fail "wrapper throttles the live MediaMTX reader"
 fi
@@ -45,7 +48,10 @@ sh "$RUNNER" court1_preview raw,normalized,raw,raw,raw,raw,raw,raw
 grep -Fxq 'court1_raw' "$CAPTURE" || fail "wrapper did not select Camera 1 raw input"
 grep -Fxq 'rtsp://127.0.0.1:8554/court1_raw' "$CAPTURE" || fail "wrapper did not read the direct H264 path"
 grep -Fxq 'libopus' "$CAPTURE" || fail "wrapper did not normalize raw AAC audio to Opus"
-grep -Fq 'asetpts=N/SR/TB,aresample=async=1:first_pts=0' "$CAPTURE" || fail "raw audio normalization is not rebased"
+grep -Fq 'aresample=async=1:first_pts=0' "$CAPTURE" || fail "raw audio does not preserve the source timeline"
+if grep -Fq 'asetpts=N/' "$CAPTURE"; then
+  fail "raw audio is independently restamped from copied video"
+fi
 
 for invalid in \
   'court9_preview raw,raw,raw,raw,raw,raw,raw,raw' \

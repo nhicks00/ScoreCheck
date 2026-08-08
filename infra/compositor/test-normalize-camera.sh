@@ -47,15 +47,20 @@ grep -Fxq 'rtsp://10.20.0.3:8554/court2_raw' "$CAPTURE" || fail "normalizer did 
 grep -Fxq 'rtsp://10.20.0.3:8554/court2_normalized' "$CAPTURE" || fail "normalizer did not publish the private normalized output"
 grep -Fxq 'libx264' "$CAPTURE" || fail "normalizer did not encode H264"
 grep -Fxq 'high' "$CAPTURE" || fail "normalizer did not select H264 High profile"
-grep -Fq 'setpts=N/(30000/1001*TB)' "$CAPTURE" || fail "normalizer did not preserve 29.97 fps mode"
+grep -Fq 'fps=fps=30000/1001:start_time=0:round=near:eof_action=pass' "$CAPTURE" \
+  || fail "normalizer did not preserve the source timeline at 29.97 fps"
 grep -Fxq '10000k' "$CAPTURE" || fail "normalizer did not apply the 1080p30 bitrate"
 grep -Fxq 'aac' "$CAPTURE" || fail "normalizer did not produce MPEG-TS-safe transport audio"
 if grep -Fxq 'libopus' "$CAPTURE"; then
   fail "normalizer retained nonstandard Opus-over-MPEG-TS transport audio"
 fi
 grep -Fq 'bframes=0:keyint=60:min-keyint=60:scenecut=0' "$CAPTURE" || fail "normalizer did not enforce the browser GOP contract"
-grep -Fq 'setpts=N/(30000/1001*TB),format=yuv420p,setfield=prog' "$CAPTURE" || fail "normalizer did not replace defective source video timestamps"
-grep -Fq 'asetpts=N/SR/TB,aresample=async=1:first_pts=0' "$CAPTURE" || fail "normalizer did not replace defective source audio timestamps"
+grep -Fq 'fps=fps=30000/1001:start_time=0:round=near:eof_action=pass,format=yuv420p,setfield=prog' "$CAPTURE" \
+  || fail "normalizer did not use the shared source timeline for video cadence"
+grep -Fq 'aresample=async=1:first_pts=0' "$CAPTURE" || fail "normalizer did not preserve source-timed audio"
+if grep -Fq 'setpts=N/' "$CAPTURE" || grep -Fq 'asetpts=N/' "$CAPTURE"; then
+  fail "normalizer independently rebuilt audio or video timestamps"
+fi
 grep -Fxq 'passthrough' "$CAPTURE" || fail "normalizer can still duplicate frames to catch up"
 if grep -Fxq 'cfr' "$CAPTURE"; then
   fail "normalizer still applies timestamp-driven CFR duplication"
@@ -78,7 +83,8 @@ export CAMERA_SOURCE_CODEC=H265
 export CAMERA_SOURCE_PROFILE=PRIORITY_1080P60
 export CAMERA_FRAME_RATE_MODE=60000/1001
 sh "$NORMALIZER"
-grep -Fq 'setpts=N/(60000/1001*TB)' "$CAPTURE" || fail "normalizer did not preserve 59.94 fps mode"
+grep -Fq 'fps=fps=60000/1001:start_time=0:round=near:eof_action=pass' "$CAPTURE" \
+  || fail "normalizer did not preserve the source timeline at 59.94 fps"
 grep -Fxq '12000k' "$CAPTURE" || fail "normalizer did not apply the 1080p60 bitrate"
 grep -Fq 'bframes=0:keyint=120:min-keyint=120:scenecut=0' "$CAPTURE" || fail "normalizer did not apply the 60 fps GOP"
 
