@@ -21,6 +21,7 @@ ORPHANED_HEALTHCHECK_COMMANDS = {
     "healthcheck.egress": "curl",
     "healthcheck.mediamtx": "wget",
     "healthcheck.program-warmer": "test",
+    "healthcheck.renderer": "node",
     "healthcheck.redis": "redis-cli",
 }
 MONITOR_CONTENT_WORKLOAD_COMMANDS = {
@@ -156,6 +157,11 @@ def direct_classification(process):
         return "healthcheck.egress"
     if b"wget -qO- http://127.0.0.1:9997/v3/config/global/get" in cmdline:
         return "healthcheck.mediamtx"
+    if (
+        command == "node"
+        and b"fetch('http://127.0.0.1:3000/api/program/renderer-binding'" in cmdline
+    ):
+        return "healthcheck.renderer"
     if command == "redis-cli" and cmdline.rstrip().endswith(b" ping"):
         return "healthcheck.redis"
     if command == "test" and cmdline == b"test -s /monitoring/program-warmer/state.json":
@@ -183,6 +189,8 @@ def container_healthcheck_classification(process):
         b"/sbin/docker-init -- /usr/local/bin/program-branch-warmer",
     }:
         return "healthcheck.program-warmer"
+    if cmdline == b"/sbin/docker-init -- docker-entrypoint.sh node server.js":
+        return "healthcheck.renderer"
     if cmdline == b"redis-server *:6379":
         return "healthcheck.redis"
     return None
@@ -575,6 +583,8 @@ def self_test():
     assert direct_classification({"command": "pactl", "parentCommand": "chrome", "commandLine": b"pactl info"}) is None
     assert direct_classification({"command": "runc", "parentCommand": "dockerd", "commandLine": b"runc exec"}) is None
     assert direct_classification({"command": "test", "parentCommand": "runc", "commandLine": b"test -s /monitoring/program-warmer/state.json"}) == "healthcheck.program-warmer"
+    assert direct_classification({"command": "node", "parentCommand": "runc", "commandLine": b"node -e fetch('http://127.0.0.1:3000/api/program/renderer-binding',{cache:'no-store'})"}) == "healthcheck.renderer"
+    assert direct_classification({"command": "node", "parentCommand": "runc", "commandLine": b"node server.js"}) is None
     assert direct_classification({"command": "test", "parentCommand": "runc", "commandLine": b"test -e /tmp/operator"}) is None
     assert direct_classification({"command": "sshd", "parentCommand": "sshd", "commandLine": b"sshd: root@notty"}) == "observer.capacity-ssh"
     assert direct_classification({"command": "sshd", "parentCommand": "systemd", "commandLine": b""}) == "observer.capacity-ssh"
@@ -586,6 +596,7 @@ def self_test():
     assert container_healthcheck_classification({"commandLine": b"/sbin/docker-init -- /mediamtx"}) == "healthcheck.mediamtx"
     assert container_healthcheck_classification({"commandLine": b"/tini -- egress"}) == "healthcheck.egress"
     assert container_healthcheck_classification({"commandLine": b"/sbin/docker-init -- /usr/local/bin/program-branch-warmer"}) == "healthcheck.program-warmer"
+    assert container_healthcheck_classification({"commandLine": b"/sbin/docker-init -- docker-entrypoint.sh node server.js"}) == "healthcheck.renderer"
     assert container_healthcheck_classification({"commandLine": b"/usr/local/bin/program-branch-warmer --operator"}) is None
     assert container_healthcheck_classification({"commandLine": b"redis-server *:6379"}) == "healthcheck.redis"
     assert container_healthcheck_classification({"commandLine": b"npm run dev"}) is None
@@ -696,6 +707,18 @@ def self_test():
         320: {"pid": 320, "ppid": 300, "identity": "320:32", "command": "runc", "parentCommand": "containerd-shim", "commandLine": b"", "cgroupFingerprint": "runtime"},
     }
     assert classification_map(monitor_healthcheck_exit, retained)["320:32"] == "healthcheck.monitor-agent.runtime"
+
+    renderer_init = {
+        330: {"pid": 330, "ppid": 1, "identity": "330:33", "command": "containerd-shim", "parentCommand": "systemd", "commandLine": b"containerd-shim-runc-v2", "cgroupFingerprint": "host"},
+        340: {"pid": 340, "ppid": 330, "identity": "340:34", "command": "docker-init", "parentCommand": "containerd-shim", "commandLine": b"/sbin/docker-init -- docker-entrypoint.sh node server.js", "cgroupFingerprint": "renderer"},
+    }
+    retained = healthcheck_shim_map(renderer_init)
+    assert retained["330:33"]["classification"] == "healthcheck.renderer"
+    renderer_healthcheck_exit = {
+        330: renderer_init[330],
+        350: {"pid": 350, "ppid": 330, "identity": "350:35", "command": "runc", "parentCommand": "containerd-shim", "commandLine": b"", "cgroupFingerprint": "runtime"},
+    }
+    assert classification_map(renderer_healthcheck_exit, retained)["350:35"] == "healthcheck.renderer.runtime"
 
     program_warmer_healthcheck = {
         400: {"pid": 400, "ppid": 1, "identity": "400:40", "command": "containerd-shim", "parentCommand": "systemd", "commandLine": b"containerd-shim-runc-v2", "cgroupFingerprint": "host"},
