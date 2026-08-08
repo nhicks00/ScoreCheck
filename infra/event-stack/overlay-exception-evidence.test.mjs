@@ -220,7 +220,7 @@ function snapshot(sampledMs, { fault = false } = {}) {
       const camera = index + 1;
       return {
         courtNumber: camera,
-        paths: { raw: path("raw", 2), preview: path("preview", 1), program: path("program", 2) },
+        paths: { raw: path("raw", 2), preview: path("preview", 1), program: path("program", 1) },
         ffmpeg: { preview: ffmpeg(null), program: ffmpeg(1) },
         browser: browser(sampledMs, fault && camera === 1),
         youtube: { courtNumber: camera, state: "HEALTHY", streamStatus: "active", healthStatus: "good", configurationIssues: [], broadcastLifecycle: "live" }

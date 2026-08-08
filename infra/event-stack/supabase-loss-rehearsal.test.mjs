@@ -314,7 +314,7 @@ function snapshot(sampledMs, { disconnected = false, incident = false, outputsAc
       const camera = index + 1;
       return {
         courtNumber: camera,
-        paths: { raw: path("raw", 2), preview: path("preview", 1), program: path("program", 2) },
+        paths: { raw: path("raw", 2), preview: path("preview", 1), program: path("program", 1) },
         ffmpeg: { preview: ffmpeg(null), program: ffmpeg(1) },
         browser: browser(sampledMs, camera === 1 && disconnected),
         youtube: { courtNumber: camera, state: "HEALTHY", streamStatus: "active", healthStatus: "good", configurationIssues: [], broadcastLifecycle: "live" }

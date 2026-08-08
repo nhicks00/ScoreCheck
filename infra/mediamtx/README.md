@@ -80,6 +80,10 @@ segments, a 12-second target live offset, and a 24-second maximum live offset.
 That buffer is intentional: viewer continuity outranks latency. Scoreboard and
 commentary state follow the measured program timeline. WHEP remains available
 for the undelayed commentary preview and one selected operator inspection only.
+Public HLS requests are authenticated by Caddy, which uses MediaMTX's protected
+CDN session mode on the loopback hop. MediaMTX therefore reports one proxy
+session per active path; browser ownership and warmer liveness are measured
+independently instead of inferred from HLS reader cardinality.
 
 The July 13 extended run proved that the four-vCPU MediaMTX host does not have
 production headroom for shared video normalization: load remained

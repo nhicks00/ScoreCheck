@@ -44,6 +44,7 @@ test("renders an isolated MediaMTX public host and matching TLS health proxy", (
   assert.match(rendered.mediaConfig, /hlsSegmentCount: 15/u);
   assert.match(rendered.mediaConfig, /hlsSegmentDuration: 2s/u);
   assert.match(rendered.mediaConfig, /hlsAlwaysRemux: no/u);
+  assert.match(rendered.mediaConfig, new RegExp(`hlsCDNSecret: "${"x".repeat(32)}"`, "u"));
   assert.match(rendered.mediaConfig, /webrtcAdditionalHosts: \["192\.0\.2\.20", "preview-rehearsal-1234\.beachvolleyballmedia\.com", "10\.120\.0\.10"\]/u);
   assert.match(rendered.mediaConfig, /rtspAddress: ":8554"/u);
   assert.match(rendered.mediaConfig, /ips: \["10\.120\.0\.11"\][\s\S]+path: "~\^court\(1\|2\|5\|6\)_raw\$"/u);
@@ -72,6 +73,7 @@ test("renders an isolated MediaMTX public host and matching TLS health proxy", (
   assert.match(rendered.caddyConfig, /\^\/court\[1-8\]_\(raw\|normalized\|preview\|program\|monitor\|calibration\)\/\.\*\$/u);
   assert.match(rendered.caddyConfig, /respond "unauthorized" 401/u);
   assert.match(rendered.caddyConfig, /reverse_proxy 127\.0\.0\.1:8888/u);
+  assert.match(rendered.caddyConfig, new RegExp(`header_up Authorization "Bearer ${"x".repeat(32)}"`, "u"));
   assert.match(rendered.caddyConfig, /reverse_proxy 127\.0\.0\.1:8889/u);
   assert.match(rendered.caddyConfig, /respond "not found" 404/u);
   assert.ok(

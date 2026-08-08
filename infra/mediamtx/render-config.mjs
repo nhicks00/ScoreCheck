@@ -25,6 +25,7 @@ export function renderMediaMtxConfigs({ mediaTemplate, caddyTemplate, environmen
     .replaceAll("__PUBLIC_IP__", JSON.stringify(publicIp))
     .replaceAll("__PRIVATE_IP__", JSON.stringify(privateIp))
     .replaceAll("__PUBLIC_HOST__", JSON.stringify(publicHost))
+    .replaceAll("__HLS_CDN_SECRET__", JSON.stringify(derivedReadPass))
     .replaceAll("__CONTENT_ANALYZER_USERS__", renderContentAnalyzerUsers(contentAnalyzerBindings))
     .replaceAll("__PROGRAM_DELAY_US__", String(delayMs * 1_000));
 
@@ -61,7 +62,8 @@ export function renderMediaMtxConfigs({ mediaTemplate, caddyTemplate, environmen
     .replaceAll("__PUBLIC_HOST__", publicHost)
     .replaceAll("__ACME_EMAIL__", acmeEmail)
     .replaceAll("__DERIVED_READ_USER__", derivedReadUser)
-    .replaceAll("__DERIVED_READ_PASS__", derivedReadPass);
+    .replaceAll("__DERIVED_READ_PASS__", derivedReadPass)
+    .replaceAll("__HLS_CDN_SECRET__", derivedReadPass);
   for (const [name, value] of Object.entries({ mediaConfig, caddyConfig })) {
     if (/__[A-Z0-9_]+__/u.test(value)) throw new Error(`${name} still contains an unresolved placeholder.`);
   }

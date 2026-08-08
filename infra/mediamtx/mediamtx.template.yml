@@ -33,6 +33,7 @@ hlsVariant: fmp4
 hlsSegmentCount: 15
 hlsSegmentDuration: 2s
 hlsAlwaysRemux: no
+hlsCDNSecret: __HLS_CDN_SECRET__
 
 # ScoreCheck does not use Media-over-QUIC. Keep the unused public listeners
 # closed instead of inheriting new server defaults on upgrade.

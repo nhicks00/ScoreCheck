@@ -27,7 +27,9 @@ __PUBLIC_HOST__ {
         query user=__DERIVED_READ_USER__ pass=__DERIVED_READ_PASS__
     }
     handle @authorizedDerivedHls {
-        reverse_proxy 127.0.0.1:8888
+        reverse_proxy 127.0.0.1:8888 {
+            header_up Authorization "Bearer __HLS_CDN_SECRET__"
+        }
     }
 
     @protectedMedia path_regexp protected_media ^/court[1-8]_(raw|normalized|preview|program|monitor|calibration)/.*$

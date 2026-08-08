@@ -158,7 +158,7 @@ function monitorSnapshot({ primaryExpected, backupExpected }) {
         paths: active ? {
           raw: path(camera === 1 ? 2 + Number(backupExpected) : 2),
           preview: path(1),
-          program: path(camera === 1 ? Number(primaryExpected) * 2 + Number(backupExpected) : 2)
+          program: path(1)
         } : {},
         ffmpeg: active ? { preview: ffmpeg(null), program: ffmpeg(1) } : {},
         browser: active ? browser(camera) : null

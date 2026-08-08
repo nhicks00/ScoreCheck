@@ -576,12 +576,12 @@ test("accepts six native 1080 camera chains and two isolated inactive cameras", 
   assert.deepEqual(browserDeltaProblems(before, after, profiles, venue.activeCameras), []);
 });
 
-test("requires exactly one program warmer and one browser HLS reader", () => {
+test("requires exactly one authenticated program HLS proxy session", () => {
   const before = snapshot({ sampledMs: startedMs, framesMultiplier: 0 });
   const after = snapshot({ sampledMs: startedMs + 5_000, framesMultiplier: 5 });
-  after.courts[0].paths.program.readerCount = 3;
+  after.courts[0].paths.program.readerCount = 2;
   assert.ok(productionSnapshotProblems(after, profiles, venue, before, startedMs + 5_000)
-    .some((entry) => entry.includes("Camera 1 program path is not healthy with 2 reader(s)")));
+    .some((entry) => entry.includes("Camera 1 program path is not healthy with 1 reader(s)")));
 });
 
 test("allows bounded audio and mux overhead above a constrained camera encoder cap", () => {
@@ -944,7 +944,7 @@ function snapshot({ active = true, sampledMs = startedMs, framesMultiplier = 0 }
       const fps = profiles[camera]?.framesPerSecond ?? 30;
       return {
         courtNumber: camera,
-        paths: running ? { raw: path("raw", 2, camera <= 2 ? 8_000_000 : 5_000_000), preview: path("preview", 1), program: path("program", 2) } : {},
+        paths: running ? { raw: path("raw", 2, camera <= 2 ? 8_000_000 : 5_000_000), preview: path("preview", 1), program: path("program", 1) } : {},
         ffmpeg: running ? { preview: ffmpeg(fps, null), program: ffmpeg(fps, 1) } : {},
         browser: running ? browser(camera, sampledMs, framesMultiplier * fps) : null
       };
