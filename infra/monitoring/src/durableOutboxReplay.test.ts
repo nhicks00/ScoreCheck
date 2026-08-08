@@ -27,7 +27,8 @@ describe("durable Supabase outage replay", () => {
       expect(restarted.loadActiveIncidents()).toHaveLength(1);
       const restartedManager = new IncidentManager();
       restartedManager.hydrate(restarted.loadActiveIncidents());
-      const resolved = restartedManager.applyWebhook(alert("resolved"), new Date("2026-07-22T12:05:00.000Z"))
+      restartedManager.applyWebhook(alert("resolved"), new Date("2026-07-22T12:05:00.000Z"));
+      const resolved = restartedManager.reconcileActiveAlerts([], new Date("2026-07-22T12:06:00.000Z"))
         .map((change): IncidentChange => ({ ...change, detail: { resolutionKind: "DEPENDENCY_RECOVERED" } }));
       await restarted.recordChanges(resolved);
       const restartedDispatcher = new NotificationDispatcher(notificationConfig(), restarted, send);

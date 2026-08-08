@@ -24,11 +24,14 @@ const alertmanagerApiAlertsSchema = z.array(z.object({
   endsAt: z.string().optional()
 }).passthrough()).max(500);
 
+const INCIDENT_RESOLUTION_GRACE_MS = 60_000;
+
 export type IncidentEventType = "OPENED" | "SEVERITY_CHANGED" | "EVIDENCE_UPDATED" | "ACKNOWLEDGED" | "RESOLVED";
 export type IncidentChange = { incident: IncidentSnapshot; eventType: IncidentEventType; detail?: Record<string, string | number | boolean | null> };
 
 export class IncidentManager {
   private readonly incidents = new Map<string, IncidentSnapshot>();
+  private readonly pendingResolutions = new Map<string, { firstMissingAtMs: number; resolvedAt: string | null }>();
 
   applyWebhook(input: unknown, now = new Date()): IncidentChange[] {
     const payload = alertmanagerWebhookSchema.parse(input);
@@ -38,17 +41,16 @@ export class IncidentManager {
       const existing = this.incidents.get(normalized.fingerprint);
       if (alert.status === "resolved") {
         if (!existing || existing.status === "resolved") continue;
-        const resolved: IncidentSnapshot = {
-          ...existing,
-          status: "resolved",
-          lastObservedAt: now.toISOString(),
-          resolvedAt: validIso(alert.endsAt) ?? now.toISOString()
-        };
-        this.incidents.set(resolved.fingerprint, resolved);
-        changed.push({ incident: resolved, eventType: "RESOLVED" });
+        if (!this.pendingResolutions.has(existing.fingerprint)) {
+          this.pendingResolutions.set(existing.fingerprint, {
+            firstMissingAtMs: now.getTime(),
+            resolvedAt: validIso(alert.endsAt)
+          });
+        }
         continue;
       }
 
+      this.pendingResolutions.delete(normalized.fingerprint);
       const newEpisode = !existing || existing.status === "resolved";
       const next: IncidentSnapshot = {
         id: newEpisode ? crypto.randomUUID() : existing.id,
@@ -90,14 +92,24 @@ export class IncidentManager {
     const activeFingerprints = new Set(alerts.map((alert) => normalizeAlert({ ...alert, status: "firing" }).fingerprint));
     const transitions = observed.filter((change) => change.eventType !== "EVIDENCE_UPDATED");
     for (const existing of this.active()) {
-      if (activeFingerprints.has(existing.fingerprint)) continue;
+      if (activeFingerprints.has(existing.fingerprint)) {
+        this.pendingResolutions.delete(existing.fingerprint);
+        continue;
+      }
+      const pending = this.pendingResolutions.get(existing.fingerprint);
+      if (!pending) {
+        this.pendingResolutions.set(existing.fingerprint, { firstMissingAtMs: now.getTime(), resolvedAt: null });
+        continue;
+      }
+      if (now.getTime() - pending.firstMissingAtMs < INCIDENT_RESOLUTION_GRACE_MS) continue;
       const resolved: IncidentSnapshot = {
         ...existing,
         status: "resolved",
         lastObservedAt: now.toISOString(),
-        resolvedAt: now.toISOString()
+        resolvedAt: pending.resolvedAt ?? now.toISOString()
       };
       this.incidents.set(resolved.fingerprint, resolved);
+      this.pendingResolutions.delete(resolved.fingerprint);
       transitions.push({ incident: resolved, eventType: "RESOLVED" });
     }
     return transitions;

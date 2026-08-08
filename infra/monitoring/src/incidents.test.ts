@@ -29,6 +29,8 @@ describe("incident manager", () => {
     };
     manager.applyWebhook(firing, new Date("2026-07-12T12:00:00Z"));
     manager.applyWebhook({ ...firing, status: "resolved", alerts: [{ ...firing.alerts[0], status: "resolved" }] }, new Date("2026-07-12T12:01:00Z"));
+    expect(manager.active()).toHaveLength(1);
+    manager.reconcileActiveAlerts([], new Date("2026-07-12T12:02:00Z"));
     expect(manager.active()).toHaveLength(0);
     expect(manager.all()[0]?.status).toBe("resolved");
   });
@@ -41,9 +43,10 @@ describe("incident manager", () => {
     };
     manager.applyWebhook(firing, new Date("2026-07-12T12:00:00Z"));
     const resolved = { ...firing, status: "resolved" as const, alerts: [{ ...firing.alerts[0], status: "resolved" as const }] };
-    expect(manager.applyWebhook(resolved, new Date("2026-07-12T12:01:00Z"))).toHaveLength(1);
+    expect(manager.applyWebhook(resolved, new Date("2026-07-12T12:01:00Z"))).toEqual([]);
     expect(manager.applyWebhook(resolved, new Date("2026-07-12T12:01:30Z"))).toEqual([]);
-    expect(manager.reconcileActiveAlerts([], new Date("2026-07-12T12:02:00Z"))).toEqual([]);
+    expect(manager.reconcileActiveAlerts([], new Date("2026-07-12T12:02:00Z")).map((change) => change.eventType)).toEqual(["RESOLVED"]);
+    expect(manager.reconcileActiveAlerts([], new Date("2026-07-12T12:02:30Z"))).toEqual([]);
   });
 
   it("creates a new incident episode when the same fingerprint recurs in one process", () => {
@@ -52,6 +55,7 @@ describe("incident manager", () => {
     const [first] = manager.applyWebhook(firstFiring, new Date("2026-07-12T12:00:05Z"));
     manager.acknowledge(first!.incident.id, "operator", "Investigating", new Date("2026-07-12T12:00:20Z"));
     manager.applyWebhook(resolvedAlert(firstFiring, "2026-07-12T12:01:00Z"), new Date("2026-07-12T12:01:00Z"));
+    manager.reconcileActiveAlerts([], new Date("2026-07-12T12:02:00Z"));
 
     const [second] = manager.applyWebhook(firingAlert("2026-07-12T12:02:00Z"), new Date("2026-07-12T12:02:05Z"));
 
@@ -67,6 +71,7 @@ describe("incident manager", () => {
     const firstFiring = firingAlert("2026-07-12T12:00:00Z");
     const [first] = firstProcess.applyWebhook(firstFiring, new Date("2026-07-12T12:00:05Z"));
     firstProcess.applyWebhook(resolvedAlert(firstFiring, "2026-07-12T12:01:00Z"), new Date("2026-07-12T12:01:00Z"));
+    firstProcess.reconcileActiveAlerts([], new Date("2026-07-12T12:02:00Z"));
 
     const restartedProcess = new IncidentManager();
     restartedProcess.hydrate([]);
@@ -110,7 +115,8 @@ describe("incident manager", () => {
       status: "firing",
       alerts: [{ status: "firing", labels: { alertname: "AgentMissing", stage: "MONITORING" }, annotations: {} }]
     }, new Date("2026-07-12T12:00:00Z"));
-    const changes = manager.reconcileActiveAlerts([], new Date("2026-07-12T12:01:00Z"));
+    expect(manager.reconcileActiveAlerts([], new Date("2026-07-12T12:01:00Z"))).toEqual([]);
+    const changes = manager.reconcileActiveAlerts([], new Date("2026-07-12T12:02:00Z"));
     expect(changes.map((change) => change.eventType)).toEqual(["RESOLVED"]);
     expect(manager.active()).toHaveLength(0);
   });
@@ -132,8 +138,36 @@ describe("incident manager", () => {
       status: { state: "suppressed" as const }
     }], new Date("2026-07-12T12:00:30Z"));
 
-    expect(changes.map((change) => change.eventType)).toEqual(["RESOLVED"]);
+    expect(changes).toEqual([]);
+    const resolved = manager.reconcileActiveAlerts([{
+      ...alert,
+      status: { state: "suppressed" as const }
+    }], new Date("2026-07-12T12:01:30Z"));
+
+    expect(resolved.map((change) => change.eventType)).toEqual(["RESOLVED"]);
     expect(manager.active()).toHaveLength(0);
+  });
+
+  it("keeps an incident open across a bounded alert reload gap", () => {
+    const manager = new IncidentManager();
+    const alert = activeApiAlert({ alertname: "RawMediaStalled", stage: "RAW_INGEST", court: "4" });
+    const [opened] = manager.reconcileActiveAlerts([alert], new Date("2026-07-12T12:00:00Z"));
+
+    expect(manager.reconcileActiveAlerts([], new Date("2026-07-12T12:00:30Z"))).toEqual([]);
+    expect(manager.reconcileActiveAlerts([alert], new Date("2026-07-12T12:01:00Z"))).toEqual([]);
+    expect(manager.active()[0]?.id).toBe(opened?.incident.id);
+    expect(manager.active()[0]?.status).toBe("open");
+  });
+
+  it("keeps the same episode when a resolved webhook refires during a rule reload", () => {
+    const manager = new IncidentManager();
+    const firing = firingAlert("2026-07-12T12:00:00Z");
+    const [opened] = manager.applyWebhook(firing, new Date("2026-07-12T12:00:00Z"));
+
+    expect(manager.applyWebhook(resolvedAlert(firing, "2026-07-12T12:00:30Z"), new Date("2026-07-12T12:00:30Z"))).toEqual([]);
+    expect(manager.applyWebhook(firing, new Date("2026-07-12T12:00:50Z")).map((change) => change.eventType)).toEqual(["EVIDENCE_UPDATED"]);
+    expect(manager.active()[0]?.id).toBe(opened?.incident.id);
+    expect(manager.active()[0]?.status).toBe("open");
   });
 
   it("records a sanitized acknowledgement reason", () => {
