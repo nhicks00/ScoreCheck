@@ -276,6 +276,16 @@ def classification_map(processes, retained_healthcheck_shims=None):
         ):
             classifications[process["identity"]] = monitor_content_classification
 
+        if (
+            process["command"] == "lk"
+            and parent is not None
+            and (parent.get("commandLine") or b"").strip()
+            == b"bash /opt/compositor/egress-supervisor.sh watch"
+            and process.get("cgroupFingerprint") is not None
+            and process.get("cgroupFingerprint") == parent.get("cgroupFingerprint")
+        ):
+            classifications[process["identity"]] = "workload.egress-supervisor"
+
         workload_classification = {
             # The pinned LiveKit server starts one `egress run-handler` child
             # per request and waits on that exact child asynchronously.
@@ -645,6 +655,10 @@ def self_test():
         183: {"pid": 183, "ppid": 180, "identity": "183:31", "command": "ffmpeg", "parentCommand": "scorecheck-ffmp", "commandLine": b"ffmpeg -i input", "cgroupFingerprint": "other"},
         184: {"pid": 184, "ppid": 180, "identity": "184:32", "command": "sh", "parentCommand": "scorecheck-ffmp", "commandLine": b"", "cgroupFingerprint": "mediamtx"},
         185: {"pid": 185, "ppid": 180, "identity": "185:33", "command": "sh", "parentCommand": "scorecheck-ffmp", "commandLine": b"", "cgroupFingerprint": "other"},
+        190: {"pid": 190, "ppid": 1, "identity": "190:34", "command": "bash", "parentCommand": "systemd", "commandLine": b"bash /opt/compositor/egress-supervisor.sh watch", "cgroupFingerprint": "supervisor"},
+        191: {"pid": 191, "ppid": 190, "identity": "191:35", "command": "lk", "parentCommand": "bash", "commandLine": b"", "cgroupFingerprint": "supervisor"},
+        192: {"pid": 192, "ppid": 190, "identity": "192:36", "command": "lk", "parentCommand": "bash", "commandLine": b"lk egress start", "cgroupFingerprint": "other"},
+        193: {"pid": 193, "ppid": 1, "identity": "193:37", "command": "lk", "parentCommand": "systemd", "commandLine": b"lk egress list --active --json", "cgroupFingerprint": "supervisor"},
     }
     classifications = classification_map(processes)
     assert classifications["20:2"] == "workload.egress-chrome"
@@ -677,6 +691,9 @@ def self_test():
     assert classifications["180:28"] == "workload.mediamtx-runner"
     assert "183:31" not in classifications
     assert "185:33" not in classifications
+    assert classifications["191:35"] == "workload.egress-supervisor"
+    assert "192:36" not in classifications
+    assert "193:37" not in classifications
 
     mediamtx_init = {
         200: {"pid": 200, "ppid": 1, "identity": "200:20", "command": "containerd-shim", "parentCommand": "systemd", "commandLine": b"containerd-shim-runc-v2", "cgroupFingerprint": "host"},
