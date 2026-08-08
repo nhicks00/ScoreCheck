@@ -45,6 +45,8 @@ for _ in $(seq 1 50); do
 done
 grep -q '"status":"WARM"' "$TEST_ROOT/state/state.json"
 grep -q 'court3_program/index.m3u8?user=scorecheck_event_reader&pass=' "$TEST_ROOT/ffmpeg.args"
+grep -q -- '-map 0:v:0' "$TEST_ROOT/ffmpeg.args"
+! grep -q -- '-map 0:a:0' "$TEST_ROOT/ffmpeg.args"
 grep -q -- '-c copy -f null -' "$TEST_ROOT/ffmpeg.args"
 
 rm "$TEST_ROOT/requests/court-3.owner.json"

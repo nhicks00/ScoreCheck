@@ -71,7 +71,7 @@ while true; do
     # Keep the event-scoped query credentials out of FFmpeg error output.
     ffmpeg -nostdin -hide_banner -loglevel quiet \
       -rw_timeout 15000000 -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 2 \
-      -i "$hls_url" -map 0:v:0 -map 0:a:0? -c copy -f null - &
+      -i "$hls_url" -map 0:v:0 -c copy -f null - &
     ffmpeg_pid=$!
     restart_count=$((restart_count + 1))
   fi
