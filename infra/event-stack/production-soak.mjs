@@ -61,7 +61,11 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (!options) return usage();
   const runtime = await ProductionSoakRuntime.create(options);
-  const result = options.command === "status" ? await runtime.status() : await runtime.run();
+  const result = options.command === "status"
+    ? await runtime.status()
+    : options.command === "cleanup"
+      ? await runtime.cleanup()
+      : await runtime.run();
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
@@ -131,6 +135,39 @@ export class ProductionSoakRuntime {
   async status() {
     const state = await readStateOrNull(join(this.options.evidence, "production-soak-state.json"));
     return state ? publicState(state) : { status: "NOT_STARTED", event: this.manifest.event };
+  }
+
+  async cleanup() {
+    const statePath = join(this.options.evidence, "production-soak-state.json");
+    const state = await readStateOrNull(statePath);
+    if (!state) throw new Error("production soak cleanup requires existing state");
+    validateState(state, this.manifest.event, this.options, this.venue, this.commentary, this.renderer, this.destinations);
+    if (state.phase === "CLEANED") return publicState(state);
+    if (!new Set(["COMPLETE", "CLEANUP"]).has(state.phase)) throw new Error(`production soak cleanup requires COMPLETE state, not ${state.phase}`);
+    state.phase = "CLEANUP";
+    state.cleanupErrors = [];
+    await writeState(statePath, state);
+    try {
+      await cleanupCompletedProductionSoak({
+        state,
+        youtube: this.youtube,
+        destinations: this.destinations,
+        egress: this.egress,
+        normalizer: this.normalizer,
+        expectations: this.expectations,
+        compositorHostForCamera: (camera) => compositorHost(this.manifest, this.lifecycleState, camera),
+        persist: () => writeState(statePath, state)
+      });
+    } catch (error) {
+      state.cleanupErrors = [safeError(error)];
+      await writeState(statePath, state);
+      throw error;
+    }
+    state.phase = "CLEANED";
+    state.cleanedAt = new Date(this.now()).toISOString();
+    state.cleanupErrors = [];
+    await writeState(statePath, state);
+    return publicState(state);
   }
 
   async run() {
@@ -789,7 +826,7 @@ export function admitBoundVenueResume(venue, state, command) {
   const bound = state?.schemaVersion === 6
     && state.venueProfileSha256 === venue?.sha256
     && state.venueAdmission?.passed === true;
-  const resumable = command === "status" || new Set(["STARTING", "RUNNING", "ABORTING", "COMPLETE", "ABORTED"]).has(state?.phase);
+  const resumable = command === "status" || new Set(["STARTING", "RUNNING", "ABORTING", "COMPLETE", "ABORTED", "CLEANUP", "CLEANED"]).has(state?.phase);
   return staleOnly && bound && resumable ? { ...venue, passed: true, resumedBoundAdmission: true } : venue;
 }
 
@@ -797,6 +834,75 @@ export function resumedSampleDueAt({ startedAt, slot, previousObservedAt, nowMs 
   const scheduledAt = Date.parse(startedAt) + slot * SAMPLE_INTERVAL_MS;
   const priorCadenceAt = previousObservedAt ? Date.parse(previousObservedAt) + SAMPLE_INTERVAL_MS : scheduledAt;
   return Math.max(scheduledAt, priorCadenceAt, nowMs);
+}
+
+export async function cleanupCompletedProductionSoak({ state, youtube, destinations, egress, normalizer, expectations, compositorHostForCamera, persist = async () => {} }) {
+  const cameras = [...state.activeCameras].sort((left, right) => left - right);
+  const providerFailures = [];
+  state.providerCleanup ??= {};
+  for (const camera of cameras) {
+    try {
+      let broadcast = await youtube.getBroadcast(destinations.broadcasts[camera].id);
+      if (["testing", "live"].includes(broadcast.lifeCycleStatus)) {
+        await youtube.transitionBroadcast(broadcast.id, "complete");
+        broadcast = await youtube.getBroadcast(broadcast.id);
+      }
+      if (broadcast.lifeCycleStatus !== "complete") throw new Error(`unexpected lifecycle ${broadcast.lifeCycleStatus}`);
+      state.providerCleanup[camera] = { lifecycleStatus: "complete", observedAt: new Date().toISOString() };
+      await persist();
+    } catch (error) {
+      providerFailures.push(`Camera ${camera} YouTube broadcast: ${safeError(error)}`);
+    }
+  }
+  if (providerFailures.length) throw new Error(`broadcast cleanup failed before Egress stop: ${providerFailures.join("; ")}`);
+
+  const outputFailures = [];
+  for (const camera of [...cameras].reverse()) {
+    const current = state.egress?.[camera];
+    if (current?.status === "stopped") continue;
+    if (!current?.id || !current.host) {
+      outputFailures.push(`Camera ${camera} Egress ownership is incomplete`);
+      continue;
+    }
+    try {
+      await egress.stopExact({
+        host: current.host,
+        court: camera,
+        egressId: current.id,
+        profile: current.profile,
+        owner: current.owner ?? productionEgressOwner(state, camera)
+      });
+      state.egress[camera] = { ...current, status: "stopped", stoppedAt: new Date().toISOString() };
+      await persist();
+    } catch (error) {
+      outputFailures.push(`Camera ${camera} Egress: ${safeError(error)}`);
+    }
+  }
+  if (outputFailures.length) throw new Error(`Egress cleanup failed: ${outputFailures.join("; ")}`);
+
+  const retirementFailures = [];
+  for (const camera of cameras) {
+    const current = state.normalizers?.[camera];
+    if (current?.required && current.running) {
+      try {
+        state.normalizers[camera] = await normalizer.stop({ host: compositorHostForCamera(camera), court: camera });
+        await persist();
+      } catch (error) {
+        retirementFailures.push(`Camera ${camera} normalizer: ${safeError(error)}`);
+      }
+    }
+    const expectation = state.monitoringExpectations?.[camera];
+    if (expectation && expectation.phase !== "CLEARED") {
+      try {
+        state.monitoringExpectations[camera] = await expectations.clear({ binding: state.monitoringBinding, camera, runId: state.runId });
+        await persist();
+      } catch (error) {
+        retirementFailures.push(`Camera ${camera} monitoring expectation: ${safeError(error)}`);
+      }
+    }
+  }
+  if (retirementFailures.length) throw new Error(`post-output cleanup failed: ${retirementFailures.join("; ")}`);
+  return state;
 }
 
 export async function recoverOwnedProgramEgress({ egress, host, court, profile, owner, oldEgressId }) {
@@ -2136,7 +2242,7 @@ function validateRouterHost(value) {
 function parseArgs(argv) {
   const command = argv[0];
   if ([undefined, "help", "-h", "--help"].includes(command)) return null;
-  if (!new Set(["run", "status"]).has(command)) throw new Error("first argument must be run or status");
+  if (!new Set(["run", "status", "cleanup"]).has(command)) throw new Error("first argument must be run, status, or cleanup");
   const options = { command, profile: null, destinations: null, evidence: null, ffprobe: null, router: "root@192.168.8.1", minimumDurationMs: 4 * 60 * 60_000, maximumDurationMs: 6 * 60 * 60_000 };
   const mapping = new Map([["--profile", "profile"], ["--destinations", "destinations"], ["--evidence", "evidence"], ["--ffprobe", "ffprobe"], ["--router", "router"], ["--minimum-hours", "minimumDurationMs"], ["--maximum-hours", "maximumDurationMs"]]);
   for (let index = 1; index < argv.length; index += 1) {
@@ -2167,7 +2273,7 @@ async function assertExecutable(path, label) {
 }
 
 function usage() {
-  process.stdout.write("Usage:\n  node infra/event-stack/production-soak.mjs run --profile /PROTECTED/operator-profile.json --destinations /PROTECTED/destinations.json --evidence /PROTECTED/EVIDENCE --ffprobe /ABSOLUTE/ffprobe [--router root@192.168.8.1] [--minimum-hours 4] [--maximum-hours 6]\n  node infra/event-stack/production-soak.mjs status --profile /PROTECTED/operator-profile.json --destinations /PROTECTED/destinations.json --evidence /PROTECTED/EVIDENCE --ffprobe /ABSOLUTE/ffprobe\n");
+  process.stdout.write("Usage:\n  node infra/event-stack/production-soak.mjs run --profile /PROTECTED/operator-profile.json --destinations /PROTECTED/destinations.json --evidence /PROTECTED/EVIDENCE --ffprobe /ABSOLUTE/ffprobe [--router root@192.168.8.1] [--minimum-hours 4] [--maximum-hours 6]\n  node infra/event-stack/production-soak.mjs status --profile /PROTECTED/operator-profile.json --destinations /PROTECTED/destinations.json --evidence /PROTECTED/EVIDENCE --ffprobe /ABSOLUTE/ffprobe\n  node infra/event-stack/production-soak.mjs cleanup --profile /PROTECTED/operator-profile.json --destinations /PROTECTED/destinations.json --evidence /PROTECTED/EVIDENCE --ffprobe /ABSOLUTE/ffprobe\n");
 }
 
 async function runCommand(command, args) {

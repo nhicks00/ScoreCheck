@@ -7,6 +7,7 @@ import {
   admitBoundVenueResume,
   browserDeltaProblems,
   assertProductionMonitorSnapshot,
+  cleanupCompletedProductionSoak,
   evaluateProductionSoak,
   evaluatePeplinkRouterEvidence,
   evaluateHlsRuntimeEvidence,
@@ -308,6 +309,79 @@ test("unwinds every resource owned by a partially started production run", async
   assert.equal(state.monitoringDestinations[1].status, "RESTORED");
   assert.equal(state.monitoringDestinations[2].status, "RESTORED");
   assert.equal(state.router.status, "stopped");
+});
+
+test("completes every production broadcast before stopping exact Egress jobs", async () => {
+  const state = {
+    runId: "run-1",
+    event: "event-1",
+    activeCameras: [1, 2],
+    egress: {
+      1: { id: "EG_1", host: "198.51.100.1", profile: "1080p30", owner: { event: "event-1" } },
+      2: { id: "EG_2", host: "198.51.100.2", profile: "1080p30", owner: { event: "event-1" } }
+    },
+    normalizers: {},
+    monitoringExpectations: {}
+  };
+  const calls = [];
+  const broadcasts = new Map([["broadcast-1", "live"], ["broadcast-2", "live"]]);
+  await cleanupCompletedProductionSoak({
+    state,
+    youtube: {
+      getBroadcast: async (id) => ({ id, lifeCycleStatus: broadcasts.get(id) }),
+      transitionBroadcast: async (id, phase) => { calls.push(`youtube:${id}:${phase}`); broadcasts.set(id, phase); }
+    },
+    destinations: { broadcasts: { 1: { id: "broadcast-1" }, 2: { id: "broadcast-2" } } },
+    egress: { stopExact: async ({ court, egressId }) => { calls.push(`egress:${court}:${egressId}`); } },
+    normalizer: { stop: async () => assert.fail("absent normalizer must not be stopped") },
+    expectations: { clear: async () => assert.fail("absent expectation must not be cleared") },
+    compositorHostForCamera: () => assert.fail("absent normalizer must not resolve a host")
+  });
+
+  assert.deepEqual(calls, [
+    "youtube:broadcast-1:complete",
+    "youtube:broadcast-2:complete",
+    "egress:2:EG_2",
+    "egress:1:EG_1"
+  ]);
+  assert.equal(state.providerCleanup[1].lifecycleStatus, "complete");
+  assert.equal(state.providerCleanup[2].lifecycleStatus, "complete");
+  assert.equal(state.egress[1].status, "stopped");
+  assert.equal(state.egress[2].status, "stopped");
+});
+
+test("keeps every Egress active when any production broadcast cannot complete", async () => {
+  const state = {
+    runId: "run-1",
+    event: "event-1",
+    activeCameras: [1, 2],
+    egress: {
+      1: { id: "EG_1", host: "198.51.100.1", profile: "1080p30" },
+      2: { id: "EG_2", host: "198.51.100.2", profile: "1080p30" }
+    },
+    normalizers: {},
+    monitoringExpectations: {}
+  };
+  let stopCount = 0;
+  const broadcasts = new Map([["broadcast-1", "live"], ["broadcast-2", "live"]]);
+  await assert.rejects(() => cleanupCompletedProductionSoak({
+    state,
+    youtube: {
+      getBroadcast: async (id) => ({ id, lifeCycleStatus: broadcasts.get(id) }),
+      transitionBroadcast: async (id, phase) => {
+        if (id === "broadcast-1") broadcasts.set(id, phase);
+      }
+    },
+    destinations: { broadcasts: { 1: { id: "broadcast-1" }, 2: { id: "broadcast-2" } } },
+    egress: { stopExact: async () => { stopCount += 1; } },
+    normalizer: {},
+    expectations: {},
+    compositorHostForCamera: () => null
+  }), /broadcast cleanup failed before Egress stop.*Camera 2/u);
+
+  assert.equal(stopCount, 0);
+  assert.equal(state.egress[1].status, undefined);
+  assert.equal(state.egress[2].status, undefined);
 });
 
 test("preserves exact cleanup failures instead of claiming a failed-start resource stopped", async () => {
